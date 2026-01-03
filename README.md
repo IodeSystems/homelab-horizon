@@ -2,6 +2,29 @@
 
 A self-contained homelab management tool for WireGuard VPN, split-horizon DNS, reverse proxy, and service monitoring. Single binary, runs on Ubuntu/Debian.
 
+## The Problem
+
+Running a homelab with external access means juggling multiple systems that don't talk to each other:
+
+- **SSL Certificate Sprawl**: Managing 12+ individual certificates, each with their own renewal schedule
+- **Internal SSL Headaches**: HTTPS doesn't work from inside your network because certs are tied to external IPs, so you're stuck with HTTP internally or browser warnings
+- **Unnecessary Public Exposure**: OAuth callbacks and other endpoints need valid SSL, forcing you to expose internal-only services to the internet just to get certificates
+- **Manual DNS Management**: Updating Route53 or other DNS providers by hand every time your IP changes or you add a service
+- **Broken Internal Resolution**: Your domains work from the internet but timeout when you're on your own network (the classic split-horizon DNS problem)
+- **WireGuard Friction**: Every new device needs a config file, QR code, and manual peer setup on the server
+- **Scattered Configuration**: HAProxy configs, DNS records, WireGuard peers, and SSL certs all managed separately with no unified view
+
+## The Solution
+
+Homelab Horizon consolidates all of this into a single web UI:
+
+- **One Wildcard Cert**: A single `*.yourdomain.com` certificate covers all your services, inside and out
+- **HTTPS Everywhere**: Same SSL cert works internally - no more HTTP fallbacks or certificate warnings on your LAN
+- **Automatic DNS Sync**: Add a service, DNS records update automatically (Route53 or Name.com)
+- **Split-Horizon Built-in**: Services resolve to internal IPs on your network/VPN, external IPs from the internet
+- **Self-Service VPN**: Generate invite links - users scan a QR code and they're connected
+- **Unified Dashboard**: See all your services, their health status, DNS records, and SSL certificates in one place
+
 ## Features
 
 - **WireGuard VPN Management**: Create clients, generate QR codes, manage peers
