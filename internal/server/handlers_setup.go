@@ -174,13 +174,13 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		"SetupComplete":          !setupStatus.NeedsSetup,
 		"Message":                r.URL.Query().Get("msg"),
 		"Error":                  r.URL.Query().Get("err"),
+		"CSRFToken":              s.getCSRFToken(r),
 	}
 	s.templates["setup"].Execute(w, data)
 }
 
 func (s *Server) handleInstallService(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -201,8 +201,7 @@ func (s *Server) handleInstallService(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEnableService(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -216,8 +215,7 @@ func (s *Server) handleEnableService(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateWGConfig(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -258,8 +256,7 @@ PostDown = iptables -D FORWARD -i %%i -j ACCEPT; iptables -t nat -D POSTROUTING 
 // DNSMasq handlers
 
 func (s *Server) handleDNSReload(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -281,8 +278,7 @@ func (s *Server) handleDNSReload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDNSMasqStart(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -294,8 +290,7 @@ func (s *Server) handleDNSMasqStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDNSMasqInit(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 

@@ -12,8 +12,7 @@ import (
 )
 
 func (s *Server) handleAddClient(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -62,8 +61,7 @@ func (s *Server) handleAddClient(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteClient(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -97,12 +95,11 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
-	token := generateToken(16)
+	token := generateToken(32)
 	if err := s.addInvite(token); err != nil {
 		http.Redirect(w, r, "/admin?err="+err.Error(), http.StatusSeeOther)
 		return
@@ -112,8 +109,7 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteInvite(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -211,8 +207,7 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -224,8 +219,7 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInterfaceUp(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -237,8 +231,7 @@ func (s *Server) handleInterfaceUp(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEnableForwarding(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -250,8 +243,7 @@ func (s *Server) handleEnableForwarding(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleAddMasquerade(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -263,8 +255,7 @@ func (s *Server) handleAddMasquerade(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleToggleClientAdmin(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 

@@ -93,8 +93,7 @@ func (s *Server) handleDNSDiscoverZones(w http.ResponseWriter, r *http.Request) 
 
 // handleDNSSyncRecord syncs a single DNS record using the zone's configured provider
 func (s *Server) handleDNSSyncRecord(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -169,8 +168,7 @@ func (s *Server) handleDNSSyncRecord(w http.ResponseWriter, r *http.Request) {
 
 // handleDNSSyncAll syncs all external DNS records using each zone's configured provider
 func (s *Server) handleDNSSyncAll(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 

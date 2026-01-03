@@ -12,8 +12,7 @@ import (
 // Zone handlers
 
 func (s *Server) handleAddZone(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -101,8 +100,7 @@ func (s *Server) handleAddZone(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteZone(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -122,8 +120,7 @@ func (s *Server) handleDeleteZone(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEditZone(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -184,8 +181,7 @@ func (s *Server) handleEditZone(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAddSubZone(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -238,8 +234,7 @@ func (s *Server) syncLetsEncrypt() {
 
 // handleApplyZoneTemplate applies a VPN services template to a zone
 func (s *Server) handleApplyZoneTemplate(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 

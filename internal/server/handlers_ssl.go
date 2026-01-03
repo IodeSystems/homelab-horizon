@@ -22,8 +22,7 @@ func (s *Server) handleSSLDeleteDomain(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSSLRequestCert(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -83,8 +82,7 @@ func (s *Server) handleSSLRequestCert(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSSLPackageCerts(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -124,8 +122,7 @@ func (s *Server) handleSSLCertInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSSLSaveSettings(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 

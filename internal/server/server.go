@@ -28,6 +28,26 @@ import (
 	"homelab-horizon/internal/wireguard"
 )
 
+// HealthStatus tracks the background health check state
+type HealthStatus struct {
+	mu        sync.RWMutex
+	healthy   bool
+	lastCheck time.Time
+}
+
+func (h *HealthStatus) SetHealthy(healthy bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.healthy = healthy
+	h.lastCheck = time.Now()
+}
+
+func (h *HealthStatus) IsHealthy() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.healthy
+}
+
 // SyncBroadcaster manages sync state and broadcasts messages to multiple SSE clients
 type SyncBroadcaster struct {
 	mu          sync.RWMutex
@@ -124,6 +144,7 @@ type Server struct {
 	config      *config.Config
 	configPath  string
 	adminToken  string
+	csrfSecret  string
 	wg          *wireguard.WGConfig
 	dns         *dnsmasq.DNSMasq
 	haproxy     *haproxy.HAProxy
@@ -131,6 +152,7 @@ type Server struct {
 	monitor     *monitor.Monitor
 	templates   map[string]*template.Template
 	sync        *SyncBroadcaster
+	health      *HealthStatus
 }
 
 func New(configPath string) (*Server, error) {
@@ -144,11 +166,19 @@ func New(configPath string) (*Server, error) {
 func NewWithConfig(cfg *config.Config, configPath string) (*Server, error) {
 	// Use existing admin token or generate a new one
 	adminToken := cfg.AdminToken
+	isNewToken := false
 	if adminToken == "" {
 		adminToken = generateToken(32)
 		cfg.AdminToken = adminToken
+		isNewToken = true
 		_ = config.Save(configPath, cfg)
+		// Write token to a secure file for first-time access
+		tokenFile := configPath + ".token"
+		if err := os.WriteFile(tokenFile, []byte(adminToken+"\n"), 0600); err == nil {
+			fmt.Fprintf(os.Stderr, "Admin token written to: %s (delete after reading)\n", tokenFile)
+		}
 	}
+	_ = isNewToken // suppress unused warning
 
 	// Ensure LocalInterface is set for DNS mapping of localhost-bound services
 	cfg.EnsureLocalInterface()
@@ -201,6 +231,7 @@ func NewWithConfig(cfg *config.Config, configPath string) (*Server, error) {
 		config:      cfg,
 		configPath:  configPath,
 		adminToken:  adminToken,
+		csrfSecret:  generateToken(32),
 		wg:          wg,
 		dns:         dns,
 		haproxy:     hap,
@@ -208,6 +239,7 @@ func NewWithConfig(cfg *config.Config, configPath string) (*Server, error) {
 		monitor:     mon,
 		templates:   make(map[string]*template.Template),
 		sync:        NewSyncBroadcaster(),
+		health:      &HealthStatus{healthy: true},
 	}
 
 	s.parseTemplates()
@@ -266,6 +298,117 @@ func (s *Server) verifyCookie(cookie string) (string, bool) {
 		return value, true
 	}
 	return "", false
+}
+
+// CSRF token generation and validation
+
+// generateCSRFToken creates a signed CSRF token for the current session
+func (s *Server) generateCSRFToken(sessionID string) string {
+	// Token = base64(sessionID:timestamp:signature)
+	timestamp := time.Now().Unix()
+	data := fmt.Sprintf("%s:%d", sessionID, timestamp)
+
+	h := hmac.New(sha256.New, []byte(s.csrfSecret))
+	h.Write([]byte(data))
+	sig := base64.StdEncoding.EncodeToString(h.Sum(nil))
+
+	token := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", data, sig)))
+	return token
+}
+
+// validateCSRFToken verifies a CSRF token is valid for the session
+func (s *Server) validateCSRFToken(token, sessionID string) bool {
+	decoded, err := base64.StdEncoding.DecodeString(token)
+	if err != nil {
+		return false
+	}
+
+	parts := strings.SplitN(string(decoded), ":", 3)
+	if len(parts) != 3 {
+		return false
+	}
+
+	tokenSession, timestampStr, sig := parts[0], parts[1], parts[2]
+
+	// Verify session matches
+	if tokenSession != sessionID {
+		return false
+	}
+
+	// Verify timestamp is not too old (24 hours max)
+	var timestamp int64
+	if _, err := fmt.Sscanf(timestampStr, "%d", &timestamp); err != nil {
+		return false
+	}
+	if time.Now().Unix()-timestamp > 86400 {
+		return false
+	}
+
+	// Verify signature
+	data := fmt.Sprintf("%s:%s", tokenSession, timestampStr)
+	h := hmac.New(sha256.New, []byte(s.csrfSecret))
+	h.Write([]byte(data))
+	expectedSig := base64.StdEncoding.EncodeToString(h.Sum(nil))
+
+	return hmac.Equal([]byte(sig), []byte(expectedSig))
+}
+
+// getSessionID extracts session ID from request for CSRF validation
+func (s *Server) getSessionID(r *http.Request) string {
+	cookie, err := r.Cookie("session")
+	if err != nil {
+		return ""
+	}
+	// Use the full cookie value as session ID
+	return cookie.Value
+}
+
+// requireCSRF validates CSRF token for POST requests, returns false if invalid
+func (s *Server) requireCSRF(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return true
+	}
+
+	sessionID := s.getSessionID(r)
+	if sessionID == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return false
+	}
+
+	csrfToken := r.FormValue("csrf_token")
+	if csrfToken == "" {
+		csrfToken = r.Header.Get("X-CSRF-Token")
+	}
+
+	if !s.validateCSRFToken(csrfToken, sessionID) {
+		http.Error(w, "Invalid CSRF token", http.StatusForbidden)
+		return false
+	}
+
+	return true
+}
+
+// getCSRFToken returns a CSRF token for the current request's session
+func (s *Server) getCSRFToken(r *http.Request) string {
+	sessionID := s.getSessionID(r)
+	if sessionID == "" {
+		return ""
+	}
+	return s.generateCSRFToken(sessionID)
+}
+
+// requireAdminPost validates admin auth and CSRF for POST requests
+// Returns true if request should proceed, false if response was already written
+func (s *Server) requireAdminPost(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return false
+	}
+	if !s.isAdmin(r) {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return false
+	}
+	return s.requireCSRF(w, r)
 }
 
 func (s *Server) isAdmin(r *http.Request) bool {
@@ -546,6 +689,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		"PublicIP":     s.config.PublicIP,
 		"WGGatewayIP":  s.config.GetWGGatewayIP(),
 		"TemplateZone": templateZone,
+		"CSRFToken":    s.getCSRFToken(r),
 	}
 	s.templates["admin"].Execute(w, data)
 }
@@ -570,8 +714,7 @@ func (s *Server) handleTest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -648,53 +791,101 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // Invite management
+// Invites are stored as "token:expiry" where expiry is a Unix timestamp.
+// Tokens expire after 24 hours by default. Legacy tokens without expiry are still accepted.
 
-func (s *Server) getInvites() []string {
-	var invites []string
+const inviteExpiry = 24 * time.Hour
+
+// inviteEntry represents a stored invite with expiration
+type inviteEntry struct {
+	Token  string
+	Expiry int64 // Unix timestamp, 0 means no expiry (legacy)
+}
+
+func (s *Server) getInviteEntries() []inviteEntry {
+	var entries []inviteEntry
 
 	file, err := os.Open(s.config.InvitesFile)
 	if err != nil {
-		return invites
+		return entries
 	}
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		token := strings.TrimSpace(scanner.Text())
-		if token != "" && !strings.HasPrefix(token, "#") {
-			invites = append(invites, token)
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Parse "token:expiry" format, or legacy plain token
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) == 2 {
+			var expiry int64
+			fmt.Sscanf(parts[1], "%d", &expiry)
+			entries = append(entries, inviteEntry{Token: parts[0], Expiry: expiry})
+		} else {
+			// Legacy format: plain token with no expiry
+			entries = append(entries, inviteEntry{Token: line, Expiry: 0})
 		}
 	}
-	return invites
+	return entries
+}
+
+// getInvites returns valid (non-expired) invite tokens for display
+func (s *Server) getInvites() []string {
+	entries := s.getInviteEntries()
+	var tokens []string
+	now := time.Now().Unix()
+	for _, e := range entries {
+		// Skip expired invites
+		if e.Expiry > 0 && e.Expiry < now {
+			continue
+		}
+		tokens = append(tokens, e.Token)
+	}
+	return tokens
 }
 
 func (s *Server) isValidInvite(token string) bool {
-	invites := s.getInvites()
-	for _, inv := range invites {
-		if inv == token {
-			return true
+	entries := s.getInviteEntries()
+	now := time.Now().Unix()
+
+	for _, e := range entries {
+		if e.Token == token {
+			// Check expiry (0 means no expiry for legacy tokens)
+			if e.Expiry == 0 || e.Expiry > now {
+				return true
+			}
 		}
 	}
 	return false
 }
 
+// addInvite stores an invite token with 24-hour expiration
 func (s *Server) addInvite(token string) error {
+	expiry := time.Now().Add(inviteExpiry).Unix()
+
 	f, err := os.OpenFile(s.config.InvitesFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	_, err = f.WriteString(token + "\n")
+	_, err = f.WriteString(fmt.Sprintf("%s:%d\n", token, expiry))
 	return err
 }
 
 func (s *Server) removeInvite(token string) error {
-	invites := s.getInvites()
+	entries := s.getInviteEntries()
 	var remaining []string
-	for _, inv := range invites {
-		if inv != token {
-			remaining = append(remaining, inv)
+
+	for _, e := range entries {
+		if e.Token != token {
+			if e.Expiry > 0 {
+				remaining = append(remaining, fmt.Sprintf("%s:%d", e.Token, e.Expiry))
+			} else {
+				remaining = append(remaining, e.Token)
+			}
 		}
 	}
 
@@ -705,19 +896,62 @@ func (s *Server) removeInvite(token string) error {
 	return os.WriteFile(s.config.InvitesFile, []byte(content), 0600)
 }
 
-// Health check handler
+// cleanupExpiredInvites removes expired invites from the file
+func (s *Server) cleanupExpiredInvites() error {
+	entries := s.getInviteEntries()
+	now := time.Now().Unix()
+	var valid []string
+
+	for _, e := range entries {
+		if e.Expiry == 0 || e.Expiry > now {
+			if e.Expiry > 0 {
+				valid = append(valid, fmt.Sprintf("%s:%d", e.Token, e.Expiry))
+			} else {
+				valid = append(valid, e.Token)
+			}
+		}
+	}
+
+	content := strings.Join(valid, "\n")
+	if len(valid) > 0 {
+		content += "\n"
+	}
+	return os.WriteFile(s.config.InvitesFile, []byte(content), 0600)
+}
+
+// Health check handler - returns minimal response based on background check
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	status := s.wg.GetInterfaceStatus()
-
-	w.Header().Set("Content-Type", "application/json")
-	if status.Up {
+	if s.health.IsHealthy() {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{"status":"ok","wireguard":{"up":true,"port":%q}}`, status.Port)
 	} else {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		fmt.Fprint(w, `{"status":"degraded","wireguard":{"up":false}}`)
 	}
+}
+
+// runHealthCheck performs internal health checks and updates status
+func (s *Server) runHealthCheck() {
+	status := s.wg.GetInterfaceStatus()
+	dnsRunning := !s.config.DNSMasqEnabled || s.dns.Status().Running
+	haproxyRunning := !s.config.HAProxyEnabled || s.haproxy.GetStatus().Running
+
+	healthy := status.Up && dnsRunning && haproxyRunning
+	s.health.SetHealthy(healthy)
+}
+
+// startHealthCheck starts background health monitoring every 60 seconds
+func (s *Server) startHealthCheck() {
+	// Run initial check
+	s.runHealthCheck()
+
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			s.runHealthCheck()
+		}
+	}()
 }
 
 // Route setup
@@ -915,10 +1149,13 @@ func (s *Server) syncPublicIPAndRecords() {
 }
 
 func (s *Server) Run() error {
+	return s.RunWithTokenCallback(nil)
+}
+
+// RunWithTokenCallback runs the server and calls the callback with the admin token if it was newly generated
+func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	fmt.Println("========================================")
 	fmt.Println("Homelab Horizon")
-	fmt.Println("========================================")
-	fmt.Printf("Admin Token: %s\n", s.adminToken)
 	fmt.Println("========================================")
 	fmt.Printf("Listening on %s\n", s.config.ListenAddr)
 	fmt.Printf("WireGuard config: %s\n", s.config.WGConfigPath)
@@ -929,6 +1166,9 @@ func (s *Server) Run() error {
 
 	// Ensure dependent services are running
 	s.ensureServicesRunning()
+
+	// Start background health check (every 60 seconds)
+	s.startHealthCheck()
 
 	// Start Route53 background sync for dynamic IP records
 	s.startRoute53Sync()

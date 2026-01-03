@@ -19,17 +19,17 @@ func (s *Server) handleChecks(w http.ResponseWriter, r *http.Request) {
 	statuses := s.monitor.GetStatuses()
 
 	data := map[string]interface{}{
-		"Config":   s.config,
-		"Statuses": statuses,
-		"Message":  r.URL.Query().Get("msg"),
-		"Error":    r.URL.Query().Get("err"),
+		"Config":    s.config,
+		"Statuses":  statuses,
+		"Message":   r.URL.Query().Get("msg"),
+		"Error":     r.URL.Query().Get("err"),
+		"CSRFToken": s.getCSRFToken(r),
 	}
 	s.templates["checks"].Execute(w, data)
 }
 
 func (s *Server) handleAddCheck(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -79,8 +79,7 @@ func (s *Server) handleAddCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -117,8 +116,7 @@ func (s *Server) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleToggleCheck(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -161,8 +159,7 @@ func (s *Server) handleToggleCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRunCheck(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -182,8 +179,7 @@ func (s *Server) handleRunCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCheckSettings(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 

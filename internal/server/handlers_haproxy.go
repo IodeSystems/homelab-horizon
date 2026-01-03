@@ -50,6 +50,7 @@ func (s *Server) handleHAProxyStatus(w http.ResponseWriter, r *http.Request) {
 		"ConfigPreview":   configPreview,
 		"Message":         r.URL.Query().Get("msg"),
 		"Error":           r.URL.Query().Get("err"),
+		"CSRFToken":       s.getCSRFToken(r),
 	}
 	s.templates["haproxy"].Execute(w, data)
 }
@@ -66,8 +67,7 @@ func (s *Server) handleHAProxyDeleteBackend(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleHAProxyWriteConfig(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -89,8 +89,7 @@ func (s *Server) handleHAProxyWriteConfig(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleHAProxyReload(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -103,8 +102,7 @@ func (s *Server) handleHAProxyReload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHAProxyStart(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -117,8 +115,7 @@ func (s *Server) handleHAProxyStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHAProxySaveSettings(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 

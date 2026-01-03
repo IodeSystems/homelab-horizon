@@ -15,8 +15,7 @@ import (
 
 // handleAddService adds a new service (replaces old DNS mapping handler)
 func (s *Server) handleAddService(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -80,8 +79,7 @@ func (s *Server) handleAddService(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEditService(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
@@ -155,8 +153,7 @@ func (s *Server) handleEditService(w http.ResponseWriter, r *http.Request) {
 
 // handleDeleteService removes a service (replaces old DNS delete handler)
 func (s *Server) handleDeleteService(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) || r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+	if !s.requireAdminPost(w, r) {
 		return
 	}
 
