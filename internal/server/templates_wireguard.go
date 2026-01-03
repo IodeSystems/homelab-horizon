@@ -5,6 +5,7 @@ const testTemplate = `<!DOCTYPE html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{.CSRFToken}}">
     <title>System Status - Homelab Horizon</title>
     <style>` + baseCSS + `</style>
 </head>
@@ -96,6 +97,21 @@ apt install dnsmasq
 systemctl enable dnsmasq</pre>
         </div>
     </div>
+    <script>
+    // Auto-inject CSRF token into all POST forms
+    (function() {
+        var csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+        document.querySelectorAll('form[method="POST"]').forEach(function(form) {
+            if (!form.querySelector('input[name="csrf_token"]')) {
+                var input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'csrf_token';
+                input.value = csrfToken;
+                form.appendChild(input);
+            }
+        });
+    })();
+    </script>
 </body>
 </html>`
 
@@ -165,6 +181,7 @@ const clientConfigTemplate = `<!DOCTYPE html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{.CSRFToken}}">
     <title>Client Config - Homelab Horizon</title>
     <style>` + baseCSS + `</style>
 </head>
@@ -192,5 +209,20 @@ const clientConfigTemplate = `<!DOCTYPE html>
             </form>
         </div>
     </div>
+    <script>
+    // Auto-inject CSRF token into all POST forms
+    (function() {
+        var csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+        document.querySelectorAll('form[method="POST"]').forEach(function(form) {
+            if (!form.querySelector('input[name="csrf_token"]')) {
+                var input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'csrf_token';
+                input.value = csrfToken;
+                form.appendChild(input);
+            }
+        });
+    })();
+    </script>
 </body>
 </html>`

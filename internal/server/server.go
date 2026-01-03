@@ -709,6 +709,7 @@ func (s *Server) handleTest(w http.ResponseWriter, r *http.Request) {
 		"DNSStatus": dnsStatus,
 		"Message":   r.URL.Query().Get("msg"),
 		"Error":     r.URL.Query().Get("err"),
+		"CSRFToken": s.getCSRFToken(r),
 	}
 	s.templates["test"].Execute(w, data)
 }

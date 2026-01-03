@@ -53,9 +53,10 @@ func (s *Server) handleAddClient(w http.ResponseWriter, r *http.Request) {
 	qrCode := qr.GenerateSVG(clientConfig, 256)
 
 	data := map[string]interface{}{
-		"Name":   name,
-		"Config": clientConfig,
-		"QRCode": template.HTML(qrCode),
+		"Name":      name,
+		"Config":    clientConfig,
+		"QRCode":    template.HTML(qrCode),
+		"CSRFToken": s.getCSRFToken(r),
 	}
 	s.templates["clientConfig"].Execute(w, data)
 }

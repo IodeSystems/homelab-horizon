@@ -5,6 +5,7 @@ const checksTemplate = `<!DOCTYPE html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{.CSRFToken}}">
     <title>Service Checks - Homelab Horizon</title>
     <style>` + baseCSS + `
     .status-light { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 0.5rem; }
@@ -126,5 +127,20 @@ const checksTemplate = `<!DOCTYPE html>
             </form>
         </div>
     </div>
+    <script>
+    // Auto-inject CSRF token into all POST forms
+    (function() {
+        var csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+        document.querySelectorAll('form[method="POST"]').forEach(function(form) {
+            if (!form.querySelector('input[name="csrf_token"]')) {
+                var input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'csrf_token';
+                input.value = csrfToken;
+                form.appendChild(input);
+            }
+        });
+    })();
+    </script>
 </body>
 </html>`

@@ -330,6 +330,7 @@ func (s *Server) handleDNSStatus(w http.ResponseWriter, r *http.Request) {
 		"PublicIP":    publicIP,
 		"AWSAvail":    route53.Available(),
 		"Message":     r.URL.Query().Get("msg"),
+		"CSRFToken":   s.getCSRFToken(r),
 		"Error":       r.URL.Query().Get("err"),
 	}
 	s.templates["dns"].Execute(w, data)
