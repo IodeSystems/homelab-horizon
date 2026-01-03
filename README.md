@@ -25,6 +25,14 @@ Homelab Horizon consolidates all of this into a single web UI:
 - **Self-Service VPN**: Generate invite links - users scan a QR code and they're connected
 - **Unified Dashboard**: See all your services, their health status, DNS records, and SSL certificates in one place
 
+## Screenshots
+
+### Admin Dashboard
+![Admin Dashboard](docs/screenshots/admin.png)
+
+### HAProxy & SSL Management
+![HAProxy & SSL](docs/screenshots/haproxy.png)
+
 ## Features
 
 - **WireGuard VPN Management**: Create clients, generate QR codes, manage peers
