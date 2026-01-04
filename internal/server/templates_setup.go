@@ -245,7 +245,11 @@ sudo homelab-horizon
     <script>
     // Auto-inject CSRF token into all POST forms
     (function() {
-        var csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+        var meta = document.querySelector('meta[name="csrf-token"]');
+        var csrfToken = meta ? meta.getAttribute('content') : '';
+        if (!csrfToken) {
+            console.error('[CSRF] No CSRF token in meta tag!');
+        }
         document.querySelectorAll('form[method="POST"]').forEach(function(form) {
             if (!form.querySelector('input[name="csrf_token"]')) {
                 var input = document.createElement('input');

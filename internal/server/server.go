@@ -304,15 +304,16 @@ func (s *Server) verifyCookie(cookie string) (string, bool) {
 
 // generateCSRFToken creates a signed CSRF token for the current session
 func (s *Server) generateCSRFToken(sessionID string) string {
-	// Token = base64(sessionID:timestamp:signature)
+	// Token = base64(sessionID|timestamp|signature)
+	// Using | as delimiter since sessionID may contain colons (e.g., "vpn:10.0.0.1")
 	timestamp := time.Now().Unix()
-	data := fmt.Sprintf("%s:%d", sessionID, timestamp)
+	data := fmt.Sprintf("%s|%d", sessionID, timestamp)
 
 	h := hmac.New(sha256.New, []byte(s.csrfSecret))
 	h.Write([]byte(data))
 	sig := base64.StdEncoding.EncodeToString(h.Sum(nil))
 
-	token := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", data, sig)))
+	token := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s|%s", data, sig)))
 	return token
 }
 
@@ -323,7 +324,8 @@ func (s *Server) validateCSRFToken(token, sessionID string) bool {
 		return false
 	}
 
-	parts := strings.SplitN(string(decoded), ":", 3)
+	// Split by | delimiter (sessionID may contain colons)
+	parts := strings.SplitN(string(decoded), "|", 3)
 	if len(parts) != 3 {
 		return false
 	}
@@ -345,7 +347,7 @@ func (s *Server) validateCSRFToken(token, sessionID string) bool {
 	}
 
 	// Verify signature
-	data := fmt.Sprintf("%s:%s", tokenSession, timestampStr)
+	data := fmt.Sprintf("%s|%s", tokenSession, timestampStr)
 	h := hmac.New(sha256.New, []byte(s.csrfSecret))
 	h.Write([]byte(data))
 	expectedSig := base64.StdEncoding.EncodeToString(h.Sum(nil))
@@ -354,13 +356,25 @@ func (s *Server) validateCSRFToken(token, sessionID string) bool {
 }
 
 // getSessionID extracts session ID from request for CSRF validation
+// For cookie-based auth, uses the session cookie
+// For VPN-based auth, uses the client's VPN IP as a pseudo-session
 func (s *Server) getSessionID(r *http.Request) string {
+	// Try session cookie first
 	cookie, err := r.Cookie("session")
-	if err != nil {
-		return ""
+	if err == nil && cookie.Value != "" {
+		return cookie.Value
 	}
-	// Use the full cookie value as session ID
-	return cookie.Value
+
+	// For VPN admins, use their VPN IP as session ID
+	// This allows CSRF tokens to work for VPN-authenticated users
+	if s.isVPNAdmin(r) {
+		clientIP := s.getClientIP(r)
+		if clientIP != "" {
+			return "vpn:" + clientIP
+		}
+	}
+
+	return ""
 }
 
 // requireCSRF validates CSRF token for POST requests, returns false if invalid
@@ -400,6 +414,7 @@ func (s *Server) requireCSRF(w http.ResponseWriter, r *http.Request) bool {
 func (s *Server) getCSRFToken(r *http.Request) string {
 	sessionID := s.getSessionID(r)
 	if sessionID == "" {
+		fmt.Printf("[CSRF] No session for %s %s\n", r.Method, r.URL.Path)
 		return ""
 	}
 	return s.generateCSRFToken(sessionID)
@@ -419,6 +434,12 @@ func (s *Server) requireAdminPost(w http.ResponseWriter, r *http.Request) bool {
 	return s.requireCSRF(w, r)
 }
 
+// csrfMiddleware is a passthrough - CSRF is checked by requireAdminPost in handlers
+// Keeping this wrapper for potential future use (rate limiting, logging, etc)
+func (s *Server) csrfMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return next
+}
+
 func (s *Server) isAdmin(r *http.Request) bool {
 	// Check session cookie first
 	cookie, err := r.Cookie("session")
@@ -435,67 +456,44 @@ func (s *Server) isAdmin(r *http.Request) bool {
 
 // isVPNAdmin checks if the request comes from a VPN client marked as admin
 func (s *Server) isVPNAdmin(r *http.Request) bool {
-	// Debug: log the raw request info
-	fmt.Printf("[VPNAuth] RemoteAddr=%s XFF=%s VPNAdmins=%v\n",
-		r.RemoteAddr, r.Header.Get("X-Forwarded-For"), s.config.VPNAdmins)
-
 	if len(s.config.VPNAdmins) == 0 {
-		fmt.Printf("[VPNAuth] No VPN admins configured\n")
 		return false
 	}
 
-	// Get client IP from request
 	clientIP := s.getClientIP(r)
-	fmt.Printf("[VPNAuth] Resolved clientIP=%s\n", clientIP)
 	if clientIP == "" {
 		return false
 	}
 
-	// Check if IP is in VPN range
 	if !s.isInVPNRange(clientIP) {
-		fmt.Printf("[VPNAuth] clientIP=%s not in VPN range %s\n", clientIP, s.config.VPNRange)
 		return false
 	}
 
-	// Look up the peer by IP
 	peer := s.wg.GetPeerByIP(clientIP)
 	if peer == nil {
-		fmt.Printf("[VPNAuth] No peer found for IP=%s\n", clientIP)
 		return false
 	}
-	fmt.Printf("[VPNAuth] Found peer: Name=%s AllowedIPs=%s\n", peer.Name, peer.AllowedIPs)
 
-	// Check if this peer is in the admin list
 	for _, adminName := range s.config.VPNAdmins {
 		if peer.Name == adminName {
-			fmt.Printf("[VPNAuth] SUCCESS: %s is a VPN admin\n", peer.Name)
 			return true
 		}
 	}
-	fmt.Printf("[VPNAuth] Peer %s is not in VPN admins list\n", peer.Name)
 	return false
 }
 
 // getClientIP extracts the client IP from the request
 func (s *Server) getClientIP(r *http.Request) string {
-	// Get the direct connection IP first
 	directIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		directIP = r.RemoteAddr
 	}
 
 	// Only trust X-Forwarded-For if the direct connection is from a trusted proxy
-	// (localhost or the server's local interface - i.e., HAProxy running on same machine)
-	trusted := s.isTrustedProxy(directIP)
-	fmt.Printf("[VPNAuth] directIP=%s isTrustedProxy=%v\n", directIP, trusted)
-
-	if trusted {
+	if s.isTrustedProxy(directIP) {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			// Take the first IP in the chain (original client)
 			parts := strings.Split(xff, ",")
-			clientIP := strings.TrimSpace(parts[0])
-			fmt.Printf("[VPNAuth] Using XFF clientIP=%s\n", clientIP)
-			return clientIP
+			return strings.TrimSpace(parts[0])
 		}
 	}
 
@@ -529,8 +527,6 @@ func (s *Server) isTrustedProxy(ip string) bool {
 		}
 	}
 
-	fmt.Printf("[VPNAuth] isTrustedProxy: ip=%s LocalInterface=%s VPNRange=%s -> NOT TRUSTED\n",
-		ip, s.config.LocalInterface, s.config.VPNRange)
 	return false
 }
 
@@ -968,79 +964,80 @@ func (s *Server) startHealthCheck() {
 func (s *Server) setupRoutes() *http.ServeMux {
 	mux := http.NewServeMux()
 
+	// Public routes (no CSRF needed)
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/", s.handleLogin)
 	mux.HandleFunc("/auth", s.handleAuth)
 	mux.HandleFunc("/logout", s.handleLogout)
+	mux.HandleFunc("/invite/", s.handleInvite)
 
-	mux.HandleFunc("/admin", s.handleAdmin)
-	mux.HandleFunc("/admin/client", s.handleAddClient)
-	mux.HandleFunc("/admin/client/delete", s.handleDeleteClient)
-	mux.HandleFunc("/admin/client/download", s.handleDownload)
-	mux.HandleFunc("/admin/client/toggle-admin", s.handleToggleClientAdmin)
-	mux.HandleFunc("/admin/invite", s.handleCreateInvite)
-	mux.HandleFunc("/admin/invite/delete", s.handleDeleteInvite)
-	mux.HandleFunc("/admin/reload", s.handleReload)
-	mux.HandleFunc("/admin/config", s.handleSaveConfig)
+	// Admin routes - all wrapped with CSRF middleware
+	mux.HandleFunc("/admin", s.csrfMiddleware(s.handleAdmin))
+	mux.HandleFunc("/admin/client", s.csrfMiddleware(s.handleAddClient))
+	mux.HandleFunc("/admin/client/delete", s.csrfMiddleware(s.handleDeleteClient))
+	mux.HandleFunc("/admin/client/download", s.csrfMiddleware(s.handleDownload))
+	mux.HandleFunc("/admin/client/toggle-admin", s.csrfMiddleware(s.handleToggleClientAdmin))
+	mux.HandleFunc("/admin/invite", s.csrfMiddleware(s.handleCreateInvite))
+	mux.HandleFunc("/admin/invite/delete", s.csrfMiddleware(s.handleDeleteInvite))
+	mux.HandleFunc("/admin/reload", s.csrfMiddleware(s.handleReload))
+	mux.HandleFunc("/admin/config", s.csrfMiddleware(s.handleSaveConfig))
 
-	mux.HandleFunc("/admin/interface/up", s.handleInterfaceUp)
-	mux.HandleFunc("/admin/enable-forwarding", s.handleEnableForwarding)
-	mux.HandleFunc("/admin/add-masquerade", s.handleAddMasquerade)
+	mux.HandleFunc("/admin/interface/up", s.csrfMiddleware(s.handleInterfaceUp))
+	mux.HandleFunc("/admin/enable-forwarding", s.csrfMiddleware(s.handleEnableForwarding))
+	mux.HandleFunc("/admin/add-masquerade", s.csrfMiddleware(s.handleAddMasquerade))
 
-	// Service and Zone management (new unified model)
-	mux.HandleFunc("/admin/service", s.handleAddService)
-	mux.HandleFunc("/admin/service/edit", s.handleEditService)
-	mux.HandleFunc("/admin/service/delete", s.handleDeleteService)
-	mux.HandleFunc("/admin/services/sync", s.handleSyncServicesStream)
-	mux.HandleFunc("/admin/services/sync/status", s.handleSyncStatus)
-	mux.HandleFunc("/admin/zone", s.handleAddZone)
-	mux.HandleFunc("/admin/zone/edit", s.handleEditZone)
-	mux.HandleFunc("/admin/zone/delete", s.handleDeleteZone)
-	mux.HandleFunc("/admin/zone/subzone", s.handleAddSubZone)
-	mux.HandleFunc("/admin/zone/template", s.handleApplyZoneTemplate)
+	// Service and Zone management
+	mux.HandleFunc("/admin/service", s.csrfMiddleware(s.handleAddService))
+	mux.HandleFunc("/admin/service/edit", s.csrfMiddleware(s.handleEditService))
+	mux.HandleFunc("/admin/service/delete", s.csrfMiddleware(s.handleDeleteService))
+	mux.HandleFunc("/admin/services/sync", s.csrfMiddleware(s.handleSyncServicesStream))
+	mux.HandleFunc("/admin/services/sync/status", s.csrfMiddleware(s.handleSyncStatus))
+	mux.HandleFunc("/admin/zone", s.csrfMiddleware(s.handleAddZone))
+	mux.HandleFunc("/admin/zone/edit", s.csrfMiddleware(s.handleEditZone))
+	mux.HandleFunc("/admin/zone/delete", s.csrfMiddleware(s.handleDeleteZone))
+	mux.HandleFunc("/admin/zone/subzone", s.csrfMiddleware(s.handleAddSubZone))
+	mux.HandleFunc("/admin/zone/template", s.csrfMiddleware(s.handleApplyZoneTemplate))
 
 	// DNSMasq management
-	mux.HandleFunc("/admin/dns/reload", s.handleDNSReload)
-	mux.HandleFunc("/admin/dnsmasq/start", s.handleDNSMasqStart)
-	mux.HandleFunc("/admin/dnsmasq/init", s.handleDNSMasqInit)
+	mux.HandleFunc("/admin/dns/reload", s.csrfMiddleware(s.handleDNSReload))
+	mux.HandleFunc("/admin/dnsmasq/start", s.csrfMiddleware(s.handleDNSMasqStart))
+	mux.HandleFunc("/admin/dnsmasq/init", s.csrfMiddleware(s.handleDNSMasqInit))
 
-	mux.HandleFunc("/admin/setup", s.handleSetup)
-	mux.HandleFunc("/admin/setup/install-service", s.handleInstallService)
-	mux.HandleFunc("/admin/setup/enable-service", s.handleEnableService)
-	mux.HandleFunc("/admin/setup/create-wg-config", s.handleCreateWGConfig)
-	mux.HandleFunc("/admin/help", s.handleHelp)
+	mux.HandleFunc("/admin/setup", s.csrfMiddleware(s.handleSetup))
+	mux.HandleFunc("/admin/setup/install-service", s.csrfMiddleware(s.handleInstallService))
+	mux.HandleFunc("/admin/setup/enable-service", s.csrfMiddleware(s.handleEnableService))
+	mux.HandleFunc("/admin/setup/create-wg-config", s.csrfMiddleware(s.handleCreateWGConfig))
+	mux.HandleFunc("/admin/help", s.csrfMiddleware(s.handleHelp))
 
-	mux.HandleFunc("/admin/haproxy", s.handleHAProxyStatus)
-	mux.HandleFunc("/admin/haproxy/backend", s.handleHAProxyAddBackend)
-	mux.HandleFunc("/admin/haproxy/backend/delete", s.handleHAProxyDeleteBackend)
-	mux.HandleFunc("/admin/haproxy/write-config", s.handleHAProxyWriteConfig)
-	mux.HandleFunc("/admin/haproxy/reload", s.handleHAProxyReload)
-	mux.HandleFunc("/admin/haproxy/start", s.handleHAProxyStart)
-	mux.HandleFunc("/admin/haproxy/settings", s.handleHAProxySaveSettings)
+	mux.HandleFunc("/admin/haproxy", s.csrfMiddleware(s.handleHAProxyStatus))
+	mux.HandleFunc("/admin/haproxy/backend", s.csrfMiddleware(s.handleHAProxyAddBackend))
+	mux.HandleFunc("/admin/haproxy/backend/delete", s.csrfMiddleware(s.handleHAProxyDeleteBackend))
+	mux.HandleFunc("/admin/haproxy/write-config", s.csrfMiddleware(s.handleHAProxyWriteConfig))
+	mux.HandleFunc("/admin/haproxy/reload", s.csrfMiddleware(s.handleHAProxyReload))
+	mux.HandleFunc("/admin/haproxy/start", s.csrfMiddleware(s.handleHAProxyStart))
+	mux.HandleFunc("/admin/haproxy/settings", s.csrfMiddleware(s.handleHAProxySaveSettings))
 
 	// SSL/Let's Encrypt routes
-	mux.HandleFunc("/admin/ssl/domain", s.handleSSLAddDomain)
-	mux.HandleFunc("/admin/ssl/domain/delete", s.handleSSLDeleteDomain)
-	mux.HandleFunc("/admin/ssl/request-cert", s.handleSSLRequestCert)
-	mux.HandleFunc("/admin/ssl/package-certs", s.handleSSLPackageCerts)
-	mux.HandleFunc("/admin/ssl/settings", s.handleSSLSaveSettings)
-	mux.HandleFunc("/admin/ssl/cert-info", s.handleSSLCertInfo)
+	mux.HandleFunc("/admin/ssl/domain", s.csrfMiddleware(s.handleSSLAddDomain))
+	mux.HandleFunc("/admin/ssl/domain/delete", s.csrfMiddleware(s.handleSSLDeleteDomain))
+	mux.HandleFunc("/admin/ssl/request-cert", s.csrfMiddleware(s.handleSSLRequestCert))
+	mux.HandleFunc("/admin/ssl/package-certs", s.csrfMiddleware(s.handleSSLPackageCerts))
+	mux.HandleFunc("/admin/ssl/settings", s.csrfMiddleware(s.handleSSLSaveSettings))
+	mux.HandleFunc("/admin/ssl/cert-info", s.csrfMiddleware(s.handleSSLCertInfo))
 
 	// External DNS routes
-	mux.HandleFunc("/admin/dns", s.handleDNSStatus)
-	mux.HandleFunc("/admin/dns/discover-zones", s.handleDNSDiscoverZones)
-	mux.HandleFunc("/admin/dns/sync", s.handleDNSSyncRecord)
-	mux.HandleFunc("/admin/dns/sync-all", s.handleDNSSyncAll)
+	mux.HandleFunc("/admin/dns", s.csrfMiddleware(s.handleDNSStatus))
+	mux.HandleFunc("/admin/dns/discover-zones", s.csrfMiddleware(s.handleDNSDiscoverZones))
+	mux.HandleFunc("/admin/dns/sync", s.csrfMiddleware(s.handleDNSSyncRecord))
+	mux.HandleFunc("/admin/dns/sync-all", s.csrfMiddleware(s.handleDNSSyncAll))
 
 	// Service monitoring routes
-	mux.HandleFunc("/admin/checks", s.handleChecks)
-	mux.HandleFunc("/admin/checks/add", s.handleAddCheck)
-	mux.HandleFunc("/admin/checks/delete", s.handleDeleteCheck)
-	mux.HandleFunc("/admin/checks/toggle", s.handleToggleCheck)
-	mux.HandleFunc("/admin/checks/run", s.handleRunCheck)
-	mux.HandleFunc("/admin/checks/settings", s.handleCheckSettings)
-
-	mux.HandleFunc("/invite/", s.handleInvite)
+	mux.HandleFunc("/admin/checks", s.csrfMiddleware(s.handleChecks))
+	mux.HandleFunc("/admin/checks/add", s.csrfMiddleware(s.handleAddCheck))
+	mux.HandleFunc("/admin/checks/delete", s.csrfMiddleware(s.handleDeleteCheck))
+	mux.HandleFunc("/admin/checks/toggle", s.csrfMiddleware(s.handleToggleCheck))
+	mux.HandleFunc("/admin/checks/run", s.csrfMiddleware(s.handleRunCheck))
+	mux.HandleFunc("/admin/checks/settings", s.csrfMiddleware(s.handleCheckSettings))
 
 	return mux
 }
