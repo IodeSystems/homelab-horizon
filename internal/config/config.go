@@ -235,14 +235,37 @@ func stripJSONCComments(data []byte) []byte {
 	lines := bytes.Split(data, []byte("\n"))
 	for _, line := range lines {
 		trimmed := bytes.TrimSpace(line)
-		// Skip full-line comments
 		if bytes.HasPrefix(trimmed, []byte("//")) {
 			continue
 		}
+		line = stripInlineComment(line)
 		buf.Write(line)
 		buf.WriteByte('\n')
 	}
 	return buf.Bytes()
+}
+
+// stripInlineComment removes trailing // comments, respecting quoted strings
+func stripInlineComment(line []byte) []byte {
+	inString := false
+	escaped := false
+	for i := 0; i < len(line); i++ {
+		if escaped {
+			escaped = false
+			continue
+		}
+		switch line[i] {
+		case '\\':
+			escaped = true
+		case '"':
+			inString = !inString
+		case '/':
+			if !inString && i+1 < len(line) && line[i+1] == '/' {
+				return bytes.TrimRight(line[:i], " \t")
+			}
+		}
+	}
+	return line
 }
 
 // Load reads config from path, overlaying on defaults
