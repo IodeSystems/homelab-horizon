@@ -15,88 +15,79 @@ import (
 	"homelab-horizon/internal/wireguard"
 )
 
-const systemdService = `[Unit]
+var (
+	Version   = "dev"
+	BuildTime = "unknown"
+)
+
+const systemdServiceTemplate = `[Unit]
 Description=Homelab Horizon - Split-Horizon DNS & VPN Management
-After=network.target
+After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%s
+ExecStart=%s%s
+WorkingDirectory=%s
 Restart=on-failure
 RestartSec=5
-
 User=root
 Group=root
-
-ProtectSystem=strict
-ReadWritePaths=/etc/wireguard /etc/dnsmasq.d /etc/haproxy /proc/sys/net/ipv4
-
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
-NoNewPrivileges=false
-PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
 `
 
+const servicePath = "/etc/systemd/system/homelab-horizon.service"
+
 func main() {
 	configPath := flag.String("config", "", "Path to configuration file (optional)")
-	install := flag.String("install", "", "Install service (systemd)")
+	install := flag.Bool("install", false, "Install systemd service")
 	check := flag.Bool("check", false, "Check system configuration and offer to fix issues")
 	configTemplate := flag.Bool("config-template", false, "Print a commented config template and exit")
 	iamPolicy := flag.Bool("iam-policy", false, "Print IAM policy template for Route53 access")
+	dryRun := flag.Bool("dry-run", false, "Dry run mode - show what would be done without making changes")
+	showSystemdService := flag.Bool("show-systemd", false, "Show the systemd service file that would be generated")
+	version := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
-	if *configTemplate {
+	switch {
+	case *version:
+		fmt.Printf("homelab-horizon %s (built %s)\n", Version, BuildTime)
+	case *configTemplate:
 		fmt.Print(config.Template())
-		return
-	}
-
-	if *iamPolicy {
+	case *iamPolicy:
 		fmt.Print(config.IAMPolicyTemplate())
-		return
-	}
-
-	if *check {
-		if err := runCheck(); err != nil {
+	case *showSystemdService:
+		fmt.Println(generateSystemdService(*configPath))
+	case *check:
+		if err := runCheck(*dryRun); err != nil {
 			log.Fatalf("Check failed: %v", err)
 		}
-		return
-	}
-
-	if *install != "" {
-		if err := installService(*install); err != nil {
+	case *install:
+		if err := installService(*dryRun); err != nil {
 			log.Fatalf("Installation failed: %v", err)
 		}
-		return
+	default:
+		runServer(*configPath, *dryRun)
 	}
+}
+
+func runServer(configPath string, dryRun bool) {
+	fmt.Printf("Homelab Horizon %s (built %s)\n", Version, BuildTime)
 
 	if os.Geteuid() != 0 {
 		log.Println("Warning: Not running as root. Some operations may fail.")
 	}
 
-	var cfg *config.Config
-	var cfgPath string
-	var err error
-
-	if *configPath != "" {
-		cfg, err = config.Load(*configPath)
-		cfgPath = *configPath
-		if err != nil {
-			log.Fatalf("Failed to load config: %v", err)
-		}
-		fmt.Printf("Loaded config from %s\n", cfgPath)
-	} else {
-		cfg, cfgPath, err = config.LoadAuto()
-		if err != nil {
-			log.Fatalf("Failed to load config: %v", err)
-		}
+	cfg, cfgPath, err := loadConfig(configPath)
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
 	}
 
 	fmt.Printf("Config search paths: %s\n", strings.Join(config.SearchPaths, ", "))
 
-	srv, err := server.NewWithConfig(cfg, cfgPath)
+	srv, err := server.NewWithConfig(cfg, cfgPath, dryRun)
 	if err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
@@ -106,7 +97,380 @@ func main() {
 	}
 }
 
-// askYesNo prompts the user for a yes/no response
+func loadConfig(configPath string) (*config.Config, string, error) {
+	if configPath != "" {
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			return nil, "", err
+		}
+		fmt.Printf("Loaded config from %s\n", configPath)
+		return cfg, configPath, nil
+	}
+	return config.LoadAuto()
+}
+
+func generateSystemdService(configPath string) string {
+	execPath, err := os.Executable()
+	if err != nil {
+		execPath = "/usr/local/bin/homelab-horizon"
+	}
+	execPath, _ = filepath.Abs(execPath)
+
+	configFlag := ""
+	workDir := "/etc/homelab-horizon"
+	if configPath != "" {
+		if abs, err := filepath.Abs(configPath); err == nil {
+			configPath = abs
+			workDir = filepath.Dir(abs)
+		}
+		configFlag = fmt.Sprintf(" -config %s", configPath)
+	}
+
+	return fmt.Sprintf(systemdServiceTemplate, execPath, configFlag, workDir)
+}
+
+type checker struct {
+	isRoot  bool
+	dryRun  bool
+	allGood bool
+	cfg     *config.Config
+	cfgPath string
+}
+
+func runCheck(dryRun bool) error {
+	fmt.Printf("Homelab Horizon %s System Check\n", Version)
+	fmt.Println("================================")
+	fmt.Println()
+
+	c := &checker{
+		isRoot:  os.Geteuid() == 0,
+		dryRun:  dryRun,
+		allGood: true,
+	}
+
+	if !c.isRoot {
+		fmt.Println("Warning: Not running as root. Some checks may be incomplete.")
+		fmt.Println()
+	}
+
+	c.cfg, c.cfgPath, _ = config.LoadAuto()
+	fmt.Println()
+
+	c.checkBinaries()
+	c.checkServices()
+	c.checkWireGuard()
+	c.checkSystemdService()
+	c.checkFileAccess()
+	c.checkNetwork()
+	c.printSummary()
+
+	return nil
+}
+
+func (c *checker) checkBinaries() {
+	c.checkBinary("WireGuard", "wg", "apt install wireguard-tools", true)
+	c.checkBinary("dnsmasq", "dnsmasq", "apt install dnsmasq", c.cfg.DNSMasqEnabled)
+	c.checkBinary("qrencode", "qrencode", "apt install qrencode", false)
+	c.checkBinary("haproxy", "haproxy", "apt install haproxy", c.cfg.HAProxyEnabled)
+}
+
+func (c *checker) checkBinary(name, binary, installCmd string, required bool) {
+	fmt.Printf("Checking %s... ", name)
+	if _, err := exec.LookPath(binary); err != nil {
+		fmt.Println("NOT FOUND")
+		if required {
+			fmt.Printf("  %s not installed.\n", name)
+			fmt.Printf("  Install with: %s\n", installCmd)
+			c.allGood = false
+		} else {
+			fmt.Printf("  Install with: %s\n", installCmd)
+		}
+	} else {
+		fmt.Println("OK")
+	}
+}
+
+func (c *checker) checkServices() {
+	if !c.cfg.HAProxyEnabled {
+		return
+	}
+
+	fmt.Print("Checking haproxy service... ")
+	if err := exec.Command("systemctl", "is-active", "haproxy").Run(); err != nil {
+		fmt.Println("NOT RUNNING")
+		if c.canFix() && askYesNo("  Start haproxy service?") {
+			if err := exec.Command("systemctl", "start", "haproxy").Run(); err != nil {
+				fmt.Printf("  Error: %v\n", err)
+			} else {
+				fmt.Println("  haproxy started.")
+			}
+		}
+	} else {
+		fmt.Println("RUNNING")
+	}
+}
+
+func (c *checker) checkWireGuard() {
+	fmt.Printf("Checking WireGuard config (%s)... ", c.cfg.WGConfigPath)
+	if _, err := os.Stat(c.cfg.WGConfigPath); os.IsNotExist(err) {
+		fmt.Println("NOT FOUND")
+		c.allGood = false
+		if c.canFix() && askYesNo("  Create WireGuard server config?") {
+			if err := createWGConfig(c.cfg, c.cfgPath); err != nil {
+				fmt.Printf("  Error: %v\n", err)
+			} else {
+				fmt.Println("  Created WireGuard config.")
+			}
+		}
+	} else if err != nil {
+		fmt.Printf("ERROR: %v\n", err)
+		c.allGood = false
+	} else {
+		fmt.Println("OK")
+	}
+
+	fmt.Printf("Checking WireGuard interface (%s)... ", c.cfg.WGInterface)
+	if err := exec.Command("wg", "show", c.cfg.WGInterface).Run(); err != nil {
+		fmt.Println("DOWN")
+		if c.canFix() && askYesNo("  Bring up WireGuard interface?") {
+			if err := exec.Command("wg-quick", "up", c.cfg.WGInterface).Run(); err != nil {
+				fmt.Printf("  Error: %v\n", err)
+			} else {
+				fmt.Println("  Interface is now up.")
+			}
+		}
+	} else {
+		fmt.Println("UP")
+	}
+}
+
+func (c *checker) checkSystemdService() {
+	fmt.Print("Checking systemd service... ")
+	if _, err := os.Stat(servicePath); os.IsNotExist(err) {
+		fmt.Println("NOT INSTALLED")
+		fmt.Println()
+		fmt.Println("  Generated service file preview:")
+		fmt.Println("  --------------------------------")
+		for _, line := range strings.Split(generateSystemdService(c.cfgPath), "\n") {
+			fmt.Printf("  %s\n", line)
+		}
+		fmt.Println("  --------------------------------")
+		if c.canFix() && askYesNo("  Install systemd service?") {
+			if err := installService(c.dryRun); err != nil {
+				fmt.Printf("  Error: %v\n", err)
+			}
+		}
+		return
+	}
+
+	if err := exec.Command("systemctl", "is-enabled", "homelab-horizon").Run(); err != nil {
+		fmt.Println("INSTALLED (not enabled)")
+		if c.canFix() && askYesNo("  Enable service to start on boot?") {
+			exec.Command("systemctl", "enable", "homelab-horizon").Run()
+			fmt.Println("  Service enabled.")
+		}
+	} else {
+		fmt.Println("OK (enabled)")
+	}
+}
+
+func (c *checker) checkFileAccess() {
+	fmt.Println()
+	fmt.Println("Checking file access...")
+
+	wgDir := filepath.Dir(c.cfg.WGConfigPath)
+	fmt.Printf("  %s: ", wgDir)
+	if err := checkWriteAccess(wgDir); err != nil {
+		fmt.Printf("NO ACCESS (%v)\n", err)
+		c.allGood = false
+	} else {
+		fmt.Println("OK")
+	}
+
+	if c.cfg.DNSMasqEnabled {
+		dnsmasqDir := filepath.Dir(c.cfg.DNSMasqConfigPath)
+		fmt.Printf("  %s: ", dnsmasqDir)
+		if err := checkWriteAccess(dnsmasqDir); err != nil {
+			fmt.Printf("NO ACCESS (%v)\n", err)
+			if c.canFix() && askYesNo("  Create dnsmasq config directory?") {
+				if err := os.MkdirAll(dnsmasqDir, 0755); err != nil {
+					fmt.Printf("  Error: %v\n", err)
+				} else {
+					fmt.Println("  Created directory.")
+				}
+			}
+		} else {
+			fmt.Println("OK")
+		}
+	}
+}
+
+func (c *checker) checkNetwork() {
+	fmt.Print("Checking IP forwarding... ")
+	data, err := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
+	if err != nil {
+		fmt.Printf("ERROR: %v\n", err)
+	} else if strings.TrimSpace(string(data)) != "1" {
+		fmt.Println("DISABLED")
+		c.allGood = false
+		if c.canFix() && askYesNo("  Enable IP forwarding?") {
+			if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644); err != nil {
+				fmt.Printf("  Error: %v\n", err)
+			} else {
+				fmt.Println("  IP forwarding enabled.")
+				fmt.Println("  To make permanent, add to /etc/sysctl.conf:")
+				fmt.Println("    net.ipv4.ip_forward=1")
+			}
+		}
+	} else {
+		fmt.Println("OK")
+	}
+
+	fmt.Printf("Checking NAT masquerade (%s)... ", c.cfg.VPNRange)
+	if err := exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING", "-s", c.cfg.VPNRange, "-j", "MASQUERADE").Run(); err != nil {
+		fmt.Println("NOT FOUND")
+		c.allGood = false
+		if c.canFix() && askYesNo("  Add masquerade rule?") {
+			if err := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", c.cfg.VPNRange, "-j", "MASQUERADE").Run(); err != nil {
+				fmt.Printf("  Error: %v\n", err)
+			} else {
+				fmt.Println("  Masquerade rule added.")
+				fmt.Println("  To make permanent, save with: iptables-save > /etc/iptables/rules.v4")
+			}
+		}
+	} else {
+		fmt.Println("OK")
+	}
+}
+
+func (c *checker) printSummary() {
+	fmt.Println()
+	fmt.Println("======================")
+	if c.allGood {
+		fmt.Println("All checks passed!")
+	} else {
+		fmt.Println("Some issues found. Review above and fix as needed.")
+	}
+	fmt.Println()
+	fmt.Printf("Config file: %s\n", c.cfgPath)
+	fmt.Printf("Web UI will listen on: %s\n", c.cfg.ListenAddr)
+	fmt.Println()
+}
+
+func (c *checker) canFix() bool {
+	return c.isRoot && !c.dryRun
+}
+
+func checkWriteAccess(path string) error {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return checkWriteAccess(filepath.Dir(path))
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("not a directory")
+	}
+
+	testFile := filepath.Join(path, ".homelab-horizon-test")
+	f, err := os.Create(testFile)
+	if err != nil {
+		return fmt.Errorf("cannot write")
+	}
+	f.Close()
+	os.Remove(testFile)
+	return nil
+}
+
+func createWGConfig(cfg *config.Config, cfgPath string) error {
+	privKey, pubKey, err := wireguard.GenerateKeyPair()
+	if err != nil {
+		return fmt.Errorf("generating keys: %w", err)
+	}
+
+	serverIP := strings.Split(cfg.VPNRange, "/")[0]
+	serverIP = strings.TrimSuffix(serverIP, ".0") + ".1"
+
+	listenPort := askString("WireGuard listen port", "51820")
+
+	endpoint := askString("Public endpoint (domain or IP)", cfg.ServerEndpoint)
+	if !strings.Contains(endpoint, ":") {
+		endpoint = endpoint + ":" + listenPort
+	}
+
+	wgDir := filepath.Dir(cfg.WGConfigPath)
+	if err := os.MkdirAll(wgDir, 0700); err != nil {
+		return fmt.Errorf("creating directory: %w", err)
+	}
+
+	wgConfig := fmt.Sprintf(`[Interface]
+PrivateKey = %s
+Address = %s/24
+ListenPort = %s
+PostUp = iptables -A FORWARD -i %%i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i %%i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+`, privKey, serverIP, listenPort)
+
+	if err := os.WriteFile(cfg.WGConfigPath, []byte(wgConfig), 0600); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+
+	cfg.ServerPublicKey = pubKey
+	cfg.ServerEndpoint = endpoint
+	if err := config.Save(cfgPath, cfg); err != nil {
+		fmt.Printf("Warning: could not save app config: %v\n", err)
+	}
+
+	fmt.Printf("  Server public key: %s\n", pubKey)
+	return nil
+}
+
+func installService(dryRun bool) error {
+	_, cfgPath, _ := config.LoadAuto()
+	serviceContent := generateSystemdService(cfgPath)
+
+	if dryRun {
+		fmt.Println("DRY RUN: Would create systemd service file:")
+		fmt.Printf("Path: %s\n", servicePath)
+		fmt.Println("Content:")
+		fmt.Println(serviceContent)
+		return nil
+	}
+
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("must run as root to install systemd service")
+	}
+
+	if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
+		return fmt.Errorf("writing service file: %w", err)
+	}
+	fmt.Printf("Created %s\n", servicePath)
+
+	fmt.Println("Validating service file...")
+	if output, err := exec.Command("systemd-analyze", "verify", servicePath).CombinedOutput(); err != nil {
+		fmt.Printf("Warning: systemd-analyze verify: %s\n", string(output))
+	} else {
+		fmt.Println("Service file validated OK")
+	}
+
+	fmt.Println("Reloading systemd...")
+	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
+		return fmt.Errorf("systemctl daemon-reload: %w", err)
+	}
+
+	fmt.Println()
+	fmt.Println("Installation complete!")
+	fmt.Println()
+	fmt.Println("Next steps:")
+	fmt.Println("  1. Start service: systemctl start homelab-horizon")
+	fmt.Println("  2. Enable on boot: systemctl enable homelab-horizon")
+	fmt.Println("  3. View logs: journalctl -u homelab-horizon -f")
+	fmt.Println()
+
+	return nil
+}
+
 func askYesNo(prompt string) bool {
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Printf("%s [y/N]: ", prompt)
@@ -115,7 +479,6 @@ func askYesNo(prompt string) bool {
 	return response == "y" || response == "yes"
 }
 
-// askString prompts the user for a string input with a default
 func askString(prompt, defaultVal string) string {
 	reader := bufio.NewReader(os.Stdin)
 	if defaultVal != "" {
@@ -129,371 +492,4 @@ func askString(prompt, defaultVal string) string {
 		return defaultVal
 	}
 	return response
-}
-
-func runCheck() error {
-	fmt.Println("Homelab Horizon System Check")
-	fmt.Println("============================")
-	fmt.Println()
-
-	isRoot := os.Geteuid() == 0
-	if !isRoot {
-		fmt.Println("Warning: Not running as root. Some checks may be incomplete.")
-		fmt.Println("Re-run with sudo for full functionality.")
-		fmt.Println()
-	}
-
-	// Load config
-	cfg, cfgPath, _ := config.LoadAuto()
-	fmt.Println()
-
-	allGood := true
-
-	// 1. Check if wg is installed
-	fmt.Print("Checking WireGuard... ")
-	if _, err := exec.LookPath("wg"); err != nil {
-		fmt.Println("NOT FOUND")
-		fmt.Println("  WireGuard tools not installed.")
-		fmt.Println("  Install with: apt install wireguard-tools")
-		allGood = false
-	} else {
-		fmt.Println("OK")
-	}
-
-	// 2. Check if dnsmasq is installed
-	fmt.Print("Checking dnsmasq... ")
-	if _, err := exec.LookPath("dnsmasq"); err != nil {
-		fmt.Println("NOT FOUND")
-		if cfg.DNSMasqEnabled {
-			fmt.Println("  dnsmasq not installed but enabled in config.")
-			fmt.Println("  Install with: apt install dnsmasq")
-			fmt.Println("  Or disable in config: \"dnsmasq_enabled\": false")
-			allGood = false
-		} else {
-			fmt.Println("  (disabled in config, OK)")
-		}
-	} else {
-		fmt.Println("OK")
-	}
-
-	// 3. Check if qrencode is installed
-	fmt.Print("Checking qrencode... ")
-	if _, err := exec.LookPath("qrencode"); err != nil {
-		fmt.Println("NOT FOUND")
-		fmt.Println("  QR codes will be disabled.")
-		fmt.Println("  Install with: apt install qrencode")
-	} else {
-		fmt.Println("OK")
-	}
-
-	// 4. Check if haproxy is installed
-	fmt.Print("Checking haproxy... ")
-	if _, err := exec.LookPath("haproxy"); err != nil {
-		fmt.Println("NOT FOUND")
-		if cfg.HAProxyEnabled {
-			fmt.Println("  haproxy not installed but enabled in config.")
-			fmt.Println("  Install with: apt install haproxy")
-			allGood = false
-		} else {
-			fmt.Println("  (disabled in config, OK)")
-		}
-	} else {
-		fmt.Println("OK")
-	}
-
-	// 5. Check if haproxy is running (if enabled)
-	if cfg.HAProxyEnabled {
-		fmt.Print("Checking haproxy service... ")
-		cmd := exec.Command("systemctl", "is-active", "haproxy")
-		if err := cmd.Run(); err != nil {
-			fmt.Println("NOT RUNNING")
-			if isRoot && askYesNo("  Start haproxy service?") {
-				if err := exec.Command("systemctl", "start", "haproxy").Run(); err != nil {
-					fmt.Printf("  Error: %v\n", err)
-				} else {
-					fmt.Println("  haproxy started.")
-				}
-			}
-		} else {
-			fmt.Println("RUNNING")
-		}
-	}
-
-	// 6. Check WireGuard interface config
-	fmt.Printf("Checking WireGuard config (%s)... ", cfg.WGConfigPath)
-	if _, err := os.Stat(cfg.WGConfigPath); os.IsNotExist(err) {
-		fmt.Println("NOT FOUND")
-		allGood = false
-		if isRoot && askYesNo("  Create WireGuard server config?") {
-			if err := createWGConfig(cfg, cfgPath); err != nil {
-				fmt.Printf("  Error: %v\n", err)
-			} else {
-				fmt.Println("  Created WireGuard config.")
-			}
-		}
-	} else if err != nil {
-		fmt.Printf("ERROR: %v\n", err)
-		allGood = false
-	} else {
-		fmt.Println("OK")
-	}
-
-	// 7. Check WireGuard interface is up
-	fmt.Printf("Checking WireGuard interface (%s)... ", cfg.WGInterface)
-	cmd := exec.Command("wg", "show", cfg.WGInterface)
-	if err := cmd.Run(); err != nil {
-		fmt.Println("DOWN")
-		if isRoot && askYesNo("  Bring up WireGuard interface?") {
-			if err := exec.Command("wg-quick", "up", cfg.WGInterface).Run(); err != nil {
-				fmt.Printf("  Error: %v\n", err)
-			} else {
-				fmt.Println("  Interface is now up.")
-			}
-		}
-	} else {
-		fmt.Println("UP")
-	}
-
-	// 8. Check systemd service
-	fmt.Print("Checking systemd service... ")
-	servicePath := "/etc/systemd/system/homelab-horizon.service"
-	if _, err := os.Stat(servicePath); os.IsNotExist(err) {
-		fmt.Println("NOT INSTALLED")
-		if isRoot && askYesNo("  Install systemd service?") {
-			if err := installService("systemd"); err != nil {
-				fmt.Printf("  Error: %v\n", err)
-			}
-		}
-	} else {
-		// Check if enabled
-		cmd := exec.Command("systemctl", "is-enabled", "homelab-horizon")
-		if err := cmd.Run(); err != nil {
-			fmt.Println("INSTALLED (not enabled)")
-			if isRoot && askYesNo("  Enable service to start on boot?") {
-				exec.Command("systemctl", "enable", "homelab-horizon").Run()
-				fmt.Println("  Service enabled.")
-			}
-		} else {
-			fmt.Println("OK (enabled)")
-		}
-	}
-
-	// 9. Check file permissions
-	fmt.Println()
-	fmt.Println("Checking file access...")
-
-	// WireGuard config directory
-	wgDir := filepath.Dir(cfg.WGConfigPath)
-	fmt.Printf("  %s: ", wgDir)
-	if err := checkWriteAccess(wgDir); err != nil {
-		fmt.Printf("NO ACCESS (%v)\n", err)
-		allGood = false
-	} else {
-		fmt.Println("OK")
-	}
-
-	// dnsmasq config directory
-	if cfg.DNSMasqEnabled {
-		dnsmasqDir := filepath.Dir(cfg.DNSMasqConfigPath)
-		fmt.Printf("  %s: ", dnsmasqDir)
-		if err := checkWriteAccess(dnsmasqDir); err != nil {
-			fmt.Printf("NO ACCESS (%v)\n", err)
-			if isRoot && askYesNo("  Create dnsmasq config directory?") {
-				if err := os.MkdirAll(dnsmasqDir, 0755); err != nil {
-					fmt.Printf("  Error: %v\n", err)
-				} else {
-					fmt.Println("  Created directory.")
-				}
-			}
-		} else {
-			fmt.Println("OK")
-		}
-	}
-
-	// 10. Check IP forwarding
-	fmt.Print("Checking IP forwarding... ")
-	data, err := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
-	if err != nil {
-		fmt.Printf("ERROR: %v\n", err)
-	} else if strings.TrimSpace(string(data)) != "1" {
-		fmt.Println("DISABLED")
-		allGood = false
-		if isRoot && askYesNo("  Enable IP forwarding?") {
-			if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644); err != nil {
-				fmt.Printf("  Error: %v\n", err)
-			} else {
-				fmt.Println("  IP forwarding enabled.")
-				fmt.Println("  To make permanent, add to /etc/sysctl.conf:")
-				fmt.Println("    net.ipv4.ip_forward=1")
-			}
-		}
-	} else {
-		fmt.Println("OK")
-	}
-
-	// 11. Check masquerade rule
-	fmt.Printf("Checking NAT masquerade (%s)... ", cfg.VPNRange)
-	cmd = exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING", "-s", cfg.VPNRange, "-j", "MASQUERADE")
-	if err := cmd.Run(); err != nil {
-		fmt.Println("NOT FOUND")
-		allGood = false
-		if isRoot && askYesNo("  Add masquerade rule?") {
-			if err := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", cfg.VPNRange, "-j", "MASQUERADE").Run(); err != nil {
-				fmt.Printf("  Error: %v\n", err)
-			} else {
-				fmt.Println("  Masquerade rule added.")
-				fmt.Println("  To make permanent, save with: iptables-save > /etc/iptables/rules.v4")
-			}
-		}
-	} else {
-		fmt.Println("OK")
-	}
-
-	// Summary
-	fmt.Println()
-	fmt.Println("======================")
-	if allGood {
-		fmt.Println("All checks passed!")
-	} else {
-		fmt.Println("Some issues found. Review above and fix as needed.")
-	}
-	fmt.Println()
-	fmt.Printf("Config file: %s\n", cfgPath)
-	fmt.Printf("Web UI will listen on: %s\n", cfg.ListenAddr)
-	fmt.Println()
-
-	return nil
-}
-
-func checkWriteAccess(path string) error {
-	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		// Check if we can create it
-		parent := filepath.Dir(path)
-		return checkWriteAccess(parent)
-	}
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("not a directory")
-	}
-	// Try to create a temp file
-	testFile := filepath.Join(path, ".homelab-horizon-test")
-	f, err := os.Create(testFile)
-	if err != nil {
-		return fmt.Errorf("cannot write")
-	}
-	f.Close()
-	os.Remove(testFile)
-	return nil
-}
-
-func createWGConfig(cfg *config.Config, cfgPath string) error {
-	// Generate server keys
-	privKey, pubKey, err := wireguard.GenerateKeyPair()
-	if err != nil {
-		return fmt.Errorf("generating keys: %w", err)
-	}
-
-	// Determine server IP from VPN range
-	serverIP := strings.Split(cfg.VPNRange, "/")[0]
-	serverIP = strings.TrimSuffix(serverIP, ".0") + ".1"
-
-	// Ask for listen port
-	listenPort := askString("WireGuard listen port", "51820")
-
-	// Ask for server endpoint
-	endpoint := askString("Public endpoint (domain or IP)", cfg.ServerEndpoint)
-	if !strings.Contains(endpoint, ":") {
-		endpoint = endpoint + ":" + listenPort
-	}
-
-	// Create directory if needed
-	wgDir := filepath.Dir(cfg.WGConfigPath)
-	if err := os.MkdirAll(wgDir, 0700); err != nil {
-		return fmt.Errorf("creating directory: %w", err)
-	}
-
-	// Write config
-	wgConfig := fmt.Sprintf(`[Interface]
-PrivateKey = %s
-Address = %s/24
-ListenPort = %s
-PostUp = iptables -A FORWARD -i %%i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i %%i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
-`, privKey, serverIP, listenPort)
-
-	if err := os.WriteFile(cfg.WGConfigPath, []byte(wgConfig), 0600); err != nil {
-		return fmt.Errorf("writing config: %w", err)
-	}
-
-	// Update app config with server public key and endpoint
-	cfg.ServerPublicKey = pubKey
-	cfg.ServerEndpoint = endpoint
-	if err := config.Save(cfgPath, cfg); err != nil {
-		fmt.Printf("Warning: could not save app config: %v\n", err)
-	}
-
-	fmt.Printf("  Server public key: %s\n", pubKey)
-	return nil
-}
-
-func installService(target string) error {
-	if target != "systemd" {
-		return fmt.Errorf("unknown install target: %s (supported: systemd)", target)
-	}
-
-	if os.Geteuid() != 0 {
-		return fmt.Errorf("must run as root to install systemd service")
-	}
-
-	// Find our binary path
-	execPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("cannot determine executable path: %w", err)
-	}
-	execPath, err = filepath.Abs(execPath)
-	if err != nil {
-		return fmt.Errorf("cannot resolve executable path: %w", err)
-	}
-
-	// Install to /usr/local/bin if not already there
-	installPath := "/usr/local/bin/homelab-horizon"
-	if execPath != installPath {
-		fmt.Printf("Copying %s to %s\n", execPath, installPath)
-		input, err := os.ReadFile(execPath)
-		if err != nil {
-			return fmt.Errorf("reading binary: %w", err)
-		}
-		if err := os.WriteFile(installPath, input, 0755); err != nil {
-			return fmt.Errorf("installing binary: %w", err)
-		}
-	}
-
-	// Generate service file
-	serviceContent := fmt.Sprintf(systemdService, installPath)
-	servicePath := "/etc/systemd/system/homelab-horizon.service"
-	if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
-		return fmt.Errorf("writing service file: %w", err)
-	}
-	fmt.Printf("Created %s\n", servicePath)
-
-	// Reload systemd
-	fmt.Println("Reloading systemd...")
-	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
-		return fmt.Errorf("systemctl daemon-reload: %w", err)
-	}
-
-	fmt.Println()
-	fmt.Println("Installation complete!")
-	fmt.Println()
-	fmt.Println("Next steps:")
-	fmt.Println("  1. Create config (optional): /etc/homelab-horizon.json")
-	fmt.Println("  2. Start service: systemctl start homelab-horizon")
-	fmt.Println("  3. Enable on boot: systemctl enable homelab-horizon")
-	fmt.Println("  4. View admin token: journalctl -u homelab-horizon | head")
-	fmt.Println()
-
-	return nil
 }
