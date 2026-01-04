@@ -50,11 +50,31 @@ clean:
 test:
 	go test -v ./...
 
+# Run unit tests only
+.PHONY: test-unit
+test-unit:
+	go test -v ./internal/...
+
+# Run integration tests only
+.PHONY: test-integration
+test-integration:
+	go test -v ./test/integration/...
+
+# Run tests with coverage
+.PHONY: test-coverage
+test-coverage:
+	go test -v -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+
 # Check/lint
 .PHONY: check
 check:
 	go vet ./...
 	go fmt ./...
+
+# Run all checks
+.PHONY: test-all
+test-all: test-unit test-integration check
 
 # Create dist directory
 dist:
