@@ -146,6 +146,7 @@ sudo cp homelab-horizon /usr/local/bin/
                     </ul>
                     <div class="tip">
                         <strong>Tip:</strong> Some routers call this "Virtual Server" or "NAT Rules" instead of "Port Forwarding".
+                        You can verify these settings by running the <strong>Connectivity Tests</strong> on the <a href="/admin/setup" style="color: #2ecc71;">Setup page</a>.
                     </div>
                 </div>
             </div>

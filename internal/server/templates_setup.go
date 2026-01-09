@@ -214,6 +214,54 @@ const setupTemplate = `<!DOCTYPE html>
         </div>
 
         <div class="card">
+            <div class="flex" style="justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <h2 style="margin: 0;">Router & Connectivity</h2>
+                <form method="POST" action="/admin/setup/test-connectivity" style="margin: 0;">
+                    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                    <button type="submit" class="success">Run Tests</button>
+                </form>
+            </div>
+            <p style="color: #ccc; margin-bottom: 1rem;">Verify your router's port forwarding and DNS settings from within the network.</p>
+            
+            {{if .ConnectivityResults}}
+            <table style="margin-bottom: 1rem;">
+                <thead>
+                    <tr>
+                        <th style="text-align: left;">Test</th>
+                        <th style="text-align: left;">Status</th>
+                        <th style="text-align: left;">Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .ConnectivityResults}}
+                    <tr>
+                        <td>{{.Name}}</td>
+                        <td>
+                            {{if eq .Status "ok"}}
+                            <span class="status-ok">● Passed</span>
+                            {{else}}
+                            <span class="status-err">● Failed</span>
+                            {{end}}
+                        </td>
+                        <td style="font-size: 0.9em; color: #ccc;">{{.Message}}</td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{else}}
+            <p style="text-align: center; color: #888; padding: 1rem; border: 1px dashed #444; border-radius: 4px;">No tests run yet. Click "Run Tests" to verify connectivity.</p>
+            {{end}}
+            
+            <div style="margin-top: 1rem; border-top: 1px solid #333; padding-top: 1rem;">
+                <h3 style="font-size: 1rem; margin-bottom: 0.5rem;">Manual Setup Steps</h3>
+                <ol style="color: #ccc; font-size: 0.9em; padding-left: 1.25rem;">
+                    <li><strong>Port Forwarding:</strong> Forward 51820/UDP, 80/TCP, and 443/TCP to this device ({{.Config.ListenAddr}}).</li>
+                    <li><strong>Upstream DNS:</strong> Point your router's upstream DNS to this device's local IP.</li>
+                </ol>
+            </div>
+        </div>
+
+        <div class="card">
             <h2>Configuration</h2>
             <form method="POST" action="/admin/config">
                 <details open>

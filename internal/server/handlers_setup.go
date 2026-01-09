@@ -2,11 +2,13 @@ package server
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"homelab-horizon/internal/config"
 	"homelab-horizon/internal/letsencrypt"
@@ -179,6 +181,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		"Error":                  r.URL.Query().Get("err"),
 		"CSRFToken":              s.getCSRFToken(r),
 		"Version":                s.version,
+		"ConnectivityResults":    s.connectivityResults,
 	}
 	s.templates["setup"].Execute(w, data)
 }
@@ -359,6 +362,126 @@ func (s *Server) handleHelp(w http.ResponseWriter, r *http.Request) {
 		"Version": s.version,
 	}
 	s.templates["help"].Execute(w, data)
+}
+
+type ConnectivityCheck struct {
+	Name    string
+	Status  string // "ok", "failed", "pending"
+	Message string
+}
+
+func (s *Server) handleTestConnectivity(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminPost(w, r) {
+		return
+	}
+
+	results := []ConnectivityCheck{}
+
+	// 1. Check DNS Resolution
+	// We check if a configured service domain resolves to its internal IP
+	dnsStatus := "failed"
+	dnsMsg := "No services configured for testing"
+	if len(s.config.Services) > 0 {
+		var testService *config.Service
+		for i := range s.config.Services {
+			if s.config.Services[i].InternalDNS != nil {
+				testService = &s.config.Services[i]
+				break
+			}
+		}
+
+		if testService != nil {
+			ips, err := net.LookupHost(testService.Domain)
+			if err == nil {
+				found := false
+				for _, ip := range ips {
+					if ip == testService.InternalDNS.IP {
+						found = true
+						break
+					}
+				}
+				if found {
+					dnsStatus = "ok"
+					dnsMsg = fmt.Sprintf("Resolved %s to %s", testService.Domain, testService.InternalDNS.IP)
+				} else {
+					dnsMsg = fmt.Sprintf("Resolved %s to %v, expected %s", testService.Domain, ips, testService.InternalDNS.IP)
+				}
+			} else {
+				dnsMsg = fmt.Sprintf("Failed to resolve %s: %v", testService.Domain, err)
+			}
+		} else {
+			dnsMsg = "No services with internal DNS configured"
+		}
+	}
+	results = append(results, ConnectivityCheck{
+		Name:    "Internal DNS Resolution",
+		Status:  dnsStatus,
+		Message: dnsMsg,
+	})
+
+	// 2. Check Port Forwarding (Hairpin NAT)
+	publicIP := s.config.PublicIP
+	if publicIP == "" {
+		// Try to get it now if not set
+		publicIP, _ = route53.GetPublicIP()
+	}
+
+	if publicIP != "" {
+		ports := []struct {
+			port int
+			name string
+		}{
+			{80, "HTTP"},
+			{443, "HTTPS"},
+		}
+
+		for _, p := range ports {
+			status := "failed"
+			msg := ""
+			addr := net.JoinHostPort(publicIP, fmt.Sprintf("%d", p.port))
+			conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+			if err == nil {
+				conn.Close()
+				status = "ok"
+				msg = fmt.Sprintf("Port %d is reachable at %s", p.port, publicIP)
+			} else {
+				msg = fmt.Sprintf("Failed to connect to %s: %v", addr, err)
+			}
+			results = append(results, ConnectivityCheck{
+				Name:    fmt.Sprintf("Port Forwarding (%s)", p.name),
+				Status:  status,
+				Message: msg,
+			})
+		}
+
+		// UDP check for WireGuard (51820)
+		wgPort := 51820
+		addr := net.JoinHostPort(publicIP, fmt.Sprintf("%d", wgPort))
+		conn, err := net.DialTimeout("udp", addr, 2*time.Second)
+		if err == nil {
+			conn.Close()
+			results = append(results, ConnectivityCheck{
+				Name:    "Port Forwarding (WireGuard)",
+				Status:  "ok",
+				Message: fmt.Sprintf("UDP Port %d is reachable at %s (Note: UDP check is limited)", wgPort, publicIP),
+			})
+		} else {
+			results = append(results, ConnectivityCheck{
+				Name:    "Port Forwarding (WireGuard)",
+				Status:  "failed",
+				Message: fmt.Sprintf("Failed to dial UDP %s: %v", addr, err),
+			})
+		}
+	} else {
+		results = append(results, ConnectivityCheck{
+			Name:    "Port Forwarding",
+			Status:  "failed",
+			Message: "Public IP not detected",
+		})
+	}
+
+	s.connectivityResults = results
+	http.Redirect(w, r, "/admin/setup?msg=Connectivity+tests+completed", http.StatusSeeOther)
 }
 
 // SystemRequirement represents a system requirement check
