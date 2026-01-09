@@ -14,7 +14,7 @@ import (
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
-	"github.com/go-acme/lego/v4/challenge"
+
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
 )
@@ -118,80 +118,6 @@ func (c *Client) ObtainCertificate(email string, domains []string, providerCfg *
 	return certificates, nil
 }
 
-// RenewCertificate renews an existing certificate
-func (c *Client) RenewCertificate(email string, certPath string, keyPath string, providerCfg *DNSProviderConfig, logFn func(string)) (*certificate.Resource, error) {
-	if logFn == nil {
-		logFn = func(s string) {}
-	}
-
-	// Read existing certificate
-	certPEM, err := os.ReadFile(certPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read certificate: %w", err)
-	}
-
-	keyPEM, err := os.ReadFile(keyPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read private key: %w", err)
-	}
-
-	// Create DNS challenge provider
-	dnsProvider, err := CreateChallengeProvider(providerCfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create DNS provider: %w", err)
-	}
-
-	logFn(fmt.Sprintf("Using DNS provider: %s", ProviderName(providerCfg)))
-
-	// Load or create user
-	user, err := c.loadOrCreateUser(email)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load/create ACME user: %w", err)
-	}
-
-	// Configure lego client
-	legoConfig := lego.NewConfig(user)
-	legoConfig.Certificate.KeyType = certcrypto.RSA2048
-
-	if c.staging {
-		legoConfig.CADirURL = lego.LEDirectoryStaging
-	}
-
-	client, err := lego.NewClient(legoConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create ACME client: %w", err)
-	}
-
-	// Set DNS provider
-	if err := client.Challenge.SetDNS01Provider(dnsProvider); err != nil {
-		return nil, fmt.Errorf("failed to set DNS provider: %w", err)
-	}
-
-	// Build certificate resource for renewal
-	certResource := &certificate.Resource{
-		Certificate: certPEM,
-		PrivateKey:  keyPEM,
-	}
-
-	logFn("Renewing certificate...")
-
-	// Renew the certificate
-	newCerts, err := client.Certificate.Renew(*certResource, true, false, "")
-	if err != nil {
-		return nil, fmt.Errorf("failed to renew certificate: %w", err)
-	}
-
-	logFn("Certificate renewed successfully!")
-
-	return newCerts, nil
-}
-
-// SetDNSProvider is a helper to set a custom DNS provider on a Lego client
-func SetDNSProvider(client *lego.Client, provider challenge.Provider) error {
-	return client.Challenge.SetDNS01Provider(provider)
-}
-
-// loadOrCreateUser loads an existing ACME user or creates a new one
 func (c *Client) loadOrCreateUser(email string) (*User, error) {
 	if err := os.MkdirAll(c.accountDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create account directory: %w", err)

@@ -65,12 +65,6 @@ func (p *Route53Provider) log(action string) {
 	fmt.Printf("[AWS/%s] %s\n", profile, action)
 }
 
-// Available checks if AWS CLI is available
-func Route53Available() bool {
-	_, err := exec.LookPath("aws")
-	return err == nil
-}
-
 // ListZones returns available Route53 hosted zones
 func (p *Route53Provider) ListZones() ([]Zone, error) {
 	p.log("Listing hosted zones...")
@@ -320,53 +314,4 @@ func (p *Route53Provider) SyncRecord(zoneID string, record Record) (changed bool
 
 	p.log(fmt.Sprintf("%s value mismatch: current=%q new=%q", record.Name, currentRecord.Value, record.Value))
 	return true, p.UpdateRecord(zoneID, record)
-}
-
-// GenerateIAMPolicy generates a fine-grained IAM policy for the given zone IDs
-func GenerateIAMPolicy(zoneIDs []string) string {
-	var zoneARNs []string
-	for _, zoneID := range zoneIDs {
-		zoneID = strings.TrimPrefix(zoneID, "/hostedzone/")
-		zoneARNs = append(zoneARNs, fmt.Sprintf("arn:aws:route53:::hostedzone/%s", zoneID))
-	}
-
-	if len(zoneARNs) == 0 {
-		zoneARNs = []string{"arn:aws:route53:::hostedzone/*"}
-	}
-
-	policy := map[string]interface{}{
-		"Version": "2012-10-17",
-		"Statement": []map[string]interface{}{
-			{
-				"Sid":    "Route53ListZones",
-				"Effect": "Allow",
-				"Action": []string{
-					"route53:ListHostedZones",
-					"route53:ListHostedZonesByName",
-				},
-				"Resource": "*",
-			},
-			{
-				"Sid":    "Route53ManageRecords",
-				"Effect": "Allow",
-				"Action": []string{
-					"route53:GetHostedZone",
-					"route53:ListResourceRecordSets",
-					"route53:ChangeResourceRecordSets",
-				},
-				"Resource": zoneARNs,
-			},
-			{
-				"Sid":    "Route53GetChanges",
-				"Effect": "Allow",
-				"Action": []string{
-					"route53:GetChange",
-				},
-				"Resource": "arn:aws:route53:::change/*",
-			},
-		},
-	}
-
-	data, _ := json.MarshalIndent(policy, "", "  ")
-	return string(data)
 }

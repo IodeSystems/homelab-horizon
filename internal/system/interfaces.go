@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"time"
 )
@@ -237,16 +236,6 @@ func (fs *DryRunFileSystem) GetWrittenFiles() map[string][]byte {
 	return result
 }
 
-func (fs *DryRunFileSystem) GetCreatedFiles() map[string]bool {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-	result := make(map[string]bool)
-	for k, v := range fs.created {
-		result[k] = v
-	}
-	return result
-}
-
 func (fs *DryRunFileSystem) GetRemovedFiles() map[string]bool {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -358,30 +347,6 @@ func (r *DryRunCommandRunner) GetRunCommands() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.ran
-}
-
-func (r *DryRunCommandRunner) GetLastCommands(count int) []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if len(r.ran) <= count {
-		return r.ran
-	}
-
-	return r.ran[len(r.ran)-count:]
-}
-
-func (r *DryRunCommandRunner) GetCommandsByType(cmdType string) []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	var result []string
-	for _, cmd := range r.ran {
-		if cmdType == "" || strings.Contains(cmd, cmdType) {
-			result = append(result, cmd)
-		}
-	}
-	return result
 }
 
 func (r *DryRunCommandRunner) Clear() {

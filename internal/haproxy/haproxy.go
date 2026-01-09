@@ -332,12 +332,6 @@ func (h *HAProxy) Start() error {
 	return cmd.Run()
 }
 
-// Stop stops HAProxy
-func (h *HAProxy) Stop() error {
-	cmd := exec.Command("systemctl", "stop", "haproxy")
-	return cmd.Run()
-}
-
 // Available checks if haproxy is installed
 func Available() bool {
 	_, err := exec.LookPath("haproxy")

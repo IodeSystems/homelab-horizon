@@ -32,82 +32,10 @@ type Record struct {
 	AWSProfile string `json:"aws_profile"`
 }
 
-// HostedZone represents a Route53 hosted zone
-type HostedZone struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
-// Manager handles Route53 operations
-type Manager struct {
-	records []Record
-}
-
-// New creates a new Route53 manager
-func New() *Manager {
-	return &Manager{}
-}
-
-// SetRecords sets the managed records
-func (m *Manager) SetRecords(records []Record) {
-	m.records = records
-}
-
-// GetRecords returns the managed records
-func (m *Manager) GetRecords() []Record {
-	return m.records
-}
-
 // Available checks if AWS CLI is available
 func Available() bool {
 	_, err := exec.LookPath("aws")
 	return err == nil
-}
-
-// ListHostedZones returns available Route53 hosted zones
-func ListHostedZones(awsProfile string) ([]HostedZone, error) {
-	logAWS(awsProfile, "Listing hosted zones...")
-
-	ctx, cancel := context.WithTimeout(context.Background(), awsTimeout)
-	defer cancel()
-
-	args := []string{"route53", "list-hosted-zones", "--output", "json"}
-
-	cmd := exec.CommandContext(ctx, "aws", args...)
-	if awsProfile != "" {
-		cmd.Env = append(os.Environ(), "AWS_PROFILE="+awsProfile)
-	}
-
-	output, err := cmd.Output()
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("AWS CLI timed out after %v", awsTimeout)
-		}
-		return nil, fmt.Errorf("failed to list hosted zones: %w", err)
-	}
-
-	var result struct {
-		HostedZones []struct {
-			ID   string `json:"Id"`
-			Name string `json:"Name"`
-		} `json:"HostedZones"`
-	}
-
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	var zones []HostedZone
-	for _, z := range result.HostedZones {
-		// Clean up the ID (remove /hostedzone/ prefix)
-		id := strings.TrimPrefix(z.ID, "/hostedzone/")
-		zones = append(zones, HostedZone{
-			ID:   id,
-			Name: strings.TrimSuffix(z.Name, "."),
-		})
-	}
-
-	return zones, nil
 }
 
 // GetCurrentValue gets the current value of a DNS record
@@ -210,70 +138,6 @@ func UpdateRecord(r Record) error {
 	}
 
 	logAWS(r.AWSProfile, fmt.Sprintf("Update %s SUCCESS", r.Name))
-	return nil
-}
-
-// DeleteRecord deletes a DNS record
-func DeleteRecord(r Record) error {
-	logAWS(r.AWSProfile, fmt.Sprintf("Deleting %s...", r.Name))
-
-	// First get the current value
-	currentValue, err := GetCurrentValue(r.ZoneID, r.Name, r.Type, r.AWSProfile)
-	if err != nil || currentValue == "" {
-		return fmt.Errorf("record not found")
-	}
-
-	if r.TTL <= 0 {
-		r.TTL = 300
-	}
-
-	if !strings.HasSuffix(r.Name, ".") {
-		r.Name = r.Name + "."
-	}
-
-	changeBatch := map[string]interface{}{
-		"Changes": []map[string]interface{}{
-			{
-				"Action": "DELETE",
-				"ResourceRecordSet": map[string]interface{}{
-					"Name": r.Name,
-					"Type": r.Type,
-					"TTL":  r.TTL,
-					"ResourceRecords": []map[string]string{
-						{"Value": currentValue},
-					},
-				},
-			},
-		},
-	}
-
-	changeBatchJSON, err := json.Marshal(changeBatch)
-	if err != nil {
-		return err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), awsTimeout)
-	defer cancel()
-
-	args := []string{
-		"route53", "change-resource-record-sets",
-		"--hosted-zone-id", r.ZoneID,
-		"--change-batch", string(changeBatchJSON),
-	}
-
-	cmd := exec.CommandContext(ctx, "aws", args...)
-	if r.AWSProfile != "" {
-		cmd.Env = append(os.Environ(), "AWS_PROFILE="+r.AWSProfile)
-	}
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("AWS CLI timed out after %v", awsTimeout)
-		}
-		return fmt.Errorf("failed to delete record: %s", string(output))
-	}
-
 	return nil
 }
 
@@ -421,20 +285,6 @@ func SyncRecord(r Record) (changed bool, err error) {
 
 	logAWS(r.AWSProfile, fmt.Sprintf("%s value mismatch: current=%q new=%q", r.Name, currentValue, r.Value))
 	return true, UpdateRecord(r)
-}
-
-// SyncDynamicIP updates a record with the current public IP
-func SyncDynamicIP(r Record) (changed bool, newIP string, err error) {
-	ip, err := GetPublicIP()
-	if err != nil {
-		return false, "", err
-	}
-
-	r.Value = ip
-	r.Type = "A"
-
-	changed, err = SyncRecord(r)
-	return changed, ip, err
 }
 
 // GenerateIAMPolicy generates a fine-grained IAM policy for the given zone IDs

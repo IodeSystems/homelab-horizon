@@ -161,16 +161,6 @@ func (d *DNSMasq) Start() error {
 	return cmd.Run()
 }
 
-func (d *DNSMasq) Stop() error {
-	cmd := exec.Command("systemctl", "stop", "dnsmasq")
-	return cmd.Run()
-}
-
-func (d *DNSMasq) Enable() error {
-	cmd := exec.Command("systemctl", "enable", "dnsmasq")
-	return cmd.Run()
-}
-
 type Status struct {
 	Running      bool
 	Enabled      bool
