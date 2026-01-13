@@ -37,6 +37,31 @@ func TestSanitizeName(t *testing.T) {
 	}
 }
 
+func TestDomainToACLPattern(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		// Exact domains should pass through unchanged
+		{"grafana.example.com", "grafana.example.com"},
+		{"api.example.com", "api.example.com"},
+		{"example.com", "example.com"},
+		// Wildcard domains should be converted to suffix patterns
+		{"*.example.com", ".example.com"},
+		{"*.api.example.com", ".api.example.com"},
+		{"*.vpn.home.example.com", ".vpn.home.example.com"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := domainToACLPattern(tt.input)
+			if got != tt.want {
+				t.Errorf("domainToACLPattern(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGenerateConfig_NoBackends(t *testing.T) {
 	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
 	h.SetBackends(nil)
@@ -162,6 +187,44 @@ func TestGenerateConfig_CustomPorts(t *testing.T) {
 
 	if !strings.Contains(config, "bind *:8080") {
 		t.Error("config should use custom HTTP port 8080")
+	}
+}
+
+func TestGenerateConfig_WildcardBackend(t *testing.T) {
+	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
+	h.SetBackends([]Backend{
+		{
+			Name:        "wildcard-api",
+			DomainMatch: "*.api.example.com",
+			Server:      "192.168.1.100:8080",
+			HTTPCheck:   false,
+		},
+		{
+			Name:        "exact-app",
+			DomainMatch: "app.example.com",
+			Server:      "192.168.1.101:8080",
+			HTTPCheck:   false,
+		},
+	})
+
+	config := h.GenerateConfig(80, 443, nil)
+
+	// Wildcard should be converted to suffix pattern
+	if !strings.Contains(config, "acl host_wildcard_api hdr_end(host) -i .api.example.com") {
+		t.Error("wildcard domain should generate suffix ACL pattern")
+	}
+
+	// Exact domain should remain unchanged
+	if !strings.Contains(config, "acl host_exact_app hdr_end(host) -i app.example.com") {
+		t.Error("exact domain should generate exact ACL pattern")
+	}
+
+	// Both backends should be defined
+	if !strings.Contains(config, "backend wildcard_api_backend") {
+		t.Error("wildcard backend should be defined")
+	}
+	if !strings.Contains(config, "backend exact_app_backend") {
+		t.Error("exact backend should be defined")
 	}
 }
 
