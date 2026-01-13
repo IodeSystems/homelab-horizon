@@ -21,8 +21,14 @@ type Route53Wrapper struct {
 	cfg *config.DNSProviderConfig
 }
 
-// ListZones implements ZoneLister for Route53 using the AWS SDK
-func (w *Route53Wrapper) ListZones(ctx context.Context) ([]libdns.Zone, error) {
+// Route53ZoneWithID represents a Route53 zone with its hosted zone ID
+type Route53ZoneWithID struct {
+	ID   string // AWS hosted zone ID (e.g., "Z1234567890ABC")
+	Name string // Zone name (e.g., "example.com.")
+}
+
+// ListZonesWithIDs lists Route53 zones with their hosted zone IDs
+func (w *Route53Wrapper) ListZonesWithIDs(ctx context.Context) ([]Route53ZoneWithID, error) {
 	// Build AWS config
 	opts := []func(*awsconfig.LoadOptions) error{}
 
@@ -51,7 +57,7 @@ func (w *Route53Wrapper) ListZones(ctx context.Context) ([]libdns.Zone, error) {
 
 	client := route53.NewFromConfig(awsCfg)
 
-	var zones []libdns.Zone
+	var zones []Route53ZoneWithID
 	var marker *string
 
 	for {
@@ -65,9 +71,13 @@ func (w *Route53Wrapper) ListZones(ctx context.Context) ([]libdns.Zone, error) {
 		}
 
 		for _, hz := range output.HostedZones {
-			name := aws.ToString(hz.Name)
-			zones = append(zones, libdns.Zone{
-				Name: name,
+			// Extract the hosted zone ID (strip /hostedzone/ prefix if present)
+			zoneID := aws.ToString(hz.Id)
+			zoneID = strings.TrimPrefix(zoneID, "/hostedzone/")
+
+			zones = append(zones, Route53ZoneWithID{
+				ID:   zoneID,
+				Name: aws.ToString(hz.Name),
 			})
 		}
 
@@ -77,6 +87,22 @@ func (w *Route53Wrapper) ListZones(ctx context.Context) ([]libdns.Zone, error) {
 		marker = output.NextMarker
 	}
 
+	return zones, nil
+}
+
+// ListZones implements ZoneLister for Route53 using the AWS SDK
+func (w *Route53Wrapper) ListZones(ctx context.Context) ([]libdns.Zone, error) {
+	zonesWithIDs, err := w.ListZonesWithIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var zones []libdns.Zone
+	for _, z := range zonesWithIDs {
+		zones = append(zones, libdns.Zone{
+			Name: z.Name,
+		})
+	}
 	return zones, nil
 }
 

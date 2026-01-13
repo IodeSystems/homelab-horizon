@@ -54,13 +54,37 @@ func (p *LibdnsAdapter) log(action string) {
 	fmt.Printf("[%s] %s\n", p.name, action)
 }
 
+// Route53ZoneLister is an interface for providers that can list zones with IDs (Route53-specific)
+type Route53ZoneLister interface {
+	ListZonesWithIDs(ctx context.Context) ([]Route53ZoneWithID, error)
+}
+
 // ListZones returns available zones from the provider
 func (p *LibdnsAdapter) ListZones() ([]Zone, error) {
-	// Check if provider implements ZoneLister for discovery
-	if lister, ok := p.rawProvider.(LibdnsZoneLister); ok {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
+	// Check if provider implements Route53-specific zone lister with IDs
+	if r53Lister, ok := p.rawProvider.(Route53ZoneLister); ok {
+		p.log("Listing zones (with hosted zone IDs)...")
+		r53Zones, err := r53Lister.ListZonesWithIDs(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list zones: %w", err)
+		}
+
+		var zones []Zone
+		for _, z := range r53Zones {
+			zones = append(zones, Zone{
+				ID:         z.ID,
+				Name:       strings.TrimSuffix(z.Name, "."),
+				DNSManaged: true,
+			})
+		}
+		return zones, nil
+	}
+
+	// Check if provider implements standard ZoneLister for discovery
+	if lister, ok := p.rawProvider.(LibdnsZoneLister); ok {
 		p.log("Listing zones...")
 		libZones, err := lister.ListZones(ctx)
 		if err != nil {
