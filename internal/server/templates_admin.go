@@ -488,7 +488,7 @@ const adminTemplate = `<!DOCTYPE html>
                                 Via this server (auto-detect IP)
                             </label>
                         </div>
-                        <input type="text" name="internal_ip" id="add-internal-ip" placeholder="10.100.0.50">
+                        <input type="text" name="internal_ip" id="add-internal-ip" placeholder="10.100.0.50" oninput="propagateIP(this.value)">
                     </div>
 
                     <div style="margin-bottom: 1rem; padding: 0.75rem; background: #1a1a2e; border-radius: 4px;">
@@ -510,7 +510,8 @@ const adminTemplate = `<!DOCTYPE html>
                             Enable HAProxy reverse proxy
                         </label>
                         <div id="add-proxy-opts" style="display: none; padding-left: 1rem; border-left: 2px solid #0f3460;">
-                            <input type="text" name="proxy_backend" placeholder="Backend address (e.g., 10.100.0.50:3000)">
+                            <input type="text" name="proxy_backend" id="add-proxy-backend" placeholder="Backend address (e.g., 10.100.0.50:3000)" oninput="validateProxyBackend(this)">
+                            <div id="add-proxy-backend-error" style="color: #e94560; font-size: 0.85em; display: none;"></div>
                             <input type="text" name="health_check" placeholder="Health check path (e.g., /api/health)">
                         </div>
                     </div>
@@ -579,7 +580,8 @@ const adminTemplate = `<!DOCTYPE html>
                         Enable HAProxy
                     </label>
                     <div id="edit-proxy-opts" style="display: none; padding-left: 1rem; border-left: 2px solid #0f3460;">
-                        <input type="text" name="proxy_backend" id="edit-svc-proxy-backend" placeholder="Backend (e.g., 10.100.0.50:3000)">
+                        <input type="text" name="proxy_backend" id="edit-svc-proxy-backend" placeholder="Backend (e.g., 10.100.0.50:3000)" oninput="validateProxyBackend(this, 'edit')">
+                        <div id="edit-proxy-backend-error" style="color: #e94560; font-size: 0.85em; display: none;"></div>
                         <input type="text" name="health_check" id="edit-svc-health" placeholder="Health check path">
                     </div>
                 </div>
@@ -1372,6 +1374,93 @@ const adminTemplate = `<!DOCTYPE html>
             }
         }
     }
+
+    // Propagate IP from internal DNS field to other fields (only if they're empty)
+    function propagateIP(ip) {
+        if (!ip) return;
+
+        // Propagate to external IP field (only if empty)
+        var externalIP = document.querySelector('#add-service-form input[name="external_ip"]');
+        if (externalIP && !externalIP.value) {
+            externalIP.value = ip;
+        }
+
+        // Propagate to proxy backend field (only if empty, append default port :80)
+        var proxyBackend = document.getElementById('add-proxy-backend');
+        if (proxyBackend && !proxyBackend.value) {
+            proxyBackend.value = ip + ':80';
+            validateProxyBackend(proxyBackend);
+        }
+    }
+
+    // Validate proxy backend format (host:port)
+    function validateProxyBackend(input, prefix) {
+        prefix = prefix || 'add';
+        var errorDiv = document.getElementById(prefix + '-proxy-backend-error');
+        var value = input.value.trim();
+
+        if (!value) {
+            errorDiv.style.display = 'none';
+            input.style.borderColor = '';
+            return true;
+        }
+
+        // Check for host:port format
+        var hostPortRegex = /^([a-zA-Z0-9.-]+|\[[a-fA-F0-9:]+\]):(\d+)$/;
+        var match = value.match(hostPortRegex);
+
+        if (!match) {
+            errorDiv.textContent = 'Invalid format. Expected host:port (e.g., 10.100.0.50:3000)';
+            errorDiv.style.display = 'block';
+            input.style.borderColor = '#e94560';
+            return false;
+        }
+
+        var port = parseInt(match[2], 10);
+        if (port < 1 || port > 65535) {
+            errorDiv.textContent = 'Port must be between 1 and 65535';
+            errorDiv.style.display = 'block';
+            input.style.borderColor = '#e94560';
+            return false;
+        }
+
+        errorDiv.style.display = 'none';
+        input.style.borderColor = '#4CAF50';
+        return true;
+    }
+
+    // Form submission validation
+    document.addEventListener('DOMContentLoaded', function() {
+        var addForm = document.getElementById('add-service-form');
+        if (addForm) {
+            addForm.addEventListener('submit', function(e) {
+                var proxyEnabled = addForm.querySelector('input[name="proxy_enabled"]');
+                if (proxyEnabled && proxyEnabled.checked) {
+                    var proxyBackend = document.getElementById('add-proxy-backend');
+                    if (!validateProxyBackend(proxyBackend)) {
+                        e.preventDefault();
+                        proxyBackend.focus();
+                        return false;
+                    }
+                }
+            });
+        }
+
+        var editForm = document.getElementById('edit-service-form');
+        if (editForm) {
+            editForm.addEventListener('submit', function(e) {
+                var proxyEnabled = editForm.querySelector('input[name="proxy_enabled"]');
+                if (proxyEnabled && proxyEnabled.checked) {
+                    var proxyBackend = document.getElementById('edit-svc-proxy-backend');
+                    if (!validateProxyBackend(proxyBackend, 'edit')) {
+                        e.preventDefault();
+                        proxyBackend.focus();
+                        return false;
+                    }
+                }
+            });
+        }
+    });
 
     function showEditService(svc) {
         document.getElementById('edit-svc-original-name').value = svc.name;
