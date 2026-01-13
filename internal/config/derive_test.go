@@ -27,6 +27,11 @@ func TestGetZoneForDomain(t *testing.T) {
 		{"app.sub.example.com", "example.com", false},
 		{"notfound.net", "", true},
 		{"exampleXcom", "", true},
+		// Wildcard domain tests
+		{"*.example.com", "example.com", false},
+		{"*.api.example.com", "example.com", false},
+		{"*.other.io", "other.io", false},
+		{"*.notfound.net", "", true},
 	}
 
 	for _, tt := range tests {
@@ -323,6 +328,32 @@ func TestValidateService(t *testing.T) {
 			name:    "invalid proxy backend",
 			svc:     Service{Name: "app", Domain: "app.example.com", Proxy: &ProxyConfig{Backend: "no-port"}},
 			wantErr: "proxy.backend",
+		},
+		// Wildcard domain validation tests
+		{
+			name:    "valid wildcard domain",
+			svc:     Service{Name: "wildcard", Domain: "*.api.example.com"},
+			wantErr: "",
+		},
+		{
+			name:    "wildcard at root level",
+			svc:     Service{Name: "wildcard", Domain: "*.example.com"},
+			wantErr: "",
+		},
+		{
+			name:    "invalid wildcard format - missing dot",
+			svc:     Service{Name: "bad", Domain: "*example.com"},
+			wantErr: "domain",
+		},
+		{
+			name:    "invalid wildcard - no domain after",
+			svc:     Service{Name: "bad", Domain: "*."},
+			wantErr: "domain",
+		},
+		{
+			name:    "invalid wildcard - single label",
+			svc:     Service{Name: "bad", Domain: "*.com"},
+			wantErr: "domain",
 		},
 	}
 

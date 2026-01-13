@@ -11,11 +11,15 @@ import (
 
 // GetZoneForDomain finds the zone that a domain belongs to
 // Returns nil if no matching zone is found
+// Supports wildcard domains (e.g., "*.api.example.com" matches zone "example.com")
 func (c *Config) GetZoneForDomain(domain string) *Zone {
+	// Strip wildcard prefix for zone lookup
+	checkDomain := strings.TrimPrefix(domain, "*.")
+
 	for i := range c.Zones {
 		zoneName := c.Zones[i].Name
 		// Domain must be a subdomain of the zone or equal to it
-		if domain == zoneName || strings.HasSuffix(domain, "."+zoneName) {
+		if checkDomain == zoneName || strings.HasSuffix(checkDomain, "."+zoneName) {
 			return &c.Zones[i]
 		}
 	}
@@ -240,6 +244,18 @@ func (c *Config) ValidateService(svc *Service) error {
 	}
 	if svc.Domain == "" {
 		return &ValidationError{Field: "domain", Message: "domain is required"}
+	}
+
+	// Validate wildcard domain format if present
+	if strings.HasPrefix(svc.Domain, "*") {
+		if !strings.HasPrefix(svc.Domain, "*.") {
+			return &ValidationError{Field: "domain", Message: "wildcard must be in format *.subdomain.example.com"}
+		}
+		// Ensure there's a valid domain after the wildcard
+		baseDomain := strings.TrimPrefix(svc.Domain, "*.")
+		if baseDomain == "" || !strings.Contains(baseDomain, ".") {
+			return &ValidationError{Field: "domain", Message: "wildcard must have a valid domain (e.g., *.api.example.com)"}
+		}
 	}
 
 	// Check zone exists for domain

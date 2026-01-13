@@ -470,6 +470,7 @@ const adminTemplate = `<!DOCTYPE html>
                         <h4 style="margin: 0 0 0.5rem 0; color: #e94560;">Step 1: Basic Info</h4>
                         <input type="text" name="name" placeholder="Service name (e.g., grafana)" required>
                         <input type="text" name="domain" placeholder="grafana.example.com" required>
+                        <p style="color: #888; font-size: 0.8em; margin: 0.25rem 0 0 0;">Supports wildcards (e.g., *.api.example.com) to route all subdomains to one backend.</p>
                     </div>
 
                     <div style="margin-bottom: 1rem; padding: 0.75rem; background: #1a1a2e; border-radius: 4px;">

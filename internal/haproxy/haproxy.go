@@ -271,7 +271,8 @@ listen stats
 	// Add ACLs for each backend
 	for _, b := range h.backends {
 		aclName := sanitizeName(b.Name)
-		sb.WriteString(fmt.Sprintf("    acl host_%s hdr_end(host) -i %s\n", aclName, b.DomainMatch))
+		aclPattern := domainToACLPattern(b.DomainMatch)
+		sb.WriteString(fmt.Sprintf("    acl host_%s hdr_end(host) -i %s\n", aclName, aclPattern))
 	}
 	sb.WriteString("\n")
 
@@ -314,6 +315,17 @@ func sanitizeName(name string) string {
 		return '_'
 	}, name)
 	return strings.ToLower(result)
+}
+
+// domainToACLPattern converts a domain to an HAProxy ACL pattern
+// For wildcard domains like "*.api.example.com", returns ".api.example.com" for suffix matching
+// For exact domains like "grafana.example.com", returns the domain as-is
+func domainToACLPattern(domain string) string {
+	if strings.HasPrefix(domain, "*.") {
+		// Convert *.api.example.com to .api.example.com for hdr_end suffix matching
+		return domain[1:] // Remove the asterisk, keep the dot
+	}
+	return domain
 }
 
 // Reload reloads HAProxy configuration
