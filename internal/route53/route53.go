@@ -45,10 +45,16 @@ func GetCurrentValue(zoneID, name, recordType, awsProfile string) (string, error
 	ctx, cancel := context.WithTimeout(context.Background(), awsTimeout)
 	defer cancel()
 
+	// Route53 stores wildcards as \052 (octal escape for *)
+	queryName := name
+	if strings.HasPrefix(name, "*.") {
+		queryName = "\\052" + name[1:]
+	}
+
 	args := []string{
 		"route53", "list-resource-record-sets",
 		"--hosted-zone-id", zoneID,
-		"--query", fmt.Sprintf("ResourceRecordSets[?Name=='%s.' && Type=='%s'].ResourceRecords[0].Value", name, recordType),
+		"--query", fmt.Sprintf("ResourceRecordSets[?Name=='%s.' && Type=='%s'].ResourceRecords[0].Value", queryName, recordType),
 		"--output", "text",
 	}
 

@@ -53,9 +53,11 @@ func (h *HealthStatus) IsHealthy() bool {
 type SyncBroadcaster struct {
 	mu          sync.RWMutex
 	running     bool
+	cancelled   bool
 	history     []string // JSON-encoded messages
 	subscribers map[chan string]struct{}
 	done        chan struct{}
+	cancel      chan struct{}
 }
 
 func NewSyncBroadcaster() *SyncBroadcaster {
@@ -71,6 +73,32 @@ func (b *SyncBroadcaster) IsRunning() bool {
 	return b.running
 }
 
+// IsCancelled returns true if the current sync has been cancelled
+func (b *SyncBroadcaster) IsCancelled() bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.cancelled
+}
+
+// Cancel signals the sync to stop
+func (b *SyncBroadcaster) Cancel() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.running && !b.cancelled {
+		b.cancelled = true
+		if b.cancel != nil {
+			close(b.cancel)
+		}
+	}
+}
+
+// CancelChan returns a channel that closes when cancel is requested
+func (b *SyncBroadcaster) CancelChan() <-chan struct{} {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.cancel
+}
+
 // Start begins a new sync session, returns false if already running
 func (b *SyncBroadcaster) Start() bool {
 	b.mu.Lock()
@@ -79,8 +107,10 @@ func (b *SyncBroadcaster) Start() bool {
 		return false
 	}
 	b.running = true
+	b.cancelled = false
 	b.history = nil
 	b.done = make(chan struct{})
+	b.cancel = make(chan struct{})
 	return true
 }
 
@@ -1040,6 +1070,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/admin/service/delete", s.csrfMiddleware(s.handleDeleteService))
 	mux.HandleFunc("/admin/services/sync", s.csrfMiddleware(s.handleSyncServicesStream))
 	mux.HandleFunc("/admin/services/sync/status", s.csrfMiddleware(s.handleSyncStatus))
+	mux.HandleFunc("/admin/services/sync/cancel", s.csrfMiddleware(s.handleSyncCancel))
 	mux.HandleFunc("/admin/zone", s.csrfMiddleware(s.handleAddZone))
 	mux.HandleFunc("/admin/zone/edit", s.csrfMiddleware(s.handleEditZone))
 	mux.HandleFunc("/admin/zone/delete", s.csrfMiddleware(s.handleDeleteZone))
