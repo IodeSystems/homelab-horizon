@@ -645,8 +645,9 @@ const adminTemplate = `<!DOCTYPE html>
                 <span id="sync-title-text">Sync All Services</span>
             </h2>
             <div id="sync-log" style="background: #0a0a1a; padding: 1rem; border-radius: 4px; font-family: monospace; font-size: 0.9rem; flex: 1; overflow-y: auto; min-height: 100px;"></div>
-            <div id="sync-actions" style="margin-top: 1rem; display: none; flex-shrink: 0;">
-                <button type="button" class="secondary" onclick="closeSyncModal()">Close</button>
+            <div id="sync-actions" style="margin-top: 1rem; flex-shrink: 0;">
+                <button type="button" id="sync-cancel-btn" class="secondary" onclick="cancelSync()" style="display: none;">Cancel Sync</button>
+                <button type="button" id="sync-close-btn-bottom" class="secondary" onclick="closeSyncModal()" style="display: none;">Close</button>
             </div>
         </div>
     </div>
@@ -1205,18 +1206,46 @@ const adminTemplate = `<!DOCTYPE html>
         var titleIcon = document.getElementById('sync-title-icon');
         var titleText = document.getElementById('sync-title-text');
         var closeBtn = document.getElementById('sync-close-btn');
-        var actions = document.getElementById('sync-actions');
+        var cancelBtn = document.getElementById('sync-cancel-btn');
+        var closeBtnBottom = document.getElementById('sync-close-btn-bottom');
 
         syncRunning = false;
         titleIcon.style.display = 'none';
         closeBtn.style.opacity = '1';
-        actions.style.display = 'block';
+        cancelBtn.style.display = 'none';
+        closeBtnBottom.style.display = 'inline-block';
 
         if (status === 'success') {
             titleText.textContent = 'Sync Complete';
+        } else if (status === 'cancelled') {
+            titleText.textContent = 'Sync Cancelled';
         } else {
             titleText.textContent = 'Sync Completed with Errors';
         }
+    }
+
+    function cancelSync() {
+        var cancelBtn = document.getElementById('sync-cancel-btn');
+        cancelBtn.disabled = true;
+        cancelBtn.textContent = 'Cancelling...';
+
+        fetch('/admin/services/sync/cancel', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: 'csrf_token={{.CSRFToken}}'
+        }).then(function(response) {
+            return response.json();
+        }).then(function(data) {
+            if (data.cancelled) {
+                appendSyncLog({level: 'warning', message: 'Cancellation requested...'});
+            }
+        }).catch(function(err) {
+            appendSyncLog({level: 'error', message: 'Failed to cancel: ' + err});
+            cancelBtn.disabled = false;
+            cancelBtn.textContent = 'Cancel Sync';
+        });
     }
 
     function connectToSync() {
@@ -1254,13 +1283,19 @@ const adminTemplate = `<!DOCTYPE html>
         var titleIcon = document.getElementById('sync-title-icon');
         var titleText = document.getElementById('sync-title-text');
         var closeBtn = document.getElementById('sync-close-btn');
+        var cancelBtn = document.getElementById('sync-cancel-btn');
+        var closeBtnBottom = document.getElementById('sync-close-btn-bottom');
 
         // Reset state
         log.innerHTML = '';
-        actions.style.display = 'none';
+        actions.style.display = 'block';
         titleIcon.style.display = 'inline-block';
         titleText.textContent = 'Syncing Services...';
         closeBtn.style.opacity = '0.5';
+        cancelBtn.style.display = 'inline-block';
+        cancelBtn.disabled = false;
+        cancelBtn.textContent = 'Cancel Sync';
+        closeBtnBottom.style.display = 'none';
         syncRunning = true;
         modal.classList.add('active');
 

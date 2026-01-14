@@ -318,11 +318,42 @@ func (s *Server) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleSyncCancel(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminPost(w, r) {
+		return
+	}
+
+	if s.sync.IsRunning() {
+		s.sync.Cancel()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"cancelled": true,
+			"message":   "Sync cancellation requested",
+		})
+	} else {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"cancelled": false,
+			"message":   "No sync running",
+		})
+	}
+}
+
 // runSync performs the actual sync operation
 func (s *Server) runSync() {
 	log := &BroadcastSyncLogger{broadcaster: s.sync}
 	hasErrors := false
 	unpropagatedDomains := make(map[string]bool) // Track domains that failed propagation
+
+	// Helper to check for cancellation
+	checkCancelled := func() bool {
+		if s.sync.IsCancelled() {
+			log.Warning("Sync cancelled by user")
+			log.Done(false)
+			return true
+		}
+		return false
+	}
 
 	// Recover from panics and report them
 	defer func() {
@@ -338,6 +369,9 @@ func (s *Server) runSync() {
 	log.Info("Starting full service sync...")
 
 	// Step 1: DNSMasq (internal DNS)
+	if checkCancelled() {
+		return
+	}
 	if s.config.DNSMasqEnabled {
 		log.Step("Syncing DNSMasq...")
 
@@ -366,6 +400,10 @@ func (s *Server) runSync() {
 		}
 	} else {
 		log.Info("DNSMasq disabled, skipping")
+	}
+
+	if checkCancelled() {
+		return
 	}
 
 	// Step 2: Route53 DNS records (external DNS - needed before SSL certs)
@@ -495,6 +533,10 @@ func (s *Server) runSync() {
 		log.Info("No external services configured, skipping Route53")
 	}
 
+	if checkCancelled() {
+		return
+	}
+
 	// Step 3: Let's Encrypt certificates (needs DNS to be set up first)
 	sslDomains := s.config.DeriveSSLDomains()
 	if s.config.SSLEnabled && len(sslDomains) > 0 {
@@ -578,6 +620,10 @@ func (s *Server) runSync() {
 		log.Info("SSL disabled, skipping certificate check")
 	} else {
 		log.Info("No SSL domains configured, skipping")
+	}
+
+	if checkCancelled() {
+		return
 	}
 
 	// Step 4: HAProxy (last - needs certs to be ready)
