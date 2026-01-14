@@ -194,6 +194,8 @@ defaults
     timeout connect 5000
     timeout client  50000
     timeout server  50000
+    compression algo gzip
+    compression type text/html text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript image/svg+xml
     errorfile 400 /etc/haproxy/errors/400.http
     errorfile 403 /etc/haproxy/errors/403.http
     errorfile 408 /etc/haproxy/errors/408.http

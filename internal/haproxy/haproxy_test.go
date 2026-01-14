@@ -228,6 +228,24 @@ func TestGenerateConfig_WildcardBackend(t *testing.T) {
 	}
 }
 
+func TestGenerateConfig_Compression(t *testing.T) {
+	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
+	h.SetBackends(nil)
+
+	config := h.GenerateConfig(80, 443, nil)
+
+	expectedStrings := []string{
+		"compression algo gzip",
+		"compression type text/html text/plain text/css application/json",
+	}
+
+	for _, expected := range expectedStrings {
+		if !strings.Contains(config, expected) {
+			t.Errorf("config missing compression setting: %s", expected)
+		}
+	}
+}
+
 func TestGetBackends(t *testing.T) {
 	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
 
