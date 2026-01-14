@@ -287,6 +287,62 @@ func SyncRecord(r Record) (changed bool, err error) {
 	return true, UpdateRecord(r)
 }
 
+// VerifyPropagation checks if a DNS record has propagated by querying public DNS servers
+// Returns true if the record resolves to the expected value, false otherwise
+func VerifyPropagation(name, expectedValue string, timeout time.Duration) bool {
+	// Public DNS servers to check
+	dnsServers := []string{
+		"8.8.8.8:53",        // Google
+		"1.1.1.1:53",        // Cloudflare
+		"208.67.222.222:53", // OpenDNS
+	}
+
+	deadline := time.Now().Add(timeout)
+	checkInterval := 5 * time.Second
+
+	for time.Now().Before(deadline) {
+		allMatch := true
+		for _, server := range dnsServers {
+			resolver := &net.Resolver{
+				PreferGo: true,
+				Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+					d := net.Dialer{Timeout: 5 * time.Second}
+					return d.DialContext(ctx, "udp", server)
+				},
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ips, err := resolver.LookupHost(ctx, name)
+			cancel()
+
+			if err != nil {
+				allMatch = false
+				break
+			}
+
+			found := false
+			for _, ip := range ips {
+				if ip == expectedValue {
+					found = true
+					break
+				}
+			}
+			if !found {
+				allMatch = false
+				break
+			}
+		}
+
+		if allMatch {
+			return true
+		}
+
+		time.Sleep(checkInterval)
+	}
+
+	return false
+}
+
 // GenerateIAMPolicy generates a fine-grained IAM policy for the given zone IDs
 func GenerateIAMPolicy(zoneIDs []string) string {
 	// Build zone ARNs

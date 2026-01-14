@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"homelab-horizon/internal/config"
 	"homelab-horizon/internal/haproxy"
@@ -368,7 +370,7 @@ func (s *Server) runSync() {
 	// Step 2: Route53 DNS records (external DNS - needed before SSL certs)
 	records := s.config.DeriveRoute53Records()
 	if len(records) > 0 && route53.Available() {
-		log.Step("Syncing Route53 DNS records...")
+		log.Step("Syncing Route53 DNS records (parallel)...")
 
 		// Update public IP if needed
 		if newIP, err := route53.GetPublicIP(); err == nil {
@@ -381,30 +383,60 @@ func (s *Server) runSync() {
 			}
 		}
 
-		var sawPermissionError bool
-		zoneIDSet := make(map[string]bool)
+		// Sync results struct for parallel processing
+		type syncResult struct {
+			record  route53.Record
+			changed bool
+			err     error
+		}
+
+		// Fan out: sync all records in parallel
+		results := make(chan syncResult, len(records))
+		var wg sync.WaitGroup
+
 		for _, rec := range records {
+			wg.Add(1)
+			go func(r route53.Record) {
+				defer wg.Done()
+				changed, err := route53.SyncRecord(r)
+				results <- syncResult{record: r, changed: changed, err: err}
+			}(rec)
+		}
+
+		// Close results channel when all goroutines complete
+		go func() {
+			wg.Wait()
+			close(results)
+		}()
+
+		// Join: collect results
+		var sawPermissionError bool
+		var changedRecords []route53.Record
+		zoneIDSet := make(map[string]bool)
+
+		for result := range results {
+			rec := result.record
 			profileInfo := ""
 			if rec.AWSProfile != "" {
 				profileInfo = fmt.Sprintf(" [%s]", rec.AWSProfile)
 			}
 			zoneIDSet[rec.ZoneID] = true
-			log.Info(fmt.Sprintf("  %s%s: checking...", rec.Name, profileInfo))
-			changed, err := route53.SyncRecord(rec)
-			if err != nil {
-				errStr := err.Error()
+
+			if result.err != nil {
+				errStr := result.err.Error()
 				log.Error(fmt.Sprintf("  %s%s: %s", rec.Name, profileInfo, errStr))
 				hasErrors = true
-				// Track if we saw a permission error
 				if strings.Contains(errStr, "AccessDenied") || strings.Contains(errStr, "not authorized") || strings.Contains(errStr, "exit status") {
 					sawPermissionError = true
 				}
-			} else if changed {
+			} else if result.changed {
 				log.Success(fmt.Sprintf("  %s -> %s (updated)", rec.Name, rec.Value))
+				changedRecords = append(changedRecords, rec)
 			} else {
 				log.Success(fmt.Sprintf("  %s -> %s (unchanged)", rec.Name, rec.Value))
 			}
 		}
+
 		// Show IAM policy hint if we saw permission errors
 		if sawPermissionError {
 			var zoneIDs []string
@@ -415,6 +447,43 @@ func (s *Server) runSync() {
 			policy := route53.GenerateIAMPolicy(zoneIDs)
 			for _, line := range strings.Split(policy, "\n") {
 				log.Info("  " + line)
+			}
+		}
+
+		// Verify propagation for changed records before proceeding to SSL
+		if len(changedRecords) > 0 {
+			log.Step("Verifying DNS propagation...")
+			propagationTimeout := 60 * time.Second
+
+			var propagationWg sync.WaitGroup
+			propagationResults := make(chan struct {
+				name    string
+				success bool
+			}, len(changedRecords))
+
+			for _, rec := range changedRecords {
+				propagationWg.Add(1)
+				go func(r route53.Record) {
+					defer propagationWg.Done()
+					success := route53.VerifyPropagation(r.Name, r.Value, propagationTimeout)
+					propagationResults <- struct {
+						name    string
+						success bool
+					}{name: r.Name, success: success}
+				}(rec)
+			}
+
+			go func() {
+				propagationWg.Wait()
+				close(propagationResults)
+			}()
+
+			for result := range propagationResults {
+				if result.success {
+					log.Success(fmt.Sprintf("  %s: propagated", result.name))
+				} else {
+					log.Warning(fmt.Sprintf("  %s: propagation timeout (may still be propagating)", result.name))
+				}
 			}
 		}
 	} else if len(records) > 0 {
