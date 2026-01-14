@@ -186,10 +186,10 @@ func (h *HAProxy) generateConfig(httpPort, httpsPort int, ssl *SSLConfig) string
     group haproxy
     daemon
 
-# Cache configuration
+# Cache configuration (RAM-based, max 4095 MB)
 cache mycache
-    total-max-size 4096
-    max-object-size 2048
+    total-max-size 4095
+    max-object-size 2047
 
 defaults
     log     global
