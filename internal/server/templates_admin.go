@@ -521,6 +521,7 @@ const adminTemplate = `<!DOCTYPE html>
             </details>
             {{end}}
             <button type="button" class="success" onclick="startSync()" style="margin-top: 0.5rem;">Sync All Services</button>
+            <button type="button" class="secondary" onclick="viewLastSync()" style="margin-top: 0.5rem;">View Last Sync</button>
         </div>
     </div>
 
@@ -1309,6 +1310,48 @@ const adminTemplate = `<!DOCTYPE html>
             syncEventSource.close();
             syncEventSource = null;
         }
+    }
+
+    function viewLastSync() {
+        var modal = document.getElementById('sync-modal');
+        var log = document.getElementById('sync-log');
+        var actions = document.getElementById('sync-actions');
+        var titleIcon = document.getElementById('sync-title-icon');
+        var titleText = document.getElementById('sync-title-text');
+        var closeBtn = document.getElementById('sync-close-btn');
+        var cancelBtn = document.getElementById('sync-cancel-btn');
+        var closeBtnBottom = document.getElementById('sync-close-btn-bottom');
+
+        // Reset state
+        log.innerHTML = '<div style="color: #888;">Loading last sync logs...</div>';
+        actions.style.display = 'block';
+        titleIcon.style.display = 'none';
+        titleText.textContent = 'Last Sync';
+        closeBtn.style.opacity = '1';
+        cancelBtn.style.display = 'none';
+        closeBtnBottom.style.display = 'inline-block';
+        modal.classList.add('active');
+
+        fetch('/admin/services/sync/status')
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.running) {
+                    // Sync is running, switch to live view
+                    startSync();
+                    return;
+                }
+                if (data.history && data.history.length > 0) {
+                    log.innerHTML = '';
+                    data.history.forEach(function(msg) {
+                        appendSyncMessage(msg);
+                    });
+                } else {
+                    log.innerHTML = '<div style="color: #888;">No previous sync logs available.</div>';
+                }
+            })
+            .catch(function(err) {
+                log.innerHTML = '<div style="color: #ff6b6b;">Error loading sync logs: ' + err + '</div>';
+            });
     }
 
     // Check if a sync is already running on page load
