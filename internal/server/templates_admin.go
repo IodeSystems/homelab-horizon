@@ -1343,7 +1343,16 @@ const adminTemplate = `<!DOCTYPE html>
                 if (data.history && data.history.length > 0) {
                     log.innerHTML = '';
                     data.history.forEach(function(msg) {
-                        appendSyncMessage(msg);
+                        try {
+                            var parsed = JSON.parse(msg);
+                            appendSyncLog(parsed);
+                        } catch (e) {
+                            // If not JSON, display as plain text
+                            var line = document.createElement('div');
+                            line.style.marginBottom = '0.25rem';
+                            line.textContent = msg;
+                            log.appendChild(line);
+                        }
                     });
                 } else {
                     log.innerHTML = '<div style="color: #888;">No previous sync logs available.</div>';
