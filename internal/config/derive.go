@@ -169,17 +169,28 @@ func (c *Config) DeriveSSLDomains() []letsencrypt.DomainConfig {
 		// Build DNS provider config for letsencrypt
 		var dnsProvider *letsencrypt.DNSProviderConfig
 		if providerCfg := zone.GetDNSProvider(); providerCfg != nil {
+			// Use provider's AWSHostedZoneID if set, otherwise fall back to zone's ZoneID
+			awsHostedZoneID := providerCfg.AWSHostedZoneID
+			if awsHostedZoneID == "" && providerCfg.Type == "route53" {
+				awsHostedZoneID = zone.ZoneID
+			}
+			// Same for Cloudflare
+			cloudflareZoneID := providerCfg.CloudflareZoneID
+			if cloudflareZoneID == "" && providerCfg.Type == "cloudflare" {
+				cloudflareZoneID = zone.ZoneID
+			}
+
 			dnsProvider = &letsencrypt.DNSProviderConfig{
 				Type:               letsencrypt.DNSProviderType(providerCfg.Type),
 				AWSAccessKeyID:     providerCfg.AWSAccessKeyID,
 				AWSSecretAccessKey: providerCfg.AWSSecretAccessKey,
 				AWSRegion:          providerCfg.AWSRegion,
-				AWSHostedZoneID:    providerCfg.AWSHostedZoneID,
+				AWSHostedZoneID:    awsHostedZoneID,
 				AWSProfile:         providerCfg.AWSProfile,
 				NamecomUsername:    providerCfg.NamecomUsername,
 				NamecomAPIToken:    providerCfg.NamecomAPIToken,
 				CloudflareAPIToken: providerCfg.CloudflareAPIToken,
-				CloudflareZoneID:   providerCfg.CloudflareZoneID,
+				CloudflareZoneID:   cloudflareZoneID,
 			}
 		}
 
