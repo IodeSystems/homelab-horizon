@@ -289,7 +289,16 @@ func SyncRecord(r Record) (changed bool, err error) {
 
 // VerifyPropagation checks if a DNS record has propagated by querying public DNS servers
 // Returns true if the record resolves to the expected value, false otherwise
+// For wildcard domains (*.example.com), queries _acme-challenge subdomain since that's what Let's Encrypt uses
 func VerifyPropagation(name, expectedValue string, timeout time.Duration) bool {
+	// Handle wildcard domains by querying the _acme-challenge subdomain
+	// This is what Let's Encrypt will use for DNS-01 challenge verification
+	queryName := name
+	if strings.HasPrefix(name, "*.") {
+		// Convert *.dev.example.com to _acme-challenge.dev.example.com
+		queryName = "_acme-challenge" + name[1:]
+	}
+
 	// Public DNS servers to check
 	dnsServers := []string{
 		"8.8.8.8:53",        // Google
@@ -312,7 +321,7 @@ func VerifyPropagation(name, expectedValue string, timeout time.Duration) bool {
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			ips, err := resolver.LookupHost(ctx, name)
+			ips, err := resolver.LookupHost(ctx, queryName)
 			cancel()
 
 			if err != nil {

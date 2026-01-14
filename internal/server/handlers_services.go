@@ -322,6 +322,7 @@ func (s *Server) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runSync() {
 	log := &BroadcastSyncLogger{broadcaster: s.sync}
 	hasErrors := false
+	unpropagatedDomains := make(map[string]bool) // Track domains that failed propagation
 
 	// Recover from panics and report them
 	defer func() {
@@ -452,8 +453,8 @@ func (s *Server) runSync() {
 
 		// Verify propagation for changed records before proceeding to SSL
 		if len(changedRecords) > 0 {
-			log.Step("Verifying DNS propagation...")
-			propagationTimeout := 60 * time.Second
+			log.Step("Verifying DNS propagation (up to 2 minutes)...")
+			propagationTimeout := 120 * time.Second
 
 			var propagationWg sync.WaitGroup
 			propagationResults := make(chan struct {
@@ -482,7 +483,9 @@ func (s *Server) runSync() {
 				if result.success {
 					log.Success(fmt.Sprintf("  %s: propagated", result.name))
 				} else {
-					log.Warning(fmt.Sprintf("  %s: propagation timeout (may still be propagating)", result.name))
+					log.Error(fmt.Sprintf("  %s: propagation failed - SSL cert request will be skipped", result.name))
+					unpropagatedDomains[result.name] = true
+					hasErrors = true
 				}
 			}
 		}
@@ -504,6 +507,12 @@ func (s *Server) runSync() {
 		})
 
 		for _, domain := range sslDomains {
+			// Skip domains that failed DNS propagation
+			if unpropagatedDomains[domain.Domain] {
+				log.Warning(fmt.Sprintf("  %s: skipped - DNS not propagated yet", domain.Domain))
+				continue
+			}
+
 			status := s.letsencrypt.GetDomainStatus(domain)
 			if status.CertExists {
 				// Check if cert has all expected SANs (including sub-zones)
