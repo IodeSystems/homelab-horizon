@@ -186,6 +186,11 @@ func (h *HAProxy) generateConfig(httpPort, httpsPort int, ssl *SSLConfig) string
     group haproxy
     daemon
 
+# Cache configuration
+cache mycache
+    total-max-size 4096
+    max-object-size 2048
+
 defaults
     log     global
     mode    http
@@ -256,6 +261,11 @@ listen stats
     mode http
     option forwardfor
     http-request set-header X-Forwarded-Proto https
+    # Caching - strip cache headers and use HAProxy cache
+    http-request del-header Cache-Control
+    http-request del-header Pragma
+    http-request cache-use mycache
+    http-response cache-store mycache
     # Router check endpoint - returns 200 OK directly (requires special header to avoid conflicts)
     http-request return status 200 content-type "text/plain" string "OK" if { path /router-check } { hdr(X-Homelab-Horizon-Check) -m found }
 `, httpsPort, certDir))
@@ -265,6 +275,11 @@ listen stats
     bind *:%d
     mode http
     option forwardfor
+    # Caching - strip cache headers and use HAProxy cache
+    http-request del-header Cache-Control
+    http-request del-header Pragma
+    http-request cache-use mycache
+    http-response cache-store mycache
     # Router check endpoint - returns 200 OK directly (requires special header to avoid conflicts)
     http-request return status 200 content-type "text/plain" string "OK" if { path /router-check } { hdr(X-Homelab-Horizon-Check) -m found }
 `, httpPort))

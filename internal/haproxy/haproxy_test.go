@@ -246,6 +246,27 @@ func TestGenerateConfig_Compression(t *testing.T) {
 	}
 }
 
+func TestGenerateConfig_Caching(t *testing.T) {
+	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
+	h.SetBackends(nil)
+
+	config := h.GenerateConfig(80, 443, nil)
+
+	expectedStrings := []string{
+		"cache mycache",
+		"total-max-size 4096",
+		"max-object-size 2048",
+		"http-request cache-use mycache",
+		"http-response cache-store mycache",
+	}
+
+	for _, expected := range expectedStrings {
+		if !strings.Contains(config, expected) {
+			t.Errorf("config missing caching setting: %s", expected)
+		}
+	}
+}
+
 func TestGetBackends(t *testing.T) {
 	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
 
