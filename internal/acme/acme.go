@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
@@ -50,13 +52,33 @@ func (c *Client) ObtainCertificate(email string, domains []string, providerCfg *
 		logFn = func(s string) {}
 	}
 
-	// Create DNS challenge provider
-	dnsProvider, err := CreateChallengeProvider(providerCfg)
+	logFn(fmt.Sprintf("Using DNS provider: %s", ProviderName(providerCfg)))
+
+	// Log provider config details (without secrets)
+	if providerCfg != nil {
+		switch providerCfg.Type {
+		case DNSProviderRoute53:
+			if providerCfg.AWSProfile != "" {
+				logFn(fmt.Sprintf("  AWS Profile: %s", providerCfg.AWSProfile))
+			}
+			if providerCfg.AWSHostedZoneID != "" {
+				logFn(fmt.Sprintf("  AWS Hosted Zone ID: %s", providerCfg.AWSHostedZoneID))
+			}
+			if providerCfg.AWSRegion != "" {
+				logFn(fmt.Sprintf("  AWS Region: %s", providerCfg.AWSRegion))
+			}
+		case DNSProviderCloudflare:
+			if providerCfg.CloudflareZoneID != "" {
+				logFn(fmt.Sprintf("  Cloudflare Zone ID: %s", providerCfg.CloudflareZoneID))
+			}
+		}
+	}
+
+	// Create DNS challenge provider with logging
+	dnsProvider, err := CreateChallengeProvider(providerCfg, logFn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DNS provider: %w", err)
 	}
-
-	logFn(fmt.Sprintf("Using DNS provider: %s", ProviderName(providerCfg)))
 
 	// Load or create user
 	user, err := c.loadOrCreateUser(email)
@@ -101,6 +123,7 @@ func (c *Client) ObtainCertificate(email string, domains []string, providerCfg *
 	}
 
 	logFn(fmt.Sprintf("Requesting certificate for: %v", domains))
+	logFn("Starting ACME challenge process...")
 
 	// Request certificate
 	request := certificate.ObtainRequest{
@@ -108,12 +131,27 @@ func (c *Client) ObtainCertificate(email string, domains []string, providerCfg *
 		Bundle:  true,
 	}
 
+	start := time.Now()
 	certificates, err := client.Certificate.Obtain(request)
+	duration := time.Since(start).Round(time.Second)
+
 	if err != nil {
+		logFn(fmt.Sprintf("Certificate request failed after %v", duration))
+		// Try to extract more useful error info
+		errStr := err.Error()
+		if strings.Contains(errStr, "NXDOMAIN") {
+			logFn("  ✗ DNS record not found - check that the zone ID is correct")
+		} else if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "Timeout") {
+			logFn("  ✗ DNS propagation timeout - the TXT record may not have propagated in time")
+		} else if strings.Contains(errStr, "unauthorized") {
+			logFn("  ✗ Authorization failed - Let's Encrypt could not verify domain ownership")
+		} else if strings.Contains(errStr, "rateLimited") {
+			logFn("  ✗ Rate limited - too many certificate requests, try again later")
+		}
 		return nil, fmt.Errorf("failed to obtain certificate: %w", err)
 	}
 
-	logFn("Certificate obtained successfully!")
+	logFn(fmt.Sprintf("✓ Certificate obtained successfully in %v", duration))
 
 	return certificates, nil
 }
