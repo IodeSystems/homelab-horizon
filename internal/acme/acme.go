@@ -1,7 +1,6 @@
 package acme
 
 import (
-	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -10,7 +9,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -72,7 +70,9 @@ func (c *Client) ObtainCertificate(email string, domains []string, providerCfg *
 				} else {
 					logFn(fmt.Sprintf("  Zone name: %s", zoneName))
 					// Check if domain has valid SOA record (is resolvable)
-					checkDomainSOA(zoneName, logFn)
+					if err := checkDomainSOA(zoneName, logFn); err != nil {
+						return nil, err
+					}
 				}
 			} else {
 				logFn("  ⚠ No AWS Hosted Zone ID configured - Lego will try to auto-detect")
@@ -265,53 +265,40 @@ func verifyRoute53Zone(zoneID, awsProfile string) (string, error) {
 }
 
 // checkDomainSOA checks if a domain has a valid SOA record (is properly configured in DNS)
-func checkDomainSOA(domain string, logFn func(string)) {
+// Returns an error if the domain is not properly delegated
+func checkDomainSOA(domain string, logFn func(string)) error {
 	// Use dig to check SOA record
 	cmd := exec.Command("dig", "+short", "SOA", domain, "@8.8.8.8")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		logFn(fmt.Sprintf("  ⚠ Could not check SOA for %s: %v", domain, err))
-		return
+		// Don't fail on dig errors, continue with cert request
+		return nil
 	}
 
 	soa := strings.TrimSpace(string(output))
 	if soa == "" {
-		logFn(fmt.Sprintf("  ⚠ No SOA record found for %s - domain may not be delegated to Route53", domain))
+		logFn(fmt.Sprintf("  ✗ No SOA record found for %s - domain is not delegated to Route53", domain))
 		// Also check NS records
 		cmd = exec.Command("dig", "+short", "NS", domain, "@8.8.8.8")
 		nsOutput, _ := cmd.CombinedOutput()
 		ns := strings.TrimSpace(string(nsOutput))
 		if ns == "" {
-			logFn(fmt.Sprintf("  ⚠ No NS records found - domain does not exist in public DNS"))
-			logFn(fmt.Sprintf("  → Check that your domain registrar nameservers point to Route53"))
-			// Get Route53 nameservers to show what they should be
+			logFn(fmt.Sprintf("  ✗ No NS records found - domain does not exist in public DNS"))
+			logFn(fmt.Sprintf("  → Update nameservers at your domain registrar to point to Route53"))
 			logFn(fmt.Sprintf("  → Run: aws route53 get-hosted-zone --id <zone-id> --query DelegationSet.NameServers"))
+			return fmt.Errorf("domain %s is not delegated - no SOA/NS records in public DNS", domain)
 		} else {
 			logFn(fmt.Sprintf("  Current NS records: %s", strings.ReplaceAll(ns, "\n", ", ")))
-		}
-	} else {
-		// Parse SOA to show primary nameserver
-		parts := strings.Fields(soa)
-		if len(parts) >= 1 {
-			logFn(fmt.Sprintf("  ✓ SOA record found (primary NS: %s)", parts[0]))
+			logFn(fmt.Sprintf("  → These should be Route53 nameservers (ns-*.awsdns-*.com/net/org/co.uk)"))
+			return fmt.Errorf("domain %s has NS records but no SOA - delegation may be incomplete", domain)
 		}
 	}
 
-	// Also do a quick check if we can resolve any record for the domain
-	r := &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			d := net.Dialer{Timeout: 5 * time.Second}
-			return d.DialContext(ctx, "udp", "8.8.8.8:53")
-		},
+	// Parse SOA to show primary nameserver
+	parts := strings.Fields(soa)
+	if len(parts) >= 1 {
+		logFn(fmt.Sprintf("  ✓ SOA record found (primary NS: %s)", parts[0]))
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	_, err = r.LookupNS(ctx, domain)
-	if err != nil {
-		if strings.Contains(err.Error(), "no such host") {
-			logFn(fmt.Sprintf("  ⚠ Domain %s returns NXDOMAIN - not configured at registrar", domain))
-		}
-	}
+	return nil
 }
