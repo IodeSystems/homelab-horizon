@@ -197,11 +197,19 @@ func (s *Server) syncServices() {
 
 // BroadcastSyncLogger sends log messages to the sync broadcaster
 type BroadcastSyncLogger struct {
-	broadcaster *SyncBroadcaster
+	broadcaster  *SyncBroadcaster
+	syncStart    time.Time
+	sectionStart time.Time
+	sectionName  string
 }
 
 func (l *BroadcastSyncLogger) Log(level, message string) {
-	data := map[string]string{"level": level, "message": message}
+	elapsed := time.Since(l.syncStart).Round(time.Millisecond)
+	data := map[string]interface{}{
+		"level":   level,
+		"message": message,
+		"elapsed": elapsed.Milliseconds(),
+	}
 	jsonData, _ := json.Marshal(data)
 	l.broadcaster.Broadcast(string(jsonData))
 }
@@ -210,14 +218,36 @@ func (l *BroadcastSyncLogger) Info(message string)    { l.Log("info", message) }
 func (l *BroadcastSyncLogger) Success(message string) { l.Log("success", message) }
 func (l *BroadcastSyncLogger) Warning(message string) { l.Log("warning", message) }
 func (l *BroadcastSyncLogger) Error(message string)   { l.Log("error", message) }
-func (l *BroadcastSyncLogger) Step(message string)    { l.Log("step", message) }
+
+// Step starts a new section and logs its name
+func (l *BroadcastSyncLogger) Step(message string) {
+	// End previous section if any
+	if l.sectionName != "" {
+		duration := time.Since(l.sectionStart).Round(time.Millisecond)
+		l.Log("section_end", fmt.Sprintf("%s completed in %v", l.sectionName, duration))
+	}
+	l.sectionName = message
+	l.sectionStart = time.Now()
+	l.Log("step", message)
+}
 
 func (l *BroadcastSyncLogger) Done(success bool) {
+	// End final section if any
+	if l.sectionName != "" {
+		duration := time.Since(l.sectionStart).Round(time.Millisecond)
+		l.Log("section_end", fmt.Sprintf("%s completed in %v", l.sectionName, duration))
+	}
+
 	status := "success"
 	if !success {
 		status = "failed"
 	}
-	data := map[string]interface{}{"done": true, "status": status}
+	totalDuration := time.Since(l.syncStart).Round(time.Millisecond)
+	data := map[string]interface{}{
+		"done":          true,
+		"status":        status,
+		"totalDuration": totalDuration.Milliseconds(),
+	}
 	jsonData, _ := json.Marshal(data)
 	l.broadcaster.Broadcast(string(jsonData))
 }
@@ -341,7 +371,7 @@ func (s *Server) handleSyncCancel(w http.ResponseWriter, r *http.Request) {
 
 // runSync performs the actual sync operation
 func (s *Server) runSync() {
-	log := &BroadcastSyncLogger{broadcaster: s.sync}
+	log := &BroadcastSyncLogger{broadcaster: s.sync, syncStart: time.Now()}
 	hasErrors := false
 	unpropagatedDomains := make(map[string]bool) // Track domains that failed propagation
 

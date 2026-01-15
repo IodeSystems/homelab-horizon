@@ -1168,19 +1168,35 @@ const adminTemplate = `<!DOCTYPE html>
 
     var syncRunning = false;
     var syncEventSource = null;
+    var reconnectAttempts = 0;
+    var maxReconnectAttempts = 10;
+    var reconnectDelay = 2000;
 
     var levelColors = {
         'info': '#888',
         'success': '#2ecc71',
         'warning': '#f1c40f',
         'error': '#e74c3c',
-        'step': '#3498db'
+        'step': '#3498db',
+        'section_end': '#666'
     };
+
+    function formatElapsed(ms) {
+        if (ms < 1000) return ms + 'ms';
+        var seconds = Math.floor(ms / 1000);
+        var minutes = Math.floor(seconds / 60);
+        if (minutes > 0) {
+            return minutes + 'm ' + (seconds % 60) + 's';
+        }
+        return seconds + '.' + Math.floor((ms % 1000) / 100) + 's';
+    }
 
     function appendSyncLog(data) {
         var log = document.getElementById('sync-log');
         var line = document.createElement('div');
         line.style.marginBottom = '0.25rem';
+        line.style.display = 'flex';
+        line.style.justifyContent = 'space-between';
 
         var color = levelColors[data.level] || '#fff';
         var prefix = '';
@@ -1195,10 +1211,26 @@ const adminTemplate = `<!DOCTYPE html>
             prefix = '✗ ';
         } else if (data.level === 'warning') {
             prefix = '⚠ ';
+        } else if (data.level === 'section_end') {
+            line.style.fontSize = '0.85em';
+            line.style.marginBottom = '0.5rem';
         }
 
-        line.style.color = color;
-        line.textContent = prefix + data.message;
+        var msgSpan = document.createElement('span');
+        msgSpan.style.color = color;
+        msgSpan.textContent = prefix + data.message;
+        line.appendChild(msgSpan);
+
+        // Show elapsed time for steps and section_end
+        if (data.elapsed !== undefined && (data.level === 'step' || data.level === 'section_end')) {
+            var timeSpan = document.createElement('span');
+            timeSpan.style.color = '#555';
+            timeSpan.style.fontSize = '0.85em';
+            timeSpan.style.marginLeft = '1rem';
+            timeSpan.textContent = formatElapsed(data.elapsed);
+            line.appendChild(timeSpan);
+        }
+
         log.appendChild(line);
         log.scrollTop = log.scrollHeight;
     }
@@ -1256,10 +1288,22 @@ const adminTemplate = `<!DOCTYPE html>
 
         syncEventSource = new EventSource('/admin/services/sync');
 
+        syncEventSource.onopen = function() {
+            if (reconnectAttempts > 0) {
+                appendSyncLog({level: 'info', message: 'Reconnected to sync stream'});
+            }
+            reconnectAttempts = 0;
+        };
+
         syncEventSource.onmessage = function(event) {
             var data = JSON.parse(event.data);
 
             if (data.done) {
+                var msg = 'Sync ' + data.status;
+                if (data.totalDuration) {
+                    msg += ' in ' + formatElapsed(data.totalDuration);
+                }
+                appendSyncLog({level: data.status === 'success' ? 'success' : 'warning', message: msg});
                 setSyncComplete(data.status);
                 syncEventSource.close();
                 syncEventSource = null;
@@ -1270,10 +1314,40 @@ const adminTemplate = `<!DOCTYPE html>
         };
 
         syncEventSource.onerror = function() {
-            setSyncComplete('failed');
-            appendSyncLog({level: 'error', message: 'Connection error'});
             syncEventSource.close();
             syncEventSource = null;
+
+            // Try to reconnect if sync might still be running
+            if (syncRunning && reconnectAttempts < maxReconnectAttempts) {
+                reconnectAttempts++;
+                appendSyncLog({level: 'warning', message: 'Connection lost, reconnecting... (' + reconnectAttempts + '/' + maxReconnectAttempts + ')'});
+                setTimeout(function() {
+                    // Check if sync is still running before reconnecting
+                    fetch('/admin/services/sync/status')
+                        .then(function(response) { return response.json(); })
+                        .then(function(status) {
+                            if (status.running) {
+                                connectToSync();
+                            } else {
+                                // Sync finished while we were disconnected
+                                appendSyncLog({level: 'info', message: 'Sync completed while disconnected'});
+                                setSyncComplete('success');
+                            }
+                        })
+                        .catch(function() {
+                            // Keep trying
+                            if (reconnectAttempts < maxReconnectAttempts) {
+                                setTimeout(connectToSync, reconnectDelay);
+                            } else {
+                                appendSyncLog({level: 'error', message: 'Failed to reconnect after ' + maxReconnectAttempts + ' attempts'});
+                                setSyncComplete('failed');
+                            }
+                        });
+                }, reconnectDelay);
+            } else if (reconnectAttempts >= maxReconnectAttempts) {
+                appendSyncLog({level: 'error', message: 'Connection lost, max reconnect attempts reached'});
+                setSyncComplete('failed');
+            }
         };
     }
 
@@ -1298,6 +1372,7 @@ const adminTemplate = `<!DOCTYPE html>
         cancelBtn.textContent = 'Cancel Sync';
         closeBtnBottom.style.display = 'none';
         syncRunning = true;
+        reconnectAttempts = 0;
         modal.classList.add('active');
 
         connectToSync();
