@@ -1171,6 +1171,7 @@ const adminTemplate = `<!DOCTYPE html>
     var reconnectAttempts = 0;
     var maxReconnectAttempts = 10;
     var reconnectDelay = 2000;
+    var isFreshSync = false;
 
     var levelColors = {
         'info': '#888',
@@ -1289,7 +1290,11 @@ const adminTemplate = `<!DOCTYPE html>
         syncEventSource = new EventSource('/admin/services/sync');
 
         syncEventSource.onopen = function() {
-            if (reconnectAttempts > 0) {
+            // Clear log on fresh sync start (not reconnect)
+            if (isFreshSync) {
+                document.getElementById('sync-log').innerHTML = '';
+                isFreshSync = false;
+            } else if (reconnectAttempts > 0) {
                 appendSyncLog({level: 'info', message: 'Reconnected to sync stream'});
             }
             reconnectAttempts = 0;
@@ -1373,6 +1378,7 @@ const adminTemplate = `<!DOCTYPE html>
         closeBtnBottom.style.display = 'none';
         syncRunning = true;
         reconnectAttempts = 0;
+        isFreshSync = true;
         modal.classList.add('active');
 
         connectToSync();
