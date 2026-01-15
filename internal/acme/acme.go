@@ -19,7 +19,6 @@ import (
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
-	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
 )
@@ -72,6 +71,8 @@ func (c *Client) ObtainCertificate(email string, domains []string, providerCfg *
 					logFn(fmt.Sprintf("  ⚠ Zone verification failed: %v", err))
 				} else {
 					logFn(fmt.Sprintf("  Zone name: %s", zoneName))
+					// Check if domain has valid SOA record (is resolvable)
+					checkDomainSOA(zoneName, logFn)
 				}
 			} else {
 				logFn("  ⚠ No AWS Hosted Zone ID configured - Lego will try to auto-detect")
@@ -114,17 +115,8 @@ func (c *Client) ObtainCertificate(email string, domains []string, providerCfg *
 		return nil, fmt.Errorf("failed to create ACME client: %w", err)
 	}
 
-	// Set DNS provider with custom pre-check using recursive DNS
-	// Lego's authoritative NS lookup is broken (returns TLD servers like gtld-servers.net)
-	// We use our own propagation check with Google/Cloudflare DNS instead
-	logFn("Using custom propagation check with recursive DNS (8.8.8.8, 1.1.1.1)")
-	err = client.Challenge.SetDNS01Provider(dnsProvider,
-		dns01.WrapPreCheck(func(domain, fqdn, value string, check dns01.PreCheckFunc) (bool, error) {
-			// Use our own DNS check with recursive resolvers
-			return checkDNSPropagation(fqdn, value, logFn)
-		}),
-	)
-	if err != nil {
+	// Set DNS provider (vanilla Lego)
+	if err := client.Challenge.SetDNS01Provider(dnsProvider); err != nil {
 		return nil, fmt.Errorf("failed to set DNS provider: %w", err)
 	}
 
@@ -272,75 +264,54 @@ func verifyRoute53Zone(zoneID, awsProfile string) (string, error) {
 	return zoneName, nil
 }
 
-// checkDNSPropagation checks if a TXT record has propagated using recursive DNS servers
-func checkDNSPropagation(fqdn, expectedValue string, logFn func(string)) (bool, error) {
-	// Remove trailing dot if present
-	fqdn = strings.TrimSuffix(fqdn, ".")
-
-	resolvers := []string{"8.8.8.8:53", "1.1.1.1:53", "208.67.222.222:53"}
-	timeout := 5 * time.Minute
-	interval := 10 * time.Second
-
-	deadline := time.Now().Add(timeout)
-	attempt := 0
-
-	for time.Now().Before(deadline) {
-		attempt++
-		allFound := true
-
-		for _, resolver := range resolvers {
-			found, err := checkTXTRecord(fqdn, expectedValue, resolver)
-			if err != nil {
-				if attempt == 1 || attempt%6 == 0 { // Log every minute
-					logFn(fmt.Sprintf("  Checking %s via %s: %v", fqdn, resolver, err))
-				}
-				allFound = false
-				break
-			}
-			if !found {
-				if attempt == 1 || attempt%6 == 0 {
-					logFn(fmt.Sprintf("  Checking %s via %s: not found yet", fqdn, resolver))
-				}
-				allFound = false
-				break
-			}
-		}
-
-		if allFound {
-			logFn(fmt.Sprintf("  ✓ TXT record verified on all resolvers after %d attempts", attempt))
-			return true, nil
-		}
-
-		time.Sleep(interval)
+// checkDomainSOA checks if a domain has a valid SOA record (is properly configured in DNS)
+func checkDomainSOA(domain string, logFn func(string)) {
+	// Use dig to check SOA record
+	cmd := exec.Command("dig", "+short", "SOA", domain, "@8.8.8.8")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		logFn(fmt.Sprintf("  ⚠ Could not check SOA for %s: %v", domain, err))
+		return
 	}
 
-	return false, fmt.Errorf("timeout waiting for DNS propagation after %v", timeout)
-}
+	soa := strings.TrimSpace(string(output))
+	if soa == "" {
+		logFn(fmt.Sprintf("  ⚠ No SOA record found for %s - domain may not be delegated to Route53", domain))
+		// Also check NS records
+		cmd = exec.Command("dig", "+short", "NS", domain, "@8.8.8.8")
+		nsOutput, _ := cmd.CombinedOutput()
+		ns := strings.TrimSpace(string(nsOutput))
+		if ns == "" {
+			logFn(fmt.Sprintf("  ⚠ No NS records found - domain does not exist in public DNS"))
+			logFn(fmt.Sprintf("  → Check that your domain registrar nameservers point to Route53"))
+			// Get Route53 nameservers to show what they should be
+			logFn(fmt.Sprintf("  → Run: aws route53 get-hosted-zone --id <zone-id> --query DelegationSet.NameServers"))
+		} else {
+			logFn(fmt.Sprintf("  Current NS records: %s", strings.ReplaceAll(ns, "\n", ", ")))
+		}
+	} else {
+		// Parse SOA to show primary nameserver
+		parts := strings.Fields(soa)
+		if len(parts) >= 1 {
+			logFn(fmt.Sprintf("  ✓ SOA record found (primary NS: %s)", parts[0]))
+		}
+	}
 
-// checkTXTRecord checks if a TXT record exists with the expected value
-func checkTXTRecord(fqdn, expectedValue, resolver string) (bool, error) {
+	// Also do a quick check if we can resolve any record for the domain
 	r := &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			d := net.Dialer{Timeout: 10 * time.Second}
-			return d.DialContext(ctx, "udp", resolver)
+			d := net.Dialer{Timeout: 5 * time.Second}
+			return d.DialContext(ctx, "udp", "8.8.8.8:53")
 		},
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	records, err := r.LookupTXT(ctx, fqdn)
+	_, err = r.LookupNS(ctx, domain)
 	if err != nil {
-		// NXDOMAIN or other DNS error - record doesn't exist yet
-		return false, nil
-	}
-
-	for _, record := range records {
-		if record == expectedValue {
-			return true, nil
+		if strings.Contains(err.Error(), "no such host") {
+			logFn(fmt.Sprintf("  ⚠ Domain %s returns NXDOMAIN - not configured at registrar", domain))
 		}
 	}
-
-	return false, nil
 }
