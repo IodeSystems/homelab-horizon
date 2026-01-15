@@ -513,6 +513,10 @@ const adminTemplate = `<!DOCTYPE html>
                             <input type="text" name="proxy_backend" id="add-proxy-backend" placeholder="Backend address (e.g., 10.100.0.50:3000)" oninput="validateProxyBackend(this)">
                             <div id="add-proxy-backend-error" style="color: #e94560; font-size: 0.85em; display: none;"></div>
                             <input type="text" name="health_check" placeholder="Health check path (e.g., /api/health)">
+                            <label style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;">
+                                <input type="checkbox" name="internal_only" style="width: auto;">
+                                Internal only (local network access)
+                            </label>
                         </div>
                     </div>
 
@@ -584,6 +588,10 @@ const adminTemplate = `<!DOCTYPE html>
                         <input type="text" name="proxy_backend" id="edit-svc-proxy-backend" placeholder="Backend (e.g., 10.100.0.50:3000)" oninput="validateProxyBackend(this, 'edit')">
                         <div id="edit-proxy-backend-error" style="color: #e94560; font-size: 0.85em; display: none;"></div>
                         <input type="text" name="health_check" id="edit-svc-health" placeholder="Health check path">
+                        <label style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;">
+                            <input type="checkbox" name="internal_only" id="edit-svc-internal-only" style="width: auto;">
+                            Internal only (local network access)
+                        </label>
                     </div>
                 </div>
 
@@ -1657,9 +1665,11 @@ const adminTemplate = `<!DOCTYPE html>
         if (hasProxy) {
             document.getElementById('edit-svc-proxy-backend').value = svc.proxy.backend || '';
             document.getElementById('edit-svc-health').value = (svc.proxy.health_check && svc.proxy.health_check.path) || '';
+            document.getElementById('edit-svc-internal-only').checked = svc.proxy.internal_only || false;
         } else {
             document.getElementById('edit-svc-proxy-backend').value = '';
             document.getElementById('edit-svc-health').value = '';
+            document.getElementById('edit-svc-internal-only').checked = false;
         }
 
         document.getElementById('edit-service-modal').classList.add('active');

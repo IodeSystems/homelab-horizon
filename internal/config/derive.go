@@ -68,9 +68,10 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 		}
 
 		b := haproxy.Backend{
-			Name:        svc.Name,
-			DomainMatch: svc.Domain,
-			Server:      svc.Proxy.Backend,
+			Name:         svc.Name,
+			DomainMatch:  svc.Domain,
+			Server:       svc.Proxy.Backend,
+			InternalOnly: svc.Proxy.InternalOnly,
 		}
 		if svc.Proxy.HealthCheck != nil && svc.Proxy.HealthCheck.Path != "" {
 			b.HTTPCheck = true

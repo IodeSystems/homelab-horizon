@@ -60,7 +60,10 @@ func (s *Server) handleAddService(w http.ResponseWriter, r *http.Request) {
 	// Proxy configuration
 	proxyBackend := strings.TrimSpace(r.FormValue("proxy_backend"))
 	if r.FormValue("proxy_enabled") == "on" && proxyBackend != "" {
-		svc.Proxy = &config.ProxyConfig{Backend: proxyBackend}
+		svc.Proxy = &config.ProxyConfig{
+			Backend:      proxyBackend,
+			InternalOnly: r.FormValue("internal_only") == "on",
+		}
 		if checkPath := strings.TrimSpace(r.FormValue("health_check")); checkPath != "" {
 			svc.Proxy.HealthCheck = &config.HealthCheck{Path: checkPath}
 		}
@@ -126,7 +129,10 @@ func (s *Server) handleEditService(w http.ResponseWriter, r *http.Request) {
 			// Update Proxy
 			proxyBackend := strings.TrimSpace(r.FormValue("proxy_backend"))
 			if r.FormValue("proxy_enabled") == "on" && proxyBackend != "" {
-				s.config.Services[i].Proxy = &config.ProxyConfig{Backend: proxyBackend}
+				s.config.Services[i].Proxy = &config.ProxyConfig{
+					Backend:      proxyBackend,
+					InternalOnly: r.FormValue("internal_only") == "on",
+				}
 				if checkPath := strings.TrimSpace(r.FormValue("health_check")); checkPath != "" {
 					s.config.Services[i].Proxy.HealthCheck = &config.HealthCheck{Path: checkPath}
 				}
