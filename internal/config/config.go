@@ -207,8 +207,9 @@ type ExternalDNS struct {
 
 // ProxyConfig configures HAProxy reverse proxying for this service
 type ProxyConfig struct {
-	Backend     string       `json:"backend"`                // host:port for HAProxy to forward to
-	HealthCheck *HealthCheck `json:"health_check,omitempty"` // Optional health check
+	Backend      string       `json:"backend"`                 // host:port for HAProxy to forward to
+	HealthCheck  *HealthCheck `json:"health_check,omitempty"`  // Optional health check
+	InternalOnly bool         `json:"internal_only,omitempty"` // Restrict to local network access only
 }
 
 // HealthCheck configures HAProxy health checks for a backend

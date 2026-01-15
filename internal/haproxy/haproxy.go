@@ -12,11 +12,12 @@ import (
 
 // Backend represents a HAProxy backend service
 type Backend struct {
-	Name        string `json:"name"`
-	DomainMatch string `json:"domain_match"` // e.g., ".example.com" matches anything ending in .example.com
-	Server      string `json:"server"`       // e.g., "192.168.1.10:8080"
-	HTTPCheck   bool   `json:"http_check"`
-	CheckPath   string `json:"check_path"` // e.g., "/health"
+	Name         string `json:"name"`
+	DomainMatch  string `json:"domain_match"`  // e.g., ".example.com" matches anything ending in .example.com
+	Server       string `json:"server"`        // e.g., "192.168.1.10:8080"
+	HTTPCheck    bool   `json:"http_check"`
+	CheckPath    string `json:"check_path"`    // e.g., "/health"
+	InternalOnly bool   `json:"internal_only"` // Restrict to local network access only
 }
 
 // BackendStatus contains runtime status of a backend
@@ -186,10 +187,10 @@ func (h *HAProxy) generateConfig(httpPort, httpsPort int, ssl *SSLConfig) string
     group haproxy
     daemon
 
-# Cache configuration (RAM-based, max 4095 MB)
+# Cache configuration (RAM-based)
 cache mycache
-    total-max-size 4095
-    max-object-size 2047
+    total-max-size 256
+    max-object-size 64
 
 defaults
     log     global
@@ -222,23 +223,36 @@ listen stats
 
 `)
 
-	// Check if SSL is enabled and cert directory has certs
+	// Check if SSL is enabled and collect domains with certs
 	sslEnabled := false
+	var sslDomains []string
 	if ssl != nil && ssl.Enabled && ssl.CertDir != "" {
 		entries, err := os.ReadDir(ssl.CertDir)
 		if err == nil {
 			for _, e := range entries {
 				if !e.IsDir() && strings.HasSuffix(e.Name(), ".pem") {
 					sslEnabled = true
-					break
+					// Extract domain name from filename (e.g., "example.com.pem" -> "example.com")
+					domain := strings.TrimSuffix(e.Name(), ".pem")
+					// Convert to wildcard pattern for matching (e.g., "example.com" -> "*.example.com")
+					sslDomains = append(sslDomains, "*."+domain)
 				}
 			}
 		}
 	}
 
+	// Check if any backends are internal-only
+	hasInternalOnly := false
+	for _, b := range h.backends {
+		if b.InternalOnly {
+			hasInternalOnly = true
+			break
+		}
+	}
+
 	// HTTP frontend
 	if sslEnabled {
-		// Redirect HTTP to HTTPS (but allow /router-check on HTTP)
+		// Redirect HTTP to HTTPS only for domains with SSL certificates
 		sb.WriteString(fmt.Sprintf(`frontend http_front
     bind *:%d
     mode http
@@ -247,9 +261,49 @@ listen stats
     acl is_router_check path /router-check
     acl has_horizon_header hdr(X-Homelab-Horizon-Check) -m found
     http-request return status 200 content-type "text/plain" string "OK" if is_router_check has_horizon_header
-    redirect scheme https code 301 if !is_router_check
-
 `, httpPort))
+
+		// Add local_access ACL if any backend is internal-only
+		if hasInternalOnly {
+			sb.WriteString(`    # Local network access ACL (RFC1918 private ranges)
+    acl local_access src 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8
+`)
+		}
+
+		// Add ACLs for domains with SSL certificates
+		if len(sslDomains) > 0 {
+			sb.WriteString("    # Domains with SSL certificates\n")
+			for i, domain := range sslDomains {
+				aclPattern := domainToACLPattern(domain)
+				sb.WriteString(fmt.Sprintf("    acl ssl_domain_%d hdr_end(host) -i %s\n", i, aclPattern))
+			}
+			// Redirect to HTTPS for each SSL domain
+			sb.WriteString("    # Only redirect to HTTPS for domains with SSL certificates\n")
+			for i := range sslDomains {
+				sb.WriteString(fmt.Sprintf("    redirect scheme https code 301 if ssl_domain_%d !is_router_check\n", i))
+			}
+		}
+
+		// Add backend ACLs and routing to HTTP frontend (for non-SSL domains)
+		sb.WriteString("    # Backend routing (for domains without SSL)\n")
+		for _, b := range h.backends {
+			aclName := sanitizeName(b.Name)
+			aclPattern := domainToACLPattern(b.DomainMatch)
+			sb.WriteString(fmt.Sprintf("    acl host_%s hdr_end(host) -i %s\n", aclName, aclPattern))
+		}
+		sb.WriteString("\n")
+		// Deny external access to internal-only backends
+		for _, b := range h.backends {
+			if b.InternalOnly {
+				aclName := sanitizeName(b.Name)
+				sb.WriteString(fmt.Sprintf("    http-request deny deny_status 403 if host_%s !local_access\n", aclName))
+			}
+		}
+		for _, b := range h.backends {
+			aclName := sanitizeName(b.Name)
+			sb.WriteString(fmt.Sprintf("    use_backend %s_backend if host_%s\n", aclName, aclName))
+		}
+		sb.WriteString("\n")
 
 		// HTTPS frontend - HAProxy loads all certs from directory
 		certDir := ssl.CertDir
@@ -269,8 +323,35 @@ listen stats
     # Router check endpoint - returns 200 OK directly (requires special header to avoid conflicts)
     http-request return status 200 content-type "text/plain" string "OK" if { path /router-check } { hdr(X-Homelab-Horizon-Check) -m found }
 `, httpsPort, certDir))
+
+		// Add local_access ACL if any backend is internal-only
+		if hasInternalOnly {
+			sb.WriteString(`    # Local network access ACL (RFC1918 private ranges)
+    acl local_access src 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8
+`)
+		}
+
+		// Add backend ACLs and routing to HTTPS frontend
+		for _, b := range h.backends {
+			aclName := sanitizeName(b.Name)
+			aclPattern := domainToACLPattern(b.DomainMatch)
+			sb.WriteString(fmt.Sprintf("    acl host_%s hdr_end(host) -i %s\n", aclName, aclPattern))
+		}
+		sb.WriteString("\n")
+		// Deny external access to internal-only backends
+		for _, b := range h.backends {
+			if b.InternalOnly {
+				aclName := sanitizeName(b.Name)
+				sb.WriteString(fmt.Sprintf("    http-request deny deny_status 403 if host_%s !local_access\n", aclName))
+			}
+		}
+		for _, b := range h.backends {
+			aclName := sanitizeName(b.Name)
+			sb.WriteString(fmt.Sprintf("    use_backend %s_backend if host_%s\n", aclName, aclName))
+		}
+		sb.WriteString("\n")
 	} else {
-		// HTTP only
+		// HTTP only - no SSL
 		sb.WriteString(fmt.Sprintf(`frontend http_front
     bind *:%d
     mode http
@@ -283,22 +364,34 @@ listen stats
     # Router check endpoint - returns 200 OK directly (requires special header to avoid conflicts)
     http-request return status 200 content-type "text/plain" string "OK" if { path /router-check } { hdr(X-Homelab-Horizon-Check) -m found }
 `, httpPort))
-	}
 
-	// Add ACLs for each backend
-	for _, b := range h.backends {
-		aclName := sanitizeName(b.Name)
-		aclPattern := domainToACLPattern(b.DomainMatch)
-		sb.WriteString(fmt.Sprintf("    acl host_%s hdr_end(host) -i %s\n", aclName, aclPattern))
-	}
-	sb.WriteString("\n")
+		// Add local_access ACL if any backend is internal-only
+		if hasInternalOnly {
+			sb.WriteString(`    # Local network access ACL (RFC1918 private ranges)
+    acl local_access src 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8
+`)
+		}
 
-	// Add use_backend rules
-	for _, b := range h.backends {
-		aclName := sanitizeName(b.Name)
-		sb.WriteString(fmt.Sprintf("    use_backend %s_backend if host_%s\n", aclName, aclName))
+		// Add backend ACLs and routing
+		for _, b := range h.backends {
+			aclName := sanitizeName(b.Name)
+			aclPattern := domainToACLPattern(b.DomainMatch)
+			sb.WriteString(fmt.Sprintf("    acl host_%s hdr_end(host) -i %s\n", aclName, aclPattern))
+		}
+		sb.WriteString("\n")
+		// Deny external access to internal-only backends
+		for _, b := range h.backends {
+			if b.InternalOnly {
+				aclName := sanitizeName(b.Name)
+				sb.WriteString(fmt.Sprintf("    http-request deny deny_status 403 if host_%s !local_access\n", aclName))
+			}
+		}
+		for _, b := range h.backends {
+			aclName := sanitizeName(b.Name)
+			sb.WriteString(fmt.Sprintf("    use_backend %s_backend if host_%s\n", aclName, aclName))
+		}
+		sb.WriteString("\n")
 	}
-	sb.WriteString("\n")
 
 	// Backend definitions
 	for _, b := range h.backends {
