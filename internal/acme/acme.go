@@ -17,7 +17,7 @@ import (
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
-
+	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
 )
@@ -112,8 +112,13 @@ func (c *Client) ObtainCertificate(email string, domains []string, providerCfg *
 		return nil, fmt.Errorf("failed to create ACME client: %w", err)
 	}
 
-	// Set DNS provider
-	if err := client.Challenge.SetDNS01Provider(dnsProvider); err != nil {
+	// Set DNS provider with recursive nameservers for propagation check
+	// This avoids issues with authoritative NS lookup returning TLD servers
+	logFn("Using recursive DNS servers for propagation check (8.8.8.8, 1.1.1.1)")
+	err = client.Challenge.SetDNS01Provider(dnsProvider,
+		dns01.AddRecursiveNameservers([]string{"8.8.8.8:53", "1.1.1.1:53"}),
+	)
+	if err != nil {
 		return nil, fmt.Errorf("failed to set DNS provider: %w", err)
 	}
 
