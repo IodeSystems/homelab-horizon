@@ -1,6 +1,7 @@
 package acme
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -9,6 +10,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,11 +114,15 @@ func (c *Client) ObtainCertificate(email string, domains []string, providerCfg *
 		return nil, fmt.Errorf("failed to create ACME client: %w", err)
 	}
 
-	// Set DNS provider with recursive nameservers for propagation check
-	// This avoids issues with authoritative NS lookup returning TLD servers
-	logFn("Using recursive DNS servers for propagation check (8.8.8.8, 1.1.1.1)")
+	// Set DNS provider with custom pre-check using recursive DNS
+	// Lego's authoritative NS lookup is broken (returns TLD servers like gtld-servers.net)
+	// We use our own propagation check with Google/Cloudflare DNS instead
+	logFn("Using custom propagation check with recursive DNS (8.8.8.8, 1.1.1.1)")
 	err = client.Challenge.SetDNS01Provider(dnsProvider,
-		dns01.AddRecursiveNameservers([]string{"8.8.8.8:53", "1.1.1.1:53"}),
+		dns01.WrapPreCheck(func(domain, fqdn, value string, check dns01.PreCheckFunc) (bool, error) {
+			// Use our own DNS check with recursive resolvers
+			return checkDNSPropagation(fqdn, value, logFn)
+		}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to set DNS provider: %w", err)
@@ -264,4 +270,77 @@ func verifyRoute53Zone(zoneID, awsProfile string) (string, error) {
 	zoneName := strings.TrimSpace(string(output))
 	zoneName = strings.TrimSuffix(zoneName, ".") // Remove trailing dot
 	return zoneName, nil
+}
+
+// checkDNSPropagation checks if a TXT record has propagated using recursive DNS servers
+func checkDNSPropagation(fqdn, expectedValue string, logFn func(string)) (bool, error) {
+	// Remove trailing dot if present
+	fqdn = strings.TrimSuffix(fqdn, ".")
+
+	resolvers := []string{"8.8.8.8:53", "1.1.1.1:53", "208.67.222.222:53"}
+	timeout := 5 * time.Minute
+	interval := 10 * time.Second
+
+	deadline := time.Now().Add(timeout)
+	attempt := 0
+
+	for time.Now().Before(deadline) {
+		attempt++
+		allFound := true
+
+		for _, resolver := range resolvers {
+			found, err := checkTXTRecord(fqdn, expectedValue, resolver)
+			if err != nil {
+				if attempt == 1 || attempt%6 == 0 { // Log every minute
+					logFn(fmt.Sprintf("  Checking %s via %s: %v", fqdn, resolver, err))
+				}
+				allFound = false
+				break
+			}
+			if !found {
+				if attempt == 1 || attempt%6 == 0 {
+					logFn(fmt.Sprintf("  Checking %s via %s: not found yet", fqdn, resolver))
+				}
+				allFound = false
+				break
+			}
+		}
+
+		if allFound {
+			logFn(fmt.Sprintf("  ✓ TXT record verified on all resolvers after %d attempts", attempt))
+			return true, nil
+		}
+
+		time.Sleep(interval)
+	}
+
+	return false, fmt.Errorf("timeout waiting for DNS propagation after %v", timeout)
+}
+
+// checkTXTRecord checks if a TXT record exists with the expected value
+func checkTXTRecord(fqdn, expectedValue, resolver string) (bool, error) {
+	r := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 10 * time.Second}
+			return d.DialContext(ctx, "udp", resolver)
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	records, err := r.LookupTXT(ctx, fqdn)
+	if err != nil {
+		// NXDOMAIN or other DNS error - record doesn't exist yet
+		return false, nil
+	}
+
+	for _, record := range records {
+		if record == expectedValue {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
