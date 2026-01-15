@@ -148,6 +148,11 @@ func createRoute53Provider(cfg *DNSProviderConfig) (challenge.Provider, error) {
 		os.Setenv("AWS_PROFILE", cfg.AWSProfile)
 	}
 
+	// Increase propagation timeout - Route53 changes can take time to propagate
+	// Default is 2 minutes, increase to 5 minutes
+	os.Setenv("AWS_PROPAGATION_TIMEOUT", "300")
+	os.Setenv("AWS_POLLING_INTERVAL", "10")
+
 	provider, err := route53.NewDNSProvider()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create route53 provider: %w", err)

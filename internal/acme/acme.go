@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -63,6 +64,15 @@ func (c *Client) ObtainCertificate(email string, domains []string, providerCfg *
 			}
 			if providerCfg.AWSHostedZoneID != "" {
 				logFn(fmt.Sprintf("  AWS Hosted Zone ID: %s", providerCfg.AWSHostedZoneID))
+				// Verify the zone exists and get its name
+				zoneName, err := verifyRoute53Zone(providerCfg.AWSHostedZoneID, providerCfg.AWSProfile)
+				if err != nil {
+					logFn(fmt.Sprintf("  ⚠ Zone verification failed: %v", err))
+				} else {
+					logFn(fmt.Sprintf("  Zone name: %s", zoneName))
+				}
+			} else {
+				logFn("  ⚠ No AWS Hosted Zone ID configured - Lego will try to auto-detect")
 			}
 			if providerCfg.AWSRegion != "" {
 				logFn(fmt.Sprintf("  AWS Region: %s", providerCfg.AWSRegion))
@@ -222,4 +232,31 @@ func (c *Client) saveUser(user *User) error {
 		return fmt.Errorf("failed to marshal user: %w", err)
 	}
 	return os.WriteFile(accountFile, data, 0600)
+}
+
+// verifyRoute53Zone checks if a Route53 zone exists and returns its name
+func verifyRoute53Zone(zoneID, awsProfile string) (string, error) {
+	// Normalize zone ID - remove /hostedzone/ prefix if present
+	zoneID = strings.TrimPrefix(zoneID, "/hostedzone/")
+
+	args := []string{
+		"route53", "get-hosted-zone",
+		"--id", zoneID,
+		"--query", "HostedZone.Name",
+		"--output", "text",
+	}
+
+	cmd := exec.Command("aws", args...)
+	if awsProfile != "" {
+		cmd.Env = append(os.Environ(), "AWS_PROFILE="+awsProfile)
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("aws cli error: %s", strings.TrimSpace(string(output)))
+	}
+
+	zoneName := strings.TrimSpace(string(output))
+	zoneName = strings.TrimSuffix(zoneName, ".") // Remove trailing dot
+	return zoneName, nil
 }
