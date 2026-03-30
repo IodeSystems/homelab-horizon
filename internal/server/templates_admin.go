@@ -15,6 +15,7 @@ const adminTemplate = `<!DOCTYPE html>
             <h1>Homelab Horizon</h1>
             <div>
                 <a href="/admin/checks"><button class="secondary">Checks</button></a>
+                <a href="/admin/network"><button class="secondary">Network</button></a>
                 <a href="/admin/haproxy"><button class="secondary">HAProxy</button></a>
                 <a href="/admin/dns"><button class="secondary">External DNS</button></a>
                 <a href="/admin/setup"><button class="secondary">Setup</button></a>
