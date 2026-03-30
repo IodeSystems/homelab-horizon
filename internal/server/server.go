@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -217,6 +218,14 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 	adminToken := ""
 	isNewToken := false
 
+	// Ensure directory for token file exists
+	tokenDir := filepath.Dir(tokenFile)
+	if _, err := os.Stat(tokenDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(tokenDir, 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to create token directory %s: %v\n", tokenDir, err)
+		}
+	}
+
 	// Try to read from token file first
 	if data, err := os.ReadFile(tokenFile); err == nil {
 		adminToken = strings.TrimSpace(string(data))
@@ -228,6 +237,8 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		// Migrate: write to file and clear from config
 		if err := os.WriteFile(tokenFile, []byte(adminToken+"\n"), 0600); err == nil {
 			fmt.Fprintf(os.Stderr, "Admin token migrated to: %s\n", tokenFile)
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: failed to migrate admin token to %s: %v\n", tokenFile, err)
 		}
 		cfg.AdminToken = ""
 		_ = config.Save(configPath, cfg)
@@ -239,6 +250,8 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		isNewToken = true
 		if err := os.WriteFile(tokenFile, []byte(adminToken+"\n"), 0600); err == nil {
 			fmt.Fprintf(os.Stderr, "Admin token written to: %s (delete after reading)\n", tokenFile)
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: failed to write admin token to %s: %v\n", tokenFile, err)
 		}
 	}
 	_ = isNewToken // suppress unused warning
@@ -1098,6 +1111,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	mux.HandleFunc("/admin/network", s.csrfMiddleware(s.handleNetworkMap))
 	mux.HandleFunc("/admin/setup", s.csrfMiddleware(s.handleSetup))
+	mux.HandleFunc("/admin/setup/install-requirement", s.csrfMiddleware(s.handleInstallRequirement))
 	mux.HandleFunc("/admin/setup/install-service", s.csrfMiddleware(s.handleInstallService))
 	mux.HandleFunc("/admin/setup/enable-service", s.csrfMiddleware(s.handleEnableService))
 	mux.HandleFunc("/admin/setup/create-wg-config", s.csrfMiddleware(s.handleCreateWGConfig))
@@ -1125,6 +1139,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/admin/dns/discover-zones", s.csrfMiddleware(s.handleDNSDiscoverZones))
 	mux.HandleFunc("/admin/dns/sync", s.csrfMiddleware(s.handleDNSSyncRecord))
 	mux.HandleFunc("/admin/dns/sync-all", s.csrfMiddleware(s.handleDNSSyncAll))
+
+	// Backup/restore API (Bearer token auth)
+	mux.HandleFunc("/admin/backup/export", s.backupAuthMiddleware(s.handleBackupExport))
+	mux.HandleFunc("/admin/backup/import", s.backupAuthMiddleware(s.handleBackupImport))
 
 	// MCP Streamable HTTP endpoint (Bearer token auth)
 	mcpSrv := NewMCPServer(s, s.version)

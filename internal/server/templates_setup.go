@@ -40,7 +40,10 @@ const setupTemplate = `<!DOCTYPE html>
                     <td>
                         {{if not .Installed}}
                         <span class="status-err">● Not installed</span>
-                        <code style="font-size: 0.85em; color: #3498db; margin-left: 0.5rem;">{{.Command}}</code>
+                        <form method="POST" action="/admin/setup/install-requirement" style="display:inline; margin-left: 0.5rem;">
+                            <input type="hidden" name="name" value="WireGuard Tools">
+                            <button class="success" type="submit" style="padding: 0.25rem 0.5rem; font-size: 0.85em;">Install</button>
+                        </form>
                         {{else if $.Status.InterfaceUp}}
                         <span class="status-ok">● Running</span>
                         {{else}}
@@ -60,7 +63,10 @@ const setupTemplate = `<!DOCTYPE html>
                         <span class="status-ok">● Installed</span>
                         {{else}}
                         <span class="status-err">● Not installed</span>
-                        <code style="font-size: 0.85em; color: #3498db; margin-left: 0.5rem;">{{.Command}}</code>
+                        <form method="POST" action="/admin/setup/install-requirement" style="display:inline; margin-left: 0.5rem;">
+                            <input type="hidden" name="name" value="HAProxy">
+                            <button class="success" type="submit" style="padding: 0.25rem 0.5rem; font-size: 0.85em;">Install</button>
+                        </form>
                         {{end}}
                         <div style="color: #888; font-size: 0.85em; margin-top: 0.25rem;">Reverse proxy that routes incoming HTTPS traffic to your services and handles SSL certificates</div>
                     </td>
@@ -72,7 +78,10 @@ const setupTemplate = `<!DOCTYPE html>
                     <td>
                         {{if not .Installed}}
                         <span class="status-err">● Not installed</span>
-                        <code style="font-size: 0.85em; color: #3498db; margin-left: 0.5rem;">{{.Command}}</code>
+                        <form method="POST" action="/admin/setup/install-requirement" style="display:inline; margin-left: 0.5rem;">
+                            <input type="hidden" name="name" value="dnsmasq">
+                            <button class="success" type="submit" style="padding: 0.25rem 0.5rem; font-size: 0.85em;">Install</button>
+                        </form>
                         {{else if $.DNSStatus.Running}}
                         <span class="status-ok">● Running</span>
                         {{else}}

@@ -1,0 +1,236 @@
+diff --git a/.gitignore b/.gitignore
+index 1c474c0..22d2f32 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -6,3 +6,4 @@ homelab-horizon.service
+ coverage.out
+ coverage.html
+ deploy.sh
++bin/deploy
+
+diff --git a/cmd/homelab-horizon/main.go b/cmd/homelab-horizon/main.go
+index acf6b68..28c78ca 100644
+--- a/cmd/homelab-horizon/main.go
++++ b/cmd/homelab-horizon/main.go
+@@ -9,6 +9,7 @@ import (
+        "os/exec"
+        "path/filepath"
+        "strings"
++       "time"
+
+        "homelab-horizon/internal/config"
+        "homelab-horizon/internal/server"
+@@ -34,6 +35,19 @@ RestartSec=5
+ User=root
+ Group=root
+
++# File system isolation
++ProtectSystem=strict
++ReadWritePaths=-/etc/wireguard -/etc/dnsmasq.d -/etc/haproxy -/proc/sys/net/ipv4 -/var/lib/haproxy -%s
++ProtectHome=true
++PrivateTmp=true
++ProtectKernelTunables=true
++
++# Network capabilities for WireGuard
++AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
++
++# Security restrictions
++NoNewPrivileges=false
++
+ [Install]
+ WantedBy=multi-user.target
+ `
+@@ -91,6 +105,10 @@ func runServer(configPath string, dryRun bool, mcpEnabled bool) {
+                return
+        }
+
++       if !dryRun {
++               maybeSelfInstall(configPath)
++       }
++
+        fmt.Printf("Homelab Horizon %s (built %s)\n", Version, BuildTime)
+
+        if os.Geteuid() != 0 {
+@@ -114,6 +132,74 @@ func runServer(configPath string, dryRun bool, mcpEnabled bool) {
+        }
+ }
+
++func maybeSelfInstall(configPath string) {
++       // Don't auto-install if we are in MCP mode or not root
++       if isMCPClient() || os.Geteuid() != 0 {
++               return
++       }
++
++       targetPath := "/usr/local/bin/homelab-horizon"
++       currentPath, err := os.Executable()
++       if err != nil {
++               return
++       }
++
++       currentPath, _ = filepath.Abs(currentPath)
++       targetPath, _ = filepath.Abs(targetPath)
++
++       // If we are already running from the target path, we are good
++       if currentPath == targetPath {
++               return
++       }
++
++       // Also don't self-install if we are already running as a systemd service
++       // (this handles cases where someone might have installed it to a different path manually)
++       if os.Getenv("INVOCATION_ID") != "" || os.Getenv("JOURNAL_STREAM") != "" {
++               return
++       }
++
++       fmt.Printf("Self-installing: moving from %s to %s\n", currentPath, targetPath)
++
++       // 1. Copy binary to target path
++       if err := copyFile(currentPath, targetPath); err != nil {
++               log.Printf("Warning: failed to copy binary to %s: %v", targetPath, err)
++               return
++       }
++
++       // 2. Ensure executable
++       if err := os.Chmod(targetPath, 0755); err != nil {
++               log.Printf("Warning: failed to chmod binary: %v", err)
++               return
++       }
++
++       // 3. Install/Update systemd service
++       if err := installService(false); err != nil {
++               log.Printf("Warning: failed to install systemd service: %v", err)
++               return
++       }
++
++       // 4. Fire a restart and die
++       fmt.Println("Restarting as systemd service...")
++       // Use systemctl restart, but since we are about to exit, we use Start if it's not running
++       // or Restart if it is. Restart is generally safer for "upgrading"
++       cmd := exec.Command("systemctl", "restart", "homelab-horizon")
++       _ = cmd.Start() // We don't wait for it to finish as it will kill us
++
++       // Give systemd a tiny bit of time to receive the command before we exit
++       time.Sleep(500 * time.Millisecond)
++
++       // Die and get replaced by the service
++       os.Exit(0)
++}
++
++func copyFile(src, dst string) error {
++       data, err := os.ReadFile(src)
++       if err != nil {
++               return err
++       }
++       return os.WriteFile(dst, data, 0755)
++}
++
+ func runMCPStdio(configPath string, dryRun bool) {
+        // MCP uses stdin/stdout for JSON-RPC — redirect all startup output to stderr
+        origStdout := os.Stdout
+@@ -168,7 +254,7 @@ func generateSystemdService(configPath string) string {
+                configFlag = fmt.Sprintf(" -config %s", configPath)
+        }
+
+-       return fmt.Sprintf(systemdServiceTemplate, execPath, configFlag, workDir)
++       return fmt.Sprintf(systemdServiceTemplate, execPath, configFlag, workDir, workDir)
+ }
+
+ type checker struct {
+@@ -484,6 +570,14 @@ func installService(dryRun bool) error {
+                return fmt.Errorf("must run as root to install systemd service")
+        }
+
++       workDir := "/etc/homelab-horizon"
++       if cfgPath != "" {
++               workDir = filepath.Dir(cfgPath)
++       }
++       if err := os.MkdirAll(workDir, 0755); err != nil {
++               return fmt.Errorf("creating working directory: %w", err)
++       }
++
+        if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
+                return fmt.Errorf("writing service file: %w", err)
+        }
+
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 8e095da..bf5a422 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -100,10 +100,10 @@ func (d *DNSProviderConfig) Validate() error {
+
+ // SearchPaths defines where to look for config files, in order of preference
+ var SearchPaths = []string{
+-       "./config.json",
+-       "./homelab-horizon.json",
+        "/etc/homelab-horizon/config.json",
+        "/etc/homelab-horizon.json",
++       "./config.json",
++       "./homelab-horizon.json",
+ }
+
+ type Config struct {
+@@ -235,7 +235,7 @@ func Default() *Config {
+                // WireGuard VPN configuration
+                WGInterface:    "wg0",
+                WGConfigPath:   "/etc/wireguard/wg0.conf",
+-               InvitesFile:    "invites.txt",
++               InvitesFile:    "/etc/homelab-horizon/invites.txt",
+                ServerEndpoint: "vpn.example.com:51820",
+                VPNRange:       "10.100.0.0/24",
+                DNS:            "10.100.0.1",
+
+diff --git a/internal/server/server.go b/internal/server/server.go
+index 5f84874..582baee 100644
+--- a/internal/server/server.go
++++ b/internal/server/server.go
+@@ -13,6 +13,7 @@ import (
+        "net"
+        "net/http"
+        "os"
++       "path/filepath"
+        "sort"
+        "strings"
+        "sync"
+@@ -217,6 +218,14 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
+        adminToken := ""
+        isNewToken := false
+
++       // Ensure directory for token file exists
++       tokenDir := filepath.Dir(tokenFile)
++       if _, err := os.Stat(tokenDir); os.IsNotExist(err) {
++               if err := os.MkdirAll(tokenDir, 0755); err != nil {
++                       fmt.Fprintf(os.Stderr, "Warning: failed to create token directory %s: %v\n", tokenDir, err)
++               }
++       }
++
+        // Try to read from token file first
+        if data, err := os.ReadFile(tokenFile); err == nil {
+                adminToken = strings.TrimSpace(string(data))
+@@ -228,6 +237,8 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
+                // Migrate: write to file and clear from config
+                if err := os.WriteFile(tokenFile, []byte(adminToken+"\n"), 0600); err == nil {
+                        fmt.Fprintf(os.Stderr, "Admin token migrated to: %s\n", tokenFile)
++               } else {
++                       fmt.Fprintf(os.Stderr, "Warning: failed to migrate admin token to %s: %v\n", tokenFile, err)
+                }
+                cfg.AdminToken = ""
+                _ = config.Save(configPath, cfg)
+@@ -239,6 +250,8 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
+                isNewToken = true
+                if err := os.WriteFile(tokenFile, []byte(adminToken+"\n"), 0600); err == nil {
+                        fmt.Fprintf(os.Stderr, "Admin token written to: %s (delete after reading)\n", tokenFile)
++               } else {
++                       fmt.Fprintf(os.Stderr, "Warning: failed to write admin token to %s: %v\n", tokenFile, err)
+                }
+        }
+        _ = isNewToken // suppress unused warning
+@@ -1126,6 +1139,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
+        mux.HandleFunc("/admin/dns/sync", s.csrfMiddleware(s.handleDNSSyncRecord))
+        mux.HandleFunc("/admin/dns/sync-all", s.csrfMiddleware(s.handleDNSSyncAll))
+
++       // Backup/restore API (Bearer token auth)
++       mux.HandleFunc("/admin/backup/export", s.backupAuthMiddleware(s.handleBackupExport))
++       mux.HandleFunc("/admin/backup/import", s.backupAuthMiddleware(s.handleBackupImport))
++
+        // MCP Streamable HTTP endpoint (Bearer token auth)
+        mcpSrv := NewMCPServer(s, s.version)
+        mcpHandler := mcpSrv.StreamableHTTPHandler()

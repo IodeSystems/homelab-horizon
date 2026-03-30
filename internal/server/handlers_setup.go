@@ -571,6 +571,59 @@ func (s *Server) handleTestConnectivity(w http.ResponseWriter, r *http.Request) 
 	http.Redirect(w, r, "/admin/setup?msg=Connectivity+tests+completed", http.StatusSeeOther)
 }
 
+func (s *Server) handleInstallRequirement(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	name := r.FormValue("name")
+	requirements := checkSystemRequirements()
+	var req *SystemRequirement
+	for i := range requirements {
+		if requirements[i].Name == name {
+			req = &requirements[i]
+			break
+		}
+	}
+
+	if req == nil {
+		http.Error(w, "Requirement not found", http.StatusNotFound)
+		return
+	}
+
+	if req.Installed {
+		http.Redirect(w, r, "/admin/setup?msg=Requirement+already+installed", http.StatusSeeOther)
+		return
+	}
+
+	// We use the command without "sudo" because the process should be running as root
+	cmdStr := strings.TrimPrefix(req.Command, "sudo ")
+	parts := strings.Fields(cmdStr)
+	if len(parts) == 0 {
+		http.Error(w, "Invalid install command", http.StatusInternalServerError)
+		return
+	}
+
+	// Force non-interactive for apt
+	if parts[0] == "apt" {
+		parts = append([]string{"apt", "-y"}, parts[1:]...)
+	}
+
+	cmd := exec.Command(parts[0], parts[1:]...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		http.Redirect(w, r, fmt.Sprintf("/admin/setup?error=Failed+to+install+%s:+%v\n%s", name, err, string(out)), http.StatusSeeOther)
+		return
+	}
+
+	http.Redirect(w, r, fmt.Sprintf("/admin/setup?msg=%s+installed+successfully", name), http.StatusSeeOther)
+}
+
 // SystemRequirement represents a system requirement check
 type SystemRequirement struct {
 	Name        string

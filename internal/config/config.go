@@ -100,10 +100,10 @@ func (d *DNSProviderConfig) Validate() error {
 
 // SearchPaths defines where to look for config files, in order of preference
 var SearchPaths = []string{
-	"./config.json",
-	"./homelab-horizon.json",
 	"/etc/homelab-horizon/config.json",
 	"/etc/homelab-horizon.json",
+	"./config.json",
+	"./homelab-horizon.json",
 }
 
 type Config struct {
@@ -235,7 +235,7 @@ func Default() *Config {
 		// WireGuard VPN configuration
 		WGInterface:    "wg0",
 		WGConfigPath:   "/etc/wireguard/wg0.conf",
-		InvitesFile:    "invites.txt",
+		InvitesFile:    "/etc/homelab-horizon/invites.txt",
 		ServerEndpoint: "vpn.example.com:51820",
 		VPNRange:       "10.100.0.0/24",
 		DNS:            "10.100.0.1",
