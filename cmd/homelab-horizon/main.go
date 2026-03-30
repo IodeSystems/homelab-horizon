@@ -49,6 +49,7 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "Dry run mode - show what would be done without making changes")
 	showSystemdService := flag.Bool("show-systemd", false, "Show the systemd service file that would be generated")
 	version := flag.Bool("version", false, "Print version and exit")
+	noMCP := flag.Bool("no-mcp", false, "Disable MCP tool server (default: MCP enabled over stdio)")
 	flag.Parse()
 
 	switch {
@@ -69,11 +70,27 @@ func main() {
 			log.Fatalf("Installation failed: %v", err)
 		}
 	default:
-		runServer(*configPath, *dryRun)
+		runServer(*configPath, *dryRun, !*noMCP)
 	}
 }
 
-func runServer(configPath string, dryRun bool) {
+// isMCPClient detects if stdin is a pipe (i.e., an MCP client launched us as a subprocess).
+// When true, we run in MCP stdio mode instead of the HTTP server.
+func isMCPClient() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice == 0
+}
+
+func runServer(configPath string, dryRun bool, mcpEnabled bool) {
+	// If MCP is enabled and stdin is a pipe, run as MCP stdio server
+	if mcpEnabled && isMCPClient() {
+		runMCPStdio(configPath, dryRun)
+		return
+	}
+
 	fmt.Printf("Homelab Horizon %s (built %s)\n", Version, BuildTime)
 
 	if os.Geteuid() != 0 {
@@ -94,6 +111,31 @@ func runServer(configPath string, dryRun bool) {
 
 	if err := srv.Run(); err != nil {
 		log.Fatalf("Server error: %v", err)
+	}
+}
+
+func runMCPStdio(configPath string, dryRun bool) {
+	// MCP uses stdin/stdout for JSON-RPC — redirect all startup output to stderr
+	origStdout := os.Stdout
+	os.Stdout = os.Stderr
+
+	cfg, cfgPath, err := loadConfig(configPath)
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	srv, err := server.NewWithConfig(cfg, cfgPath, dryRun, Version)
+	if err != nil {
+		log.Fatalf("Failed to initialize server: %v", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "MCP server ready (admin token loaded from %s.token)\n", cfgPath)
+
+	// Restore stdout for MCP protocol
+	os.Stdout = origStdout
+	mcp := server.NewMCPServer(srv, Version)
+	if err := mcp.ServeStdio(); err != nil {
+		log.Fatalf("MCP server error: %v", err)
 	}
 }
 

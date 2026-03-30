@@ -378,18 +378,6 @@ func (s *Server) handleSyncCancel(w http.ResponseWriter, r *http.Request) {
 // runSync performs the actual sync operation
 func (s *Server) runSync() {
 	log := &BroadcastSyncLogger{broadcaster: s.sync, syncStart: time.Now()}
-	hasErrors := false
-	unpropagatedDomains := make(map[string]bool) // Track domains that failed propagation
-
-	// Helper to check for cancellation
-	checkCancelled := func() bool {
-		if s.sync.IsCancelled() {
-			log.Warning("Sync cancelled by user")
-			log.Done(false)
-			return true
-		}
-		return false
-	}
 
 	// Recover from panics and report them
 	defer func() {
@@ -401,6 +389,29 @@ func (s *Server) runSync() {
 	}()
 
 	defer s.sync.Finish()
+
+	s.runSyncInternal(log, s.sync.CancelChan())
+}
+
+// runSyncInternal performs the full sync with a pluggable logger and optional cancel channel.
+// Used by both the SSE broadcast handler and the MCP sync tool.
+func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
+	hasErrors := false
+	unpropagatedDomains := make(map[string]bool)
+
+	checkCancelled := func() bool {
+		if cancelCh == nil {
+			return false
+		}
+		select {
+		case <-cancelCh:
+			log.Warning("Sync cancelled by user")
+			log.Done(false)
+			return true
+		default:
+			return false
+		}
+	}
 
 	log.Info("Starting full service sync...")
 

@@ -507,6 +507,19 @@ func (s *Server) requireAdminPost(w http.ResponseWriter, r *http.Request) bool {
 	return s.requireCSRF(w, r)
 }
 
+// mcpAuthMiddleware validates Bearer token auth for the MCP HTTP endpoint.
+func (s *Server) mcpAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		const prefix = "Bearer "
+		if !strings.HasPrefix(auth, prefix) || strings.TrimPrefix(auth, prefix) != s.adminToken {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // csrfMiddleware is a passthrough - CSRF is checked by requireAdminPost in handlers
 // Keeping this wrapper for potential future use (rate limiting, logging, etc)
 func (s *Server) csrfMiddleware(next http.HandlerFunc) http.HandlerFunc {
@@ -1110,6 +1123,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/admin/dns/discover-zones", s.csrfMiddleware(s.handleDNSDiscoverZones))
 	mux.HandleFunc("/admin/dns/sync", s.csrfMiddleware(s.handleDNSSyncRecord))
 	mux.HandleFunc("/admin/dns/sync-all", s.csrfMiddleware(s.handleDNSSyncAll))
+
+	// MCP Streamable HTTP endpoint (Bearer token auth)
+	mcpSrv := NewMCPServer(s, s.version)
+	mcpHandler := mcpSrv.StreamableHTTPHandler()
+	mux.Handle("/mcp", s.mcpAuthMiddleware(mcpHandler))
 
 	// Service monitoring routes
 	mux.HandleFunc("/admin/checks", s.csrfMiddleware(s.handleChecks))
