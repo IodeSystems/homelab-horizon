@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"homelab-horizon/internal/config"
 	"homelab-horizon/internal/server"
@@ -33,6 +34,19 @@ Restart=on-failure
 RestartSec=5
 User=root
 Group=root
+
+# File system isolation
+ProtectSystem=strict
+ReadWritePaths=-/etc/wireguard -/etc/dnsmasq.d -/etc/haproxy -/proc/sys/net/ipv4 -/var/lib/haproxy -%s
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+
+# Network capabilities for WireGuard
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+# Security restrictions
+NoNewPrivileges=false
 
 [Install]
 WantedBy=multi-user.target
@@ -91,6 +105,10 @@ func runServer(configPath string, dryRun bool, mcpEnabled bool) {
 		return
 	}
 
+	if !dryRun {
+		maybeSelfInstall(configPath)
+	}
+
 	fmt.Printf("Homelab Horizon %s (built %s)\n", Version, BuildTime)
 
 	if os.Geteuid() != 0 {
@@ -112,6 +130,74 @@ func runServer(configPath string, dryRun bool, mcpEnabled bool) {
 	if err := srv.Run(); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}
+}
+
+func maybeSelfInstall(configPath string) {
+	// Don't auto-install if we are in MCP mode or not root
+	if isMCPClient() || os.Geteuid() != 0 {
+		return
+	}
+
+	targetPath := "/usr/local/bin/homelab-horizon"
+	currentPath, err := os.Executable()
+	if err != nil {
+		return
+	}
+
+	currentPath, _ = filepath.Abs(currentPath)
+	targetPath, _ = filepath.Abs(targetPath)
+
+	// If we are already running from the target path, we are good
+	if currentPath == targetPath {
+		return
+	}
+
+	// Also don't self-install if we are already running as a systemd service
+	// (this handles cases where someone might have installed it to a different path manually)
+	if os.Getenv("INVOCATION_ID") != "" || os.Getenv("JOURNAL_STREAM") != "" {
+		return
+	}
+
+	fmt.Printf("Self-installing: moving from %s to %s\n", currentPath, targetPath)
+
+	// 1. Copy binary to target path
+	if err := copyFile(currentPath, targetPath); err != nil {
+		log.Printf("Warning: failed to copy binary to %s: %v", targetPath, err)
+		return
+	}
+
+	// 2. Ensure executable
+	if err := os.Chmod(targetPath, 0755); err != nil {
+		log.Printf("Warning: failed to chmod binary: %v", err)
+		return
+	}
+
+	// 3. Install/Update systemd service
+	if err := installService(false); err != nil {
+		log.Printf("Warning: failed to install systemd service: %v", err)
+		return
+	}
+
+	// 4. Fire a restart and die
+	fmt.Println("Restarting as systemd service...")
+	// Use systemctl restart, but since we are about to exit, we use Start if it's not running
+	// or Restart if it is. Restart is generally safer for "upgrading"
+	cmd := exec.Command("systemctl", "restart", "homelab-horizon")
+	_ = cmd.Start() // We don't wait for it to finish as it will kill us
+
+	// Give systemd a tiny bit of time to receive the command before we exit
+	time.Sleep(500 * time.Millisecond)
+
+	// Die and get replaced by the service
+	os.Exit(0)
+}
+
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0755)
 }
 
 func runMCPStdio(configPath string, dryRun bool) {
@@ -168,7 +254,7 @@ func generateSystemdService(configPath string) string {
 		configFlag = fmt.Sprintf(" -config %s", configPath)
 	}
 
-	return fmt.Sprintf(systemdServiceTemplate, execPath, configFlag, workDir)
+	return fmt.Sprintf(systemdServiceTemplate, execPath, configFlag, workDir, workDir)
 }
 
 type checker struct {
@@ -482,6 +568,14 @@ func installService(dryRun bool) error {
 
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("must run as root to install systemd service")
+	}
+
+	workDir := "/etc/homelab-horizon"
+	if cfgPath != "" {
+		workDir = filepath.Dir(cfgPath)
+	}
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		return fmt.Errorf("creating working directory: %w", err)
 	}
 
 	if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
