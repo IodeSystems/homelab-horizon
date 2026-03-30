@@ -335,6 +335,7 @@ func (s *Server) parseTemplates() {
 		},
 	}).Parse(checksTemplate))
 	s.templates["help"] = template.Must(template.New("help").Parse(helpTemplate))
+	s.templates["network"] = template.Must(template.New("network").Parse(networkTemplate))
 }
 
 func generateToken(length int) string {
@@ -1095,6 +1096,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/admin/dnsmasq/start", s.csrfMiddleware(s.handleDNSMasqStart))
 	mux.HandleFunc("/admin/dnsmasq/init", s.csrfMiddleware(s.handleDNSMasqInit))
 
+	mux.HandleFunc("/admin/network", s.csrfMiddleware(s.handleNetworkMap))
 	mux.HandleFunc("/admin/setup", s.csrfMiddleware(s.handleSetup))
 	mux.HandleFunc("/admin/setup/install-service", s.csrfMiddleware(s.handleInstallService))
 	mux.HandleFunc("/admin/setup/enable-service", s.csrfMiddleware(s.handleEnableService))

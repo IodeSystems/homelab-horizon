@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"net"
 	"strings"
 
@@ -203,6 +204,109 @@ func (c *Config) DeriveSSLDomains() []letsencrypt.DomainConfig {
 		})
 	}
 	return domains
+}
+
+// HostPortEntry represents a single port reservation on a host
+type HostPortEntry struct {
+	Port    string `json:"port"`
+	Proto   string `json:"proto"` // "tcp" or "udp"
+	Service string `json:"service"`
+	Domain  string `json:"domain,omitempty"`
+}
+
+// HostPortMap represents all port reservations grouped by host IP
+type HostPortMap struct {
+	Hosts map[string][]HostPortEntry `json:"hosts"`
+}
+
+// DeriveHostPortMap builds a map of host -> reserved ports from the full config.
+// Includes service proxy backends, HAProxy listen ports, WireGuard, dnsmasq, and the admin server.
+func (c *Config) DeriveHostPortMap() HostPortMap {
+	m := make(map[string][]HostPortEntry)
+	gateway := c.GetWGGatewayIP()
+	if gateway == "" {
+		gateway = "server"
+	}
+
+	// Service proxy backends
+	for _, svc := range c.Services {
+		if svc.Proxy == nil || svc.Proxy.Backend == "" {
+			continue
+		}
+		host, port, err := net.SplitHostPort(svc.Proxy.Backend)
+		if err != nil {
+			continue
+		}
+		// Normalize localhost to gateway
+		if host == "localhost" || host == "127.0.0.1" {
+			if c.LocalInterface != "" {
+				host = c.LocalInterface
+			} else {
+				host = gateway
+			}
+		}
+		m[host] = append(m[host], HostPortEntry{
+			Port:    port,
+			Proto:   "tcp",
+			Service: svc.Name,
+			Domain:  svc.Domain,
+		})
+	}
+
+	// HAProxy listen ports (on gateway)
+	if c.HAProxyEnabled {
+		httpPort := c.HAProxyHTTPPort
+		if httpPort == 0 {
+			httpPort = 80
+		}
+		httpsPort := c.HAProxyHTTPSPort
+		if httpsPort == 0 {
+			httpsPort = 443
+		}
+		m[gateway] = append(m[gateway], HostPortEntry{
+			Port:    fmt.Sprintf("%d", httpPort),
+			Proto:   "tcp",
+			Service: "haproxy",
+		})
+		m[gateway] = append(m[gateway], HostPortEntry{
+			Port:    fmt.Sprintf("%d", httpsPort),
+			Proto:   "tcp",
+			Service: "haproxy-tls",
+		})
+	}
+
+	// WireGuard port (from ServerEndpoint)
+	if c.ServerEndpoint != "" {
+		if _, port, err := net.SplitHostPort(c.ServerEndpoint); err == nil {
+			m[gateway] = append(m[gateway], HostPortEntry{
+				Port:    port,
+				Proto:   "udp",
+				Service: "wireguard",
+			})
+		}
+	}
+
+	// dnsmasq
+	if c.DNSMasqEnabled {
+		m[gateway] = append(m[gateway], HostPortEntry{
+			Port:    "53",
+			Proto:   "udp",
+			Service: "dnsmasq",
+		})
+	}
+
+	// Admin server
+	if c.ListenAddr != "" {
+		if _, port, err := net.SplitHostPort(c.ListenAddr); err == nil {
+			m[gateway] = append(m[gateway], HostPortEntry{
+				Port:    port,
+				Proto:   "tcp",
+				Service: "homelab-horizon",
+			})
+		}
+	}
+
+	return HostPortMap{Hosts: m}
 }
 
 // GetServicesForZone returns all services belonging to a zone

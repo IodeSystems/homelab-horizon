@@ -100,6 +100,13 @@ func (m *MCPServer) registerTools() {
 	)
 
 	m.mcp.AddTool(
+		mcp.NewTool("get_host_port_map",
+			mcp.WithDescription("Get a map of all hosts and their reserved ports, derived from service backends, HAProxy, WireGuard, dnsmasq, and the admin server"),
+		),
+		m.handleGetHostPortMap,
+	)
+
+	m.mcp.AddTool(
 		mcp.NewTool("sync",
 			mcp.WithDescription("Trigger a full sync of all subsystems: dnsmasq, external DNS, SSL certificates, and HAProxy. Returns the sync log."),
 		),
@@ -330,6 +337,10 @@ func (m *MCPServer) buildService(name, domain string, req mcp.CallToolRequest) c
 	}
 
 	return svc
+}
+
+func (m *MCPServer) handleGetHostPortMap(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return jsonResult(m.srv.config.DeriveHostPortMap())
 }
 
 func (m *MCPServer) handleSync(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
