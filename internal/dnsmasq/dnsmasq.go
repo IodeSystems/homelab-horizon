@@ -152,13 +152,31 @@ func (d *DNSMasq) RemoveMapping(hostname string) error {
 }
 
 func (d *DNSMasq) Reload() error {
-	cmd := exec.Command("systemctl", "restart", "dnsmasq")
-	return cmd.Run()
+	return systemctlWithJournal("restart", "dnsmasq")
 }
 
 func (d *DNSMasq) Start() error {
-	cmd := exec.Command("systemctl", "start", "dnsmasq")
-	return cmd.Run()
+	return systemctlWithJournal("start", "dnsmasq")
+}
+
+// systemctlWithJournal runs a systemctl command and, on failure, pulls recent
+// journal lines for the unit so the caller gets a useful error message.
+func systemctlWithJournal(action, unit string) error {
+	cmd := exec.Command("systemctl", action, unit)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// Grab last 10 journal lines for context
+		journal := exec.Command("journalctl", "-u", unit, "-n", "10", "--no-pager", "-o", "cat")
+		journalOut, _ := journal.CombinedOutput()
+		detail := strings.TrimSpace(string(out))
+		if len(journalOut) > 0 {
+			detail += "\n" + strings.TrimSpace(string(journalOut))
+		}
+		if detail == "" {
+			detail = err.Error()
+		}
+		return fmt.Errorf("%s %s failed: %s", action, unit, detail)
+	}
+	return nil
 }
 
 type Status struct {

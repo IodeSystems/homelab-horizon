@@ -301,7 +301,7 @@ func (s *Server) handleDNSReload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.dns.Reload(); err != nil {
-		http.Redirect(w, r, "/admin?err=dnsmasq+reload+failed:+"+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin?err="+url.QueryEscape("dnsmasq reload failed: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/admin?msg=dnsmasq+reloaded", http.StatusSeeOther)
@@ -313,7 +313,7 @@ func (s *Server) handleDNSMasqStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.dns.Start(); err != nil {
-		http.Redirect(w, r, "/admin/setup?err="+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/admin/setup?msg=dnsmasq+started", http.StatusSeeOther)
