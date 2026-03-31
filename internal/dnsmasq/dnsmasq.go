@@ -161,11 +161,14 @@ func (d *DNSMasq) Start() error {
 
 // systemctlWithJournal runs a systemctl command and, on failure, pulls recent
 // journal lines for the unit so the caller gets a useful error message.
+// Uses systemd-run to escape ProtectSystem=strict sandbox.
 func systemctlWithJournal(action, unit string) error {
-	cmd := exec.Command("systemctl", action, unit)
+	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+		"systemctl", action, unit)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// Grab last 10 journal lines for context
-		journal := exec.Command("journalctl", "-u", unit, "-n", "10", "--no-pager", "-o", "cat")
+		journal := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+			"journalctl", "-u", unit, "-n", "10", "--no-pager", "-o", "cat")
 		journalOut, _ := journal.CombinedOutput()
 		detail := strings.TrimSpace(string(out))
 		if len(journalOut) > 0 {
