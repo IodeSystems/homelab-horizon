@@ -156,6 +156,11 @@ func (d *DNSMasq) Reload() error {
 }
 
 func (d *DNSMasq) Start() error {
+	// Check if the unit exists before trying to start
+	check := exec.Command("systemctl", "cat", "dnsmasq.service")
+	if out, err := check.CombinedOutput(); err != nil {
+		return fmt.Errorf("dnsmasq.service unit not found — try reinstalling: sudo apt install --reinstall dnsmasq (systemctl cat: %s)", strings.TrimSpace(string(out)))
+	}
 	return systemctlWithJournal("start", "dnsmasq")
 }
 
