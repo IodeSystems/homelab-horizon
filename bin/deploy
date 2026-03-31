@@ -43,6 +43,8 @@ ssh "$TARGET" -t "
   sudo chmod +x $REMOTE_PATH
 
   echo 'Installing systemd service using binary...'
+  sudo mkdir -p /etc/homelab-horizon
+  cd /etc/homelab-horizon
   sudo $REMOTE_PATH -install
 
   echo 'Enabling and restarting service...'
