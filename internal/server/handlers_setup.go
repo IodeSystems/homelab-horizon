@@ -215,14 +215,14 @@ func (s *Server) handleInstallService(w http.ResponseWriter, r *http.Request) {
 		"bash", "-c", fmt.Sprintf("cat > %s", servicePath))
 	cmd.Stdin = strings.NewReader(serviceContent)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		http.Redirect(w, r, "/admin/setup?err=Failed+to+write+service+file:+"+err.Error()+"+"+string(out), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape("Failed to write service file: "+err.Error()+" "+string(out)), http.StatusSeeOther)
 		return
 	}
 
 	cmd = exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
 		"systemctl", "daemon-reload")
 	if err := cmd.Run(); err != nil {
-		http.Redirect(w, r, "/admin/setup?err=Failed+to+reload+systemd:+"+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape("Failed to reload systemd: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 
@@ -237,7 +237,7 @@ func (s *Server) handleEnableService(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
 		"systemctl", "enable", "homelab-horizon")
 	if err := cmd.Run(); err != nil {
-		http.Redirect(w, r, "/admin/setup?err=Failed+to+enable+service:+"+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape("Failed to enable service: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 
@@ -251,7 +251,7 @@ func (s *Server) handleCreateWGConfig(w http.ResponseWriter, r *http.Request) {
 
 	privKey, pubKey, err := wireguard.GenerateKeyPair()
 	if err != nil {
-		http.Redirect(w, r, "/admin/setup?err=Failed+to+generate+keys:+"+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape("Failed to generate keys: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 
@@ -267,12 +267,12 @@ PostDown = iptables -D FORWARD -i %%i -j ACCEPT; iptables -t nat -D POSTROUTING 
 `, privKey, serverIP)
 
 	if err := os.MkdirAll("/etc/wireguard", 0700); err != nil {
-		http.Redirect(w, r, "/admin/setup?err=Failed+to+create+directory:+"+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape("Failed to create directory: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 
 	if err := os.WriteFile(s.config.WGConfigPath, []byte(wgConfig), 0600); err != nil {
-		http.Redirect(w, r, "/admin/setup?err=Failed+to+write+config:+"+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape("Failed to write config: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 
@@ -292,11 +292,11 @@ func (s *Server) handleDNSReload(w http.ResponseWriter, r *http.Request) {
 
 	// Write config and mappings before reloading to pick up any changes
 	if err := s.dns.WriteConfig(); err != nil {
-		http.Redirect(w, r, "/admin?err=dnsmasq+write+failed:+"+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin?err="+url.QueryEscape("dnsmasq write failed: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 	if err := s.dns.SetMappings(s.config.DeriveDNSMappings()); err != nil {
-		http.Redirect(w, r, "/admin?err=dnsmasq+mappings+failed:+"+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin?err="+url.QueryEscape("dnsmasq mappings failed: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 
@@ -334,7 +334,7 @@ func (s *Server) handleDNSMasqInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.dns.WriteConfig(); err != nil {
-		http.Redirect(w, r, "/admin/setup?err="+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"homelab-horizon/internal/config"
@@ -26,13 +27,13 @@ func (s *Server) handleAddClient(w http.ResponseWriter, r *http.Request) {
 
 	privKey, pubKey, err := wireguard.GenerateKeyPair()
 	if err != nil {
-		http.Redirect(w, r, "/admin?err="+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 
 	clientIP, err := s.wg.GetNextIP(s.config.VPNRange)
 	if err != nil {
-		http.Redirect(w, r, "/admin?err="+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 
@@ -43,7 +44,7 @@ func (s *Server) handleAddClient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.wg.AddPeer(name, pubKey, allowedIPs); err != nil {
-		http.Redirect(w, r, "/admin?err="+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 
@@ -118,7 +119,7 @@ func (s *Server) handleEditClient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.wg.UpdatePeer(pubkey, name, allowedIPs); err != nil {
-		http.Redirect(w, r, "/admin?err="+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 
@@ -144,7 +145,7 @@ func (s *Server) handleDeleteClient(w http.ResponseWriter, r *http.Request) {
 
 	pubkey := r.FormValue("pubkey")
 	if err := s.wg.RemovePeer(pubkey); err != nil {
-		http.Redirect(w, r, "/admin?err="+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 
@@ -178,7 +179,7 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 
 	token := generateToken(32)
 	if err := s.addInvite(token); err != nil {
-		http.Redirect(w, r, "/admin?err="+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 
@@ -289,7 +290,7 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.wg.Reload(); err != nil {
-		http.Redirect(w, r, "/admin?err=Reload+failed:+"+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin?err="+url.QueryEscape("Reload failed: "+err.Error()), http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/admin?msg=WireGuard+reloaded", http.StatusSeeOther)
@@ -301,7 +302,7 @@ func (s *Server) handleInterfaceUp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.wg.InterfaceUp(); err != nil {
-		http.Redirect(w, r, "/admin/setup?err="+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/admin/setup?msg=Interface+started", http.StatusSeeOther)
@@ -313,7 +314,7 @@ func (s *Server) handleEnableForwarding(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := wireguard.EnableIPForwarding(); err != nil {
-		http.Redirect(w, r, "/admin/setup?err="+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/admin/setup?msg=IP+forwarding+enabled", http.StatusSeeOther)
@@ -325,7 +326,7 @@ func (s *Server) handleAddMasquerade(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := wireguard.AddMasqueradeRule(s.config.VPNRange); err != nil {
-		http.Redirect(w, r, "/admin/setup?err="+err.Error(), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/admin/setup?msg=Masquerade+rule+added", http.StatusSeeOther)
