@@ -28,6 +28,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+ExecStartPre=/bin/mkdir -p %s
 ExecStart=%s
 WorkingDirectory=%s
 Restart=on-failure
@@ -129,7 +130,7 @@ func generateServiceContent(configPath string) string {
 		}
 	}
 
-	return fmt.Sprintf(systemdServiceTemplate, execStart, workDir, workDir)
+	return fmt.Sprintf(systemdServiceTemplate, workDir, execStart, workDir, workDir)
 }
 
 // Setup and system handlers
