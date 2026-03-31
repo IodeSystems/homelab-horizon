@@ -28,7 +28,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStartPre=/bin/mkdir -p %s
+ExecStartPre=+/bin/mkdir -p %s
 ExecStart=%s
 WorkingDirectory=%s
 Restart=on-failure
