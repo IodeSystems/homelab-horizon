@@ -1,0 +1,77 @@
+#!/bin/bash
+set -e
+
+# Configuration
+TARGET="${1:-ubuntu@192.168.1.89}"
+
+echo "Detecting architecture on $TARGET..."
+UNAME_M=$(ssh "$TARGET" "uname -m" 2>/dev/null || echo "unknown")
+
+case "$UNAME_M" in
+  x86_64)
+    ARCH="linux-amd64"
+    ;;
+  aarch64|arm64)
+    ARCH="linux-arm64"
+    ;;
+  armv7l|armv6l)
+    ARCH="linux-armv7"
+    ;;
+  *)
+    echo "Unsupported or unknown architecture: $UNAME_M"
+    echo "Falling back to linux-arm64"
+    ARCH="linux-arm64"
+    ;;
+esac
+
+echo "Detected architecture: $ARCH"
+
+BINARY="dist/homelab-horizon-$ARCH"
+REMOTE_PATH="/usr/local/bin/homelab-horizon"
+
+echo "Building for $ARCH..."
+make build-"$ARCH"
+
+echo "Deploying to $TARGET..."
+
+# Copy binary to remote
+scp "$BINARY" "$TARGET:/tmp/homelab-horizon.new"
+
+# Remote execution for installation/update
+ssh "$TARGET" -t "
+  sudo mv /tmp/homelab-horizon.new $REMOTE_PATH
+  sudo chmod +x $REMOTE_PATH
+
+  echo 'Installing systemd service using binary...'
+  sudo $REMOTE_PATH -install
+
+  echo 'Enabling and restarting service...'
+  sudo systemctl enable homelab-horizon
+  sudo systemctl daemon-reload
+  if sudo systemctl restart homelab-horizon; then
+    echo 'Checking status...'
+    sudo systemctl status homelab-horizon --no-pager -l | head -20
+
+    echo ''
+    echo 'Auth token:'
+    for i in {1..5}; do
+      if [ -f /etc/homelab-horizon/config.json.token ]; then
+        sudo cat /etc/homelab-horizon/config.json.token
+        break
+      fi
+      sleep 1
+    done || echo '(token file not found)'
+  else
+    echo ''
+    echo '*** SERVICE FAILED TO START ***'
+    echo ''
+    sudo systemctl status homelab-horizon --no-pager -l
+    echo ''
+    echo '--- Journal (last 30 lines) ---'
+    sudo journalctl -u homelab-horizon -n 30 --no-pager -o short
+    exit 1
+  fi
+"
+
+echo ""
+echo "Done!"
