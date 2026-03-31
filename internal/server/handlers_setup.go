@@ -688,16 +688,24 @@ func checkSystemRequirements() []SystemRequirement {
 		},
 	}
 
-	// Check each requirement using exec.LookPath
-	binaries := map[string]string{
-		"WireGuard Tools": "wg",
-		"HAProxy":         "haproxy",
-		"dnsmasq":         "dnsmasq",
+	// Check each requirement: binary must exist AND package must be installed
+	type check struct {
+		binary  string
+		dpkgPkg string // verify this package is installed, not just the binary
+	}
+	checks := map[string]check{
+		"WireGuard Tools": {binary: "wg", dpkgPkg: "wireguard-tools"},
+		"HAProxy":         {binary: "haproxy", dpkgPkg: "haproxy"},
+		"dnsmasq":         {binary: "dnsmasq", dpkgPkg: "dnsmasq"},
 	}
 	for i := range requirements {
-		if bin, ok := binaries[requirements[i].Name]; ok {
-			if _, err := exec.LookPath(bin); err != nil {
-				requirements[i].Error = fmt.Sprintf("'%s' not found in PATH", bin)
+		if c, ok := checks[requirements[i].Name]; ok {
+			if _, err := exec.LookPath(c.binary); err != nil {
+				requirements[i].Error = fmt.Sprintf("'%s' not found in PATH", c.binary)
+			} else if out, err := exec.Command("dpkg", "-s", c.dpkgPkg).CombinedOutput(); err != nil {
+				requirements[i].Error = fmt.Sprintf("binary found but package '%s' not fully installed (only dnsmasq-base?)", c.dpkgPkg)
+			} else if !strings.Contains(string(out), "Status: install ok installed") {
+				requirements[i].Error = fmt.Sprintf("package '%s' in broken state", c.dpkgPkg)
 			} else {
 				requirements[i].Installed = true
 			}
