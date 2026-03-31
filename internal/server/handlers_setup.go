@@ -649,8 +649,12 @@ func (s *Server) handleInstallRequirement(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Packages may install systemd units; reload so systemctl can find them
-	exec.Command("systemctl", "daemon-reload").Run()
+	// Packages may install systemd units; reload so systemctl can find them.
+	// Also re-run dpkg configure in case postinst scripts need to finish.
+	exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+		"dpkg", "--configure", "-a").Run()
+	exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+		"systemctl", "daemon-reload").Run()
 
 	http.Redirect(w, r, fmt.Sprintf("/admin/setup?msg=%s+installed+successfully", name), http.StatusSeeOther)
 }
