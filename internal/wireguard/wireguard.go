@@ -423,22 +423,34 @@ func GenerateKeyPair() (privateKey, publicKey string, err error) {
 }
 
 func (w *WGConfig) Reload() error {
-	cmd := exec.Command("bash", "-c", fmt.Sprintf("wg syncconf %s <(wg-quick strip %s)", w.iface, w.iface))
-	if err := cmd.Run(); err != nil {
-		restartCmd := exec.Command("bash", "-c", fmt.Sprintf("wg-quick down %s; wg-quick up %s", w.iface, w.iface))
-		return restartCmd.Run()
+	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+		"bash", "-c", fmt.Sprintf("wg syncconf %s <(wg-quick strip %s)", w.iface, w.iface))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		restartCmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+			"bash", "-c", fmt.Sprintf("wg-quick down %s; wg-quick up %s", w.iface, w.iface))
+		if out2, err2 := restartCmd.CombinedOutput(); err2 != nil {
+			return fmt.Errorf("wg reload failed: %v — %s; restart also failed: %v — %s", err, string(out), err2, string(out2))
+		}
 	}
 	return nil
 }
 
 func (w *WGConfig) InterfaceUp() error {
-	cmd := exec.Command("wg-quick", "up", w.iface)
-	return cmd.Run()
+	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+		"wg-quick", "up", w.iface)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("wg-quick up failed: %v — %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func (w *WGConfig) InterfaceDown() error {
-	cmd := exec.Command("wg-quick", "down", w.iface)
-	return cmd.Run()
+	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+		"wg-quick", "down", w.iface)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("wg-quick down failed: %v — %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 type SystemStatus struct {
@@ -484,8 +496,12 @@ func EnableIPForwarding() error {
 }
 
 func AddMasqueradeRule(vpnRange string) error {
-	cmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", vpnRange, "-j", "MASQUERADE")
-	return cmd.Run()
+	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+		"iptables", "-t", "nat", "-A", "POSTROUTING", "-s", vpnRange, "-j", "MASQUERADE")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("iptables masquerade failed: %v — %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func (w *WGConfig) GetAddress() string {
