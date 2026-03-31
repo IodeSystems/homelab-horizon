@@ -165,20 +165,6 @@ func (d *DNSMasq) Start() error {
 	return systemctlWithJournal("start", "dnsmasq")
 }
 
-const dnsmasqServiceTemplate = `[Unit]
-Description=dnsmasq - managed by homelab-horizon
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/sbin/dnsmasq -k --conf-dir=/etc/dnsmasq.d,*.dpkg-dist,*.dpkg-old,*.dpkg-new
-ExecReload=/bin/kill -HUP $MAINPID
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-`
-
 // ensureServiceUnit creates dnsmasq.service if it doesn't exist.
 // Ubuntu's dnsmasq package uses sysv init scripts and relies on
 // systemd-sysv-generator, which may not run when installed via
@@ -186,20 +172,38 @@ WantedBy=multi-user.target
 func (d *DNSMasq) ensureServiceUnit() error {
 	servicePath := "/etc/systemd/system/dnsmasq.service"
 
-	// Check if any dnsmasq service unit exists (system or generated)
-	if exec.Command("systemctl", "cat", "dnsmasq.service").Run() == nil {
-		return nil
+	// If a system-provided unit exists (not ours), use it
+	if out, err := exec.Command("systemctl", "cat", "dnsmasq.service").CombinedOutput(); err == nil {
+		if !strings.Contains(string(out), "managed by homelab-horizon") {
+			return nil
+		}
+		// Our unit exists — fall through to regenerate it in case the template changed
 	}
 
 	// Check dnsmasq binary exists
-	if _, err := exec.LookPath("dnsmasq"); err != nil {
+	dnsmasqBin, err := exec.LookPath("dnsmasq")
+	if err != nil {
 		return fmt.Errorf("dnsmasq binary not found — install it first")
 	}
+
+	serviceContent := fmt.Sprintf(`[Unit]
+Description=dnsmasq - managed by homelab-horizon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%s -k -C %s
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+`, dnsmasqBin, d.configPath)
 
 	// Create our own service unit
 	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
 		"bash", "-c", fmt.Sprintf("cat > %s && systemctl daemon-reload", servicePath))
-	cmd.Stdin = strings.NewReader(dnsmasqServiceTemplate)
+	cmd.Stdin = strings.NewReader(serviceContent)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to create dnsmasq.service: %v — %s", err, strings.TrimSpace(string(out)))
 	}
