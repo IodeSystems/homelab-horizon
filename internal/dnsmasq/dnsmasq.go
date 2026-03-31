@@ -152,16 +152,59 @@ func (d *DNSMasq) RemoveMapping(hostname string) error {
 }
 
 func (d *DNSMasq) Reload() error {
+	if err := d.ensureServiceUnit(); err != nil {
+		return err
+	}
 	return systemctlWithJournal("restart", "dnsmasq")
 }
 
 func (d *DNSMasq) Start() error {
-	// Check if the unit exists before trying to start
-	check := exec.Command("systemctl", "cat", "dnsmasq.service")
-	if out, err := check.CombinedOutput(); err != nil {
-		return fmt.Errorf("dnsmasq.service unit not found — try reinstalling: sudo apt install --reinstall dnsmasq (systemctl cat: %s)", strings.TrimSpace(string(out)))
+	if err := d.ensureServiceUnit(); err != nil {
+		return err
 	}
 	return systemctlWithJournal("start", "dnsmasq")
+}
+
+const dnsmasqServiceTemplate = `[Unit]
+Description=dnsmasq - managed by homelab-horizon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/dnsmasq -k --conf-dir=/etc/dnsmasq.d,*.dpkg-dist,*.dpkg-old,*.dpkg-new
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+`
+
+// ensureServiceUnit creates dnsmasq.service if it doesn't exist.
+// Ubuntu's dnsmasq package uses sysv init scripts and relies on
+// systemd-sysv-generator, which may not run when installed via
+// a transient systemd-run service.
+func (d *DNSMasq) ensureServiceUnit() error {
+	servicePath := "/etc/systemd/system/dnsmasq.service"
+
+	// Check if any dnsmasq service unit exists (system or generated)
+	if exec.Command("systemctl", "cat", "dnsmasq.service").Run() == nil {
+		return nil
+	}
+
+	// Check dnsmasq binary exists
+	if _, err := exec.LookPath("dnsmasq"); err != nil {
+		return fmt.Errorf("dnsmasq binary not found — install it first")
+	}
+
+	// Create our own service unit
+	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+		"bash", "-c", fmt.Sprintf("cat > %s && systemctl daemon-reload", servicePath))
+	cmd.Stdin = strings.NewReader(dnsmasqServiceTemplate)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to create dnsmasq.service: %v — %s", err, strings.TrimSpace(string(out)))
+	}
+
+	return nil
 }
 
 // systemctlWithJournal runs a systemctl command and, on failure, pulls recent
