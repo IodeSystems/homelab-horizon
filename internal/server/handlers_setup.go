@@ -312,6 +312,15 @@ func (s *Server) handleDNSMasqStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ensure config exists before starting
+	if err := s.dns.WriteConfig(); err != nil {
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape("dnsmasq write config failed: "+err.Error()), http.StatusSeeOther)
+		return
+	}
+	if mappings := s.config.DeriveDNSMappings(); len(mappings) > 0 {
+		s.dns.SetMappings(mappings)
+	}
+
 	if err := s.dns.Start(); err != nil {
 		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return

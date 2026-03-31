@@ -173,11 +173,12 @@ func (d *DNSMasq) ensureServiceUnit() error {
 	servicePath := "/etc/systemd/system/dnsmasq.service"
 
 	// If a system-provided unit exists (not ours), use it
+	existingContent := ""
 	if out, err := exec.Command("systemctl", "cat", "dnsmasq.service").CombinedOutput(); err == nil {
 		if !strings.Contains(string(out), "managed by homelab-horizon") {
 			return nil
 		}
-		// Our unit exists — fall through to regenerate it in case the template changed
+		existingContent = string(out)
 	}
 
 	// Check dnsmasq binary exists
@@ -200,7 +201,12 @@ Restart=on-failure
 WantedBy=multi-user.target
 `, dnsmasqBin, d.configPath)
 
-	// Create our own service unit
+	// Skip if content hasn't changed
+	if strings.Contains(existingContent, strings.TrimSpace(serviceContent)) {
+		return nil
+	}
+
+	// Create/update our service unit
 	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
 		"bash", "-c", fmt.Sprintf("cat > %s && systemctl daemon-reload", servicePath))
 	cmd.Stdin = strings.NewReader(serviceContent)
