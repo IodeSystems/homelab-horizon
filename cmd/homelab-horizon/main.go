@@ -28,6 +28,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+ExecStartPre=/bin/mkdir -p %s
 ExecStart=%s%s
 WorkingDirectory=%s
 Restart=on-failure
@@ -254,7 +255,7 @@ func generateSystemdService(configPath string) string {
 		configFlag = fmt.Sprintf(" -config %s", configPath)
 	}
 
-	return fmt.Sprintf(systemdServiceTemplate, execPath, configFlag, workDir, workDir)
+	return fmt.Sprintf(systemdServiceTemplate, workDir, execPath, configFlag, workDir, workDir)
 }
 
 type checker struct {
