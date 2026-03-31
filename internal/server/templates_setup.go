@@ -40,6 +40,7 @@ const setupTemplate = `<!DOCTYPE html>
                     <td>
                         {{if not .Installed}}
                         <span class="status-err">● Not installed</span>
+                        {{if .Error}}<div style="color: #e74c3c; font-size: 0.8em; margin-top: 0.15rem;">{{.Error}}</div>{{end}}
                         <form method="POST" action="/admin/setup/install-requirement" style="display:inline; margin-left: 0.5rem;">
                             <input type="hidden" name="name" value="WireGuard Tools">
                             <button class="success" type="submit" style="padding: 0.25rem 0.5rem; font-size: 0.85em;">Install</button>
@@ -63,6 +64,7 @@ const setupTemplate = `<!DOCTYPE html>
                         <span class="status-ok">● Installed</span>
                         {{else}}
                         <span class="status-err">● Not installed</span>
+                        {{if .Error}}<div style="color: #e74c3c; font-size: 0.8em; margin-top: 0.15rem;">{{.Error}}</div>{{end}}
                         <form method="POST" action="/admin/setup/install-requirement" style="display:inline; margin-left: 0.5rem;">
                             <input type="hidden" name="name" value="HAProxy">
                             <button class="success" type="submit" style="padding: 0.25rem 0.5rem; font-size: 0.85em;">Install</button>
@@ -78,6 +80,7 @@ const setupTemplate = `<!DOCTYPE html>
                     <td>
                         {{if not .Installed}}
                         <span class="status-err">● Not installed</span>
+                        {{if .Error}}<div style="color: #e74c3c; font-size: 0.8em; margin-top: 0.15rem;">{{.Error}}</div>{{end}}
                         <form method="POST" action="/admin/setup/install-requirement" style="display:inline; margin-left: 0.5rem;">
                             <input type="hidden" name="name" value="dnsmasq">
                             <button class="success" type="submit" style="padding: 0.25rem 0.5rem; font-size: 0.85em;">Install</button>
@@ -349,6 +352,29 @@ const setupTemplate = `<!DOCTYPE html>
         </div>
 
         <div class="card">
+            <h2>Backup & Restore</h2>
+            <p style="color: #ccc; margin-bottom: 1rem;">Export a full backup (config, WireGuard keys, SSL certs, invites) or restore from a previous backup. After restoring, run a sync to regenerate derived configs.</p>
+            <div class="flex">
+                <a href="/admin/backup/export" id="backup-export-link" style="text-decoration: none;"><button type="button" class="secondary">Download Backup</button></a>
+                <button type="button" class="secondary" onclick="document.getElementById('restore-modal').classList.add('active')">Restore from Backup</button>
+            </div>
+        </div>
+
+        <div class="modal-overlay" id="restore-modal">
+            <div class="modal-content" style="max-width: 500px;">
+                <button class="modal-close" onclick="this.closest('.modal-overlay').classList.remove('active')">&times;</button>
+                <h2>Restore from Backup</h2>
+                <p style="color: #ccc; margin-bottom: 1rem;">Upload a backup zip file. This will overwrite the current configuration, WireGuard keys, SSL certificates, and admin token.</p>
+                <div id="restore-status" style="display: none; margin-bottom: 1rem;"></div>
+                <input type="file" id="restore-file" accept=".zip" style="margin-bottom: 1rem;">
+                <div class="flex">
+                    <button type="button" class="danger" id="restore-btn" onclick="doRestore()">Restore</button>
+                    <button type="button" class="secondary" onclick="this.closest('.modal-overlay').classList.remove('active')">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
             <h2>Manual Installation</h2>
             <pre># Copy binary and run
 sudo cp homelab-horizon /usr/local/bin/
@@ -414,6 +440,46 @@ sudo homelab-horizon
             setGatewayMode('custom');
         }
     })();
+    function doRestore() {
+        var fileInput = document.getElementById('restore-file');
+        var status = document.getElementById('restore-status');
+        var btn = document.getElementById('restore-btn');
+
+        if (!fileInput.files.length) {
+            status.style.display = 'block';
+            status.className = 'error';
+            status.textContent = 'Please select a backup zip file.';
+            return;
+        }
+
+        btn.disabled = true;
+        btn.innerHTML = '<span class="loading"></span> Restoring...';
+        status.style.display = 'block';
+        status.className = 'info';
+        status.textContent = 'Uploading and restoring backup...';
+
+        var file = fileInput.files[0];
+        fetch('/admin/backup/import', {
+            method: 'POST',
+            body: file,
+        }).then(function(resp) {
+            return resp.json().then(function(data) {
+                if (resp.ok && data.status === 'ok') {
+                    status.className = 'success';
+                    status.textContent = 'Restore complete. Run a sync to regenerate derived configs.';
+                } else {
+                    status.className = 'error';
+                    status.textContent = 'Restore had errors: ' + (data.errors || []).join(', ');
+                }
+            });
+        }).catch(function(err) {
+            status.className = 'error';
+            status.textContent = 'Restore failed: ' + err.message;
+        }).finally(function() {
+            btn.disabled = false;
+            btn.innerHTML = 'Restore';
+        });
+    }
     </script>
 </body>
 </html>`

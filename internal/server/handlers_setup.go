@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +34,19 @@ Restart=on-failure
 RestartSec=5
 User=root
 Group=root
+
+# File system isolation
+ProtectSystem=strict
+ReadWritePaths=-/etc/wireguard -/etc/dnsmasq.d -/etc/haproxy -/etc/systemd/system -/proc/sys/net/ipv4 -/var/lib/haproxy -%s
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+
+# Network capabilities for WireGuard
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+# Security restrictions
+NoNewPrivileges=false
 
 [Install]
 WantedBy=multi-user.target
@@ -115,7 +129,7 @@ func generateServiceContent(configPath string) string {
 		}
 	}
 
-	return fmt.Sprintf(systemdServiceTemplate, execStart, workDir)
+	return fmt.Sprintf(systemdServiceTemplate, execStart, workDir, workDir)
 }
 
 // Setup and system handlers
@@ -194,13 +208,18 @@ func (s *Server) handleInstallService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	serviceContent := generateServiceContent(s.configPath)
+	servicePath := "/etc/systemd/system/homelab-horizon.service"
 
-	if err := os.WriteFile("/etc/systemd/system/homelab-horizon.service", []byte(serviceContent), 0644); err != nil {
-		http.Redirect(w, r, "/admin/setup?err=Failed+to+write+service+file:+"+err.Error(), http.StatusSeeOther)
+	// Use systemd-run to escape ProtectSystem=strict sandbox for writing service file
+	cmd := exec.Command("systemd-run", "--scope", "--", "bash", "-c",
+		fmt.Sprintf("cat > %s", servicePath))
+	cmd.Stdin = strings.NewReader(serviceContent)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		http.Redirect(w, r, "/admin/setup?err=Failed+to+write+service+file:+"+err.Error()+"+"+string(out), http.StatusSeeOther)
 		return
 	}
 
-	cmd := exec.Command("systemctl", "daemon-reload")
+	cmd = exec.Command("systemd-run", "--scope", "--", "systemctl", "daemon-reload")
 	if err := cmd.Run(); err != nil {
 		http.Redirect(w, r, "/admin/setup?err=Failed+to+reload+systemd:+"+err.Error(), http.StatusSeeOther)
 		return
@@ -214,7 +233,7 @@ func (s *Server) handleEnableService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cmd := exec.Command("systemctl", "enable", "homelab-horizon")
+	cmd := exec.Command("systemd-run", "--scope", "--", "systemctl", "enable", "homelab-horizon")
 	if err := cmd.Run(); err != nil {
 		http.Redirect(w, r, "/admin/setup?err=Failed+to+enable+service:+"+err.Error(), http.StatusSeeOther)
 		return
@@ -615,9 +634,15 @@ func (s *Server) handleInstallRequirement(w http.ResponseWriter, r *http.Request
 		parts = append([]string{"apt", "-y"}, parts[1:]...)
 	}
 
-	cmd := exec.Command(parts[0], parts[1:]...)
+	// Use systemd-run to escape ProtectSystem=strict sandbox
+	cmd := exec.Command("systemd-run", append([]string{"--scope", "--"}, parts...)...)
+	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		http.Redirect(w, r, fmt.Sprintf("/admin/setup?error=Failed+to+install+%s:+%v\n%s", name, err, string(out)), http.StatusSeeOther)
+		errMsg := fmt.Sprintf("Failed to install %s: %v", name, err)
+		if len(out) > 0 {
+			errMsg += " — " + strings.TrimSpace(string(out))
+		}
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape(errMsg), http.StatusSeeOther)
 		return
 	}
 
@@ -630,6 +655,7 @@ type SystemRequirement struct {
 	Description string
 	Installed   bool
 	Command     string // Command to install
+	Error       string // Error message if check failed
 }
 
 // checkSystemRequirements checks for required packages and system capabilities
@@ -652,19 +678,19 @@ func checkSystemRequirements() []SystemRequirement {
 		},
 	}
 
-	// Check each requirement
+	// Check each requirement using exec.LookPath
+	binaries := map[string]string{
+		"WireGuard Tools": "wg",
+		"HAProxy":         "haproxy",
+		"dnsmasq":         "dnsmasq",
+	}
 	for i := range requirements {
-		var cmd *exec.Cmd
-		switch requirements[i].Name {
-		case "WireGuard Tools":
-			cmd = exec.Command("which", "wg")
-		case "HAProxy":
-			cmd = exec.Command("which", "haproxy")
-		case "dnsmasq":
-			cmd = exec.Command("which", "dnsmasq")
-		}
-		if cmd != nil {
-			requirements[i].Installed = cmd.Run() == nil
+		if bin, ok := binaries[requirements[i].Name]; ok {
+			if _, err := exec.LookPath(bin); err != nil {
+				requirements[i].Error = fmt.Sprintf("'%s' not found in PATH", bin)
+			} else {
+				requirements[i].Installed = true
+			}
 		}
 	}
 

@@ -37,7 +37,7 @@ Group=root
 
 # File system isolation
 ProtectSystem=strict
-ReadWritePaths=-/etc/wireguard -/etc/dnsmasq.d -/etc/haproxy -/proc/sys/net/ipv4 -/var/lib/haproxy -%s
+ReadWritePaths=-/etc/wireguard -/etc/dnsmasq.d -/etc/haproxy -/etc/systemd/system -/proc/sys/net/ipv4 -/var/lib/haproxy -%s
 ProtectHome=true
 PrivateTmp=true
 ProtectKernelTunables=true

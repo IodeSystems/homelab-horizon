@@ -225,15 +225,21 @@ func zipWriteFile(zw *zip.Writer, name string, data []byte) {
 	w.Write(data)
 }
 
-// backupAuthMiddleware validates Bearer token auth, same pattern as MCP.
+// backupAuthMiddleware accepts Bearer token (API) or session cookie / VPN admin (UI).
 func (s *Server) backupAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Bearer token (API/CLI usage)
 		auth := r.Header.Get("Authorization")
 		const prefix = "Bearer "
-		if !strings.HasPrefix(auth, prefix) || strings.TrimPrefix(auth, prefix) != s.adminToken {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		if strings.HasPrefix(auth, prefix) && strings.TrimPrefix(auth, prefix) == s.adminToken {
+			next(w, r)
 			return
 		}
-		next(w, r)
+		// Session cookie / VPN admin (UI usage)
+		if s.isAdmin(r) {
+			next(w, r)
+			return
+		}
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	}
 }
