@@ -210,16 +210,17 @@ func (s *Server) handleInstallService(w http.ResponseWriter, r *http.Request) {
 	serviceContent := generateServiceContent(s.configPath)
 	servicePath := "/etc/systemd/system/homelab-horizon.service"
 
-	// Use systemd-run to escape ProtectSystem=strict sandbox for writing service file
-	cmd := exec.Command("systemd-run", "--scope", "--", "bash", "-c",
-		fmt.Sprintf("cat > %s", servicePath))
+	// Use systemd-run to create a transient service that escapes ProtectSystem=strict
+	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+		"bash", "-c", fmt.Sprintf("cat > %s", servicePath))
 	cmd.Stdin = strings.NewReader(serviceContent)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		http.Redirect(w, r, "/admin/setup?err=Failed+to+write+service+file:+"+err.Error()+"+"+string(out), http.StatusSeeOther)
 		return
 	}
 
-	cmd = exec.Command("systemd-run", "--scope", "--", "systemctl", "daemon-reload")
+	cmd = exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+		"systemctl", "daemon-reload")
 	if err := cmd.Run(); err != nil {
 		http.Redirect(w, r, "/admin/setup?err=Failed+to+reload+systemd:+"+err.Error(), http.StatusSeeOther)
 		return
@@ -233,7 +234,8 @@ func (s *Server) handleEnableService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cmd := exec.Command("systemd-run", "--scope", "--", "systemctl", "enable", "homelab-horizon")
+	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+		"systemctl", "enable", "homelab-horizon")
 	if err := cmd.Run(); err != nil {
 		http.Redirect(w, r, "/admin/setup?err=Failed+to+enable+service:+"+err.Error(), http.StatusSeeOther)
 		return
@@ -634,9 +636,10 @@ func (s *Server) handleInstallRequirement(w http.ResponseWriter, r *http.Request
 		parts = append([]string{"apt", "-y"}, parts[1:]...)
 	}
 
-	// Use systemd-run to escape ProtectSystem=strict sandbox
-	cmd := exec.Command("systemd-run", append([]string{"--scope", "--"}, parts...)...)
-	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+	// Use systemd-run to create a transient service that escapes ProtectSystem=strict
+	args := append([]string{"--pipe", "--wait", "--service-type=oneshot",
+		"--setenv=DEBIAN_FRONTEND=noninteractive"}, parts...)
+	cmd := exec.Command("systemd-run", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		errMsg := fmt.Sprintf("Failed to install %s: %v", name, err)
 		if len(out) > 0 {
