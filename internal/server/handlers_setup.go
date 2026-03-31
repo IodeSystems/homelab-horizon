@@ -266,13 +266,13 @@ PostUp = iptables -A FORWARD -i %%i -j ACCEPT; iptables -t nat -A POSTROUTING -o
 PostDown = iptables -D FORWARD -i %%i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
 `, privKey, serverIP)
 
-	if err := os.MkdirAll("/etc/wireguard", 0700); err != nil {
-		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape("Failed to create directory: "+err.Error()), http.StatusSeeOther)
-		return
-	}
-
-	if err := os.WriteFile(s.config.WGConfigPath, []byte(wgConfig), 0600); err != nil {
-		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape("Failed to write config: "+err.Error()), http.StatusSeeOther)
+	// Use systemd-run to escape ProtectSystem=strict — /etc is read-only in the sandbox
+	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+		"bash", "-c", fmt.Sprintf("mkdir -p /etc/wireguard && chmod 700 /etc/wireguard && cat > %s && chmod 600 %s",
+			s.config.WGConfigPath, s.config.WGConfigPath))
+	cmd.Stdin = strings.NewReader(wgConfig)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape("Failed to write WG config: "+err.Error()+" "+strings.TrimSpace(string(out))), http.StatusSeeOther)
 		return
 	}
 
