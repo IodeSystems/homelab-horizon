@@ -47,6 +47,9 @@ const setupTemplate = `<!DOCTYPE html>
                         </form>
                         {{else if $.Status.InterfaceUp}}
                         <span class="status-ok">● Running</span>
+                        {{else if not $.WGConfigExists}}
+                        <span style="color: #f39c12;">● Not configured</span>
+                        <div style="color: #888; font-size: 0.8em; margin-top: 0.15rem;">Create a server config below first</div>
                         {{else}}
                         <span class="status-err">● Down</span>
                         <form method="POST" action="/admin/interface/up" style="display:inline; margin-left: 0.5rem;">
