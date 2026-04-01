@@ -417,8 +417,8 @@ listen stats
 			}
 			sb.WriteString(fmt.Sprintf("    option httpchk GET %s\n", checkPath))
 			sb.WriteString("    http-check expect status 200\n")
-			sb.WriteString(fmt.Sprintf("    server current %s check inter 3s fall 2 rise 2\n", b.CurrentServer))
 			sb.WriteString(fmt.Sprintf("    server next %s check inter 3s fall 2 rise 2\n", b.NextServer))
+			sb.WriteString(fmt.Sprintf("    server current %s check inter 3s fall 2 rise 2\n", b.CurrentServer))
 		} else {
 			sb.WriteString("    balance roundrobin\n")
 			if b.HTTPCheck {
