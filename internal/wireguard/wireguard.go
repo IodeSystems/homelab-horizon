@@ -481,11 +481,29 @@ func (w *WGConfig) CheckSystem(vpnRange string) SystemStatus {
 		status.ForwardingError = "IP forwarding disabled"
 	}
 
-	cmd = exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING", "-s", vpnRange, "-j", "MASQUERADE")
-	if err := cmd.Run(); err != nil {
-		status.MasqError = "Masquerade rule not found"
+	// Check for masquerade rule matching what PostUp creates: -o <outIface> -j MASQUERADE
+	// Also accept the legacy -s <vpnRange> form in case it was added manually.
+	outIface := detectDefaultInterface()
+	if outIface != "" {
+		cmd = exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING", "-o", outIface, "-j", "MASQUERADE")
+		if err := cmd.Run(); err != nil {
+			// Fall back to checking legacy source-based rule
+			cmd = exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING", "-s", vpnRange, "-j", "MASQUERADE")
+			if err := cmd.Run(); err != nil {
+				status.MasqError = "Masquerade rule not found"
+			} else {
+				status.Masquerading = true
+			}
+		} else {
+			status.Masquerading = true
+		}
 	} else {
-		status.Masquerading = true
+		cmd = exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING", "-s", vpnRange, "-j", "MASQUERADE")
+		if err := cmd.Run(); err != nil {
+			status.MasqError = "Masquerade rule not found"
+		} else {
+			status.Masquerading = true
+		}
 	}
 
 	return status
@@ -496,8 +514,12 @@ func EnableIPForwarding() error {
 }
 
 func AddMasqueradeRule(vpnRange string) error {
+	outIface := detectDefaultInterface()
+	if outIface == "" {
+		outIface = "eth0"
+	}
 	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
-		"iptables", "-t", "nat", "-A", "POSTROUTING", "-s", vpnRange, "-j", "MASQUERADE")
+		"iptables", "-t", "nat", "-I", "POSTROUTING", "1", "-o", outIface, "-j", "MASQUERADE")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("iptables masquerade failed: %v — %s", err, strings.TrimSpace(string(out)))
 	}
@@ -508,6 +530,105 @@ func (w *WGConfig) GetAddress() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.address
+}
+
+func (w *WGConfig) GetPostUp() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.postUp
+}
+
+func (w *WGConfig) GetPostDown() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.postDown
+}
+
+// ExpectedPostUp returns the PostUp line we'd generate for a new config with the given output interface.
+// Uses -I (insert) instead of -A (append) so rules are placed before any UFW drop/reject rules.
+func ExpectedPostUp(outIface string) string {
+	return fmt.Sprintf("iptables -I FORWARD 1 -i %%i -j ACCEPT; iptables -I FORWARD 2 -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -I POSTROUTING 1 -o %s -j MASQUERADE", outIface)
+}
+
+// ExpectedPostDown returns the PostDown line we'd generate for a new config with the given output interface.
+func ExpectedPostDown(outIface string) string {
+	return fmt.Sprintf("iptables -D FORWARD -i %%i -j ACCEPT; iptables -D FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE", outIface)
+}
+
+// UpdateInterfaceRules rewrites PostUp and PostDown in the config file, preserving everything else.
+func (w *WGConfig) UpdateInterfaceRules(postUp, postDown string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	data, err := os.ReadFile(w.path)
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(string(data), "\n")
+	var result []string
+	inInterface := false
+	replacedUp := false
+	replacedDown := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if trimmed == "[Interface]" {
+			inInterface = true
+			result = append(result, line)
+			continue
+		}
+		if trimmed == "[Peer]" {
+			inInterface = false
+		}
+
+		if inInterface {
+			if strings.HasPrefix(trimmed, "PostUp") {
+				result = append(result, "PostUp = "+postUp)
+				replacedUp = true
+				continue
+			}
+			if strings.HasPrefix(trimmed, "PostDown") {
+				result = append(result, "PostDown = "+postDown)
+				replacedDown = true
+				continue
+			}
+		}
+
+		result = append(result, line)
+	}
+
+	// If PostUp/PostDown didn't exist, add them before the first blank line after [Interface]
+	if !replacedUp || !replacedDown {
+		var final []string
+		added := false
+		for _, line := range result {
+			final = append(final, line)
+			if !added && strings.TrimSpace(line) == "[Interface]" {
+				// We'll add after the last Interface key
+			}
+			if !added && strings.HasPrefix(strings.TrimSpace(line), "ListenPort") {
+				if !replacedUp {
+					final = append(final, "PostUp = "+postUp)
+				}
+				if !replacedDown {
+					final = append(final, "PostDown = "+postDown)
+				}
+				added = true
+			}
+		}
+		result = final
+	}
+
+	output := strings.Join(result, "\n")
+	if err := os.WriteFile(w.path, []byte(output), 0600); err != nil {
+		return err
+	}
+
+	w.postUp = postUp
+	w.postDown = postDown
+	return nil
 }
 
 func GenerateClientConfig(clientPrivateKey, clientIP, serverPubKey, serverEndpoint, dns, allowedIPs string) string {
@@ -528,6 +649,21 @@ Endpoint = %s
 AllowedIPs = %s
 PersistentKeepalive = 25
 `, clientPrivateKey, clientIPForAddress, dns, serverPubKey, serverEndpoint, allowedIPs)
+}
+
+// detectDefaultInterface returns the name of the network interface used for the default route.
+func detectDefaultInterface() string {
+	data, err := os.ReadFile("/proc/net/route")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[1] == "00000000" {
+			return fields[0]
+		}
+	}
+	return ""
 }
 
 func ValidatePublicKey(key string) bool {
