@@ -217,8 +217,8 @@ func (s *Server) handleCreateWGConfig(w http.ResponseWriter, r *http.Request) {
 PrivateKey = %s
 Address = %s/24
 ListenPort = 51820
-PostUp = iptables -A FORWARD -i %%i -j ACCEPT; iptables -t nat -A POSTROUTING -o %s -j MASQUERADE
-PostDown = iptables -D FORWARD -i %%i -j ACCEPT; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE
+PostUp = iptables -I FORWARD 1 -i %%i -j ACCEPT; iptables -I FORWARD 2 -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -I POSTROUTING 1 -o %s -j MASQUERADE
+PostDown = iptables -D FORWARD -i %%i -j ACCEPT; iptables -D FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE
 `, privKey, serverIP, outIface, outIface)
 
 	// Use systemd-run to escape ProtectSystem=strict — /etc is read-only in the sandbox
@@ -396,6 +396,35 @@ func (s *Server) handleTestConnectivity(w http.ResponseWriter, r *http.Request) 
 				Name:    "HAProxy Config",
 				Status:  "ok",
 				Message: "HAProxy config is up to date",
+			})
+		}
+	}
+
+	// 0b. Check if WireGuard config PostUp/PostDown are up-to-date
+	if s.config.ServerPublicKey != "" {
+		outIface := config.DetectDefaultInterface()
+		if outIface == "" {
+			outIface = "eth0"
+		}
+		expectedPostUp := wireguard.ExpectedPostUp(outIface)
+		currentPostUp := s.wg.GetPostUp()
+		if currentPostUp == "" {
+			results = append(results, ConnectivityCheck{
+				Name:    "WireGuard Config",
+				Status:  "failed",
+				Message: "WireGuard config has no PostUp rules. Click 'Fix WG Rules' to update.",
+			})
+		} else if currentPostUp != expectedPostUp {
+			results = append(results, ConnectivityCheck{
+				Name:    "WireGuard Config",
+				Status:  "failed",
+				Message: "WireGuard PostUp/PostDown rules are out of date. Click 'Fix WG Rules' to update.",
+			})
+		} else {
+			results = append(results, ConnectivityCheck{
+				Name:    "WireGuard Config",
+				Status:  "ok",
+				Message: "WireGuard config rules are up to date",
 			})
 		}
 	}
@@ -701,6 +730,37 @@ func checkHAProxyLogging() []SystemHealthCheck {
 	})
 
 	return checks
+}
+
+func (s *Server) handleFixWGRules(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminPost(w, r) {
+		return
+	}
+
+	outIface := config.DetectDefaultInterface()
+	if outIface == "" {
+		outIface = "eth0"
+	}
+
+	postUp := wireguard.ExpectedPostUp(outIface)
+	postDown := wireguard.ExpectedPostDown(outIface)
+
+	if err := s.wg.UpdateInterfaceRules(postUp, postDown); err != nil {
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape("Failed to update WG rules: "+err.Error()), http.StatusSeeOther)
+		return
+	}
+
+	// Restart WG to apply the new PostUp/PostDown
+	if err := s.wg.InterfaceDown(); err != nil {
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape("Updated config but failed to restart WG: "+err.Error()), http.StatusSeeOther)
+		return
+	}
+	if err := s.wg.InterfaceUp(); err != nil {
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape("Updated config but failed to bring WG up: "+err.Error()), http.StatusSeeOther)
+		return
+	}
+
+	http.Redirect(w, r, "/admin/setup?msg=WireGuard+rules+updated+and+interface+restarted", http.StatusSeeOther)
 }
 
 func (s *Server) handleFixHAProxyLogging(w http.ResponseWriter, r *http.Request) {

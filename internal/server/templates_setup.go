@@ -273,7 +273,15 @@ const setupTemplate = `<!DOCTYPE html>
                             <span class="status-err">● Failed</span>
                             {{end}}
                         </td>
-                        <td style="font-size: 0.9em; color: #ccc;">{{.Message}}</td>
+                        <td style="font-size: 0.9em; color: #ccc;">
+                            {{.Message}}
+                            {{if and (eq .Name "WireGuard Config") (eq .Status "failed")}}
+                            <form method="POST" action="/admin/setup/fix-wg-rules" style="display:inline; margin-left: 0.5rem;">
+                                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                                <button type="submit" class="small">Fix WG Rules</button>
+                            </form>
+                            {{end}}
+                        </td>
                     </tr>
                     {{end}}
                 </tbody>

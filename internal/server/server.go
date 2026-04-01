@@ -1119,6 +1119,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/admin/setup/enable-service", s.csrfMiddleware(s.handleEnableService))
 	mux.HandleFunc("/admin/setup/create-wg-config", s.csrfMiddleware(s.handleCreateWGConfig))
 	mux.HandleFunc("/admin/setup/test-connectivity", s.csrfMiddleware(s.handleTestConnectivity))
+	mux.HandleFunc("/admin/setup/fix-wg-rules", s.csrfMiddleware(s.handleFixWGRules))
 	mux.HandleFunc("/admin/setup/fix-haproxy-logging", s.csrfMiddleware(s.handleFixHAProxyLogging))
 	mux.HandleFunc("/admin/help", s.csrfMiddleware(s.handleHelp))
 
