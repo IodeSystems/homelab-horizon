@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -185,14 +186,16 @@ func TestDeriveAllowedIPs(t *testing.T) {
 			cfg := &Config{VPNRange: tt.vpnRange}
 			got := cfg.DeriveAllowedIPs()
 
-			if got != tt.want {
-				t.Errorf("DeriveAllowedIPs() = %s, want %s", got, tt.want)
+			// Must always contain the VPN range (may also include detected local network)
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("DeriveAllowedIPs() = %s, want it to contain %s", got, tt.want)
 			}
 		})
 	}
 }
 
 func TestGetAllowedIPs(t *testing.T) {
+	// Explicit AllowedIPs should be returned as-is
 	cfg := &Config{
 		VPNRange:   "10.100.0.0/24",
 		AllowedIPs: "10.100.0.0/24, 192.168.1.0/24",
@@ -204,15 +207,15 @@ func TestGetAllowedIPs(t *testing.T) {
 		t.Errorf("GetAllowedIPs() = %s, want %s", got, want)
 	}
 
+	// Empty AllowedIPs should derive and always include VPN range
 	cfg2 := &Config{
 		VPNRange:   "10.100.0.0/24",
 		AllowedIPs: "",
 	}
 
 	got2 := cfg2.GetAllowedIPs()
-	want2 := "10.100.0.0/24"
-	if got2 != want2 {
-		t.Errorf("GetAllowedIPs() = %s, want %s", got2, want2)
+	if !strings.Contains(got2, "10.100.0.0/24") {
+		t.Errorf("GetAllowedIPs() = %s, want it to contain 10.100.0.0/24", got2)
 	}
 }
 

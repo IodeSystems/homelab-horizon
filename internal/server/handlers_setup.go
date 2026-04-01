@@ -19,39 +19,6 @@ import (
 	"homelab-horizon/internal/wireguard"
 )
 
-// systemdServiceTemplate is the template for the systemd service file
-// %s is the ExecStart command, %s is the working directory
-const systemdServiceTemplate = `[Unit]
-Description=Homelab Horizon - Split-Horizon DNS & VPN Management
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStartPre=+/bin/mkdir -p %s
-ExecStart=%s
-WorkingDirectory=%s
-Restart=on-failure
-RestartSec=5
-User=root
-Group=root
-
-# File system isolation
-ProtectSystem=strict
-ReadWritePaths=-/etc/wireguard -/etc/dnsmasq.d -/etc/haproxy -/etc/systemd/system -/proc/sys/net/ipv4 -/var/lib/haproxy -%s
-ProtectHome=true
-PrivateTmp=true
-ProtectKernelTunables=true
-
-# Network capabilities for WireGuard
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
-
-# Security restrictions
-NoNewPrivileges=false
-
-[Install]
-WantedBy=multi-user.target
-`
 
 // SetupStatus represents the current setup state
 type SetupStatus struct {
@@ -100,37 +67,18 @@ func CheckSetupStatus(wgConfigPath string) SetupStatus {
 
 // generateServiceContent creates the expected systemd service file content
 func generateServiceContent(configPath string) string {
-	// Get the current executable path
-	binaryPath := "/usr/local/bin/homelab-horizon" // fallback
+	binaryPath := "/usr/local/bin/homelab-horizon"
 	if execPath, err := os.Executable(); err == nil {
 		if absPath, err := filepath.Abs(execPath); err == nil {
 			binaryPath = absPath
 		}
 	}
-
-	// Build ExecStart command with config argument if specified
-	execStart := binaryPath
 	if configPath != "" {
-		absConfigPath, err := filepath.Abs(configPath)
-		if err == nil {
-			configPath = absConfigPath
-		}
-		execStart = fmt.Sprintf("%s --config %s", binaryPath, configPath)
-	}
-
-	// Determine working directory from config path (must be absolute for systemd)
-	workDir := "/etc/homelab-horizon"
-	if configPath != "" {
-		absConfigPath, err := filepath.Abs(configPath)
-		if err == nil {
-			dir := filepath.Dir(absConfigPath)
-			if dir != "" && dir != "." {
-				workDir = dir
-			}
+		if abs, err := filepath.Abs(configPath); err == nil {
+			configPath = abs
 		}
 	}
-
-	return fmt.Sprintf(systemdServiceTemplate, workDir, execStart, workDir, workDir)
+	return config.GenerateServiceFile(binaryPath, configPath)
 }
 
 // Setup and system handlers
@@ -175,6 +123,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	status := s.wg.CheckSystem(s.config.VPNRange)
 	dnsStatus := s.dns.Status()
 	requirements := checkSystemRequirements()
+	healthChecks := checkSystemHealth()
 	ipv6Status := route53.CheckIPv6()
 
 	setupStatus := CheckSetupStatus(s.config.WGConfigPath)
@@ -192,6 +141,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		"Status":                 status,
 		"DNSStatus":              dnsStatus,
 		"Requirements":           requirements,
+		"HealthChecks":           healthChecks,
 		"IPv6Status":             ipv6Status,
 		"SetupComplete":          !setupStatus.NeedsSetup,
 		"Message":                r.URL.Query().Get("msg"),
@@ -259,13 +209,17 @@ func (s *Server) handleCreateWGConfig(w http.ResponseWriter, r *http.Request) {
 	serverIP := strings.Split(s.config.VPNRange, "/")[0]
 	serverIP = strings.TrimSuffix(serverIP, ".0") + ".1"
 
+	outIface := config.DetectDefaultInterface()
+	if outIface == "" {
+		outIface = "eth0"
+	}
 	wgConfig := fmt.Sprintf(`[Interface]
 PrivateKey = %s
 Address = %s/24
 ListenPort = 51820
-PostUp = iptables -A FORWARD -i %%i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i %%i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
-`, privKey, serverIP)
+PostUp = iptables -A FORWARD -i %%i -j ACCEPT; iptables -t nat -A POSTROUTING -o %s -j MASQUERADE
+PostDown = iptables -D FORWARD -i %%i -j ACCEPT; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE
+`, privKey, serverIP, outIface, outIface)
 
 	// Use systemd-run to escape ProtectSystem=strict — /etc is read-only in the sandbox
 	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
@@ -676,6 +630,134 @@ type SystemRequirement struct {
 	Installed   bool
 	Command     string // Command to install
 	Error       string // Error message if check failed
+}
+
+// SystemHealthCheck represents a fixable system misconfiguration
+type SystemHealthCheck struct {
+	Name        string
+	Description string
+	OK          bool
+	Error       string
+	FixAction   string // form action URL for the fix button
+	FixLabel    string // button text
+}
+
+// checkSystemHealth detects known system misconfigurations
+func checkSystemHealth() []SystemHealthCheck {
+	var checks []SystemHealthCheck
+
+	// Only check HAProxy logging if haproxy is installed
+	if _, err := exec.LookPath("haproxy"); err == nil {
+		checks = append(checks, checkHAProxyLogging()...)
+	}
+
+	return checks
+}
+
+// checkHAProxyLogging detects the apparmor/rsyslog disconnected path issue
+// that prevents HAProxy from logging when chrooted.
+func checkHAProxyLogging() []SystemHealthCheck {
+	var checks []SystemHealthCheck
+
+	// Check 1: rsyslogd apparmor profile needs attach_disconnected flag
+	// Without it, rsyslog denies messages from chrooted haproxy because
+	// the kernel presents the socket as a "disconnected path".
+	apparmorOK := false
+	profileData, err := os.ReadFile("/etc/apparmor.d/usr.sbin.rsyslogd")
+	if err == nil {
+		content := string(profileData)
+		if strings.Contains(content, "attach_disconnected") {
+			apparmorOK = true
+		}
+	} else {
+		// No apparmor profile = not applicable
+		apparmorOK = true
+	}
+
+	checks = append(checks, SystemHealthCheck{
+		Name:        "HAProxy Logging (AppArmor)",
+		Description: "rsyslogd needs attach_disconnected flag to receive logs from chrooted HAProxy",
+		OK:          apparmorOK,
+		Error:       "rsyslogd apparmor profile missing attach_disconnected flag — HAProxy logs are silently dropped",
+		FixAction:   "/admin/setup/fix-haproxy-logging",
+		FixLabel:    "Fix",
+	})
+
+	// Check 2: /var/log/haproxy.log must exist with correct ownership
+	logOK := false
+	if info, err := os.Stat("/var/log/haproxy.log"); err == nil {
+		// File exists — good enough (ownership is harder to check portably)
+		_ = info
+		logOK = true
+	}
+
+	checks = append(checks, SystemHealthCheck{
+		Name:        "HAProxy Log File",
+		Description: "rsyslog needs a pre-created log file with syslog ownership to write HAProxy logs",
+		OK:          logOK,
+		Error:       "/var/log/haproxy.log does not exist — rsyslog cannot create it after dropping privileges",
+		FixAction:   "/admin/setup/fix-haproxy-logging",
+		FixLabel:    "Fix",
+	})
+
+	return checks
+}
+
+func (s *Server) handleFixHAProxyLogging(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminPost(w, r) {
+		return
+	}
+
+	var errors []string
+
+	// Fix 1: Add attach_disconnected to rsyslogd apparmor profile
+	profilePath := "/etc/apparmor.d/usr.sbin.rsyslogd"
+	if data, err := os.ReadFile(profilePath); err == nil {
+		content := string(data)
+		if !strings.Contains(content, "attach_disconnected") {
+			// Replace the profile declaration to add the flag
+			fixed := strings.Replace(content,
+				"profile rsyslogd /usr/sbin/rsyslogd {",
+				"profile rsyslogd /usr/sbin/rsyslogd flags=(attach_disconnected) {", 1)
+			if fixed == content {
+				errors = append(errors, "Could not find profile declaration to patch")
+			} else {
+				cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+					"bash", "-c", fmt.Sprintf("cat > %s", profilePath))
+				cmd.Stdin = strings.NewReader(fixed)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					errors = append(errors, "Failed to write apparmor profile: "+err.Error()+" "+strings.TrimSpace(string(out)))
+				} else {
+					// Reload the apparmor profile
+					cmd = exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+						"apparmor_parser", "-r", profilePath)
+					if out, err := cmd.CombinedOutput(); err != nil {
+						errors = append(errors, "Failed to reload apparmor profile: "+err.Error()+" "+strings.TrimSpace(string(out)))
+					}
+				}
+			}
+		}
+	}
+
+	// Fix 2: Create /var/log/haproxy.log with correct ownership
+	if _, err := os.Stat("/var/log/haproxy.log"); os.IsNotExist(err) {
+		cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+			"bash", "-c", "touch /var/log/haproxy.log && chown syslog:adm /var/log/haproxy.log && chmod 640 /var/log/haproxy.log")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			errors = append(errors, "Failed to create log file: "+err.Error()+" "+strings.TrimSpace(string(out)))
+		}
+	}
+
+	// Restart rsyslog to pick up changes
+	exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+		"systemctl", "restart", "rsyslog").Run()
+
+	if len(errors) > 0 {
+		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape(strings.Join(errors, "; ")), http.StatusSeeOther)
+		return
+	}
+
+	http.Redirect(w, r, "/admin/setup?msg=HAProxy+logging+fixed", http.StatusSeeOther)
 }
 
 // checkSystemRequirements checks for required packages and system capabilities

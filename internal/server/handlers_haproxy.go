@@ -38,6 +38,14 @@ func (s *Server) handleHAProxyStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	configPreview := s.haproxy.GenerateConfig(s.config.HAProxyHTTPPort, s.config.HAProxyHTTPSPort, sslConfig)
 
+	// Collect services with deploy enabled
+	var deployServices []config.Service
+	for _, svc := range s.config.Services {
+		if svc.Proxy != nil && svc.Proxy.Deploy != nil {
+			deployServices = append(deployServices, svc)
+		}
+	}
+
 	data := map[string]interface{}{
 		"Config":          s.config,
 		"HAProxyStatus":   hapStatus,
@@ -48,6 +56,7 @@ func (s *Server) handleHAProxyStatus(w http.ResponseWriter, r *http.Request) {
 		"SSLStatus":       sslStatus,
 		"AWSProfiles":     awsProfiles,
 		"ConfigPreview":   configPreview,
+		"DeployServices":  deployServices,
 		"Message":         r.URL.Query().Get("msg"),
 		"Error":           r.URL.Query().Get("err"),
 		"CSRFToken":       s.getCSRFToken(r),
@@ -141,6 +150,13 @@ func (s *Server) handleHAProxySaveSettings(w http.ResponseWriter, r *http.Reques
 	s.syncHAProxyBackends()
 
 	http.Redirect(w, r, "/admin/haproxy?msg=Settings+saved", http.StatusSeeOther)
+}
+
+func (s *Server) handleDeployScript(w http.ResponseWriter, r *http.Request) {
+	// Auth handled by backupAuthMiddleware (Bearer token or session cookie)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=deploy-service")
+	w.Write([]byte(deployScriptContent))
 }
 
 func (s *Server) syncHAProxyBackends() {

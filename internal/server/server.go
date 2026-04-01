@@ -1075,6 +1075,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/logout", s.handleLogout)
 	mux.HandleFunc("/invite/", s.handleInvite)
 
+	// Deploy API (per-service token auth, no admin/CSRF)
+	mux.HandleFunc("/api/deploy/", s.handleDeployAPI)
+
 	// Admin routes - all wrapped with CSRF middleware
 	mux.HandleFunc("/admin", s.csrfMiddleware(s.handleAdmin))
 	mux.HandleFunc("/admin/client", s.csrfMiddleware(s.handleAddClient))
@@ -1116,6 +1119,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/admin/setup/enable-service", s.csrfMiddleware(s.handleEnableService))
 	mux.HandleFunc("/admin/setup/create-wg-config", s.csrfMiddleware(s.handleCreateWGConfig))
 	mux.HandleFunc("/admin/setup/test-connectivity", s.csrfMiddleware(s.handleTestConnectivity))
+	mux.HandleFunc("/admin/setup/fix-haproxy-logging", s.csrfMiddleware(s.handleFixHAProxyLogging))
 	mux.HandleFunc("/admin/help", s.csrfMiddleware(s.handleHelp))
 
 	mux.HandleFunc("/admin/haproxy", s.csrfMiddleware(s.handleHAProxyStatus))
@@ -1125,6 +1129,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/admin/haproxy/reload", s.csrfMiddleware(s.handleHAProxyReload))
 	mux.HandleFunc("/admin/haproxy/start", s.csrfMiddleware(s.handleHAProxyStart))
 	mux.HandleFunc("/admin/haproxy/settings", s.csrfMiddleware(s.handleHAProxySaveSettings))
+	mux.HandleFunc("/admin/haproxy/deploy-script", s.handleDeployScript) // public — script has no secrets
 
 	// SSL/Let's Encrypt routes
 	mux.HandleFunc("/admin/ssl/domain", s.csrfMiddleware(s.handleSSLAddDomain))
@@ -1180,6 +1185,28 @@ func (s *Server) ensureServicesRunning() {
 	if s.config.DNSMasqEnabled {
 		fmt.Print("Checking dnsmasq... ")
 		dnsStatus := s.dns.Status()
+
+		// Regenerate config if interfaces are missing
+		if len(dnsStatus.MissingInterfaces) > 0 {
+			fmt.Printf("STALE CONFIG (missing interfaces: %v)\n", dnsStatus.MissingInterfaces)
+			fmt.Print("  Regenerating dnsmasq config... ")
+			if err := s.dns.WriteConfig(); err != nil {
+				fmt.Printf("FAILED: %v\n", err)
+			} else {
+				fmt.Println("OK")
+				s.dns.SetMappings(s.config.DeriveDNSMappings())
+				if dnsStatus.Running {
+					fmt.Print("  Restarting dnsmasq... ")
+					if err := s.dns.Reload(); err != nil {
+						fmt.Printf("FAILED: %v\n", err)
+					} else {
+						fmt.Println("OK")
+					}
+				}
+				dnsStatus = s.dns.Status() // re-check
+			}
+		}
+
 		if !dnsStatus.Running {
 			fmt.Println("NOT RUNNING")
 			fmt.Print("  Attempting to start dnsmasq... ")
@@ -1188,7 +1215,7 @@ func (s *Server) ensureServicesRunning() {
 			} else {
 				fmt.Println("OK")
 			}
-		} else {
+		} else if len(dnsStatus.MissingInterfaces) == 0 {
 			fmt.Println("OK")
 		}
 	}

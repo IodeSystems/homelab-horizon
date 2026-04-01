@@ -148,15 +148,21 @@ func (m *Monitor) Stop() {
 	m.cancel()
 }
 
-// GetStatuses returns all current check statuses
+// GetStatuses returns all current check statuses, ordered:
+// manual checks first (in config order), then auto-generated (alphabetical).
 func (m *Monitor) GetStatuses() []CheckStatus {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	result := make([]CheckStatus, 0, len(m.statuses))
-	for _, s := range m.statuses {
-		result = append(result, *s)
+	allChecks := m.getAllChecks()
+	result := make([]CheckStatus, 0, len(allChecks))
+
+	for _, check := range allChecks {
+		if s, ok := m.statuses[check.Name]; ok {
+			result = append(result, *s)
+		}
 	}
+
 	return result
 }
 
@@ -377,17 +383,20 @@ func (m *Monitor) sendNotification(check config.ServiceCheck, checkErr error) {
 	resp.Body.Close()
 }
 
-// RunCheck manually runs a check and returns the result
+// RunCheck manually runs a check and returns the result.
+// Searches both manual and auto-generated checks.
 func (m *Monitor) RunCheck(name string) *CheckStatus {
 	m.mu.RLock()
+	allChecks := m.getAllChecks()
+	m.mu.RUnlock()
+
 	var check *config.ServiceCheck
-	for i := range m.config.ServiceChecks {
-		if m.config.ServiceChecks[i].Name == name {
-			check = &m.config.ServiceChecks[i]
+	for i := range allChecks {
+		if allChecks[i].Name == name {
+			check = &allChecks[i]
 			break
 		}
 	}
-	m.mu.RUnlock()
 
 	if check == nil {
 		return nil

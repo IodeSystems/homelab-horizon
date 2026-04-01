@@ -55,7 +55,15 @@ const haproxyTemplate = `<!DOCTYPE html>
                 <tr>
                     <td data-label="Service"><strong>{{.Name}}</strong></td>
                     <td data-label="Domain"><code>{{.DomainMatch}}</code></td>
-                    <td data-label="Backend"><code>{{.Server}}</code></td>
+                    <td data-label="Backend">
+                        {{if .Deploy}}
+                            <code>{{.CurrentServer}}</code> <span style="color: #4ecca3; font-size: 0.8em;">current</span><br>
+                            <code>{{.NextServer}}</code> <span style="color: #e94560; font-size: 0.8em;">next</span>
+                            <br><span style="font-size: 0.75em; color: #888;">balance: {{if .DeployBalance}}{{.DeployBalance}}{{else}}first{{end}}</span>
+                        {{else}}
+                            <code>{{.Server}}</code>
+                        {{end}}
+                    </td>
                     <td data-label="Health">{{if .HTTPCheck}}{{if .CheckPath}}{{.CheckPath}}{{else}}/{{end}}{{else}}-{{end}}</td>
                     <td data-label="Status">
                         {{if .Healthy}}
@@ -72,7 +80,15 @@ const haproxyTemplate = `<!DOCTYPE html>
                 <tr>
                     <td data-label="Service"><strong>{{.Name}}</strong></td>
                     <td data-label="Domain"><code>{{.DomainMatch}}</code></td>
-                    <td data-label="Backend"><code>{{.Server}}</code></td>
+                    <td data-label="Backend">
+                        {{if .Deploy}}
+                            <code>{{.CurrentServer}}</code> <span style="color: #4ecca3; font-size: 0.8em;">current</span><br>
+                            <code>{{.NextServer}}</code> <span style="color: #e94560; font-size: 0.8em;">next</span>
+                            <br><span style="font-size: 0.75em; color: #888;">balance: {{if .DeployBalance}}{{.DeployBalance}}{{else}}first{{end}}</span>
+                        {{else}}
+                            <code>{{.Server}}</code>
+                        {{end}}
+                    </td>
                     <td data-label="Health">{{if .HTTPCheck}}{{if .CheckPath}}{{.CheckPath}}{{else}}/{{end}}{{else}}-{{end}}</td>
                 </tr>
                 {{end}}
@@ -106,6 +122,31 @@ const haproxyTemplate = `<!DOCTYPE html>
                 <pre style="margin-top: 0.5rem; max-height: 400px; overflow-y: auto;">{{.ConfigPreview}}</pre>
             </details>
         </div>
+
+        {{if .DeployServices}}
+        <div class="card">
+            <h2>Deploy Management</h2>
+            <p style="color: #888; margin-bottom: 1rem;">Services with blue-green deploy enabled. Use the deploy script to manage slot states.</p>
+            <table>
+                <thead><tr><th>Service</th><th>Backend (current)</th><th>Backend (next)</th><th>Balance</th><th>Active</th><th></th></tr></thead>
+                <tbody>
+                {{range .DeployServices}}
+                <tr>
+                    <td><strong>{{.Name}}</strong></td>
+                    <td><code>{{.Proxy.Backend}}</code></td>
+                    <td><code>{{.Proxy.Deploy.NextBackend}}</code></td>
+                    <td>{{if .Proxy.Deploy.Balance}}{{.Proxy.Deploy.Balance}}{{else}}first{{end}}</td>
+                    <td>slot {{if .Proxy.Deploy.ActiveSlot}}{{.Proxy.Deploy.ActiveSlot}}{{else}}a{{end}}</td>
+                    <td><button type="button" class="secondary" style="padding: 0.25rem 0.5rem; font-size: 0.85em;" onclick="showDeployInfo('{{.Name}}', '{{.Proxy.Deploy.Token}}')">Script</button></td>
+                </tr>
+                {{end}}
+                </tbody>
+            </table>
+            <div style="margin-top: 0.5rem;">
+                <a href="/admin/haproxy/deploy-script"><button type="button" class="secondary">Download deploy-service script</button></a>
+            </div>
+        </div>
+        {{end}}
 
         <div class="card">
             <h2>Settings</h2>
@@ -209,6 +250,20 @@ const haproxyTemplate = `<!DOCTYPE html>
         </div>
     </div>
 
+    <div id="deploy-info-modal" class="modal-overlay" onclick="if(event.target===this)closeDeployInfoModal()">
+        <div class="modal-content" style="max-width: 700px;">
+            <button class="modal-close" onclick="closeDeployInfoModal()">&times;</button>
+            <h2 style="margin-bottom: 1rem;">Deploy Script — <span id="deploy-info-name"></span></h2>
+            <div style="margin-bottom: 1rem;">
+                <strong>Token:</strong> <code id="deploy-info-token" style="user-select: all;"></code>
+            </div>
+            <pre id="deploy-info-examples" style="font-size: 0.85em; overflow-x: auto; background: #0a0a1a; padding: 1rem; border-radius: 4px; white-space: pre-wrap;"></pre>
+            <div style="margin-top: 1rem;">
+                <a href="/admin/haproxy/deploy-script"><button type="button" class="secondary">Download Script</button></a>
+            </div>
+        </div>
+    </div>
+
     <div id="cert-info-modal" class="modal-overlay" onclick="if(event.target===this)closeCertInfoModal()">
         <div class="modal-content" style="max-width: 600px;">
             <button class="modal-close" onclick="closeCertInfoModal()">&times;</button>
@@ -280,6 +335,36 @@ const haproxyTemplate = `<!DOCTYPE html>
 
     function closeCertInfoModal() {
         document.getElementById('cert-info-modal').classList.remove('active');
+    }
+
+    function showDeployInfo(name, token) {
+        var modal = document.getElementById('deploy-info-modal');
+        document.getElementById('deploy-info-name').textContent = name;
+        document.getElementById('deploy-info-token').textContent = token;
+
+        var baseUrl = window.location.protocol + '//' + window.location.host;
+        var examples = document.getElementById('deploy-info-examples');
+        examples.innerHTML =
+            '<strong>Setup:</strong>\n' +
+            'curl -sO ' + baseUrl + '/admin/haproxy/deploy-script\n' +
+            'chmod +x deploy-service\n' +
+            'echo "' + token + '" > ~/deploy.secret.token\n\n' +
+            '<strong>Status:</strong>\n' +
+            './deploy-service ' + baseUrl + ' - status\n\n' +
+            '<strong>Rolling deploy:</strong>\n' +
+            './deploy-service ' + baseUrl + ' - rolling start\n' +
+            '# ... deploy to next backend ...\n' +
+            './deploy-service ' + baseUrl + ' - rolling continue\n' +
+            '# ... deploy to current backend ...\n' +
+            './deploy-service ' + baseUrl + ' - rolling finalize\n\n' +
+            '<strong>Blue-green promote:</strong>\n' +
+            './deploy-service ' + baseUrl + ' - promote\n';
+
+        modal.classList.add('active');
+    }
+
+    function closeDeployInfoModal() {
+        document.getElementById('deploy-info-modal').classList.remove('active');
     }
 
     // Auto-inject CSRF token into all POST forms

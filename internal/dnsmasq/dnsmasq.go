@@ -61,7 +61,13 @@ func (d *DNSMasq) WriteConfig() error {
 	config.WriteString("no-resolv\n\n")
 
 	config.WriteString("# Cache settings\n")
-	config.WriteString("cache-size=1000\n")
+	config.WriteString("cache-size=1000\n\n")
+
+	// Include hosts/address file if it's separate from the main config
+	if d.hostsPath != "" && d.hostsPath != d.configPath {
+		config.WriteString("# DNS address mappings\n")
+		config.WriteString(fmt.Sprintf("conf-file=%s\n", d.hostsPath))
+	}
 
 	if err := os.WriteFile(d.configPath, []byte(config.String()), 0644); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
@@ -241,10 +247,11 @@ func systemctlWithJournal(action, unit string) error {
 }
 
 type Status struct {
-	Running      bool
-	Enabled      bool
-	ConfigExists bool
-	Error        string
+	Running           bool
+	Enabled           bool
+	ConfigExists      bool
+	Error             string
+	MissingInterfaces []string // Configured interfaces not found in dnsmasq config
 }
 
 func (d *DNSMasq) Status() Status {
@@ -264,7 +271,37 @@ func (d *DNSMasq) Status() Status {
 		status.ConfigExists = true
 	}
 
+	// Check if all configured interfaces are present in the config file
+	if status.ConfigExists {
+		status.MissingInterfaces = d.checkMissingInterfaces()
+	}
+
 	return status
+}
+
+// checkMissingInterfaces compares configured interfaces against what's in the config file
+func (d *DNSMasq) checkMissingInterfaces() []string {
+	data, err := os.ReadFile(d.configPath)
+	if err != nil {
+		return nil
+	}
+
+	// Collect interface= lines from the config file
+	onDisk := make(map[string]bool)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "interface=") {
+			onDisk[strings.TrimPrefix(line, "interface=")] = true
+		}
+	}
+
+	var missing []string
+	for _, iface := range d.interfaces {
+		if !onDisk[iface] {
+			missing = append(missing, iface)
+		}
+	}
+	return missing
 }
 
 func (d *DNSMasq) UpdateUpstream(servers []string) {

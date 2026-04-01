@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -210,6 +211,18 @@ type ProxyConfig struct {
 	Backend      string       `json:"backend"`                 // host:port for HAProxy to forward to
 	HealthCheck  *HealthCheck `json:"health_check,omitempty"`  // Optional health check
 	InternalOnly bool         `json:"internal_only,omitempty"` // Restrict to local network access only
+	Deploy       *DeployConfig `json:"deploy,omitempty"`       // Blue-green deploy with current/next slots
+}
+
+// DeployConfig enables blue-green deployment with two server slots.
+// Slot A uses the port from ProxyConfig.Backend. Slot B uses NextBackend.
+// Health checks use ProxyConfig.HealthCheck.Path for both slots.
+// The deploy API uses Token for auth and manages drain/down/up transitions.
+type DeployConfig struct {
+	NextBackend string `json:"next_backend"`          // Slot B address host:port (Slot A = ProxyConfig.Backend)
+	Token       string `json:"token"`                 // Per-service deploy token
+	ActiveSlot  string `json:"active_slot,omitempty"` // "a" or "b" — which slot is currently serving (default "a")
+	Balance     string `json:"balance,omitempty"`     // "first" (active/standby) or "roundrobin" (even). Default "first".
 }
 
 // HealthCheck configures HAProxy health checks for a backend
@@ -224,6 +237,40 @@ type ServiceCheck struct {
 	Target   string `json:"target"`             // IP/hostname for ping, URL for http
 	Interval int    `json:"interval,omitempty"` // Check interval in seconds (default 300)
 	Enabled  bool   `json:"enabled"`            // Whether check is active (false = ignored)
+}
+
+// CurrentServer returns the host:port for the active slot.
+// backend is ProxyConfig.Backend (slot A's address).
+func (d *DeployConfig) CurrentServer(backend string) string {
+	if d.ActiveSlot == "b" {
+		return d.NextBackend
+	}
+	return backend
+}
+
+// InactiveServer returns the host:port for the inactive slot.
+// backend is ProxyConfig.Backend (slot A's address).
+func (d *DeployConfig) InactiveServer(backend string) string {
+	if d.ActiveSlot == "b" {
+		return backend
+	}
+	return d.NextBackend
+}
+
+// Swap flips the active slot
+func (d *DeployConfig) Swap() {
+	if d.ActiveSlot == "b" {
+		d.ActiveSlot = "a"
+	} else {
+		d.ActiveSlot = "b"
+	}
+}
+
+// GenerateDeployToken creates a random 32-char hex token
+func GenerateDeployToken() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return fmt.Sprintf("%x", b)
 }
 
 func Default() *Config {
@@ -398,10 +445,33 @@ func GetInterfaceIP(ifaceName string) (string, error) {
 	return "", fmt.Errorf("no IPv4 address found on %s", ifaceName)
 }
 
+// DetectDefaultInterface returns the name of the network interface used for the default route.
+func DetectDefaultInterface() string {
+	data, err := os.ReadFile("/proc/net/route")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		// Destination 00000000 = default route
+		if len(fields) >= 2 && fields[1] == "00000000" {
+			return fields[0]
+		}
+	}
+	return ""
+}
+
 // DetectLocalInterface attempts to detect the local interface IP
-// Tries eth0 first, then falls back to deriving from VPN range
+// Uses the default route interface, falls back to eth0, then VPN range
 func (c *Config) DetectLocalInterface() string {
-	// Try eth0 first
+	// Try the default route interface first
+	if iface := DetectDefaultInterface(); iface != "" {
+		if ip, err := GetInterfaceIP(iface); err == nil {
+			return ip
+		}
+	}
+
+	// Try eth0 as fallback
 	if ip, err := GetInterfaceIP("eth0"); err == nil {
 		return ip
 	}
@@ -460,8 +530,12 @@ func (c *Config) DeriveAllowedIPs() string {
 		cidrs = append(cidrs, c.VPNRange)
 	}
 
-	// Try to detect local network from eth0
-	if localCIDR := GetLocalNetworkCIDR("eth0"); localCIDR != "" {
+	// Try to detect local network from the default route interface, then fall back to eth0
+	iface := DetectDefaultInterface()
+	if iface == "" {
+		iface = "eth0"
+	}
+	if localCIDR := GetLocalNetworkCIDR(iface); localCIDR != "" {
 		// Don't duplicate if it's the same as VPN range
 		if localCIDR != c.VPNRange {
 			cidrs = append(cidrs, localCIDR)
@@ -661,4 +735,56 @@ Alternatively, you can use the AWS CLI:
     --policy-name homelab-horizon-route53 \
     --policy-document file://policy.json
 `
+}
+
+// systemdServiceTemplate is the single source of truth for the systemd service file.
+// Args: workDir, execStart, workDir, workDir
+const systemdServiceTemplate = `[Unit]
+Description=Homelab Horizon - Split-Horizon DNS & VPN Management
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=+/bin/mkdir -p %s /etc/letsencrypt /etc/haproxy/certs
+ExecStart=%s
+WorkingDirectory=%s
+Restart=on-failure
+RestartSec=5
+User=root
+Group=root
+
+# File system isolation
+ProtectSystem=strict
+ReadWritePaths=-/etc/wireguard -/etc/dnsmasq.d -/etc/haproxy -/etc/letsencrypt -/etc/systemd/system -/proc/sys/net/ipv4 -/var/lib/haproxy -%s
+ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelTunables=true
+
+# Network capabilities for WireGuard
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+# Security restrictions
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target
+`
+
+// GenerateServiceFile produces the systemd service file content.
+// binaryPath is the absolute path to the homelab-horizon binary.
+// configPath is the absolute path to the config file (may be empty).
+func GenerateServiceFile(binaryPath, configPath string) string {
+	execStart := binaryPath
+	workDir := "/etc/homelab-horizon"
+
+	if configPath != "" {
+		execStart = fmt.Sprintf("%s -config %s", binaryPath, configPath)
+		dir := filepath.Dir(configPath)
+		if dir != "" && dir != "." {
+			workDir = dir
+		}
+	}
+
+	return fmt.Sprintf(systemdServiceTemplate, workDir, execStart, workDir, workDir)
 }

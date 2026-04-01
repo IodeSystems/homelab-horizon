@@ -18,6 +18,12 @@ type Backend struct {
 	HTTPCheck    bool   `json:"http_check"`
 	CheckPath    string `json:"check_path"`    // e.g., "/health"
 	InternalOnly bool   `json:"internal_only"` // Restrict to local network access only
+
+	// Blue-green deploy fields (when Deploy is true, CurrentServer/NextServer are used instead of Server)
+	Deploy        bool   `json:"deploy,omitempty"`
+	CurrentServer string `json:"current_server,omitempty"`  // host:port for active slot
+	NextServer    string `json:"next_server,omitempty"`     // host:port for inactive slot
+	DeployBalance string `json:"deploy_balance,omitempty"`  // "first" or "roundrobin" (default "first")
 }
 
 // BackendStatus contains runtime status of a backend
@@ -398,22 +404,50 @@ listen stats
 		aclName := sanitizeName(b.Name)
 		sb.WriteString(fmt.Sprintf("backend %s_backend\n", aclName))
 		sb.WriteString("    mode http\n")
-		sb.WriteString("    balance roundrobin\n")
 
-		if b.HTTPCheck {
+		if b.Deploy {
+			balance := b.DeployBalance
+			if balance == "" {
+				balance = "first"
+			}
+			sb.WriteString(fmt.Sprintf("    balance %s\n", balance))
 			checkPath := b.CheckPath
 			if checkPath == "" {
 				checkPath = "/"
 			}
 			sb.WriteString(fmt.Sprintf("    option httpchk GET %s\n", checkPath))
-			sb.WriteString(fmt.Sprintf("    server %s %s check\n", aclName, b.Server))
+			sb.WriteString("    http-check expect status 200\n")
+			if balance == "roundrobin" {
+				// Both slots enabled, traffic split evenly
+				sb.WriteString(fmt.Sprintf("    server current %s check inter 3s fall 2 rise 2\n", b.CurrentServer))
+				sb.WriteString(fmt.Sprintf("    server next %s check inter 3s fall 2 rise 2\n", b.NextServer))
+			} else {
+				// First available: next starts disabled, only gets traffic when current is down/draining
+				sb.WriteString(fmt.Sprintf("    server current %s check inter 3s fall 2 rise 2\n", b.CurrentServer))
+				sb.WriteString(fmt.Sprintf("    server next %s check inter 3s fall 2 rise 2 disabled\n", b.NextServer))
+			}
 		} else {
-			sb.WriteString(fmt.Sprintf("    server %s %s\n", aclName, b.Server))
+			sb.WriteString("    balance roundrobin\n")
+			if b.HTTPCheck {
+				checkPath := b.CheckPath
+				if checkPath == "" {
+					checkPath = "/"
+				}
+				sb.WriteString(fmt.Sprintf("    option httpchk GET %s\n", checkPath))
+				sb.WriteString(fmt.Sprintf("    server %s %s check\n", aclName, b.Server))
+			} else {
+				sb.WriteString(fmt.Sprintf("    server %s %s\n", aclName, b.Server))
+			}
 		}
 		sb.WriteString("\n")
 	}
 
 	return sb.String()
+}
+
+// SanitizeName converts a service name to a safe HAProxy identifier
+func SanitizeName(name string) string {
+	return sanitizeName(name)
 }
 
 func sanitizeName(name string) string {
@@ -460,6 +494,86 @@ func (h *HAProxy) Reload() error {
 func (h *HAProxy) Start() error {
 	cmd := exec.Command("systemctl", "start", "haproxy")
 	return cmd.Run()
+}
+
+// SetServerState sends a state change command to the HAProxy admin socket.
+// backend is the backend name (e.g., "myservice_backend"), server is "current" or "next",
+// state is "ready", "drain", or "maint".
+func (h *HAProxy) SetServerState(backend, server, state string) error {
+	conn, err := net.DialTimeout("unix", h.statsSocket, 2*time.Second)
+	if err != nil {
+		return fmt.Errorf("connecting to haproxy socket: %w", err)
+	}
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	cmd := fmt.Sprintf("set server %s/%s state %s\n", backend, server, state)
+	if _, err := conn.Write([]byte(cmd)); err != nil {
+		return fmt.Errorf("writing to haproxy socket: %w", err)
+	}
+
+	// Read response
+	buf := make([]byte, 4096)
+	n, _ := conn.Read(buf)
+	resp := strings.TrimSpace(string(buf[:n]))
+	if resp != "" {
+		return fmt.Errorf("haproxy: %s", resp)
+	}
+	return nil
+}
+
+// GetServerState queries the HAProxy admin socket for server states in a backend.
+// Returns a map of server name -> state (e.g., "ready", "drain", "maint").
+func (h *HAProxy) GetServerState(backend string) (map[string]string, error) {
+	conn, err := net.DialTimeout("unix", h.statsSocket, 2*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to haproxy socket: %w", err)
+	}
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	cmd := fmt.Sprintf("show servers state %s\n", backend)
+	if _, err := conn.Write([]byte(cmd)); err != nil {
+		return nil, fmt.Errorf("writing to haproxy socket: %w", err)
+	}
+
+	states := make(map[string]string)
+	scanner := bufio.NewScanner(conn)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "#") || line == "" {
+			continue
+		}
+		// Format: be_id be_name srv_id srv_name srv_addr srv_op_state srv_admin_state ...
+		// srv_op_state: 0=stopped, 2=running
+		// srv_admin_state bitmask: 0=ready, bit0=FMAINT, bit5=FDRAIN
+		fields := strings.Fields(line)
+		if len(fields) < 7 {
+			continue
+		}
+		srvName := fields[3]
+		opState := fields[5]
+		adminState := fields[6]
+
+		switch {
+		case adminState != "0" && adminState != "6": // has MAINT bit
+			states[srvName] = "maint"
+		case adminState == "6" || strings.Contains(adminState, "drain"):
+			states[srvName] = "drain"
+		case opState == "2":
+			states[srvName] = "up"
+		case opState == "0":
+			states[srvName] = "down"
+		default:
+			states[srvName] = "unknown"
+		}
+	}
+	return states, nil
+}
+
+// GetStatsSocket returns the stats socket path
+func (h *HAProxy) GetStatsSocket() string {
+	return h.statsSocket
 }
 
 // Available checks if haproxy is installed
