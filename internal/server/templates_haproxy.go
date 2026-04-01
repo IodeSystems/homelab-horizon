@@ -58,7 +58,7 @@ const haproxyTemplate = `<!DOCTYPE html>
                     <td data-label="Backend">
                         {{if .Deploy}}
                             <code>{{.CurrentServer}}</code> <span style="color: #4ecca3; font-size: 0.8em;">current</span><br>
-                            <code>{{.NextServer}}</code> <span style="color: #e94560; font-size: 0.8em;">next</span>
+                            <code>{{.NextServer}}</code> <span style="color: #6c9bce; font-size: 0.8em;">next</span>
                             <br><span style="font-size: 0.75em; color: #888;">balance: {{if .DeployBalance}}{{.DeployBalance}}{{else}}first{{end}}</span>
                         {{else}}
                             <code>{{.Server}}</code>
@@ -83,7 +83,7 @@ const haproxyTemplate = `<!DOCTYPE html>
                     <td data-label="Backend">
                         {{if .Deploy}}
                             <code>{{.CurrentServer}}</code> <span style="color: #4ecca3; font-size: 0.8em;">current</span><br>
-                            <code>{{.NextServer}}</code> <span style="color: #e94560; font-size: 0.8em;">next</span>
+                            <code>{{.NextServer}}</code> <span style="color: #6c9bce; font-size: 0.8em;">next</span>
                             <br><span style="font-size: 0.75em; color: #888;">balance: {{if .DeployBalance}}{{.DeployBalance}}{{else}}first{{end}}</span>
                         {{else}}
                             <code>{{.Server}}</code>
