@@ -445,6 +445,9 @@ const adminTemplate = `<!DOCTYPE html>
                         {{if $svc.Proxy}}
                             <span class="status-ok" title="HAProxy backend">⬤</span>
                             <code style="font-size: 0.85em;">{{$svc.Proxy.Backend}}</code>
+                            {{if $svc.Proxy.Deploy}}
+                                <br><span style="font-size: 0.8em; color: #4ecca3;" title="Blue-green deploy enabled">⇄ deploy:{{$svc.Proxy.Deploy.ActiveSlot}} next→{{$svc.Proxy.Deploy.NextBackend}}</span>
+                            {{end}}
                         {{else}}
                             <span style="color:#666">-</span>
                         {{end}}
@@ -518,6 +521,18 @@ const adminTemplate = `<!DOCTYPE html>
                                 <input type="checkbox" name="internal_only" style="width: auto;">
                                 Internal only (local network access)
                             </label>
+                            <label style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;">
+                                <input type="checkbox" name="deploy_enabled" style="width: auto;" onchange="toggleDeploy(this, 'add')">
+                                Enable blue-green deploy (current/next)
+                            </label>
+                            <div id="add-deploy-opts" style="display: none; padding-left: 1rem; border-left: 2px solid #0f3460; margin-top: 0.5rem;">
+                                <input type="text" name="deploy_next_port" placeholder="Next slot backend (e.g., 10.0.0.5:8081)">
+                                <select name="deploy_balance" style="margin-top: 0.5rem;">
+                                    <option value="first">First available (active/standby)</option>
+                                    <option value="roundrobin">Round robin (even split)</option>
+                                </select>
+                                <p style="font-size: 0.8em; color: #a0a0c0; margin: 0.25rem 0;">Current slot uses the backend port. Health check is shared. Token generated automatically.</p>
+                            </div>
                         </div>
                     </div>
 
@@ -593,6 +608,18 @@ const adminTemplate = `<!DOCTYPE html>
                             <input type="checkbox" name="internal_only" id="edit-svc-internal-only" style="width: auto;">
                             Internal only (local network access)
                         </label>
+                        <label style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;">
+                            <input type="checkbox" name="deploy_enabled" id="edit-svc-deploy" style="width: auto;" onchange="toggleDeploy(this, 'edit')">
+                            Enable blue-green deploy (current/next)
+                        </label>
+                        <div id="edit-deploy-opts" style="display: none; padding-left: 1rem; border-left: 2px solid #0f3460; margin-top: 0.5rem;">
+                            <input type="text" name="deploy_next_port" id="edit-svc-deploy-next-port" placeholder="Next slot backend (e.g., 10.0.0.5:8081)">
+                            <select name="deploy_balance" id="edit-svc-deploy-balance" style="margin-top: 0.5rem;">
+                                <option value="first">First available (active/standby)</option>
+                                <option value="roundrobin">Round robin (even split)</option>
+                            </select>
+                            <div id="edit-deploy-token" style="font-size: 0.8em; color: #a0a0c0; margin-top: 0.25rem;"></div>
+                        </div>
                     </div>
                 </div>
 
@@ -1540,6 +1567,10 @@ const adminTemplate = `<!DOCTYPE html>
         document.getElementById('add-external-opts').style.display = checkbox.checked ? 'block' : 'none';
     }
 
+    function toggleDeploy(checkbox, prefix) {
+        document.getElementById(prefix + '-deploy-opts').style.display = checkbox.checked ? 'block' : 'none';
+    }
+
     function toggleProxy(checkbox) {
         document.getElementById('add-proxy-opts').style.display = checkbox.checked ? 'block' : 'none';
         // If enabling proxy, suggest setting internal DNS to haproxy mode
@@ -1667,10 +1698,26 @@ const adminTemplate = `<!DOCTYPE html>
             document.getElementById('edit-svc-proxy-backend').value = svc.proxy.backend || '';
             document.getElementById('edit-svc-health').value = (svc.proxy.health_check && svc.proxy.health_check.path) || '';
             document.getElementById('edit-svc-internal-only').checked = svc.proxy.internal_only || false;
+            // Deploy fields
+            var hasDeploy = svc.proxy.deploy != null;
+            document.getElementById('edit-svc-deploy').checked = hasDeploy;
+            document.getElementById('edit-deploy-opts').style.display = hasDeploy ? 'block' : 'none';
+            if (hasDeploy) {
+                document.getElementById('edit-svc-deploy-next-port').value = svc.proxy.deploy.next_backend || '';
+                document.getElementById('edit-svc-deploy-balance').value = svc.proxy.deploy.balance || 'first';
+                var tokenDiv = document.getElementById('edit-deploy-token');
+                tokenDiv.innerHTML = 'Deploy token: <code>' + (svc.proxy.deploy.token || 'none') + '</code><br>Active slot: <strong>' + (svc.proxy.deploy.active_slot || 'a') + '</strong>';
+            } else {
+                document.getElementById('edit-svc-deploy-next-port').value = '';
+                document.getElementById('edit-svc-deploy-balance').value = 'first';
+                document.getElementById('edit-deploy-token').innerHTML = '';
+            }
         } else {
             document.getElementById('edit-svc-proxy-backend').value = '';
             document.getElementById('edit-svc-health').value = '';
             document.getElementById('edit-svc-internal-only').checked = false;
+            document.getElementById('edit-svc-deploy').checked = false;
+            document.getElementById('edit-deploy-opts').style.display = 'none';
         }
 
         document.getElementById('edit-service-modal').classList.add('active');

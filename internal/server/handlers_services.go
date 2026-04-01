@@ -67,6 +67,22 @@ func (s *Server) handleAddService(w http.ResponseWriter, r *http.Request) {
 		if checkPath := strings.TrimSpace(r.FormValue("health_check")); checkPath != "" {
 			svc.Proxy.HealthCheck = &config.HealthCheck{Path: checkPath}
 		}
+		// Deploy (blue-green) configuration
+		if r.FormValue("deploy_enabled") == "on" {
+			nextBackend := strings.TrimSpace(r.FormValue("deploy_next_port"))
+			if nextBackend != "" {
+				balance := r.FormValue("deploy_balance")
+				if balance != "roundrobin" {
+					balance = "first"
+				}
+				svc.Proxy.Deploy = &config.DeployConfig{
+					NextBackend: nextBackend,
+					Token:       config.GenerateDeployToken(),
+					ActiveSlot:  "a",
+					Balance:     balance,
+				}
+			}
+		}
 	}
 
 	if err := s.config.AddService(svc); err != nil {
@@ -129,12 +145,44 @@ func (s *Server) handleEditService(w http.ResponseWriter, r *http.Request) {
 			// Update Proxy
 			proxyBackend := strings.TrimSpace(r.FormValue("proxy_backend"))
 			if r.FormValue("proxy_enabled") == "on" && proxyBackend != "" {
+				// Preserve existing deploy token if re-enabling deploy
+				var existingDeploy *config.DeployConfig
+				if s.config.Services[i].Proxy != nil {
+					existingDeploy = s.config.Services[i].Proxy.Deploy
+				}
 				s.config.Services[i].Proxy = &config.ProxyConfig{
 					Backend:      proxyBackend,
 					InternalOnly: r.FormValue("internal_only") == "on",
 				}
 				if checkPath := strings.TrimSpace(r.FormValue("health_check")); checkPath != "" {
 					s.config.Services[i].Proxy.HealthCheck = &config.HealthCheck{Path: checkPath}
+				}
+				// Deploy (blue-green) configuration
+				if r.FormValue("deploy_enabled") == "on" {
+					nextBackend := strings.TrimSpace(r.FormValue("deploy_next_port"))
+					if nextBackend != "" {
+						token := config.GenerateDeployToken()
+						activeSlot := "a"
+						// Preserve existing token and active slot
+						if existingDeploy != nil {
+							if existingDeploy.Token != "" {
+								token = existingDeploy.Token
+							}
+							if existingDeploy.ActiveSlot != "" {
+								activeSlot = existingDeploy.ActiveSlot
+							}
+						}
+						balance := r.FormValue("deploy_balance")
+						if balance != "roundrobin" {
+							balance = "first"
+						}
+						s.config.Services[i].Proxy.Deploy = &config.DeployConfig{
+							NextBackend: nextBackend,
+							Token:       token,
+							ActiveSlot:  activeSlot,
+							Balance:     balance,
+						}
+					}
 				}
 			} else {
 				s.config.Services[i].Proxy = nil

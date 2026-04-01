@@ -149,6 +149,21 @@ const setupTemplate = `<!DOCTYPE html>
                         <div style="color: #888; font-size: 0.85em; margin-top: 0.25rem;">IPv6 connectivity status - helps diagnose slow DNS or connection issues</div>
                     </td>
                 </tr>
+                {{range .HealthChecks}}
+                {{if not .OK}}
+                <tr>
+                    <td style="vertical-align: top;">{{.Name}}</td>
+                    <td>
+                        <span class="status-err">● Problem</span>
+                        <div style="color: #e74c3c; font-size: 0.8em; margin-top: 0.15rem;">{{.Error}}</div>
+                        <form method="POST" action="{{.FixAction}}" style="display:inline; margin-left: 0.5rem;">
+                            <button class="success" type="submit" style="padding: 0.25rem 0.5rem; font-size: 0.85em;">{{.FixLabel}}</button>
+                        </form>
+                        <div style="color: #888; font-size: 0.85em; margin-top: 0.25rem;">{{.Description}}</div>
+                    </td>
+                </tr>
+                {{end}}
+                {{end}}
             </table>
             <form method="POST" action="/admin/reload" style="display:inline">
                 <button type="submit" class="secondary">Reload WireGuard</button>

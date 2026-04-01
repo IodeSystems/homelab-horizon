@@ -78,6 +78,16 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 			b.HTTPCheck = true
 			b.CheckPath = svc.Proxy.HealthCheck.Path
 		}
+
+		// Blue-green deploy: override server with current/next slots
+		if svc.Proxy.Deploy != nil {
+			b.Deploy = true
+			b.HTTPCheck = true
+			b.DeployBalance = svc.Proxy.Deploy.Balance
+			b.CurrentServer = svc.Proxy.Deploy.CurrentServer(svc.Proxy.Backend)
+			b.NextServer = svc.Proxy.Deploy.InactiveServer(svc.Proxy.Backend)
+		}
+
 		backends = append(backends, b)
 	}
 	return backends

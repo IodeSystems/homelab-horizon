@@ -21,38 +21,6 @@ var (
 	BuildTime = "unknown"
 )
 
-const systemdServiceTemplate = `[Unit]
-Description=Homelab Horizon - Split-Horizon DNS & VPN Management
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStartPre=+/bin/mkdir -p %s
-ExecStart=%s%s
-WorkingDirectory=%s
-Restart=on-failure
-RestartSec=5
-User=root
-Group=root
-
-# File system isolation
-ProtectSystem=strict
-ReadWritePaths=-/etc/wireguard -/etc/dnsmasq.d -/etc/haproxy -/etc/systemd/system -/proc/sys/net/ipv4 -/var/lib/haproxy -%s
-ProtectHome=true
-PrivateTmp=true
-ProtectKernelTunables=true
-
-# Network capabilities for WireGuard
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
-
-# Security restrictions
-NoNewPrivileges=false
-
-[Install]
-WantedBy=multi-user.target
-`
-
 const servicePath = "/etc/systemd/system/homelab-horizon.service"
 
 func main() {
@@ -245,17 +213,13 @@ func generateSystemdService(configPath string) string {
 	}
 	execPath, _ = filepath.Abs(execPath)
 
-	configFlag := ""
-	workDir := "/etc/homelab-horizon"
 	if configPath != "" {
 		if abs, err := filepath.Abs(configPath); err == nil {
 			configPath = abs
-			workDir = filepath.Dir(abs)
 		}
-		configFlag = fmt.Sprintf(" -config %s", configPath)
 	}
 
-	return fmt.Sprintf(systemdServiceTemplate, workDir, execPath, configFlag, workDir, workDir)
+	return config.GenerateServiceFile(execPath, configPath)
 }
 
 type checker struct {
@@ -356,6 +320,31 @@ func (c *checker) checkWireGuard() {
 		c.allGood = false
 	} else {
 		fmt.Println("OK")
+
+		// Check if PostUp references the correct outbound interface
+		if data, err := os.ReadFile(c.cfg.WGConfigPath); err == nil {
+			outIface := config.DetectDefaultInterface()
+			if outIface != "" {
+				for _, line := range strings.Split(string(data), "\n") {
+					if !strings.Contains(line, "PostUp") || !strings.Contains(line, "-o ") {
+						continue
+					}
+					for _, seg := range strings.Split(line, "-o ") {
+						if seg == "" {
+							continue
+						}
+						ifName := strings.Fields(seg)[0]
+						if ifName != outIface && ifName != "%i" {
+							fmt.Printf("  WARNING: PostUp references '-o %s' but default route uses '%s'\n", ifName, outIface)
+							fmt.Println("  Masquerade/forwarding will not work until wg0.conf is updated.")
+							c.allGood = false
+							break
+						}
+					}
+					break
+				}
+			}
+		}
 	}
 
 	fmt.Printf("Checking WireGuard interface (%s)... ", c.cfg.WGInterface)
@@ -533,13 +522,17 @@ func createWGConfig(cfg *config.Config, cfgPath string) error {
 		return fmt.Errorf("creating directory: %w", err)
 	}
 
+	outIface := config.DetectDefaultInterface()
+	if outIface == "" {
+		outIface = "eth0"
+	}
 	wgConfig := fmt.Sprintf(`[Interface]
 PrivateKey = %s
 Address = %s/24
 ListenPort = %s
-PostUp = iptables -A FORWARD -i %%i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i %%i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
-`, privKey, serverIP, listenPort)
+PostUp = iptables -A FORWARD -i %%i -j ACCEPT; iptables -t nat -A POSTROUTING -o %s -j MASQUERADE
+PostDown = iptables -D FORWARD -i %%i -j ACCEPT; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE
+`, privKey, serverIP, listenPort, outIface, outIface)
 
 	if err := os.WriteFile(cfg.WGConfigPath, []byte(wgConfig), 0600); err != nil {
 		return fmt.Errorf("writing config: %w", err)
