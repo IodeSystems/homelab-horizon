@@ -29,9 +29,11 @@ type Backend struct {
 // BackendStatus contains runtime status of a backend
 type BackendStatus struct {
 	Backend
-	Healthy   bool
-	LastCheck time.Time
-	Error     string
+	Healthy      bool
+	LastCheck    time.Time
+	Error        string
+	CurrentState string // "up", "down", "drain", "maint", "unknown" - for deploy backends
+	NextState    string // "up", "down", "drain", "maint", "unknown" - for deploy backends
 }
 
 // HAProxy manages HAProxy configuration
@@ -104,18 +106,33 @@ func (h *HAProxy) GetBackendStatuses() []BackendStatus {
 			LastCheck: time.Now(),
 		}
 
-		// Try to connect to the backend
-		conn, err := net.DialTimeout("tcp", b.Server, 3*time.Second)
-		if err != nil {
-			bs.Error = err.Error()
-			bs.Healthy = false
+		if b.Deploy {
+			// For deploy backends, query HAProxy admin socket for per-server state
+			aclName := sanitizeName(b.Name)
+			if states, err := h.GetServerState(aclName + "_backend"); err == nil {
+				bs.CurrentState = states["current"]
+				bs.NextState = states["next"]
+				// Healthy if at least one server is up
+				bs.Healthy = bs.CurrentState == "up" || bs.NextState == "up"
+			} else {
+				bs.CurrentState = "unknown"
+				bs.NextState = "unknown"
+				bs.Error = err.Error()
+			}
 		} else {
-			conn.Close()
-			bs.Healthy = true
+			// Try to connect to the backend
+			conn, err := net.DialTimeout("tcp", b.Server, 3*time.Second)
+			if err != nil {
+				bs.Error = err.Error()
+				bs.Healthy = false
+			} else {
+				conn.Close()
+				bs.Healthy = true
 
-			// If HTTP check is enabled, do a basic check
-			if b.HTTPCheck && b.CheckPath != "" {
-				bs.Healthy, bs.Error = h.httpCheck(b.Server, b.CheckPath)
+				// If HTTP check is enabled, do a basic check
+				if b.HTTPCheck && b.CheckPath != "" {
+					bs.Healthy, bs.Error = h.httpCheck(b.Server, b.CheckPath)
+				}
 			}
 		}
 

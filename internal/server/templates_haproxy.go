@@ -7,7 +7,13 @@ const haproxyTemplate = `<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{.CSRFToken}}">
     <title>HAProxy - Homelab Horizon</title>
-    <style>` + baseCSS + `</style>
+    <style>` + baseCSS + `
+    .srv-state-up { color: #4ecca3; }
+    .srv-state-down { color: #e94560; }
+    .srv-state-maint { color: #e94560; }
+    .srv-state-drain { color: #f0a500; }
+    .srv-state-unknown { color: #888; }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -57,8 +63,8 @@ const haproxyTemplate = `<!DOCTYPE html>
                     <td data-label="Domain"><code>{{.DomainMatch}}</code></td>
                     <td data-label="Backend">
                         {{if .Deploy}}
-                            <code>{{.CurrentServer}}</code> <span style="color: #4ecca3; font-size: 0.8em;">current</span><br>
-                            <code>{{.NextServer}}</code> <span style="color: #6c9bce; font-size: 0.8em;">next</span>
+                            <code>{{.CurrentServer}}</code> <span class="srv-state-{{.CurrentState}}" style="font-size: 0.8em;">current ({{.CurrentState}})</span><br>
+                            <code>{{.NextServer}}</code> <span class="srv-state-{{.NextState}}" style="font-size: 0.8em;">next ({{.NextState}})</span>
                             <br><span style="font-size: 0.75em; color: #888;">balance: {{if .DeployBalance}}{{.DeployBalance}}{{else}}first{{end}}</span>
                         {{else}}
                             <code>{{.Server}}</code>
@@ -82,8 +88,8 @@ const haproxyTemplate = `<!DOCTYPE html>
                     <td data-label="Domain"><code>{{.DomainMatch}}</code></td>
                     <td data-label="Backend">
                         {{if .Deploy}}
-                            <code>{{.CurrentServer}}</code> <span style="color: #4ecca3; font-size: 0.8em;">current</span><br>
-                            <code>{{.NextServer}}</code> <span style="color: #6c9bce; font-size: 0.8em;">next</span>
+                            <code>{{.CurrentServer}}</code> <span style="color: #888; font-size: 0.8em;">current</span><br>
+                            <code>{{.NextServer}}</code> <span style="color: #888; font-size: 0.8em;">next</span>
                             <br><span style="font-size: 0.75em; color: #888;">balance: {{if .DeployBalance}}{{.DeployBalance}}{{else}}first{{end}}</span>
                         {{else}}
                             <code>{{.Server}}</code>
