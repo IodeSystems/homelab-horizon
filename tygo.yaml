@@ -1,0 +1,3 @@
+packages:
+  - path: "homelab-horizon/internal/apitypes"
+    output_path: "ui/src/api/generated-types.ts"

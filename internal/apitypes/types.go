@@ -1,0 +1,332 @@
+package apitypes
+
+import "time"
+
+// Error response
+type ErrorResponse struct {
+	Error string `json:"error"`
+}
+
+// OK response (used by many mutation endpoints)
+type OKResponse struct {
+	OK bool `json:"ok"`
+}
+
+// Dashboard
+
+type DashboardResponse struct {
+	ServiceCount   int    `json:"serviceCount"`
+	DomainCount    int    `json:"domainCount"`
+	ZoneCount      int    `json:"zoneCount"`
+	PeerCount      int    `json:"peerCount"`
+	HAProxyRunning bool   `json:"haproxyRunning"`
+	SSLEnabled     bool   `json:"sslEnabled"`
+	Version        string `json:"version"`
+}
+
+// Services
+
+type HealthCheckResp struct {
+	Path string `json:"path"`
+}
+
+type DeployResp struct {
+	NextBackend string `json:"nextBackend"`
+	ActiveSlot  string `json:"activeSlot"`
+	Balance     string `json:"balance"`
+}
+
+type ProxyResp struct {
+	Backend      string           `json:"backend"`
+	HealthCheck  *HealthCheckResp `json:"healthCheck,omitempty"`
+	InternalOnly bool             `json:"internalOnly"`
+	Deploy       *DeployResp      `json:"deploy,omitempty"`
+}
+
+type InternalDNSResp struct {
+	IP string `json:"ip"`
+}
+
+type ExternalDNSResp struct {
+	IP  string `json:"ip"`
+	TTL int    `json:"ttl"`
+}
+
+type ServiceResp struct {
+	Name        string           `json:"name"`
+	Domains     []string         `json:"domains"`
+	InternalDNS *InternalDNSResp `json:"internalDNS,omitempty"`
+	ExternalDNS *ExternalDNSResp `json:"externalDNS,omitempty"`
+	Proxy       *ProxyResp       `json:"proxy,omitempty"`
+}
+
+// Domains
+
+type DomainResp struct {
+	Domain               string `json:"domain"`
+	ZoneName             string `json:"zoneName"`
+	ZoneHasSSL           bool   `json:"zoneHasSSL"`
+	HasZone              bool   `json:"hasZone"`
+	ServiceName          string `json:"serviceName"`
+	HasService           bool   `json:"hasService"`
+	HasInternalDNS       bool   `json:"hasInternalDNS"`
+	InternalIP           string `json:"internalIP"`
+	HasExternalDNS       bool   `json:"hasExternalDNS"`
+	ExternalIP           string `json:"externalIP"`
+	DnsmasqResolvedIP    string `json:"dnsmasqResolvedIP"`
+	RemoteResolvedIP     string `json:"remoteResolvedIP"`
+	DnsmasqDNSMatch      bool   `json:"dnsmasqDNSMatch"`
+	RemoteDNSMatch       bool   `json:"remoteDNSMatch"`
+	HasProxy             bool   `json:"hasProxy"`
+	ProxyBackend         string `json:"proxyBackend"`
+	InternalOnly         bool   `json:"internalOnly"`
+	HasHealthCheck       bool   `json:"hasHealthCheck"`
+	HealthPath           string `json:"healthPath"`
+	HasSSLCoverage       bool   `json:"hasSSLCoverage"`
+	CertExists           bool   `json:"certExists"`
+	CertExpiry           string `json:"certExpiry"`
+	CertDomain           string `json:"certDomain"`
+	CanEnableHTTPS       bool   `json:"canEnableHTTPS"`
+	NeededSubZone        string `json:"neededSubZone"`
+	NeededSubZoneDisplay string `json:"neededSubZoneDisplay"`
+	CanRequestCert       bool   `json:"canRequestCert"`
+	CanSyncDNS           bool   `json:"canSyncDNS"`
+}
+
+type SSLGapResp struct {
+	Domain   string `json:"domain"`
+	ZoneName string `json:"zoneName"`
+	SubZone  string `json:"subZone"`
+	Display  string `json:"display"`
+	Reason   string `json:"reason"`
+}
+
+type ZoneSSLResp struct {
+	ZoneName          string   `json:"zoneName"`
+	SSLEnabled        bool     `json:"sslEnabled"`
+	ConfiguredDomains []string `json:"configuredDomains"`
+	ActualSANs        []string `json:"actualSANs"`
+	CertExists        bool     `json:"certExists"`
+	CertExpiry        string   `json:"certExpiry"`
+	CertIssuer        string   `json:"certIssuer"`
+	MissingSANs       []string `json:"missingSANs"`
+	ExtraSANs         []string `json:"extraSANs"`
+}
+
+type DomainsResponse struct {
+	Domains         []DomainResp  `json:"domains"`
+	TotalCount      int           `json:"totalCount"`
+	IntDNSCount     int           `json:"intDNSCount"`
+	ExtDNSCount     int           `json:"extDNSCount"`
+	HTTPSCount      int           `json:"httpsCount"`
+	ProxyCount      int           `json:"proxyCount"`
+	SSLGaps         []SSLGapResp  `json:"sslGaps"`
+	ZoneSSLStatuses []ZoneSSLResp `json:"zoneSSLStatuses"`
+}
+
+// VPN Peers
+
+type PeerResp struct {
+	Name            string `json:"name"`
+	PublicKey       string `json:"publicKey"`
+	AllowedIPs      string `json:"allowedIPs"`
+	Endpoint        string `json:"endpoint,omitempty"`
+	LatestHandshake string `json:"latestHandshake,omitempty"`
+	TransferRx      string `json:"transferRx,omitempty"`
+	TransferTx      string `json:"transferTx,omitempty"`
+	Online          bool   `json:"online"`
+	IsAdmin         bool   `json:"isAdmin"`
+}
+
+type AddPeerResponse struct {
+	OK     bool   `json:"ok"`
+	Config string `json:"config"`
+	QRCode string `json:"qrCode"`
+}
+
+// Invites
+
+type InviteResp struct {
+	Token string `json:"token"`
+	URL   string `json:"url"`
+}
+
+type CreateInviteResponse struct {
+	OK    bool   `json:"ok"`
+	Token string `json:"token"`
+	URL   string `json:"url"`
+}
+
+// Zones
+
+type ZoneResp struct {
+	Name         string   `json:"name"`
+	ZoneID       string   `json:"zoneId"`
+	SSLEnabled   bool     `json:"sslEnabled"`
+	SSLEmail     string   `json:"sslEmail,omitempty"`
+	SubZones     []string `json:"subZones"`
+	ProviderType string   `json:"providerType,omitempty"`
+}
+
+// Settings
+
+type HAProxyResp struct {
+	Running      bool   `json:"running"`
+	ConfigExists bool   `json:"configExists"`
+	Version      string `json:"version"`
+	Enabled      bool   `json:"enabled"`
+	HTTPPort     int    `json:"httpPort"`
+	HTTPSPort    int    `json:"httpsPort"`
+}
+
+type SSLResp struct {
+	Enabled        bool   `json:"enabled"`
+	CertDir        string `json:"certDir"`
+	HAProxyCertDir string `json:"haproxyCertDir"`
+}
+
+type CheckStatusResp struct {
+	Name      string    `json:"name"`
+	Type      string    `json:"type"`
+	Target    string    `json:"target"`
+	Status    string    `json:"status"`
+	LastCheck time.Time `json:"last_check"`
+	LastError string    `json:"last_error,omitempty"`
+	Interval  int       `json:"interval"`
+	Enabled   bool      `json:"enabled"`
+	AutoGen   bool      `json:"auto_gen"`
+}
+
+type ConfigResp struct {
+	PublicIP       string   `json:"publicIP"`
+	LocalInterface string   `json:"localInterface"`
+	DnsmasqEnabled bool     `json:"dnsmasqEnabled"`
+	VPNAdmins      []string `json:"vpnAdmins"`
+}
+
+type SettingsResponse struct {
+	Zones   []ZoneResp        `json:"zones"`
+	HAProxy HAProxyResp       `json:"haproxy"`
+	SSL     SSLResp           `json:"ssl"`
+	Checks  []CheckStatusResp `json:"checks"`
+	Config  ConfigResp        `json:"config"`
+}
+
+// HAProxy config preview
+
+type HAProxyConfigPreview struct {
+	Config string `json:"config"`
+}
+
+// Auth
+
+type AuthStatusResponse struct {
+	Authenticated bool   `json:"authenticated"`
+	Method        string `json:"method,omitempty"`
+}
+
+type LoginRequest struct {
+	Token string `json:"token"`
+}
+
+type LoginResponse struct {
+	OK       bool   `json:"ok"`
+	Invite   bool   `json:"invite,omitempty"`
+	Redirect string `json:"redirect,omitempty"`
+}
+
+// Deploy
+
+type DeploySlotStatus struct {
+	Slot    string `json:"slot"`
+	Backend string `json:"backend"`
+	State   string `json:"state"`
+}
+
+type DeployStatus struct {
+	Service     string           `json:"service"`
+	Domain      string           `json:"domain"`
+	Domains     []string         `json:"domains,omitempty"`
+	ActiveSlot  string           `json:"active_slot"`
+	Balance     string           `json:"balance"`
+	HealthCheck string           `json:"health_check"`
+	Current     DeploySlotStatus `json:"current"`
+	Next        DeploySlotStatus `json:"next"`
+}
+
+type DeployStateChangeResponse struct {
+	Status string `json:"status"`
+	Server string `json:"server"`
+	State  string `json:"state"`
+}
+
+type DeploySwapResponse struct {
+	Status     string `json:"status"`
+	ActiveSlot string `json:"active_slot"`
+	Current    string `json:"current"`
+	Next       string `json:"next"`
+}
+
+// Service mutations
+
+type ServiceRequest struct {
+	OriginalName string `json:"originalName,omitempty"`
+	Name         string `json:"name"`
+	Domains      []string `json:"domains"`
+	InternalDNS  *ServiceRequestInternalDNS `json:"internalDNS,omitempty"`
+	ExternalDNS  *ServiceRequestExternalDNS `json:"externalDNS,omitempty"`
+	Proxy        *ServiceRequestProxy       `json:"proxy,omitempty"`
+}
+
+type ServiceRequestInternalDNS struct {
+	IP string `json:"ip"`
+}
+
+type ServiceRequestExternalDNS struct {
+	IP  string `json:"ip"`
+	TTL int    `json:"ttl"`
+}
+
+type ServiceRequestProxy struct {
+	Backend     string                      `json:"backend"`
+	HealthCheck *ServiceRequestHealthCheck  `json:"healthCheck,omitempty"`
+	InternalOnly bool                       `json:"internalOnly"`
+}
+
+type ServiceRequestHealthCheck struct {
+	Path string `json:"path"`
+}
+
+// DNS sync
+
+type DNSSyncResponse struct {
+	OK      bool `json:"ok"`
+	Changed bool `json:"changed"`
+}
+
+type DNSSyncAllResponse struct {
+	OK      bool `json:"ok"`
+	Updated int  `json:"updated"`
+	Failed  int  `json:"failed"`
+}
+
+// Toggle admin
+
+type ToggleAdminResponse struct {
+	OK      bool `json:"ok"`
+	IsAdmin bool `json:"isAdmin"`
+}
+
+// Trigger sync
+
+type TriggerSyncResponse struct {
+	OK      bool `json:"ok"`
+	Started bool `json:"started"`
+}
+
+// Run check
+
+type RunCheckResponse struct {
+	OK     bool   `json:"ok"`
+	Status string `json:"status"`
+}

@@ -10,9 +10,14 @@ LDFLAGS=-ldflags "-s -w -X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIM
 .PHONY: all
 all: build
 
+# Generate TypeScript types from Go structs (requires tygo)
+.PHONY: generate
+generate:
+	~/go/bin/tygo generate
+
 # Build frontend (React SPA)
 .PHONY: ui
-ui:
+ui: generate
 	cd ui && npm ci && npm run build
 
 # Create stub ui/dist for Go-only builds (no npm required)

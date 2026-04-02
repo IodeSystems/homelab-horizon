@@ -1,3 +1,5 @@
+import type { ZodType } from "zod/v4";
+
 const API_BASE = "/api/v1";
 
 export class ApiError extends Error {
@@ -9,15 +11,25 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Fetch from the API with optional zod schema validation.
+ *
+ * When a schema is provided, the response is validated against it.
+ * In development, validation errors are logged as warnings.
+ * This catches API drift (Go changed a field name/type) immediately
+ * instead of silently producing undefined values that crash later.
+ */
 export async function apiFetch<T>(
   path: string,
-  options?: RequestInit,
+  options?: RequestInit & { schema?: ZodType<T> },
 ): Promise<T> {
+  const { schema, ...fetchOptions } = options ?? {};
+
   const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
+    ...fetchOptions,
     headers: {
       "Content-Type": "application/json",
-      ...options?.headers,
+      ...fetchOptions?.headers,
     },
   });
 
@@ -30,5 +42,17 @@ export async function apiFetch<T>(
     throw new ApiError(res.status, body.error || res.statusText);
   }
 
-  return res.json() as Promise<T>;
+  const data = await res.json();
+
+  if (schema) {
+    const result = schema.safeParse(data);
+    if (!result.success) {
+      console.warn(
+        `[API] Response validation failed for ${path}:`,
+        result.error.issues,
+      );
+    }
+  }
+
+  return data as T;
 }

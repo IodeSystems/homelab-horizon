@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"homelab-horizon/internal/apitypes"
 	"homelab-horizon/internal/config"
 	"homelab-horizon/internal/haproxy"
 )
@@ -16,17 +17,9 @@ func (s *Server) handleAPISettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Zones
-	type zoneResp struct {
-		Name         string   `json:"name"`
-		ZoneID       string   `json:"zoneId"`
-		SSLEnabled   bool     `json:"sslEnabled"`
-		SSLEmail     string   `json:"sslEmail,omitempty"`
-		SubZones     []string `json:"subZones"`
-		ProviderType string   `json:"providerType,omitempty"`
-	}
-	zones := make([]zoneResp, 0, len(s.config.Zones))
+	zones := make([]apitypes.ZoneResp, 0, len(s.config.Zones))
 	for _, z := range s.config.Zones {
-		zr := zoneResp{
+		zr := apitypes.ZoneResp{
 			Name:     z.Name,
 			ZoneID:   z.ZoneID,
 			SubZones: z.SubZones,
@@ -46,15 +39,7 @@ func (s *Server) handleAPISettings(w http.ResponseWriter, r *http.Request) {
 
 	// HAProxy
 	haStatus := s.haproxy.GetStatus()
-	type haproxyResp struct {
-		Running      bool   `json:"running"`
-		ConfigExists bool   `json:"configExists"`
-		Version      string `json:"version"`
-		Enabled      bool   `json:"enabled"`
-		HTTPPort     int    `json:"httpPort"`
-		HTTPSPort    int    `json:"httpsPort"`
-	}
-	ha := haproxyResp{
+	ha := apitypes.HAProxyResp{
 		Running:      haStatus.Running,
 		ConfigExists: haStatus.ConfigExists,
 		Version:      haStatus.Version,
@@ -64,45 +49,42 @@ func (s *Server) handleAPISettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// SSL
-	type sslResp struct {
-		Enabled        bool   `json:"enabled"`
-		CertDir        string `json:"certDir"`
-		HAProxyCertDir string `json:"haproxyCertDir"`
-	}
-	ssl := sslResp{
+	ssl := apitypes.SSLResp{
 		Enabled:        s.config.SSLEnabled,
 		CertDir:        s.config.SSLCertDir,
 		HAProxyCertDir: s.config.SSLHAProxyCertDir,
 	}
 
 	// Checks
-	checks := s.monitor.GetStatuses()
+	monitorChecks := s.monitor.GetStatuses()
+	checks := make([]apitypes.CheckStatusResp, 0, len(monitorChecks))
+	for _, c := range monitorChecks {
+		checks = append(checks, apitypes.CheckStatusResp{
+			Name:      c.Name,
+			Type:      c.Type,
+			Target:    c.Target,
+			Status:    c.Status,
+			LastCheck: c.LastCheck,
+			LastError: c.LastError,
+			Interval:  c.Interval,
+			Enabled:   c.Enabled,
+			AutoGen:   c.AutoGen,
+		})
+	}
 
 	// Config
 	vpnAdmins := s.config.VPNAdmins
 	if vpnAdmins == nil {
 		vpnAdmins = []string{}
 	}
-	type configResp struct {
-		PublicIP       string   `json:"publicIP"`
-		LocalInterface string   `json:"localInterface"`
-		DnsmasqEnabled bool     `json:"dnsmasqEnabled"`
-		VPNAdmins      []string `json:"vpnAdmins"`
-	}
-	cfg := configResp{
+	cfg := apitypes.ConfigResp{
 		PublicIP:       s.config.PublicIP,
 		LocalInterface: s.config.LocalInterface,
 		DnsmasqEnabled: s.config.DNSMasqEnabled,
 		VPNAdmins:      vpnAdmins,
 	}
 
-	resp := struct {
-		Zones   []zoneResp  `json:"zones"`
-		HAProxy haproxyResp `json:"haproxy"`
-		SSL     sslResp     `json:"ssl"`
-		Checks  interface{} `json:"checks"`
-		Config  configResp  `json:"config"`
-	}{
+	resp := apitypes.SettingsResponse{
 		Zones:   zones,
 		HAProxy: ha,
 		SSL:     ssl,
@@ -380,7 +362,7 @@ func (s *Server) handleAPIHAProxyConfigPreview(w http.ResponseWriter, r *http.Re
 	preview := s.haproxy.GenerateConfig(s.config.HAProxyHTTPPort, s.config.HAProxyHTTPSPort, sslConfig)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"config": preview})
+	json.NewEncoder(w).Encode(apitypes.HAProxyConfigPreview{Config: preview})
 }
 
 func (s *Server) handleAPIAddCheck(w http.ResponseWriter, r *http.Request) {
@@ -574,6 +556,6 @@ func (s *Server) handleAPIRunCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "status": result.Status})
+	json.NewEncoder(w).Encode(apitypes.RunCheckResponse{OK: true, Status: result.Status})
 }
 
