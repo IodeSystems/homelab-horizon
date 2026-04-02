@@ -60,9 +60,10 @@ type ServiceStatus struct {
 	InternalDNSResolved string `json:"internalDNSResolved,omitempty"` // actual IP from dnsmasq
 	ExternalDNSUp       bool   `json:"externalDNSUp"`                 // 1.1.1.1 resolves the primary domain
 	ExternalDNSResolved string `json:"externalDNSResolved,omitempty"` // actual IP from 1.1.1.1
-	ProxyUp             bool   `json:"proxyUp"`                       // HAProxy backend healthy
+	ProxyUp             bool   `json:"proxyUp"`                       // HAProxy backend healthy (from HAProxy socket)
 	ProxyError          string `json:"proxyError,omitempty"`          // health check error
-	ProxyState          string `json:"proxyState,omitempty"`          // "up", "down", "drain", "maint"
+	ProxyState          string `json:"proxyState,omitempty"`          // "up", "down", "drain", "maint" (current/single backend)
+	ProxyNextState      string `json:"proxyNextState,omitempty"`      // "up", "down", "drain", "maint" (next slot for deploy)
 }
 
 type ServiceResp struct {

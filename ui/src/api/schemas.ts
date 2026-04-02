@@ -61,6 +61,7 @@ const ServiceStatusSchema = z.object({
   proxyUp: z.boolean(),
   proxyError: z.string().optional(),
   proxyState: z.string().optional(),
+  proxyNextState: z.string().optional(),
 });
 
 export const ServiceSchema = z.object({

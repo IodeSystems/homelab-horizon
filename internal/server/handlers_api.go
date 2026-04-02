@@ -115,17 +115,19 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	backendStatuses := s.haproxy.GetBackendStatuses()
 	type backendInfo struct {
-		healthy bool
-		err     string
-		state   string
+		healthy   bool
+		err       string
+		state     string
+		nextState string
 	}
 	backendMap := make(map[string]backendInfo)
 	for _, bs := range backendStatuses {
-		bi := backendInfo{healthy: bs.Healthy, err: bs.Error}
-		if bs.CurrentState != "" {
-			bi.state = bs.CurrentState
+		backendMap[bs.Name] = backendInfo{
+			healthy:   bs.Healthy,
+			err:       bs.Error,
+			state:     bs.CurrentState,
+			nextState: bs.NextState,
 		}
-		backendMap[bs.Name] = bi
 	}
 
 	for i := range sorted {
@@ -154,6 +156,7 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 				sr.Status.ProxyUp = bi.healthy
 				sr.Status.ProxyError = bi.err
 				sr.Status.ProxyState = bi.state
+				sr.Status.ProxyNextState = bi.nextState
 			}
 		}
 	}

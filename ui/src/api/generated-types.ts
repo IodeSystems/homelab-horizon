@@ -53,9 +53,10 @@ export interface ServiceStatus {
   internalDNSResolved?: string; // actual IP from dnsmasq
   externalDNSUp: boolean; // 1.1.1.1 resolves the primary domain
   externalDNSResolved?: string; // actual IP from 1.1.1.1
-  proxyUp: boolean; // HAProxy backend healthy
+  proxyUp: boolean; // HAProxy backend healthy (from HAProxy socket)
   proxyError?: string; // health check error
-  proxyState?: string; // "up", "down", "drain", "maint"
+  proxyState?: string; // "up", "down", "drain", "maint" (current/single backend)
+  proxyNextState?: string; // "up", "down", "drain", "maint" (next slot for deploy)
 }
 export interface ServiceResp {
   name: string;
