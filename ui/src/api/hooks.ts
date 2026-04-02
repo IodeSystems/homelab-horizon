@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
 import type {
   AddPeerResponse,
+  BanListResponse,
   CreateInviteResponse,
   DashboardData,
   DomainsData,
@@ -13,6 +14,7 @@ import type {
   Zone,
 } from "./types";
 import {
+  BanListResponseSchema,
   DashboardDataSchema,
   ServicesSchema,
   DomainsDataSchema,
@@ -476,6 +478,45 @@ export function useRunCheck() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
+// --- Bans ---
+
+export function useBans() {
+  return useQuery({
+    queryKey: ["bans"],
+    queryFn: () =>
+      apiFetch<BanListResponse>("/bans", { schema: BanListResponseSchema }),
+    refetchInterval: 30000,
+  });
+}
+
+export function useBanIP() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { ip: string; timeout?: number; reason?: string }) =>
+      apiFetch("/bans/add", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["bans"] });
+    },
+  });
+}
+
+export function useUnbanIP() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (ip: string) =>
+      apiFetch("/bans/remove", {
+        method: "POST",
+        body: JSON.stringify({ ip }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["bans"] });
     },
   });
 }

@@ -14,6 +14,7 @@ import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as ServicesRouteImport } from './routes/services'
 import { Route as DomainsRouteImport } from './routes/domains'
 import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as BansRouteImport } from './routes/bans'
 import { Route as IndexRouteImport } from './routes/index'
 
 const VpnRoute = VpnRouteImport.update({
@@ -41,6 +42,11 @@ const DashboardRoute = DashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BansRoute = BansRouteImport.update({
+  id: '/bans',
+  path: '/bans',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -49,6 +55,7 @@ const IndexRoute = IndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/bans': typeof BansRoute
   '/dashboard': typeof DashboardRoute
   '/domains': typeof DomainsRoute
   '/services': typeof ServicesRoute
@@ -57,6 +64,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/bans': typeof BansRoute
   '/dashboard': typeof DashboardRoute
   '/domains': typeof DomainsRoute
   '/services': typeof ServicesRoute
@@ -66,6 +74,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/bans': typeof BansRoute
   '/dashboard': typeof DashboardRoute
   '/domains': typeof DomainsRoute
   '/services': typeof ServicesRoute
@@ -76,16 +85,25 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/bans'
     | '/dashboard'
     | '/domains'
     | '/services'
     | '/settings'
     | '/vpn'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/dashboard' | '/domains' | '/services' | '/settings' | '/vpn'
+  to:
+    | '/'
+    | '/bans'
+    | '/dashboard'
+    | '/domains'
+    | '/services'
+    | '/settings'
+    | '/vpn'
   id:
     | '__root__'
     | '/'
+    | '/bans'
     | '/dashboard'
     | '/domains'
     | '/services'
@@ -95,6 +113,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  BansRoute: typeof BansRoute
   DashboardRoute: typeof DashboardRoute
   DomainsRoute: typeof DomainsRoute
   ServicesRoute: typeof ServicesRoute
@@ -139,6 +158,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/bans': {
+      id: '/bans'
+      path: '/bans'
+      fullPath: '/bans'
+      preLoaderRoute: typeof BansRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -151,6 +177,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  BansRoute: BansRoute,
   DashboardRoute: DashboardRoute,
   DomainsRoute: DomainsRoute,
   ServicesRoute: ServicesRoute,

@@ -224,3 +224,17 @@ export const SettingsDataSchema = z.object({
 export const HAProxyConfigPreviewSchema = z.object({
   config: z.string(),
 });
+
+// Bans
+export const BanEntrySchema = z.object({
+  ip: z.string(),
+  timeout: z.number(),
+  createdAt: z.number(),
+  expiresAt: z.number(),
+  reason: z.string(),
+  service: z.string(),
+});
+
+export const BanListResponseSchema = z.object({
+  bans: z.array(BanEntrySchema),
+});

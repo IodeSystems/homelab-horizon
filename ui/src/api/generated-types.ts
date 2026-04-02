@@ -244,6 +244,25 @@ export interface ServiceRequestProxy {
 export interface ServiceRequestHealthCheck {
   path: string;
 }
+export interface BanRequest {
+  ip: string;
+  timeout?: number /* int */; // seconds, 0 = permanent
+  reason?: string;
+}
+export interface UnbanRequest {
+  ip: string;
+}
+export interface BanEntry {
+  ip: string;
+  timeout?: number /* int */;
+  createdAt: number /* int64 */;
+  expiresAt?: number /* int64 */;
+  reason?: string;
+  service?: string;
+}
+export interface BanListResponse {
+  bans: BanEntry[];
+}
 export interface DNSSyncResponse {
   ok: boolean;
   changed: boolean;

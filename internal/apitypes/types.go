@@ -297,6 +297,31 @@ type ServiceRequestHealthCheck struct {
 	Path string `json:"path"`
 }
 
+// IP Ban types
+
+type BanRequest struct {
+	IP      string `json:"ip"`
+	Timeout int    `json:"timeout,omitempty"` // seconds, 0 = permanent
+	Reason  string `json:"reason,omitempty"`
+}
+
+type UnbanRequest struct {
+	IP string `json:"ip"`
+}
+
+type BanEntry struct {
+	IP        string `json:"ip"`
+	Timeout   int    `json:"timeout,omitempty"`
+	CreatedAt int64  `json:"createdAt"`
+	ExpiresAt int64  `json:"expiresAt,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	Service   string `json:"service,omitempty"`
+}
+
+type BanListResponse struct {
+	Bans []BanEntry `json:"bans"`
+}
+
 // DNS sync
 
 type DNSSyncResponse struct {
