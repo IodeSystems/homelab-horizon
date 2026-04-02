@@ -1,6 +1,8 @@
 package config
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -91,12 +93,12 @@ func TestDeriveDNSMappings(t *testing.T) {
 	cfg := &Config{
 		LocalInterface: "192.168.1.100",
 		Services: []Service{
-			{Domain: "app.example.com", InternalDNS: &InternalDNS{IP: "192.168.1.50"}},
-			{Domain: "api.example.com", InternalDNS: &InternalDNS{IP: "192.168.1.51"}},
-			{Domain: "local.example.com", InternalDNS: &InternalDNS{IP: "localhost"}},
-			{Domain: "loopback.example.com", InternalDNS: &InternalDNS{IP: "127.0.0.1"}},
-			{Domain: "external.example.com", InternalDNS: nil},
-			{Domain: "empty.example.com", InternalDNS: &InternalDNS{IP: ""}},
+			{Domains: []string{"app.example.com"}, InternalDNS: &InternalDNS{IP: "192.168.1.50"}},
+			{Domains: []string{"api.example.com"}, InternalDNS: &InternalDNS{IP: "192.168.1.51"}},
+			{Domains: []string{"local.example.com"}, InternalDNS: &InternalDNS{IP: "localhost"}},
+			{Domains: []string{"loopback.example.com"}, InternalDNS: &InternalDNS{IP: "127.0.0.1"}},
+			{Domains: []string{"external.example.com"}, InternalDNS: nil},
+			{Domains: []string{"empty.example.com"}, InternalDNS: &InternalDNS{IP: ""}},
 		},
 	}
 
@@ -133,12 +135,12 @@ func TestDeriveHAProxyBackends(t *testing.T) {
 		Services: []Service{
 			{
 				Name:   "grafana",
-				Domain: "grafana.example.com",
+				Domains: []string{"grafana.example.com"},
 				Proxy:  &ProxyConfig{Backend: "192.168.1.50:3000"},
 			},
 			{
 				Name:   "prom",
-				Domain: "prom.example.com",
+				Domains: []string{"prom.example.com"},
 				Proxy: &ProxyConfig{
 					Backend:     "192.168.1.51:9090",
 					HealthCheck: &HealthCheck{Path: "/api/health"},
@@ -146,12 +148,12 @@ func TestDeriveHAProxyBackends(t *testing.T) {
 			},
 			{
 				Name:   "internal",
-				Domain: "internal.example.com",
+				Domains: []string{"internal.example.com"},
 				Proxy:  nil,
 			},
 			{
 				Name:   "empty-backend",
-				Domain: "empty.example.com",
+				Domains: []string{"empty.example.com"},
 				Proxy:  &ProxyConfig{Backend: ""},
 			},
 		},
@@ -184,16 +186,71 @@ func TestDeriveHAProxyBackends(t *testing.T) {
 	}
 }
 
+func TestDeriveHAProxyBackends_MultiDomain(t *testing.T) {
+	cfg := &Config{
+		Services: []Service{
+			{
+				Name:    "multi-app",
+				Domains: []string{"app.example.com", "book.example.com", "portal.example.com"},
+				Proxy:   &ProxyConfig{Backend: "192.168.1.50:8080"},
+			},
+		},
+	}
+
+	backends := cfg.DeriveHAProxyBackends()
+
+	if len(backends) != 1 {
+		t.Fatalf("Expected 1 backend, got %d", len(backends))
+	}
+
+	b := backends[0]
+	if len(b.DomainMatches) != 3 {
+		t.Fatalf("Expected 3 domain matches, got %d", len(b.DomainMatches))
+	}
+	if b.DomainMatches[0] != "app.example.com" {
+		t.Errorf("Expected first domain app.example.com, got %s", b.DomainMatches[0])
+	}
+	if b.DomainMatches[1] != "book.example.com" {
+		t.Errorf("Expected second domain book.example.com, got %s", b.DomainMatches[1])
+	}
+	if b.DomainMatches[2] != "portal.example.com" {
+		t.Errorf("Expected third domain portal.example.com, got %s", b.DomainMatches[2])
+	}
+}
+
+func TestDeriveDNSMappings_MultiDomain(t *testing.T) {
+	cfg := &Config{
+		Services: []Service{
+			{
+				Domains:     []string{"app.example.com", "book.example.com"},
+				InternalDNS: &InternalDNS{IP: "192.168.1.50"},
+			},
+		},
+	}
+
+	mappings := cfg.DeriveDNSMappings()
+
+	if len(mappings) != 2 {
+		t.Fatalf("Expected 2 mappings, got %d", len(mappings))
+	}
+	if mappings["app.example.com"] != "192.168.1.50" {
+		t.Errorf("Expected app mapping 192.168.1.50, got %s", mappings["app.example.com"])
+	}
+	if mappings["book.example.com"] != "192.168.1.50" {
+		t.Errorf("Expected book mapping 192.168.1.50, got %s", mappings["book.example.com"])
+	}
+}
+
 func TestGetServicesForZone(t *testing.T) {
 	cfg := &Config{
 		Zones: []Zone{
 			{Name: "example.com", ZoneID: "Z1"},
 		},
 		Services: []Service{
-			{Name: "app", Domain: "app.example.com"},
-			{Name: "api", Domain: "api.example.com"},
-			{Name: "root", Domain: "example.com"},
-			{Name: "other", Domain: "app.other.io"},
+			{Name: "app", Domains: []string{"app.example.com"}},
+			{Name: "api", Domains: []string{"api.example.com"}},
+			{Name: "root", Domains: []string{"example.com"}},
+			{Name: "other", Domains: []string{"app.other.io"}},
 		},
 	}
 
@@ -286,73 +343,73 @@ func TestValidateService(t *testing.T) {
 	}{
 		{
 			name:    "valid service",
-			svc:     Service{Name: "app", Domain: "app.example.com"},
+			svc:     Service{Name: "app", Domains: []string{"app.example.com"}},
 			wantErr: "",
 		},
 		{
 			name:    "missing name",
-			svc:     Service{Name: "", Domain: "app.example.com"},
+			svc:     Service{Name: "", Domains: []string{"app.example.com"}},
 			wantErr: "name",
 		},
 		{
 			name:    "missing domain",
-			svc:     Service{Name: "app", Domain: ""},
+			svc:     Service{Name: "app", Domains: nil},
 			wantErr: "domain",
 		},
 		{
 			name:    "no zone for domain",
-			svc:     Service{Name: "app", Domain: "app.other.io"},
+			svc:     Service{Name: "app", Domains: []string{"app.other.io"}},
 			wantErr: "domain",
 		},
 		{
 			name:    "valid internal DNS",
-			svc:     Service{Name: "app", Domain: "app.example.com", InternalDNS: &InternalDNS{IP: "192.168.1.1"}},
+			svc:     Service{Name: "app", Domains: []string{"app.example.com"}, InternalDNS: &InternalDNS{IP: "192.168.1.1"}},
 			wantErr: "",
 		},
 		{
 			name:    "localhost internal DNS",
-			svc:     Service{Name: "app", Domain: "app.example.com", InternalDNS: &InternalDNS{IP: "localhost"}},
+			svc:     Service{Name: "app", Domains: []string{"app.example.com"}, InternalDNS: &InternalDNS{IP: "localhost"}},
 			wantErr: "",
 		},
 		{
 			name:    "invalid internal DNS IP",
-			svc:     Service{Name: "app", Domain: "app.example.com", InternalDNS: &InternalDNS{IP: "not-an-ip"}},
+			svc:     Service{Name: "app", Domains: []string{"app.example.com"}, InternalDNS: &InternalDNS{IP: "not-an-ip"}},
 			wantErr: "internal_dns.ip",
 		},
 		{
 			name:    "valid proxy backend",
-			svc:     Service{Name: "app", Domain: "app.example.com", Proxy: &ProxyConfig{Backend: "192.168.1.1:8080"}},
+			svc:     Service{Name: "app", Domains: []string{"app.example.com"}, Proxy: &ProxyConfig{Backend: "192.168.1.1:8080"}},
 			wantErr: "",
 		},
 		{
 			name:    "invalid proxy backend",
-			svc:     Service{Name: "app", Domain: "app.example.com", Proxy: &ProxyConfig{Backend: "no-port"}},
+			svc:     Service{Name: "app", Domains: []string{"app.example.com"}, Proxy: &ProxyConfig{Backend: "no-port"}},
 			wantErr: "proxy.backend",
 		},
 		// Wildcard domain validation tests
 		{
 			name:    "valid wildcard domain",
-			svc:     Service{Name: "wildcard", Domain: "*.api.example.com"},
+			svc:     Service{Name: "wildcard", Domains: []string{"*.api.example.com"}},
 			wantErr: "",
 		},
 		{
 			name:    "wildcard at root level",
-			svc:     Service{Name: "wildcard", Domain: "*.example.com"},
+			svc:     Service{Name: "wildcard", Domains: []string{"*.example.com"}},
 			wantErr: "",
 		},
 		{
 			name:    "invalid wildcard format - missing dot",
-			svc:     Service{Name: "bad", Domain: "*example.com"},
+			svc:     Service{Name: "bad", Domains: []string{"*example.com"}},
 			wantErr: "domain",
 		},
 		{
 			name:    "invalid wildcard - no domain after",
-			svc:     Service{Name: "bad", Domain: "*."},
+			svc:     Service{Name: "bad", Domains: []string{"*."}},
 			wantErr: "domain",
 		},
 		{
 			name:    "invalid wildcard - single label",
-			svc:     Service{Name: "bad", Domain: "*.com"},
+			svc:     Service{Name: "bad", Domains: []string{"*.com"}},
 			wantErr: "domain",
 		},
 	}
@@ -438,11 +495,11 @@ func TestAddService(t *testing.T) {
 	cfg := &Config{
 		Zones: []Zone{{Name: "example.com", ZoneID: "Z1"}},
 		Services: []Service{
-			{Name: "existing", Domain: "existing.example.com"},
+			{Name: "existing", Domains: []string{"existing.example.com"}},
 		},
 	}
 
-	err := cfg.AddService(Service{Name: "new", Domain: "new.example.com"})
+	err := cfg.AddService(Service{Name: "new", Domains: []string{"new.example.com"}})
 	if err != nil {
 		t.Errorf("AddService() error = %v", err)
 	}
@@ -450,12 +507,12 @@ func TestAddService(t *testing.T) {
 		t.Errorf("Expected 2 services, got %d", len(cfg.Services))
 	}
 
-	err = cfg.AddService(Service{Name: "existing", Domain: "another.example.com"})
+	err = cfg.AddService(Service{Name: "existing", Domains: []string{"another.example.com"}})
 	if err == nil {
 		t.Error("AddService() should fail for duplicate name")
 	}
 
-	err = cfg.AddService(Service{Name: "dup-domain", Domain: "existing.example.com"})
+	err = cfg.AddService(Service{Name: "dup-domain", Domains: []string{"existing.example.com"}})
 	if err == nil {
 		t.Error("AddService() should fail for duplicate domain")
 	}
@@ -464,9 +521,9 @@ func TestAddService(t *testing.T) {
 func TestRemoveService(t *testing.T) {
 	cfg := &Config{
 		Services: []Service{
-			{Name: "svc1", Domain: "svc1.example.com"},
-			{Name: "svc2", Domain: "svc2.example.com"},
-			{Name: "svc3", Domain: "svc3.example.com"},
+			{Name: "svc1", Domains: []string{"svc1.example.com"}},
+			{Name: "svc2", Domains: []string{"svc2.example.com"}},
+			{Name: "svc3", Domains: []string{"svc3.example.com"}},
 		},
 	}
 
@@ -510,9 +567,9 @@ func TestRemoveZone(t *testing.T) {
 			{Name: "other.io", ZoneID: "Z2"},
 		},
 		Services: []Service{
-			{Name: "svc1", Domain: "svc1.example.com"},
-			{Name: "svc2", Domain: "svc2.example.com"},
-			{Name: "svc3", Domain: "svc3.other.io"},
+			{Name: "svc1", Domains: []string{"svc1.example.com"}},
+			{Name: "svc2", Domains: []string{"svc2.example.com"}},
+			{Name: "svc3", Domains: []string{"svc3.other.io"}},
 		},
 	}
 
@@ -563,8 +620,8 @@ func TestGetZone(t *testing.T) {
 func TestGetService(t *testing.T) {
 	cfg := &Config{
 		Services: []Service{
-			{Name: "svc1", Domain: "svc1.example.com"},
-			{Name: "svc2", Domain: "svc2.example.com"},
+			{Name: "svc1", Domains: []string{"svc1.example.com"}},
+			{Name: "svc2", Domains: []string{"svc2.example.com"}},
 		},
 	}
 
@@ -598,6 +655,37 @@ func TestExtractIP(t *testing.T) {
 				t.Errorf("extractIP(%s) = %s, want %s", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestServiceJSON_BackwardsCompat(t *testing.T) {
+	// Legacy format: "domain": "x"
+	legacy := `{"name":"test","domain":"app.example.com"}`
+	var svc Service
+	if err := json.Unmarshal([]byte(legacy), &svc); err != nil {
+		t.Fatalf("Unmarshal legacy format: %v", err)
+	}
+	if len(svc.Domains) != 1 || svc.Domains[0] != "app.example.com" {
+		t.Errorf("Legacy domain not migrated: %v", svc.Domains)
+	}
+
+	// New format: "domains": ["x", "y"]
+	multi := `{"name":"test","domains":["app.example.com","book.example.com"]}`
+	var svc2 Service
+	if err := json.Unmarshal([]byte(multi), &svc2); err != nil {
+		t.Fatalf("Unmarshal multi format: %v", err)
+	}
+	if len(svc2.Domains) != 2 {
+		t.Errorf("Expected 2 domains, got %d", len(svc2.Domains))
+	}
+
+	// Marshal produces "domains" key
+	data, err := json.Marshal(svc)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"domains"`) {
+		t.Errorf("Marshal should use domains key: %s", data)
 	}
 }
 

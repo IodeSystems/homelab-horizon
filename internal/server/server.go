@@ -735,7 +735,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	// Build list of service domains for DNS resolution
 	var serviceDomains []string
 	for _, svc := range s.config.Services {
-		serviceDomains = append(serviceDomains, svc.Domain)
+		serviceDomains = append(serviceDomains, svc.Domains...)
 	}
 
 	// Resolve against public DNS (first upstream server)
@@ -762,8 +762,13 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	for _, zone := range s.config.Zones {
 		hasServices := false
 		for _, svc := range s.config.Services {
-			if svc.Domain == zone.Name || strings.HasSuffix(svc.Domain, "."+zone.Name) {
-				hasServices = true
+			for _, domain := range svc.Domains {
+				if domain == zone.Name || strings.HasSuffix(domain, "."+zone.Name) {
+					hasServices = true
+					break
+				}
+			}
+			if hasServices {
 				break
 			}
 		}

@@ -443,7 +443,8 @@ func (s *Server) handleTestConnectivity(w http.ResponseWriter, r *http.Request) 
 		}
 
 		if testService != nil {
-			ips, err := net.LookupHost(testService.Domain)
+			testDomain := testService.PrimaryDomain()
+			ips, err := net.LookupHost(testDomain)
 			if err == nil {
 				found := false
 				for _, ip := range ips {
@@ -454,12 +455,12 @@ func (s *Server) handleTestConnectivity(w http.ResponseWriter, r *http.Request) 
 				}
 				if found {
 					dnsStatus = "ok"
-					dnsMsg = fmt.Sprintf("Resolved %s to %s", testService.Domain, testService.InternalDNS.IP)
+					dnsMsg = fmt.Sprintf("Resolved %s to %s", testDomain, testService.InternalDNS.IP)
 				} else {
-					dnsMsg = fmt.Sprintf("Resolved %s to %v, expected %s", testService.Domain, ips, testService.InternalDNS.IP)
+					dnsMsg = fmt.Sprintf("Resolved %s to %v, expected %s", testDomain, ips, testService.InternalDNS.IP)
 				}
 			} else {
-				dnsMsg = fmt.Sprintf("Failed to resolve %s: %v", testService.Domain, err)
+				dnsMsg = fmt.Sprintf("Failed to resolve %s: %v", testDomain, err)
 			}
 		} else {
 			dnsMsg = "No services with internal DNS configured"

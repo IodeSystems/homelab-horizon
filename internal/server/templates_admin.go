@@ -402,11 +402,11 @@ const adminTemplate = `<!DOCTYPE html>
                 {{range $svc := .Services}}
                 <tr>
                     <td data-label="Service"><strong>{{$svc.Name}}</strong></td>
-                    <td data-label="Domain"><code>{{$svc.Domain}}</code></td>
+                    <td data-label="Domain"><code>{{range $i, $d := $svc.Domains}}{{if $i}}, {{end}}{{$d}}{{end}}</code></td>
                     <td data-label="Internal">
                         {{if $svc.InternalDNS}}
                             {{$expectedPrivate := $svc.InternalDNS.IP}}
-                            {{$actualPrivate := index $.PrivateDNS $svc.Domain}}
+                            {{$actualPrivate := index $.PrivateDNS ($svc.PrimaryDomain)}}
                             {{if $actualPrivate}}
                                 {{if eq $actualPrivate $expectedPrivate}}
                                     <span class="status-ok" title="Resolves correctly">⬤</span>
@@ -423,7 +423,7 @@ const adminTemplate = `<!DOCTYPE html>
                     </td>
                     <td data-label="External">
                         {{if $svc.ExternalDNS}}
-                            {{$actualPublic := index $.PublicDNS $svc.Domain}}
+                            {{$actualPublic := index $.PublicDNS ($svc.PrimaryDomain)}}
                             {{$expectedPublic := $svc.ExternalDNS.IP}}
                             {{if eq $expectedPublic ""}}{{$expectedPublic = $.Config.PublicIP}}{{end}}
                             {{if $actualPublic}}
@@ -473,8 +473,8 @@ const adminTemplate = `<!DOCTYPE html>
                     <div style="margin-bottom: 1rem; padding: 0.75rem; background: #1a1a2e; border-radius: 4px;">
                         <h4 style="margin: 0 0 0.5rem 0; color: #e94560;">Step 1: Basic Info</h4>
                         <input type="text" name="name" placeholder="Service name (e.g., grafana)" required>
-                        <input type="text" name="domain" placeholder="grafana.example.com" required>
-                        <p style="color: #888; font-size: 0.8em; margin: 0.25rem 0 0 0;">Supports wildcards (e.g., *.api.example.com) to route all subdomains to one backend.</p>
+                        <input type="text" name="domain" placeholder="app.example.com, book.example.com" required>
+                        <p style="color: #888; font-size: 0.8em; margin: 0.25rem 0 0 0;">Comma-separated for multiple domains. Supports wildcards (e.g., *.api.example.com).</p>
                     </div>
 
                     <div style="margin-bottom: 1rem; padding: 0.75rem; background: #1a1a2e; border-radius: 4px;">
@@ -574,7 +574,7 @@ const adminTemplate = `<!DOCTYPE html>
                 <div style="margin-bottom: 1rem; padding: 0.5rem; background: #1a1a2e; border-radius: 4px;">
                     <strong style="color: #e94560;">Basic Info</strong>
                     <input type="text" name="name" id="edit-svc-name" placeholder="Service name" required style="margin-top: 0.5rem;">
-                    <input type="text" name="domain" id="edit-svc-domain" placeholder="Domain" required>
+                    <input type="text" name="domain" id="edit-svc-domain" placeholder="Domains (comma-separated)" required>
                 </div>
 
                 <div style="margin-bottom: 1rem; padding: 0.5rem; background: #1a1a2e; border-radius: 4px;">
@@ -1673,7 +1673,7 @@ const adminTemplate = `<!DOCTYPE html>
     function showEditService(svc) {
         document.getElementById('edit-svc-original-name').value = svc.name;
         document.getElementById('edit-svc-name').value = svc.name;
-        document.getElementById('edit-svc-domain').value = svc.domain;
+        document.getElementById('edit-svc-domain').value = (svc.domains || []).join(', ');
 
         // Internal DNS
         document.getElementById('edit-svc-internal-ip').value = (svc.internal_dns && svc.internal_dns.ip) || '';

@@ -60,7 +60,7 @@ const haproxyTemplate = `<!DOCTYPE html>
                 {{range .BackendStatuses}}
                 <tr>
                     <td data-label="Service"><strong>{{.Name}}</strong></td>
-                    <td data-label="Domain"><code>{{.DomainMatch}}</code></td>
+                    <td data-label="Domain"><code>{{range $i, $d := .GetDomainMatches}}{{if $i}}, {{end}}{{$d}}{{end}}</code></td>
                     <td data-label="Backend">
                         {{if .Deploy}}
                             <code>{{.CurrentServer}}</code> <span class="srv-state-{{.CurrentState}}" style="font-size: 0.8em;">current ({{.CurrentState}})</span><br>
@@ -85,7 +85,7 @@ const haproxyTemplate = `<!DOCTYPE html>
                 {{range .Backends}}
                 <tr>
                     <td data-label="Service"><strong>{{.Name}}</strong></td>
-                    <td data-label="Domain"><code>{{.DomainMatch}}</code></td>
+                    <td data-label="Domain"><code>{{range $i, $d := .GetDomainMatches}}{{if $i}}, {{end}}{{$d}}{{end}}</code></td>
                     <td data-label="Backend">
                         {{if .Deploy}}
                             <code>{{.CurrentServer}}</code> <span style="color: #888; font-size: 0.8em;">current</span><br>

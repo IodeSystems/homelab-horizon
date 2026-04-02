@@ -12,9 +12,10 @@ import (
 
 // Backend represents a HAProxy backend service
 type Backend struct {
-	Name         string `json:"name"`
-	DomainMatch  string `json:"domain_match"`  // e.g., ".example.com" matches anything ending in .example.com
-	Server       string `json:"server"`        // e.g., "192.168.1.10:8080"
+	Name          string   `json:"name"`
+	DomainMatch   string   `json:"domain_match,omitempty"`  // Deprecated: use DomainMatches
+	DomainMatches []string `json:"domain_matches,omitempty"` // e.g., [".example.com", "app.other.com"]
+	Server        string   `json:"server"`                  // e.g., "192.168.1.10:8080"
 	HTTPCheck    bool   `json:"http_check"`
 	CheckPath    string `json:"check_path"`    // e.g., "/health"
 	InternalOnly bool   `json:"internal_only"` // Restrict to local network access only
@@ -24,6 +25,17 @@ type Backend struct {
 	CurrentServer string `json:"current_server,omitempty"`  // host:port for active slot
 	NextServer    string `json:"next_server,omitempty"`     // host:port for inactive slot
 	DeployBalance string `json:"deploy_balance,omitempty"`  // "first" or "roundrobin" (default "first")
+}
+
+// GetDomainMatches returns all domain matches, falling back to DomainMatch for backwards compat
+func (b *Backend) GetDomainMatches() []string {
+	if len(b.DomainMatches) > 0 {
+		return b.DomainMatches
+	}
+	if b.DomainMatch != "" {
+		return []string{b.DomainMatch}
+	}
+	return nil
 }
 
 // BackendStatus contains runtime status of a backend
@@ -311,8 +323,11 @@ listen stats
 		sb.WriteString("    # Backend routing (for domains without SSL)\n")
 		for _, b := range h.backends {
 			aclName := sanitizeName(b.Name)
-			aclPattern := domainToACLPattern(b.DomainMatch)
-			sb.WriteString(fmt.Sprintf("    acl host_%s hdr_end(host) -i %s\n", aclName, aclPattern))
+			var patterns []string
+			for _, dm := range b.GetDomainMatches() {
+				patterns = append(patterns, domainToACLPattern(dm))
+			}
+			sb.WriteString(fmt.Sprintf("    acl host_%s hdr_end(host) -i %s\n", aclName, strings.Join(patterns, " ")))
 		}
 		sb.WriteString("\n")
 		// Deny external access to internal-only backends
@@ -357,8 +372,11 @@ listen stats
 		// Add backend ACLs and routing to HTTPS frontend
 		for _, b := range h.backends {
 			aclName := sanitizeName(b.Name)
-			aclPattern := domainToACLPattern(b.DomainMatch)
-			sb.WriteString(fmt.Sprintf("    acl host_%s hdr_end(host) -i %s\n", aclName, aclPattern))
+			var patterns []string
+			for _, dm := range b.GetDomainMatches() {
+				patterns = append(patterns, domainToACLPattern(dm))
+			}
+			sb.WriteString(fmt.Sprintf("    acl host_%s hdr_end(host) -i %s\n", aclName, strings.Join(patterns, " ")))
 		}
 		sb.WriteString("\n")
 		// Deny external access to internal-only backends
@@ -398,8 +416,11 @@ listen stats
 		// Add backend ACLs and routing
 		for _, b := range h.backends {
 			aclName := sanitizeName(b.Name)
-			aclPattern := domainToACLPattern(b.DomainMatch)
-			sb.WriteString(fmt.Sprintf("    acl host_%s hdr_end(host) -i %s\n", aclName, aclPattern))
+			var patterns []string
+			for _, dm := range b.GetDomainMatches() {
+				patterns = append(patterns, domainToACLPattern(dm))
+			}
+			sb.WriteString(fmt.Sprintf("    acl host_%s hdr_end(host) -i %s\n", aclName, strings.Join(patterns, " ")))
 		}
 		sb.WriteString("\n")
 		// Deny external access to internal-only backends

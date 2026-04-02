@@ -22,16 +22,24 @@ func (s *Server) handleAddService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := strings.TrimSpace(r.FormValue("name"))
-	domain := strings.TrimSpace(r.FormValue("domain"))
+	domainsRaw := strings.TrimSpace(r.FormValue("domain"))
 
-	if name == "" || domain == "" {
+	if name == "" || domainsRaw == "" {
 		http.Redirect(w, r, "/admin?err=Name+and+domain+required", http.StatusSeeOther)
 		return
 	}
 
+	var domains []string
+	for _, d := range strings.Split(domainsRaw, ",") {
+		d = strings.TrimSpace(d)
+		if d != "" {
+			domains = append(domains, d)
+		}
+	}
+
 	svc := config.Service{
-		Name:   name,
-		Domain: domain,
+		Name:    name,
+		Domains: domains,
 	}
 
 	// Internal DNS configuration
@@ -106,11 +114,19 @@ func (s *Server) handleEditService(w http.ResponseWriter, r *http.Request) {
 
 	originalName := strings.TrimSpace(r.FormValue("original_name"))
 	name := strings.TrimSpace(r.FormValue("name"))
-	domain := strings.TrimSpace(r.FormValue("domain"))
+	domainsRaw := strings.TrimSpace(r.FormValue("domain"))
 
-	if originalName == "" || name == "" || domain == "" {
+	if originalName == "" || name == "" || domainsRaw == "" {
 		http.Redirect(w, r, "/admin?err=Name+and+domain+required", http.StatusSeeOther)
 		return
+	}
+
+	var domains []string
+	for _, d := range strings.Split(domainsRaw, ",") {
+		d = strings.TrimSpace(d)
+		if d != "" {
+			domains = append(domains, d)
+		}
 	}
 
 	// Find and update the service
@@ -118,7 +134,7 @@ func (s *Server) handleEditService(w http.ResponseWriter, r *http.Request) {
 	for i := range s.config.Services {
 		if s.config.Services[i].Name == originalName {
 			s.config.Services[i].Name = name
-			s.config.Services[i].Domain = domain
+			s.config.Services[i].Domains = domains
 
 			// Update Internal DNS
 			internalIP := strings.TrimSpace(r.FormValue("internal_ip"))
