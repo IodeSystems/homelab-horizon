@@ -43,17 +43,38 @@ import { useSyncContext } from "../components/SyncProvider";
 import type { Service } from "../api/types";
 import type { ServiceMutationInput } from "../api/hooks";
 
-function StatusDot({ active }: { active: boolean }) {
+function StatusDot({
+  configured,
+  detected,
+  title,
+}: {
+  configured: boolean;
+  detected: boolean;
+  title?: string;
+}) {
+  let color: string;
+  let opacity = 1;
+  if (configured && detected) {
+    color = "#2ecc71";
+  } else if (configured && !detected) {
+    color = "#e74c3c";
+  } else if (!configured && detected) {
+    color = "#f39c12";
+  } else {
+    color = "#555";
+    opacity = 0.5;
+  }
   return (
     <Box
       component="span"
+      title={title}
       sx={{
         display: "inline-block",
         width: 10,
         height: 10,
         borderRadius: "50%",
-        bgcolor: active ? "success.main" : "text.secondary",
-        opacity: active ? 1 : 0.4,
+        bgcolor: color,
+        opacity,
       }}
     />
   );
@@ -517,13 +538,13 @@ function ServiceRow({
           </Box>
         </TableCell>
         <TableCell align="center">
-          <StatusDot active={hasIntDNS} />
+          <StatusDot configured={hasIntDNS} detected={service.status.internalDNSUp} />
         </TableCell>
         <TableCell align="center">
-          <StatusDot active={hasExtDNS} />
+          <StatusDot configured={hasExtDNS} detected={service.status.externalDNSUp} />
         </TableCell>
         <TableCell align="center">
-          <StatusDot active={hasProxy} />
+          <StatusDot configured={hasProxy} detected={service.status.proxyUp} />
         </TableCell>
       </TableRow>
       <TableRow>

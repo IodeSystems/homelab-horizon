@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
+	"sync"
 
 	"homelab-horizon/internal/apitypes"
 	"homelab-horizon/internal/config"
@@ -52,6 +54,9 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	dnsmasqAddr := s.config.GetWGGatewayIP() + ":53"
+
+	// Build service list
 	sorted := make([]apitypes.ServiceResp, 0, len(s.config.Services))
 	for _, svc := range s.config.Services {
 		sr := apitypes.ServiceResp{
@@ -90,6 +95,40 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(sorted, func(i, j int) bool {
 		return sorted[i].Name < sorted[j].Name
 	})
+
+	// Check live status in parallel for each service
+	var wg sync.WaitGroup
+	backendStatuses := s.haproxy.GetBackendStatuses()
+	backendHealthMap := make(map[string]bool)
+	for _, bs := range backendStatuses {
+		backendHealthMap[bs.Name] = bs.Healthy
+	}
+
+	for i := range sorted {
+		sr := &sorted[i]
+		primaryDomain := ""
+		if len(sr.Domains) > 0 {
+			primaryDomain = sr.Domains[0]
+		}
+		if primaryDomain == "" || strings.HasPrefix(primaryDomain, "*.") {
+			continue
+		}
+
+		wg.Add(1)
+		go func(sr *apitypes.ServiceResp, domain string) {
+			defer wg.Done()
+			dnsmasqIP, remoteIP := resolveDomain(domain, dnsmasqAddr)
+			sr.Status.InternalDNSUp = dnsmasqIP != ""
+			sr.Status.ExternalDNSUp = remoteIP != ""
+		}(sr, primaryDomain)
+
+		// Check HAProxy backend health
+		if sr.Proxy != nil {
+			backendName := sr.Name + "_backend"
+			sr.Status.ProxyUp = backendHealthMap[backendName]
+		}
+	}
+	wg.Wait()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(sorted)

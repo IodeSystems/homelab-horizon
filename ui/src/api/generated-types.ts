@@ -45,12 +45,18 @@ export interface ExternalDNSResp {
   ip: string;
   ttl: number /* int */;
 }
+export interface ServiceStatus {
+  internalDNSUp: boolean; // dnsmasq resolves the primary domain
+  externalDNSUp: boolean; // 1.1.1.1 resolves the primary domain
+  proxyUp: boolean; // HAProxy backend is healthy
+}
 export interface ServiceResp {
   name: string;
   domains: string[];
   internalDNS?: InternalDNSResp;
   externalDNS?: ExternalDNSResp;
   proxy?: ProxyResp;
+  status: ServiceStatus;
 }
 export interface DomainResp {
   domain: string;

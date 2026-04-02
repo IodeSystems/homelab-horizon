@@ -50,6 +50,12 @@ const DeployConfigSchema = z
   })
   .optional();
 
+const ServiceStatusSchema = z.object({
+  internalDNSUp: z.boolean(),
+  externalDNSUp: z.boolean(),
+  proxyUp: z.boolean(),
+});
+
 export const ServiceSchema = z.object({
   name: z.string(),
   domains: z.array(z.string()),
@@ -65,6 +71,7 @@ export const ServiceSchema = z.object({
       deploy: DeployConfigSchema,
     })
     .optional(),
+  status: ServiceStatusSchema,
 });
 
 export const ServicesSchema = z.array(ServiceSchema);
