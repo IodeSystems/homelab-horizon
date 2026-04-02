@@ -137,6 +137,43 @@ func (c *Config) DeriveRoute53Records() []route53.Record {
 	return records
 }
 
+// filterRedundantDomains removes non-wildcard domains that are already covered
+// by a wildcard in the same list. A wildcard *.X covers any single-level
+// subdomain of X, so "dev.example.com" is redundant if "*.example.com" is
+// present. Let's Encrypt rejects such requests as malformed.
+func filterRedundantDomains(domains []string) []string {
+	// Collect all wildcard suffixes: "*.example.com" → ".example.com"
+	wildcardSuffixes := make(map[string]bool)
+	for _, d := range domains {
+		if strings.HasPrefix(d, "*.") {
+			wildcardSuffixes[d[1:]] = true // ".example.com"
+		}
+	}
+	if len(wildcardSuffixes) == 0 {
+		return domains
+	}
+
+	var filtered []string
+	for _, d := range domains {
+		if strings.HasPrefix(d, "*.") {
+			// Keep all wildcards
+			filtered = append(filtered, d)
+			continue
+		}
+		// Check if this domain is a single-level match for any wildcard
+		dotIdx := strings.Index(d, ".")
+		if dotIdx > 0 {
+			suffix := d[dotIdx:] // ".example.com"
+			if wildcardSuffixes[suffix] {
+				// Redundant — skip it
+				continue
+			}
+		}
+		filtered = append(filtered, d)
+	}
+	return filtered
+}
+
 // DeriveSSLDomains generates SSL domains from zones with SSL enabled
 // Only requests certificates for domains explicitly specified in SubZones.
 // SubZones specify which domains to include:
@@ -165,14 +202,21 @@ func (c *Config) DeriveSSLDomains() []letsencrypt.DomainConfig {
 		var allDomains []string
 		for _, subZone := range zone.SubZones {
 			if subZone == "" {
-				// Empty string means root domain
 				allDomains = append(allDomains, zone.Name)
 			} else if subZone == "*" {
-				// Asterisk alone means root wildcard
 				allDomains = append(allDomains, "*."+zone.Name)
 			} else {
 				allDomains = append(allDomains, subZone+"."+zone.Name)
 			}
+		}
+
+		// Filter out non-wildcard domains that are redundant with a wildcard
+		// in the same request. E.g., if *.iodesystems.com is present, remove
+		// dev.iodesystems.com — Let's Encrypt rejects this as malformed.
+		allDomains = filterRedundantDomains(allDomains)
+
+		if len(allDomains) == 0 {
+			continue
 		}
 
 		// First domain is primary, rest are extra SANs

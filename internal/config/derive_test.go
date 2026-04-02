@@ -754,3 +754,56 @@ func TestDeriveSSLDomains(t *testing.T) {
 		t.Errorf("Expected ExtraSANs [*.rootonly.io], got %v", domains[1].ExtraSANs)
 	}
 }
+
+func TestFilterRedundantDomains(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  []string
+		expect []string
+	}{
+		{
+			name:   "no wildcards, no filtering",
+			input:  []string{"example.com", "dev.example.com"},
+			expect: []string{"example.com", "dev.example.com"},
+		},
+		{
+			name:   "wildcard removes single-level subdomain",
+			input:  []string{"*.iodesystems.com", "dev.iodesystems.com", "kc.iodesystems.com"},
+			expect: []string{"*.iodesystems.com"},
+		},
+		{
+			name:   "wildcard does not remove multi-level subdomain",
+			input:  []string{"*.iodesystems.com", "app.vpn.iodesystems.com"},
+			expect: []string{"*.iodesystems.com", "app.vpn.iodesystems.com"},
+		},
+		{
+			name:   "wildcard does not remove root domain",
+			input:  []string{"*.example.com", "example.com"},
+			expect: []string{"*.example.com", "example.com"},
+		},
+		{
+			name:   "sub-level wildcard removes its single-level matches",
+			input:  []string{"*.vpn.example.com", "admin.vpn.example.com"},
+			expect: []string{"*.vpn.example.com"},
+		},
+		{
+			name:   "mixed wildcards and non-redundant",
+			input:  []string{"*.iodesystems.com", "vpn.iodesystems.com", "*.vpn.iodesystems.com", "kiosk.vpn.iodesystems.com"},
+			expect: []string{"*.iodesystems.com", "*.vpn.iodesystems.com"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := filterRedundantDomains(tt.input)
+			if len(got) != len(tt.expect) {
+				t.Fatalf("got %v, want %v", got, tt.expect)
+			}
+			for i := range got {
+				if got[i] != tt.expect[i] {
+					t.Errorf("got[%d] = %q, want %q", i, got[i], tt.expect[i])
+				}
+			}
+		})
+	}
+}
