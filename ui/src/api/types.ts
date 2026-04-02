@@ -47,4 +47,7 @@ export type {
   CheckResult,
   CheckHistoryResponse,
   ChecksOverview,
+  DomainSSLAddRequest,
+  DomainSSLAddResponse,
+  DomainSSLRemoveRequest,
 } from "./generated-types";

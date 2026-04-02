@@ -190,6 +190,38 @@ export function useAddSubZone() {
   });
 }
 
+// --- Domain SSL mutations ---
+
+export function useAddDomainSSL() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (domain: string) =>
+      apiFetch("/domains/ssl/add", {
+        method: "POST",
+        body: JSON.stringify({ domain }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["domains"] });
+      qc.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
+export function useRemoveDomainSSL() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (domain: string) =>
+      apiFetch("/domains/ssl/remove", {
+        method: "POST",
+        body: JSON.stringify({ domain }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["domains"] });
+      qc.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
 // --- SSL mutations ---
 
 export function useRequestCert() {

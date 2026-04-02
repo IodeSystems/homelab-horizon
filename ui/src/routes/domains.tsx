@@ -27,8 +27,8 @@ import {
   useDomains,
   useSyncDNS,
   useSyncAllDNS,
-  useAddSubZone,
-  useRequestCert,
+  useAddDomainSSL,
+  useRemoveDomainSSL,
 } from "../api/hooks";
 import type { DomainAnalysis } from "../api/types";
 
@@ -103,8 +103,8 @@ function DomainRow({
 }) {
   const [open, setOpen] = useState(false);
   const syncDNS = useSyncDNS();
-  const addSubZone = useAddSubZone();
-  const requestCert = useRequestCert();
+  const addSSL = useAddDomainSSL();
+  const removeSSL = useRemoveDomainSSL();
 
   const handleSyncDNS = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -121,32 +121,29 @@ function DomainRow({
     });
   };
 
-  const handleEnableHTTPS = (e: React.MouseEvent) => {
+  const handleAddSSL = (e: React.MouseEvent) => {
     e.stopPropagation();
-    addSubZone.mutate(
-      { zone: domain.zoneName, subzone: domain.neededSubZone },
-      {
-        onSuccess: () =>
-          onSnack(
-            `Sub-zone ${domain.neededSubZoneDisplay} added. Run Sync to update SSL certificate.`,
-            "success",
-          ),
-        onError: (err) => onSnack(err.message, "error"),
-      },
-    );
+    addSSL.mutate(domain.domain, {
+      onSuccess: () =>
+        onSnack(
+          `SSL coverage added for ${domain.domain}. Sync will request the certificate.`,
+          "success",
+        ),
+      onError: (err) => onSnack(err.message, "error"),
+    });
   };
 
-  const handleRequestCert = (e: React.MouseEvent) => {
+  const handleRemoveSSL = (e: React.MouseEvent) => {
     e.stopPropagation();
-    requestCert.mutate(domain.zoneName, {
+    removeSSL.mutate(domain.domain, {
       onSuccess: () =>
-        onSnack(`Certificate requested for *.${domain.zoneName}`, "success"),
+        onSnack(`SSL coverage removed for ${domain.domain}`, "success"),
       onError: (err) => onSnack(err.message, "error"),
     });
   };
 
   const anyPending =
-    syncDNS.isPending || addSubZone.isPending || requestCert.isPending;
+    syncDNS.isPending || addSSL.isPending || removeSSL.isPending;
 
   return (
     <>
@@ -289,7 +286,7 @@ function DomainRow({
             </Box>
 
             {/* Action buttons */}
-            {(domain.canSyncDNS || domain.canEnableHTTPS || domain.canRequestCert) && (
+            {(domain.canSyncDNS || domain.canEnableHTTPS || (domain.hasSSLCoverage && !domain.hasService)) && (
               <Box sx={{ display: "flex", gap: 1, pb: 2, flexWrap: "wrap" }}>
                 {domain.canSyncDNS && (
                   <Button
@@ -306,22 +303,23 @@ function DomainRow({
                   <Button
                     size="small"
                     variant="outlined"
-                    startIcon={addSubZone.isPending ? <CircularProgress size={16} /> : <HttpsIcon />}
-                    onClick={handleEnableHTTPS}
+                    startIcon={addSSL.isPending ? <CircularProgress size={16} /> : <HttpsIcon />}
+                    onClick={handleAddSSL}
                     disabled={anyPending}
                   >
-                    Enable HTTPS ({domain.neededSubZoneDisplay})
+                    Add SSL ({domain.neededSubZoneDisplay})
                   </Button>
                 )}
-                {domain.canRequestCert && (
+                {domain.hasSSLCoverage && !domain.hasService && (
                   <Button
                     size="small"
                     variant="outlined"
-                    startIcon={requestCert.isPending ? <CircularProgress size={16} /> : <HttpsIcon />}
-                    onClick={handleRequestCert}
+                    color="warning"
+                    startIcon={removeSSL.isPending ? <CircularProgress size={16} /> : <HttpsIcon />}
+                    onClick={handleRemoveSSL}
                     disabled={anyPending}
                   >
-                    Request Certificate
+                    Remove SSL
                   </Button>
                 )}
               </Box>
@@ -336,6 +334,7 @@ function DomainRow({
 function DomainsPage() {
   const { data, isLoading, error } = useDomains();
   const syncAllDNS = useSyncAllDNS();
+  const addSSL = useAddDomainSSL();
   const [snack, setSnack] = useState<SnackState>({ open: false, message: "", severity: "success" });
 
   const showSnack = (message: string, severity: "success" | "error") =>
@@ -405,9 +404,27 @@ function DomainsPage() {
           <Box component="ul" sx={{ m: 0, pl: 2 }}>
             {data.sslGaps.map((gap) => (
               <li key={gap.domain}>
-                <Typography variant="body2">
-                  {gap.display} &mdash; {gap.reason}
-                </Typography>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1, my: 0.5 }}>
+                  <Typography variant="body2">
+                    {gap.display} &mdash; {gap.reason}
+                  </Typography>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={addSSL.isPending ? <CircularProgress size={14} /> : <HttpsIcon />}
+                    onClick={() =>
+                      addSSL.mutate(gap.domain, {
+                        onSuccess: () =>
+                          showSnack(`SSL coverage added for ${gap.display}`, "success"),
+                        onError: (err) => showSnack(err.message, "error"),
+                      })
+                    }
+                    disabled={addSSL.isPending}
+                    sx={{ whiteSpace: "nowrap", flexShrink: 0 }}
+                  >
+                    Add SSL
+                  </Button>
+                </Box>
               </li>
             ))}
           </Box>

@@ -314,6 +314,17 @@ export interface ChecksOverview {
   failed: number /* int */;
   pending: number /* int */;
 }
+export interface DomainSSLAddRequest {
+  domain: string;
+}
+export interface DomainSSLAddResponse {
+  ok: boolean;
+  zone: string;
+  subZone: string;
+}
+export interface DomainSSLRemoveRequest {
+  domain: string;
+}
 export interface ServiceIntegration {
   name: string;
   token: string;
