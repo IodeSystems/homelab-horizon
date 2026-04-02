@@ -1084,6 +1084,14 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// Deploy API (per-service token auth, no admin/CSRF)
 	mux.HandleFunc("/api/deploy/", s.handleDeployAPI)
 
+	// IP Ban API (deploy token auth, no CSRF)
+	mux.HandleFunc("/api/ban/", s.handleBanAPI)
+
+	// Admin ban management
+	mux.HandleFunc("/api/v1/bans", s.handleAPIBanList)
+	mux.HandleFunc("/api/v1/bans/add", s.handleAPIBanAdd)
+	mux.HandleFunc("/api/v1/bans/remove", s.handleAPIBanRemove)
+
 	// Admin routes - all wrapped with CSRF middleware
 	mux.HandleFunc("/admin", s.csrfMiddleware(s.handleAdmin))
 	mux.HandleFunc("/admin/client", s.csrfMiddleware(s.handleAddClient))
@@ -1376,6 +1384,10 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 
 	// Start background health check (every 60 seconds)
 	s.startHealthCheck()
+
+	// Reapply IP bans and start expiry goroutine
+	s.reapplyBans()
+	go s.startBanExpiry()
 
 	// Start Route53 background sync for dynamic IP records
 	s.startRoute53Sync()

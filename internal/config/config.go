@@ -157,6 +157,19 @@ type Config struct {
 
 	// VPN-based admin authentication
 	VPNAdmins []string `json:"vpn_admins,omitempty"` // Client names with admin access via VPN IP
+
+	// IP banning
+	IPBans []IPBan `json:"ip_bans,omitempty"`
+}
+
+// IPBan represents a banned IP address
+type IPBan struct {
+	IP        string `json:"ip"`
+	Timeout   int    `json:"timeout,omitempty"`    // seconds, 0 = permanent
+	CreatedAt int64  `json:"created_at"`           // unix timestamp
+	ExpiresAt int64  `json:"expires_at,omitempty"` // unix timestamp, 0 = never
+	Reason    string `json:"reason,omitempty"`
+	Service   string `json:"service,omitempty"` // which service banned it
 }
 
 // Zone represents a DNS zone with shared configuration for DNS provider and SSL

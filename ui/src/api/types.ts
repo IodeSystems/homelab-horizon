@@ -39,4 +39,8 @@ export type {
   ToggleAdminResponse,
   TriggerSyncResponse,
   RunCheckResponse,
+  BanEntry,
+  BanListResponse,
+  BanRequest,
+  UnbanRequest,
 } from "./generated-types";
