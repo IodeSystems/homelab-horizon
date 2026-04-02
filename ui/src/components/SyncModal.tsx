@@ -43,27 +43,9 @@ export function useSyncModal() {
           setOpen(true);
           setDone(false);
           connectToStream();
-        } else if (data.history && data.history.length > 0) {
-          // Sync completed but not yet dismissed — show results
-          const entries = data.history
-            .map((h) => {
-              try {
-                return JSON.parse(h) as SyncLogEntry;
-              } catch {
-                return null;
-              }
-            })
-            .filter((e): e is SyncLogEntry => e !== null);
-          if (entries.length > 0) {
-            const lastEntry = entries[entries.length - 1];
-            if (lastEntry?.done) {
-              setLog(entries);
-              setDone(true);
-              setSuccess(lastEntry.status === "success");
-              setOpen(true);
-            }
-          }
         }
+        // Don't auto-show completed syncs on page load — only show
+        // if user explicitly triggered the sync in this session
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
