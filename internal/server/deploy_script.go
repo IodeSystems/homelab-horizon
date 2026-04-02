@@ -119,7 +119,8 @@ status() {
 import sys, json
 d = json.load(sys.stdin)
 print(f\"Service:      {d['service']}\")
-print(f\"Domain:       {d['domain']}\")
+domains = d.get('domains', [d['domain']] if d.get('domain') else [])
+print(f\"Domains:      {', '.join(domains)}\")
 print(f\"Balance:      {d.get('balance', 'first')}\")
 print(f\"Health check: {d.get('health_check', '-')}\")
 print(f\"Active slot:  {d.get('active_slot', 'a')}\")
