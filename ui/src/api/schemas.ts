@@ -240,6 +240,13 @@ export const HAProxyConfigPreviewSchema = z.object({
   config: z.string(),
 });
 
+// Domain SSL mutations
+export const DomainSSLAddResponseSchema = z.object({
+  ok: z.boolean(),
+  zone: z.string(),
+  subZone: z.string(),
+});
+
 // Bans
 export const BanEntrySchema = z.object({
   ip: z.string(),

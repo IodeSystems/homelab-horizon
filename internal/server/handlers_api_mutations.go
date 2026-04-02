@@ -501,6 +501,191 @@ func (s *Server) handleAPIRequestCert(w http.ResponseWriter, r *http.Request) {
 	writeJSONOK(w)
 }
 
+// POST /api/v1/domains/ssl/add
+func (s *Server) handleAPIDomainSSLAdd(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	var req apitypes.DomainSSLAddRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+
+	if req.Domain == "" {
+		writeJSONError(w, http.StatusBadRequest, "domain required")
+		return
+	}
+
+	zone := s.config.GetZoneForDomain(req.Domain)
+	if zone == nil {
+		writeJSONError(w, http.StatusNotFound, "No zone found for domain")
+		return
+	}
+
+	subZone, _, _ := neededSubZoneForDomain(req.Domain, zone.Name)
+
+	// Check if SubZone already exists
+	for _, existing := range zone.SubZones {
+		if existing == subZone {
+			writeJSONError(w, http.StatusConflict, "SSL coverage already exists")
+			return
+		}
+	}
+
+	// Add SubZone to the zone
+	for i := range s.config.Zones {
+		if s.config.Zones[i].Name == zone.Name {
+			s.config.Zones[i].SubZones = append(s.config.Zones[i].SubZones, subZone)
+			break
+		}
+	}
+
+	if err := config.Save(s.configPath, s.config); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.syncServices()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(apitypes.DomainSSLAddResponse{
+		OK:      true,
+		Zone:    zone.Name,
+		SubZone: subZone,
+	})
+}
+
+// POST /api/v1/domains/ssl/remove
+func (s *Server) handleAPIDomainSSLRemove(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	var req apitypes.DomainSSLRemoveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+
+	if req.Domain == "" {
+		writeJSONError(w, http.StatusBadRequest, "domain required")
+		return
+	}
+
+	zone := s.config.GetZoneForDomain(req.Domain)
+	if zone == nil {
+		writeJSONError(w, http.StatusNotFound, "No zone found for domain")
+		return
+	}
+
+	// Figure out which SubZone produces this domain
+	subZone, _, _ := neededSubZoneForDomain(req.Domain, zone.Name)
+
+	// Find and verify the SubZone exists
+	subZoneIdx := -1
+	for i := range s.config.Zones {
+		if s.config.Zones[i].Name == zone.Name {
+			for j, existing := range s.config.Zones[i].SubZones {
+				if existing == subZone {
+					subZoneIdx = j
+					break
+				}
+			}
+			break
+		}
+	}
+
+	if subZoneIdx == -1 {
+		writeJSONError(w, http.StatusNotFound, "SubZone not found on zone")
+		return
+	}
+
+	// Build the pattern this SubZone covers
+	var pattern string
+	if subZone == "" {
+		pattern = zone.Name
+	} else if subZone == "*" {
+		pattern = "*." + zone.Name
+	} else {
+		pattern = subZone + "." + zone.Name
+	}
+
+	// Build remaining patterns (all SubZones except the one being removed)
+	var remainingPatterns []string
+	for _, sz := range zone.SubZones {
+		if sz == subZone {
+			continue
+		}
+		if sz == "" {
+			remainingPatterns = append(remainingPatterns, zone.Name)
+		} else if sz == "*" {
+			remainingPatterns = append(remainingPatterns, "*."+zone.Name)
+		} else {
+			remainingPatterns = append(remainingPatterns, sz+"."+zone.Name)
+		}
+	}
+
+	// Check if any service domains are covered ONLY by this SubZone pattern
+	var dependentServices []string
+	for _, svc := range s.config.Services {
+		for _, domain := range svc.Domains {
+			if !domainMatchesPattern(domain, pattern) {
+				continue
+			}
+			// This service domain matches the pattern being removed.
+			// Check if any remaining pattern also covers it.
+			coveredByOther := false
+			for _, rp := range remainingPatterns {
+				if domainMatchesPattern(domain, rp) {
+					coveredByOther = true
+					break
+				}
+			}
+			if !coveredByOther {
+				dependentServices = append(dependentServices, svc.Name)
+				break // one match per service is enough
+			}
+		}
+	}
+
+	if len(dependentServices) > 0 {
+		writeJSONError(w, http.StatusConflict,
+			fmt.Sprintf("Cannot remove: services [%s] depend on %s coverage",
+				strings.Join(dependentServices, ", "), pattern))
+		return
+	}
+
+	// Safe to remove: find the zone again and remove the SubZone
+	for i := range s.config.Zones {
+		if s.config.Zones[i].Name == zone.Name {
+			s.config.Zones[i].SubZones = append(
+				s.config.Zones[i].SubZones[:subZoneIdx],
+				s.config.Zones[i].SubZones[subZoneIdx+1:]...,
+			)
+			break
+		}
+	}
+
+	if err := config.Save(s.configPath, s.config); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.syncServices()
+	writeJSONOK(w)
+}
+
 // POST /api/v1/services/sync
 func (s *Server) handleAPITriggerSync(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {

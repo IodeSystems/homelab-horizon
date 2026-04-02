@@ -392,6 +392,22 @@ type ChecksOverview struct {
 	Pending int `json:"pending"`
 }
 
+// Domain SSL mutations
+
+type DomainSSLAddRequest struct {
+	Domain string `json:"domain"`
+}
+
+type DomainSSLAddResponse struct {
+	OK      bool   `json:"ok"`
+	Zone    string `json:"zone"`
+	SubZone string `json:"subZone"`
+}
+
+type DomainSSLRemoveRequest struct {
+	Domain string `json:"domain"`
+}
+
 // Service integration
 
 type ServiceIntegration struct {

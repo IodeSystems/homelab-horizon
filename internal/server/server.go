@@ -1214,6 +1214,8 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/dns/sync-all", s.handleAPISyncAllDNS)
 	mux.HandleFunc("/api/v1/zones/subzone", s.handleAPIAddSubZone)
 	mux.HandleFunc("/api/v1/ssl/request-cert", s.handleAPIRequestCert)
+	mux.HandleFunc("/api/v1/domains/ssl/add", s.handleAPIDomainSSLAdd)
+	mux.HandleFunc("/api/v1/domains/ssl/remove", s.handleAPIDomainSSLRemove)
 	mux.HandleFunc("/api/v1/services/sync", s.handleAPITriggerSync)
 	mux.HandleFunc("/api/v1/vpn/peers/add", s.handleAPIAddPeer)
 	mux.HandleFunc("/api/v1/vpn/peers/edit", s.handleAPIEditPeer)
