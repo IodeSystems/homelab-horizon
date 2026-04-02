@@ -150,8 +150,7 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 
 		// Check HAProxy backend health
 		if sr.Proxy != nil {
-			backendName := sr.Name + "_backend"
-			if bi, ok := backendMap[backendName]; ok {
+			if bi, ok := backendMap[sr.Name]; ok {
 				sr.Status.ProxyUp = bi.healthy
 				sr.Status.ProxyError = bi.err
 				sr.Status.ProxyState = bi.state
