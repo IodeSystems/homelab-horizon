@@ -78,7 +78,7 @@ const dnsTemplate = `<!DOCTYPE html>
                 {{range .Services}}
                 <tr>
                     <td data-label="Service"><strong>{{.Name}}</strong></td>
-                    <td data-label="Domain"><code>{{.Domain}}</code></td>
+                    <td data-label="Domain"><code>{{range $i, $d := .Domains}}{{if $i}}, {{end}}{{$d}}{{end}}</code></td>
                     <td data-label="Proxy">
                         {{if .Proxy}}
                             <span style="color: #3498db;">HAProxy</span>
@@ -98,7 +98,7 @@ const dnsTemplate = `<!DOCTYPE html>
                     </td>
                     <td>
                         <form method="POST" action="/admin/dns/sync" style="display:inline">
-                            <input type="hidden" name="name" value="{{.Domain}}">
+                            <input type="hidden" name="name" value="{{.PrimaryDomain}}">
                             <button class="success" type="submit">Sync</button>
                         </form>
                     </td>

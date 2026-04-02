@@ -182,11 +182,16 @@ func (s *Server) handleDNSSyncRecord(w http.ResponseWriter, r *http.Request) {
 
 	name := r.FormValue("name")
 
-	// Find the service by domain name
+	// Find the service by domain name (name is the primary domain)
 	var svc *config.Service
 	for i := range s.config.Services {
-		if s.config.Services[i].Domain == name {
-			svc = &s.config.Services[i]
+		for _, d := range s.config.Services[i].Domains {
+			if d == name {
+				svc = &s.config.Services[i]
+				break
+			}
+		}
+		if svc != nil {
 			break
 		}
 	}
@@ -197,7 +202,7 @@ func (s *Server) handleDNSSyncRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get the zone for this domain
-	zone := s.config.GetZoneForDomain(svc.Domain)
+	zone := s.config.GetZoneForDomain(name)
 	if zone == nil {
 		http.Redirect(w, r, "/admin/route53?err=No+zone+found+for+domain", http.StatusSeeOther)
 		return
@@ -230,7 +235,7 @@ func (s *Server) handleDNSSyncRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	record := dns.Record{
-		Name:  svc.Domain,
+		Name:  name,
 		Type:  "A",
 		Value: publicIP,
 		TTL:   ttl,
@@ -257,21 +262,9 @@ func (s *Server) handleDNSSyncAll(w http.ResponseWriter, r *http.Request) {
 
 	var updated, failed int
 
-	// Group services by zone
+	// Group services by zone, sync each domain
 	for _, svc := range s.config.Services {
 		if svc.ExternalDNS == nil {
-			continue
-		}
-
-		zone := s.config.GetZoneForDomain(svc.Domain)
-		if zone == nil {
-			failed++
-			continue
-		}
-
-		providerCfg := zone.GetDNSProvider()
-		if providerCfg == nil {
-			failed++
 			continue
 		}
 
@@ -281,29 +274,43 @@ func (s *Server) handleDNSSyncAll(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		provider, err := dns.NewProvider(providerCfg)
-		if err != nil {
-			failed++
-			continue
-		}
-
 		ttl := 300
 		if svc.ExternalDNS.TTL > 0 {
 			ttl = svc.ExternalDNS.TTL
 		}
 
-		record := dns.Record{
-			Name:  svc.Domain,
-			Type:  "A",
-			Value: publicIP,
-			TTL:   ttl,
-		}
+		for _, domain := range svc.Domains {
+			zone := s.config.GetZoneForDomain(domain)
+			if zone == nil {
+				failed++
+				continue
+			}
 
-		changed, err := provider.SyncRecord(zone.ZoneID, record)
-		if err != nil {
-			failed++
-		} else if changed {
-			updated++
+			providerCfg := zone.GetDNSProvider()
+			if providerCfg == nil {
+				failed++
+				continue
+			}
+
+			provider, err := dns.NewProvider(providerCfg)
+			if err != nil {
+				failed++
+				continue
+			}
+
+			record := dns.Record{
+				Name:  domain,
+				Type:  "A",
+				Value: publicIP,
+				TTL:   ttl,
+			}
+
+			changed, err := provider.SyncRecord(zone.ZoneID, record)
+			if err != nil {
+				failed++
+			} else if changed {
+				updated++
+			}
 		}
 	}
 

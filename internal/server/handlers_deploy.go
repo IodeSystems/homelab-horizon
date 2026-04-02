@@ -119,7 +119,7 @@ func (s *Server) handleDeployStatus(w http.ResponseWriter, svc *config.Service, 
 
 	status := DeployStatus{
 		Service:     svc.Name,
-		Domain:      svc.Domain,
+		Domain:      svc.PrimaryDomain(),
 		ActiveSlot:  deploy.ActiveSlot,
 		Balance:     balance,
 		HealthCheck: healthCheck,

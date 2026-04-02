@@ -228,6 +228,35 @@ func TestGenerateConfig_WildcardBackend(t *testing.T) {
 	}
 }
 
+func TestGenerateConfig_MultiDomainBackend(t *testing.T) {
+	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
+	h.SetBackends([]Backend{
+		{
+			Name:          "multi-app",
+			DomainMatches: []string{"app.example.com", "book.example.com", "portal.example.com"},
+			Server:        "192.168.1.10:8080",
+		},
+	})
+
+	config := h.GenerateConfig(80, 443, nil)
+
+	// All three domains should be in a single ACL line
+	expected := "acl host_multi_app hdr_end(host) -i app.example.com book.example.com portal.example.com"
+	if !strings.Contains(config, expected) {
+		t.Errorf("config missing multi-domain ACL: %s", expected)
+	}
+
+	// Single backend definition
+	if !strings.Contains(config, "backend multi_app_backend") {
+		t.Error("config missing backend definition")
+	}
+
+	// Single use_backend
+	if !strings.Contains(config, "use_backend multi_app_backend if host_multi_app") {
+		t.Error("config missing use_backend directive")
+	}
+}
+
 func TestGenerateConfig_Compression(t *testing.T) {
 	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
 	h.SetBackends(nil)

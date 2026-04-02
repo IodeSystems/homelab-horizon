@@ -267,8 +267,8 @@ func (s *Server) handleApplyZoneTemplate(w http.ResponseWriter, r *http.Request)
 	// Create template services
 	services := []config.Service{
 		{
-			Name:   "vpn",
-			Domain: "vpn." + zoneName,
+			Name:    "vpn",
+			Domains: []string{"vpn." + zoneName},
 			InternalDNS: &config.InternalDNS{
 				IP: natIP,
 			},
@@ -278,8 +278,8 @@ func (s *Server) handleApplyZoneTemplate(w http.ResponseWriter, r *http.Request)
 			},
 		},
 		{
-			Name:   "vpn-kiosk",
-			Domain: "kiosk.vpn." + zoneName,
+			Name:    "vpn-kiosk",
+			Domains: []string{"kiosk.vpn." + zoneName},
 			InternalDNS: &config.InternalDNS{
 				IP: natIP,
 			},
@@ -295,8 +295,8 @@ func (s *Server) handleApplyZoneTemplate(w http.ResponseWriter, r *http.Request)
 			},
 		},
 		{
-			Name:   "vpn-admin",
-			Domain: "admin.vpn." + zoneName,
+			Name:    "vpn-admin",
+			Domains: []string{"admin.vpn." + zoneName},
 			InternalDNS: &config.InternalDNS{
 				IP: wgGatewayIP,
 			},

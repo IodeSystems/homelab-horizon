@@ -189,10 +189,42 @@ type ZoneSSL struct {
 // Service represents a unified service configuration with clear separation of concerns
 type Service struct {
 	Name        string       `json:"name"`                   // Human-readable, e.g., "grafana"
-	Domain      string       `json:"domain"`                 // FQDN, e.g., "grafana.example.com"
+	Domains     []string     `json:"domains"`                // FQDNs, e.g., ["app.example.com", "book.example.com"]
 	InternalDNS *InternalDNS `json:"internal_dns,omitempty"` // dnsmasq config for VPN clients
 	ExternalDNS *ExternalDNS `json:"external_dns,omitempty"` // Route53 config for public access
 	Proxy       *ProxyConfig `json:"proxy,omitempty"`        // HAProxy reverse proxy config
+}
+
+// PrimaryDomain returns the first domain, or "" if none configured
+func (s *Service) PrimaryDomain() string {
+	if len(s.Domains) > 0 {
+		return s.Domains[0]
+	}
+	return ""
+}
+
+// UnmarshalJSON handles backwards compatibility: accepts both "domain":"x" and "domains":["x","y"]
+func (s *Service) UnmarshalJSON(data []byte) error {
+	// Use an alias to avoid infinite recursion
+	type ServiceAlias Service
+	var alias ServiceAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+	*s = Service(alias)
+
+	// Check for legacy "domain" field
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if domainRaw, ok := raw["domain"]; ok && len(s.Domains) == 0 {
+		var single string
+		if err := json.Unmarshal(domainRaw, &single); err == nil && single != "" {
+			s.Domains = []string{single}
+		}
+	}
+	return nil
 }
 
 // InternalDNS configures how VPN clients (via dnsmasq) resolve this domain

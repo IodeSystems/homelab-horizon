@@ -55,7 +55,9 @@ func (c *Config) DeriveDNSMappings() map[string]string {
 				ip = c.LocalInterface
 			}
 		}
-		mappings[svc.Domain] = ip
+		for _, domain := range svc.Domains {
+			mappings[domain] = ip
+		}
 	}
 	return mappings
 }
@@ -69,10 +71,10 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 		}
 
 		b := haproxy.Backend{
-			Name:         svc.Name,
-			DomainMatch:  svc.Domain,
-			Server:       svc.Proxy.Backend,
-			InternalOnly: svc.Proxy.InternalOnly,
+			Name:          svc.Name,
+			DomainMatches: svc.Domains,
+			Server:        svc.Proxy.Backend,
+			InternalOnly:  svc.Proxy.InternalOnly,
 		}
 		if svc.Proxy.HealthCheck != nil && svc.Proxy.HealthCheck.Path != "" {
 			b.HTTPCheck = true
@@ -101,11 +103,6 @@ func (c *Config) DeriveRoute53Records() []route53.Record {
 			continue
 		}
 
-		zone := c.GetZoneForDomain(svc.Domain)
-		if zone == nil {
-			continue // No zone configured for this domain
-		}
-
 		publicIP := c.GetPublicIPForService(&svc)
 		if publicIP == "" {
 			continue // No public IP available
@@ -116,19 +113,26 @@ func (c *Config) DeriveRoute53Records() []route53.Record {
 			ttl = 300 // Default TTL
 		}
 
-		awsProfile := ""
-		if provider := zone.GetDNSProvider(); provider != nil {
-			awsProfile = provider.AWSProfile
+		for _, domain := range svc.Domains {
+			zone := c.GetZoneForDomain(domain)
+			if zone == nil {
+				continue // No zone configured for this domain
+			}
+
+			awsProfile := ""
+			if provider := zone.GetDNSProvider(); provider != nil {
+				awsProfile = provider.AWSProfile
+			}
+			records = append(records, route53.Record{
+				Name:       domain,
+				Type:       "A",
+				Value:      publicIP,
+				TTL:        ttl,
+				ZoneID:     zone.ZoneID,
+				ZoneName:   zone.Name,
+				AWSProfile: awsProfile,
+			})
 		}
-		records = append(records, route53.Record{
-			Name:       svc.Domain,
-			Type:       "A",
-			Value:      publicIP,
-			TTL:        ttl,
-			ZoneID:     zone.ZoneID,
-			ZoneName:   zone.Name,
-			AWSProfile: awsProfile,
-		})
 	}
 	return records
 }
@@ -259,7 +263,7 @@ func (c *Config) DeriveHostPortMap() HostPortMap {
 			Port:    port,
 			Proto:   "tcp",
 			Service: svc.Name,
-			Domain:  svc.Domain,
+			Domain:  svc.PrimaryDomain(),
 		})
 	}
 
@@ -323,8 +327,11 @@ func (c *Config) DeriveHostPortMap() HostPortMap {
 func (c *Config) GetServicesForZone(zone *Zone) []Service {
 	var services []Service
 	for _, svc := range c.Services {
-		if svc.Domain == zone.Name || strings.HasSuffix(svc.Domain, "."+zone.Name) {
-			services = append(services, svc)
+		for _, domain := range svc.Domains {
+			if domain == zone.Name || strings.HasSuffix(domain, "."+zone.Name) {
+				services = append(services, svc)
+				break
+			}
 		}
 	}
 	return services
@@ -368,26 +375,32 @@ func (c *Config) ValidateService(svc *Service) error {
 	if svc.Name == "" {
 		return &ValidationError{Field: "name", Message: "service name is required"}
 	}
-	if svc.Domain == "" {
-		return &ValidationError{Field: "domain", Message: "domain is required"}
+	if len(svc.Domains) == 0 {
+		return &ValidationError{Field: "domain", Message: "at least one domain is required"}
 	}
 
-	// Validate wildcard domain format if present
-	if strings.HasPrefix(svc.Domain, "*") {
-		if !strings.HasPrefix(svc.Domain, "*.") {
-			return &ValidationError{Field: "domain", Message: "wildcard must be in format *.subdomain.example.com"}
+	for _, domain := range svc.Domains {
+		if domain == "" {
+			return &ValidationError{Field: "domain", Message: "domain must not be empty"}
 		}
-		// Ensure there's a valid domain after the wildcard
-		baseDomain := strings.TrimPrefix(svc.Domain, "*.")
-		if baseDomain == "" || !strings.Contains(baseDomain, ".") {
-			return &ValidationError{Field: "domain", Message: "wildcard must have a valid domain (e.g., *.api.example.com)"}
-		}
-	}
 
-	// Check zone exists for domain
-	zone := c.GetZoneForDomain(svc.Domain)
-	if zone == nil {
-		return &ValidationError{Field: "domain", Message: "no zone configured for this domain"}
+		// Validate wildcard domain format if present
+		if strings.HasPrefix(domain, "*") {
+			if !strings.HasPrefix(domain, "*.") {
+				return &ValidationError{Field: "domain", Message: "wildcard must be in format *.subdomain.example.com"}
+			}
+			// Ensure there's a valid domain after the wildcard
+			baseDomain := strings.TrimPrefix(domain, "*.")
+			if baseDomain == "" || !strings.Contains(baseDomain, ".") {
+				return &ValidationError{Field: "domain", Message: "wildcard must have a valid domain (e.g., *.api.example.com)"}
+			}
+		}
+
+		// Check zone exists for domain
+		zone := c.GetZoneForDomain(domain)
+		if zone == nil {
+			return &ValidationError{Field: "domain", Message: fmt.Sprintf("no zone configured for domain %q", domain)}
+		}
 	}
 
 	// Validate InternalDNS if present
@@ -454,11 +467,15 @@ func extractIP(address string) string {
 func (c *Config) AddService(svc Service) error {
 	// Check for duplicate
 	for _, existing := range c.Services {
-		if existing.Domain == svc.Domain {
-			return &ValidationError{Field: "domain", Message: "service with this domain already exists"}
-		}
 		if existing.Name == svc.Name {
 			return &ValidationError{Field: "name", Message: "service with this name already exists"}
+		}
+		for _, newDomain := range svc.Domains {
+			for _, existingDomain := range existing.Domains {
+				if newDomain == existingDomain {
+					return &ValidationError{Field: "domain", Message: fmt.Sprintf("domain %q already used by service %q", newDomain, existing.Name)}
+				}
+			}
 		}
 	}
 
@@ -504,10 +521,17 @@ func (c *Config) AddZone(zone Zone) error {
 func (c *Config) RemoveZone(name string) bool {
 	for i, zone := range c.Zones {
 		if zone.Name == name {
-			// Remove all services in this zone
+			// Remove all services that have any domain in this zone
 			var remaining []Service
 			for _, svc := range c.Services {
-				if svc.Domain != zone.Name && !strings.HasSuffix(svc.Domain, "."+zone.Name) {
+				inZone := false
+				for _, domain := range svc.Domains {
+					if domain == zone.Name || strings.HasSuffix(domain, "."+zone.Name) {
+						inZone = true
+						break
+					}
+				}
+				if !inZone {
 					remaining = append(remaining, svc)
 				}
 			}

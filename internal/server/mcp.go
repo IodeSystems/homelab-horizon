@@ -126,7 +126,7 @@ func (m *MCPServer) handleGetTopology(_ context.Context, _ mcp.CallToolRequest) 
 
 	var serviceDomains []string
 	for _, svc := range cfg.Services {
-		serviceDomains = append(serviceDomains, svc.Domain)
+		serviceDomains = append(serviceDomains, svc.Domains...)
 	}
 	var publicDNS, privateDNS map[string]string
 	if len(cfg.UpstreamDNS) > 0 && len(serviceDomains) > 0 {
@@ -266,7 +266,7 @@ func (m *MCPServer) handleUpdateService(_ context.Context, req mcp.CallToolReque
 			return mcp.NewToolResultError(fmt.Sprintf("service %q not found", name)), nil
 		}
 		if domain == "" {
-			domain = existing.Domain
+			domain = strings.Join(existing.Domains, ",")
 		}
 
 		m.srv.config.RemoveService(name)
@@ -306,9 +306,16 @@ func (m *MCPServer) handleUpdateService(_ context.Context, req mcp.CallToolReque
 }
 
 func (m *MCPServer) buildService(name, domain string, req mcp.CallToolRequest) config.Service {
+	var domains []string
+	for _, d := range strings.Split(domain, ",") {
+		d = strings.TrimSpace(d)
+		if d != "" {
+			domains = append(domains, d)
+		}
+	}
 	svc := config.Service{
-		Name:   name,
-		Domain: domain,
+		Name:    name,
+		Domains: domains,
 	}
 
 	if ip := req.GetString("internal_ip", ""); ip != "" {
