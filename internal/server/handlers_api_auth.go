@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"homelab-horizon/internal/apitypes"
 )
 
 func (s *Server) handleAPIAuthStatus(w http.ResponseWriter, r *http.Request) {
@@ -14,15 +16,15 @@ func (s *Server) handleAPIAuthStatus(w http.ResponseWriter, r *http.Request) {
 		if s.isVPNAdmin(r) {
 			method = "vpn"
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"authenticated": true,
-			"method":        method,
+		json.NewEncoder(w).Encode(apitypes.AuthStatusResponse{
+			Authenticated: true,
+			Method:        method,
 		})
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"authenticated": false,
+	json.NewEncoder(w).Encode(apitypes.AuthStatusResponse{
+		Authenticated: false,
 	})
 }
 
@@ -34,9 +36,7 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body struct {
-		Token string `json:"token"`
-	}
+	var body apitypes.LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -56,16 +56,16 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 			MaxAge:   86400,
 		})
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+		json.NewEncoder(w).Encode(apitypes.LoginResponse{OK: true})
 		return
 	}
 
 	if s.isValidInvite(token) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"ok":       true,
-			"invite":   true,
-			"redirect": "/invite/" + token,
+		json.NewEncoder(w).Encode(apitypes.LoginResponse{
+			OK:       true,
+			Invite:   true,
+			Redirect: "/invite/" + token,
 		})
 		return
 	}

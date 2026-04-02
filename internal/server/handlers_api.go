@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+
+	"homelab-horizon/internal/apitypes"
 )
 
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
@@ -30,18 +32,8 @@ func (s *Server) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
 
 	haStatus := s.haproxy.GetStatus()
 
-	type dashboardResponse struct {
-		ServiceCount   int    `json:"serviceCount"`
-		DomainCount    int    `json:"domainCount"`
-		ZoneCount      int    `json:"zoneCount"`
-		PeerCount      int    `json:"peerCount"`
-		HAProxyRunning bool   `json:"haproxyRunning"`
-		SSLEnabled     bool   `json:"sslEnabled"`
-		Version        string `json:"version"`
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(dashboardResponse{
+	json.NewEncoder(w).Encode(apitypes.DashboardResponse{
 		ServiceCount:   len(s.config.Services),
 		DomainCount:    domainCount,
 		ZoneCount:      len(s.config.Zones),
@@ -58,65 +50,31 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type healthCheckResp struct {
-		Path string `json:"path"`
-	}
-
-	type deployResp struct {
-		NextBackend string `json:"nextBackend"`
-		ActiveSlot  string `json:"activeSlot"`
-		Balance     string `json:"balance"`
-	}
-
-	type proxyResp struct {
-		Backend      string           `json:"backend"`
-		HealthCheck  *healthCheckResp `json:"healthCheck,omitempty"`
-		InternalOnly bool             `json:"internalOnly"`
-		Deploy       *deployResp      `json:"deploy,omitempty"`
-	}
-
-	type internalDNSResp struct {
-		IP string `json:"ip"`
-	}
-
-	type externalDNSResp struct {
-		IP  string `json:"ip"`
-		TTL int    `json:"ttl"`
-	}
-
-	type serviceResp struct {
-		Name        string           `json:"name"`
-		Domains     []string         `json:"domains"`
-		InternalDNS *internalDNSResp `json:"internalDNS,omitempty"`
-		ExternalDNS *externalDNSResp `json:"externalDNS,omitempty"`
-		Proxy       *proxyResp       `json:"proxy,omitempty"`
-	}
-
-	sorted := make([]serviceResp, 0, len(s.config.Services))
+	sorted := make([]apitypes.ServiceResp, 0, len(s.config.Services))
 	for _, svc := range s.config.Services {
-		sr := serviceResp{
+		sr := apitypes.ServiceResp{
 			Name:    svc.Name,
 			Domains: svc.Domains,
 		}
 		if svc.InternalDNS != nil {
-			sr.InternalDNS = &internalDNSResp{IP: svc.InternalDNS.IP}
+			sr.InternalDNS = &apitypes.InternalDNSResp{IP: svc.InternalDNS.IP}
 		}
 		if svc.ExternalDNS != nil {
-			sr.ExternalDNS = &externalDNSResp{
+			sr.ExternalDNS = &apitypes.ExternalDNSResp{
 				IP:  s.config.GetPublicIPForService(&svc),
 				TTL: svc.ExternalDNS.TTL,
 			}
 		}
 		if svc.Proxy != nil && svc.Proxy.Backend != "" {
-			pr := &proxyResp{
+			pr := &apitypes.ProxyResp{
 				Backend:      svc.Proxy.Backend,
 				InternalOnly: svc.Proxy.InternalOnly,
 			}
 			if svc.Proxy.HealthCheck != nil {
-				pr.HealthCheck = &healthCheckResp{Path: svc.Proxy.HealthCheck.Path}
+				pr.HealthCheck = &apitypes.HealthCheckResp{Path: svc.Proxy.HealthCheck.Path}
 			}
 			if svc.Proxy.Deploy != nil {
-				pr.Deploy = &deployResp{
+				pr.Deploy = &apitypes.DeployResp{
 					NextBackend: svc.Proxy.Deploy.NextBackend,
 					ActiveSlot:  svc.Proxy.Deploy.ActiveSlot,
 					Balance:     svc.Proxy.Deploy.Balance,
@@ -141,63 +99,12 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type domainResp struct {
-		Domain               string `json:"domain"`
-		ZoneName             string `json:"zoneName"`
-		ZoneHasSSL           bool   `json:"zoneHasSSL"`
-		HasZone              bool   `json:"hasZone"`
-		ServiceName          string `json:"serviceName"`
-		HasService           bool   `json:"hasService"`
-		HasInternalDNS       bool   `json:"hasInternalDNS"`
-		InternalIP           string `json:"internalIP"`
-		HasExternalDNS       bool   `json:"hasExternalDNS"`
-		ExternalIP           string `json:"externalIP"`
-		DnsmasqResolvedIP    string `json:"dnsmasqResolvedIP"`
-		RemoteResolvedIP     string `json:"remoteResolvedIP"`
-		DnsmasqDNSMatch      bool   `json:"dnsmasqDNSMatch"`
-		RemoteDNSMatch       bool   `json:"remoteDNSMatch"`
-		HasProxy             bool   `json:"hasProxy"`
-		ProxyBackend         string `json:"proxyBackend"`
-		InternalOnly         bool   `json:"internalOnly"`
-		HasHealthCheck       bool   `json:"hasHealthCheck"`
-		HealthPath           string `json:"healthPath"`
-		HasSSLCoverage       bool   `json:"hasSSLCoverage"`
-		CertExists           bool   `json:"certExists"`
-		CertExpiry           string `json:"certExpiry"`
-		CertDomain           string `json:"certDomain"`
-		CanEnableHTTPS       bool   `json:"canEnableHTTPS"`
-		NeededSubZone        string `json:"neededSubZone"`
-		NeededSubZoneDisplay string `json:"neededSubZoneDisplay"`
-		CanRequestCert       bool   `json:"canRequestCert"`
-		CanSyncDNS           bool   `json:"canSyncDNS"`
-	}
-
-	type sslGapResp struct {
-		Domain   string `json:"domain"`
-		ZoneName string `json:"zoneName"`
-		SubZone  string `json:"subZone"`
-		Display  string `json:"display"`
-		Reason   string `json:"reason"`
-	}
-
-	type zoneSSLResp struct {
-		ZoneName          string   `json:"zoneName"`
-		SSLEnabled        bool     `json:"sslEnabled"`
-		ConfiguredDomains []string `json:"configuredDomains"`
-		ActualSANs        []string `json:"actualSANs"`
-		CertExists        bool     `json:"certExists"`
-		CertExpiry        string   `json:"certExpiry"`
-		CertIssuer        string   `json:"certIssuer"`
-		MissingSANs       []string `json:"missingSANs"`
-		ExtraSANs         []string `json:"extraSANs"`
-	}
-
 	// Gather domains from services
-	domainMap := make(map[string]*domainResp)
+	domainMap := make(map[string]*apitypes.DomainResp)
 
 	for _, svc := range s.config.Services {
 		for _, domain := range svc.Domains {
-			dr := &domainResp{
+			dr := &apitypes.DomainResp{
 				Domain:      domain,
 				ServiceName: svc.Name,
 				HasService:  true,
@@ -236,7 +143,7 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 				domain = sub + "." + zone.Name
 			}
 			if _, exists := domainMap[domain]; !exists {
-				domainMap[domain] = &domainResp{Domain: domain}
+				domainMap[domain] = &apitypes.DomainResp{Domain: domain}
 			}
 		}
 	}
@@ -290,7 +197,7 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Compute action flags and SSL gaps
-	var sslGaps []sslGapResp
+	var sslGaps []apitypes.SSLGapResp
 	for _, dr := range domainMap {
 		if dr.HasZone && !dr.HasSSLCoverage {
 			subZone, display, reason := neededSubZoneForDomain(dr.Domain, dr.ZoneName)
@@ -298,7 +205,7 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 			dr.NeededSubZone = subZone
 			dr.NeededSubZoneDisplay = display
 			if dr.HasService {
-				sslGaps = append(sslGaps, sslGapResp{
+				sslGaps = append(sslGaps, apitypes.SSLGapResp{
 					Domain: dr.Domain, ZoneName: dr.ZoneName,
 					SubZone: subZone, Display: display, Reason: reason,
 				})
@@ -310,9 +217,9 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build zone SSL statuses
-	var zoneStatuses []zoneSSLResp
+	var zoneStatuses []apitypes.ZoneSSLResp
 	for _, zone := range s.config.Zones {
-		zs := zoneSSLResp{
+		zs := apitypes.ZoneSSLResp{
 			ZoneName:          zone.Name,
 			SSLEnabled:        zone.SSL != nil && zone.SSL.Enabled,
 			ConfiguredDomains: []string{},
@@ -363,7 +270,7 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Flatten, sort, count
-	domains := make([]domainResp, 0, len(domainMap))
+	domains := make([]apitypes.DomainResp, 0, len(domainMap))
 	for _, dr := range domainMap {
 		domains = append(domains, *dr)
 	}
@@ -371,7 +278,7 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 		return domains[i].Domain < domains[j].Domain
 	})
 	if sslGaps == nil {
-		sslGaps = []sslGapResp{}
+		sslGaps = []apitypes.SSLGapResp{}
 	}
 
 	var intDNS, extDNS, https, proxy int
@@ -391,15 +298,15 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"domains":         domains,
-		"totalCount":      len(domains),
-		"intDNSCount":     intDNS,
-		"extDNSCount":     extDNS,
-		"httpsCount":      https,
-		"proxyCount":      proxy,
-		"sslGaps":         sslGaps,
-		"zoneSSLStatuses": zoneStatuses,
+	json.NewEncoder(w).Encode(apitypes.DomainsResponse{
+		Domains:         domains,
+		TotalCount:      len(domains),
+		IntDNSCount:     intDNS,
+		ExtDNSCount:     extDNS,
+		HTTPSCount:      https,
+		ProxyCount:      proxy,
+		SSLGaps:         sslGaps,
+		ZoneSSLStatuses: zoneStatuses,
 	})
 }
 
@@ -413,21 +320,9 @@ func (s *Server) handleAPIVPNPeers(w http.ResponseWriter, r *http.Request) {
 	ifaceStatus := s.wg.GetInterfaceStatus()
 	configPeers := s.wg.GetPeers()
 
-	type peerResp struct {
-		Name            string `json:"name"`
-		PublicKey       string `json:"publicKey"`
-		AllowedIPs     string `json:"allowedIPs"`
-		Endpoint       string `json:"endpoint,omitempty"`
-		LatestHandshake string `json:"latestHandshake,omitempty"`
-		TransferRx     string `json:"transferRx,omitempty"`
-		TransferTx     string `json:"transferTx,omitempty"`
-		Online         bool   `json:"online"`
-		IsAdmin        bool   `json:"isAdmin"`
-	}
-
-	peers := make([]peerResp, 0, len(configPeers))
+	peers := make([]apitypes.PeerResp, 0, len(configPeers))
 	for _, p := range configPeers {
-		pr := peerResp{
+		pr := apitypes.PeerResp{
 			Name:       p.Name,
 			PublicKey:  p.PublicKey,
 			AllowedIPs: p.AllowedIPs,
@@ -458,18 +353,9 @@ func (s *Server) handleAPIZones(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type zoneResp struct {
-		Name         string   `json:"name"`
-		ZoneID       string   `json:"zoneId"`
-		SSLEnabled   bool     `json:"sslEnabled"`
-		SSLEmail     string   `json:"sslEmail,omitempty"`
-		SubZones     []string `json:"subZones"`
-		ProviderType string   `json:"providerType,omitempty"`
-	}
-
-	zones := make([]zoneResp, 0, len(s.config.Zones))
+	zones := make([]apitypes.ZoneResp, 0, len(s.config.Zones))
 	for _, z := range s.config.Zones {
-		zr := zoneResp{
+		zr := apitypes.ZoneResp{
 			Name:     z.Name,
 			ZoneID:   z.ZoneID,
 			SubZones: z.SubZones,

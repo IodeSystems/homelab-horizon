@@ -5,27 +5,11 @@ import (
 	"net/http"
 	"strings"
 
+	"homelab-horizon/internal/apitypes"
 	"homelab-horizon/internal/config"
 	"homelab-horizon/internal/haproxy"
 )
 
-// DeployStatus is the JSON response for GET /api/deploy/{token}/status
-type DeployStatus struct {
-	Service     string           `json:"service"`
-	Domain      string           `json:"domain"`
-	Domains     []string         `json:"domains,omitempty"`
-	ActiveSlot  string           `json:"active_slot"`
-	Balance     string           `json:"balance"`
-	HealthCheck string           `json:"health_check"`
-	Current     DeploySlotStatus `json:"current"`
-	Next        DeploySlotStatus `json:"next"`
-}
-
-type DeploySlotStatus struct {
-	Slot    string `json:"slot"`    // "a" or "b"
-	Backend string `json:"backend"` // host:port
-	State   string `json:"state"`   // "up", "drain", "maint", "down", "unknown"
-}
 
 // findServiceByDeployToken returns the service index matching the deploy token.
 func (s *Server) findServiceByDeployToken(token string) int {
@@ -118,19 +102,19 @@ func (s *Server) handleDeployStatus(w http.ResponseWriter, svc *config.Service, 
 		nextSlot = "a"
 	}
 
-	status := DeployStatus{
+	status := apitypes.DeployStatus{
 		Service:     svc.Name,
 		Domain:      svc.PrimaryDomain(),
 		Domains:     svc.Domains,
 		ActiveSlot:  deploy.ActiveSlot,
 		Balance:     balance,
 		HealthCheck: healthCheck,
-		Current: DeploySlotStatus{
+		Current: apitypes.DeploySlotStatus{
 			Slot:    currentSlot,
 			Backend: deploy.CurrentServer(svc.Proxy.Backend),
 			State:   "unknown",
 		},
-		Next: DeploySlotStatus{
+		Next: apitypes.DeploySlotStatus{
 			Slot:    nextSlot,
 			Backend: deploy.InactiveServer(svc.Proxy.Backend),
 			State:   "unknown",
@@ -171,10 +155,10 @@ func (s *Server) handleDeployStateChange(w http.ResponseWriter, backendName, slo
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "ok",
-		"server": slot,
-		"state":  action,
+	json.NewEncoder(w).Encode(apitypes.DeployStateChangeResponse{
+		Status: "ok",
+		Server: slot,
+		State:  action,
 	})
 }
 
@@ -206,11 +190,11 @@ func (s *Server) handleDeploySwap(w http.ResponseWriter, svcIdx int) {
 	backend := s.config.Services[svcIdx].Proxy.Backend
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":      "ok",
-		"active_slot": deploy.ActiveSlot,
-		"current":     deploy.CurrentServer(backend),
-		"next":        deploy.InactiveServer(backend),
+	json.NewEncoder(w).Encode(apitypes.DeploySwapResponse{
+		Status:     "ok",
+		ActiveSlot: deploy.ActiveSlot,
+		Current:    deploy.CurrentServer(backend),
+		Next:       deploy.InactiveServer(backend),
 	})
 }
 

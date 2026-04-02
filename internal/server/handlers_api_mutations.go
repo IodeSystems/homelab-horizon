@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"homelab-horizon/internal/apitypes"
 	"homelab-horizon/internal/config"
 	"homelab-horizon/internal/dns"
 	"homelab-horizon/internal/letsencrypt"
@@ -16,34 +17,7 @@ func writeJSONOK(w http.ResponseWriter) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
 
-func writeJSONOKExtra(w http.ResponseWriter, extra map[string]interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	extra["ok"] = true
-	json.NewEncoder(w).Encode(extra)
-}
-
-// apiServiceRequest mirrors the JSON body for add/edit service
-type apiServiceRequest struct {
-	OriginalName string `json:"originalName,omitempty"`
-	Name         string `json:"name"`
-	Domains      []string `json:"domains"`
-	InternalDNS  *struct {
-		IP string `json:"ip"`
-	} `json:"internalDNS,omitempty"`
-	ExternalDNS *struct {
-		IP  string `json:"ip"`
-		TTL int    `json:"ttl"`
-	} `json:"externalDNS,omitempty"`
-	Proxy *struct {
-		Backend     string `json:"backend"`
-		HealthCheck *struct {
-			Path string `json:"path"`
-		} `json:"healthCheck,omitempty"`
-		InternalOnly bool `json:"internalOnly"`
-	} `json:"proxy,omitempty"`
-}
-
-func (req *apiServiceRequest) toService() config.Service {
+func serviceRequestToService(req *apitypes.ServiceRequest) config.Service {
 	svc := config.Service{
 		Name:    req.Name,
 		Domains: req.Domains,
@@ -81,7 +55,7 @@ func (s *Server) handleAPIAddService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req apiServiceRequest
+	var req apitypes.ServiceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
 		return
@@ -102,7 +76,7 @@ func (s *Server) handleAPIAddService(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Domains = domains
 
-	svc := req.toService()
+	svc := serviceRequestToService(&req)
 
 	if err := s.config.AddService(svc); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -129,7 +103,7 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req apiServiceRequest
+	var req apitypes.ServiceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
 		return
@@ -332,7 +306,8 @@ func (s *Server) handleAPISyncDNS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSONOKExtra(w, map[string]interface{}{"changed": changed})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(apitypes.DNSSyncResponse{OK: true, Changed: changed})
 }
 
 // POST /api/v1/dns/sync-all
@@ -399,10 +374,8 @@ func (s *Server) handleAPISyncAllDNS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSONOKExtra(w, map[string]interface{}{
-		"updated": updated,
-		"failed":  failed,
-	})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(apitypes.DNSSyncAllResponse{OK: true, Updated: updated, Failed: failed})
 }
 
 // POST /api/v1/zones/subzone
@@ -544,5 +517,6 @@ func (s *Server) handleAPITriggerSync(w http.ResponseWriter, r *http.Request) {
 		go s.runSync()
 	}
 
-	writeJSONOKExtra(w, map[string]interface{}{"started": started})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(apitypes.TriggerSyncResponse{OK: true, Started: started})
 }

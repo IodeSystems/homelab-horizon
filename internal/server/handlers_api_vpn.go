@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"homelab-horizon/internal/apitypes"
 	"homelab-horizon/internal/config"
 	"homelab-horizon/internal/qr"
 	"homelab-horizon/internal/wireguard"
@@ -72,10 +73,10 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 	qrCode := qr.GenerateSVG(clientConfig, 256)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":     true,
-		"config": clientConfig,
-		"qrCode": qrCode,
+	json.NewEncoder(w).Encode(apitypes.AddPeerResponse{
+		OK:     true,
+		Config: clientConfig,
+		QRCode: qrCode,
 	})
 }
 
@@ -239,9 +240,9 @@ func (s *Server) handleAPIToggleAdmin(w http.ResponseWriter, r *http.Request) {
 	config.Save(s.configPath, s.config)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":      true,
-		"isAdmin": !isCurrentlyAdmin,
+	json.NewEncoder(w).Encode(apitypes.ToggleAdminResponse{
+		OK:      true,
+		IsAdmin: !isCurrentlyAdmin,
 	})
 }
 
@@ -272,15 +273,10 @@ func (s *Server) handleAPIListInvites(w http.ResponseWriter, r *http.Request) {
 
 	tokens := s.getInvites()
 
-	type inviteResp struct {
-		Token string `json:"token"`
-		URL   string `json:"url"`
-	}
-
-	invites := make([]inviteResp, 0, len(tokens))
+	invites := make([]apitypes.InviteResp, 0, len(tokens))
 	for _, token := range tokens {
 		url := strings.TrimSuffix(s.config.KioskURL, "/") + "/invite/" + token
-		invites = append(invites, inviteResp{
+		invites = append(invites, apitypes.InviteResp{
 			Token: token,
 			URL:   url,
 		})
@@ -309,10 +305,10 @@ func (s *Server) handleAPICreateInvite(w http.ResponseWriter, r *http.Request) {
 	url := strings.TrimSuffix(s.config.KioskURL, "/") + "/invite/" + token
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":    true,
-		"token": token,
-		"url":   url,
+	json.NewEncoder(w).Encode(apitypes.CreateInviteResponse{
+		OK:    true,
+		Token: token,
+		URL:   url,
 	})
 }
 

@@ -12,39 +12,53 @@ import type {
   VPNPeer,
   Zone,
 } from "./types";
+import {
+  DashboardDataSchema,
+  ServicesSchema,
+  DomainsDataSchema,
+  VPNPeersSchema,
+  ZonesSchema,
+  SettingsDataSchema,
+  HAProxyConfigPreviewSchema,
+  InvitesSchema,
+} from "./schemas";
 
 export function useDashboard() {
   return useQuery({
     queryKey: ["dashboard"],
-    queryFn: () => apiFetch<DashboardData>("/dashboard"),
+    queryFn: () =>
+      apiFetch<DashboardData>("/dashboard", { schema: DashboardDataSchema }),
   });
 }
 
 export function useServices() {
   return useQuery({
     queryKey: ["services"],
-    queryFn: () => apiFetch<Service[]>("/services"),
+    queryFn: () =>
+      apiFetch<Service[]>("/services", { schema: ServicesSchema }),
   });
 }
 
 export function useDomains() {
   return useQuery({
     queryKey: ["domains"],
-    queryFn: () => apiFetch<DomainsData>("/domains"),
+    queryFn: () =>
+      apiFetch<DomainsData>("/domains", { schema: DomainsDataSchema }),
   });
 }
 
 export function useVPNPeers() {
   return useQuery({
     queryKey: ["vpn", "peers"],
-    queryFn: () => apiFetch<VPNPeer[]>("/vpn/peers"),
+    queryFn: () =>
+      apiFetch<VPNPeer[]>("/vpn/peers", { schema: VPNPeersSchema }),
   });
 }
 
 export function useZones() {
   return useQuery({
     queryKey: ["zones"],
-    queryFn: () => apiFetch<Zone[]>("/zones"),
+    queryFn: () => apiFetch<Zone[]>("/zones", { schema: ZonesSchema }),
   });
 }
 
@@ -266,7 +280,8 @@ export function useReloadWG() {
 export function useInvites() {
   return useQuery({
     queryKey: ["vpn", "invites"],
-    queryFn: () => apiFetch<Invite[]>("/vpn/invites"),
+    queryFn: () =>
+      apiFetch<Invite[]>("/vpn/invites", { schema: InvitesSchema }),
   });
 }
 
@@ -302,14 +317,18 @@ export function useDeleteInvite() {
 export function useSettings() {
   return useQuery({
     queryKey: ["settings"],
-    queryFn: () => apiFetch<SettingsData>("/settings"),
+    queryFn: () =>
+      apiFetch<SettingsData>("/settings", { schema: SettingsDataSchema }),
   });
 }
 
 export function useHAProxyConfigPreview() {
   return useQuery({
     queryKey: ["haproxy", "config-preview"],
-    queryFn: () => apiFetch<HAProxyConfigPreview>("/haproxy/config-preview"),
+    queryFn: () =>
+      apiFetch<HAProxyConfigPreview>("/haproxy/config-preview", {
+        schema: HAProxyConfigPreviewSchema,
+      }),
     enabled: false, // fetch on demand
   });
 }
