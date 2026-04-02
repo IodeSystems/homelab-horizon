@@ -606,25 +606,44 @@ func (s *Server) handleAPIDomainSSLRemove(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Figure out which SubZone produces this domain
-	subZone, _, _ := neededSubZoneForDomain(req.Domain, zone.Name)
-
-	// Find and verify the SubZone exists
+	// Find which SubZone produces this domain
+	// A SubZone expands to: "" → zone.Name, "*" → *.zone.Name, "foo" → foo.zone.Name
+	subZone := ""
 	subZoneIdx := -1
 	for i := range s.config.Zones {
-		if s.config.Zones[i].Name == zone.Name {
-			for j, existing := range s.config.Zones[i].SubZones {
-				if existing == subZone {
-					subZoneIdx = j
-					break
-				}
-			}
-			break
+		if s.config.Zones[i].Name != zone.Name {
+			continue
 		}
+		for j, sz := range s.config.Zones[i].SubZones {
+			var expanded string
+			if sz == "" {
+				expanded = zone.Name
+			} else if sz == "*" {
+				expanded = "*." + zone.Name
+			} else {
+				expanded = sz + "." + zone.Name
+			}
+			if expanded == req.Domain {
+				subZone = sz
+				subZoneIdx = j
+				break
+			}
+		}
+		break
 	}
 
 	if subZoneIdx == -1 {
-		writeJSONError(w, http.StatusNotFound, "SubZone not found on zone")
+		// Check if this is a service domain (not a SubZone-derived domain)
+		for _, svc := range s.config.Services {
+			for _, d := range svc.Domains {
+				if d == req.Domain {
+					writeJSONError(w, http.StatusBadRequest,
+						fmt.Sprintf("Domain %s belongs to service %q — remove it from the service instead", req.Domain, svc.Name))
+					return
+				}
+			}
+		}
+		writeJSONError(w, http.StatusNotFound, "No SubZone found for this domain on zone "+zone.Name)
 		return
 	}
 
