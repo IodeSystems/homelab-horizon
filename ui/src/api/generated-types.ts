@@ -50,8 +50,12 @@ export interface ExternalDNSResp {
 }
 export interface ServiceStatus {
   internalDNSUp: boolean; // dnsmasq resolves the primary domain
+  internalDNSResolved?: string; // actual IP from dnsmasq
   externalDNSUp: boolean; // 1.1.1.1 resolves the primary domain
-  proxyUp: boolean; // HAProxy backend is healthy
+  externalDNSResolved?: string; // actual IP from 1.1.1.1
+  proxyUp: boolean; // HAProxy backend healthy
+  proxyError?: string; // health check error
+  proxyState?: string; // "up", "down", "drain", "maint"
 }
 export interface ServiceResp {
   name: string;

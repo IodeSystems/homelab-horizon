@@ -114,9 +114,18 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 	// Check live status in parallel for each service
 	var wg sync.WaitGroup
 	backendStatuses := s.haproxy.GetBackendStatuses()
-	backendHealthMap := make(map[string]bool)
+	type backendInfo struct {
+		healthy bool
+		err     string
+		state   string
+	}
+	backendMap := make(map[string]backendInfo)
 	for _, bs := range backendStatuses {
-		backendHealthMap[bs.Name] = bs.Healthy
+		bi := backendInfo{healthy: bs.Healthy, err: bs.Error}
+		if bs.CurrentState != "" {
+			bi.state = bs.CurrentState
+		}
+		backendMap[bs.Name] = bi
 	}
 
 	for i := range sorted {
@@ -134,13 +143,19 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 			defer wg.Done()
 			dnsmasqIP, remoteIP := resolveDomain(domain, dnsmasqAddr)
 			sr.Status.InternalDNSUp = dnsmasqIP != ""
+			sr.Status.InternalDNSResolved = dnsmasqIP
 			sr.Status.ExternalDNSUp = remoteIP != ""
+			sr.Status.ExternalDNSResolved = remoteIP
 		}(sr, primaryDomain)
 
 		// Check HAProxy backend health
 		if sr.Proxy != nil {
 			backendName := sr.Name + "_backend"
-			sr.Status.ProxyUp = backendHealthMap[backendName]
+			if bi, ok := backendMap[backendName]; ok {
+				sr.Status.ProxyUp = bi.healthy
+				sr.Status.ProxyError = bi.err
+				sr.Status.ProxyState = bi.state
+			}
 		}
 	}
 	wg.Wait()
