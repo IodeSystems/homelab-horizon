@@ -558,48 +558,90 @@ function ServiceRow({
                 gap: 2,
               }}
             >
-              {hasIntDNS && (
-                <DetailCard title="Internal DNS">
-                  <Typography variant="body2">
-                    IP: {service.internalDNS!.ip}
-                  </Typography>
-                </DetailCard>
-              )}
-              {hasExtDNS && (
-                <DetailCard title="External DNS">
-                  <Typography variant="body2">
-                    IP: {service.externalDNS!.ip}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    TTL: {service.externalDNS!.ttl}
-                  </Typography>
+              {(hasIntDNS || hasExtDNS) && (
+                <DetailCard title="DNS">
+                  {hasIntDNS && (
+                    <Box sx={{ display: "flex", gap: 1, alignItems: "center", mb: 0.5 }}>
+                      <StatusDot configured={true} detected={service.status.internalDNSUp} />
+                      <Typography variant="body2" sx={{ minWidth: 60 }}>Internal:</Typography>
+                      <Typography variant="body2" component="span">
+                        <code>{service.internalDNS!.ip}</code>
+                      </Typography>
+                      {service.status.internalDNSResolved && service.status.internalDNSResolved !== service.internalDNS!.ip && (
+                        <Typography variant="body2" color="error.main">
+                          resolves to {service.status.internalDNSResolved}
+                        </Typography>
+                      )}
+                      {service.status.internalDNSUp && service.status.internalDNSResolved === service.internalDNS!.ip && (
+                        <Typography variant="body2" color="success.main">ok</Typography>
+                      )}
+                      {!service.status.internalDNSUp && (
+                        <Typography variant="body2" color="error.main">not resolving</Typography>
+                      )}
+                    </Box>
+                  )}
+                  {hasExtDNS && (
+                    <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+                      <StatusDot configured={true} detected={service.status.externalDNSUp} />
+                      <Typography variant="body2" sx={{ minWidth: 60 }}>External:</Typography>
+                      <Typography variant="body2" component="span">
+                        <code>{service.externalDNS!.ip || "auto"}</code>
+                      </Typography>
+                      {service.status.externalDNSResolved ? (
+                        service.status.externalDNSResolved !== service.externalDNS!.ip && service.externalDNS!.ip ? (
+                          <Typography variant="body2" color="error.main">
+                            resolves to {service.status.externalDNSResolved}
+                          </Typography>
+                        ) : (
+                          <Typography variant="body2" color="success.main">
+                            {service.status.externalDNSResolved}
+                          </Typography>
+                        )
+                      ) : (
+                        <Typography variant="body2" color="error.main">not resolving</Typography>
+                      )}
+                    </Box>
+                  )}
                 </DetailCard>
               )}
               {hasProxy && (
-                <DetailCard title="Proxy">
-                  <Typography variant="body2">
-                    Backend: {service.proxy!.backend}
-                  </Typography>
+                <DetailCard title="HAProxy">
+                  <Box sx={{ display: "flex", gap: 1, alignItems: "center", mb: 0.5 }}>
+                    <StatusDot configured={true} detected={service.status.proxyUp} />
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                      {hasDeploy ? "Current" : "Backend"}:
+                    </Typography>
+                    <Typography variant="body2"><code>{service.proxy!.backend}</code></Typography>
+                    {service.status.proxyState && (
+                      <Chip
+                        label={service.status.proxyState}
+                        size="small"
+                        color={service.status.proxyState === "up" ? "success" : service.status.proxyState === "down" ? "error" : "warning"}
+                        variant="outlined"
+                      />
+                    )}
+                  </Box>
+                  {hasDeploy && (
+                    <Box sx={{ display: "flex", gap: 1, alignItems: "center", mb: 0.5 }}>
+                      <StatusDot configured={true} detected={true} />
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>Next:</Typography>
+                      <Typography variant="body2"><code>{service.proxy!.deploy!.nextBackend}</code></Typography>
+                      <Chip label={`slot ${service.proxy!.deploy!.activeSlot}`} size="small" variant="outlined" />
+                      <Chip label={service.proxy!.deploy!.balance} size="small" variant="outlined" color="info" />
+                    </Box>
+                  )}
+                  {service.status.proxyError && (
+                    <Typography variant="body2" color="error.main" sx={{ mb: 0.5 }}>
+                      {service.status.proxyError}
+                    </Typography>
+                  )}
                   {service.proxy!.healthCheck && (
                     <Typography variant="body2" color="text.secondary">
-                      Health: {service.proxy!.healthCheck.path}
+                      Health check: {service.proxy!.healthCheck.path}
                     </Typography>
                   )}
                   <Typography variant="body2" color="text.secondary">
                     {service.proxy!.internalOnly ? "Internal only" : "Public"}
-                  </Typography>
-                </DetailCard>
-              )}
-              {hasDeploy && (
-                <DetailCard title="Deploy">
-                  <Typography variant="body2">
-                    Active: {service.proxy!.deploy!.activeSlot}
-                  </Typography>
-                  <Typography variant="body2">
-                    Next: {service.proxy!.deploy!.nextBackend}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Balance: {service.proxy!.deploy!.balance}
                   </Typography>
                 </DetailCard>
               )}

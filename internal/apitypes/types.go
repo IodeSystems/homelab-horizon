@@ -56,9 +56,13 @@ type ExternalDNSResp struct {
 }
 
 type ServiceStatus struct {
-	InternalDNSUp bool `json:"internalDNSUp"` // dnsmasq resolves the primary domain
-	ExternalDNSUp bool `json:"externalDNSUp"` // 1.1.1.1 resolves the primary domain
-	ProxyUp       bool `json:"proxyUp"`       // HAProxy backend is healthy
+	InternalDNSUp       bool   `json:"internalDNSUp"`                 // dnsmasq resolves the primary domain
+	InternalDNSResolved string `json:"internalDNSResolved,omitempty"` // actual IP from dnsmasq
+	ExternalDNSUp       bool   `json:"externalDNSUp"`                 // 1.1.1.1 resolves the primary domain
+	ExternalDNSResolved string `json:"externalDNSResolved,omitempty"` // actual IP from 1.1.1.1
+	ProxyUp             bool   `json:"proxyUp"`                       // HAProxy backend healthy
+	ProxyError          string `json:"proxyError,omitempty"`          // health check error
+	ProxyState          string `json:"proxyState,omitempty"`          // "up", "down", "drain", "maint"
 }
 
 type ServiceResp struct {
