@@ -3,6 +3,8 @@ import { apiFetch } from "./client";
 import type {
   AddPeerResponse,
   BanListResponse,
+  CheckHistoryResponse,
+  CheckStatus,
   CreateInviteResponse,
   DashboardData,
   DomainsData,
@@ -16,6 +18,8 @@ import type {
 } from "./types";
 import {
   BanListResponseSchema,
+  CheckHistoryResponseSchema,
+  ChecksListSchema,
   DashboardDataSchema,
   ServicesSchema,
   DomainsDataSchema,
@@ -446,6 +450,8 @@ export function useAddCheck() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings"] });
+      qc.invalidateQueries({ queryKey: ["checks"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
   });
 }
@@ -460,6 +466,8 @@ export function useDeleteCheck() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings"] });
+      qc.invalidateQueries({ queryKey: ["checks"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
   });
 }
@@ -474,6 +482,8 @@ export function useToggleCheck() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings"] });
+      qc.invalidateQueries({ queryKey: ["checks"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
   });
 }
@@ -488,7 +498,31 @@ export function useRunCheck() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings"] });
+      qc.invalidateQueries({ queryKey: ["checks"] });
     },
+  });
+}
+
+// --- Checks (standalone) ---
+
+export function useChecks() {
+  return useQuery({
+    queryKey: ["checks"],
+    queryFn: () =>
+      apiFetch<CheckStatus[]>("/checks", { schema: ChecksListSchema }),
+    refetchInterval: 30000,
+  });
+}
+
+export function useCheckHistory(name: string) {
+  return useQuery({
+    queryKey: ["checks", "history", name],
+    queryFn: () =>
+      apiFetch<CheckHistoryResponse>(
+        `/checks/history?name=${encodeURIComponent(name)}`,
+        { schema: CheckHistoryResponseSchema },
+      ),
+    enabled: !!name,
   });
 }
 

@@ -22,6 +22,9 @@ type DashboardResponse struct {
 	HAProxyRunning bool   `json:"haproxyRunning"`
 	SSLEnabled     bool   `json:"sslEnabled"`
 	Version        string `json:"version"`
+	ChecksTotal    int    `json:"checksTotal"`
+	ChecksHealthy  int    `json:"checksHealthy"`
+	ChecksFailed   int    `json:"checksFailed"`
 }
 
 // Services
@@ -361,6 +364,27 @@ type TriggerSyncResponse struct {
 type RunCheckResponse struct {
 	OK     bool   `json:"ok"`
 	Status string `json:"status"`
+}
+
+// Check history
+
+type CheckResult struct {
+	Timestamp time.Time `json:"timestamp"`
+	Status    string    `json:"status"`
+	Latency   int64     `json:"latency"`
+	Error     string    `json:"error,omitempty"`
+}
+
+type CheckHistoryResponse struct {
+	Name    string        `json:"name"`
+	Results []CheckResult `json:"results"`
+}
+
+type ChecksOverview struct {
+	Total   int `json:"total"`
+	Healthy int `json:"healthy"`
+	Failed  int `json:"failed"`
+	Pending int `json:"pending"`
 }
 
 // Service integration

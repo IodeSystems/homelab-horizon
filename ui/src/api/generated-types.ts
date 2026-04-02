@@ -23,6 +23,9 @@ export interface DashboardResponse {
   haproxyRunning: boolean;
   sslEnabled: boolean;
   version: string;
+  checksTotal: number /* int */;
+  checksHealthy: number /* int */;
+  checksFailed: number /* int */;
 }
 export interface HealthCheckResp {
   path: string;
@@ -289,6 +292,22 @@ export interface TriggerSyncResponse {
 export interface RunCheckResponse {
   ok: boolean;
   status: string;
+}
+export interface CheckResult {
+  timestamp: any /* time.Time */;
+  status: string;
+  latency: number /* int64 */;
+  error?: string;
+}
+export interface CheckHistoryResponse {
+  name: string;
+  results: CheckResult[];
+}
+export interface ChecksOverview {
+  total: number /* int */;
+  healthy: number /* int */;
+  failed: number /* int */;
+  pending: number /* int */;
 }
 export interface ServiceIntegration {
   name: string;

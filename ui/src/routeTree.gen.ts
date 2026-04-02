@@ -14,6 +14,7 @@ import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as ServicesRouteImport } from './routes/services'
 import { Route as DomainsRouteImport } from './routes/domains'
 import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as ChecksRouteImport } from './routes/checks'
 import { Route as BansRouteImport } from './routes/bans'
 import { Route as IndexRouteImport } from './routes/index'
 
@@ -42,6 +43,11 @@ const DashboardRoute = DashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ChecksRoute = ChecksRouteImport.update({
+  id: '/checks',
+  path: '/checks',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const BansRoute = BansRouteImport.update({
   id: '/bans',
   path: '/bans',
@@ -56,6 +62,7 @@ const IndexRoute = IndexRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/bans': typeof BansRoute
+  '/checks': typeof ChecksRoute
   '/dashboard': typeof DashboardRoute
   '/domains': typeof DomainsRoute
   '/services': typeof ServicesRoute
@@ -65,6 +72,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/bans': typeof BansRoute
+  '/checks': typeof ChecksRoute
   '/dashboard': typeof DashboardRoute
   '/domains': typeof DomainsRoute
   '/services': typeof ServicesRoute
@@ -75,6 +83,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/bans': typeof BansRoute
+  '/checks': typeof ChecksRoute
   '/dashboard': typeof DashboardRoute
   '/domains': typeof DomainsRoute
   '/services': typeof ServicesRoute
@@ -86,6 +95,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/bans'
+    | '/checks'
     | '/dashboard'
     | '/domains'
     | '/services'
@@ -95,6 +105,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/bans'
+    | '/checks'
     | '/dashboard'
     | '/domains'
     | '/services'
@@ -104,6 +115,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/bans'
+    | '/checks'
     | '/dashboard'
     | '/domains'
     | '/services'
@@ -114,6 +126,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BansRoute: typeof BansRoute
+  ChecksRoute: typeof ChecksRoute
   DashboardRoute: typeof DashboardRoute
   DomainsRoute: typeof DomainsRoute
   ServicesRoute: typeof ServicesRoute
@@ -158,6 +171,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/checks': {
+      id: '/checks'
+      path: '/checks'
+      fullPath: '/checks'
+      preLoaderRoute: typeof ChecksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/bans': {
       id: '/bans'
       path: '/bans'
@@ -178,6 +198,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BansRoute: BansRoute,
+  ChecksRoute: ChecksRoute,
   DashboardRoute: DashboardRoute,
   DomainsRoute: DomainsRoute,
   ServicesRoute: ServicesRoute,

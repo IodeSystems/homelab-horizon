@@ -36,6 +36,18 @@ func (s *Server) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
 
 	haStatus := s.haproxy.GetStatus()
 
+	// Compute checks overview
+	statuses := s.monitor.GetStatuses()
+	var checksHealthy, checksFailed int
+	for _, cs := range statuses {
+		switch cs.Status {
+		case "ok":
+			checksHealthy++
+		case "failed":
+			checksFailed++
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(apitypes.DashboardResponse{
 		ServiceCount:   len(s.config.Services),
@@ -45,6 +57,9 @@ func (s *Server) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
 		HAProxyRunning: haStatus.Running,
 		SSLEnabled:     s.config.SSLEnabled,
 		Version:        s.version,
+		ChecksTotal:    len(statuses),
+		ChecksHealthy:  checksHealthy,
+		ChecksFailed:   checksFailed,
 	})
 }
 

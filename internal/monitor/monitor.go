@@ -26,11 +26,22 @@ type CheckStatus struct {
 	AutoGen   bool      `json:"auto_gen"` // True if auto-generated from HAProxy service
 }
 
+// CheckResult records a single check execution for history tracking
+type CheckResult struct {
+	Timestamp time.Time `json:"timestamp"`
+	Status    string    `json:"status"`          // "ok", "failed"
+	Latency   int64     `json:"latency"`         // milliseconds
+	Error     string    `json:"error,omitempty"`
+}
+
+const maxHistoryPerCheck = 100
+
 // Monitor manages service health checks and notifications
 type Monitor struct {
 	mu       sync.RWMutex
 	config   *config.Config
-	statuses map[string]*CheckStatus // keyed by check name
+	statuses map[string]*CheckStatus   // keyed by check name
+	history  map[string][]CheckResult   // keyed by check name, ring buffer of last 100 results
 	ctx      context.Context
 	cancel   context.CancelFunc
 	client   *http.Client
@@ -42,6 +53,7 @@ func New(cfg *config.Config) *Monitor {
 	return &Monitor{
 		config:   cfg,
 		statuses: make(map[string]*CheckStatus),
+		history:  make(map[string][]CheckResult),
 		ctx:      ctx,
 		cancel:   cancel,
 		client: &http.Client{
@@ -178,6 +190,34 @@ func (m *Monitor) GetStatus(name string) *CheckStatus {
 	return nil
 }
 
+// GetHistory returns the check history for a specific check
+func (m *Monitor) GetHistory(name string) []CheckResult {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	h := m.history[name]
+	if h == nil {
+		return []CheckResult{}
+	}
+	out := make([]CheckResult, len(h))
+	copy(out, h)
+	return out
+}
+
+// GetAllHistory returns the check history for all checks
+func (m *Monitor) GetAllHistory() map[string][]CheckResult {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	out := make(map[string][]CheckResult, len(m.history))
+	for k, v := range m.history {
+		c := make([]CheckResult, len(v))
+		copy(c, v)
+		out[k] = c
+	}
+	return out
+}
+
 // Reload updates the monitor with new configuration
 func (m *Monitor) Reload(cfg *config.Config) {
 	m.Stop()
@@ -185,6 +225,7 @@ func (m *Monitor) Reload(cfg *config.Config) {
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	m.mu.Lock()
 	m.statuses = make(map[string]*CheckStatus)
+	m.history = make(map[string][]CheckResult)
 	m.mu.Unlock()
 	m.Start()
 }
@@ -259,6 +300,8 @@ func (m *Monitor) executeCheck(check config.ServiceCheck) {
 	var err error
 	var newStatus string
 
+	start := time.Now()
+
 	switch strings.ToLower(check.Type) {
 	case "ping":
 		err = m.doPing(check.Target)
@@ -268,10 +311,22 @@ func (m *Monitor) executeCheck(check config.ServiceCheck) {
 		err = fmt.Errorf("unknown check type: %s", check.Type)
 	}
 
+	latency := time.Since(start).Milliseconds()
+
 	if err != nil {
 		newStatus = "failed"
 	} else {
 		newStatus = "ok"
+	}
+
+	// Build history result
+	result := CheckResult{
+		Timestamp: time.Now(),
+		Status:    newStatus,
+		Latency:   latency,
+	}
+	if err != nil {
+		result.Error = err.Error()
 	}
 
 	// Update status and check for state change
@@ -300,6 +355,15 @@ func (m *Monitor) executeCheck(check config.ServiceCheck) {
 	} else {
 		status.LastError = ""
 	}
+
+	// Append to history ring buffer
+	h := m.history[check.Name]
+	h = append(h, result)
+	if len(h) > maxHistoryPerCheck {
+		h = h[len(h)-maxHistoryPerCheck:]
+	}
+	m.history[check.Name] = h
+
 	m.mu.Unlock()
 
 	// Send notification if transitioning to failed
