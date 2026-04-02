@@ -33,6 +33,9 @@ export const DashboardDataSchema = z.object({
   haproxyRunning: z.boolean(),
   sslEnabled: z.boolean(),
   version: z.string(),
+  checksTotal: z.number(),
+  checksHealthy: z.number(),
+  checksFailed: z.number(),
 });
 
 // Services
@@ -245,3 +248,18 @@ export const BanEntrySchema = z.object({
 export const BanListResponseSchema = z.object({
   bans: z.array(BanEntrySchema),
 });
+
+// Check history
+export const CheckResultSchema = z.object({
+  timestamp: z.string(),
+  status: z.string(),
+  latency: z.number(),
+  error: z.string().optional(),
+});
+
+export const CheckHistoryResponseSchema = z.object({
+  name: z.string(),
+  results: z.array(CheckResultSchema),
+});
+
+export const ChecksListSchema = z.array(CheckStatusSchema);

@@ -10,6 +10,7 @@ import DnsIcon from "@mui/icons-material/Dns";
 import LanguageIcon from "@mui/icons-material/Language";
 import PublicIcon from "@mui/icons-material/Public";
 import PeopleIcon from "@mui/icons-material/People";
+import MonitorHeartIcon from "@mui/icons-material/MonitorHeart";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 import InfoIcon from "@mui/icons-material/Info";
@@ -156,6 +157,48 @@ function DashboardPage() {
           </Box>
         </Paper>
       </Box>
+
+      {data.checksTotal > 0 && (
+        <Paper sx={{ p: 3, mb: 3 }}>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1.5 }}>
+            <MonitorHeartIcon sx={{ color: "primary.main" }} />
+            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+              Health Checks
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ ml: "auto" }}>
+              {data.checksHealthy} healthy / {data.checksFailed} failed / {data.checksTotal} total
+            </Typography>
+          </Box>
+          <Box
+            sx={{
+              display: "flex",
+              height: 12,
+              borderRadius: 1,
+              overflow: "hidden",
+              bgcolor: "action.hover",
+            }}
+          >
+            {data.checksHealthy > 0 && (
+              <Box
+                sx={{
+                  width: `${(data.checksHealthy / data.checksTotal) * 100}%`,
+                  bgcolor: "success.main",
+                  transition: "width 0.3s",
+                }}
+              />
+            )}
+            {data.checksFailed > 0 && (
+              <Box
+                sx={{
+                  width: `${(data.checksFailed / data.checksTotal) * 100}%`,
+                  bgcolor: "error.main",
+                  transition: "width 0.3s",
+                }}
+              />
+            )}
+          </Box>
+        </Paper>
+      )}
 
       <Paper sx={{ p: 3 }}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>

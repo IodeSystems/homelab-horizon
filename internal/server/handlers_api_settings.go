@@ -365,6 +365,62 @@ func (s *Server) handleAPIHAProxyConfigPreview(w http.ResponseWriter, r *http.Re
 	json.NewEncoder(w).Encode(apitypes.HAProxyConfigPreview{Config: preview})
 }
 
+func (s *Server) handleAPIChecks(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	monitorChecks := s.monitor.GetStatuses()
+	checks := make([]apitypes.CheckStatusResp, 0, len(monitorChecks))
+	for _, c := range monitorChecks {
+		checks = append(checks, apitypes.CheckStatusResp{
+			Name:      c.Name,
+			Type:      c.Type,
+			Target:    c.Target,
+			Status:    c.Status,
+			LastCheck: c.LastCheck,
+			LastError: c.LastError,
+			Interval:  c.Interval,
+			Enabled:   c.Enabled,
+			AutoGen:   c.AutoGen,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(checks)
+}
+
+func (s *Server) handleAPICheckHistory(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		writeJSONError(w, http.StatusBadRequest, "name parameter required")
+		return
+	}
+
+	history := s.monitor.GetHistory(name)
+	results := make([]apitypes.CheckResult, 0, len(history))
+	for _, h := range history {
+		results = append(results, apitypes.CheckResult{
+			Timestamp: h.Timestamp,
+			Status:    h.Status,
+			Latency:   h.Latency,
+			Error:     h.Error,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(apitypes.CheckHistoryResponse{
+		Name:    name,
+		Results: results,
+	})
+}
+
 func (s *Server) handleAPIAddCheck(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {
 		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")

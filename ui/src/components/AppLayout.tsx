@@ -18,6 +18,7 @@ import DnsIcon from "@mui/icons-material/Dns";
 import LanguageIcon from "@mui/icons-material/Language";
 import VpnKeyIcon from "@mui/icons-material/VpnKey";
 import BlockIcon from "@mui/icons-material/Block";
+import MonitorHeartIcon from "@mui/icons-material/MonitorHeart";
 import SettingsIcon from "@mui/icons-material/Settings";
 import LogoutIcon from "@mui/icons-material/Logout";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
@@ -38,6 +39,7 @@ const navItems: NavItem[] = [
   { icon: <LanguageIcon />, label: "Domains", path: "/domains" },
   { icon: <VpnKeyIcon />, label: "VPN Clients", path: "/vpn" },
   { icon: <BlockIcon />, label: "IP Bans", path: "/bans" },
+  { icon: <MonitorHeartIcon />, label: "Checks", path: "/checks" },
   { icon: <SettingsIcon />, label: "Settings", path: "/settings" },
 ];
 
