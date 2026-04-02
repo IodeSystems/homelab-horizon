@@ -355,3 +355,12 @@ type RunCheckResponse struct {
 	OK     bool   `json:"ok"`
 	Status string `json:"status"`
 }
+
+// Service integration
+
+type ServiceIntegration struct {
+	Name      string `json:"name"`
+	Token     string `json:"token"`
+	BaseURL   string `json:"baseURL"`
+	HasDeploy bool   `json:"hasDeploy"`
+}

@@ -284,3 +284,9 @@ export interface RunCheckResponse {
   ok: boolean;
   status: string;
 }
+export interface ServiceIntegration {
+  name: string;
+  token: string;
+  baseURL: string;
+  hasDeploy: boolean;
+}

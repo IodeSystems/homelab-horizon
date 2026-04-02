@@ -202,10 +202,18 @@ type ZoneSSL struct {
 // Service represents a unified service configuration with clear separation of concerns
 type Service struct {
 	Name        string       `json:"name"`                   // Human-readable, e.g., "grafana"
+	Token       string       `json:"token,omitempty"`        // API token for service integration (ban, status)
 	Domains     []string     `json:"domains"`                // FQDNs, e.g., ["app.example.com", "book.example.com"]
 	InternalDNS *InternalDNS `json:"internal_dns,omitempty"` // dnsmasq config for VPN clients
 	ExternalDNS *ExternalDNS `json:"external_dns,omitempty"` // Route53 config for public access
 	Proxy       *ProxyConfig `json:"proxy,omitempty"`        // HAProxy reverse proxy config
+}
+
+// EnsureToken generates a token for this service if one doesn't exist.
+func (s *Service) EnsureToken() {
+	if s.Token == "" {
+		s.Token = GenerateDeployToken()
+	}
 }
 
 // PrimaryDomain returns the first domain, or "" if none configured

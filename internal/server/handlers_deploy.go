@@ -11,9 +11,13 @@ import (
 )
 
 
-// findServiceByDeployToken returns the service index matching the deploy token.
-func (s *Server) findServiceByDeployToken(token string) int {
+// findServiceByToken returns the service index matching either the service token
+// or the legacy deploy token.
+func (s *Server) findServiceByToken(token string) int {
 	for i, svc := range s.config.Services {
+		if svc.Token == token {
+			return i
+		}
 		if svc.Proxy != nil && svc.Proxy.Deploy != nil && svc.Proxy.Deploy.Token == token {
 			return i
 		}
@@ -45,7 +49,7 @@ func (s *Server) handleDeployAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	idx := s.findServiceByDeployToken(token)
+	idx := s.findServiceByToken(token)
 	if idx < 0 {
 		http.Error(w, "invalid deploy token", http.StatusUnauthorized)
 		return
