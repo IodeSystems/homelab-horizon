@@ -9,6 +9,7 @@ import type {
   HAProxyConfigPreview,
   Invite,
   Service,
+  ServiceIntegration,
   SettingsData,
   VPNPeer,
   Zone,
@@ -61,6 +62,15 @@ export function useZones() {
   return useQuery({
     queryKey: ["zones"],
     queryFn: () => apiFetch<Zone[]>("/zones", { schema: ZonesSchema }),
+  });
+}
+
+export function useServiceIntegration(name: string) {
+  return useQuery({
+    queryKey: ["services", "integration", name],
+    queryFn: () =>
+      apiFetch<ServiceIntegration>(`/services/integration?name=${encodeURIComponent(name)}`),
+    enabled: !!name,
   });
 }
 

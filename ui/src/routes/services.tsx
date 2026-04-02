@@ -30,12 +30,15 @@ import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import SyncIcon from "@mui/icons-material/Sync";
+import IntegrationInstructionsIcon from "@mui/icons-material/IntegrationInstructions";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import {
   useServices,
   useAddService,
   useEditService,
   useDeleteService,
   useTriggerSync,
+  useServiceIntegration,
 } from "../api/hooks";
 import type { Service } from "../api/types";
 import type { ServiceMutationInput } from "../api/hooks";
@@ -345,6 +348,131 @@ function DeleteConfirmDialog({
   );
 }
 
+// --- Integration Dialog ---
+
+function IntegrationDialog({
+  serviceName,
+  open,
+  onClose,
+}: {
+  serviceName: string;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const { data, isLoading } = useServiceIntegration(open ? serviceName : "");
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const script = data
+    ? [
+        `# ${data.name} — Homelab Horizon Integration`,
+        `# Base URL: ${data.baseURL}`,
+        ``,
+        `TOKEN="${data.token}"`,
+        `BASE="${data.baseURL}"`,
+        ``,
+        `# --- IP Banning ---`,
+        ``,
+        `# Ban an IP (timeout in seconds, 0 = permanent)`,
+        `curl -X POST "$BASE/api/ban/ban" \\`,
+        `  -H "Authorization: Bearer $TOKEN" \\`,
+        `  -H "Content-Type: application/json" \\`,
+        `  -d '{"ip":"1.2.3.4","timeout":3600,"reason":"brute force"}'`,
+        ``,
+        `# Unban an IP`,
+        `curl -X POST "$BASE/api/ban/unban" \\`,
+        `  -H "Authorization: Bearer $TOKEN" \\`,
+        `  -H "Content-Type: application/json" \\`,
+        `  -d '{"ip":"1.2.3.4"}'`,
+        ``,
+        `# List active bans`,
+        `curl -s "$BASE/api/ban/list" \\`,
+        `  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool`,
+        ...(data.hasDeploy
+          ? [
+              ``,
+              `# --- Blue-Green Deploy ---`,
+              ``,
+              `# Download deploy control script`,
+              `curl -sO "$BASE/admin/haproxy/deploy-script"`,
+              `chmod +x deploy-service`,
+              ``,
+              `# Check deploy status`,
+              `curl -s "$BASE/api/deploy/status" \\`,
+              `  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool`,
+              ``,
+              `# Swap active/next slots`,
+              `curl -X POST "$BASE/api/deploy/swap" \\`,
+              `  -H "Authorization: Bearer $TOKEN"`,
+            ]
+          : []),
+      ].join("\n")
+    : "";
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle>
+        Service Integration — {serviceName}
+      </DialogTitle>
+      <DialogContent>
+        {isLoading ? (
+          <Box sx={{ display: "flex", justifyContent: "center", py: 4 }}>
+            <CircularProgress />
+          </Box>
+        ) : data ? (
+          <>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Use these commands to integrate your service with Homelab Horizon.
+              The token authenticates your service for IP banning
+              {data.hasDeploy ? " and blue-green deploy" : ""} operations.
+            </Typography>
+            <Box sx={{ position: "relative" }}>
+              <IconButton
+                size="small"
+                onClick={() => handleCopy(script)}
+                sx={{ position: "absolute", top: 8, right: 8, zIndex: 1 }}
+                title="Copy to clipboard"
+              >
+                <ContentCopyIcon fontSize="small" />
+              </IconButton>
+              <Box
+                component="pre"
+                sx={{
+                  bgcolor: "#0f3460",
+                  color: "#eee",
+                  p: 2,
+                  borderRadius: 1,
+                  overflow: "auto",
+                  maxHeight: 500,
+                  fontSize: "0.85rem",
+                  fontFamily: "monospace",
+                  whiteSpace: "pre",
+                  m: 0,
+                }}
+              >
+                {script}
+              </Box>
+            </Box>
+          </>
+        ) : null}
+      </DialogContent>
+      <DialogActions>
+        {copied && (
+          <Typography variant="body2" color="success.main" sx={{ mr: 2 }}>
+            Copied!
+          </Typography>
+        )}
+        <Button onClick={onClose}>Close</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 // --- Service Row ---
 
 function ServiceRow({
@@ -357,6 +485,7 @@ function ServiceRow({
   onDelete: (name: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [integrationOpen, setIntegrationOpen] = useState(false);
 
   const hasIntDNS = !!service.internalDNS;
   const hasExtDNS = !!service.externalDNS;
@@ -451,15 +580,6 @@ function ServiceRow({
                   <Typography variant="body2" color="text.secondary">
                     Balance: {service.proxy!.deploy!.balance}
                   </Typography>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    sx={{ mt: 1 }}
-                    href="/admin/haproxy/deploy-script"
-                    target="_blank"
-                  >
-                    Download Deploy Script
-                  </Button>
                 </DetailCard>
               )}
               {!hasIntDNS && !hasExtDNS && !hasProxy && (
@@ -469,6 +589,17 @@ function ServiceRow({
               )}
             </Box>
             <Box sx={{ display: "flex", gap: 1, pb: 2 }}>
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<IntegrationInstructionsIcon />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIntegrationOpen(true);
+                }}
+              >
+                Integration
+              </Button>
               <Button
                 size="small"
                 variant="outlined"
@@ -496,6 +627,11 @@ function ServiceRow({
           </Collapse>
         </TableCell>
       </TableRow>
+      <IntegrationDialog
+        serviceName={service.name}
+        open={integrationOpen}
+        onClose={() => setIntegrationOpen(false)}
+      />
     </>
   );
 }

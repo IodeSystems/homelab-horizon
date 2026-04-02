@@ -43,4 +43,5 @@ export type {
   BanListResponse,
   BanRequest,
   UnbanRequest,
+  ServiceIntegration,
 } from "./generated-types";

@@ -2,10 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 
 	"homelab-horizon/internal/apitypes"
+	"homelab-horizon/internal/config"
 )
 
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
@@ -375,4 +377,54 @@ func (s *Server) handleAPIZones(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(zones)
+}
+
+// handleAPIServiceIntegration returns the service token and integration instructions.
+// GET /api/v1/services/integration?name=serviceName
+func (s *Server) handleAPIServiceIntegration(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		writeJSONError(w, http.StatusBadRequest, "name parameter required")
+		return
+	}
+
+	var svc *config.Service
+	for i := range s.config.Services {
+		if s.config.Services[i].Name == name {
+			svc = &s.config.Services[i]
+			break
+		}
+	}
+	if svc == nil {
+		writeJSONError(w, http.StatusNotFound, "service not found")
+		return
+	}
+
+	// Ensure token exists
+	if svc.Token == "" {
+		svc.EnsureToken()
+		config.Save(s.configPath, s.config)
+	}
+
+	// Build base URL from request
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
+
+	hasDeploy := svc.Proxy != nil && svc.Proxy.Deploy != nil
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(apitypes.ServiceIntegration{
+		Name:      svc.Name,
+		Token:     svc.Token,
+		BaseURL:   baseURL,
+		HasDeploy: hasDeploy,
+	})
 }

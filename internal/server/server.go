@@ -1098,6 +1098,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/bans/add", s.handleAPIBanAdd)
 	mux.HandleFunc("/api/v1/bans/remove", s.handleAPIBanRemove)
 
+	// Service integration
+	mux.HandleFunc("/api/v1/services/integration", s.handleAPIServiceIntegration)
+
 	// Admin routes - all wrapped with CSRF middleware
 	mux.HandleFunc("/admin", s.csrfMiddleware(s.handleAdmin))
 	mux.HandleFunc("/admin/client", s.csrfMiddleware(s.handleAddClient))
@@ -1236,6 +1239,18 @@ func (s *Server) setupRoutes() *http.ServeMux {
 }
 
 func (s *Server) ensureServicesRunning() {
+	// Ensure all services have API tokens
+	tokensGenerated := false
+	for i := range s.config.Services {
+		if s.config.Services[i].Token == "" {
+			s.config.Services[i].EnsureToken()
+			tokensGenerated = true
+		}
+	}
+	if tokensGenerated {
+		config.Save(s.configPath, s.config)
+	}
+
 	// Ensure WireGuard interface is up
 	fmt.Printf("Checking WireGuard interface %s... ", s.config.WGInterface)
 	status := s.wg.GetInterfaceStatus()

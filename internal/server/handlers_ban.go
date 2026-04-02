@@ -195,7 +195,7 @@ func (s *Server) handleBanAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	idx := s.findServiceByDeployToken(token)
+	idx := s.findServiceByToken(token)
 	if idx < 0 {
 		http.Error(w, "invalid deploy token", http.StatusUnauthorized)
 		return
