@@ -1172,6 +1172,52 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/admin/checks/run", s.csrfMiddleware(s.handleRunCheck))
 	mux.HandleFunc("/admin/checks/settings", s.csrfMiddleware(s.handleCheckSettings))
 
+	// API v1 routes (JSON, SameSite cookie auth)
+	mux.HandleFunc("/api/v1/auth/status", s.handleAPIAuthStatus)
+	mux.HandleFunc("/api/v1/auth/login", s.handleAPILogin)
+	mux.HandleFunc("/api/v1/auth/logout", s.handleAPILogout)
+
+	// API v1 data routes
+	mux.HandleFunc("/api/v1/dashboard", s.handleAPIDashboard)
+	mux.HandleFunc("/api/v1/services", s.handleAPIServices)
+	mux.HandleFunc("/api/v1/domains", s.handleAPIDomains)
+	mux.HandleFunc("/api/v1/vpn/peers", s.handleAPIVPNPeers)
+	mux.HandleFunc("/api/v1/zones", s.handleAPIZones)
+
+	// API v1 mutation routes
+	mux.HandleFunc("/api/v1/services/add", s.handleAPIAddService)
+	mux.HandleFunc("/api/v1/services/edit", s.handleAPIEditService)
+	mux.HandleFunc("/api/v1/services/delete", s.handleAPIDeleteService)
+	mux.HandleFunc("/api/v1/dns/sync", s.handleAPISyncDNS)
+	mux.HandleFunc("/api/v1/dns/sync-all", s.handleAPISyncAllDNS)
+	mux.HandleFunc("/api/v1/zones/subzone", s.handleAPIAddSubZone)
+	mux.HandleFunc("/api/v1/ssl/request-cert", s.handleAPIRequestCert)
+	mux.HandleFunc("/api/v1/services/sync", s.handleAPITriggerSync)
+	mux.HandleFunc("/api/v1/vpn/peers/add", s.handleAPIAddPeer)
+	mux.HandleFunc("/api/v1/vpn/peers/edit", s.handleAPIEditPeer)
+	mux.HandleFunc("/api/v1/vpn/peers/delete", s.handleAPIDeletePeer)
+	mux.HandleFunc("/api/v1/vpn/peers/toggle-admin", s.handleAPIToggleAdmin)
+	mux.HandleFunc("/api/v1/vpn/reload", s.handleAPIReloadWG)
+	mux.HandleFunc("/api/v1/vpn/invites", s.handleAPIListInvites)
+	mux.HandleFunc("/api/v1/vpn/invites/create", s.handleAPICreateInvite)
+	mux.HandleFunc("/api/v1/vpn/invites/delete", s.handleAPIDeleteInvite)
+
+	// API v1 settings routes
+	mux.HandleFunc("/api/v1/settings", s.handleAPISettings)
+	mux.HandleFunc("/api/v1/zones/add", s.handleAPIAddZone)
+	mux.HandleFunc("/api/v1/zones/edit", s.handleAPIEditZone)
+	mux.HandleFunc("/api/v1/zones/delete", s.handleAPIDeleteZone)
+	mux.HandleFunc("/api/v1/haproxy/write-config", s.handleAPIHAProxyWriteConfig)
+	mux.HandleFunc("/api/v1/haproxy/reload", s.handleAPIHAProxyReload)
+	mux.HandleFunc("/api/v1/haproxy/config-preview", s.handleAPIHAProxyConfigPreview)
+	mux.HandleFunc("/api/v1/checks/add", s.handleAPIAddCheck)
+	mux.HandleFunc("/api/v1/checks/delete", s.handleAPIDeleteCheck)
+	mux.HandleFunc("/api/v1/checks/toggle", s.handleAPIToggleCheck)
+	mux.HandleFunc("/api/v1/checks/run", s.handleAPIRunCheck)
+
+	// React SPA
+	s.setupSPA(mux)
+
 	return mux
 }
 
