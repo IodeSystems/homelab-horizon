@@ -558,50 +558,66 @@ function ServiceRow({
                 gap: 2,
               }}
             >
-              {(hasIntDNS || hasExtDNS) && (
+              {(hasIntDNS || hasExtDNS || service.status.internalDNSUp || service.status.externalDNSUp) && (
                 <DetailCard title="DNS">
-                  {hasIntDNS && (
-                    <Box sx={{ display: "flex", gap: 1, alignItems: "center", mb: 0.5 }}>
-                      <StatusDot configured={true} detected={service.status.internalDNSUp} />
-                      <Typography variant="body2" sx={{ minWidth: 60 }}>Internal:</Typography>
-                      <Typography variant="body2" component="span">
-                        <code>{service.internalDNS!.ip}</code>
-                      </Typography>
-                      {service.status.internalDNSResolved && service.status.internalDNSResolved !== service.internalDNS!.ip && (
-                        <Typography variant="body2" color="error.main">
+                  <Box sx={{ display: "flex", gap: 1, alignItems: "center", mb: 0.5 }}>
+                    <StatusDot configured={hasIntDNS} detected={service.status.internalDNSUp} />
+                    <Typography variant="body2" sx={{ minWidth: 60 }}>Internal:</Typography>
+                    {hasIntDNS ? (
+                      <>
+                        <Typography variant="body2"><code>{service.internalDNS!.ip}</code></Typography>
+                        {service.status.internalDNSResolved && service.status.internalDNSResolved !== service.internalDNS!.ip ? (
+                          <Typography variant="body2" color="error.main">
+                            resolves to {service.status.internalDNSResolved}
+                          </Typography>
+                        ) : service.status.internalDNSUp ? (
+                          <Typography variant="body2" color="success.main">ok</Typography>
+                        ) : (
+                          <Typography variant="body2" color="error.main">not resolving</Typography>
+                        )}
+                      </>
+                    ) : service.status.internalDNSResolved ? (
+                      <>
+                        <Typography variant="body2" color="text.secondary">unconfigured</Typography>
+                        <Typography variant="body2" color="warning.main">
                           resolves to {service.status.internalDNSResolved}
                         </Typography>
-                      )}
-                      {service.status.internalDNSUp && service.status.internalDNSResolved === service.internalDNS!.ip && (
-                        <Typography variant="body2" color="success.main">ok</Typography>
-                      )}
-                      {!service.status.internalDNSUp && (
-                        <Typography variant="body2" color="error.main">not resolving</Typography>
-                      )}
-                    </Box>
-                  )}
-                  {hasExtDNS && (
-                    <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
-                      <StatusDot configured={true} detected={service.status.externalDNSUp} />
-                      <Typography variant="body2" sx={{ minWidth: 60 }}>External:</Typography>
-                      <Typography variant="body2" component="span">
-                        <code>{service.externalDNS!.ip || "auto"}</code>
-                      </Typography>
-                      {service.status.externalDNSResolved ? (
-                        service.status.externalDNSResolved !== service.externalDNS!.ip && service.externalDNS!.ip ? (
-                          <Typography variant="body2" color="error.main">
-                            resolves to {service.status.externalDNSResolved}
-                          </Typography>
+                      </>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">unconfigured</Typography>
+                    )}
+                  </Box>
+                  <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+                    <StatusDot configured={hasExtDNS} detected={service.status.externalDNSUp} />
+                    <Typography variant="body2" sx={{ minWidth: 60 }}>External:</Typography>
+                    {hasExtDNS ? (
+                      <>
+                        <Typography variant="body2"><code>{service.externalDNS!.ip || "auto"}</code></Typography>
+                        {service.status.externalDNSResolved ? (
+                          service.status.externalDNSResolved !== service.externalDNS!.ip && service.externalDNS!.ip ? (
+                            <Typography variant="body2" color="error.main">
+                              resolves to {service.status.externalDNSResolved}
+                            </Typography>
+                          ) : (
+                            <Typography variant="body2" color="success.main">
+                              {service.status.externalDNSResolved}
+                            </Typography>
+                          )
                         ) : (
-                          <Typography variant="body2" color="success.main">
-                            {service.status.externalDNSResolved}
-                          </Typography>
-                        )
-                      ) : (
-                        <Typography variant="body2" color="error.main">not resolving</Typography>
-                      )}
-                    </Box>
-                  )}
+                          <Typography variant="body2" color="error.main">not resolving</Typography>
+                        )}
+                      </>
+                    ) : service.status.externalDNSResolved ? (
+                      <>
+                        <Typography variant="body2" color="text.secondary">unconfigured</Typography>
+                        <Typography variant="body2" color="warning.main">
+                          resolves to {service.status.externalDNSResolved}
+                        </Typography>
+                      </>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">unconfigured</Typography>
+                    )}
+                  </Box>
                 </DetailCard>
               )}
               {hasProxy && (
