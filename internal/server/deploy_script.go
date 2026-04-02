@@ -109,11 +109,12 @@ fi
 CMD="$1"
 shift
 
-API="$URL/api/deploy/$TOKEN"
+API="$URL/api/deploy"
+AUTH="Authorization: Bearer $TOKEN"
 
 status() {
   local raw
-  raw=$(curl -sf "$API/status") || { echo "Failed to fetch status"; exit 1; }
+  raw=$(curl -sf -H "$AUTH" "$API/status") || { echo "Failed to fetch status"; exit 1; }
   if command -v python3 &>/dev/null; then
     echo "$raw" | python3 -c "
 import sys, json
@@ -135,24 +136,24 @@ for role in ('current', 'next'):
 }
 
 status_json() {
-  curl -sf "$API/status"
+  curl -sf -H "$AUTH" "$API/status"
 }
 
 post() {
   local path="$1"
   local resp
-  resp=$(curl -sf -X POST "$API/$path") || { echo "FAILED: $path"; exit 1; }
+  resp=$(curl -sf -X POST -H "$AUTH" "$API/$path") || { echo "FAILED: $path"; exit 1; }
   echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
 }
 
 get_state() {
   local slot="$1"
-  curl -sf "$API/status" | python3 -c "import sys,json; print(json.load(sys.stdin)['$slot']['state'])" 2>/dev/null || echo "unknown"
+  curl -sf -H "$AUTH" "$API/status" | python3 -c "import sys,json; print(json.load(sys.stdin)['$slot']['state'])" 2>/dev/null || echo "unknown"
 }
 
 get_backend() {
   local slot="$1"
-  curl -sf "$API/status" | python3 -c "import sys,json; print(json.load(sys.stdin)['$slot']['backend'])" 2>/dev/null || echo "unknown"
+  curl -sf -H "$AUTH" "$API/status" | python3 -c "import sys,json; print(json.load(sys.stdin)['$slot']['backend'])" 2>/dev/null || echo "unknown"
 }
 
 wait_drained() {

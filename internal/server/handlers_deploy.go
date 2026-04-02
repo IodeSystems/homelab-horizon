@@ -21,36 +21,47 @@ func (s *Server) findServiceByDeployToken(token string) int {
 	return -1
 }
 
-// handleDeployAPI handles all /api/deploy/{token}/... requests.
+// extractBearerToken gets the deploy token from the Authorization: Bearer header.
+func extractBearerToken(r *http.Request) string {
+	auth := r.Header.Get("Authorization")
+	if strings.HasPrefix(auth, "Bearer ") {
+		return strings.TrimPrefix(auth, "Bearer ")
+	}
+	return ""
+}
+
+// handleDeployAPI handles all /api/deploy/... requests.
+// Token must be in Authorization: Bearer header.
 // Routes:
-//   GET  /api/deploy/{token}/status
-//   POST /api/deploy/{token}/current/up
-//   POST /api/deploy/{token}/current/drain
-//   POST /api/deploy/{token}/current/down
-//   POST /api/deploy/{token}/next/up
-//   POST /api/deploy/{token}/next/drain
-//   POST /api/deploy/{token}/next/down
-//   POST /api/deploy/{token}/swap
+//
+//	GET  /api/deploy/status
+//	POST /api/deploy/current/up|drain|down
+//	POST /api/deploy/next/up|drain|down
+//	POST /api/deploy/swap
 func (s *Server) handleDeployAPI(w http.ResponseWriter, r *http.Request) {
-	// Parse: /api/deploy/{token}/...
-	path := strings.TrimPrefix(r.URL.Path, "/api/deploy/")
-	parts := strings.SplitN(path, "/", 3)
-	if len(parts) < 2 {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+	token := extractBearerToken(r)
+	if token == "" {
+		http.Error(w, "Authorization: Bearer <token> required", http.StatusUnauthorized)
 		return
 	}
 
-	token := parts[0]
 	idx := s.findServiceByDeployToken(token)
 	if idx < 0 {
 		http.Error(w, "invalid deploy token", http.StatusUnauthorized)
 		return
 	}
 
+	path := strings.TrimPrefix(r.URL.Path, "/api/deploy/")
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) < 1 || parts[0] == "" {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+
 	svc := &s.config.Services[idx]
 	deploy := svc.Proxy.Deploy
 	backendName := haproxy.SanitizeName(svc.Name) + "_backend"
-	action := parts[1]
+	action := parts[0]
 
 	switch action {
 	case "status":
@@ -65,11 +76,11 @@ func (s *Server) handleDeployAPI(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if len(parts) < 3 {
+		if len(parts) < 2 {
 			http.Error(w, "missing action (up/drain/down)", http.StatusBadRequest)
 			return
 		}
-		s.handleDeployStateChange(w, backendName, action, parts[2])
+		s.handleDeployStateChange(w, backendName, action, parts[1])
 
 	case "swap":
 		if r.Method != http.MethodPost {
