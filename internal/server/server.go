@@ -1101,6 +1101,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// Service integration
 	mux.HandleFunc("/api/v1/services/integration", s.handleAPIServiceIntegration)
 
+	// Sync (reuse existing handlers, they check isAdmin internally)
+	mux.HandleFunc("/api/v1/services/sync/stream", s.handleSyncServicesStream)
+	mux.HandleFunc("/api/v1/services/sync/status", s.handleSyncStatus)
+	mux.HandleFunc("/api/v1/services/sync/cancel", s.handleSyncCancel)
+
 	// Admin routes - all wrapped with CSRF middleware
 	mux.HandleFunc("/admin", s.csrfMiddleware(s.handleAdmin))
 	mux.HandleFunc("/admin/client", s.csrfMiddleware(s.handleAddClient))
