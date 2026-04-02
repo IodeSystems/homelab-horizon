@@ -529,7 +529,24 @@ func (s *Server) handleAPIDomainSSLAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	subZone, _, _ := neededSubZoneForDomain(req.Domain, zone.Name)
+	// Compute the exact SubZone for this domain (not a wildcard)
+	// e.g., "alt-redline.iodesystems.com" → "alt-redline"
+	// e.g., "iodesystems.com" → "" (root)
+	// e.g., "*.vpn.iodesystems.com" → "*.vpn"
+	var subZone string
+	checkDomain := strings.TrimPrefix(req.Domain, "*.")
+	if strings.HasPrefix(req.Domain, "*.") {
+		// Preserve wildcard prefix for wildcard domains
+		if checkDomain == zone.Name {
+			subZone = "*"
+		} else {
+			subZone = "*." + strings.TrimSuffix(checkDomain, "."+zone.Name)
+		}
+	} else if checkDomain == zone.Name {
+		subZone = ""
+	} else {
+		subZone = strings.TrimSuffix(checkDomain, "."+zone.Name)
+	}
 
 	// Check if SubZone already exists
 	for _, existing := range zone.SubZones {
