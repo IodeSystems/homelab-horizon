@@ -37,9 +37,9 @@ import {
   useAddService,
   useEditService,
   useDeleteService,
-  useTriggerSync,
   useServiceIntegration,
 } from "../api/hooks";
+import { useSyncContext } from "../components/SyncProvider";
 import type { Service } from "../api/types";
 import type { ServiceMutationInput } from "../api/hooks";
 
@@ -651,7 +651,7 @@ function ServicesPage() {
   const addMutation = useAddService();
   const editMutation = useEditService();
   const deleteMutation = useDeleteService();
-  const syncMutation = useTriggerSync();
+  const { startSync } = useSyncContext();
 
   const [addOpen, setAddOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Service | null>(null);
@@ -694,16 +694,7 @@ function ServicesPage() {
   };
 
   const handleSync = () => {
-    syncMutation.mutate(undefined, {
-      onSuccess: (data) => {
-        const resp = data as { started: boolean };
-        showSnack(
-          resp.started ? "Sync started" : "Sync already running",
-          "success",
-        );
-      },
-      onError: (err) => showSnack(err.message, "error"),
-    });
+    startSync();
   };
 
   if (isLoading) {
@@ -731,9 +722,8 @@ function ServicesPage() {
             variant="outlined"
             startIcon={<SyncIcon />}
             onClick={handleSync}
-            disabled={syncMutation.isPending}
           >
-            {syncMutation.isPending ? "Syncing..." : "Sync All"}
+            Sync All
           </Button>
           <Button
             variant="contained"

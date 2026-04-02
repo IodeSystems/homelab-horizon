@@ -3,6 +3,7 @@ import { Box, CircularProgress } from "@mui/material";
 import { useAuthStatus } from "../api/auth";
 import AppLayout from "../components/AppLayout";
 import LoginPage from "../components/LoginPage";
+import SyncProvider from "../components/SyncProvider";
 
 function RootComponent() {
   const { data, isLoading, isError } = useAuthStatus();
@@ -27,9 +28,11 @@ function RootComponent() {
   }
 
   return (
-    <AppLayout>
-      <Outlet />
-    </AppLayout>
+    <SyncProvider>
+      <AppLayout>
+        <Outlet />
+      </AppLayout>
+    </SyncProvider>
   );
 }
 
