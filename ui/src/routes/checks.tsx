@@ -176,6 +176,11 @@ function CheckRow({ check }: { check: CheckStatus }) {
             <StatusDot status={check.status} />
             <Typography variant="body2">{check.status}</Typography>
           </Box>
+          {check.status === "failed" && check.last_error && (
+            <Typography variant="caption" color="error.main" sx={{ display: "block", mt: 0.25, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={check.last_error}>
+              {check.last_error}
+            </Typography>
+          )}
         </TableCell>
         <TableCell>
           <Typography variant="body2" color="text.secondary">

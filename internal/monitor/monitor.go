@@ -279,7 +279,12 @@ func (m *Monitor) runCheck(check config.ServiceCheck) {
 		interval = 300
 	}
 
-	// Run immediately on start
+	// Wait before first check to let services finish starting
+	select {
+	case <-time.After(10 * time.Second):
+	case <-m.ctx.Done():
+		return
+	}
 	m.executeCheck(check)
 
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
