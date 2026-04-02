@@ -1076,8 +1076,14 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// Public routes (no CSRF needed)
 	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/", s.handleLogin)
-	mux.HandleFunc("/auth", s.handleAuth)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/app/", http.StatusFound)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	mux.HandleFunc("/auth", s.handleAuth)   // kept for invite flow compatibility
 	mux.HandleFunc("/logout", s.handleLogout)
 	mux.HandleFunc("/invite/", s.handleInvite)
 

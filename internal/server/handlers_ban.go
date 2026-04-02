@@ -189,15 +189,12 @@ func banListEntries(bans []config.IPBan) []apitypes.BanEntry {
 // Service API — deploy token auth, no CSRF
 
 func (s *Server) handleBanAPI(w http.ResponseWriter, r *http.Request) {
-	// Parse: /api/ban/{token}/{action}
-	path := strings.TrimPrefix(r.URL.Path, "/api/ban/")
-	parts := strings.SplitN(path, "/", 2)
-	if len(parts) < 2 {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+	token := extractBearerToken(r)
+	if token == "" {
+		http.Error(w, "Authorization: Bearer <token> required", http.StatusUnauthorized)
 		return
 	}
 
-	token := parts[0]
 	idx := s.findServiceByDeployToken(token)
 	if idx < 0 {
 		http.Error(w, "invalid deploy token", http.StatusUnauthorized)
@@ -205,7 +202,7 @@ func (s *Server) handleBanAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	service := s.config.Services[idx].Name
-	action := parts[1]
+	action := strings.TrimPrefix(r.URL.Path, "/api/ban/")
 
 	switch action {
 	case "ban":
