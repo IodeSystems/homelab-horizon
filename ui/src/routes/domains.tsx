@@ -7,6 +7,10 @@ import {
   Chip,
   CircularProgress,
   Collapse,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   IconButton,
   Paper,
   Snackbar,
@@ -16,6 +20,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TextField,
   Typography,
 } from "@mui/material";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
@@ -23,6 +28,8 @@ import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import WarningIcon from "@mui/icons-material/Warning";
 import SyncIcon from "@mui/icons-material/Sync";
 import HttpsIcon from "@mui/icons-material/Https";
+import AddIcon from "@mui/icons-material/Add";
+import DeleteIcon from "@mui/icons-material/Delete";
 import {
   useDomains,
   useSyncDNS,
@@ -197,9 +204,22 @@ function DomainRow({
               : domain.certExists ? "Cert exists but not in SubZones" : undefined}
           />
         </TableCell>
+        <TableCell align="right" sx={{ p: 0.5 }}>
+          {!domain.hasService && domain.hasSSLCoverage && (
+            <IconButton
+              size="small"
+              color="error"
+              title="Remove SSL coverage"
+              onClick={(e) => { e.stopPropagation(); handleRemoveSSL(e); }}
+              disabled={anyPending}
+            >
+              <DeleteIcon fontSize="small" />
+            </IconButton>
+          )}
+        </TableCell>
       </TableRow>
       <TableRow>
-        <TableCell sx={{ py: 0 }} colSpan={7}>
+        <TableCell sx={{ py: 0 }} colSpan={8}>
           <Collapse in={open} timeout="auto" unmountOnExit>
             <Box
               sx={{
@@ -334,11 +354,25 @@ function DomainRow({
 function DomainsPage() {
   const { data, isLoading, error } = useDomains();
   const syncAllDNS = useSyncAllDNS();
-  const addSSL = useAddDomainSSL();
+  const addSSLMutation = useAddDomainSSL();
+  const [addOpen, setAddOpen] = useState(false);
+  const [addDomain, setAddDomain] = useState("");
   const [snack, setSnack] = useState<SnackState>({ open: false, message: "", severity: "success" });
 
   const showSnack = (message: string, severity: "success" | "error") =>
     setSnack({ open: true, message, severity });
+
+  const handleAddDomain = () => {
+    if (!addDomain.trim()) return;
+    addSSLMutation.mutate(addDomain.trim(), {
+      onSuccess: () => {
+        showSnack(`SSL coverage added for ${addDomain.trim()}`, "success");
+        setAddOpen(false);
+        setAddDomain("");
+      },
+      onError: (err) => showSnack(err.message, "error"),
+    });
+  };
 
   const handleSyncAll = () => {
     syncAllDNS.mutate(undefined, {
@@ -372,14 +406,23 @@ function DomainsPage() {
         <Typography variant="h5" sx={{ fontWeight: 600 }}>
           Domains
         </Typography>
-        <Button
-          variant="outlined"
-          startIcon={syncAllDNS.isPending ? <CircularProgress size={16} /> : <SyncIcon />}
-          onClick={handleSyncAll}
-          disabled={syncAllDNS.isPending}
-        >
-          {syncAllDNS.isPending ? "Syncing..." : "Sync All DNS"}
-        </Button>
+        <Box sx={{ display: "flex", gap: 1 }}>
+          <Button
+            variant="outlined"
+            startIcon={syncAllDNS.isPending ? <CircularProgress size={16} /> : <SyncIcon />}
+            onClick={handleSyncAll}
+            disabled={syncAllDNS.isPending}
+          >
+            {syncAllDNS.isPending ? "Syncing..." : "Sync All DNS"}
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => setAddOpen(true)}
+          >
+            Add Domain
+          </Button>
+        </Box>
       </Box>
 
       <Paper sx={{ p: 2, mb: 3 }}>
@@ -411,15 +454,15 @@ function DomainsPage() {
                   <Button
                     size="small"
                     variant="outlined"
-                    startIcon={addSSL.isPending ? <CircularProgress size={14} /> : <HttpsIcon />}
+                    startIcon={addSSLMutation.isPending ? <CircularProgress size={14} /> : <HttpsIcon />}
                     onClick={() =>
-                      addSSL.mutate(gap.domain, {
+                      addSSLMutation.mutate(gap.domain, {
                         onSuccess: () =>
                           showSnack(`SSL coverage added for ${gap.display}`, "success"),
                         onError: (err) => showSnack(err.message, "error"),
                       })
                     }
-                    disabled={addSSL.isPending}
+                    disabled={addSSLMutation.isPending}
                     sx={{ whiteSpace: "nowrap", flexShrink: 0 }}
                   >
                     Add SSL
@@ -442,12 +485,13 @@ function DomainsPage() {
               <TableCell align="center">Ext DNS</TableCell>
               <TableCell align="center">Proxy</TableCell>
               <TableCell align="center">HTTPS</TableCell>
+              <TableCell sx={{ width: 50 }} />
             </TableRow>
           </TableHead>
           <TableBody>
             {data.domains.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
                     No domains found.
                   </Typography>
@@ -461,6 +505,36 @@ function DomainsPage() {
           </TableBody>
         </Table>
       </TableContainer>
+
+      {/* Add Domain dialog */}
+      <Dialog open={addOpen} onClose={() => setAddOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Add Domain SSL Coverage</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Enter a domain name to add SSL coverage. The zone and wildcard
+            pattern will be determined automatically.
+          </Typography>
+          <TextField
+            fullWidth
+            label="Domain"
+            placeholder="app.example.com"
+            value={addDomain}
+            onChange={(e) => setAddDomain(e.target.value)}
+            autoFocus
+            onKeyDown={(e) => { if (e.key === "Enter") handleAddDomain(); }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAddOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleAddDomain}
+            disabled={!addDomain.trim() || addSSLMutation.isPending}
+          >
+            {addSSLMutation.isPending ? "Adding..." : "Add"}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Snackbar
         open={snack.open}
