@@ -693,7 +693,10 @@ function ServicesPage() {
     });
   };
 
+  const [syncConfirmOpen, setSyncConfirmOpen] = useState(false);
+
   const handleSync = () => {
+    setSyncConfirmOpen(false);
     startSync();
   };
 
@@ -721,9 +724,9 @@ function ServicesPage() {
           <Button
             variant="outlined"
             startIcon={<SyncIcon />}
-            onClick={handleSync}
+            onClick={() => setSyncConfirmOpen(true)}
           >
-            Sync All
+            Sync DNS, SSL &amp; HAProxy
           </Button>
           <Button
             variant="contained"
@@ -802,6 +805,24 @@ function ServicesPage() {
         onConfirm={handleDelete}
         isDeleting={deleteMutation.isPending}
       />
+
+      {/* Sync confirmation */}
+      <Dialog open={syncConfirmOpen} onClose={() => setSyncConfirmOpen(false)}>
+        <DialogTitle>Sync All Services?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary">
+            This will sync all subsystems in order: internal DNS (dnsmasq),
+            external DNS records, SSL certificates, and HAProxy configuration.
+            It may take a few minutes if certificates need to be requested.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSyncConfirmOpen(false)}>Cancel</Button>
+          <Button variant="contained" onClick={handleSync}>
+            Start Sync
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Snackbar feedback */}
       <Snackbar
