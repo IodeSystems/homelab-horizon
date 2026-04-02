@@ -24,6 +24,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 			Value:    s.signCookie("admin"),
 			Path:     "/",
 			HttpOnly: true,
+			SameSite: http.SameSiteStrictMode,
 			MaxAge:   86400,
 		})
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)

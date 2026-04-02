@@ -1,0 +1,421 @@
+import { useState } from "react";
+import { createFileRoute } from "@tanstack/react-router";
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  Collapse,
+  IconButton,
+  Paper,
+  Snackbar,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Typography,
+} from "@mui/material";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
+import WarningIcon from "@mui/icons-material/Warning";
+import SyncIcon from "@mui/icons-material/Sync";
+import HttpsIcon from "@mui/icons-material/Https";
+import {
+  useDomains,
+  useSyncDNS,
+  useSyncAllDNS,
+  useAddSubZone,
+  useRequestCert,
+} from "../api/hooks";
+import type { DomainAnalysis } from "../api/types";
+
+function StatusDot({ active }: { active: boolean }) {
+  return (
+    <Box
+      component="span"
+      sx={{
+        display: "inline-block",
+        width: 10,
+        height: 10,
+        borderRadius: "50%",
+        bgcolor: active ? "success.main" : "text.secondary",
+        opacity: active ? 1 : 0.4,
+      }}
+    />
+  );
+}
+
+function SummaryChip({ label, count }: { label: string; count: number }) {
+  return (
+    <Chip
+      label={`${label}: ${count}`}
+      size="small"
+      variant="outlined"
+      sx={{ fontVariantNumeric: "tabular-nums" }}
+    />
+  );
+}
+
+interface SnackState {
+  open: boolean;
+  message: string;
+  severity: "success" | "error";
+}
+
+function DomainRow({
+  domain,
+  onSnack,
+}: {
+  domain: DomainAnalysis;
+  onSnack: (message: string, severity: "success" | "error") => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const syncDNS = useSyncDNS();
+  const addSubZone = useAddSubZone();
+  const requestCert = useRequestCert();
+
+  const handleSyncDNS = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    syncDNS.mutate(domain.domain, {
+      onSuccess: (data) => {
+        onSnack(
+          data.changed
+            ? `DNS record updated for ${domain.domain}`
+            : `DNS already up to date for ${domain.domain}`,
+          "success",
+        );
+      },
+      onError: (err) => onSnack(err.message, "error"),
+    });
+  };
+
+  const handleEnableHTTPS = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    addSubZone.mutate(
+      { zone: domain.zoneName, subzone: domain.neededSubZone },
+      {
+        onSuccess: () =>
+          onSnack(
+            `Sub-zone ${domain.neededSubZoneDisplay} added. Run Sync to update SSL certificate.`,
+            "success",
+          ),
+        onError: (err) => onSnack(err.message, "error"),
+      },
+    );
+  };
+
+  const handleRequestCert = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    requestCert.mutate(domain.zoneName, {
+      onSuccess: () =>
+        onSnack(`Certificate requested for *.${domain.zoneName}`, "success"),
+      onError: (err) => onSnack(err.message, "error"),
+    });
+  };
+
+  const anyPending =
+    syncDNS.isPending || addSubZone.isPending || requestCert.isPending;
+
+  return (
+    <>
+      <TableRow
+        hover
+        onClick={() => setOpen(!open)}
+        sx={{ cursor: "pointer", "& > *": { borderBottom: "unset" } }}
+      >
+        <TableCell sx={{ width: 40, p: 1 }}>
+          <IconButton size="small">
+            {open ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
+          </IconButton>
+        </TableCell>
+        <TableCell>
+          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            {domain.domain}
+          </Typography>
+        </TableCell>
+        <TableCell>
+          <Typography variant="body2" color="text.secondary">
+            {domain.zoneName}
+          </Typography>
+        </TableCell>
+        <TableCell align="center">
+          <StatusDot active={domain.hasInternalDNS} />
+        </TableCell>
+        <TableCell align="center">
+          <StatusDot active={domain.hasExternalDNS} />
+        </TableCell>
+        <TableCell align="center">
+          <StatusDot active={domain.hasProxy} />
+        </TableCell>
+        <TableCell align="center">
+          <StatusDot active={domain.hasSSLCoverage} />
+        </TableCell>
+      </TableRow>
+      <TableRow>
+        <TableCell sx={{ py: 0 }} colSpan={7}>
+          <Collapse in={open} timeout="auto" unmountOnExit>
+            <Box
+              sx={{
+                py: 2,
+                display: "grid",
+                gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", md: "1fr 1fr 1fr" },
+                gap: 2,
+              }}
+            >
+              <Paper variant="outlined" sx={{ p: 2, bgcolor: "rgba(255,255,255,0.02)" }}>
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1, textTransform: "uppercase", letterSpacing: 1 }}>
+                  Zone
+                </Typography>
+                <Typography variant="body2">Zone: {domain.zoneName}</Typography>
+                <Typography variant="body2">Service: {domain.serviceName}</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Zone SSL: <StatusDot active={domain.zoneHasSSL} /> {domain.zoneHasSSL ? "Enabled" : "Disabled"}
+                </Typography>
+              </Paper>
+
+              <Paper variant="outlined" sx={{ p: 2, bgcolor: "rgba(255,255,255,0.02)" }}>
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1, textTransform: "uppercase", letterSpacing: 1 }}>
+                  DNS Resolution
+                </Typography>
+                {domain.hasInternalDNS && (
+                  <Typography variant="body2">Internal IP: {domain.internalIP}</Typography>
+                )}
+                {domain.hasExternalDNS && (
+                  <Typography variant="body2">External IP: {domain.externalIP}</Typography>
+                )}
+                {domain.dnsmasqResolvedIP && (
+                  <Typography variant="body2">
+                    Dnsmasq: {domain.dnsmasqResolvedIP}{" "}
+                    {domain.dnsmasqDNSMatch ? (
+                      <Chip label="match" size="small" color="success" sx={{ height: 18 }} />
+                    ) : (
+                      <Chip label="mismatch" size="small" color="error" sx={{ height: 18 }} />
+                    )}
+                  </Typography>
+                )}
+                {domain.remoteResolvedIP && (
+                  <Typography variant="body2">
+                    Remote: {domain.remoteResolvedIP}{" "}
+                    {domain.remoteDNSMatch ? (
+                      <Chip label="match" size="small" color="success" sx={{ height: 18 }} />
+                    ) : (
+                      <Chip label="mismatch" size="small" color="error" sx={{ height: 18 }} />
+                    )}
+                  </Typography>
+                )}
+              </Paper>
+
+              <Paper variant="outlined" sx={{ p: 2, bgcolor: "rgba(255,255,255,0.02)" }}>
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1, textTransform: "uppercase", letterSpacing: 1 }}>
+                  SSL / Proxy
+                </Typography>
+                {domain.hasProxy && (
+                  <>
+                    <Typography variant="body2">Backend: {domain.proxyBackend}</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {domain.internalOnly ? "Internal only" : "Public"}
+                    </Typography>
+                    {domain.hasHealthCheck && (
+                      <Typography variant="body2" color="text.secondary">
+                        Health: {domain.healthPath}
+                      </Typography>
+                    )}
+                  </>
+                )}
+                {domain.certExists && (
+                  <>
+                    <Typography variant="body2">Cert domain: {domain.certDomain}</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Expires: {domain.certExpiry}
+                    </Typography>
+                  </>
+                )}
+                {!domain.hasProxy && !domain.certExists && (
+                  <Typography variant="body2" color="text.secondary">
+                    No proxy or SSL configured.
+                  </Typography>
+                )}
+              </Paper>
+            </Box>
+
+            {/* Action buttons */}
+            {(domain.canSyncDNS || domain.canEnableHTTPS || domain.canRequestCert) && (
+              <Box sx={{ display: "flex", gap: 1, pb: 2, flexWrap: "wrap" }}>
+                {domain.canSyncDNS && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={syncDNS.isPending ? <CircularProgress size={16} /> : <SyncIcon />}
+                    onClick={handleSyncDNS}
+                    disabled={anyPending}
+                  >
+                    Sync External DNS
+                  </Button>
+                )}
+                {domain.canEnableHTTPS && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={addSubZone.isPending ? <CircularProgress size={16} /> : <HttpsIcon />}
+                    onClick={handleEnableHTTPS}
+                    disabled={anyPending}
+                  >
+                    Enable HTTPS ({domain.neededSubZoneDisplay})
+                  </Button>
+                )}
+                {domain.canRequestCert && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={requestCert.isPending ? <CircularProgress size={16} /> : <HttpsIcon />}
+                    onClick={handleRequestCert}
+                    disabled={anyPending}
+                  >
+                    Request Certificate
+                  </Button>
+                )}
+              </Box>
+            )}
+          </Collapse>
+        </TableCell>
+      </TableRow>
+    </>
+  );
+}
+
+function DomainsPage() {
+  const { data, isLoading, error } = useDomains();
+  const syncAllDNS = useSyncAllDNS();
+  const [snack, setSnack] = useState<SnackState>({ open: false, message: "", severity: "success" });
+
+  const showSnack = (message: string, severity: "success" | "error") =>
+    setSnack({ open: true, message, severity });
+
+  const handleSyncAll = () => {
+    syncAllDNS.mutate(undefined, {
+      onSuccess: (data) => {
+        showSnack(
+          `DNS sync complete: ${data.updated} updated, ${data.failed} failed`,
+          data.failed > 0 ? "error" : "success",
+        );
+      },
+      onError: (err) => showSnack(err.message, "error"),
+    });
+  };
+
+  if (isLoading) {
+    return (
+      <Box sx={{ display: "flex", justifyContent: "center", pt: 8 }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (error) {
+    return <Alert severity="error">Failed to load domains: {error.message}</Alert>;
+  }
+
+  if (!data) return null;
+
+  return (
+    <Box>
+      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 3 }}>
+        <Typography variant="h5" sx={{ fontWeight: 600 }}>
+          Domains
+        </Typography>
+        <Button
+          variant="outlined"
+          startIcon={syncAllDNS.isPending ? <CircularProgress size={16} /> : <SyncIcon />}
+          onClick={handleSyncAll}
+          disabled={syncAllDNS.isPending}
+        >
+          {syncAllDNS.isPending ? "Syncing..." : "Sync All DNS"}
+        </Button>
+      </Box>
+
+      <Paper sx={{ p: 2, mb: 3 }}>
+        <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+          <SummaryChip label="Total" count={data.totalCount} />
+          <SummaryChip label="Internal DNS" count={data.intDNSCount} />
+          <SummaryChip label="External DNS" count={data.extDNSCount} />
+          <SummaryChip label="HTTPS" count={data.httpsCount} />
+          <SummaryChip label="Proxy" count={data.proxyCount} />
+        </Box>
+      </Paper>
+
+      {data.sslGaps.length > 0 && (
+        <Alert
+          severity="warning"
+          icon={<WarningIcon />}
+          sx={{ mb: 3 }}
+        >
+          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
+            SSL Coverage Gaps ({data.sslGaps.length})
+          </Typography>
+          <Box component="ul" sx={{ m: 0, pl: 2 }}>
+            {data.sslGaps.map((gap) => (
+              <li key={gap.domain}>
+                <Typography variant="body2">
+                  {gap.display} &mdash; {gap.reason}
+                </Typography>
+              </li>
+            ))}
+          </Box>
+        </Alert>
+      )}
+
+      <TableContainer component={Paper}>
+        <Table>
+          <TableHead>
+            <TableRow>
+              <TableCell sx={{ width: 40 }} />
+              <TableCell>Domain</TableCell>
+              <TableCell>Zone</TableCell>
+              <TableCell align="center">Int DNS</TableCell>
+              <TableCell align="center">Ext DNS</TableCell>
+              <TableCell align="center">Proxy</TableCell>
+              <TableCell align="center">HTTPS</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {data.domains.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={7} align="center">
+                  <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
+                    No domains found.
+                  </Typography>
+                </TableCell>
+              </TableRow>
+            ) : (
+              data.domains.map((d) => (
+                <DomainRow key={d.domain} domain={d} onSnack={showSnack} />
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </TableContainer>
+
+      <Snackbar
+        open={snack.open}
+        autoHideDuration={4000}
+        onClose={() => setSnack((s) => ({ ...s, open: false }))}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Alert
+          severity={snack.severity}
+          onClose={() => setSnack((s) => ({ ...s, open: false }))}
+          variant="filled"
+        >
+          {snack.message}
+        </Alert>
+      </Snackbar>
+    </Box>
+  );
+}
+
+export const Route = createFileRoute("/domains")({
+  component: DomainsPage,
+});

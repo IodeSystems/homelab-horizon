@@ -10,19 +10,52 @@ LDFLAGS=-ldflags "-s -w -X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIM
 .PHONY: all
 all: build
 
-# Build for current platform
+# Build frontend (React SPA)
+.PHONY: ui
+ui:
+	cd ui && npm ci && npm run build
+
+# Create stub ui/dist for Go-only builds (no npm required)
+ui/dist/index.html:
+	mkdir -p ui/dist
+	echo '<!DOCTYPE html><html><body>Run <code>make ui</code> to build the frontend.</body></html>' > ui/dist/index.html
+
+# Build for current platform (includes frontend)
 .PHONY: build
-build:
+build: ui
 	CGO_ENABLED=0 go build $(LDFLAGS) -o $(BINARY_NAME) $(CMD_PATH)
 
-# Run locally
+# Build Go only (uses stub frontend if ui/dist doesn't exist)
+.PHONY: build-go
+build-go: ui/dist/index.html
+	CGO_ENABLED=0 go build $(LDFLAGS) -o $(BINARY_NAME) $(CMD_PATH)
+
+# Run backend + frontend dev servers together (Ctrl-C stops both)
 .PHONY: run
-run:
+run: ui/node_modules
+	@trap 'kill 0' EXIT; \
+	cd ui && npm run dev & \
+	go run $(CMD_PATH) & \
+	wait
+
+# Run Go backend only (builds frontend first, serves at /app/)
+.PHONY: run-backend
+run-backend: ui
 	go run $(CMD_PATH)
+
+# Run Vite frontend dev server only (proxies API to :8080)
+.PHONY: run-frontend
+run-frontend: ui/node_modules
+	cd ui && npm run dev
+
+# Install frontend dependencies if needed
+ui/node_modules: ui/package.json
+	cd ui && npm install
+	@touch ui/node_modules
 
 # Build for all platforms
 .PHONY: build-all
-build-all: build-linux-amd64 build-linux-arm64 build-linux-arm
+build-all: ui build-linux-amd64 build-linux-arm64 build-linux-arm
 
 # Linux AMD64 (most servers, x86_64)
 .PHONY: build-linux-amd64
@@ -44,6 +77,7 @@ build-linux-arm: dist
 clean:
 	rm -f $(BINARY_NAME)
 	rm -rf dist/
+	rm -rf ui/dist/
 
 # Run tests
 .PHONY: test
@@ -82,7 +116,7 @@ dist:
 
 # Build release archives
 .PHONY: release
-release: clean dist build-all
+release: clean dist ui build-all
 	@echo "Creating release archives..."
 	cd dist && tar -czf $(BINARY_NAME)-linux-amd64.tar.gz $(BINARY_NAME)-linux-amd64
 	cd dist && tar -czf $(BINARY_NAME)-linux-arm64.tar.gz $(BINARY_NAME)-linux-arm64
@@ -100,8 +134,12 @@ install: build
 help:
 	@echo "Homelab Horizon Build Targets:"
 	@echo ""
-	@echo "  make              - Build for current platform"
-	@echo "  make run          - Run locally (go run)"
+	@echo "  make              - Build for current platform (includes frontend)"
+	@echo "  make ui           - Build frontend only (React SPA)"
+	@echo "  make build-go     - Build Go only (stub frontend)"
+	@echo "  make run          - Run backend + frontend dev servers together"
+	@echo "  make run-backend  - Run Go backend only (:8080)"
+	@echo "  make run-frontend - Run Vite frontend dev server only (:5173)"
 	@echo "  make build-all    - Build for all platforms"
 	@echo "  make release      - Build all platforms and create .tar.gz archives"
 	@echo ""
