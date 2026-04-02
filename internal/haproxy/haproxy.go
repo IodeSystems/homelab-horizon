@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -132,19 +133,24 @@ func (h *HAProxy) GetBackendStatuses() []BackendStatus {
 				bs.Error = err.Error()
 			}
 		} else {
-			// Try to connect to the backend
-			conn, err := net.DialTimeout("tcp", b.Server, 3*time.Second)
-			if err != nil {
-				bs.Error = err.Error()
-				bs.Healthy = false
+			// Single backend: do a proper health check
+			if b.HTTPCheck && b.CheckPath != "" {
+				bs.Healthy, bs.Error = h.httpCheck(b.Server, b.CheckPath)
 			} else {
-				conn.Close()
-				bs.Healthy = true
-
-				// If HTTP check is enabled, do a basic check
-				if b.HTTPCheck && b.CheckPath != "" {
-					bs.Healthy, bs.Error = h.httpCheck(b.Server, b.CheckPath)
+				// No health check path — just try TCP connect
+				conn, err := net.DialTimeout("tcp", b.Server, 3*time.Second)
+				if err != nil {
+					bs.Error = err.Error()
+					bs.Healthy = false
+				} else {
+					conn.Close()
+					bs.Healthy = true
 				}
+			}
+			if bs.Healthy {
+				bs.CurrentState = "up"
+			} else {
+				bs.CurrentState = "down"
 			}
 		}
 
@@ -155,33 +161,19 @@ func (h *HAProxy) GetBackendStatuses() []BackendStatus {
 }
 
 func (h *HAProxy) httpCheck(server, path string) (bool, string) {
-	conn, err := net.DialTimeout("tcp", server, 3*time.Second)
+	client := &http.Client{Timeout: 5 * time.Second}
+	url := fmt.Sprintf("http://%s%s", server, path)
+	resp, err := client.Get(url)
 	if err != nil {
 		return false, err.Error()
 	}
-	defer conn.Close()
+	defer resp.Body.Close()
 
-	// Send HTTP request
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
-	request := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", path)
-	_, err = conn.Write([]byte(request))
-	if err != nil {
-		return false, err.Error()
-	}
-
-	// Read response
-	reader := bufio.NewReader(conn)
-	statusLine, err := reader.ReadString('\n')
-	if err != nil {
-		return false, err.Error()
-	}
-
-	// Check for 2xx status
-	if strings.Contains(statusLine, " 2") {
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return true, ""
 	}
 
-	return false, "HTTP " + strings.TrimSpace(statusLine)
+	return false, fmt.Sprintf("HTTP %d %s", resp.StatusCode, resp.Status)
 }
 
 // SSLConfig holds SSL configuration for HAProxy
