@@ -451,6 +451,15 @@ function ServiceRow({
                   <Typography variant="body2" color="text.secondary">
                     Balance: {service.proxy!.deploy!.balance}
                   </Typography>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    sx={{ mt: 1 }}
+                    href="/admin/haproxy/deploy-script"
+                    target="_blank"
+                  >
+                    Download Deploy Script
+                  </Button>
                 </DetailCard>
               )}
               {!hasIntDNS && !hasExtDNS && !hasProxy && (
