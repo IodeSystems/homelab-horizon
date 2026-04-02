@@ -349,6 +349,7 @@ func (s *Server) parseTemplates() {
 	}).Parse(checksTemplate))
 	s.templates["help"] = template.Must(template.New("help").Parse(helpTemplate))
 	s.templates["network"] = template.Must(template.New("network").Parse(networkTemplate))
+	s.templates["domains"] = template.Must(template.New("domains").Parse(domainsTemplate))
 }
 
 func generateToken(length int) string {
@@ -1144,6 +1145,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/admin/ssl/package-certs", s.csrfMiddleware(s.handleSSLPackageCerts))
 	mux.HandleFunc("/admin/ssl/settings", s.csrfMiddleware(s.handleSSLSaveSettings))
 	mux.HandleFunc("/admin/ssl/cert-info", s.csrfMiddleware(s.handleSSLCertInfo))
+
+	// Domain analysis
+	mux.HandleFunc("/admin/domains", s.csrfMiddleware(s.handleDomainAnalysis))
 
 	// External DNS routes
 	mux.HandleFunc("/admin/dns", s.csrfMiddleware(s.handleDNSStatus))

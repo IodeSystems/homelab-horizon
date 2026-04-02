@@ -18,6 +18,7 @@ const adminTemplate = `<!DOCTYPE html>
                 <a href="/admin/network"><button class="secondary">Network</button></a>
                 <a href="/admin/haproxy"><button class="secondary">HAProxy</button></a>
                 <a href="/admin/dns"><button class="secondary">External DNS</button></a>
+                <a href="/admin/domains"><button class="secondary">Domains</button></a>
                 <a href="/admin/setup"><button class="secondary">Setup</button></a>
                 <a href="/admin/help"><button class="secondary">Help</button></a>
                 <a href="/logout"><button class="secondary">Logout</button></a>
