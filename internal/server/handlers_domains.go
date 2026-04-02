@@ -269,17 +269,16 @@ func (s *Server) handleDomainAnalysis(w http.ResponseWriter, r *http.Request) {
 	var sslGaps []SSLGap
 	for _, da := range domainMap {
 		if da.HasZone && !da.HasSSLCoverage {
-			subZone, display, reason := neededSubZoneForDomain(da.Domain, da.ZoneName)
 			da.CanEnableHTTPS = true
-			da.NeededSubZone = subZone
-			da.NeededSubZoneDisplay = display
+			da.NeededSubZone = da.Domain
+			da.NeededSubZoneDisplay = da.Domain
 			if da.HasService {
 				sslGaps = append(sslGaps, SSLGap{
 					Domain:   da.Domain,
 					ZoneName: da.ZoneName,
-					SubZone:  subZone,
-					Display:  display,
-					Reason:   reason,
+					SubZone:  da.Domain,
+					Display:  da.Domain,
+					Reason:   "No SSL certificate coverage for this domain",
 				})
 			}
 		}

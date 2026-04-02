@@ -273,14 +273,14 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 	var sslGaps []apitypes.SSLGapResp
 	for _, dr := range domainMap {
 		if dr.HasZone && !dr.HasSSLCoverage {
-			subZone, display, reason := neededSubZoneForDomain(dr.Domain, dr.ZoneName)
 			dr.CanEnableHTTPS = true
-			dr.NeededSubZone = subZone
-			dr.NeededSubZoneDisplay = display
+			dr.NeededSubZone = dr.Domain
+			dr.NeededSubZoneDisplay = dr.Domain
 			if dr.HasService {
 				sslGaps = append(sslGaps, apitypes.SSLGapResp{
 					Domain: dr.Domain, ZoneName: dr.ZoneName,
-					SubZone: subZone, Display: display, Reason: reason,
+					SubZone: dr.Domain, Display: dr.Domain,
+					Reason: "No SSL certificate coverage for this domain",
 				})
 			}
 		}
