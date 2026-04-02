@@ -142,24 +142,54 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type domainResp struct {
-		Domain         string `json:"domain"`
-		ZoneName       string `json:"zoneName,omitempty"`
-		HasZone        bool   `json:"hasZone"`
-		ServiceName    string `json:"serviceName,omitempty"`
-		HasService     bool   `json:"hasService"`
-		HasInternalDNS bool   `json:"hasInternalDNS"`
-		InternalIP     string `json:"internalIP,omitempty"`
-		HasExternalDNS bool   `json:"hasExternalDNS"`
-		ExternalIP     string `json:"externalIP,omitempty"`
-		HasProxy       bool   `json:"hasProxy"`
-		ProxyBackend   string `json:"proxyBackend,omitempty"`
-		InternalOnly   bool   `json:"internalOnly"`
-		HasHealthCheck bool   `json:"hasHealthCheck"`
-		HealthPath     string `json:"healthPath,omitempty"`
-		HasSSLCoverage bool   `json:"hasSSLCoverage"`
-		CertExists     bool   `json:"certExists"`
-		CertExpiry     string `json:"certExpiry,omitempty"`
-		CertDomain     string `json:"certDomain,omitempty"`
+		Domain               string `json:"domain"`
+		ZoneName             string `json:"zoneName"`
+		ZoneHasSSL           bool   `json:"zoneHasSSL"`
+		HasZone              bool   `json:"hasZone"`
+		ServiceName          string `json:"serviceName"`
+		HasService           bool   `json:"hasService"`
+		HasInternalDNS       bool   `json:"hasInternalDNS"`
+		InternalIP           string `json:"internalIP"`
+		HasExternalDNS       bool   `json:"hasExternalDNS"`
+		ExternalIP           string `json:"externalIP"`
+		DnsmasqResolvedIP    string `json:"dnsmasqResolvedIP"`
+		RemoteResolvedIP     string `json:"remoteResolvedIP"`
+		DnsmasqDNSMatch      bool   `json:"dnsmasqDNSMatch"`
+		RemoteDNSMatch       bool   `json:"remoteDNSMatch"`
+		HasProxy             bool   `json:"hasProxy"`
+		ProxyBackend         string `json:"proxyBackend"`
+		InternalOnly         bool   `json:"internalOnly"`
+		HasHealthCheck       bool   `json:"hasHealthCheck"`
+		HealthPath           string `json:"healthPath"`
+		HasSSLCoverage       bool   `json:"hasSSLCoverage"`
+		CertExists           bool   `json:"certExists"`
+		CertExpiry           string `json:"certExpiry"`
+		CertDomain           string `json:"certDomain"`
+		CanEnableHTTPS       bool   `json:"canEnableHTTPS"`
+		NeededSubZone        string `json:"neededSubZone"`
+		NeededSubZoneDisplay string `json:"neededSubZoneDisplay"`
+		CanRequestCert       bool   `json:"canRequestCert"`
+		CanSyncDNS           bool   `json:"canSyncDNS"`
+	}
+
+	type sslGapResp struct {
+		Domain   string `json:"domain"`
+		ZoneName string `json:"zoneName"`
+		SubZone  string `json:"subZone"`
+		Display  string `json:"display"`
+		Reason   string `json:"reason"`
+	}
+
+	type zoneSSLResp struct {
+		ZoneName          string   `json:"zoneName"`
+		SSLEnabled        bool     `json:"sslEnabled"`
+		ConfiguredDomains []string `json:"configuredDomains"`
+		ActualSANs        []string `json:"actualSANs"`
+		CertExists        bool     `json:"certExists"`
+		CertExpiry        string   `json:"certExpiry"`
+		CertIssuer        string   `json:"certIssuer"`
+		MissingSANs       []string `json:"missingSANs"`
+		ExtraSANs         []string `json:"extraSANs"`
 	}
 
 	// Gather domains from services
@@ -189,6 +219,7 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 					dr.HealthPath = svc.Proxy.HealthCheck.Path
 				}
 			}
+			dr.CanSyncDNS = dr.HasExternalDNS
 			domainMap[domain] = dr
 		}
 	}
@@ -216,29 +247,25 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 		if zone != nil {
 			dr.HasZone = true
 			dr.ZoneName = zone.Name
+			dr.ZoneHasSSL = zone.SSL != nil && zone.SSL.Enabled
 		}
 	}
 
-	// Check SSL coverage using zone SubZones patterns
-	type certCache struct {
-		exists bool
-		expiry string
-	}
-	certInfoCache := make(map[string]*certCache)
-
+	// Check SSL coverage
 	for _, zone := range s.config.Zones {
 		if zone.SSL == nil || !zone.SSL.Enabled {
 			continue
 		}
-
 		wildcardDomain := "*." + zone.Name
-		cc := &certCache{}
+		cc := struct {
+			exists bool
+			expiry string
+		}{}
 		info, err := s.letsencrypt.GetCertInfoForDomain(wildcardDomain)
 		if err == nil && info != nil {
 			cc.exists = true
 			cc.expiry = info.NotAfter
 		}
-		certInfoCache[zone.Name] = cc
 
 		for _, sub := range zone.SubZones {
 			var pattern string
@@ -249,7 +276,6 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 			} else {
 				pattern = sub + "." + zone.Name
 			}
-
 			for _, dr := range domainMap {
 				if domainMatchesPattern(dr.Domain, pattern) {
 					dr.HasSSLCoverage = true
@@ -263,7 +289,80 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Flatten and sort
+	// Compute action flags and SSL gaps
+	var sslGaps []sslGapResp
+	for _, dr := range domainMap {
+		if dr.HasZone && !dr.HasSSLCoverage {
+			subZone, display, reason := neededSubZoneForDomain(dr.Domain, dr.ZoneName)
+			dr.CanEnableHTTPS = true
+			dr.NeededSubZone = subZone
+			dr.NeededSubZoneDisplay = display
+			if dr.HasService {
+				sslGaps = append(sslGaps, sslGapResp{
+					Domain: dr.Domain, ZoneName: dr.ZoneName,
+					SubZone: subZone, Display: display, Reason: reason,
+				})
+			}
+		}
+		if dr.HasSSLCoverage && !dr.CertExists {
+			dr.CanRequestCert = true
+		}
+	}
+
+	// Build zone SSL statuses
+	var zoneStatuses []zoneSSLResp
+	for _, zone := range s.config.Zones {
+		zs := zoneSSLResp{
+			ZoneName:          zone.Name,
+			SSLEnabled:        zone.SSL != nil && zone.SSL.Enabled,
+			ConfiguredDomains: []string{},
+			ActualSANs:        []string{},
+			MissingSANs:       []string{},
+			ExtraSANs:         []string{},
+		}
+		for _, sub := range zone.SubZones {
+			if sub == "" {
+				zs.ConfiguredDomains = append(zs.ConfiguredDomains, zone.Name)
+			} else if sub == "*" {
+				zs.ConfiguredDomains = append(zs.ConfiguredDomains, "*."+zone.Name)
+			} else {
+				zs.ConfiguredDomains = append(zs.ConfiguredDomains, sub+"."+zone.Name)
+			}
+		}
+		if zs.SSLEnabled {
+			info, err := s.letsencrypt.GetCertInfoForDomain("*." + zone.Name)
+			if err == nil && info != nil {
+				zs.CertExists = true
+				zs.CertExpiry = info.NotAfter
+				zs.CertIssuer = info.Issuer
+				zs.ActualSANs = info.SANs
+				if zs.ActualSANs == nil {
+					zs.ActualSANs = []string{}
+				}
+				configSet := make(map[string]bool)
+				for _, d := range zs.ConfiguredDomains {
+					configSet[d] = true
+				}
+				actualSet := make(map[string]bool)
+				for _, s := range zs.ActualSANs {
+					actualSet[s] = true
+				}
+				for _, d := range zs.ConfiguredDomains {
+					if !actualSet[d] {
+						zs.MissingSANs = append(zs.MissingSANs, d)
+					}
+				}
+				for _, s := range zs.ActualSANs {
+					if !configSet[s] {
+						zs.ExtraSANs = append(zs.ExtraSANs, s)
+					}
+				}
+			}
+		}
+		zoneStatuses = append(zoneStatuses, zs)
+	}
+
+	// Flatten, sort, count
 	domains := make([]domainResp, 0, len(domainMap))
 	for _, dr := range domainMap {
 		domains = append(domains, *dr)
@@ -271,38 +370,36 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(domains, func(i, j int) bool {
 		return domains[i].Domain < domains[j].Domain
 	})
-
-	// Summary counts
-	sslCovered := 0
-	withCert := 0
-	withProxy := 0
-	for _, d := range domains {
-		if d.HasSSLCoverage {
-			sslCovered++
-		}
-		if d.CertExists {
-			withCert++
-		}
-		if d.HasProxy {
-			withProxy++
-		}
+	if sslGaps == nil {
+		sslGaps = []sslGapResp{}
 	}
 
-	type domainsResponse struct {
-		Domains        []domainResp `json:"domains"`
-		TotalCount     int          `json:"totalCount"`
-		SSLCoveredCount int         `json:"sslCoveredCount"`
-		CertExistCount int          `json:"certExistCount"`
-		ProxyCount     int          `json:"proxyCount"`
+	var intDNS, extDNS, https, proxy int
+	for _, d := range domains {
+		if d.HasInternalDNS {
+			intDNS++
+		}
+		if d.HasExternalDNS {
+			extDNS++
+		}
+		if d.CertExists {
+			https++
+		}
+		if d.HasProxy {
+			proxy++
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(domainsResponse{
-		Domains:         domains,
-		TotalCount:      len(domains),
-		SSLCoveredCount: sslCovered,
-		CertExistCount:  withCert,
-		ProxyCount:      withProxy,
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"domains":         domains,
+		"totalCount":      len(domains),
+		"intDNSCount":     intDNS,
+		"extDNSCount":     extDNS,
+		"httpsCount":      https,
+		"proxyCount":      proxy,
+		"sslGaps":         sslGaps,
+		"zoneSSLStatuses": zoneStatuses,
 	})
 }
 
