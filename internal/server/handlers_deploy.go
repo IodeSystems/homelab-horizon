@@ -13,6 +13,7 @@ import (
 type DeployStatus struct {
 	Service     string           `json:"service"`
 	Domain      string           `json:"domain"`
+	Domains     []string         `json:"domains,omitempty"`
 	ActiveSlot  string           `json:"active_slot"`
 	Balance     string           `json:"balance"`
 	HealthCheck string           `json:"health_check"`
@@ -120,6 +121,7 @@ func (s *Server) handleDeployStatus(w http.ResponseWriter, svc *config.Service, 
 	status := DeployStatus{
 		Service:     svc.Name,
 		Domain:      svc.PrimaryDomain(),
+		Domains:     svc.Domains,
 		ActiveSlot:  deploy.ActiveSlot,
 		Balance:     balance,
 		HealthCheck: healthCheck,
