@@ -623,9 +623,17 @@ function ServiceRow({
                   </Box>
                   {hasDeploy && (
                     <Box sx={{ display: "flex", gap: 1, alignItems: "center", mb: 0.5 }}>
-                      <StatusDot configured={true} detected={true} />
+                      <StatusDot configured={true} detected={service.status.proxyNextState === "up"} />
                       <Typography variant="body2" sx={{ fontWeight: 600 }}>Next:</Typography>
                       <Typography variant="body2"><code>{service.proxy!.deploy!.nextBackend}</code></Typography>
+                      {service.status.proxyNextState && (
+                        <Chip
+                          label={service.status.proxyNextState}
+                          size="small"
+                          color={service.status.proxyNextState === "up" ? "success" : service.status.proxyNextState === "down" ? "error" : "warning"}
+                          variant="outlined"
+                        />
+                      )}
                       <Chip label={`slot ${service.proxy!.deploy!.activeSlot}`} size="small" variant="outlined" />
                       <Chip label={service.proxy!.deploy!.balance} size="small" variant="outlined" color="info" />
                     </Box>

@@ -109,48 +109,40 @@ func (h *HAProxy) GetStatus() Status {
 	return status
 }
 
-// GetBackendStatuses checks health of all backends
+// GetBackendStatuses checks health of all backends using HAProxy's own health check data.
+// Uses the HAProxy admin socket "show stat" to get real status — no redundant external checks.
 func (h *HAProxy) GetBackendStatuses() []BackendStatus {
-	var statuses []BackendStatus
+	// Query HAProxy for all stats
+	haStats := h.getHAProxyStats()
 
+	var statuses []BackendStatus
 	for _, b := range h.backends {
 		bs := BackendStatus{
 			Backend:   b,
 			LastCheck: time.Now(),
 		}
 
+		backendName := sanitizeName(b.Name) + "_backend"
+
 		if b.Deploy {
-			// For deploy backends, query HAProxy admin socket for per-server state
-			aclName := sanitizeName(b.Name)
-			if states, err := h.GetServerState(aclName + "_backend"); err == nil {
-				bs.CurrentState = states["current"]
-				bs.NextState = states["next"]
-				// Healthy if at least one server is up
-				bs.Healthy = bs.CurrentState == "up" || bs.NextState == "up"
-			} else {
-				bs.CurrentState = "unknown"
-				bs.NextState = "unknown"
-				bs.Error = err.Error()
+			// Deploy backends: get per-server state from HAProxy
+			currentInfo := haStats[backendName+"/current"]
+			nextInfo := haStats[backendName+"/next"]
+
+			bs.CurrentState = currentInfo.state
+			bs.NextState = nextInfo.state
+			if currentInfo.checkDesc != "" {
+				bs.Error = currentInfo.checkDesc
 			}
+			bs.Healthy = currentInfo.state == "up" || nextInfo.state == "up"
 		} else {
-			// Single backend: do a proper health check
-			if b.HTTPCheck && b.CheckPath != "" {
-				bs.Healthy, bs.Error = h.httpCheck(b.Server, b.CheckPath)
-			} else {
-				// No health check path — just try TCP connect
-				conn, err := net.DialTimeout("tcp", b.Server, 3*time.Second)
-				if err != nil {
-					bs.Error = err.Error()
-					bs.Healthy = false
-				} else {
-					conn.Close()
-					bs.Healthy = true
-				}
-			}
-			if bs.Healthy {
-				bs.CurrentState = "up"
-			} else {
-				bs.CurrentState = "down"
+			// Single backend: get server state from HAProxy
+			srvName := sanitizeName(b.Name)
+			info := haStats[backendName+"/"+srvName]
+			bs.CurrentState = info.state
+			bs.Healthy = info.state == "up"
+			if !bs.Healthy && info.checkDesc != "" {
+				bs.Error = info.checkDesc
 			}
 		}
 
@@ -158,6 +150,77 @@ func (h *HAProxy) GetBackendStatuses() []BackendStatus {
 	}
 
 	return statuses
+}
+
+type haStatInfo struct {
+	state     string // "up", "down", "no check"
+	checkDesc string // e.g., "Layer7 check passed", "Connection refused"
+}
+
+// getHAProxyStats queries "show stat" from the HAProxy socket and returns
+// a map keyed by "backend_name/server_name" with status info.
+func (h *HAProxy) getHAProxyStats() map[string]haStatInfo {
+	result := make(map[string]haStatInfo)
+
+	conn, err := net.DialTimeout("unix", h.statsSocket, 2*time.Second)
+	if err != nil {
+		return result
+	}
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write([]byte("show stat\n")); err != nil {
+		return result
+	}
+
+	scanner := bufio.NewScanner(conn)
+	// Read header
+	if !scanner.Scan() {
+		return result
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		fields := strings.Split(line, ",")
+		if len(fields) < 38 {
+			continue
+		}
+
+		pxName := fields[0]  // backend name
+		svName := fields[1]  // server name or FRONTEND/BACKEND
+		status := fields[17] // UP, DOWN, MAINT, DRAIN, no check, etc.
+		lastChk := ""
+		if len(fields) > 76 {
+			lastChk = fields[76] // last_chk description
+		}
+
+		// Skip FRONTEND and BACKEND aggregate rows — we want individual servers
+		if svName == "FRONTEND" || svName == "BACKEND" {
+			continue
+		}
+
+		key := pxName + "/" + svName
+		state := "unknown"
+		switch {
+		case status == "UP":
+			state = "up"
+		case status == "DOWN":
+			state = "down"
+		case status == "MAINT":
+			state = "maint"
+		case strings.Contains(status, "DRAIN"):
+			state = "drain"
+		case status == "no check":
+			state = "no check"
+		}
+
+		result[key] = haStatInfo{state: state, checkDesc: lastChk}
+	}
+
+	return result
 }
 
 func (h *HAProxy) httpCheck(server, path string) (bool, string) {
