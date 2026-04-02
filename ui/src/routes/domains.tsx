@@ -32,17 +32,46 @@ import {
 } from "../api/hooks";
 import type { DomainAnalysis } from "../api/types";
 
-function StatusDot({ active }: { active: boolean }) {
+/**
+ * 4-state status dot:
+ *   gray  = not configured, not detected
+ *   yellow = not configured, but detected (unexpected presence)
+ *   green  = configured and present/working
+ *   red    = configured but not present/broken
+ */
+function StatusDot({
+  configured,
+  detected,
+  title,
+}: {
+  configured: boolean;
+  detected: boolean;
+  title?: string;
+}) {
+  let color: string;
+  let opacity = 1;
+  if (configured && detected) {
+    color = "#2ecc71"; // green
+  } else if (configured && !detected) {
+    color = "#e74c3c"; // red
+  } else if (!configured && detected) {
+    color = "#f39c12"; // yellow
+  } else {
+    color = "#555"; // gray
+    opacity = 0.5;
+  }
+
   return (
     <Box
       component="span"
+      title={title}
       sx={{
         display: "inline-block",
         width: 10,
         height: 10,
         borderRadius: "50%",
-        bgcolor: active ? "success.main" : "text.secondary",
-        opacity: active ? 1 : 0.4,
+        bgcolor: color,
+        opacity,
       }}
     />
   );
@@ -142,16 +171,34 @@ function DomainRow({
           </Typography>
         </TableCell>
         <TableCell align="center">
-          <StatusDot active={domain.hasInternalDNS} />
+          <StatusDot
+            configured={domain.hasInternalDNS}
+            detected={!!domain.dnsmasqResolvedIP}
+            title={domain.hasInternalDNS
+              ? domain.dnsmasqResolvedIP ? `${domain.internalIP} → ${domain.dnsmasqResolvedIP}` : `${domain.internalIP} (not resolving)`
+              : domain.dnsmasqResolvedIP ? `Resolves to ${domain.dnsmasqResolvedIP} (not configured)` : undefined}
+          />
         </TableCell>
         <TableCell align="center">
-          <StatusDot active={domain.hasExternalDNS} />
+          <StatusDot
+            configured={domain.hasExternalDNS}
+            detected={!!domain.remoteResolvedIP}
+            title={domain.hasExternalDNS
+              ? domain.remoteResolvedIP ? `${domain.externalIP} → ${domain.remoteResolvedIP}` : `${domain.externalIP} (not resolving)`
+              : domain.remoteResolvedIP ? `Resolves to ${domain.remoteResolvedIP} (not configured)` : undefined}
+          />
         </TableCell>
         <TableCell align="center">
-          <StatusDot active={domain.hasProxy} />
+          <StatusDot configured={domain.hasProxy} detected={domain.hasProxy} />
         </TableCell>
         <TableCell align="center">
-          <StatusDot active={domain.hasSSLCoverage} />
+          <StatusDot
+            configured={domain.hasSSLCoverage}
+            detected={domain.certExists}
+            title={domain.hasSSLCoverage
+              ? domain.certExists ? `Covered by ${domain.certDomain}` : `Covered by ${domain.certDomain} (no cert on disk)`
+              : domain.certExists ? "Cert exists but not in SubZones" : undefined}
+          />
         </TableCell>
       </TableRow>
       <TableRow>
@@ -172,7 +219,7 @@ function DomainRow({
                 <Typography variant="body2">Zone: {domain.zoneName}</Typography>
                 <Typography variant="body2">Service: {domain.serviceName}</Typography>
                 <Typography variant="body2" color="text.secondary">
-                  Zone SSL: <StatusDot active={domain.zoneHasSSL} /> {domain.zoneHasSSL ? "Enabled" : "Disabled"}
+                  Zone SSL: <StatusDot configured={domain.zoneHasSSL} detected={domain.zoneHasSSL} /> {domain.zoneHasSSL ? "Enabled" : "Disabled"}
                 </Typography>
               </Paper>
 

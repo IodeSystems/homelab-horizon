@@ -52,12 +52,19 @@ type ExternalDNSResp struct {
 	TTL int    `json:"ttl"`
 }
 
+type ServiceStatus struct {
+	InternalDNSUp bool `json:"internalDNSUp"` // dnsmasq resolves the primary domain
+	ExternalDNSUp bool `json:"externalDNSUp"` // 1.1.1.1 resolves the primary domain
+	ProxyUp       bool `json:"proxyUp"`       // HAProxy backend is healthy
+}
+
 type ServiceResp struct {
 	Name        string           `json:"name"`
 	Domains     []string         `json:"domains"`
 	InternalDNS *InternalDNSResp `json:"internalDNS,omitempty"`
 	ExternalDNS *ExternalDNSResp `json:"externalDNS,omitempty"`
 	Proxy       *ProxyResp       `json:"proxy,omitempty"`
+	Status      ServiceStatus    `json:"status"`
 }
 
 // Domains
