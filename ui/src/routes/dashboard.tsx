@@ -3,7 +3,6 @@ import {
   Alert,
   Box,
   CircularProgress,
-  Link,
   Paper,
   Typography,
 } from "@mui/material";
@@ -163,15 +162,6 @@ function DashboardPage() {
           <InfoIcon sx={{ color: "text.secondary" }} />
           <Typography variant="body2" color="text.secondary">
             Version: {data.version || "unknown"}
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mx: 1 }}>
-            &middot;
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            Classic admin panel:{" "}
-            <Link href="/admin" sx={{ color: "primary.main" }}>
-              /admin
-            </Link>
           </Typography>
         </Box>
       </Paper>
