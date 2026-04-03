@@ -392,44 +392,29 @@ function IntegrationDialog({
   const script = data
     ? [
         `# ${data.name} — Homelab Horizon Integration`,
-        `# Base URL: ${data.baseURL}`,
         ``,
-        `TOKEN="${data.token}"`,
-        `BASE="${data.baseURL}"`,
+        `# Download hz-client`,
+        `curl -sO "${data.baseURL}/admin/haproxy/hz-client"`,
+        `chmod +x hz-client`,
+        ``,
+        `# Configure`,
+        `export HZ_TOKEN="${data.token}"`,
+        `export HZ_URL="${data.baseURL}"`,
         ``,
         `# --- IP Banning ---`,
         ``,
-        `# Ban an IP (timeout in seconds, 0 = permanent)`,
-        `curl -X POST "$BASE/api/ban/ban" \\`,
-        `  -H "Authorization: Bearer $TOKEN" \\`,
-        `  -H "Content-Type: application/json" \\`,
-        `  -d '{"ip":"1.2.3.4","timeout":3600,"reason":"brute force"}'`,
-        ``,
-        `# Unban an IP`,
-        `curl -X POST "$BASE/api/ban/unban" \\`,
-        `  -H "Authorization: Bearer $TOKEN" \\`,
-        `  -H "Content-Type: application/json" \\`,
-        `  -d '{"ip":"1.2.3.4"}'`,
-        ``,
-        `# List active bans`,
-        `curl -s "$BASE/api/ban/list" \\`,
-        `  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool`,
+        `./hz-client bans                                               # List active bans`,
+        `./hz-client ban 1.2.3.4 --timeout 3600 --reason "brute force"  # Ban an IP`,
+        `./hz-client unban 1.2.3.4                                      # Unban an IP`,
         ...(data.hasDeploy
           ? [
               ``,
-              `# --- Blue-Green Deploy ---`,
+              `# --- Rolling Deploy ---`,
               ``,
-              `# Download deploy control script`,
-              `curl -sO "$BASE/admin/haproxy/deploy-script"`,
-              `chmod +x deploy-service`,
-              ``,
-              `# Check deploy status`,
-              `curl -s "$BASE/api/deploy/status" \\`,
-              `  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool`,
-              ``,
-              `# Swap active/next slots`,
-              `curl -X POST "$BASE/api/deploy/swap" \\`,
-              `  -H "Authorization: Bearer $TOKEN"`,
+              `./hz-client status              # Check deploy status`,
+              `./hz-client rolling start       # Take next slot down — deploy new code to it`,
+              `./hz-client rolling continue    # Bring next up, take current down — deploy to it`,
+              `./hz-client rolling finalize    # Bring current up — both slots on new code`,
             ]
           : []),
       ].join("\n")
@@ -448,9 +433,8 @@ function IntegrationDialog({
         ) : data ? (
           <>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Use these commands to integrate your service with Homelab Horizon.
-              The token authenticates your service for IP banning
-              {data.hasDeploy ? " and blue-green deploy" : ""} operations.
+              Download and configure the hz-client to manage IP banning
+              {data.hasDeploy ? " and rolling deploys" : ""} for this service.
             </Typography>
             <Box sx={{ position: "relative" }}>
               <IconButton

@@ -262,8 +262,8 @@ func (h *HAProxy) generateConfig(httpPort, httpsPort int, ssl *SSLConfig) string
 
 # Cache configuration (RAM-based)
 cache mycache
-    total-max-size 256
-    max-object-size 64
+    total-max-size 1024
+    max-object-size 524288
 
 defaults
     log     global
@@ -273,8 +273,6 @@ defaults
     timeout connect 5000
     timeout client  50000
     timeout server  50000
-    compression algo gzip
-    compression type text/html text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript image/svg+xml
     errorfile 400 /etc/haproxy/errors/400.http
     errorfile 403 /etc/haproxy/errors/403.http
     errorfile 408 /etc/haproxy/errors/408.http
@@ -391,9 +389,11 @@ listen stats
     mode http
     option forwardfor
     http-request set-header X-Forwarded-Proto https
-    # Caching - strip cache headers and use HAProxy cache
-    http-request del-header Cache-Control
-    http-request del-header Pragma
+    # Compression
+    compression algo gzip
+    compression type text/html text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript image/svg+xml
+    compression offload
+    # HAProxy LRU cache
     http-request cache-use mycache
     http-response cache-store mycache
     # Router check endpoint - returns 200 OK directly (requires special header to avoid conflicts)
@@ -435,9 +435,11 @@ listen stats
     bind *:%d
     mode http
     option forwardfor
-    # Caching - strip cache headers and use HAProxy cache
-    http-request del-header Cache-Control
-    http-request del-header Pragma
+    # Compression
+    compression algo gzip
+    compression type text/html text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript image/svg+xml
+    compression offload
+    # HAProxy LRU cache
     http-request cache-use mycache
     http-response cache-store mycache
     # Router check endpoint - returns 200 OK directly (requires special header to avoid conflicts)

@@ -283,8 +283,8 @@ func TestGenerateConfig_Caching(t *testing.T) {
 
 	expectedStrings := []string{
 		"cache mycache",
-		"total-max-size 256",
-		"max-object-size 64",
+		"total-max-size 1024",
+		"max-object-size 524288",
 		"http-request cache-use mycache",
 		"http-response cache-store mycache",
 	}
