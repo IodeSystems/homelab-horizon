@@ -85,7 +85,7 @@ export interface ServiceMutationInput {
   name: string;
   domains: string[];
   internalDNS?: { ip: string } | null;
-  externalDNS?: { ip: string; ttl: number } | null;
+  externalDNS?: { ip: string; ips?: string[]; ttl: number } | null;
   proxy?: {
     backend: string;
     healthCheck?: { path: string } | null;

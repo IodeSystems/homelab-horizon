@@ -303,24 +303,44 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 			}
 		}
 
+		// Group records by (Name, Type, ZoneID) for round-robin record sets
+		type recordSetKey struct {
+			Name, Type, ZoneID string
+		}
+		recordSets := make(map[recordSetKey][]route53.Record)
+		var recordSetOrder []recordSetKey
+		for _, rec := range records {
+			key := recordSetKey{rec.Name, rec.Type, rec.ZoneID}
+			if _, exists := recordSets[key]; !exists {
+				recordSetOrder = append(recordSetOrder, key)
+			}
+			recordSets[key] = append(recordSets[key], rec)
+		}
+
 		// Sync results struct for parallel processing
 		type syncResult struct {
-			record  route53.Record
+			key     recordSetKey
+			records []route53.Record
 			changed bool
 			err     error
 		}
 
-		// Fan out: sync all records in parallel
-		results := make(chan syncResult, len(records))
+		// Fan out: sync all record sets in parallel
+		results := make(chan syncResult, len(recordSets))
 		var wg sync.WaitGroup
 
-		for _, rec := range records {
+		for _, key := range recordSetOrder {
+			recs := recordSets[key]
 			wg.Add(1)
-			go func(r route53.Record) {
+			go func(k recordSetKey, rs []route53.Record) {
 				defer wg.Done()
-				changed, err := route53.SyncRecord(r)
-				results <- syncResult{record: r, changed: changed, err: err}
-			}(rec)
+				var values []string
+				for _, r := range rs {
+					values = append(values, r.Value)
+				}
+				changed, err := route53.SyncRecordSet(rs[0], values)
+				results <- syncResult{key: k, records: rs, changed: changed, err: err}
+			}(key, recs)
 		}
 
 		// Close results channel when all goroutines complete
@@ -335,12 +355,23 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 		zoneIDSet := make(map[string]bool)
 
 		for result := range results {
-			rec := result.record
+			rec := result.records[0]
 			profileInfo := ""
 			if rec.AWSProfile != "" {
 				profileInfo = fmt.Sprintf(" [%s]", rec.AWSProfile)
 			}
 			zoneIDSet[rec.ZoneID] = true
+
+			var valuesStr string
+			if len(result.records) == 1 {
+				valuesStr = result.records[0].Value
+			} else {
+				vals := make([]string, len(result.records))
+				for i, r := range result.records {
+					vals[i] = r.Value
+				}
+				valuesStr = strings.Join(vals, ", ")
+			}
 
 			if result.err != nil {
 				errStr := result.err.Error()
@@ -350,10 +381,10 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 					sawPermissionError = true
 				}
 			} else if result.changed {
-				log.Success(fmt.Sprintf("  %s -> %s (updated)", rec.Name, rec.Value))
-				changedRecords = append(changedRecords, rec)
+				log.Success(fmt.Sprintf("  %s -> %s (updated)", rec.Name, valuesStr))
+				changedRecords = append(changedRecords, result.records...)
 			} else {
-				log.Success(fmt.Sprintf("  %s -> %s (unchanged)", rec.Name, rec.Value))
+				log.Success(fmt.Sprintf("  %s -> %s (unchanged)", rec.Name, valuesStr))
 			}
 		}
 

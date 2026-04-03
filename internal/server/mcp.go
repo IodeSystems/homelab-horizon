@@ -324,10 +324,18 @@ func (m *MCPServer) buildService(name, domain string, req mcp.CallToolRequest) c
 
 	if req.GetBool("external_enabled", false) {
 		ttl := req.GetInt("ttl", 300)
-		svc.ExternalDNS = &config.ExternalDNS{
-			IP:  req.GetString("external_ip", ""),
-			TTL: ttl,
+		extDNS := &config.ExternalDNS{TTL: ttl}
+		if ipsStr := req.GetString("external_ips", ""); ipsStr != "" {
+			for _, ip := range strings.Split(ipsStr, ",") {
+				ip = strings.TrimSpace(ip)
+				if ip != "" {
+					extDNS.IPs = append(extDNS.IPs, ip)
+				}
+			}
+		} else if ip := req.GetString("external_ip", ""); ip != "" {
+			extDNS.IPs = []string{ip}
 		}
+		svc.ExternalDNS = extDNS
 	}
 
 	if req.GetBool("proxy_enabled", false) {

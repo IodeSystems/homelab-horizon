@@ -258,8 +258,20 @@ type InternalDNS struct {
 
 // ExternalDNS configures how public internet clients (via Route53) resolve this domain
 type ExternalDNS struct {
-	IP  string `json:"ip,omitempty"`  // IP for Route53 ("" = auto-detect public IP)
-	TTL int    `json:"ttl,omitempty"` // Route53 TTL (default 300)
+	IP  string   `json:"ip,omitempty"`  // Deprecated: use IPs. Single IP kept for backward compat.
+	IPs []string `json:"ips,omitempty"` // Multiple IPs for round-robin DNS
+	TTL int      `json:"ttl,omitempty"` // Route53 TTL (default 300)
+}
+
+// GetIPs returns all configured IPs, falling back to the legacy single IP field.
+func (e *ExternalDNS) GetIPs() []string {
+	if len(e.IPs) > 0 {
+		return e.IPs
+	}
+	if e.IP != "" {
+		return []string{e.IP}
+	}
+	return nil
 }
 
 // ProxyConfig configures HAProxy reverse proxying for this service

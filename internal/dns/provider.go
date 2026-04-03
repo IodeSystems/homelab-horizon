@@ -49,6 +49,10 @@ type Provider interface {
 
 	// SyncRecord creates or updates a record, returns true if changed
 	SyncRecord(zoneID string, record Record) (changed bool, err error)
+
+	// SyncRecordSet creates or updates a set of A records with the same name (round-robin DNS).
+	// All values are set atomically so the provider treats them as a single record set.
+	SyncRecordSet(zoneID string, records []Record) (changed bool, err error)
 }
 
 // NewProvider creates a DNS provider from configuration

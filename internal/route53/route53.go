@@ -38,9 +38,21 @@ func Available() bool {
 	return err == nil
 }
 
-// GetCurrentValue gets the current value of a DNS record
+// GetCurrentValue gets the current value of a DNS record (first value only, for backward compat)
 func GetCurrentValue(zoneID, name, recordType, awsProfile string) (string, error) {
-	logAWS(awsProfile, fmt.Sprintf("Getting current value for %s (%s)...", name, recordType))
+	values, err := GetCurrentValues(zoneID, name, recordType, awsProfile)
+	if err != nil {
+		return "", err
+	}
+	if len(values) == 0 {
+		return "", nil
+	}
+	return values[0], nil
+}
+
+// GetCurrentValues gets all current values of a DNS record set (for round-robin support)
+func GetCurrentValues(zoneID, name, recordType, awsProfile string) ([]string, error) {
+	logAWS(awsProfile, fmt.Sprintf("Getting current values for %s (%s)...", name, recordType))
 
 	ctx, cancel := context.WithTimeout(context.Background(), awsTimeout)
 	defer cancel()
@@ -54,7 +66,7 @@ func GetCurrentValue(zoneID, name, recordType, awsProfile string) (string, error
 	args := []string{
 		"route53", "list-resource-record-sets",
 		"--hosted-zone-id", zoneID,
-		"--query", fmt.Sprintf("ResourceRecordSets[?Name=='%s.' && Type=='%s'].ResourceRecords[0].Value", queryName, recordType),
+		"--query", fmt.Sprintf("ResourceRecordSets[?Name=='%s.' && Type=='%s'].ResourceRecords[].Value", queryName, recordType),
 		"--output", "text",
 	}
 
@@ -66,36 +78,54 @@ func GetCurrentValue(zoneID, name, recordType, awsProfile string) (string, error
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return "", fmt.Errorf("AWS CLI timed out after %v", awsTimeout)
+			return nil, fmt.Errorf("AWS CLI timed out after %v", awsTimeout)
 		}
-		// Include the AWS error output in the error message
 		errMsg := strings.TrimSpace(string(output))
 		if errMsg != "" {
-			return "", fmt.Errorf("%s: %s", err, errMsg)
+			return nil, fmt.Errorf("%s: %s", err, errMsg)
 		}
-		return "", err
+		return nil, err
 	}
 
-	value := strings.TrimSpace(string(output))
-	if value == "None" || value == "" {
-		logAWS(awsProfile, fmt.Sprintf("Current value for %s: (empty)", name))
-		return "", nil
+	raw := strings.TrimSpace(string(output))
+	if raw == "None" || raw == "" {
+		logAWS(awsProfile, fmt.Sprintf("Current values for %s: (empty)", name))
+		return nil, nil
 	}
-	logAWS(awsProfile, fmt.Sprintf("Current value for %s: %q", name, value))
-	return value, nil
+
+	// AWS CLI --output text separates values with tabs
+	var values []string
+	for _, v := range strings.Fields(raw) {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			values = append(values, v)
+		}
+	}
+	logAWS(awsProfile, fmt.Sprintf("Current values for %s: %v", name, values))
+	return values, nil
 }
 
-// UpdateRecord creates or updates a DNS record
+// UpdateRecord creates or updates a DNS record (single value)
 func UpdateRecord(r Record) error {
-	logAWS(r.AWSProfile, fmt.Sprintf("Updating %s -> %s...", r.Name, r.Value))
+	return UpdateRecordSet(r, []string{r.Value})
+}
+
+// UpdateRecordSet creates or updates a DNS record set with multiple values (round-robin)
+func UpdateRecordSet(r Record, values []string) error {
+	logAWS(r.AWSProfile, fmt.Sprintf("Updating %s -> %v...", r.Name, values))
 
 	if r.TTL <= 0 {
 		r.TTL = 300
 	}
 
-	// Ensure name ends with zone name
+	// Ensure name ends with dot
 	if !strings.HasSuffix(r.Name, ".") {
 		r.Name = r.Name + "."
+	}
+
+	var resourceRecords []map[string]string
+	for _, v := range values {
+		resourceRecords = append(resourceRecords, map[string]string{"Value": v})
 	}
 
 	changeBatch := map[string]interface{}{
@@ -103,12 +133,10 @@ func UpdateRecord(r Record) error {
 			{
 				"Action": "UPSERT",
 				"ResourceRecordSet": map[string]interface{}{
-					"Name": r.Name,
-					"Type": r.Type,
-					"TTL":  r.TTL,
-					"ResourceRecords": []map[string]string{
-						{"Value": r.Value},
-					},
+					"Name":            r.Name,
+					"Type":            r.Type,
+					"TTL":             r.TTL,
+					"ResourceRecords": resourceRecords,
 				},
 			},
 		},
@@ -269,28 +297,50 @@ func CheckIPv6() IPv6Status {
 	return status
 }
 
-// SyncRecord updates a record if the value has changed
+// SyncRecord updates a single-value record if the value has changed
 func SyncRecord(r Record) (changed bool, err error) {
-	currentValue, err := GetCurrentValue(r.ZoneID, r.Name, r.Type, r.AWSProfile)
+	return SyncRecordSet(r, []string{r.Value})
+}
+
+// SyncRecordSet updates a record set with multiple values (round-robin DNS).
+// All values are UPSERTed as a single record set so Route53 treats them as round-robin.
+func SyncRecordSet(r Record, values []string) (changed bool, err error) {
+	currentValues, err := GetCurrentValues(r.ZoneID, r.Name, r.Type, r.AWSProfile)
 	if err != nil {
 		errStr := err.Error()
-		// Check if this is a permission error - don't try to create if we can't even read
 		if strings.Contains(errStr, "AccessDenied") || strings.Contains(errStr, "not authorized") {
 			logAWS(r.AWSProfile, fmt.Sprintf("Permission denied for %s: %v", r.Name, err))
 			return false, err
 		}
-		logAWS(r.AWSProfile, fmt.Sprintf("GetCurrentValue error for %s: %v, will try to create", r.Name, err))
-		// Record might not exist, try to create it
-		return true, UpdateRecord(r)
+		logAWS(r.AWSProfile, fmt.Sprintf("GetCurrentValues error for %s: %v, will try to create", r.Name, err))
+		return true, UpdateRecordSet(r, values)
 	}
 
-	if currentValue == r.Value {
-		logAWS(r.AWSProfile, fmt.Sprintf("%s already set to %s", r.Name, r.Value))
+	if stringSlicesEqual(currentValues, values) {
+		logAWS(r.AWSProfile, fmt.Sprintf("%s already set to %v", r.Name, values))
 		return false, nil
 	}
 
-	logAWS(r.AWSProfile, fmt.Sprintf("%s value mismatch: current=%q new=%q", r.Name, currentValue, r.Value))
-	return true, UpdateRecord(r)
+	logAWS(r.AWSProfile, fmt.Sprintf("%s value mismatch: current=%v new=%v", r.Name, currentValues, values))
+	return true, UpdateRecordSet(r, values)
+}
+
+// stringSlicesEqual compares two string slices ignoring order
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, v := range a {
+		counts[v]++
+	}
+	for _, v := range b {
+		counts[v]--
+		if counts[v] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // VerifyPropagation checks if a DNS record has propagated by querying public DNS servers

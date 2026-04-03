@@ -46,6 +46,7 @@ export interface InternalDNSResp {
 }
 export interface ExternalDNSResp {
   ip: string;
+  ips?: string[];
   ttl: number /* int */;
 }
 export interface ServiceStatus {
@@ -77,6 +78,7 @@ export interface DomainResp {
   internalIP: string;
   hasExternalDNS: boolean;
   externalIP: string;
+  externalIPs?: string[];
   dnsmasqResolvedIP: string;
   remoteResolvedIP: string;
   dnsmasqDNSMatch: boolean;
@@ -255,6 +257,7 @@ export interface ServiceRequestInternalDNS {
 }
 export interface ServiceRequestExternalDNS {
   ip: string;
+  ips?: string[];
   ttl: number /* int */;
 }
 export interface ServiceRequestProxy {

@@ -69,7 +69,7 @@ export const ServiceSchema = z.object({
   domains: z.array(z.string()),
   internalDNS: z.object({ ip: z.string() }).optional(),
   externalDNS: z
-    .object({ ip: z.string(), ttl: z.number() })
+    .object({ ip: z.string(), ips: z.array(z.string()).optional(), ttl: z.number() })
     .optional(),
   proxy: z
     .object({
@@ -96,6 +96,7 @@ export const DomainAnalysisSchema = z.object({
   internalIP: z.string(),
   hasExternalDNS: z.boolean(),
   externalIP: z.string(),
+  externalIPs: z.array(z.string()).optional(),
   dnsmasqResolvedIP: z.string(),
   remoteResolvedIP: z.string(),
   dnsmasqDNSMatch: z.boolean(),

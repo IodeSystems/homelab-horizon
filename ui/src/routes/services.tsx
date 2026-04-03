@@ -111,7 +111,7 @@ interface ServiceFormState {
   domains: string;
   internalIP: string;
   externalEnabled: boolean;
-  externalIP: string;
+  externalIPs: string;
   externalTTL: string;
   proxyEnabled: boolean;
   proxyBackend: string;
@@ -124,7 +124,7 @@ const emptyForm: ServiceFormState = {
   domains: "",
   internalIP: "",
   externalEnabled: false,
-  externalIP: "",
+  externalIPs: "",
   externalTTL: "300",
   proxyEnabled: false,
   proxyBackend: "",
@@ -138,7 +138,7 @@ function serviceToForm(svc: Service): ServiceFormState {
     domains: svc.domains.join(", "),
     internalIP: svc.internalDNS?.ip ?? "",
     externalEnabled: !!svc.externalDNS,
-    externalIP: svc.externalDNS?.ip ?? "",
+    externalIPs: svc.externalDNS?.ips?.join(", ") ?? svc.externalDNS?.ip ?? "",
     externalTTL: String(svc.externalDNS?.ttl ?? 300),
     proxyEnabled: !!svc.proxy,
     proxyBackend: svc.proxy?.backend ?? "",
@@ -167,8 +167,13 @@ function formToInput(form: ServiceFormState, originalName?: string): ServiceMuta
   }
 
   if (form.externalEnabled) {
+    const ips = form.externalIPs
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     input.externalDNS = {
-      ip: form.externalIP,
+      ip: ips[0] ?? "",
+      ips: ips.length > 0 ? ips : undefined,
       ttl: parseInt(form.externalTTL, 10) || 300,
     };
   }
@@ -259,12 +264,12 @@ function ServiceFormDialog({
         {form.externalEnabled && (
           <Box sx={{ display: "flex", gap: 2 }}>
             <TextField
-              label="External IP"
-              value={form.externalIP}
-              onChange={(e) => update("externalIP", e.target.value)}
+              label="External IPs"
+              value={form.externalIPs}
+              onChange={(e) => update("externalIPs", e.target.value)}
               size="small"
               fullWidth
-              helperText="Leave empty to use public IP"
+              helperText="Comma-separated. Multiple IPs enable round-robin DNS. Leave empty to use public IP."
             />
             <TextField
               label="TTL"
