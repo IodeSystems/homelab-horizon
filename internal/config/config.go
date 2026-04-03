@@ -160,6 +160,9 @@ type Config struct {
 
 	// IP banning
 	IPBans []IPBan `json:"ip_bans,omitempty"`
+
+	// Auto-heal: automatically install and configure missing dependencies on startup
+	AutoHeal bool `json:"auto_heal,omitempty"`
 }
 
 // IPBan represents a banned IP address
@@ -421,32 +424,42 @@ func stripInlineComment(line []byte) []byte {
 	return line
 }
 
-// Load reads config from path, overlaying on defaults
-// Supports JSONC format (JSON with // comments)
-func Load(path string) (*Config, error) {
+// LoadFromJSON parses config JSON (with JSONC comment support), overlaying on defaults
+func LoadFromJSON(data []byte) (*Config, error) {
 	cfg := Default()
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return cfg, nil // just use defaults
-		}
-		return nil, err
-	}
-
-	// Strip JSONC comments before parsing
 	data = stripJSONCComments(data)
-
-	// Overlay file values on defaults
 	if err := json.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", path, err)
+		return nil, fmt.Errorf("parsing config: %w", err)
 	}
-
 	return cfg, nil
 }
 
-// LoadAuto finds and loads config from standard paths
+// Load reads config from path, overlaying on defaults
+// Supports JSONC format (JSON with // comments)
+func Load(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Default(), nil // just use defaults
+		}
+		return nil, err
+	}
+	return LoadFromJSON(data)
+}
+
+// LoadAuto finds and loads config from standard paths.
+// If HZ_CONFIG env var is set, it is parsed as JSON config directly.
 func LoadAuto() (*Config, string, error) {
+	if envCfg := os.Getenv("HZ_CONFIG"); envCfg != "" {
+		cfg, err := LoadFromJSON([]byte(envCfg))
+		if err != nil {
+			return nil, "", fmt.Errorf("parsing HZ_CONFIG: %w", err)
+		}
+		path := SearchPaths[0] // default save path
+		fmt.Printf("Loaded config from HZ_CONFIG environment variable\n")
+		return cfg, path, nil
+	}
+
 	path, found := Find()
 	cfg, err := Load(path)
 	if err != nil {

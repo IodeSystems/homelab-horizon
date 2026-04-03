@@ -20,53 +20,70 @@ Homelab Horizon consolidates all of this into a single web UI:
 
 - **Consolidated Certs**: Wildcard certs only cover one level (`*.example.com` won't cover `app.sub.example.com`), so we make it easy to add extra SANs like `*.vpn.example.com` - all visible and editable in the UI, and you can inspect exactly what each cert covers. No more mystery broken SSL.
 - **HTTPS Everywhere**: Same SSL cert works internally - no more HTTP fallbacks or certificate warnings on your LAN
-- **Automatic DNS Sync**: Add a service, DNS records update automatically (Route53 or Name.com)
+- **Automatic DNS Sync**: Add a service, DNS records update automatically (Route53, Cloudflare, Name.com, and more)
 - **Split-Horizon Built-in**: Services resolve to internal IPs on your network/VPN, external IPs from the internet
 - **Self-Service VPN**: Generate invite links - users scan a QR code and they're connected
 - **Unified Dashboard**: See all your services, their health status, DNS records, and SSL certificates in one place
 
 ## Screenshots
 
-### Admin Dashboard
-![Admin Dashboard](docs/screenshots/admin.png)
+### Services
+![Services](docs/screenshots/services.png)
 
-### HAProxy & SSL Management
-![HAProxy & SSL](docs/screenshots/haproxy.png)
+### Service Detail
+![Service Detail](docs/screenshots/services-detail.png)
+
+### Settings
+![Settings](docs/screenshots/settings.png)
 
 ## Features
 
+- **Auto-Heal**: Detects and installs missing dependencies on a fresh Ubuntu system
 - **WireGuard VPN Management**: Create clients, generate QR codes, manage peers
-- **Split-Horizon DNS**: Internal DNS via dnsmasq, external DNS via Route53 or Name.com
+- **Split-Horizon DNS**: Internal DNS via dnsmasq, external DNS via Route53, Name.com, Cloudflare, and more
 - **Reverse Proxy**: HAProxy with automatic Let's Encrypt wildcard SSL certificates
 - **Service Monitoring**: Health checks with ntfy push notifications
 - **Self-Service Onboarding**: Users redeem invite tokens to get VPN configs
+- **IP Banning**: Per-service IP bans with timeout support
+- **Rolling Deploys**: Blue-green deployment support with hz-client CLI
 
 ## Quick Start
 
-### 1. Install Dependencies
+### Option A: Docker Demo
+
+Try it instantly with no setup — auto-installs all dependencies on a vanilla Ubuntu container:
 
 ```bash
-sudo apt update
-sudo apt install wireguard-tools haproxy dnsmasq
+make docker-run
+# or manually:
+docker run --rm -p 8080:8080 homelab-horizon:demo
 ```
 
-### 2. Build & Run
+Open `http://localhost:8080` and log in with the admin token printed in the container logs.
+
+### Option B: Direct Install
 
 ```bash
-# Build
-go build -o homelab-horizon .
+# Build (requires Go 1.25+ and Node.js)
+make
 
 # Run (requires sudo for WireGuard and ports 80/443)
 sudo ./homelab-horizon
 ```
 
-On first run, an admin token is printed to stdout. Use this to access the web interface.
+On first run, the binary:
+1. Copies itself to `/usr/local/bin/`
+2. Installs a systemd service
+3. Prints an admin token to stdout
 
-### 3. Install as Service
+If `auto_heal` is enabled in the config, it will also detect and install missing packages (`wireguard-tools`, `haproxy`, `dnsmasq`) automatically via `apt-get`.
+
+### Environment Variable Config
+
+Pass the full config as JSON via the `HZ_CONFIG` environment variable — useful for Docker and backup/restore:
 
 ```bash
-sudo cp homelab-horizon /usr/local/bin/
-sudo ./homelab-horizon  # Use Setup -> Install Systemd Service in the web UI
+sudo HZ_CONFIG='{"listen_addr":":8080","auto_heal":true,...}' ./homelab-horizon
 ```
 
 ## Setup Guide
@@ -75,8 +92,14 @@ sudo ./homelab-horizon  # Use Setup -> Install Systemd Service in the web UI
 
 You need a domain where you control DNS. Supported providers:
 
-- **AWS Route53**: Install AWS CLI (`sudo snap install aws-cli --classic`) and configure (`aws configure`)
-- **Name.com**: Enable API access at name.com/account/settings/security
+- **AWS Route53**
+- **Cloudflare**
+- **Name.com**
+- **DigitalOcean**
+- **Hetzner**
+- **Gandi**
+- **Google Cloud DNS**
+- **DuckDNS**
 
 ### Step 2: Configure Your Router
 
@@ -157,36 +180,45 @@ Creates `.tar.gz` archives for each platform in `dist/`.
 
 ```bash
 # Current system
-CGO_ENABLED=0 go build -o homelab-horizon .
+CGO_ENABLED=0 go build -o homelab-horizon ./cmd/homelab-horizon
 
 # Raspberry Pi 4/5 (ARM64)
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o homelab-horizon-arm64 .
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o homelab-horizon-arm64 ./cmd/homelab-horizon
 
 # Raspberry Pi 2/3 (32-bit ARM)
-CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -o homelab-horizon-armv7 .
+CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -o homelab-horizon-armv7 ./cmd/homelab-horizon
 ```
 
 Note: `CGO_ENABLED=0` creates a fully static binary with no external dependencies.
 
 ## Configuration
 
-Configuration is stored in JSON. Locations searched (in order):
+Configuration is stored in JSON (with `//` comment support). Locations searched (in order):
 
-1. `./config.json`
-2. `./homelab-horizon.json`
-3. `/etc/homelab-horizon/config.json`
-4. `/etc/homelab-horizon.json`
+1. `/etc/homelab-horizon/config.json`
+2. `/etc/homelab-horizon.json`
+3. `./config.json`
+4. `./homelab-horizon.json`
+
+Alternatively, pass the full config as JSON via the `HZ_CONFIG` environment variable.
 
 ### Example Configuration
 
 ```json
 {
   "listen_addr": ":8080",
+  "auto_heal": true,
+
   "wg_interface": "wg0",
   "wg_config_path": "/etc/wireguard/wg0.conf",
   "server_endpoint": "vpn.example.com:51820",
   "vpn_range": "10.100.0.0/24",
   "dns": "10.100.0.1",
+
+  "dnsmasq_enabled": true,
+  "haproxy_enabled": true,
+  "ssl_enabled": true,
+
   "zones": [
     {
       "name": "example.com",
@@ -198,15 +230,16 @@ Configuration is stored in JSON. Locations searched (in order):
       "ssl": {
         "enabled": true,
         "email": "admin@example.com"
-      }
+      },
+      "sub_zones": ["vpn"]
     }
   ],
   "services": [
     {
       "name": "grafana",
-      "domain": "grafana.example.com",
+      "domains": ["grafana.example.com"],
       "internal_dns": { "ip": "192.168.1.50" },
-      "external_dns": {},
+      "external_dns": { "ttl": 300 },
       "proxy": {
         "backend": "192.168.1.50:3000",
         "health_check": { "path": "/api/health" }
@@ -221,32 +254,28 @@ Configuration is stored in JSON. Locations searched (in order):
 
 | Page | Description |
 |------|-------------|
-| `/admin` | Main dashboard - clients, invites, zones, services |
-| `/admin/setup` | System status, requirements, configuration |
-| `/admin/dns` | External DNS records and sync status |
-| `/admin/haproxy` | Reverse proxy backends and SSL certificates |
-| `/admin/checks` | Health check status and notifications |
-| `/admin/help` | Getting started guide |
+| `/app/dashboard` | Overview dashboard |
+| `/app/services` | Service management — domains, DNS, proxy, health status |
+| `/app/domains` | External DNS records and sync status |
+| `/app/vpn` | VPN client management — create clients, QR codes, invites |
+| `/app/bans` | IP ban management |
+| `/app/checks` | Health check status and notifications |
+| `/app/settings` | Zones, HAProxy, SSL, health checks, system config |
 
 ## DNS Providers
 
-### AWS Route53
+Configure your provider in the zone's `dns_provider` block:
 
-1. Install: `sudo snap install aws-cli --classic`
-2. Configure: `aws configure`
-3. Required IAM permissions:
-   - `route53:ListHostedZones`
-   - `route53:GetHostedZone`
-   - `route53:ChangeResourceRecordSets`
-   - `route53:GetChange`
-
-### Name.com
-
-1. Enable API access at [name.com/account/settings/security](https://www.name.com/account/settings/security)
-2. Create token at [name.com/account/settings/api](https://www.name.com/account/settings/api)
-3. Refresh page and copy username + token
-
-Note: Name.com API has rate limits (10 req/sec, 3000/hour). The app handles this automatically.
+| Provider | Type | Required Fields |
+|----------|------|----------------|
+| AWS Route53 | `route53` | `aws_profile` or `aws_access_key_id` + `aws_secret_access_key` |
+| Cloudflare | `cloudflare` | `cloudflare_api_token` |
+| Name.com | `namecom` | `namecom_username` + `namecom_api_token` |
+| DigitalOcean | `digitalocean` | `api_token` |
+| Hetzner | `hetzner` | `api_token` |
+| Gandi | `gandi` | `api_token` |
+| Google Cloud DNS | `googlecloud` | `gcp_project` (+ optional `gcp_service_account_json`) |
+| DuckDNS | `duckdns` | `api_token` |
 
 ## Health Checks
 
@@ -267,16 +296,15 @@ Certificates cover:
 ## Requirements
 
 - Ubuntu/Debian Linux
-- Go 1.25+ (for building)
+- Go 1.25+ and Node.js (for building)
 - Root access (for WireGuard, ports 80/443, iptables)
 
-Required packages:
+Runtime packages (auto-installed when `auto_heal` is enabled):
 - `wireguard-tools` - VPN management
-- `haproxy` - Reverse proxy
-- `dnsmasq` - Internal DNS
-
-Optional:
-- AWS CLI - For Route53 DNS provider
+- `haproxy` - Reverse proxy (when `haproxy_enabled`)
+- `dnsmasq` - Internal DNS (when `dnsmasq_enabled`)
+- `iptables` - NAT masquerading
+- `qrencode` - VPN client QR codes
 
 ## License
 

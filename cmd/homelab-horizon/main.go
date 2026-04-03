@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"homelab-horizon/internal/autoheal"
 	"homelab-horizon/internal/config"
 	"homelab-horizon/internal/server"
 	"homelab-horizon/internal/wireguard"
@@ -91,6 +92,13 @@ func runServer(configPath string, dryRun bool, mcpEnabled bool) {
 
 	fmt.Printf("Config search paths: %s\n", strings.Join(config.SearchPaths, ", "))
 
+	if cfg.AutoHeal {
+		fmt.Println("Auto-heal enabled, checking dependencies...")
+		if err := autoheal.Run(cfg); err != nil {
+			log.Fatalf("Auto-heal failed: %v", err)
+		}
+	}
+
 	srv, err := server.NewWithConfig(cfg, cfgPath, dryRun, Version)
 	if err != nil {
 		log.Fatalf("Failed to start server: %v", err)
@@ -102,6 +110,10 @@ func runServer(configPath string, dryRun bool, mcpEnabled bool) {
 }
 
 func maybeSelfInstall(configPath string) {
+	// Don't auto-install in Docker (no systemd)
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return
+	}
 	// Don't auto-install if we are in MCP mode or not root
 	if isMCPClient() || os.Geteuid() != 0 {
 		return

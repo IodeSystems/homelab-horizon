@@ -1,0 +1,8 @@
+.git
+.idea
+.claude
+ui/node_modules
+coverage.out
+coverage.html
+homelab-horizon
+*.service

@@ -812,7 +812,8 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/services/sync/cancel", s.handleSyncCancel)
 
 	// Kept admin routes
-	mux.HandleFunc("/admin/haproxy/deploy-script", s.handleDeployScript) // services download this
+	mux.HandleFunc("/admin/haproxy/deploy-script", s.handleHZClientScript) // services download this
+	mux.HandleFunc("/admin/haproxy/hz-client", s.handleHZClientScript)    // new canonical path
 
 	// Backup/restore API (Bearer token auth)
 	mux.HandleFunc("/admin/backup/export", s.backupAuthMiddleware(s.handleBackupExport))
@@ -887,6 +888,12 @@ func (s *Server) ensureServicesRunning() {
 	}
 	if tokensGenerated {
 		config.Save(s.configPath, s.config)
+	}
+
+	// In Docker, skip service management (no systemd)
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		fmt.Println("Running in Docker: skipping service startup (no systemd)")
+		return
 	}
 
 	// Ensure WireGuard interface is up

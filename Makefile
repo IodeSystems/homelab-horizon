@@ -64,17 +64,17 @@ build-all: ui build-linux-amd64 build-linux-arm64 build-linux-arm
 
 # Linux AMD64 (most servers, x86_64)
 .PHONY: build-linux-amd64
-build-linux-amd64: dist
+build-linux-amd64: ui dist
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-amd64 $(CMD_PATH)
 
 # Linux ARM64 (Raspberry Pi 4/5, modern ARM servers)
 .PHONY: build-linux-arm64
-build-linux-arm64: dist
+build-linux-arm64: ui dist
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-arm64 $(CMD_PATH)
 
 # Linux ARM (Raspberry Pi 2/3, older 32-bit ARM)
 .PHONY: build-linux-arm
-build-linux-arm: dist
+build-linux-arm: ui dist
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-armv7 $(CMD_PATH)
 
 # Clean build artifacts
@@ -135,6 +135,16 @@ install: build
 	sudo cp $(BINARY_NAME) /usr/local/bin/
 	@echo "Installed to /usr/local/bin/$(BINARY_NAME)"
 
+# Build Docker demo image (vanilla Ubuntu + binary + demo config)
+.PHONY: docker
+docker: build-linux-amd64
+	docker build -t homelab-horizon:demo .
+
+# Run Docker demo container
+.PHONY: docker-run
+docker-run: docker
+	docker run --rm -p 8080:8080 --name hz-demo homelab-horizon:demo
+
 .PHONY: help
 help:
 	@echo "Homelab Horizon Build Targets:"
@@ -156,3 +166,6 @@ help:
 	@echo "  make clean        - Remove build artifacts"
 	@echo "  make test         - Run tests"
 	@echo "  make check        - Run go vet and fmt"
+	@echo ""
+	@echo "  make docker       - Build Docker demo image"
+	@echo "  make docker-run   - Build and run Docker demo on :8080"
