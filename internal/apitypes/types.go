@@ -108,7 +108,12 @@ type DomainResp struct {
 	CanSyncDNS           bool     `json:"canSyncDNS"`
 	CoveredBy            string   `json:"coveredBy,omitempty"`     // wildcard that covers this domain (e.g., "*.iodesystems.com")
 	IsRedundant          bool     `json:"isRedundant"`             // SubZone is redundant with a wildcard on the same zone
-	AbsorbedDomains      []string `json:"absorbedDomains,omitempty"` // for wildcards: service domains this covers
+	AbsorbedDomains      []AbsorbedDomain `json:"absorbedDomains,omitempty"` // for wildcards: service domains this covers
+}
+
+type AbsorbedDomain struct {
+	Domain  string `json:"domain"`
+	Service string `json:"service,omitempty"` // service name if bound
 }
 
 type SSLGapResp struct {

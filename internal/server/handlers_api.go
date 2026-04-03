@@ -311,18 +311,21 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Find all domains this wildcard absorbs
-			var absorbed []string
+			var absorbed []apitypes.AbsorbedDomain
 			for _, dr := range domainMap {
 				if dr.Domain == wp || dr.ZoneName != zone.Name {
 					continue
 				}
 				if domainMatchesPattern(dr.Domain, wp) {
 					dr.CoveredBy = wp
-					absorbed = append(absorbed, dr.Domain)
+					absorbed = append(absorbed, apitypes.AbsorbedDomain{
+						Domain:  dr.Domain,
+						Service: dr.ServiceName,
+					})
 				}
 			}
 			if len(absorbed) > 0 {
-				sort.Strings(absorbed)
+				sort.Slice(absorbed, func(i, j int) bool { return absorbed[i].Domain < absorbed[j].Domain })
 				wpDomain.AbsorbedDomains = absorbed
 			}
 

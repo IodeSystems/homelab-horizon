@@ -116,7 +116,7 @@ export const DomainAnalysisSchema = z.object({
   canSyncDNS: z.boolean(),
   coveredBy: z.string().optional(),
   isRedundant: z.boolean(),
-  absorbedDomains: z.array(z.string()).optional(),
+  absorbedDomains: z.array(z.object({ domain: z.string(), service: z.string().optional() })).optional(),
 });
 
 export const SSLGapSchema = z.object({
