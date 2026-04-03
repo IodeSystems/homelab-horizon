@@ -130,19 +130,6 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     <Box sx={{ display: "flex", minHeight: "100vh" }}>
       {isMobile ? (
         <>
-          <IconButton
-            onClick={() => setDrawerOpen(true)}
-            sx={{
-              position: "fixed",
-              top: 12,
-              left: 12,
-              zIndex: 1300,
-              bgcolor: "background.paper",
-              "&:hover": { bgcolor: "secondary.main" },
-            }}
-          >
-            <MenuIcon />
-          </IconButton>
           <Drawer
             open={drawerOpen}
             onClose={() => setDrawerOpen(false)}
@@ -171,10 +158,19 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         sx={{
           flex: 1,
           p: 3,
-          pt: isMobile ? 8 : 3,
           minWidth: 0,
         }}
       >
+        {isMobile && (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
+            <IconButton onClick={() => setDrawerOpen(true)} edge="start">
+              <MenuIcon />
+            </IconButton>
+            <Typography variant="h6" sx={{ fontWeight: 700, color: "#fff" }}>
+              Homelab Horizon
+            </Typography>
+          </Box>
+        )}
         {children}
       </Box>
     </Box>
