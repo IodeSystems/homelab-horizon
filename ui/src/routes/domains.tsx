@@ -259,9 +259,14 @@ function DomainRow({
                     Covers ({domain.absorbedDomains.length} domains)
                   </Typography>
                   {domain.absorbedDomains.map((d) => (
-                    <Typography key={d} variant="body2" sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
-                      {d}
-                    </Typography>
+                    <Box key={d.domain} sx={{ display: "flex", gap: 1, alignItems: "center", mb: 0.25 }}>
+                      <Typography variant="body2" sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
+                        {d.domain}
+                      </Typography>
+                      {d.service && (
+                        <Chip label={d.service} size="small" variant="outlined" sx={{ fontSize: "0.7rem", height: 18 }} />
+                      )}
+                    </Box>
                   ))}
                 </Paper>
               )}
