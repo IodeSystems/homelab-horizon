@@ -1,70 +1,62 @@
-package server
-
-// Auto-synced from bin/deploy-service. Do not edit directly.
-var deployScriptContent = `#!/bin/bash
+#!/bin/bash
 set -euo pipefail
 
 usage() {
   cat <<'HELP'
-deploy-service - Blue-green deploy management for homelab-horizon services
+hz-client - CLI for homelab-horizon services
 
 USAGE
-  deploy-service [--timeout SEC] <horizon-url> <deploy-token> <command> [args]
+  HZ_TOKEN=<token> HZ_URL=<url> hz-client [--timeout SEC] <command> [args]
+
+ENVIRONMENT
+  HZ_TOKEN    Service/deploy token (required)
+  HZ_URL      Horizon server URL, e.g. http://192.168.1.89:8080 (required)
 
 OPTIONS
   --timeout SEC    Max seconds to wait for state transitions (default: 30)
 
 COMMANDS
-  status                   Show full deployment config and slot states
+  IP banning:
+    bans                                        List all active bans
+    ban <ip> [--timeout SEC] [--reason "..."]   Ban an IP address
+    unban <ip>                                  Unban an IP address
 
-  current up|drain|down    Control the current (active) slot
-  next    up|drain|down    Control the next (standby) slot
-  swap                     Swap slot labels and reload haproxy
+  Rolling deploy:
+    status                   Show deployment config and slot states
+    rolling status           Show which rolling deploy phase you're in
+    rolling start            Phase 1: drain+down next. Deploy your code to it.
+    rolling continue         Phase 2: up next, verify, drain+down current. Deploy to it.
+    rolling finalize         Phase 3: up current, verify. Both slots on new code.
 
-  promote                  Blue-green cutover: up next, drain+down current
-                           Run 'swap' after to reset labels for next cycle.
-
-  rolling status           Show which rolling deploy phase you're in
-  rolling start            Phase 1: drain+down next. Deploy your code to it.
-  rolling continue         Phase 2: up next, verify, drain+down current. Deploy to it.
-  rolling finalize         Phase 3: up current, verify. Both slots on new code.
-
-HEALTH CHECKS
-  HAProxy health-checks each slot at the configured health_check path (shown
-  in 'status' output). A slot will only reach state "up" after the health
-  check passes. If the service is not healthy within --timeout seconds, the
-  command exits with an error.
-
-  Before calling 'up' on a slot, ensure the service is running and will pass
-  its health check. HAProxy probes every 3s with fall=2/rise=2, so a slot
-  needs two consecutive successful checks (~6s) to go "up".
+  Low-level slot control:
+    current up|drain|down    Control the current (active) slot
+    next    up|drain|down    Control the next (standby) slot
+    swap                     Swap slot labels and reload haproxy
+    promote                  Blue-green cutover: up next, drain+down current
 
 ROLLING DEPLOY FLOW
-  deploy-service URL TOKEN rolling start
+  hz-client rolling start
   # next slot is now down — deploy new code to its backend
-  deploy-service URL TOKEN rolling continue
+  hz-client rolling continue
   # next is verified healthy, current is now down — deploy to its backend
-  deploy-service URL TOKEN rolling finalize
+  hz-client rolling finalize
 
-BLUE-GREEN DEPLOY FLOW
-  # deploy new code to the next backend
-  deploy-service URL TOKEN promote
-  # traffic is now on next. when ready for next cycle:
-  deploy-service URL TOKEN swap
-
-TOKEN FILE
-  If the token argument is "-", the script reads from ~/deploy.secret.token
-  (override with DEPLOY_TOKEN_FILE env var).
+HEALTH CHECKS
+  HAProxy probes every 3s with fall=2/rise=2, so a slot needs two consecutive
+  successful checks (~6s) to reach "up". If not healthy within --timeout
+  seconds, the command exits with an error.
 
 EXAMPLES
-  deploy-service http://192.168.1.89:8080 - status
-  deploy-service --timeout 60 http://host:8080 - rolling start
-  deploy-service http://host:8080 TOKEN next up
-  deploy-service http://host:8080 TOKEN promote
+  hz-client bans
+  hz-client ban 1.2.3.4 --timeout 3600 --reason "brute force"
+  hz-client unban 1.2.3.4
+  hz-client status
+  hz-client rolling start
+  hz-client --timeout 60 rolling continue
 HELP
 }
 
-# Parse --timeout before positional args
+# Parse global options before command
 TIMEOUT=30
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -82,46 +74,35 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [ $# -lt 3 ]; then
+if [ $# -lt 1 ]; then
   usage
   exit 0
 fi
 
-URL="$1"
-TOKEN="$2"
-shift 2
+: "${HZ_TOKEN:?HZ_TOKEN environment variable is required}"
+: "${HZ_URL:?HZ_URL environment variable is required}"
 
-# Load token from file if "-"
-if [ "$TOKEN" = "-" ]; then
-  TOKEN_FILE="${DEPLOY_TOKEN_FILE:-$HOME/deploy.secret.token}"
-  if [ -f "$TOKEN_FILE" ]; then
-    TOKEN=$(head -1 "$TOKEN_FILE" | tr -d '[:space:]')
-    if [ -z "$TOKEN" ]; then
-      echo "Error: token file $TOKEN_FILE is empty" >&2
-      exit 1
-    fi
-  else
-    echo "Error: no token provided and $TOKEN_FILE not found" >&2
-    echo "Create the file with your deploy token, or pass it as an argument." >&2
-    exit 1
-  fi
-fi
+# Strip trailing slash from URL
+HZ_URL="${HZ_URL%/}"
+
+AUTH="Authorization: Bearer $HZ_TOKEN"
+DEPLOY_API="$HZ_URL/api/deploy"
+BAN_API="$HZ_URL/api/ban"
+
 CMD="$1"
 shift
 
-API="$URL/api/deploy"
-AUTH="Authorization: Bearer $TOKEN"
+# --- Deploy helpers ---
 
 status() {
   local raw
-  raw=$(curl -sf -H "$AUTH" "$API/status") || { echo "Failed to fetch status"; exit 1; }
+  raw=$(curl -sf -H "$AUTH" "$DEPLOY_API/status") || { echo "Failed to fetch status"; exit 1; }
   if command -v python3 &>/dev/null; then
     echo "$raw" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 print(f\"Service:      {d['service']}\")
-domains = d.get('domains', [d['domain']] if d.get('domain') else [])
-print(f\"Domains:      {', '.join(domains)}\")
+print(f\"Domain:       {d['domain']}\")
 print(f\"Balance:      {d.get('balance', 'first')}\")
 print(f\"Health check: {d.get('health_check', '-')}\")
 print(f\"Active slot:  {d.get('active_slot', 'a')}\")
@@ -135,25 +116,21 @@ for role in ('current', 'next'):
   fi
 }
 
-status_json() {
-  curl -sf -H "$AUTH" "$API/status"
-}
-
-post() {
+deploy_post() {
   local path="$1"
   local resp
-  resp=$(curl -sf -X POST -H "$AUTH" "$API/$path") || { echo "FAILED: $path"; exit 1; }
+  resp=$(curl -sf -X POST -H "$AUTH" "$DEPLOY_API/$path") || { echo "FAILED: $path"; exit 1; }
   echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
 }
 
 get_state() {
   local slot="$1"
-  curl -sf -H "$AUTH" "$API/status" | python3 -c "import sys,json; print(json.load(sys.stdin)['$slot']['state'])" 2>/dev/null || echo "unknown"
+  curl -sf -H "$AUTH" "$DEPLOY_API/status" | python3 -c "import sys,json; print(json.load(sys.stdin)['$slot']['state'])" 2>/dev/null || echo "unknown"
 }
 
 get_backend() {
   local slot="$1"
-  curl -sf -H "$AUTH" "$API/status" | python3 -c "import sys,json; print(json.load(sys.stdin)['$slot']['backend'])" 2>/dev/null || echo "unknown"
+  curl -sf -H "$AUTH" "$DEPLOY_API/status" | python3 -c "import sys,json; print(json.load(sys.stdin)['$slot']['backend'])" 2>/dev/null || echo "unknown"
 }
 
 wait_drained() {
@@ -189,7 +166,6 @@ wait_healthy() {
   exit 1
 }
 
-# Determine rolling deploy phase from slot states
 rolling_phase() {
   local current_state next_state
   current_state=$(get_state "current")
@@ -210,6 +186,20 @@ rolling_phase() {
   fi
 }
 
+# --- Ban helpers ---
+
+ban_post() {
+  local action="$1"
+  shift
+  local resp
+  resp=$(curl -sf -X POST -H "$AUTH" -H "Content-Type: application/json" -d "$1" "$BAN_API/$action") || {
+    echo "FAILED: ban/$action"; exit 1
+  }
+  echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
+}
+
+# --- Command dispatch ---
+
 case "$CMD" in
   status)
     status
@@ -218,12 +208,12 @@ case "$CMD" in
   current|next)
     ACTION="${1:?Missing action (up|drain|down)}"
     echo "$CMD -> $ACTION"
-    post "$CMD/$ACTION"
+    deploy_post "$CMD/$ACTION"
     ;;
 
   swap)
     echo "Swapping active slot..."
-    post "swap"
+    deploy_post "swap"
     ;;
 
   promote)
@@ -233,17 +223,17 @@ case "$CMD" in
     echo ""
 
     echo "Bringing up next slot..."
-    post "next/up"
+    deploy_post "next/up"
     wait_healthy "next"
     echo ""
 
     echo "Draining current slot..."
-    post "current/drain"
+    deploy_post "current/drain"
     wait_drained "current"
     echo ""
 
     echo "Taking current slot offline..."
-    post "current/down"
+    deploy_post "current/down"
     echo ""
 
     status
@@ -300,16 +290,16 @@ case "$CMD" in
 
         NEXT_BACKEND=$(get_backend "next")
         echo "Draining next slot ($NEXT_BACKEND)..."
-        post "next/drain" > /dev/null
+        deploy_post "next/drain" > /dev/null
         wait_drained "next"
 
         echo "Taking next slot down..."
-        post "next/down" > /dev/null
+        deploy_post "next/down" > /dev/null
         echo ""
 
         echo "=== Next slot is down ==="
         echo "Deploy your update to: $NEXT_BACKEND"
-        echo "Then run: deploy-service $URL - rolling continue"
+        echo "Then run: hz-client rolling continue"
         ;;
 
       continue)
@@ -323,22 +313,22 @@ case "$CMD" in
         echo ""
 
         echo "Bringing next slot up..."
-        post "next/up" > /dev/null
+        deploy_post "next/up" > /dev/null
         wait_healthy "next"
         echo ""
 
         CURRENT_BACKEND=$(get_backend "current")
         echo "Next is healthy. Draining current slot ($CURRENT_BACKEND)..."
-        post "current/drain" > /dev/null
+        deploy_post "current/drain" > /dev/null
         wait_drained "current"
 
         echo "Taking current slot down..."
-        post "current/down" > /dev/null
+        deploy_post "current/down" > /dev/null
         echo ""
 
         echo "=== Current slot is down ==="
         echo "Deploy your update to: $CURRENT_BACKEND"
-        echo "Then run: deploy-service $URL - rolling finalize"
+        echo "Then run: hz-client rolling finalize"
         ;;
 
       finalize)
@@ -352,7 +342,7 @@ case "$CMD" in
         echo ""
 
         echo "Bringing current slot up..."
-        post "current/up" > /dev/null
+        deploy_post "current/up" > /dev/null
         wait_healthy "current"
         echo ""
 
@@ -368,10 +358,77 @@ case "$CMD" in
     esac
     ;;
 
+  ban)
+    IP="${1:?Missing IP address}"
+    shift
+
+    # Parse ban-specific options
+    BAN_TIMEOUT=0
+    BAN_REASON=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --timeout)
+          BAN_TIMEOUT="${2:?--timeout requires a value}"
+          shift 2
+          ;;
+        --reason)
+          BAN_REASON="${2:?--reason requires a value}"
+          shift 2
+          ;;
+        *)
+          echo "Unknown ban option: $1" >&2
+          exit 1
+          ;;
+      esac
+    done
+
+    echo "Banning $IP..."
+    # Build JSON payload safely via python3 (handles quoting)
+    PAYLOAD=$(python3 -c "
+import json, sys
+print(json.dumps({'ip': sys.argv[1], 'timeout': int(sys.argv[2]), 'reason': sys.argv[3]}))
+" "$IP" "$BAN_TIMEOUT" "$BAN_REASON")
+    ban_post "ban" "$PAYLOAD"
+    ;;
+
+  unban)
+    IP="${1:?Missing IP address}"
+    echo "Unbanning $IP..."
+    ban_post "unban" "{\"ip\": \"$IP\"}"
+    ;;
+
+  bans)
+    raw=$(curl -sf -H "$AUTH" "$BAN_API/list") || { echo "Failed to fetch bans"; exit 1; }
+    if command -v python3 &>/dev/null; then
+      echo "$raw" | python3 -c "
+import sys, json
+from datetime import datetime
+d = json.load(sys.stdin)
+bans = d.get('bans', [])
+if not bans:
+    print('No active bans.')
+    sys.exit(0)
+print(f'{len(bans)} active ban(s):')
+print()
+for b in bans:
+    created = datetime.fromtimestamp(b['created_at']).strftime('%Y-%m-%d %H:%M:%S') if b.get('created_at') else '-'
+    expires = datetime.fromtimestamp(b['expires_at']).strftime('%Y-%m-%d %H:%M:%S') if b.get('expires_at') else 'never'
+    reason = b.get('reason', '-') or '-'
+    service = b.get('service', '-') or '-'
+    print(f\"  {b['ip']:20s}  created={created}  expires={expires}  reason={reason}  by={service}\")
+"
+    else
+      echo "$raw"
+    fi
+    ;;
+
   *)
     echo "Unknown command: $CMD"
-    echo "Commands: status | current|next (up|drain|down) | swap | promote | rolling (status|start|continue|finalize)"
+    echo ""
+    echo "Deploy:  status | current|next (up|drain|down) | swap | promote | rolling (...)"
+    echo "Bans:    ban <ip> | unban <ip> | bans"
+    echo ""
+    echo "Run 'hz-client --help' for full usage."
     exit 1
     ;;
 esac
-`

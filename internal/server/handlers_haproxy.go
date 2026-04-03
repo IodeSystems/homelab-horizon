@@ -4,11 +4,11 @@ import (
 	"net/http"
 )
 
-func (s *Server) handleDeployScript(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleHZClientScript(w http.ResponseWriter, r *http.Request) {
 	// Auth handled by backupAuthMiddleware (Bearer token or session cookie)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Content-Disposition", "attachment; filename=deploy-service")
-	w.Write([]byte(deployScriptContent))
+	w.Header().Set("Content-Disposition", "attachment; filename=hz-client")
+	w.Write([]byte(hzClientScriptContent))
 }
 
 func (s *Server) syncHAProxyBackends() {
