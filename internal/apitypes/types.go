@@ -51,8 +51,9 @@ type InternalDNSResp struct {
 }
 
 type ExternalDNSResp struct {
-	IP  string `json:"ip"`
-	TTL int    `json:"ttl"`
+	IP  string   `json:"ip"`
+	IPs []string `json:"ips,omitempty"` // All IPs for round-robin DNS
+	TTL int      `json:"ttl"`
 }
 
 type ServiceStatus struct {
@@ -86,8 +87,9 @@ type DomainResp struct {
 	HasService           bool   `json:"hasService"`
 	HasInternalDNS       bool   `json:"hasInternalDNS"`
 	InternalIP           string `json:"internalIP"`
-	HasExternalDNS       bool   `json:"hasExternalDNS"`
-	ExternalIP           string `json:"externalIP"`
+	HasExternalDNS       bool     `json:"hasExternalDNS"`
+	ExternalIP           string   `json:"externalIP"`
+	ExternalIPs          []string `json:"externalIPs,omitempty"` // All IPs for round-robin DNS
 	DnsmasqResolvedIP    string `json:"dnsmasqResolvedIP"`
 	RemoteResolvedIP     string `json:"remoteResolvedIP"`
 	DnsmasqDNSMatch      bool   `json:"dnsmasqDNSMatch"`
@@ -306,8 +308,9 @@ type ServiceRequestInternalDNS struct {
 }
 
 type ServiceRequestExternalDNS struct {
-	IP  string `json:"ip"`
-	TTL int    `json:"ttl"`
+	IP  string   `json:"ip"`
+	IPs []string `json:"ips,omitempty"` // Multiple IPs for round-robin DNS
+	TTL int      `json:"ttl"`
 }
 
 type ServiceRequestProxy struct {

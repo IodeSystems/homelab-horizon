@@ -82,8 +82,10 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 			sr.InternalDNS = &apitypes.InternalDNSResp{IP: svc.InternalDNS.IP}
 		}
 		if svc.ExternalDNS != nil {
+			ips := s.config.GetPublicIPsForService(&svc)
 			sr.ExternalDNS = &apitypes.ExternalDNSResp{
 				IP:  s.config.GetPublicIPForService(&svc),
+				IPs: ips,
 				TTL: svc.ExternalDNS.TTL,
 			}
 		}
@@ -189,6 +191,7 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 			if svc.ExternalDNS != nil {
 				dr.HasExternalDNS = true
 				dr.ExternalIP = s.config.GetPublicIPForService(&svc)
+				dr.ExternalIPs = s.config.GetPublicIPsForService(&svc)
 			}
 			if svc.Proxy != nil && svc.Proxy.Backend != "" {
 				dr.HasProxy = true

@@ -30,7 +30,13 @@ func serviceRequestToService(req *apitypes.ServiceRequest) config.Service {
 		if ttl <= 0 {
 			ttl = 300
 		}
-		svc.ExternalDNS = &config.ExternalDNS{IP: req.ExternalDNS.IP, TTL: ttl}
+		extDNS := &config.ExternalDNS{TTL: ttl}
+		if len(req.ExternalDNS.IPs) > 0 {
+			extDNS.IPs = req.ExternalDNS.IPs
+		} else if req.ExternalDNS.IP != "" {
+			extDNS.IPs = []string{req.ExternalDNS.IP}
+		}
+		svc.ExternalDNS = extDNS
 	}
 	if req.Proxy != nil && req.Proxy.Backend != "" {
 		svc.Proxy = &config.ProxyConfig{
@@ -142,7 +148,13 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 				if ttl <= 0 {
 					ttl = 300
 				}
-				s.config.Services[i].ExternalDNS = &config.ExternalDNS{IP: req.ExternalDNS.IP, TTL: ttl}
+				extDNS := &config.ExternalDNS{TTL: ttl}
+				if len(req.ExternalDNS.IPs) > 0 {
+					extDNS.IPs = req.ExternalDNS.IPs
+				} else if req.ExternalDNS.IP != "" {
+					extDNS.IPs = []string{req.ExternalDNS.IP}
+				}
+				s.config.Services[i].ExternalDNS = extDNS
 			} else {
 				s.config.Services[i].ExternalDNS = nil
 			}
@@ -276,8 +288,8 @@ func (s *Server) handleAPISyncDNS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	publicIP := s.config.GetPublicIPForService(svc)
-	if publicIP == "" {
+	publicIPs := s.config.GetPublicIPsForService(svc)
+	if len(publicIPs) == 0 {
 		writeJSONError(w, http.StatusBadRequest, "No public IP available")
 		return
 	}
@@ -293,14 +305,17 @@ func (s *Server) handleAPISyncDNS(w http.ResponseWriter, r *http.Request) {
 		ttl = svc.ExternalDNS.TTL
 	}
 
-	record := dns.Record{
-		Name:  req.Domain,
-		Type:  "A",
-		Value: publicIP,
-		TTL:   ttl,
+	var records []dns.Record
+	for _, ip := range publicIPs {
+		records = append(records, dns.Record{
+			Name:  req.Domain,
+			Type:  "A",
+			Value: ip,
+			TTL:   ttl,
+		})
 	}
 
-	changed, err := provider.SyncRecord(zone.ZoneID, record)
+	changed, err := provider.SyncRecordSet(zone.ZoneID, records)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "Sync failed: "+err.Error())
 		return
@@ -328,8 +343,8 @@ func (s *Server) handleAPISyncAllDNS(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		publicIP := s.config.GetPublicIPForService(&svc)
-		if publicIP == "" {
+		publicIPs := s.config.GetPublicIPsForService(&svc)
+		if len(publicIPs) == 0 {
 			failed++
 			continue
 		}
@@ -358,14 +373,17 @@ func (s *Server) handleAPISyncAllDNS(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			record := dns.Record{
-				Name:  domain,
-				Type:  "A",
-				Value: publicIP,
-				TTL:   ttl,
+			var records []dns.Record
+			for _, ip := range publicIPs {
+				records = append(records, dns.Record{
+					Name:  domain,
+					Type:  "A",
+					Value: ip,
+					TTL:   ttl,
+				})
 			}
 
-			changed, err := provider.SyncRecord(zone.ZoneID, record)
+			changed, err := provider.SyncRecordSet(zone.ZoneID, records)
 			if err != nil {
 				failed++
 			} else if changed {

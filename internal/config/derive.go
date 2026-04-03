@@ -27,16 +27,28 @@ func (c *Config) GetZoneForDomain(domain string) *Zone {
 	return nil
 }
 
-// GetPublicIPForService returns the appropriate public IP for a service
-// Returns service's ExternalDNS.IP if set, otherwise falls back to global PublicIP
+// GetPublicIPForService returns the first public IP for a service (for display/backward compat).
 func (c *Config) GetPublicIPForService(svc *Service) string {
+	ips := c.GetPublicIPsForService(svc)
+	if len(ips) > 0 {
+		return ips[0]
+	}
+	return ""
+}
+
+// GetPublicIPsForService returns all public IPs for a service.
+// Returns service's ExternalDNS.IPs if set, otherwise falls back to global PublicIP.
+func (c *Config) GetPublicIPsForService(svc *Service) []string {
 	if svc.ExternalDNS == nil {
-		return ""
+		return nil
 	}
-	if svc.ExternalDNS.IP != "" {
-		return svc.ExternalDNS.IP
+	if ips := svc.ExternalDNS.GetIPs(); len(ips) > 0 {
+		return ips
 	}
-	return c.PublicIP
+	if c.PublicIP != "" {
+		return []string{c.PublicIP}
+	}
+	return nil
 }
 
 // DeriveDNSMappings generates dnsmasq address mappings from services
@@ -95,7 +107,8 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 	return backends
 }
 
-// DeriveRoute53Records generates Route53 A records from services with ExternalDNS config
+// DeriveRoute53Records generates Route53 A records from services with ExternalDNS config.
+// Services with multiple IPs produce multiple records per domain (round-robin DNS).
 func (c *Config) DeriveRoute53Records() []route53.Record {
 	var records []route53.Record
 	for _, svc := range c.Services {
@@ -103,8 +116,8 @@ func (c *Config) DeriveRoute53Records() []route53.Record {
 			continue
 		}
 
-		publicIP := c.GetPublicIPForService(&svc)
-		if publicIP == "" {
+		publicIPs := c.GetPublicIPsForService(&svc)
+		if len(publicIPs) == 0 {
 			continue // No public IP available
 		}
 
@@ -123,15 +136,17 @@ func (c *Config) DeriveRoute53Records() []route53.Record {
 			if provider := zone.GetDNSProvider(); provider != nil {
 				awsProfile = provider.AWSProfile
 			}
-			records = append(records, route53.Record{
-				Name:       domain,
-				Type:       "A",
-				Value:      publicIP,
-				TTL:        ttl,
-				ZoneID:     zone.ZoneID,
-				ZoneName:   zone.Name,
-				AWSProfile: awsProfile,
-			})
+			for _, ip := range publicIPs {
+				records = append(records, route53.Record{
+					Name:       domain,
+					Type:       "A",
+					Value:      ip,
+					TTL:        ttl,
+					ZoneID:     zone.ZoneID,
+					ZoneName:   zone.Name,
+					AWSProfile: awsProfile,
+				})
+			}
 		}
 	}
 	return records

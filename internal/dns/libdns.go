@@ -239,6 +239,98 @@ func (p *LibdnsAdapter) SyncRecord(zoneID string, record Record) (changed bool, 
 	return true, p.UpdateRecord(zoneID, record)
 }
 
+// SyncRecordSet creates or updates a set of records with the same name/type (round-robin DNS).
+// It deletes existing records for the name/type, then creates all new values.
+func (p *LibdnsAdapter) SyncRecordSet(zoneID string, records []Record) (changed bool, err error) {
+	if len(records) == 0 {
+		return false, nil
+	}
+	// Single record: delegate to SyncRecord
+	if len(records) == 1 {
+		return p.SyncRecord(zoneID, records[0])
+	}
+
+	name := records[0].Name
+	recordType := records[0].Type
+	p.log(fmt.Sprintf("SyncRecordSet %s (%s) with %d values...", name, recordType, len(records)))
+
+	// Get current records to compare
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	existing, err := p.provider.GetRecords(ctx, p.zone)
+	if err != nil {
+		p.log(fmt.Sprintf("GetRecords error: %v, will recreate", err))
+	}
+
+	// Collect existing values for this name/type
+	relName := p.toRelativeName(name)
+	var existingValues []string
+	for _, r := range existing {
+		rr := r.RR()
+		if rr.Name == relName && rr.Type == recordType {
+			existingValues = append(existingValues, rr.Data)
+		}
+	}
+
+	// Check if values match (order-independent)
+	newValues := make([]string, len(records))
+	for i, r := range records {
+		newValues[i] = r.Value
+	}
+	if stringSlicesEqual(existingValues, newValues) {
+		p.log(fmt.Sprintf("%s already set to %v", name, newValues))
+		return false, nil
+	}
+
+	// Delete existing records for this name/type, then create all new ones
+	if len(existingValues) > 0 {
+		if err := p.DeleteRecord(zoneID, name, recordType); err != nil {
+			p.log(fmt.Sprintf("DeleteRecord error during set sync: %v", err))
+		}
+	}
+
+	// Create all records
+	var libRecords []libdns.Record
+	for _, rec := range records {
+		lr, err := p.toLibdnsRecord(rec)
+		if err != nil {
+			return false, fmt.Errorf("failed to convert record: %w", err)
+		}
+		libRecords = append(libRecords, lr)
+	}
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel2()
+
+	_, err = p.provider.SetRecords(ctx2, p.zone, libRecords)
+	if err != nil {
+		p.log(fmt.Sprintf("SetRecords for %s FAILED: %v", name, err))
+		return false, fmt.Errorf("failed to set record set: %w", err)
+	}
+
+	p.log(fmt.Sprintf("SyncRecordSet %s SUCCESS (%d values)", name, len(records)))
+	return true, nil
+}
+
+// stringSlicesEqual compares two string slices ignoring order
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, v := range a {
+		counts[v]++
+	}
+	for _, v := range b {
+		counts[v]--
+		if counts[v] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // toRelativeName converts a FQDN or partial name to a relative name for libdns
 func (p *LibdnsAdapter) toRelativeName(name string) string {
 	// Remove trailing dot if present

@@ -351,6 +351,33 @@ func (p *NamecomProvider) SyncRecord(zoneID string, record Record) (changed bool
 	return true, p.UpdateRecord(zoneID, record)
 }
 
+// SyncRecordSet syncs a set of records with the same name/type (round-robin DNS).
+// Name.com doesn't natively support multi-value record sets the same way Route53 does,
+// so we delete existing records and create new ones.
+func (p *NamecomProvider) SyncRecordSet(zoneID string, records []Record) (changed bool, err error) {
+	if len(records) <= 1 {
+		if len(records) == 1 {
+			return p.SyncRecord(zoneID, records[0])
+		}
+		return false, nil
+	}
+
+	name := records[0].Name
+	recordType := records[0].Type
+	p.log(fmt.Sprintf("SyncRecordSet %s (%s) with %d values...", name, recordType, len(records)))
+
+	// Delete existing, then create all new records
+	_ = p.DeleteRecord(zoneID, name, recordType)
+
+	for _, rec := range records {
+		if err := p.CreateRecord(zoneID, rec); err != nil {
+			return false, fmt.Errorf("failed to create record %s -> %s: %w", rec.Name, rec.Value, err)
+		}
+	}
+
+	return true, nil
+}
+
 // findRecordID finds the ID of a record by host and type
 func (p *NamecomProvider) findRecordID(domainName, host, recordType string) (int, error) {
 	respBody, err := p.doRequest("GET", fmt.Sprintf("/domains/%s/records", domainName), nil)
