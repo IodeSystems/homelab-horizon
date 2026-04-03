@@ -4,154 +4,92 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
-	"net/url"
 	"strings"
 
-	"homelab-horizon/internal/config"
 	"homelab-horizon/internal/qr"
 	"homelab-horizon/internal/wireguard"
 )
 
-func (s *Server) handleAddClient(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
-		return
-	}
+// inviteBaseCSS is minimal CSS for the invite page (standalone, not part of the SPA).
+const inviteBaseCSS = `
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #1a1a2e; color: #eee; min-height: 100vh; padding: 1rem; }
+.card { background: #16213e; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+input, button { font-size: 1rem; padding: 0.75rem 1rem; border-radius: 4px; border: none; }
+input { background: #0f3460; color: #fff; width: 100%; margin-bottom: 0.5rem; }
+input::placeholder { color: #888; }
+button { background: #e94560; color: #fff; cursor: pointer; }
+button:hover { background: #ff6b6b; }
+button.success { background: #2ecc71; }
+button.success:hover { background: #27ae60; }
+.error { background: #c0392b; padding: 1rem; border-radius: 4px; margin-bottom: 1rem; }
+.info { background: #2980b9; padding: 1rem; border-radius: 4px; margin-bottom: 1rem; }
+pre { background: #0f3460; padding: 1rem; border-radius: 4px; overflow-x: auto; font-family: monospace; white-space: pre-wrap; word-break: break-all; font-size: 0.85rem; }
+a { color: #e94560; }
+`
 
-	name := strings.TrimSpace(r.FormValue("name"))
-	if name == "" {
-		http.Redirect(w, r, "/admin?err=Name+required", http.StatusSeeOther)
-		return
-	}
+const inviteTemplateHTML = `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Get Your VPN Config - Homelab Horizon</title>
+    <style>` + inviteBaseCSS + `
+    .invite-container { max-width: 500px; margin: 2rem auto; }
+    </style>
+</head>
+<body>
+    <div class="invite-container">
+        <h1>WireGuard VPN Setup</h1>
 
-	extraIPs := strings.TrimSpace(r.FormValue("extra_ips"))
+        {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
 
-	privKey, pubKey, err := wireguard.GenerateKeyPair()
-	if err != nil {
-		http.Redirect(w, r, "/admin?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
-		return
-	}
+        {{if not .Config}}
+        <div class="card">
+            <p>Enter a name for your device to generate your VPN configuration.</p>
+            <form method="POST" action="/invite/{{.Token}}">
+                <input type="text" name="name" placeholder="Device name (e.g., my-laptop)" required autofocus>
+                <button type="submit">Generate Config</button>
+            </form>
+        </div>
+        {{else}}
+        <div class="card">
+            <div class="info">
+                <strong>Important:</strong> This is the only time you'll see this configuration. Download it now!
+            </div>
+            <h2>Scan QR Code (Mobile)</h2>
+            <div style="background: white; padding: 1rem; border-radius: 8px; display: inline-block; margin-bottom: 1rem;">
+                {{if .QRCode}}{{.QRCode}}{{end}}
+            </div>
+            <h2>Or Download Config File</h2>
+            <pre>{{.Config}}</pre>
+            <form method="POST" action="/invite/{{.Token}}/download">
+                <input type="hidden" name="config" value="{{.Config}}">
+                <input type="hidden" name="name" value="{{.Name}}">
+                <button type="submit" class="success">Download .conf File</button>
+            </form>
+        </div>
+        <div class="card">
+            <h2>Setup Instructions</h2>
+            <ol style="padding-left: 1.5rem; line-height: 1.8;">
+                <li>Download the configuration file or scan the QR code</li>
+                <li>Install WireGuard on your device:
+                    <ul style="padding-left: 1rem; margin: 0.5rem 0;">
+                        <li><strong>Windows/Mac:</strong> <a href="https://www.wireguard.com/install/" target="_blank">wireguard.com/install</a></li>
+                        <li><strong>Linux:</strong> <code>apt install wireguard</code></li>
+                        <li><strong>iOS/Android:</strong> App Store / Play Store</li>
+                    </ul>
+                </li>
+                <li>Import the configuration file into WireGuard</li>
+                <li>Connect and enjoy!</li>
+            </ol>
+        </div>
+        {{end}}
+    </div>
+</body>
+</html>`
 
-	clientIP, err := s.wg.GetNextIP(s.config.VPNRange)
-	if err != nil {
-		http.Redirect(w, r, "/admin?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
-		return
-	}
-
-	// Combine client IP with extra IPs if provided
-	allowedIPs := clientIP
-	if extraIPs != "" {
-		allowedIPs = clientIP + ", " + extraIPs
-	}
-
-	if err := s.wg.AddPeer(name, pubKey, allowedIPs); err != nil {
-		http.Redirect(w, r, "/admin?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
-		return
-	}
-
-	s.wg.Reload()
-
-	clientConfig := wireguard.GenerateClientConfig(
-		privKey,
-		strings.TrimSuffix(clientIP, "/32"),
-		s.config.ServerPublicKey,
-		s.config.ServerEndpoint,
-		s.config.DNS,
-		s.config.GetAllowedIPs(),
-	)
-
-	qrCode := qr.GenerateSVG(clientConfig, 256)
-
-	data := map[string]interface{}{
-		"Name":      name,
-		"Config":    clientConfig,
-		"QRCode":    template.HTML(qrCode),
-		"CSRFToken": s.getCSRFToken(r),
-	}
-	s.templates["clientConfig"].Execute(w, data)
-}
-
-func (s *Server) handleEditClient(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
-		return
-	}
-
-	pubkey := strings.TrimSpace(r.FormValue("pubkey"))
-	name := strings.TrimSpace(r.FormValue("name"))
-	extraIPs := strings.TrimSpace(r.FormValue("extra_ips"))
-
-	if pubkey == "" {
-		http.Redirect(w, r, "/admin?err=Public+key+required", http.StatusSeeOther)
-		return
-	}
-
-	if name == "" {
-		http.Redirect(w, r, "/admin?err=Name+required", http.StatusSeeOther)
-		return
-	}
-
-	// Get the current peer to preserve the primary IP
-	peer := s.wg.GetPeerByPublicKey(pubkey)
-	if peer == nil {
-		http.Redirect(w, r, "/admin?err=Peer+not+found", http.StatusSeeOther)
-		return
-	}
-
-	// Extract the primary IP (first /32 IP) from current AllowedIPs
-	currentIPs := strings.Split(peer.AllowedIPs, ",")
-	var primaryIP string
-	for _, ip := range currentIPs {
-		ip = strings.TrimSpace(ip)
-		if strings.HasSuffix(ip, "/32") {
-			primaryIP = ip
-			break
-		}
-	}
-
-	if primaryIP == "" {
-		// Fallback to using the first IP if no /32 found
-		primaryIP = strings.TrimSpace(currentIPs[0])
-	}
-
-	// Build new AllowedIPs: primary IP + extra IPs
-	allowedIPs := primaryIP
-	if extraIPs != "" {
-		allowedIPs = primaryIP + ", " + extraIPs
-	}
-
-	if err := s.wg.UpdatePeer(pubkey, name, allowedIPs); err != nil {
-		http.Redirect(w, r, "/admin?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
-		return
-	}
-
-	// Update VPNAdmins if the name changed and the old name was an admin
-	if peer.Name != name {
-		for i, adminName := range s.config.VPNAdmins {
-			if adminName == peer.Name {
-				s.config.VPNAdmins[i] = name
-				config.Save(s.configPath, s.config)
-				break
-			}
-		}
-	}
-
-	s.wg.Reload()
-	http.Redirect(w, r, "/admin?msg=Client+updated", http.StatusSeeOther)
-}
-
-func (s *Server) handleDeleteClient(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
-		return
-	}
-
-	pubkey := r.FormValue("pubkey")
-	if err := s.wg.RemovePeer(pubkey); err != nil {
-		http.Redirect(w, r, "/admin?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
-		return
-	}
-
-	s.wg.Reload()
-	http.Redirect(w, r, "/admin?msg=Client+removed", http.StatusSeeOther)
-}
+var inviteTemplateParsed = template.Must(template.New("invite").Parse(inviteTemplateHTML))
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -172,30 +110,6 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(cfg))
 }
 
-func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
-		return
-	}
-
-	token := generateToken(32)
-	if err := s.addInvite(token); err != nil {
-		http.Redirect(w, r, "/admin?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
-		return
-	}
-
-	http.Redirect(w, r, "/admin?msg=Invite+created:+"+token, http.StatusSeeOther)
-}
-
-func (s *Server) handleDeleteInvite(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
-		return
-	}
-
-	token := r.FormValue("token")
-	s.removeInvite(token)
-	http.Redirect(w, r, "/admin?msg=Invite+revoked", http.StatusSeeOther)
-}
-
 func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimPrefix(r.URL.Path, "/invite/")
 	token = strings.TrimSuffix(token, "/download")
@@ -205,7 +119,7 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 			"Error": "Invalid or expired invite token",
 			"Token": token,
 		}
-		s.templates["invite"].Execute(w, data)
+		inviteTemplateParsed.Execute(w, data)
 		return
 	}
 
@@ -221,7 +135,7 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 				"Error": "Device name is required",
 				"Token": token,
 			}
-			s.templates["invite"].Execute(w, data)
+			inviteTemplateParsed.Execute(w, data)
 			return
 		}
 
@@ -231,7 +145,7 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 				"Error": "Failed to generate keys: " + err.Error(),
 				"Token": token,
 			}
-			s.templates["invite"].Execute(w, data)
+			inviteTemplateParsed.Execute(w, data)
 			return
 		}
 
@@ -241,7 +155,7 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 				"Error": "No available IPs: " + err.Error(),
 				"Token": token,
 			}
-			s.templates["invite"].Execute(w, data)
+			inviteTemplateParsed.Execute(w, data)
 			return
 		}
 
@@ -250,7 +164,7 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 				"Error": "Failed to add peer: " + err.Error(),
 				"Token": token,
 			}
-			s.templates["invite"].Execute(w, data)
+			inviteTemplateParsed.Execute(w, data)
 			return
 		}
 
@@ -274,99 +188,12 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 			"Config": clientConfig,
 			"QRCode": template.HTML(qrCode),
 		}
-		s.templates["invite"].Execute(w, data)
+		inviteTemplateParsed.Execute(w, data)
 		return
 	}
 
 	data := map[string]interface{}{
 		"Token": token,
 	}
-	s.templates["invite"].Execute(w, data)
-}
-
-func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
-		return
-	}
-
-	if err := s.wg.Reload(); err != nil {
-		http.Redirect(w, r, "/admin?err="+url.QueryEscape("Reload failed: "+err.Error()), http.StatusSeeOther)
-		return
-	}
-	http.Redirect(w, r, "/admin?msg=WireGuard+reloaded", http.StatusSeeOther)
-}
-
-func (s *Server) handleInterfaceUp(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
-		return
-	}
-
-	if err := s.wg.InterfaceUp(); err != nil {
-		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
-		return
-	}
-	http.Redirect(w, r, "/admin/setup?msg=Interface+started", http.StatusSeeOther)
-}
-
-func (s *Server) handleEnableForwarding(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
-		return
-	}
-
-	if err := wireguard.EnableIPForwarding(); err != nil {
-		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
-		return
-	}
-	http.Redirect(w, r, "/admin/setup?msg=IP+forwarding+enabled", http.StatusSeeOther)
-}
-
-func (s *Server) handleAddMasquerade(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
-		return
-	}
-
-	if err := wireguard.AddMasqueradeRule(s.config.VPNRange); err != nil {
-		http.Redirect(w, r, "/admin/setup?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
-		return
-	}
-	http.Redirect(w, r, "/admin/setup?msg=Masquerade+rule+added", http.StatusSeeOther)
-}
-
-func (s *Server) handleToggleClientAdmin(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
-		return
-	}
-
-	clientName := strings.TrimSpace(r.FormValue("name"))
-	if clientName == "" {
-		http.Redirect(w, r, "/admin?err=Client+name+required", http.StatusSeeOther)
-		return
-	}
-
-	// Check if client is currently an admin
-	isCurrentlyAdmin := false
-	for _, adminName := range s.config.VPNAdmins {
-		if adminName == clientName {
-			isCurrentlyAdmin = true
-			break
-		}
-	}
-
-	if isCurrentlyAdmin {
-		// Remove from admins
-		newAdmins := make([]string, 0, len(s.config.VPNAdmins)-1)
-		for _, adminName := range s.config.VPNAdmins {
-			if adminName != clientName {
-				newAdmins = append(newAdmins, adminName)
-			}
-		}
-		s.config.VPNAdmins = newAdmins
-		http.Redirect(w, r, "/admin?msg=Removed+admin+access+for+"+clientName, http.StatusSeeOther)
-	} else {
-		// Add to admins
-		s.config.VPNAdmins = append(s.config.VPNAdmins, clientName)
-		http.Redirect(w, r, "/admin?msg=Granted+admin+access+to+"+clientName, http.StatusSeeOther)
-	}
-
-	config.Save(s.configPath, s.config)
+	inviteTemplateParsed.Execute(w, data)
 }
