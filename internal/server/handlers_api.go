@@ -232,19 +232,34 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check SSL coverage
+	// Build a map of zone → cert info using DeriveSSLDomains (which knows the actual primary domain)
+	type certInfo struct {
+		exists bool
+		expiry string
+	}
+	zoneCerts := make(map[string]*certInfo)
+	for _, dc := range s.config.DeriveSSLDomains() {
+		ci := &certInfo{}
+		info, err := s.letsencrypt.GetCertInfoForDomain(dc.Domain)
+		if err == nil && info != nil {
+			ci.exists = true
+			ci.expiry = info.NotAfter
+		}
+		// Map zone name to cert info (strip wildcard prefix to get zone)
+		zoneName := strings.TrimPrefix(dc.Domain, "*.")
+		// Find the actual zone this belongs to
+		if zone := s.config.GetZoneForDomain(zoneName); zone != nil {
+			zoneCerts[zone.Name] = ci
+		}
+	}
+
 	for _, zone := range s.config.Zones {
 		if zone.SSL == nil || !zone.SSL.Enabled {
 			continue
 		}
-		wildcardDomain := "*." + zone.Name
-		cc := struct {
-			exists bool
-			expiry string
-		}{}
-		info, err := s.letsencrypt.GetCertInfoForDomain(wildcardDomain)
-		if err == nil && info != nil {
-			cc.exists = true
-			cc.expiry = info.NotAfter
+		cc := zoneCerts[zone.Name]
+		if cc == nil {
+			cc = &certInfo{}
 		}
 
 		for _, sub := range zone.SubZones {
@@ -259,7 +274,7 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 			for _, dr := range domainMap {
 				if domainMatchesPattern(dr.Domain, pattern) {
 					dr.HasSSLCoverage = true
-					dr.CertDomain = wildcardDomain
+					dr.CertDomain = "*." + zone.Name
 					if cc.exists {
 						dr.CertExists = true
 						dr.CertExpiry = cc.expiry
@@ -268,6 +283,26 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	// Resolve DNS for service domains in parallel
+	dnsmasqAddr := s.config.GetWGGatewayIP() + ":53"
+	var wgDomains sync.WaitGroup
+	for _, dr := range domainMap {
+		if !dr.HasService || strings.HasPrefix(dr.Domain, "*.") {
+			continue
+		}
+		dr := dr
+		wgDomains.Add(1)
+		go func() {
+			defer wgDomains.Done()
+			dnsmasqIP, remoteIP := resolveDomain(dr.Domain, dnsmasqAddr)
+			dr.DnsmasqResolvedIP = dnsmasqIP
+			dr.RemoteResolvedIP = remoteIP
+			dr.DnsmasqDNSMatch = dnsmasqIP != "" && dnsmasqIP == dr.InternalIP
+			dr.RemoteDNSMatch = remoteIP != "" && remoteIP == dr.ExternalIP
+		}()
+	}
+	wgDomains.Wait()
 
 	// Compute action flags and SSL gaps
 	var sslGaps []apitypes.SSLGapResp
@@ -365,7 +400,19 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if zs.SSLEnabled {
-			info, err := s.letsencrypt.GetCertInfoForDomain("*." + zone.Name)
+			// Find the cert using the actual primary domain from DeriveSSLDomains
+			var certLookupDomain string
+			for _, dc := range s.config.DeriveSSLDomains() {
+				dcZone := strings.TrimPrefix(dc.Domain, "*.")
+				if z := s.config.GetZoneForDomain(dcZone); z != nil && z.Name == zone.Name {
+					certLookupDomain = dc.Domain
+					break
+				}
+			}
+			if certLookupDomain == "" {
+				certLookupDomain = "*." + zone.Name // fallback
+			}
+			info, err := s.letsencrypt.GetCertInfoForDomain(certLookupDomain)
 			if err == nil && info != nil {
 				zs.CertExists = true
 				zs.CertExpiry = info.NotAfter
