@@ -7,14 +7,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"html/template"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -24,7 +21,6 @@ import (
 	"homelab-horizon/internal/haproxy"
 	"homelab-horizon/internal/letsencrypt"
 	"homelab-horizon/internal/monitor"
-	"homelab-horizon/internal/qr"
 	"homelab-horizon/internal/route53"
 	"homelab-horizon/internal/system"
 	"homelab-horizon/internal/wireguard"
@@ -185,11 +181,9 @@ type Server struct {
 	dns                 *dnsmasq.DNSMasq
 	haproxy             *haproxy.HAProxy
 	letsencrypt         *letsencrypt.Manager
-	monitor             *monitor.Monitor
-	templates           map[string]*template.Template
-	sync                *SyncBroadcaster
-	health              *HealthStatus
-	connectivityResults []ConnectivityCheck
+	monitor *monitor.Monitor
+	sync    *SyncBroadcaster
+	health  *HealthStatus
 }
 
 func New(configPath string) (*Server, error) {
@@ -316,40 +310,12 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		dns:         dns,
 		haproxy:     hap,
 		letsencrypt: le,
-		monitor:     mon,
-		templates:   make(map[string]*template.Template),
-		sync:        NewSyncBroadcaster(),
-		health:      &HealthStatus{healthy: true},
+		monitor: mon,
+		sync:    NewSyncBroadcaster(),
+		health:  &HealthStatus{healthy: true},
 	}
 
-	s.parseTemplates()
-
 	return s, nil
-}
-
-func (s *Server) parseTemplates() {
-	s.templates["login"] = template.Must(template.New("login").Parse(loginTemplate))
-	s.templates["admin"] = template.Must(template.New("admin").Funcs(template.FuncMap{
-		"json": func(v interface{}) template.JS {
-			b, _ := json.Marshal(v)
-			return template.JS(b)
-		},
-	}).Parse(adminTemplate))
-	s.templates["test"] = template.Must(template.New("test").Parse(testTemplate))
-	s.templates["invite"] = template.Must(template.New("invite").Parse(inviteTemplate))
-	s.templates["clientConfig"] = template.Must(template.New("clientConfig").Parse(clientConfigTemplate))
-	s.templates["setup"] = template.Must(template.New("setup").Parse(setupTemplate))
-	s.templates["haproxy"] = template.Must(template.New("haproxy").Parse(haproxyTemplate))
-	s.templates["dns"] = template.Must(template.New("dns").Parse(dnsTemplate))
-	s.templates["checks"] = template.Must(template.New("checks").Funcs(template.FuncMap{
-		"json": func(v interface{}) template.JS {
-			b, _ := json.Marshal(v)
-			return template.JS(b)
-		},
-	}).Parse(checksTemplate))
-	s.templates["help"] = template.Must(template.New("help").Parse(helpTemplate))
-	s.templates["network"] = template.Must(template.New("network").Parse(networkTemplate))
-	s.templates["domains"] = template.Must(template.New("domains").Parse(domainsTemplate))
 }
 
 func generateToken(length int) string {
@@ -535,12 +501,6 @@ func (s *Server) mcpAuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// csrfMiddleware is a passthrough - CSRF is checked by requireAdminPost in handlers
-// Keeping this wrapper for potential future use (rate limiting, logging, etc)
-func (s *Server) csrfMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return next
-}
-
 func (s *Server) isAdmin(r *http.Request) bool {
 	// Check session cookie first
 	cookie, err := r.Cookie("session")
@@ -648,261 +608,6 @@ func (s *Server) isInVPNRange(ip string) bool {
 	}
 
 	return vpnNet.Contains(clientIP)
-}
-
-type InviteData struct {
-	Token  string
-	URL    string
-	QRCode template.HTML
-}
-
-type PeerData struct {
-	Name            string
-	PublicKey       string
-	AllowedIPs      string
-	Endpoint        string
-	LatestHandshake string
-	TransferRx      string
-	TransferTx      string
-	Online          bool
-	IsAdmin         bool
-}
-
-func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-		return
-	}
-
-	// Check if onboarding is needed
-	setupStatus := CheckSetupStatus(s.config.WGConfigPath)
-	if setupStatus.IsFirstRun {
-		// First run - redirect to help page for introduction
-		http.Redirect(w, r, "/admin/help", http.StatusSeeOther)
-		return
-	}
-	if setupStatus.NeedsSetup {
-		// Setup incomplete - redirect to setup page
-		http.Redirect(w, r, "/admin/setup", http.StatusSeeOther)
-		return
-	}
-
-	s.wg.Load()
-	tokens := s.getInvites()
-
-	// Get live interface status
-	ifaceStatus := s.wg.GetInterfaceStatus()
-
-	// Build peer data with live status
-	configPeers := s.wg.GetPeers()
-	var peers []PeerData
-	for _, p := range configPeers {
-		pd := PeerData{
-			Name:       p.Name,
-			PublicKey:  p.PublicKey,
-			AllowedIPs: p.AllowedIPs,
-		}
-		if status, ok := ifaceStatus.Peers[p.PublicKey]; ok {
-			pd.Endpoint = status.Endpoint
-			pd.LatestHandshake = status.LatestHandshake
-			pd.TransferRx = status.TransferRx
-			pd.TransferTx = status.TransferTx
-			pd.Online = status.LatestHandshake != ""
-		}
-		// Check if this peer is a VPN admin
-		for _, adminName := range s.config.VPNAdmins {
-			if p.Name == adminName {
-				pd.IsAdmin = true
-				break
-			}
-		}
-		peers = append(peers, pd)
-	}
-
-	// Build invite data with URLs and QR codes
-	var invites []InviteData
-	for _, token := range tokens {
-		url := strings.TrimSuffix(s.config.KioskURL, "/") + "/invite/" + token
-		invites = append(invites, InviteData{
-			Token:  token,
-			URL:    url,
-			QRCode: template.HTML(qr.GenerateSVG(url, 150)),
-		})
-	}
-
-	// Derive DNS mappings from services
-	mappings := s.config.DeriveDNSMappings()
-
-	// Build list of service domains for DNS resolution
-	var serviceDomains []string
-	for _, svc := range s.config.Services {
-		serviceDomains = append(serviceDomains, svc.Domains...)
-	}
-
-	// Resolve against public DNS (first upstream server)
-	var publicDNS map[string]string
-	if len(s.config.UpstreamDNS) > 0 && len(serviceDomains) > 0 {
-		publicDNS = dnsmasq.ResolveAllWith(serviceDomains, s.config.UpstreamDNS[0])
-	}
-
-	// Resolve against private DNS (our dnsmasq server on the WG interface)
-	var privateDNS map[string]string
-	if len(serviceDomains) > 0 && s.config.DNS != "" {
-		privateDNS = dnsmasq.ResolveAllWith(serviceDomains, s.config.DNS)
-	}
-
-	// Sort services by name
-	sortedServices := make([]config.Service, len(s.config.Services))
-	copy(sortedServices, s.config.Services)
-	sort.Slice(sortedServices, func(i, j int) bool {
-		return sortedServices[i].Name < sortedServices[j].Name
-	})
-
-	// Find first zone with no services (for template offer)
-	var templateZone string
-	for _, zone := range s.config.Zones {
-		hasServices := false
-		for _, svc := range s.config.Services {
-			for _, domain := range svc.Domains {
-				if domain == zone.Name || strings.HasSuffix(domain, "."+zone.Name) {
-					hasServices = true
-					break
-				}
-			}
-			if hasServices {
-				break
-			}
-		}
-		if !hasServices {
-			templateZone = zone.Name
-			break
-		}
-	}
-
-	ipv6Status := route53.CheckIPv6()
-
-	data := map[string]interface{}{
-		"Peers":           peers,
-		"Invites":         invites,
-		"Config":          s.config,
-		"Zones":           s.config.Zones,
-		"Services":        sortedServices,
-		"DNSMappings":     mappings,
-		"PublicDNS":       publicDNS,
-		"PrivateDNS":      privateDNS,
-		"InterfaceUp":     ifaceStatus.Up,
-		"InterfacePort":   ifaceStatus.Port,
-		"InterfacePubKey": ifaceStatus.PublicKey,
-		"AWSProfiles":     letsencrypt.GetAWSProfiles(),
-		"Message":         r.URL.Query().Get("msg"),
-		"Error":           r.URL.Query().Get("err"),
-		// Network IPs for display and templates
-		"NATIP":        s.config.LocalInterface,
-		"PublicIP":     s.config.PublicIP,
-		"WGGatewayIP":  s.config.GetWGGatewayIP(),
-		"TemplateZone": templateZone,
-		"CSRFToken":    s.getCSRFToken(r),
-		"IPv6Status":   ipv6Status,
-		"Version":      s.version,
-	}
-	s.templates["admin"].Execute(w, data)
-}
-
-func (s *Server) handleTest(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-		return
-	}
-
-	status := s.wg.CheckSystem(s.config.VPNRange)
-	dnsStatus := s.dns.Status()
-
-	data := map[string]interface{}{
-		"Config":    s.config,
-		"Status":    status,
-		"DNSStatus": dnsStatus,
-		"Message":   r.URL.Query().Get("msg"),
-		"Error":     r.URL.Query().Get("err"),
-		"CSRFToken": s.getCSRFToken(r),
-	}
-	s.templates["test"].Execute(w, data)
-}
-
-func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
-		return
-	}
-
-	// Server settings
-	s.config.ListenAddr = r.FormValue("listen_addr")
-	s.config.KioskURL = r.FormValue("kiosk_url")
-
-	// WireGuard settings
-	s.config.WGInterface = r.FormValue("wg_interface")
-	s.config.WGConfigPath = r.FormValue("wg_config_path")
-	s.config.ServerEndpoint = r.FormValue("server_endpoint")
-	s.config.ServerPublicKey = r.FormValue("server_public_key")
-
-	// VPN settings
-	s.config.VPNRange = r.FormValue("vpn_range")
-	s.config.DNS = r.FormValue("dns")
-	s.config.AllowedIPs = r.FormValue("allowed_ips")
-
-	// Files
-	s.config.InvitesFile = r.FormValue("invites_file")
-
-	// DNSMasq settings
-	s.config.DNSMasqEnabled = r.FormValue("dnsmasq_enabled") == "on"
-	s.config.DNSMasqConfigPath = r.FormValue("dnsmasq_config_path")
-	s.config.DNSMasqHostsPath = r.FormValue("dnsmasq_hosts_path")
-
-	// Additional interfaces for dnsmasq - split by comma
-	interfacesStr := r.FormValue("dnsmasq_interfaces")
-	var dnsInterfaces []string
-	for _, iface := range strings.Split(interfacesStr, ",") {
-		iface = strings.TrimSpace(iface)
-		if iface != "" {
-			dnsInterfaces = append(dnsInterfaces, iface)
-		}
-	}
-	s.config.DNSMasqInterfaces = dnsInterfaces
-
-	// Upstream DNS - split by comma or newline
-	upstreamStr := r.FormValue("upstream_dns")
-	var upstreamDNS []string
-	for _, str := range strings.Split(upstreamStr, ",") {
-		str = strings.TrimSpace(str)
-		if str != "" {
-			upstreamDNS = append(upstreamDNS, str)
-		}
-	}
-	if len(upstreamDNS) > 0 {
-		s.config.UpstreamDNS = upstreamDNS
-	}
-
-	if err := config.Save(s.configPath, s.config); err != nil {
-		http.Redirect(w, r, "/admin?err="+err.Error(), http.StatusSeeOther)
-		return
-	}
-
-	// Reload WireGuard config if path changed
-	s.wg = wireguard.NewConfig(s.config.WGConfigPath, s.config.WGInterface)
-	s.wg.Load()
-
-	// Re-detect local interface IP (in case interfaces changed)
-	s.config.LocalInterface = "" // Reset to force re-detection
-	s.config.EnsureLocalInterface()
-
-	// Update dnsmasq config and reload
-	allDNSInterfaces := append([]string{s.config.WGInterface}, s.config.DNSMasqInterfaces...)
-	s.dns = dnsmasq.New(s.config.DNSMasqConfigPath, s.config.DNSMasqHostsPath, allDNSInterfaces, s.config.UpstreamDNS)
-	if s.config.DNSMasqEnabled {
-		s.dns.WriteConfig()
-		s.dns.SetMappings(s.config.DeriveDNSMappings())
-		s.dns.Reload()
-	}
-
-	http.Redirect(w, r, "/admin?msg=Configuration+saved", http.StatusSeeOther)
 }
 
 // Invite management
@@ -1106,76 +811,8 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/services/sync/status", s.handleSyncStatus)
 	mux.HandleFunc("/api/v1/services/sync/cancel", s.handleSyncCancel)
 
-	// Admin routes - all wrapped with CSRF middleware
-	mux.HandleFunc("/admin", s.csrfMiddleware(s.handleAdmin))
-	mux.HandleFunc("/admin/client", s.csrfMiddleware(s.handleAddClient))
-	mux.HandleFunc("/admin/client/edit", s.csrfMiddleware(s.handleEditClient))
-	mux.HandleFunc("/admin/client/delete", s.csrfMiddleware(s.handleDeleteClient))
-	mux.HandleFunc("/admin/client/download", s.csrfMiddleware(s.handleDownload))
-	mux.HandleFunc("/admin/client/toggle-admin", s.csrfMiddleware(s.handleToggleClientAdmin))
-	mux.HandleFunc("/admin/invite", s.csrfMiddleware(s.handleCreateInvite))
-	mux.HandleFunc("/admin/invite/delete", s.csrfMiddleware(s.handleDeleteInvite))
-	mux.HandleFunc("/admin/reload", s.csrfMiddleware(s.handleReload))
-	mux.HandleFunc("/admin/config", s.csrfMiddleware(s.handleSaveConfig))
-
-	mux.HandleFunc("/admin/interface/up", s.csrfMiddleware(s.handleInterfaceUp))
-	mux.HandleFunc("/admin/enable-forwarding", s.csrfMiddleware(s.handleEnableForwarding))
-	mux.HandleFunc("/admin/add-masquerade", s.csrfMiddleware(s.handleAddMasquerade))
-
-	// Service and Zone management
-	mux.HandleFunc("/admin/service", s.csrfMiddleware(s.handleAddService))
-	mux.HandleFunc("/admin/service/edit", s.csrfMiddleware(s.handleEditService))
-	mux.HandleFunc("/admin/service/delete", s.csrfMiddleware(s.handleDeleteService))
-	mux.HandleFunc("/admin/services/sync", s.csrfMiddleware(s.handleSyncServicesStream))
-	mux.HandleFunc("/admin/services/sync/status", s.csrfMiddleware(s.handleSyncStatus))
-	mux.HandleFunc("/admin/services/sync/cancel", s.csrfMiddleware(s.handleSyncCancel))
-	mux.HandleFunc("/admin/zone", s.csrfMiddleware(s.handleAddZone))
-	mux.HandleFunc("/admin/zone/edit", s.csrfMiddleware(s.handleEditZone))
-	mux.HandleFunc("/admin/zone/delete", s.csrfMiddleware(s.handleDeleteZone))
-	mux.HandleFunc("/admin/zone/subzone", s.csrfMiddleware(s.handleAddSubZone))
-	mux.HandleFunc("/admin/zone/template", s.csrfMiddleware(s.handleApplyZoneTemplate))
-
-	// DNSMasq management
-	mux.HandleFunc("/admin/dns/reload", s.csrfMiddleware(s.handleDNSReload))
-	mux.HandleFunc("/admin/dnsmasq/start", s.csrfMiddleware(s.handleDNSMasqStart))
-	mux.HandleFunc("/admin/dnsmasq/init", s.csrfMiddleware(s.handleDNSMasqInit))
-
-	mux.HandleFunc("/admin/network", s.csrfMiddleware(s.handleNetworkMap))
-	mux.HandleFunc("/admin/setup", s.csrfMiddleware(s.handleSetup))
-	mux.HandleFunc("/admin/setup/install-requirement", s.csrfMiddleware(s.handleInstallRequirement))
-	mux.HandleFunc("/admin/setup/install-service", s.csrfMiddleware(s.handleInstallService))
-	mux.HandleFunc("/admin/setup/enable-service", s.csrfMiddleware(s.handleEnableService))
-	mux.HandleFunc("/admin/setup/create-wg-config", s.csrfMiddleware(s.handleCreateWGConfig))
-	mux.HandleFunc("/admin/setup/test-connectivity", s.csrfMiddleware(s.handleTestConnectivity))
-	mux.HandleFunc("/admin/setup/fix-wg-rules", s.csrfMiddleware(s.handleFixWGRules))
-	mux.HandleFunc("/admin/setup/fix-haproxy-logging", s.csrfMiddleware(s.handleFixHAProxyLogging))
-	mux.HandleFunc("/admin/help", s.csrfMiddleware(s.handleHelp))
-
-	mux.HandleFunc("/admin/haproxy", s.csrfMiddleware(s.handleHAProxyStatus))
-	mux.HandleFunc("/admin/haproxy/backend", s.csrfMiddleware(s.handleHAProxyAddBackend))
-	mux.HandleFunc("/admin/haproxy/backend/delete", s.csrfMiddleware(s.handleHAProxyDeleteBackend))
-	mux.HandleFunc("/admin/haproxy/write-config", s.csrfMiddleware(s.handleHAProxyWriteConfig))
-	mux.HandleFunc("/admin/haproxy/reload", s.csrfMiddleware(s.handleHAProxyReload))
-	mux.HandleFunc("/admin/haproxy/start", s.csrfMiddleware(s.handleHAProxyStart))
-	mux.HandleFunc("/admin/haproxy/settings", s.csrfMiddleware(s.handleHAProxySaveSettings))
-	mux.HandleFunc("/admin/haproxy/deploy-script", s.handleDeployScript) // public — script has no secrets
-
-	// SSL/Let's Encrypt routes
-	mux.HandleFunc("/admin/ssl/domain", s.csrfMiddleware(s.handleSSLAddDomain))
-	mux.HandleFunc("/admin/ssl/domain/delete", s.csrfMiddleware(s.handleSSLDeleteDomain))
-	mux.HandleFunc("/admin/ssl/request-cert", s.csrfMiddleware(s.handleSSLRequestCert))
-	mux.HandleFunc("/admin/ssl/package-certs", s.csrfMiddleware(s.handleSSLPackageCerts))
-	mux.HandleFunc("/admin/ssl/settings", s.csrfMiddleware(s.handleSSLSaveSettings))
-	mux.HandleFunc("/admin/ssl/cert-info", s.csrfMiddleware(s.handleSSLCertInfo))
-
-	// Domain analysis
-	mux.HandleFunc("/admin/domains", s.csrfMiddleware(s.handleDomainAnalysis))
-
-	// External DNS routes
-	mux.HandleFunc("/admin/dns", s.csrfMiddleware(s.handleDNSStatus))
-	mux.HandleFunc("/admin/dns/discover-zones", s.csrfMiddleware(s.handleDNSDiscoverZones))
-	mux.HandleFunc("/admin/dns/sync", s.csrfMiddleware(s.handleDNSSyncRecord))
-	mux.HandleFunc("/admin/dns/sync-all", s.csrfMiddleware(s.handleDNSSyncAll))
+	// Kept admin routes
+	mux.HandleFunc("/admin/haproxy/deploy-script", s.handleDeployScript) // services download this
 
 	// Backup/restore API (Bearer token auth)
 	mux.HandleFunc("/admin/backup/export", s.backupAuthMiddleware(s.handleBackupExport))
@@ -1185,14 +822,6 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mcpSrv := NewMCPServer(s, s.version)
 	mcpHandler := mcpSrv.StreamableHTTPHandler()
 	mux.Handle("/mcp", s.mcpAuthMiddleware(mcpHandler))
-
-	// Service monitoring routes
-	mux.HandleFunc("/admin/checks", s.csrfMiddleware(s.handleChecks))
-	mux.HandleFunc("/admin/checks/add", s.csrfMiddleware(s.handleAddCheck))
-	mux.HandleFunc("/admin/checks/delete", s.csrfMiddleware(s.handleDeleteCheck))
-	mux.HandleFunc("/admin/checks/toggle", s.csrfMiddleware(s.handleToggleCheck))
-	mux.HandleFunc("/admin/checks/run", s.csrfMiddleware(s.handleRunCheck))
-	mux.HandleFunc("/admin/checks/settings", s.csrfMiddleware(s.handleCheckSettings))
 
 	// API v1 routes (JSON, SameSite cookie auth)
 	mux.HandleFunc("/api/v1/auth/status", s.handleAPIAuthStatus)

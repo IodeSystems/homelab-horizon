@@ -5,11 +5,6 @@ import (
 	"strings"
 )
 
-func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	data := map[string]interface{}{"Error": ""}
-	s.templates["login"].Execute(w, data)
-}
-
 func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -27,7 +22,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 			SameSite: http.SameSiteStrictMode,
 			MaxAge:   86400,
 		})
-		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+		http.Redirect(w, r, "/app/", http.StatusSeeOther)
 		return
 	}
 
@@ -36,8 +31,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := map[string]interface{}{"Error": "Invalid token"}
-	s.templates["login"].Execute(w, data)
+	http.Error(w, "Invalid token", http.StatusUnauthorized)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {

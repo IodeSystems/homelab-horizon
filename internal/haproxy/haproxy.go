@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -221,22 +220,6 @@ func (h *HAProxy) getHAProxyStats() map[string]haStatInfo {
 	}
 
 	return result
-}
-
-func (h *HAProxy) httpCheck(server, path string) (bool, string) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	url := fmt.Sprintf("http://%s%s", server, path)
-	resp, err := client.Get(url)
-	if err != nil {
-		return false, err.Error()
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return true, ""
-	}
-
-	return false, fmt.Sprintf("HTTP %d %s", resp.StatusCode, resp.Status)
 }
 
 // SSLConfig holds SSL configuration for HAProxy
