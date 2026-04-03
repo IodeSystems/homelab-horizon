@@ -218,7 +218,7 @@ function DomainRow({
           />
         </TableCell>
         <TableCell align="right" sx={{ p: 0.5 }}>
-          {!domain.hasService && domain.hasSSLCoverage && (
+          {!domain.hasService && domain.hasSSLCoverage && !(domain.absorbedDomains && domain.absorbedDomains.length > 0) && (
             <IconButton
               size="small"
               color="error"
@@ -361,7 +361,7 @@ function DomainRow({
                     Add SSL ({domain.neededSubZoneDisplay})
                   </Button>
                 )}
-                {domain.hasSSLCoverage && !domain.hasService && (
+                {domain.hasSSLCoverage && !domain.hasService && !(domain.absorbedDomains && domain.absorbedDomains.length > 0) && (
                   <Button
                     size="small"
                     variant="outlined"
