@@ -95,6 +95,9 @@ export interface DomainResp {
   neededSubZoneDisplay: string;
   canRequestCert: boolean;
   canSyncDNS: boolean;
+  coveredBy?: string; // wildcard that covers this domain (e.g., "*.iodesystems.com")
+  isRedundant: boolean; // SubZone is redundant with a wildcard on the same zone
+  absorbedDomains?: string[]; // for wildcards: service domains this covers
 }
 export interface SSLGapResp {
   domain: string;
