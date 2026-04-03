@@ -67,7 +67,7 @@ Open `http://localhost:8080` and log in with the admin token printed in the cont
 # Build (requires Go 1.25+ and Node.js)
 make
 
-# Run (requires sudo for WireGuard and ports 80/443)
+# Run as root (needed for WireGuard, dnsmasq, HAProxy, iptables, ports 80/443, and systemd service management)
 sudo ./homelab-horizon
 ```
 
@@ -110,37 +110,85 @@ You need a domain where you control DNS. Supported providers:
    - `80/TCP` - HTTP (Let's Encrypt challenges)
    - `443/TCP` - HTTPS (reverse proxy)
 
-### Step 3: Configure Services
+### Step 3: Configure Zones & Services
 
 1. Add a DNS zone with your domain and provider credentials
-2. Add services with internal DNS (for VPN/local access) and optional external DNS
-3. Enable HAProxy for services needing SSL termination
-4. Create VPN clients for remote access
-5. Set up health checks for monitoring
+2. Add services — each gets a domain, internal DNS, optional external DNS, and optional HAProxy backend
+3. Click "Sync DNS, SSL & HAProxy" to apply everything
+
+## Zones & Domains
+
+A **zone** represents a domain you own (e.g., `example.com`) and connects it to your DNS provider. Once a zone is configured, you can add services under it with any subdomain.
+
+### Wildcard SSL
+
+Each zone automatically gets a wildcard SSL certificate (`*.example.com`) via Let's Encrypt DNS-01 challenges. This means any service like `grafana.example.com` or `wiki.example.com` gets valid HTTPS with no per-service cert management.
+
+For deeper subdomains, add **sub-zones**. For example, adding `"vpn"` as a sub-zone to `example.com` gets you a `*.vpn.example.com` wildcard — so VPN client names like `carl.vpn.example.com` also get valid SSL.
+
+### Adding Services
+
+Once your zone is set up, adding a service is straightforward:
+
+- **Name**: human-readable identifier (e.g., `grafana`)
+- **Domains**: one or more FQDNs under your zone (e.g., `grafana.example.com`)
+- **Internal DNS**: the LAN IP that VPN/local clients should resolve to (e.g., `192.168.1.50`)
+- **External DNS**: enables public DNS records pointing to your public IP (auto-detected)
+- **Proxy**: HAProxy backend (`host:port`) — can be a LAN service or an external host
+
+Services don't have to be on your local network. The proxy backend can point to any reachable host:port — a Raspberry Pi on your LAN, a VM in the cloud, or a container on the same machine.
 
 ## Architecture
 
 ```
-Internet                        Your Network
-    |                               |
-    v                               v
-[Router] -----> [Homelab Horizon] <---- [VPN Clients]
-    |               |    |    |
-    |               |    |    +-- dnsmasq (internal DNS)
-    |               |    +------- HAProxy (reverse proxy + SSL)
-    |               +------------ WireGuard (VPN server)
-    |
-    +-- Port 51820 (WireGuard)
-    +-- Port 80/443 (HAProxy)
+                    Internet
+                       |
+           +-----------+-----------+
+           |                       |
+    Remote VPN Clients      Public HTTPS Traffic
+    (phone, laptop, etc.)   (grafana.example.com)
+           |                       |
+           | :51820/UDP            | :80/:443
+           v                       v
+       +-------+              +--------+
+       |Router |------------->| Router |
+       +-------+              +--------+
+           |                       |
+           v                       v
+    +----------------------------------------------+
+    |            Homelab Horizon                    |
+    |                                              |
+    |  WireGuard ---- dnsmasq ---- HAProxy + SSL   |
+    |  (VPN server)  (split DNS)  (reverse proxy)  |
+    +----------------------------------------------+
+           |              |              |
+           v              v              v
+    +-----------+  +-----------+  +-----------+
+    | Local VPN |  | LAN       |  | External  |
+    | Clients   |  | Services  |  | Services  |
+    | (on-site) |  |           |  |           |
+    +-----------+  | grafana   |  | cloud-app |
+                   | :3000     |  | :8080     |
+                   | nextcloud |  +-----------+
+                   | :8080     |
+                   | NAS :445  |
+                   +-----------+
 ```
+
+VPN clients can connect from anywhere — inside your network or remotely over the internet. Services can be local LAN hosts (e.g., `192.168.1.50:3000`) or external targets (e.g., a cloud VM). HAProxy terminates SSL and proxies to the configured backend, wherever it lives.
 
 ### Split-Horizon DNS
 
+The same domain resolves differently depending on where you are:
+
 | Location | DNS Resolution | Path |
 |----------|---------------|------|
-| On VPN | Internal IP (e.g., 192.168.1.50) | Direct to service |
+| On VPN (remote) | Internal IP (e.g., 192.168.1.50) | VPN tunnel -> direct to service |
+| On VPN (local) | Internal IP (e.g., 192.168.1.50) | Direct to service |
 | Local Network | Internal IP (via dnsmasq) | Direct to service |
 | Public Internet | Your Public IP | Router -> HAProxy -> Service |
+
+This means `grafana.example.com` works with valid HTTPS from everywhere — your couch, your phone on cellular, or the public internet.
 
 ## Building
 
@@ -296,8 +344,8 @@ Certificates cover:
 ## Requirements
 
 - Ubuntu/Debian Linux
-- Go 1.25+ and Node.js (for building)
-- Root access (for WireGuard, ports 80/443, iptables)
+- Go 1.25+ and Node.js (for building from source)
+- Root access — needed for WireGuard, dnsmasq, HAProxy, iptables, systemd service management, and binding ports 80/443
 
 Runtime packages (auto-installed when `auto_heal` is enabled):
 - `wireguard-tools` - VPN management
