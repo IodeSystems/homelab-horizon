@@ -182,11 +182,6 @@ function DomainRow({
             </Typography>
           )}
         </TableCell>
-        <TableCell>
-          <Typography variant="body2" color="text.secondary">
-            {domain.zoneName}
-          </Typography>
-        </TableCell>
         <TableCell align="center">
           <StatusDot
             configured={domain.hasInternalDNS}
@@ -232,7 +227,7 @@ function DomainRow({
         </TableCell>
       </TableRow>
       <TableRow>
-        <TableCell sx={{ py: 0 }} colSpan={8}>
+        <TableCell sx={{ py: 0 }} colSpan={7}>
           <Collapse in={open} timeout="auto" unmountOnExit>
             <Box
               sx={{
@@ -505,37 +500,78 @@ function DomainsPage() {
         </Alert>
       )}
 
-      <TableContainer component={Paper}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell sx={{ width: 40 }} />
-              <TableCell>Domain</TableCell>
-              <TableCell>Zone</TableCell>
-              <TableCell align="center">Int DNS</TableCell>
-              <TableCell align="center">Ext DNS</TableCell>
-              <TableCell align="center">Proxy</TableCell>
-              <TableCell align="center">HTTPS</TableCell>
-              <TableCell sx={{ width: 50 }} />
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {data.domains.length === 0 ? (
+      {(() => {
+        // Group domains by zone and sort canonically within each group.
+        // Canonical sort: split on ".", reverse to get TLD-first, then
+        // compare segments descending so deeper subdomains sort naturally.
+        const byZone = new Map<string, DomainAnalysis[]>();
+        for (const d of data.domains) {
+          const zone = d.zoneName || "(no zone)";
+          if (!byZone.has(zone)) byZone.set(zone, []);
+          byZone.get(zone)!.push(d);
+        }
+
+        const canonicalKey = (domain: string) =>
+          domain.split(".").reverse().join(".");
+
+        for (const domains of byZone.values()) {
+          domains.sort((a, b) =>
+            canonicalKey(b.domain).localeCompare(canonicalKey(a.domain)),
+          );
+        }
+
+        // Sort zone groups by zone name
+        const zones = [...byZone.entries()].sort((a, b) =>
+          a[0].localeCompare(b[0]),
+        );
+
+        return zones.map(([zone, domains]) => (
+          <Box key={zone} sx={{ mb: 3 }}>
+            <Typography
+              variant="subtitle1"
+              sx={{ fontWeight: 600, mb: 1, color: "text.secondary" }}
+            >
+              {zone}
+            </Typography>
+            <TableContainer component={Paper}>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ width: 40 }} />
+                    <TableCell>Domain</TableCell>
+                    <TableCell align="center">Int DNS</TableCell>
+                    <TableCell align="center">Ext DNS</TableCell>
+                    <TableCell align="center">Proxy</TableCell>
+                    <TableCell align="center">HTTPS</TableCell>
+                    <TableCell sx={{ width: 50 }} />
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {domains.map((d) => (
+                    <DomainRow key={d.domain} domain={d} onSnack={showSnack} />
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Box>
+        ));
+      })()}
+
+      {data.domains.length === 0 && (
+        <TableContainer component={Paper}>
+          <Table>
+            <TableBody>
               <TableRow>
-                <TableCell colSpan={8} align="center">
+                <TableCell colSpan={7} align="center">
                   <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
                     No domains found.
                   </Typography>
                 </TableCell>
               </TableRow>
-            ) : (
-              data.domains.map((d) => (
-                <DomainRow key={d.domain} domain={d} onSnack={showSnack} />
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
 
       {/* Add Domain dialog */}
       <Dialog open={addOpen} onClose={() => setAddOpen(false)} maxWidth="sm" fullWidth>
