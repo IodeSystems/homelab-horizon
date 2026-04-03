@@ -14,20 +14,23 @@ func (s *Server) setupSPA(mux *http.ServeMux) {
 		return
 	}
 
-	fileServer := http.StripPrefix("/app", http.FileServer(http.FS(distFS)))
-
 	mux.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {
-		// Check if the requested file exists in the embedded FS
+		// Strip /app/ prefix to get the path within dist/
 		path := strings.TrimPrefix(r.URL.Path, "/app/")
 		if path == "" {
 			path = "index.html"
 		}
 
-		if _, err := fs.Stat(distFS, path); err != nil {
-			// File not found — serve index.html for SPA client-side routing
-			r.URL.Path = "/app/index.html"
+		// If the file exists in the embedded FS, serve it directly
+		if f, err := distFS.Open(path); err == nil {
+			f.Close()
+			// Serve the static file
+			http.ServeFileFS(w, r, distFS, path)
+			return
 		}
 
-		fileServer.ServeHTTP(w, r)
+		// File not found — serve index.html for SPA client-side routing
+		// This preserves the URL so TanStack Router picks up the correct route
+		http.ServeFileFS(w, r, distFS, "index.html")
 	})
 }
