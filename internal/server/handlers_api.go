@@ -289,6 +289,58 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Compute wildcard relationships: CoveredBy, IsRedundant, AbsorbedDomains
+	// For each zone, find wildcard SubZones and mark which domains they absorb
+	for _, zone := range s.config.Zones {
+		// Collect wildcard patterns on this zone
+		var wildcardPatterns []string
+		for _, sub := range zone.SubZones {
+			if strings.HasPrefix(sub, "*") {
+				if sub == "*" {
+					wildcardPatterns = append(wildcardPatterns, "*."+zone.Name)
+				} else {
+					wildcardPatterns = append(wildcardPatterns, sub+"."+zone.Name)
+				}
+			}
+		}
+
+		for _, wp := range wildcardPatterns {
+			wpDomain := domainMap[wp]
+			if wpDomain == nil {
+				continue
+			}
+
+			// Find all domains this wildcard absorbs
+			var absorbed []string
+			for _, dr := range domainMap {
+				if dr.Domain == wp || dr.ZoneName != zone.Name {
+					continue
+				}
+				if domainMatchesPattern(dr.Domain, wp) {
+					dr.CoveredBy = wp
+					absorbed = append(absorbed, dr.Domain)
+				}
+			}
+			if len(absorbed) > 0 {
+				sort.Strings(absorbed)
+				wpDomain.AbsorbedDomains = absorbed
+			}
+
+			// Mark non-wildcard SubZones redundant if covered by this wildcard
+			for _, sub := range zone.SubZones {
+				if strings.HasPrefix(sub, "*") || sub == "" {
+					continue
+				}
+				expanded := sub + "." + zone.Name
+				if domainMatchesPattern(expanded, wp) {
+					if dr, ok := domainMap[expanded]; ok {
+						dr.IsRedundant = true
+					}
+				}
+			}
+		}
+	}
+
 	// Build zone SSL statuses
 	var zoneStatuses []apitypes.ZoneSSLResp
 	for _, zone := range s.config.Zones {

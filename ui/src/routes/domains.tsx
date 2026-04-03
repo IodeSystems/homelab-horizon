@@ -165,9 +165,22 @@ function DomainRow({
           </IconButton>
         </TableCell>
         <TableCell>
-          <Typography variant="body2" sx={{ fontWeight: 600 }}>
-            {domain.domain}
-          </Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              {domain.domain}
+            </Typography>
+            {domain.isRedundant && (
+              <Chip label="redundant" size="small" color="warning" variant="outlined" sx={{ fontSize: "0.7rem", height: 20 }} />
+            )}
+            {domain.absorbedDomains && domain.absorbedDomains.length > 0 && (
+              <Chip label={`covers ${domain.absorbedDomains.length}`} size="small" color="info" variant="outlined" sx={{ fontSize: "0.7rem", height: 20 }} />
+            )}
+          </Box>
+          {domain.coveredBy && !domain.hasService && (
+            <Typography variant="caption" color="text.secondary">
+              covered by {domain.coveredBy}
+            </Typography>
+          )}
         </TableCell>
         <TableCell>
           <Typography variant="body2" color="text.secondary">
@@ -239,6 +252,19 @@ function DomainRow({
                   Zone SSL: <StatusDot configured={domain.zoneHasSSL} detected={domain.zoneHasSSL} /> {domain.zoneHasSSL ? "Enabled" : "Disabled"}
                 </Typography>
               </Paper>
+
+              {domain.absorbedDomains && domain.absorbedDomains.length > 0 && (
+                <Paper variant="outlined" sx={{ p: 2, bgcolor: "rgba(255,255,255,0.02)" }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1, textTransform: "uppercase", letterSpacing: 1 }}>
+                    Covers ({domain.absorbedDomains.length} domains)
+                  </Typography>
+                  {domain.absorbedDomains.map((d) => (
+                    <Typography key={d} variant="body2" sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
+                      {d}
+                    </Typography>
+                  ))}
+                </Paper>
+              )}
 
               <Paper variant="outlined" sx={{ p: 2, bgcolor: "rgba(255,255,255,0.02)" }}>
                 <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1, textTransform: "uppercase", letterSpacing: 1 }}>

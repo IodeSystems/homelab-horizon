@@ -104,8 +104,11 @@ type DomainResp struct {
 	CanEnableHTTPS       bool   `json:"canEnableHTTPS"`
 	NeededSubZone        string `json:"neededSubZone"`
 	NeededSubZoneDisplay string `json:"neededSubZoneDisplay"`
-	CanRequestCert       bool   `json:"canRequestCert"`
-	CanSyncDNS           bool   `json:"canSyncDNS"`
+	CanRequestCert       bool     `json:"canRequestCert"`
+	CanSyncDNS           bool     `json:"canSyncDNS"`
+	CoveredBy            string   `json:"coveredBy,omitempty"`     // wildcard that covers this domain (e.g., "*.iodesystems.com")
+	IsRedundant          bool     `json:"isRedundant"`             // SubZone is redundant with a wildcard on the same zone
+	AbsorbedDomains      []string `json:"absorbedDomains,omitempty"` // for wildcards: service domains this covers
 }
 
 type SSLGapResp struct {
