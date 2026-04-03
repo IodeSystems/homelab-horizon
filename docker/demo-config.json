@@ -1,0 +1,101 @@
+{
+  "listen_addr": ":8080",
+  "auto_heal": true,
+  "kiosk_url": "https://vpn.example.com",
+
+  "wg_interface": "wg0",
+  "wg_config_path": "/etc/wireguard/wg0.conf",
+  "invites_file": "/etc/homelab-horizon/invites.txt",
+  "server_endpoint": "vpn.example.com:51820",
+  "vpn_range": "10.100.0.0/24",
+  "dns": "10.100.0.1",
+
+  "dnsmasq_enabled": true,
+  "dnsmasq_config_path": "/etc/dnsmasq.d/wg-vpn.conf",
+  "dnsmasq_hosts_path": "/etc/dnsmasq.d/wg-hosts.conf",
+  "upstream_dns": ["1.1.1.1", "8.8.8.8"],
+
+  "haproxy_enabled": true,
+  "haproxy_config_path": "/etc/haproxy/haproxy.cfg",
+  "haproxy_http_port": 80,
+  "haproxy_https_port": 443,
+
+  "ssl_enabled": true,
+  "ssl_cert_dir": "/etc/letsencrypt",
+  "ssl_haproxy_cert_dir": "/etc/haproxy/certs",
+
+  "zones": [
+    {
+      "name": "example.com",
+      "zone_id": "ZDEMO1234567890",
+      "ssl": {
+        "enabled": true,
+        "email": "admin@example.com"
+      },
+      "sub_zones": ["vpn"]
+    }
+  ],
+
+  "services": [
+    {
+      "name": "grafana",
+      "domains": ["grafana.example.com"],
+      "internal_dns": {"ip": "192.168.1.50"},
+      "external_dns": {"ttl": 300},
+      "proxy": {
+        "backend": "192.168.1.50:3000",
+        "health_check": {"path": "/api/health"}
+      }
+    },
+    {
+      "name": "nextcloud",
+      "domains": ["cloud.example.com"],
+      "internal_dns": {"ip": "192.168.1.51"},
+      "external_dns": {"ttl": 300},
+      "proxy": {
+        "backend": "192.168.1.51:8080",
+        "health_check": {"path": "/status.php"}
+      }
+    },
+    {
+      "name": "home-assistant",
+      "domains": ["ha.example.com"],
+      "internal_dns": {"ip": "192.168.1.52"},
+      "proxy": {
+        "backend": "192.168.1.52:8123",
+        "health_check": {"path": "/api/"},
+        "internal_only": true
+      }
+    },
+    {
+      "name": "jellyfin",
+      "domains": ["media.example.com"],
+      "internal_dns": {"ip": "192.168.1.53"},
+      "external_dns": {"ttl": 300},
+      "proxy": {
+        "backend": "192.168.1.53:8096",
+        "health_check": {"path": "/health"}
+      }
+    },
+    {
+      "name": "vaultwarden",
+      "domains": ["vault.example.com"],
+      "internal_dns": {"ip": "192.168.1.54"},
+      "external_dns": {"ttl": 300},
+      "proxy": {
+        "backend": "192.168.1.54:8080"
+      }
+    },
+    {
+      "name": "internal-wiki",
+      "domains": ["wiki.example.com"],
+      "internal_dns": {"ip": "192.168.1.60"}
+    }
+  ],
+
+  "ntfy_url": "https://ntfy.sh/homelab-demo-alerts",
+  "service_checks": [
+    {"name": "Grafana Health", "type": "http", "target": "http://192.168.1.50:3000/api/health", "interval": 300, "enabled": true},
+    {"name": "NAS Ping", "type": "ping", "target": "192.168.1.100", "interval": 60, "enabled": true}
+  ]
+}
