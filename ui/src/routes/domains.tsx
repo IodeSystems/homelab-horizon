@@ -32,11 +32,10 @@ import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import {
   useDomains,
-  useSyncDNS,
-  useSyncAllDNS,
   useAddDomainSSL,
   useRemoveDomainSSL,
 } from "../api/hooks";
+import { useSyncContext } from "../components/SyncProvider";
 import type { DomainAnalysis } from "../api/types";
 
 /**
@@ -109,24 +108,8 @@ function DomainRow({
   onSnack: (message: string, severity: "success" | "error") => void;
 }) {
   const [open, setOpen] = useState(false);
-  const syncDNS = useSyncDNS();
   const addSSL = useAddDomainSSL();
   const removeSSL = useRemoveDomainSSL();
-
-  const handleSyncDNS = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    syncDNS.mutate(domain.domain, {
-      onSuccess: (data) => {
-        onSnack(
-          data.changed
-            ? `DNS record updated for ${domain.domain}`
-            : `DNS already up to date for ${domain.domain}`,
-          "success",
-        );
-      },
-      onError: (err) => onSnack(err.message, "error"),
-    });
-  };
 
   const handleAddSSL = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -149,8 +132,7 @@ function DomainRow({
     });
   };
 
-  const anyPending =
-    syncDNS.isPending || addSSL.isPending || removeSSL.isPending;
+  const anyPending = addSSL.isPending || removeSSL.isPending;
 
   return (
     <>
@@ -332,19 +314,8 @@ function DomainRow({
             </Box>
 
             {/* Action buttons */}
-            {(domain.canSyncDNS || domain.canEnableHTTPS || (domain.hasSSLCoverage && !domain.hasService)) && (
+            {(domain.canEnableHTTPS || (domain.hasSSLCoverage && !domain.hasService)) && (
               <Box sx={{ display: "flex", gap: 1, pb: 2, flexWrap: "wrap" }}>
-                {domain.canSyncDNS && (
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    startIcon={syncDNS.isPending ? <CircularProgress size={16} /> : <SyncIcon />}
-                    onClick={handleSyncDNS}
-                    disabled={anyPending}
-                  >
-                    Sync External DNS
-                  </Button>
-                )}
                 {domain.canEnableHTTPS && (
                   <Button
                     size="small"
@@ -379,7 +350,7 @@ function DomainRow({
 
 function DomainsPage() {
   const { data, isLoading, error } = useDomains();
-  const syncAllDNS = useSyncAllDNS();
+  const { startSync, isSyncing } = useSyncContext();
   const addSSLMutation = useAddDomainSSL();
   const [addOpen, setAddOpen] = useState(false);
   const [addDomain, setAddDomain] = useState("");
@@ -401,15 +372,7 @@ function DomainsPage() {
   };
 
   const handleSyncAll = () => {
-    syncAllDNS.mutate(undefined, {
-      onSuccess: (data) => {
-        showSnack(
-          `DNS sync complete: ${data.updated} updated, ${data.failed} failed`,
-          data.failed > 0 ? "error" : "success",
-        );
-      },
-      onError: (err) => showSnack(err.message, "error"),
-    });
+    startSync();
   };
 
   if (isLoading) {
@@ -435,11 +398,11 @@ function DomainsPage() {
         <Box sx={{ display: "flex", gap: 1 }}>
           <Button
             variant="outlined"
-            startIcon={syncAllDNS.isPending ? <CircularProgress size={16} /> : <SyncIcon />}
+            startIcon={isSyncing ? <CircularProgress size={16} /> : <SyncIcon />}
             onClick={handleSyncAll}
-            disabled={syncAllDNS.isPending}
+            disabled={isSyncing}
           >
-            {syncAllDNS.isPending ? "Syncing..." : "Sync All DNS"}
+            {isSyncing ? "Syncing..." : "Sync"}
           </Button>
           <Button
             variant="contained"

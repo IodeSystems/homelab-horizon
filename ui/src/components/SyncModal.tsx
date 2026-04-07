@@ -83,11 +83,18 @@ export function useSyncModal() {
     };
   }, [queryClient]);
 
+  const [confirming, setConfirming] = useState(false);
+
   const startSync = useCallback(() => {
+    setConfirming(true);
+    setOpen(true);
+  }, []);
+
+  const confirmSync = useCallback(() => {
+    setConfirming(false);
     setLog([]);
     setDone(false);
     setSuccess(false);
-    setOpen(true);
     connectToStream();
   }, [connectToStream]);
 
@@ -114,7 +121,7 @@ export function useSyncModal() {
     };
   }, []);
 
-  return { open, log, done, success, startSync, cancelSync, dismiss };
+  return { open, log, done, success, confirming, startSync, confirmSync, cancelSync, dismiss };
 }
 
 function levelColor(level: string): string {
@@ -137,6 +144,8 @@ export default function SyncModal({
   log,
   done,
   success,
+  confirming,
+  onConfirm,
   onCancel,
   onDismiss,
 }: {
@@ -144,6 +153,8 @@ export default function SyncModal({
   log: SyncLogEntry[];
   done: boolean;
   success: boolean;
+  confirming: boolean;
+  onConfirm: () => void;
   onCancel: () => void;
   onDismiss: () => void;
 }) {
@@ -153,6 +164,42 @@ export default function SyncModal({
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [log]);
+
+  if (confirming) {
+    return (
+      <Dialog
+        open={open}
+        maxWidth="sm"
+        fullWidth
+        onClose={onDismiss}
+        slotProps={{ backdrop: { sx: { backdropFilter: "blur(4px)" } } }}
+      >
+        <DialogTitle>Sync All Services</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            This will run a full sync across all subsystems:
+          </Typography>
+          <Box component="ul" sx={{ m: 0, pl: 2 }}>
+            <li><Typography variant="body2">Update internal DNS (dnsmasq)</Typography></li>
+            <li><Typography variant="body2">Sync external DNS records (Route53)</Typography></li>
+            <li><Typography variant="body2">Request or renew SSL certificates (Let's Encrypt)</Typography></li>
+            <li><Typography variant="body2">Regenerate and reload HAProxy configuration</Typography></li>
+          </Box>
+          <Typography variant="body2" color="warning.main" sx={{ mt: 2 }}>
+            DNS and SSL changes may not be easily reversible. External DNS records will be
+            updated to match current configuration, and new certificates will be requested
+            for any uncovered domains.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={onDismiss}>Cancel</Button>
+          <Button onClick={onConfirm} variant="contained" color="primary">
+            Start Sync
+          </Button>
+        </DialogActions>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog

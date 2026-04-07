@@ -146,34 +146,6 @@ export function useDeleteService() {
 
 // --- DNS mutations ---
 
-export function useSyncDNS() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (domain: string) =>
-      apiFetch<{ ok: boolean; changed: boolean }>("/dns/sync", {
-        method: "POST",
-        body: JSON.stringify({ domain }),
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["domains"] });
-    },
-  });
-}
-
-export function useSyncAllDNS() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () =>
-      apiFetch<{ ok: boolean; updated: number; failed: number }>(
-        "/dns/sync-all",
-        { method: "POST" },
-      ),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["domains"] });
-    },
-  });
-}
-
 // --- Zone mutations ---
 
 export function useAddSubZone() {
