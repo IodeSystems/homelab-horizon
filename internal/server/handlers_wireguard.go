@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"homelab-horizon/internal/config"
 	"homelab-horizon/internal/qr"
 	"homelab-horizon/internal/wireguard"
 )
@@ -91,6 +92,62 @@ const inviteTemplateHTML = `<!DOCTYPE html>
 
 var inviteTemplateParsed = template.Must(template.New("invite").Parse(inviteTemplateHTML))
 
+const shareTemplateHTML = `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VPN Config - Homelab Horizon</title>
+    <style>` + inviteBaseCSS + `
+    .invite-container { max-width: 500px; margin: 2rem auto; }
+    </style>
+</head>
+<body>
+    <div class="invite-container">
+        <h1>WireGuard VPN Config</h1>
+        <p style="margin-bottom: 1rem;">Configuration for <strong>{{.Name}}</strong></p>
+
+        {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+
+        {{if .Config}}
+        <div class="card">
+            <div class="info">
+                <strong>Important:</strong> Save this configuration now. This link may be revoked at any time.
+            </div>
+            <h2>Scan QR Code (Mobile)</h2>
+            <div style="background: white; padding: 1rem; border-radius: 8px; display: inline-block; margin-bottom: 1rem;">
+                {{if .QRCode}}{{.QRCode}}{{end}}
+            </div>
+            <h2>Or Download Config File</h2>
+            <pre>{{.Config}}</pre>
+            <form method="POST" action="/share/{{.Token}}/download">
+                <input type="hidden" name="config" value="{{.Config}}">
+                <input type="hidden" name="name" value="{{.Name}}">
+                <button type="submit" class="success">Download .conf File</button>
+            </form>
+        </div>
+        <div class="card">
+            <h2>Setup Instructions</h2>
+            <ol style="padding-left: 1.5rem; line-height: 1.8;">
+                <li>Download the configuration file or scan the QR code</li>
+                <li>Install WireGuard on your device:
+                    <ul style="padding-left: 1rem; margin: 0.5rem 0;">
+                        <li><strong>Windows/Mac:</strong> <a href="https://www.wireguard.com/install/" target="_blank">wireguard.com/install</a></li>
+                        <li><strong>Linux:</strong> <code>apt install wireguard</code></li>
+                        <li><strong>iOS/Android:</strong> App Store / Play Store</li>
+                    </ul>
+                </li>
+                <li>Import the configuration file into WireGuard</li>
+                <li>Connect and enjoy!</li>
+            </ol>
+        </div>
+        {{end}}
+    </div>
+</body>
+</html>`
+
+var shareTemplateParsed = template.Must(template.New("share").Parse(shareTemplateHTML))
+
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -168,7 +225,12 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Invited peers default to vpn-only (admin can upgrade later)
+		s.config.SetPeerProfile(name, config.ProfileVPNOnly)
+		config.Save(s.configPath, s.config)
+
 		s.wg.Reload()
+		s.rebuildWGForwardChain()
 		s.removeInvite(token)
 
 		clientConfig := wireguard.GenerateClientConfig(
@@ -177,7 +239,7 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 			s.config.ServerPublicKey,
 			s.config.ServerEndpoint,
 			s.config.DNS,
-			s.config.GetAllowedIPs(),
+			s.config.GetAllowedIPsForProfile(config.ProfileVPNOnly),
 		)
 
 		qrCode := qr.GenerateSVG(clientConfig, 256)
@@ -196,4 +258,36 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 		"Token": token,
 	}
 	inviteTemplateParsed.Execute(w, data)
+}
+
+func (s *Server) handleConfigSharePage(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimPrefix(r.URL.Path, "/share/")
+	token = strings.TrimSuffix(token, "/download")
+
+	s.configSharesMu.Lock()
+	share, ok := s.configShares[token]
+	s.configSharesMu.Unlock()
+
+	if !ok {
+		data := map[string]interface{}{
+			"Error": "Invalid or expired share link",
+			"Token": token,
+			"Name":  "",
+		}
+		shareTemplateParsed.Execute(w, data)
+		return
+	}
+
+	if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/download") {
+		s.handleDownload(w, r)
+		return
+	}
+
+	data := map[string]interface{}{
+		"Token":  token,
+		"Name":   share.PeerName,
+		"Config": share.Config,
+		"QRCode": template.HTML(share.QRCode),
+	}
+	shareTemplateParsed.Execute(w, data)
 }

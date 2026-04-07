@@ -307,6 +307,45 @@ func (w *WGConfig) UpdatePeer(publicKey, name, allowedIPs string) error {
 	return nil
 }
 
+// ReplacePeerKey replaces a peer's public key in the config file and in-memory state.
+func (w *WGConfig) ReplacePeerKey(oldPubKey, newPubKey string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	data, err := os.ReadFile(w.path)
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(string(data), "\n")
+	found := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "PublicKey") && extractValue(trimmed) == oldPubKey {
+			lines[i] = "PublicKey = " + newPubKey
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("peer not found")
+	}
+
+	if err := os.WriteFile(w.path, []byte(strings.Join(lines, "\n")), 0600); err != nil {
+		return err
+	}
+
+	for i := range w.peers {
+		if w.peers[i].PublicKey == oldPubKey {
+			w.peers[i].PublicKey = newPubKey
+			break
+		}
+	}
+
+	return nil
+}
+
 func (w *WGConfig) RemovePeer(publicKey string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -553,6 +592,116 @@ func ExpectedPostUp(outIface string) string {
 // ExpectedPostDown returns the PostDown line we'd generate for a new config with the given output interface.
 func ExpectedPostDown(outIface string) string {
 	return fmt.Sprintf("iptables -D FORWARD -i %%i -j ACCEPT; iptables -D FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE", outIface)
+}
+
+const forwardChainName = "WG-FORWARD"
+
+// peerIP extracts the first /32 IP from a peer's AllowedIPs string
+func peerIP(allowedIPs string) string {
+	for _, part := range strings.Split(allowedIPs, ",") {
+		part = strings.TrimSpace(part)
+		if strings.HasSuffix(part, "/32") {
+			return strings.TrimSuffix(part, "/32")
+		}
+	}
+	// Fallback: take IP from first entry
+	parts := strings.Split(strings.TrimSpace(allowedIPs), "/")
+	if len(parts) > 0 {
+		return parts[0]
+	}
+	return ""
+}
+
+// SetupForwardChain creates the WG-FORWARD chain, adds the jump rule, and populates per-peer rules.
+// Called once at server startup.
+func SetupForwardChain(wgInterface string, peers []Peer, profiles map[string]string, vpnRange, lanCIDR string) error {
+	// Create chain (ignore error if already exists)
+	exec.Command("iptables", "-N", forwardChainName).Run()
+
+	// Check if jump rule already exists, add if not
+	if err := exec.Command("iptables", "-C", "FORWARD", "-i", wgInterface, "-j", forwardChainName).Run(); err != nil {
+		if out, err := exec.Command("iptables", "-I", "FORWARD", "1", "-i", wgInterface, "-j", forwardChainName).CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to add FORWARD jump: %s: %w", out, err)
+		}
+	}
+
+	// Ensure RELATED,ESTABLISHED rule for return traffic
+	if err := exec.Command("iptables", "-C", "FORWARD", "-o", wgInterface, "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run(); err != nil {
+		exec.Command("iptables", "-I", "FORWARD", "2", "-o", wgInterface, "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run()
+	}
+
+	return RebuildForwardChain(peers, profiles, vpnRange, lanCIDR)
+}
+
+// TeardownForwardChain removes the jump rule, flushes and deletes the chain.
+func TeardownForwardChain(wgInterface string) error {
+	exec.Command("iptables", "-D", "FORWARD", "-i", wgInterface, "-j", forwardChainName).Run()
+	exec.Command("iptables", "-F", forwardChainName).Run()
+	exec.Command("iptables", "-X", forwardChainName).Run()
+	return nil
+}
+
+// RebuildForwardChain flushes and repopulates the WG-FORWARD chain with per-peer rules.
+// Called whenever peers or profiles change.
+func RebuildForwardChain(peers []Peer, profiles map[string]string, vpnRange, lanCIDR string) error {
+	// Flush existing rules
+	if out, err := exec.Command("iptables", "-F", forwardChainName).CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to flush %s: %s: %w", forwardChainName, out, err)
+	}
+
+	if profiles == nil {
+		profiles = map[string]string{}
+	}
+
+	// Add per-peer rules
+	for _, p := range peers {
+		ip := peerIP(p.AllowedIPs)
+		if ip == "" {
+			continue
+		}
+		profile := profiles[p.Name]
+		if profile == "" {
+			profile = "lan-access"
+		}
+
+		switch profile {
+		case "full-tunnel":
+			// Allow all traffic from this peer
+			exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "ACCEPT").Run()
+		case "vpn-only":
+			// Allow only VPN range
+			if vpnRange != "" {
+				exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", vpnRange, "-j", "ACCEPT").Run()
+			}
+			exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "DROP").Run()
+		default: // lan-access
+			// Allow VPN range + LAN
+			if vpnRange != "" {
+				exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", vpnRange, "-j", "ACCEPT").Run()
+			}
+			if lanCIDR != "" {
+				exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", lanCIDR, "-j", "ACCEPT").Run()
+			}
+			exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "DROP").Run()
+		}
+	}
+
+	// Default: drop anything not matched (unknown source IPs)
+	exec.Command("iptables", "-A", forwardChainName, "-j", "DROP").Run()
+
+	return nil
+}
+
+// ExpectedPostUpWithChain returns PostUp commands that use the WG-FORWARD chain approach.
+func ExpectedPostUpWithChain(outIface string) string {
+	return fmt.Sprintf("iptables -N %s 2>/dev/null; iptables -I FORWARD 1 -i %%i -j %s; iptables -I FORWARD 2 -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -I POSTROUTING 1 -o %s -j MASQUERADE",
+		forwardChainName, forwardChainName, outIface)
+}
+
+// ExpectedPostDownWithChain returns PostDown commands that tear down the WG-FORWARD chain.
+func ExpectedPostDownWithChain(outIface string) string {
+	return fmt.Sprintf("iptables -D FORWARD -i %%i -j %s; iptables -D FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE; iptables -F %s; iptables -X %s",
+		forwardChainName, outIface, forwardChainName, forwardChainName)
 }
 
 // UpdateInterfaceRules rewrites PostUp and PostDown in the config file, preserving everything else.

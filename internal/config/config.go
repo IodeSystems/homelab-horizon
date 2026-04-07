@@ -12,6 +12,13 @@ import (
 	"strings"
 )
 
+// Routing profile constants for WireGuard peers
+const (
+	ProfileLanAccess  = "lan-access"
+	ProfileFullTunnel = "full-tunnel"
+	ProfileVPNOnly    = "vpn-only"
+)
+
 // DNSProviderType identifies the DNS provider for ACME challenges and DNS management
 type DNSProviderType string
 
@@ -157,6 +164,9 @@ type Config struct {
 
 	// VPN-based admin authentication
 	VPNAdmins []string `json:"vpn_admins,omitempty"` // Client names with admin access via VPN IP
+
+	// Per-peer routing profiles: "lan-access" (default), "full-tunnel", "vpn-only"
+	VPNProfiles map[string]string `json:"vpn_profiles,omitempty"`
 
 	// IP banning
 	IPBans []IPBan `json:"ip_bans,omitempty"`
@@ -633,6 +643,61 @@ func (c *Config) GetAllowedIPs() string {
 		return c.AllowedIPs
 	}
 	return c.DeriveAllowedIPs()
+}
+
+// GetPeerProfile returns the routing profile for a peer, defaulting to "lan-access"
+func (c *Config) GetPeerProfile(name string) string {
+	if c.VPNProfiles != nil {
+		if p, ok := c.VPNProfiles[name]; ok && p != "" {
+			return p
+		}
+	}
+	return ProfileLanAccess
+}
+
+// SetPeerProfile sets the routing profile for a peer
+func (c *Config) SetPeerProfile(name, profile string) {
+	if c.VPNProfiles == nil {
+		c.VPNProfiles = make(map[string]string)
+	}
+	if profile == "" || profile == ProfileLanAccess {
+		delete(c.VPNProfiles, name)
+	} else {
+		c.VPNProfiles[name] = profile
+	}
+}
+
+// RenamePeerProfile updates the profile map key when a peer is renamed
+func (c *Config) RenamePeerProfile(oldName, newName string) {
+	if c.VPNProfiles == nil {
+		return
+	}
+	if p, ok := c.VPNProfiles[oldName]; ok {
+		delete(c.VPNProfiles, oldName)
+		c.VPNProfiles[newName] = p
+	}
+}
+
+// DeletePeerProfile removes the profile entry for a peer
+func (c *Config) DeletePeerProfile(name string) {
+	if c.VPNProfiles != nil {
+		delete(c.VPNProfiles, name)
+	}
+}
+
+// GetAllowedIPsForProfile returns client-side AllowedIPs for a routing profile
+func (c *Config) GetAllowedIPsForProfile(profile string) string {
+	switch profile {
+	case ProfileFullTunnel:
+		return "0.0.0.0/0, ::/0"
+	case ProfileVPNOnly:
+		if c.VPNRange != "" {
+			return c.VPNRange
+		}
+		return "10.100.0.0/24"
+	default:
+		return c.GetAllowedIPs()
+	}
 }
 
 // GetWGGatewayIP returns the WireGuard gateway IP (first IP in VPN range, typically .1)

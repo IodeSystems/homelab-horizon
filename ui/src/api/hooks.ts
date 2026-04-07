@@ -5,11 +5,14 @@ import type {
   BanListResponse,
   CheckHistoryResponse,
   CheckStatus,
+  ConfigShare,
   CreateInviteResponse,
   DashboardData,
   DomainsData,
   HAProxyConfigPreview,
   Invite,
+  PeerConfigResponse,
+  RekeyPeerResponse,
   Service,
   ServiceIntegration,
   SettingsData,
@@ -20,9 +23,12 @@ import {
   BanListResponseSchema,
   CheckHistoryResponseSchema,
   ChecksListSchema,
+  ConfigSharesSchema,
   DashboardDataSchema,
   ServicesSchema,
   DomainsDataSchema,
+  PeerConfigResponseSchema,
+  RekeyPeerResponseSchema,
   VPNPeersSchema,
   ZonesSchema,
   SettingsDataSchema,
@@ -228,7 +234,7 @@ export function useTriggerSync() {
 export function useAddPeer() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { name: string; extraIPs: string }) =>
+    mutationFn: (input: { name: string; extraIPs: string; profile: string }) =>
       apiFetch<AddPeerResponse>("/vpn/peers/add", {
         method: "POST",
         body: JSON.stringify(input),
@@ -247,6 +253,7 @@ export function useEditPeer() {
       publicKey: string;
       name: string;
       extraIPs: string;
+      profile: string;
     }) =>
       apiFetch("/vpn/peers/edit", {
         method: "POST",
@@ -283,6 +290,72 @@ export function useToggleAdmin() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["vpn", "peers"] });
+    },
+  });
+}
+
+export function useSetPeerProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; profile: string }) =>
+      apiFetch("/vpn/peers/set-profile", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["vpn", "peers"] });
+    },
+  });
+}
+
+export function useGetPeerConfig(publicKey: string) {
+  return useQuery({
+    queryKey: ["vpn", "peers", "config", publicKey],
+    queryFn: () =>
+      apiFetch<PeerConfigResponse>(
+        `/vpn/peers/config?publicKey=${encodeURIComponent(publicKey)}`,
+        { schema: PeerConfigResponseSchema },
+      ),
+    enabled: !!publicKey,
+  });
+}
+
+export function useRekeyPeer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (publicKey: string) =>
+      apiFetch<RekeyPeerResponse>("/vpn/peers/rekey", {
+        method: "POST",
+        body: JSON.stringify({ publicKey }),
+        schema: RekeyPeerResponseSchema,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["vpn", "peers"] });
+      qc.invalidateQueries({ queryKey: ["vpn", "config-shares"] });
+    },
+  });
+}
+
+export function useConfigShares() {
+  return useQuery({
+    queryKey: ["vpn", "config-shares"],
+    queryFn: () =>
+      apiFetch<ConfigShare[]>("/vpn/config-shares", {
+        schema: ConfigSharesSchema,
+      }),
+  });
+}
+
+export function useDeleteConfigShare() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (token: string) =>
+      apiFetch("/vpn/config-shares/delete", {
+        method: "POST",
+        body: JSON.stringify({ token }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["vpn", "config-shares"] });
     },
   });
 }

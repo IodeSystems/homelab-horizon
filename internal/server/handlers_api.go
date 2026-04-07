@@ -504,6 +504,7 @@ func (s *Server) handleAPIVPNPeers(w http.ResponseWriter, r *http.Request) {
 			Name:       p.Name,
 			PublicKey:  p.PublicKey,
 			AllowedIPs: p.AllowedIPs,
+			Profile:    s.config.GetPeerProfile(p.Name),
 		}
 		if status, ok := ifaceStatus.Peers[p.PublicKey]; ok {
 			pr.Endpoint = status.Endpoint

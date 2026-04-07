@@ -168,6 +168,14 @@ func (b *SyncBroadcaster) GetHistory() []string {
 	return history
 }
 
+// configShare stores a shared VPN config (created on re-key) for distribution via URL.
+type configShare struct {
+	Token    string
+	PeerName string
+	Config   string
+	QRCode   string
+}
+
 type Server struct {
 	config              *config.Config
 	configPath          string
@@ -184,6 +192,9 @@ type Server struct {
 	monitor *monitor.Monitor
 	sync    *SyncBroadcaster
 	health  *HealthStatus
+
+	configSharesMu sync.Mutex
+	configShares   map[string]*configShare // token -> share
 }
 
 func New(configPath string) (*Server, error) {
@@ -279,6 +290,15 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		}
 	}
 
+	// Set up WG-FORWARD iptables chain for per-peer routing profiles
+	if !dryRun {
+		lanCIDR := config.GetLocalNetworkCIDR(config.DetectDefaultInterface())
+		peers := wg.GetPeers()
+		if err := wireguard.SetupForwardChain(cfg.WGInterface, peers, cfg.VPNProfiles, cfg.VPNRange, lanCIDR); err != nil {
+			fmt.Printf("Warning: Could not set up WG-FORWARD chain: %v\n", err)
+		}
+	}
+
 	// Build list of interfaces for dnsmasq: WG interface + any additional configured interfaces
 	dnsInterfaces := append([]string{cfg.WGInterface}, cfg.DNSMasqInterfaces...)
 	dns := dnsmasq.New(cfg.DNSMasqConfigPath, cfg.DNSMasqHostsPath, dnsInterfaces, cfg.UpstreamDNS)
@@ -298,21 +318,22 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 	mon := monitor.New(cfg)
 
 	s := &Server{
-		config:      cfg,
-		configPath:  configPath,
-		adminToken:  adminToken,
-		csrfSecret:  generateToken(32),
-		dryRun:      dryRun,
-		version:     version,
-		fs:          fs,
-		runner:      runner,
-		wg:          wg,
-		dns:         dns,
-		haproxy:     hap,
-		letsencrypt: le,
-		monitor: mon,
-		sync:    NewSyncBroadcaster(),
-		health:  &HealthStatus{healthy: true},
+		config:       cfg,
+		configPath:   configPath,
+		adminToken:   adminToken,
+		csrfSecret:   generateToken(32),
+		dryRun:       dryRun,
+		version:      version,
+		fs:           fs,
+		runner:       runner,
+		wg:           wg,
+		dns:          dns,
+		haproxy:      hap,
+		letsencrypt:  le,
+		monitor:      mon,
+		sync:         NewSyncBroadcaster(),
+		health:       &HealthStatus{healthy: true},
+		configShares: make(map[string]*configShare),
 	}
 
 	return s, nil
@@ -791,6 +812,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/auth", s.handleAuth)   // kept for invite flow compatibility
 	mux.HandleFunc("/logout", s.handleLogout)
 	mux.HandleFunc("/invite/", s.handleInvite)
+	mux.HandleFunc("/share/", s.handleConfigSharePage)
 
 	// Deploy API (per-service token auth, no admin/CSRF)
 	mux.HandleFunc("/api/deploy/", s.handleDeployAPI)
@@ -851,7 +873,12 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/vpn/peers/edit", s.handleAPIEditPeer)
 	mux.HandleFunc("/api/v1/vpn/peers/delete", s.handleAPIDeletePeer)
 	mux.HandleFunc("/api/v1/vpn/peers/toggle-admin", s.handleAPIToggleAdmin)
+	mux.HandleFunc("/api/v1/vpn/peers/set-profile", s.handleAPISetPeerProfile)
 	mux.HandleFunc("/api/v1/vpn/reload", s.handleAPIReloadWG)
+	mux.HandleFunc("/api/v1/vpn/peers/config", s.handleAPIGetPeerConfig)
+	mux.HandleFunc("/api/v1/vpn/peers/rekey", s.handleAPIRekeyPeer)
+	mux.HandleFunc("/api/v1/vpn/config-shares", s.handleAPIListConfigShares)
+	mux.HandleFunc("/api/v1/vpn/config-shares/delete", s.handleAPIDeleteConfigShare)
 	mux.HandleFunc("/api/v1/vpn/invites", s.handleAPIListInvites)
 	mux.HandleFunc("/api/v1/vpn/invites/create", s.handleAPICreateInvite)
 	mux.HandleFunc("/api/v1/vpn/invites/delete", s.handleAPIDeleteInvite)
