@@ -16,17 +16,19 @@ export function useSyncContext() {
 }
 
 export default function SyncProvider({ children }: { children: ReactNode }) {
-  const { open, log, done, success, startSync, cancelSync, dismiss } =
+  const { open, log, done, success, confirming, startSync, confirmSync, cancelSync, dismiss } =
     useSyncModal();
 
   return (
-    <SyncContext.Provider value={{ startSync, isSyncing: open && !done }}>
+    <SyncContext.Provider value={{ startSync, isSyncing: open && !done && !confirming }}>
       {children}
       <SyncModal
         open={open}
         log={log}
         done={done}
         success={success}
+        confirming={confirming}
+        onConfirm={confirmSync}
         onCancel={cancelSync}
         onDismiss={dismiss}
       />
