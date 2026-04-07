@@ -21,6 +21,8 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  Tab,
+  Tabs,
   TextField,
   Typography,
   MenuItem,
@@ -818,12 +820,7 @@ function ServicesPage() {
     });
   };
 
-  const [syncConfirmOpen, setSyncConfirmOpen] = useState(false);
-
-  const handleSync = () => {
-    setSyncConfirmOpen(false);
-    startSync();
-  };
+  const [tab, setTab] = useState("all");
 
   if (isLoading) {
     return (
@@ -839,6 +836,29 @@ function ServicesPage() {
 
   const services = data ?? [];
 
+  const hasError = (svc: Service) =>
+    (svc.internalDNS && !svc.status.internalDNSUp) ||
+    (svc.externalDNS && !svc.status.externalDNSUp) ||
+    (svc.proxy && !svc.status.proxyUp);
+
+  const counts = {
+    all: services.length,
+    errors: services.filter(hasError).length,
+    internal: services.filter((s) => s.internalDNS && !s.externalDNS).length,
+    external: services.filter((s) => s.externalDNS).length,
+    proxy: services.filter((s) => s.proxy).length,
+  };
+
+  const filtered = services.filter((svc) => {
+    switch (tab) {
+      case "errors": return hasError(svc);
+      case "internal": return !!svc.internalDNS && !svc.externalDNS;
+      case "external": return !!svc.externalDNS;
+      case "proxy": return !!svc.proxy;
+      default: return true;
+    }
+  });
+
   return (
     <Box>
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 3 }}>
@@ -849,9 +869,9 @@ function ServicesPage() {
           <Button
             variant="outlined"
             startIcon={<SyncIcon />}
-            onClick={() => setSyncConfirmOpen(true)}
+            onClick={startSync}
           >
-            Sync DNS, SSL &amp; HAProxy
+            Sync
           </Button>
           <Button
             variant="contained"
@@ -862,6 +882,24 @@ function ServicesPage() {
           </Button>
         </Box>
       </Box>
+
+      <Tabs
+        value={tab}
+        onChange={(_, v) => setTab(v)}
+        sx={{ mb: 2 }}
+      >
+        <Tab label={`All (${counts.all})`} value="all" />
+        {counts.errors > 0 && (
+          <Tab
+            label={`Errors (${counts.errors})`}
+            value="errors"
+            sx={{ color: "error.main" }}
+          />
+        )}
+        <Tab label={`Internal (${counts.internal})`} value="internal" />
+        <Tab label={`External (${counts.external})`} value="external" />
+        <Tab label={`Proxy (${counts.proxy})`} value="proxy" />
+      </Tabs>
 
       <TableContainer component={Paper}>
         <Table>
@@ -876,16 +914,16 @@ function ServicesPage() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {services.length === 0 ? (
+            {filtered.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={6} align="center">
                   <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
-                    No services configured.
+                    {services.length === 0 ? "No services configured." : "No matching services."}
                   </Typography>
                 </TableCell>
               </TableRow>
             ) : (
-              services.map((svc) => (
+              filtered.map((svc) => (
                 <ServiceRow
                   key={svc.name}
                   service={svc}
@@ -930,24 +968,6 @@ function ServicesPage() {
         onConfirm={handleDelete}
         isDeleting={deleteMutation.isPending}
       />
-
-      {/* Sync confirmation */}
-      <Dialog open={syncConfirmOpen} onClose={() => setSyncConfirmOpen(false)}>
-        <DialogTitle>Sync All Services?</DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" color="text.secondary">
-            This will sync all subsystems in order: internal DNS (dnsmasq),
-            external DNS records, SSL certificates, and HAProxy configuration.
-            It may take a few minutes if certificates need to be requested.
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setSyncConfirmOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleSync}>
-            Start Sync
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       {/* Snackbar feedback */}
       <Snackbar
