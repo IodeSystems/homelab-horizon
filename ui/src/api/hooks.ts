@@ -90,6 +90,7 @@ export interface ServiceMutationInput {
     backend: string;
     healthCheck?: { path: string } | null;
     internalOnly: boolean;
+    deploy?: { nextBackend: string; balance?: string } | null;
   } | null;
 }
 

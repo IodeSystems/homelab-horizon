@@ -46,7 +46,7 @@ export interface InternalDNSResp {
 }
 export interface ExternalDNSResp {
   ip: string;
-  ips?: string[];
+  ips?: string[]; // All IPs for round-robin DNS
   ttl: number /* int */;
 }
 export interface ServiceStatus {
@@ -78,7 +78,7 @@ export interface DomainResp {
   internalIP: string;
   hasExternalDNS: boolean;
   externalIP: string;
-  externalIPs?: string[];
+  externalIPs?: string[]; // All IPs for round-robin DNS
   dnsmasqResolvedIP: string;
   remoteResolvedIP: string;
   dnsmasqDNSMatch: boolean;
@@ -257,13 +257,18 @@ export interface ServiceRequestInternalDNS {
 }
 export interface ServiceRequestExternalDNS {
   ip: string;
-  ips?: string[];
+  ips?: string[]; // Multiple IPs for round-robin DNS
   ttl: number /* int */;
 }
 export interface ServiceRequestProxy {
   backend: string;
   healthCheck?: ServiceRequestHealthCheck;
   internalOnly: boolean;
+  deploy?: ServiceRequestDeploy;
+}
+export interface ServiceRequestDeploy {
+  nextBackend: string;
+  balance?: string; // "first" or "roundrobin"
 }
 export interface ServiceRequestHealthCheck {
   path: string;

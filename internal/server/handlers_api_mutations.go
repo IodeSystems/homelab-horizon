@@ -46,6 +46,14 @@ func serviceRequestToService(req *apitypes.ServiceRequest) config.Service {
 		if req.Proxy.HealthCheck != nil && req.Proxy.HealthCheck.Path != "" {
 			svc.Proxy.HealthCheck = &config.HealthCheck{Path: req.Proxy.HealthCheck.Path}
 		}
+		if req.Proxy.Deploy != nil && req.Proxy.Deploy.NextBackend != "" {
+			svc.Proxy.Deploy = &config.DeployConfig{
+				NextBackend: req.Proxy.Deploy.NextBackend,
+				Token:       config.GenerateDeployToken(),
+				ActiveSlot:  "a",
+				Balance:     req.Proxy.Deploy.Balance,
+			}
+		}
 	}
 	return svc
 }
@@ -161,7 +169,7 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 
 			// Proxy
 			if req.Proxy != nil && req.Proxy.Backend != "" {
-				// Preserve existing deploy config
+				// Preserve existing deploy config for token/activeSlot
 				var existingDeploy *config.DeployConfig
 				if s.config.Services[i].Proxy != nil {
 					existingDeploy = s.config.Services[i].Proxy.Deploy
@@ -173,9 +181,25 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 				if req.Proxy.HealthCheck != nil && req.Proxy.HealthCheck.Path != "" {
 					s.config.Services[i].Proxy.HealthCheck = &config.HealthCheck{Path: req.Proxy.HealthCheck.Path}
 				}
-				// Preserve deploy config if it existed
-				if existingDeploy != nil {
-					s.config.Services[i].Proxy.Deploy = existingDeploy
+				// Handle deploy config from request
+				if req.Proxy.Deploy != nil && req.Proxy.Deploy.NextBackend != "" {
+					if existingDeploy != nil {
+						// Update fields but preserve token and activeSlot
+						existingDeploy.NextBackend = req.Proxy.Deploy.NextBackend
+						existingDeploy.Balance = req.Proxy.Deploy.Balance
+						s.config.Services[i].Proxy.Deploy = existingDeploy
+					} else {
+						// New deploy config
+						s.config.Services[i].Proxy.Deploy = &config.DeployConfig{
+							NextBackend: req.Proxy.Deploy.NextBackend,
+							Token:       config.GenerateDeployToken(),
+							ActiveSlot:  "a",
+							Balance:     req.Proxy.Deploy.Balance,
+						}
+					}
+				} else if existingDeploy != nil && (req.Proxy.Deploy == nil || req.Proxy.Deploy.NextBackend == "") {
+					// Deploy was removed
+					s.config.Services[i].Proxy.Deploy = nil
 				}
 			} else {
 				s.config.Services[i].Proxy = nil
