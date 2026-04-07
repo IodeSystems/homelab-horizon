@@ -317,6 +317,12 @@ type ServiceRequestProxy struct {
 	Backend     string                      `json:"backend"`
 	HealthCheck *ServiceRequestHealthCheck  `json:"healthCheck,omitempty"`
 	InternalOnly bool                       `json:"internalOnly"`
+	Deploy      *ServiceRequestDeploy       `json:"deploy,omitempty"`
+}
+
+type ServiceRequestDeploy struct {
+	NextBackend string `json:"nextBackend"`
+	Balance     string `json:"balance,omitempty"` // "first" or "roundrobin"
 }
 
 type ServiceRequestHealthCheck struct {

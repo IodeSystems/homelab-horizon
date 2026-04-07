@@ -23,6 +23,7 @@ import {
   TableRow,
   TextField,
   Typography,
+  MenuItem,
 } from "@mui/material";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
@@ -117,6 +118,9 @@ interface ServiceFormState {
   proxyBackend: string;
   healthCheckPath: string;
   internalOnly: boolean;
+  deployEnabled: boolean;
+  deployNextBackend: string;
+  deployBalance: string;
 }
 
 const emptyForm: ServiceFormState = {
@@ -130,6 +134,9 @@ const emptyForm: ServiceFormState = {
   proxyBackend: "",
   healthCheckPath: "",
   internalOnly: false,
+  deployEnabled: false,
+  deployNextBackend: "",
+  deployBalance: "first",
 };
 
 function serviceToForm(svc: Service): ServiceFormState {
@@ -144,6 +151,9 @@ function serviceToForm(svc: Service): ServiceFormState {
     proxyBackend: svc.proxy?.backend ?? "",
     healthCheckPath: svc.proxy?.healthCheck?.path ?? "",
     internalOnly: svc.proxy?.internalOnly ?? false,
+    deployEnabled: !!svc.proxy?.deploy,
+    deployNextBackend: svc.proxy?.deploy?.nextBackend ?? "",
+    deployBalance: svc.proxy?.deploy?.balance || "first",
   };
 }
 
@@ -185,6 +195,12 @@ function formToInput(form: ServiceFormState, originalName?: string): ServiceMuta
     };
     if (form.healthCheckPath) {
       input.proxy.healthCheck = { path: form.healthCheckPath };
+    }
+    if (form.deployEnabled && form.deployNextBackend) {
+      input.proxy.deploy = {
+        nextBackend: form.deployNextBackend,
+        balance: form.deployBalance || "first",
+      };
     }
   }
 
@@ -315,6 +331,39 @@ function ServiceFormDialog({
               />
               <Typography variant="body2">Internal only</Typography>
             </Box>
+
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <Switch
+                checked={form.deployEnabled}
+                onChange={(e) => update("deployEnabled", e.target.checked)}
+                size="small"
+              />
+              <Typography variant="body2">Blue-green deploy</Typography>
+            </Box>
+            {form.deployEnabled && (
+              <Box sx={{ display: "flex", gap: 2 }}>
+                <TextField
+                  label="Next backend (host:port)"
+                  value={form.deployNextBackend}
+                  onChange={(e) => update("deployNextBackend", e.target.value)}
+                  size="small"
+                  fullWidth
+                  helperText="Slot B address. Slot A uses the proxy backend above."
+                />
+                <TextField
+                  label="Balance"
+                  value={form.deployBalance}
+                  onChange={(e) => update("deployBalance", e.target.value)}
+                  size="small"
+                  select
+                  sx={{ minWidth: 160 }}
+                  helperText="Routing strategy"
+                >
+                  <MenuItem value="first">Active/Standby</MenuItem>
+                  <MenuItem value="roundrobin">Round Robin</MenuItem>
+                </TextField>
+              </Box>
+            )}
           </>
         )}
       </DialogContent>
