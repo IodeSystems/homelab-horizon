@@ -161,12 +161,33 @@ type PeerResp struct {
 	TransferTx      string `json:"transferTx,omitempty"`
 	Online          bool   `json:"online"`
 	IsAdmin         bool   `json:"isAdmin"`
+	Profile         string `json:"profile"`
 }
 
 type AddPeerResponse struct {
 	OK     bool   `json:"ok"`
 	Config string `json:"config"`
 	QRCode string `json:"qrCode"`
+}
+
+type PeerConfigResponse struct {
+	OK     bool   `json:"ok"`
+	Config string `json:"config"`
+	QRCode string `json:"qrCode"`
+}
+
+type RekeyPeerResponse struct {
+	OK        bool   `json:"ok"`
+	Config    string `json:"config"`
+	QRCode    string `json:"qrCode"`
+	ShareToken string `json:"shareToken"`
+	ShareURL   string `json:"shareURL"`
+}
+
+type ConfigShareResp struct {
+	Token    string `json:"token"`
+	URL      string `json:"url"`
+	PeerName string `json:"peerName"`
 }
 
 // Invites

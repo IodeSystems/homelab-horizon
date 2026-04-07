@@ -10,8 +10,12 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControl,
   IconButton,
+  InputLabel,
+  MenuItem,
   Paper,
+  Select,
   Snackbar,
   Table,
   TableBody,
@@ -29,7 +33,10 @@ import {
   Delete as DeleteIcon,
   Download as DownloadIcon,
   Edit as EditIcon,
+  Link as LinkIcon,
   Refresh as RefreshIcon,
+  VpnKey as VpnKeyIcon,
+  Warning as WarningIcon,
 } from "@mui/icons-material";
 import {
   useAddPeer,
@@ -37,12 +44,15 @@ import {
   useDeleteInvite,
   useDeletePeer,
   useEditPeer,
+  useGetPeerConfig,
   useInvites,
+  useRekeyPeer,
   useReloadWG,
+  useSetPeerProfile,
   useToggleAdmin,
   useVPNPeers,
 } from "../api/hooks";
-import type { AddPeerResponse, VPNPeer } from "../api/types";
+import type { AddPeerResponse, RekeyPeerResponse, VPNPeer } from "../api/types";
 
 function StatusDot({ active }: { active: boolean }) {
   return (
@@ -72,16 +82,18 @@ function AddPeerDialog({
 }) {
   const [name, setName] = useState("");
   const [extraIPs, setExtraIPs] = useState("");
+  const [profile, setProfile] = useState("lan-access");
   const addPeer = useAddPeer();
 
   const handleSubmit = () => {
     addPeer.mutate(
-      { name: name.trim(), extraIPs: extraIPs.trim() },
+      { name: name.trim(), extraIPs: extraIPs.trim(), profile },
       {
         onSuccess: (data) => {
           onResult(data, name.trim());
           setName("");
           setExtraIPs("");
+          setProfile("lan-access");
         },
       },
     );
@@ -99,6 +111,18 @@ function AddPeerDialog({
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
+        <FormControl fullWidth margin="normal">
+          <InputLabel>Routing Profile</InputLabel>
+          <Select
+            value={profile}
+            label="Routing Profile"
+            onChange={(e) => setProfile(e.target.value)}
+          >
+            <MenuItem value="lan-access">LAN Access (VPN + LAN)</MenuItem>
+            <MenuItem value="full-tunnel">Full Tunnel (all traffic)</MenuItem>
+            <MenuItem value="vpn-only">VPN Only (restricted)</MenuItem>
+          </Select>
+        </FormControl>
         <TextField
           label="Extra Allowed IPs (optional)"
           fullWidth
@@ -106,7 +130,7 @@ function AddPeerDialog({
           value={extraIPs}
           onChange={(e) => setExtraIPs(e.target.value)}
           placeholder="e.g. 10.0.0.0/24"
-          helperText="Additional subnets this client can access"
+          helperText="Additional subnets this client can access (server-side)"
         />
         {addPeer.error && (
           <Alert severity="error" sx={{ mt: 1 }}>
@@ -223,6 +247,7 @@ function EditPeerDialog({
 }) {
   const [name, setName] = useState("");
   const [extraIPs, setExtraIPs] = useState("");
+  const [profile, setProfile] = useState("lan-access");
   const editPeer = useEditPeer();
 
   // Sync state when peer changes
@@ -230,6 +255,7 @@ function EditPeerDialog({
   if (peer && peer.publicKey !== lastPeerKey) {
     setLastPeerKey(peer.publicKey);
     setName(peer.name);
+    setProfile(peer.profile || "lan-access");
     // Extract extra IPs (everything after the first /32 entry)
     const parts = peer.allowedIPs.split(",").map((s) => s.trim());
     const extra = parts.filter((p) => !p.endsWith("/32"));
@@ -239,7 +265,7 @@ function EditPeerDialog({
   const handleSubmit = () => {
     if (!peer) return;
     editPeer.mutate(
-      { publicKey: peer.publicKey, name: name.trim(), extraIPs: extraIPs.trim() },
+      { publicKey: peer.publicKey, name: name.trim(), extraIPs: extraIPs.trim(), profile },
       { onSuccess: () => onClose() },
     );
   };
@@ -256,6 +282,18 @@ function EditPeerDialog({
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
+        <FormControl fullWidth margin="normal">
+          <InputLabel>Routing Profile</InputLabel>
+          <Select
+            value={profile}
+            label="Routing Profile"
+            onChange={(e) => setProfile(e.target.value)}
+          >
+            <MenuItem value="lan-access">LAN Access (VPN + LAN)</MenuItem>
+            <MenuItem value="full-tunnel">Full Tunnel (all traffic)</MenuItem>
+            <MenuItem value="vpn-only">VPN Only (restricted)</MenuItem>
+          </Select>
+        </FormControl>
         <TextField
           label="Extra Allowed IPs"
           fullWidth
@@ -329,10 +367,275 @@ function DeletePeerDialog({
   );
 }
 
+function PeerConfigDialog({
+  open,
+  onClose,
+  peer,
+}: {
+  open: boolean;
+  onClose: () => void;
+  peer: VPNPeer | null;
+}) {
+  const configQuery = useGetPeerConfig(peer?.publicKey ?? "");
+  const rekeyPeer = useRekeyPeer();
+  const [rekeyResult, setRekeyResult] = useState<RekeyPeerResponse | null>(null);
+  const [copied, setCopied] = useState("");
+  const [confirmRekey, setConfirmRekey] = useState(false);
+
+  // Reset state when dialog opens/closes or peer changes
+  const [lastPeerKey, setLastPeerKey] = useState("");
+  if (peer && peer.publicKey !== lastPeerKey) {
+    setLastPeerKey(peer.publicKey);
+    setRekeyResult(null);
+    setConfirmRekey(false);
+    setCopied("");
+  }
+
+  const handleCopy = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(label);
+    setTimeout(() => setCopied(""), 2000);
+  };
+
+  const handleDownload = (config: string, name: string) => {
+    const blob = new Blob([config], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${name.replace(/\s+/g, "-")}.conf`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleRekey = () => {
+    if (!peer) return;
+    rekeyPeer.mutate(peer.publicKey, {
+      onSuccess: (data) => {
+        setRekeyResult(data);
+        setConfirmRekey(false);
+      },
+    });
+  };
+
+  const displayConfig = rekeyResult?.config ?? configQuery.data?.config;
+  const displayQR = rekeyResult?.qrCode;
+  const isPlaceholder = !rekeyResult;
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <VpnKeyIcon />
+          Config: {peer?.name}
+        </Box>
+      </DialogTitle>
+      <DialogContent>
+        {configQuery.isLoading && !rekeyResult && (
+          <Box sx={{ display: "flex", justifyContent: "center", py: 4 }}>
+            <CircularProgress />
+          </Box>
+        )}
+
+        {configQuery.error && !rekeyResult && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {configQuery.error.message}
+          </Alert>
+        )}
+
+        {displayConfig && (
+          <>
+            {isPlaceholder && (
+              <Alert severity="info" sx={{ mb: 2 }}>
+                Config shown with placeholder private key. Use <strong>Re-key</strong> to
+                generate a new keypair and get a complete, working config.
+              </Alert>
+            )}
+
+            {rekeyResult && (
+              <Alert severity="success" sx={{ mb: 2 }}>
+                Peer re-keyed successfully. The old config is now invalid.
+              </Alert>
+            )}
+
+            {displayQR && (
+              <>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  QR Code
+                </Typography>
+                <Box
+                  sx={{ display: "flex", justifyContent: "center", mb: 2 }}
+                  dangerouslySetInnerHTML={{ __html: displayQR }}
+                />
+              </>
+            )}
+
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+              WireGuard Config
+            </Typography>
+            <Box sx={{ position: "relative" }}>
+              <pre
+                style={{
+                  background: "#1e1e1e",
+                  color: "#d4d4d4",
+                  padding: 16,
+                  borderRadius: 4,
+                  overflow: "auto",
+                  fontSize: 12,
+                }}
+              >
+                {displayConfig}
+              </pre>
+              <IconButton
+                size="small"
+                onClick={() => handleCopy(displayConfig, "config")}
+                sx={{ position: "absolute", top: 4, right: 4, color: "#aaa" }}
+              >
+                <CopyIcon fontSize="small" />
+              </IconButton>
+            </Box>
+            {copied === "config" && (
+              <Typography variant="caption" color="success.main">
+                Copied to clipboard
+              </Typography>
+            )}
+
+            {rekeyResult?.shareURL && (
+              <Box sx={{ mt: 2 }}>
+                <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                  Share Link
+                </Typography>
+                <Box
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 1,
+                    bgcolor: "action.hover",
+                    borderRadius: 1,
+                    px: 1.5,
+                    py: 1,
+                  }}
+                >
+                  <LinkIcon fontSize="small" color="primary" />
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      fontFamily: "monospace",
+                      fontSize: 12,
+                      flex: 1,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {rekeyResult.shareURL}
+                  </Typography>
+                  <Tooltip title="Copy share link">
+                    <IconButton
+                      size="small"
+                      onClick={() =>
+                        handleCopy(rekeyResult.shareURL, "share")
+                      }
+                    >
+                      <CopyIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+                {copied === "share" && (
+                  <Typography variant="caption" color="success.main">
+                    Share link copied
+                  </Typography>
+                )}
+                <Typography variant="caption" color="text.secondary">
+                  Send this link to the user — they can view and download the
+                  config directly.
+                </Typography>
+              </Box>
+            )}
+          </>
+        )}
+
+        {rekeyPeer.error && (
+          <Alert severity="error" sx={{ mt: 2 }}>
+            {rekeyPeer.error.message}
+          </Alert>
+        )}
+
+        {confirmRekey && (
+          <Alert
+            severity="warning"
+            sx={{ mt: 2 }}
+            icon={<WarningIcon />}
+            action={
+              <Box sx={{ display: "flex", gap: 1 }}>
+                <Button
+                  size="small"
+                  onClick={() => setConfirmRekey(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="small"
+                  color="warning"
+                  variant="contained"
+                  onClick={handleRekey}
+                  disabled={rekeyPeer.isPending}
+                >
+                  {rekeyPeer.isPending ? "Re-keying..." : "Confirm Re-key"}
+                </Button>
+              </Box>
+            }
+          >
+            This will generate a new keypair and <strong>invalidate</strong> the
+            client's current WireGuard config. They will need the new config to
+            reconnect.
+          </Alert>
+        )}
+      </DialogContent>
+      <DialogActions>
+        {!rekeyResult && displayConfig && (
+          <Button
+            startIcon={<DownloadIcon />}
+            onClick={() =>
+              handleDownload(displayConfig, peer?.name ?? "wireguard")
+            }
+            disabled={isPlaceholder}
+          >
+            Download .conf
+          </Button>
+        )}
+        {rekeyResult && (
+          <Button
+            startIcon={<DownloadIcon />}
+            onClick={() =>
+              handleDownload(displayConfig!, peer?.name ?? "wireguard")
+            }
+          >
+            Download .conf
+          </Button>
+        )}
+        {!confirmRekey && !rekeyResult && (
+          <Button
+            color="warning"
+            variant="outlined"
+            startIcon={<VpnKeyIcon />}
+            onClick={() => setConfirmRekey(true)}
+          >
+            Re-key
+          </Button>
+        )}
+        <Button onClick={onClose} variant="contained">
+          {rekeyResult ? "Done" : "Close"}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 function VPNPage() {
   const { data, isLoading, error } = useVPNPeers();
   const invitesQuery = useInvites();
   const toggleAdmin = useToggleAdmin();
+  const setPeerProfile = useSetPeerProfile();
   const reloadWG = useReloadWG();
   const createInvite = useCreateInvite();
   const deleteInvite = useDeleteInvite();
@@ -344,6 +647,7 @@ function VPNPage() {
   } | null>(null);
   const [editPeer, setEditPeer] = useState<VPNPeer | null>(null);
   const [deletePeer, setDeletePeer] = useState<VPNPeer | null>(null);
+  const [configPeer, setConfigPeer] = useState<VPNPeer | null>(null);
   const [snack, setSnack] = useState("");
 
   if (isLoading) {
@@ -408,6 +712,7 @@ function VPNPage() {
           <TableHead>
             <TableRow>
               <TableCell>Name</TableCell>
+              <TableCell>Profile</TableCell>
               <TableCell>Status</TableCell>
               <TableCell>Endpoint</TableCell>
               <TableCell>Allowed IPs</TableCell>
@@ -419,7 +724,7 @@ function VPNPage() {
           <TableBody>
             {peers.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   <Typography
                     variant="body2"
                     color="text.secondary"
@@ -448,6 +753,35 @@ function VPNPage() {
                         />
                       )}
                     </Box>
+                  </TableCell>
+                  <TableCell>
+                    <Tooltip title="Click to cycle profile">
+                      <Chip
+                        label={peer.profile || "lan-access"}
+                        size="small"
+                        color={
+                          peer.profile === "full-tunnel"
+                            ? "warning"
+                            : peer.profile === "vpn-only"
+                              ? "info"
+                              : "default"
+                        }
+                        onClick={() => {
+                          const profiles = ["lan-access", "full-tunnel", "vpn-only"];
+                          const current = peer.profile || "lan-access";
+                          const idx = profiles.indexOf(current);
+                          const next = profiles[(idx + 1) % profiles.length] ?? "lan-access";
+                          setPeerProfile.mutate(
+                            { name: peer.name, profile: next },
+                            {
+                              onSuccess: () =>
+                                setSnack(`${peer.name} profile set to ${next}`),
+                            },
+                          );
+                        }}
+                        sx={{ cursor: "pointer" }}
+                      />
+                    </Tooltip>
                   </TableCell>
                   <TableCell>
                     <Box sx={{ display: "flex", alignItems: "center" }}>
@@ -509,6 +843,14 @@ function VPNPage() {
                           }
                           sx={{ cursor: "pointer" }}
                         />
+                      </Tooltip>
+                      <Tooltip title="View config / Re-key">
+                        <IconButton
+                          size="small"
+                          onClick={() => setConfigPeer(peer)}
+                        >
+                          <VpnKeyIcon fontSize="small" />
+                        </IconButton>
                       </Tooltip>
                       <Tooltip title="Edit">
                         <IconButton
@@ -675,6 +1017,11 @@ function VPNPage() {
         open={deletePeer !== null}
         onClose={() => setDeletePeer(null)}
         peer={deletePeer}
+      />
+      <PeerConfigDialog
+        open={configPeer !== null}
+        onClose={() => setConfigPeer(null)}
+        peer={configPeer}
       />
 
       {/* Snackbar */}

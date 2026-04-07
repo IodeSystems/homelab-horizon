@@ -162,6 +162,7 @@ export const VPNPeerSchema = z.object({
   transferTx: z.string(),
   online: z.boolean(),
   isAdmin: z.boolean(),
+  profile: z.string(),
 });
 
 export const VPNPeersSchema = z.array(VPNPeerSchema);
@@ -171,6 +172,28 @@ export const AddPeerResponseSchema = z.object({
   config: z.string(),
   qrCode: z.string(),
 });
+
+export const PeerConfigResponseSchema = z.object({
+  ok: z.boolean(),
+  config: z.string(),
+  qrCode: z.string(),
+});
+
+export const RekeyPeerResponseSchema = z.object({
+  ok: z.boolean(),
+  config: z.string(),
+  qrCode: z.string(),
+  shareToken: z.string(),
+  shareURL: z.string(),
+});
+
+export const ConfigShareSchema = z.object({
+  token: z.string(),
+  url: z.string(),
+  peerName: z.string(),
+});
+
+export const ConfigSharesSchema = z.array(ConfigShareSchema);
 
 export const InviteSchema = z.object({
   token: z.string(),

@@ -143,11 +143,29 @@ export interface PeerResp {
   transferTx?: string;
   online: boolean;
   isAdmin: boolean;
+  profile: string;
 }
 export interface AddPeerResponse {
   ok: boolean;
   config: string;
   qrCode: string;
+}
+export interface PeerConfigResponse {
+  ok: boolean;
+  config: string;
+  qrCode: string;
+}
+export interface RekeyPeerResponse {
+  ok: boolean;
+  config: string;
+  qrCode: string;
+  shareToken: string;
+  shareURL: string;
+}
+export interface ConfigShareResp {
+  token: string;
+  url: string;
+  peerName: string;
 }
 export interface InviteResp {
   token: string;
