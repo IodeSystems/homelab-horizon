@@ -350,6 +350,22 @@ func (s *Server) handleAPISyncDNS(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/v1/dns/sync-all
+//
+// Per-instance op (registered via handlePeerInstance, exempt from
+// nonPrimaryGuardMiddleware) — see plan/plan.md "External DNS". In a
+// multi-peer fleet each peer must be able to publish A records without
+// bouncing through the config primary. Two cases:
+//
+//  1. Service has explicit ExternalDNS.IPs (the round-robin HA case from
+//     ce8a872): every peer publishes the same record set, last write wins,
+//     converges trivially.
+//  2. Service falls back to the peer's own PublicIP: each peer would
+//     publish its own IP. This is only correct for single-peer deployments;
+//     in a fleet, services that need HA must use case 1.
+//
+// Either way, the rule from the principles section ("each peer manages only
+// its own external resources") is preserved — there is no cross-peer write
+// path here, and a non-primary calling sync-all is doing the right thing.
 func (s *Server) handleAPISyncAllDNS(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {
 		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")

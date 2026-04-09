@@ -7,10 +7,20 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"homelab-horizon/internal/apitypes"
 	"homelab-horizon/internal/config"
 )
+
+// unixOrZero returns t.Unix() unless t is the zero value, in which case it
+// returns 0 so the JSON omitempty drops the field on the wire.
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
 
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
@@ -48,8 +58,7 @@ func (s *Server) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.DashboardResponse{
+	resp := apitypes.DashboardResponse{
 		ServiceCount:   len(s.cfg().Services),
 		DomainCount:    domainCount,
 		ZoneCount:      len(s.cfg().Zones),
@@ -60,7 +69,27 @@ func (s *Server) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
 		ChecksTotal:    len(statuses),
 		ChecksHealthy:  checksHealthy,
 		ChecksFailed:   checksFailed,
-	})
+	}
+
+	// Surface peer-sync state on non-primary instances so the dashboard can
+	// show "last successful pull". Primary instances and standalone setups
+	// have nothing to report. See plan/plan.md Phase 1 hardening item 5.
+	if cfg := s.cfg(); cfg.PeerID != "" && !cfg.ConfigPrimary {
+		if primary := cfg.PrimaryPeer(); primary != nil {
+			snap := s.peerSyncSnapshot()
+			resp.PeerSync = &apitypes.PeerSyncStatus{
+				PrimaryID:     primary.ID,
+				PullCount:     snap.PullCount,
+				LastPullAt:    unixOrZero(snap.LastPullAt),
+				LastSuccessAt: unixOrZero(snap.LastSuccessAt),
+				LastApplyAt:   unixOrZero(snap.LastApplyAt),
+				LastError:     snap.LastError,
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {

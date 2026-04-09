@@ -25,6 +25,15 @@ export const LoginResponseSchema = z.object({
 });
 
 // Dashboard
+export const PeerSyncStatusSchema = z.object({
+  primaryId: z.string(),
+  pullCount: z.number(),
+  lastPullAt: z.number().optional(),
+  lastSuccessAt: z.number().optional(),
+  lastApplyAt: z.number().optional(),
+  lastError: z.string().optional(),
+});
+
 export const DashboardDataSchema = z.object({
   serviceCount: z.number(),
   domainCount: z.number(),
@@ -36,6 +45,7 @@ export const DashboardDataSchema = z.object({
   checksTotal: z.number(),
   checksHealthy: z.number(),
   checksFailed: z.number(),
+  peerSync: PeerSyncStatusSchema.optional(),
 });
 
 // Services

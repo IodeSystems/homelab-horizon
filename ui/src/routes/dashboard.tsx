@@ -14,7 +14,10 @@ import MonitorHeartIcon from "@mui/icons-material/MonitorHeart";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 import InfoIcon from "@mui/icons-material/Info";
+import SyncIcon from "@mui/icons-material/Sync";
+import SyncProblemIcon from "@mui/icons-material/SyncProblem";
 import { useDashboard } from "../api/hooks";
+import type { PeerSyncStatus } from "../api/generated-types";
 
 function StatusDot({ active }: { active: boolean }) {
   return (
@@ -28,6 +31,69 @@ function StatusDot({ active }: { active: boolean }) {
         mr: 1,
       }}
     />
+  );
+}
+
+function formatRelative(unixSeconds: number | undefined): string {
+  if (!unixSeconds) return "never";
+  const diffSec = Math.floor(Date.now() / 1000) - unixSeconds;
+  if (diffSec < 0) return "just now";
+  if (diffSec < 60) return `${diffSec}s ago`;
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+  return `${Math.floor(diffSec / 86400)}d ago`;
+}
+
+function PeerSyncTile({ status }: { status: PeerSyncStatus }) {
+  const healthy = !status.lastError;
+  return (
+    <Paper sx={{ p: 3, mb: 3 }}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
+        {healthy ? (
+          <SyncIcon sx={{ color: "success.main" }} />
+        ) : (
+          <SyncProblemIcon sx={{ color: "error.main" }} />
+        )}
+        <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+          Config sync from {status.primaryId}
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ ml: "auto" }}>
+          {status.pullCount} pull{status.pullCount === 1 ? "" : "s"}
+        </Typography>
+      </Box>
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: { xs: "1fr 1fr", sm: "1fr 1fr 1fr" },
+          gap: 1,
+          mb: status.lastError ? 1 : 0,
+        }}
+      >
+        <Box>
+          <Typography variant="caption" color="text.secondary">
+            Last attempt
+          </Typography>
+          <Typography variant="body2">{formatRelative(status.lastPullAt)}</Typography>
+        </Box>
+        <Box>
+          <Typography variant="caption" color="text.secondary">
+            Last success
+          </Typography>
+          <Typography variant="body2">{formatRelative(status.lastSuccessAt)}</Typography>
+        </Box>
+        <Box>
+          <Typography variant="caption" color="text.secondary">
+            Last applied
+          </Typography>
+          <Typography variant="body2">{formatRelative(status.lastApplyAt)}</Typography>
+        </Box>
+      </Box>
+      {status.lastError && (
+        <Alert severity="error" sx={{ mt: 1 }}>
+          {status.lastError}
+        </Alert>
+      )}
+    </Paper>
   );
 }
 
@@ -114,6 +180,8 @@ function DashboardPage() {
           label="VPN Peers"
         />
       </Box>
+
+      {data.peerSync && <PeerSyncTile status={data.peerSync} />}
 
       <Box
         sx={{

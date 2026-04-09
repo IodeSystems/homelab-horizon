@@ -447,3 +447,116 @@ func TestDNSProviderConfigValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateFleet(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr bool
+	}{
+		{
+			name:    "single instance (no fleet config)",
+			cfg:     Config{},
+			wantErr: false,
+		},
+		{
+			name: "primary alone",
+			cfg: Config{
+				PeerID:        "site-a",
+				ConfigPrimary: true,
+			},
+			wantErr: false,
+		},
+		{
+			name: "primary with non-primary peer",
+			cfg: Config{
+				PeerID:        "site-a",
+				ConfigPrimary: true,
+				Peers:         []Peer{{ID: "site-b", WGAddr: "10.0.0.2"}},
+			},
+			wantErr: false,
+		},
+		{
+			name: "non-primary with primary peer",
+			cfg: Config{
+				PeerID: "site-b",
+				Peers:  []Peer{{ID: "site-a", WGAddr: "10.0.0.1", Primary: true}},
+			},
+			wantErr: false,
+		},
+		{
+			name: "missing peer_id",
+			cfg: Config{
+				Peers: []Peer{{ID: "site-a", WGAddr: "10.0.0.1", Primary: true}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "peer entry missing fields",
+			cfg: Config{
+				PeerID: "site-b",
+				Peers:  []Peer{{ID: "site-a"}}, // no WGAddr
+			},
+			wantErr: true,
+		},
+		{
+			name: "peer id duplicates self",
+			cfg: Config{
+				PeerID: "site-a",
+				Peers:  []Peer{{ID: "site-a", WGAddr: "10.0.0.1"}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "primary flag set on self AND peer",
+			cfg: Config{
+				PeerID:        "site-a",
+				ConfigPrimary: true,
+				Peers:         []Peer{{ID: "site-b", WGAddr: "10.0.0.2", Primary: true}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "two peers marked primary",
+			cfg: Config{
+				PeerID: "site-c",
+				Peers: []Peer{
+					{ID: "site-a", WGAddr: "10.0.0.1", Primary: true},
+					{ID: "site-b", WGAddr: "10.0.0.2", Primary: true},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.ValidateFleet()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateFleet() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestPrimaryPeer(t *testing.T) {
+	cfg := Config{
+		PeerID: "site-c",
+		Peers: []Peer{
+			{ID: "site-a", WGAddr: "10.0.0.1"},
+			{ID: "site-b", WGAddr: "10.0.0.2", Primary: true},
+		},
+	}
+	p := cfg.PrimaryPeer()
+	if p == nil {
+		t.Fatal("expected primary peer, got nil")
+	}
+	if p.ID != "site-b" {
+		t.Errorf("expected site-b, got %s", p.ID)
+	}
+
+	cfg2 := Config{PeerID: "site-a", ConfigPrimary: true}
+	if cfg2.PrimaryPeer() != nil {
+		t.Error("expected no primary peer entry on a primary instance")
+	}
+}

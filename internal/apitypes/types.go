@@ -25,6 +25,21 @@ type DashboardResponse struct {
 	ChecksTotal    int    `json:"checksTotal"`
 	ChecksHealthy  int    `json:"checksHealthy"`
 	ChecksFailed   int    `json:"checksFailed"`
+
+	// PeerSync is populated only when this instance is a non-primary in a fleet.
+	PeerSync *PeerSyncStatus `json:"peerSync,omitempty"`
+}
+
+// PeerSyncStatus surfaces the peer-sync pull-loop state to the dashboard so
+// operators can spot a non-primary that has stopped converging without
+// having to scrape logs. See plan/plan.md Phase 1 hardening item 5.
+type PeerSyncStatus struct {
+	PrimaryID     string `json:"primaryId"`               // peer id this instance is pulling from
+	PullCount     int    `json:"pullCount"`               // total pull attempts since startup
+	LastPullAt    int64  `json:"lastPullAt,omitempty"`    // unix seconds, 0 if never
+	LastSuccessAt int64  `json:"lastSuccessAt,omitempty"` // unix seconds, 0 if never
+	LastApplyAt   int64  `json:"lastApplyAt,omitempty"`   // unix seconds, 0 if never
+	LastError     string `json:"lastError,omitempty"`     // empty if last attempt succeeded
 }
 
 // Services
@@ -269,6 +284,11 @@ type HAProxyConfigPreview struct {
 type AuthStatusResponse struct {
 	Authenticated bool   `json:"authenticated"`
 	Method        string `json:"method,omitempty"`
+
+	// Multi-instance HA — populated when this instance is part of a fleet.
+	PeerID        string `json:"peerId,omitempty"`        // local instance identity
+	ConfigPrimary bool   `json:"configPrimary,omitempty"` // true if this instance is the config primary
+	PrimaryID     string `json:"primaryId,omitempty"`     // peer id of the config primary (when this instance is non-primary)
 }
 
 type LoginRequest struct {

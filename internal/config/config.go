@@ -173,6 +173,60 @@ type Config struct {
 
 	// Auto-heal: automatically install and configure missing dependencies on startup
 	AutoHeal bool `json:"auto_heal,omitempty"`
+
+	// Multi-instance HA (fleet) — see plan/plan.md
+	PeerID        string `json:"peer_id,omitempty"`        // local identity within the fleet
+	ConfigPrimary bool   `json:"config_primary,omitempty"` // true if THIS instance is the config primary
+	Peers         []Peer `json:"peers,omitempty"`          // every other instance in the fleet
+}
+
+// Peer describes another homelab-horizon instance in the fleet.
+// All inter-peer traffic flows over the WireGuard site-to-site tunnel,
+// so WGAddr must be reachable on the WG interface.
+type Peer struct {
+	ID      string `json:"id"`
+	WGAddr  string `json:"wg_addr"`           // host[:port] reachable over WG (port defaults to local listen port)
+	Primary bool   `json:"primary,omitempty"` // marks the config primary on non-primary instances
+}
+
+// PrimaryPeer returns the entry in Peers marked as primary, or nil if none.
+func (c *Config) PrimaryPeer() *Peer {
+	for i := range c.Peers {
+		if c.Peers[i].Primary {
+			return &c.Peers[i]
+		}
+	}
+	return nil
+}
+
+// ValidateFleet checks the multi-instance fields are internally consistent.
+// Returns nil if no fleet is configured (single-instance mode).
+func (c *Config) ValidateFleet() error {
+	if c.PeerID == "" && len(c.Peers) == 0 && !c.ConfigPrimary {
+		return nil // single-instance mode
+	}
+	if c.PeerID == "" {
+		return errors.New("peer_id required when peers[] or config_primary is set")
+	}
+	primaries := 0
+	for _, p := range c.Peers {
+		if p.ID == "" || p.WGAddr == "" {
+			return fmt.Errorf("peer entry missing id or wg_addr: %+v", p)
+		}
+		if p.ID == c.PeerID {
+			return fmt.Errorf("peer entry %q duplicates own peer_id", p.ID)
+		}
+		if p.Primary {
+			primaries++
+		}
+	}
+	if c.ConfigPrimary && primaries > 0 {
+		return errors.New("config_primary is true on this instance but a peer is also marked primary")
+	}
+	if !c.ConfigPrimary && primaries > 1 {
+		return errors.New("more than one peer marked primary")
+	}
+	return nil
 }
 
 // IPBan represents a banned IP address
