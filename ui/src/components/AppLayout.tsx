@@ -1,5 +1,6 @@
 import { type ReactNode, useState } from "react";
 import {
+  Alert,
   Box,
   Drawer,
   IconButton,
@@ -22,7 +23,7 @@ import MonitorHeartIcon from "@mui/icons-material/MonitorHeart";
 import SettingsIcon from "@mui/icons-material/Settings";
 import LogoutIcon from "@mui/icons-material/Logout";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
-import { useLogout } from "../api/auth";
+import { useAuthStatus, useLogout } from "../api/auth";
 
 const SIDEBAR_WIDTH = 240;
 
@@ -121,6 +122,18 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
+function ReadOnlyBanner() {
+  const { data } = useAuthStatus();
+  if (!data || data.configPrimary || !data.peerId) return null;
+  const primary = data.primaryId || "the config primary";
+  return (
+    <Alert severity="warning" sx={{ mb: 2 }}>
+      Read-only — this instance ({data.peerId}) is a non-primary fleet member.
+      Edit configuration on <strong>{primary}</strong>.
+    </Alert>
+  );
+}
+
 export default function AppLayout({ children }: { children: ReactNode }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("md"));
@@ -171,6 +184,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             </Typography>
           </Box>
         )}
+        <ReadOnlyBanner />
         {children}
       </Box>
     </Box>

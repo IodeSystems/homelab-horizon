@@ -177,12 +177,26 @@ type configShare struct {
 	QRCode   string
 }
 
+// peerSyncStatus records the most recent peer-sync pull-loop attempts so the
+// dashboard can surface "last successful pull" without having to scrape logs.
+// Updated by pullConfigOnce, read by handleAPIDashboard.
+type peerSyncStatus struct {
+	mu            sync.RWMutex
+	pullCount     int       // total pull attempts since startup
+	lastPullAt    time.Time // timestamp of last attempt (success OR failure)
+	lastSuccessAt time.Time // timestamp of last successful ping+fetch (regardless of apply)
+	lastApplyAt   time.Time // timestamp of last config swap (only set when apply succeeds)
+	lastError     string    // empty when last attempt succeeded
+}
+
 type Server struct {
-	// config is swapped atomically. Always access via s.cfg() — never read
-	// the field directly outside the few helpers below. In-place mutation
-	// of the pointed-to Config is still racy with concurrent handler reads;
-	// that pre-existing race is out of scope for this refactor.
+	// config is swapped atomically by applyNewConfig (peer-sync pull loop).
+	// Always access via s.cfg() — never read the field directly outside the
+	// few helpers below. In-place mutation of the pointed-to Config is still
+	// racy with concurrent handler reads; that pre-existing race is tracked
+	// separately and out of scope for this refactor.
 	config              atomic.Pointer[config.Config]
+	peerSyncStatus      peerSyncStatus
 	configPath          string
 	adminToken          string
 	csrfSecret          string
@@ -200,6 +214,15 @@ type Server struct {
 
 	configSharesMu sync.Mutex
 	configShares   map[string]*configShare // token -> share
+
+	// peerInstancePaths and peerInstancePrefixes track routes that are
+	// per-instance ops (not shared-config mutations) and therefore exempt
+	// from nonPrimaryGuardMiddleware. Populated only during setupRoutes()
+	// via handlePeerInstance / handlePeerInstanceSubtree, then read-only.
+	// Single source of truth — there is no separate hand-curated exempt
+	// list to keep in sync.
+	peerInstancePaths    map[string]bool
+	peerInstancePrefixes []string
 }
 
 func New(configPath string) (*Server, error) {
@@ -826,11 +849,13 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/invite/", s.handleInvite)
 	mux.HandleFunc("/share/", s.handleConfigSharePage)
 
-	// Deploy API (per-service token auth, no admin/CSRF)
-	mux.HandleFunc("/api/deploy/", s.handleDeployAPI)
+	// Deploy API (per-service token auth, no admin/CSRF). Per-instance op:
+	// the deploy token authenticates regardless of which peer serves.
+	s.handlePeerInstanceSubtree(mux, "/api/deploy/", s.handleDeployAPI)
 
-	// IP Ban API (deploy token auth, no CSRF)
-	mux.HandleFunc("/api/ban/", s.handleBanAPI)
+	// IP Ban API (deploy token auth, no CSRF). Per-instance until Phase 4
+	// LWW sync.
+	s.handlePeerInstanceSubtree(mux, "/api/ban/", s.handleBanAPI)
 
 	// Admin ban management
 	mux.HandleFunc("/api/v1/bans", s.handleAPIBanList)
@@ -840,10 +865,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// Service integration
 	mux.HandleFunc("/api/v1/services/integration", s.handleAPIServiceIntegration)
 
-	// Sync (reuse existing handlers, they check isAdmin internally)
-	mux.HandleFunc("/api/v1/services/sync/stream", s.handleSyncServicesStream)
-	mux.HandleFunc("/api/v1/services/sync/status", s.handleSyncStatus)
-	mux.HandleFunc("/api/v1/services/sync/cancel", s.handleSyncCancel)
+	// Sync (reuse existing handlers, they check isAdmin internally).
+	// Per-instance: re-derives haproxy/dnsmasq state from current config.
+	s.handlePeerInstance(mux, "/api/v1/services/sync/stream", s.handleSyncServicesStream)
+	s.handlePeerInstance(mux, "/api/v1/services/sync/status", s.handleSyncStatus)
+	s.handlePeerInstance(mux, "/api/v1/services/sync/cancel", s.handleSyncCancel)
 
 	// Kept admin routes
 	mux.HandleFunc("/admin/haproxy/deploy-script", s.handleHZClientScript) // services download this
@@ -858,10 +884,16 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mcpHandler := mcpSrv.StreamableHTTPHandler()
 	mux.Handle("/mcp", s.mcpAuthMiddleware(mcpHandler))
 
-	// API v1 routes (JSON, SameSite cookie auth)
-	mux.HandleFunc("/api/v1/auth/status", s.handleAPIAuthStatus)
-	mux.HandleFunc("/api/v1/auth/login", s.handleAPILogin)
-	mux.HandleFunc("/api/v1/auth/logout", s.handleAPILogout)
+	// Multi-instance HA peer plumbing — bound to WG only. Per-instance:
+	// each peer must answer pings/config-pull regardless of primary status.
+	s.handlePeerInstance(mux, "/api/peer/ping", s.peerOnlyMiddleware(s.handlePeerPing))
+	s.handlePeerInstance(mux, "/api/peer/config", s.peerOnlyMiddleware(s.handlePeerConfig))
+
+	// API v1 auth routes (JSON, SameSite cookie auth). Per-instance: a
+	// non-primary spare must still allow login/logout for read-only access.
+	s.handlePeerInstance(mux, "/api/v1/auth/status", s.handleAPIAuthStatus)
+	s.handlePeerInstance(mux, "/api/v1/auth/login", s.handleAPILogin)
+	s.handlePeerInstance(mux, "/api/v1/auth/logout", s.handleAPILogout)
 
 	// API v1 data routes
 	mux.HandleFunc("/api/v1/dashboard", s.handleAPIDashboard)
@@ -874,19 +906,24 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/services/add", s.handleAPIAddService)
 	mux.HandleFunc("/api/v1/services/edit", s.handleAPIEditService)
 	mux.HandleFunc("/api/v1/services/delete", s.handleAPIDeleteService)
-	mux.HandleFunc("/api/v1/dns/sync", s.handleAPISyncDNS)
-	mux.HandleFunc("/api/v1/dns/sync-all", s.handleAPISyncAllDNS)
+	// DNS sync routes are per-instance: each peer manages its own A
+	// record (round-robin DNS). See plan/plan.md "External DNS" — never
+	// touch another peer's A record.
+	s.handlePeerInstance(mux, "/api/v1/dns/sync", s.handleAPISyncDNS)
+	s.handlePeerInstance(mux, "/api/v1/dns/sync-all", s.handleAPISyncAllDNS)
 	mux.HandleFunc("/api/v1/zones/subzone", s.handleAPIAddSubZone)
 	mux.HandleFunc("/api/v1/ssl/request-cert", s.handleAPIRequestCert)
 	mux.HandleFunc("/api/v1/domains/ssl/add", s.handleAPIDomainSSLAdd)
 	mux.HandleFunc("/api/v1/domains/ssl/remove", s.handleAPIDomainSSLRemove)
-	mux.HandleFunc("/api/v1/services/sync", s.handleAPITriggerSync)
+	// Trigger-sync is per-instance: re-derives haproxy/dnsmasq state.
+	s.handlePeerInstance(mux, "/api/v1/services/sync", s.handleAPITriggerSync)
 	mux.HandleFunc("/api/v1/vpn/peers/add", s.handleAPIAddPeer)
 	mux.HandleFunc("/api/v1/vpn/peers/edit", s.handleAPIEditPeer)
 	mux.HandleFunc("/api/v1/vpn/peers/delete", s.handleAPIDeletePeer)
 	mux.HandleFunc("/api/v1/vpn/peers/toggle-admin", s.handleAPIToggleAdmin)
 	mux.HandleFunc("/api/v1/vpn/peers/set-profile", s.handleAPISetPeerProfile)
-	mux.HandleFunc("/api/v1/vpn/reload", s.handleAPIReloadWG)
+	// Per-instance subsystem reload.
+	s.handlePeerInstance(mux, "/api/v1/vpn/reload", s.handleAPIReloadWG)
 	mux.HandleFunc("/api/v1/vpn/peers/config", s.handleAPIGetPeerConfig)
 	mux.HandleFunc("/api/v1/vpn/peers/rekey", s.handleAPIRekeyPeer)
 	mux.HandleFunc("/api/v1/vpn/config-shares", s.handleAPIListConfigShares)
@@ -900,8 +937,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/zones/add", s.handleAPIAddZone)
 	mux.HandleFunc("/api/v1/zones/edit", s.handleAPIEditZone)
 	mux.HandleFunc("/api/v1/zones/delete", s.handleAPIDeleteZone)
-	mux.HandleFunc("/api/v1/haproxy/write-config", s.handleAPIHAProxyWriteConfig)
-	mux.HandleFunc("/api/v1/haproxy/reload", s.handleAPIHAProxyReload)
+	// Per-instance haproxy ops: each peer writes/reloads its own config.
+	s.handlePeerInstance(mux, "/api/v1/haproxy/write-config", s.handleAPIHAProxyWriteConfig)
+	s.handlePeerInstance(mux, "/api/v1/haproxy/reload", s.handleAPIHAProxyReload)
 	mux.HandleFunc("/api/v1/haproxy/config-preview", s.handleAPIHAProxyConfigPreview)
 	mux.HandleFunc("/api/v1/checks", s.handleAPIChecks)
 	mux.HandleFunc("/api/v1/checks/history", s.handleAPICheckHistory)
@@ -914,6 +952,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.setupSPA(mux)
 
 	return mux
+}
+
+// handler returns the fully-wrapped HTTP handler (mux + middlewares).
+func (s *Server) handler() http.Handler {
+	return s.nonPrimaryGuardMiddleware(s.setupRoutes())
 }
 
 func (s *Server) ensureServicesRunning() {
@@ -1101,11 +1144,14 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	s.monitor.Start()
 	fmt.Println("Service monitor started")
 
+	// Start multi-instance config pull loop (no-op on primary / standalone)
+	s.startPeerSync()
+
 	fmt.Println("========================================")
 
 	server := &http.Server{
 		Addr:         s.cfg().ListenAddr,
-		Handler:      s.setupRoutes(),
+		Handler:      s.handler(),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 10 * time.Minute, // Long timeout for SSE streams and certbot operations
 	}

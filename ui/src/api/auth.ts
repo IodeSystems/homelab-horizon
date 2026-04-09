@@ -4,6 +4,10 @@ import { apiFetch } from "./client";
 interface AuthStatus {
   authenticated: boolean;
   method?: "cookie" | "vpn";
+  // Multi-instance HA fleet metadata (empty for single-instance)
+  peerId?: string;
+  configPrimary?: boolean;
+  primaryId?: string;
 }
 
 interface LoginResponse {

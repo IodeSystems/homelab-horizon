@@ -26,6 +26,23 @@ export interface DashboardResponse {
   checksTotal: number /* int */;
   checksHealthy: number /* int */;
   checksFailed: number /* int */;
+  /**
+   * PeerSync is populated only when this instance is a non-primary in a fleet.
+   */
+  peerSync?: PeerSyncStatus;
+}
+/**
+ * PeerSyncStatus surfaces the peer-sync pull-loop state to the dashboard so
+ * operators can spot a non-primary that has stopped converging without
+ * having to scrape logs. See plan/plan.md Phase 1 hardening item 5.
+ */
+export interface PeerSyncStatus {
+  primaryId: string; // peer id this instance is pulling from
+  pullCount: number /* int */; // total pull attempts since startup
+  lastPullAt?: number /* int64 */; // unix seconds, 0 if never
+  lastSuccessAt?: number /* int64 */; // unix seconds, 0 if never
+  lastApplyAt?: number /* int64 */; // unix seconds, 0 if never
+  lastError?: string; // empty if last attempt succeeded
 }
 export interface HealthCheckResp {
   path: string;
@@ -227,6 +244,12 @@ export interface HAProxyConfigPreview {
 export interface AuthStatusResponse {
   authenticated: boolean;
   method?: string;
+  /**
+   * Multi-instance HA — populated when this instance is part of a fleet.
+   */
+  peerId?: string; // local instance identity
+  configPrimary?: boolean; // true if this instance is the config primary
+  primaryId?: string; // peer id of the config primary (when this instance is non-primary)
 }
 export interface LoginRequest {
   token: string;

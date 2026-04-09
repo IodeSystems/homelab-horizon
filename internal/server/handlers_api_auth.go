@@ -11,6 +11,11 @@ import (
 func (s *Server) handleAPIAuthStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
+	primaryID := ""
+	if p := s.cfg().PrimaryPeer(); p != nil {
+		primaryID = p.ID
+	}
+
 	if s.isAdmin(r) {
 		method := "cookie"
 		if s.isVPNAdmin(r) {
@@ -19,12 +24,18 @@ func (s *Server) handleAPIAuthStatus(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(apitypes.AuthStatusResponse{
 			Authenticated: true,
 			Method:        method,
+			PeerID:        s.cfg().PeerID,
+			ConfigPrimary: s.cfg().ConfigPrimary,
+			PrimaryID:     primaryID,
 		})
 		return
 	}
 
 	json.NewEncoder(w).Encode(apitypes.AuthStatusResponse{
 		Authenticated: false,
+		PeerID:        s.cfg().PeerID,
+		ConfigPrimary: s.cfg().ConfigPrimary,
+		PrimaryID:     primaryID,
 	})
 }
 
