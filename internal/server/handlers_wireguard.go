@@ -206,7 +206,7 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		clientIP, err := s.wg.GetNextIP(s.config.VPNRange)
+		clientIP, err := s.wg.GetNextIP(s.cfg().VPNRange)
 		if err != nil {
 			data := map[string]interface{}{
 				"Error": "No available IPs: " + err.Error(),
@@ -226,8 +226,8 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Invited peers default to vpn-only (admin can upgrade later)
-		s.config.SetPeerProfile(name, config.ProfileVPNOnly)
-		config.Save(s.configPath, s.config)
+		s.cfg().SetPeerProfile(name, config.ProfileVPNOnly)
+		config.Save(s.configPath, s.cfg())
 
 		s.wg.Reload()
 		s.rebuildWGForwardChain()
@@ -236,10 +236,10 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 		clientConfig := wireguard.GenerateClientConfig(
 			privKey,
 			strings.TrimSuffix(clientIP, "/32"),
-			s.config.ServerPublicKey,
-			s.config.ServerEndpoint,
-			s.config.DNS,
-			s.config.GetAllowedIPsForProfile(config.ProfileVPNOnly),
+			s.cfg().ServerPublicKey,
+			s.cfg().ServerEndpoint,
+			s.cfg().DNS,
+			s.cfg().GetAllowedIPsForProfile(config.ProfileVPNOnly),
 		)
 
 		qrCode := qr.GenerateSVG(clientConfig, 256)

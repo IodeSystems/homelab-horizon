@@ -53,13 +53,13 @@ func (s *Server) banIP(ip string, timeout int, reason, service string) error {
 	ip = parsed.String() // normalize
 
 	// Self-lockout protection
-	gatewayIP := s.config.GetWGGatewayIP()
-	if ip == gatewayIP || ip == s.config.LocalInterface || ip == s.config.PublicIP {
+	gatewayIP := s.cfg().GetWGGatewayIP()
+	if ip == gatewayIP || ip == s.cfg().LocalInterface || ip == s.cfg().PublicIP {
 		return fmt.Errorf("refusing to ban server IP %s (self-lockout protection)", ip)
 	}
 
 	// Already banned?
-	for _, b := range s.config.IPBans {
+	for _, b := range s.cfg().IPBans {
 		if b.IP == ip {
 			return nil // already banned, no-op
 		}
@@ -81,11 +81,11 @@ func (s *Server) banIP(ip string, timeout int, reason, service string) error {
 		ban.ExpiresAt = now + int64(timeout)
 	}
 
-	s.config.IPBans = append(s.config.IPBans, ban)
+	s.cfg().IPBans = append(s.cfg().IPBans, ban)
 
 	fmt.Printf("[ban] banned %s timeout=%d reason=%q service=%q\n", ip, timeout, reason, service)
 
-	return config.Save(s.configPath, s.config)
+	return config.Save(s.configPath, s.cfg())
 }
 
 // unbanIP removes the iptables rule and removes the ban from config.
@@ -103,17 +103,17 @@ func (s *Server) unbanIP(ip string) error {
 	_ = iptablesUnban(ip)
 
 	// Remove from config
-	filtered := s.config.IPBans[:0]
-	for _, b := range s.config.IPBans {
+	filtered := s.cfg().IPBans[:0]
+	for _, b := range s.cfg().IPBans {
 		if b.IP != ip {
 			filtered = append(filtered, b)
 		}
 	}
-	s.config.IPBans = filtered
+	s.cfg().IPBans = filtered
 
 	fmt.Printf("[ban] unbanned %s\n", ip)
 
-	return config.Save(s.configPath, s.config)
+	return config.Save(s.configPath, s.cfg())
 }
 
 // reapplyBans restores iptables rules from persisted config on startup.
@@ -122,8 +122,8 @@ func (s *Server) reapplyBans() {
 	defer banMu.Unlock()
 
 	now := time.Now().Unix()
-	active := s.config.IPBans[:0]
-	for _, ban := range s.config.IPBans {
+	active := s.cfg().IPBans[:0]
+	for _, ban := range s.cfg().IPBans {
 		if ban.ExpiresAt > 0 && ban.ExpiresAt <= now {
 			// Expired — clean up iptables just in case
 			_ = iptablesUnban(ban.IP)
@@ -139,9 +139,9 @@ func (s *Server) reapplyBans() {
 		}
 		active = append(active, ban)
 	}
-	if len(active) != len(s.config.IPBans) {
-		s.config.IPBans = active
-		if err := config.Save(s.configPath, s.config); err != nil {
+	if len(active) != len(s.cfg().IPBans) {
+		s.cfg().IPBans = active
+		if err := config.Save(s.configPath, s.cfg()); err != nil {
 			fmt.Printf("[ban] failed to save config after reapply: %v\n", err)
 		}
 	}
@@ -155,7 +155,7 @@ func (s *Server) startBanExpiry() {
 	for range ticker.C {
 		now := time.Now().Unix()
 		var expired []string
-		for _, ban := range s.config.IPBans {
+		for _, ban := range s.cfg().IPBans {
 			if ban.ExpiresAt > 0 && ban.ExpiresAt <= now {
 				expired = append(expired, ban.IP)
 			}
@@ -201,7 +201,7 @@ func (s *Server) handleBanAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	service := s.config.Services[idx].Name
+	service := s.cfg().Services[idx].Name
 	action := strings.TrimPrefix(r.URL.Path, "/api/ban/")
 
 	switch action {
@@ -253,7 +253,7 @@ func (s *Server) handleBanAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(apitypes.BanListResponse{Bans: banListEntries(s.config.IPBans)})
+		json.NewEncoder(w).Encode(apitypes.BanListResponse{Bans: banListEntries(s.cfg().IPBans)})
 
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
@@ -272,7 +272,7 @@ func (s *Server) handleAPIBanList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.BanListResponse{Bans: banListEntries(s.config.IPBans)})
+	json.NewEncoder(w).Encode(apitypes.BanListResponse{Bans: banListEntries(s.cfg().IPBans)})
 }
 
 func (s *Server) handleAPIBanAdd(w http.ResponseWriter, r *http.Request) {

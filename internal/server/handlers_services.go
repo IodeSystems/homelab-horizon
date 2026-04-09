@@ -17,21 +17,21 @@ import (
 // syncServices syncs all subsystems with current service configuration (quick, no logging)
 func (s *Server) syncServices() {
 	// Update DNSMasq
-	if s.config.DNSMasqEnabled {
-		s.dns.SetMappings(s.config.DeriveDNSMappings())
+	if s.cfg().DNSMasqEnabled {
+		s.dns.SetMappings(s.cfg().DeriveDNSMappings())
 		s.dns.Reload()
 	}
 
 	// Update HAProxy
-	if s.config.HAProxyEnabled {
-		s.haproxy.SetBackends(s.config.DeriveHAProxyBackends())
+	if s.cfg().HAProxyEnabled {
+		s.haproxy.SetBackends(s.cfg().DeriveHAProxyBackends())
 	}
 
 	// Update Let's Encrypt
 	s.letsencrypt = letsencrypt.New(letsencrypt.Config{
-		Domains:        s.config.DeriveSSLDomains(),
-		CertDir:        s.config.SSLCertDir,
-		HAProxyCertDir: s.config.SSLHAProxyCertDir,
+		Domains:        s.cfg().DeriveSSLDomains(),
+		CertDir:        s.cfg().SSLCertDir,
+		HAProxyCertDir: s.cfg().SSLHAProxyCertDir,
 	})
 }
 
@@ -253,10 +253,10 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 	if checkCancelled() {
 		return
 	}
-	if s.config.DNSMasqEnabled {
+	if s.cfg().DNSMasqEnabled {
 		log.Step("Syncing DNSMasq...")
 
-		mappings := s.config.DeriveDNSMappings()
+		mappings := s.cfg().DeriveDNSMappings()
 		log.Info(fmt.Sprintf("  Generated %d DNS mappings", len(mappings)))
 
 		if err := s.dns.SetMappings(mappings); err != nil {
@@ -288,18 +288,18 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 	}
 
 	// Step 2: Route53 DNS records (external DNS - needed before SSL certs)
-	records := s.config.DeriveRoute53Records()
+	records := s.cfg().DeriveRoute53Records()
 	if len(records) > 0 && route53.Available() {
 		log.Step("Syncing Route53 DNS records (parallel)...")
 
 		// Update public IP if needed
 		if newIP, err := route53.GetPublicIP(); err == nil {
-			if newIP != s.config.PublicIP {
-				log.Info(fmt.Sprintf("  Public IP changed: %s -> %s", s.config.PublicIP, newIP))
-				s.config.PublicIP = newIP
-				config.Save(s.configPath, s.config)
+			if newIP != s.cfg().PublicIP {
+				log.Info(fmt.Sprintf("  Public IP changed: %s -> %s", s.cfg().PublicIP, newIP))
+				s.cfg().PublicIP = newIP
+				config.Save(s.configPath, s.cfg())
 				// Re-derive records with new IP
-				records = s.config.DeriveRoute53Records()
+				records = s.cfg().DeriveRoute53Records()
 			}
 		}
 
@@ -450,14 +450,14 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 	}
 
 	// Step 3: Let's Encrypt certificates (needs DNS to be set up first)
-	sslDomains := s.config.DeriveSSLDomains()
-	if s.config.SSLEnabled && len(sslDomains) > 0 {
+	sslDomains := s.cfg().DeriveSSLDomains()
+	if s.cfg().SSLEnabled && len(sslDomains) > 0 {
 		log.Step("Checking SSL certificates...")
 
 		s.letsencrypt = letsencrypt.New(letsencrypt.Config{
 			Domains:        sslDomains,
-			CertDir:        s.config.SSLCertDir,
-			HAProxyCertDir: s.config.SSLHAProxyCertDir,
+			CertDir:        s.cfg().SSLCertDir,
+			HAProxyCertDir: s.cfg().SSLHAProxyCertDir,
 		})
 
 		for _, domain := range sslDomains {
@@ -501,7 +501,7 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 					if strings.Contains(errStr, "AccessDenied") || strings.Contains(errStr, "not authorized") {
 						// Get zone IDs for the domains
 						var zoneIDs []string
-						for _, zone := range s.config.Zones {
+						for _, zone := range s.cfg().Zones {
 							if zone.SSL != nil && zone.SSL.Enabled {
 								zoneIDs = append(zoneIDs, zone.ZoneID)
 							}
@@ -520,7 +520,7 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 		}
 
 		// Package certs for HAProxy if needed
-		if s.config.HAProxyEnabled {
+		if s.cfg().HAProxyEnabled {
 			if err := s.letsencrypt.PackageAllForHAProxy(); err != nil {
 				log.Error(fmt.Sprintf("  Failed to package certs for HAProxy: %s", err))
 				hasErrors = true
@@ -539,22 +539,22 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 	}
 
 	// Step 4: HAProxy (last - needs certs to be ready)
-	if s.config.HAProxyEnabled {
+	if s.cfg().HAProxyEnabled {
 		log.Step("Syncing HAProxy...")
 
-		backends := s.config.DeriveHAProxyBackends()
+		backends := s.cfg().DeriveHAProxyBackends()
 		s.haproxy.SetBackends(backends)
 		log.Info(fmt.Sprintf("  Configured %d backends", len(backends)))
 
 		var sslConfig *haproxy.SSLConfig
-		if s.config.SSLEnabled {
+		if s.cfg().SSLEnabled {
 			sslConfig = &haproxy.SSLConfig{
 				Enabled: true,
-				CertDir: s.config.SSLHAProxyCertDir,
+				CertDir: s.cfg().SSLHAProxyCertDir,
 			}
 		}
 
-		if err := s.haproxy.WriteConfig(s.config.HAProxyHTTPPort, s.config.HAProxyHTTPSPort, sslConfig); err != nil {
+		if err := s.haproxy.WriteConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, sslConfig); err != nil {
 			log.Error(fmt.Sprintf("  Failed to write config: %s", err))
 			hasErrors = true
 		} else {

@@ -115,7 +115,7 @@ func (m *MCPServer) registerTools() {
 }
 
 func (m *MCPServer) handleGetTopology(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	cfg := m.srv.config
+	cfg := m.srv.cfg()
 
 	services := make([]config.Service, len(cfg.Services))
 	copy(services, cfg.Services)
@@ -182,7 +182,7 @@ func (m *MCPServer) handleGetStatus(_ context.Context, _ mcp.CallToolRequest) (*
 			pi.TransferTx = status.TransferTx
 			pi.Online = status.LatestHandshake != ""
 		}
-		for _, adminName := range m.srv.config.VPNAdmins {
+		for _, adminName := range m.srv.cfg().VPNAdmins {
 			if p.Name == adminName {
 				pi.IsAdmin = true
 				break
@@ -203,19 +203,19 @@ func (m *MCPServer) handleGetStatus(_ context.Context, _ mcp.CallToolRequest) (*
 			"peers":        peerData,
 		},
 		"dnsmasq": map[string]any{
-			"enabled":       m.srv.config.DNSMasqEnabled,
+			"enabled":       m.srv.cfg().DNSMasqEnabled,
 			"running":       dnsStatus.Running,
 			"config_exists": dnsStatus.ConfigExists,
 			"error":         dnsStatus.Error,
 		},
 		"haproxy": map[string]any{
-			"enabled":       m.srv.config.HAProxyEnabled,
+			"enabled":       m.srv.cfg().HAProxyEnabled,
 			"running":       hapStatus.Running,
 			"config_exists": hapStatus.ConfigExists,
 			"version":       hapStatus.Version,
 			"error":         hapStatus.Error,
 		},
-		"ssl_enabled":    m.srv.config.SSLEnabled,
+		"ssl_enabled":    m.srv.cfg().SSLEnabled,
 		"health_checks":  checkStatuses,
 		"overall_health": m.srv.health.IsHealthy(),
 	}
@@ -235,10 +235,10 @@ func (m *MCPServer) handleUpdateService(_ context.Context, req mcp.CallToolReque
 
 	switch action {
 	case "delete":
-		if !m.srv.config.RemoveService(name) {
+		if !m.srv.cfg().RemoveService(name) {
 			return mcp.NewToolResultError(fmt.Sprintf("service %q not found", name)), nil
 		}
-		if err := config.Save(m.srv.configPath, m.srv.config); err != nil {
+		if err := config.Save(m.srv.configPath, m.srv.cfg()); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("save failed: %s", err)), nil
 		}
 		m.srv.syncServices()
@@ -250,10 +250,10 @@ func (m *MCPServer) handleUpdateService(_ context.Context, req mcp.CallToolReque
 			return mcp.NewToolResultError("domain is required for add"), nil
 		}
 		svc := m.buildService(name, domain, req)
-		if err := m.srv.config.AddService(svc); err != nil {
+		if err := m.srv.cfg().AddService(svc); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		if err := config.Save(m.srv.configPath, m.srv.config); err != nil {
+		if err := config.Save(m.srv.configPath, m.srv.cfg()); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("save failed: %s", err)), nil
 		}
 		m.srv.syncServices()
@@ -261,7 +261,7 @@ func (m *MCPServer) handleUpdateService(_ context.Context, req mcp.CallToolReque
 
 	case "edit":
 		domain := req.GetString("domain", "")
-		existing := m.srv.config.GetService(name)
+		existing := m.srv.cfg().GetService(name)
 		if existing == nil {
 			return mcp.NewToolResultError(fmt.Sprintf("service %q not found", name)), nil
 		}
@@ -269,7 +269,7 @@ func (m *MCPServer) handleUpdateService(_ context.Context, req mcp.CallToolReque
 			domain = strings.Join(existing.Domains, ",")
 		}
 
-		m.srv.config.RemoveService(name)
+		m.srv.cfg().RemoveService(name)
 		svc := m.buildService(name, domain, req)
 
 		// Preserve existing config for fields not provided
@@ -290,11 +290,11 @@ func (m *MCPServer) handleUpdateService(_ context.Context, req mcp.CallToolReque
 			}
 		}
 
-		if err := m.srv.config.AddService(svc); err != nil {
-			m.srv.config.AddService(*existing)
+		if err := m.srv.cfg().AddService(svc); err != nil {
+			m.srv.cfg().AddService(*existing)
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		if err := config.Save(m.srv.configPath, m.srv.config); err != nil {
+		if err := config.Save(m.srv.configPath, m.srv.cfg()); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("save failed: %s", err)), nil
 		}
 		m.srv.syncServices()
@@ -355,7 +355,7 @@ func (m *MCPServer) buildService(name, domain string, req mcp.CallToolRequest) c
 }
 
 func (m *MCPServer) handleGetHostPortMap(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return jsonResult(m.srv.config.DeriveHostPortMap())
+	return jsonResult(m.srv.cfg().DeriveHostPortMap())
 }
 
 func (m *MCPServer) handleSync(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {

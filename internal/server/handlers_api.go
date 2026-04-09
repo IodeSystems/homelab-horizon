@@ -25,7 +25,7 @@ func (s *Server) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	domainCount := 0
-	for _, svc := range s.config.Services {
+	for _, svc := range s.cfg().Services {
 		domainCount += len(svc.Domains)
 	}
 
@@ -50,12 +50,12 @@ func (s *Server) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(apitypes.DashboardResponse{
-		ServiceCount:   len(s.config.Services),
+		ServiceCount:   len(s.cfg().Services),
 		DomainCount:    domainCount,
-		ZoneCount:      len(s.config.Zones),
+		ZoneCount:      len(s.cfg().Zones),
 		PeerCount:      peerCount,
 		HAProxyRunning: haStatus.Running,
-		SSLEnabled:     s.config.SSLEnabled,
+		SSLEnabled:     s.cfg().SSLEnabled,
 		Version:        s.version,
 		ChecksTotal:    len(statuses),
 		ChecksHealthy:  checksHealthy,
@@ -69,11 +69,11 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dnsmasqAddr := s.config.GetWGGatewayIP() + ":53"
+	dnsmasqAddr := s.cfg().GetWGGatewayIP() + ":53"
 
 	// Build service list
-	sorted := make([]apitypes.ServiceResp, 0, len(s.config.Services))
-	for _, svc := range s.config.Services {
+	sorted := make([]apitypes.ServiceResp, 0, len(s.cfg().Services))
+	for _, svc := range s.cfg().Services {
 		sr := apitypes.ServiceResp{
 			Name:    svc.Name,
 			Domains: svc.Domains,
@@ -82,9 +82,9 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 			sr.InternalDNS = &apitypes.InternalDNSResp{IP: svc.InternalDNS.IP}
 		}
 		if svc.ExternalDNS != nil {
-			ips := s.config.GetPublicIPsForService(&svc)
+			ips := s.cfg().GetPublicIPsForService(&svc)
 			sr.ExternalDNS = &apitypes.ExternalDNSResp{
-				IP:  s.config.GetPublicIPForService(&svc),
+				IP:  s.cfg().GetPublicIPForService(&svc),
 				IPs: ips,
 				TTL: svc.ExternalDNS.TTL,
 			}
@@ -177,7 +177,7 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 	// Gather domains from services
 	domainMap := make(map[string]*apitypes.DomainResp)
 
-	for _, svc := range s.config.Services {
+	for _, svc := range s.cfg().Services {
 		for _, domain := range svc.Domains {
 			dr := &apitypes.DomainResp{
 				Domain:      domain,
@@ -190,8 +190,8 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 			}
 			if svc.ExternalDNS != nil {
 				dr.HasExternalDNS = true
-				dr.ExternalIP = s.config.GetPublicIPForService(&svc)
-				dr.ExternalIPs = s.config.GetPublicIPsForService(&svc)
+				dr.ExternalIP = s.cfg().GetPublicIPForService(&svc)
+				dr.ExternalIPs = s.cfg().GetPublicIPsForService(&svc)
 			}
 			if svc.Proxy != nil && svc.Proxy.Backend != "" {
 				dr.HasProxy = true
@@ -208,7 +208,7 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add zone-derived domains not already present
-	for _, zone := range s.config.Zones {
+	for _, zone := range s.cfg().Zones {
 		for _, sub := range zone.SubZones {
 			var domain string
 			if sub == "" {
@@ -226,7 +226,7 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 
 	// Populate zone info
 	for _, dr := range domainMap {
-		zone := s.config.GetZoneForDomain(dr.Domain)
+		zone := s.cfg().GetZoneForDomain(dr.Domain)
 		if zone != nil {
 			dr.HasZone = true
 			dr.ZoneName = zone.Name
@@ -241,7 +241,7 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 		expiry string
 	}
 	zoneCerts := make(map[string]*certInfo)
-	for _, dc := range s.config.DeriveSSLDomains() {
+	for _, dc := range s.cfg().DeriveSSLDomains() {
 		ci := &certInfo{}
 		info, err := s.letsencrypt.GetCertInfoForDomain(dc.Domain)
 		if err == nil && info != nil {
@@ -251,12 +251,12 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 		// Map zone name to cert info (strip wildcard prefix to get zone)
 		zoneName := strings.TrimPrefix(dc.Domain, "*.")
 		// Find the actual zone this belongs to
-		if zone := s.config.GetZoneForDomain(zoneName); zone != nil {
+		if zone := s.cfg().GetZoneForDomain(zoneName); zone != nil {
 			zoneCerts[zone.Name] = ci
 		}
 	}
 
-	for _, zone := range s.config.Zones {
+	for _, zone := range s.cfg().Zones {
 		if zone.SSL == nil || !zone.SSL.Enabled {
 			continue
 		}
@@ -288,7 +288,7 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve DNS for service domains in parallel
-	dnsmasqAddr := s.config.GetWGGatewayIP() + ":53"
+	dnsmasqAddr := s.cfg().GetWGGatewayIP() + ":53"
 	var wgDomains sync.WaitGroup
 	for _, dr := range domainMap {
 		if !dr.HasService || strings.HasPrefix(dr.Domain, "*.") {
@@ -329,7 +329,7 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 
 	// Compute wildcard relationships: CoveredBy, IsRedundant, AbsorbedDomains
 	// For each zone, find wildcard SubZones and mark which domains they absorb
-	for _, zone := range s.config.Zones {
+	for _, zone := range s.cfg().Zones {
 		// Collect wildcard patterns on this zone
 		var wildcardPatterns []string
 		for _, sub := range zone.SubZones {
@@ -384,7 +384,7 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 
 	// Build zone SSL statuses
 	var zoneStatuses []apitypes.ZoneSSLResp
-	for _, zone := range s.config.Zones {
+	for _, zone := range s.cfg().Zones {
 		zs := apitypes.ZoneSSLResp{
 			ZoneName:          zone.Name,
 			SSLEnabled:        zone.SSL != nil && zone.SSL.Enabled,
@@ -405,9 +405,9 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 		if zs.SSLEnabled {
 			// Find the cert using the actual primary domain from DeriveSSLDomains
 			var certLookupDomain string
-			for _, dc := range s.config.DeriveSSLDomains() {
+			for _, dc := range s.cfg().DeriveSSLDomains() {
 				dcZone := strings.TrimPrefix(dc.Domain, "*.")
-				if z := s.config.GetZoneForDomain(dcZone); z != nil && z.Name == zone.Name {
+				if z := s.cfg().GetZoneForDomain(dcZone); z != nil && z.Name == zone.Name {
 					certLookupDomain = dc.Domain
 					break
 				}
@@ -504,7 +504,7 @@ func (s *Server) handleAPIVPNPeers(w http.ResponseWriter, r *http.Request) {
 			Name:       p.Name,
 			PublicKey:  p.PublicKey,
 			AllowedIPs: p.AllowedIPs,
-			Profile:    s.config.GetPeerProfile(p.Name),
+			Profile:    s.cfg().GetPeerProfile(p.Name),
 		}
 		if status, ok := ifaceStatus.Peers[p.PublicKey]; ok {
 			pr.Endpoint = status.Endpoint
@@ -513,7 +513,7 @@ func (s *Server) handleAPIVPNPeers(w http.ResponseWriter, r *http.Request) {
 			pr.TransferTx = status.TransferTx
 			pr.Online = status.LatestHandshake != ""
 		}
-		for _, adminName := range s.config.VPNAdmins {
+		for _, adminName := range s.cfg().VPNAdmins {
 			if p.Name == adminName {
 				pr.IsAdmin = true
 				break
@@ -532,8 +532,8 @@ func (s *Server) handleAPIZones(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	zones := make([]apitypes.ZoneResp, 0, len(s.config.Zones))
-	for _, z := range s.config.Zones {
+	zones := make([]apitypes.ZoneResp, 0, len(s.cfg().Zones))
+	for _, z := range s.cfg().Zones {
 		zr := apitypes.ZoneResp{
 			Name:     z.Name,
 			ZoneID:   z.ZoneID,
@@ -571,9 +571,9 @@ func (s *Server) handleAPIServiceIntegration(w http.ResponseWriter, r *http.Requ
 	}
 
 	var svc *config.Service
-	for i := range s.config.Services {
-		if s.config.Services[i].Name == name {
-			svc = &s.config.Services[i]
+	for i := range s.cfg().Services {
+		if s.cfg().Services[i].Name == name {
+			svc = &s.cfg().Services[i]
 			break
 		}
 	}
@@ -585,7 +585,7 @@ func (s *Server) handleAPIServiceIntegration(w http.ResponseWriter, r *http.Requ
 	// Ensure token exists
 	if svc.Token == "" {
 		svc.EnsureToken()
-		config.Save(s.configPath, s.config)
+		config.Save(s.configPath, s.cfg())
 	}
 
 	// Build base URL from request

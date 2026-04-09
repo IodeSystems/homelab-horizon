@@ -17,8 +17,8 @@ func (s *Server) handleAPISettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Zones
-	zones := make([]apitypes.ZoneResp, 0, len(s.config.Zones))
-	for _, z := range s.config.Zones {
+	zones := make([]apitypes.ZoneResp, 0, len(s.cfg().Zones))
+	for _, z := range s.cfg().Zones {
 		zr := apitypes.ZoneResp{
 			Name:     z.Name,
 			ZoneID:   z.ZoneID,
@@ -43,16 +43,16 @@ func (s *Server) handleAPISettings(w http.ResponseWriter, r *http.Request) {
 		Running:      haStatus.Running,
 		ConfigExists: haStatus.ConfigExists,
 		Version:      haStatus.Version,
-		Enabled:      s.config.HAProxyEnabled,
-		HTTPPort:     s.config.HAProxyHTTPPort,
-		HTTPSPort:    s.config.HAProxyHTTPSPort,
+		Enabled:      s.cfg().HAProxyEnabled,
+		HTTPPort:     s.cfg().HAProxyHTTPPort,
+		HTTPSPort:    s.cfg().HAProxyHTTPSPort,
 	}
 
 	// SSL
 	ssl := apitypes.SSLResp{
-		Enabled:        s.config.SSLEnabled,
-		CertDir:        s.config.SSLCertDir,
-		HAProxyCertDir: s.config.SSLHAProxyCertDir,
+		Enabled:        s.cfg().SSLEnabled,
+		CertDir:        s.cfg().SSLCertDir,
+		HAProxyCertDir: s.cfg().SSLHAProxyCertDir,
 	}
 
 	// Checks
@@ -73,14 +73,14 @@ func (s *Server) handleAPISettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Config
-	vpnAdmins := s.config.VPNAdmins
+	vpnAdmins := s.cfg().VPNAdmins
 	if vpnAdmins == nil {
 		vpnAdmins = []string{}
 	}
 	cfg := apitypes.ConfigResp{
-		PublicIP:       s.config.PublicIP,
-		LocalInterface: s.config.LocalInterface,
-		DnsmasqEnabled: s.config.DNSMasqEnabled,
+		PublicIP:       s.cfg().PublicIP,
+		LocalInterface: s.cfg().LocalInterface,
+		DnsmasqEnabled: s.cfg().DNSMasqEnabled,
 		VPNAdmins:      vpnAdmins,
 	}
 
@@ -182,12 +182,12 @@ func (s *Server) handleAPIAddZone(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.config.AddZone(zone); err != nil {
+	if err := s.cfg().AddZone(zone); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	if err := config.Save(s.configPath, s.config); err != nil {
+	if err := config.Save(s.configPath, s.cfg()); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -235,18 +235,18 @@ func (s *Server) handleAPIEditZone(w http.ResponseWriter, r *http.Request) {
 	sslEmail := strings.TrimSpace(req.SSLEmail)
 
 	var found bool
-	for i := range s.config.Zones {
-		if s.config.Zones[i].Name == originalName {
+	for i := range s.cfg().Zones {
+		if s.cfg().Zones[i].Name == originalName {
 			if sslEmail != "" {
-				if s.config.Zones[i].SSL == nil {
-					s.config.Zones[i].SSL = &config.ZoneSSL{}
+				if s.cfg().Zones[i].SSL == nil {
+					s.cfg().Zones[i].SSL = &config.ZoneSSL{}
 				}
-				s.config.Zones[i].SSL.Enabled = true
-				s.config.Zones[i].SSL.Email = sslEmail
+				s.cfg().Zones[i].SSL.Enabled = true
+				s.cfg().Zones[i].SSL.Email = sslEmail
 			} else {
-				s.config.Zones[i].SSL = nil
+				s.cfg().Zones[i].SSL = nil
 			}
-			s.config.Zones[i].SubZones = subZones
+			s.cfg().Zones[i].SubZones = subZones
 			found = true
 			break
 		}
@@ -257,7 +257,7 @@ func (s *Server) handleAPIEditZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := config.Save(s.configPath, s.config); err != nil {
+	if err := config.Save(s.configPath, s.cfg()); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -284,12 +284,12 @@ func (s *Server) handleAPIDeleteZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.config.RemoveZone(req.Name) {
+	if !s.cfg().RemoveZone(req.Name) {
 		writeJSONError(w, http.StatusNotFound, "Zone not found")
 		return
 	}
 
-	if err := config.Save(s.configPath, s.config); err != nil {
+	if err := config.Save(s.configPath, s.cfg()); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -310,14 +310,14 @@ func (s *Server) handleAPIHAProxyWriteConfig(w http.ResponseWriter, r *http.Requ
 	}
 
 	var sslConfig *haproxy.SSLConfig
-	if s.config.SSLEnabled {
+	if s.cfg().SSLEnabled {
 		sslConfig = &haproxy.SSLConfig{
 			Enabled: true,
-			CertDir: s.config.SSLHAProxyCertDir,
+			CertDir: s.cfg().SSLHAProxyCertDir,
 		}
 	}
 
-	if err := s.haproxy.WriteConfig(s.config.HAProxyHTTPPort, s.config.HAProxyHTTPSPort, sslConfig); err != nil {
+	if err := s.haproxy.WriteConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, sslConfig); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -352,14 +352,14 @@ func (s *Server) handleAPIHAProxyConfigPreview(w http.ResponseWriter, r *http.Re
 	}
 
 	var sslConfig *haproxy.SSLConfig
-	if s.config.SSLEnabled {
+	if s.cfg().SSLEnabled {
 		sslConfig = &haproxy.SSLConfig{
 			Enabled: true,
-			CertDir: s.config.SSLHAProxyCertDir,
+			CertDir: s.cfg().SSLHAProxyCertDir,
 		}
 	}
 
-	preview := s.haproxy.GenerateConfig(s.config.HAProxyHTTPPort, s.config.HAProxyHTTPSPort, sslConfig)
+	preview := s.haproxy.GenerateConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, sslConfig)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(apitypes.HAProxyConfigPreview{Config: preview})
@@ -451,7 +451,7 @@ func (s *Server) handleAPIAddCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, c := range s.config.ServiceChecks {
+	for _, c := range s.cfg().ServiceChecks {
 		if c.Name == name {
 			writeJSONError(w, http.StatusBadRequest, "Check with this name already exists")
 			return
@@ -471,13 +471,13 @@ func (s *Server) handleAPIAddCheck(w http.ResponseWriter, r *http.Request) {
 		Enabled:  true,
 	}
 
-	s.config.ServiceChecks = append(s.config.ServiceChecks, check)
-	if err := config.Save(s.configPath, s.config); err != nil {
+	s.cfg().ServiceChecks = append(s.cfg().ServiceChecks, check)
+	if err := config.Save(s.configPath, s.cfg()); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	s.monitor.Reload(s.config)
+	s.monitor.Reload(s.cfg())
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
@@ -508,9 +508,9 @@ func (s *Server) handleAPIDeleteCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	found := false
-	for i, c := range s.config.ServiceChecks {
+	for i, c := range s.cfg().ServiceChecks {
 		if c.Name == name {
-			s.config.ServiceChecks = append(s.config.ServiceChecks[:i], s.config.ServiceChecks[i+1:]...)
+			s.cfg().ServiceChecks = append(s.cfg().ServiceChecks[:i], s.cfg().ServiceChecks[i+1:]...)
 			found = true
 			break
 		}
@@ -521,12 +521,12 @@ func (s *Server) handleAPIDeleteCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := config.Save(s.configPath, s.config); err != nil {
+	if err := config.Save(s.configPath, s.cfg()); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	s.monitor.Reload(s.config)
+	s.monitor.Reload(s.cfg())
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
@@ -568,14 +568,14 @@ func (s *Server) handleAPIToggleCheck(w http.ResponseWriter, r *http.Request) {
 	if status.AutoGen {
 		s.monitor.UpdateConfig()
 	} else {
-		for i := range s.config.ServiceChecks {
-			if s.config.ServiceChecks[i].Name == name {
-				s.config.ServiceChecks[i].Enabled = newEnabled
+		for i := range s.cfg().ServiceChecks {
+			if s.cfg().ServiceChecks[i].Name == name {
+				s.cfg().ServiceChecks[i].Enabled = newEnabled
 				break
 			}
 		}
 	}
-	config.Save(s.configPath, s.config)
+	config.Save(s.configPath, s.cfg())
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true})

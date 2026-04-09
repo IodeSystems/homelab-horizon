@@ -14,7 +14,7 @@ import (
 // findServiceByToken returns the service index matching either the service token
 // or the legacy deploy token.
 func (s *Server) findServiceByToken(token string) int {
-	for i, svc := range s.config.Services {
+	for i, svc := range s.cfg().Services {
 		if svc.Token == token {
 			return i
 		}
@@ -62,7 +62,7 @@ func (s *Server) handleDeployAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	svc := &s.config.Services[idx]
+	svc := &s.cfg().Services[idx]
 	deploy := svc.Proxy.Deploy
 	backendName := haproxy.SanitizeName(svc.Name) + "_backend"
 	action := parts[0]
@@ -178,11 +178,11 @@ func (s *Server) handleDeployStateChange(w http.ResponseWriter, backendName, slo
 }
 
 func (s *Server) handleDeploySwap(w http.ResponseWriter, svcIdx int) {
-	deploy := s.config.Services[svcIdx].Proxy.Deploy
+	deploy := s.cfg().Services[svcIdx].Proxy.Deploy
 	deploy.Swap()
 
 	// Save config
-	if err := config.Save(s.configPath, s.config); err != nil {
+	if err := config.Save(s.configPath, s.cfg()); err != nil {
 		http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -190,10 +190,10 @@ func (s *Server) handleDeploySwap(w http.ResponseWriter, svcIdx int) {
 	// Regenerate and reload haproxy so current/next ports reflect the new active slot
 	s.syncHAProxyBackends()
 	ssl := &haproxy.SSLConfig{
-		Enabled: s.config.SSLEnabled,
-		CertDir: s.config.SSLHAProxyCertDir,
+		Enabled: s.cfg().SSLEnabled,
+		CertDir: s.cfg().SSLHAProxyCertDir,
 	}
-	if err := s.haproxy.WriteConfig(s.config.HAProxyHTTPPort, s.config.HAProxyHTTPSPort, ssl); err != nil {
+	if err := s.haproxy.WriteConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, ssl); err != nil {
 		http.Error(w, "failed to write haproxy config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -202,7 +202,7 @@ func (s *Server) handleDeploySwap(w http.ResponseWriter, svcIdx int) {
 		return
 	}
 
-	backend := s.config.Services[svcIdx].Proxy.Backend
+	backend := s.cfg().Services[svcIdx].Proxy.Backend
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(apitypes.DeploySwapResponse{
