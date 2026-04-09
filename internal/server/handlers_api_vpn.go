@@ -50,7 +50,7 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP, err := s.wg.GetNextIP(s.config.VPNRange)
+	clientIP, err := s.wg.GetNextIP(s.cfg().VPNRange)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -66,8 +66,8 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.config.SetPeerProfile(name, profile)
-	config.Save(s.configPath, s.config)
+	s.cfg().SetPeerProfile(name, profile)
+	config.Save(s.configPath, s.cfg())
 
 	s.wg.Reload()
 	s.rebuildWGForwardChain()
@@ -75,10 +75,10 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 	clientConfig := wireguard.GenerateClientConfig(
 		privKey,
 		strings.TrimSuffix(clientIP, "/32"),
-		s.config.ServerPublicKey,
-		s.config.ServerEndpoint,
-		s.config.DNS,
-		s.config.GetAllowedIPsForProfile(profile),
+		s.cfg().ServerPublicKey,
+		s.cfg().ServerEndpoint,
+		s.cfg().DNS,
+		s.cfg().GetAllowedIPsForProfile(profile),
 	)
 
 	qrCode := qr.GenerateSVG(clientConfig, 256)
@@ -156,13 +156,13 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 
 	// Update VPNAdmins if name changed and old name was admin
 	if peer.Name != name {
-		for i, adminName := range s.config.VPNAdmins {
+		for i, adminName := range s.cfg().VPNAdmins {
 			if adminName == peer.Name {
-				s.config.VPNAdmins[i] = name
+				s.cfg().VPNAdmins[i] = name
 				break
 			}
 		}
-		s.config.RenamePeerProfile(peer.Name, name)
+		s.cfg().RenamePeerProfile(peer.Name, name)
 	}
 
 	// Update profile
@@ -170,8 +170,8 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 	if profile == "" {
 		profile = config.ProfileLanAccess
 	}
-	s.config.SetPeerProfile(name, profile)
-	config.Save(s.configPath, s.config)
+	s.cfg().SetPeerProfile(name, profile)
+	config.Save(s.configPath, s.cfg())
 
 	s.wg.Reload()
 	s.rebuildWGForwardChain()
@@ -212,8 +212,8 @@ func (s *Server) handleAPIDeletePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if peer != nil {
-		s.config.DeletePeerProfile(peer.Name)
-		config.Save(s.configPath, s.config)
+		s.cfg().DeletePeerProfile(peer.Name)
+		config.Save(s.configPath, s.cfg())
 	}
 
 	s.wg.Reload()
@@ -248,7 +248,7 @@ func (s *Server) handleAPIToggleAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	isCurrentlyAdmin := false
-	for _, adminName := range s.config.VPNAdmins {
+	for _, adminName := range s.cfg().VPNAdmins {
 		if adminName == clientName {
 			isCurrentlyAdmin = true
 			break
@@ -256,18 +256,18 @@ func (s *Server) handleAPIToggleAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isCurrentlyAdmin {
-		newAdmins := make([]string, 0, len(s.config.VPNAdmins)-1)
-		for _, adminName := range s.config.VPNAdmins {
+		newAdmins := make([]string, 0, len(s.cfg().VPNAdmins)-1)
+		for _, adminName := range s.cfg().VPNAdmins {
 			if adminName != clientName {
 				newAdmins = append(newAdmins, adminName)
 			}
 		}
-		s.config.VPNAdmins = newAdmins
+		s.cfg().VPNAdmins = newAdmins
 	} else {
-		s.config.VPNAdmins = append(s.config.VPNAdmins, clientName)
+		s.cfg().VPNAdmins = append(s.cfg().VPNAdmins, clientName)
 	}
 
-	config.Save(s.configPath, s.config)
+	config.Save(s.configPath, s.cfg())
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(apitypes.ToggleAdminResponse{
@@ -331,8 +331,8 @@ func (s *Server) handleAPISetPeerProfile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	s.config.SetPeerProfile(name, profile)
-	config.Save(s.configPath, s.config)
+	s.cfg().SetPeerProfile(name, profile)
+	config.Save(s.configPath, s.cfg())
 	s.rebuildWGForwardChain()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -343,8 +343,8 @@ func (s *Server) handleAPISetPeerProfile(w http.ResponseWriter, r *http.Request)
 func (s *Server) rebuildWGForwardChain() {
 	peers := s.wg.GetPeers()
 	lanCIDR := config.GetLocalNetworkCIDR(config.DetectDefaultInterface())
-	profiles := s.config.VPNProfiles
-	if err := wireguard.RebuildForwardChain(peers, profiles, s.config.VPNRange, lanCIDR); err != nil {
+	profiles := s.cfg().VPNProfiles
+	if err := wireguard.RebuildForwardChain(peers, profiles, s.cfg().VPNRange, lanCIDR); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to rebuild WG-FORWARD chain: %v\n", err)
 	}
 }
@@ -359,7 +359,7 @@ func (s *Server) handleAPIListInvites(w http.ResponseWriter, r *http.Request) {
 
 	invites := make([]apitypes.InviteResp, 0, len(tokens))
 	for _, token := range tokens {
-		url := strings.TrimSuffix(s.config.KioskURL, "/") + "/invite/" + token
+		url := strings.TrimSuffix(s.cfg().KioskURL, "/") + "/invite/" + token
 		invites = append(invites, apitypes.InviteResp{
 			Token: token,
 			URL:   url,
@@ -386,7 +386,7 @@ func (s *Server) handleAPICreateInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	url := strings.TrimSuffix(s.config.KioskURL, "/") + "/invite/" + token
+	url := strings.TrimSuffix(s.cfg().KioskURL, "/") + "/invite/" + token
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(apitypes.CreateInviteResponse{
@@ -427,7 +427,7 @@ func (s *Server) handleAPIGetPeerConfig(w http.ResponseWriter, r *http.Request) 
 		primaryIP = strings.Split(strings.TrimSpace(peer.AllowedIPs), "/")[0]
 	}
 
-	profile := s.config.GetPeerProfile(peer.Name)
+	profile := s.cfg().GetPeerProfile(peer.Name)
 	if profile == "" {
 		profile = "lan-access"
 	}
@@ -435,10 +435,10 @@ func (s *Server) handleAPIGetPeerConfig(w http.ResponseWriter, r *http.Request) 
 	clientConfig := wireguard.GenerateClientConfig(
 		"<YOUR_PRIVATE_KEY>",
 		primaryIP,
-		s.config.ServerPublicKey,
-		s.config.ServerEndpoint,
-		s.config.DNS,
-		s.config.GetAllowedIPsForProfile(profile),
+		s.cfg().ServerPublicKey,
+		s.cfg().ServerEndpoint,
+		s.cfg().DNS,
+		s.cfg().GetAllowedIPsForProfile(profile),
 	)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -505,7 +505,7 @@ func (s *Server) handleAPIRekeyPeer(w http.ResponseWriter, r *http.Request) {
 		primaryIP = strings.Split(strings.TrimSpace(peer.AllowedIPs), "/")[0]
 	}
 
-	profile := s.config.GetPeerProfile(peer.Name)
+	profile := s.cfg().GetPeerProfile(peer.Name)
 	if profile == "" {
 		profile = "lan-access"
 	}
@@ -513,10 +513,10 @@ func (s *Server) handleAPIRekeyPeer(w http.ResponseWriter, r *http.Request) {
 	clientConfig := wireguard.GenerateClientConfig(
 		privKey,
 		primaryIP,
-		s.config.ServerPublicKey,
-		s.config.ServerEndpoint,
-		s.config.DNS,
-		s.config.GetAllowedIPsForProfile(profile),
+		s.cfg().ServerPublicKey,
+		s.cfg().ServerEndpoint,
+		s.cfg().DNS,
+		s.cfg().GetAllowedIPsForProfile(profile),
 	)
 
 	qrCode := qr.GenerateSVG(clientConfig, 256)
@@ -539,7 +539,7 @@ func (s *Server) handleAPIRekeyPeer(w http.ResponseWriter, r *http.Request) {
 	}
 	s.configSharesMu.Unlock()
 
-	shareURL := strings.TrimSuffix(s.config.KioskURL, "/") + "/share/" + token
+	shareURL := strings.TrimSuffix(s.cfg().KioskURL, "/") + "/share/" + token
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(apitypes.RekeyPeerResponse{
@@ -560,7 +560,7 @@ func (s *Server) handleAPIListConfigShares(w http.ResponseWriter, r *http.Reques
 	s.configSharesMu.Lock()
 	shares := make([]apitypes.ConfigShareResp, 0, len(s.configShares))
 	for _, share := range s.configShares {
-		url := strings.TrimSuffix(s.config.KioskURL, "/") + "/share/" + share.Token
+		url := strings.TrimSuffix(s.cfg().KioskURL, "/") + "/share/" + share.Token
 		shares = append(shares, apitypes.ConfigShareResp{
 			Token:    share.Token,
 			URL:      url,

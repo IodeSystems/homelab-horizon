@@ -13,5 +13,5 @@ func (s *Server) handleHZClientScript(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) syncHAProxyBackends() {
 	// Derive HAProxy backends from services
-	s.haproxy.SetBackends(s.config.DeriveHAProxyBackends())
+	s.haproxy.SetBackends(s.cfg().DeriveHAProxyBackends())
 }

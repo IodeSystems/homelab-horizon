@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"homelab-horizon/internal/config"
@@ -177,7 +178,11 @@ type configShare struct {
 }
 
 type Server struct {
-	config              *config.Config
+	// config is swapped atomically. Always access via s.cfg() — never read
+	// the field directly outside the few helpers below. In-place mutation
+	// of the pointed-to Config is still racy with concurrent handler reads;
+	// that pre-existing race is out of scope for this refactor.
+	config              atomic.Pointer[config.Config]
 	configPath          string
 	adminToken          string
 	csrfSecret          string
@@ -318,7 +323,6 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 	mon := monitor.New(cfg)
 
 	s := &Server{
-		config:       cfg,
 		configPath:   configPath,
 		adminToken:   adminToken,
 		csrfSecret:   generateToken(32),
@@ -335,8 +339,16 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		health:       &HealthStatus{healthy: true},
 		configShares: make(map[string]*configShare),
 	}
+	s.config.Store(cfg)
 
 	return s, nil
+}
+
+// cfg returns the current live config. It is the only sanctioned way to read
+// s.config — the underlying atomic.Pointer is swapped by the peer-sync pull
+// loop and reading the field directly would race with that swap.
+func (s *Server) cfg() *config.Config {
+	return s.config.Load()
 }
 
 func generateToken(length int) string {
@@ -538,7 +550,7 @@ func (s *Server) isAdmin(r *http.Request) bool {
 
 // isVPNAdmin checks if the request comes from a VPN client marked as admin
 func (s *Server) isVPNAdmin(r *http.Request) bool {
-	if len(s.config.VPNAdmins) == 0 {
+	if len(s.cfg().VPNAdmins) == 0 {
 		return false
 	}
 
@@ -556,7 +568,7 @@ func (s *Server) isVPNAdmin(r *http.Request) bool {
 		return false
 	}
 
-	for _, adminName := range s.config.VPNAdmins {
+	for _, adminName := range s.cfg().VPNAdmins {
 		if peer.Name == adminName {
 			return true
 		}
@@ -590,13 +602,13 @@ func (s *Server) isTrustedProxy(ip string) bool {
 	}
 
 	// Trust the server's local interface IP (where HAProxy runs)
-	if s.config.LocalInterface != "" && ip == s.config.LocalInterface {
+	if s.cfg().LocalInterface != "" && ip == s.cfg().LocalInterface {
 		return true
 	}
 
 	// Trust the VPN server IP (first IP in VPN range)
-	if s.config.VPNRange != "" {
-		_, vpnNet, err := net.ParseCIDR(s.config.VPNRange)
+	if s.cfg().VPNRange != "" {
+		_, vpnNet, err := net.ParseCIDR(s.cfg().VPNRange)
 		if err == nil {
 			// Server IP is typically .1 in the range
 			serverIP := vpnNet.IP.To4()
@@ -614,11 +626,11 @@ func (s *Server) isTrustedProxy(ip string) bool {
 
 // isInVPNRange checks if an IP address is within the configured VPN range
 func (s *Server) isInVPNRange(ip string) bool {
-	if s.config.VPNRange == "" {
+	if s.cfg().VPNRange == "" {
 		return false
 	}
 
-	_, vpnNet, err := net.ParseCIDR(s.config.VPNRange)
+	_, vpnNet, err := net.ParseCIDR(s.cfg().VPNRange)
 	if err != nil {
 		return false
 	}
@@ -646,7 +658,7 @@ type inviteEntry struct {
 func (s *Server) getInviteEntries() []inviteEntry {
 	var entries []inviteEntry
 
-	file, err := os.Open(s.config.InvitesFile)
+	file, err := os.Open(s.cfg().InvitesFile)
 	if err != nil {
 		return entries
 	}
@@ -706,7 +718,7 @@ func (s *Server) isValidInvite(token string) bool {
 func (s *Server) addInvite(token string) error {
 	expiry := time.Now().Add(inviteExpiry).Unix()
 
-	f, err := os.OpenFile(s.config.InvitesFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(s.cfg().InvitesFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
@@ -734,7 +746,7 @@ func (s *Server) removeInvite(token string) error {
 	if len(remaining) > 0 {
 		content += "\n"
 	}
-	return os.WriteFile(s.config.InvitesFile, []byte(content), 0600)
+	return os.WriteFile(s.cfg().InvitesFile, []byte(content), 0600)
 }
 
 // cleanupExpiredInvites removes expired invites from the file
@@ -757,7 +769,7 @@ func (s *Server) cleanupExpiredInvites() error {
 	if len(valid) > 0 {
 		content += "\n"
 	}
-	return os.WriteFile(s.config.InvitesFile, []byte(content), 0600)
+	return os.WriteFile(s.cfg().InvitesFile, []byte(content), 0600)
 }
 
 // Health check handler - returns minimal response based on background check
@@ -773,8 +785,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // runHealthCheck performs internal health checks and updates status
 func (s *Server) runHealthCheck() {
 	status := s.wg.GetInterfaceStatus()
-	dnsRunning := !s.config.DNSMasqEnabled || s.dns.Status().Running
-	haproxyRunning := !s.config.HAProxyEnabled || s.haproxy.GetStatus().Running
+	dnsRunning := !s.cfg().DNSMasqEnabled || s.dns.Status().Running
+	haproxyRunning := !s.cfg().HAProxyEnabled || s.haproxy.GetStatus().Running
 
 	healthy := status.Up && dnsRunning && haproxyRunning
 	s.health.SetHealthy(healthy)
@@ -907,14 +919,14 @@ func (s *Server) setupRoutes() *http.ServeMux {
 func (s *Server) ensureServicesRunning() {
 	// Ensure all services have API tokens
 	tokensGenerated := false
-	for i := range s.config.Services {
-		if s.config.Services[i].Token == "" {
-			s.config.Services[i].EnsureToken()
+	for i := range s.cfg().Services {
+		if s.cfg().Services[i].Token == "" {
+			s.cfg().Services[i].EnsureToken()
 			tokensGenerated = true
 		}
 	}
 	if tokensGenerated {
-		config.Save(s.configPath, s.config)
+		config.Save(s.configPath, s.cfg())
 	}
 
 	// In Docker, skip service management (no systemd)
@@ -924,11 +936,11 @@ func (s *Server) ensureServicesRunning() {
 	}
 
 	// Ensure WireGuard interface is up
-	fmt.Printf("Checking WireGuard interface %s... ", s.config.WGInterface)
+	fmt.Printf("Checking WireGuard interface %s... ", s.cfg().WGInterface)
 	status := s.wg.GetInterfaceStatus()
 	if !status.Up {
 		fmt.Println("DOWN")
-		fmt.Printf("  Attempting to bring up %s... ", s.config.WGInterface)
+		fmt.Printf("  Attempting to bring up %s... ", s.cfg().WGInterface)
 		if err := s.wg.InterfaceUp(); err != nil {
 			fmt.Printf("FAILED: %v\n", err)
 		} else {
@@ -939,7 +951,7 @@ func (s *Server) ensureServicesRunning() {
 	}
 
 	// Ensure dnsmasq is running if enabled
-	if s.config.DNSMasqEnabled {
+	if s.cfg().DNSMasqEnabled {
 		fmt.Print("Checking dnsmasq... ")
 		dnsStatus := s.dns.Status()
 
@@ -951,7 +963,7 @@ func (s *Server) ensureServicesRunning() {
 				fmt.Printf("FAILED: %v\n", err)
 			} else {
 				fmt.Println("OK")
-				s.dns.SetMappings(s.config.DeriveDNSMappings())
+				s.dns.SetMappings(s.cfg().DeriveDNSMappings())
 				if dnsStatus.Running {
 					fmt.Print("  Restarting dnsmasq... ")
 					if err := s.dns.Reload(); err != nil {
@@ -978,7 +990,7 @@ func (s *Server) ensureServicesRunning() {
 	}
 
 	// Ensure HAProxy is running if enabled
-	if s.config.HAProxyEnabled {
+	if s.cfg().HAProxyEnabled {
 		fmt.Print("Checking HAProxy... ")
 		hapStatus := s.haproxy.GetStatus()
 		if !hapStatus.Running {
@@ -996,13 +1008,13 @@ func (s *Server) ensureServicesRunning() {
 }
 
 func (s *Server) startRoute53Sync() {
-	interval := s.config.PublicIPInterval
+	interval := s.cfg().PublicIPInterval
 	if interval <= 0 {
 		return
 	}
 
 	// Check if there are any external services that need Route53 sync
-	records := s.config.DeriveRoute53Records()
+	records := s.cfg().DeriveRoute53Records()
 	if len(records) == 0 {
 		return
 	}
@@ -1028,16 +1040,16 @@ func (s *Server) syncPublicIPAndRecords() {
 	}
 
 	// Only sync if IP changed
-	if newIP == s.config.PublicIP {
+	if newIP == s.cfg().PublicIP {
 		return
 	}
 
-	fmt.Printf("[DNS] Public IP changed: %s -> %s\n", s.config.PublicIP, newIP)
-	s.config.PublicIP = newIP
-	config.Save(s.configPath, s.config)
+	fmt.Printf("[DNS] Public IP changed: %s -> %s\n", s.cfg().PublicIP, newIP)
+	s.cfg().PublicIP = newIP
+	config.Save(s.configPath, s.cfg())
 
 	// Sync all derived DNS records
-	records := s.config.DeriveRoute53Records()
+	records := s.cfg().DeriveRoute53Records()
 	if len(records) == 0 {
 		return
 	}
@@ -1065,10 +1077,10 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	fmt.Println("========================================")
 	fmt.Println("Homelab Horizon")
 	fmt.Println("========================================")
-	fmt.Printf("Listening on %s\n", s.config.ListenAddr)
-	fmt.Printf("WireGuard config: %s\n", s.config.WGConfigPath)
-	if s.config.DNSMasqEnabled {
-		fmt.Printf("DNSMasq config: %s\n", s.config.DNSMasqConfigPath)
+	fmt.Printf("Listening on %s\n", s.cfg().ListenAddr)
+	fmt.Printf("WireGuard config: %s\n", s.cfg().WGConfigPath)
+	if s.cfg().DNSMasqEnabled {
+		fmt.Printf("DNSMasq config: %s\n", s.cfg().DNSMasqConfigPath)
 	}
 	fmt.Println("========================================")
 
@@ -1092,7 +1104,7 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	fmt.Println("========================================")
 
 	server := &http.Server{
-		Addr:         s.config.ListenAddr,
+		Addr:         s.cfg().ListenAddr,
 		Handler:      s.setupRoutes(),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 10 * time.Minute, // Long timeout for SSE streams and certbot operations

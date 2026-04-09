@@ -37,7 +37,7 @@ func (s *Server) handleBackupExport(w http.ResponseWriter, r *http.Request) {
 	zw := zip.NewWriter(&buf)
 
 	// 1. Config (clear public_ip so the new server re-detects)
-	cfgCopy := *s.config
+	cfgCopy := *s.cfg()
 	cfgCopy.PublicIP = ""
 	cfgJSON, err := json.MarshalIndent(&cfgCopy, "", "  ")
 	if err != nil {
@@ -50,22 +50,22 @@ func (s *Server) handleBackupExport(w http.ResponseWriter, r *http.Request) {
 	zipWriteFile(zw, "token", []byte(s.adminToken+"\n"))
 
 	// 3. WireGuard config
-	if s.config.WGConfigPath != "" {
-		if data, err := os.ReadFile(s.config.WGConfigPath); err == nil {
+	if s.cfg().WGConfigPath != "" {
+		if data, err := os.ReadFile(s.cfg().WGConfigPath); err == nil {
 			zipWriteFile(zw, "wireguard.conf", data)
 		}
 	}
 
 	// 4. Invites
-	if s.config.InvitesFile != "" {
-		if data, err := os.ReadFile(s.config.InvitesFile); err == nil && len(data) > 0 {
+	if s.cfg().InvitesFile != "" {
+		if data, err := os.ReadFile(s.cfg().InvitesFile); err == nil && len(data) > 0 {
 			zipWriteFile(zw, "invites.txt", data)
 		}
 	}
 
 	// 5. SSL certificates (letsencrypt live dir)
-	if s.config.SSLEnabled && s.config.SSLCertDir != "" {
-		liveDir := filepath.Join(s.config.SSLCertDir, "live")
+	if s.cfg().SSLEnabled && s.cfg().SSLCertDir != "" {
+		liveDir := filepath.Join(s.cfg().SSLCertDir, "live")
 		if entries, err := os.ReadDir(liveDir); err == nil {
 			for _, entry := range entries {
 				if !entry.IsDir() {
@@ -151,7 +151,7 @@ func (s *Server) handleBackupImport(w http.ResponseWriter, r *http.Request) {
 	if err := config.Save(s.configPath, &cfg); err != nil {
 		errors = append(errors, fmt.Sprintf("config: %v", err))
 	} else {
-		s.config = &cfg
+		s.config.Store(&cfg)
 	}
 
 	// 2. Write admin token
