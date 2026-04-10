@@ -46,6 +46,10 @@ import {
   useEditPeer,
   useGetPeerConfig,
   useInvites,
+  useMFAGrantSession,
+  useMFAReset,
+  useMFARevokeSession,
+  useMFASettings,
   useRekeyPeer,
   useReloadWG,
   useSetPeerProfile,
@@ -639,6 +643,10 @@ function VPNPage() {
   const reloadWG = useReloadWG();
   const createInvite = useCreateInvite();
   const deleteInvite = useDeleteInvite();
+  const mfaSettings = useMFASettings();
+  const mfaReset = useMFAReset();
+  const mfaGrantSession = useMFAGrantSession();
+  const mfaRevokeSession = useMFARevokeSession();
 
   const [addOpen, setAddOpen] = useState(false);
   const [peerResult, setPeerResult] = useState<{
@@ -713,6 +721,7 @@ function VPNPage() {
             <TableRow>
               <TableCell>Name</TableCell>
               <TableCell>Profile</TableCell>
+              {mfaSettings.data?.enabled && <TableCell>MFA</TableCell>}
               <TableCell>Status</TableCell>
               <TableCell>Endpoint</TableCell>
               <TableCell>Allowed IPs</TableCell>
@@ -724,7 +733,7 @@ function VPNPage() {
           <TableBody>
             {peers.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} align="center">
+                <TableCell colSpan={mfaSettings.data?.enabled ? 9 : 8} align="center">
                   <Typography
                     variant="body2"
                     color="text.secondary"
@@ -783,6 +792,55 @@ function VPNPage() {
                       />
                     </Tooltip>
                   </TableCell>
+                  {mfaSettings.data?.enabled && (
+                    <TableCell>
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexWrap: "wrap" }}>
+                        {peer.isAdmin ? (
+                          <Chip label="bypass" size="small" color="default" />
+                        ) : peer.mfaSessionActive ? (
+                          <Tooltip title={peer.mfaSessionExpiry ? `Expires: ${new Date(peer.mfaSessionExpiry).toLocaleString()}` : "Permanent session"}>
+                            <Chip
+                              label="active"
+                              size="small"
+                              color="success"
+                              onDelete={() => mfaRevokeSession.mutate(peer.name, { onSuccess: () => setSnack(`MFA session revoked for ${peer.name}`) })}
+                            />
+                          </Tooltip>
+                        ) : peer.mfaEnrolled ? (
+                          <Chip label="jailed" size="small" color="error" />
+                        ) : (
+                          <Chip label="not enrolled" size="small" color="warning" variant="outlined" />
+                        )}
+                        {!peer.isAdmin && (
+                          <Box sx={{ display: "flex", gap: 0.25 }}>
+                            {peer.mfaEnrolled && (
+                              <Tooltip title="Reset TOTP (force re-enrollment)">
+                                <Chip
+                                  label="Reset"
+                                  size="small"
+                                  variant="outlined"
+                                  onClick={() => mfaReset.mutate(peer.name, { onSuccess: () => setSnack(`TOTP reset for ${peer.name}`) })}
+                                  sx={{ cursor: "pointer" }}
+                                />
+                              </Tooltip>
+                            )}
+                            {!peer.mfaSessionActive && (
+                              <Tooltip title="Grant 8h MFA session">
+                                <Chip
+                                  label="Grant"
+                                  size="small"
+                                  variant="outlined"
+                                  color="success"
+                                  onClick={() => mfaGrantSession.mutate({ name: peer.name, duration: "8h" }, { onSuccess: () => setSnack(`MFA session granted to ${peer.name}`) })}
+                                  sx={{ cursor: "pointer" }}
+                                />
+                              </Tooltip>
+                            )}
+                          </Box>
+                        )}
+                      </Box>
+                    </TableCell>
+                  )}
                   <TableCell>
                     <Box sx={{ display: "flex", alignItems: "center" }}>
                       <StatusDot active={peer.online} />

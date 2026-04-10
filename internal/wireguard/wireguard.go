@@ -630,7 +630,12 @@ func SetupForwardChain(wgInterface string, peers []Peer, profiles map[string]str
 		exec.Command("iptables", "-I", "FORWARD", "2", "-o", wgInterface, "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run()
 	}
 
-	return RebuildForwardChain(peers, profiles, vpnRange, lanCIDR)
+	return RebuildForwardChain(ForwardChainOpts{
+		Peers:    peers,
+		Profiles: profiles,
+		VPNRange: vpnRange,
+		LanCIDR:  lanCIDR,
+	})
 }
 
 // TeardownForwardChain removes the jump rule, flushes and deletes the chain.
@@ -641,24 +646,44 @@ func TeardownForwardChain(wgInterface string) error {
 	return nil
 }
 
+// ForwardChainOpts holds options for rebuilding the WG-FORWARD chain.
+type ForwardChainOpts struct {
+	Peers       []Peer
+	Profiles    map[string]string
+	VPNRange    string
+	LanCIDR     string
+	JailedPeers map[string]bool // peers currently MFA-jailed
+	ServerWGIP  string          // WG interface address (e.g. "10.100.0.1")
+	ListenPort  string          // Horizon listen port (e.g. "8080")
+}
+
 // RebuildForwardChain flushes and repopulates the WG-FORWARD chain with per-peer rules.
 // Called whenever peers or profiles change.
-func RebuildForwardChain(peers []Peer, profiles map[string]string, vpnRange, lanCIDR string) error {
+func RebuildForwardChain(opts ForwardChainOpts) error {
 	// Flush existing rules
 	if out, err := exec.Command("iptables", "-F", forwardChainName).CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to flush %s: %s: %w", forwardChainName, out, err)
 	}
 
+	profiles := opts.Profiles
 	if profiles == nil {
 		profiles = map[string]string{}
 	}
 
 	// Add per-peer rules
-	for _, p := range peers {
+	for _, p := range opts.Peers {
 		ip := peerIP(p.AllowedIPs)
 		if ip == "" {
 			continue
 		}
+
+		// MFA jail: peer can only reach Horizon server
+		if opts.JailedPeers[p.Name] && opts.ServerWGIP != "" && opts.ListenPort != "" {
+			exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", opts.ServerWGIP+"/32", "-p", "tcp", "--dport", opts.ListenPort, "-j", "ACCEPT").Run()
+			exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "DROP").Run()
+			continue
+		}
+
 		profile := profiles[p.Name]
 		if profile == "" {
 			profile = "lan-access"
@@ -670,17 +695,17 @@ func RebuildForwardChain(peers []Peer, profiles map[string]string, vpnRange, lan
 			exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "ACCEPT").Run()
 		case "vpn-only":
 			// Allow only VPN range
-			if vpnRange != "" {
-				exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", vpnRange, "-j", "ACCEPT").Run()
+			if opts.VPNRange != "" {
+				exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", opts.VPNRange, "-j", "ACCEPT").Run()
 			}
 			exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "DROP").Run()
 		default: // lan-access
 			// Allow VPN range + LAN
-			if vpnRange != "" {
-				exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", vpnRange, "-j", "ACCEPT").Run()
+			if opts.VPNRange != "" {
+				exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", opts.VPNRange, "-j", "ACCEPT").Run()
 			}
-			if lanCIDR != "" {
-				exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", lanCIDR, "-j", "ACCEPT").Run()
+			if opts.LanCIDR != "" {
+				exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", opts.LanCIDR, "-j", "ACCEPT").Run()
 			}
 			exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "DROP").Run()
 		}

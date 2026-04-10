@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Routing profile constants for WireGuard peers
@@ -167,6 +168,12 @@ type Config struct {
 
 	// Per-peer routing profiles: "lan-access" (default), "full-tunnel", "vpn-only"
 	VPNProfiles map[string]string `json:"vpn_profiles,omitempty"`
+
+	// WireGuard MFA (TOTP per-connect)
+	VPNMFAEnabled   bool              `json:"vpn_mfa_enabled,omitempty"`
+	VPNMFADurations []string          `json:"vpn_mfa_durations,omitempty"` // e.g. ["2h","4h","8h","forever"]
+	VPNMFASecrets   map[string]string `json:"vpn_mfa_secrets,omitempty"`   // peer name -> base32 TOTP secret
+	VPNMFASessions  map[string]int64  `json:"vpn_mfa_sessions,omitempty"`  // peer name -> expiry unix timestamp (0 = forever)
 
 	// WireGuard VPN client peers — shared state, replicated to non-primary
 	// instances via the pull loop. Handlers update this after every WG
@@ -791,6 +798,115 @@ func (c *Config) DeletePeerProfile(name string) {
 	if c.VPNProfiles != nil {
 		delete(c.VPNProfiles, name)
 	}
+}
+
+// IsPeerMFAJailed returns true if MFA is enabled, the peer has no active session,
+// and the peer is not a VPN admin (admins bypass MFA).
+func (c *Config) IsPeerMFAJailed(name string) bool {
+	if !c.VPNMFAEnabled {
+		return false
+	}
+	// VPN admins bypass MFA
+	for _, admin := range c.VPNAdmins {
+		if admin == name {
+			return false
+		}
+	}
+	if c.VPNMFASessions != nil {
+		if expiry, ok := c.VPNMFASessions[name]; ok {
+			if expiry == 0 { // forever
+				return false
+			}
+			if expiry > time.Now().Unix() {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// GetJailedPeers returns a set of peer names that are currently MFA-jailed.
+func (c *Config) GetJailedPeers() map[string]bool {
+	jailed := make(map[string]bool)
+	if !c.VPNMFAEnabled {
+		return jailed
+	}
+	for _, p := range c.WGPeers {
+		if c.IsPeerMFAJailed(p.Name) {
+			jailed[p.Name] = true
+		}
+	}
+	return jailed
+}
+
+// SetMFASession sets an MFA session for a peer with the given expiry timestamp.
+// Use expiry=0 for a permanent session.
+func (c *Config) SetMFASession(name string, expiry int64) {
+	if c.VPNMFASessions == nil {
+		c.VPNMFASessions = make(map[string]int64)
+	}
+	c.VPNMFASessions[name] = expiry
+}
+
+// ClearMFASession removes a peer's MFA session.
+func (c *Config) ClearMFASession(name string) {
+	if c.VPNMFASessions != nil {
+		delete(c.VPNMFASessions, name)
+	}
+}
+
+// SetMFASecret sets a peer's TOTP secret.
+func (c *Config) SetMFASecret(name, secret string) {
+	if c.VPNMFASecrets == nil {
+		c.VPNMFASecrets = make(map[string]string)
+	}
+	c.VPNMFASecrets[name] = secret
+}
+
+// ClearMFASecret removes a peer's TOTP secret (forces re-enrollment).
+func (c *Config) ClearMFASecret(name string) {
+	if c.VPNMFASecrets != nil {
+		delete(c.VPNMFASecrets, name)
+	}
+	// Also clear any active session
+	c.ClearMFASession(name)
+}
+
+// PruneExpiredMFASessions removes expired MFA sessions. Returns true if any were pruned.
+func (c *Config) PruneExpiredMFASessions() bool {
+	if c.VPNMFASessions == nil {
+		return false
+	}
+	now := time.Now().Unix()
+	pruned := false
+	for name, expiry := range c.VPNMFASessions {
+		if expiry != 0 && expiry <= now {
+			delete(c.VPNMFASessions, name)
+			pruned = true
+		}
+	}
+	return pruned
+}
+
+// RenameMFAPeer updates MFA maps when a peer is renamed.
+func (c *Config) RenameMFAPeer(oldName, newName string) {
+	if c.VPNMFASecrets != nil {
+		if s, ok := c.VPNMFASecrets[oldName]; ok {
+			delete(c.VPNMFASecrets, oldName)
+			c.VPNMFASecrets[newName] = s
+		}
+	}
+	if c.VPNMFASessions != nil {
+		if s, ok := c.VPNMFASessions[oldName]; ok {
+			delete(c.VPNMFASessions, oldName)
+			c.VPNMFASessions[newName] = s
+		}
+	}
+}
+
+// DeleteMFAPeer removes all MFA state for a peer.
+func (c *Config) DeleteMFAPeer(name string) {
+	c.ClearMFASecret(name)
 }
 
 // GetAllowedIPsForProfile returns client-side AllowedIPs for a routing profile

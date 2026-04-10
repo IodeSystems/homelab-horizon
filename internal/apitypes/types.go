@@ -177,6 +177,40 @@ type PeerResp struct {
 	Online          bool   `json:"online"`
 	IsAdmin         bool   `json:"isAdmin"`
 	Profile         string `json:"profile"`
+	MFAEnrolled     bool   `json:"mfaEnrolled"`
+	MFASessionActive bool  `json:"mfaSessionActive"`
+	MFASessionExpiry string `json:"mfaSessionExpiry,omitempty"`
+}
+
+// MFA types
+
+type MFAStatusResponse struct {
+	Enrolled       bool     `json:"enrolled"`
+	SessionActive  bool     `json:"sessionActive"`
+	SessionExpiry  string   `json:"sessionExpiry,omitempty"`
+	Durations      []string `json:"durations"`
+	ProvisioningURI string  `json:"provisioningUri,omitempty"` // only during enrollment
+}
+
+type MFAEnrollResponse struct {
+	OK              bool   `json:"ok"`
+	ProvisioningURI string `json:"provisioningUri"`
+	Secret          string `json:"secret"`
+}
+
+type MFAVerifyRequest struct {
+	Code     string `json:"code"`
+	Duration string `json:"duration"` // "2h", "4h", "8h", "forever"
+}
+
+type MFAVerifyResponse struct {
+	OK     bool   `json:"ok"`
+	Expiry string `json:"expiry,omitempty"`
+}
+
+type MFASettingsResponse struct {
+	Enabled   bool     `json:"enabled"`
+	Durations []string `json:"durations"`
 }
 
 type AddPeerResponse struct {

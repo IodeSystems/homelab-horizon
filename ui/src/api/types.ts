@@ -53,4 +53,9 @@ export type {
   DomainSSLAddRequest,
   DomainSSLAddResponse,
   DomainSSLRemoveRequest,
+  MFAStatusResponse,
+  MFAEnrollResponse,
+  MFAVerifyRequest,
+  MFAVerifyResponse,
+  MFASettingsResponse,
 } from "./generated-types";

@@ -548,6 +548,20 @@ func (s *Server) handleAPIVPNPeers(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
+		// MFA status
+		if s.cfg().VPNMFAEnabled {
+			if s.cfg().VPNMFASecrets != nil {
+				_, pr.MFAEnrolled = s.cfg().VPNMFASecrets[p.Name]
+			}
+			if s.cfg().VPNMFASessions != nil {
+				if expiry, ok := s.cfg().VPNMFASessions[p.Name]; ok {
+					pr.MFASessionActive = expiry == 0 || expiry > time.Now().Unix()
+					if expiry != 0 {
+						pr.MFASessionExpiry = time.Unix(expiry, 0).Format(time.RFC3339)
+					}
+				}
+			}
+		}
 		peers = append(peers, pr)
 	}
 
