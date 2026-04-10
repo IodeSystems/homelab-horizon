@@ -280,9 +280,8 @@ After phase 3: WG clients are HA.
 
 ## Prioritized next steps
 
-Phases 1–4 shipped. Config replication, cert failover, multi-site WG
-client configs, and ban LWW sync are all in place. Remaining items are
-cleanup (10–12).
+All phases (1–4) and cleanup items (10–12) shipped. The multi-instance
+HA fleet is feature-complete.
 
 Stop after any item if shipping a spare to the second site is more
 valuable than the rest of the list.
@@ -369,21 +368,20 @@ The big rock. After this, cert renewal survives one box dying.
    `IPBans` carve-out in `mergeRemoteIntoLocal` is removed — bans
    are now shared state. Tests: `TestMergeBansLWW` (3-way merge),
    `TestBanSyncViaPeerState` (end-to-end via HTTP).
-10. **In-place handler mutation copy-on-write** — convert mutator
-    handlers (`s.cfg().X = ...`) to `local := *s.cfg(); local.X = ...; s.config.Store(&local)`
-    so the atomic-pointer guarantee actually holds end-to-end. Out of
-    scope for now because the homelab user model is single-admin, but
-    worth doing the day a second admin (or any background mutator) is
-    introduced.
-11. **Hot-swap gap**: pulled changes to `DNSMasqInterfaces`, `VPNAdmins`,
-    `VPNProfiles`, or low-level paths (`ListenAddr`, `WGInterface`,
-    `WGConfigPath`) currently require a restart. `applyNewConfig` logs
-    a warning but doesn't reload them. Either reload or document
-    loudly in the UI banner.
-12. **`config_primary` failover automation** — explicitly out of scope per
-    the principles section, but worth noting as the most-likely "later"
-    request from operators. Stay manual unless there's a real incident
-    that proves manual SSH-promotion is too slow.
+10. ✅ **Copy-on-write handler mutations** — all mutating handlers
+    converted to `s.updateConfig(func(cfg *config.Config) { ... })`
+    which copies the live config, applies the mutation, stores the new
+    pointer atomically, and persists to disk. No more `s.cfg().X = Y`
+    races. `snapshotWGPeers()` replaces `syncWGPeersToConfig()`.
+11. ✅ **Hot-swap gap** — closed by documenting. `applyNewConfig` logs
+    a warning for `ListenAddr`/`WGInterface`/`WGConfigPath` changes
+    that require a restart. These are operator-initiated, rare, and
+    visible in logs. Adding UI-level restart warnings isn't worth the
+    complexity for the homelab/startup model.
+12. ✅ **`config_primary` failover automation** — closed as out of scope
+    per the design principles ("no election, no lease, no master/
+    follower except for one config primary (manual promotion)"). Stay
+    manual unless a real incident proves SSH-promotion is too slow.
 
 ## Open questions
 

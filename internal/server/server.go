@@ -392,6 +392,17 @@ func (s *Server) cfg() *config.Config {
 	return s.config.Load()
 }
 
+// updateConfig atomically copies the live config, applies a mutation function,
+// stores the new copy, and persists to disk. This is the sanctioned way to
+// mutate config — it avoids the torn-read race that direct s.cfg().X = Y
+// mutations have with concurrent readers.
+func (s *Server) updateConfig(fn func(cfg *config.Config)) error {
+	cfg := *s.cfg()
+	fn(&cfg)
+	s.config.Store(&cfg)
+	return config.Save(s.configPath, &cfg)
+}
+
 func generateToken(length int) string {
 	b := make([]byte, length)
 	rand.Read(b)
@@ -986,14 +997,17 @@ func (s *Server) handler() http.Handler {
 func (s *Server) ensureServicesRunning() {
 	// Ensure all services have API tokens
 	tokensGenerated := false
-	for i := range s.cfg().Services {
-		if s.cfg().Services[i].Token == "" {
-			s.cfg().Services[i].EnsureToken()
+	services := s.cfg().Services
+	for i := range services {
+		if services[i].Token == "" {
+			services[i].EnsureToken()
 			tokensGenerated = true
 		}
 	}
 	if tokensGenerated {
-		config.Save(s.configPath, s.cfg())
+		s.updateConfig(func(cfg *config.Config) {
+			cfg.Services = services
+		})
 	}
 
 	// In Docker, skip service management (no systemd)
@@ -1112,8 +1126,9 @@ func (s *Server) syncPublicIPAndRecords() {
 	}
 
 	fmt.Printf("[DNS] Public IP changed: %s -> %s\n", s.cfg().PublicIP, newIP)
-	s.cfg().PublicIP = newIP
-	config.Save(s.configPath, s.cfg())
+	s.updateConfig(func(cfg *config.Config) {
+		cfg.PublicIP = newIP
+	})
 
 	// Sync all derived DNS records
 	records := s.cfg().DeriveRoute53Records()

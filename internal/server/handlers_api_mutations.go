@@ -92,13 +92,15 @@ func (s *Server) handleAPIAddService(w http.ResponseWriter, r *http.Request) {
 
 	svc := serviceRequestToService(&req)
 
-	if err := s.cfg().AddService(svc); err != nil {
-		writeJSONError(w, http.StatusBadRequest, err.Error())
+	var addErr error
+	if err := s.updateConfig(func(cfg *config.Config) {
+		addErr = cfg.AddService(svc)
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	if err := config.Save(s.configPath, s.cfg()); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
+	if addErr != nil {
+		writeJSONError(w, http.StatusBadRequest, addErr.Error())
 		return
 	}
 
@@ -138,16 +140,19 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var found bool
-	for i := range s.cfg().Services {
-		if s.cfg().Services[i].Name == req.OriginalName {
-			s.cfg().Services[i].Name = req.Name
-			s.cfg().Services[i].Domains = domains
+	if err := s.updateConfig(func(cfg *config.Config) {
+		for i := range cfg.Services {
+			if cfg.Services[i].Name != req.OriginalName {
+				continue
+			}
+			cfg.Services[i].Name = req.Name
+			cfg.Services[i].Domains = domains
 
 			// Internal DNS
 			if req.InternalDNS != nil && req.InternalDNS.IP != "" {
-				s.cfg().Services[i].InternalDNS = &config.InternalDNS{IP: req.InternalDNS.IP}
+				cfg.Services[i].InternalDNS = &config.InternalDNS{IP: req.InternalDNS.IP}
 			} else {
-				s.cfg().Services[i].InternalDNS = nil
+				cfg.Services[i].InternalDNS = nil
 			}
 
 			// External DNS
@@ -162,35 +167,33 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 				} else if req.ExternalDNS.IP != "" {
 					extDNS.IPs = []string{req.ExternalDNS.IP}
 				}
-				s.cfg().Services[i].ExternalDNS = extDNS
+				cfg.Services[i].ExternalDNS = extDNS
 			} else {
-				s.cfg().Services[i].ExternalDNS = nil
+				cfg.Services[i].ExternalDNS = nil
 			}
 
 			// Proxy
 			if req.Proxy != nil && req.Proxy.Backend != "" {
 				// Preserve existing deploy config for token/activeSlot
 				var existingDeploy *config.DeployConfig
-				if s.cfg().Services[i].Proxy != nil {
-					existingDeploy = s.cfg().Services[i].Proxy.Deploy
+				if cfg.Services[i].Proxy != nil {
+					existingDeploy = cfg.Services[i].Proxy.Deploy
 				}
-				s.cfg().Services[i].Proxy = &config.ProxyConfig{
+				cfg.Services[i].Proxy = &config.ProxyConfig{
 					Backend:      req.Proxy.Backend,
 					InternalOnly: req.Proxy.InternalOnly,
 				}
 				if req.Proxy.HealthCheck != nil && req.Proxy.HealthCheck.Path != "" {
-					s.cfg().Services[i].Proxy.HealthCheck = &config.HealthCheck{Path: req.Proxy.HealthCheck.Path}
+					cfg.Services[i].Proxy.HealthCheck = &config.HealthCheck{Path: req.Proxy.HealthCheck.Path}
 				}
 				// Handle deploy config from request
 				if req.Proxy.Deploy != nil && req.Proxy.Deploy.NextBackend != "" {
 					if existingDeploy != nil {
-						// Update fields but preserve token and activeSlot
 						existingDeploy.NextBackend = req.Proxy.Deploy.NextBackend
 						existingDeploy.Balance = req.Proxy.Deploy.Balance
-						s.cfg().Services[i].Proxy.Deploy = existingDeploy
+						cfg.Services[i].Proxy.Deploy = existingDeploy
 					} else {
-						// New deploy config
-						s.cfg().Services[i].Proxy.Deploy = &config.DeployConfig{
+						cfg.Services[i].Proxy.Deploy = &config.DeployConfig{
 							NextBackend: req.Proxy.Deploy.NextBackend,
 							Token:       config.GenerateDeployToken(),
 							ActiveSlot:  "a",
@@ -198,25 +201,22 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				} else if existingDeploy != nil && (req.Proxy.Deploy == nil || req.Proxy.Deploy.NextBackend == "") {
-					// Deploy was removed
-					s.cfg().Services[i].Proxy.Deploy = nil
+					cfg.Services[i].Proxy.Deploy = nil
 				}
 			} else {
-				s.cfg().Services[i].Proxy = nil
+				cfg.Services[i].Proxy = nil
 			}
 
 			found = true
-			break
+			return
 		}
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	if !found {
 		writeJSONError(w, http.StatusNotFound, "Service not found")
-		return
-	}
-
-	if err := config.Save(s.configPath, s.cfg()); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -243,13 +243,15 @@ func (s *Server) handleAPIDeleteService(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if !s.cfg().RemoveService(req.Name) {
-		writeJSONError(w, http.StatusNotFound, "Service not found")
+	var removed bool
+	if err := s.updateConfig(func(cfg *config.Config) {
+		removed = cfg.RemoveService(req.Name)
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	if err := config.Save(s.configPath, s.cfg()); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
+	if !removed {
+		writeJSONError(w, http.StatusNotFound, "Service not found")
 		return
 	}
 
@@ -464,27 +466,34 @@ func (s *Server) handleAPIAddSubZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var found bool
-	for i := range s.cfg().Zones {
-		if s.cfg().Zones[i].Name == zoneName {
-			for _, existing := range s.cfg().Zones[i].SubZones {
+	// Validate before mutating
+	cfg := s.cfg()
+	var zoneFound bool
+	for i := range cfg.Zones {
+		if cfg.Zones[i].Name == zoneName {
+			zoneFound = true
+			for _, existing := range cfg.Zones[i].SubZones {
 				if existing == subZone {
 					writeJSONError(w, http.StatusConflict, "Sub-zone already exists")
 					return
 				}
 			}
-			s.cfg().Zones[i].SubZones = append(s.cfg().Zones[i].SubZones, subZone)
-			found = true
 			break
 		}
 	}
-
-	if !found {
+	if !zoneFound {
 		writeJSONError(w, http.StatusNotFound, "Zone not found")
 		return
 	}
 
-	if err := config.Save(s.configPath, s.cfg()); err != nil {
+	if err := s.updateConfig(func(cfg *config.Config) {
+		for i := range cfg.Zones {
+			if cfg.Zones[i].Name == zoneName {
+				cfg.Zones[i].SubZones = append(cfg.Zones[i].SubZones, subZone)
+				return
+			}
+		}
+	}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -615,14 +624,14 @@ func (s *Server) handleAPIDomainSSLAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add SubZone to the zone
-	for i := range s.cfg().Zones {
-		if s.cfg().Zones[i].Name == zone.Name {
-			s.cfg().Zones[i].SubZones = append(s.cfg().Zones[i].SubZones, subZone)
-			break
+	if err := s.updateConfig(func(cfg *config.Config) {
+		for i := range cfg.Zones {
+			if cfg.Zones[i].Name == zone.Name {
+				cfg.Zones[i].SubZones = append(cfg.Zones[i].SubZones, subZone)
+				return
+			}
 		}
-	}
-
-	if err := config.Save(s.configPath, s.cfg()); err != nil {
+	}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -761,17 +770,17 @@ func (s *Server) handleAPIDomainSSLRemove(w http.ResponseWriter, r *http.Request
 	}
 
 	// Safe to remove: find the zone again and remove the SubZone
-	for i := range s.cfg().Zones {
-		if s.cfg().Zones[i].Name == zone.Name {
-			s.cfg().Zones[i].SubZones = append(
-				s.cfg().Zones[i].SubZones[:subZoneIdx],
-				s.cfg().Zones[i].SubZones[subZoneIdx+1:]...,
-			)
-			break
+	if err := s.updateConfig(func(cfg *config.Config) {
+		for i := range cfg.Zones {
+			if cfg.Zones[i].Name == zone.Name {
+				cfg.Zones[i].SubZones = append(
+					cfg.Zones[i].SubZones[:subZoneIdx],
+					cfg.Zones[i].SubZones[subZoneIdx+1:]...,
+				)
+				return
+			}
 		}
-	}
-
-	if err := config.Save(s.configPath, s.cfg()); err != nil {
+	}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

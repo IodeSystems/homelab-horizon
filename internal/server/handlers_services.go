@@ -296,8 +296,9 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 		if newIP, err := route53.GetPublicIP(); err == nil {
 			if newIP != s.cfg().PublicIP {
 				log.Info(fmt.Sprintf("  Public IP changed: %s -> %s", s.cfg().PublicIP, newIP))
-				s.cfg().PublicIP = newIP
-				config.Save(s.configPath, s.cfg())
+				s.updateConfig(func(cfg *config.Config) {
+					cfg.PublicIP = newIP
+				})
 				// Re-derive records with new IP
 				records = s.cfg().DeriveRoute53Records()
 			}

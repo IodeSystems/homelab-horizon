@@ -178,11 +178,9 @@ func (s *Server) handleDeployStateChange(w http.ResponseWriter, backendName, slo
 }
 
 func (s *Server) handleDeploySwap(w http.ResponseWriter, svcIdx int) {
-	deploy := s.cfg().Services[svcIdx].Proxy.Deploy
-	deploy.Swap()
-
-	// Save config
-	if err := config.Save(s.configPath, s.cfg()); err != nil {
+	if err := s.updateConfig(func(cfg *config.Config) {
+		cfg.Services[svcIdx].Proxy.Deploy.Swap()
+	}); err != nil {
 		http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -202,14 +200,15 @@ func (s *Server) handleDeploySwap(w http.ResponseWriter, svcIdx int) {
 		return
 	}
 
-	backend := s.cfg().Services[svcIdx].Proxy.Backend
+	svc := s.cfg().Services[svcIdx]
+	deploy := svc.Proxy.Deploy
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(apitypes.DeploySwapResponse{
 		Status:     "ok",
 		ActiveSlot: deploy.ActiveSlot,
-		Current:    deploy.CurrentServer(backend),
-		Next:       deploy.InactiveServer(backend),
+		Current:    deploy.CurrentServer(svc.Proxy.Backend),
+		Next:       deploy.InactiveServer(svc.Proxy.Backend),
 	})
 }
 

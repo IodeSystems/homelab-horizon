@@ -81,11 +81,11 @@ func (s *Server) banIP(ip string, timeout int, reason, service string) error {
 		ban.ExpiresAt = now + int64(timeout)
 	}
 
-	s.cfg().IPBans = append(s.cfg().IPBans, ban)
-
 	fmt.Printf("[ban] banned %s timeout=%d reason=%q service=%q\n", ip, timeout, reason, service)
 
-	return config.Save(s.configPath, s.cfg())
+	return s.updateConfig(func(cfg *config.Config) {
+		cfg.IPBans = append(cfg.IPBans, ban)
+	})
 }
 
 // unbanIP removes the iptables rule and removes the ban from config.
@@ -102,18 +102,17 @@ func (s *Server) unbanIP(ip string) error {
 	// Remove iptables rule (ignore error if rule doesn't exist)
 	_ = iptablesUnban(ip)
 
-	// Remove from config
-	filtered := s.cfg().IPBans[:0]
-	for _, b := range s.cfg().IPBans {
-		if b.IP != ip {
-			filtered = append(filtered, b)
-		}
-	}
-	s.cfg().IPBans = filtered
-
 	fmt.Printf("[ban] unbanned %s\n", ip)
 
-	return config.Save(s.configPath, s.cfg())
+	return s.updateConfig(func(cfg *config.Config) {
+		filtered := cfg.IPBans[:0]
+		for _, b := range cfg.IPBans {
+			if b.IP != ip {
+				filtered = append(filtered, b)
+			}
+		}
+		cfg.IPBans = filtered
+	})
 }
 
 // reapplyBans restores iptables rules from persisted config on startup.
@@ -122,10 +121,10 @@ func (s *Server) reapplyBans() {
 	defer banMu.Unlock()
 
 	now := time.Now().Unix()
-	active := s.cfg().IPBans[:0]
-	for _, ban := range s.cfg().IPBans {
+	bans := s.cfg().IPBans
+	var active []config.IPBan
+	for _, ban := range bans {
 		if ban.ExpiresAt > 0 && ban.ExpiresAt <= now {
-			// Expired — clean up iptables just in case
 			_ = iptablesUnban(ban.IP)
 			fmt.Printf("[ban] expired ban removed on startup: %s\n", ban.IP)
 			continue
@@ -139,9 +138,10 @@ func (s *Server) reapplyBans() {
 		}
 		active = append(active, ban)
 	}
-	if len(active) != len(s.cfg().IPBans) {
-		s.cfg().IPBans = active
-		if err := config.Save(s.configPath, s.cfg()); err != nil {
+	if len(active) != len(bans) {
+		if err := s.updateConfig(func(cfg *config.Config) {
+			cfg.IPBans = active
+		}); err != nil {
 			fmt.Printf("[ban] failed to save config after reapply: %v\n", err)
 		}
 	}

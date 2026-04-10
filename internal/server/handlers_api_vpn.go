@@ -66,9 +66,11 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.cfg().SetPeerProfile(name, profile)
-	s.syncWGPeersToConfig()
-	config.Save(s.configPath, s.cfg())
+	wgPeers := s.snapshotWGPeers()
+	s.updateConfig(func(cfg *config.Config) {
+		cfg.SetPeerProfile(name, profile)
+		cfg.WGPeers = wgPeers
+	})
 
 	s.wg.Reload()
 	s.rebuildWGForwardChain()
@@ -148,25 +150,25 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update VPNAdmins if name changed and old name was admin
-	if peer.Name != name {
-		for i, adminName := range s.cfg().VPNAdmins {
-			if adminName == peer.Name {
-				s.cfg().VPNAdmins[i] = name
-				break
-			}
-		}
-		s.cfg().RenamePeerProfile(peer.Name, name)
-	}
-
-	// Update profile
 	profile := strings.TrimSpace(req.Profile)
 	if profile == "" {
 		profile = config.ProfileLanAccess
 	}
-	s.cfg().SetPeerProfile(name, profile)
-	s.syncWGPeersToConfig()
-	config.Save(s.configPath, s.cfg())
+	oldName := peer.Name
+	wgPeers := s.snapshotWGPeers()
+	s.updateConfig(func(cfg *config.Config) {
+		if oldName != name {
+			for i, adminName := range cfg.VPNAdmins {
+				if adminName == oldName {
+					cfg.VPNAdmins[i] = name
+					break
+				}
+			}
+			cfg.RenamePeerProfile(oldName, name)
+		}
+		cfg.SetPeerProfile(name, profile)
+		cfg.WGPeers = wgPeers
+	})
 
 	s.wg.Reload()
 	s.rebuildWGForwardChain()
@@ -206,11 +208,17 @@ func (s *Server) handleAPIDeletePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	peerName := ""
 	if peer != nil {
-		s.cfg().DeletePeerProfile(peer.Name)
+		peerName = peer.Name
 	}
-	s.syncWGPeersToConfig()
-	config.Save(s.configPath, s.cfg())
+	wgPeers := s.snapshotWGPeers()
+	s.updateConfig(func(cfg *config.Config) {
+		if peerName != "" {
+			cfg.DeletePeerProfile(peerName)
+		}
+		cfg.WGPeers = wgPeers
+	})
 
 	s.wg.Reload()
 	s.rebuildWGForwardChain()
@@ -251,19 +259,19 @@ func (s *Server) handleAPIToggleAdmin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if isCurrentlyAdmin {
-		newAdmins := make([]string, 0, len(s.cfg().VPNAdmins)-1)
-		for _, adminName := range s.cfg().VPNAdmins {
-			if adminName != clientName {
-				newAdmins = append(newAdmins, adminName)
+	s.updateConfig(func(cfg *config.Config) {
+		if isCurrentlyAdmin {
+			newAdmins := make([]string, 0, len(cfg.VPNAdmins)-1)
+			for _, adminName := range cfg.VPNAdmins {
+				if adminName != clientName {
+					newAdmins = append(newAdmins, adminName)
+				}
 			}
+			cfg.VPNAdmins = newAdmins
+		} else {
+			cfg.VPNAdmins = append(cfg.VPNAdmins, clientName)
 		}
-		s.cfg().VPNAdmins = newAdmins
-	} else {
-		s.cfg().VPNAdmins = append(s.cfg().VPNAdmins, clientName)
-	}
-
-	config.Save(s.configPath, s.cfg())
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(apitypes.ToggleAdminResponse{
@@ -327,8 +335,9 @@ func (s *Server) handleAPISetPeerProfile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	s.cfg().SetPeerProfile(name, profile)
-	config.Save(s.configPath, s.cfg())
+	s.updateConfig(func(cfg *config.Config) {
+		cfg.SetPeerProfile(name, profile)
+	})
 	s.rebuildWGForwardChain()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -514,8 +523,10 @@ func (s *Server) handleAPIRekeyPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.syncWGPeersToConfig()
-	config.Save(s.configPath, s.cfg())
+	wgPeers := s.snapshotWGPeers()
+	s.updateConfig(func(cfg *config.Config) {
+		cfg.WGPeers = wgPeers
+	})
 	s.wg.Reload()
 
 	// Extract primary IP
