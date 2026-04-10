@@ -888,6 +888,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// each peer must answer pings/config-pull regardless of primary status.
 	s.handlePeerInstance(mux, "/api/peer/ping", s.peerOnlyMiddleware(s.handlePeerPing))
 	s.handlePeerInstance(mux, "/api/peer/config", s.peerOnlyMiddleware(s.handlePeerConfig))
+	// Cert pull endpoint for Phase 2 ACME HA — non-owners fetch cert+key
+	// from the owner peer. Subtree because domain is in the path.
+	s.handlePeerInstanceSubtree(mux, "/api/peer/cert/", s.peerOnlyMiddleware(s.handlePeerCert))
 
 	// API v1 auth routes (JSON, SameSite cookie auth). Per-instance: a
 	// non-primary spare must still allow login/logout for read-only access.
@@ -1111,6 +1114,120 @@ func (s *Server) syncPublicIPAndRecords() {
 	}
 }
 
+const (
+	certRenewalInterval = 12 * time.Hour
+	certRenewalDays     = 30 // renew when cert expires within this many days
+)
+
+// startCertRenewal runs a background ticker that checks for certificates
+// nearing expiry (or missing) and renews them without operator action.
+// This is the prerequisite for Phase 2 ACME deterministic ownership —
+// without it, a non-primary spare can never renew anything on its own
+// because the mutating sync endpoint is guarded.
+func (s *Server) startCertRenewal() {
+	if !s.cfg().SSLEnabled {
+		return
+	}
+	if len(s.cfg().DeriveSSLDomains()) == 0 {
+		return
+	}
+
+	fmt.Printf("Starting cert renewal sweep (every %s, renew within %dd of expiry)\n",
+		certRenewalInterval, certRenewalDays)
+
+	go func() {
+		// First sweep shortly after startup so fresh instances converge.
+		time.Sleep(1 * time.Minute)
+		s.certRenewalSweep()
+
+		ticker := time.NewTicker(certRenewalInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			s.certRenewalSweep()
+		}
+	}()
+}
+
+// certRenewalSweep checks every configured SSL domain and renews certs
+// that are missing, have stale SANs, or expire within certRenewalDays.
+//
+// In a fleet, each domain is deterministically assigned to one peer via
+// certOwner(). This peer is responsible for renewal; all others skip.
+// When the owner is down, ownership shifts to the next peer in the hash
+// ring automatically (because alivePeers() excludes unreachable nodes).
+func (s *Server) certRenewalSweep() {
+	cfg := s.cfg()
+	sslDomains := cfg.DeriveSSLDomains()
+	if !cfg.SSLEnabled || len(sslDomains) == 0 {
+		return
+	}
+
+	// Determine ownership when running in a fleet.
+	alive := s.alivePeers() // nil in standalone mode
+	if len(alive) > 0 {
+		fmt.Printf("[cert-renewal] alive peers: %v\n", alive)
+	}
+
+	// Build a fresh LE manager from current config so domain list is up to
+	// date (config may have changed via pull loop since startup).
+	le := letsencrypt.New(letsencrypt.Config{
+		Domains:        sslDomains,
+		CertDir:        cfg.SSLCertDir,
+		HAProxyCertDir: cfg.SSLHAProxyCertDir,
+	})
+
+	for _, domain := range sslDomains {
+		// In a fleet, non-owners pull certs from the owner instead of
+		// renewing. This is the "eager poll" from Phase 2 item 6.
+		if len(alive) > 0 {
+			owner := certOwner(domain.Domain, alive)
+			if owner != cfg.PeerID {
+				fmt.Printf("[cert-renewal] %s: owned by %s, pulling\n", domain.Domain, owner)
+				if err := s.pullCertFromPeer(domain.Domain, owner, cfg); err != nil {
+					fmt.Printf("[cert-renewal] %s: pull from %s failed: %v\n", domain.Domain, owner, err)
+				}
+				continue
+			}
+			fmt.Printf("[cert-renewal] %s: this peer (%s) is owner\n", domain.Domain, cfg.PeerID)
+		}
+
+		status := le.GetDomainStatus(domain)
+
+		if !status.CertExists {
+			fmt.Printf("[cert-renewal] %s: no cert, requesting\n", domain.Domain)
+			if err := le.RequestCertForDomain(domain); err != nil {
+				fmt.Printf("[cert-renewal] %s: request failed: %v\n", domain.Domain, err)
+			} else {
+				fmt.Printf("[cert-renewal] %s: obtained\n", domain.Domain)
+			}
+			continue
+		}
+
+		// Check for missing SANs (sub-zones added since last cert).
+		hasCert, missingSANs, _ := le.CheckCertSANs(domain)
+		if hasCert && len(missingSANs) > 0 {
+			fmt.Printf("[cert-renewal] %s: missing SANs %v, renewing\n", domain.Domain, missingSANs)
+			if err := le.RequestCertForDomain(domain); err != nil {
+				fmt.Printf("[cert-renewal] %s: renewal failed: %v\n", domain.Domain, err)
+			} else {
+				fmt.Printf("[cert-renewal] %s: renewed with updated SANs\n", domain.Domain)
+			}
+			continue
+		}
+
+		// Check expiry window.
+		if le.NeedsRenewal(domain, certRenewalDays) {
+			fmt.Printf("[cert-renewal] %s: expires within %dd, renewing\n", domain.Domain, certRenewalDays)
+			if err := le.RequestCertForDomain(domain); err != nil {
+				fmt.Printf("[cert-renewal] %s: renewal failed: %v\n", domain.Domain, err)
+			} else {
+				fmt.Printf("[cert-renewal] %s: renewed\n", domain.Domain)
+			}
+			continue
+		}
+	}
+}
+
 func (s *Server) Run() error {
 	return s.RunWithTokenCallback(nil)
 }
@@ -1143,6 +1260,9 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	// Start service health monitor
 	s.monitor.Start()
 	fmt.Println("Service monitor started")
+
+	// Start unattended cert renewal (Phase 2 prereq)
+	s.startCertRenewal()
 
 	// Start multi-instance config pull loop (no-op on primary / standalone)
 	s.startPeerSync()

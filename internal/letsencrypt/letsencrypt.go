@@ -1,11 +1,14 @@
 package letsencrypt
 
 import (
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"homelab-horizon/internal/acme"
 )
@@ -237,6 +240,31 @@ func (m *Manager) RequestCertForDomainWithLog(d DomainConfig, logFn LogFunc) err
 
 	// Package cert for HAProxy
 	return m.PackageForHAProxyDomain(d.Domain)
+}
+
+// NeedsRenewal reports whether a domain's certificate expires within the given
+// number of days. Returns true when the cert doesn't exist (needs initial
+// issuance) or when the NotAfter timestamp is within the window.
+func (m *Manager) NeedsRenewal(d DomainConfig, withinDays int) bool {
+	baseDomain := strings.TrimPrefix(d.Domain, "*.")
+	certPath := filepath.Join(m.config.CertDir, "live", baseDomain, "fullchain.pem")
+
+	data, err := os.ReadFile(certPath)
+	if err != nil {
+		return true // cert doesn't exist
+	}
+
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return true
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return true
+	}
+
+	return time.Until(cert.NotAfter) < time.Duration(withinDays)*24*time.Hour
 }
 
 // PackageForHAProxyDomain combines cert and key into a single PEM for HAProxy
