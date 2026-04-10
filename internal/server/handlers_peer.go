@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"homelab-horizon/internal/config"
@@ -46,20 +48,90 @@ func (s *Server) handlePeerConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// peerOnlyMiddleware allows only requests originating from the WireGuard
-// subnet. WG is the auth boundary — no tokens, no HMAC.
+// PeerCertResponse is returned by GET /api/peer/cert/<domain>.
+type PeerCertResponse struct {
+	Domain string `json:"domain"`
+	Cert   string `json:"cert"` // fullchain.pem contents
+	Key    string `json:"key"`  // privkey.pem contents
+}
+
+// handlePeerCert returns the certificate + private key for a domain so
+// non-owner peers can pull certs they don't renew themselves. The domain
+// is extracted from the URL path suffix after "/api/peer/cert/".
+//
+// Restricted to configured peers via peerOnlyMiddleware (item 2).
+func (s *Server) handlePeerCert(w http.ResponseWriter, r *http.Request) {
+	domain := strings.TrimPrefix(r.URL.Path, "/api/peer/cert/")
+	if domain == "" {
+		http.Error(w, "domain required", http.StatusBadRequest)
+		return
+	}
+
+	cfg := s.cfg()
+	// Strip wildcard prefix for the filesystem path (certs stored under
+	// the base domain, e.g. /etc/letsencrypt/live/example.com/).
+	baseDomain := strings.TrimPrefix(domain, "*.")
+	certDir := filepath.Join(cfg.SSLCertDir, "live", baseDomain)
+
+	certData, err := os.ReadFile(filepath.Join(certDir, "fullchain.pem"))
+	if err != nil {
+		http.Error(w, "cert not found", http.StatusNotFound)
+		return
+	}
+	keyData, err := os.ReadFile(filepath.Join(certDir, "privkey.pem"))
+	if err != nil {
+		http.Error(w, "key not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(PeerCertResponse{
+		Domain: domain,
+		Cert:   string(certData),
+		Key:    string(keyData),
+	})
+}
+
+// peerOnlyMiddleware allows only requests from configured peer addresses.
+// When the fleet has configured peers, only those specific wg_addr hosts
+// are allowed — not the entire VPN CIDR. This is critical for Phase 2
+// endpoints like /api/peer/cert/:domain that expose private key material.
+//
+// Falls back to VPN CIDR check when no peers are configured (standalone
+// mode or primary with no peers listed) so the endpoint still works in
+// development/testing.
 func (s *Server) peerOnlyMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
 		if err != nil {
 			host = r.RemoteAddr
 		}
-		if !s.isInVPNRange(host) {
-			http.Error(w, "peer api only reachable over wireguard", http.StatusForbidden)
+		if !s.isAllowedPeer(host) {
+			http.Error(w, "peer api: not a configured peer", http.StatusForbidden)
 			return
 		}
 		next(w, r)
 	}
+}
+
+// isAllowedPeer reports whether ip is a configured fleet peer. When
+// peers are configured, only their wg_addr hosts (stripped of port) are
+// accepted. When no peers are configured, falls back to VPN CIDR.
+func (s *Server) isAllowedPeer(ip string) bool {
+	peers := s.cfg().Peers
+	if len(peers) == 0 {
+		return s.isInVPNRange(ip)
+	}
+	for _, p := range peers {
+		peerHost := p.WGAddr
+		if h, _, err := net.SplitHostPort(peerHost); err == nil {
+			peerHost = h
+		}
+		if peerHost == ip {
+			return true
+		}
+	}
+	return false
 }
 
 // nonPrimaryGuardMiddleware returns 403 with the primary peer ID when this

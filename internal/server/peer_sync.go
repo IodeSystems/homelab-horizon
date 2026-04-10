@@ -10,9 +10,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net/http"
+	"os"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"homelab-horizon/internal/config"
@@ -222,6 +226,120 @@ func buildPeerURL(wgAddr, path string) string {
 		addr += ":8080"
 	}
 	return "http://" + addr + path
+}
+
+// alivePeers pings every configured peer in parallel and returns the IDs of
+// those that responded with a valid ping (including self). The result is
+// deterministically sorted by ID so all peers in the fleet compute the same
+// order for ownership decisions.
+func (s *Server) alivePeers() []string {
+	cfg := s.cfg()
+	if cfg.PeerID == "" {
+		return nil
+	}
+
+	// Self is always alive.
+	alive := []string{cfg.PeerID}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, p := range cfg.Peers {
+		wg.Add(1)
+		go func(peer config.Peer) {
+			defer wg.Done()
+			url := buildPeerURL(peer.WGAddr, "/api/peer/ping")
+			resp, err := fetchPeerPing(url)
+			if err != nil {
+				fmt.Printf("[peer-liveness] %s (%s): unreachable: %v\n", peer.ID, url, err)
+				return
+			}
+			if resp.PeerID != peer.ID {
+				fmt.Printf("[peer-liveness] %s: responded with peer_id=%q, skipping\n", peer.ID, resp.PeerID)
+				return
+			}
+			mu.Lock()
+			alive = append(alive, peer.ID)
+			mu.Unlock()
+		}(p)
+	}
+	wg.Wait()
+
+	sort.Strings(alive)
+	return alive
+}
+
+// certOwner deterministically assigns a domain to one of the alive peers.
+// The assignment is stable across all peers in the fleet as long as they
+// agree on the alive set (same sorted IDs) — which they will when network
+// partitions aren't in play.
+//
+// Hash: FNV-1a 64-bit — fast, well-distributed, stdlib, deterministic.
+func certOwner(domain string, alivePeers []string) string {
+	if len(alivePeers) == 0 {
+		return ""
+	}
+	h := fnv.New64a()
+	h.Write([]byte(domain))
+	return alivePeers[h.Sum64()%uint64(len(alivePeers))]
+}
+
+// pullCertFromPeer fetches the cert+key for a domain from the owner peer
+// and writes them to disk in the standard LE layout so HAProxy packaging
+// and local LE status checks work normally. Also packages for HAProxy.
+func (s *Server) pullCertFromPeer(domain, ownerID string, cfg *config.Config) error {
+	// Find the owner's WGAddr.
+	var wgAddr string
+	for _, p := range cfg.Peers {
+		if p.ID == ownerID {
+			wgAddr = p.WGAddr
+			break
+		}
+	}
+	if wgAddr == "" {
+		return fmt.Errorf("peer %q not found in config", ownerID)
+	}
+
+	url := buildPeerURL(wgAddr, "/api/peer/cert/"+domain)
+	body, err := fetchPeerBody(url)
+	if err != nil {
+		return fmt.Errorf("fetch: %w", err)
+	}
+
+	var resp PeerCertResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return fmt.Errorf("decode: %w", err)
+	}
+	if resp.Cert == "" || resp.Key == "" {
+		return fmt.Errorf("empty cert or key in response")
+	}
+
+	// Write to the standard LE cert dir layout.
+	baseDomain := strings.TrimPrefix(domain, "*.")
+	certDir := fmt.Sprintf("%s/live/%s", cfg.SSLCertDir, baseDomain)
+	if err := os.MkdirAll(certDir, 0700); err != nil {
+		return fmt.Errorf("mkdir: %w", err)
+	}
+	if err := os.WriteFile(certDir+"/fullchain.pem", []byte(resp.Cert), 0600); err != nil {
+		return fmt.Errorf("write cert: %w", err)
+	}
+	if err := os.WriteFile(certDir+"/privkey.pem", []byte(resp.Key), 0600); err != nil {
+		return fmt.Errorf("write key: %w", err)
+	}
+
+	// Package for HAProxy so the pulled cert is immediately usable.
+	if cfg.SSLHAProxyCertDir != "" {
+		if err := os.MkdirAll(cfg.SSLHAProxyCertDir, 0700); err != nil {
+			return fmt.Errorf("mkdir haproxy: %w", err)
+		}
+		combined := resp.Cert + resp.Key
+		outPath := fmt.Sprintf("%s/%s.pem", cfg.SSLHAProxyCertDir, baseDomain)
+		if err := os.WriteFile(outPath, []byte(combined), 0600); err != nil {
+			return fmt.Errorf("write haproxy cert: %w", err)
+		}
+	}
+
+	fmt.Printf("[cert-renewal] %s: pulled from %s\n", domain, ownerID)
+	return nil
 }
 
 var peerHTTPClient = &http.Client{Timeout: 5 * time.Second}
