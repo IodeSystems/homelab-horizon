@@ -272,7 +272,7 @@ After phase 2: actual HA. Cert renewal survives one box dying.
 
 After phase 3: WG clients are HA.
 
-### Phase 4 — Bans LWW sync (optional)
+### Phase 4 — Bans LWW sync (optional) ✅ SHIPPED
 
 - Add `GET /api/peer/state` returning ban list with timestamps.
 - Pull from every peer every 30s. Merge LWW per IP.
@@ -280,9 +280,9 @@ After phase 3: WG clients are HA.
 
 ## Prioritized next steps
 
-Phases 1–3 shipped. Config replication, cert failover, and multi-site
-WG client configs are all in place. The next items are Phase 4 (bans
-LWW sync) and cleanup.
+Phases 1–4 shipped. Config replication, cert failover, multi-site WG
+client configs, and ban LWW sync are all in place. Remaining items are
+cleanup (10–12).
 
 Stop after any item if shipping a spare to the second site is more
 valuable than the rest of the list.
@@ -361,10 +361,14 @@ The big rock. After this, cert renewal survives one box dying.
 
 ### Later (Phase 4 + cleanup)
 
-9. **Phase 4 — bans LWW sync**: `GET /api/peer/state` with timestamps,
-   pull from every peer every 30s, merge LWW per IP, persist. Removes
-   the Phase 1 per-peer-bans carve-out in
-   `mergeRemoteIntoLocal` (`peer_sync.go:212`).
+9. ✅ **Phase 4 — bans LWW sync**: `GET /api/peer/state` returns ban
+   list. `startBanSync` runs a 30s ticker on ALL fleet members (not
+   just non-primary) that fetches bans from every peer and merges
+   LWW per IP (`mergeBansLWW` — highest `CreatedAt` wins). Merged
+   bans are persisted and iptables rules reapplied. The Phase 1
+   `IPBans` carve-out in `mergeRemoteIntoLocal` is removed — bans
+   are now shared state. Tests: `TestMergeBansLWW` (3-way merge),
+   `TestBanSyncViaPeerState` (end-to-end via HTTP).
 10. **In-place handler mutation copy-on-write** — convert mutator
     handlers (`s.cfg().X = ...`) to `local := *s.cfg(); local.X = ...; s.config.Store(&local)`
     so the atomic-pointer guarantee actually holds end-to-end. Out of
