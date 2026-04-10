@@ -30,8 +30,10 @@ services:
     volumes:
       - ./config/hz1.json:/etc/homelab-horizon/config.json
       - ./config/wg-hz1.conf:/etc/wireguard/wg0.conf
+      - ../docker-entrypoint.sh:/docker-entrypoint.sh:ro
       - hz1-certs:/etc/letsencrypt
       - hz1-haproxy-certs:/etc/haproxy/certs
+    entrypoint: ["/bin/bash", "/docker-entrypoint.sh"]
     networks:
       fleet:
         ipv4_address: 172.30.0.10
@@ -52,8 +54,10 @@ services:
     volumes:
       - ./config/hz2.json:/etc/homelab-horizon/config.json
       - ./config/wg-hz2.conf:/etc/wireguard/wg0.conf
+      - ../docker-entrypoint.sh:/docker-entrypoint.sh:ro
       - hz2-certs:/etc/letsencrypt
       - hz2-haproxy-certs:/etc/haproxy/certs
+    entrypoint: ["/bin/bash", "/docker-entrypoint.sh"]
     networks:
       fleet:
         ipv4_address: 172.30.0.11

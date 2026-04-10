@@ -172,41 +172,6 @@ cat > "$CONFIG_DIR/hz2.json" <<EOF
 }
 EOF
 
-# --- Entrypoint scripts ---
-# Bring up the s2s tunnel before starting HZ.
-
-cat > "$CONFIG_DIR/hz1-entrypoint.sh" <<'EOF'
-#!/bin/bash
-set -e
-
-# Install wireguard-tools for wg-quick (auto_heal handles the rest)
-apt-get update -qq && apt-get install -y -qq wireguard-tools iproute2 >/dev/null 2>&1
-
-# Bring up the site-to-site tunnel (not managed by HZ)
-wg-quick up /etc/wireguard/wg-s2s.conf || true
-
-echo "Site-to-site tunnel up (10.0.0.1)"
-echo "Starting homelab-horizon..."
-
-exec /usr/local/bin/homelab-horizon
-EOF
-
-cat > "$CONFIG_DIR/hz2-entrypoint.sh" <<'EOF'
-#!/bin/bash
-set -e
-
-apt-get update -qq && apt-get install -y -qq wireguard-tools iproute2 >/dev/null 2>&1
-
-wg-quick up /etc/wireguard/wg-s2s.conf || true
-
-echo "Site-to-site tunnel up (10.0.0.2)"
-echo "Starting homelab-horizon..."
-
-exec /usr/local/bin/homelab-horizon
-EOF
-
-chmod +x "$CONFIG_DIR/hz1-entrypoint.sh" "$CONFIG_DIR/hz2-entrypoint.sh"
-
 echo ""
 echo "Config written to $CONFIG_DIR/"
 echo ""

@@ -4,7 +4,7 @@
 #   ./setup.sh          # generate WG keys and config
 #   docker compose up   # start HZ
 #
-# HZ UI: http://localhost:8080
+# HZ UI: http://localhost:8090
 
 services:
   hz:
@@ -18,13 +18,15 @@ services:
     devices:
       - /dev/net/tun:/dev/net/tun
     ports:
-      - "8080:8080"
-      - "51820:51820/udp"
+      - "8090:8080"
+      - "51900:51820/udp"
     volumes:
       - ./config/hz.json:/etc/homelab-horizon/config.json
       - ./config/wg0.conf:/etc/wireguard/wg0.conf
+      - ../docker-entrypoint.sh:/docker-entrypoint.sh:ro
       - hz-certs:/etc/letsencrypt
       - hz-haproxy-certs:/etc/haproxy/certs
+    entrypoint: ["/bin/bash", "/docker-entrypoint.sh"]
 
 volumes:
   hz-certs:

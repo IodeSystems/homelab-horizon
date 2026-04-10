@@ -17,6 +17,7 @@ type dependency struct {
 }
 
 var dependencies = []dependency{
+	{"iproute2", "ip", "iproute2", func(*config.Config) bool { return true }},
 	{"WireGuard tools", "wg", "wireguard-tools", func(*config.Config) bool { return true }},
 	{"iptables", "iptables", "iptables", func(*config.Config) bool { return true }},
 	{"qrencode", "qrencode", "qrencode", func(*config.Config) bool { return true }},
