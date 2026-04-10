@@ -182,13 +182,15 @@ func (s *Server) handleAPIAddZone(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.cfg().AddZone(zone); err != nil {
-		writeJSONError(w, http.StatusBadRequest, err.Error())
+	var addErr error
+	if err := s.updateConfig(func(cfg *config.Config) {
+		addErr = cfg.AddZone(zone)
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	if err := config.Save(s.configPath, s.cfg()); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
+	if addErr != nil {
+		writeJSONError(w, http.StatusBadRequest, addErr.Error())
 		return
 	}
 
@@ -235,30 +237,30 @@ func (s *Server) handleAPIEditZone(w http.ResponseWriter, r *http.Request) {
 	sslEmail := strings.TrimSpace(req.SSLEmail)
 
 	var found bool
-	for i := range s.cfg().Zones {
-		if s.cfg().Zones[i].Name == originalName {
-			if sslEmail != "" {
-				if s.cfg().Zones[i].SSL == nil {
-					s.cfg().Zones[i].SSL = &config.ZoneSSL{}
+	if err := s.updateConfig(func(cfg *config.Config) {
+		for i := range cfg.Zones {
+			if cfg.Zones[i].Name == originalName {
+				if sslEmail != "" {
+					if cfg.Zones[i].SSL == nil {
+						cfg.Zones[i].SSL = &config.ZoneSSL{}
+					}
+					cfg.Zones[i].SSL.Enabled = true
+					cfg.Zones[i].SSL.Email = sslEmail
+				} else {
+					cfg.Zones[i].SSL = nil
 				}
-				s.cfg().Zones[i].SSL.Enabled = true
-				s.cfg().Zones[i].SSL.Email = sslEmail
-			} else {
-				s.cfg().Zones[i].SSL = nil
+				cfg.Zones[i].SubZones = subZones
+				found = true
+				break
 			}
-			s.cfg().Zones[i].SubZones = subZones
-			found = true
-			break
 		}
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	if !found {
 		writeJSONError(w, http.StatusNotFound, "Zone not found")
-		return
-	}
-
-	if err := config.Save(s.configPath, s.cfg()); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -284,13 +286,15 @@ func (s *Server) handleAPIDeleteZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.cfg().RemoveZone(req.Name) {
-		writeJSONError(w, http.StatusNotFound, "Zone not found")
+	removed := false
+	if err := s.updateConfig(func(cfg *config.Config) {
+		removed = cfg.RemoveZone(req.Name)
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	if err := config.Save(s.configPath, s.cfg()); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
+	if !removed {
+		writeJSONError(w, http.StatusNotFound, "Zone not found")
 		return
 	}
 
@@ -471,8 +475,9 @@ func (s *Server) handleAPIAddCheck(w http.ResponseWriter, r *http.Request) {
 		Enabled:  true,
 	}
 
-	s.cfg().ServiceChecks = append(s.cfg().ServiceChecks, check)
-	if err := config.Save(s.configPath, s.cfg()); err != nil {
+	if err := s.updateConfig(func(cfg *config.Config) {
+		cfg.ServiceChecks = append(cfg.ServiceChecks, check)
+	}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -508,21 +513,21 @@ func (s *Server) handleAPIDeleteCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	found := false
-	for i, c := range s.cfg().ServiceChecks {
-		if c.Name == name {
-			s.cfg().ServiceChecks = append(s.cfg().ServiceChecks[:i], s.cfg().ServiceChecks[i+1:]...)
-			found = true
-			break
+	if err := s.updateConfig(func(cfg *config.Config) {
+		for i, c := range cfg.ServiceChecks {
+			if c.Name == name {
+				cfg.ServiceChecks = append(cfg.ServiceChecks[:i], cfg.ServiceChecks[i+1:]...)
+				found = true
+				break
+			}
 		}
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	if !found {
 		writeJSONError(w, http.StatusNotFound, "Check not found")
-		return
-	}
-
-	if err := config.Save(s.configPath, s.cfg()); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -567,15 +572,20 @@ func (s *Server) handleAPIToggleCheck(w http.ResponseWriter, r *http.Request) {
 
 	if status.AutoGen {
 		s.monitor.UpdateConfig()
-	} else {
-		for i := range s.cfg().ServiceChecks {
-			if s.cfg().ServiceChecks[i].Name == name {
-				s.cfg().ServiceChecks[i].Enabled = newEnabled
-				break
+	}
+	if err := s.updateConfig(func(cfg *config.Config) {
+		if !status.AutoGen {
+			for i := range cfg.ServiceChecks {
+				if cfg.ServiceChecks[i].Name == name {
+					cfg.ServiceChecks[i].Enabled = newEnabled
+					break
+				}
 			}
 		}
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	config.Save(s.configPath, s.cfg())
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true})

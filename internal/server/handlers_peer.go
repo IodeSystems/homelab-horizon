@@ -232,7 +232,10 @@ func (s *Server) isPeerInstanceRoute(path string) bool {
 // cfg.WGPeers so it gets persisted to config.json and replicated to
 // non-primary instances. Call this after every WG mutation (add/edit/delete/
 // re-key) before config.Save.
-func (s *Server) syncWGPeersToConfig() {
+// syncWGPeersToConfig snapshots the current WG config file peer list into
+// the given config (or s.cfg() if nil). Call this before updateConfig/Save
+// so WGPeers reflects the latest WG file state. Mutates cfg in place.
+func (s *Server) snapshotWGPeers() []config.WGPeer {
 	peers := s.wg.GetPeers()
 	wgPeers := make([]config.WGPeer, len(peers))
 	for i, p := range peers {
@@ -242,7 +245,7 @@ func (s *Server) syncWGPeersToConfig() {
 			AllowedIPs: p.AllowedIPs,
 		}
 	}
-	s.cfg().WGPeers = wgPeers
+	return wgPeers
 }
 
 // applyWGPeersFromConfig applies the WGPeers list from config to the local

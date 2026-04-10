@@ -339,8 +339,9 @@ func (s *Server) banSyncOnce() {
 		}
 	}
 
-	cfg.IPBans = merged
-	config.Save(s.configPath, cfg)
+	s.updateConfig(func(c *config.Config) {
+		c.IPBans = merged
+	})
 	s.reapplyBans()
 	fmt.Printf("[ban-sync] merged bans: %d total\n", len(merged))
 }

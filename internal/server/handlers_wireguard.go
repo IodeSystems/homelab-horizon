@@ -226,9 +226,11 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Invited peers default to vpn-only (admin can upgrade later)
-		s.cfg().SetPeerProfile(name, config.ProfileVPNOnly)
-		s.syncWGPeersToConfig()
-		config.Save(s.configPath, s.cfg())
+		wgPeers := s.snapshotWGPeers()
+		s.updateConfig(func(cfg *config.Config) {
+			cfg.SetPeerProfile(name, config.ProfileVPNOnly)
+			cfg.WGPeers = wgPeers
+		})
 
 		s.wg.Reload()
 		s.rebuildWGForwardChain()

@@ -613,8 +613,21 @@ func (s *Server) handleAPIServiceIntegration(w http.ResponseWriter, r *http.Requ
 
 	// Ensure token exists
 	if svc.Token == "" {
-		svc.EnsureToken()
-		config.Save(s.configPath, s.cfg())
+		s.updateConfig(func(cfg *config.Config) {
+			for i := range cfg.Services {
+				if cfg.Services[i].Name == name && cfg.Services[i].Token == "" {
+					cfg.Services[i].EnsureToken()
+					break
+				}
+			}
+		})
+		// Re-lookup svc from the new config
+		for i := range s.cfg().Services {
+			if s.cfg().Services[i].Name == name {
+				svc = &s.cfg().Services[i]
+				break
+			}
+		}
 	}
 
 	// Build base URL from request
