@@ -1,0 +1,105 @@
+# Site-to-site HA: two HZ instances at different "sites" connected
+# by a WireGuard tunnel.
+#
+# Each site has its own VPN range for clients. Fleet comms flow over
+# the site-to-site tunnel (10.0.0.0/24). This models the "homelab"
+# scenario — two boxes at different physical locations.
+#
+# Network topology:
+#   hz1 (site-a, 10.0.0.1) ═══ WG tunnel ═══ (10.0.0.2, site-b) hz2
+#        wg1: 10.0.1.0/24                      wg1: 10.0.2.0/24
+#        VPN clients ^                          VPN clients ^
+#
+# Usage:
+#   ./setup.sh          # generate WG keys and configs
+#   docker compose up   # start both instances
+#
+# hz1 (primary):  http://localhost:8081
+# hz2 (spare):    http://localhost:8082
+
+services:
+  hz1:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: hz1
+    hostname: hz1
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.ip_forward=1
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8081:8080"
+      - "51821:51820/udp"
+      - "51831:51830/udp"
+    volumes:
+      - ./config/hz1.json:/etc/homelab-horizon/config.json
+      - ./config/wg-hz1-s2s.conf:/etc/wireguard/wg-s2s.conf
+      - ./config/wg-hz1-clients.conf:/etc/wireguard/wg0.conf
+      - ./config/hz1-entrypoint.sh:/entrypoint.sh:ro
+      - hz1-certs:/etc/letsencrypt
+      - hz1-haproxy-certs:/etc/haproxy/certs
+    entrypoint: ["/bin/bash", "/entrypoint.sh"]
+    networks:
+      site-a:
+        ipv4_address: 172.31.0.10
+      # hz1 also joins the "wan" network so the s2s tunnel can reach hz2
+      wan:
+        ipv4_address: 172.29.0.10
+
+  hz2:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: hz2
+    hostname: hz2
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.ip_forward=1
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8082:8080"
+      - "51822:51820/udp"
+      - "51832:51830/udp"
+    volumes:
+      - ./config/hz2.json:/etc/homelab-horizon/config.json
+      - ./config/wg-hz2-s2s.conf:/etc/wireguard/wg-s2s.conf
+      - ./config/wg-hz2-clients.conf:/etc/wireguard/wg0.conf
+      - ./config/hz2-entrypoint.sh:/entrypoint.sh:ro
+      - hz2-certs:/etc/letsencrypt
+      - hz2-haproxy-certs:/etc/haproxy/certs
+    entrypoint: ["/bin/bash", "/entrypoint.sh"]
+    networks:
+      site-b:
+        ipv4_address: 172.32.0.10
+      wan:
+        ipv4_address: 172.29.0.11
+
+networks:
+  # Each site has its own isolated LAN.
+  site-a:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+  site-b:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.32.0.0/24
+  # Shared "WAN" network — only used for the s2s tunnel endpoints.
+  wan:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.29.0.0/24
+
+volumes:
+  hz1-certs:
+  hz1-haproxy-certs:
+  hz2-certs:
+  hz2-haproxy-certs:
