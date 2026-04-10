@@ -43,9 +43,11 @@ import {
   useHAProxyConfigPreview,
   useHAProxyReload,
   useHAProxyWriteConfig,
+  useMFASettings,
   useRunCheck,
   useSettings,
   useToggleCheck,
+  useUpdateMFASettings,
 } from "../api/hooks";
 import type { CheckStatus, Zone } from "../api/types";
 
@@ -1007,6 +1009,85 @@ function SystemTab({
   );
 }
 
+// --- VPN MFA Tab ---
+
+const ALL_DURATIONS = ["2h", "4h", "8h", "forever"];
+
+function VPNMFATab() {
+  const mfa = useMFASettings();
+  const updateMFA = useUpdateMFASettings();
+  const [snack, setSnack] = useState("");
+
+  if (mfa.isLoading) return <CircularProgress />;
+  if (mfa.isError) return <Alert severity="error">Failed to load MFA settings</Alert>;
+
+  const enabled = mfa.data?.enabled ?? false;
+  const durations = mfa.data?.durations ?? [];
+
+  return (
+    <Box>
+      <Paper sx={{ p: 3, mb: 2 }}>
+        <Typography variant="h6" gutterBottom>
+          VPN Multi-Factor Authentication
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          When enabled, VPN peers are jailed to only reach the Horizon portal until they
+          verify with a TOTP code from their authenticator app. VPN admins bypass MFA.
+        </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
+          <Typography>MFA Enabled</Typography>
+          <Switch
+            checked={enabled}
+            onChange={(_, checked) =>
+              updateMFA.mutate(
+                { enabled: checked, durations: durations.length > 0 ? durations : ALL_DURATIONS },
+                { onSuccess: () => setSnack(checked ? "MFA enabled" : "MFA disabled") },
+              )
+            }
+          />
+        </Box>
+        {enabled && (
+          <>
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+              Allowed Session Durations
+            </Typography>
+            <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+              {ALL_DURATIONS.map((d) => {
+                const active = durations.includes(d);
+                return (
+                  <Chip
+                    key={d}
+                    label={d === "forever" ? "Permanent" : d}
+                    color={active ? "primary" : "default"}
+                    variant={active ? "filled" : "outlined"}
+                    onClick={() => {
+                      const next = active
+                        ? durations.filter((x: string) => x !== d)
+                        : [...durations, d];
+                      if (next.length === 0) return; // must have at least one
+                      updateMFA.mutate(
+                        { enabled, durations: next },
+                        { onSuccess: () => setSnack("Durations updated") },
+                      );
+                    }}
+                    sx={{ cursor: "pointer" }}
+                  />
+                );
+              })}
+            </Box>
+          </>
+        )}
+      </Paper>
+      <Snackbar
+        open={!!snack}
+        autoHideDuration={3000}
+        onClose={() => setSnack("")}
+        message={snack}
+      />
+    </Box>
+  );
+}
+
 // --- Main Settings Page ---
 
 function SettingsPage() {
@@ -1042,6 +1123,7 @@ function SettingsPage() {
         <Tab label="HAProxy" />
         <Tab label="SSL" />
         <Tab label="Health Checks" />
+        <Tab label="VPN MFA" />
         <Tab label="System" />
       </Tabs>
 
@@ -1065,7 +1147,8 @@ function SettingsPage() {
         />
       )}
       {tab === 3 && <ChecksTab checks={data.checks} />}
-      {tab === 4 && (
+      {tab === 4 && <VPNMFATab />}
+      {tab === 5 && (
         <SystemTab
           publicIP={data.config.publicIP}
           localInterface={data.config.localInterface}

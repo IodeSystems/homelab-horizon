@@ -967,6 +967,16 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/vpn/invites/create", s.handleAPICreateInvite)
 	mux.HandleFunc("/api/v1/vpn/invites/delete", s.handleAPIDeleteInvite)
 
+	// MFA routes — status/enroll/verify are accessible from jail (VPN peer auth by IP)
+	mux.HandleFunc("/api/v1/mfa/status", s.handleAPIMFAStatus)
+	mux.HandleFunc("/api/v1/mfa/enroll", s.handleAPIMFAEnroll)
+	mux.HandleFunc("/api/v1/mfa/verify", s.handleAPIMFAVerify)
+	// MFA admin routes
+	mux.HandleFunc("/api/v1/mfa/settings", s.handleAPIMFASettings)
+	mux.HandleFunc("/api/v1/mfa/reset", s.handleAPIMFAReset)
+	mux.HandleFunc("/api/v1/mfa/grant-session", s.handleAPIMFAGrantSession)
+	mux.HandleFunc("/api/v1/mfa/revoke-session", s.handleAPIMFARevokeSession)
+
 	// API v1 settings routes
 	mux.HandleFunc("/api/v1/settings", s.handleAPISettings)
 	mux.HandleFunc("/api/v1/zones/add", s.handleAPIAddZone)
@@ -1305,6 +1315,11 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 
 	// Start ban LWW sync across all fleet peers (Phase 4)
 	s.startBanSync()
+
+	// Start MFA session expiry pruner
+	mfaDone := make(chan struct{})
+	s.startMFASessionPruner(mfaDone)
+	defer close(mfaDone)
 
 	fmt.Println("========================================")
 

@@ -11,6 +11,10 @@ import type {
   DomainsData,
   HAProxyConfigPreview,
   Invite,
+  MFAEnrollResponse,
+  MFASettingsResponse,
+  MFAStatusResponse,
+  MFAVerifyResponse,
   PeerConfigResponse,
   RekeyPeerResponse,
   Service,
@@ -639,6 +643,106 @@ export function useUnbanIP() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["bans"] });
+    },
+  });
+}
+
+// --- MFA ---
+
+export function useMFAStatus() {
+  return useQuery({
+    queryKey: ["mfa", "status"],
+    queryFn: () => apiFetch<MFAStatusResponse>("/mfa/status"),
+    retry: false,
+  });
+}
+
+export function useMFAEnroll() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<MFAEnrollResponse>("/mfa/enroll", { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["mfa", "status"] });
+    },
+  });
+}
+
+export function useMFAVerify() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { code: string; duration: string }) =>
+      apiFetch<MFAVerifyResponse>("/mfa/verify", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["mfa", "status"] });
+      qc.invalidateQueries({ queryKey: ["vpn", "peers"] });
+    },
+  });
+}
+
+export function useMFASettings() {
+  return useQuery({
+    queryKey: ["mfa", "settings"],
+    queryFn: () => apiFetch<MFASettingsResponse>("/mfa/settings"),
+  });
+}
+
+export function useUpdateMFASettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { enabled: boolean; durations: string[] }) =>
+      apiFetch("/mfa/settings", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["mfa", "settings"] });
+      qc.invalidateQueries({ queryKey: ["vpn", "peers"] });
+    },
+  });
+}
+
+export function useMFAReset() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) =>
+      apiFetch("/mfa/reset", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["vpn", "peers"] });
+    },
+  });
+}
+
+export function useMFAGrantSession() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; duration: string }) =>
+      apiFetch("/mfa/grant-session", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["vpn", "peers"] });
+    },
+  });
+}
+
+export function useMFARevokeSession() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) =>
+      apiFetch("/mfa/revoke-session", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["vpn", "peers"] });
     },
   });
 }

@@ -173,6 +173,9 @@ export const VPNPeerSchema = z.object({
   online: z.boolean(),
   isAdmin: z.boolean(),
   profile: z.string(),
+  mfaEnrolled: z.boolean(),
+  mfaSessionActive: z.boolean(),
+  mfaSessionExpiry: z.string().optional(),
 });
 
 export const VPNPeersSchema = z.array(VPNPeerSchema);

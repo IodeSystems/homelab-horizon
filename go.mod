@@ -17,6 +17,7 @@ require (
 	github.com/libdns/libdns v1.1.1
 	github.com/libdns/route53 v1.6.0
 	github.com/mark3labs/mcp-go v0.46.0
+	github.com/pquerna/otp v1.5.0
 )
 
 require (
@@ -34,6 +35,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.19 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.10 // indirect
 	github.com/aws/smithy-go v1.24.2 // indirect
+	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/digitalocean/godo v1.148.0 // indirect

@@ -161,6 +161,33 @@ export interface PeerResp {
   online: boolean;
   isAdmin: boolean;
   profile: string;
+  mfaEnrolled: boolean;
+  mfaSessionActive: boolean;
+  mfaSessionExpiry?: string;
+}
+export interface MFAStatusResponse {
+  enrolled: boolean;
+  sessionActive: boolean;
+  sessionExpiry?: string;
+  durations: string[];
+  provisioningUri?: string; // only during enrollment
+}
+export interface MFAEnrollResponse {
+  ok: boolean;
+  provisioningUri: string;
+  secret: string;
+}
+export interface MFAVerifyRequest {
+  code: string;
+  duration: string; // "2h", "4h", "8h", "forever"
+}
+export interface MFAVerifyResponse {
+  ok: boolean;
+  expiry?: string;
+}
+export interface MFASettingsResponse {
+  enabled: boolean;
+  durations: string[];
 }
 export interface AddPeerResponse {
   ok: boolean;

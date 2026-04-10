@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -165,6 +166,7 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			cfg.RenamePeerProfile(oldName, name)
+			cfg.RenameMFAPeer(oldName, name)
 		}
 		cfg.SetPeerProfile(name, profile)
 		cfg.WGPeers = wgPeers
@@ -216,6 +218,7 @@ func (s *Server) handleAPIDeletePeer(w http.ResponseWriter, r *http.Request) {
 	s.updateConfig(func(cfg *config.Config) {
 		if peerName != "" {
 			cfg.DeletePeerProfile(peerName)
+			cfg.DeleteMFAPeer(peerName)
 		}
 		cfg.WGPeers = wgPeers
 	})
@@ -381,10 +384,28 @@ func (s *Server) generateClientConfig(clientPrivKey, clientIP, profile string) s
 
 // rebuildWGForwardChain rebuilds the iptables WG-FORWARD chain based on current peers and profiles.
 func (s *Server) rebuildWGForwardChain() {
+	cfg := s.cfg()
 	peers := s.wg.GetPeers()
 	lanCIDR := config.GetLocalNetworkCIDR(config.DetectDefaultInterface())
-	profiles := s.cfg().VPNProfiles
-	if err := wireguard.RebuildForwardChain(peers, profiles, s.cfg().VPNRange, lanCIDR); err != nil {
+
+	// Compute MFA jail state
+	serverWGIP := strings.TrimSuffix(strings.Split(s.wg.GetAddress(), "/")[0], "")
+	listenPort := ""
+	if addr := cfg.ListenAddr; addr != "" {
+		if _, p, err := net.SplitHostPort(addr); err == nil {
+			listenPort = p
+		}
+	}
+
+	if err := wireguard.RebuildForwardChain(wireguard.ForwardChainOpts{
+		Peers:       peers,
+		Profiles:    cfg.VPNProfiles,
+		VPNRange:    cfg.VPNRange,
+		LanCIDR:     lanCIDR,
+		JailedPeers: cfg.GetJailedPeers(),
+		ServerWGIP:  serverWGIP,
+		ListenPort:  listenPort,
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to rebuild WG-FORWARD chain: %v\n", err)
 	}
 }
