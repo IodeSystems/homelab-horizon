@@ -527,6 +527,42 @@ func TestValidateFleet(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "disjoint VPN ranges (site-to-site)",
+			cfg: Config{
+				PeerID:        "site-a",
+				ConfigPrimary: true,
+				VPNRange:      "10.0.1.0/24",
+				Peers: []Peer{
+					{ID: "site-b", WGAddr: "10.0.0.2", VPNRange: "10.0.2.0/24"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "overlapping VPN ranges",
+			cfg: Config{
+				PeerID:        "site-a",
+				ConfigPrimary: true,
+				VPNRange:      "10.0.1.0/24",
+				Peers: []Peer{
+					{ID: "site-b", WGAddr: "10.0.0.2", VPNRange: "10.0.1.0/24"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "same-subnet (no peer VPNRange — valid)",
+			cfg: Config{
+				PeerID:        "site-a",
+				ConfigPrimary: true,
+				VPNRange:      "10.100.0.0/24",
+				Peers: []Peer{
+					{ID: "site-b", WGAddr: "172.30.0.11"},
+				},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

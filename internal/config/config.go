@@ -168,6 +168,11 @@ type Config struct {
 	// Per-peer routing profiles: "lan-access" (default), "full-tunnel", "vpn-only"
 	VPNProfiles map[string]string `json:"vpn_profiles,omitempty"`
 
+	// WireGuard VPN client peers — shared state, replicated to non-primary
+	// instances via the pull loop. Handlers update this after every WG
+	// mutation; applyNewConfig applies it to the local WG config file.
+	WGPeers []WGPeer `json:"wg_peers,omitempty"`
+
 	// IP banning
 	IPBans []IPBan `json:"ip_bans,omitempty"`
 
@@ -180,6 +185,15 @@ type Config struct {
 	Peers         []Peer `json:"peers,omitempty"`          // every other instance in the fleet
 }
 
+// WGPeer represents a WireGuard VPN client peer. This is the shared-state
+// representation stored in config.json and replicated across fleet members.
+// The WG config file on disk is derived from this list.
+type WGPeer struct {
+	Name       string `json:"name"`
+	PublicKey  string `json:"public_key"`
+	AllowedIPs string `json:"allowed_ips"`
+}
+
 // Peer describes another homelab-horizon instance in the fleet.
 // All inter-peer traffic flows over the WireGuard site-to-site tunnel,
 // so WGAddr must be reachable on the WG interface.
@@ -187,6 +201,13 @@ type Peer struct {
 	ID      string `json:"id"`
 	WGAddr  string `json:"wg_addr"`           // host[:port] reachable over WG (port defaults to local listen port)
 	Primary bool   `json:"primary,omitempty"` // marks the config primary on non-primary instances
+
+	// Phase 3: needed for multi-site client config generation.
+	// When populated, GenerateMultiSiteClientConfig emits one [Peer]
+	// block per site. When empty, single-site mode is assumed.
+	ServerEndpoint  string `json:"server_endpoint,omitempty"`  // e.g. "b.example.com:51820"
+	ServerPublicKey string `json:"server_public_key,omitempty"`
+	VPNRange        string `json:"vpn_range,omitempty"` // e.g. "10.0.2.0/24"
 }
 
 // PrimaryPeer returns the entry in Peers marked as primary, or nil if none.
@@ -226,6 +247,39 @@ func (c *Config) ValidateFleet() error {
 	if !c.ConfigPrimary && primaries > 1 {
 		return errors.New("more than one peer marked primary")
 	}
+
+	// Validate VPN ranges don't overlap when configured (site-to-site).
+	if c.VPNRange != "" {
+		ranges := []struct {
+			id    string
+			cidr  string
+		}{{c.PeerID, c.VPNRange}}
+		for _, p := range c.Peers {
+			if p.VPNRange != "" {
+				ranges = append(ranges, struct {
+					id   string
+					cidr string
+				}{p.ID, p.VPNRange})
+			}
+		}
+		for i := 0; i < len(ranges); i++ {
+			_, netI, errI := net.ParseCIDR(ranges[i].cidr)
+			if errI != nil {
+				continue
+			}
+			for j := i + 1; j < len(ranges); j++ {
+				_, netJ, errJ := net.ParseCIDR(ranges[j].cidr)
+				if errJ != nil {
+					continue
+				}
+				if netI.Contains(netJ.IP) || netJ.Contains(netI.IP) {
+					return fmt.Errorf("VPN ranges overlap: %s (%s) and %s (%s)",
+						ranges[i].id, ranges[i].cidr, ranges[j].id, ranges[j].cidr)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

@@ -891,6 +891,53 @@ func TestPullCertFromPeer(t *testing.T) {
 	}
 }
 
+func TestWGPeersReplicateViaPullLoop(t *testing.T) {
+	// Primary has WG peers in config.
+	primaryCfg := &config.Config{
+		PeerID:        "site-a",
+		ConfigPrimary: true,
+		VPNRange:      "10.100.0.0/24",
+		WGPeers: []config.WGPeer{
+			{Name: "alice", PublicKey: "alice-pubkey-abc", AllowedIPs: "10.100.0.2/32"},
+			{Name: "bob", PublicKey: "bob-pubkey-xyz", AllowedIPs: "10.100.0.3/32"},
+		},
+	}
+	primary := newTestServer(t, primaryCfg)
+	primaryAddr := startPeerHTTPServer(t, primary)
+
+	// Non-primary starts with no WG peers.
+	nonPrimaryCfg := &config.Config{
+		PeerID:        "site-b",
+		ConfigPrimary: false,
+		Peers: []config.Peer{
+			{ID: "site-a", WGAddr: primaryAddr, Primary: true},
+		},
+		VPNRange: "10.100.0.0/24",
+		WGPeers:  nil, // empty
+	}
+	nonPrimary := newTestServer(t, nonPrimaryCfg)
+
+	// Pull should converge WGPeers.
+	nonPrimary.pullConfigOnce()
+
+	got := nonPrimary.cfg()
+	if len(got.WGPeers) != 2 {
+		t.Fatalf("expected 2 WG peers after pull, got %d", len(got.WGPeers))
+	}
+	if got.WGPeers[0].Name != "alice" || got.WGPeers[1].Name != "bob" {
+		t.Errorf("WG peers not replicated correctly: %+v", got.WGPeers)
+	}
+
+	// Verify persisted to disk.
+	persisted, err := config.Load(nonPrimary.configPath)
+	if err != nil {
+		t.Fatalf("reload persisted config: %v", err)
+	}
+	if len(persisted.WGPeers) != 2 {
+		t.Errorf("persisted WGPeers count = %d, want 2", len(persisted.WGPeers))
+	}
+}
+
 func TestCertOwner(t *testing.T) {
 	peers := []string{"site-a", "site-b", "site-c"}
 

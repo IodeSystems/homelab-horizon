@@ -318,6 +318,24 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		}
 	}
 
+	// Migration: import WG config file peers into config.json WGPeers
+	// if the field is empty (first run after upgrade or new install).
+	if len(cfg.WGPeers) == 0 {
+		wgPeers := wg.GetPeers()
+		if len(wgPeers) > 0 {
+			cfg.WGPeers = make([]config.WGPeer, len(wgPeers))
+			for i, p := range wgPeers {
+				cfg.WGPeers[i] = config.WGPeer{
+					Name:       p.Name,
+					PublicKey:  p.PublicKey,
+					AllowedIPs: p.AllowedIPs,
+				}
+			}
+			fmt.Printf("Migrated %d WG peers into config.json\n", len(wgPeers))
+			_ = config.Save(configPath, cfg)
+		}
+	}
+
 	// Set up WG-FORWARD iptables chain for per-peer routing profiles
 	if !dryRun {
 		lanCIDR := config.GetLocalNetworkCIDR(config.DetectDefaultInterface())
