@@ -92,6 +92,19 @@ func (s *Server) handlePeerCert(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// PeerStateResponse is returned by GET /api/peer/state.
+type PeerStateResponse struct {
+	Bans []config.IPBan `json:"bans"`
+}
+
+// handlePeerState returns runtime state for LWW sync. Currently just bans.
+func (s *Server) handlePeerState(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(PeerStateResponse{
+		Bans: s.cfg().IPBans,
+	})
+}
+
 // peerOnlyMiddleware allows only requests from configured peer addresses.
 // When the fleet has configured peers, only those specific wg_addr hosts
 // are allowed — not the entire VPN CIDR. This is critical for Phase 2

@@ -909,6 +909,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// Cert pull endpoint for Phase 2 ACME HA — non-owners fetch cert+key
 	// from the owner peer. Subtree because domain is in the path.
 	s.handlePeerInstanceSubtree(mux, "/api/peer/cert/", s.peerOnlyMiddleware(s.handlePeerCert))
+	// Ban state endpoint for Phase 4 LWW sync — each peer exposes its
+	// ban list so others can merge.
+	s.handlePeerInstance(mux, "/api/peer/state", s.peerOnlyMiddleware(s.handlePeerState))
 
 	// API v1 auth routes (JSON, SameSite cookie auth). Per-instance: a
 	// non-primary spare must still allow login/logout for read-only access.
@@ -1284,6 +1287,9 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 
 	// Start multi-instance config pull loop (no-op on primary / standalone)
 	s.startPeerSync()
+
+	// Start ban LWW sync across all fleet peers (Phase 4)
+	s.startBanSync()
 
 	fmt.Println("========================================")
 

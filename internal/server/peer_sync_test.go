@@ -95,8 +95,9 @@ func TestMergeRemoteIntoLocal(t *testing.T) {
 	if merged.AdminToken != "local-secret" {
 		t.Errorf("AdminToken clobbered: %s", merged.AdminToken)
 	}
-	if len(merged.IPBans) != 1 || merged.IPBans[0].IP != "10.0.0.99" {
-		t.Errorf("IPBans should remain local until Phase 4 LWW sync, got: %+v", merged.IPBans)
+	// IPBans are now shared state (Phase 4 LWW sync) — they come from remote.
+	if len(merged.IPBans) != 1 || merged.IPBans[0].IP != "10.0.0.42" {
+		t.Errorf("IPBans should come from remote (shared state), got: %+v", merged.IPBans)
 	}
 
 	// Original local config must not be mutated.
@@ -233,8 +234,10 @@ func TestPullLoopE2E(t *testing.T) {
 	if got.PublicIP != "203.0.113.2" {
 		t.Errorf("PublicIP clobbered: %s", got.PublicIP)
 	}
-	if len(got.IPBans) != 1 || got.IPBans[0].IP != "10.0.0.99" {
-		t.Errorf("IPBans should remain local: %+v", got.IPBans)
+	// IPBans are now shared state (Phase 4 LWW sync) — pulled from primary.
+	// The primary config has no bans, so non-primary's local ban is replaced.
+	if len(got.IPBans) != 0 {
+		t.Errorf("IPBans should match primary (empty): %+v", got.IPBans)
 	}
 
 	// Peers entry should still be marked Primary on the non-primary side
@@ -888,6 +891,98 @@ func TestPullCertFromPeer(t *testing.T) {
 	err = puller.pullCertFromPeer("*.example.com", "site-unknown", pullerCfg)
 	if err == nil {
 		t.Error("expected error for unknown peer")
+	}
+}
+
+func TestMergeBansLWW(t *testing.T) {
+	local := []config.IPBan{
+		{IP: "1.1.1.1", CreatedAt: 100, Reason: "local-old"},
+		{IP: "2.2.2.2", CreatedAt: 200, Reason: "local-only"},
+	}
+	remote := []config.IPBan{
+		{IP: "1.1.1.1", CreatedAt: 150, Reason: "remote-newer"},
+		{IP: "3.3.3.3", CreatedAt: 300, Reason: "remote-only"},
+	}
+
+	merged := mergeBansLWW(local, remote)
+
+	byIP := make(map[string]config.IPBan)
+	for _, b := range merged {
+		byIP[b.IP] = b
+	}
+
+	if len(merged) != 3 {
+		t.Fatalf("expected 3 merged bans, got %d: %+v", len(merged), merged)
+	}
+
+	// 1.1.1.1: remote is newer (150 > 100)
+	if byIP["1.1.1.1"].Reason != "remote-newer" {
+		t.Errorf("1.1.1.1 should be remote-newer, got %q", byIP["1.1.1.1"].Reason)
+	}
+
+	// 2.2.2.2: local-only
+	if byIP["2.2.2.2"].Reason != "local-only" {
+		t.Errorf("2.2.2.2 should be local-only, got %q", byIP["2.2.2.2"].Reason)
+	}
+
+	// 3.3.3.3: remote-only
+	if byIP["3.3.3.3"].Reason != "remote-only" {
+		t.Errorf("3.3.3.3 should be remote-only, got %q", byIP["3.3.3.3"].Reason)
+	}
+}
+
+func TestBanSyncViaPeerState(t *testing.T) {
+	// Primary has a ban.
+	primaryCfg := &config.Config{
+		PeerID:        "site-a",
+		ConfigPrimary: true,
+		VPNRange:      "10.100.0.0/24",
+		IPBans: []config.IPBan{
+			{IP: "5.5.5.5", CreatedAt: 1000, Reason: "primary-ban"},
+		},
+	}
+	primary := newTestServer(t, primaryCfg)
+
+	// Start HTTP server with state endpoint.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/peer/ping", primary.handlePeerPing)
+	mux.HandleFunc("/api/peer/config", primary.handlePeerConfig)
+	mux.HandleFunc("/api/peer/state", primary.handlePeerState)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	primaryAddr := ts.URL[len("http://"):]
+
+	// Non-primary has a different ban.
+	nonPrimaryCfg := &config.Config{
+		PeerID:        "site-b",
+		ConfigPrimary: false,
+		Peers: []config.Peer{
+			{ID: "site-a", WGAddr: primaryAddr, Primary: true},
+		},
+		VPNRange: "10.100.0.0/24",
+		IPBans: []config.IPBan{
+			{IP: "6.6.6.6", CreatedAt: 900, Reason: "local-ban"},
+		},
+	}
+	nonPrimary := newTestServer(t, nonPrimaryCfg)
+
+	// Run ban sync once.
+	nonPrimary.banSyncOnce()
+
+	got := nonPrimary.cfg()
+	if len(got.IPBans) != 2 {
+		t.Fatalf("expected 2 merged bans, got %d: %+v", len(got.IPBans), got.IPBans)
+	}
+
+	byIP := make(map[string]config.IPBan)
+	for _, b := range got.IPBans {
+		byIP[b.IP] = b
+	}
+	if _, ok := byIP["5.5.5.5"]; !ok {
+		t.Error("missing primary ban 5.5.5.5")
+	}
+	if _, ok := byIP["6.6.6.6"]; !ok {
+		t.Error("missing local ban 6.6.6.6")
 	}
 }
 

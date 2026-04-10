@@ -22,7 +22,10 @@ import (
 	"homelab-horizon/internal/config"
 )
 
-const peerSyncInterval = 30 * time.Second
+const (
+	peerSyncInterval = 30 * time.Second
+	banSyncInterval  = 30 * time.Second
+)
 
 // startPeerSync starts the config pull loop on non-primary instances.
 // No-op when this instance is the primary or no fleet is configured.
@@ -193,7 +196,6 @@ func (s *Server) peerSyncSnapshot() PeerSyncStatusSnapshot {
 //   - PublicIP (each peer manages its own A record / public IP detection)
 //   - LocalInterface (host-specific)
 //   - AdminToken (host-local secret)
-//   - IPBans (per-peer until Phase 4 adds LWW sync)
 func mergeRemoteIntoLocal(remote, local *config.Config) *config.Config {
 	out := *remote // shallow copy of remote (shared state)
 
@@ -212,8 +214,9 @@ func mergeRemoteIntoLocal(remote, local *config.Config) *config.Config {
 	out.LocalInterface = local.LocalInterface
 	out.AdminToken = local.AdminToken
 
-	// Bans are per-peer until Phase 4 introduces LWW sync.
-	out.IPBans = local.IPBans
+	// IPBans: take the LWW-merged result from the remote config.
+	// The ban sync loop on each peer independently merges bans from all
+	// peers, so the primary's ban list is the authoritative merged set.
 
 	return &out
 }
@@ -266,6 +269,101 @@ func (s *Server) alivePeers() []string {
 
 	sort.Strings(alive)
 	return alive
+}
+
+// startBanSync starts a 30s ticker that pulls bans from every peer and
+// merges them LWW per IP. Runs on ALL fleet members (primary and non-primary)
+// so bans propagate bidirectionally regardless of where they originate.
+// No-op in single-instance mode.
+func (s *Server) startBanSync() {
+	cfg := s.cfg()
+	if cfg.PeerID == "" || len(cfg.Peers) == 0 {
+		return
+	}
+	fmt.Printf("[ban-sync] starting LWW sync every %s with %d peer(s)\n",
+		banSyncInterval, len(cfg.Peers))
+
+	go func() {
+		time.Sleep(5 * time.Second) // let other subsystems start first
+		s.banSyncOnce()
+
+		ticker := time.NewTicker(banSyncInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			s.banSyncOnce()
+		}
+	}()
+}
+
+// banSyncOnce fetches bans from every peer and merges them with the local
+// ban list using last-write-wins per IP (by CreatedAt timestamp).
+func (s *Server) banSyncOnce() {
+	cfg := s.cfg()
+	var allRemoteBans []config.IPBan
+
+	for _, p := range cfg.Peers {
+		url := buildPeerURL(p.WGAddr, "/api/peer/state")
+		body, err := fetchPeerBody(url)
+		if err != nil {
+			// Peer down — skip silently (liveness is checked elsewhere).
+			continue
+		}
+		var resp PeerStateResponse
+		if err := json.Unmarshal(body, &resp); err != nil {
+			fmt.Printf("[ban-sync] decode %s: %v\n", p.ID, err)
+			continue
+		}
+		allRemoteBans = append(allRemoteBans, resp.Bans...)
+	}
+
+	if len(allRemoteBans) == 0 {
+		return
+	}
+
+	merged := mergeBansLWW(cfg.IPBans, allRemoteBans)
+	if len(merged) == len(cfg.IPBans) {
+		// Quick check: if counts match, compare more carefully.
+		same := true
+		localByIP := make(map[string]int64, len(cfg.IPBans))
+		for _, b := range cfg.IPBans {
+			localByIP[b.IP] = b.CreatedAt
+		}
+		for _, b := range merged {
+			if localByIP[b.IP] != b.CreatedAt {
+				same = false
+				break
+			}
+		}
+		if same {
+			return
+		}
+	}
+
+	cfg.IPBans = merged
+	config.Save(s.configPath, cfg)
+	s.reapplyBans()
+	fmt.Printf("[ban-sync] merged bans: %d total\n", len(merged))
+}
+
+// mergeBansLWW merges two ban lists using last-write-wins per IP.
+// For each IP, the ban with the highest CreatedAt wins.
+func mergeBansLWW(local, remote []config.IPBan) []config.IPBan {
+	byIP := make(map[string]config.IPBan)
+	for _, b := range local {
+		if existing, ok := byIP[b.IP]; !ok || b.CreatedAt > existing.CreatedAt {
+			byIP[b.IP] = b
+		}
+	}
+	for _, b := range remote {
+		if existing, ok := byIP[b.IP]; !ok || b.CreatedAt > existing.CreatedAt {
+			byIP[b.IP] = b
+		}
+	}
+	result := make([]config.IPBan, 0, len(byIP))
+	for _, b := range byIP {
+		result = append(result, b)
+	}
+	return result
 }
 
 // certOwner deterministically assigns a domain to one of the alive peers.
