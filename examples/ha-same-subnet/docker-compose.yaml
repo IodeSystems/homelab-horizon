@@ -1,0 +1,72 @@
+# Same-subnet HA: two HZ instances on the same Docker bridge.
+#
+# Both boxes share a VPN range and can see each other directly.
+# This models the "startup" scenario — two boxes in one DC/VPC.
+#
+# Usage:
+#   ./setup.sh          # generate WG keys and configs
+#   docker compose up   # start both instances
+#
+# hz1 (primary):  http://localhost:8081
+# hz2 (spare):    http://localhost:8082
+#
+# Edit services/zones on hz1. Within 30s, hz2 pulls the config.
+# hz2's UI shows a read-only banner.
+
+services:
+  hz1:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: hz1
+    hostname: hz1
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8081:8080"
+      - "51821:51820/udp"
+    volumes:
+      - ./config/hz1.json:/etc/homelab-horizon/config.json
+      - ./config/wg-hz1.conf:/etc/wireguard/wg0.conf
+      - hz1-certs:/etc/letsencrypt
+      - hz1-haproxy-certs:/etc/haproxy/certs
+    networks:
+      fleet:
+        ipv4_address: 172.30.0.10
+
+  hz2:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: hz2
+    hostname: hz2
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8082:8080"
+      - "51822:51820/udp"
+    volumes:
+      - ./config/hz2.json:/etc/homelab-horizon/config.json
+      - ./config/wg-hz2.conf:/etc/wireguard/wg0.conf
+      - hz2-certs:/etc/letsencrypt
+      - hz2-haproxy-certs:/etc/haproxy/certs
+    networks:
+      fleet:
+        ipv4_address: 172.30.0.11
+
+networks:
+  fleet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  hz1-certs:
+  hz1-haproxy-certs:
+  hz2-certs:
+  hz2-haproxy-certs:

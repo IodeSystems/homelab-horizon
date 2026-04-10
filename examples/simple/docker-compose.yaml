@@ -1,0 +1,31 @@
+# Simple single-instance HZ. No fleet, no HA — just one box.
+#
+# Usage:
+#   ./setup.sh          # generate WG keys and config
+#   docker compose up   # start HZ
+#
+# HZ UI: http://localhost:8080
+
+services:
+  hz:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: hz
+    hostname: hz
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8080:8080"
+      - "51820:51820/udp"
+    volumes:
+      - ./config/hz.json:/etc/homelab-horizon/config.json
+      - ./config/wg0.conf:/etc/wireguard/wg0.conf
+      - hz-certs:/etc/letsencrypt
+      - hz-haproxy-certs:/etc/haproxy/certs
+
+volumes:
+  hz-certs:
+  hz-haproxy-certs:
