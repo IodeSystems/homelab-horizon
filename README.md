@@ -46,20 +46,26 @@ Homelab Horizon consolidates all of this into a single web UI:
 - **Self-Service Onboarding**: Users redeem invite tokens to get VPN configs
 - **IP Banning**: Per-service IP bans with timeout support
 - **Rolling Deploys**: Blue-green deployment support with hz-client CLI
+- **Multi-Instance HA**: Run two boxes for automatic config replication, cert failover, and round-robin DNS
+- **MCP Server**: Machine-readable API for AI-assisted management
 
 ## Quick Start
 
-### Option A: Docker Demo
-
-Try it instantly with no setup — auto-installs all dependencies on a vanilla Ubuntu container:
+### Option A: Docker (recommended for trying it out)
 
 ```bash
-make docker-run
-# or manually:
-docker run --rm -p 8080:8080 homelab-horizon:demo
+cd examples/simple
+./setup.sh            # generate WG keys and config
+docker compose up -d  # start HZ
 ```
 
-Open `http://localhost:8080` and log in with the admin token printed in the container logs.
+Open `http://localhost:8090` and log in with the admin token:
+
+```bash
+docker exec hz cat /etc/homelab-horizon/config.json.token
+```
+
+See [examples/](examples/) for all scenarios including HA setups.
 
 ### Option B: Direct Install
 
@@ -74,9 +80,9 @@ sudo ./homelab-horizon
 On first run, the binary:
 1. Copies itself to `/usr/local/bin/`
 2. Installs a systemd service
-3. Prints an admin token to stdout
+3. Writes an admin token to `/etc/homelab-horizon/config.json.token`
 
-If `auto_heal` is enabled in the config, it will also detect and install missing packages (`wireguard-tools`, `haproxy`, `dnsmasq`) automatically via `apt-get`.
+If `auto_heal` is enabled in the config, it will also detect and install missing packages (`wireguard-tools`, `iproute2`, `haproxy`, `dnsmasq`) automatically via `apt-get`.
 
 ### Environment Variable Config
 
@@ -137,6 +143,63 @@ Once your zone is set up, adding a service is straightforward:
 - **Proxy**: HAProxy backend (`host:port`) — can be a LAN service or an external host
 
 Services don't have to be on your local network. The proxy backend can point to any reachable host:port — a Raspberry Pi on your LAN, a VM in the cloud, or a container on the same machine.
+
+## High Availability
+
+Run two HZ instances for automatic failover. No orchestrator, no election, no shared state — just two boxes.
+
+| Capability | Status |
+|---|---|
+| Config replication (warm spare) | Shipped |
+| Cert renewal failover (ACME HA) | Shipped |
+| Round-robin DNS (both IPs in DNS) | Shipped |
+| Non-primary read-only guard | Shipped |
+| Multi-site WG client configs | Roadmap (Phase 3) |
+
+### How it works
+
+1. **One primary, one spare.** The primary is the single config writer. The spare pulls config every 30s, validates, and applies changes.
+2. **Cert ownership is deterministic.** Each SSL domain is assigned to one peer via consistent hashing. If the owner dies, ownership shifts automatically and the survivor renews.
+3. **DNS has both IPs.** Round-robin DNS gives clients both addresses. Browsers retry on TCP failure — failover is automatic.
+4. **Edit on the primary.** The spare's UI shows a read-only banner. Mutating API calls return 403 with the primary's ID.
+5. **Manual promotion.** If the primary dies permanently, SSH into the spare, flip `config_primary: true`, restart.
+
+### Two topologies
+
+| | Same-subnet | Site-to-site |
+|---|---|---|
+| Use case | Two boxes in one DC/VPC | Two boxes at different locations |
+| Fleet comms | LAN IP | WireGuard tunnel IP |
+| VPN range | Shared `/24` | Disjoint `/24` per site |
+| Complexity | Low | Medium (pre-configure s2s tunnel) |
+
+### Try it
+
+```bash
+# Same-subnet HA (startup scenario)
+cd examples/ha-same-subnet && ./setup.sh && docker compose up -d
+
+# Site-to-site HA (homelab scenario)
+cd examples/ha-site-to-site && ./setup.sh && docker compose up -d
+```
+
+Each example includes a `test.sh` that verifies startup, replication, guard middleware, and failover. See [docs/common-scenarios.md](docs/common-scenarios.md) for the full story.
+
+### Fleet config
+
+Add to each instance's `config.json`:
+
+```json
+{
+  "peer_id": "hz1",
+  "config_primary": true,
+  "peers": [
+    { "id": "hz2", "wg_addr": "10.0.0.2:8080" }
+  ]
+}
+```
+
+The spare mirrors this with `"config_primary": false` and marks the primary peer with `"primary": true`.
 
 ## Architecture
 
@@ -335,7 +398,9 @@ Check types:
 
 ## SSL Certificates
 
-Wildcard certificates are automatically obtained via Let's Encrypt using DNS-01 challenges. Certificates are renewed automatically when within 30 days of expiry.
+Wildcard certificates are automatically obtained via Let's Encrypt using DNS-01 challenges. A background sweep runs every 12 hours and renews certificates within 30 days of expiry — no operator action needed.
+
+In an HA fleet, cert renewal is deterministic: each domain is assigned to one peer. If that peer dies, ownership shifts automatically and the survivor renews. Non-owners pull certs from the owner.
 
 Certificates cover:
 - `*.example.com` (base zone)
@@ -348,6 +413,7 @@ Certificates cover:
 - Root access — needed for WireGuard, dnsmasq, HAProxy, iptables, systemd service management, and binding ports 80/443
 
 Runtime packages (auto-installed when `auto_heal` is enabled):
+- `iproute2` - Network interface management
 - `wireguard-tools` - VPN management
 - `haproxy` - Reverse proxy (when `haproxy_enabled`)
 - `dnsmasq` - Internal DNS (when `dnsmasq_enabled`)
