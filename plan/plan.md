@@ -261,7 +261,7 @@ maps to a numbered item in the prioritized list below.
 
 After phase 2: actual HA. Cert renewal survives one box dying.
 
-### Phase 3 — WG client multi-peer config generation
+### Phase 3 — WG client multi-peer config generation ✅ SHIPPED
 
 - Add a `site` (or similar) field per WG peer entry, identifying which HZ instance
   it belongs to. Or derive from local interface.
@@ -280,9 +280,9 @@ After phase 3: WG clients are HA.
 
 ## Prioritized next steps
 
-Phase 1 (warm-spare config replication) and Phase 2 (ACME deterministic
-ownership) are shipped. After this, cert renewal survives one box dying.
-The next real capability is Phase 3 (WG client multi-peer).
+Phases 1–3 shipped. Config replication, cert failover, and multi-site
+WG client configs are all in place. The next items are Phase 4 (bans
+LWW sync) and cleanup.
 
 Stop after any item if shipping a spare to the second site is more
 valuable than the rest of the list.
@@ -340,20 +340,24 @@ The big rock. After this, cert renewal survives one box dying.
 ### Next (Phase 3 — WG client multi-peer)
 
 8. **Phase 3 — multi-peer WG client configs**: two sub-tasks:
-   **8a. Move WG peer list into config.json** — today WG client peers
-   (name, IP, public key, profile) are stored only in the WG config
-   file on disk. Move them into `config.json` as `wg_peers[]` (shared
-   state, replicated by pull loop). All mutation handlers (add/edit/
-   delete/re-key peer) write to config.json first, then apply to the
-   local WG config. `applyNewConfig` applies WG peer delta to the
-   local WG config file on the non-primary. Migration: on first load,
-   import existing WG config file peers into config.json.
-   **8b. Multi-site client config generation** — extend `Peer` config
-   struct with `server_endpoint`, `server_public_key`, `vpn_range`.
-   Validate at config load that VPN ranges are disjoint.
-   `GenerateClientConfig` emits one `[Peer]` block per site. Update
-   QR/share-link/re-key flows (`b0a630e`). Per-site `/24` allocation
-   documented in operator setup guide.
+   ✅ **8a. Move WG peer list into config.json** — `WGPeer` struct
+   + `WGPeers []WGPeer` field in config (shared state, replicated).
+   `syncWGPeersToConfig()` snapshots WG file state into config after
+   every VPN handler mutation (add/edit/delete/re-key).
+   `applyWGPeersFromConfig()` applies config peer list to local WG
+   config file during pull loop (add/remove/update peers, reload WG,
+   rebuild iptables). Migration on startup: imports existing WG config
+   file peers into `WGPeers` if empty. Test:
+   `TestWGPeersReplicateViaPullLoop`.
+   ✅ **8b. Multi-site client config generation** — `Peer` struct
+   extended with `server_endpoint`, `server_public_key`, `vpn_range`.
+   `ValidateFleet` rejects overlapping VPN ranges. New
+   `GenerateMultiSiteClientConfig` emits one `[Peer]` block per site
+   with disjoint `AllowedIPs`. `generateClientConfig` on Server
+   auto-detects multi-site mode (peers have VPNRange) and dispatches.
+   All VPN handler call sites (add/edit/rekey/preview/invite) updated.
+   Tests: `TestGenerateMultiSiteClientConfig`, VPN range overlap in
+   `TestValidateFleet` (3 new cases).
 
 ### Later (Phase 4 + cleanup)
 

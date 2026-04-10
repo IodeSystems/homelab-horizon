@@ -3,6 +3,7 @@ package wireguard
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -247,4 +248,36 @@ func TestSystemStatus(t *testing.T) {
 	t.Logf("InterfaceUp: %v", status.InterfaceUp)
 	t.Logf("IPForwarding: %v", status.IPForwarding)
 	t.Logf("Masquerading: %v", status.Masquerading)
+}
+
+func TestGenerateMultiSiteClientConfig(t *testing.T) {
+	sites := []SitePeer{
+		{PublicKey: "site-a-pubkey", Endpoint: "a.example.com:51820", AllowedIPs: "10.0.1.0/24"},
+		{PublicKey: "site-b-pubkey", Endpoint: "b.example.com:51820", AllowedIPs: "10.0.2.0/24"},
+	}
+
+	cfg := GenerateMultiSiteClientConfig("client-privkey", "10.0.1.2", "10.0.1.1", sites)
+
+	// Should have [Interface] + two [Peer] blocks.
+	if !strings.Contains(cfg, "[Interface]") {
+		t.Error("missing [Interface] section")
+	}
+	if strings.Count(cfg, "[Peer]") != 2 {
+		t.Errorf("expected 2 [Peer] blocks, got %d", strings.Count(cfg, "[Peer]"))
+	}
+	if !strings.Contains(cfg, "site-a-pubkey") {
+		t.Error("missing site-a public key")
+	}
+	if !strings.Contains(cfg, "site-b-pubkey") {
+		t.Error("missing site-b public key")
+	}
+	if !strings.Contains(cfg, "AllowedIPs = 10.0.1.0/24") {
+		t.Error("missing site-a AllowedIPs")
+	}
+	if !strings.Contains(cfg, "AllowedIPs = 10.0.2.0/24") {
+		t.Error("missing site-b AllowedIPs")
+	}
+	if !strings.Contains(cfg, "10.0.1.2/24") {
+		t.Error("client address not formatted correctly")
+	}
 }

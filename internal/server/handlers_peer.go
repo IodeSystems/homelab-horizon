@@ -215,6 +215,88 @@ func (s *Server) isPeerInstanceRoute(path string) bool {
 	return false
 }
 
+// syncWGPeersToConfig snapshots the current WG config file peer list into
+// cfg.WGPeers so it gets persisted to config.json and replicated to
+// non-primary instances. Call this after every WG mutation (add/edit/delete/
+// re-key) before config.Save.
+func (s *Server) syncWGPeersToConfig() {
+	peers := s.wg.GetPeers()
+	wgPeers := make([]config.WGPeer, len(peers))
+	for i, p := range peers {
+		wgPeers[i] = config.WGPeer{
+			Name:       p.Name,
+			PublicKey:  p.PublicKey,
+			AllowedIPs: p.AllowedIPs,
+		}
+	}
+	s.cfg().WGPeers = wgPeers
+}
+
+// applyWGPeersFromConfig applies the WGPeers list from config to the local
+// WG config file. Called by applyNewConfig on non-primary instances when the
+// pulled config has a different peer set.
+func (s *Server) applyWGPeersFromConfig(cfg *config.Config) {
+	if s.wg == nil || len(cfg.WGPeers) == 0 {
+		return
+	}
+
+	current := s.wg.GetPeers()
+	currentByKey := make(map[string]struct{}, len(current))
+	for _, p := range current {
+		currentByKey[p.PublicKey] = struct{}{}
+	}
+
+	desiredByKey := make(map[string]config.WGPeer, len(cfg.WGPeers))
+	for _, p := range cfg.WGPeers {
+		desiredByKey[p.PublicKey] = p
+	}
+
+	changed := false
+
+	// Remove peers not in desired set.
+	for _, p := range current {
+		if _, ok := desiredByKey[p.PublicKey]; !ok {
+			fmt.Printf("[peer-sync] removing WG peer %s (%s)\n", p.Name, p.PublicKey[:8])
+			if err := s.wg.RemovePeer(p.PublicKey); err != nil {
+				fmt.Printf("[peer-sync] remove peer %s: %v\n", p.Name, err)
+			}
+			changed = true
+		}
+	}
+
+	// Add or update peers.
+	for _, desired := range cfg.WGPeers {
+		if _, exists := currentByKey[desired.PublicKey]; !exists {
+			fmt.Printf("[peer-sync] adding WG peer %s (%s)\n", desired.Name, desired.PublicKey[:8])
+			if err := s.wg.AddPeer(desired.Name, desired.PublicKey, desired.AllowedIPs); err != nil {
+				fmt.Printf("[peer-sync] add peer %s: %v\n", desired.Name, err)
+			}
+			changed = true
+		} else {
+			// Check if name or AllowedIPs changed.
+			for _, cur := range current {
+				if cur.PublicKey == desired.PublicKey {
+					if cur.Name != desired.Name || cur.AllowedIPs != desired.AllowedIPs {
+						fmt.Printf("[peer-sync] updating WG peer %s\n", desired.Name)
+						if err := s.wg.UpdatePeer(desired.PublicKey, desired.Name, desired.AllowedIPs); err != nil {
+							fmt.Printf("[peer-sync] update peer %s: %v\n", desired.Name, err)
+						}
+						changed = true
+					}
+					break
+				}
+			}
+		}
+	}
+
+	if changed {
+		if err := s.wg.Reload(); err != nil {
+			fmt.Printf("[peer-sync] WG reload after peer sync: %v\n", err)
+		}
+		s.rebuildWGForwardChain()
+	}
+}
+
 // applyNewConfig swaps the live config and reloads derived subsystems.
 // Used by the pull loop on non-primary instances.
 //
@@ -233,6 +315,9 @@ func (s *Server) applyNewConfig(newCfg *config.Config) error {
 
 	// Re-derive subsystem state (dnsmasq mappings, haproxy backends, LE).
 	s.syncServices()
+
+	// Apply WG peer list from the pulled config to local WG config file.
+	s.applyWGPeersFromConfig(newCfg)
 
 	// Monitor watches ServiceChecks + auto-generated checks from Services.
 	// Reload picks up both. Cheap when nothing actually changed but we only

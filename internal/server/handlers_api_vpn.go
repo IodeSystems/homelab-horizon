@@ -67,19 +67,13 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.cfg().SetPeerProfile(name, profile)
+	s.syncWGPeersToConfig()
 	config.Save(s.configPath, s.cfg())
 
 	s.wg.Reload()
 	s.rebuildWGForwardChain()
 
-	clientConfig := wireguard.GenerateClientConfig(
-		privKey,
-		strings.TrimSuffix(clientIP, "/32"),
-		s.cfg().ServerPublicKey,
-		s.cfg().ServerEndpoint,
-		s.cfg().DNS,
-		s.cfg().GetAllowedIPsForProfile(profile),
-	)
+	clientConfig := s.generateClientConfig(privKey, strings.TrimSuffix(clientIP, "/32"), profile)
 
 	qrCode := qr.GenerateSVG(clientConfig, 256)
 
@@ -171,6 +165,7 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 		profile = config.ProfileLanAccess
 	}
 	s.cfg().SetPeerProfile(name, profile)
+	s.syncWGPeersToConfig()
 	config.Save(s.configPath, s.cfg())
 
 	s.wg.Reload()
@@ -213,8 +208,9 @@ func (s *Server) handleAPIDeletePeer(w http.ResponseWriter, r *http.Request) {
 
 	if peer != nil {
 		s.cfg().DeletePeerProfile(peer.Name)
-		config.Save(s.configPath, s.cfg())
 	}
+	s.syncWGPeersToConfig()
+	config.Save(s.configPath, s.cfg())
 
 	s.wg.Reload()
 	s.rebuildWGForwardChain()
@@ -339,6 +335,41 @@ func (s *Server) handleAPISetPeerProfile(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "profile": profile})
 }
 
+// generateClientConfig produces a WG client config, using multi-site mode
+// when fleet peers have VPNRange configured (site-to-site topology).
+func (s *Server) generateClientConfig(clientPrivKey, clientIP, profile string) string {
+	cfg := s.cfg()
+
+	// Check if any fleet peer has VPNRange — if so, multi-site mode.
+	var sites []wireguard.SitePeer
+	for _, p := range cfg.Peers {
+		if p.VPNRange != "" && p.ServerPublicKey != "" && p.ServerEndpoint != "" {
+			sites = append(sites, wireguard.SitePeer{
+				PublicKey:  p.ServerPublicKey,
+				Endpoint:   p.ServerEndpoint,
+				AllowedIPs: p.VPNRange,
+			})
+		}
+	}
+
+	if len(sites) > 0 {
+		// Multi-site: add local site as a peer too.
+		sites = append([]wireguard.SitePeer{{
+			PublicKey:  cfg.ServerPublicKey,
+			Endpoint:   cfg.ServerEndpoint,
+			AllowedIPs: cfg.VPNRange,
+		}}, sites...)
+		return wireguard.GenerateMultiSiteClientConfig(clientPrivKey, clientIP, cfg.DNS, sites)
+	}
+
+	// Single-site: use the original generator with profile-based AllowedIPs.
+	return wireguard.GenerateClientConfig(
+		clientPrivKey, clientIP,
+		cfg.ServerPublicKey, cfg.ServerEndpoint,
+		cfg.DNS, cfg.GetAllowedIPsForProfile(profile),
+	)
+}
+
 // rebuildWGForwardChain rebuilds the iptables WG-FORWARD chain based on current peers and profiles.
 func (s *Server) rebuildWGForwardChain() {
 	peers := s.wg.GetPeers()
@@ -432,14 +463,7 @@ func (s *Server) handleAPIGetPeerConfig(w http.ResponseWriter, r *http.Request) 
 		profile = "lan-access"
 	}
 
-	clientConfig := wireguard.GenerateClientConfig(
-		"<YOUR_PRIVATE_KEY>",
-		primaryIP,
-		s.cfg().ServerPublicKey,
-		s.cfg().ServerEndpoint,
-		s.cfg().DNS,
-		s.cfg().GetAllowedIPsForProfile(profile),
-	)
+	clientConfig := s.generateClientConfig("<YOUR_PRIVATE_KEY>", primaryIP, profile)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(apitypes.PeerConfigResponse{
@@ -490,6 +514,8 @@ func (s *Server) handleAPIRekeyPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.syncWGPeersToConfig()
+	config.Save(s.configPath, s.cfg())
 	s.wg.Reload()
 
 	// Extract primary IP
@@ -510,14 +536,7 @@ func (s *Server) handleAPIRekeyPeer(w http.ResponseWriter, r *http.Request) {
 		profile = "lan-access"
 	}
 
-	clientConfig := wireguard.GenerateClientConfig(
-		privKey,
-		primaryIP,
-		s.cfg().ServerPublicKey,
-		s.cfg().ServerEndpoint,
-		s.cfg().DNS,
-		s.cfg().GetAllowedIPsForProfile(profile),
-	)
+	clientConfig := s.generateClientConfig(privKey, primaryIP, profile)
 
 	qrCode := qr.GenerateSVG(clientConfig, 256)
 

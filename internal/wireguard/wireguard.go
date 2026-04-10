@@ -800,6 +800,36 @@ PersistentKeepalive = 25
 `, clientPrivateKey, clientIPForAddress, dns, serverPubKey, serverEndpoint, allowedIPs)
 }
 
+// SitePeer describes one site's WireGuard server for multi-site client configs.
+type SitePeer struct {
+	PublicKey  string
+	Endpoint  string
+	AllowedIPs string // that site's VPN range
+}
+
+// GenerateMultiSiteClientConfig generates a client config with one [Peer]
+// block per site. Each peer gets its own AllowedIPs (the site's VPN range).
+// Used for site-to-site topologies where the client can reach both sites.
+func GenerateMultiSiteClientConfig(clientPrivateKey, clientIP, dns string, sites []SitePeer) string {
+	clientIPForAddress := clientIP
+	if !strings.Contains(clientIP, "/") {
+		clientIPForAddress = clientIP + "/24"
+	} else {
+		clientIPForAddress = strings.TrimSuffix(clientIPForAddress, "/32") + "/24"
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "[Interface]\nPrivateKey = %s\nAddress = %s\nDNS = %s\n",
+		clientPrivateKey, clientIPForAddress, dns)
+
+	for _, site := range sites {
+		fmt.Fprintf(&b, "\n[Peer]\nPublicKey = %s\nEndpoint = %s\nAllowedIPs = %s\nPersistentKeepalive = 25\n",
+			site.PublicKey, site.Endpoint, site.AllowedIPs)
+	}
+
+	return b.String()
+}
+
 // detectDefaultInterface returns the name of the network interface used for the default route.
 func detectDefaultInterface() string {
 	data, err := os.ReadFile("/proc/net/route")
