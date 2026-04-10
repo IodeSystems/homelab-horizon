@@ -34,14 +34,16 @@ services:
       - "8081:8080"
       - "51821:51820/udp"
       - "51831:51830/udp"
+    environment:
+      - WG_EXTRA_CONFS=/etc/wireguard/wg-s2s.conf
     volumes:
       - ./config/hz1.json:/etc/homelab-horizon/config.json
       - ./config/wg-hz1-s2s.conf:/etc/wireguard/wg-s2s.conf
       - ./config/wg-hz1-clients.conf:/etc/wireguard/wg0.conf
-      - ./config/hz1-entrypoint.sh:/entrypoint.sh:ro
+      - ../docker-entrypoint.sh:/docker-entrypoint.sh:ro
       - hz1-certs:/etc/letsencrypt
       - hz1-haproxy-certs:/etc/haproxy/certs
-    entrypoint: ["/bin/bash", "/entrypoint.sh"]
+    entrypoint: ["/bin/bash", "/docker-entrypoint.sh"]
     networks:
       site-a:
         ipv4_address: 172.31.0.10
@@ -65,14 +67,16 @@ services:
       - "8082:8080"
       - "51822:51820/udp"
       - "51832:51830/udp"
+    environment:
+      - WG_EXTRA_CONFS=/etc/wireguard/wg-s2s.conf
     volumes:
       - ./config/hz2.json:/etc/homelab-horizon/config.json
       - ./config/wg-hz2-s2s.conf:/etc/wireguard/wg-s2s.conf
       - ./config/wg-hz2-clients.conf:/etc/wireguard/wg0.conf
-      - ./config/hz2-entrypoint.sh:/entrypoint.sh:ro
+      - ../docker-entrypoint.sh:/docker-entrypoint.sh:ro
       - hz2-certs:/etc/letsencrypt
       - hz2-haproxy-certs:/etc/haproxy/certs
-    entrypoint: ["/bin/bash", "/entrypoint.sh"]
+    entrypoint: ["/bin/bash", "/docker-entrypoint.sh"]
     networks:
       site-b:
         ipv4_address: 172.32.0.10

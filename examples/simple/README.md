@@ -9,7 +9,7 @@ One HZ box — no fleet, no HA. The getting-started path.
 docker compose up -d  # start HZ
 ```
 
-Open http://localhost:8080 and log in with the admin token from
+Open http://localhost:8090 and log in with the admin token from
 `docker logs hz`.
 
 ## What you get
