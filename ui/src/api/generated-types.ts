@@ -414,3 +414,36 @@ export interface ServiceIntegration {
   baseURL: string;
   hasDeploy: boolean;
 }
+export interface HAFleetPeer {
+  id: string;
+  wgAddr: string;
+  primary?: boolean;
+  online?: boolean;
+  lastSyncAt?: string;
+  lastSyncErr?: string;
+}
+export interface HAStatusResponse {
+  peerId: string;
+  configPrimary: boolean;
+  peers: HAFleetPeer[];
+}
+export interface HACreateJoinTokenRequest {
+  peerId: string;
+  topology: string; // "same-subnet" or "site-to-site"
+  /**
+   * Site-to-site fields
+   */
+  remoteEndpoint?: string; // e.g. "1.2.3.4:51830"
+  vpnRange?: string; // e.g. "10.0.2.0/24"
+}
+export interface HACreateJoinTokenResponse {
+  ok: boolean;
+  token: string;
+  oneLiner: string;
+}
+export interface HAJoinCompleteRequest {
+  peer_id: string;
+  wg_addr: string;
+  s2s_pubkey?: string;
+  vpn_pubkey: string;
+}

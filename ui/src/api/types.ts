@@ -58,4 +58,8 @@ export type {
   MFAVerifyRequest,
   MFAVerifyResponse,
   MFASettingsResponse,
+  HAStatusResponse,
+  HAFleetPeer,
+  HACreateJoinTokenRequest,
+  HACreateJoinTokenResponse,
 } from "./generated-types";

@@ -43,13 +43,15 @@ import {
   useHAProxyConfigPreview,
   useHAProxyReload,
   useHAProxyWriteConfig,
+  useCreateJoinToken,
+  useHAStatus,
   useMFASettings,
   useRunCheck,
   useSettings,
   useToggleCheck,
   useUpdateMFASettings,
 } from "../api/hooks";
-import type { CheckStatus, Zone } from "../api/types";
+import type { CheckStatus, HAFleetPeer, Zone } from "../api/types";
 
 function StatusDot({ status }: { status: string }) {
   const color =
@@ -1009,6 +1011,241 @@ function SystemTab({
   );
 }
 
+// --- HA Fleet Tab ---
+
+function HAFleetTab() {
+  const ha = useHAStatus();
+  const createJoinToken = useCreateJoinToken();
+  const [peerID, setPeerID] = useState("");
+  const [topology, setTopology] = useState("same-subnet");
+  const [remoteEndpoint, setRemoteEndpoint] = useState("");
+  const [vpnRange, setVpnRange] = useState("");
+  const [oneLiner, setOneLiner] = useState("");
+  const [snack, setSnack] = useState("");
+
+  return (
+    <Box>
+      {/* Current Fleet Status */}
+      <Paper sx={{ p: 3, mb: 2 }}>
+        <Typography variant="h6" gutterBottom>
+          Fleet Status
+        </Typography>
+        {ha.isLoading ? (
+          <CircularProgress size={20} />
+        ) : ha.isError ? (
+          <Alert severity="error">Failed to load fleet status</Alert>
+        ) : (
+          <>
+            <Box sx={{ display: "flex", gap: 2, mb: 2 }}>
+              <Chip
+                label={`Peer ID: ${ha.data?.peerId || "(not set)"}`}
+                variant="outlined"
+              />
+              <Chip
+                label={ha.data?.configPrimary ? "Primary" : "Non-Primary"}
+                color={ha.data?.configPrimary ? "success" : "default"}
+              />
+            </Box>
+            {ha.data?.peers && ha.data.peers.length > 0 ? (
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Peer ID</TableCell>
+                      <TableCell>Address</TableCell>
+                      <TableCell>Role</TableCell>
+                      <TableCell>Status</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {ha.data.peers.map((peer: HAFleetPeer) => (
+                      <TableRow key={peer.id}>
+                        <TableCell>{peer.id}</TableCell>
+                        <TableCell sx={{ fontFamily: "monospace" }}>
+                          {peer.wgAddr}
+                        </TableCell>
+                        <TableCell>
+                          {peer.primary ? (
+                            <Chip label="Primary" size="small" color="success" />
+                          ) : (
+                            <Chip label="Spare" size="small" />
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            label={peer.online ? "Online" : "Offline"}
+                            size="small"
+                            color={peer.online ? "success" : "error"}
+                            variant="outlined"
+                          />
+                          {peer.lastSyncErr && (
+                            <Typography
+                              variant="caption"
+                              color="error"
+                              sx={{ ml: 1 }}
+                            >
+                              {peer.lastSyncErr}
+                            </Typography>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            ) : (
+              <Typography variant="body2" color="text.secondary">
+                No fleet peers configured. This instance is running standalone.
+              </Typography>
+            )}
+          </>
+        )}
+      </Paper>
+
+      {/* Add Peer */}
+      <Paper sx={{ p: 3, mb: 2 }}>
+        <Typography variant="h6" gutterBottom>
+          Add Fleet Peer
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Generate a one-liner join script to run on the new instance. It will
+          download the binary, configure WireGuard, and join the fleet
+          automatically.
+        </Typography>
+
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <TextField
+            label="Peer ID"
+            value={peerID}
+            onChange={(e) => setPeerID(e.target.value)}
+            placeholder="e.g. hz2"
+            size="small"
+            sx={{ maxWidth: 300 }}
+          />
+          <Box>
+            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+              Topology
+            </Typography>
+            <Select
+              value={topology}
+              onChange={(e) => setTopology(e.target.value)}
+              size="small"
+              sx={{ minWidth: 200 }}
+            >
+              <MenuItem value="same-subnet">
+                Same Subnet (LAN / Docker bridge)
+              </MenuItem>
+              <MenuItem value="site-to-site">
+                Site-to-Site (WireGuard tunnel)
+              </MenuItem>
+            </Select>
+          </Box>
+
+          {topology === "site-to-site" && (
+            <>
+              <TextField
+                label="Remote Endpoint (for S2S tunnel)"
+                value={remoteEndpoint}
+                onChange={(e) => setRemoteEndpoint(e.target.value)}
+                placeholder="e.g. remote-host.example.com:51830"
+                size="small"
+                sx={{ maxWidth: 400 }}
+                helperText="Public IP/hostname of the new instance for the S2S tunnel"
+              />
+              <TextField
+                label="VPN Range (for new site)"
+                value={vpnRange}
+                onChange={(e) => setVpnRange(e.target.value)}
+                placeholder="e.g. 10.0.2.0/24"
+                size="small"
+                sx={{ maxWidth: 300 }}
+                helperText="Must not overlap with existing VPN ranges"
+              />
+            </>
+          )}
+
+          <Button
+            variant="contained"
+            disabled={
+              !peerID ||
+              createJoinToken.isPending ||
+              (topology === "site-to-site" && !vpnRange)
+            }
+            onClick={() => {
+              createJoinToken.mutate(
+                {
+                  peerId: peerID.trim(),
+                  topology,
+                  remoteEndpoint: remoteEndpoint.trim(),
+                  vpnRange: vpnRange.trim(),
+                },
+                {
+                  onSuccess: (data) => {
+                    setOneLiner(data.oneLiner);
+                    setSnack("Join token created");
+                  },
+                  onError: (err) =>
+                    setSnack(
+                      err instanceof Error ? err.message : "Failed to create token",
+                    ),
+                },
+              );
+            }}
+            sx={{ alignSelf: "flex-start" }}
+          >
+            {createJoinToken.isPending
+              ? "Generating..."
+              : "Generate Join Command"}
+          </Button>
+        </Box>
+
+        {oneLiner && (
+          <Box sx={{ mt: 3 }}>
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+              Run this on the new instance (as root):
+            </Typography>
+            <Paper
+              sx={{
+                p: 2,
+                bgcolor: "#1a1a2e",
+                color: "#e0e0e0",
+                fontFamily: "monospace",
+                fontSize: "0.85rem",
+                wordBreak: "break-all",
+                position: "relative",
+              }}
+            >
+              {oneLiner}
+              <Button
+                size="small"
+                sx={{ position: "absolute", top: 4, right: 4 }}
+                onClick={() => {
+                  navigator.clipboard.writeText(oneLiner);
+                  setSnack("Copied to clipboard");
+                }}
+              >
+                Copy
+              </Button>
+            </Paper>
+            <Alert severity="info" sx={{ mt: 1 }}>
+              This token expires in 1 hour. The script will download the binary,
+              set up WireGuard, create the config, install the systemd service,
+              and report back to this instance.
+            </Alert>
+          </Box>
+        )}
+      </Paper>
+
+      <Snackbar
+        open={!!snack}
+        autoHideDuration={3000}
+        onClose={() => setSnack("")}
+        message={snack}
+      />
+    </Box>
+  );
+}
+
 // --- VPN MFA Tab ---
 
 const ALL_DURATIONS = ["2h", "4h", "8h", "forever"];
@@ -1124,6 +1361,7 @@ function SettingsPage() {
         <Tab label="SSL" />
         <Tab label="Health Checks" />
         <Tab label="VPN MFA" />
+        <Tab label="HA Fleet" />
         <Tab label="System" />
       </Tabs>
 
@@ -1148,7 +1386,8 @@ function SettingsPage() {
       )}
       {tab === 3 && <ChecksTab checks={data.checks} />}
       {tab === 4 && <VPNMFATab />}
-      {tab === 5 && (
+      {tab === 5 && <HAFleetTab />}
+      {tab === 6 && (
         <SystemTab
           publicIP={data.config.publicIP}
           localInterface={data.config.localInterface}

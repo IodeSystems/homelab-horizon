@@ -9,7 +9,9 @@ import type {
   CreateInviteResponse,
   DashboardData,
   DomainsData,
+  HACreateJoinTokenResponse,
   HAProxyConfigPreview,
+  HAStatusResponse,
   Invite,
   MFAEnrollResponse,
   MFASettingsResponse,
@@ -744,5 +746,30 @@ export function useMFARevokeSession() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["vpn", "peers"] });
     },
+  });
+}
+
+// --- HA Fleet ---
+
+export function useHAStatus() {
+  return useQuery({
+    queryKey: ["ha", "status"],
+    queryFn: () => apiFetch<HAStatusResponse>("/ha/status"),
+    refetchInterval: 30000,
+  });
+}
+
+export function useCreateJoinToken() {
+  return useMutation({
+    mutationFn: (input: {
+      peerId: string;
+      topology: string;
+      remoteEndpoint?: string;
+      vpnRange?: string;
+    }) =>
+      apiFetch<HACreateJoinTokenResponse>("/ha/create-join-token", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
   });
 }

@@ -508,3 +508,41 @@ type ServiceIntegration struct {
 	BaseURL   string `json:"baseURL"`
 	HasDeploy bool   `json:"hasDeploy"`
 }
+
+// HA Fleet
+
+type HAFleetPeer struct {
+	ID           string `json:"id"`
+	WGAddr       string `json:"wgAddr"`
+	Primary      bool   `json:"primary,omitempty"`
+	Online       bool   `json:"online,omitempty"`
+	LastSyncAt   string `json:"lastSyncAt,omitempty"`
+	LastSyncErr  string `json:"lastSyncErr,omitempty"`
+}
+
+type HAStatusResponse struct {
+	PeerID        string        `json:"peerId"`
+	ConfigPrimary bool          `json:"configPrimary"`
+	Peers         []HAFleetPeer `json:"peers"`
+}
+
+type HACreateJoinTokenRequest struct {
+	PeerID   string `json:"peerId"`
+	Topology string `json:"topology"` // "same-subnet" or "site-to-site"
+	// Site-to-site fields
+	RemoteEndpoint string `json:"remoteEndpoint,omitempty"` // e.g. "1.2.3.4:51830"
+	VPNRange       string `json:"vpnRange,omitempty"`       // e.g. "10.0.2.0/24"
+}
+
+type HACreateJoinTokenResponse struct {
+	OK       bool   `json:"ok"`
+	Token    string `json:"token"`
+	OneLiner string `json:"oneLiner"`
+}
+
+type HAJoinCompleteRequest struct {
+	PeerID    string `json:"peer_id"`
+	WGAddr    string `json:"wg_addr"`
+	S2SPubKey string `json:"s2s_pubkey,omitempty"`
+	VPNPubKey string `json:"vpn_pubkey"`
+}
