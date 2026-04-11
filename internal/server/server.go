@@ -214,6 +214,7 @@ type Server struct {
 
 	configSharesMu sync.Mutex
 	configShares   map[string]*configShare // token -> share
+	joinTokens     *joinTokenStore         // HA join tokens
 
 	// peerInstancePaths and peerInstancePrefixes track routes that are
 	// per-instance ops (not shared-config mutations) and therefore exempt
@@ -379,6 +380,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		sync:         NewSyncBroadcaster(),
 		health:       &HealthStatus{healthy: true},
 		configShares: make(map[string]*configShare),
+		joinTokens:   newJoinTokenStore(),
 	}
 	s.config.Store(cfg)
 
@@ -966,6 +968,14 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/vpn/invites", s.handleAPIListInvites)
 	mux.HandleFunc("/api/v1/vpn/invites/create", s.handleAPICreateInvite)
 	mux.HandleFunc("/api/v1/vpn/invites/delete", s.handleAPIDeleteInvite)
+
+	// HA fleet routes
+	mux.HandleFunc("/api/v1/ha/status", s.handleAPIHAStatus)
+	mux.HandleFunc("/api/v1/ha/create-join-token", s.handleAPIHACreateJoinToken)
+	// HA join routes (public, token-authed by the join script)
+	mux.HandleFunc("/admin/ha/join-script", s.handleHAJoinScript)
+	mux.HandleFunc("/admin/ha/hz-binary", s.handleHABinary)
+	mux.HandleFunc("/admin/ha/join-complete", s.handleHAJoinComplete)
 
 	// MFA routes — status/enroll/verify are accessible from jail (VPN peer auth by IP)
 	mux.HandleFunc("/api/v1/mfa/status", s.handleAPIMFAStatus)
