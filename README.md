@@ -51,7 +51,7 @@ Homelab Horizon consolidates all of this into a single web UI:
 
 ## Quick Start
 
-### Option A: Docker (recommended for trying it out)
+### Kick the tires (Docker)
 
 ```bash
 cd examples/simple
@@ -65,15 +65,13 @@ Open `http://localhost:8090` and log in with the admin token:
 docker exec hz cat /etc/homelab-horizon/config.json.token
 ```
 
-See [examples/](examples/) for all scenarios including HA setups.
-
-### Option B: Direct Install
+### Bare metal install
 
 ```bash
 # Build (requires Go 1.25+ and Node.js)
 make
 
-# Run as root (needed for WireGuard, dnsmasq, HAProxy, iptables, ports 80/443, and systemd service management)
+# Run as root (WireGuard, dnsmasq, HAProxy, iptables, ports 80/443, systemd)
 sudo ./homelab-horizon
 ```
 
@@ -82,15 +80,27 @@ On first run, the binary:
 2. Installs a systemd service
 3. Writes an admin token to `/etc/homelab-horizon/config.json.token`
 
-If `auto_heal` is enabled in the config, it will also detect and install missing packages (`wireguard-tools`, `iproute2`, `haproxy`, `dnsmasq`) automatically via `apt-get`.
+With `auto_heal: true`, it detects and installs missing packages (`wireguard-tools`, `iproute2`, `haproxy`, `dnsmasq`) via `apt-get`.
 
-### Environment Variable Config
-
-Pass the full config as JSON via the `HZ_CONFIG` environment variable — useful for Docker and backup/restore:
+Pass config via environment for Docker or backup/restore workflows:
 
 ```bash
 sudo HZ_CONFIG='{"listen_addr":":8080","auto_heal":true,...}' ./homelab-horizon
 ```
+
+### Growing with you
+
+HZ scales from a single box to a redundant pair without reconfiguration. When you're ready, add a second instance:
+
+- **Same-subnet** (two boxes in one rack or VPC): low complexity, shared VPN range, LAN replication
+- **Cross-site** (two locations or availability zones): WireGuard tunnel between peers, disjoint VPN ranges, full geo-redundancy
+
+```bash
+cd examples/ha-same-subnet && ./setup.sh && docker compose up -d
+cd examples/ha-site-to-site && ./setup.sh && docker compose up -d
+```
+
+See the [High Availability](#high-availability) section and [examples/](examples/) for details.
 
 ## Setup Guide
 
@@ -148,13 +158,9 @@ Services don't have to be on your local network. The proxy backend can point to 
 
 Run two HZ instances for automatic failover. No orchestrator, no election, no shared state — just two boxes.
 
-| Capability | Status |
-|---|---|
-| Config replication (warm spare) | Shipped |
-| Cert renewal failover (ACME HA) | Shipped |
-| Round-robin DNS (both IPs in DNS) | Shipped |
-| Non-primary read-only guard | Shipped |
-| Multi-site WG client configs | Roadmap (Phase 3) |
+Capabilities: config replication, cert renewal failover, round-robin DNS, read-only guard on the spare.
+
+**Failover:** when the primary dies permanently, remove it from the spare's fleet peer list. The spare detects it has no primary to follow and promotes itself — no SSH, no config editing, no restart.
 
 ### How it works
 
@@ -162,7 +168,7 @@ Run two HZ instances for automatic failover. No orchestrator, no election, no sh
 2. **Cert ownership is deterministic.** Each SSL domain is assigned to one peer via consistent hashing. If the owner dies, ownership shifts automatically and the survivor renews.
 3. **DNS has both IPs.** Round-robin DNS gives clients both addresses. Browsers retry on TCP failure — failover is automatic.
 4. **Edit on the primary.** The spare's UI shows a read-only banner. Mutating API calls return 403 with the primary's ID.
-5. **Manual promotion.** If the primary dies permanently, SSH into the spare, flip `config_primary: true`, restart.
+5. **Promotion is automatic.** Remove the dead primary from the spare's peer list — the spare promotes itself on the next sync cycle.
 
 ### Two topologies
 
