@@ -33,6 +33,7 @@ var requiredDirs = []struct {
 	{"/etc/dnsmasq.d", 0755},
 	{"/etc/haproxy", 0755},
 	{"/etc/haproxy/certs", 0755},
+	{"/etc/haproxy/errors", 0755},
 	{"/etc/homelab-horizon", 0755},
 }
 

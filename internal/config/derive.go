@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"homelab-horizon/internal/haproxy"
@@ -74,6 +76,14 @@ func (c *Config) DeriveDNSMappings() map[string]string {
 	return mappings
 }
 
+// haproxyErrorsDir returns the directory where per-service HAProxy error files are written.
+func (c *Config) haproxyErrorsDir() string {
+	if c.HAProxyConfigPath != "" {
+		return filepath.Join(filepath.Dir(c.HAProxyConfigPath), "errors")
+	}
+	return "/etc/haproxy/errors"
+}
+
 // DeriveHAProxyBackends generates HAProxy backends from services with Proxy config
 func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 	var backends []haproxy.Backend
@@ -102,9 +112,50 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 			b.NextServer = svc.Proxy.Deploy.InactiveServer(svc.Proxy.Backend)
 		}
 
+		// Custom 503 maintenance page
+		if svc.Proxy.MaintenancePage != "" {
+			b.ErrorFile503 = filepath.Join(c.haproxyErrorsDir(), haproxy.SanitizeName(svc.Name)+"_503.http")
+		}
+
 		backends = append(backends, b)
 	}
 	return backends
+}
+
+// WriteMaintenancePageFiles writes per-service 503.http error files for any service
+// with MaintenancePage set, and removes stale files for services where it was cleared.
+func (c *Config) WriteMaintenancePageFiles() error {
+	errorsDir := c.haproxyErrorsDir()
+	if err := os.MkdirAll(errorsDir, 0755); err != nil {
+		return err
+	}
+
+	// Collect active filenames and write them
+	active := make(map[string]bool)
+	for _, svc := range c.Services {
+		if svc.Proxy == nil || svc.Proxy.MaintenancePage == "" {
+			continue
+		}
+		filename := haproxy.SanitizeName(svc.Name) + "_503.http"
+		active[filename] = true
+		path := filepath.Join(errorsDir, filename)
+		content := "HTTP/1.0 503 Service Unavailable\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Type: text/html\r\n\r\n" + svc.Proxy.MaintenancePage
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			return err
+		}
+	}
+
+	// Remove stale files (previously written, now cleared)
+	entries, err := os.ReadDir(errorsDir)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), "_503.http") && !active[e.Name()] {
+			os.Remove(filepath.Join(errorsDir, e.Name()))
+		}
+	}
+	return nil
 }
 
 // DeriveRoute53Records generates Route53 A records from services with ExternalDNS config.

@@ -401,10 +401,11 @@ func (e *ExternalDNS) GetIPs() []string {
 
 // ProxyConfig configures HAProxy reverse proxying for this service
 type ProxyConfig struct {
-	Backend      string       `json:"backend"`                 // host:port for HAProxy to forward to
-	HealthCheck  *HealthCheck `json:"health_check,omitempty"`  // Optional health check
-	InternalOnly bool         `json:"internal_only,omitempty"` // Restrict to local network access only
-	Deploy       *DeployConfig `json:"deploy,omitempty"`       // Blue-green deploy with current/next slots
+	Backend         string        `json:"backend"`                    // host:port for HAProxy to forward to
+	HealthCheck     *HealthCheck  `json:"health_check,omitempty"`     // Optional health check
+	InternalOnly    bool          `json:"internal_only,omitempty"`    // Restrict to local network access only
+	Deploy          *DeployConfig `json:"deploy,omitempty"`           // Blue-green deploy with current/next slots
+	MaintenancePage string        `json:"maintenance_page,omitempty"` // HTML body served as 503 during maintenance
 }
 
 // DeployConfig enables blue-green deployment with two server slots.

@@ -24,7 +24,13 @@ func (s *Server) syncServices() {
 
 	// Update HAProxy
 	if s.cfg().HAProxyEnabled {
-		s.haproxy.SetBackends(s.cfg().DeriveHAProxyBackends())
+		s.syncHAProxyBackends()
+		var sslConfig *haproxy.SSLConfig
+		if s.cfg().SSLEnabled {
+			sslConfig = &haproxy.SSLConfig{Enabled: true, CertDir: s.cfg().SSLHAProxyCertDir}
+		}
+		s.haproxy.WriteConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, sslConfig)
+		s.haproxy.Reload()
 	}
 
 	// Update Let's Encrypt
@@ -543,6 +549,7 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 	if s.cfg().HAProxyEnabled {
 		log.Step("Syncing HAProxy...")
 
+		s.cfg().WriteMaintenancePageFiles()
 		backends := s.cfg().DeriveHAProxyBackends()
 		s.haproxy.SetBackends(backends)
 		log.Info(fmt.Sprintf("  Configured %d backends", len(backends)))
