@@ -43,7 +43,7 @@ func (s *Server) startPeerSync() {
 	}
 	primary := s.cfg().PrimaryPeer()
 	if primary == nil {
-		fmt.Println("[peer-sync] WARNING: non-primary with no peer marked primary — config sync disabled")
+		s.autoPromote()
 		return
 	}
 	fmt.Printf("[peer-sync] starting pull loop: self=%s primary=%s@%s every %s\n",
@@ -62,8 +62,27 @@ func (s *Server) startPeerSync() {
 	}()
 }
 
+// autoPromote promotes this non-primary instance to primary by setting
+// ConfigPrimary=true and persisting the change. Called when the peer list
+// contains no entry marked primary — the operator's act of removing the
+// primary peer is the explicit signal that promotion is intended.
+func (s *Server) autoPromote() {
+	fmt.Printf("[peer-sync] no primary peer configured — auto-promoting %s to primary\n", s.cfg().PeerID)
+	if err := s.updateConfig(func(cfg *config.Config) {
+		cfg.ConfigPrimary = true
+	}); err != nil {
+		fmt.Printf("[peer-sync] auto-promote: save failed: %v\n", err)
+	}
+}
+
 // pullConfigOnce attempts a single pull from the primary peer.
 func (s *Server) pullConfigOnce() {
+	// If the operator removed the primary peer mid-run, promote now.
+	if !s.cfg().ConfigPrimary && s.cfg().PeerID != "" && s.cfg().PrimaryPeer() == nil {
+		s.autoPromote()
+		return
+	}
+
 	primary := s.cfg().PrimaryPeer()
 	if primary == nil {
 		return

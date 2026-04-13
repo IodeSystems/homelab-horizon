@@ -1091,6 +1091,53 @@ func TestCertOwner(t *testing.T) {
 	}
 }
 
+func TestAutoPromoteOnNoPrimaryPeer(t *testing.T) {
+	// A non-primary fleet member with no peer marked primary should promote
+	// itself — both at startup (startPeerSync) and mid-loop (pullConfigOnce).
+
+	makeSpareCfg := func() *config.Config {
+		return &config.Config{
+			PeerID:        "hz2",
+			ConfigPrimary: false,
+			Peers:         []config.Peer{}, // no primary peer
+		}
+	}
+
+	t.Run("startPeerSync promotes at startup", func(t *testing.T) {
+		s := newTestServer(t, makeSpareCfg())
+		s.startPeerSync()
+		if !s.cfg().ConfigPrimary {
+			t.Fatal("expected ConfigPrimary=true after startPeerSync with no primary peer")
+		}
+		// Persisted to disk.
+		persisted, err := config.Load(s.configPath)
+		if err != nil {
+			t.Fatalf("reload config: %v", err)
+		}
+		if !persisted.ConfigPrimary {
+			t.Error("promotion not persisted to disk")
+		}
+	})
+
+	t.Run("pullConfigOnce promotes mid-loop", func(t *testing.T) {
+		s := newTestServer(t, makeSpareCfg())
+		s.pullConfigOnce()
+		if !s.cfg().ConfigPrimary {
+			t.Fatal("expected ConfigPrimary=true after pullConfigOnce with no primary peer")
+		}
+	})
+
+	t.Run("already-primary is left alone", func(t *testing.T) {
+		cfg := makeSpareCfg()
+		cfg.ConfigPrimary = true
+		s := newTestServer(t, cfg)
+		s.pullConfigOnce() // must not panic or re-trigger anything
+		if !s.cfg().ConfigPrimary {
+			t.Fatal("primary should stay primary")
+		}
+	})
+}
+
 func TestBuildPeerURL(t *testing.T) {
 	tests := []struct {
 		addr string
