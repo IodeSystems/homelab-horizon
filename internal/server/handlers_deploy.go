@@ -95,6 +95,17 @@ func (s *Server) handleDeployAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		s.handleDeploySwap(w, idx)
 
+	case "maint-page":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if len(parts) < 2 {
+			http.Error(w, "missing subcommand (set/clear)", http.StatusBadRequest)
+			return
+		}
+		s.handleDeployMaintPage(w, r, idx, parts[1])
+
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
 	}
@@ -181,6 +192,52 @@ func (s *Server) handleDeployStateChange(w http.ResponseWriter, backendName, slo
 		Server: slot,
 		State:  action,
 	})
+}
+
+func (s *Server) handleDeployMaintPage(w http.ResponseWriter, r *http.Request, svcIdx int, sub string) {
+	var html string
+	switch sub {
+	case "set":
+		var req struct {
+			HTML string `json:"html"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.HTML == "" {
+			http.Error(w, "body must be JSON {\"html\": \"...\"}", http.StatusBadRequest)
+			return
+		}
+		html = req.HTML
+	case "clear":
+		// html stays ""
+	default:
+		http.Error(w, "unknown subcommand: "+sub+", expected set/clear", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.updateConfig(func(cfg *config.Config) {
+		cfg.Services[svcIdx].Proxy.MaintenancePage = html
+	}); err != nil {
+		http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.syncHAProxyBackends()
+	ssl := &haproxy.SSLConfig{Enabled: s.cfg().SSLEnabled, CertDir: s.cfg().SSLHAProxyCertDir}
+	if err := s.haproxy.WriteConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, ssl); err != nil {
+		http.Error(w, "failed to write haproxy config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.haproxy.Reload(); err != nil {
+		http.Error(w, "failed to reload haproxy: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if html != "" {
+		sum := md5.Sum([]byte(html))
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "maintenance_page_md5": fmt.Sprintf("%x", sum)})
+	} else {
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}
 }
 
 func (s *Server) handleDeploySwap(w http.ResponseWriter, svcIdx int) {

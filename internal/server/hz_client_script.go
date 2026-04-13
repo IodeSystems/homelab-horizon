@@ -37,6 +37,10 @@ COMMANDS
     swap                     Swap slot labels and reload haproxy
     promote                  Blue-green cutover: up next, drain+down current
 
+  Maintenance page:
+    maint-page set <file>    Set a custom 503 page from file ("-" for stdin)
+    maint-page clear         Remove the custom 503 page (revert to default)
+
 ROLLING DEPLOY FLOW
   hz-client rolling start
   # next slot is now down — deploy new code to its backend
@@ -56,6 +60,9 @@ EXAMPLES
   hz-client status
   hz-client rolling start
   hz-client --timeout 60 rolling continue
+  hz-client maint-page set maintenance.html
+  echo "<h1>Down for upgrade</h1>" | hz-client maint-page set -
+  hz-client maint-page clear
 HELP
 }
 
@@ -109,6 +116,8 @@ print(f\"Domain:       {d['domain']}\")
 print(f\"Balance:      {d.get('balance', 'first')}\")
 print(f\"Health check: {d.get('health_check', '-')}\")
 print(f\"Active slot:  {d.get('active_slot', 'a')}\")
+md5 = d.get('maintenance_page_md5', '')
+print(f\"Maint page:   {md5 if md5 else '(none)'}\")
 print()
 for role in ('current', 'next'):
     s = d[role]
@@ -425,14 +434,49 @@ for b in bans:
     fi
     ;;
 
+  maint-page)
+    SUBCMD="${1:?Missing subcommand (set/clear)}"
+    shift
+
+    case "$SUBCMD" in
+      set)
+        FILE="${1:?Missing file argument ('-' for stdin)}"
+        if [ "$FILE" = "-" ]; then
+          HTML=$(cat)
+        else
+          [ -f "$FILE" ] || { echo "File not found: $FILE" >&2; exit 1; }
+          HTML=$(cat "$FILE")
+        fi
+        PAYLOAD=$(python3 -c "import json,sys; print(json.dumps({'html': sys.stdin.read()}))" <<< "$HTML")
+        resp=$(curl -sf -X POST -H "$AUTH" -H "Content-Type: application/json" \
+          -d "$PAYLOAD" "$DEPLOY_API/maint-page/set") || { echo "FAILED: maint-page/set"; exit 1; }
+        echo "$resp" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+md5 = d.get('maintenance_page_md5', '')
+print(f'Maintenance page set. MD5: {md5}')
+"
+        ;;
+      clear)
+        resp=$(curl -sf -X POST -H "$AUTH" "$DEPLOY_API/maint-page/clear") || { echo "FAILED: maint-page/clear"; exit 1; }
+        echo "Maintenance page cleared."
+        ;;
+      *)
+        echo "Unknown maint-page subcommand: $SUBCMD"
+        echo "Subcommands: set <file> | clear"
+        exit 1
+        ;;
+    esac
+    ;;
+
   *)
     echo "Unknown command: $CMD"
     echo ""
     echo "Deploy:  status | current|next (up|drain|down) | swap | promote | rolling (...)"
     echo "Bans:    ban <ip> | unban <ip> | bans"
+    echo "Maint:   maint-page set <file> | maint-page clear"
     echo ""
     echo "Run 'hz-client --help' for full usage."
     exit 1
     ;;
-esac
-`
+esac`
