@@ -1,7 +1,9 @@
 package server
 
 import (
+	"crypto/md5"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -134,6 +136,10 @@ func (s *Server) handleDeployStatus(w http.ResponseWriter, svc *config.Service, 
 			Backend: deploy.InactiveServer(svc.Proxy.Backend),
 			State:   "unknown",
 		},
+	}
+	if svc.Proxy.MaintenancePage != "" {
+		sum := md5.Sum([]byte(svc.Proxy.MaintenancePage))
+		status.MaintenancePageMD5 = fmt.Sprintf("%x", sum)
 	}
 
 	// Query haproxy socket for live state

@@ -55,10 +55,11 @@ type DeployResp struct {
 }
 
 type ProxyResp struct {
-	Backend      string           `json:"backend"`
-	HealthCheck  *HealthCheckResp `json:"healthCheck,omitempty"`
-	InternalOnly bool             `json:"internalOnly"`
-	Deploy       *DeployResp      `json:"deploy,omitempty"`
+	Backend             string           `json:"backend"`
+	HealthCheck         *HealthCheckResp `json:"healthCheck,omitempty"`
+	InternalOnly        bool             `json:"internalOnly"`
+	Deploy              *DeployResp      `json:"deploy,omitempty"`
+	MaintenancePageMD5  string           `json:"maintenancePageMD5,omitempty"`
 }
 
 type InternalDNSResp struct {
@@ -344,14 +345,15 @@ type DeploySlotStatus struct {
 }
 
 type DeployStatus struct {
-	Service     string           `json:"service"`
-	Domain      string           `json:"domain"`
-	Domains     []string         `json:"domains,omitempty"`
-	ActiveSlot  string           `json:"active_slot"`
-	Balance     string           `json:"balance"`
-	HealthCheck string           `json:"health_check"`
-	Current     DeploySlotStatus `json:"current"`
-	Next        DeploySlotStatus `json:"next"`
+	Service            string           `json:"service"`
+	Domain             string           `json:"domain"`
+	Domains            []string         `json:"domains,omitempty"`
+	ActiveSlot         string           `json:"active_slot"`
+	Balance            string           `json:"balance"`
+	HealthCheck        string           `json:"health_check"`
+	Current            DeploySlotStatus `json:"current"`
+	Next               DeploySlotStatus `json:"next"`
+	MaintenancePageMD5 string           `json:"maintenance_page_md5,omitempty"`
 }
 
 type DeployStateChangeResponse struct {

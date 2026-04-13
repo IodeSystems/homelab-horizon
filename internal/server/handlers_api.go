@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -132,6 +133,10 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 					ActiveSlot:  svc.Proxy.Deploy.ActiveSlot,
 					Balance:     svc.Proxy.Deploy.Balance,
 				}
+			}
+			if svc.Proxy.MaintenancePage != "" {
+				sum := md5.Sum([]byte(svc.Proxy.MaintenancePage))
+				pr.MaintenancePageMD5 = fmt.Sprintf("%x", sum)
 			}
 			sr.Proxy = pr
 		}

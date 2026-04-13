@@ -25,6 +25,9 @@ type Backend struct {
 	CurrentServer string `json:"current_server,omitempty"`  // host:port for active slot
 	NextServer    string `json:"next_server,omitempty"`     // host:port for inactive slot
 	DeployBalance string `json:"deploy_balance,omitempty"`  // "first" or "roundrobin" (default "first")
+
+	// Custom error pages
+	ErrorFile503 string `json:"error_file_503,omitempty"` // path to custom 503.http file
 }
 
 // GetDomainMatches returns all domain matches, falling back to DomainMatch for backwards compat
@@ -233,6 +236,37 @@ func (h *HAProxy) GenerateConfig(httpPort, httpsPort int, ssl *SSLConfig) string
 	return h.generateConfig(httpPort, httpsPort, ssl)
 }
 
+// default503Page is the HAProxy-format error file written to errors/503.http at each reload.
+// Per-service maintenance pages override this at the backend level.
+const default503Page = "HTTP/1.0 503 Service Unavailable\r\n" +
+	"Cache-Control: no-cache\r\n" +
+	"Connection: close\r\n" +
+	"Content-Type: text/html\r\n" +
+	"\r\n" +
+	`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Service Unavailable</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.card{text-align:center;padding:2rem 3rem}
+.code{font-size:5rem;font-weight:700;color:#f8fafc;line-height:1;letter-spacing:-2px}
+.msg{margin-top:.75rem;font-size:1.1rem;color:#94a3b8}
+.hint{margin-top:2rem;font-size:.8rem;color:#475569}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="code">503</div>
+  <div class="msg">Service temporarily unavailable</div>
+  <div class="hint">We'll be back shortly.</div>
+</div>
+</body>
+</html>`
+
 // WriteConfig generates and writes the HAProxy configuration
 func (h *HAProxy) WriteConfig(httpPort, httpsPort int, ssl *SSLConfig) error {
 	config := h.generateConfig(httpPort, httpsPort, ssl)
@@ -241,6 +275,12 @@ func (h *HAProxy) WriteConfig(httpPort, httpsPort int, ssl *SSLConfig) error {
 	dir := strings.TrimSuffix(h.configPath, "/haproxy.cfg")
 	if dir != h.configPath {
 		os.MkdirAll(dir, 0755)
+	}
+
+	// Write default 503 error page (overrides vanilla HAProxy; per-service pages override this)
+	errorsDir := dir + "/errors"
+	if err := os.MkdirAll(errorsDir, 0755); err == nil {
+		os.WriteFile(errorsDir+"/503.http", []byte(default503Page), 0644)
 	}
 
 	return os.WriteFile(h.configPath, []byte(config), 0644)
@@ -482,6 +522,9 @@ listen stats
 		aclName := sanitizeName(b.Name)
 		sb.WriteString(fmt.Sprintf("backend %s_backend\n", aclName))
 		sb.WriteString("    mode http\n")
+		if b.ErrorFile503 != "" {
+			sb.WriteString(fmt.Sprintf("    errorfile 503 %s\n", b.ErrorFile503))
+		}
 
 		if b.Deploy {
 			balance := b.DeployBalance

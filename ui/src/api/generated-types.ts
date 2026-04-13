@@ -57,6 +57,7 @@ export interface ProxyResp {
   healthCheck?: HealthCheckResp;
   internalOnly: boolean;
   deploy?: DeployResp;
+  maintenancePageMD5?: string;
 }
 export interface InternalDNSResp {
   ip: string;
@@ -300,6 +301,7 @@ export interface DeployStatus {
   health_check: string;
   current: DeploySlotStatus;
   next: DeploySlotStatus;
+  maintenance_page_md5?: string;
 }
 export interface DeployStateChangeResponse {
   status: string;

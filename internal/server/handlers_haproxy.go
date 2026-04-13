@@ -12,6 +12,8 @@ func (s *Server) handleHZClientScript(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) syncHAProxyBackends() {
+	// Write per-service 503 maintenance pages (no-op if none configured)
+	s.cfg().WriteMaintenancePageFiles()
 	// Derive HAProxy backends from services
 	s.haproxy.SetBackends(s.cfg().DeriveHAProxyBackends())
 }
