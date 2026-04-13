@@ -471,6 +471,11 @@ function IntegrationDialog({
               `./hz-client rolling start       # Take next slot down — deploy new code to it`,
               `./hz-client rolling continue    # Bring next up, take current down — deploy to it`,
               `./hz-client rolling finalize    # Bring current up — both slots on new code`,
+              ``,
+              `# --- Maintenance Page (for incompatible upgrades) ---`,
+              ``,
+              `./hz-client maint-page set maintenance.html  # Serve custom 503 while down`,
+              `./hz-client maint-page clear                 # Restore default after upgrade`,
             ]
           : []),
       ].join("\n")
@@ -490,7 +495,7 @@ function IntegrationDialog({
           <>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
               Download and configure the hz-client to manage IP banning
-              {data.hasDeploy ? " and rolling deploys" : ""} for this service.
+              {data.hasDeploy ? ", rolling deploys, and maintenance pages" : ""} for this service.
             </Typography>
             <Box sx={{ position: "relative" }}>
               <IconButton
