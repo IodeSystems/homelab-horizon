@@ -409,62 +409,56 @@ function LetsEncryptCard({ health }: { health: SystemHealth }) {
         </Typography>
       )}
       {domains.length > 0 && (
-        <TableContainer>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Primary + SANs</TableCell>
-                <TableCell>Provider</TableCell>
-                <TableCell>Cert</TableCell>
-                <TableCell>Expires</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {domains.map((d) => (
-                <TableRow key={d.domain}>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                      {d.domain}
+        <Stack spacing={1.5}>
+          {domains.map((d) => {
+            // All names on the cert — CN and SANs are functionally equivalent
+            // for browsers, and showing them as peers avoids implying that
+            // e.g. *.vpn.example.com "covers" unrelated SANs like vz.example.com
+            // (which is wrong — wildcards only span one label at their position).
+            const allNames = [d.domain, ...(d.sans ?? [])];
+            return (
+              <Paper key={d.domain} variant="outlined" sx={{ p: 1.5 }}>
+                <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                  <Chip
+                    size="small"
+                    label={d.cert_exists ? "present" : "missing"}
+                    color={d.cert_exists ? "success" : "error"}
+                    variant={d.cert_exists ? "outlined" : "filled"}
+                  />
+                  {d.needs_renewal ? (
+                    <Chip size="small" color="warning" label={d.expiry_info || "renew soon"} />
+                  ) : d.expiry_info ? (
+                    <Typography variant="caption" color="text.secondary">
+                      {d.expiry_info}
                     </Typography>
-                    {d.sans && d.sans.length > 0 && (
-                      <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap", mt: 0.5 }}>
-                        {d.sans.map((s) => (
-                          <Chip
-                            key={s}
-                            label={s}
-                            size="small"
-                            variant="outlined"
-                            sx={{ fontFamily: "monospace", fontSize: "0.7rem" }}
-                          />
-                        ))}
-                      </Box>
-                    )}
-                  </TableCell>
-                  <TableCell>{d.provider || "—"}</TableCell>
-                  <TableCell>
+                  ) : null}
+                  <Box sx={{ flex: 1 }} />
+                  {d.provider && (
+                    <Typography variant="caption" color="text.secondary">
+                      {d.provider}
+                    </Typography>
+                  )}
+                </Stack>
+                <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
+                  {allNames.map((n) => (
                     <Chip
+                      key={n}
+                      label={n}
                       size="small"
-                      label={d.cert_exists ? "present" : "missing"}
-                      color={d.cert_exists ? "success" : "error"}
-                      variant={d.cert_exists ? "outlined" : "filled"}
+                      variant="outlined"
+                      sx={{ fontFamily: "monospace", fontSize: "0.75rem" }}
                     />
-                  </TableCell>
-                  <TableCell>
-                    {d.needs_renewal ? (
-                      <Chip size="small" color="warning" label={d.expiry_info || "renew soon"} />
-                    ) : (
-                      <Typography variant="caption">{d.expiry_info || "—"}</Typography>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
+                  ))}
+                </Box>
+              </Paper>
+            );
+          })}
+        </Stack>
       )}
       <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
-        One cert per zone — the primary domain is the cert's CN and SANs are extra names on the
-        same cert. Request / renew from the SSL tab.
+        One cert per zone with all listed names as SANs — they're peers, not a hierarchy.
+        A <code>*.foo</code> wildcard only matches <code>X.foo</code> (one label deep); it does not
+        cover <code>foo</code> itself or sibling names like <code>bar</code>. Request / renew from the SSL tab.
       </Typography>
     </ComponentCard>
   );
