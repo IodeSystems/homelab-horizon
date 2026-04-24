@@ -31,13 +31,10 @@ import {
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
-import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import SaveIcon from "@mui/icons-material/Save";
 import {
-  useAddCheck,
   useAddZone,
-  useDeleteCheck,
   useDeleteZone,
   useEditZone,
   useHAProxyConfigPreview,
@@ -46,38 +43,13 @@ import {
   useCreateJoinToken,
   useHAStatus,
   useMFASettings,
-  useRunCheck,
   useSettings,
   useSystemHealth,
-  useToggleCheck,
   useUpdateMFASettings,
 } from "../api/hooks";
-import type { CheckStatus, HAFleetPeer, Zone } from "../api/types";
+import type { HAFleetPeer, Zone } from "../api/types";
 import { SystemHealthTab } from "../components/SystemHealthTab";
 import { IPTablesTab } from "../components/IPTablesTab";
-
-function StatusDot({ status }: { status: string }) {
-  const color =
-    status === "ok"
-      ? "success.main"
-      : status === "failed"
-        ? "error.main"
-        : status === "disabled"
-          ? "text.secondary"
-          : "info.main";
-  return (
-    <Box
-      component="span"
-      sx={{
-        display: "inline-block",
-        width: 10,
-        height: 10,
-        borderRadius: "50%",
-        bgcolor: color,
-      }}
-    />
-  );
-}
 
 // --- Zone Tab ---
 
@@ -646,250 +618,10 @@ function HAProxyTab({
 
 // --- Health Checks Tab ---
 
-function AddCheckDialog({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
-  const addCheck = useAddCheck();
-  const [form, setForm] = useState({
-    name: "",
-    type: "http",
-    target: "",
-    interval: 300,
-  });
-
-  const handleSubmit = () => {
-    addCheck.mutate(form, {
-      onSuccess: () => {
-        onClose();
-        setForm({ name: "", type: "http", target: "", interval: 300 });
-      },
-    });
-  };
-
-  return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Add Health Check</DialogTitle>
-      <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: "8px !important" }}>
-        <TextField
-          label="Name"
-          value={form.name}
-          onChange={(e) => setForm({ ...form, name: e.target.value })}
-          size="small"
-          fullWidth
-        />
-        <Select
-          value={form.type}
-          onChange={(e) => setForm({ ...form, type: e.target.value })}
-          size="small"
-          fullWidth
-        >
-          <MenuItem value="http">HTTP</MenuItem>
-          <MenuItem value="ping">Ping</MenuItem>
-        </Select>
-        <TextField
-          label="Target"
-          value={form.target}
-          onChange={(e) => setForm({ ...form, target: e.target.value })}
-          size="small"
-          fullWidth
-          placeholder={form.type === "http" ? "https://example.com" : "192.168.1.1"}
-        />
-        <TextField
-          label="Interval (seconds)"
-          type="number"
-          value={form.interval}
-          onChange={(e) => setForm({ ...form, interval: parseInt(e.target.value) || 300 })}
-          size="small"
-          fullWidth
-        />
-        {addCheck.isError && (
-          <Alert severity="error">{(addCheck.error as Error).message}</Alert>
-        )}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
-        <Button
-          onClick={handleSubmit}
-          variant="contained"
-          disabled={!form.name || !form.target || addCheck.isPending}
-        >
-          {addCheck.isPending ? <CircularProgress size={20} /> : "Add"}
-        </Button>
-      </DialogActions>
-    </Dialog>
-  );
-}
-
-function ChecksTab({ checks }: { checks: CheckStatus[] }) {
-  const [addOpen, setAddOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-  const deleteCheck = useDeleteCheck();
-  const toggleCheck = useToggleCheck();
-  const runCheck = useRunCheck();
-  const [snack, setSnack] = useState("");
-
-  const handleDelete = () => {
-    if (deleteTarget) {
-      deleteCheck.mutate(deleteTarget, {
-        onSuccess: () => setDeleteTarget(null),
-      });
-    }
-  };
-
-  const handleRun = (name: string) => {
-    runCheck.mutate(name, {
-      onSuccess: (data) => setSnack(`Check ${name}: ${data.status}`),
-    });
-  };
-
-  const formatTime = (t: string) => {
-    if (!t) return "--";
-    const d = new Date(t);
-    if (isNaN(d.getTime())) return "--";
-    return d.toLocaleString();
-  };
-
-  return (
-    <Box>
-      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2 }}>
-        <Typography variant="h6">Health Checks</Typography>
-        <Button
-          startIcon={<AddIcon />}
-          variant="contained"
-          size="small"
-          onClick={() => setAddOpen(true)}
-        >
-          Add Check
-        </Button>
-      </Box>
-
-      <TableContainer component={Paper}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell sx={{ width: 30 }} />
-              <TableCell>Name</TableCell>
-              <TableCell>Type</TableCell>
-              <TableCell>Target</TableCell>
-              <TableCell>Last Check</TableCell>
-              <TableCell>Interval</TableCell>
-              <TableCell align="center">Enabled</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {checks.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={8} align="center">
-                  <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
-                    No health checks configured.
-                  </Typography>
-                </TableCell>
-              </TableRow>
-            ) : (
-              checks.map((c) => (
-                <TableRow key={c.name} hover>
-                  <TableCell>
-                    <StatusDot status={c.status} />
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                      {c.name}
-                    </Typography>
-                    {c.auto_gen && (
-                      <Chip label="auto" size="small" sx={{ ml: 1, height: 18, fontSize: "0.65rem" }} />
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Chip label={c.type} size="small" variant="outlined" />
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace", fontSize: "0.8rem", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {c.target}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" color="text.secondary" sx={{ fontSize: "0.8rem" }}>
-                      {formatTime(c.last_check)}
-                    </Typography>
-                    {c.last_error && (
-                      <Typography variant="body2" color="error.main" sx={{ fontSize: "0.7rem" }}>
-                        {c.last_error}
-                      </Typography>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" color="text.secondary">{c.interval}s</Typography>
-                  </TableCell>
-                  <TableCell align="center">
-                    <Switch
-                      size="small"
-                      checked={c.enabled}
-                      onChange={() => toggleCheck.mutate(c.name)}
-                    />
-                  </TableCell>
-                  <TableCell align="right">
-                    <Tooltip title="Run now">
-                      <IconButton
-                        size="small"
-                        onClick={() => handleRun(c.name)}
-                        disabled={runCheck.isPending}
-                      >
-                        <PlayArrowIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                    {!c.auto_gen && (
-                      <Tooltip title="Delete">
-                        <IconButton
-                          size="small"
-                          onClick={() => setDeleteTarget(c.name)}
-                          color="error"
-                        >
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
-
-      <AddCheckDialog open={addOpen} onClose={() => setAddOpen(false)} />
-
-      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)}>
-        <DialogTitle>Delete Check</DialogTitle>
-        <DialogContent>
-          <Typography>
-            Delete check <strong>{deleteTarget}</strong>?
-          </Typography>
-          {deleteCheck.isError && (
-            <Alert severity="error" sx={{ mt: 1 }}>{(deleteCheck.error as Error).message}</Alert>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteTarget(null)}>Cancel</Button>
-          <Button onClick={handleDelete} color="error" variant="contained" disabled={deleteCheck.isPending}>
-            {deleteCheck.isPending ? <CircularProgress size={20} /> : "Delete"}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Snackbar
-        open={!!snack}
-        autoHideDuration={3000}
-        onClose={() => setSnack("")}
-        message={snack}
-      />
-    </Box>
-  );
-}
+// AddCheckDialog + ChecksTab removed — the main /checks sidebar page owns
+// health check management end-to-end (CRUD + history graphs). Duplicating
+// it on a Settings tab forced admins to keep two mental models of the
+// same data.
 
 // System tab now lives in components/SystemHealthTab.tsx — it grew from a
 // static config readout into a full dashboard of per-component checks +
@@ -1276,7 +1008,6 @@ function SettingsPage() {
         <Tab label="System" />
         <Tab label="Zones" />
         <Tab label="HAProxy" />
-        <Tab label="Health Checks" />
         <Tab label="VPN MFA" />
         <Tab label="HA Fleet" />
         <Tab label="IPTables" />
@@ -1305,10 +1036,9 @@ function SettingsPage() {
           httpsPort={data.haproxy.httpsPort}
         />
       )}
-      {tab === 3 && <ChecksTab checks={data.checks} />}
-      {tab === 4 && <VPNMFATab />}
-      {tab === 5 && <HAFleetTab />}
-      {tab === 6 && <IPTablesTab />}
+      {tab === 3 && <VPNMFATab />}
+      {tab === 4 && <HAFleetTab />}
+      {tab === 5 && <IPTablesTab />}
     </Box>
   );
 }
