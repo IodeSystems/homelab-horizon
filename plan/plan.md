@@ -107,10 +107,10 @@ POST /api/v1/system/install/acme           # acme.sh installer
 POST /api/v1/system/install/horizon-unit   # write /etc/systemd/system/homelab-horizon.service  ✅ done
 POST /api/v1/system/enable/horizon         # systemctl enable                         ✅ done
 POST /api/v1/wg/create-config              # handleCreateWGConfig                     ✅ done
-POST /api/v1/dnsmasq/write-config          # WriteConfig
-POST /api/v1/dnsmasq/reload                # Reload
-POST /api/v1/dnsmasq/start                 # Start
-POST /api/v1/dnsmasq/init-unit             # handleDNSMasqInit
+POST /api/v1/dnsmasq/write-config          # WriteConfig + SetMappings                ✅ done
+POST /api/v1/dnsmasq/reload                # Reload (writes config first)             ✅ done
+POST /api/v1/dnsmasq/start                 # Start (ensures unit via dnsmasq.Start)   ✅ done
+# /api/v1/dnsmasq/init-unit collapsed: Start() auto-ensures the systemd unit.
 POST /api/v1/haproxy/write-config          # WriteConfig (exists already)              ✅ pre-existing
 POST /api/v1/haproxy/fix-logging           # handleFixHAProxyLogging                   ✅ done
 ```
