@@ -64,6 +64,8 @@ export type {
   HACreateJoinTokenResponse,
   ComponentHealth,
   SystemHealthResponse as SystemHealth,
+  AllCheckHistoryResponse,
+  AllCheckHistoryEntry,
 } from "./generated-types";
 
 // Apt-audit entries aren't in apitypes (internal-only struct in the server

@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strings"
 
 	"homelab-horizon/internal/apitypes"
@@ -393,6 +394,46 @@ func (s *Server) handleAPIChecks(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(checks)
+}
+
+// handleAPIAllCheckHistory returns the ring-buffer history for every
+// configured check in a single response. Used by the main /checks page's
+// stacked charts so we don't fan out one /checks/history call per row
+// when the dashboard opens.
+func (s *Server) handleAPIAllCheckHistory(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	all := s.monitor.GetAllHistory()
+	// Sort keys so the response is deterministic — charts depend on a
+	// stable service ordering for legend color assignment.
+	names := make([]string, 0, len(all))
+	for n := range all {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	series := make([]apitypes.AllCheckHistoryEntry, 0, len(names))
+	for _, n := range names {
+		hist := all[n]
+		results := make([]apitypes.CheckResult, 0, len(hist))
+		for _, h := range hist {
+			results = append(results, apitypes.CheckResult{
+				Timestamp: h.Timestamp,
+				Status:    h.Status,
+				Latency:   h.Latency,
+				Error:     h.Error,
+			})
+		}
+		series = append(series, apitypes.AllCheckHistoryEntry{
+			Name:    n,
+			Results: results,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(apitypes.AllCheckHistoryResponse{Series: series})
 }
 
 func (s *Server) handleAPICheckHistory(w http.ResponseWriter, r *http.Request) {

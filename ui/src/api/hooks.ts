@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
 import type {
   AddPeerResponse,
+  AllCheckHistoryResponse,
   AptAuditResponse,
   BanListResponse,
   CheckHistoryResponse,
@@ -612,6 +613,15 @@ export function useCheckHistory(name: string) {
         { schema: CheckHistoryResponseSchema },
       ),
     enabled: !!name,
+  });
+}
+
+export function useAllCheckHistory() {
+  return useQuery({
+    queryKey: ["checks", "history", "all"],
+    queryFn: () =>
+      apiFetch<AllCheckHistoryResponse>("/checks/history/all"),
+    refetchInterval: 30000,
   });
 }
 

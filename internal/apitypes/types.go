@@ -479,6 +479,17 @@ type CheckHistoryResponse struct {
 	Results []CheckResult `json:"results"`
 }
 
+// AllCheckHistoryEntry is one series (check + its history) in the aggregate
+// history response used by the main /checks page's stacked charts.
+type AllCheckHistoryEntry struct {
+	Name    string        `json:"name"`
+	Results []CheckResult `json:"results"`
+}
+
+type AllCheckHistoryResponse struct {
+	Series []AllCheckHistoryEntry `json:"series"`
+}
+
 type ChecksOverview struct {
 	Total   int `json:"total"`
 	Healthy int `json:"healthy"`
