@@ -990,6 +990,14 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// System health (on-host software stack). Per-instance — each peer reports
 	// its own view; downstream/network checks live at /api/v1/checks.
 	s.handlePeerInstance(mux, "/api/v1/system/health", s.handleAPISystemHealth)
+	// On-host fixers. All per-instance: each peer repairs its own system.
+	s.handlePeerInstance(mux, "/api/v1/system/fix/ip-forwarding", s.handleAPISystemFixIPForwarding)
+	s.handlePeerInstance(mux, "/api/v1/system/fix/masquerade", s.handleAPISystemFixMasquerade)
+	s.handlePeerInstance(mux, "/api/v1/system/fix/wg-forward-chain", s.handleAPISystemFixWGForwardChain)
+	s.handlePeerInstance(mux, "/api/v1/system/fix/wg-rules", s.handleAPISystemFixWGRules)
+	s.handlePeerInstance(mux, "/api/v1/wg/create-config", s.handleAPIWGCreateConfig)
+	s.handlePeerInstance(mux, "/api/v1/system/install/horizon-unit", s.handleAPISystemInstallHorizonUnit)
+	s.handlePeerInstance(mux, "/api/v1/system/enable/horizon", s.handleAPISystemEnableHorizon)
 
 	// API v1 settings routes
 	mux.HandleFunc("/api/v1/settings", s.handleAPISettings)

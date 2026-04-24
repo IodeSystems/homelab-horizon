@@ -96,21 +96,22 @@ Each phase is independently mergeable and leaves the system in a working state.
 **API endpoints (new in this phase)**:
 ```
 GET  /api/v1/system/health                 # aggregated per-component check results   ✅ done
-POST /api/v1/system/fix/ip-forwarding      # EnableIPForwarding
-POST /api/v1/system/fix/masquerade         # AddMasqueradeRule
-POST /api/v1/system/fix/wg-forward-chain   # SetupForwardChain
+POST /api/v1/system/fix/ip-forwarding      # EnableIPForwarding                       ✅ done
+POST /api/v1/system/fix/masquerade         # AddMasqueradeRule                        ✅ done
+POST /api/v1/system/fix/wg-forward-chain   # SetupForwardChain                        ✅ done
+POST /api/v1/system/fix/wg-rules           # regen PostUp/PostDown + bounce iface     ✅ done
 POST /api/v1/system/install/wg             # apt install wireguard-tools
 POST /api/v1/system/install/haproxy        # apt install haproxy
 POST /api/v1/system/install/dnsmasq        # apt install dnsmasq
 POST /api/v1/system/install/acme           # acme.sh installer
-POST /api/v1/system/install/horizon-unit   # write /etc/systemd/system/homelab-horizon.service
-POST /api/v1/system/enable/horizon         # systemctl enable
-POST /api/v1/wg/create-config              # handleCreateWGConfig
+POST /api/v1/system/install/horizon-unit   # write /etc/systemd/system/homelab-horizon.service  ✅ done
+POST /api/v1/system/enable/horizon         # systemctl enable                         ✅ done
+POST /api/v1/wg/create-config              # handleCreateWGConfig                     ✅ done
 POST /api/v1/dnsmasq/write-config          # WriteConfig
 POST /api/v1/dnsmasq/reload                # Reload
 POST /api/v1/dnsmasq/start                 # Start
 POST /api/v1/dnsmasq/init-unit             # handleDNSMasqInit
-POST /api/v1/haproxy/write-config          # WriteConfig (exists? verify)
+POST /api/v1/haproxy/write-config          # WriteConfig (exists already)
 POST /api/v1/haproxy/fix-logging           # handleFixHAProxyLogging
 ```
 
