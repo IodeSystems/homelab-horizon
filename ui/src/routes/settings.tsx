@@ -640,116 +640,9 @@ function HAProxyTab({
   );
 }
 
-// --- SSL Tab ---
-
-function SSLTab({
-  sslEnabled,
-  certDir,
-  haproxyCertDir,
-  zones,
-}: {
-  sslEnabled: boolean;
-  certDir: string;
-  haproxyCertDir: string;
-  zones: Zone[];
-}) {
-  return (
-    <Box>
-      <Typography variant="h6" sx={{ mb: 2 }}>SSL / Let's Encrypt</Typography>
-
-      <Paper sx={{ p: 2, mb: 2 }}>
-        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr 1fr" }, gap: 2 }}>
-          <Box>
-            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase", letterSpacing: 1 }}>
-              SSL Status
-            </Typography>
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 0.5 }}>
-              <Box
-                sx={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: "50%",
-                  bgcolor: sslEnabled ? "success.main" : "text.secondary",
-                }}
-              />
-              <Typography variant="body2">{sslEnabled ? "Enabled" : "Disabled"}</Typography>
-            </Box>
-          </Box>
-          <Box>
-            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase", letterSpacing: 1 }}>
-              Cert Directory
-            </Typography>
-            <Typography variant="body2" sx={{ mt: 0.5, fontFamily: "monospace", fontSize: "0.8rem" }}>
-              {certDir || "Not configured"}
-            </Typography>
-          </Box>
-          <Box>
-            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase", letterSpacing: 1 }}>
-              HAProxy Cert Directory
-            </Typography>
-            <Typography variant="body2" sx={{ mt: 0.5, fontFamily: "monospace", fontSize: "0.8rem" }}>
-              {haproxyCertDir || "Not configured"}
-            </Typography>
-          </Box>
-        </Box>
-      </Paper>
-
-      <Typography variant="subtitle2" sx={{ mb: 1 }}>Zone SSL Status</Typography>
-      <TableContainer component={Paper}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Zone</TableCell>
-              <TableCell>SSL</TableCell>
-              <TableCell>Email</TableCell>
-              <TableCell>Sub-Zones</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {zones.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={4} align="center">
-                  <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
-                    No zones configured.
-                  </Typography>
-                </TableCell>
-              </TableRow>
-            ) : (
-              zones.map((z) => (
-                <TableRow key={z.name} hover>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontWeight: 600 }}>{z.name}</Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Chip
-                      label={z.sslEnabled ? "Enabled" : "Disabled"}
-                      size="small"
-                      color={z.sslEnabled ? "success" : "default"}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" color="text.secondary">
-                      {z.sslEmail || "--"}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
-                      {z.subZones.length > 0
-                        ? z.subZones.map((sz) => (
-                            <Chip key={sz} label={sz || "(root)"} size="small" variant="outlined" />
-                          ))
-                        : "--"}
-                    </Box>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
-    </Box>
-  );
-}
+// SSLTab removed — merged into System → Let's Encrypt card.
+// (Zone/email/subzones annotations now render inline per cert;
+// cert directories + global SSL enabled chip moved to the card header.)
 
 // --- Health Checks Tab ---
 
@@ -1383,7 +1276,6 @@ function SettingsPage() {
         <Tab label="System" />
         <Tab label="Zones" />
         <Tab label="HAProxy" />
-        <Tab label="SSL" />
         <Tab label="Health Checks" />
         <Tab label="VPN MFA" />
         <Tab label="HA Fleet" />
@@ -1396,6 +1288,10 @@ function SettingsPage() {
           localInterface={data.config.localInterface}
           dnsmasqEnabled={data.config.dnsmasqEnabled}
           vpnAdmins={data.config.vpnAdmins}
+          sslEnabled={data.ssl.enabled}
+          certDir={data.ssl.certDir}
+          haproxyCertDir={data.ssl.haproxyCertDir}
+          zones={data.zones}
         />
       )}
       {tab === 1 && <ZonesTab zones={data.zones} />}
@@ -1409,18 +1305,10 @@ function SettingsPage() {
           httpsPort={data.haproxy.httpsPort}
         />
       )}
-      {tab === 3 && (
-        <SSLTab
-          sslEnabled={data.ssl.enabled}
-          certDir={data.ssl.certDir}
-          haproxyCertDir={data.ssl.haproxyCertDir}
-          zones={data.zones}
-        />
-      )}
-      {tab === 4 && <ChecksTab checks={data.checks} />}
-      {tab === 5 && <VPNMFATab />}
-      {tab === 6 && <HAFleetTab />}
-      {tab === 7 && <IPTablesTab />}
+      {tab === 3 && <ChecksTab checks={data.checks} />}
+      {tab === 4 && <VPNMFATab />}
+      {tab === 5 && <HAFleetTab />}
+      {tab === 6 && <IPTablesTab />}
     </Box>
   );
 }
