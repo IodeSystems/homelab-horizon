@@ -233,6 +233,15 @@ func mergeRemoteIntoLocal(remote, local *config.Config) *config.Config {
 	out.LocalInterface = local.LocalInterface
 	out.AdminToken = local.AdminToken
 
+	// Host-local iface/CIDR memory — each peer has its own default route,
+	// so the primary's values don't apply here.
+	out.LastLocalIface = local.LastLocalIface
+	out.LastLanCIDR = local.LastLanCIDR
+
+	// Blessed iptables rules are local-only — the primary's bless list
+	// doesn't apply to this host's adjacent tooling.
+	out.BlessedIPTablesRules = local.BlessedIPTablesRules
+
 	// IPBans: take the LWW-merged result from the remote config.
 	// The ban sync loop on each peer independently merges bans from all
 	// peers, so the primary's ban list is the authoritative merged set.
