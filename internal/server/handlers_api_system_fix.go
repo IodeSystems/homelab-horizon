@@ -203,3 +203,58 @@ func (s *Server) handleAPISystemEnableHorizon(w http.ResponseWriter, r *http.Req
 	}
 	s.writeFixOK(w)
 }
+
+// POST /api/v1/haproxy/fix-logging — fixes the two common reasons HAProxy
+// logs get silently dropped when the daemon is chrooted:
+//  1. rsyslogd apparmor profile missing `attach_disconnected` flag.
+//  2. /var/log/haproxy.log doesn't exist (rsyslog can't create it after
+//     dropping privileges).
+// Collects errors rather than bailing on the first — each sub-fix is
+// independent and partial success is useful.
+func (s *Server) handleAPIHAProxyFixLogging(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminPost(w, r) {
+		return
+	}
+
+	var errs []string
+
+	const profilePath = "/etc/apparmor.d/usr.sbin.rsyslogd"
+	if data, err := os.ReadFile(profilePath); err == nil {
+		content := string(data)
+		if !strings.Contains(content, "attach_disconnected") {
+			fixed := strings.Replace(content,
+				"profile rsyslogd /usr/sbin/rsyslogd {",
+				"profile rsyslogd /usr/sbin/rsyslogd flags=(attach_disconnected) {", 1)
+			if fixed == content {
+				errs = append(errs, "could not find apparmor profile declaration to patch")
+			} else {
+				cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
+					"bash", "-c", fmt.Sprintf("cat > %s", profilePath))
+				cmd.Stdin = strings.NewReader(fixed)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					errs = append(errs, "write apparmor profile: "+err.Error()+" — "+strings.TrimSpace(string(out)))
+				} else {
+					if out, err := systemdRun("apparmor_parser", "-r", profilePath); err != nil {
+						errs = append(errs, "reload apparmor: "+err.Error()+" — "+out)
+					}
+				}
+			}
+		}
+	}
+
+	if _, err := os.Stat("/var/log/haproxy.log"); os.IsNotExist(err) {
+		script := "touch /var/log/haproxy.log && chown syslog:adm /var/log/haproxy.log && chmod 640 /var/log/haproxy.log"
+		if out, err := systemdRun("bash", "-c", script); err != nil {
+			errs = append(errs, "create log file: "+err.Error()+" — "+out)
+		}
+	}
+
+	// Best-effort rsyslog bounce — not fatal if it fails.
+	_, _ = systemdRun("systemctl", "restart", "rsyslog")
+
+	if len(errs) > 0 {
+		writeJSONError(w, http.StatusInternalServerError, strings.Join(errs, "; "))
+		return
+	}
+	s.writeFixOK(w)
+}
