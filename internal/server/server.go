@@ -1013,6 +1013,14 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/system/install/package", s.handleAPISystemInstallPackage)
 	s.handlePeerInstance(mux, "/api/v1/system/apt-audit", s.handleAPISystemAptAudit)
 
+	// IPTables rule inventory + bless/unbless/remove/reconcile. All per-
+	// instance (iptables is a local-machine concern, bless is local-only).
+	s.handlePeerInstance(mux, "/api/v1/iptables/rules", s.handleAPIIPTablesRules)
+	s.handlePeerInstance(mux, "/api/v1/iptables/bless", s.handleAPIIPTablesBless)
+	s.handlePeerInstance(mux, "/api/v1/iptables/unbless", s.handleAPIIPTablesUnbless)
+	s.handlePeerInstance(mux, "/api/v1/iptables/remove", s.handleAPIIPTablesRemove)
+	s.handlePeerInstance(mux, "/api/v1/iptables/reconcile", s.handleAPIIPTablesReconcile)
+
 	// API v1 settings routes
 	mux.HandleFunc("/api/v1/settings", s.handleAPISettings)
 	mux.HandleFunc("/api/v1/zones/add", s.handleAPIAddZone)

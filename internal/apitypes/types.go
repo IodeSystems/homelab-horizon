@@ -514,12 +514,22 @@ type ServiceIntegration struct {
 // HA Fleet
 
 type HAFleetPeer struct {
-	ID           string `json:"id"`
-	WGAddr       string `json:"wgAddr"`
-	Primary      bool   `json:"primary,omitempty"`
-	Online       bool   `json:"online,omitempty"`
-	LastSyncAt   string `json:"lastSyncAt,omitempty"`
-	LastSyncErr  string `json:"lastSyncErr,omitempty"`
+	ID              string            `json:"id"`
+	WGAddr          string            `json:"wgAddr"`
+	Primary         bool              `json:"primary,omitempty"`
+	Online          bool              `json:"online,omitempty"`
+	LastSyncAt      string            `json:"lastSyncAt,omitempty"`
+	LastSyncErr     string            `json:"lastSyncErr,omitempty"`
+	IPTablesSummary *IPTablesSummary  `json:"iptables_summary,omitempty"` // peer's local rule classification counts
+}
+
+// IPTablesSummary mirrors internal/iptables.Summary for the wire format.
+// Kept here so the apitypes package is self-contained and tygo can emit it.
+type IPTablesSummary struct {
+	Expected int `json:"expected"`
+	Stale    int `json:"stale"`
+	Blessed  int `json:"blessed"`
+	Unknown  int `json:"unknown"`
 }
 
 type HAStatusResponse struct {

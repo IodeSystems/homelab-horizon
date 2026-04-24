@@ -12,6 +12,7 @@ import (
 
 	"homelab-horizon/internal/apitypes"
 	"homelab-horizon/internal/config"
+	"homelab-horizon/internal/iptables"
 )
 
 // joinToken holds the state for a pending HA join operation.
@@ -96,8 +97,31 @@ func (s *Server) handleAPIHAStatus(w http.ResponseWriter, r *http.Request) {
 		pingURL := fmt.Sprintf("http://%s/api/peer/ping", addr)
 		client := &http.Client{Timeout: 2 * time.Second}
 		if pingResp, err := client.Get(pingURL); err == nil {
+			if pingResp.StatusCode == http.StatusOK {
+				fp.Online = true
+				// Decode the ping body to surface the peer's iptables
+				// summary. Failure to decode doesn't affect online state.
+				var body PeerPingResponse
+				if err := json.NewDecoder(pingResp.Body).Decode(&body); err == nil && body.IPTablesSummary != nil {
+					fp.IPTablesSummary = &apitypes.IPTablesSummary{
+						Expected: body.IPTablesSummary.Expected,
+						Stale:    body.IPTablesSummary.Stale,
+						Blessed:  body.IPTablesSummary.Blessed,
+						Unknown:  body.IPTablesSummary.Unknown,
+					}
+				}
+			}
 			pingResp.Body.Close()
-			fp.Online = pingResp.StatusCode == http.StatusOK
+		}
+
+		// Self is always "online" from our own vantage; propagate our own
+		// summary too (the peer loop above only queries Peers, not self).
+		if p.ID == cfg.PeerID {
+			fp.Online = true
+			if live, expected, stale, blessed, _, err := s.buildClassifierInputs(); err == nil {
+				sum := summarizeLocal(live, expected, stale, blessed)
+				fp.IPTablesSummary = &sum
+			}
 		}
 
 		// Sync status (only relevant if we're non-primary)
@@ -114,6 +138,20 @@ func (s *Server) handleAPIHAStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// summarizeLocal runs the classifier on the local-host inputs and returns an
+// apitypes.IPTablesSummary. Factored out so handleAPIHAStatus's self-inclusion
+// path and the ping endpoint can share shape without pulling internal/iptables
+// into the apitypes package.
+func summarizeLocal(live, expected, stale []iptables.Rule, blessed []string) apitypes.IPTablesSummary {
+	s := iptables.SummarizeClassified(iptables.Classify(live, expected, stale, blessed))
+	return apitypes.IPTablesSummary{
+		Expected: s.Expected,
+		Stale:    s.Stale,
+		Blessed:  s.Blessed,
+		Unknown:  s.Unknown,
+	}
 }
 
 // handleAPIHACreateJoinToken creates a join token and returns the one-liner.
