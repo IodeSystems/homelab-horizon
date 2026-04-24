@@ -548,3 +548,27 @@ type HAJoinCompleteRequest struct {
 	S2SPubKey string `json:"s2s_pubkey,omitempty"`
 	VPNPubKey string `json:"vpn_pubkey"`
 }
+
+// System health — per-component facts for the SystemTab dashboard.
+// This is the on-host view only. Downstream/network service health lives
+// in /api/v1/checks (the Monitor package).
+
+type ComponentHealth struct {
+	Name         string            `json:"name"`          // "wireguard", "haproxy", "dnsmasq", "letsencrypt"
+	Installed    bool              `json:"installed"`     // binary on PATH
+	ConfigExists bool              `json:"config_exists"` // component config file present
+	Enabled      bool              `json:"enabled"`       // systemd unit enabled at boot
+	Running      bool              `json:"running"`       // systemd unit currently active
+	Version      string            `json:"version,omitempty"`
+	Extras       map[string]any    `json:"extras,omitempty"` // component-specific facts
+	Errors       []string          `json:"errors,omitempty"`
+}
+
+type SystemHealthResponse struct {
+	Components            []ComponentHealth `json:"components"`
+	IPForwarding          bool              `json:"ip_forwarding"`
+	IPForwardingError     string            `json:"ip_forwarding_error,omitempty"`
+	HorizonUnitInstalled  bool              `json:"horizon_unit_installed"`
+	HorizonEnabled        bool              `json:"horizon_enabled"`
+	HorizonRunning        bool              `json:"horizon_running"`
+}
