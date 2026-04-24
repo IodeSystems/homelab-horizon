@@ -449,3 +449,21 @@ export interface HAJoinCompleteRequest {
   s2s_pubkey?: string;
   vpn_pubkey: string;
 }
+export interface ComponentHealth {
+  name: string; // "wireguard", "haproxy", "dnsmasq", "letsencrypt"
+  installed: boolean; // binary on PATH
+  config_exists: boolean; // component config file present
+  enabled: boolean; // systemd unit enabled at boot
+  running: boolean; // systemd unit currently active
+  version?: string;
+  extras?: { [key: string]: any}; // component-specific facts
+  errors?: string[];
+}
+export interface SystemHealthResponse {
+  components: ComponentHealth[];
+  ip_forwarding: boolean;
+  ip_forwarding_error?: string;
+  horizon_unit_installed: boolean;
+  horizon_enabled: boolean;
+  horizon_running: boolean;
+}
