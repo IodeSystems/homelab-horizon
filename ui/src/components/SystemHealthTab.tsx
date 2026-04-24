@@ -43,7 +43,7 @@ import {
   useSystemHealth,
   useWriteDNSMasqConfig,
 } from "../api/hooks";
-import type { ComponentHealth, SystemHealth } from "../api/types";
+import type { ComponentHealth, SystemHealth, Zone } from "../api/types";
 
 // CheckRow renders one line: label + status chip + optional fix button.
 // Keep the shape uniform across all component cards so the dashboard reads
@@ -382,14 +382,36 @@ function DNSMasqCard({ health }: { health: SystemHealth }) {
   );
 }
 
-function LetsEncryptCard({ health }: { health: SystemHealth }) {
+// certMatchesZone pairs an LE cert back to the Zone it was derived from so
+// we can annotate with the zone's SSL email and subzone list (those two
+// facts used to live on the separate SSL tab; merged here).
+function certMatchesZone(certPrimary: string, zoneName: string): boolean {
+  return certPrimary === zoneName || certPrimary.endsWith("." + zoneName);
+}
+
+function LetsEncryptCard({
+  health,
+  sslEnabled,
+  certDir,
+  haproxyCertDir,
+  zones,
+}: {
+  health: SystemHealth;
+  sslEnabled: boolean;
+  certDir: string;
+  haproxyCertDir: string;
+  zones: Zone[];
+}) {
   const le = byName(health, "letsencrypt");
   if (!le) return null;
   const extras = le.extras ?? {};
   if (extras.disabled) {
     return (
       <ComponentCard title="Let's Encrypt" component={le}>
-        <Alert severity="info">SSL is disabled in config. Enable on the SSL tab to manage certs.</Alert>
+        <Alert severity="info">
+          SSL is disabled in config. Set <code>ssl.enabled = true</code> and enable SSL on at
+          least one zone to start managing certs.
+        </Alert>
       </ComponentCard>
     );
   }
@@ -401,8 +423,59 @@ function LetsEncryptCard({ health }: { health: SystemHealth }) {
     provider?: string;
     needs_renewal?: boolean;
   }>;
+  // Surface zones that have SSL enabled but no cert emerged for them —
+  // usually "SSL enabled but SubZones empty." Previously only visible by
+  // comparing Zones tab to the (now-removed) SSL tab by eye.
+  const zonesWithoutCerts = zones.filter(
+    (z) => z.sslEnabled && !domains.some((d) => certMatchesZone(d.domain, z.name)),
+  );
+
   return (
     <ComponentCard title="Let's Encrypt" component={le}>
+      {/* Global SSL config — merged from the old SSL tab. */}
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: { xs: "1fr", sm: "auto 1fr 1fr" },
+          gap: 2,
+          alignItems: "center",
+          mb: 2,
+          pb: 2,
+          borderBottom: 1,
+          borderColor: "divider",
+        }}
+      >
+        <Chip
+          label={sslEnabled ? "SSL Enabled" : "SSL Disabled"}
+          size="small"
+          color={sslEnabled ? "success" : "default"}
+        />
+        <Box>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ textTransform: "uppercase", letterSpacing: 1, display: "block" }}
+          >
+            Cert directory
+          </Typography>
+          <Typography variant="body2" sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
+            {certDir || "Not configured"}
+          </Typography>
+        </Box>
+        <Box>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ textTransform: "uppercase", letterSpacing: 1, display: "block" }}
+          >
+            HAProxy cert directory
+          </Typography>
+          <Typography variant="body2" sx={{ fontFamily: "monospace", fontSize: "0.8rem" }}>
+            {haproxyCertDir || "Not configured"}
+          </Typography>
+        </Box>
+      </Box>
+
       {domains.length === 0 && (
         <Typography variant="body2" color="text.secondary">
           No SSL domains configured.
@@ -416,6 +489,7 @@ function LetsEncryptCard({ health }: { health: SystemHealth }) {
             // e.g. *.vpn.example.com "covers" unrelated SANs like vz.example.com
             // (which is wrong — wildcards only span one label at their position).
             const allNames = [d.domain, ...(d.sans ?? [])];
+            const zone = zones.find((z) => certMatchesZone(d.domain, z.name));
             return (
               <Paper key={d.domain} variant="outlined" sx={{ p: 1.5 }}>
                 <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
@@ -433,10 +507,18 @@ function LetsEncryptCard({ health }: { health: SystemHealth }) {
                     </Typography>
                   ) : null}
                   <Box sx={{ flex: 1 }} />
-                  {d.provider && (
+                  {zone?.sslEmail && (
                     <Typography variant="caption" color="text.secondary">
-                      {d.provider}
+                      {zone.sslEmail}
                     </Typography>
+                  )}
+                  {d.provider && (
+                    <Chip
+                      size="small"
+                      label={d.provider}
+                      variant="outlined"
+                      sx={{ textTransform: "none" }}
+                    />
                   )}
                 </Stack>
                 <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
@@ -450,15 +532,39 @@ function LetsEncryptCard({ health }: { health: SystemHealth }) {
                     />
                   ))}
                 </Box>
+                {zone && (
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ mt: 1, display: "block" }}
+                  >
+                    Zone: <strong>{zone.name}</strong>{" "}
+                    {zone.subZones.length > 0 && (
+                      <>
+                        · SubZones: {zone.subZones.map((s) => s || "(root)").join(", ")}
+                      </>
+                    )}
+                  </Typography>
+                )}
               </Paper>
             );
           })}
         </Stack>
       )}
+
+      {zonesWithoutCerts.length > 0 && (
+        <Alert severity="warning" sx={{ mt: 2 }}>
+          SSL enabled but no cert for:{" "}
+          {zonesWithoutCerts.map((z) => z.name).join(", ")}
+          . Likely cause: empty <code>subZones</code> on that zone — add at least one entry on
+          the Zones tab to request a cert.
+        </Alert>
+      )}
+
       <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
         One cert per zone with all listed names as SANs — they're peers, not a hierarchy.
         A <code>*.foo</code> wildcard only matches <code>X.foo</code> (one label deep); it does not
-        cover <code>foo</code> itself or sibling names like <code>bar</code>. Request / renew from the SSL tab.
+        cover <code>foo</code> itself or sibling names like <code>bar</code>.
       </Typography>
     </ComponentCard>
   );
@@ -665,11 +771,19 @@ export function SystemHealthTab({
   localInterface,
   dnsmasqEnabled,
   vpnAdmins,
+  sslEnabled,
+  certDir,
+  haproxyCertDir,
+  zones,
 }: {
   publicIP: string;
   localInterface: string;
   dnsmasqEnabled: boolean;
   vpnAdmins: string[];
+  sslEnabled: boolean;
+  certDir: string;
+  haproxyCertDir: string;
+  zones: Zone[];
 }) {
   const { data: health, isLoading, error } = useSystemHealth();
 
@@ -705,7 +819,13 @@ export function SystemHealthTab({
       <WireGuardCard health={health} />
       <HAProxyCard health={health} />
       <DNSMasqCard health={health} />
-      <LetsEncryptCard health={health} />
+      <LetsEncryptCard
+        health={health}
+        sslEnabled={sslEnabled}
+        certDir={certDir}
+        haproxyCertDir={haproxyCertDir}
+        zones={zones}
+      />
       <AptInstallCard />
     </Stack>
   );
