@@ -324,13 +324,6 @@ function DNSMasqCard({ health }: { health: SystemHealth }) {
   const start = useStartDNSMasq();
 
   if (!dns) return null;
-  const extras = dns.extras ?? {};
-  // Listen-address drift is the dnsmasq analog of the iptables
-  // "LocalInterface changed without reload" case — config file says bind to
-  // X, cfg says the interface IP is Y. Reload endpoint regenerates config
-  // and restarts dnsmasq so it rebinds on Y. Undefined = drift check didn't
-  // run (ConfigExists was false), so we treat it as "not failing."
-  const listenAddrOK = extras.listen_address_matches_local_interface !== false;
   return (
     <ComponentCard title="dnsmasq" component={dns}>
       <CheckRow
@@ -363,16 +356,6 @@ function DNSMasqCard({ health }: { health: SystemHealth }) {
         fixDisabled={!dns.installed}
         fixRunning={start.isPending}
         fixLabel="Start"
-      />
-      <CheckRow
-        label="Listen address matches LocalInterface"
-        ok={listenAddrOK}
-        okLabel="Match"
-        failingLabel="Drifted"
-        fix={() => reload.mutate()}
-        fixDisabled={!dns.config_exists}
-        fixRunning={reload.isPending}
-        fixLabel="Write + reload"
       />
       <Box sx={{ mt: 1 }}>
         <Button
