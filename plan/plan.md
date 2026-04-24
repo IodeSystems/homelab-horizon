@@ -192,7 +192,7 @@ Admin-auth gate on all mutations. Read endpoints follow existing settings-read a
 
 **Files touched**: `internal/server/handlers_api_iptables.go` (new), `internal/server/handlers_api_system.go` (new), `internal/server/server.go` (route registration).
 
-### Phase 5 — UI: System Health tab expansion + IPTables tab
+### Phase 5 — UI: System Health tab expansion + IPTables tab   ✅ done
 
 **System Health tab** (expand existing `SystemTab`):
 - Top section: per-component health cards — WireGuard, HAProxy, dnsmasq — each showing installed/configured/running chips + error list. Data from `GET /api/v1/system/health`.
