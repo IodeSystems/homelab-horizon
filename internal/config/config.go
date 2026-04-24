@@ -147,6 +147,16 @@ type Config struct {
 	UpstreamDNS       []string `json:"upstream_dns"`
 	LocalInterface    string   `json:"local_interface"` // Local interface IP for DNS resolution of localhost-bound services
 
+	// LastLocalIface and LastLanCIDR persist what the interface sync last
+	// reconciled against. On startup the watcher seeds from these (not from
+	// live detection) so drift that occurred while horizon was down — e.g.
+	// someone plugged in a new eth while the service was stopped — still
+	// triggers reconfiguration. Empty = never reconciled; triggers a one-time
+	// sync on first run. Also useful as a manual recovery lever: set to the
+	// stale iface name to force cleanup of its MASQUERADE rule.
+	LastLocalIface string `json:"last_local_iface,omitempty"`
+	LastLanCIDR    string `json:"last_lan_cidr,omitempty"`
+
 	// HAProxy configuration
 	HAProxyEnabled    bool   `json:"haproxy_enabled"`
 	HAProxyConfigPath string `json:"haproxy_config_path"`
