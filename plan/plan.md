@@ -111,8 +111,8 @@ POST /api/v1/dnsmasq/write-config          # WriteConfig
 POST /api/v1/dnsmasq/reload                # Reload
 POST /api/v1/dnsmasq/start                 # Start
 POST /api/v1/dnsmasq/init-unit             # handleDNSMasqInit
-POST /api/v1/haproxy/write-config          # WriteConfig (exists already)
-POST /api/v1/haproxy/fix-logging           # handleFixHAProxyLogging
+POST /api/v1/haproxy/write-config          # WriteConfig (exists already)              ✅ pre-existing
+POST /api/v1/haproxy/fix-logging           # handleFixHAProxyLogging                   ✅ done
 ```
 
 Single `POST /api/v1/system/fix/:id` with `id` switch is an alternative — less REST-pure but fewer routes. Either works; minor.

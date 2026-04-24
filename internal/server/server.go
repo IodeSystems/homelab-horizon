@@ -998,6 +998,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/wg/create-config", s.handleAPIWGCreateConfig)
 	s.handlePeerInstance(mux, "/api/v1/system/install/horizon-unit", s.handleAPISystemInstallHorizonUnit)
 	s.handlePeerInstance(mux, "/api/v1/system/enable/horizon", s.handleAPISystemEnableHorizon)
+	s.handlePeerInstance(mux, "/api/v1/haproxy/fix-logging", s.handleAPIHAProxyFixLogging)
 
 	// API v1 settings routes
 	mux.HandleFunc("/api/v1/settings", s.handleAPISettings)

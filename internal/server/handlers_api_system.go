@@ -85,6 +85,23 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 	if hapStatus.Error != "" {
 		hap.Errors = append(hap.Errors, hapStatus.Error)
 	}
+	// Logging sub-check: chrooted haproxy can't reach syslog if rsyslogd's
+	// apparmor profile lacks `attach_disconnected` or /var/log/haproxy.log
+	// doesn't exist. Both are fixable via /api/v1/haproxy/fix-logging.
+	if hap.Installed {
+		apparmorOK, apparmorReason := checkHAProxyApparmor()
+		logFileOK := fileExists("/var/log/haproxy.log")
+		hap.Extras = map[string]any{
+			"logging_apparmor_ok":  apparmorOK,
+			"logging_file_exists":  logFileOK,
+		}
+		if !apparmorOK {
+			hap.Errors = append(hap.Errors, "logging: "+apparmorReason)
+		}
+		if !logFileOK {
+			hap.Errors = append(hap.Errors, "logging: /var/log/haproxy.log missing (rsyslog drops privileges before it can create it)")
+		}
+	}
 	resp.Components = append(resp.Components, hap)
 
 	// dnsmasq.
@@ -159,4 +176,27 @@ func systemdIsEnabled(unit string) bool {
 		return false
 	}
 	return strings.TrimSpace(string(out)) == "enabled"
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// checkHAProxyApparmor detects whether the rsyslogd apparmor profile has the
+// `attach_disconnected` flag — without it, rsyslog denies messages from the
+// chrooted HAProxy because the kernel presents the socket as a disconnected
+// path and the logs are silently dropped. Returns (true, "") on hosts with no
+// apparmor profile (not applicable).
+func checkHAProxyApparmor() (bool, string) {
+	const profilePath = "/etc/apparmor.d/usr.sbin.rsyslogd"
+	data, err := os.ReadFile(profilePath)
+	if err != nil {
+		// No apparmor profile → not applicable to this host.
+		return true, ""
+	}
+	if strings.Contains(string(data), "attach_disconnected") {
+		return true, ""
+	}
+	return false, "rsyslogd apparmor profile is missing attach_disconnected flag — HAProxy logs are silently dropped"
 }
