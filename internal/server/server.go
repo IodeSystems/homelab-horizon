@@ -1032,6 +1032,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/haproxy/config-preview", s.handleAPIHAProxyConfigPreview)
 	mux.HandleFunc("/api/v1/checks", s.handleAPIChecks)
 	mux.HandleFunc("/api/v1/checks/history", s.handleAPICheckHistory)
+	mux.HandleFunc("/api/v1/checks/history/all", s.handleAPIAllCheckHistory)
 	mux.HandleFunc("/api/v1/checks/add", s.handleAPIAddCheck)
 	mux.HandleFunc("/api/v1/checks/delete", s.handleAPIDeleteCheck)
 	mux.HandleFunc("/api/v1/checks/toggle", s.handleAPIToggleCheck)

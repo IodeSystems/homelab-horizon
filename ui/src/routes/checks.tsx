@@ -6,7 +6,6 @@ import {
   Button,
   Chip,
   CircularProgress,
-  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
@@ -28,19 +27,18 @@ import {
 import {
   Add as AddIcon,
   Delete as DeleteIcon,
-  ExpandLess,
-  ExpandMore,
   PlayArrow as PlayArrowIcon,
 } from "@mui/icons-material";
 import {
   useAddCheck,
-  useCheckHistory,
+  useAllCheckHistory,
   useChecks,
   useDeleteCheck,
   useRunCheck,
   useToggleCheck,
 } from "../api/hooks";
 import type { CheckStatus } from "../api/types";
+import { ChecksStackedCharts } from "../components/ChecksStackedCharts";
 
 function relativeTime(isoStr: string): string {
   if (!isoStr) return "Never";
@@ -77,79 +75,20 @@ function StatusDot({ status }: { status: string }) {
   );
 }
 
-function HistoryGraph({ name }: { name: string }) {
-  const { data, isLoading } = useCheckHistory(name);
-
-  if (isLoading) {
-    return (
-      <Box sx={{ py: 2, display: "flex", justifyContent: "center" }}>
-        <CircularProgress size={20} />
-      </Box>
-    );
-  }
-
-  const results = data?.results ?? [];
-  if (results.length === 0) {
-    return (
-      <Typography variant="body2" color="text.secondary" sx={{ py: 2, pl: 2 }}>
-        No history yet
-      </Typography>
-    );
-  }
-
-  // Find max latency for scale
-  const maxLatency = Math.max(...results.map((r) => r.latency), 1);
-  const barWidth = 6;
-  const barGap = 1;
-  const svgHeight = 60;
-  const svgWidth = results.length * (barWidth + barGap);
-
-  return (
-    <Box sx={{ py: 1, px: 2, overflowX: "auto" }}>
-      <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5, display: "block" }}>
-        Last {results.length} checks &mdash; max latency: {maxLatency}ms
-      </Typography>
-      <svg
-        width={svgWidth}
-        height={svgHeight}
-        viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-        style={{ display: "block" }}
-      >
-        {results.map((r, i) => {
-          const h = Math.max((r.latency / maxLatency) * (svgHeight - 4), 2);
-          const fill = r.status === "ok" ? "#4caf50" : "#f44336";
-          const x = i * (barWidth + barGap);
-          const y = svgHeight - h;
-          return (
-            <Tooltip
-              key={i}
-              title={`${r.status} - ${r.latency}ms${r.error ? ` - ${r.error}` : ""}`}
-            >
-              <rect x={x} y={y} width={barWidth} height={h} fill={fill} rx={1} />
-            </Tooltip>
-          );
-        })}
-      </svg>
-    </Box>
-  );
-}
+// Per-row HistoryGraph removed — the whole-fleet ChecksStackedCharts at the
+// top of the page now carries the history signal (up/down ribbon + latency
+// stacked). Expanding each row to see its own sparkline was redundant.
 
 function CheckRow({ check }: { check: CheckStatus }) {
-  const [expanded, setExpanded] = useState(false);
   const toggleCheck = useToggleCheck();
   const deleteCheck = useDeleteCheck();
   const runCheck = useRunCheck();
 
   return (
     <>
-      <TableRow
-        hover
-        sx={{ cursor: "pointer" }}
-        onClick={() => setExpanded(!expanded)}
-      >
+      <TableRow hover>
         <TableCell>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            {expanded ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
             <Typography variant="body2" sx={{ fontWeight: 500 }}>
               {check.name}
             </Typography>
@@ -225,19 +164,13 @@ function CheckRow({ check }: { check: CheckStatus }) {
           </Box>
         </TableCell>
       </TableRow>
-      <TableRow>
-        <TableCell colSpan={7} sx={{ py: 0, borderBottom: expanded ? undefined : "none" }}>
-          <Collapse in={expanded} timeout="auto" unmountOnExit>
-            <HistoryGraph name={check.name} />
-          </Collapse>
-        </TableCell>
-      </TableRow>
     </>
   );
 }
 
 function ChecksPage() {
   const { data: checks, isLoading, error } = useChecks();
+  const { data: allHistory } = useAllCheckHistory();
   const [addOpen, setAddOpen] = useState(false);
   const [snack, setSnack] = useState("");
   const addCheck = useAddCheck();
@@ -284,6 +217,8 @@ function ChecksPage() {
           Add Check
         </Button>
       </Box>
+
+      <ChecksStackedCharts series={allHistory?.series ?? []} />
 
       <TableContainer component={Paper}>
         <Table size="small">

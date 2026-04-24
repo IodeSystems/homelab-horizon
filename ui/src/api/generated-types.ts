@@ -393,6 +393,17 @@ export interface CheckHistoryResponse {
   name: string;
   results: CheckResult[];
 }
+/**
+ * AllCheckHistoryEntry is one series (check + its history) in the aggregate
+ * history response used by the main /checks page's stacked charts.
+ */
+export interface AllCheckHistoryEntry {
+  name: string;
+  results: CheckResult[];
+}
+export interface AllCheckHistoryResponse {
+  series: AllCheckHistoryEntry[];
+}
 export interface ChecksOverview {
   total: number /* int */;
   healthy: number /* int */;
