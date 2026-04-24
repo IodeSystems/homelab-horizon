@@ -95,7 +95,7 @@ Each phase is independently mergeable and leaves the system in a working state.
 
 **API endpoints (new in this phase)**:
 ```
-GET  /api/v1/system/health                 # aggregated per-component check results
+GET  /api/v1/system/health                 # aggregated per-component check results   ✅ done
 POST /api/v1/system/fix/ip-forwarding      # EnableIPForwarding
 POST /api/v1/system/fix/masquerade         # AddMasqueradeRule
 POST /api/v1/system/fix/wg-forward-chain   # SetupForwardChain

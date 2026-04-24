@@ -987,6 +987,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/mfa/grant-session", s.handleAPIMFAGrantSession)
 	mux.HandleFunc("/api/v1/mfa/revoke-session", s.handleAPIMFARevokeSession)
 
+	// System health (on-host software stack). Per-instance — each peer reports
+	// its own view; downstream/network checks live at /api/v1/checks.
+	s.handlePeerInstance(mux, "/api/v1/system/health", s.handleAPISystemHealth)
+
 	// API v1 settings routes
 	mux.HandleFunc("/api/v1/settings", s.handleAPISettings)
 	mux.HandleFunc("/api/v1/zones/add", s.handleAPIAddZone)
