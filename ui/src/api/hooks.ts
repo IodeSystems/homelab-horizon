@@ -14,6 +14,9 @@ import type {
   HAProxyConfigPreview,
   HAStatusResponse,
   Invite,
+  IPTablesReport,
+  IPTablesRule,
+  IPTablesRulesResponse,
   MFAEnrollResponse,
   MFASettingsResponse,
   MFAStatusResponse,
@@ -837,6 +840,70 @@ export function useInstallPackage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["system", "health"] });
       qc.invalidateQueries({ queryKey: ["system", "apt-audit"] });
+    },
+  });
+}
+
+// --- IPTables rule inventory (Phase 5) ---
+
+export function useIPTablesRules() {
+  return useQuery({
+    queryKey: ["iptables", "rules"],
+    queryFn: () => apiFetch<IPTablesRulesResponse>("/iptables/rules"),
+    refetchInterval: 15000,
+  });
+}
+
+export function useBlessIPTablesRule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (canonical: string) =>
+      apiFetch("/iptables/bless", {
+        method: "POST",
+        body: JSON.stringify({ canonical }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["iptables", "rules"] });
+    },
+  });
+}
+
+export function useUnblessIPTablesRule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (canonical: string) =>
+      apiFetch("/iptables/unbless", {
+        method: "POST",
+        body: JSON.stringify({ canonical }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["iptables", "rules"] });
+    },
+  });
+}
+
+export function useRemoveIPTablesRule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (rule: IPTablesRule) =>
+      apiFetch("/iptables/remove", {
+        method: "POST",
+        body: JSON.stringify(rule),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["iptables", "rules"] });
+    },
+  });
+}
+
+export function useReconcileIPTables() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<IPTablesReport>("/iptables/reconcile", { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["iptables", "rules"] });
+      qc.invalidateQueries({ queryKey: ["ha", "status"] });
     },
   });
 }

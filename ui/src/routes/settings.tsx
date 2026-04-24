@@ -53,6 +53,7 @@ import {
 } from "../api/hooks";
 import type { CheckStatus, HAFleetPeer, Zone } from "../api/types";
 import { SystemHealthTab } from "../components/SystemHealthTab";
+import { IPTablesTab } from "../components/IPTablesTab";
 
 function StatusDot({ status }: { status: string }) {
   const color =
@@ -995,41 +996,72 @@ function HAFleetTab() {
                       <TableCell>Address</TableCell>
                       <TableCell>Role</TableCell>
                       <TableCell>Status</TableCell>
+                      <TableCell>IPTables</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {ha.data.peers.map((peer: HAFleetPeer) => (
-                      <TableRow key={peer.id}>
-                        <TableCell>{peer.id}</TableCell>
-                        <TableCell sx={{ fontFamily: "monospace" }}>
-                          {peer.wgAddr}
-                        </TableCell>
-                        <TableCell>
-                          {peer.primary ? (
-                            <Chip label="Primary" size="small" color="success" />
-                          ) : (
-                            <Chip label="Spare" size="small" />
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Chip
-                            label={peer.online ? "Online" : "Offline"}
-                            size="small"
-                            color={peer.online ? "success" : "error"}
-                            variant="outlined"
-                          />
-                          {peer.lastSyncErr && (
-                            <Typography
-                              variant="caption"
-                              color="error"
-                              sx={{ ml: 1 }}
-                            >
-                              {peer.lastSyncErr}
-                            </Typography>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {ha.data.peers.map((peer: HAFleetPeer) => {
+                      const sum = peer.iptables_summary;
+                      const hasDrift = !!sum && (sum.stale > 0 || sum.unknown > 0);
+                      return (
+                        <TableRow key={peer.id}>
+                          <TableCell>{peer.id}</TableCell>
+                          <TableCell sx={{ fontFamily: "monospace" }}>
+                            {peer.wgAddr}
+                          </TableCell>
+                          <TableCell>
+                            {peer.primary ? (
+                              <Chip label="Primary" size="small" color="success" />
+                            ) : (
+                              <Chip label="Spare" size="small" />
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <Chip
+                              label={peer.online ? "Online" : "Offline"}
+                              size="small"
+                              color={peer.online ? "success" : "error"}
+                              variant="outlined"
+                            />
+                            {peer.lastSyncErr && (
+                              <Typography
+                                variant="caption"
+                                color="error"
+                                sx={{ ml: 1 }}
+                              >
+                                {peer.lastSyncErr}
+                              </Typography>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {!sum ? (
+                              <Typography variant="caption" color="text.secondary">
+                                —
+                              </Typography>
+                            ) : hasDrift ? (
+                              <Tooltip
+                                title={
+                                  `stale=${sum.stale} unknown=${sum.unknown} — ` +
+                                  "open IPTables tab on this peer to review (bless is per-host, local only)"
+                                }
+                              >
+                                <Chip
+                                  size="small"
+                                  color="warning"
+                                  label={`stale ${sum.stale} · unknown ${sum.unknown}`}
+                                />
+                              </Tooltip>
+                            ) : (
+                              <Tooltip
+                                title={`expected=${sum.expected} blessed=${sum.blessed}`}
+                              >
+                                <Chip size="small" color="success" variant="outlined" label="Clean" />
+                              </Tooltip>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </TableContainer>
@@ -1305,6 +1337,7 @@ function SettingsPage() {
         <Tab label="VPN MFA" />
         <Tab label="HA Fleet" />
         <Tab label="System" />
+        <Tab label="IPTables" />
       </Tabs>
 
       {tab === 0 && <ZonesTab zones={data.zones} />}
@@ -1337,6 +1370,7 @@ function SettingsPage() {
           vpnAdmins={data.config.vpnAdmins}
         />
       )}
+      {tab === 7 && <IPTablesTab />}
     </Box>
   );
 }
