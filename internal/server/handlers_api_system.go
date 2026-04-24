@@ -115,10 +115,34 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 	if dnsStatus.Error != "" {
 		dns.Errors = append(dns.Errors, dnsStatus.Error)
 	}
+	dnsExtras := map[string]any{
+		"listen_addresses": dnsStatus.ListenAddresses,
+	}
 	if len(dnsStatus.MissingInterfaces) > 0 {
-		dns.Extras = map[string]any{"missing_interfaces": dnsStatus.MissingInterfaces}
+		dnsExtras["missing_interfaces"] = dnsStatus.MissingInterfaces
 		dns.Errors = append(dns.Errors, "config missing interfaces: "+strings.Join(dnsStatus.MissingInterfaces, ", "))
 	}
+	// Listen-address drift: dnsmasq config's listen-address= lines must
+	// include the current LocalInterface IP. If it doesn't, dnsmasq is
+	// bound to the old IP — reloading would fix it. Detection gates a
+	// "reload dnsmasq" fix button in the UI.
+	if cfg.LocalInterface != "" && dns.ConfigExists {
+		hasLocal := false
+		for _, a := range dnsStatus.ListenAddresses {
+			if a == cfg.LocalInterface {
+				hasLocal = true
+				break
+			}
+		}
+		dnsExtras["listen_address_matches_local_interface"] = hasLocal
+		if !hasLocal {
+			dns.Errors = append(dns.Errors,
+				"listen-address= in config ("+strings.Join(dnsStatus.ListenAddresses, ", ")+
+					") doesn't include current LocalInterface "+cfg.LocalInterface+
+					" — writing config + reloading will fix")
+		}
+	}
+	dns.Extras = dnsExtras
 	resp.Components = append(resp.Components, dns)
 
 	// Let's Encrypt. "Installed" here means acme account configured, not a

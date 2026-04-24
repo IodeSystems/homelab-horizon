@@ -252,6 +252,12 @@ type Status struct {
 	ConfigExists      bool
 	Error             string
 	MissingInterfaces []string // Configured interfaces not found in dnsmasq config
+	// ListenAddresses is the set of listen-address= IPs from the config file.
+	// Callers compare these against cfg.LocalInterface to detect drift — if
+	// dnsmasq's config says "bind 192.168.1.10" but LocalInterface is now
+	// 192.168.2.15, service-name resolution against the new IP fails even
+	// though dnsmasq is "running".
+	ListenAddresses []string
 }
 
 func (d *DNSMasq) Status() Status {
@@ -274,9 +280,33 @@ func (d *DNSMasq) Status() Status {
 	// Check if all configured interfaces are present in the config file
 	if status.ConfigExists {
 		status.MissingInterfaces = d.checkMissingInterfaces()
+		status.ListenAddresses = d.readListenAddresses()
 	}
 
 	return status
+}
+
+// readListenAddresses extracts every `listen-address=<ip>` line from the
+// dnsmasq config file. Deliberately doesn't touch the kernel or query ss(8) —
+// this is cheap, self-contained, and the config is the source of truth for
+// what dnsmasq will bind to on the next reload.
+func (d *DNSMasq) readListenAddresses() []string {
+	data, err := os.ReadFile(d.configPath)
+	if err != nil {
+		return nil
+	}
+	var addrs []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "listen-address=") {
+			addr := strings.TrimPrefix(line, "listen-address=")
+			addr = strings.TrimSpace(addr)
+			if addr != "" {
+				addrs = append(addrs, addr)
+			}
+		}
+	}
+	return addrs
 }
 
 // checkMissingInterfaces compares configured interfaces against what's in the config file
