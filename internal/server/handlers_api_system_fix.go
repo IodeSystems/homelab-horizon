@@ -3,13 +3,16 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"homelab-horizon/internal/apitypes"
+	"homelab-horizon/internal/autoheal"
 	"homelab-horizon/internal/config"
 	"homelab-horizon/internal/wireguard"
 )
@@ -202,6 +205,129 @@ func (s *Server) handleAPISystemEnableHorizon(w http.ResponseWriter, r *http.Req
 		return
 	}
 	s.writeFixOK(w)
+}
+
+// aptAuditEntry is one line in the apt-audit.log JSONL file. Horizon has a
+// single admin token so there's no per-user attribution — SourceIP is the
+// closest we get to "who asked for this."
+type aptAuditEntry struct {
+	Timestamp time.Time `json:"timestamp"`
+	Package   string    `json:"package"`
+	Success   bool      `json:"success"`
+	Error     string    `json:"error,omitempty"`
+	Output    string    `json:"output,omitempty"`
+	SourceIP  string    `json:"source_ip,omitempty"`
+}
+
+// aptAuditPath is the JSONL log file next to config.json; one entry per line,
+// append-only. Read via GET /api/v1/system/apt-audit (latest last, tail).
+func (s *Server) aptAuditPath() string {
+	return filepath.Join(filepath.Dir(s.configPath), "apt-audit.log")
+}
+
+// recordAptAudit appends one JSONL line. Best-effort: errors logged but not
+// surfaced — the install itself already returned, and the audit being incomplete
+// shouldn't break the response to the admin.
+func (s *Server) recordAptAudit(entry aptAuditEntry) {
+	f, err := os.OpenFile(s.aptAuditPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "apt-audit open: %v\n", err)
+		return
+	}
+	defer f.Close()
+	if err := json.NewEncoder(f).Encode(entry); err != nil {
+		fmt.Fprintf(os.Stderr, "apt-audit write: %v\n", err)
+	}
+}
+
+// POST /api/v1/system/install/package — admin installs one of the apt
+// packages horizon knows about. Whitelisted in autoheal.KnownPackages so
+// this endpoint can't be coerced into running arbitrary apt commands.
+// Every invocation is journaled to apt-audit.log (next to config.json)
+// with timestamp, admin, output, and error — readable via /apt-audit.
+func (s *Server) handleAPISystemInstallPackage(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminPost(w, r) {
+		return
+	}
+	var body struct {
+		Package string `json:"package"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid json body: "+err.Error())
+		return
+	}
+	if body.Package == "" {
+		writeJSONError(w, http.StatusBadRequest, "package is required")
+		return
+	}
+
+	output, err := autoheal.InstallPackage(body.Package)
+	entry := aptAuditEntry{
+		Timestamp: time.Now().UTC(),
+		Package:   body.Package,
+		Success:   err == nil,
+		Output:    output,
+		SourceIP:  s.getClientIP(r),
+	}
+	if err != nil {
+		entry.Error = err.Error()
+	}
+	s.recordAptAudit(entry)
+
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok":      true,
+		"package": body.Package,
+		"output":  output,
+	})
+}
+
+// GET /api/v1/system/apt-audit — returns the last ~N entries of the
+// apt-audit.log JSONL file. Newest first in the response.
+func (s *Server) handleAPISystemAptAudit(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	f, err := os.Open(s.aptAuditPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			// First-run case: no installs ever performed.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"entries": []aptAuditEntry{}})
+			return
+		}
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer f.Close()
+
+	entries := []aptAuditEntry{}
+	dec := json.NewDecoder(f)
+	for {
+		var entry aptAuditEntry
+		if err := dec.Decode(&entry); err != nil {
+			if err == io.EOF {
+				break
+			}
+			// Skip malformed line — best-effort.
+			continue
+		}
+		entries = append(entries, entry)
+	}
+
+	// Reverse: newest first.
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"entries": entries})
 }
 
 // POST /api/v1/dnsmasq/write-config — regenerate dnsmasq.conf from current

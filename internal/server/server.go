@@ -1002,6 +1002,8 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/write-config", s.handleAPIDNSMasqWriteConfig)
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/reload", s.handleAPIDNSMasqReload)
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/start", s.handleAPIDNSMasqStart)
+	s.handlePeerInstance(mux, "/api/v1/system/install/package", s.handleAPISystemInstallPackage)
+	s.handlePeerInstance(mux, "/api/v1/system/apt-audit", s.handleAPISystemAptAudit)
 
 	// API v1 settings routes
 	mux.HandleFunc("/api/v1/settings", s.handleAPISettings)
