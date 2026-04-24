@@ -100,9 +100,8 @@ POST /api/v1/system/fix/ip-forwarding      # EnableIPForwarding                 
 POST /api/v1/system/fix/masquerade         # AddMasqueradeRule                        ✅ done
 POST /api/v1/system/fix/wg-forward-chain   # SetupForwardChain                        ✅ done
 POST /api/v1/system/fix/wg-rules           # regen PostUp/PostDown + bounce iface     ✅ done
-POST /api/v1/system/install/wg             # apt install wireguard-tools
-POST /api/v1/system/install/haproxy        # apt install haproxy
-POST /api/v1/system/install/dnsmasq        # apt install dnsmasq
+POST /api/v1/system/install/package        # apt install <allow-listed pkg>           ✅ done (single endpoint, body {"package":"..."})
+GET  /api/v1/system/apt-audit              # JSONL audit log, newest-first             ✅ done
 # /api/v1/system/install/acme dropped: lego is compiled into horizon, no external acme.sh binary to install.
 # Per-domain cert request: /api/v1/ssl/request-cert already exists (pre-Phase-0). ✅ pre-existing
 POST /api/v1/system/install/horizon-unit   # write /etc/systemd/system/homelab-horizon.service  ✅ done
