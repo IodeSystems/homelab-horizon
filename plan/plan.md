@@ -154,7 +154,7 @@ Single `POST /api/v1/system/fix/:id` with `id` switch is an alternative — less
 
 **Files touched**: `internal/iptables/classify.go` (new), `internal/iptables/classify_test.go` (new), `internal/config/config.go` (add `BlessedIPTablesRules`).
 
-### Phase 3 — Reconciler (auto-heal), wired to startup + periodic
+### Phase 3 — Reconciler (auto-heal), wired to startup + periodic   ✅ done
 
 **Goal**: on startup and periodically, call classifier → delete `stale` → add missing `expected` → update `LastLocalIface`/`LastLanCIDR`. Never touch `unknown` or `blessed`.
 

@@ -836,7 +836,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// runHealthCheck performs internal health checks and updates status
+// runHealthCheck performs internal health checks and updates status.
+// Also the heartbeat for the iptables reconciler — piggybacks here (every
+// 60s) instead of having its own ticker because the classifier is cheap
+// and the two loops share the same "check the host state" cadence.
 func (s *Server) runHealthCheck() {
 	status := s.wg.GetInterfaceStatus()
 	dnsRunning := !s.cfg().DNSMasqEnabled || s.dns.Status().Running
@@ -844,6 +847,11 @@ func (s *Server) runHealthCheck() {
 
 	healthy := status.Up && dnsRunning && haproxyRunning
 	s.health.SetHealthy(healthy)
+
+	// Self-heal iptables drift. Runs even if other health signals are
+	// degraded — a stale MASQUERADE is itself often the cause of the
+	// degradation.
+	s.reconcileIPTables()
 }
 
 // startHealthCheck starts background health monitoring every 60 seconds
