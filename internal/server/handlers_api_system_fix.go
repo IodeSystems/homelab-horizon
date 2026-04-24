@@ -204,6 +204,72 @@ func (s *Server) handleAPISystemEnableHorizon(w http.ResponseWriter, r *http.Req
 	s.writeFixOK(w)
 }
 
+// POST /api/v1/dnsmasq/write-config — regenerate dnsmasq.conf from current
+// config + service-derived DNS mappings. Does not reload; use /reload after.
+func (s *Server) handleAPIDNSMasqWriteConfig(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminPost(w, r) {
+		return
+	}
+	if err := s.dns.WriteConfig(); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if mappings := s.cfg().DeriveDNSMappings(); len(mappings) > 0 {
+		if err := s.dns.SetMappings(mappings); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "mappings: "+err.Error())
+			return
+		}
+	}
+	s.writeFixOK(w)
+}
+
+// POST /api/v1/dnsmasq/reload — systemctl reload dnsmasq. Writes config
+// first so the reload picks up any drift.
+func (s *Server) handleAPIDNSMasqReload(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminPost(w, r) {
+		return
+	}
+	if err := s.dns.WriteConfig(); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "write-config: "+err.Error())
+		return
+	}
+	if mappings := s.cfg().DeriveDNSMappings(); len(mappings) > 0 {
+		if err := s.dns.SetMappings(mappings); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "mappings: "+err.Error())
+			return
+		}
+	}
+	if err := s.dns.Reload(); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "reload: "+err.Error())
+		return
+	}
+	s.writeFixOK(w)
+}
+
+// POST /api/v1/dnsmasq/start — systemctl start dnsmasq. Internally ensures
+// the service unit file exists (creates it if missing) before starting.
+// Writes config first so the service comes up with horizon's settings.
+func (s *Server) handleAPIDNSMasqStart(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminPost(w, r) {
+		return
+	}
+	if err := s.dns.WriteConfig(); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "write-config: "+err.Error())
+		return
+	}
+	if mappings := s.cfg().DeriveDNSMappings(); len(mappings) > 0 {
+		if err := s.dns.SetMappings(mappings); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "mappings: "+err.Error())
+			return
+		}
+	}
+	if err := s.dns.Start(); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeFixOK(w)
+}
+
 // POST /api/v1/haproxy/fix-logging — fixes the two common reasons HAProxy
 // logs get silently dropped when the daemon is chrooted:
 //  1. rsyslogd apparmor profile missing `attach_disconnected` flag.
