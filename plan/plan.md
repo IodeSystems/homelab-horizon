@@ -121,7 +121,7 @@ Single `POST /api/v1/system/fix/:id` with `id` switch is an alternative — less
 
 **Out of scope for Phase 0**: the iptables rule inventory (that's Phases 1–5). Phase 0 keeps using the existing primitives — it doesn't refactor them. Phases 1–5 layer the classifier on top later, and at that point the IPTables tab replaces the scattered iptables-fixer buttons in Phase 0's WG card.
 
-### Phase 1 — Generator refactor (backend, pure code motion)
+### Phase 1 — Generator refactor (backend, pure code motion)   ✅ done
 
 **Goal**: centralize "what rules does horizon want" into one function, so we can diff live against expected.
 
