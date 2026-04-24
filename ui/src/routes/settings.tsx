@@ -48,6 +48,7 @@ import {
   useMFASettings,
   useRunCheck,
   useSettings,
+  useSystemHealth,
   useToggleCheck,
   useUpdateMFASettings,
 } from "../api/hooks";
@@ -315,6 +316,47 @@ function EditZoneDialog({
   );
 }
 
+// certForZone finds the LE cert entry (from /system/health) whose domains
+// belong to the given zone. Matches if the primary domain equals the zone
+// name or ends with ".<zoneName>" — covers both the bare-apex case
+// (veliode.com cert for veliode.com zone) and the wildcard-primary case
+// (*.vpn.iodesystems.com cert for iodesystems.com zone).
+function certForZone(
+  zoneName: string,
+  domains: Array<{ domain: string; cert_exists: boolean; expiry_info?: string; needs_renewal?: boolean; sans?: string[] }>,
+) {
+  return domains.find(
+    (d) => d.domain === zoneName || d.domain.endsWith("." + zoneName),
+  );
+}
+
+function ZoneCertChip({ zoneName }: { zoneName: string }) {
+  const { data: health } = useSystemHealth();
+  if (!health) return null;
+  const leComponent = health.components.find((c) => c.name === "letsencrypt");
+  const domains = ((leComponent?.extras as { domains?: Array<{ domain: string; cert_exists: boolean; expiry_info?: string; needs_renewal?: boolean; sans?: string[] }> } | undefined)?.domains) ?? [];
+  const cert = certForZone(zoneName, domains);
+  if (!cert) {
+    // SSL disabled on this zone, or no SubZones configured.
+    return <Chip label="—" size="small" variant="outlined" sx={{ opacity: 0.5 }} />;
+  }
+  if (!cert.cert_exists) {
+    return <Chip label="missing" size="small" color="error" />;
+  }
+  if (cert.needs_renewal) {
+    return (
+      <Tooltip title={cert.expiry_info || "renew soon"}>
+        <Chip label="renew soon" size="small" color="warning" />
+      </Tooltip>
+    );
+  }
+  return (
+    <Tooltip title={cert.expiry_info || "present"}>
+      <Chip label="ok" size="small" color="success" variant="outlined" />
+    </Tooltip>
+  );
+}
+
 function ZonesTab({ zones }: { zones: Zone[] }) {
   const [addOpen, setAddOpen] = useState(false);
   const [editZone, setEditZone] = useState<Zone | null>(null);
@@ -351,6 +393,7 @@ function ZonesTab({ zones }: { zones: Zone[] }) {
               <TableCell>Provider</TableCell>
               <TableCell>Zone ID</TableCell>
               <TableCell>SSL</TableCell>
+              <TableCell>Cert</TableCell>
               <TableCell>Sub-Zones</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
@@ -358,7 +401,7 @@ function ZonesTab({ zones }: { zones: Zone[] }) {
           <TableBody>
             {zones.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} align="center">
+                <TableCell colSpan={7} align="center">
                   <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
                     No zones configured.
                   </Typography>
@@ -386,6 +429,13 @@ function ZonesTab({ zones }: { zones: Zone[] }) {
                       size="small"
                       color={z.sslEnabled ? "success" : "default"}
                     />
+                  </TableCell>
+                  <TableCell>
+                    {z.sslEnabled ? (
+                      <ZoneCertChip zoneName={z.name} />
+                    ) : (
+                      <Typography variant="caption" color="text.secondary">—</Typography>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
