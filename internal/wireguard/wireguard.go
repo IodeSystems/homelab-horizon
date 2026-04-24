@@ -565,6 +565,17 @@ func AddMasqueradeRule(vpnRange string) error {
 	return nil
 }
 
+// RemoveMasqueradeRule deletes a POSTROUTING MASQUERADE rule pinned to the given
+// output interface. Used when the default-route interface changes so the stale
+// rule doesn't keep NATing through a no-longer-egress iface. Missing rule is not
+// an error — iptables -D returns non-zero but we don't care in that case.
+func RemoveMasqueradeRule(outIface string) {
+	if outIface == "" {
+		return
+	}
+	exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING", "-o", outIface, "-j", "MASQUERADE").Run()
+}
+
 func (w *WGConfig) GetAddress() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
