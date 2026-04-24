@@ -103,7 +103,8 @@ POST /api/v1/system/fix/wg-rules           # regen PostUp/PostDown + bounce ifac
 POST /api/v1/system/install/wg             # apt install wireguard-tools
 POST /api/v1/system/install/haproxy        # apt install haproxy
 POST /api/v1/system/install/dnsmasq        # apt install dnsmasq
-POST /api/v1/system/install/acme           # acme.sh installer
+# /api/v1/system/install/acme dropped: lego is compiled into horizon, no external acme.sh binary to install.
+# Per-domain cert request: /api/v1/ssl/request-cert already exists (pre-Phase-0). ✅ pre-existing
 POST /api/v1/system/install/horizon-unit   # write /etc/systemd/system/homelab-horizon.service  ✅ done
 POST /api/v1/system/enable/horizon         # systemctl enable                         ✅ done
 POST /api/v1/wg/create-config              # handleCreateWGConfig                     ✅ done

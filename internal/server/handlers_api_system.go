@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"homelab-horizon/internal/apitypes"
+	"homelab-horizon/internal/config"
 	"homelab-horizon/internal/letsencrypt"
 )
 
@@ -139,12 +140,27 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 			if !d.CertExists {
 				allHaveCerts = false
 			}
+			// NeedsRenewal decodes the cert and checks NotAfter vs the 30d
+			// window used by the startup renewal sweep. Surfacing it in the
+			// health payload lets the UI flag certs that'll need attention
+			// soon even though the cert still exists.
+			needsRenewal := false
+			if d.CertExists {
+				needsRenewal = leMgr.NeedsRenewal(
+					leDomainFromStatus(d, cfg),
+					certRenewalDays,
+				)
+			}
 			perDomain = append(perDomain, map[string]any{
-				"domain":      d.Domain,
-				"cert_exists": d.CertExists,
-				"expiry_info": d.ExpiryInfo,
-				"provider":    d.ProviderType,
+				"domain":        d.Domain,
+				"cert_exists":   d.CertExists,
+				"expiry_info":   d.ExpiryInfo,
+				"provider":      d.ProviderType,
+				"needs_renewal": needsRenewal,
 			})
+			if needsRenewal {
+				le.Errors = append(le.Errors, d.Domain+": expires within "+strings.TrimSpace(d.ExpiryInfo))
+			}
 		}
 		le.Running = allHaveCerts
 		le.Extras = map[string]any{"domains": perDomain}
@@ -181,6 +197,18 @@ func systemdIsEnabled(unit string) bool {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// leDomainFromStatus rebuilds the DomainConfig that produced a DomainStatus —
+// the status struct doesn't carry enough to call NeedsRenewal, so we re-look
+// it up from the derived domain list. Returns zero value if no match.
+func leDomainFromStatus(ds letsencrypt.DomainStatus, cfg *config.Config) letsencrypt.DomainConfig {
+	for _, d := range cfg.DeriveSSLDomains() {
+		if d.Domain == ds.Domain {
+			return d
+		}
+	}
+	return letsencrypt.DomainConfig{}
 }
 
 // checkHAProxyApparmor detects whether the rsyslogd apparmor profile has the
