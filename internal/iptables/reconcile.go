@@ -105,30 +105,38 @@ func Reconcile(
 // `-o` token isn't the current default iface. Returns the first such token,
 // or "" if nothing matches. Used for the first-upgrade bootstrap where
 // LastLocalIface hasn't been persisted yet.
+//
+// Strictly matches the 4-token shape horizon emits — `-o <iface> -j MASQUERADE`
+// with no source restriction or interface negation. This avoids false-positives
+// on Docker/k8s style rules like `-s 172.22.0.0/16 ! -o br-b760 -j MASQUERADE`
+// which also contain "-o <iface>" but are semantically different: those are
+// NAT-only-for-this-bridge rules, not the blanket "outbound via default iface"
+// we care about.
 func inferStaleIface(live []Rule, currentDefault string) string {
 	for _, r := range live {
 		if r.Table != "nat" || r.Chain != "POSTROUTING" {
 			continue
 		}
-		if !containsSlice(r.Args, "MASQUERADE") {
+		if !isHorizonMasqShape(r.Args) {
 			continue
 		}
-		for i := 0; i+1 < len(r.Args); i++ {
-			if r.Args[i] == "-o" && r.Args[i+1] != currentDefault {
-				return r.Args[i+1]
-			}
+		if r.Args[1] != currentDefault {
+			return r.Args[1]
 		}
 	}
 	return ""
 }
 
-func containsSlice(args []string, tok string) bool {
-	for _, a := range args {
-		if a == tok {
-			return true
-		}
-	}
-	return false
+// isHorizonMasqShape reports whether args is the exact 4-token shape horizon
+// emits for its MASQUERADE rule: ["-o", "<iface>", "-j", "MASQUERADE"]. Rules
+// owned by other tools (docker, libvirt, ufw, custom scripts) usually add
+// source/destination predicates or interface negation — those are none of our
+// business and must not be misclassified as stale-horizon.
+func isHorizonMasqShape(args []string) bool {
+	return len(args) == 4 &&
+		args[0] == "-o" &&
+		args[2] == "-j" &&
+		args[3] == "MASQUERADE"
 }
 
 // addRule inserts a rule at position 1 in its chain (so WG-FORWARD jumps and

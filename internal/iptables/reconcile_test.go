@@ -28,3 +28,33 @@ func TestInferStaleIfaceIgnoresNonMasquerade(t *testing.T) {
 		t.Errorf("should only match MASQUERADE rules, got %q", got)
 	}
 }
+
+// Regression: docker emits `-s 172.x.0.0/16 ! -o br-xxx -j MASQUERADE`.
+// The earlier loose implementation matched any `-o X` anywhere in args and
+// latched onto the bridge name, reporting a false inferredOld.
+func TestInferStaleIfaceIgnoresDockerStyleMasquerade(t *testing.T) {
+	live := []Rule{
+		{Table: "nat", Chain: "POSTROUTING", Args: []string{
+			"-s", "172.22.0.0/16", "!", "-o", "br-b760fe75fd7d", "-j", "MASQUERADE",
+		}},
+	}
+	if got := inferStaleIface(live, "eth0"); got != "" {
+		t.Errorf("docker-style MASQUERADE with source/negation must not infer as stale, got %q", got)
+	}
+}
+
+// Regression: horizon-shape MASQUERADE pinned to an old iface must still
+// infer correctly after the tightening above.
+func TestInferStaleIfaceMatchesBareHorizonShape(t *testing.T) {
+	live := []Rule{
+		// Docker-style first (must be skipped):
+		{Table: "nat", Chain: "POSTROUTING", Args: []string{
+			"-s", "172.22.0.0/16", "!", "-o", "br-b760fe75fd7d", "-j", "MASQUERADE",
+		}},
+		// Horizon-style old rule (should be inferred):
+		{Table: "nat", Chain: "POSTROUTING", Args: []string{"-o", "wlp3s0", "-j", "MASQUERADE"}},
+	}
+	if got := inferStaleIface(live, "eth0"); got != "wlp3s0" {
+		t.Errorf("want wlp3s0, got %q", got)
+	}
+}
