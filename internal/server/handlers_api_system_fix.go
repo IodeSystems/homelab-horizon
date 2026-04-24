@@ -41,7 +41,12 @@ func systemdRun(args ...string) (string, error) {
 
 // POST /api/v1/system/fix/ip-forwarding — sysctl net.ipv4.ip_forward=1
 func (s *Server) handleAPISystemFixIPForwarding(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	if err := wireguard.EnableIPForwarding(); err != nil {
@@ -55,7 +60,12 @@ func (s *Server) handleAPISystemFixIPForwarding(w http.ResponseWriter, r *http.R
 // the current default-route interface. Idempotent: if the rule already exists
 // the command errors, but we check first via CheckSystem and skip adding.
 func (s *Server) handleAPISystemFixMasquerade(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	if err := wireguard.AddMasqueradeRule(s.cfg().VPNRange); err != nil {
@@ -68,7 +78,12 @@ func (s *Server) handleAPISystemFixMasquerade(w http.ResponseWriter, r *http.Req
 // POST /api/v1/system/fix/wg-forward-chain — (re)install the WG-FORWARD chain
 // with per-peer profile rules based on current config + peers + LAN CIDR.
 func (s *Server) handleAPISystemFixWGForwardChain(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	cfg := s.cfg()
@@ -85,7 +100,12 @@ func (s *Server) handleAPISystemFixWGForwardChain(w http.ResponseWriter, r *http
 // for the current default-route iface, then bounce the interface so new rules
 // take effect.
 func (s *Server) handleAPISystemFixWGRules(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	outIface := config.DetectDefaultInterface()
@@ -113,7 +133,12 @@ func (s *Server) handleAPISystemFixWGRules(w http.ResponseWriter, r *http.Reques
 // a new keypair + PostUp/PostDown for the current default iface. Only used
 // on a truly fresh install; persists the server's public key into config.
 func (s *Server) handleAPIWGCreateConfig(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	cfg := s.cfg()
@@ -164,7 +189,12 @@ PostDown = %s
 // supervises horizon itself into /etc/systemd/system/homelab-horizon.service
 // and runs daemon-reload so the new unit is visible.
 func (s *Server) handleAPISystemInstallHorizonUnit(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 
@@ -197,7 +227,12 @@ func (s *Server) handleAPISystemInstallHorizonUnit(w http.ResponseWriter, r *htt
 
 // POST /api/v1/system/enable/horizon — systemctl enable homelab-horizon
 func (s *Server) handleAPISystemEnableHorizon(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	if out, err := systemdRun("systemctl", "enable", "homelab-horizon"); err != nil {
@@ -246,7 +281,12 @@ func (s *Server) recordAptAudit(entry aptAuditEntry) {
 // Every invocation is journaled to apt-audit.log (next to config.json)
 // with timestamp, admin, output, and error — readable via /apt-audit.
 func (s *Server) handleAPISystemInstallPackage(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	var body struct {
@@ -333,7 +373,12 @@ func (s *Server) handleAPISystemAptAudit(w http.ResponseWriter, r *http.Request)
 // POST /api/v1/dnsmasq/write-config — regenerate dnsmasq.conf from current
 // config + service-derived DNS mappings. Does not reload; use /reload after.
 func (s *Server) handleAPIDNSMasqWriteConfig(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	if err := s.dns.WriteConfig(); err != nil {
@@ -352,7 +397,12 @@ func (s *Server) handleAPIDNSMasqWriteConfig(w http.ResponseWriter, r *http.Requ
 // POST /api/v1/dnsmasq/reload — systemctl reload dnsmasq. Writes config
 // first so the reload picks up any drift.
 func (s *Server) handleAPIDNSMasqReload(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	if err := s.dns.WriteConfig(); err != nil {
@@ -376,7 +426,12 @@ func (s *Server) handleAPIDNSMasqReload(w http.ResponseWriter, r *http.Request) 
 // the service unit file exists (creates it if missing) before starting.
 // Writes config first so the service comes up with horizon's settings.
 func (s *Server) handleAPIDNSMasqStart(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	if err := s.dns.WriteConfig(); err != nil {
@@ -404,7 +459,12 @@ func (s *Server) handleAPIDNSMasqStart(w http.ResponseWriter, r *http.Request) {
 // Collects errors rather than bailing on the first — each sub-fix is
 // independent and partial success is useful.
 func (s *Server) handleAPIHAProxyFixLogging(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 

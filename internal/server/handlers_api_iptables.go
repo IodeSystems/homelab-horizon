@@ -100,7 +100,12 @@ type canonicalRequest struct {
 // BlessedIPTablesRules list. The reconciler will leave matching live rules
 // alone going forward. Local-only: does not sync to other peers.
 func (s *Server) handleAPIIPTablesBless(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	var req canonicalRequest
@@ -130,7 +135,12 @@ func (s *Server) handleAPIIPTablesBless(w http.ResponseWriter, r *http.Request) 
 // list. The rule stays live on the host; subsequent reconciles will classify
 // it as unknown (if it's not also expected/stale).
 func (s *Server) handleAPIIPTablesUnbless(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	var req canonicalRequest
@@ -159,7 +169,12 @@ func (s *Server) handleAPIIPTablesUnbless(w http.ResponseWriter, r *http.Request
 // Takes a full Rule in the body so the server doesn't need to re-parse a
 // canonical string back into a spec.
 func (s *Server) handleAPIIPTablesRemove(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	var rule iptables.Rule
@@ -184,7 +199,12 @@ func (s *Server) handleAPIIPTablesRemove(w http.ResponseWriter, r *http.Request)
 // POST /api/v1/iptables/reconcile — trigger reconcile on-demand and return
 // the full report. Useful for the IPTables UI tab's "Reconcile now" button.
 func (s *Server) handleAPIIPTablesReconcile(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdminPost(w, r) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 
