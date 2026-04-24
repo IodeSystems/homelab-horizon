@@ -16,22 +16,35 @@ import (
 	"strings"
 
 	"homelab-horizon/internal/config"
+	"homelab-horizon/internal/iptables"
 )
 
 // PeerPingResponse is returned by GET /api/peer/ping.
+// IPTables summary is included so the HA Fleet tab can flag peers whose
+// local iptables have drift or unknown rules without requiring a second
+// round-trip. Computed fresh on each call — iptables-save is cheap enough
+// that caching isn't worth the staleness risk.
 type PeerPingResponse struct {
-	PeerID        string `json:"peer_id"`
-	ConfigPrimary bool   `json:"config_primary"`
+	PeerID          string                  `json:"peer_id"`
+	ConfigPrimary   bool                    `json:"config_primary"`
+	IPTablesSummary *iptables.Summary       `json:"iptables_summary,omitempty"`
 }
 
 // handlePeerPing returns this instance's identity. Cheap, used for liveness
 // at decision time (cert ownership, config sync) instead of a heartbeat.
 func (s *Server) handlePeerPing(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(PeerPingResponse{
+	resp := PeerPingResponse{
 		PeerID:        s.cfg().PeerID,
 		ConfigPrimary: s.cfg().ConfigPrimary,
-	})
+	}
+	// Best-effort iptables classification — failures here don't fail the
+	// ping (we still need to report peer identity for cert ownership etc.)
+	if live, expected, stale, blessed, _, err := s.buildClassifierInputs(); err == nil {
+		summary := iptables.SummarizeClassified(iptables.Classify(live, expected, stale, blessed))
+		resp.IPTablesSummary = &summary
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // handlePeerConfig returns the full config JSON. Only the config primary

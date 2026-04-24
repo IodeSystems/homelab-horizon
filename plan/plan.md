@@ -170,7 +170,7 @@ Single `POST /api/v1/system/fix/:id` with `id` switch is an alternative — less
 
 **Files touched**: `internal/iptables/reconcile.go` (new), `internal/server/server.go` (wire into health check, remove any stub).
 
-### Phase 4 — API endpoints
+### Phase 4 — API endpoints   ✅ done
 
 ```
 GET    /api/v1/iptables/rules          # returns []ClassifiedRule + summary counts

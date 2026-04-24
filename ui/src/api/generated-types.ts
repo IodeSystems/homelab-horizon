@@ -423,6 +423,17 @@ export interface HAFleetPeer {
   online?: boolean;
   lastSyncAt?: string;
   lastSyncErr?: string;
+  iptables_summary?: IPTablesSummary; // peer's local rule classification counts
+}
+/**
+ * IPTablesSummary mirrors internal/iptables.Summary for the wire format.
+ * Kept here so the apitypes package is self-contained and tygo can emit it.
+ */
+export interface IPTablesSummary {
+  expected: number /* int */;
+  stale: number /* int */;
+  blessed: number /* int */;
+  unknown: number /* int */;
 }
 export interface HAStatusResponse {
   peerId: string;
