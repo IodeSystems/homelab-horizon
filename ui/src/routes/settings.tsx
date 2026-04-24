@@ -52,6 +52,7 @@ import {
   useUpdateMFASettings,
 } from "../api/hooks";
 import type { CheckStatus, HAFleetPeer, Zone } from "../api/types";
+import { SystemHealthTab } from "../components/SystemHealthTab";
 
 function StatusDot({ status }: { status: string }) {
   const color =
@@ -946,70 +947,9 @@ function ChecksTab({ checks }: { checks: CheckStatus[] }) {
   );
 }
 
-// --- System Tab ---
-
-function SystemTab({
-  publicIP,
-  localInterface,
-  dnsmasqEnabled,
-  vpnAdmins,
-}: {
-  publicIP: string;
-  localInterface: string;
-  dnsmasqEnabled: boolean;
-  vpnAdmins: string[];
-}) {
-  return (
-    <Box>
-      <Typography variant="h6" sx={{ mb: 2 }}>System Configuration</Typography>
-
-      <Paper sx={{ p: 2 }}>
-        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 3 }}>
-          <Box>
-            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase", letterSpacing: 1, display: "block", mb: 0.5 }}>
-              Public IP
-            </Typography>
-            <Typography variant="body1" sx={{ fontFamily: "monospace" }}>
-              {publicIP || "Auto-detected"}
-            </Typography>
-          </Box>
-          <Box>
-            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase", letterSpacing: 1, display: "block", mb: 0.5 }}>
-              Local Interface
-            </Typography>
-            <Typography variant="body1" sx={{ fontFamily: "monospace" }}>
-              {localInterface || "Auto-detected"}
-            </Typography>
-          </Box>
-          <Box>
-            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase", letterSpacing: 1, display: "block", mb: 0.5 }}>
-              DNSMasq
-            </Typography>
-            <Chip
-              label={dnsmasqEnabled ? "Enabled" : "Disabled"}
-              size="small"
-              color={dnsmasqEnabled ? "success" : "default"}
-            />
-          </Box>
-          <Box>
-            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase", letterSpacing: 1, display: "block", mb: 0.5 }}>
-              VPN Admins
-            </Typography>
-            {vpnAdmins.length > 0 ? (
-              <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
-                {vpnAdmins.map((a) => (
-                  <Chip key={a} label={a} size="small" variant="outlined" />
-                ))}
-              </Box>
-            ) : (
-              <Typography variant="body2" color="text.secondary">None configured</Typography>
-            )}
-          </Box>
-        </Box>
-      </Paper>
-    </Box>
-  );
-}
+// System tab now lives in components/SystemHealthTab.tsx — it grew from a
+// static config readout into a full dashboard of per-component checks +
+// inline fixers, and is too big to carry inline.
 
 // --- HA Fleet Tab ---
 
@@ -1390,7 +1330,7 @@ function SettingsPage() {
       {tab === 4 && <VPNMFATab />}
       {tab === 5 && <HAFleetTab />}
       {tab === 6 && (
-        <SystemTab
+        <SystemHealthTab
           publicIP={data.config.publicIP}
           localInterface={data.config.localInterface}
           dnsmasqEnabled={data.config.dnsmasqEnabled}

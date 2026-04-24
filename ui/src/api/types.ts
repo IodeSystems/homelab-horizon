@@ -62,4 +62,21 @@ export type {
   HAFleetPeer,
   HACreateJoinTokenRequest,
   HACreateJoinTokenResponse,
+  ComponentHealth,
+  SystemHealthResponse as SystemHealth,
 } from "./generated-types";
+
+// Apt-audit entries aren't in apitypes (internal-only struct in the server
+// package). Mirror the JSON shape here.
+export interface AptAuditEntry {
+  timestamp: string;
+  package: string;
+  success: boolean;
+  error?: string;
+  output?: string;
+  source_ip?: string;
+}
+
+export interface AptAuditResponse {
+  entries: AptAuditEntry[];
+}

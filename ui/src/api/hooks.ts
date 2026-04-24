@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
 import type {
   AddPeerResponse,
+  AptAuditResponse,
   BanListResponse,
   CheckHistoryResponse,
   CheckStatus,
@@ -22,6 +23,7 @@ import type {
   Service,
   ServiceIntegration,
   SettingsData,
+  SystemHealth,
   VPNPeer,
   Zone,
 } from "./types";
@@ -771,5 +773,70 @@ export function useCreateJoinToken() {
         method: "POST",
         body: JSON.stringify(input),
       }),
+  });
+}
+
+// --- System Health dashboard (Phase 0) ---
+
+// Poll every 15s so chip states stay fresh while the admin is actively
+// clicking fixers. Not so fast that the endpoint's systemctl shells out
+// become a load concern.
+export function useSystemHealth() {
+  return useQuery({
+    queryKey: ["system", "health"],
+    queryFn: () => apiFetch<SystemHealth>("/system/health"),
+    refetchInterval: 15000,
+  });
+}
+
+export function useAptAudit() {
+  return useQuery({
+    queryKey: ["system", "apt-audit"],
+    queryFn: () => apiFetch<AptAuditResponse>("/system/apt-audit"),
+  });
+}
+
+// Generic fixer hook — every /api/v1/system/fix/* and similar POST-with-no-body
+// endpoint shares the same mutation shape. Rather than hand-write one hook per
+// endpoint we take the path as input. Invalidates system/health so chips
+// update after a successful fix.
+function useSystemFix(path: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiFetch("/" + path, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["system", "health"] });
+    },
+  });
+}
+
+export const useFixIPForwarding = () => useSystemFix("system/fix/ip-forwarding");
+export const useFixMasquerade = () => useSystemFix("system/fix/masquerade");
+export const useFixWGForwardChain = () => useSystemFix("system/fix/wg-forward-chain");
+export const useFixWGRules = () => useSystemFix("system/fix/wg-rules");
+export const useCreateWGConfig = () => useSystemFix("wg/create-config");
+export const useInstallHorizonUnit = () => useSystemFix("system/install/horizon-unit");
+export const useEnableHorizon = () => useSystemFix("system/enable/horizon");
+export const useFixHAProxyLogging = () => useSystemFix("haproxy/fix-logging");
+export const useWriteDNSMasqConfig = () => useSystemFix("dnsmasq/write-config");
+export const useReloadDNSMasq = () => useSystemFix("dnsmasq/reload");
+export const useStartDNSMasq = () => useSystemFix("dnsmasq/start");
+
+// Package install — distinct from the generic fixer because it takes a body.
+export function useInstallPackage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (pkg: string) =>
+      apiFetch<{ ok: boolean; package: string; output: string }>(
+        "/system/install/package",
+        {
+          method: "POST",
+          body: JSON.stringify({ package: pkg }),
+        },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["system", "health"] });
+      qc.invalidateQueries({ queryKey: ["system", "apt-audit"] });
+    },
   });
 }
