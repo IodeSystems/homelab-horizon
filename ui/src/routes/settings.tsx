@@ -1330,18 +1330,26 @@ function SettingsPage() {
         scrollButtons="auto"
         sx={{ mb: 3, borderBottom: 1, borderColor: "divider" }}
       >
+        <Tab label="System" />
         <Tab label="Zones" />
         <Tab label="HAProxy" />
         <Tab label="SSL" />
         <Tab label="Health Checks" />
         <Tab label="VPN MFA" />
         <Tab label="HA Fleet" />
-        <Tab label="System" />
         <Tab label="IPTables" />
       </Tabs>
 
-      {tab === 0 && <ZonesTab zones={data.zones} />}
-      {tab === 1 && (
+      {tab === 0 && (
+        <SystemHealthTab
+          publicIP={data.config.publicIP}
+          localInterface={data.config.localInterface}
+          dnsmasqEnabled={data.config.dnsmasqEnabled}
+          vpnAdmins={data.config.vpnAdmins}
+        />
+      )}
+      {tab === 1 && <ZonesTab zones={data.zones} />}
+      {tab === 2 && (
         <HAProxyTab
           running={data.haproxy.running}
           configExists={data.haproxy.configExists}
@@ -1351,7 +1359,7 @@ function SettingsPage() {
           httpsPort={data.haproxy.httpsPort}
         />
       )}
-      {tab === 2 && (
+      {tab === 3 && (
         <SSLTab
           sslEnabled={data.ssl.enabled}
           certDir={data.ssl.certDir}
@@ -1359,17 +1367,9 @@ function SettingsPage() {
           zones={data.zones}
         />
       )}
-      {tab === 3 && <ChecksTab checks={data.checks} />}
-      {tab === 4 && <VPNMFATab />}
-      {tab === 5 && <HAFleetTab />}
-      {tab === 6 && (
-        <SystemHealthTab
-          publicIP={data.config.publicIP}
-          localInterface={data.config.localInterface}
-          dnsmasqEnabled={data.config.dnsmasqEnabled}
-          vpnAdmins={data.config.vpnAdmins}
-        />
-      )}
+      {tab === 4 && <ChecksTab checks={data.checks} />}
+      {tab === 5 && <VPNMFATab />}
+      {tab === 6 && <HAFleetTab />}
       {tab === 7 && <IPTablesTab />}
     </Box>
   );
