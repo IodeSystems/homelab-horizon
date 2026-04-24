@@ -134,9 +134,12 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 		le.Installed = leStatus.LegoAvailable
 		// "Running" doesn't really apply — LE is request-driven. Report true
 		// when all configured domains have a cert present.
+		// Parallel to leStatus.Domains — same order, lets us pull ExtraSANs
+		// from the original DomainConfig (DomainStatus doesn't carry them).
+		sslDomains := cfg.DeriveSSLDomains()
 		allHaveCerts := len(leStatus.Domains) > 0
 		perDomain := make([]map[string]any, 0, len(leStatus.Domains))
-		for _, d := range leStatus.Domains {
+		for i, d := range leStatus.Domains {
 			if !d.CertExists {
 				allHaveCerts = false
 			}
@@ -151,8 +154,13 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 					certRenewalDays,
 				)
 			}
+			var sans []string
+			if i < len(sslDomains) {
+				sans = sslDomains[i].ExtraSANs
+			}
 			perDomain = append(perDomain, map[string]any{
 				"domain":        d.Domain,
+				"sans":          sans,
 				"cert_exists":   d.CertExists,
 				"expiry_info":   d.ExpiryInfo,
 				"provider":      d.ProviderType,

@@ -395,6 +395,7 @@ function LetsEncryptCard({ health }: { health: SystemHealth }) {
   }
   const domains = (extras.domains ?? []) as Array<{
     domain: string;
+    sans?: string[];
     cert_exists: boolean;
     expiry_info?: string;
     provider?: string;
@@ -412,7 +413,7 @@ function LetsEncryptCard({ health }: { health: SystemHealth }) {
           <Table size="small">
             <TableHead>
               <TableRow>
-                <TableCell>Domain</TableCell>
+                <TableCell>Primary + SANs</TableCell>
                 <TableCell>Provider</TableCell>
                 <TableCell>Cert</TableCell>
                 <TableCell>Expires</TableCell>
@@ -421,7 +422,24 @@ function LetsEncryptCard({ health }: { health: SystemHealth }) {
             <TableBody>
               {domains.map((d) => (
                 <TableRow key={d.domain}>
-                  <TableCell sx={{ fontFamily: "monospace" }}>{d.domain}</TableCell>
+                  <TableCell>
+                    <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                      {d.domain}
+                    </Typography>
+                    {d.sans && d.sans.length > 0 && (
+                      <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap", mt: 0.5 }}>
+                        {d.sans.map((s) => (
+                          <Chip
+                            key={s}
+                            label={s}
+                            size="small"
+                            variant="outlined"
+                            sx={{ fontFamily: "monospace", fontSize: "0.7rem" }}
+                          />
+                        ))}
+                      </Box>
+                    )}
+                  </TableCell>
                   <TableCell>{d.provider || "—"}</TableCell>
                   <TableCell>
                     <Chip
@@ -445,7 +463,8 @@ function LetsEncryptCard({ health }: { health: SystemHealth }) {
         </TableContainer>
       )}
       <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
-        Request a new cert from the SSL tab if any row above is missing or due for renewal.
+        One cert per zone — the primary domain is the cert's CN and SANs are extra names on the
+        same cert. Request / renew from the SSL tab.
       </Typography>
     </ComponentCard>
   );
@@ -674,6 +693,13 @@ export function SystemHealthTab({
 
   return (
     <Stack spacing={2}>
+      {/* Config/identity first — the admin's "where am I" at a glance. */}
+      <ConfigCard
+        publicIP={publicIP}
+        localInterface={localInterface}
+        dnsmasqEnabled={dnsmasqEnabled}
+        vpnAdmins={vpnAdmins}
+      />
       <Paper sx={{ p: 2, bgcolor: "background.default" }} variant="outlined">
         <Typography variant="body2" color="text.secondary">
           On-host health checks with inline fixers. Downstream service probes live on the{" "}
@@ -687,12 +713,6 @@ export function SystemHealthTab({
       <DNSMasqCard health={health} />
       <LetsEncryptCard health={health} />
       <AptInstallCard />
-      <ConfigCard
-        publicIP={publicIP}
-        localInterface={localInterface}
-        dnsmasqEnabled={dnsmasqEnabled}
-        vpnAdmins={vpnAdmins}
-      />
     </Stack>
   );
 }
