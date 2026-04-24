@@ -142,7 +142,7 @@ Single `POST /api/v1/system/fix/:id` with `id` switch is an alternative — less
 
 **Files touched**: `internal/iptables/rules.go` (new), `internal/iptables/rules_test.go` (new). Maybe export helpers from `internal/wireguard/` if needed.
 
-### Phase 2 — Classifier + live read
+### Phase 2 — Classifier + live read   ✅ done
 
 **Goal**: given `cfg` + live iptables state, produce `[]ClassifiedRule`.
 

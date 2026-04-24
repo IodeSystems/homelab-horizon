@@ -154,8 +154,20 @@ type Config struct {
 	// triggers reconfiguration. Empty = never reconciled; triggers a one-time
 	// sync on first run. Also useful as a manual recovery lever: set to the
 	// stale iface name to force cleanup of its MASQUERADE rule.
+	// Local-only: excluded from peer-sync (pinned back in mergePulledConfig).
 	LastLocalIface string `json:"last_local_iface,omitempty"`
 	LastLanCIDR    string `json:"last_lan_cidr,omitempty"`
+
+	// BlessedIPTablesRules is the admin-blessed external iptables rules on
+	// this host — rules horizon didn't emit but the admin has marked as OK.
+	// Canonical-form strings (iptables.Rule.Canonical()). The reconciler
+	// leaves blessed rules alone regardless of what the classifier thinks
+	// of them.
+	// Local-only: excluded from peer-sync. Different hosts in a fleet can
+	// have different adjacent tooling (monitoring, host-specific VPN
+	// clients) and bless lists should track the local machine, not the
+	// synced config.
+	BlessedIPTablesRules []string `json:"blessed_iptables_rules,omitempty"`
 
 	// HAProxy configuration
 	HAProxyEnabled    bool   `json:"haproxy_enabled"`
