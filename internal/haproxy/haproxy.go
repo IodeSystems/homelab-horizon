@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 )
@@ -66,9 +67,11 @@ func New(configPath, statsSocket string) *HAProxy {
 	}
 }
 
-// SetBackends sets the backends list
+// SetBackends sets the backends list, ordered by routing specificity so all
+// consumers (config generation, status, API) see the same order HAProxy
+// evaluates `use_backend` in.
 func (h *HAProxy) SetBackends(backends []Backend) {
-	h.backends = backends
+	h.backends = sortBackendsBySpecificity(backends)
 }
 
 // GetBackends returns the backends list
@@ -289,6 +292,11 @@ func (h *HAProxy) WriteConfig(httpPort, httpsPort int, ssl *SSLConfig) error {
 func (h *HAProxy) generateConfig(httpPort, httpsPort int, ssl *SSLConfig) string {
 	var sb strings.Builder
 
+	// Sort backends so more-specific domains evaluate before less-specific ones.
+	// hdr_end(host) is a greedy suffix match, so without this `iodesystems.com`
+	// would swallow requests intended for `ha.iodesystems.com`.
+	backends := sortBackendsBySpecificity(h.backends)
+
 	// Global section
 	sb.WriteString(`global
     log /dev/log local0
@@ -354,7 +362,7 @@ listen stats
 
 	// Check if any backends are internal-only
 	hasInternalOnly := false
-	for _, b := range h.backends {
+	for _, b := range backends {
 		if b.InternalOnly {
 			hasInternalOnly = true
 			break
@@ -397,7 +405,7 @@ listen stats
 
 		// Add backend ACLs and routing to HTTP frontend (for non-SSL domains)
 		sb.WriteString("    # Backend routing (for domains without SSL)\n")
-		for _, b := range h.backends {
+		for _, b := range backends {
 			aclName := sanitizeName(b.Name)
 			var patterns []string
 			for _, dm := range b.GetDomainMatches() {
@@ -407,13 +415,13 @@ listen stats
 		}
 		sb.WriteString("\n")
 		// Deny external access to internal-only backends
-		for _, b := range h.backends {
+		for _, b := range backends {
 			if b.InternalOnly {
 				aclName := sanitizeName(b.Name)
 				sb.WriteString(fmt.Sprintf("    http-request deny deny_status 403 if host_%s !local_access\n", aclName))
 			}
 		}
-		for _, b := range h.backends {
+		for _, b := range backends {
 			aclName := sanitizeName(b.Name)
 			sb.WriteString(fmt.Sprintf("    use_backend %s_backend if host_%s\n", aclName, aclName))
 		}
@@ -448,7 +456,7 @@ listen stats
 		}
 
 		// Add backend ACLs and routing to HTTPS frontend
-		for _, b := range h.backends {
+		for _, b := range backends {
 			aclName := sanitizeName(b.Name)
 			var patterns []string
 			for _, dm := range b.GetDomainMatches() {
@@ -458,13 +466,13 @@ listen stats
 		}
 		sb.WriteString("\n")
 		// Deny external access to internal-only backends
-		for _, b := range h.backends {
+		for _, b := range backends {
 			if b.InternalOnly {
 				aclName := sanitizeName(b.Name)
 				sb.WriteString(fmt.Sprintf("    http-request deny deny_status 403 if host_%s !local_access\n", aclName))
 			}
 		}
-		for _, b := range h.backends {
+		for _, b := range backends {
 			aclName := sanitizeName(b.Name)
 			sb.WriteString(fmt.Sprintf("    use_backend %s_backend if host_%s\n", aclName, aclName))
 		}
@@ -494,7 +502,7 @@ listen stats
 		}
 
 		// Add backend ACLs and routing
-		for _, b := range h.backends {
+		for _, b := range backends {
 			aclName := sanitizeName(b.Name)
 			var patterns []string
 			for _, dm := range b.GetDomainMatches() {
@@ -504,13 +512,13 @@ listen stats
 		}
 		sb.WriteString("\n")
 		// Deny external access to internal-only backends
-		for _, b := range h.backends {
+		for _, b := range backends {
 			if b.InternalOnly {
 				aclName := sanitizeName(b.Name)
 				sb.WriteString(fmt.Sprintf("    http-request deny deny_status 403 if host_%s !local_access\n", aclName))
 			}
 		}
-		for _, b := range h.backends {
+		for _, b := range backends {
 			aclName := sanitizeName(b.Name)
 			sb.WriteString(fmt.Sprintf("    use_backend %s_backend if host_%s\n", aclName, aclName))
 		}
@@ -518,7 +526,7 @@ listen stats
 	}
 
 	// Backend definitions
-	for _, b := range h.backends {
+	for _, b := range backends {
 		aclName := sanitizeName(b.Name)
 		sb.WriteString(fmt.Sprintf("backend %s_backend\n", aclName))
 		sb.WriteString("    mode http\n")
@@ -573,6 +581,47 @@ func sanitizeName(name string) string {
 		return '_'
 	}, name)
 	return strings.ToLower(result)
+}
+
+// sortBackendsBySpecificity returns a copy of backends ordered so the most
+// specific domain match evaluates first in HAProxy's first-match-wins
+// `use_backend` chain. Specificity is ranked by the *least* specific domain in
+// each backend (its greediest suffix), since that's the one that can swallow
+// shorter hosts on other backends.
+func sortBackendsBySpecificity(backends []Backend) []Backend {
+	out := make([]Backend, len(backends))
+	copy(out, backends)
+	sort.SliceStable(out, func(i, j int) bool {
+		iDots, iLen, iKey := backendMinSpecificity(out[i])
+		jDots, jLen, jKey := backendMinSpecificity(out[j])
+		if iDots != jDots {
+			return iDots > jDots
+		}
+		if iLen != jLen {
+			return iLen > jLen
+		}
+		return iKey < jKey
+	})
+	return out
+}
+
+// backendMinSpecificity returns the specificity of the backend's least-specific
+// domain (most dots/longest pattern wins). Backends with no domains sort last.
+func backendMinSpecificity(b Backend) (dots, length int, key string) {
+	domains := b.GetDomainMatches()
+	if len(domains) == 0 {
+		return -1, -1, ""
+	}
+	dots, length = -1, -1
+	for _, d := range domains {
+		p := domainToACLPattern(d)
+		dc := strings.Count(p, ".")
+		ln := len(p)
+		if dots == -1 || dc < dots || (dc == dots && ln < length) {
+			dots, length, key = dc, ln, p
+		}
+	}
+	return
 }
 
 // domainToACLPattern converts a domain to an HAProxy ACL pattern
