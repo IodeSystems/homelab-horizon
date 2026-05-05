@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import {
   Alert,
@@ -41,6 +41,7 @@ import {
   useEditService,
   useDeleteService,
   useServiceIntegration,
+  useSettings,
 } from "../api/hooks";
 import { useSyncContext } from "../components/SyncProvider";
 import type { Service } from "../api/types";
@@ -49,16 +50,22 @@ import type { ServiceMutationInput } from "../api/hooks";
 function StatusDot({
   configured,
   detected,
+  indeterminate,
   title,
 }: {
   configured: boolean;
   detected: boolean;
+  // Configured but no signal to confirm health (e.g. proxy with no health
+  // check). Yellow rather than red — we can't honestly call it broken.
+  indeterminate?: boolean;
   title?: string;
 }) {
   let color: string;
   let opacity = 1;
   if (configured && detected) {
     color = "#2ecc71";
+  } else if (configured && indeterminate) {
+    color = "#f39c12";
   } else if (configured && !detected) {
     color = "#e74c3c";
   } else if (!configured && detected) {
@@ -216,6 +223,8 @@ function ServiceFormDialog({
   isSubmitting,
   initialValues,
   title,
+  localInterface,
+  publicIP,
 }: {
   open: boolean;
   onClose: () => void;
@@ -223,6 +232,8 @@ function ServiceFormDialog({
   isSubmitting: boolean;
   initialValues: ServiceFormState;
   title: string;
+  localInterface: string;
+  publicIP: string;
 }) {
   const [form, setForm] = useState<ServiceFormState>(initialValues);
 
@@ -240,6 +251,34 @@ function ServiceFormDialog({
 
   // Sync form with initialValues when they change (dialog open)
   useState(() => setForm(initialValues));
+
+  // When proxy is enabled and internal IP is blank, default it to the HAProxy
+  // host's LAN IP — otherwise traffic skips the proxy entirely.
+  useEffect(() => {
+    if (form.proxyEnabled && !form.internalIP && localInterface) {
+      setForm((f) => ({ ...f, internalIP: localInterface }));
+    }
+  }, [form.proxyEnabled, form.internalIP, localInterface]);
+
+  const internalMismatch =
+    form.proxyEnabled &&
+    !!form.internalIP &&
+    !!localInterface &&
+    form.internalIP !== localInterface;
+
+  const externalIPList = form.externalIPs
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // Empty externalIPs is treated as "auto" (resolves to the host's PublicIP),
+  // which is fine. Only warn when the user has typed IPs and the public one
+  // isn't among them.
+  const externalMismatch =
+    form.proxyEnabled &&
+    form.externalEnabled &&
+    !!publicIP &&
+    externalIPList.length > 0 &&
+    !externalIPList.includes(publicIP);
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
@@ -268,8 +307,19 @@ function ServiceFormDialog({
           onChange={(e) => update("internalIP", e.target.value)}
           size="small"
           fullWidth
-          helperText="Leave empty to disable internal DNS"
+          helperText={
+            form.proxyEnabled
+              ? `Should be the HAProxy host (${localInterface || "unknown"}) so requests route through the proxy`
+              : "Leave empty to disable internal DNS"
+          }
         />
+        {internalMismatch && (
+          <Alert severity="warning" sx={{ mt: -1 }}>
+            Internal DNS IP <code>{form.internalIP}</code> doesn't match this
+            HAProxy host (<code>{localInterface}</code>). Requests for these
+            domains will bypass the proxy.
+          </Alert>
+        )}
 
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <Switch
@@ -280,24 +330,37 @@ function ServiceFormDialog({
           <Typography variant="body2">External DNS</Typography>
         </Box>
         {form.externalEnabled && (
-          <Box sx={{ display: "flex", gap: 2 }}>
-            <TextField
-              label="External IPs"
-              value={form.externalIPs}
-              onChange={(e) => update("externalIPs", e.target.value)}
-              size="small"
-              fullWidth
-              helperText="Comma-separated. Multiple IPs enable round-robin DNS. Leave empty to use public IP."
-            />
-            <TextField
-              label="TTL"
-              value={form.externalTTL}
-              onChange={(e) => update("externalTTL", e.target.value)}
-              size="small"
-              sx={{ width: 120 }}
-              type="number"
-            />
-          </Box>
+          <>
+            <Box sx={{ display: "flex", gap: 2 }}>
+              <TextField
+                label="External IPs"
+                value={form.externalIPs}
+                onChange={(e) => update("externalIPs", e.target.value)}
+                size="small"
+                fullWidth
+                helperText={
+                  form.proxyEnabled
+                    ? `Leave empty for auto (${publicIP || "public IP"}) so requests reach this HAProxy host`
+                    : "Comma-separated. Multiple IPs enable round-robin DNS. Leave empty to use public IP."
+                }
+              />
+              <TextField
+                label="TTL"
+                value={form.externalTTL}
+                onChange={(e) => update("externalTTL", e.target.value)}
+                size="small"
+                sx={{ width: 120 }}
+                type="number"
+              />
+            </Box>
+            {externalMismatch && (
+              <Alert severity="warning" sx={{ mt: -1 }}>
+                External IPs don't include this HAProxy host's public IP
+                (<code>{publicIP}</code>). External traffic for these domains
+                won't hit the proxy. Leave the field empty to use auto.
+              </Alert>
+            )}
+          </>
         )}
 
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
@@ -557,6 +620,10 @@ function ServiceRow({
   const hasExtDNS = !!service.externalDNS;
   const hasProxy = !!service.proxy;
   const hasDeploy = !!service.proxy?.deploy;
+  // Without a health check HAProxy reports "no check" — not "down". Treat the
+  // proxy status as indeterminate (yellow) instead of red.
+  const proxyIndeterminate =
+    hasProxy && !service.status.proxyUp && !service.proxy?.healthCheck;
 
   return (
     <>
@@ -589,7 +656,12 @@ function ServiceRow({
           <StatusDot configured={hasExtDNS} detected={service.status.externalDNSUp} />
         </TableCell>
         <TableCell align="center">
-          <StatusDot configured={hasProxy} detected={service.status.proxyUp} />
+          <StatusDot
+            configured={hasProxy}
+            detected={service.status.proxyUp}
+            indeterminate={proxyIndeterminate}
+            title={proxyIndeterminate ? "No health check configured" : undefined}
+          />
         </TableCell>
       </TableRow>
       <TableRow>
@@ -668,7 +740,11 @@ function ServiceRow({
               {hasProxy && (
                 <DetailCard title="HAProxy">
                   <Box sx={{ display: "flex", gap: 1, alignItems: "center", mb: 0.5 }}>
-                    <StatusDot configured={true} detected={service.status.proxyUp} />
+                    <StatusDot
+                      configured={true}
+                      detected={service.status.proxyUp}
+                      indeterminate={proxyIndeterminate}
+                    />
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>
                       {hasDeploy ? "Current" : "Backend"}:
                     </Typography>
@@ -780,10 +856,14 @@ interface SnackState {
 
 function ServicesPage() {
   const { data, isLoading, error } = useServices();
+  const { data: settings } = useSettings();
   const addMutation = useAddService();
   const editMutation = useEditService();
   const deleteMutation = useDeleteService();
   const { startSync } = useSyncContext();
+
+  const localInterface = settings?.config?.localInterface ?? "";
+  const publicIP = settings?.config?.publicIP ?? "";
 
   const [addOpen, setAddOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Service | null>(null);
@@ -844,7 +924,7 @@ function ServicesPage() {
   const hasError = (svc: Service) =>
     (svc.internalDNS && !svc.status.internalDNSUp) ||
     (svc.externalDNS && !svc.status.externalDNSUp) ||
-    (svc.proxy && !svc.status.proxyUp);
+    (svc.proxy && !svc.status.proxyUp && !!svc.proxy.healthCheck);
 
   const counts = {
     all: services.length,
@@ -950,6 +1030,8 @@ function ServicesPage() {
           onClose={() => setAddOpen(false)}
           onSubmit={handleAdd}
           isSubmitting={addMutation.isPending}
+          localInterface={localInterface}
+          publicIP={publicIP}
         />
       )}
 
@@ -962,6 +1044,8 @@ function ServicesPage() {
           onClose={() => setEditTarget(null)}
           onSubmit={handleEdit}
           isSubmitting={editMutation.isPending}
+          localInterface={localInterface}
+          publicIP={publicIP}
         />
       )}
 
