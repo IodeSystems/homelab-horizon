@@ -296,6 +296,51 @@ func TestGenerateConfig_Caching(t *testing.T) {
 	}
 }
 
+func TestGenerateConfig_OverlappingDomainsOrderedBySpecificity(t *testing.T) {
+	// hdr_end(host) is a greedy suffix match: a host like ha.iodesystems.com
+	// matches both `iodesystems.com` and `ha.iodesystems.com`. Whichever
+	// use_backend comes first wins. Ensure the more-specific backend is emitted
+	// first regardless of input order.
+	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
+	h.SetBackends([]Backend{
+		{Name: "root", DomainMatch: "iodesystems.com", Server: "10.0.0.1:80"},
+		{Name: "ha", DomainMatch: "ha.iodesystems.com", Server: "10.0.0.2:80"},
+	})
+
+	config := h.GenerateConfig(80, 443, nil)
+
+	haIdx := strings.Index(config, "use_backend ha_backend if host_ha")
+	rootIdx := strings.Index(config, "use_backend root_backend if host_root")
+	if haIdx < 0 || rootIdx < 0 {
+		t.Fatalf("expected both use_backend lines, got:\n%s", config)
+	}
+	if haIdx > rootIdx {
+		t.Errorf("ha.iodesystems.com use_backend (idx %d) must precede iodesystems.com (idx %d) so the suffix-match doesn't swallow ha.* requests", haIdx, rootIdx)
+	}
+}
+
+func TestSortBackendsBySpecificity(t *testing.T) {
+	in := []Backend{
+		{Name: "a", DomainMatch: "iodesystems.com"},
+		{Name: "b", DomainMatch: "ha.iodesystems.com"},
+		{Name: "c", DomainMatch: "deep.app.iodesystems.com"},
+		{Name: "d", DomainMatches: []string{"iodesystems.com", "x.foo.com"}}, // least specific = iodesystems.com
+		{Name: "e", DomainMatch: "*.iodesystems.com"},                        // pattern .iodesystems.com (2 dots)
+	}
+	got := sortBackendsBySpecificity(in)
+	gotNames := make([]string, len(got))
+	for i, b := range got {
+		gotNames[i] = b.Name
+	}
+	// c (3 dots) > b (2 dots) > e (2 dots, shorter pattern than b) > a/d (1 dot tie, alphabetical)
+	want := []string{"c", "b", "e", "a", "d"}
+	for i := range want {
+		if gotNames[i] != want[i] {
+			t.Fatalf("sort order: got %v, want %v", gotNames, want)
+		}
+	}
+}
+
 func TestGetBackends(t *testing.T) {
 	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
 
