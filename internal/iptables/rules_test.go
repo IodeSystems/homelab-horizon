@@ -14,6 +14,32 @@ func TestRuleCanonical(t *testing.T) {
 	}
 }
 
+// TestRuleCanonicalNormalizesStateAndConntrack pins the equivalence between
+// legacy `-m state --state X` and modern `-m conntrack --ctstate X`. Without
+// this, the reconciler dup-inserts the FORWARD return-traffic rule on every
+// 60s tick when iptables-nft rewrites the saved form to conntrack — slowly
+// growing FORWARD until WG forwarding performance collapses.
+func TestRuleCanonicalNormalizesStateAndConntrack(t *testing.T) {
+	legacy := Rule{
+		Table: "filter",
+		Chain: "FORWARD",
+		Args:  []string{"-o", "wg0", "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
+	}
+	modern := Rule{
+		Table: "filter",
+		Chain: "FORWARD",
+		Args:  []string{"-o", "wg0", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
+	}
+	if legacy.Canonical() != modern.Canonical() {
+		t.Errorf("state/conntrack forms must canonicalize equal:\n  legacy:   %q\n  modern:   %q",
+			legacy.Canonical(), modern.Canonical())
+	}
+	want := "filter|FORWARD|-o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"
+	if legacy.Canonical() != want {
+		t.Errorf("canonical form should be the conntrack one, got %q", legacy.Canonical())
+	}
+}
+
 func TestRuleString(t *testing.T) {
 	r := Rule{Table: "filter", Chain: "FORWARD", Args: []string{"-i", "wg0", "-j", "WG-FORWARD"}}
 	want := "-t filter -A FORWARD -i wg0 -j WG-FORWARD"
@@ -42,7 +68,7 @@ func TestExpectedRulesMinimal(t *testing.T) {
 	wantCanon := []string{
 		"nat|POSTROUTING|-o eth0 -j MASQUERADE",
 		"filter|FORWARD|-i wg0 -j WG-FORWARD",
-		"filter|FORWARD|-o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT",
+		"filter|FORWARD|-o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
 		"filter|WG-FORWARD|-j DROP",
 	}
 	for i, w := range wantCanon {

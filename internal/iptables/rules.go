@@ -41,8 +41,32 @@ type Rule struct {
 // internal comparison only; it's not valid iptables syntax. Stable across
 // Go versions — arg order is preserved as provided because iptables treats
 // arg order as significant for matching.
+//
+// Equivalence normalization: legacy `-m state --state X` and modern
+// `-m conntrack --ctstate X` are semantically identical (the kernel treats
+// them the same; iptables-nft transparently converts one to the other on
+// some distros). Canonical collapses both to the conntrack form so the
+// classifier sees them as the same rule and doesn't dup-insert when the
+// emitted form and the saved form disagree.
 func (r Rule) Canonical() string {
-	return r.Table + "|" + r.Chain + "|" + strings.Join(r.Args, " ")
+	return r.Table + "|" + r.Chain + "|" + strings.Join(canonicalizeArgs(r.Args), " ")
+}
+
+// canonicalizeArgs rewrites equivalent iptables match modules to a single
+// canonical form for comparison. Currently handles state→conntrack only;
+// extend here if other modules show similar legacy/modern divergence.
+func canonicalizeArgs(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		// `-m state --state X` → `-m conntrack --ctstate X`
+		if args[i] == "-m" && i+3 < len(args) && args[i+1] == "state" && args[i+2] == "--state" {
+			out = append(out, "-m", "conntrack", "--ctstate", args[i+3])
+			i += 3
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
 }
 
 // String returns a human-readable form matching how iptables-save prints
@@ -109,7 +133,7 @@ func ExpectedRules(in Inputs) []Rule {
 	rules = append(rules, Rule{
 		Table: "filter",
 		Chain: "FORWARD",
-		Args:  []string{"-o", in.WGInterface, "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
+		Args:  []string{"-o", in.WGInterface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
 	})
 
 	// WG-FORWARD body: per-peer rules + default drop.
