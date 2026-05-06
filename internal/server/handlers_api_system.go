@@ -9,6 +9,7 @@ import (
 
 	"homelab-horizon/internal/apitypes"
 	"homelab-horizon/internal/config"
+	"homelab-horizon/internal/dnsmasq"
 	"homelab-horizon/internal/letsencrypt"
 )
 
@@ -118,6 +119,28 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 	if len(dnsStatus.MissingInterfaces) > 0 {
 		dns.Extras = map[string]any{"missing_interfaces": dnsStatus.MissingInterfaces}
 		dns.Errors = append(dns.Errors, "config missing interfaces: "+strings.Join(dnsStatus.MissingInterfaces, ", "))
+	}
+	// Cross-check: with bind-dynamic dnsmasq only listens on IPs owned by its
+	// configured interfaces. If local_interface points at an IP that lives on
+	// a different NIC than any in dnsmasq_interfaces, dnsmasq runs fine but
+	// silently ignores requests on local_interface — invisible to MissingInterfaces.
+	dnsAllIfaces := append([]string{cfg.WGInterface}, cfg.DNSMasqInterfaces...)
+	bindCheck := dnsmasq.CheckLocalBind(cfg.LocalInterface, dnsAllIfaces)
+	if !bindCheck.OK {
+		if dns.Extras == nil {
+			dns.Extras = map[string]any{}
+		}
+		dns.Extras["local_bind"] = map[string]any{
+			"local_ip":       bindCheck.LocalIP,
+			"bound_ips":      bindCheck.BoundIPs,
+			"owning_iface":   bindCheck.OwningIface,
+			"configured_ifs": bindCheck.ConfiguredIfs,
+		}
+		msg := "local_interface " + bindCheck.LocalIP + " is not on any dnsmasq interface (" + strings.Join(bindCheck.ConfiguredIfs, ", ") + ")"
+		if bindCheck.OwningIface != "" {
+			msg += " — IP lives on " + bindCheck.OwningIface
+		}
+		dns.Errors = append(dns.Errors, msg)
 	}
 	resp.Components = append(resp.Components, dns)
 

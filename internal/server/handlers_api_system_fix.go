@@ -14,6 +14,7 @@ import (
 	"homelab-horizon/internal/apitypes"
 	"homelab-horizon/internal/autoheal"
 	"homelab-horizon/internal/config"
+	"homelab-horizon/internal/dnsmasq"
 	"homelab-horizon/internal/wireguard"
 )
 
@@ -405,6 +406,73 @@ func (s *Server) handleAPIDNSMasqReload(w http.ResponseWriter, r *http.Request) 
 		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
+	if err := s.dns.WriteConfig(); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "write-config: "+err.Error())
+		return
+	}
+	if mappings := s.cfg().DeriveDNSMappings(); len(mappings) > 0 {
+		if err := s.dns.SetMappings(mappings); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "mappings: "+err.Error())
+			return
+		}
+	}
+	if err := s.dns.Reload(); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "reload: "+err.Error())
+		return
+	}
+	s.writeFixOK(w)
+}
+
+// POST /api/v1/dnsmasq/fix-interfaces — adds the NIC that actually owns
+// local_interface IP to dnsmasq_interfaces, then rewrites + reloads dnsmasq.
+// Catches the case where local_interface points at one NIC but dnsmasq is
+// configured for a different NIC (so it silently ignores requests on the
+// expected IP).
+func (s *Server) handleAPIDNSMasqFixInterfaces(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	cfg := s.cfg()
+	if cfg.LocalInterface == "" {
+		writeJSONError(w, http.StatusBadRequest, "local_interface is empty — nothing to fix")
+		return
+	}
+
+	currentIfs := append([]string{cfg.WGInterface}, cfg.DNSMasqInterfaces...)
+	check := dnsmasq.CheckLocalBind(cfg.LocalInterface, currentIfs)
+	if check.OK {
+		s.writeFixOK(w)
+		return
+	}
+	if check.OwningIface == "" {
+		writeJSONError(w, http.StatusInternalServerError,
+			"no interface owns local_interface "+cfg.LocalInterface+" — set local_interface to an IP that exists on this host")
+		return
+	}
+
+	newDNSIfs := append([]string{}, cfg.DNSMasqInterfaces...)
+	for _, name := range newDNSIfs {
+		if name == check.OwningIface {
+			s.writeFixOK(w)
+			return
+		}
+	}
+	newDNSIfs = append(newDNSIfs, check.OwningIface)
+
+	if err := s.updateConfig(func(c *config.Config) {
+		c.DNSMasqInterfaces = newDNSIfs
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "save config: "+err.Error())
+		return
+	}
+
+	s.dns.UpdateInterfaces(append([]string{s.cfg().WGInterface}, newDNSIfs...))
+
 	if err := s.dns.WriteConfig(); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "write-config: "+err.Error())
 		return

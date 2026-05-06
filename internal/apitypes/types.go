@@ -593,3 +593,54 @@ type SystemHealthResponse struct {
 	HorizonEnabled        bool              `json:"horizon_enabled"`
 	HorizonRunning        bool              `json:"horizon_running"`
 }
+
+// Live host metrics — point-in-time snapshot. CPU/network counters are
+// monotonic raw values; the client subtracts adjacent samples to derive
+// rates, which keeps the backend stateless and avoids cross-client
+// interference when multiple browsers poll at different intervals.
+
+type CPUMetric struct {
+	User    uint64 `json:"user"`
+	Nice    uint64 `json:"nice"`
+	System  uint64 `json:"system"`
+	Idle    uint64 `json:"idle"`
+	IOWait  uint64 `json:"iowait"`
+	IRQ     uint64 `json:"irq"`
+	SoftIRQ uint64 `json:"softirq"`
+	Steal   uint64 `json:"steal"`
+	Cores   int    `json:"cores"`
+}
+
+type MemoryMetric struct {
+	TotalBytes     uint64 `json:"total_bytes"`
+	AvailableBytes uint64 `json:"available_bytes"`
+	UsedBytes      uint64 `json:"used_bytes"`
+	SwapTotalBytes uint64 `json:"swap_total_bytes"`
+	SwapUsedBytes  uint64 `json:"swap_used_bytes"`
+}
+
+type NetworkIface struct {
+	Iface   string `json:"iface"`
+	RXBytes uint64 `json:"rx_bytes"`
+	TXBytes uint64 `json:"tx_bytes"`
+}
+
+type DiskMetric struct {
+	Mount      string `json:"mount"`
+	FSType     string `json:"fs_type"`
+	TotalBytes uint64 `json:"total_bytes"`
+	FreeBytes  uint64 `json:"free_bytes"`
+	UsedBytes  uint64 `json:"used_bytes"`
+}
+
+type SystemMetricsResponse struct {
+	TS            int64          `json:"ts"`
+	CPU           CPUMetric      `json:"cpu"`
+	Memory        MemoryMetric   `json:"memory"`
+	Network       []NetworkIface `json:"network"`
+	Disks         []DiskMetric   `json:"disks"`
+	Load1         float64        `json:"load1"`
+	Load5         float64        `json:"load5"`
+	Load15        float64        `json:"load15"`
+	UptimeSeconds float64        `json:"uptime_seconds"`
+}

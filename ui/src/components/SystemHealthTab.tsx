@@ -40,10 +40,12 @@ import {
   useInstallPackage,
   useReloadDNSMasq,
   useStartDNSMasq,
+  useFixDNSMasqInterfaces,
   useSystemHealth,
   useWriteDNSMasqConfig,
 } from "../api/hooks";
 import type { ComponentHealth, SystemHealth, Zone } from "../api/types";
+import { SystemMetricsCard } from "./SystemMetricsCard";
 
 // CheckRow renders one line: label + status chip + optional fix button.
 // Keep the shape uniform across all component cards so the dashboard reads
@@ -322,8 +324,17 @@ function DNSMasqCard({ health }: { health: SystemHealth }) {
   const writeConfig = useWriteDNSMasqConfig();
   const reload = useReloadDNSMasq();
   const start = useStartDNSMasq();
+  const fixIfaces = useFixDNSMasqInterfaces();
 
   if (!dns) return null;
+  const localBind = (dns.extras?.local_bind ?? null) as {
+    local_ip?: string;
+    bound_ips?: string[];
+    owning_iface?: string;
+    configured_ifs?: string[];
+  } | null;
+  const localBindOK = !localBind;
+  const owningIface = localBind?.owning_iface ?? "";
   return (
     <ComponentCard title="dnsmasq" component={dns}>
       <CheckRow
@@ -356,6 +367,22 @@ function DNSMasqCard({ health }: { health: SystemHealth }) {
         fixDisabled={!dns.installed}
         fixRunning={start.isPending}
         fixLabel="Start"
+      />
+      <CheckRow
+        label={
+          localBindOK
+            ? "local_interface bound by dnsmasq"
+            : `local_interface ${localBind?.local_ip ?? ""} not on dnsmasq interface${
+                owningIface ? ` (owned by ${owningIface})` : ""
+              }`
+        }
+        ok={localBindOK}
+        okLabel="OK"
+        failingLabel="Mismatch"
+        fix={() => fixIfaces.mutate()}
+        fixDisabled={!owningIface}
+        fixRunning={fixIfaces.isPending}
+        fixLabel={owningIface ? `Add ${owningIface}` : "Fix"}
       />
       <Box sx={{ mt: 1 }}>
         <Button
@@ -808,6 +835,8 @@ export function SystemHealthTab({
         dnsmasqEnabled={dnsmasqEnabled}
         vpnAdmins={vpnAdmins}
       />
+      {/* Live host metrics — relevant when running on limited hardware. */}
+      <SystemMetricsCard />
       <Paper sx={{ p: 2, bgcolor: "background.default" }} variant="outlined">
         <Typography variant="body2" color="text.secondary">
           On-host health checks with inline fixers. Downstream service probes live on the{" "}

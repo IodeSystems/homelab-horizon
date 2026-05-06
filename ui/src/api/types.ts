@@ -64,6 +64,11 @@ export type {
   HACreateJoinTokenResponse,
   ComponentHealth,
   SystemHealthResponse as SystemHealth,
+  SystemMetricsResponse as SystemMetrics,
+  CPUMetric,
+  MemoryMetric,
+  NetworkIface,
+  DiskMetric,
   AllCheckHistoryResponse,
   AllCheckHistoryEntry,
 } from "./generated-types";

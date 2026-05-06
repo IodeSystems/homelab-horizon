@@ -310,6 +310,84 @@ func (d *DNSMasq) UpdateUpstream(servers []string) {
 	d.upstream = servers
 }
 
+func (d *DNSMasq) UpdateInterfaces(interfaces []string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.interfaces = interfaces
+}
+
+// LocalBindCheck reports whether localIP is owned by one of ifaces. If not,
+// owningIface is the actual interface (if any) that holds the IP — useful for
+// proposing a fix. ok is true when the IP is bound by a configured interface
+// (or localIP is empty, in which case the check is skipped).
+type LocalBindCheck struct {
+	OK            bool
+	LocalIP       string
+	BoundIPs      []string // IPs the configured interfaces actually have
+	OwningIface   string   // empty if no interface has localIP
+	ConfiguredIfs []string // interfaces dnsmasq is configured to bind to
+}
+
+// CheckLocalBind verifies that localIP lives on one of ifaces. dnsmasq with
+// bind-dynamic only listens on IPs that belong to its configured interfaces,
+// so this catches the case where local_interface points at a NIC that isn't
+// in dnsmasq_interfaces.
+func CheckLocalBind(localIP string, ifaces []string) LocalBindCheck {
+	res := LocalBindCheck{LocalIP: localIP, ConfiguredIfs: ifaces}
+	if localIP == "" {
+		res.OK = true
+		return res
+	}
+
+	for _, name := range ifaces {
+		ips := interfaceIPv4s(name)
+		res.BoundIPs = append(res.BoundIPs, ips...)
+		for _, ip := range ips {
+			if ip == localIP {
+				res.OK = true
+			}
+		}
+	}
+	if res.OK {
+		return res
+	}
+
+	// Find which interface (if any) actually owns localIP so callers can
+	// propose adding it to the dnsmasq interface list.
+	all, err := net.Interfaces()
+	if err == nil {
+		for _, ni := range all {
+			for _, ip := range interfaceIPv4s(ni.Name) {
+				if ip == localIP {
+					res.OwningIface = ni.Name
+					return res
+				}
+			}
+		}
+	}
+	return res
+}
+
+func interfaceIPv4s(name string) []string {
+	iface, err := net.InterfaceByName(name)
+	if err != nil {
+		return nil
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, a := range addrs {
+		if ipNet, ok := a.(*net.IPNet); ok {
+			if v4 := ipNet.IP.To4(); v4 != nil {
+				out = append(out, v4.String())
+			}
+		}
+	}
+	return out
+}
+
 // ResolveWith resolves a hostname against a specific DNS server
 func ResolveWith(hostname, dnsServer string) (string, error) {
 	if !strings.Contains(dnsServer, ":") {
