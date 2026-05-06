@@ -28,6 +28,7 @@ import type {
   ServiceIntegration,
   SettingsData,
   SystemHealth,
+  SystemMetrics,
   VPNPeer,
   Zone,
 } from "./types";
@@ -809,6 +810,17 @@ export function useAptAudit() {
   });
 }
 
+// Live host metrics — polled fast (2s) so the live charts feel real-time.
+// Backend is stateless; UI keeps the rolling window in component state.
+export function useSystemMetrics() {
+  return useQuery({
+    queryKey: ["system", "metrics"],
+    queryFn: () => apiFetch<SystemMetrics>("/system/metrics"),
+    refetchInterval: 2000,
+    refetchIntervalInBackground: false,
+  });
+}
+
 // Generic fixer hook — every /api/v1/system/fix/* and similar POST-with-no-body
 // endpoint shares the same mutation shape. Rather than hand-write one hook per
 // endpoint we take the path as input. Invalidates system/health so chips
@@ -834,6 +846,7 @@ export const useFixHAProxyLogging = () => useSystemFix("haproxy/fix-logging");
 export const useWriteDNSMasqConfig = () => useSystemFix("dnsmasq/write-config");
 export const useReloadDNSMasq = () => useSystemFix("dnsmasq/reload");
 export const useStartDNSMasq = () => useSystemFix("dnsmasq/start");
+export const useFixDNSMasqInterfaces = () => useSystemFix("dnsmasq/fix-interfaces");
 
 // Package install — distinct from the generic fixer because it takes a body.
 export function useInstallPackage() {

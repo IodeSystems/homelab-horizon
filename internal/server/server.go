@@ -1010,8 +1010,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/write-config", s.handleAPIDNSMasqWriteConfig)
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/reload", s.handleAPIDNSMasqReload)
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/start", s.handleAPIDNSMasqStart)
+	s.handlePeerInstance(mux, "/api/v1/dnsmasq/fix-interfaces", s.handleAPIDNSMasqFixInterfaces)
 	s.handlePeerInstance(mux, "/api/v1/system/install/package", s.handleAPISystemInstallPackage)
 	s.handlePeerInstance(mux, "/api/v1/system/apt-audit", s.handleAPISystemAptAudit)
+	s.handlePeerInstance(mux, "/api/v1/system/metrics", s.handleAPISystemMetrics)
 
 	// IPTables rule inventory + bless/unbless/remove/reconcile. All per-
 	// instance (iptables is a local-machine concern, bless is local-only).

@@ -489,3 +489,44 @@ export interface SystemHealthResponse {
   horizon_enabled: boolean;
   horizon_running: boolean;
 }
+export interface CPUMetric {
+  user: number /* uint64 */;
+  nice: number /* uint64 */;
+  system: number /* uint64 */;
+  idle: number /* uint64 */;
+  iowait: number /* uint64 */;
+  irq: number /* uint64 */;
+  softirq: number /* uint64 */;
+  steal: number /* uint64 */;
+  cores: number /* int */;
+}
+export interface MemoryMetric {
+  total_bytes: number /* uint64 */;
+  available_bytes: number /* uint64 */;
+  used_bytes: number /* uint64 */;
+  swap_total_bytes: number /* uint64 */;
+  swap_used_bytes: number /* uint64 */;
+}
+export interface NetworkIface {
+  iface: string;
+  rx_bytes: number /* uint64 */;
+  tx_bytes: number /* uint64 */;
+}
+export interface DiskMetric {
+  mount: string;
+  fs_type: string;
+  total_bytes: number /* uint64 */;
+  free_bytes: number /* uint64 */;
+  used_bytes: number /* uint64 */;
+}
+export interface SystemMetricsResponse {
+  ts: number /* int64 */;
+  cpu: CPUMetric;
+  memory: MemoryMetric;
+  network: NetworkIface[];
+  disks: DiskMetric[];
+  load1: number /* float64 */;
+  load5: number /* float64 */;
+  load15: number /* float64 */;
+  uptime_seconds: number /* float64 */;
+}
