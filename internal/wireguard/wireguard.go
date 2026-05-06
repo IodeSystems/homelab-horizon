@@ -594,15 +594,32 @@ func (w *WGConfig) GetPostDown() string {
 	return w.postDown
 }
 
-// ExpectedPostUp returns the PostUp line we'd generate for a new config with the given output interface.
-// Uses -I (insert) instead of -A (append) so rules are placed before any UFW drop/reject rules.
+// ExpectedPostUp returns the PostUp line we'd generate for a new config with
+// the given output interface. The form is chain-based: it ensures WG-FORWARD
+// exists, jumps to it from FORWARD for wg-incoming traffic (so per-peer
+// profile/jail/DROP rules in WG-FORWARD actually fire), allows return traffic
+// via conntrack, and adds NAT MASQUERADE for the default iface.
+//
+// `2>/dev/null || true` on the chain create swallows the "chain already
+// exists" error so wg-quick doesn't abort PostUp on a re-up.
+//
+// Earlier versions emitted `iptables -I FORWARD 1 -i %i -j ACCEPT` directly,
+// which short-circuited everything — WG-FORWARD never fired and per-peer
+// policy was bypassed. Hosts upgraded from that template need their wg0.conf
+// rewritten (handlers_api_system_fix.go re-emits via this function).
 func ExpectedPostUp(outIface string) string {
-	return fmt.Sprintf("iptables -I FORWARD 1 -i %%i -j ACCEPT; iptables -I FORWARD 2 -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -I POSTROUTING 1 -o %s -j MASQUERADE", outIface)
+	return fmt.Sprintf("iptables -N %s 2>/dev/null || true; iptables -I FORWARD 1 -i %%i -j %s; iptables -I FORWARD 2 -o %%i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -I POSTROUTING 1 -o %s -j MASQUERADE",
+		forwardChainName, forwardChainName, outIface)
 }
 
-// ExpectedPostDown returns the PostDown line we'd generate for a new config with the given output interface.
+// ExpectedPostDown returns the PostDown line we'd generate for a new config
+// with the given output interface. Inverse of ExpectedPostUp: removes the
+// FORWARD jump, the conntrack return rule, and the NAT MASQUERADE, then
+// flushes and deletes the WG-FORWARD chain so a subsequent PostUp starts
+// from a clean slate.
 func ExpectedPostDown(outIface string) string {
-	return fmt.Sprintf("iptables -D FORWARD -i %%i -j ACCEPT; iptables -D FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE", outIface)
+	return fmt.Sprintf("iptables -D FORWARD -i %%i -j %s; iptables -D FORWARD -o %%i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE; iptables -F %s; iptables -X %s",
+		forwardChainName, outIface, forwardChainName, forwardChainName)
 }
 
 const forwardChainName = "WG-FORWARD"
@@ -636,9 +653,11 @@ func SetupForwardChain(wgInterface string, peers []Peer, profiles map[string]str
 		}
 	}
 
-	// Ensure RELATED,ESTABLISHED rule for return traffic
-	if err := exec.Command("iptables", "-C", "FORWARD", "-o", wgInterface, "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run(); err != nil {
-		exec.Command("iptables", "-I", "FORWARD", "2", "-o", wgInterface, "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run()
+	// Ensure RELATED,ESTABLISHED rule for return traffic. Conntrack form is
+	// what iptables-nft stores natively; matches what ExpectedPostUp emits
+	// and what the iptables/rules.go canonical normalizer compares against.
+	if err := exec.Command("iptables", "-C", "FORWARD", "-o", wgInterface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run(); err != nil {
+		exec.Command("iptables", "-I", "FORWARD", "2", "-o", wgInterface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run()
 	}
 
 	return RebuildForwardChain(ForwardChainOpts{
@@ -726,18 +745,6 @@ func RebuildForwardChain(opts ForwardChainOpts) error {
 	exec.Command("iptables", "-A", forwardChainName, "-j", "DROP").Run()
 
 	return nil
-}
-
-// ExpectedPostUpWithChain returns PostUp commands that use the WG-FORWARD chain approach.
-func ExpectedPostUpWithChain(outIface string) string {
-	return fmt.Sprintf("iptables -N %s 2>/dev/null; iptables -I FORWARD 1 -i %%i -j %s; iptables -I FORWARD 2 -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -I POSTROUTING 1 -o %s -j MASQUERADE",
-		forwardChainName, forwardChainName, outIface)
-}
-
-// ExpectedPostDownWithChain returns PostDown commands that tear down the WG-FORWARD chain.
-func ExpectedPostDownWithChain(outIface string) string {
-	return fmt.Sprintf("iptables -D FORWARD -i %%i -j %s; iptables -D FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE; iptables -F %s; iptables -X %s",
-		forwardChainName, outIface, forwardChainName, forwardChainName)
 }
 
 // UpdateInterfaceRules rewrites PostUp and PostDown in the config file, preserving everything else.

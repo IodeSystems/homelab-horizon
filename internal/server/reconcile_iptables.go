@@ -3,11 +3,13 @@ package server
 import (
 	"fmt"
 	"net"
+	"os/exec"
 	"regexp"
 	"strings"
 
 	"homelab-horizon/internal/config"
 	"homelab-horizon/internal/iptables"
+	"homelab-horizon/internal/wireguard"
 )
 
 // masqIfaceRe matches the iface token in an iptables MASQUERADE clause embedded
@@ -18,7 +20,7 @@ var masqIfaceRe = regexp.MustCompile(`-o \S+ -j MASQUERADE`)
 
 // reconcileIPTables is the single-entry self-heal for on-host state that drifts
 // when the LAN interface changes. It runs at startup and on every tick of
-// startHealthCheck (60s), and handles three independent drifts:
+// startHealthCheck (60s), and handles four independent drifts:
 //
 //  1. LocalInterface IP (dnsmasq binds here + maps localhost services):
 //     on change, updateConfig + dns.WriteConfig + dns.Reload.
@@ -29,6 +31,10 @@ var masqIfaceRe = regexp.MustCompile(`-o \S+ -j MASQUERADE`)
 //  3. First-run bootstrap (LastLocalIface empty): auto-infer the stale iface
 //     from a live `-o X -j MASQUERADE` where X isn't the current default, and
 //     proceed as if LastLocalIface were that X.
+//  4. Legacy bypass PostUp: hosts upgraded from a horizon version that wrote
+//     `-I FORWARD 1 -i %i -j ACCEPT` in PostUp had per-peer policy silently
+//     bypassed. Detect that pattern in wg0.conf and migrate to the modern
+//     chain-based form, removing the live bypass rules in the same pass.
 //
 // Failures are logged but don't stop the loop — a transient iptables lock or
 // missing binary on first boot shouldn't prevent subsequent passes.
@@ -54,6 +60,37 @@ func (s *Server) reconcileIPTables() {
 			fmt.Printf("[iptables-sync] dns WriteConfig: %v\n", err)
 		} else if err := s.dns.Reload(); err != nil {
 			fmt.Printf("[iptables-sync] dns Reload: %v\n", err)
+		}
+	}
+
+	// ---- Axis 4: legacy bypass PostUp migration ----
+	// Older horizon emitted `iptables -I FORWARD 1 -i %i -j ACCEPT` in PostUp,
+	// which short-circuits FORWARD before WG-FORWARD jumps fire — per-peer
+	// profile/jail/DROP rules are silently bypassed. Detect that exact pattern
+	// and rewrite wg0.conf to the modern chain-based form, then drop the live
+	// bypass + legacy `-m state` return rule so Reconcile (below) installs the
+	// chain jump and `-m conntrack` return on this same pass.
+	//
+	// Detection is conservative: bypass token AND no WG-FORWARD reference. A
+	// custom admin PostUp that already mentions WG-FORWARD is left untouched.
+	if isLegacyBypassPostUp(s.wg.GetPostUp()) {
+		fmt.Printf("[iptables-sync] migrating legacy bypass PostUp to chain-based form (iface=%s)\n", newIface)
+		if err := s.wg.UpdateInterfaceRules(wireguard.ExpectedPostUp(newIface), wireguard.ExpectedPostDown(newIface)); err != nil {
+			fmt.Printf("[iptables-sync] migrate wg0.conf: %v\n", err)
+		}
+		// Strip live legacy rules. Loop because the bypass and the state-form
+		// return can each have duplicates from prior reconcile dup-inserts.
+		// `iptables -D` returns non-zero when no match remains — that's our
+		// loop terminator.
+		for i := 0; i < 16; i++ {
+			if err := exec.Command("iptables", "-D", "FORWARD", "-i", cfg.WGInterface, "-j", "ACCEPT").Run(); err != nil {
+				break
+			}
+		}
+		for i := 0; i < 16; i++ {
+			if err := exec.Command("iptables", "-D", "FORWARD", "-o", cfg.WGInterface, "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run(); err != nil {
+				break
+			}
 		}
 	}
 
@@ -137,4 +174,14 @@ func (s *Server) reconcileIPTables() {
 			}
 		}
 	}
+}
+
+// isLegacyBypassPostUp reports whether postUp matches the legacy template that
+// emitted `iptables -I FORWARD 1 -i %i -j ACCEPT`. That single rule short-
+// circuits FORWARD for all wg-incoming traffic, defeating WG-FORWARD policy.
+// Detection requires both the bypass token and the absence of any WG-FORWARD
+// reference, so a custom admin PostUp that already uses the chain is not
+// misidentified.
+func isLegacyBypassPostUp(postUp string) bool {
+	return strings.Contains(postUp, "-i %i -j ACCEPT") && !strings.Contains(postUp, "WG-FORWARD")
 }
