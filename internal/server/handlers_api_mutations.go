@@ -17,6 +17,30 @@ func writeJSONOK(w http.ResponseWriter) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
 
+// requestProxyTimeouts converts API timeout overrides into config form,
+// clamping negatives to zero. Returns nil when no timeout is set so the
+// HAProxy defaults section stays in effect.
+func requestProxyTimeouts(t *apitypes.ServiceRequestTimeouts) *config.ProxyTimeouts {
+	if t == nil {
+		return nil
+	}
+	clamp := func(n int) int {
+		if n < 0 {
+			return 0
+		}
+		return n
+	}
+	pt := &config.ProxyTimeouts{
+		ConnectSeconds: clamp(t.ConnectSeconds),
+		ServerSeconds:  clamp(t.ServerSeconds),
+		TunnelSeconds:  clamp(t.TunnelSeconds),
+	}
+	if pt.ConnectSeconds == 0 && pt.ServerSeconds == 0 && pt.TunnelSeconds == 0 {
+		return nil
+	}
+	return pt
+}
+
 func serviceRequestToService(req *apitypes.ServiceRequest) config.Service {
 	svc := config.Service{
 		Name:    req.Name,
@@ -54,6 +78,7 @@ func serviceRequestToService(req *apitypes.ServiceRequest) config.Service {
 				Balance:     req.Proxy.Deploy.Balance,
 			}
 		}
+		svc.Proxy.Timeouts = requestProxyTimeouts(req.Proxy.Timeouts)
 	}
 	return svc
 }
@@ -174,14 +199,19 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 
 			// Proxy
 			if req.Proxy != nil && req.Proxy.Backend != "" {
-				// Preserve existing deploy config for token/activeSlot
+				// Preserve existing deploy config (token/activeSlot) and the
+				// maintenance page, which the editor doesn't round-trip.
 				var existingDeploy *config.DeployConfig
+				var existingMaintenancePage string
 				if cfg.Services[i].Proxy != nil {
 					existingDeploy = cfg.Services[i].Proxy.Deploy
+					existingMaintenancePage = cfg.Services[i].Proxy.MaintenancePage
 				}
 				cfg.Services[i].Proxy = &config.ProxyConfig{
-					Backend:      req.Proxy.Backend,
-					InternalOnly: req.Proxy.InternalOnly,
+					Backend:         req.Proxy.Backend,
+					InternalOnly:    req.Proxy.InternalOnly,
+					MaintenancePage: existingMaintenancePage,
+					Timeouts:        requestProxyTimeouts(req.Proxy.Timeouts),
 				}
 				if req.Proxy.HealthCheck != nil && req.Proxy.HealthCheck.Path != "" {
 					cfg.Services[i].Proxy.HealthCheck = &config.HealthCheck{Path: req.Proxy.HealthCheck.Path}

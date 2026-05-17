@@ -55,11 +55,20 @@ type DeployResp struct {
 }
 
 type ProxyResp struct {
-	Backend             string           `json:"backend"`
-	HealthCheck         *HealthCheckResp `json:"healthCheck,omitempty"`
-	InternalOnly        bool             `json:"internalOnly"`
-	Deploy              *DeployResp      `json:"deploy,omitempty"`
-	MaintenancePageMD5  string           `json:"maintenancePageMD5,omitempty"`
+	Backend            string             `json:"backend"`
+	HealthCheck        *HealthCheckResp   `json:"healthCheck,omitempty"`
+	InternalOnly       bool               `json:"internalOnly"`
+	Deploy             *DeployResp        `json:"deploy,omitempty"`
+	MaintenancePageMD5 string             `json:"maintenancePageMD5,omitempty"`
+	Timeouts           *ProxyTimeoutsResp `json:"timeouts,omitempty"`
+}
+
+// ProxyTimeoutsResp surfaces per-backend HAProxy timeout overrides (seconds).
+// A zero/omitted field means the HAProxy defaults section applies.
+type ProxyTimeoutsResp struct {
+	ConnectSeconds int `json:"connectSeconds,omitempty"`
+	ServerSeconds  int `json:"serverSeconds,omitempty"`
+	TunnelSeconds  int `json:"tunnelSeconds,omitempty"`
 }
 
 type InternalDNSResp struct {
@@ -391,10 +400,19 @@ type ServiceRequestExternalDNS struct {
 }
 
 type ServiceRequestProxy struct {
-	Backend     string                      `json:"backend"`
-	HealthCheck *ServiceRequestHealthCheck  `json:"healthCheck,omitempty"`
+	Backend      string                     `json:"backend"`
+	HealthCheck  *ServiceRequestHealthCheck `json:"healthCheck,omitempty"`
 	InternalOnly bool                       `json:"internalOnly"`
-	Deploy      *ServiceRequestDeploy       `json:"deploy,omitempty"`
+	Deploy       *ServiceRequestDeploy      `json:"deploy,omitempty"`
+	Timeouts     *ServiceRequestTimeouts    `json:"timeouts,omitempty"`
+}
+
+// ServiceRequestTimeouts carries per-backend HAProxy timeout overrides
+// (seconds) from the service editor. Zero/omitted = inherit defaults.
+type ServiceRequestTimeouts struct {
+	ConnectSeconds int `json:"connectSeconds,omitempty"`
+	ServerSeconds  int `json:"serverSeconds,omitempty"`
+	TunnelSeconds  int `json:"tunnelSeconds,omitempty"`
 }
 
 type ServiceRequestDeploy struct {

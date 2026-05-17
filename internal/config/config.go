@@ -423,11 +423,21 @@ func (e *ExternalDNS) GetIPs() []string {
 
 // ProxyConfig configures HAProxy reverse proxying for this service
 type ProxyConfig struct {
-	Backend         string        `json:"backend"`                    // host:port for HAProxy to forward to
-	HealthCheck     *HealthCheck  `json:"health_check,omitempty"`     // Optional health check
-	InternalOnly    bool          `json:"internal_only,omitempty"`    // Restrict to local network access only
-	Deploy          *DeployConfig `json:"deploy,omitempty"`           // Blue-green deploy with current/next slots
-	MaintenancePage string        `json:"maintenance_page,omitempty"` // HTML body served as 503 during maintenance
+	Backend         string         `json:"backend"`                    // host:port for HAProxy to forward to
+	HealthCheck     *HealthCheck   `json:"health_check,omitempty"`     // Optional health check
+	InternalOnly    bool           `json:"internal_only,omitempty"`    // Restrict to local network access only
+	Deploy          *DeployConfig  `json:"deploy,omitempty"`           // Blue-green deploy with current/next slots
+	MaintenancePage string         `json:"maintenance_page,omitempty"` // HTML body served as 503 during maintenance
+	Timeouts        *ProxyTimeouts `json:"timeouts,omitempty"`         // Optional per-backend HAProxy timeout overrides
+}
+
+// ProxyTimeouts holds optional per-backend HAProxy timeout overrides, in
+// seconds. A zero field means "inherit the HAProxy defaults section".
+// These map to the timeout directives valid inside a backend block.
+type ProxyTimeouts struct {
+	ConnectSeconds int `json:"connect_seconds,omitempty"` // timeout connect — TCP connection to the backend
+	ServerSeconds  int `json:"server_seconds,omitempty"`  // timeout server — inactivity waiting on the backend (long-running responses)
+	TunnelSeconds  int `json:"tunnel_seconds,omitempty"`  // timeout tunnel — bidirectional/WebSocket connections after handshake
 }
 
 // DeployConfig enables blue-green deployment with two server slots.

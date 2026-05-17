@@ -117,6 +117,13 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 			b.ErrorFile503 = filepath.Join(c.haproxyErrorsDir(), haproxy.SanitizeName(svc.Name)+"_503.http")
 		}
 
+		// Per-backend timeout overrides
+		if svc.Proxy.Timeouts != nil {
+			b.TimeoutConnect = svc.Proxy.Timeouts.ConnectSeconds
+			b.TimeoutServer = svc.Proxy.Timeouts.ServerSeconds
+			b.TimeoutTunnel = svc.Proxy.Timeouts.TunnelSeconds
+		}
+
 		backends = append(backends, b)
 	}
 	return backends

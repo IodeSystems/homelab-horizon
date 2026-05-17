@@ -130,6 +130,10 @@ interface ServiceFormState {
   deployEnabled: boolean;
   deployNextBackend: string;
   deployBalance: string;
+  // Per-backend HAProxy timeout overrides, in seconds. Blank = inherit defaults.
+  timeoutServer: string;
+  timeoutConnect: string;
+  timeoutTunnel: string;
 }
 
 const emptyForm: ServiceFormState = {
@@ -146,6 +150,9 @@ const emptyForm: ServiceFormState = {
   deployEnabled: false,
   deployNextBackend: "",
   deployBalance: "first",
+  timeoutServer: "",
+  timeoutConnect: "",
+  timeoutTunnel: "",
 };
 
 function serviceToForm(svc: Service): ServiceFormState {
@@ -163,6 +170,15 @@ function serviceToForm(svc: Service): ServiceFormState {
     deployEnabled: !!svc.proxy?.deploy,
     deployNextBackend: svc.proxy?.deploy?.nextBackend ?? "",
     deployBalance: svc.proxy?.deploy?.balance || "first",
+    timeoutServer: svc.proxy?.timeouts?.serverSeconds
+      ? String(svc.proxy.timeouts.serverSeconds)
+      : "",
+    timeoutConnect: svc.proxy?.timeouts?.connectSeconds
+      ? String(svc.proxy.timeouts.connectSeconds)
+      : "",
+    timeoutTunnel: svc.proxy?.timeouts?.tunnelSeconds
+      ? String(svc.proxy.timeouts.tunnelSeconds)
+      : "",
   };
 }
 
@@ -211,6 +227,16 @@ function formToInput(form: ServiceFormState, originalName?: string): ServiceMuta
         balance: form.deployBalance || "first",
       };
     }
+    const timeouts: Record<string, number> = {};
+    const server = parseInt(form.timeoutServer, 10);
+    const connect = parseInt(form.timeoutConnect, 10);
+    const tunnel = parseInt(form.timeoutTunnel, 10);
+    if (server > 0) timeouts.serverSeconds = server;
+    if (connect > 0) timeouts.connectSeconds = connect;
+    if (tunnel > 0) timeouts.tunnelSeconds = tunnel;
+    if (Object.keys(timeouts).length > 0) {
+      input.proxy.timeouts = timeouts;
+    }
   }
 
   return input;
@@ -236,6 +262,10 @@ function ServiceFormDialog({
   publicIP: string;
 }) {
   const [form, setForm] = useState<ServiceFormState>(initialValues);
+  // Timeouts start expanded only when the service already overrides one.
+  const [timeoutsOpen, setTimeoutsOpen] = useState(
+    !!(initialValues.timeoutServer || initialValues.timeoutConnect || initialValues.timeoutTunnel),
+  );
 
   // Reset form when dialog opens with new values
   const prevOpen = useState(open)[0];
@@ -429,6 +459,70 @@ function ServiceFormDialog({
                 </TextField>
               </Box>
             )}
+
+            <Box>
+              <Box
+                onClick={() => setTimeoutsOpen((o) => !o)}
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 0.5,
+                  cursor: "pointer",
+                  userSelect: "none",
+                }}
+              >
+                <IconButton size="small" sx={{ p: 0.25 }}>
+                  {timeoutsOpen ? (
+                    <KeyboardArrowUpIcon fontSize="small" />
+                  ) : (
+                    <KeyboardArrowDownIcon fontSize="small" />
+                  )}
+                </IconButton>
+                <Typography variant="body2">Timeouts</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  override HAProxy defaults
+                </Typography>
+              </Box>
+              <Collapse in={timeoutsOpen} timeout="auto" unmountOnExit>
+                <Box sx={{ display: "flex", gap: 2, mt: 1 }}>
+                  <TextField
+                    label="Server"
+                    value={form.timeoutServer}
+                    onChange={(e) => update("timeoutServer", e.target.value)}
+                    size="small"
+                    type="number"
+                    fullWidth
+                    helperText="Default 50s"
+                  />
+                  <TextField
+                    label="Connect"
+                    value={form.timeoutConnect}
+                    onChange={(e) => update("timeoutConnect", e.target.value)}
+                    size="small"
+                    type="number"
+                    fullWidth
+                    helperText="Default 5s"
+                  />
+                  <TextField
+                    label="Tunnel"
+                    value={form.timeoutTunnel}
+                    onChange={(e) => update("timeoutTunnel", e.target.value)}
+                    size="small"
+                    type="number"
+                    fullWidth
+                    helperText="WebSocket"
+                  />
+                </Box>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", mt: 0.5 }}
+                >
+                  Seconds. Leave blank to inherit HAProxy defaults. Raise Server for
+                  long-running backend requests.
+                </Typography>
+              </Collapse>
+            </Box>
           </>
         )}
       </DialogContent>
@@ -788,6 +882,21 @@ function ServiceRow({
                   <Typography variant="body2" color="text.secondary">
                     {service.proxy!.internalOnly ? "Internal only" : "Public"}
                   </Typography>
+                  {service.proxy!.timeouts && (
+                    <Typography variant="body2" color="text.secondary">
+                      Timeouts:{" "}
+                      {[
+                        service.proxy!.timeouts.serverSeconds &&
+                          `server ${service.proxy!.timeouts.serverSeconds}s`,
+                        service.proxy!.timeouts.connectSeconds &&
+                          `connect ${service.proxy!.timeouts.connectSeconds}s`,
+                        service.proxy!.timeouts.tunnelSeconds &&
+                          `tunnel ${service.proxy!.timeouts.tunnelSeconds}s`,
+                      ]
+                        .filter(Boolean)
+                        .join(", ")}
+                    </Typography>
+                  )}
                 </DetailCard>
               )}
               {!hasIntDNS && !hasExtDNS && !hasProxy && (

@@ -29,6 +29,12 @@ type Backend struct {
 
 	// Custom error pages
 	ErrorFile503 string `json:"error_file_503,omitempty"` // path to custom 503.http file
+
+	// Per-backend timeout overrides in seconds. Zero = inherit the defaults
+	// section. Emitted as `timeout <name> <n>s` inside the backend block.
+	TimeoutConnect int `json:"timeout_connect,omitempty"`
+	TimeoutServer  int `json:"timeout_server,omitempty"`
+	TimeoutTunnel  int `json:"timeout_tunnel,omitempty"`
 }
 
 // GetDomainMatches returns all domain matches, falling back to DomainMatch for backwards compat
@@ -532,6 +538,17 @@ listen stats
 		sb.WriteString("    mode http\n")
 		if b.ErrorFile503 != "" {
 			sb.WriteString(fmt.Sprintf("    errorfile 503 %s\n", b.ErrorFile503))
+		}
+
+		// Per-backend timeout overrides. Omitted timeouts inherit the defaults section.
+		if b.TimeoutConnect > 0 {
+			sb.WriteString(fmt.Sprintf("    timeout connect %ds\n", b.TimeoutConnect))
+		}
+		if b.TimeoutServer > 0 {
+			sb.WriteString(fmt.Sprintf("    timeout server %ds\n", b.TimeoutServer))
+		}
+		if b.TimeoutTunnel > 0 {
+			sb.WriteString(fmt.Sprintf("    timeout tunnel %ds\n", b.TimeoutTunnel))
 		}
 
 		if b.Deploy {
