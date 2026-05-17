@@ -138,6 +138,13 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 				sum := md5.Sum([]byte(svc.Proxy.MaintenancePage))
 				pr.MaintenancePageMD5 = fmt.Sprintf("%x", sum)
 			}
+			if t := svc.Proxy.Timeouts; t != nil {
+				pr.Timeouts = &apitypes.ProxyTimeoutsResp{
+					ConnectSeconds: t.ConnectSeconds,
+					ServerSeconds:  t.ServerSeconds,
+					TunnelSeconds:  t.TunnelSeconds,
+				}
+			}
 			sr.Proxy = pr
 		}
 		sorted = append(sorted, sr)

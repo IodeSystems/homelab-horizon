@@ -58,6 +58,16 @@ export interface ProxyResp {
   internalOnly: boolean;
   deploy?: DeployResp;
   maintenancePageMD5?: string;
+  timeouts?: ProxyTimeoutsResp;
+}
+/**
+ * ProxyTimeoutsResp surfaces per-backend HAProxy timeout overrides (seconds).
+ * A zero/omitted field means the HAProxy defaults section applies.
+ */
+export interface ProxyTimeoutsResp {
+  connectSeconds?: number /* int */;
+  serverSeconds?: number /* int */;
+  tunnelSeconds?: number /* int */;
 }
 export interface InternalDNSResp {
   ip: string;
@@ -335,6 +345,16 @@ export interface ServiceRequestProxy {
   healthCheck?: ServiceRequestHealthCheck;
   internalOnly: boolean;
   deploy?: ServiceRequestDeploy;
+  timeouts?: ServiceRequestTimeouts;
+}
+/**
+ * ServiceRequestTimeouts carries per-backend HAProxy timeout overrides
+ * (seconds) from the service editor. Zero/omitted = inherit defaults.
+ */
+export interface ServiceRequestTimeouts {
+  connectSeconds?: number /* int */;
+  serverSeconds?: number /* int */;
+  tunnelSeconds?: number /* int */;
 }
 export interface ServiceRequestDeploy {
   nextBackend: string;

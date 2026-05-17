@@ -257,6 +257,51 @@ func TestGenerateConfig_MultiDomainBackend(t *testing.T) {
 	}
 }
 
+func TestGenerateConfig_BackendTimeouts(t *testing.T) {
+	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
+	h.SetBackends([]Backend{
+		{
+			Name:           "slow-app",
+			DomainMatches:  []string{"slow.example.com"},
+			Server:         "192.168.1.10:8080",
+			TimeoutConnect: 10,
+			TimeoutServer:  1800,
+			TimeoutTunnel:  3600,
+		},
+		{
+			Name:          "default-app",
+			DomainMatches: []string{"fast.example.com"},
+			Server:        "192.168.1.11:8080",
+		},
+	})
+
+	config := h.GenerateConfig(80, 443, nil)
+
+	// Overrides emitted in seconds for the backend that sets them
+	for _, expected := range []string{
+		"timeout connect 10s",
+		"timeout server 1800s",
+		"timeout tunnel 3600s",
+	} {
+		if !strings.Contains(config, expected) {
+			t.Errorf("config missing timeout override: %s", expected)
+		}
+	}
+
+	// The backend with no overrides emits no per-backend timeout lines.
+	start := strings.Index(config, "backend default_app_backend")
+	if start == -1 {
+		t.Fatalf("config missing default_app backend:\n%s", config)
+	}
+	section := config[start:]
+	if end := strings.Index(section, "\nbackend "); end != -1 {
+		section = section[:end]
+	}
+	if strings.Contains(section, "timeout ") {
+		t.Errorf("default_app backend should inherit defaults, got timeout line:\n%s", section)
+	}
+}
+
 func TestGenerateConfig_Compression(t *testing.T) {
 	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
 	h.SetBackends(nil)
