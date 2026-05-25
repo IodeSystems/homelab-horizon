@@ -1016,6 +1016,10 @@ function SettingsPage() {
       {tab === 0 && (
         <SystemHealthTab
           publicIP={data.config.publicIP}
+          publicIPOverride={data.config.publicIPOverride}
+          publicIPLastChecked={data.config.publicIPLastChecked}
+          publicIPStale={data.config.publicIPStale}
+          publicIPMaxAge={data.config.publicIPMaxAge}
           localInterface={data.config.localInterface}
           dnsmasqEnabled={data.config.dnsmasqEnabled}
           vpnAdmins={data.config.vpnAdmins}

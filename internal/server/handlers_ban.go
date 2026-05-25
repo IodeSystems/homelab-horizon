@@ -54,7 +54,7 @@ func (s *Server) banIP(ip string, timeout int, reason, service string) error {
 
 	// Self-lockout protection
 	gatewayIP := s.cfg().GetWGGatewayIP()
-	if ip == gatewayIP || ip == s.cfg().LocalInterface || ip == s.cfg().PublicIP {
+	if ip == gatewayIP || ip == s.cfg().LocalInterface || ip == s.cfg().EffectivePublicIP() {
 		return fmt.Errorf("refusing to ban server IP %s (self-lockout protection)", ip)
 	}
 

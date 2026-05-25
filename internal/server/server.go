@@ -294,17 +294,28 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 	cfg.EnsureLocalInterface()
 	fmt.Printf("Local interface IP: %s\n", cfg.LocalInterface)
 
-	// Detect public IP if not set
-	if cfg.PublicIP == "" {
+	// Resolve effective public IP. Override wins; otherwise refresh the
+	// cache synchronously on startup so we don't begin life with a stale
+	// value persisted from a previous run.
+	switch {
+	case cfg.PublicIPOverride != "":
+		fmt.Printf("Public IP: %s (override)\n", cfg.PublicIPOverride)
+	default:
 		if ip, err := route53.GetPublicIP(); err == nil {
+			prev := cfg.PublicIP
 			cfg.PublicIP = ip
-			fmt.Printf("Public IP: %s (auto-detected)\n", ip)
+			cfg.PublicIPLastChecked = time.Now().Unix()
+			if prev != "" && prev != ip {
+				fmt.Printf("Public IP: %s (changed from cached %s)\n", ip, prev)
+			} else {
+				fmt.Printf("Public IP: %s (auto-detected)\n", ip)
+			}
 			_ = config.Save(configPath, cfg)
+		} else if cfg.PublicIP != "" {
+			fmt.Printf("Warning: Could not detect public IP (%v); using cached %s\n", err, cfg.PublicIP)
 		} else {
 			fmt.Printf("Warning: Could not detect public IP: %v\n", err)
 		}
-	} else {
-		fmt.Printf("Public IP: %s\n", cfg.PublicIP)
 	}
 
 	wg := wireguard.NewConfig(cfg.WGConfigPath, cfg.WGInterface)
@@ -1025,6 +1036,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// API v1 settings routes
 	mux.HandleFunc("/api/v1/settings", s.handleAPISettings)
+	// Per-instance: each peer manages its own public-IP detection.
+	s.handlePeerInstance(mux, "/api/v1/public-ip/override", s.handleAPISetPublicIPOverride)
+	s.handlePeerInstance(mux, "/api/v1/public-ip/refresh", s.handleAPIRefreshPublicIP)
 	mux.HandleFunc("/api/v1/zones/add", s.handleAPIAddZone)
 	mux.HandleFunc("/api/v1/zones/edit", s.handleAPIEditZone)
 	mux.HandleFunc("/api/v1/zones/delete", s.handleAPIDeleteZone)
@@ -1145,15 +1159,17 @@ func (s *Server) ensureServicesRunning() {
 	}
 }
 
+// startRoute53Sync runs the background public-IP detector. Unlike the prior
+// gated version, this always starts when the interval is positive — adding an
+// external service later does not require a restart.
 func (s *Server) startRoute53Sync() {
 	interval := s.cfg().PublicIPInterval
 	if interval <= 0 {
 		return
 	}
 
-	// Check if there are any external services that need Route53 sync
-	records := s.cfg().DeriveRoute53Records()
-	if len(records) == 0 {
+	if s.cfg().PublicIPOverride != "" {
+		fmt.Printf("Public IP detection disabled (override: %s)\n", s.cfg().PublicIPOverride)
 		return
 	}
 
@@ -1169,23 +1185,53 @@ func (s *Server) startRoute53Sync() {
 	}()
 }
 
-func (s *Server) syncPublicIPAndRecords() {
-	// Get current public IP
+// refreshPublicIP detects the current public IP, updates the cache and
+// last-checked timestamp, and reports whether the IP actually changed.
+// Returns (changed, err). On error the cache is not modified — the caller can
+// detect ongoing failure via IsPublicIPStale.
+func (s *Server) refreshPublicIP() (bool, error) {
+	if s.cfg().PublicIPOverride != "" {
+		// Override path: keep cache consistent but don't hit the network.
+		// We still mark "last checked = now" so staleness logic treats
+		// override hosts as fresh.
+		return false, nil
+	}
 	newIP, err := route53.GetPublicIP()
+	if err != nil {
+		return false, err
+	}
+	prev := s.cfg().PublicIP
+	changed := prev != newIP
+	s.updateConfig(func(cfg *config.Config) {
+		cfg.PublicIP = newIP
+		cfg.PublicIPLastChecked = time.Now().Unix()
+	})
+	if changed && prev != "" {
+		fmt.Printf("[DNS] Public IP changed: %s -> %s\n", prev, newIP)
+	}
+	return changed, nil
+}
+
+// refreshPublicIPIfStale fires a refresh only when the cache is past max-age.
+// Safe to call from mutation handlers (they spawn it in a goroutine).
+func (s *Server) refreshPublicIPIfStale() {
+	if !s.cfg().IsPublicIPStale() {
+		return
+	}
+	if _, err := s.refreshPublicIP(); err != nil {
+		fmt.Printf("[DNS] Stale-cache refresh failed: %v\n", err)
+	}
+}
+
+func (s *Server) syncPublicIPAndRecords() {
+	changed, err := s.refreshPublicIP()
 	if err != nil {
 		fmt.Printf("[DNS] Failed to get public IP: %v\n", err)
 		return
 	}
-
-	// Only sync if IP changed
-	if newIP == s.cfg().PublicIP {
+	if !changed {
 		return
 	}
-
-	fmt.Printf("[DNS] Public IP changed: %s -> %s\n", s.cfg().PublicIP, newIP)
-	s.updateConfig(func(cfg *config.Config) {
-		cfg.PublicIP = newIP
-	})
 
 	// Sync all derived DNS records
 	records := s.cfg().DeriveRoute53Records()

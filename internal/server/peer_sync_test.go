@@ -24,11 +24,13 @@ func TestMergeRemoteIntoLocal(t *testing.T) {
 		WGConfigPath:    "/etc/wireguard/wg0.conf",
 		ServerEndpoint:  "b.example.com:51820",
 		ServerPublicKey: "B-pubkey",
-		PublicIP:        "203.0.113.2", // local public IP
-		LocalInterface:  "192.168.2.1",
-		AdminToken:      "local-secret",
-		Services:        []config.Service{{Name: "old-service"}},
-		IPBans:          []config.IPBan{{IP: "10.0.0.99", Reason: "local-ban"}},
+		PublicIP:            "203.0.113.2", // local public IP
+		PublicIPOverride:    "203.0.113.50",
+		PublicIPLastChecked: 1700000000,
+		LocalInterface:      "192.168.2.1",
+		AdminToken:          "local-secret",
+		Services:            []config.Service{{Name: "old-service"}},
+		IPBans:              []config.IPBan{{IP: "10.0.0.99", Reason: "local-ban"}},
 	}
 
 	remote := &config.Config{
@@ -40,9 +42,11 @@ func TestMergeRemoteIntoLocal(t *testing.T) {
 		WGConfigPath:    "/etc/wireguard/wg-remote.conf",
 		ServerEndpoint:  "a.example.com:51820",
 		ServerPublicKey: "A-pubkey",
-		PublicIP:        "203.0.113.1", // remote's IP — must NOT clobber local
-		LocalInterface:  "192.168.1.1",
-		AdminToken:      "remote-secret", // must NOT clobber
+		PublicIP:            "203.0.113.1", // remote's IP — must NOT clobber local
+		PublicIPOverride:    "203.0.113.99",
+		PublicIPLastChecked: 1700009999,
+		LocalInterface:      "192.168.1.1",
+		AdminToken:          "remote-secret", // must NOT clobber
 		Services: []config.Service{
 			{Name: "grafana", Domains: []string{"grafana.example.com"}},
 			{Name: "prometheus", Domains: []string{"prom.example.com"}},
@@ -88,6 +92,12 @@ func TestMergeRemoteIntoLocal(t *testing.T) {
 	}
 	if merged.PublicIP != "203.0.113.2" {
 		t.Errorf("PublicIP clobbered: %s", merged.PublicIP)
+	}
+	if merged.PublicIPOverride != "203.0.113.50" {
+		t.Errorf("PublicIPOverride clobbered: %s", merged.PublicIPOverride)
+	}
+	if merged.PublicIPLastChecked != 1700000000 {
+		t.Errorf("PublicIPLastChecked clobbered: %d", merged.PublicIPLastChecked)
 	}
 	if merged.LocalInterface != "192.168.2.1" {
 		t.Errorf("LocalInterface clobbered: %s", merged.LocalInterface)

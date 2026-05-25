@@ -161,7 +161,11 @@ function serviceToForm(svc: Service): ServiceFormState {
     domains: svc.domains.join(", "),
     internalIP: svc.internalDNS?.ip ?? "",
     externalEnabled: !!svc.externalDNS,
-    externalIPs: svc.externalDNS?.ips?.join(", ") ?? svc.externalDNS?.ip ?? "",
+    // Only the *configured* IPs round-trip into the form. The legacy fields
+    // (`ip`/`ips`) on the API response are the resolved fallback, so using
+    // them here would silently promote auto-detection into a per-service
+    // static override on save — exactly the staleness bug we're avoiding.
+    externalIPs: svc.externalDNS?.configuredIPs?.join(", ") ?? "",
     externalTTL: String(svc.externalDNS?.ttl ?? 300),
     proxyEnabled: !!svc.proxy,
     proxyBackend: svc.proxy?.backend ?? "",
@@ -240,6 +244,117 @@ function formToInput(form: ServiceFormState, originalName?: string): ServiceMuta
   }
 
   return input;
+}
+
+// ExternalIPsField shows the External-DNS IP picker in two modes:
+//   - Blank (auto): renders as a button labeled with the resolved fallback
+//     IP. Clicking it opens the text field for an explicit override.
+//   - Typed: renders as the text field with a "Use auto" affordance to
+//     return to the fallback. Saving empty also reverts to auto.
+// The empty-string is the persisted "use fallback" value; this component is
+// purely presentation around that.
+function ExternalIPsField({
+  value,
+  onChange,
+  ttl,
+  onTTLChange,
+  publicIP,
+  proxyEnabled,
+  externalMismatch,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  ttl: string;
+  onTTLChange: (v: string) => void;
+  publicIP: string;
+  proxyEnabled: boolean;
+  externalMismatch: boolean;
+}) {
+  const [editing, setEditing] = useState(value.trim().length > 0);
+
+  // If the parent clears the value (e.g. dialog re-opens for a different
+  // service), collapse back to the button presentation.
+  useEffect(() => {
+    if (value.trim().length === 0) setEditing(false);
+  }, [value]);
+
+  const helperText = proxyEnabled
+    ? `Leave empty for auto (${publicIP || "public IP"}) so requests reach this HAProxy host`
+    : "Comma-separated. Multiple IPs enable round-robin DNS. Leave empty to use public IP.";
+
+  return (
+    <>
+      {editing ? (
+        <Box sx={{ display: "flex", gap: 2 }}>
+          <TextField
+            label="External IPs"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            size="small"
+            fullWidth
+            autoFocus
+            placeholder={publicIP ? `auto: ${publicIP}` : "auto-detected"}
+            helperText={helperText}
+          />
+          <TextField
+            label="TTL"
+            value={ttl}
+            onChange={(e) => onTTLChange(e.target.value)}
+            size="small"
+            sx={{ width: 120 }}
+            type="number"
+          />
+        </Box>
+      ) : (
+        <Box sx={{ display: "flex", gap: 2, alignItems: "flex-start" }}>
+          <Box sx={{ flex: 1 }}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ textTransform: "uppercase", letterSpacing: 1, display: "block", mb: 0.5 }}
+            >
+              External IPs
+            </Typography>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => setEditing(true)}
+              fullWidth
+              sx={{
+                fontFamily: "monospace",
+                textTransform: "none",
+                justifyContent: "flex-start",
+              }}
+            >
+              Public IP: {publicIP || "auto-detected"}
+            </Button>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: "block", mt: 0.5, ml: 1.75 }}
+            >
+              Click to set a static override
+            </Typography>
+          </Box>
+          <TextField
+            label="TTL"
+            value={ttl}
+            onChange={(e) => onTTLChange(e.target.value)}
+            size="small"
+            sx={{ width: 120, mt: 2.5 }}
+            type="number"
+          />
+        </Box>
+      )}
+      {editing && externalMismatch && (
+        <Alert severity="warning" sx={{ mt: -1 }}>
+          External IPs don't include this HAProxy host's public IP
+          (<code>{publicIP}</code>). External traffic for these domains
+          won't hit the proxy. Clear the field to use auto.
+        </Alert>
+      )}
+    </>
+  );
 }
 
 function ServiceFormDialog({
@@ -360,37 +475,15 @@ function ServiceFormDialog({
           <Typography variant="body2">External DNS</Typography>
         </Box>
         {form.externalEnabled && (
-          <>
-            <Box sx={{ display: "flex", gap: 2 }}>
-              <TextField
-                label="External IPs"
-                value={form.externalIPs}
-                onChange={(e) => update("externalIPs", e.target.value)}
-                size="small"
-                fullWidth
-                helperText={
-                  form.proxyEnabled
-                    ? `Leave empty for auto (${publicIP || "public IP"}) so requests reach this HAProxy host`
-                    : "Comma-separated. Multiple IPs enable round-robin DNS. Leave empty to use public IP."
-                }
-              />
-              <TextField
-                label="TTL"
-                value={form.externalTTL}
-                onChange={(e) => update("externalTTL", e.target.value)}
-                size="small"
-                sx={{ width: 120 }}
-                type="number"
-              />
-            </Box>
-            {externalMismatch && (
-              <Alert severity="warning" sx={{ mt: -1 }}>
-                External IPs don't include this HAProxy host's public IP
-                (<code>{publicIP}</code>). External traffic for these domains
-                won't hit the proxy. Leave the field empty to use auto.
-              </Alert>
-            )}
-          </>
+          <ExternalIPsField
+            value={form.externalIPs}
+            onChange={(v) => update("externalIPs", v)}
+            ttl={form.externalTTL}
+            onTTLChange={(v) => update("externalTTL", v)}
+            publicIP={publicIP}
+            proxyEnabled={form.proxyEnabled}
+            externalMismatch={externalMismatch}
+          />
         )}
 
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>

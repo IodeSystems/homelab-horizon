@@ -114,9 +114,10 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 		if svc.ExternalDNS != nil {
 			ips := s.cfg().GetPublicIPsForService(&svc)
 			sr.ExternalDNS = &apitypes.ExternalDNSResp{
-				IP:  s.cfg().GetPublicIPForService(&svc),
-				IPs: ips,
-				TTL: svc.ExternalDNS.TTL,
+				IP:            s.cfg().GetPublicIPForService(&svc),
+				IPs:           ips,
+				ConfiguredIPs: svc.ExternalDNS.GetIPs(),
+				TTL:           svc.ExternalDNS.TTL,
 			}
 		}
 		if svc.Proxy != nil && svc.Proxy.Backend != "" {

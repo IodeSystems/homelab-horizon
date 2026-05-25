@@ -434,6 +434,47 @@ export function useSettings() {
   });
 }
 
+// --- Public IP override / refresh ---
+
+export interface PublicIPStatus {
+  publicIP: string;
+  publicIPOverride?: string;
+  publicIPLastChecked?: number;
+  publicIPStale: boolean;
+  publicIPMaxAge: number;
+  error?: string;
+}
+
+export function useSetPublicIPOverride() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (override: string) =>
+      apiFetch<PublicIPStatus>("/public-ip/override", {
+        method: "POST",
+        body: JSON.stringify({ override }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings"] });
+      qc.invalidateQueries({ queryKey: ["domains"] });
+      qc.invalidateQueries({ queryKey: ["services"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+}
+
+export function useRefreshPublicIP() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<PublicIPStatus>("/public-ip/refresh", { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings"] });
+      qc.invalidateQueries({ queryKey: ["domains"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+}
+
 export function useHAProxyConfigPreview() {
   return useQuery({
     queryKey: ["haproxy", "config-preview"],

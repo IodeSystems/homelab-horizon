@@ -344,9 +344,13 @@ func (s *Server) handleAPISyncDNS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	publicIPs := s.cfg().GetPublicIPsForService(svc)
+	publicIPs := s.cfg().PublishablePublicIPs(svc)
 	if len(publicIPs) == 0 {
-		writeJSONError(w, http.StatusBadRequest, "No public IP available")
+		if s.cfg().IsPublicIPStale() {
+			writeJSONError(w, http.StatusServiceUnavailable, "Public IP is unknown or stale; cannot publish")
+		} else {
+			writeJSONError(w, http.StatusBadRequest, "No public IP available")
+		}
 		return
 	}
 
@@ -415,7 +419,7 @@ func (s *Server) handleAPISyncAllDNS(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		publicIPs := s.cfg().GetPublicIPsForService(&svc)
+		publicIPs := s.cfg().PublishablePublicIPs(&svc)
 		if len(publicIPs) == 0 {
 			failed++
 			continue

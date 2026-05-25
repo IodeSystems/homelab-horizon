@@ -6,11 +6,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"homelab-horizon/internal/haproxy"
 	"homelab-horizon/internal/letsencrypt"
 	"homelab-horizon/internal/route53"
 )
+
+// DefaultPublicIPMaxAge is the staleness threshold used when PublicIPMaxAge
+// is 0 (unset). Cached IPs older than this are not published.
+const DefaultPublicIPMaxAge = 3600 // 1 hour
 
 // GetZoneForDomain finds the zone that a domain belongs to
 // Returns nil if no matching zone is found
@@ -29,7 +34,40 @@ func (c *Config) GetZoneForDomain(domain string) *Zone {
 	return nil
 }
 
+// EffectivePublicIP returns the IP currently representing this host:
+// PublicIPOverride if set, otherwise the cached PublicIP (which may be stale —
+// callers that publish to DNS should check IsPublicIPStale first).
+func (c *Config) EffectivePublicIP() string {
+	if c.PublicIPOverride != "" {
+		return c.PublicIPOverride
+	}
+	return c.PublicIP
+}
+
+// EffectivePublicIPMaxAge returns the configured staleness threshold,
+// substituting DefaultPublicIPMaxAge when unset.
+func (c *Config) EffectivePublicIPMaxAge() int {
+	if c.PublicIPMaxAge > 0 {
+		return c.PublicIPMaxAge
+	}
+	return DefaultPublicIPMaxAge
+}
+
+// IsPublicIPStale reports whether the cached PublicIP is too old to trust.
+// Always false when an override is set; always true when the cache is empty
+// or has never been checked.
+func (c *Config) IsPublicIPStale() bool {
+	if c.PublicIPOverride != "" {
+		return false
+	}
+	if c.PublicIP == "" || c.PublicIPLastChecked == 0 {
+		return true
+	}
+	return time.Now().Unix()-c.PublicIPLastChecked > int64(c.EffectivePublicIPMaxAge())
+}
+
 // GetPublicIPForService returns the first public IP for a service (for display/backward compat).
+// May return a stale value — use PublishablePublicIPs for the DNS publish path.
 func (c *Config) GetPublicIPForService(svc *Service) string {
 	ips := c.GetPublicIPsForService(svc)
 	if len(ips) > 0 {
@@ -38,8 +76,10 @@ func (c *Config) GetPublicIPForService(svc *Service) string {
 	return ""
 }
 
-// GetPublicIPsForService returns all public IPs for a service.
-// Returns service's ExternalDNS.IPs if set, otherwise falls back to global PublicIP.
+// GetPublicIPsForService returns all public IPs known for a service, for
+// *display* purposes. Returns the service's explicit ExternalDNS.IPs if set,
+// otherwise falls back to the host's effective public IP (which may be stale).
+// For the DNS publish path use PublishablePublicIPs instead.
 func (c *Config) GetPublicIPsForService(svc *Service) []string {
 	if svc.ExternalDNS == nil {
 		return nil
@@ -47,8 +87,31 @@ func (c *Config) GetPublicIPsForService(svc *Service) []string {
 	if ips := svc.ExternalDNS.GetIPs(); len(ips) > 0 {
 		return ips
 	}
-	if c.PublicIP != "" {
-		return []string{c.PublicIP}
+	if ip := c.EffectivePublicIP(); ip != "" {
+		return []string{ip}
+	}
+	return nil
+}
+
+// PublishablePublicIPs is the publish-path counterpart to
+// GetPublicIPsForService. It returns IPs safe to write to DNS:
+//   - Service-explicit ExternalDNS.IPs are returned verbatim.
+//   - The host's public IP is returned only when it is *not* stale.
+//
+// Returning nil here means "don't publish" — callers must handle this rather
+// than coerce to an empty record.
+func (c *Config) PublishablePublicIPs(svc *Service) []string {
+	if svc.ExternalDNS == nil {
+		return nil
+	}
+	if ips := svc.ExternalDNS.GetIPs(); len(ips) > 0 {
+		return ips
+	}
+	if c.IsPublicIPStale() {
+		return nil
+	}
+	if ip := c.EffectivePublicIP(); ip != "" {
+		return []string{ip}
 	}
 	return nil
 }
@@ -174,9 +237,9 @@ func (c *Config) DeriveRoute53Records() []route53.Record {
 			continue
 		}
 
-		publicIPs := c.GetPublicIPsForService(&svc)
+		publicIPs := c.PublishablePublicIPs(&svc)
 		if len(publicIPs) == 0 {
-			continue // No public IP available
+			continue // No publishable public IP (missing or stale)
 		}
 
 		ttl := svc.ExternalDNS.TTL
