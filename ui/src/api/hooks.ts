@@ -200,6 +200,7 @@ export function useAddDomainSSL() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["domains"] });
       qc.invalidateQueries({ queryKey: ["settings"] });
+      qc.invalidateQueries({ queryKey: ["zones"] });
     },
   });
 }
@@ -215,6 +216,7 @@ export function useRemoveDomainSSL() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["domains"] });
       qc.invalidateQueries({ queryKey: ["settings"] });
+      qc.invalidateQueries({ queryKey: ["zones"] });
     },
   });
 }
