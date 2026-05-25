@@ -1,0 +1,95 @@
+#!/bin/bash
+# Tag and publish a homelab-horizon release.
+#
+# Usage:
+#   ./bin/release           # auto-bump patch from latest tag
+#   ./bin/release v0.2.0    # explicit version (vMAJOR.MINOR.PATCH)
+#
+# Flow: preflight → smoke build → tag → cross-compile → push tag → gh release.
+# Preflight refuses on non-main, dirty tree, or origin drift — a wrong tag
+# pushed to the world is hard to walk back cleanly.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+readonly BINARY_NAME="homelab-horizon"
+readonly MAIN_BRANCH="main"
+
+err()  { printf >&2 "release: %s\n" "$*"; exit 1; }
+note() { printf "release: %s\n" "$*"; }
+
+# ----- preflight -----------------------------------------------------------
+
+command -v gh >/dev/null 2>&1 || err "gh CLI not installed (https://cli.github.com)"
+gh auth status >/dev/null 2>&1 || err "gh not authenticated — run 'gh auth login'"
+[ -f Makefile ] || err "must run from the repo root"
+
+branch="$(git rev-parse --abbrev-ref HEAD)"
+[ "$branch" = "$MAIN_BRANCH" ] || err "must release from $MAIN_BRANCH (on $branch)"
+
+git diff --quiet && git diff --cached --quiet \
+  || err "working tree has uncommitted changes"
+[ -z "$(git ls-files --others --exclude-standard)" ] \
+  || err "working tree has untracked files"
+
+note "fetching origin..."
+git fetch origin "$MAIN_BRANCH" --tags >/dev/null
+
+local_sha="$(git rev-parse HEAD)"
+remote_sha="$(git rev-parse "origin/$MAIN_BRANCH")"
+[ "$local_sha" = "$remote_sha" ] \
+  || err "local $MAIN_BRANCH ($local_sha) differs from origin ($remote_sha)"
+
+# ----- resolve version -----------------------------------------------------
+
+if [ $# -gt 0 ]; then
+  VERSION="$1"
+else
+  last="$(git tag --sort=-version:refname \
+    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)"
+  if [ -z "$last" ]; then
+    VERSION="v0.0.1"
+    note "no existing tags — starting at $VERSION"
+  else
+    IFS='.' read -r major minor patch <<<"${last#v}"
+    VERSION="v${major}.${minor}.$((patch + 1))"
+    note "bumping $last -> $VERSION"
+  fi
+fi
+
+[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+  || err "version must be vMAJOR.MINOR.PATCH (got $VERSION)"
+! git rev-parse "$VERSION" >/dev/null 2>&1 \
+  || err "tag $VERSION already exists"
+
+# ----- build / tag / build / push / publish --------------------------------
+
+# Smoke build before tagging so a broken build doesn't litter the repo with
+# stranded tags. Hits the same code path as `make release` for the current
+# host arch — if this fails, the cross-compile would too.
+note "smoke build..."
+make build >/dev/null
+
+# Tagged annotated so `git describe` surfaces it and the release-build's
+# ldflags bake the right version. If a later step fails, run
+# `git tag -d $VERSION` to reset before retrying.
+note "tagging $VERSION..."
+git tag -a "$VERSION" -m "$VERSION"
+
+note "release build (cross-compile)..."
+make release
+
+note "pushing tag..."
+git push origin "$VERSION"
+
+note "creating GitHub release..."
+gh release create "$VERSION" \
+  --title "$VERSION" \
+  --generate-notes \
+  "dist/${BINARY_NAME}-linux-amd64.tar.gz" \
+  "dist/${BINARY_NAME}-linux-arm64.tar.gz" \
+  "dist/${BINARY_NAME}-linux-armv7.tar.gz"
+
+repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+note "done — https://github.com/${repo}/releases/tag/${VERSION}"
