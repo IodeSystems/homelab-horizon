@@ -1063,10 +1063,12 @@ function IntegrationDialog({
 
 function ServiceRow({
   service,
+  zones,
   onEdit,
   onDelete,
 }: {
   service: Service;
+  zones: Zone[];
   onEdit: (svc: Service) => void;
   onDelete: (name: string) => void;
 }) {
@@ -1101,9 +1103,25 @@ function ServiceRow({
         </TableCell>
         <TableCell>
           <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
-            {service.domains.map((d) => (
-              <Chip key={d} label={d} size="small" variant="outlined" />
-            ))}
+            {service.domains.map((d) => {
+              const cov = analyzeDomainCoverage(d, zones);
+              // Green iff a cert will actually be issued: SubZone coverage
+              // (explicit or absorbed by a wildcard) AND the zone has SSL
+              // turned on. A SubZone in an SSL-disabled zone is dead weight.
+              const sslOn =
+                !!cov &&
+                (cov.state === "explicit" || cov.state === "covered") &&
+                !!cov.zone?.sslEnabled;
+              return (
+                <Chip
+                  key={d}
+                  label={d}
+                  size="small"
+                  variant="outlined"
+                  color={sslOn ? "success" : "default"}
+                />
+              );
+            })}
           </Box>
         </TableCell>
         <TableCell align="center">
@@ -1329,6 +1347,7 @@ interface SnackState {
 function ServicesPage() {
   const { data, isLoading, error } = useServices();
   const { data: settings } = useSettings();
+  const { data: zonesData } = useZones();
   const addMutation = useAddService();
   const editMutation = useEditService();
   const deleteMutation = useDeleteService();
@@ -1336,6 +1355,7 @@ function ServicesPage() {
 
   const localInterface = settings?.config?.localInterface ?? "";
   const publicIP = settings?.config?.publicIP ?? "";
+  const zones = zonesData ?? [];
 
   const [addOpen, setAddOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Service | null>(null);
@@ -1484,6 +1504,7 @@ function ServicesPage() {
                 <ServiceRow
                   key={svc.name}
                   service={svc}
+                  zones={zones}
                   onEdit={setEditTarget}
                   onDelete={setDeleteTarget}
                 />
