@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"homelab-horizon/internal/config"
 	"homelab-horizon/internal/haproxy"
 	"homelab-horizon/internal/letsencrypt"
 	"homelab-horizon/internal/route53"
@@ -16,6 +15,11 @@ import (
 
 // syncServices syncs all subsystems with current service configuration (quick, no logging)
 func (s *Server) syncServices() {
+	// Opportunistic public-IP refresh: if the cache is stale, kick off a
+	// background fetch so the next derived-records call sees a current IP.
+	// Non-blocking — mutation handlers should not stall on external HTTP.
+	go s.refreshPublicIPIfStale()
+
 	// Update DNSMasq
 	if s.cfg().DNSMasqEnabled {
 		s.dns.SetMappings(s.cfg().DeriveDNSMappings())
@@ -293,22 +297,23 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 		return
 	}
 
+	// Refresh public IP before deriving records — the user is watching this
+	// stream, so we do it synchronously and surface failures inline.
+	if route53.Available() && s.cfg().PublicIPOverride == "" {
+		if changed, err := s.refreshPublicIP(); err != nil {
+			log.Warning(fmt.Sprintf("Public IP detection failed: %v", err))
+			if s.cfg().IsPublicIPStale() {
+				log.Warning("Cached public IP is stale; DNS records using it will be skipped")
+			}
+		} else if changed {
+			log.Info(fmt.Sprintf("Public IP refreshed: %s", s.cfg().PublicIP))
+		}
+	}
+
 	// Step 2: Route53 DNS records (external DNS - needed before SSL certs)
 	records := s.cfg().DeriveRoute53Records()
 	if len(records) > 0 && route53.Available() {
 		log.Step("Syncing Route53 DNS records (parallel)...")
-
-		// Update public IP if needed
-		if newIP, err := route53.GetPublicIP(); err == nil {
-			if newIP != s.cfg().PublicIP {
-				log.Info(fmt.Sprintf("  Public IP changed: %s -> %s", s.cfg().PublicIP, newIP))
-				s.updateConfig(func(cfg *config.Config) {
-					cfg.PublicIP = newIP
-				})
-				// Re-derive records with new IP
-				records = s.cfg().DeriveRoute53Records()
-			}
-		}
 
 		// Group records by (Name, Type, ZoneID) for round-robin record sets
 		type recordSetKey struct {

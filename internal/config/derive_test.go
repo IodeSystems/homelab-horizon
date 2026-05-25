@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGetZoneForDomain(t *testing.T) {
@@ -87,6 +88,130 @@ func TestGetPublicIPForService(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEffectivePublicIP(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{"override beats cache", Config{PublicIP: "1.1.1.1", PublicIPOverride: "9.9.9.9"}, "9.9.9.9"},
+		{"cache when no override", Config{PublicIP: "1.1.1.1"}, "1.1.1.1"},
+		{"empty when nothing set", Config{}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.cfg.EffectivePublicIP()
+			if got != tt.want {
+				t.Errorf("EffectivePublicIP() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsPublicIPStale(t *testing.T) {
+	now := time.Now().Unix()
+	tests := []struct {
+		name      string
+		cfg       Config
+		wantStale bool
+	}{
+		{
+			name:      "override is never stale",
+			cfg:       Config{PublicIPOverride: "9.9.9.9"},
+			wantStale: false,
+		},
+		{
+			name:      "empty cache is stale",
+			cfg:       Config{},
+			wantStale: true,
+		},
+		{
+			name:      "cache without timestamp is stale",
+			cfg:       Config{PublicIP: "1.1.1.1"},
+			wantStale: true,
+		},
+		{
+			name:      "fresh cache within max-age",
+			cfg:       Config{PublicIP: "1.1.1.1", PublicIPLastChecked: now - 10, PublicIPMaxAge: 3600},
+			wantStale: false,
+		},
+		{
+			name:      "cache beyond max-age is stale",
+			cfg:       Config{PublicIP: "1.1.1.1", PublicIPLastChecked: now - 7200, PublicIPMaxAge: 3600},
+			wantStale: true,
+		},
+		{
+			name:      "default max-age is 3600",
+			cfg:       Config{PublicIP: "1.1.1.1", PublicIPLastChecked: now - 7200, PublicIPMaxAge: 0},
+			wantStale: true,
+		},
+		{
+			name:      "default max-age fresh edge",
+			cfg:       Config{PublicIP: "1.1.1.1", PublicIPLastChecked: now - 1000, PublicIPMaxAge: 0},
+			wantStale: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.IsPublicIPStale(); got != tt.wantStale {
+				t.Errorf("IsPublicIPStale() = %v, want %v", got, tt.wantStale)
+			}
+		})
+	}
+}
+
+func TestPublishablePublicIPs(t *testing.T) {
+	now := time.Now().Unix()
+	fresh := Config{PublicIP: "1.1.1.1", PublicIPLastChecked: now, PublicIPMaxAge: 3600}
+	stale := Config{PublicIP: "1.1.1.1", PublicIPLastChecked: now - 7200, PublicIPMaxAge: 3600}
+
+	t.Run("fresh cache: fallback service gets cache", func(t *testing.T) {
+		svc := Service{ExternalDNS: &ExternalDNS{}}
+		got := fresh.PublishablePublicIPs(&svc)
+		if len(got) != 1 || got[0] != "1.1.1.1" {
+			t.Errorf("got %v, want [1.1.1.1]", got)
+		}
+	})
+
+	t.Run("stale cache: fallback service gets nothing", func(t *testing.T) {
+		svc := Service{ExternalDNS: &ExternalDNS{}}
+		got := stale.PublishablePublicIPs(&svc)
+		if len(got) != 0 {
+			t.Errorf("got %v, want nil (stale should not publish)", got)
+		}
+	})
+
+	t.Run("stale cache: explicit service IPs still publish", func(t *testing.T) {
+		svc := Service{ExternalDNS: &ExternalDNS{IP: "5.6.7.8"}}
+		got := stale.PublishablePublicIPs(&svc)
+		if len(got) != 1 || got[0] != "5.6.7.8" {
+			t.Errorf("got %v, want [5.6.7.8]", got)
+		}
+	})
+
+	t.Run("override: fallback service uses override regardless of cache age", func(t *testing.T) {
+		cfg := Config{
+			PublicIP:            "1.1.1.1",
+			PublicIPOverride:    "9.9.9.9",
+			PublicIPLastChecked: now - 99999, // very stale
+			PublicIPMaxAge:      3600,
+		}
+		svc := Service{ExternalDNS: &ExternalDNS{}}
+		got := cfg.PublishablePublicIPs(&svc)
+		if len(got) != 1 || got[0] != "9.9.9.9" {
+			t.Errorf("got %v, want [9.9.9.9]", got)
+		}
+	})
+
+	t.Run("no external DNS: never publishes", func(t *testing.T) {
+		svc := Service{ExternalDNS: nil}
+		got := fresh.PublishablePublicIPs(&svc)
+		if got != nil {
+			t.Errorf("got %v, want nil", got)
+		}
+	})
 }
 
 func TestDeriveDNSMappings(t *testing.T) {

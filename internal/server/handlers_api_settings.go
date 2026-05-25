@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -79,10 +80,14 @@ func (s *Server) handleAPISettings(w http.ResponseWriter, r *http.Request) {
 		vpnAdmins = []string{}
 	}
 	cfg := apitypes.ConfigResp{
-		PublicIP:       s.cfg().PublicIP,
-		LocalInterface: s.cfg().LocalInterface,
-		DnsmasqEnabled: s.cfg().DNSMasqEnabled,
-		VPNAdmins:      vpnAdmins,
+		PublicIP:            s.cfg().EffectivePublicIP(),
+		PublicIPOverride:    s.cfg().PublicIPOverride,
+		PublicIPLastChecked: s.cfg().PublicIPLastChecked,
+		PublicIPStale:       s.cfg().IsPublicIPStale(),
+		PublicIPMaxAge:      s.cfg().EffectivePublicIPMaxAge(),
+		LocalInterface:      s.cfg().LocalInterface,
+		DnsmasqEnabled:      s.cfg().DNSMasqEnabled,
+		VPNAdmins:           vpnAdmins,
 	}
 
 	resp := apitypes.SettingsResponse{
@@ -664,5 +669,85 @@ func (s *Server) handleAPIRunCheck(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(apitypes.RunCheckResponse{OK: true, Status: result.Status})
+}
+
+// handleAPISetPublicIPOverride sets or clears the host's manual public-IP
+// override. Per-instance: each peer manages its own override. Setting an
+// empty string clears the override (returns to auto-detection).
+func (s *Server) handleAPISetPublicIPOverride(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	var req apitypes.PublicIPOverrideRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	override := strings.TrimSpace(req.Override)
+	if override != "" && net.ParseIP(override) == nil {
+		writeJSONError(w, http.StatusBadRequest, "override must be a valid IP address or empty")
+		return
+	}
+
+	s.updateConfig(func(cfg *config.Config) {
+		cfg.PublicIPOverride = override
+		// Clearing the override forces re-detection; mark the cache stale
+		// so the next sync/refresh fetches fresh.
+		if override == "" {
+			cfg.PublicIPLastChecked = 0
+		}
+	})
+
+	// Kick a refresh in the background so the new state takes effect quickly.
+	go func() {
+		if _, err := s.refreshPublicIP(); err != nil {
+			// Best-effort; the periodic ticker will retry.
+			return
+		}
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(apitypes.PublicIPStatusResponse{
+		PublicIP:            s.cfg().EffectivePublicIP(),
+		PublicIPOverride:    s.cfg().PublicIPOverride,
+		PublicIPLastChecked: s.cfg().PublicIPLastChecked,
+		PublicIPStale:       s.cfg().IsPublicIPStale(),
+		PublicIPMaxAge:      s.cfg().EffectivePublicIPMaxAge(),
+	})
+}
+
+// handleAPIRefreshPublicIP forces an immediate public-IP refresh and returns
+// the resulting status. Per-instance.
+func (s *Server) handleAPIRefreshPublicIP(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	_, err := s.refreshPublicIP()
+	resp := apitypes.PublicIPStatusResponse{
+		PublicIP:            s.cfg().EffectivePublicIP(),
+		PublicIPOverride:    s.cfg().PublicIPOverride,
+		PublicIPLastChecked: s.cfg().PublicIPLastChecked,
+		PublicIPStale:       s.cfg().IsPublicIPStale(),
+		PublicIPMaxAge:      s.cfg().EffectivePublicIPMaxAge(),
+	}
+	if err != nil {
+		resp.Error = err.Error()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 

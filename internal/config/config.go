@@ -135,9 +135,26 @@ type Config struct {
 	Zones    []Zone    `json:"zones"`
 	Services []Service `json:"services"`
 
-	// Public IP for external access (auto-detected if empty)
-	PublicIP         string `json:"public_ip,omitempty"`
-	PublicIPInterval int    `json:"public_ip_interval"` // Sync interval in seconds (0 = disabled, default 300)
+	// Public IP for external access.
+	// PublicIP is the *cached* result of auto-detection. Treat as
+	// possibly-stale: callers that publish to DNS should consult
+	// IsPublicIPStale() before using it. Local-only (each peer has its own
+	// public IP); pinned in mergeRemoteIntoLocal.
+	PublicIP string `json:"public_ip,omitempty"`
+	// PublicIPOverride, when non-empty, is used in place of auto-detection.
+	// Set this only for hosts with a known-static public IP. Local-only.
+	PublicIPOverride string `json:"public_ip_override,omitempty"`
+	// PublicIPLastChecked is the unix-seconds timestamp of the last
+	// successful auto-detection. 0 = never. Local-only.
+	PublicIPLastChecked int64 `json:"public_ip_last_checked,omitempty"`
+	// PublicIPInterval controls how often the background detector runs
+	// (seconds; 0 = disabled). Fleet-shared.
+	PublicIPInterval int `json:"public_ip_interval"`
+	// PublicIPMaxAge is the staleness threshold in seconds. Once the
+	// cached IP is older than this, it is no longer published to DNS
+	// (the system would rather publish nothing than the wrong IP).
+	// 0 = use default (3600). Fleet-shared.
+	PublicIPMaxAge int `json:"public_ip_max_age"`
 
 	// DNSMasq configuration
 	DNSMasqEnabled    bool     `json:"dnsmasq_enabled"`
@@ -517,8 +534,9 @@ func Default() *Config {
 		// Services configuration (Layer 2)
 		Zones:            []Zone{},
 		Services:         []Service{},
-		PublicIP:         "",  // Auto-detected
-		PublicIPInterval: 300, // 5 minutes
+		PublicIP:         "",   // Auto-detected
+		PublicIPInterval: 300,  // 5 minutes
+		PublicIPMaxAge:   3600, // 1 hour staleness threshold
 
 		// DNSMasq configuration
 		DNSMasqEnabled:    true,

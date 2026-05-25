@@ -25,6 +25,8 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import {
@@ -38,7 +40,9 @@ import {
   useFixWGRules,
   useInstallHorizonUnit,
   useInstallPackage,
+  useRefreshPublicIP,
   useReloadDNSMasq,
+  useSetPublicIPOverride,
   useStartDNSMasq,
   useFixDNSMasqInterfaces,
   useSystemHealth,
@@ -658,16 +662,150 @@ function AptInstallCard() {
   );
 }
 
+// formatAge converts a unix-seconds timestamp into a coarse "Xs/Xm/Xh ago"
+// label. Used for the public-IP staleness indicator.
+function formatAge(unixSeconds?: number): string {
+  if (!unixSeconds) return "never";
+  const ageSec = Math.max(0, Math.floor(Date.now() / 1000 - unixSeconds));
+  if (ageSec < 60) return `${ageSec}s ago`;
+  if (ageSec < 3600) return `${Math.floor(ageSec / 60)}m ago`;
+  if (ageSec < 86400) return `${Math.floor(ageSec / 3600)}h ago`;
+  return `${Math.floor(ageSec / 86400)}d ago`;
+}
+
+// PublicIPField bundles the "what's our IP" display with override editing
+// and manual refresh. Surfacing staleness directly avoids silent stale-IP
+// outages — if detection has been failing, the admin sees it here.
+function PublicIPField({
+  publicIP,
+  publicIPOverride,
+  publicIPLastChecked,
+  publicIPStale,
+  publicIPMaxAge,
+}: {
+  publicIP: string;
+  publicIPOverride?: string;
+  publicIPLastChecked?: number;
+  publicIPStale: boolean;
+  publicIPMaxAge: number;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(publicIPOverride ?? "");
+  const setOverride = useSetPublicIPOverride();
+  const refresh = useRefreshPublicIP();
+
+  const usingOverride = !!publicIPOverride;
+  const detectedLabel = publicIPLastChecked
+    ? `auto-detected, last checked ${formatAge(publicIPLastChecked)}`
+    : "auto-detected, never checked";
+
+  const handleSave = () => {
+    setOverride.mutate(draft.trim(), {
+      onSuccess: () => setEditing(false),
+    });
+  };
+
+  return (
+    <Box>
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{ textTransform: "uppercase", letterSpacing: 1, display: "block", mb: 0.5 }}
+      >
+        Public IP
+      </Typography>
+      {editing ? (
+        <Stack direction="row" spacing={1} alignItems="center">
+          <TextField
+            size="small"
+            placeholder="leave empty for auto-detect"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            sx={{ flex: 1, fontFamily: "monospace" }}
+          />
+          <Button
+            size="small"
+            variant="contained"
+            onClick={handleSave}
+            disabled={setOverride.isPending}
+          >
+            {setOverride.isPending ? <CircularProgress size={16} /> : "Save"}
+          </Button>
+          <Button
+            size="small"
+            onClick={() => {
+              setDraft(publicIPOverride ?? "");
+              setEditing(false);
+            }}
+          >
+            Cancel
+          </Button>
+        </Stack>
+      ) : (
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+          <Typography variant="body1" sx={{ fontFamily: "monospace" }}>
+            {publicIP || "—"}
+          </Typography>
+          <Chip
+            size="small"
+            label={usingOverride ? "override" : detectedLabel}
+            color={usingOverride ? "default" : publicIPStale ? "warning" : "success"}
+            variant={usingOverride ? "outlined" : "filled"}
+          />
+          <Tooltip title="Edit override (empty = auto)">
+            <Button size="small" onClick={() => setEditing(true)}>
+              Edit
+            </Button>
+          </Tooltip>
+          {!usingOverride && (
+            <Tooltip title="Re-detect now">
+              <span>
+                <Button
+                  size="small"
+                  onClick={() => refresh.mutate()}
+                  disabled={refresh.isPending}
+                >
+                  {refresh.isPending ? <CircularProgress size={14} /> : "Refresh"}
+                </Button>
+              </span>
+            </Tooltip>
+          )}
+        </Stack>
+      )}
+      {!editing && publicIPStale && !usingOverride && (
+        <Alert severity="warning" sx={{ mt: 1, py: 0 }}>
+          Cached public IP is stale (older than {Math.round(publicIPMaxAge / 60)}m).
+          DNS publishing for services that fall back to this IP is paused until
+          detection succeeds.
+        </Alert>
+      )}
+      {refresh.data?.error && !refresh.isPending && (
+        <Alert severity="error" sx={{ mt: 1, py: 0 }}>
+          Refresh failed: {refresh.data.error}
+        </Alert>
+      )}
+    </Box>
+  );
+}
+
 // ConfigCard preserves the pre-Phase-0 static config display. Keeps it
 // visible without the admin having to hunt across multiple places, and
 // is the natural home for things like LocalInterface + VPN admins.
 function ConfigCard({
   publicIP,
+  publicIPOverride,
+  publicIPLastChecked,
+  publicIPStale,
+  publicIPMaxAge,
   localInterface,
   dnsmasqEnabled,
   vpnAdmins,
 }: {
   publicIP: string;
+  publicIPOverride?: string;
+  publicIPLastChecked?: number;
+  publicIPStale: boolean;
+  publicIPMaxAge: number;
   localInterface: string;
   dnsmasqEnabled: boolean;
   vpnAdmins: string[];
@@ -683,18 +821,13 @@ function ConfigCard({
             gap: 3,
           }}
         >
-          <Box>
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ textTransform: "uppercase", letterSpacing: 1, display: "block", mb: 0.5 }}
-            >
-              Public IP
-            </Typography>
-            <Typography variant="body1" sx={{ fontFamily: "monospace" }}>
-              {publicIP || "Auto-detected"}
-            </Typography>
-          </Box>
+          <PublicIPField
+            publicIP={publicIP}
+            publicIPOverride={publicIPOverride}
+            publicIPLastChecked={publicIPLastChecked}
+            publicIPStale={publicIPStale}
+            publicIPMaxAge={publicIPMaxAge}
+          />
           <Box>
             <Typography
               variant="caption"
@@ -795,6 +928,10 @@ export function InstallPackageDialog({
 
 export function SystemHealthTab({
   publicIP,
+  publicIPOverride,
+  publicIPLastChecked,
+  publicIPStale,
+  publicIPMaxAge,
   localInterface,
   dnsmasqEnabled,
   vpnAdmins,
@@ -804,6 +941,10 @@ export function SystemHealthTab({
   zones,
 }: {
   publicIP: string;
+  publicIPOverride?: string;
+  publicIPLastChecked?: number;
+  publicIPStale: boolean;
+  publicIPMaxAge: number;
   localInterface: string;
   dnsmasqEnabled: boolean;
   vpnAdmins: string[];
@@ -831,6 +972,10 @@ export function SystemHealthTab({
       {/* Config/identity first — the admin's "where am I" at a glance. */}
       <ConfigCard
         publicIP={publicIP}
+        publicIPOverride={publicIPOverride}
+        publicIPLastChecked={publicIPLastChecked}
+        publicIPStale={publicIPStale}
+        publicIPMaxAge={publicIPMaxAge}
         localInterface={localInterface}
         dnsmasqEnabled={dnsmasqEnabled}
         vpnAdmins={vpnAdmins}

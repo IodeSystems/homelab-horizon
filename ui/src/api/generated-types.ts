@@ -73,8 +73,20 @@ export interface InternalDNSResp {
   ip: string;
 }
 export interface ExternalDNSResp {
+  /**
+   * IP / IPs are the *resolved* IPs the service currently publishes —
+   * either the user's explicit ConfiguredIPs or the host fallback. Use
+   * these for display and DNS-status checks.
+   */
   ip: string;
-  ips?: string[]; // All IPs for round-robin DNS
+  ips?: string[];
+  /**
+   * ConfiguredIPs is the user-set list. Empty means "use the host's
+   * public IP fallback". UI edit forms should use this to populate the
+   * IP field — pre-filling with the resolved fallback would silently
+   * turn auto-resolution into a per-service static override on save.
+   */
+  configuredIPs?: string[];
   ttl: number /* int */;
 }
 export interface ServiceStatus {
@@ -265,6 +277,10 @@ export interface CheckStatusResp {
 }
 export interface ConfigResp {
   publicIP: string;
+  publicIPOverride?: string;
+  publicIPLastChecked?: number /* int64 */; // unix seconds; 0 = never
+  publicIPStale: boolean;
+  publicIPMaxAge: number /* int */; // staleness threshold, seconds
   localInterface: string;
   dnsmasqEnabled: boolean;
   vpnAdmins: string[];
@@ -275,6 +291,26 @@ export interface SettingsResponse {
   ssl: SSLResp;
   checks: CheckStatusResp[];
   config: ConfigResp;
+}
+/**
+ * PublicIPOverrideRequest sets or clears the host's manual public-IP override.
+ * Empty Override clears the override (returns to auto-detection).
+ */
+export interface PublicIPOverrideRequest {
+  override: string;
+}
+/**
+ * PublicIPStatusResponse summarizes the host's current public-IP state.
+ * Error is set when an immediate refresh attempt failed; the cached PublicIP
+ * remains usable (subject to PublicIPStale).
+ */
+export interface PublicIPStatusResponse {
+  publicIP: string;
+  publicIPOverride?: string;
+  publicIPLastChecked?: number /* int64 */;
+  publicIPStale: boolean;
+  publicIPMaxAge: number /* int */;
+  error?: string;
 }
 export interface HAProxyConfigPreview {
   config: string;

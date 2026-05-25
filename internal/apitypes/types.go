@@ -76,9 +76,17 @@ type InternalDNSResp struct {
 }
 
 type ExternalDNSResp struct {
+	// IP / IPs are the *resolved* IPs the service currently publishes —
+	// either the user's explicit ConfiguredIPs or the host fallback. Use
+	// these for display and DNS-status checks.
 	IP  string   `json:"ip"`
-	IPs []string `json:"ips,omitempty"` // All IPs for round-robin DNS
-	TTL int      `json:"ttl"`
+	IPs []string `json:"ips,omitempty"`
+	// ConfiguredIPs is the user-set list. Empty means "use the host's
+	// public IP fallback". UI edit forms should use this to populate the
+	// IP field — pre-filling with the resolved fallback would silently
+	// turn auto-resolution into a per-service static override on save.
+	ConfiguredIPs []string `json:"configuredIPs,omitempty"`
+	TTL           int      `json:"ttl"`
 }
 
 type ServiceStatus struct {
@@ -303,10 +311,14 @@ type CheckStatusResp struct {
 }
 
 type ConfigResp struct {
-	PublicIP       string   `json:"publicIP"`
-	LocalInterface string   `json:"localInterface"`
-	DnsmasqEnabled bool     `json:"dnsmasqEnabled"`
-	VPNAdmins      []string `json:"vpnAdmins"`
+	PublicIP            string   `json:"publicIP"`
+	PublicIPOverride    string   `json:"publicIPOverride,omitempty"`
+	PublicIPLastChecked int64    `json:"publicIPLastChecked,omitempty"` // unix seconds; 0 = never
+	PublicIPStale       bool     `json:"publicIPStale"`
+	PublicIPMaxAge      int      `json:"publicIPMaxAge"` // staleness threshold, seconds
+	LocalInterface      string   `json:"localInterface"`
+	DnsmasqEnabled      bool     `json:"dnsmasqEnabled"`
+	VPNAdmins           []string `json:"vpnAdmins"`
 }
 
 type SettingsResponse struct {
@@ -315,6 +327,24 @@ type SettingsResponse struct {
 	SSL     SSLResp           `json:"ssl"`
 	Checks  []CheckStatusResp `json:"checks"`
 	Config  ConfigResp        `json:"config"`
+}
+
+// PublicIPOverrideRequest sets or clears the host's manual public-IP override.
+// Empty Override clears the override (returns to auto-detection).
+type PublicIPOverrideRequest struct {
+	Override string `json:"override"`
+}
+
+// PublicIPStatusResponse summarizes the host's current public-IP state.
+// Error is set when an immediate refresh attempt failed; the cached PublicIP
+// remains usable (subject to PublicIPStale).
+type PublicIPStatusResponse struct {
+	PublicIP            string `json:"publicIP"`
+	PublicIPOverride    string `json:"publicIPOverride,omitempty"`
+	PublicIPLastChecked int64  `json:"publicIPLastChecked,omitempty"`
+	PublicIPStale       bool   `json:"publicIPStale"`
+	PublicIPMaxAge      int    `json:"publicIPMaxAge"`
+	Error               string `json:"error,omitempty"`
 }
 
 // HAProxy config preview

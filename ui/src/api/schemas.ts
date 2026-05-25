@@ -79,7 +79,12 @@ export const ServiceSchema = z.object({
   domains: z.array(z.string()),
   internalDNS: z.object({ ip: z.string() }).optional(),
   externalDNS: z
-    .object({ ip: z.string(), ips: z.array(z.string()).optional(), ttl: z.number() })
+    .object({
+      ip: z.string(),
+      ips: z.array(z.string()).optional(),
+      configuredIPs: z.array(z.string()).optional(),
+      ttl: z.number(),
+    })
     .optional(),
   proxy: z
     .object({
@@ -263,9 +268,22 @@ export const CheckStatusSchema = z.object({
 
 export const SystemConfigSchema = z.object({
   publicIP: z.string(),
+  publicIPOverride: z.string().optional(),
+  publicIPLastChecked: z.number().optional(),
+  publicIPStale: z.boolean(),
+  publicIPMaxAge: z.number(),
   localInterface: z.string(),
   dnsmasqEnabled: z.boolean(),
   vpnAdmins: z.array(z.string()),
+});
+
+export const PublicIPStatusSchema = z.object({
+  publicIP: z.string(),
+  publicIPOverride: z.string().optional(),
+  publicIPLastChecked: z.number().optional(),
+  publicIPStale: z.boolean(),
+  publicIPMaxAge: z.number(),
+  error: z.string().optional(),
 });
 
 export const SettingsDataSchema = z.object({
