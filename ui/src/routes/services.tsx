@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import {
   Alert,
@@ -14,6 +14,7 @@ import {
   IconButton,
   Paper,
   Snackbar,
+  Stack,
   Switch,
   Table,
   TableBody,
@@ -24,6 +25,7 @@ import {
   Tab,
   Tabs,
   TextField,
+  Tooltip,
   Typography,
   MenuItem,
 } from "@mui/material";
@@ -42,9 +44,12 @@ import {
   useDeleteService,
   useServiceIntegration,
   useSettings,
+  useZones,
+  useAddDomainSSL,
+  useRemoveDomainSSL,
 } from "../api/hooks";
 import { useSyncContext } from "../components/SyncProvider";
-import type { Service } from "../api/types";
+import type { Service, Zone } from "../api/types";
 import type { ServiceMutationInput } from "../api/hooks";
 
 function StatusDot({
@@ -357,6 +362,253 @@ function ExternalIPsField({
   );
 }
 
+// --- SSL coverage analysis ---
+//
+// SSL coverage is a zone-level concept: each Zone owns one wildcard cert whose
+// SANs are derived from `zone.SubZones`. A given service domain is "covered"
+// if its label is literally a SubZone, or if a wildcard SubZone on the same
+// zone matches it. Cross-zone wildcard coverage doesn't exist (the backend
+// only absorbs within a single zone).
+
+type CoverageState = "noZone" | "explicit" | "covered" | "uncovered";
+
+interface DomainCoverage {
+  domain: string;
+  state: CoverageState;
+  zone?: Zone;
+  // Wildcard pattern that covers this domain (only set when state="covered").
+  coveredBy?: string;
+}
+
+// Mirror of internal/server/handlers_domains.go:domainMatchesPattern.
+// *.example.com matches one label only (foo.example.com, not a.b.example.com).
+function domainMatchesPattern(domain: string, pattern: string): boolean {
+  if (domain === pattern) return true;
+  if (pattern.startsWith("*.")) {
+    const suffix = pattern.slice(1);
+    if (domain.endsWith(suffix)) {
+      const prefix = domain.slice(0, -suffix.length);
+      return prefix.length > 0 && !prefix.includes(".");
+    }
+  }
+  return false;
+}
+
+function analyzeDomainCoverage(raw: string, zones: Zone[]): DomainCoverage | null {
+  const domain = raw.trim().toLowerCase();
+  if (!domain) return null;
+
+  const isWildcard = domain.startsWith("*.");
+  const check = isWildcard ? domain.slice(2) : domain;
+
+  // Match the backend's GetZoneForDomain: first zone whose name equals the
+  // domain or is a parent suffix. Picking a different zone here would mean
+  // the addDomainSSL mutation lands in a zone the UI didn't analyze.
+  const zone = zones.find((z) => z.name === check || check.endsWith("." + z.name));
+  if (!zone) return { domain, state: "noZone" };
+
+  let subZoneLabel: string;
+  if (isWildcard) {
+    subZoneLabel = check === zone.name ? "*" : "*." + check.slice(0, -(zone.name.length + 1));
+  } else if (check === zone.name) {
+    subZoneLabel = "";
+  } else {
+    subZoneLabel = check.slice(0, -(zone.name.length + 1));
+  }
+
+  const subZones = zone.subZones ?? [];
+  if (subZones.includes(subZoneLabel)) {
+    return { domain, state: "explicit", zone };
+  }
+  for (const sz of subZones) {
+    if (!sz.startsWith("*")) continue;
+    const pattern = sz === "*" ? "*." + zone.name : sz + "." + zone.name;
+    if (domainMatchesPattern(domain, pattern)) {
+      return { domain, state: "covered", zone, coveredBy: pattern };
+    }
+  }
+  return { domain, state: "uncovered", zone };
+}
+
+// DomainCoverageRow shows one parsed domain with its current SSL state and a
+// toggle. `isOrphanRisk` is true when toggling on would write a SubZone to the
+// zone for a domain that isn't yet a service domain anywhere — cancelling the
+// form afterwards leaves a dangling SAN.
+function DomainCoverageRow({
+  cov,
+  zoneSSLOff,
+  isOrphanRisk,
+  onAdd,
+  onRemove,
+  isPending,
+  error,
+}: {
+  cov: DomainCoverage;
+  zoneSSLOff: boolean;
+  isOrphanRisk: boolean;
+  onAdd: () => void;
+  onRemove: () => void;
+  isPending: boolean;
+  error: string | null;
+}) {
+  const canToggle = cov.state === "explicit" || cov.state === "uncovered";
+  const sslOn = cov.state === "explicit" || cov.state === "covered";
+
+  let statusLabel: string;
+  let statusColor: "success" | "warning" | "error" | "default";
+  let helperText: string | null = null;
+  if (cov.state === "noZone") {
+    statusLabel = "no matching zone";
+    statusColor = "error";
+    helperText = "Add this domain's zone on the Domains page to enable SSL.";
+  } else if (cov.state === "explicit") {
+    statusLabel = `SubZone of ${cov.zone!.name}`;
+    statusColor = "success";
+  } else if (cov.state === "covered") {
+    statusLabel = `covered by ${cov.coveredBy}`;
+    statusColor = "success";
+  } else {
+    statusLabel = `zone ${cov.zone!.name}`;
+    statusColor = "warning";
+  }
+
+  const tooltip =
+    cov.state === "noZone"
+      ? "No matching zone — create one first"
+      : cov.state === "covered"
+      ? `Already covered by ${cov.coveredBy}; remove that wildcard to manage this domain individually`
+      : cov.state === "explicit"
+      ? "Remove this domain's SubZone (affects the zone immediately)"
+      : "Add this domain as a SubZone (affects the zone immediately)";
+
+  return (
+    <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1, py: 0.25 }}>
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography variant="body2" sx={{ fontFamily: "monospace", wordBreak: "break-all" }}>
+          {cov.domain}
+        </Typography>
+        <Box sx={{ display: "flex", gap: 0.5, mt: 0.25, flexWrap: "wrap" }}>
+          <Chip size="small" label={statusLabel} color={statusColor} variant="outlined" />
+          {zoneSSLOff && (
+            <Chip size="small" label="zone SSL disabled" color="warning" variant="outlined" />
+          )}
+        </Box>
+        {helperText && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.25 }}>
+            {helperText}
+          </Typography>
+        )}
+        {isOrphanRisk && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.25 }}>
+            New domain — toggling SSL writes a SubZone to{" "}
+            <code>{cov.zone!.name}</code> immediately, even if you cancel this dialog.
+          </Typography>
+        )}
+        {error && (
+          <Typography variant="caption" color="error.main" sx={{ display: "block", mt: 0.25 }}>
+            {error}
+          </Typography>
+        )}
+      </Box>
+      <Tooltip title={tooltip}>
+        <span>
+          <Switch
+            size="small"
+            checked={sslOn}
+            disabled={!canToggle || isPending}
+            onChange={() => (cov.state === "explicit" ? onRemove() : onAdd())}
+          />
+        </span>
+      </Tooltip>
+    </Box>
+  );
+}
+
+function DomainCoverageList({
+  domainsText,
+  zones,
+  savedDomains,
+}: {
+  domainsText: string;
+  zones: Zone[];
+  // Every domain currently bound to any saved service. Used to detect the
+  // orphan case: a domain that isn't on any service yet would leave a SAN
+  // without an owner if the form is cancelled after toggling SSL on.
+  savedDomains: Set<string>;
+}) {
+  const addSSL = useAddDomainSSL();
+  const removeSSL = useRemoveDomainSSL();
+  // Per-domain error so a failure on one row doesn't blank the others.
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const rows = useMemo(() => {
+    const seen = new Set<string>();
+    const out: DomainCoverage[] = [];
+    for (const raw of domainsText.split(",")) {
+      const d = raw.trim().toLowerCase();
+      if (!d || seen.has(d)) continue;
+      seen.add(d);
+      const cov = analyzeDomainCoverage(d, zones);
+      if (cov) out.push(cov);
+    }
+    return out;
+  }, [domainsText, zones]);
+
+  if (rows.length === 0) return null;
+
+  const clearError = (d: string) =>
+    setErrors((e) => {
+      if (!(d in e)) return e;
+      const next = { ...e };
+      delete next[d];
+      return next;
+    });
+
+  const setError = (d: string, msg: string) =>
+    setErrors((e) => ({ ...e, [d]: msg }));
+
+  const handleAdd = (cov: DomainCoverage) => {
+    clearError(cov.domain);
+    addSSL.mutate(cov.domain, {
+      onError: (err: unknown) =>
+        setError(cov.domain, err instanceof Error ? err.message : String(err)),
+    });
+  };
+  const handleRemove = (cov: DomainCoverage) => {
+    clearError(cov.domain);
+    removeSSL.mutate(cov.domain, {
+      onError: (err: unknown) =>
+        setError(cov.domain, err instanceof Error ? err.message : String(err)),
+    });
+  };
+
+  return (
+    <Box>
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{ textTransform: "uppercase", letterSpacing: 1, display: "block", mb: 0.5 }}
+      >
+        SSL coverage
+      </Typography>
+      <Stack spacing={0.25}>
+        {rows.map((cov) => (
+          <DomainCoverageRow
+            key={cov.domain}
+            cov={cov}
+            zoneSSLOff={!!cov.zone && !cov.zone.sslEnabled}
+            isOrphanRisk={cov.state === "uncovered" && !savedDomains.has(cov.domain)}
+            onAdd={() => handleAdd(cov)}
+            onRemove={() => handleRemove(cov)}
+            isPending={addSSL.isPending || removeSSL.isPending}
+            error={errors[cov.domain] ?? null}
+          />
+        ))}
+      </Stack>
+    </Box>
+  );
+}
+
 function ServiceFormDialog({
   open,
   onClose,
@@ -381,6 +633,17 @@ function ServiceFormDialog({
   const [timeoutsOpen, setTimeoutsOpen] = useState(
     !!(initialValues.timeoutServer || initialValues.timeoutConnect || initialValues.timeoutTunnel),
   );
+  const zonesQuery = useZones();
+  const servicesQuery = useServices();
+  // Set of domains owned by any saved service. Used downstream to detect when
+  // toggling SSL on a typed-but-unsaved domain would leave an orphan SubZone.
+  const savedDomains = useMemo(() => {
+    const set = new Set<string>();
+    for (const svc of servicesQuery.data ?? []) {
+      for (const d of svc.domains) set.add(d.toLowerCase());
+    }
+    return set;
+  }, [servicesQuery.data]);
 
   // Reset form when dialog opens with new values
   const prevOpen = useState(open)[0];
@@ -446,6 +709,13 @@ function ServiceFormDialog({
           fullWidth
           helperText="e.g. grafana.example.com, monitor.example.com"
         />
+        {zonesQuery.data && (
+          <DomainCoverageList
+            domainsText={form.domains}
+            zones={zonesQuery.data}
+            savedDomains={savedDomains}
+          />
+        )}
         <TextField
           label="Internal DNS IP"
           value={form.internalIP}
