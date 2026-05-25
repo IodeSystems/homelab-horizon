@@ -6,8 +6,8 @@ homelab-horizon.service
 coverage.out
 coverage.html
 deploy.sh
-bin/deploy
 ui/node_modules
 ui/dist
 ui/*.tsbuildinfo
 homelab-horizon-linux
+.hz.json

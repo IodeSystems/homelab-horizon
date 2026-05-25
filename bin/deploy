@@ -1,130 +1,209 @@
 #!/bin/bash
-# Deploy homelab-horizon to a host.
+# Deploy homelab-horizon to one or more hosts.
 #
 # Usage:
-#   ./bin/deploy --host ubuntu@1.2.3.4               # local build (dev loop)
-#   ./bin/deploy --host ubuntu@1.2.3.4 --version v0.0.1  # GitHub release
+#   ./bin/deploy                                    # fan out over .hz.json
+#   ./bin/deploy --host user@h                      # single host, local build
+#   ./bin/deploy --host user@h --version v0.0.1     # single host, release
+#   ./bin/deploy --version v0.0.1                   # fan out, pin all to vX
 #
-# --version: target curls the matching prebuilt archive from the GitHub
-#            release. No local toolchain needed; binary is exactly what
-#            'bin/release' published.
-# (default): cross-compile the working tree locally and scp. Faster turn-
-#            around and lets you ship un-tagged WIP fixes.
+# .hz.json (gitignored, repo root) is an array of per-host entries:
+#   [
+#     {"host": "ubuntu@10.0.0.1"},
+#     {"host": "pi@10.0.0.2", "version": "v0.0.1"}
+#   ]
+#
+# Precedence: CLI --host puts us in single-shot mode and ignores config.
+# CLI --version overrides every entry's version (the "re-pin the whole
+# fleet" knob).
 
 set -euo pipefail
 
 DEFAULT_HOST="ubuntu@192.168.1.89"
-HOST="$DEFAULT_HOST"
-VERSION=""
+CONFIG_FILE=".hz.json"
+REMOTE_PATH="/usr/local/bin/homelab-horizon"
+
+CLI_HOST=""
+CLI_VERSION=""
 
 usage() {
   cat <<HELP
 Usage: $0 [--host USER@HOST] [--version vX.Y.Z]
 
-  --host       SSH target (default: $DEFAULT_HOST)
-  --version    GitHub release tag to deploy; omit for local build
+  --host       SSH target. Single-shot; ignores $CONFIG_FILE.
+  --version    GitHub release tag. Overrides every entry's version.
   -h, --help   Show this help
+
+No --host: read $CONFIG_FILE (JSON array of {host, version}) and fan out.
+No $CONFIG_FILE either: fall back to $DEFAULT_HOST, local build.
 HELP
 }
+
+err() { printf >&2 "deploy: %s\n" "$*"; exit 1; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --host)
-      [ $# -ge 2 ] || { echo "--host needs a value" >&2; exit 2; }
-      HOST="$2"; shift 2 ;;
+      [ $# -ge 2 ] || err "--host needs a value"
+      CLI_HOST="$2"; shift 2 ;;
     --version)
-      [ $# -ge 2 ] || { echo "--version needs a value" >&2; exit 2; }
-      VERSION="$2"; shift 2 ;;
+      [ $# -ge 2 ] || err "--version needs a value"
+      CLI_VERSION="$2"; shift 2 ;;
     -h|--help)
       usage; exit 0 ;;
     *)
-      echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
+      printf >&2 "deploy: unknown arg: %s\n" "$1"; usage >&2; exit 2 ;;
   esac
 done
 
-[ -n "$HOST" ] || { echo "--host required" >&2; exit 2; }
-
-if [ -n "$VERSION" ] && ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "--version must be vMAJOR.MINOR.PATCH (got $VERSION)" >&2
-  exit 2
+if [ -n "$CLI_VERSION" ] && ! [[ "$CLI_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  err "--version must be vMAJOR.MINOR.PATCH (got $CLI_VERSION)"
 fi
 
-echo "Detecting architecture on $HOST..."
-UNAME_M=$(ssh "$HOST" "uname -m" 2>/dev/null || echo "unknown")
-case "$UNAME_M" in
-  x86_64)        ARCH="linux-amd64" ;;
-  aarch64|arm64) ARCH="linux-arm64" ;;
-  armv7l|armv6l) ARCH="linux-armv7" ;;
-  *)
-    echo "Unsupported arch ($UNAME_M) — falling back to linux-arm64" >&2
-    ARCH="linux-arm64"
-    ;;
-esac
-echo "Architecture: $ARCH"
+# ----- Build the deploy plan -----------------------------------------------
 
-REMOTE_PATH="/usr/local/bin/homelab-horizon"
+declare -a HOSTS=()
+declare -a VERSIONS=()
 
-# Stage /tmp/homelab-horizon.new on the target via one of two paths.
-if [ -z "$VERSION" ]; then
-  echo "Building $ARCH locally..."
-  make build-"$ARCH"
-  scp "dist/homelab-horizon-$ARCH" "$HOST:/tmp/homelab-horizon.new"
+if [ -n "$CLI_HOST" ]; then
+  HOSTS+=("$CLI_HOST")
+  VERSIONS+=("$CLI_VERSION")
+elif [ -f "$CONFIG_FILE" ]; then
+  command -v jq >/dev/null 2>&1 || err "jq required to read $CONFIG_FILE"
+  jq -e 'type == "array"' "$CONFIG_FILE" >/dev/null \
+    || err "$CONFIG_FILE must be a JSON array"
+  count=$(jq 'length' "$CONFIG_FILE")
+  [ "$count" -gt 0 ] || err "$CONFIG_FILE is empty"
+  for i in $(seq 0 $((count - 1))); do
+    h=$(jq -r ".[$i].host // empty" "$CONFIG_FILE")
+    v=$(jq -r ".[$i].version // empty" "$CONFIG_FILE")
+    [ -n "$h" ] || err "$CONFIG_FILE entry $i: host is required"
+    HOSTS+=("$h")
+    # CLI --version, if given, overrides whatever the entry says — that's
+    # the "re-pin the whole fleet to one tag" knob.
+    VERSIONS+=("${CLI_VERSION:-$v}")
+  done
 else
-  # Derive owner/repo from the git origin so this script keeps working if
-  # the repo gets forked or moved — no hardcoded slug to drift.
-  repo=$(git remote get-url origin 2>/dev/null \
-    | sed -E 's|.*github.com[:/]([^/]+/[^/.]+)(\.git)?$|\1|')
-  [ -n "$repo" ] || { echo "could not derive repo from git origin" >&2; exit 1; }
-  url="https://github.com/$repo/releases/download/$VERSION/homelab-horizon-$ARCH.tar.gz"
-  echo "Fetching $url on $HOST..."
-  # curl -f turns a 404 (bad tag) into a non-zero exit instead of writing
-  # the HTML error page to disk and "succeeding".
-  ssh "$HOST" "set -e
-    cd /tmp
-    curl -fSL -o homelab-horizon-$ARCH.tar.gz '$url'
-    tar -xzf homelab-horizon-$ARCH.tar.gz
-    mv homelab-horizon-$ARCH homelab-horizon.new
-    rm -f homelab-horizon-$ARCH.tar.gz
-  "
+  HOSTS+=("$DEFAULT_HOST")
+  VERSIONS+=("$CLI_VERSION")
 fi
 
-echo "Installing on $HOST..."
-ssh "$HOST" -t "
-  sudo mv /tmp/homelab-horizon.new $REMOTE_PATH
-  sudo chmod +x $REMOTE_PATH
+# ----- Probe arches --------------------------------------------------------
+# Done upfront so we can dedup local builds (the 'ui' target is phony and
+# rebuilds the frontend on every make invocation; collapsing N amd64 hosts
+# to one build saves a frontend rebuild per host).
 
-  echo 'Installing systemd service using binary...'
-  sudo mkdir -p /etc/homelab-horizon
-  cd /etc/homelab-horizon
-  sudo $REMOTE_PATH -install
+detect_arch() {
+  local m
+  m=$(ssh "$1" "uname -m" 2>/dev/null || echo "unknown")
+  case "$m" in
+    x86_64)        echo "linux-amd64" ;;
+    aarch64|arm64) echo "linux-arm64" ;;
+    armv7l|armv6l) echo "linux-armv7" ;;
+    *)
+      printf >&2 "deploy: unknown arch (%s) on %s, falling back to linux-arm64\n" "$m" "$2"
+      echo "linux-arm64" ;;
+  esac
+}
 
-  echo 'Enabling and restarting service...'
-  sudo systemctl enable homelab-horizon
-  sudo systemctl daemon-reload
-  if sudo systemctl restart homelab-horizon; then
-    echo 'Checking status...'
-    sudo systemctl status homelab-horizon --no-pager -l | head -20
+declare -a ARCHS=()
+for h in "${HOSTS[@]}"; do
+  printf "Detecting architecture on %s..." "$h"
+  a=$(detect_arch "$h" "$h")
+  ARCHS+=("$a")
+  printf " %s\n" "$a"
+done
 
-    echo ''
-    echo 'Auth token:'
-    for i in {1..5}; do
-      if [ -f /etc/homelab-horizon/config.json.token ]; then
-        sudo cat /etc/homelab-horizon/config.json.token
-        break
-      fi
-      sleep 1
-    done || echo '(token file not found)'
-  else
-    echo ''
-    echo '*** SERVICE FAILED TO START ***'
-    echo ''
-    sudo systemctl status homelab-horizon --no-pager -l
-    echo ''
-    echo '--- Journal (last 30 lines) ---'
-    sudo journalctl -u homelab-horizon -n 30 --no-pager -o short
-    exit 1
+# ----- Local builds (only for entries without a --version) -----------------
+
+declare -A NEED_BUILD=()
+for i in "${!HOSTS[@]}"; do
+  if [ -z "${VERSIONS[$i]}" ]; then
+    NEED_BUILD["${ARCHS[$i]}"]=1
   fi
-"
+done
 
-echo ""
-echo "Done!"
+if [ "${#NEED_BUILD[@]}" -gt 0 ]; then
+  for arch in "${!NEED_BUILD[@]}"; do
+    echo "Building $arch locally..."
+    make "build-$arch"
+  done
+fi
+
+# ----- Repo slug (only needed if any entry pulls a release) ----------------
+
+REPO=""
+for v in "${VERSIONS[@]}"; do
+  if [ -n "$v" ]; then
+    REPO=$(git remote get-url origin 2>/dev/null \
+      | sed -E 's|.*github.com[:/]([^/]+/[^/.]+)(\.git)?$|\1|')
+    [ -n "$REPO" ] || err "could not derive repo from git origin"
+    break
+  fi
+done
+
+# ----- Per-host deploy -----------------------------------------------------
+
+deploy_one() {
+  local host="$1" arch="$2" version="$3"
+
+  echo
+  echo "=== $host ($arch${version:+, $version})"
+
+  if [ -z "$version" ]; then
+    scp "dist/homelab-horizon-$arch" "$host:/tmp/homelab-horizon.new"
+  else
+    local url="https://github.com/$REPO/releases/download/$version/homelab-horizon-$arch.tar.gz"
+    echo "Fetching $url on $host..."
+    # -f turns a 404 (bad tag) into a real error instead of writing the
+    # HTML error page to disk and "succeeding".
+    ssh "$host" "set -e
+      cd /tmp
+      curl -fSL -o homelab-horizon-$arch.tar.gz '$url'
+      tar -xzf homelab-horizon-$arch.tar.gz
+      mv homelab-horizon-$arch homelab-horizon.new
+      rm -f homelab-horizon-$arch.tar.gz
+    "
+  fi
+
+  ssh "$host" -t "
+    sudo mv /tmp/homelab-horizon.new $REMOTE_PATH
+    sudo chmod +x $REMOTE_PATH
+    echo 'Installing systemd service using binary...'
+    sudo mkdir -p /etc/homelab-horizon
+    cd /etc/homelab-horizon
+    sudo $REMOTE_PATH -install
+    echo 'Enabling and restarting service...'
+    sudo systemctl enable homelab-horizon
+    sudo systemctl daemon-reload
+    if sudo systemctl restart homelab-horizon; then
+      echo 'Checking status...'
+      sudo systemctl status homelab-horizon --no-pager -l | head -20
+      echo ''
+      echo 'Auth token:'
+      for i in {1..5}; do
+        if [ -f /etc/homelab-horizon/config.json.token ]; then
+          sudo cat /etc/homelab-horizon/config.json.token
+          break
+        fi
+        sleep 1
+      done || echo '(token file not found)'
+    else
+      echo ''
+      echo '*** SERVICE FAILED TO START ***'
+      echo ''
+      sudo systemctl status homelab-horizon --no-pager -l
+      echo ''
+      echo '--- Journal (last 30 lines) ---'
+      sudo journalctl -u homelab-horizon -n 30 --no-pager -o short
+      exit 1
+    fi
+  "
+}
+
+for i in "${!HOSTS[@]}"; do
+  deploy_one "${HOSTS[$i]}" "${ARCHS[$i]}" "${VERSIONS[$i]}"
+done
+
+echo
+echo "All ${#HOSTS[@]} target(s) done."
