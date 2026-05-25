@@ -1,44 +1,95 @@
 #!/bin/bash
-set -e
+# Deploy homelab-horizon to a host.
+#
+# Usage:
+#   ./bin/deploy --host ubuntu@1.2.3.4               # local build (dev loop)
+#   ./bin/deploy --host ubuntu@1.2.3.4 --version v0.0.1  # GitHub release
+#
+# --version: target curls the matching prebuilt archive from the GitHub
+#            release. No local toolchain needed; binary is exactly what
+#            'bin/release' published.
+# (default): cross-compile the working tree locally and scp. Faster turn-
+#            around and lets you ship un-tagged WIP fixes.
 
-# Configuration
-TARGET="${1:-ubuntu@192.168.1.89}"
+set -euo pipefail
 
-echo "Detecting architecture on $TARGET..."
-UNAME_M=$(ssh "$TARGET" "uname -m" 2>/dev/null || echo "unknown")
+DEFAULT_HOST="ubuntu@192.168.1.89"
+HOST="$DEFAULT_HOST"
+VERSION=""
 
+usage() {
+  cat <<HELP
+Usage: $0 [--host USER@HOST] [--version vX.Y.Z]
+
+  --host       SSH target (default: $DEFAULT_HOST)
+  --version    GitHub release tag to deploy; omit for local build
+  -h, --help   Show this help
+HELP
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --host)
+      [ $# -ge 2 ] || { echo "--host needs a value" >&2; exit 2; }
+      HOST="$2"; shift 2 ;;
+    --version)
+      [ $# -ge 2 ] || { echo "--version needs a value" >&2; exit 2; }
+      VERSION="$2"; shift 2 ;;
+    -h|--help)
+      usage; exit 0 ;;
+    *)
+      echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+[ -n "$HOST" ] || { echo "--host required" >&2; exit 2; }
+
+if [ -n "$VERSION" ] && ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "--version must be vMAJOR.MINOR.PATCH (got $VERSION)" >&2
+  exit 2
+fi
+
+echo "Detecting architecture on $HOST..."
+UNAME_M=$(ssh "$HOST" "uname -m" 2>/dev/null || echo "unknown")
 case "$UNAME_M" in
-  x86_64)
-    ARCH="linux-amd64"
-    ;;
-  aarch64|arm64)
-    ARCH="linux-arm64"
-    ;;
-  armv7l|armv6l)
-    ARCH="linux-armv7"
-    ;;
+  x86_64)        ARCH="linux-amd64" ;;
+  aarch64|arm64) ARCH="linux-arm64" ;;
+  armv7l|armv6l) ARCH="linux-armv7" ;;
   *)
-    echo "Unsupported or unknown architecture: $UNAME_M"
-    echo "Falling back to linux-arm64"
+    echo "Unsupported arch ($UNAME_M) — falling back to linux-arm64" >&2
     ARCH="linux-arm64"
     ;;
 esac
+echo "Architecture: $ARCH"
 
-echo "Detected architecture: $ARCH"
-
-BINARY="dist/homelab-horizon-$ARCH"
 REMOTE_PATH="/usr/local/bin/homelab-horizon"
 
-echo "Building for $ARCH..."
-make build-"$ARCH"
+# Stage /tmp/homelab-horizon.new on the target via one of two paths.
+if [ -z "$VERSION" ]; then
+  echo "Building $ARCH locally..."
+  make build-"$ARCH"
+  scp "dist/homelab-horizon-$ARCH" "$HOST:/tmp/homelab-horizon.new"
+else
+  # Derive owner/repo from the git origin so this script keeps working if
+  # the repo gets forked or moved — no hardcoded slug to drift.
+  repo=$(git remote get-url origin 2>/dev/null \
+    | sed -E 's|.*github.com[:/]([^/]+/[^/.]+)(\.git)?$|\1|')
+  [ -n "$repo" ] || { echo "could not derive repo from git origin" >&2; exit 1; }
+  url="https://github.com/$repo/releases/download/$VERSION/homelab-horizon-$ARCH.tar.gz"
+  echo "Fetching $url on $HOST..."
+  # curl -f turns a 404 (bad tag) into a non-zero exit instead of writing
+  # the HTML error page to disk and "succeeding".
+  ssh "$HOST" "set -e
+    cd /tmp
+    curl -fSL -o homelab-horizon-$ARCH.tar.gz '$url'
+    tar -xzf homelab-horizon-$ARCH.tar.gz
+    mv homelab-horizon-$ARCH homelab-horizon.new
+    rm -f homelab-horizon-$ARCH.tar.gz
+  "
+fi
 
-echo "Deploying to $TARGET..."
-
-# Copy binary to remote
-scp "$BINARY" "$TARGET:/tmp/homelab-horizon.new"
-
-# Remote execution for installation/update
-ssh "$TARGET" -t "
+echo "Installing on $HOST..."
+ssh "$HOST" -t "
   sudo mv /tmp/homelab-horizon.new $REMOTE_PATH
   sudo chmod +x $REMOTE_PATH
 
