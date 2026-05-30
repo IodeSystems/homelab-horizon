@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   Alert,
   Box,
@@ -97,22 +97,37 @@ function PeerSyncTile({ status }: { status: PeerSyncStatus }) {
   );
 }
 
+const cardLinkStyle: React.CSSProperties = {
+  textDecoration: "none",
+  color: "inherit",
+  display: "block",
+  height: "100%",
+};
+
 function StatCard({
   icon,
   value,
   label,
+  clickable,
 }: {
   icon: React.ReactNode;
   value: number | string;
   label: string;
+  clickable?: boolean;
 }) {
   return (
     <Paper
       sx={{
         p: 3,
+        height: "100%",
         display: "flex",
         alignItems: "center",
         gap: 2,
+        ...(clickable && {
+          cursor: "pointer",
+          transition: "box-shadow 0.2s",
+          "&:hover": { boxShadow: 6 },
+        }),
       }}
     >
       <Box sx={{ color: "primary.main", display: "flex" }}>{icon}</Box>
@@ -159,26 +174,38 @@ function DashboardPage() {
           mb: 3,
         }}
       >
-        <StatCard
-          icon={<DnsIcon sx={{ fontSize: 36 }} />}
-          value={data.serviceCount}
-          label="Services"
-        />
-        <StatCard
-          icon={<LanguageIcon sx={{ fontSize: 36 }} />}
-          value={data.domainCount}
-          label="Domains"
-        />
-        <StatCard
-          icon={<PublicIcon sx={{ fontSize: 36 }} />}
-          value={data.zoneCount}
-          label="Zones"
-        />
-        <StatCard
-          icon={<PeopleIcon sx={{ fontSize: 36 }} />}
-          value={data.peerCount}
-          label="VPN Peers"
-        />
+        <Link to="/services" style={cardLinkStyle}>
+          <StatCard
+            icon={<DnsIcon sx={{ fontSize: 36 }} />}
+            value={data.serviceCount}
+            label="Services"
+            clickable
+          />
+        </Link>
+        <Link to="/domains" style={cardLinkStyle}>
+          <StatCard
+            icon={<LanguageIcon sx={{ fontSize: 36 }} />}
+            value={data.domainCount}
+            label="Domains"
+            clickable
+          />
+        </Link>
+        <Link to="/domains" style={cardLinkStyle}>
+          <StatCard
+            icon={<PublicIcon sx={{ fontSize: 36 }} />}
+            value={data.zoneCount}
+            label="Zones"
+            clickable
+          />
+        </Link>
+        <Link to="/vpn" style={cardLinkStyle}>
+          <StatCard
+            icon={<PeopleIcon sx={{ fontSize: 36 }} />}
+            value={data.peerCount}
+            label="VPN Peers"
+            clickable
+          />
+        </Link>
       </Box>
 
       {data.peerSync && <PeerSyncTile status={data.peerSync} />}
@@ -227,7 +254,15 @@ function DashboardPage() {
       </Box>
 
       {data.checksTotal > 0 && (
-        <Paper sx={{ p: 3, mb: 3 }}>
+        <Link to="/checks" style={{ ...cardLinkStyle, height: "auto", marginBottom: 24 }}>
+        <Paper
+          sx={{
+            p: 3,
+            cursor: "pointer",
+            transition: "box-shadow 0.2s",
+            "&:hover": { boxShadow: 6 },
+          }}
+        >
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1.5 }}>
             <MonitorHeartIcon sx={{ color: "primary.main" }} />
             <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
@@ -266,6 +301,7 @@ function DashboardPage() {
             )}
           </Box>
         </Paper>
+        </Link>
       )}
 
       <Paper sx={{ p: 3 }}>
