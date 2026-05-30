@@ -1,0 +1,104 @@
+{
+  "//": "Hermetic demo config for README screenshots. Daemons OFF and",
+  "//auto_heal": "auto_heal OFF so the container boots offline with no apt, no",
+  "//network": "WireGuard/dnsmasq/HAProxy, and no outbound traffic. All IPs are",
+  "//ips": "RFC 5737 documentation ranges (192.0.2.0/24 TEST-NET-1) — never a",
+  "//real": "real network. admin_token is pinned so the capture script can log in.",
+
+  "listen_addr": ":8080",
+  "admin_token": "demo-screenshot-token-do-not-use",
+  "auto_heal": false,
+
+  "wg_interface": "wg0",
+  "server_endpoint": "vpn.example.com:51820",
+  "server_public_key": "DEMOaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0=",
+  "vpn_range": "192.0.2.0/24",
+  "dns": "192.0.2.1",
+  "public_ip_override": "198.51.100.10",
+
+  "dnsmasq_enabled": false,
+  "haproxy_enabled": false,
+  "ssl_enabled": false,
+
+  "zones": [
+    {
+      "name": "example.com",
+      "zone_id": "ZDEMO1234567890",
+      "ssl": {
+        "enabled": true,
+        "email": "admin@example.com"
+      },
+      "sub_zones": ["vpn"]
+    }
+  ],
+
+  "services": [
+    {
+      "name": "grafana",
+      "domains": ["grafana.example.com"],
+      "internal_dns": {"ip": "192.0.2.50"},
+      "external_dns": {"ttl": 300},
+      "proxy": {
+        "backend": "192.0.2.50:3000",
+        "health_check": {"path": "/api/health"}
+      }
+    },
+    {
+      "name": "nextcloud",
+      "domains": ["cloud.example.com"],
+      "internal_dns": {"ip": "192.0.2.51"},
+      "external_dns": {"ttl": 300},
+      "proxy": {
+        "backend": "192.0.2.51:8080",
+        "health_check": {"path": "/status.php"}
+      }
+    },
+    {
+      "name": "home-assistant",
+      "domains": ["ha.example.com"],
+      "internal_dns": {"ip": "192.0.2.52"},
+      "proxy": {
+        "backend": "192.0.2.52:8123",
+        "health_check": {"path": "/api/"},
+        "internal_only": true
+      }
+    },
+    {
+      "name": "jellyfin",
+      "domains": ["media.example.com"],
+      "internal_dns": {"ip": "192.0.2.53"},
+      "external_dns": {"ttl": 300},
+      "proxy": {
+        "backend": "192.0.2.53:8096",
+        "health_check": {"path": "/health"},
+        "deploy": {"next_backend": "192.0.2.63:8096", "balance": "first"}
+      }
+    },
+    {
+      "name": "vaultwarden",
+      "domains": ["vault.example.com"],
+      "internal_dns": {"ip": "192.0.2.54"},
+      "external_dns": {"ttl": 300},
+      "proxy": {
+        "backend": "192.0.2.54:8080"
+      }
+    },
+    {
+      "name": "internal-wiki",
+      "domains": ["wiki.example.com"],
+      "internal_dns": {"ip": "192.0.2.60"}
+    }
+  ],
+
+  "wg_peers": [
+    {"name": "carls-laptop", "public_key": "DEMOlaptopaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0=", "allowed_ips": "192.0.2.10/32"},
+    {"name": "carls-phone", "public_key": "DEMOphoneaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0=", "allowed_ips": "192.0.2.11/32"},
+    {"name": "work-tablet", "public_key": "DEMOtabletaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0=", "allowed_ips": "192.0.2.12/32"}
+  ],
+
+  "ntfy_url": "https://ntfy.sh/homelab-demo-alerts",
+  "service_checks": [
+    {"name": "Grafana Health", "type": "http", "target": "http://192.0.2.50:3000/api/health", "interval": 300, "enabled": true},
+    {"name": "NAS Ping", "type": "ping", "target": "192.0.2.100", "interval": 60, "enabled": true}
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "homelab-horizon-screenshots",
+  "private": true,
+  "type": "module",
+  "description": "Playwright screenshot capture for README docs. Run via bin/screenshots.",
+  "scripts": {
+    "shoot": "node take-screenshots.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}

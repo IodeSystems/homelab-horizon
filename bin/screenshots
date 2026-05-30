@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Regenerate README screenshots reproducibly.
+#
+# Boots HZ in a hermetic Docker container (daemons off, auto_heal off, RFC 5737
+# documentation IPs, public-IP detection overridden) so nothing touches a real
+# network, drives it with Playwright, captures docs/screenshots/*.png, and tears
+# the container down. Safe to run anywhere with Docker + Node.
+#
+# Usage: ./bin/screenshots
+#
+# Env overrides:
+#   HZ_PORT     host port to publish (default 18080, bound to 127.0.0.1 only)
+#   KEEP        set to 1 to leave the container running for debugging
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+readonly IMAGE="homelab-horizon:screenshots"
+readonly NAME="hz-screenshots"
+readonly CONFIG="docker/screenshot-config.json"
+readonly TOKEN="demo-screenshot-token-do-not-use"
+readonly PORT="${HZ_PORT:-18080}"
+readonly BASE="http://127.0.0.1:${PORT}"
+
+err()  { printf >&2 "screenshots: %s\n" "$*"; exit 1; }
+note() { printf "screenshots: %s\n" "$*"; }
+
+command -v docker >/dev/null 2>&1 || err "docker not installed"
+command -v node   >/dev/null 2>&1 || err "node not installed"
+[ -f "$CONFIG" ] || err "missing $CONFIG (run from repo root)"
+
+cleanup() {
+  [ "${KEEP:-0}" = "1" ] && { note "KEEP=1 — leaving $NAME running on $BASE"; return; }
+  docker rm -f "$NAME" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+# 1. Build the linux/amd64 binary the Dockerfile expects.
+note "building linux-amd64 binary..."
+make build-linux-amd64 >/dev/null
+
+# 2. Build the demo image (vanilla Ubuntu + binary). Config is mounted at run
+#    time, not baked, so re-shooting never needs a rebuild.
+note "building docker image..."
+docker build -t "$IMAGE" . >/dev/null
+
+# 3. Run hermetic. Bound to loopback only; the config disables every daemon and
+#    overrides public-IP detection, so the container makes no outbound calls.
+docker rm -f "$NAME" >/dev/null 2>&1 || true
+note "starting container on $BASE..."
+docker run -d --rm --name "$NAME" \
+  -p "127.0.0.1:${PORT}:8080" \
+  -v "$(pwd)/${CONFIG}:/etc/homelab-horizon/config.json:ro" \
+  "$IMAGE" >/dev/null
+
+# 4. Wait for readiness. NB: /health reflects operational health (DNS + proxy
+#    up), which is intentionally false in this hermetic daemon-off container —
+#    so poll the SPA instead, which serves 200 as soon as the listener is up.
+note "waiting for the app to come up..."
+for i in $(seq 1 60); do
+  if curl -fsS -o /dev/null "${BASE}/app/"; then
+    ok=1; break
+  fi
+  sleep 1
+done
+[ "${ok:-0}" = "1" ] || { docker logs "$NAME" 2>&1 | tail -30; err "container never became healthy"; }
+
+# 5. Install Playwright JS package (browsers are expected to be cached already)
+#    and capture.
+note "installing playwright (docs/)..."
+( cd docs && npm install --no-audit --no-fund >/dev/null )
+
+note "capturing screenshots..."
+node docs/take-screenshots.mjs "$BASE" "$TOKEN"
+
+note "done — see docs/screenshots/"

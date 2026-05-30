@@ -1,86 +1,116 @@
 #!/usr/bin/env node
-// Takes demo screenshots for the README using puppeteer.
+// Capture README screenshots with Playwright against a running HZ instance.
+//
 // Usage: node docs/take-screenshots.mjs [base-url] [admin-token]
+//   base-url     default http://127.0.0.1:18080
+//   admin-token  default matches docker/screenshot-config.json
+//
+// Intended to be driven by bin/screenshots, which boots a hermetic Docker
+// container (no real network) and tears it down afterward. The container's
+// config pins the admin token below and uses RFC 5737 documentation IPs, so
+// nothing here touches a real homelab.
 
-import puppeteer from 'puppeteer';
+import { chromium } from "playwright";
 
-const BASE = process.argv[2] || 'http://localhost:18080';
-const TOKEN = process.argv[3] || '0460c25502e5038db08b25009d5e4cd3';
-const SCREENSHOT_DIR = new URL('./screenshots/', import.meta.url).pathname;
+const BASE = process.argv[2] || "http://127.0.0.1:18080";
+const TOKEN = process.argv[3] || "demo-screenshot-token-do-not-use";
+const SCREENSHOT_DIR = new URL("./screenshots/", import.meta.url).pathname;
+const VIEWPORT = { width: 1280, height: 900 };
 
 async function main() {
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    executablePath: '/usr/bin/google-chrome',
-  });
+  const browser = await chromium.launch({ args: ["--no-sandbox"] });
+  const context = await browser.newContext({ viewport: VIEWPORT });
+  const page = await context.newPage();
 
-  const page = await browser.newPage();
-  await page.setViewport({ width: 1280, height: 900 });
-
-  // Navigate to the app first (so fetch has the right origin)
-  await page.goto(`${BASE}/app/`, { waitUntil: 'networkidle0' });
-
-  // Login via fetch from page context
-  const resp = await page.evaluate(async (token) => {
-    const r = await fetch('/api/v1/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+  // Land on the SPA so fetch() runs with the right origin, then log in.
+  // Login sets an HttpOnly session cookie scoped to the context.
+  await page.goto(`${BASE}/app/`, { waitUntil: "domcontentloaded" });
+  const login = await page.evaluate(async (token) => {
+    const r = await fetch("/api/v1/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token }),
     });
-    return r.json();
+    return { status: r.status, body: await r.json().catch(() => null) };
   }, TOKEN);
 
-  if (!resp.ok) {
-    console.error('Login failed:', resp);
+  if (login.status !== 200 || !login.body?.ok) {
+    console.error("Login failed:", login);
     process.exit(1);
   }
-  console.log('Logged in');
+  console.log("Logged in");
 
-  // Services page
-  await page.goto(`${BASE}/app/services`, { waitUntil: 'networkidle0' });
-  await page.waitForSelector('table');
-  await new Promise(r => setTimeout(r, 500));
-  await page.screenshot({ path: `${SCREENSHOT_DIR}services.png` });
-  console.log('Captured services.png');
+  const shoot = (name) =>
+    page.screenshot({ path: `${SCREENSHOT_DIR}${name}.png` });
 
-  // Expand grafana row by clicking text
-  const clicked = await page.evaluate(() => {
-    const cells = document.querySelectorAll('td');
-    for (const td of cells) {
-      if (td.textContent.trim() === 'grafana') {
-        td.closest('tr').click();
+  // Settle helper: navigate, wait for network idle, let MUI animations finish.
+  const visit = async (path) => {
+    await page.goto(`${BASE}/app/${path}`, { waitUntil: "networkidle" });
+    await page.waitForTimeout(600);
+  };
+
+  // Dashboard
+  await visit("dashboard");
+  await shoot("dashboard");
+  console.log("Captured dashboard.png");
+
+  // Services list
+  await visit("services");
+  await page.waitForSelector("table");
+  await shoot("services");
+  console.log("Captured services.png");
+
+  // Service detail — expand the grafana row
+  const expanded = await page.evaluate(() => {
+    for (const td of document.querySelectorAll("td")) {
+      if (td.textContent.trim() === "grafana") {
+        td.closest("tr").click();
         return true;
       }
     }
     return false;
   });
-  if (clicked) {
-    await new Promise(r => setTimeout(r, 500));
-    await page.screenshot({ path: `${SCREENSHOT_DIR}services-detail.png` });
-    console.log('Captured services-detail.png');
+  if (expanded) {
+    await page.waitForTimeout(600);
+    await shoot("services-detail");
+    console.log("Captured services-detail.png");
+  } else {
+    console.warn("grafana row not found — skipping services-detail.png");
   }
 
-  // Settings page
-  await page.goto(`${BASE}/app/settings`, { waitUntil: 'networkidle0' });
-  await new Promise(r => setTimeout(r, 500));
-  await page.screenshot({ path: `${SCREENSHOT_DIR}settings.png` });
-  console.log('Captured settings.png');
+  // Port Map dialog — reload to collapse the expanded row first
+  await visit("services");
+  await page.waitForSelector("table");
+  const opened = await page.evaluate(() => {
+    for (const b of document.querySelectorAll("button")) {
+      if (b.textContent.trim() === "Port Map") {
+        b.click();
+        return true;
+      }
+    }
+    return false;
+  });
+  if (opened) {
+    await page.waitForSelector('div[role="dialog"]');
+    await page.waitForTimeout(600);
+    await shoot("port-map");
+    console.log("Captured port-map.png");
+  } else {
+    console.warn("Port Map button not found — skipping port-map.png");
+  }
 
-  // VPN page
-  await page.goto(`${BASE}/app/vpn`, { waitUntil: 'networkidle0' });
-  await new Promise(r => setTimeout(r, 500));
-  await page.screenshot({ path: `${SCREENSHOT_DIR}vpn.png` });
-  console.log('Captured vpn.png');
-
-  // Checks page
-  await page.goto(`${BASE}/app/checks`, { waitUntil: 'networkidle0' });
-  await new Promise(r => setTimeout(r, 500));
-  await page.screenshot({ path: `${SCREENSHOT_DIR}checks.png` });
-  console.log('Captured checks.png');
+  // Remaining top-level pages
+  for (const p of ["domains", "vpn", "checks", "settings"]) {
+    await visit(p);
+    await shoot(p);
+    console.log(`Captured ${p}.png`);
+  }
 
   await browser.close();
-  console.log('Done');
+  console.log("Done");
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
