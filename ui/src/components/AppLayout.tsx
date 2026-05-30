@@ -65,7 +65,11 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       }}
     >
       <Box sx={{ p: 2, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-        <Typography variant="h6" sx={{ fontWeight: 700, color: "#fff" }}>
+        <Typography
+          variant="h6"
+          onClick={() => handleNav("/dashboard")}
+          sx={{ fontWeight: 700, color: "#fff", cursor: "pointer" }}
+        >
           Homelab Horizon
         </Typography>
       </Box>
@@ -138,6 +142,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("md"));
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const navigate = useNavigate();
 
   return (
     <Box sx={{ display: "flex", minHeight: "100vh" }}>
@@ -179,7 +184,11 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             <IconButton onClick={() => setDrawerOpen(true)} edge="start">
               <MenuIcon />
             </IconButton>
-            <Typography variant="h6" sx={{ fontWeight: 700, color: "#fff" }}>
+            <Typography
+              variant="h6"
+              onClick={() => navigate({ to: "/dashboard" })}
+              sx={{ fontWeight: 700, color: "#fff", cursor: "pointer" }}
+            >
               Homelab Horizon
             </Typography>
           </Box>
