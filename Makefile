@@ -145,6 +145,11 @@ docker: build-linux-amd64
 docker-run: docker
 	docker run --rm -p 8080:8080 --name hz-demo homelab-horizon:demo
 
+# Regenerate README screenshots in a hermetic Docker container (no real network)
+.PHONY: screenshots
+screenshots:
+	./bin/screenshots
+
 .PHONY: help
 help:
 	@echo "Homelab Horizon Build Targets:"
@@ -169,3 +174,4 @@ help:
 	@echo ""
 	@echo "  make docker       - Build Docker demo image"
 	@echo "  make docker-run   - Build and run Docker demo on :8080"
+	@echo "  make screenshots  - Regenerate README screenshots (hermetic Docker)"
