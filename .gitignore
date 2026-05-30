@@ -9,5 +9,7 @@ deploy.sh
 ui/node_modules
 ui/dist
 ui/*.tsbuildinfo
+docs/node_modules
+docs/package-lock.json
 homelab-horizon-linux
 .hz.json
