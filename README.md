@@ -27,14 +27,24 @@ Homelab Horizon consolidates all of this into a single web UI:
 
 ## Screenshots
 
+### Dashboard
+![Dashboard](docs/screenshots/dashboard.png)
+
 ### Services
 ![Services](docs/screenshots/services.png)
 
 ### Service Detail
 ![Service Detail](docs/screenshots/services-detail.png)
 
+### Port Map
+![Port Map](docs/screenshots/port-map.png)
+
 ### Settings
 ![Settings](docs/screenshots/settings.png)
+
+> Regenerate with `make screenshots` — boots a hermetic Docker container
+> (daemons off, RFC 5737 documentation IPs, no outbound network) and captures
+> these with Playwright. See [docs/take-screenshots.mjs](docs/take-screenshots.mjs).
 
 ## Features
 
