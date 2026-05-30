@@ -22,6 +22,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TableSortLabel,
   Tab,
   Tabs,
   TextField,
@@ -37,6 +38,7 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import SyncIcon from "@mui/icons-material/Sync";
 import IntegrationInstructionsIcon from "@mui/icons-material/IntegrationInstructions";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import LanIcon from "@mui/icons-material/Lan";
 import {
   useServices,
   useAddService,
@@ -1059,6 +1061,250 @@ function IntegrationDialog({
   );
 }
 
+// --- Port Map Dialog ---
+//
+// Flat diagnostic view of every downstream host:port the proxy forwards to.
+// One row per backend address — a blue-green service contributes two rows
+// (current + next slot), since each slot is a distinct host:port we hit.
+
+type PortMapOrderBy = "host" | "port" | "service";
+
+interface PortMapRow {
+  host: string;
+  port: number; // NaN when the backend string has no parseable port
+  portRaw: string;
+  service: string;
+  domains: string[];
+  slot: string | null; // "current"/"next" for deploy services, else null
+  state: string; // HAProxy server state: up/down/drain/maint, or ""
+  up: boolean;
+  // Configured but no health check and not confirmed up — yellow, not red.
+  indeterminate: boolean;
+}
+
+// Split on the last colon so IPv4/hostnames work; IPv6 literals would need
+// brackets, which the backend config doesn't use today.
+function splitHostPort(addr: string): { host: string; port: number; portRaw: string } {
+  const idx = addr.lastIndexOf(":");
+  if (idx < 0) return { host: addr, port: NaN, portRaw: "" };
+  const portRaw = addr.slice(idx + 1);
+  return { host: addr.slice(0, idx), port: parseInt(portRaw, 10), portRaw };
+}
+
+function buildPortMapRows(services: Service[]): PortMapRow[] {
+  const rows: PortMapRow[] = [];
+  for (const svc of services) {
+    if (!svc.proxy) continue;
+    const hasDeploy = !!svc.proxy.deploy;
+    const noCheck = !svc.proxy.healthCheck;
+    rows.push({
+      ...splitHostPort(svc.proxy.backend),
+      service: svc.name,
+      domains: svc.domains,
+      slot: hasDeploy ? "current" : null,
+      state: svc.status.proxyState ?? "",
+      up: svc.status.proxyUp,
+      indeterminate: !svc.status.proxyUp && noCheck,
+    });
+    if (hasDeploy && svc.proxy.deploy) {
+      rows.push({
+        ...splitHostPort(svc.proxy.deploy.nextBackend),
+        service: svc.name,
+        domains: svc.domains,
+        slot: "next",
+        state: svc.status.proxyNextState ?? "",
+        up: svc.status.proxyNextState === "up",
+        indeterminate: false,
+      });
+    }
+  }
+  return rows;
+}
+
+function stateColor(state: string): "success" | "error" | "warning" {
+  return state === "up" ? "success" : state === "down" ? "error" : "warning";
+}
+
+function PortMapDialog({
+  open,
+  onClose,
+  services,
+}: {
+  open: boolean;
+  onClose: () => void;
+  services: Service[];
+}) {
+  const [orderBy, setOrderBy] = useState<PortMapOrderBy>("host");
+  const [order, setOrder] = useState<"asc" | "desc">("asc");
+  const [filterHost, setFilterHost] = useState<string | null>(null);
+
+  const rows = useMemo(() => buildPortMapRows(services), [services]);
+
+  const sorted = useMemo(() => {
+    const dir = order === "asc" ? 1 : -1;
+    // NaN ports sort last (asc) via Infinity; string columns are case-folded.
+    const keyOf = (r: PortMapRow): string | number =>
+      orderBy === "port"
+        ? Number.isNaN(r.port)
+          ? Infinity
+          : r.port
+        : orderBy === "service"
+        ? r.service.toLowerCase()
+        : r.host.toLowerCase();
+    return [...rows].sort((a, b) => {
+      const av = keyOf(a);
+      const bv = keyOf(b);
+      let cmp = av < bv ? -1 : av > bv ? 1 : 0;
+      if (cmp === 0) {
+        // Stable, readable tiebreak: host then numeric port.
+        cmp =
+          a.host.localeCompare(b.host) ||
+          (a.port || 0) - (b.port || 0) ||
+          a.service.localeCompare(b.service);
+      }
+      return cmp * dir;
+    });
+  }, [rows, orderBy, order]);
+
+  const visible = useMemo(
+    () => (filterHost ? sorted.filter((r) => r.host === filterHost) : sorted),
+    [sorted, filterHost],
+  );
+
+  const handleClose = () => {
+    setFilterHost(null);
+    onClose();
+  };
+
+  const handleSort = (col: PortMapOrderBy) => {
+    if (orderBy === col) {
+      setOrder((o) => (o === "asc" ? "desc" : "asc"));
+    } else {
+      setOrderBy(col);
+      setOrder("asc");
+    }
+  };
+
+  const sortableHead = (col: PortMapOrderBy, label: string, align?: "right") => (
+    <TableCell align={align} sortDirection={orderBy === col ? order : false}>
+      <TableSortLabel
+        active={orderBy === col}
+        direction={orderBy === col ? order : "asc"}
+        onClick={() => handleSort(col)}
+      >
+        {label}
+      </TableSortLabel>
+    </TableCell>
+  );
+
+  return (
+    <Dialog open={open} onClose={handleClose} maxWidth="lg" fullWidth>
+      <DialogTitle>Port Map</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Every downstream host:port the proxy forwards to. Sort by host, port,
+          or service; click a host to filter.
+        </Typography>
+        {filterHost && (
+          <Box sx={{ mb: 2 }}>
+            <Chip
+              label={`host: ${filterHost}`}
+              onDelete={() => setFilterHost(null)}
+              color="primary"
+              variant="outlined"
+              size="small"
+            />
+          </Box>
+        )}
+        {rows.length === 0 ? (
+          <Typography variant="body2" color="text.secondary" sx={{ py: 4 }} align="center">
+            No proxied services.
+          </Typography>
+        ) : (
+          <TableContainer component={Paper} variant="outlined">
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  {sortableHead("host", "Host")}
+                  {sortableHead("port", "Port", "right")}
+                  {sortableHead("service", "Service")}
+                  <TableCell>Domains</TableCell>
+                  <TableCell>Status</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {visible.map((row, i) => (
+                  <TableRow key={`${row.service}-${row.slot ?? "single"}-${i}`} hover>
+                    <TableCell>
+                      <Box
+                        component="button"
+                        type="button"
+                        onClick={() => setFilterHost(row.host)}
+                        title="Filter by this host"
+                        sx={{
+                          all: "unset",
+                          cursor: "pointer",
+                          fontFamily: "monospace",
+                          fontSize: "0.875rem",
+                          color: "primary.main",
+                          "&:hover": { textDecoration: "underline" },
+                        }}
+                      >
+                        {row.host}
+                      </Box>
+                    </TableCell>
+                    <TableCell align="right">
+                      <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                        {row.portRaw || "—"}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                        {row.service}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
+                        {row.domains.map((d) => (
+                          <Chip key={d} label={d} size="small" variant="outlined" />
+                        ))}
+                      </Box>
+                    </TableCell>
+                    <TableCell>
+                      <Box sx={{ display: "flex", gap: 0.5, alignItems: "center" }}>
+                        <StatusDot
+                          configured
+                          detected={row.up}
+                          indeterminate={row.indeterminate}
+                          title={row.indeterminate ? "No health check configured" : undefined}
+                        />
+                        {row.state && (
+                          <Chip
+                            label={row.state}
+                            size="small"
+                            variant="outlined"
+                            color={stateColor(row.state)}
+                          />
+                        )}
+                        {row.slot && (
+                          <Chip label={row.slot} size="small" variant="outlined" />
+                        )}
+                      </Box>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={handleClose}>Close</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 // --- Service Row ---
 
 function ServiceRow({
@@ -1358,6 +1604,7 @@ function ServicesPage() {
   const zones = zonesData ?? [];
 
   const [addOpen, setAddOpen] = useState(false);
+  const [portMapOpen, setPortMapOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Service | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [snack, setSnack] = useState<SnackState>({ open: false, message: "", severity: "success" });
@@ -1445,6 +1692,13 @@ function ServicesPage() {
         <Box sx={{ display: "flex", gap: 1 }}>
           <Button
             variant="outlined"
+            startIcon={<LanIcon />}
+            onClick={() => setPortMapOpen(true)}
+          >
+            Port Map
+          </Button>
+          <Button
+            variant="outlined"
             startIcon={<SyncIcon />}
             onClick={startSync}
           >
@@ -1513,6 +1767,13 @@ function ServicesPage() {
           </TableBody>
         </Table>
       </TableContainer>
+
+      {/* Port map dialog */}
+      <PortMapDialog
+        open={portMapOpen}
+        onClose={() => setPortMapOpen(false)}
+        services={services}
+      />
 
       {/* Add dialog */}
       {addOpen && (
