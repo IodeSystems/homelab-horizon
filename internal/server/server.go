@@ -2,19 +2,23 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"homelab-horizon/internal/config"
@@ -1435,5 +1439,25 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 		WriteTimeout: 10 * time.Minute, // Long timeout for SSE streams and certbot operations
 	}
 
-	return server.ListenAndServe()
+	// Graceful shutdown: serve in the background and drain in-flight requests on
+	// SIGINT/SIGTERM (systemd stop) instead of dropping connections. ErrServerClosed
+	// is the normal result of Shutdown and is not an error.
+	errCh := make(chan error, 1)
+	go func() {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+	}()
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	select {
+	case err := <-errCh:
+		return err
+	case <-sig:
+		fmt.Fprintln(os.Stderr, "shutting down (draining in-flight requests)...")
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		return server.Shutdown(ctx)
+	}
 }
