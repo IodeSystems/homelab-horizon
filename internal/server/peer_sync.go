@@ -370,9 +370,11 @@ func (s *Server) banSyncOnce() {
 		}
 	}
 
-	s.updateConfig(func(c *config.Config) {
+	if err := s.updateConfig(func(c *config.Config) {
 		c.IPBans = merged
-	})
+	}); err != nil {
+		slog.Warn("ban-sync: updateConfig", "err", err)
+	}
 	s.reapplyBans()
 	slog.Info("ban-sync: merged bans", "total", len(merged))
 }
@@ -479,7 +481,7 @@ func fetchPeerPing(url string) (*PeerPingResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
@@ -495,7 +497,7 @@ func fetchPeerBody(url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}

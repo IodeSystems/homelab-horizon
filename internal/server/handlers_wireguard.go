@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -164,7 +165,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
-	w.Write([]byte(cfg))
+	_, _ = w.Write([]byte(cfg))
 }
 
 func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
@@ -176,7 +177,7 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 			"Error": "Invalid or expired invite token",
 			"Token": token,
 		}
-		inviteTemplateParsed.Execute(w, data)
+		_ = inviteTemplateParsed.Execute(w, data)
 		return
 	}
 
@@ -192,7 +193,7 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 				"Error": "Device name is required",
 				"Token": token,
 			}
-			inviteTemplateParsed.Execute(w, data)
+			_ = inviteTemplateParsed.Execute(w, data)
 			return
 		}
 
@@ -202,7 +203,7 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 				"Error": "Failed to generate keys: " + err.Error(),
 				"Token": token,
 			}
-			inviteTemplateParsed.Execute(w, data)
+			_ = inviteTemplateParsed.Execute(w, data)
 			return
 		}
 
@@ -212,7 +213,7 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 				"Error": "No available IPs: " + err.Error(),
 				"Token": token,
 			}
-			inviteTemplateParsed.Execute(w, data)
+			_ = inviteTemplateParsed.Execute(w, data)
 			return
 		}
 
@@ -221,20 +222,26 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 				"Error": "Failed to add peer: " + err.Error(),
 				"Token": token,
 			}
-			inviteTemplateParsed.Execute(w, data)
+			_ = inviteTemplateParsed.Execute(w, data)
 			return
 		}
 
 		// Invited peers default to vpn-only (admin can upgrade later)
 		wgPeers := s.snapshotWGPeers()
-		s.updateConfig(func(cfg *config.Config) {
+		if err := s.updateConfig(func(cfg *config.Config) {
 			cfg.SetPeerProfile(name, config.ProfileVPNOnly)
 			cfg.WGPeers = wgPeers
-		})
+		}); err != nil {
+			slog.Warn("updateConfig", "err", err)
+		}
 
-		s.wg.Reload()
+		if err := s.wg.Reload(); err != nil {
+			slog.Warn("wg.Reload", "err", err)
+		}
 		s.rebuildWGForwardChain()
-		s.removeInvite(token)
+		if err := s.removeInvite(token); err != nil {
+			slog.Warn("removeInvite", "err", err)
+		}
 
 		clientConfig := s.generateClientConfig(privKey, strings.TrimSuffix(clientIP, "/32"), config.ProfileVPNOnly)
 
@@ -246,14 +253,14 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 			"Config": clientConfig,
 			"QRCode": template.HTML(qrCode),
 		}
-		inviteTemplateParsed.Execute(w, data)
+		_ = inviteTemplateParsed.Execute(w, data)
 		return
 	}
 
 	data := map[string]interface{}{
 		"Token": token,
 	}
-	inviteTemplateParsed.Execute(w, data)
+	_ = inviteTemplateParsed.Execute(w, data)
 }
 
 func (s *Server) handleConfigSharePage(w http.ResponseWriter, r *http.Request) {
@@ -270,7 +277,7 @@ func (s *Server) handleConfigSharePage(w http.ResponseWriter, r *http.Request) {
 			"Token": token,
 			"Name":  "",
 		}
-		shareTemplateParsed.Execute(w, data)
+		_ = shareTemplateParsed.Execute(w, data)
 		return
 	}
 
@@ -285,5 +292,5 @@ func (s *Server) handleConfigSharePage(w http.ResponseWriter, r *http.Request) {
 		"Config": share.Config,
 		"QRCode": template.HTML(share.QRCode),
 	}
-	shareTemplateParsed.Execute(w, data)
+	_ = shareTemplateParsed.Execute(w, data)
 }

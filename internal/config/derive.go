@@ -229,7 +229,7 @@ func (c *Config) WriteMaintenancePageFiles() error {
 	}
 	for _, e := range entries {
 		if strings.HasSuffix(e.Name(), "_503.http") && !active[e.Name()] {
-			os.Remove(filepath.Join(errorsDir, e.Name()))
+			_ = os.Remove(filepath.Join(errorsDir, e.Name()))
 		}
 	}
 	return nil
@@ -344,11 +344,12 @@ func (c *Config) DeriveSSLDomains() []letsencrypt.DomainConfig {
 		// Empty string "" means root domain, "*" means root wildcard, otherwise append to zone name
 		var allDomains []string
 		for _, subZone := range zone.SubZones {
-			if subZone == "" {
+			switch subZone {
+			case "":
 				allDomains = append(allDomains, zone.Name)
-			} else if subZone == "*" {
+			case "*":
 				allDomains = append(allDomains, "*."+zone.Name)
-			} else {
+			default:
 				allDomains = append(allDomains, subZone+"."+zone.Name)
 			}
 		}

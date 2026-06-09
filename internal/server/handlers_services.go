@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -22,8 +23,12 @@ func (s *Server) syncServices() {
 
 	// Update DNSMasq
 	if s.cfg().DNSMasqEnabled {
-		s.dns.SetMappings(s.cfg().DeriveDNSMappings())
-		s.dns.Reload()
+		if err := s.dns.SetMappings(s.cfg().DeriveDNSMappings()); err != nil {
+			slog.Warn("dns.SetMappings", "err", err)
+		}
+		if err := s.dns.Reload(); err != nil {
+			slog.Warn("dns.Reload", "err", err)
+		}
 	}
 
 	// Update HAProxy
@@ -33,8 +38,12 @@ func (s *Server) syncServices() {
 		if s.cfg().SSLEnabled {
 			sslConfig = &haproxy.SSLConfig{Enabled: true, CertDir: s.cfg().SSLHAProxyCertDir}
 		}
-		s.haproxy.WriteConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, sslConfig)
-		s.haproxy.Reload()
+		if err := s.haproxy.WriteConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, sslConfig); err != nil {
+			slog.Warn("haproxy.WriteConfig", "err", err)
+		}
+		if err := s.haproxy.Reload(); err != nil {
+			slog.Warn("haproxy.Reload", "err", err)
+		}
 	}
 
 	// Update Let's Encrypt
@@ -143,7 +152,7 @@ func (s *Server) handleSyncServicesStream(w http.ResponseWriter, r *http.Request
 
 	// Send history first
 	for _, msg := range history {
-		fmt.Fprintf(w, "data: %s\n\n", msg)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", msg)
 	}
 	flusher.Flush()
 
@@ -164,7 +173,7 @@ func (s *Server) handleSyncServicesStream(w http.ResponseWriter, r *http.Request
 				// Channel closed
 				return
 			}
-			fmt.Fprintf(w, "data: %s\n\n", msg)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", msg)
 			flusher.Flush()
 		case <-done:
 			// Sync finished - drain remaining messages
@@ -174,7 +183,7 @@ func (s *Server) handleSyncServicesStream(w http.ResponseWriter, r *http.Request
 					if !ok {
 						return
 					}
-					fmt.Fprintf(w, "data: %s\n\n", msg)
+					_, _ = fmt.Fprintf(w, "data: %s\n\n", msg)
 					flusher.Flush()
 				default:
 					return
@@ -192,7 +201,7 @@ func (s *Server) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"running": s.sync.IsRunning(),
 		"history": s.sync.GetHistory(),
 	})
@@ -206,13 +215,13 @@ func (s *Server) handleSyncCancel(w http.ResponseWriter, r *http.Request) {
 	if s.sync.IsRunning() {
 		s.sync.Cancel()
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"cancelled": true,
 			"message":   "Sync cancellation requested",
 		})
 	} else {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"cancelled": false,
 			"message":   "No sync running",
 		})
@@ -554,7 +563,9 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 	if s.cfg().HAProxyEnabled {
 		log.Step("Syncing HAProxy...")
 
-		s.cfg().WriteMaintenancePageFiles()
+		if err := s.cfg().WriteMaintenancePageFiles(); err != nil {
+			slog.Warn("WriteMaintenancePageFiles", "err", err)
+		}
 		backends := s.cfg().DeriveHAProxyBackends()
 		s.haproxy.SetBackends(backends)
 		log.Info(fmt.Sprintf("  Configured %d backends", len(backends)))

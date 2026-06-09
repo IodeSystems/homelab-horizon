@@ -17,19 +17,19 @@ import (
 
 // joinToken holds the state for a pending HA join operation.
 type joinToken struct {
-	Token           string
-	PeerID          string
-	Topology        string // "same-subnet" or "site-to-site"
-	RemoteEndpoint  string // for site-to-site: caller's public endpoint
-	VPNRange        string // for site-to-site: new peer's VPN range
-	CreatedAt       time.Time
-	PrimaryPeerID   string
-	PrimaryWGAddr   string // how the new peer reaches primary over WG/LAN
-	PrimaryS2SPubKey string // for site-to-site: primary's s2s public key
+	Token              string
+	PeerID             string
+	Topology           string // "same-subnet" or "site-to-site"
+	RemoteEndpoint     string // for site-to-site: caller's public endpoint
+	VPNRange           string // for site-to-site: new peer's VPN range
+	CreatedAt          time.Time
+	PrimaryPeerID      string
+	PrimaryWGAddr      string // how the new peer reaches primary over WG/LAN
+	PrimaryS2SPubKey   string // for site-to-site: primary's s2s public key
 	PrimaryS2SEndpoint string // for site-to-site: primary's s2s endpoint
-	PrimaryVPNRange string
-	PrimaryListenPort string
-	AdminToken      string // so the join-complete callback can auth
+	PrimaryVPNRange    string
+	PrimaryListenPort  string
+	AdminToken         string // so the join-complete callback can auth
 }
 
 // joinTokenStore is a thread-safe store for pending join tokens.
@@ -111,7 +111,7 @@ func (s *Server) handleAPIHAStatus(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			pingResp.Body.Close()
+			_ = pingResp.Body.Close()
 		}
 
 		// Self is always "online" from our own vantage; propagate our own
@@ -137,7 +137,7 @@ func (s *Server) handleAPIHAStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // summarizeLocal runs the classifier on the local-host inputs and returns an
@@ -237,7 +237,7 @@ func (s *Server) handleAPIHACreateJoinToken(w http.ResponseWriter, r *http.Reque
 	oneLiner := fmt.Sprintf("curl -sfL '%s/admin/ha/join-script?token=%s' | sudo bash", baseURL, token)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.HACreateJoinTokenResponse{
+	_ = json.NewEncoder(w).Encode(apitypes.HACreateJoinTokenResponse{
 		OK:       true,
 		Token:    token,
 		OneLiner: oneLiner,
@@ -290,7 +290,7 @@ func (s *Server) handleHAJoinScript(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/x-shellscript")
 	w.Header().Set("Content-Disposition", "attachment; filename=hz-join.sh")
-	w.Write([]byte(script))
+	_, _ = w.Write([]byte(script))
 }
 
 // handleHABinary serves the running binary for download.
@@ -319,7 +319,7 @@ func (s *Server) handleHABinary(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Cannot read binary", http.StatusInternalServerError)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	stat, err := f.Stat()
 	if err != nil {
@@ -330,7 +330,7 @@ func (s *Server) handleHABinary(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", "attachment; filename=homelab-horizon")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size()))
-	io.Copy(w, f)
+	_, _ = io.Copy(w, f)
 }
 
 // resolveExePath resolves /proc/self/exe on Linux or falls back to the given path.
@@ -405,7 +405,7 @@ func (s *Server) handleHAJoinComplete(w http.ResponseWriter, r *http.Request) {
 	s.joinTokens.remove(token)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 // splitHostPort splits a listen address like ":8080" or "0.0.0.0:8080" into host and port.

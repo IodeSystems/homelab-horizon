@@ -259,12 +259,12 @@ func TestDeriveHAProxyBackends(t *testing.T) {
 	cfg := &Config{
 		Services: []Service{
 			{
-				Name:   "grafana",
+				Name:    "grafana",
 				Domains: []string{"grafana.example.com"},
-				Proxy:  &ProxyConfig{Backend: "192.168.1.50:3000"},
+				Proxy:   &ProxyConfig{Backend: "192.168.1.50:3000"},
 			},
 			{
-				Name:   "prom",
+				Name:    "prom",
 				Domains: []string{"prom.example.com"},
 				Proxy: &ProxyConfig{
 					Backend:     "192.168.1.51:9090",
@@ -272,14 +272,14 @@ func TestDeriveHAProxyBackends(t *testing.T) {
 				},
 			},
 			{
-				Name:   "internal",
+				Name:    "internal",
 				Domains: []string{"internal.example.com"},
-				Proxy:  nil,
+				Proxy:   nil,
 			},
 			{
-				Name:   "empty-backend",
+				Name:    "empty-backend",
 				Domains: []string{"empty.example.com"},
-				Proxy:  &ProxyConfig{Backend: ""},
+				Proxy:   &ProxyConfig{Backend: ""},
 			},
 		},
 	}

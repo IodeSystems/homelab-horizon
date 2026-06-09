@@ -1,11 +1,12 @@
 package server
 
 import (
-	"github.com/iodesystems/homelab-horizon/internal/config"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
 func TestAdminTokenMigrationFromConfig(t *testing.T) {

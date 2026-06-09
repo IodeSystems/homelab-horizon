@@ -81,9 +81,9 @@ func TestGetJailedPeers(t *testing.T) {
 func TestPruneExpiredMFASessions(t *testing.T) {
 	cfg := &Config{
 		VPNMFASessions: map[string]int64{
-			"expired":  time.Now().Add(-1 * time.Hour).Unix(),
-			"active":   time.Now().Add(1 * time.Hour).Unix(),
-			"forever":  0,
+			"expired": time.Now().Add(-1 * time.Hour).Unix(),
+			"active":  time.Now().Add(1 * time.Hour).Unix(),
+			"forever": 0,
 		},
 	}
 	pruned := cfg.PruneExpiredMFASessions()
@@ -145,11 +145,11 @@ func TestMFAConfigPersistence(t *testing.T) {
 	path := tmpDir + "/cfg.json"
 
 	cfg := &Config{
-		ListenAddr:     ":8080",
-		VPNMFAEnabled:  true,
+		ListenAddr:      ":8080",
+		VPNMFAEnabled:   true,
 		VPNMFADurations: []string{"2h", "4h"},
-		VPNMFASecrets:  map[string]string{"alice": "JBSWY3DPEHPK3PXP"},
-		VPNMFASessions: map[string]int64{"alice": 0},
+		VPNMFASecrets:   map[string]string{"alice": "JBSWY3DPEHPK3PXP"},
+		VPNMFASessions:  map[string]int64{"alice": 0},
 	}
 	if err := Save(path, cfg); err != nil {
 		t.Fatalf("save: %v", err)

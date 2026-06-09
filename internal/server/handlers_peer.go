@@ -45,7 +45,7 @@ func (s *Server) handlePeerPing(w http.ResponseWriter, r *http.Request) {
 		resp.IPTablesSummary = &summary
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // handlePeerConfig returns the full config JSON. Only the config primary
@@ -99,7 +99,7 @@ func (s *Server) handlePeerCert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(PeerCertResponse{
+	_ = json.NewEncoder(w).Encode(PeerCertResponse{
 		Domain: domain,
 		Cert:   string(certData),
 		Key:    string(keyData),
@@ -114,7 +114,7 @@ type PeerStateResponse struct {
 // handlePeerState returns runtime state for LWW sync. Currently just bans.
 func (s *Server) handlePeerState(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(PeerStateResponse{
+	_ = json.NewEncoder(w).Encode(PeerStateResponse{
 		Bans: s.cfg().IPBans,
 	})
 }
@@ -195,7 +195,7 @@ func (s *Server) nonPrimaryGuardMiddleware(next http.Handler) http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"error":      "this instance is read-only — edit on the config primary",
 			"primary_id": primaryID,
 		})

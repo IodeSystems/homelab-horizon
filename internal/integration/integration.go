@@ -68,7 +68,7 @@ func (d *Detector) Probe(ctx context.Context, t Target) bool {
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return false
 	}

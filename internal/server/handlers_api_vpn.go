@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -68,12 +69,17 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wgPeers := s.snapshotWGPeers()
-	s.updateConfig(func(cfg *config.Config) {
+	if err := s.updateConfig(func(cfg *config.Config) {
 		cfg.SetPeerProfile(name, profile)
 		cfg.WGPeers = wgPeers
-	})
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
 
-	s.wg.Reload()
+	if err := s.wg.Reload(); err != nil {
+		slog.Warn("wg.Reload", "err", err)
+	}
 	s.rebuildWGForwardChain()
 
 	clientConfig := s.generateClientConfig(privKey, strings.TrimSuffix(clientIP, "/32"), profile)
@@ -81,7 +87,7 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 	qrCode := qr.GenerateSVG(clientConfig, 256)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.AddPeerResponse{
+	_ = json.NewEncoder(w).Encode(apitypes.AddPeerResponse{
 		OK:     true,
 		Config: clientConfig,
 		QRCode: qrCode,
@@ -100,9 +106,9 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		PublicKey string `json:"publicKey"`
-		Name     string `json:"name"`
-		ExtraIPs string `json:"extraIPs"`
-		Profile  string `json:"profile"`
+		Name      string `json:"name"`
+		ExtraIPs  string `json:"extraIPs"`
+		Profile   string `json:"profile"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
@@ -157,7 +163,7 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 	}
 	oldName := peer.Name
 	wgPeers := s.snapshotWGPeers()
-	s.updateConfig(func(cfg *config.Config) {
+	if err := s.updateConfig(func(cfg *config.Config) {
 		if oldName != name {
 			for i, adminName := range cfg.VPNAdmins {
 				if adminName == oldName {
@@ -170,13 +176,18 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 		}
 		cfg.SetPeerProfile(name, profile)
 		cfg.WGPeers = wgPeers
-	})
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
 
-	s.wg.Reload()
+	if err := s.wg.Reload(); err != nil {
+		slog.Warn("wg.Reload", "err", err)
+	}
 	s.rebuildWGForwardChain()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
 
 func (s *Server) handleAPIDeletePeer(w http.ResponseWriter, r *http.Request) {
@@ -215,19 +226,24 @@ func (s *Server) handleAPIDeletePeer(w http.ResponseWriter, r *http.Request) {
 		peerName = peer.Name
 	}
 	wgPeers := s.snapshotWGPeers()
-	s.updateConfig(func(cfg *config.Config) {
+	if err := s.updateConfig(func(cfg *config.Config) {
 		if peerName != "" {
 			cfg.DeletePeerProfile(peerName)
 			cfg.DeleteMFAPeer(peerName)
 		}
 		cfg.WGPeers = wgPeers
-	})
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
 
-	s.wg.Reload()
+	if err := s.wg.Reload(); err != nil {
+		slog.Warn("wg.Reload", "err", err)
+	}
 	s.rebuildWGForwardChain()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
 
 func (s *Server) handleAPIToggleAdmin(w http.ResponseWriter, r *http.Request) {
@@ -262,7 +278,7 @@ func (s *Server) handleAPIToggleAdmin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.updateConfig(func(cfg *config.Config) {
+	if err := s.updateConfig(func(cfg *config.Config) {
 		if isCurrentlyAdmin {
 			newAdmins := make([]string, 0, len(cfg.VPNAdmins)-1)
 			for _, adminName := range cfg.VPNAdmins {
@@ -274,10 +290,13 @@ func (s *Server) handleAPIToggleAdmin(w http.ResponseWriter, r *http.Request) {
 		} else {
 			cfg.VPNAdmins = append(cfg.VPNAdmins, clientName)
 		}
-	})
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.ToggleAdminResponse{
+	_ = json.NewEncoder(w).Encode(apitypes.ToggleAdminResponse{
 		OK:      true,
 		IsAdmin: !isCurrentlyAdmin,
 	})
@@ -301,7 +320,7 @@ func (s *Server) handleAPIReloadWG(w http.ResponseWriter, r *http.Request) {
 	s.rebuildWGForwardChain()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
 
 func (s *Server) handleAPISetPeerProfile(w http.ResponseWriter, r *http.Request) {
@@ -338,13 +357,16 @@ func (s *Server) handleAPISetPeerProfile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	s.updateConfig(func(cfg *config.Config) {
+	if err := s.updateConfig(func(cfg *config.Config) {
 		cfg.SetPeerProfile(name, profile)
-	})
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
 	s.rebuildWGForwardChain()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "profile": profile})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "profile": profile})
 }
 
 // generateClientConfig produces a WG client config, using multi-site mode
@@ -428,7 +450,7 @@ func (s *Server) handleAPIListInvites(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(invites)
+	_ = json.NewEncoder(w).Encode(invites)
 }
 
 func (s *Server) handleAPICreateInvite(w http.ResponseWriter, r *http.Request) {
@@ -450,7 +472,7 @@ func (s *Server) handleAPICreateInvite(w http.ResponseWriter, r *http.Request) {
 	url := strings.TrimSuffix(s.cfg().KioskURL, "/") + "/invite/" + token
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.CreateInviteResponse{
+	_ = json.NewEncoder(w).Encode(apitypes.CreateInviteResponse{
 		OK:    true,
 		Token: token,
 		URL:   url,
@@ -496,7 +518,7 @@ func (s *Server) handleAPIGetPeerConfig(w http.ResponseWriter, r *http.Request) 
 	clientConfig := s.generateClientConfig("<YOUR_PRIVATE_KEY>", primaryIP, profile)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.PeerConfigResponse{
+	_ = json.NewEncoder(w).Encode(apitypes.PeerConfigResponse{
 		OK:     true,
 		Config: clientConfig,
 	})
@@ -545,10 +567,15 @@ func (s *Server) handleAPIRekeyPeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wgPeers := s.snapshotWGPeers()
-	s.updateConfig(func(cfg *config.Config) {
+	if err := s.updateConfig(func(cfg *config.Config) {
 		cfg.WGPeers = wgPeers
-	})
-	s.wg.Reload()
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
+	if err := s.wg.Reload(); err != nil {
+		slog.Warn("wg.Reload", "err", err)
+	}
 
 	// Extract primary IP
 	primaryIP := ""
@@ -593,7 +620,7 @@ func (s *Server) handleAPIRekeyPeer(w http.ResponseWriter, r *http.Request) {
 	shareURL := strings.TrimSuffix(s.cfg().KioskURL, "/") + "/share/" + token
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.RekeyPeerResponse{
+	_ = json.NewEncoder(w).Encode(apitypes.RekeyPeerResponse{
 		OK:         true,
 		Config:     clientConfig,
 		QRCode:     qrCode,
@@ -621,7 +648,7 @@ func (s *Server) handleAPIListConfigShares(w http.ResponseWriter, r *http.Reques
 	s.configSharesMu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(shares)
+	_ = json.NewEncoder(w).Encode(shares)
 }
 
 func (s *Server) handleAPIDeleteConfigShare(w http.ResponseWriter, r *http.Request) {
@@ -652,7 +679,7 @@ func (s *Server) handleAPIDeleteConfigShare(w http.ResponseWriter, r *http.Reque
 	s.configSharesMu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
 
 func (s *Server) handleAPIDeleteInvite(w http.ResponseWriter, r *http.Request) {
@@ -684,5 +711,5 @@ func (s *Server) handleAPIDeleteInvite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }

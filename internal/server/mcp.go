@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -152,7 +153,9 @@ func (m *MCPServer) handleGetTopology(_ context.Context, _ mcp.CallToolRequest) 
 }
 
 func (m *MCPServer) handleGetStatus(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	m.srv.wg.Load()
+	if err := m.srv.wg.Load(); err != nil {
+		slog.Warn("wg.Load", "err", err)
+	}
 	ifaceStatus := m.srv.wg.GetInterfaceStatus()
 	peers := m.srv.wg.GetPeers()
 
@@ -291,7 +294,9 @@ func (m *MCPServer) handleUpdateService(_ context.Context, req mcp.CallToolReque
 		}
 
 		if err := m.srv.cfg().AddService(svc); err != nil {
-			m.srv.cfg().AddService(*existing)
+			if err2 := m.srv.cfg().AddService(*existing); err2 != nil {
+				slog.Warn("AddService rollback", "err", err2)
+			}
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 		if err := config.Save(m.srv.configPath, m.srv.cfg()); err != nil {

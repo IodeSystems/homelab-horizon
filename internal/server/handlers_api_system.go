@@ -94,8 +94,8 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 		apparmorOK, apparmorReason := checkHAProxyApparmor()
 		logFileOK := fileExists("/var/log/haproxy.log")
 		hap.Extras = map[string]any{
-			"logging_apparmor_ok":  apparmorOK,
-			"logging_file_exists":  logFileOK,
+			"logging_apparmor_ok": apparmorOK,
+			"logging_file_exists": logFileOK,
 		}
 		if !apparmorOK {
 			hap.Errors = append(hap.Errors, "logging: "+apparmorReason)

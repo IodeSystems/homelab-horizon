@@ -21,20 +21,20 @@ func ScrapeYAML(targets []Target) string {
 
 	for _, g := range groupByService(targets) {
 		head := g.targets[0]
-		sb.WriteString(fmt.Sprintf("  - job_name: %s\n", yamlScalar(g.service)))
-		sb.WriteString(fmt.Sprintf("    metrics_path: %s\n", yamlScalar(head.MetricsPath)))
+		fmt.Fprintf(&sb, "  - job_name: %s\n", yamlScalar(g.service))
+		fmt.Fprintf(&sb, "    metrics_path: %s\n", yamlScalar(head.MetricsPath))
 		if head.Bearer != "" {
 			sb.WriteString("    authorization:\n")
 			sb.WriteString("      type: Bearer\n")
-			sb.WriteString(fmt.Sprintf("      credentials: %s\n", yamlScalar(head.Bearer)))
+			fmt.Fprintf(&sb, "      credentials: %s\n", yamlScalar(head.Bearer))
 		}
 		sb.WriteString("    static_configs:\n")
 		for _, t := range g.targets {
-			sb.WriteString(fmt.Sprintf("      - targets: [%s]\n", yamlScalar(t.Address)))
+			fmt.Fprintf(&sb, "      - targets: [%s]\n", yamlScalar(t.Address))
 			sb.WriteString("        labels:\n")
-			sb.WriteString(fmt.Sprintf("          service: %s\n", yamlScalar(t.Service)))
+			fmt.Fprintf(&sb, "          service: %s\n", yamlScalar(t.Service))
 			if t.Slot != "" {
-				sb.WriteString(fmt.Sprintf("          slot: %s\n", yamlScalar(t.Slot)))
+				fmt.Fprintf(&sb, "          slot: %s\n", yamlScalar(t.Slot))
 			}
 		}
 	}

@@ -225,7 +225,7 @@ func (s *Server) handleBanAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(apitypes.OKResponse{OK: true})
+		_ = json.NewEncoder(w).Encode(apitypes.OKResponse{OK: true})
 
 	case "unban":
 		if r.Method != http.MethodPost {
@@ -246,7 +246,7 @@ func (s *Server) handleBanAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(apitypes.OKResponse{OK: true})
+		_ = json.NewEncoder(w).Encode(apitypes.OKResponse{OK: true})
 
 	case "list":
 		if r.Method != http.MethodGet {
@@ -254,7 +254,7 @@ func (s *Server) handleBanAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(apitypes.BanListResponse{Bans: banListEntries(s.cfg().IPBans)})
+		_ = json.NewEncoder(w).Encode(apitypes.BanListResponse{Bans: banListEntries(s.cfg().IPBans)})
 
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
@@ -273,7 +273,7 @@ func (s *Server) handleAPIBanList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.BanListResponse{Bans: banListEntries(s.cfg().IPBans)})
+	_ = json.NewEncoder(w).Encode(apitypes.BanListResponse{Bans: banListEntries(s.cfg().IPBans)})
 }
 
 func (s *Server) handleAPIBanAdd(w http.ResponseWriter, r *http.Request) {
@@ -299,7 +299,7 @@ func (s *Server) handleAPIBanAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.OKResponse{OK: true})
+	_ = json.NewEncoder(w).Encode(apitypes.OKResponse{OK: true})
 }
 
 func (s *Server) handleAPIBanRemove(w http.ResponseWriter, r *http.Request) {
@@ -325,5 +325,5 @@ func (s *Server) handleAPIBanRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.OKResponse{OK: true})
+	_ = json.NewEncoder(w).Encode(apitypes.OKResponse{OK: true})
 }
