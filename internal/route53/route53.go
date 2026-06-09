@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -18,7 +19,7 @@ func logAWS(profile, action string) {
 	if profile == "" {
 		profile = "default"
 	}
-	fmt.Printf("[AWS/%s] %s\n", profile, action)
+	slog.Debug(action, "aws_profile", profile)
 }
 
 // Record represents a DNS record

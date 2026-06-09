@@ -1,7 +1,7 @@
 package server
 
 import (
-	"fmt"
+	"log/slog"
 	"net"
 	"os/exec"
 	"regexp"
@@ -52,14 +52,14 @@ func (s *Server) reconcileIPTables() {
 
 	// ---- Axis 1: LocalInterface (IP) ----
 	if newLocalIP != "" && newLocalIP != cfg.LocalInterface {
-		fmt.Printf("[iptables-sync] LocalInterface: %s -> %s\n", cfg.LocalInterface, newLocalIP)
+		slog.Info("iptables-sync: LocalInterface changed", "old", cfg.LocalInterface, "new", newLocalIP)
 		if err := s.updateConfig(func(c *config.Config) { c.LocalInterface = newLocalIP }); err != nil {
-			fmt.Printf("[iptables-sync] persist LocalInterface: %v\n", err)
+			slog.Warn("iptables-sync: persist LocalInterface failed", "err", err)
 		}
 		if err := s.dns.WriteConfig(); err != nil {
-			fmt.Printf("[iptables-sync] dns WriteConfig: %v\n", err)
+			slog.Warn("iptables-sync: dns WriteConfig failed", "err", err)
 		} else if err := s.dns.Reload(); err != nil {
-			fmt.Printf("[iptables-sync] dns Reload: %v\n", err)
+			slog.Warn("iptables-sync: dns Reload failed", "err", err)
 		}
 	}
 
@@ -74,9 +74,9 @@ func (s *Server) reconcileIPTables() {
 	// Detection is conservative: bypass token AND no WG-FORWARD reference. A
 	// custom admin PostUp that already mentions WG-FORWARD is left untouched.
 	if isLegacyBypassPostUp(s.wg.GetPostUp()) {
-		fmt.Printf("[iptables-sync] migrating legacy bypass PostUp to chain-based form (iface=%s)\n", newIface)
+		slog.Info("iptables-sync: migrating legacy bypass PostUp to chain-based form", "iface", newIface)
 		if err := s.wg.UpdateInterfaceRules(wireguard.ExpectedPostUp(newIface), wireguard.ExpectedPostDown(newIface)); err != nil {
-			fmt.Printf("[iptables-sync] migrate wg0.conf: %v\n", err)
+			slog.Warn("iptables-sync: migrate wg0.conf failed", "err", err)
 		}
 		// Strip live legacy rules. Loop because the bypass and the state-form
 		// return can each have duplicates from prior reconcile dup-inserts.
@@ -129,7 +129,7 @@ func (s *Server) reconcileIPTables() {
 
 	live, err := iptables.LiveRules()
 	if err != nil {
-		fmt.Printf("[iptables-sync] LiveRules: %v\n", err)
+		slog.Warn("iptables-sync: LiveRules failed", "err", err)
 		return
 	}
 
@@ -137,11 +137,12 @@ func (s *Server) reconcileIPTables() {
 		newIface, cfg.LastLocalIface)
 
 	if len(report.Deleted) > 0 || len(report.Added) > 0 || report.InferredOld != "" {
-		fmt.Printf("[iptables-sync] deleted=%d added=%d inferredOld=%q summary=%+v\n",
-			len(report.Deleted), len(report.Added), report.InferredOld, report.Summary)
+		slog.Info("iptables-sync: reconciled",
+			"deleted", len(report.Deleted), "added", len(report.Added),
+			"inferred_old", report.InferredOld, "summary", report.Summary)
 	}
 	for _, e := range report.Errors {
-		fmt.Printf("[iptables-sync] err: %s\n", e)
+		slog.Warn("iptables-sync: reconcile error", "err", e)
 	}
 
 	// Persist new last-seen values so the next pass (and a reboot) have
@@ -154,7 +155,7 @@ func (s *Server) reconcileIPTables() {
 			c.LastLocalIface = newIface
 			c.LastLanCIDR = newLanCIDR
 		}); err != nil {
-			fmt.Printf("[iptables-sync] persist last-iface/cidr: %v\n", err)
+			slog.Warn("iptables-sync: persist last-iface/cidr failed", "err", err)
 		}
 	}
 
@@ -170,7 +171,7 @@ func (s *Server) reconcileIPTables() {
 		newDown := masqIfaceRe.ReplaceAllString(oldDown, repl)
 		if newUp != oldUp || newDown != oldDown {
 			if err := s.wg.UpdateInterfaceRules(newUp, newDown); err != nil {
-				fmt.Printf("[iptables-sync] rewrite wg0.conf PostUp/Down: %v\n", err)
+				slog.Warn("iptables-sync: rewrite wg0.conf PostUp/Down failed", "err", err)
 			}
 		}
 	}

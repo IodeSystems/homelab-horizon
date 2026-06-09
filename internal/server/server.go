@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -247,7 +248,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 	if dryRun {
 		fs = system.NewDryRunFileSystem()
 		runner = system.NewDryRunCommandRunner()
-		fmt.Println("DRY RUN MODE: No changes will be made")
+		slog.Info("dry run mode: no changes will be made")
 	} else {
 		fs = &system.RealFileSystem{}
 		runner = &system.RealCommandRunner{}
@@ -262,7 +263,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 	tokenDir := filepath.Dir(tokenFile)
 	if _, err := os.Stat(tokenDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(tokenDir, 0755); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to create token directory %s: %v\n", tokenDir, err)
+			slog.Warn("failed to create token directory", "dir", tokenDir, "err", err)
 		}
 	}
 
@@ -276,9 +277,9 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		adminToken = cfg.AdminToken
 		// Migrate: write to file and clear from config
 		if err := os.WriteFile(tokenFile, []byte(adminToken+"\n"), 0600); err == nil {
-			fmt.Fprintf(os.Stderr, "Admin token migrated to: %s\n", tokenFile)
+			slog.Info("admin token migrated", "token_file", tokenFile)
 		} else {
-			fmt.Fprintf(os.Stderr, "Warning: failed to migrate admin token to %s: %v\n", tokenFile, err)
+			slog.Warn("failed to migrate admin token", "token_file", tokenFile, "err", err)
 		}
 		cfg.AdminToken = ""
 		_ = config.Save(configPath, cfg)
@@ -289,44 +290,44 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		adminToken = generateToken(32)
 		isNewToken = true
 		if err := os.WriteFile(tokenFile, []byte(adminToken+"\n"), 0600); err == nil {
-			fmt.Fprintf(os.Stderr, "Admin token written to: %s (delete after reading)\n", tokenFile)
+			slog.Info("admin token written to file (delete after reading)", "token_file", tokenFile)
 		} else {
-			fmt.Fprintf(os.Stderr, "Warning: failed to write admin token to %s: %v\n", tokenFile, err)
+			slog.Warn("failed to write admin token", "token_file", tokenFile, "err", err)
 		}
 	}
 	_ = isNewToken // suppress unused warning
 
 	// Ensure LocalInterface is set for DNS mapping of localhost-bound services
 	cfg.EnsureLocalInterface()
-	fmt.Printf("Local interface IP: %s\n", cfg.LocalInterface)
+	slog.Info("local interface IP", "ip", cfg.LocalInterface)
 
 	// Resolve effective public IP. Override wins; otherwise refresh the
 	// cache synchronously on startup so we don't begin life with a stale
 	// value persisted from a previous run.
 	switch {
 	case cfg.PublicIPOverride != "":
-		fmt.Printf("Public IP: %s (override)\n", cfg.PublicIPOverride)
+		slog.Info("public IP override active", "ip", cfg.PublicIPOverride)
 	default:
 		if ip, err := route53.GetPublicIP(); err == nil {
 			prev := cfg.PublicIP
 			cfg.PublicIP = ip
 			cfg.PublicIPLastChecked = time.Now().Unix()
 			if prev != "" && prev != ip {
-				fmt.Printf("Public IP: %s (changed from cached %s)\n", ip, prev)
+				slog.Info("public IP changed", "ip", ip, "prev", prev)
 			} else {
-				fmt.Printf("Public IP: %s (auto-detected)\n", ip)
+				slog.Info("public IP detected", "ip", ip)
 			}
 			_ = config.Save(configPath, cfg)
 		} else if cfg.PublicIP != "" {
-			fmt.Printf("Warning: Could not detect public IP (%v); using cached %s\n", err, cfg.PublicIP)
+			slog.Warn("could not detect public IP, using cached value", "cached_ip", cfg.PublicIP, "err", err)
 		} else {
-			fmt.Printf("Warning: Could not detect public IP: %v\n", err)
+			slog.Warn("could not detect public IP", "err", err)
 		}
 	}
 
 	wg := wireguard.NewConfig(cfg.WGConfigPath, cfg.WGInterface)
 	if err := wg.Load(); err != nil {
-		fmt.Printf("Warning: Could not load WireGuard config: %v\n", err)
+		slog.Warn("could not load WireGuard config", "err", err)
 	}
 
 	if cfg.ServerPublicKey == "" {
@@ -349,7 +350,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 					AllowedIPs: p.AllowedIPs,
 				}
 			}
-			fmt.Printf("Migrated %d WG peers into config.json\n", len(wgPeers))
+			slog.Info("migrated WG peers into config.json", "count", len(wgPeers))
 			_ = config.Save(configPath, cfg)
 		}
 	}
@@ -359,7 +360,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		lanCIDR := config.GetLocalNetworkCIDR(config.DetectDefaultInterface())
 		peers := wg.GetPeers()
 		if err := wireguard.SetupForwardChain(cfg.WGInterface, peers, cfg.VPNProfiles, cfg.VPNRange, lanCIDR); err != nil {
-			fmt.Printf("Warning: Could not set up WG-FORWARD chain: %v\n", err)
+			slog.Warn("could not set up WG-FORWARD chain", "err", err)
 		}
 	}
 
@@ -543,7 +544,7 @@ func (s *Server) requireCSRF(w http.ResponseWriter, r *http.Request) bool {
 
 	sessionID := s.getSessionID(r)
 	if sessionID == "" {
-		fmt.Printf("[CSRF] Missing session for %s %s\n", r.Method, r.URL.Path)
+		slog.Debug("CSRF: missing session", "method", r.Method, "path", r.URL.Path)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return false
 	}
@@ -554,13 +555,13 @@ func (s *Server) requireCSRF(w http.ResponseWriter, r *http.Request) bool {
 	}
 
 	if csrfToken == "" {
-		fmt.Printf("[CSRF] Missing token for %s %s\n", r.Method, r.URL.Path)
+		slog.Debug("CSRF: missing token", "method", r.Method, "path", r.URL.Path)
 		http.Error(w, "Missing CSRF token", http.StatusForbidden)
 		return false
 	}
 
 	if !s.validateCSRFToken(csrfToken, sessionID) {
-		fmt.Printf("[CSRF] Invalid token for %s %s sessionID=%q token=%q\n", r.Method, r.URL.Path, sessionID, csrfToken[:min(len(csrfToken), 20)]+"...")
+		slog.Warn("CSRF: invalid token", "method", r.Method, "path", r.URL.Path, "session_id", sessionID)
 		http.Error(w, "Invalid CSRF token", http.StatusForbidden)
 		return false
 	}
@@ -571,9 +572,8 @@ func (s *Server) requireCSRF(w http.ResponseWriter, r *http.Request) bool {
 // getCSRFToken returns a CSRF token for the current request's session
 func (s *Server) getCSRFToken(r *http.Request) string {
 	sessionID := s.getSessionID(r)
-	fmt.Printf("[CSRF] Generating token for %s %s sessionID=%q\n", r.Method, r.URL.Path, sessionID)
+	slog.Debug("CSRF: generating token", "method", r.Method, "path", r.URL.Path, "session_id", sessionID)
 	if sessionID == "" {
-		fmt.Printf("[CSRF] No session for %s %s\n", r.Method, r.URL.Path)
 		return ""
 	}
 	return s.generateCSRFToken(sessionID)
@@ -1099,45 +1099,40 @@ func (s *Server) ensureServicesRunning() {
 
 	// In Docker, skip service management (no systemd)
 	if _, err := os.Stat("/.dockerenv"); err == nil {
-		fmt.Println("Running in Docker: skipping service startup (no systemd)")
+		slog.Info("running in Docker: skipping service startup (no systemd)")
 		return
 	}
 
 	// Ensure WireGuard interface is up
-	fmt.Printf("Checking WireGuard interface %s... ", s.cfg().WGInterface)
 	status := s.wg.GetInterfaceStatus()
 	if !status.Up {
-		fmt.Println("DOWN")
-		fmt.Printf("  Attempting to bring up %s... ", s.cfg().WGInterface)
+		slog.Info("WireGuard interface is down, bringing up", "interface", s.cfg().WGInterface)
 		if err := s.wg.InterfaceUp(); err != nil {
-			fmt.Printf("FAILED: %v\n", err)
+			slog.Error("failed to bring up WireGuard interface", "interface", s.cfg().WGInterface, "err", err)
 		} else {
-			fmt.Println("OK")
+			slog.Info("WireGuard interface up", "interface", s.cfg().WGInterface)
 		}
 	} else {
-		fmt.Println("OK")
+		slog.Debug("WireGuard interface up", "interface", s.cfg().WGInterface)
 	}
 
 	// Ensure dnsmasq is running if enabled
 	if s.cfg().DNSMasqEnabled {
-		fmt.Print("Checking dnsmasq... ")
 		dnsStatus := s.dns.Status()
 
 		// Regenerate config if interfaces are missing
 		if len(dnsStatus.MissingInterfaces) > 0 {
-			fmt.Printf("STALE CONFIG (missing interfaces: %v)\n", dnsStatus.MissingInterfaces)
-			fmt.Print("  Regenerating dnsmasq config... ")
+			slog.Warn("dnsmasq config stale: missing interfaces", "missing", dnsStatus.MissingInterfaces)
 			if err := s.dns.WriteConfig(); err != nil {
-				fmt.Printf("FAILED: %v\n", err)
+				slog.Error("failed to regenerate dnsmasq config", "err", err)
 			} else {
-				fmt.Println("OK")
+				slog.Info("dnsmasq config regenerated")
 				s.dns.SetMappings(s.cfg().DeriveDNSMappings())
 				if dnsStatus.Running {
-					fmt.Print("  Restarting dnsmasq... ")
 					if err := s.dns.Reload(); err != nil {
-						fmt.Printf("FAILED: %v\n", err)
+						slog.Error("failed to restart dnsmasq", "err", err)
 					} else {
-						fmt.Println("OK")
+						slog.Info("dnsmasq restarted")
 					}
 				}
 				dnsStatus = s.dns.Status() // re-check
@@ -1145,32 +1140,29 @@ func (s *Server) ensureServicesRunning() {
 		}
 
 		if !dnsStatus.Running {
-			fmt.Println("NOT RUNNING")
-			fmt.Print("  Attempting to start dnsmasq... ")
+			slog.Info("dnsmasq not running, starting")
 			if err := s.dns.Start(); err != nil {
-				fmt.Printf("FAILED: %v\n", err)
+				slog.Error("failed to start dnsmasq", "err", err)
 			} else {
-				fmt.Println("OK")
+				slog.Info("dnsmasq started")
 			}
-		} else if len(dnsStatus.MissingInterfaces) == 0 {
-			fmt.Println("OK")
+		} else {
+			slog.Debug("dnsmasq running")
 		}
 	}
 
 	// Ensure HAProxy is running if enabled
 	if s.cfg().HAProxyEnabled {
-		fmt.Print("Checking HAProxy... ")
 		hapStatus := s.haproxy.GetStatus()
 		if !hapStatus.Running {
-			fmt.Println("NOT RUNNING")
-			fmt.Print("  Attempting to start HAProxy... ")
+			slog.Info("HAProxy not running, starting")
 			if err := s.haproxy.Start(); err != nil {
-				fmt.Printf("FAILED: %v\n", err)
+				slog.Error("failed to start HAProxy", "err", err)
 			} else {
-				fmt.Println("OK")
+				slog.Info("HAProxy started")
 			}
 		} else {
-			fmt.Println("OK")
+			slog.Debug("HAProxy running")
 		}
 	}
 }
@@ -1185,11 +1177,11 @@ func (s *Server) startRoute53Sync() {
 	}
 
 	if s.cfg().PublicIPOverride != "" {
-		fmt.Printf("Public IP detection disabled (override: %s)\n", s.cfg().PublicIPOverride)
+		slog.Debug("public IP detection disabled (override active)", "ip", s.cfg().PublicIPOverride)
 		return
 	}
 
-	fmt.Printf("Starting Route53/Public IP sync (every %ds)\n", interval)
+	slog.Info("starting Route53/public IP sync", "interval_s", interval)
 
 	go func() {
 		ticker := time.NewTicker(time.Duration(interval) * time.Second)
@@ -1223,7 +1215,7 @@ func (s *Server) refreshPublicIP() (bool, error) {
 		cfg.PublicIPLastChecked = time.Now().Unix()
 	})
 	if changed && prev != "" {
-		fmt.Printf("[DNS] Public IP changed: %s -> %s\n", prev, newIP)
+		slog.Info("public IP changed", "ip", newIP, "prev", prev)
 	}
 	return changed, nil
 }
@@ -1235,14 +1227,14 @@ func (s *Server) refreshPublicIPIfStale() {
 		return
 	}
 	if _, err := s.refreshPublicIP(); err != nil {
-		fmt.Printf("[DNS] Stale-cache refresh failed: %v\n", err)
+		slog.Warn("stale-cache public IP refresh failed", "err", err)
 	}
 }
 
 func (s *Server) syncPublicIPAndRecords() {
 	changed, err := s.refreshPublicIP()
 	if err != nil {
-		fmt.Printf("[DNS] Failed to get public IP: %v\n", err)
+		slog.Warn("failed to get public IP", "err", err)
 		return
 	}
 	if !changed {
@@ -1255,16 +1247,16 @@ func (s *Server) syncPublicIPAndRecords() {
 		return
 	}
 
-	fmt.Printf("[DNS] Syncing %d record(s)...\n", len(records))
+	slog.Info("syncing DNS records", "count", len(records))
 
 	for _, rec := range records {
 		changed, err := route53.SyncRecord(rec)
 		if err != nil {
-			fmt.Printf("[DNS] Sync failed for %s: %v\n", rec.Name, err)
+			slog.Error("DNS sync failed", "record", rec.Name, "err", err)
 			continue
 		}
 		if changed {
-			fmt.Printf("[DNS] Updated %s to %s\n", rec.Name, rec.Value)
+			slog.Info("DNS record updated", "record", rec.Name, "value", rec.Value)
 		}
 	}
 }
@@ -1287,8 +1279,7 @@ func (s *Server) startCertRenewal() {
 		return
 	}
 
-	fmt.Printf("Starting cert renewal sweep (every %s, renew within %dd of expiry)\n",
-		certRenewalInterval, certRenewalDays)
+	slog.Info("starting cert renewal sweep", "interval", certRenewalInterval, "renew_within_days", certRenewalDays)
 
 	go func() {
 		// First sweep shortly after startup so fresh instances converge.
@@ -1320,7 +1311,7 @@ func (s *Server) certRenewalSweep() {
 	// Determine ownership when running in a fleet.
 	alive := s.alivePeers() // nil in standalone mode
 	if len(alive) > 0 {
-		fmt.Printf("[cert-renewal] alive peers: %v\n", alive)
+		slog.Debug("cert-renewal: alive peers", "peers", alive)
 	}
 
 	// Build a fresh LE manager from current config so domain list is up to
@@ -1337,23 +1328,23 @@ func (s *Server) certRenewalSweep() {
 		if len(alive) > 0 {
 			owner := certOwner(domain.Domain, alive)
 			if owner != cfg.PeerID {
-				fmt.Printf("[cert-renewal] %s: owned by %s, pulling\n", domain.Domain, owner)
+				slog.Debug("cert-renewal: pulling cert from owner", "domain", domain.Domain, "owner", owner)
 				if err := s.pullCertFromPeer(domain.Domain, owner, cfg); err != nil {
-					fmt.Printf("[cert-renewal] %s: pull from %s failed: %v\n", domain.Domain, owner, err)
+					slog.Warn("cert-renewal: pull from peer failed", "domain", domain.Domain, "owner", owner, "err", err)
 				}
 				continue
 			}
-			fmt.Printf("[cert-renewal] %s: this peer (%s) is owner\n", domain.Domain, cfg.PeerID)
+			slog.Debug("cert-renewal: this peer is owner", "domain", domain.Domain, "peer", cfg.PeerID)
 		}
 
 		status := le.GetDomainStatus(domain)
 
 		if !status.CertExists {
-			fmt.Printf("[cert-renewal] %s: no cert, requesting\n", domain.Domain)
+			slog.Info("cert-renewal: no cert, requesting", "domain", domain.Domain)
 			if err := le.RequestCertForDomain(domain); err != nil {
-				fmt.Printf("[cert-renewal] %s: request failed: %v\n", domain.Domain, err)
+				slog.Error("cert-renewal: request failed", "domain", domain.Domain, "err", err)
 			} else {
-				fmt.Printf("[cert-renewal] %s: obtained\n", domain.Domain)
+				slog.Info("cert-renewal: obtained", "domain", domain.Domain)
 			}
 			continue
 		}
@@ -1361,22 +1352,22 @@ func (s *Server) certRenewalSweep() {
 		// Check for missing SANs (sub-zones added since last cert).
 		hasCert, missingSANs, _ := le.CheckCertSANs(domain)
 		if hasCert && len(missingSANs) > 0 {
-			fmt.Printf("[cert-renewal] %s: missing SANs %v, renewing\n", domain.Domain, missingSANs)
+			slog.Info("cert-renewal: missing SANs, renewing", "domain", domain.Domain, "missing_sans", missingSANs)
 			if err := le.RequestCertForDomain(domain); err != nil {
-				fmt.Printf("[cert-renewal] %s: renewal failed: %v\n", domain.Domain, err)
+				slog.Error("cert-renewal: renewal failed", "domain", domain.Domain, "err", err)
 			} else {
-				fmt.Printf("[cert-renewal] %s: renewed with updated SANs\n", domain.Domain)
+				slog.Info("cert-renewal: renewed with updated SANs", "domain", domain.Domain)
 			}
 			continue
 		}
 
 		// Check expiry window.
 		if le.NeedsRenewal(domain, certRenewalDays) {
-			fmt.Printf("[cert-renewal] %s: expires within %dd, renewing\n", domain.Domain, certRenewalDays)
+			slog.Info("cert-renewal: expiring soon, renewing", "domain", domain.Domain, "within_days", certRenewalDays)
 			if err := le.RequestCertForDomain(domain); err != nil {
-				fmt.Printf("[cert-renewal] %s: renewal failed: %v\n", domain.Domain, err)
+				slog.Error("cert-renewal: renewal failed", "domain", domain.Domain, "err", err)
 			} else {
-				fmt.Printf("[cert-renewal] %s: renewed\n", domain.Domain)
+				slog.Info("cert-renewal: renewed", "domain", domain.Domain)
 			}
 			continue
 		}
@@ -1389,15 +1380,13 @@ func (s *Server) Run() error {
 
 // RunWithTokenCallback runs the server and calls the callback with the admin token if it was newly generated
 func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
-	fmt.Println("========================================")
-	fmt.Println("Homelab Horizon")
-	fmt.Println("========================================")
-	fmt.Printf("Listening on %s\n", s.cfg().ListenAddr)
-	fmt.Printf("WireGuard config: %s\n", s.cfg().WGConfigPath)
+	slog.Info("starting Homelab Horizon",
+		"listen", s.cfg().ListenAddr,
+		"wg_config", s.cfg().WGConfigPath,
+	)
 	if s.cfg().DNSMasqEnabled {
-		fmt.Printf("DNSMasq config: %s\n", s.cfg().DNSMasqConfigPath)
+		slog.Info("dnsmasq enabled", "config", s.cfg().DNSMasqConfigPath)
 	}
-	fmt.Println("========================================")
 
 	// Ensure dependent services are running
 	s.ensureServicesRunning()
@@ -1414,7 +1403,7 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 
 	// Start service health monitor
 	s.monitor.Start()
-	fmt.Println("Service monitor started")
+	slog.Info("service monitor started")
 
 	// Start unattended cert renewal (Phase 2 prereq)
 	s.startCertRenewal()
@@ -1430,7 +1419,7 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	s.startMFASessionPruner(mfaDone)
 	defer close(mfaDone)
 
-	fmt.Println("========================================")
+	slog.Info("server ready", "listen", s.cfg().ListenAddr)
 
 	server := &http.Server{
 		Addr:         s.cfg().ListenAddr,
@@ -1455,7 +1444,7 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	case err := <-errCh:
 		return err
 	case <-sig:
-		fmt.Fprintln(os.Stderr, "shutting down (draining in-flight requests)...")
+		slog.Info("shutting down (draining in-flight requests)")
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		return server.Shutdown(ctx)

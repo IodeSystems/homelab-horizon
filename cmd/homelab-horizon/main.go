@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +13,7 @@ import (
 
 	"homelab-horizon/internal/autoheal"
 	"homelab-horizon/internal/config"
+	"homelab-horizon/internal/hzlog"
 	"homelab-horizon/internal/server"
 	"homelab-horizon/internal/wireguard"
 )
@@ -36,6 +37,8 @@ func main() {
 	noMCP := flag.Bool("no-mcp", false, "Disable MCP tool server (default: MCP enabled over stdio)")
 	flag.Parse()
 
+	hzlog.Setup() // structured slog → stderr (JSON under journald, text on a TTY)
+
 	switch {
 	case *version:
 		fmt.Printf("homelab-horizon %s (built %s)\n", Version, BuildTime)
@@ -47,11 +50,13 @@ func main() {
 		fmt.Println(generateSystemdService(*configPath))
 	case *check:
 		if err := runCheck(*dryRun); err != nil {
-			log.Fatalf("Check failed: %v", err)
+			slog.Error("check failed", "err", err)
+			os.Exit(1)
 		}
 	case *install:
 		if err := installService(*dryRun); err != nil {
-			log.Fatalf("Installation failed: %v", err)
+			slog.Error("installation failed", "err", err)
+			os.Exit(1)
 		}
 	default:
 		runServer(*configPath, *dryRun, !*noMCP)
@@ -79,33 +84,37 @@ func runServer(configPath string, dryRun bool, mcpEnabled bool) {
 		maybeSelfInstall(configPath)
 	}
 
-	fmt.Printf("Homelab Horizon %s (built %s)\n", Version, BuildTime)
+	slog.Info("Homelab Horizon", "version", Version, "built", BuildTime)
 
 	if os.Geteuid() != 0 {
-		log.Println("Warning: Not running as root. Some operations may fail.")
+		slog.Warn("not running as root: some operations may fail")
 	}
 
 	cfg, cfgPath, err := loadConfig(configPath)
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		slog.Error("failed to load config", "err", err)
+		os.Exit(1)
 	}
 
-	fmt.Printf("Config search paths: %s\n", strings.Join(config.SearchPaths, ", "))
+	slog.Debug("config search paths", "paths", strings.Join(config.SearchPaths, ", "))
 
 	if cfg.AutoHeal {
-		fmt.Println("Auto-heal enabled, checking dependencies...")
+		slog.Info("auto-heal enabled, checking dependencies")
 		if err := autoheal.Run(cfg); err != nil {
-			log.Fatalf("Auto-heal failed: %v", err)
+			slog.Error("auto-heal failed", "err", err)
+			os.Exit(1)
 		}
 	}
 
 	srv, err := server.NewWithConfig(cfg, cfgPath, dryRun, Version)
 	if err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+		slog.Error("failed to start server", "err", err)
+		os.Exit(1)
 	}
 
 	if err := srv.Run(); err != nil {
-		log.Fatalf("Server error: %v", err)
+		slog.Error("server error", "err", err)
+		os.Exit(1)
 	}
 }
 
@@ -139,28 +148,28 @@ func maybeSelfInstall(configPath string) {
 		return
 	}
 
-	fmt.Printf("Self-installing: moving from %s to %s\n", currentPath, targetPath)
+	slog.Info("self-installing", "from", currentPath, "to", targetPath)
 
 	// 1. Copy binary to target path
 	if err := copyFile(currentPath, targetPath); err != nil {
-		log.Printf("Warning: failed to copy binary to %s: %v", targetPath, err)
+		slog.Warn("self-install: failed to copy binary", "target", targetPath, "err", err)
 		return
 	}
 
 	// 2. Ensure executable
 	if err := os.Chmod(targetPath, 0755); err != nil {
-		log.Printf("Warning: failed to chmod binary: %v", err)
+		slog.Warn("self-install: failed to chmod binary", "err", err)
 		return
 	}
 
 	// 3. Install/Update systemd service
 	if err := installService(false); err != nil {
-		log.Printf("Warning: failed to install systemd service: %v", err)
+		slog.Warn("self-install: failed to install systemd service", "err", err)
 		return
 	}
 
 	// 4. Fire a restart and die
-	fmt.Println("Restarting as systemd service...")
+	slog.Info("restarting as systemd service")
 	// Use systemctl restart, but since we are about to exit, we use Start if it's not running
 	// or Restart if it is. Restart is generally safer for "upgrading"
 	cmd := exec.Command("systemctl", "restart", "homelab-horizon")
@@ -188,21 +197,24 @@ func runMCPStdio(configPath string, dryRun bool) {
 
 	cfg, cfgPath, err := loadConfig(configPath)
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		slog.Error("MCP: failed to load config", "err", err)
+		os.Exit(1)
 	}
 
 	srv, err := server.NewWithConfig(cfg, cfgPath, dryRun, Version)
 	if err != nil {
-		log.Fatalf("Failed to initialize server: %v", err)
+		slog.Error("MCP: failed to initialize server", "err", err)
+		os.Exit(1)
 	}
 
-	fmt.Fprintf(os.Stderr, "MCP server ready (admin token loaded from %s.token)\n", cfgPath)
+	slog.Info("MCP server ready", "token_file", cfgPath+".token")
 
 	// Restore stdout for MCP protocol
 	os.Stdout = origStdout
 	mcp := server.NewMCPServer(srv, Version)
 	if err := mcp.ServeStdio(); err != nil {
-		log.Fatalf("MCP server error: %v", err)
+		slog.Error("MCP server error", "err", err)
+		os.Exit(1)
 	}
 }
 
@@ -212,7 +224,7 @@ func loadConfig(configPath string) (*config.Config, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		fmt.Printf("Loaded config from %s\n", configPath)
+		slog.Info("loaded config", "path", configPath)
 		return cfg, configPath, nil
 	}
 	return config.LoadAuto()
@@ -553,7 +565,7 @@ PostDown = iptables -D FORWARD -i %%i -j ACCEPT; iptables -t nat -D POSTROUTING 
 	cfg.ServerPublicKey = pubKey
 	cfg.ServerEndpoint = endpoint
 	if err := config.Save(cfgPath, cfg); err != nil {
-		fmt.Printf("Warning: could not save app config: %v\n", err)
+		slog.Warn("could not save app config", "err", err)
 	}
 
 	fmt.Printf("  Server public key: %s\n", pubKey)
