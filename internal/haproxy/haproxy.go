@@ -14,18 +14,19 @@ import (
 // Backend represents a HAProxy backend service
 type Backend struct {
 	Name          string   `json:"name"`
-	DomainMatch   string   `json:"domain_match,omitempty"`  // Deprecated: use DomainMatches
+	DomainMatch   string   `json:"domain_match,omitempty"`   // Deprecated: use DomainMatches
 	DomainMatches []string `json:"domain_matches,omitempty"` // e.g., [".example.com", "app.other.com"]
-	Server        string   `json:"server"`                  // e.g., "192.168.1.10:8080"
-	HTTPCheck    bool   `json:"http_check"`
-	CheckPath    string `json:"check_path"`    // e.g., "/health"
-	InternalOnly bool   `json:"internal_only"` // Restrict to local network access only
+	Server        string   `json:"server"`                   // e.g., "192.168.1.10:8080"
+	HTTPCheck     bool     `json:"http_check"`
+	CheckPath     string   `json:"check_path"`             // e.g., "/health"
+	InternalOnly  bool     `json:"internal_only"`          // Restrict to local network access only
+	MetricsPath   string   `json:"metrics_path,omitempty"` // if set, deny this path from non-local sources (Prometheus scrapes the backend directly)
 
 	// Blue-green deploy fields (when Deploy is true, CurrentServer/NextServer are used instead of Server)
 	Deploy        bool   `json:"deploy,omitempty"`
-	CurrentServer string `json:"current_server,omitempty"`  // host:port for active slot
-	NextServer    string `json:"next_server,omitempty"`     // host:port for inactive slot
-	DeployBalance string `json:"deploy_balance,omitempty"`  // "first" or "roundrobin" (default "first")
+	CurrentServer string `json:"current_server,omitempty"` // host:port for active slot
+	NextServer    string `json:"next_server,omitempty"`    // host:port for inactive slot
+	DeployBalance string `json:"deploy_balance,omitempty"` // "first" or "roundrobin" (default "first")
 
 	// Custom error pages
 	ErrorFile503 string `json:"error_file_503,omitempty"` // path to custom 503.http file
@@ -366,11 +367,12 @@ listen stats
 		}
 	}
 
-	// Check if any backends are internal-only
-	hasInternalOnly := false
+	// Whether to emit the local_access ACL: any internal-only backend (whole-
+	// service restriction) or any metrics endpoint (path restriction) needs it.
+	needLocalAccess := false
 	for _, b := range backends {
-		if b.InternalOnly {
-			hasInternalOnly = true
+		if b.InternalOnly || b.MetricsPath != "" {
+			needLocalAccess = true
 			break
 		}
 	}
@@ -388,8 +390,8 @@ listen stats
     http-request return status 200 content-type "text/plain" string "OK" if is_router_check has_horizon_header
 `, httpPort))
 
-		// Add local_access ACL if any backend is internal-only
-		if hasInternalOnly {
+		// Add local_access ACL if any backend is internal-only or metrics-restricted
+		if needLocalAccess {
 			sb.WriteString(`    # Local network access ACL (RFC1918 private ranges)
     acl local_access src 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8
 `)
@@ -427,6 +429,14 @@ listen stats
 				sb.WriteString(fmt.Sprintf("    http-request deny deny_status 403 if host_%s !local_access\n", aclName))
 			}
 		}
+		// Deny external access to metrics endpoints. Prometheus scrapes backends
+		// directly over the internal network; the public domain path stays closed.
+		for _, b := range backends {
+			if b.MetricsPath != "" {
+				aclName := sanitizeName(b.Name)
+				sb.WriteString(fmt.Sprintf("    http-request deny deny_status 403 if host_%s { path %s } !local_access\n", aclName, b.MetricsPath))
+			}
+		}
 		for _, b := range backends {
 			aclName := sanitizeName(b.Name)
 			sb.WriteString(fmt.Sprintf("    use_backend %s_backend if host_%s\n", aclName, aclName))
@@ -454,8 +464,8 @@ listen stats
     http-request return status 200 content-type "text/plain" string "OK" if { path /router-check } { hdr(X-Homelab-Horizon-Check) -m found }
 `, httpsPort, certDir))
 
-		// Add local_access ACL if any backend is internal-only
-		if hasInternalOnly {
+		// Add local_access ACL if any backend is internal-only or metrics-restricted
+		if needLocalAccess {
 			sb.WriteString(`    # Local network access ACL (RFC1918 private ranges)
     acl local_access src 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8
 `)
@@ -476,6 +486,14 @@ listen stats
 			if b.InternalOnly {
 				aclName := sanitizeName(b.Name)
 				sb.WriteString(fmt.Sprintf("    http-request deny deny_status 403 if host_%s !local_access\n", aclName))
+			}
+		}
+		// Deny external access to metrics endpoints. Prometheus scrapes backends
+		// directly over the internal network; the public domain path stays closed.
+		for _, b := range backends {
+			if b.MetricsPath != "" {
+				aclName := sanitizeName(b.Name)
+				sb.WriteString(fmt.Sprintf("    http-request deny deny_status 403 if host_%s { path %s } !local_access\n", aclName, b.MetricsPath))
 			}
 		}
 		for _, b := range backends {
@@ -500,8 +518,8 @@ listen stats
     http-request return status 200 content-type "text/plain" string "OK" if { path /router-check } { hdr(X-Homelab-Horizon-Check) -m found }
 `, httpPort))
 
-		// Add local_access ACL if any backend is internal-only
-		if hasInternalOnly {
+		// Add local_access ACL if any backend is internal-only or metrics-restricted
+		if needLocalAccess {
 			sb.WriteString(`    # Local network access ACL (RFC1918 private ranges)
     acl local_access src 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8
 `)
@@ -522,6 +540,14 @@ listen stats
 			if b.InternalOnly {
 				aclName := sanitizeName(b.Name)
 				sb.WriteString(fmt.Sprintf("    http-request deny deny_status 403 if host_%s !local_access\n", aclName))
+			}
+		}
+		// Deny external access to metrics endpoints. Prometheus scrapes backends
+		// directly over the internal network; the public domain path stays closed.
+		for _, b := range backends {
+			if b.MetricsPath != "" {
+				aclName := sanitizeName(b.Name)
+				sb.WriteString(fmt.Sprintf("    http-request deny deny_status 403 if host_%s { path %s } !local_access\n", aclName, b.MetricsPath))
 			}
 		}
 		for _, b := range backends {

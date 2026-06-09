@@ -20,6 +20,7 @@ import (
 	"homelab-horizon/internal/config"
 	"homelab-horizon/internal/dnsmasq"
 	"homelab-horizon/internal/haproxy"
+	"homelab-horizon/internal/integration"
 	"homelab-horizon/internal/letsencrypt"
 	"homelab-horizon/internal/monitor"
 	"homelab-horizon/internal/route53"
@@ -195,22 +196,23 @@ type Server struct {
 	// few helpers below. In-place mutation of the pointed-to Config is still
 	// racy with concurrent handler reads; that pre-existing race is tracked
 	// separately and out of scope for this refactor.
-	config              atomic.Pointer[config.Config]
-	peerSyncStatus      peerSyncStatus
-	configPath          string
-	adminToken          string
-	csrfSecret          string
-	dryRun              bool
-	version             string
-	fs                  system.FileSystem
-	runner              system.CommandRunner
-	wg                  *wireguard.WGConfig
-	dns                 *dnsmasq.DNSMasq
-	haproxy             *haproxy.HAProxy
-	letsencrypt         *letsencrypt.Manager
-	monitor *monitor.Monitor
-	sync    *SyncBroadcaster
-	health  *HealthStatus
+	config         atomic.Pointer[config.Config]
+	peerSyncStatus peerSyncStatus
+	configPath     string
+	adminToken     string
+	csrfSecret     string
+	dryRun         bool
+	version        string
+	fs             system.FileSystem
+	runner         system.CommandRunner
+	wg             *wireguard.WGConfig
+	dns            *dnsmasq.DNSMasq
+	haproxy        *haproxy.HAProxy
+	letsencrypt    *letsencrypt.Manager
+	monitor        *monitor.Monitor
+	sync           *SyncBroadcaster
+	health         *HealthStatus
+	metrics        *integration.Detector // Prometheus metrics discovery (pull integration)
 
 	configSharesMu sync.Mutex
 	configShares   map[string]*configShare // token -> share
@@ -390,6 +392,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		monitor:      mon,
 		sync:         NewSyncBroadcaster(),
 		health:       &HealthStatus{healthy: true},
+		metrics:      integration.NewDetector(),
 		configShares: make(map[string]*configShare),
 		joinTokens:   newJoinTokenStore(),
 	}
@@ -863,6 +866,10 @@ func (s *Server) runHealthCheck() {
 	// degraded — a stale MASQUERADE is itself often the cause of the
 	// degradation.
 	s.reconcileIPTables()
+
+	// Re-probe observability integrations (Prometheus metrics discovery) so the
+	// served scrape config tracks which services are currently compatible.
+	s.refreshMetricsTargets()
 }
 
 // startHealthCheck starts background health monitoring every 60 seconds
@@ -894,7 +901,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		}
 		http.NotFound(w, r)
 	})
-	mux.HandleFunc("/auth", s.handleAuth)   // kept for invite flow compatibility
+	mux.HandleFunc("/auth", s.handleAuth) // kept for invite flow compatibility
 	mux.HandleFunc("/logout", s.handleLogout)
 	mux.HandleFunc("/invite/", s.handleInvite)
 	mux.HandleFunc("/share/", s.handleConfigSharePage)
@@ -923,7 +930,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// Kept admin routes
 	mux.HandleFunc("/admin/haproxy/deploy-script", s.handleHZClientScript) // services download this
-	mux.HandleFunc("/admin/haproxy/hz-client", s.handleHZClientScript)    // new canonical path
+	mux.HandleFunc("/admin/haproxy/hz-client", s.handleHZClientScript)     // new canonical path
 
 	// Backup/restore API (Bearer token auth)
 	mux.HandleFunc("/admin/backup/export", s.backupAuthMiddleware(s.handleBackupExport))
@@ -1053,6 +1060,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/checks/delete", s.handleAPIDeleteCheck)
 	mux.HandleFunc("/api/v1/checks/toggle", s.handleAPIToggleCheck)
 	mux.HandleFunc("/api/v1/checks/run", s.handleAPIRunCheck)
+
+	// Integration discovery endpoints (network-restricted: local/VPN/admin).
+	// Pull-style integrations: a central consumer scrapes hz for the config.
+	mux.HandleFunc("/integration/prometheus/scrape.yaml", s.handleIntegrationPromScrape)
+	mux.HandleFunc("/integration/prometheus/targets.json", s.handleIntegrationPromTargets)
 
 	// React SPA
 	s.setupSPA(mux)

@@ -187,6 +187,13 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 			b.TimeoutTunnel = svc.Proxy.Timeouts.TunnelSeconds
 		}
 
+		// Metrics endpoint: deny it from non-local sources at the edge (the
+		// public domain path stays closed; Prometheus scrapes the backend
+		// directly over the internal network). Default path /metrics.
+		if svc.Integrations != nil && svc.Integrations.Metrics != nil && !svc.Integrations.Metrics.Disabled {
+			b.MetricsPath = svc.Integrations.Metrics.MetricsPath()
+		}
+
 		backends = append(backends, b)
 	}
 	return backends

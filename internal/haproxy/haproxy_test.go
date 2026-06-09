@@ -114,6 +114,50 @@ func TestGenerateConfig_WithBackends(t *testing.T) {
 	}
 }
 
+func TestGenerateConfig_MetricsDeny(t *testing.T) {
+	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
+	h.SetBackends([]Backend{
+		{
+			Name:        "ragtag",
+			DomainMatch: ".rt.example.com",
+			Server:      "192.168.1.50:7700",
+			MetricsPath: "/metrics",
+		},
+	})
+
+	config := h.GenerateConfig(80, 443, nil)
+
+	for _, expected := range []string{
+		// local_access ACL must be emitted even with no internal-only backend.
+		"acl local_access src 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8",
+		// the metrics path is denied for non-local sources, scoped to the host.
+		"http-request deny deny_status 403 if host_ragtag { path /metrics } !local_access",
+	} {
+		if !strings.Contains(config, expected) {
+			t.Errorf("config missing: %s", expected)
+		}
+	}
+}
+
+func TestGenerateConfig_NoMetricsDenyByDefault(t *testing.T) {
+	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
+	h.SetBackends([]Backend{
+		{Name: "plain", DomainMatch: ".plain.example.com", Server: "10.0.0.1:80"},
+	})
+
+	config := h.GenerateConfig(80, 443, nil)
+
+	// No deny rules referencing local_access, and no local_access ACL at all,
+	// when nothing is internal-only or metrics-restricted. (The router-check
+	// uses `{ path /router-check }` legitimately, so we check the deny signal.)
+	if strings.Contains(config, "!local_access") {
+		t.Errorf("no local_access deny expected when nothing is restricted:\n%s", config)
+	}
+	if strings.Contains(config, "acl local_access") {
+		t.Errorf("local_access ACL should not appear with no internal-only or metrics backend")
+	}
+}
+
 func TestGenerateConfig_WithSSL(t *testing.T) {
 	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
 	h.SetBackends([]Backend{
