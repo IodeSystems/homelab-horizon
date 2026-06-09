@@ -2,6 +2,7 @@ package autoheal
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -102,27 +103,28 @@ func Run(cfg *config.Config) error {
 	var missing []string
 	for _, dep := range dependencies {
 		if !dep.require(cfg) {
-			fmt.Printf("  [skip] %s (not enabled)\n", dep.name)
+			slog.Debug("dependency not enabled, skipping", "name", dep.name)
 			continue
 		}
 		if _, err := exec.LookPath(dep.binary); err != nil {
-			fmt.Printf("  [missing] %s (%s)\n", dep.name, dep.pkg)
+			slog.Warn("dependency missing", "name", dep.name, "package", dep.pkg)
 			missing = append(missing, dep.pkg)
 		} else {
-			fmt.Printf("  [ok] %s\n", dep.name)
+			slog.Debug("dependency present", "name", dep.name)
 		}
 	}
 
 	// Install missing packages
 	if len(missing) > 0 {
-		fmt.Printf("Installing: %s\n", strings.Join(missing, ", "))
+		slog.Info("installing packages", "packages", strings.Join(missing, ", "))
 
 		// Set DEBIAN_FRONTEND to avoid interactive prompts
 		env := append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 
+		// apt is verbose tooling output (diagnostics) — keep it off stdout.
 		update := exec.Command("apt-get", "update", "-qq")
 		update.Env = env
-		update.Stdout = os.Stdout
+		update.Stdout = os.Stderr
 		update.Stderr = os.Stderr
 		if err := update.Run(); err != nil {
 			return fmt.Errorf("apt-get update failed: %w", err)
@@ -131,13 +133,13 @@ func Run(cfg *config.Config) error {
 		args := append([]string{"install", "-y", "-qq"}, missing...)
 		install := exec.Command("apt-get", args...)
 		install.Env = env
-		install.Stdout = os.Stdout
+		install.Stdout = os.Stderr
 		install.Stderr = os.Stderr
 		if err := install.Run(); err != nil {
 			return fmt.Errorf("apt-get install failed: %w", err)
 		}
 
-		fmt.Println("Packages installed successfully")
+		slog.Info("packages installed")
 	}
 
 	// Create required directories
@@ -149,7 +151,7 @@ func Run(cfg *config.Config) error {
 
 	// Enable IP forwarding
 	if err := enableIPForwarding(); err != nil {
-		fmt.Printf("Warning: could not enable IP forwarding: %v\n", err)
+		slog.Warn("could not enable IP forwarding", "err", err)
 	}
 
 	// Stop system-provided dnsmasq if it was just installed — HZ manages its own
@@ -168,7 +170,7 @@ func enableIPForwarding() error {
 	if strings.TrimSpace(string(current)) == "1" {
 		return nil
 	}
-	fmt.Println("Enabling IP forwarding")
+	slog.Info("enabling IP forwarding")
 	return os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
 }
 
@@ -176,7 +178,7 @@ func stopSystemDnsmasq() {
 	// Best-effort: stop and disable the system dnsmasq service so it doesn't
 	// conflict with the one HZ manages. Errors are expected in Docker (no systemd).
 	cmd := exec.Command("systemctl", "disable", "--now", "dnsmasq")
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	_ = cmd.Run()
 }

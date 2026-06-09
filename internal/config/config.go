@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -674,7 +675,7 @@ func LoadAuto() (*Config, string, error) {
 			return nil, "", fmt.Errorf("parsing HZ_CONFIG: %w", err)
 		}
 		path := SearchPaths[0] // default save path
-		fmt.Printf("Loaded config from HZ_CONFIG environment variable\n")
+		slog.Info("loaded config from HZ_CONFIG environment variable")
 		return cfg, path, nil
 	}
 
@@ -684,10 +685,9 @@ func LoadAuto() (*Config, string, error) {
 		return nil, "", err
 	}
 	if !found {
-		fmt.Printf("No config file found, using defaults\n")
-		fmt.Printf("Create %s to customize settings\n", path)
+		slog.Info("no config file found, using defaults", "create_at", path)
 	} else {
-		fmt.Printf("Loaded config from %s\n", path)
+		slog.Info("loaded config", "path", path)
 	}
 	return cfg, path, nil
 }

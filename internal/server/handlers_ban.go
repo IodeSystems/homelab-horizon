@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os/exec"
@@ -81,7 +82,7 @@ func (s *Server) banIP(ip string, timeout int, reason, service string) error {
 		ban.ExpiresAt = now + int64(timeout)
 	}
 
-	fmt.Printf("[ban] banned %s timeout=%d reason=%q service=%q\n", ip, timeout, reason, service)
+	slog.Info("ban: IP banned", "ip", ip, "timeout", timeout, "reason", reason, "service", service)
 
 	return s.updateConfig(func(cfg *config.Config) {
 		cfg.IPBans = append(cfg.IPBans, ban)
@@ -102,7 +103,7 @@ func (s *Server) unbanIP(ip string) error {
 	// Remove iptables rule (ignore error if rule doesn't exist)
 	_ = iptablesUnban(ip)
 
-	fmt.Printf("[ban] unbanned %s\n", ip)
+	slog.Info("ban: IP unbanned", "ip", ip)
 
 	return s.updateConfig(func(cfg *config.Config) {
 		filtered := cfg.IPBans[:0]
@@ -126,14 +127,14 @@ func (s *Server) reapplyBans() {
 	for _, ban := range bans {
 		if ban.ExpiresAt > 0 && ban.ExpiresAt <= now {
 			_ = iptablesUnban(ban.IP)
-			fmt.Printf("[ban] expired ban removed on startup: %s\n", ban.IP)
+			slog.Info("ban: expired ban removed on startup", "ip", ban.IP)
 			continue
 		}
 		if !iptablesCheckBan(ban.IP) {
 			if err := iptablesBan(ban.IP); err != nil {
-				fmt.Printf("[ban] failed to reapply ban for %s: %v\n", ban.IP, err)
+				slog.Error("ban: failed to reapply ban", "ip", ban.IP, "err", err)
 			} else {
-				fmt.Printf("[ban] reapplied ban for %s\n", ban.IP)
+				slog.Info("ban: reapplied ban", "ip", ban.IP)
 			}
 		}
 		active = append(active, ban)
@@ -142,7 +143,7 @@ func (s *Server) reapplyBans() {
 		if err := s.updateConfig(func(cfg *config.Config) {
 			cfg.IPBans = active
 		}); err != nil {
-			fmt.Printf("[ban] failed to save config after reapply: %v\n", err)
+			slog.Error("ban: failed to save config after reapply", "err", err)
 		}
 	}
 }
@@ -162,9 +163,9 @@ func (s *Server) startBanExpiry() {
 		}
 		for _, ip := range expired {
 			if err := s.unbanIP(ip); err != nil {
-				fmt.Printf("[ban] failed to expire ban for %s: %v\n", ip, err)
+				slog.Error("ban: failed to expire ban", "ip", ip, "err", err)
 			} else {
-				fmt.Printf("[ban] expired ban for %s\n", ip)
+				slog.Info("ban: expired ban removed", "ip", ip)
 			}
 		}
 	}

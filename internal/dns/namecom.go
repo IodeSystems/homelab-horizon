@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -93,7 +94,7 @@ func (p *NamecomProvider) Name() string {
 }
 
 func (p *NamecomProvider) log(action string) {
-	fmt.Printf("[Name.com/%s] %s\n", p.username, action)
+	slog.Debug(action, "provider", "namecom", "username", p.username)
 }
 
 func (p *NamecomProvider) doRequest(method, path string, body interface{}) ([]byte, error) {

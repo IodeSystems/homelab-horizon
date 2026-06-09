@@ -9,6 +9,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -25,9 +26,9 @@ import (
 // round-trip. Computed fresh on each call — iptables-save is cheap enough
 // that caching isn't worth the staleness risk.
 type PeerPingResponse struct {
-	PeerID          string                  `json:"peer_id"`
-	ConfigPrimary   bool                    `json:"config_primary"`
-	IPTablesSummary *iptables.Summary       `json:"iptables_summary,omitempty"`
+	PeerID          string            `json:"peer_id"`
+	ConfigPrimary   bool              `json:"config_primary"`
+	IPTablesSummary *iptables.Summary `json:"iptables_summary,omitempty"`
 }
 
 // handlePeerPing returns this instance's identity. Cheap, used for liveness
@@ -285,9 +286,9 @@ func (s *Server) applyWGPeersFromConfig(cfg *config.Config) {
 	// Remove peers not in desired set.
 	for _, p := range current {
 		if _, ok := desiredByKey[p.PublicKey]; !ok {
-			fmt.Printf("[peer-sync] removing WG peer %s (%s)\n", p.Name, p.PublicKey[:8])
+			slog.Info("peer-sync: removing WG peer", "name", p.Name, "pubkey_prefix", p.PublicKey[:8])
 			if err := s.wg.RemovePeer(p.PublicKey); err != nil {
-				fmt.Printf("[peer-sync] remove peer %s: %v\n", p.Name, err)
+				slog.Error("peer-sync: remove WG peer failed", "name", p.Name, "err", err)
 			}
 			changed = true
 		}
@@ -296,9 +297,9 @@ func (s *Server) applyWGPeersFromConfig(cfg *config.Config) {
 	// Add or update peers.
 	for _, desired := range cfg.WGPeers {
 		if _, exists := currentByKey[desired.PublicKey]; !exists {
-			fmt.Printf("[peer-sync] adding WG peer %s (%s)\n", desired.Name, desired.PublicKey[:8])
+			slog.Info("peer-sync: adding WG peer", "name", desired.Name, "pubkey_prefix", desired.PublicKey[:8])
 			if err := s.wg.AddPeer(desired.Name, desired.PublicKey, desired.AllowedIPs); err != nil {
-				fmt.Printf("[peer-sync] add peer %s: %v\n", desired.Name, err)
+				slog.Error("peer-sync: add WG peer failed", "name", desired.Name, "err", err)
 			}
 			changed = true
 		} else {
@@ -306,9 +307,9 @@ func (s *Server) applyWGPeersFromConfig(cfg *config.Config) {
 			for _, cur := range current {
 				if cur.PublicKey == desired.PublicKey {
 					if cur.Name != desired.Name || cur.AllowedIPs != desired.AllowedIPs {
-						fmt.Printf("[peer-sync] updating WG peer %s\n", desired.Name)
+						slog.Info("peer-sync: updating WG peer", "name", desired.Name)
 						if err := s.wg.UpdatePeer(desired.PublicKey, desired.Name, desired.AllowedIPs); err != nil {
-							fmt.Printf("[peer-sync] update peer %s: %v\n", desired.Name, err)
+							slog.Error("peer-sync: update WG peer failed", "name", desired.Name, "err", err)
 						}
 						changed = true
 					}
@@ -320,7 +321,7 @@ func (s *Server) applyWGPeersFromConfig(cfg *config.Config) {
 
 	if changed {
 		if err := s.wg.Reload(); err != nil {
-			fmt.Printf("[peer-sync] WG reload after peer sync: %v\n", err)
+			slog.Error("peer-sync: WG reload after peer sync failed", "err", err)
 		}
 		s.rebuildWGForwardChain()
 	}
@@ -356,8 +357,7 @@ func (s *Server) applyNewConfig(newCfg *config.Config) error {
 	if old.ListenAddr != newCfg.ListenAddr ||
 		old.WGInterface != newCfg.WGInterface ||
 		old.WGConfigPath != newCfg.WGConfigPath {
-		fmt.Println("[peer-sync] WARNING: low-level config changed (listen/wg) — restart required to take effect")
+		slog.Warn("peer-sync: low-level config changed (listen/wg) — restart required to take effect")
 	}
 	return nil
 }
-
