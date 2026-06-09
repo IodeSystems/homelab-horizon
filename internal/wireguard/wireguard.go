@@ -206,7 +206,7 @@ func (w *WGConfig) AddPeer(name, publicKey, allowedIP string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	peerBlock := fmt.Sprintf("\n[Peer]\n# %s\nPublicKey = %s\nAllowedIPs = %s\n", name, publicKey, allowedIP)
 	if _, err := f.WriteString(peerBlock); err != nil {
@@ -573,7 +573,7 @@ func RemoveMasqueradeRule(outIface string) {
 	if outIface == "" {
 		return
 	}
-	exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING", "-o", outIface, "-j", "MASQUERADE").Run()
+	_ = exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING", "-o", outIface, "-j", "MASQUERADE").Run()
 }
 
 func (w *WGConfig) GetAddress() string {
@@ -644,7 +644,7 @@ func peerIP(allowedIPs string) string {
 // Called once at server startup.
 func SetupForwardChain(wgInterface string, peers []Peer, profiles map[string]string, vpnRange, lanCIDR string) error {
 	// Create chain (ignore error if already exists)
-	exec.Command("iptables", "-N", forwardChainName).Run()
+	_ = exec.Command("iptables", "-N", forwardChainName).Run()
 
 	// Check if jump rule already exists, add if not
 	if err := exec.Command("iptables", "-C", "FORWARD", "-i", wgInterface, "-j", forwardChainName).Run(); err != nil {
@@ -657,7 +657,7 @@ func SetupForwardChain(wgInterface string, peers []Peer, profiles map[string]str
 	// what iptables-nft stores natively; matches what ExpectedPostUp emits
 	// and what the iptables/rules.go canonical normalizer compares against.
 	if err := exec.Command("iptables", "-C", "FORWARD", "-o", wgInterface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run(); err != nil {
-		exec.Command("iptables", "-I", "FORWARD", "2", "-o", wgInterface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run()
+		_ = exec.Command("iptables", "-I", "FORWARD", "2", "-o", wgInterface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run()
 	}
 
 	return RebuildForwardChain(ForwardChainOpts{
@@ -670,9 +670,9 @@ func SetupForwardChain(wgInterface string, peers []Peer, profiles map[string]str
 
 // TeardownForwardChain removes the jump rule, flushes and deletes the chain.
 func TeardownForwardChain(wgInterface string) error {
-	exec.Command("iptables", "-D", "FORWARD", "-i", wgInterface, "-j", forwardChainName).Run()
-	exec.Command("iptables", "-F", forwardChainName).Run()
-	exec.Command("iptables", "-X", forwardChainName).Run()
+	_ = exec.Command("iptables", "-D", "FORWARD", "-i", wgInterface, "-j", forwardChainName).Run()
+	_ = exec.Command("iptables", "-F", forwardChainName).Run()
+	_ = exec.Command("iptables", "-X", forwardChainName).Run()
 	return nil
 }
 
@@ -709,8 +709,8 @@ func RebuildForwardChain(opts ForwardChainOpts) error {
 
 		// MFA jail: peer can only reach Horizon server
 		if opts.JailedPeers[p.Name] && opts.ServerWGIP != "" && opts.ListenPort != "" {
-			exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", opts.ServerWGIP+"/32", "-p", "tcp", "--dport", opts.ListenPort, "-j", "ACCEPT").Run()
-			exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "DROP").Run()
+			_ = exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", opts.ServerWGIP+"/32", "-p", "tcp", "--dport", opts.ListenPort, "-j", "ACCEPT").Run()
+			_ = exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "DROP").Run()
 			continue
 		}
 
@@ -722,27 +722,27 @@ func RebuildForwardChain(opts ForwardChainOpts) error {
 		switch profile {
 		case "full-tunnel":
 			// Allow all traffic from this peer
-			exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "ACCEPT").Run()
+			_ = exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "ACCEPT").Run()
 		case "vpn-only":
 			// Allow only VPN range
 			if opts.VPNRange != "" {
-				exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", opts.VPNRange, "-j", "ACCEPT").Run()
+				_ = exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", opts.VPNRange, "-j", "ACCEPT").Run()
 			}
-			exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "DROP").Run()
+			_ = exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "DROP").Run()
 		default: // lan-access
 			// Allow VPN range + LAN
 			if opts.VPNRange != "" {
-				exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", opts.VPNRange, "-j", "ACCEPT").Run()
+				_ = exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", opts.VPNRange, "-j", "ACCEPT").Run()
 			}
 			if opts.LanCIDR != "" {
-				exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", opts.LanCIDR, "-j", "ACCEPT").Run()
+				_ = exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", opts.LanCIDR, "-j", "ACCEPT").Run()
 			}
-			exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "DROP").Run()
+			_ = exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "DROP").Run()
 		}
 	}
 
 	// Default: drop anything not matched (unknown source IPs)
-	exec.Command("iptables", "-A", forwardChainName, "-j", "DROP").Run()
+	_ = exec.Command("iptables", "-A", forwardChainName, "-j", "DROP").Run()
 
 	return nil
 }
@@ -797,9 +797,6 @@ func (w *WGConfig) UpdateInterfaceRules(postUp, postDown string) error {
 		added := false
 		for _, line := range result {
 			final = append(final, line)
-			if !added && strings.TrimSpace(line) == "[Interface]" {
-				// We'll add after the last Interface key
-			}
 			if !added && strings.HasPrefix(strings.TrimSpace(line), "ListenPort") {
 				if !replacedUp {
 					final = append(final, "PostUp = "+postUp)
@@ -846,7 +843,7 @@ PersistentKeepalive = 25
 // SitePeer describes one site's WireGuard server for multi-site client configs.
 type SitePeer struct {
 	PublicKey  string
-	Endpoint  string
+	Endpoint   string
 	AllowedIPs string // that site's VPN range
 }
 

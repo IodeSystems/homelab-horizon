@@ -456,22 +456,6 @@ func (s *Server) verifyCookie(cookie string) (string, bool) {
 
 // CSRF token generation and validation
 
-// generateCSRFToken creates a signed CSRF token for the current session
-func (s *Server) generateCSRFToken(sessionID string) string {
-	// Token = base64(base64(sessionID)|timestamp|signature)
-	// SessionID is base64-encoded because it may contain | (from signed cookies)
-	timestamp := time.Now().Unix()
-	encodedSession := base64.StdEncoding.EncodeToString([]byte(sessionID))
-	data := fmt.Sprintf("%s|%d", encodedSession, timestamp)
-
-	h := hmac.New(sha256.New, []byte(s.csrfSecret))
-	h.Write([]byte(data))
-	sig := base64.StdEncoding.EncodeToString(h.Sum(nil))
-
-	token := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s|%s", data, sig)))
-	return token
-}
-
 // validateCSRFToken verifies a CSRF token is valid for the session
 func (s *Server) validateCSRFToken(token, sessionID string) bool {
 	decoded, err := base64.StdEncoding.DecodeString(token)
@@ -567,16 +551,6 @@ func (s *Server) requireCSRF(w http.ResponseWriter, r *http.Request) bool {
 	}
 
 	return true
-}
-
-// getCSRFToken returns a CSRF token for the current request's session
-func (s *Server) getCSRFToken(r *http.Request) string {
-	sessionID := s.getSessionID(r)
-	slog.Debug("CSRF: generating token", "method", r.Method, "path", r.URL.Path, "session_id", sessionID)
-	if sessionID == "" {
-		return ""
-	}
-	return s.generateCSRFToken(sessionID)
 }
 
 // requireAdminPost validates admin auth and CSRF for POST requests
@@ -734,7 +708,7 @@ func (s *Server) getInviteEntries() []inviteEntry {
 	if err != nil {
 		return entries
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -746,7 +720,7 @@ func (s *Server) getInviteEntries() []inviteEntry {
 		parts := strings.SplitN(line, ":", 2)
 		if len(parts) == 2 {
 			var expiry int64
-			fmt.Sscanf(parts[1], "%d", &expiry)
+			_, _ = fmt.Sscanf(parts[1], "%d", &expiry)
 			entries = append(entries, inviteEntry{Token: parts[0], Expiry: expiry})
 		} else {
 			// Legacy format: plain token with no expiry
@@ -794,9 +768,9 @@ func (s *Server) addInvite(token string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
-	_, err = f.WriteString(fmt.Sprintf("%s:%d\n", token, expiry))
+	_, err = fmt.Fprintf(f, "%s:%d\n", token, expiry)
 	return err
 }
 
@@ -816,29 +790,6 @@ func (s *Server) removeInvite(token string) error {
 
 	content := strings.Join(remaining, "\n")
 	if len(remaining) > 0 {
-		content += "\n"
-	}
-	return os.WriteFile(s.cfg().InvitesFile, []byte(content), 0600)
-}
-
-// cleanupExpiredInvites removes expired invites from the file
-func (s *Server) cleanupExpiredInvites() error {
-	entries := s.getInviteEntries()
-	now := time.Now().Unix()
-	var valid []string
-
-	for _, e := range entries {
-		if e.Expiry == 0 || e.Expiry > now {
-			if e.Expiry > 0 {
-				valid = append(valid, fmt.Sprintf("%s:%d", e.Token, e.Expiry))
-			} else {
-				valid = append(valid, e.Token)
-			}
-		}
-	}
-
-	content := strings.Join(valid, "\n")
-	if len(valid) > 0 {
 		content += "\n"
 	}
 	return os.WriteFile(s.cfg().InvitesFile, []byte(content), 0600)
@@ -1092,9 +1043,11 @@ func (s *Server) ensureServicesRunning() {
 		}
 	}
 	if tokensGenerated {
-		s.updateConfig(func(cfg *config.Config) {
+		if err := s.updateConfig(func(cfg *config.Config) {
 			cfg.Services = services
-		})
+		}); err != nil {
+			slog.Warn("updateConfig service tokens", "err", err)
+		}
 	}
 
 	// In Docker, skip service management (no systemd)
@@ -1127,7 +1080,9 @@ func (s *Server) ensureServicesRunning() {
 				slog.Error("failed to regenerate dnsmasq config", "err", err)
 			} else {
 				slog.Info("dnsmasq config regenerated")
-				s.dns.SetMappings(s.cfg().DeriveDNSMappings())
+				if err := s.dns.SetMappings(s.cfg().DeriveDNSMappings()); err != nil {
+					slog.Warn("dns.SetMappings", "err", err)
+				}
 				if dnsStatus.Running {
 					if err := s.dns.Reload(); err != nil {
 						slog.Error("failed to restart dnsmasq", "err", err)
@@ -1210,10 +1165,12 @@ func (s *Server) refreshPublicIP() (bool, error) {
 	}
 	prev := s.cfg().PublicIP
 	changed := prev != newIP
-	s.updateConfig(func(cfg *config.Config) {
+	if err := s.updateConfig(func(cfg *config.Config) {
 		cfg.PublicIP = newIP
 		cfg.PublicIPLastChecked = time.Now().Unix()
-	})
+	}); err != nil {
+		slog.Warn("updateConfig publicIP", "err", err)
+	}
 	if changed && prev != "" {
 		slog.Info("public IP changed", "ip", newIP, "prev", prev)
 	}

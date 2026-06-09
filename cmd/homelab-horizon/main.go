@@ -408,7 +408,7 @@ func (c *checker) checkSystemdService() {
 	if err := exec.Command("systemctl", "is-enabled", "homelab-horizon").Run(); err != nil {
 		fmt.Println("INSTALLED (not enabled)")
 		if c.canFix() && askYesNo("  Enable service to start on boot?") {
-			exec.Command("systemctl", "enable", "homelab-horizon").Run()
+			_ = exec.Command("systemctl", "enable", "homelab-horizon").Run()
 			fmt.Println("  Service enabled.")
 		}
 	} else {
@@ -520,8 +520,8 @@ func checkWriteAccess(path string) error {
 	if err != nil {
 		return fmt.Errorf("cannot write")
 	}
-	f.Close()
-	os.Remove(testFile)
+	_ = f.Close()
+	_ = os.Remove(testFile)
 	return nil
 }
 

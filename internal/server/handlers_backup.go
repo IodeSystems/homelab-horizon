@@ -89,7 +89,7 @@ func (s *Server) handleBackupExport(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", "attachment; filename=homelab-horizon-backup.zip")
-	w.Write(buf.Bytes())
+	_, _ = w.Write(buf.Bytes())
 }
 
 // handleBackupImport restores server state from a backup zip.
@@ -124,7 +124,7 @@ func (s *Server) handleBackupImport(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		data, err := io.ReadAll(rc)
-		rc.Close()
+		_ = rc.Close()
 		if err != nil {
 			continue
 		}
@@ -172,7 +172,9 @@ func (s *Server) handleBackupImport(w http.ResponseWriter, r *http.Request) {
 		if err := os.WriteFile(cfg.WGConfigPath, wgData, 0600); err != nil {
 			errors = append(errors, fmt.Sprintf("wireguard: %v", err))
 		} else {
-			s.wg.Load()
+			if err := s.wg.Load(); err != nil {
+				errors = append(errors, fmt.Sprintf("wireguard load: %v", err))
+			}
 		}
 	}
 
@@ -205,14 +207,14 @@ func (s *Server) handleBackupImport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if len(errors) > 0 {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"status": "partial",
 			"errors": errors,
 		})
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status": "ok",
 	})
 }
@@ -222,7 +224,7 @@ func zipWriteFile(zw *zip.Writer, name string, data []byte) {
 	if err != nil {
 		return
 	}
-	w.Write(data)
+	_, _ = w.Write(data)
 }
 
 // backupAuthMiddleware accepts Bearer token (API) or session cookie / VPN admin (UI).

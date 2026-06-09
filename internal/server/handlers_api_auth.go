@@ -21,7 +21,7 @@ func (s *Server) handleAPIAuthStatus(w http.ResponseWriter, r *http.Request) {
 		if s.isVPNAdmin(r) {
 			method = "vpn"
 		}
-		json.NewEncoder(w).Encode(apitypes.AuthStatusResponse{
+		_ = json.NewEncoder(w).Encode(apitypes.AuthStatusResponse{
 			Authenticated: true,
 			Method:        method,
 			PeerID:        s.cfg().PeerID,
@@ -31,7 +31,7 @@ func (s *Server) handleAPIAuthStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	json.NewEncoder(w).Encode(apitypes.AuthStatusResponse{
+	_ = json.NewEncoder(w).Encode(apitypes.AuthStatusResponse{
 		Authenticated: false,
 		PeerID:        s.cfg().PeerID,
 		ConfigPrimary: s.cfg().ConfigPrimary,
@@ -43,7 +43,7 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Method not allowed"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Method not allowed"})
 		return
 	}
 
@@ -51,7 +51,7 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request body"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request body"})
 		return
 	}
 
@@ -67,13 +67,13 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 			MaxAge:   86400,
 		})
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(apitypes.LoginResponse{OK: true})
+		_ = json.NewEncoder(w).Encode(apitypes.LoginResponse{OK: true})
 		return
 	}
 
 	if s.isValidInvite(token) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(apitypes.LoginResponse{
+		_ = json.NewEncoder(w).Encode(apitypes.LoginResponse{
 			OK:       true,
 			Invite:   true,
 			Redirect: "/invite/" + token,
@@ -83,14 +83,14 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
-	json.NewEncoder(w).Encode(map[string]string{"error": "Invalid token"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid token"})
 }
 
 func (s *Server) handleAPILogout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Method not allowed"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Method not allowed"})
 		return
 	}
 
@@ -103,5 +103,5 @@ func (s *Server) handleAPILogout(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 	})
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
