@@ -13,3 +13,14 @@ docs/node_modules
 docs/package-lock.json
 homelab-horizon-linux
 .hz.json
+
+# Secrets (CFG-4) — never commit. hz's runtime config holds DNS creds + tokens
+# and lives on the box (/etc/homelab-horizon/config.json), not in the repo.
+# The tracked templates are docker/demo-config.json + the `-config-template` flag.
+/config.json
+/homelab-horizon.json
+*.token
+secrets.env
+*.secret
+*.secret.*
+*.secret.properties
