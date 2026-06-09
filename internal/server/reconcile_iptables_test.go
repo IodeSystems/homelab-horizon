@@ -3,7 +3,7 @@ package server
 import (
 	"testing"
 
-	"homelab-horizon/internal/wireguard"
+	"github.com/iodesystems/homelab-horizon/internal/wireguard"
 )
 
 func TestIsLegacyBypassPostUp(t *testing.T) {

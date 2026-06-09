@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 )
 
 func (s *Server) handleAPIAuthStatus(w http.ResponseWriter, r *http.Request) {

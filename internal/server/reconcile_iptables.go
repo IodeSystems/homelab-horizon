@@ -7,9 +7,9 @@ import (
 	"regexp"
 	"strings"
 
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/iptables"
-	"homelab-horizon/internal/wireguard"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/iptables"
+	"github.com/iodesystems/homelab-horizon/internal/wireguard"
 )
 
 // masqIfaceRe matches the iface token in an iptables MASQUERADE clause embedded

@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"homelab-horizon/internal/apitypes"
-	"homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
 // unixOrZero returns t.Unix() unless t is the zero value, in which case it

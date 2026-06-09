@@ -10,8 +10,8 @@ import (
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 
-	"homelab-horizon/internal/apitypes"
-	"homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
 // getPeerFromRequest identifies the VPN peer making the request by their VPN IP.

@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/dnsmasq"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	homelabUI "homelab-horizon/ui"
+	homelabUI "github.com/iodesystems/homelab-horizon/ui"
 )
 
 func (s *Server) setupSPA(mux *http.ServeMux) {

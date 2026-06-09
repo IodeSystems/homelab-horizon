@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 )
 
 // handleAPISystemMetrics returns a single point-in-time snapshot of host

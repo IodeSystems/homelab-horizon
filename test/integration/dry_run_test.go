@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/server"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/server"
 )
 
 func TestDryRunMode(t *testing.T) {

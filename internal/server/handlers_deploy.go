@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"strings"
 
-	"homelab-horizon/internal/apitypes"
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/haproxy"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/haproxy"
 )
 
 

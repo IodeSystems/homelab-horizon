@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"homelab-horizon/internal/acme"
+	"github.com/iodesystems/homelab-horizon/internal/acme"
 )
 
 // DNSProviderType identifies the DNS provider for ACME challenges

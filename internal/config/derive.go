@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"homelab-horizon/internal/haproxy"
-	"homelab-horizon/internal/letsencrypt"
-	"homelab-horizon/internal/route53"
+	"github.com/iodesystems/homelab-horizon/internal/haproxy"
+	"github.com/iodesystems/homelab-horizon/internal/letsencrypt"
+	"github.com/iodesystems/homelab-horizon/internal/route53"
 )
 
 // DefaultPublicIPMaxAge is the staleness threshold used when PublicIPMaxAge

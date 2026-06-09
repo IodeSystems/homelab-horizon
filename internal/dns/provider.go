@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
 // Zone represents a DNS zone

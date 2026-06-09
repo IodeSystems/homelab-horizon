@@ -8,10 +8,10 @@ import (
 	"os"
 	"strings"
 
-	"homelab-horizon/internal/apitypes"
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/qr"
-	"homelab-horizon/internal/wireguard"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/qr"
+	"github.com/iodesystems/homelab-horizon/internal/wireguard"
 )
 
 func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {

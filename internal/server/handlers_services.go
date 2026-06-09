@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"homelab-horizon/internal/haproxy"
-	"homelab-horizon/internal/letsencrypt"
-	"homelab-horizon/internal/route53"
+	"github.com/iodesystems/homelab-horizon/internal/haproxy"
+	"github.com/iodesystems/homelab-horizon/internal/letsencrypt"
+	"github.com/iodesystems/homelab-horizon/internal/route53"
 )
 
 // syncServices syncs all subsystems with current service configuration (quick, no logging)

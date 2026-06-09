@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
 // handleBackupExport produces a zip containing all state needed to clone this server.

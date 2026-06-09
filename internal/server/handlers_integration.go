@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"homelab-horizon/internal/integration"
+	"github.com/iodesystems/homelab-horizon/internal/integration"
 )
 
 // metricsCandidates builds the per-slot Prometheus targets from the service

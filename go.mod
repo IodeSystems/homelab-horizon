@@ -1,4 +1,4 @@
-module homelab-horizon
+module github.com/iodesystems/homelab-horizon
 
 go 1.26
 

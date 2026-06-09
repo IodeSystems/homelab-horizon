@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
 // CheckStatus represents the current status of a service check
