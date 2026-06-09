@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"strings"
 
-	"homelab-horizon/internal/apitypes"
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/dns"
-	"homelab-horizon/internal/letsencrypt"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/dns"
+	"github.com/iodesystems/homelab-horizon/internal/letsencrypt"
 )
 
 func writeJSONOK(w http.ResponseWriter) {

@@ -7,10 +7,10 @@ import (
 	"os/exec"
 	"strings"
 
-	"homelab-horizon/internal/apitypes"
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/dnsmasq"
-	"homelab-horizon/internal/letsencrypt"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
+	"github.com/iodesystems/homelab-horizon/internal/letsencrypt"
 )
 
 // handleAPISystemHealth returns per-component facts about the on-host software

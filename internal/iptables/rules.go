@@ -17,7 +17,7 @@ package iptables
 import (
 	"strings"
 
-	"homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
 // ForwardChainName is the chain horizon inserts per-peer profile rules into.

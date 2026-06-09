@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"strings"
 
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/qr"
-	"homelab-horizon/internal/wireguard"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/qr"
+	"github.com/iodesystems/homelab-horizon/internal/wireguard"
 )
 
 // inviteBaseCSS is minimal CSS for the invite page (standalone, not part of the SPA).

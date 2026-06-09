@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"homelab-horizon/internal/apitypes"
-	"homelab-horizon/internal/autoheal"
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/dnsmasq"
-	"homelab-horizon/internal/wireguard"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/autoheal"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
+	"github.com/iodesystems/homelab-horizon/internal/wireguard"
 )
 
 // Fixer endpoints for on-host system state. These restore the "fix this"

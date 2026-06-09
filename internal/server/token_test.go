@@ -1,7 +1,7 @@
 package server
 
 import (
-	"homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 	"os"
 	"path/filepath"
 	"strings"

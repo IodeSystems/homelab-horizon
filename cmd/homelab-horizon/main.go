@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"homelab-horizon/internal/autoheal"
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/hzlog"
-	"homelab-horizon/internal/server"
-	"homelab-horizon/internal/wireguard"
+	"github.com/iodesystems/homelab-horizon/internal/autoheal"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/hzlog"
+	"github.com/iodesystems/homelab-horizon/internal/server"
+	"github.com/iodesystems/homelab-horizon/internal/wireguard"
 )
 
 var (

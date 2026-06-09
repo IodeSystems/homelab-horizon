@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"homelab-horizon/internal/apitypes"
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/iptables"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/iptables"
 )
 
 // joinToken holds the state for a pending HA join operation.

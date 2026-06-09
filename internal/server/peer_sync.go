@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
 const (

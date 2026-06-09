@@ -16,8 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/iptables"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/iptables"
 )
 
 // PeerPingResponse is returned by GET /api/peer/ping.

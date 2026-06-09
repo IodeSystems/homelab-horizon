@@ -22,15 +22,15 @@ import (
 	"syscall"
 	"time"
 
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/dnsmasq"
-	"homelab-horizon/internal/haproxy"
-	"homelab-horizon/internal/integration"
-	"homelab-horizon/internal/letsencrypt"
-	"homelab-horizon/internal/monitor"
-	"homelab-horizon/internal/route53"
-	"homelab-horizon/internal/system"
-	"homelab-horizon/internal/wireguard"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
+	"github.com/iodesystems/homelab-horizon/internal/haproxy"
+	"github.com/iodesystems/homelab-horizon/internal/integration"
+	"github.com/iodesystems/homelab-horizon/internal/letsencrypt"
+	"github.com/iodesystems/homelab-horizon/internal/monitor"
+	"github.com/iodesystems/homelab-horizon/internal/route53"
+	"github.com/iodesystems/homelab-horizon/internal/system"
+	"github.com/iodesystems/homelab-horizon/internal/wireguard"
 )
 
 // HealthStatus tracks the background health check state

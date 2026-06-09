@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
 type dependency struct {

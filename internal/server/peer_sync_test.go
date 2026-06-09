@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/monitor"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/monitor"
 )
 
 func TestMergeRemoteIntoLocal(t *testing.T) {
