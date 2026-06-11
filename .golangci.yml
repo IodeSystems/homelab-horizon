@@ -1,0 +1,29 @@
+# iodesystems shared golangci-lint config (org template — canon X-LINT-1).
+# golangci-lint v2. Standard high-signal linter set + misspell; gofmt + goimports
+# as formatters (org import grouping). Keep this file identical across repos.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  # "standard" = errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    - misspell
+  exclusions:
+    generated: lax
+    rules:
+      # Test files may ignore errors on cleanup/assert helpers.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/iodesystems

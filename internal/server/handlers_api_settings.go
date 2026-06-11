@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"homelab-horizon/internal/apitypes"
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/haproxy"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/haproxy"
 )
 
 func (s *Server) handleAPISettings(w http.ResponseWriter, r *http.Request) {
@@ -99,7 +99,7 @@ func (s *Server) handleAPISettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleAPIAddZone(w http.ResponseWriter, r *http.Request) {
@@ -121,8 +121,8 @@ func (s *Server) handleAPIAddZone(w http.ResponseWriter, r *http.Request) {
 		AWSAccessKeyID     string `json:"awsAccessKeyId"`
 		AWSSecretAccessKey string `json:"awsSecretAccessKey"`
 		AWSRegion          string `json:"awsRegion"`
-		NamecomUsername     string `json:"namecomUsername"`
-		NamecomAPIToken     string `json:"namecomApiToken"`
+		NamecomUsername    string `json:"namecomUsername"`
+		NamecomAPIToken    string `json:"namecomApiToken"`
 		CloudflareAPIToken string `json:"cloudflareApiToken"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -202,7 +202,7 @@ func (s *Server) handleAPIAddZone(w http.ResponseWriter, r *http.Request) {
 
 	s.syncLetsEncrypt()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 func (s *Server) handleAPIEditZone(w http.ResponseWriter, r *http.Request) {
@@ -271,7 +271,7 @@ func (s *Server) handleAPIEditZone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 func (s *Server) handleAPIDeleteZone(w http.ResponseWriter, r *http.Request) {
@@ -306,7 +306,7 @@ func (s *Server) handleAPIDeleteZone(w http.ResponseWriter, r *http.Request) {
 
 	s.syncServices()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 func (s *Server) handleAPIHAProxyWriteConfig(w http.ResponseWriter, r *http.Request) {
@@ -333,7 +333,7 @@ func (s *Server) handleAPIHAProxyWriteConfig(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 func (s *Server) handleAPIHAProxyReload(w http.ResponseWriter, r *http.Request) {
@@ -352,7 +352,7 @@ func (s *Server) handleAPIHAProxyReload(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 func (s *Server) handleAPIHAProxyConfigPreview(w http.ResponseWriter, r *http.Request) {
@@ -372,7 +372,7 @@ func (s *Server) handleAPIHAProxyConfigPreview(w http.ResponseWriter, r *http.Re
 	preview := s.haproxy.GenerateConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, sslConfig)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.HAProxyConfigPreview{Config: preview})
+	_ = json.NewEncoder(w).Encode(apitypes.HAProxyConfigPreview{Config: preview})
 }
 
 func (s *Server) handleAPIChecks(w http.ResponseWriter, r *http.Request) {
@@ -398,7 +398,7 @@ func (s *Server) handleAPIChecks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(checks)
+	_ = json.NewEncoder(w).Encode(checks)
 }
 
 // handleAPIAllCheckHistory returns the ring-buffer history for every
@@ -465,7 +465,7 @@ func (s *Server) handleAPICheckHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.CheckHistoryResponse{
+	_ = json.NewEncoder(w).Encode(apitypes.CheckHistoryResponse{
 		Name:    name,
 		Results: results,
 	})
@@ -531,7 +531,7 @@ func (s *Server) handleAPIAddCheck(w http.ResponseWriter, r *http.Request) {
 	s.monitor.Reload(s.cfg())
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 func (s *Server) handleAPIDeleteCheck(w http.ResponseWriter, r *http.Request) {
@@ -580,7 +580,7 @@ func (s *Server) handleAPIDeleteCheck(w http.ResponseWriter, r *http.Request) {
 	s.monitor.Reload(s.cfg())
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 func (s *Server) handleAPIToggleCheck(w http.ResponseWriter, r *http.Request) {
@@ -634,7 +634,7 @@ func (s *Server) handleAPIToggleCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 func (s *Server) handleAPIRunCheck(w http.ResponseWriter, r *http.Request) {
@@ -668,7 +668,7 @@ func (s *Server) handleAPIRunCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.RunCheckResponse{OK: true, Status: result.Status})
+	_ = json.NewEncoder(w).Encode(apitypes.RunCheckResponse{OK: true, Status: result.Status})
 }
 
 // handleAPISetPublicIPOverride sets or clears the host's manual public-IP
@@ -696,14 +696,17 @@ func (s *Server) handleAPISetPublicIPOverride(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	s.updateConfig(func(cfg *config.Config) {
+	if err := s.updateConfig(func(cfg *config.Config) {
 		cfg.PublicIPOverride = override
 		// Clearing the override forces re-detection; mark the cache stale
 		// so the next sync/refresh fetches fresh.
 		if override == "" {
 			cfg.PublicIPLastChecked = 0
 		}
-	})
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
 
 	// Kick a refresh in the background so the new state takes effect quickly.
 	go func() {
@@ -714,7 +717,7 @@ func (s *Server) handleAPISetPublicIPOverride(w http.ResponseWriter, r *http.Req
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.PublicIPStatusResponse{
+	_ = json.NewEncoder(w).Encode(apitypes.PublicIPStatusResponse{
 		PublicIP:            s.cfg().EffectivePublicIP(),
 		PublicIPOverride:    s.cfg().PublicIPOverride,
 		PublicIPLastChecked: s.cfg().PublicIPLastChecked,
@@ -748,6 +751,5 @@ func (s *Server) handleAPIRefreshPublicIP(w http.ResponseWriter, r *http.Request
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
-

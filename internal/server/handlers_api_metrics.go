@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 )
 
 // handleAPISystemMetrics returns a single point-in-time snapshot of host
@@ -25,11 +25,11 @@ func (s *Server) handleAPISystemMetrics(w http.ResponseWriter, r *http.Request) 
 	}
 
 	resp := apitypes.SystemMetricsResponse{
-		TS:    time.Now().UnixMilli(),
-		CPU:   readCPU(),
-		Memory: readMemory(),
+		TS:      time.Now().UnixMilli(),
+		CPU:     readCPU(),
+		Memory:  readMemory(),
 		Network: readNetwork(),
-		Disks: readDisks(),
+		Disks:   readDisks(),
 	}
 	resp.Load1, resp.Load5, resp.Load15 = readLoadAvg()
 	resp.UptimeSeconds = readUptime()
@@ -44,7 +44,7 @@ func readCPU() apitypes.CPUMetric {
 	if err != nil {
 		return m
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := sc.Text()
@@ -75,7 +75,7 @@ func readMemory() apitypes.MemoryMetric {
 	if err != nil {
 		return m
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var total, avail, swapTotal, swapFree uint64
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -116,7 +116,7 @@ func readNetwork() []apitypes.NetworkIface {
 	if err != nil {
 		return out
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 	// Skip 2 header lines.
 	sc.Scan()
@@ -148,18 +148,18 @@ func readNetwork() []apitypes.NetworkIface {
 // skip pseudo / virtual FS (proc, sysfs, tmpfs, cgroup, overlay, etc.) —
 // those don't represent actual storage capacity the admin can run out of.
 var realFSTypes = map[string]bool{
-	"ext2":    true,
-	"ext3":    true,
-	"ext4":    true,
-	"xfs":     true,
-	"btrfs":   true,
-	"zfs":     true,
-	"f2fs":    true,
-	"vfat":    true,
-	"exfat":   true,
-	"ntfs":    true,
-	"ntfs3":   true,
-	"jfs":     true,
+	"ext2":     true,
+	"ext3":     true,
+	"ext4":     true,
+	"xfs":      true,
+	"btrfs":    true,
+	"zfs":      true,
+	"f2fs":     true,
+	"vfat":     true,
+	"exfat":    true,
+	"ntfs":     true,
+	"ntfs3":    true,
+	"jfs":      true,
 	"reiserfs": true,
 }
 
@@ -169,7 +169,7 @@ func readDisks() []apitypes.DiskMetric {
 	if err != nil {
 		return out
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	seen := map[string]bool{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {

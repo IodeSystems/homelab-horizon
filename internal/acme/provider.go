@@ -56,7 +56,9 @@ func (p *LoggingProvider) CleanUp(domain, token, keyAuth string) error {
 // Timeout returns the timeout and interval for DNS propagation checks
 func (p *LoggingProvider) Timeout() (timeout, interval time.Duration) {
 	// Check if underlying provider has custom timeout
-	if t, ok := p.provider.(interface{ Timeout() (time.Duration, time.Duration) }); ok {
+	if t, ok := p.provider.(interface {
+		Timeout() (time.Duration, time.Duration)
+	}); ok {
 		return t.Timeout()
 	}
 	// Default timeout of 2 minutes with 5 second intervals
@@ -133,25 +135,39 @@ func createRoute53Provider(cfg *DNSProviderConfig) (challenge.Provider, error) {
 	// Set environment variables for lego's route53 provider
 	// The provider reads these during initialization
 	if cfg.AWSAccessKeyID != "" {
-		os.Setenv("AWS_ACCESS_KEY_ID", cfg.AWSAccessKeyID)
+		if err := os.Setenv("AWS_ACCESS_KEY_ID", cfg.AWSAccessKeyID); err != nil {
+			return nil, fmt.Errorf("setenv AWS_ACCESS_KEY_ID: %w", err)
+		}
 	}
 	if cfg.AWSSecretAccessKey != "" {
-		os.Setenv("AWS_SECRET_ACCESS_KEY", cfg.AWSSecretAccessKey)
+		if err := os.Setenv("AWS_SECRET_ACCESS_KEY", cfg.AWSSecretAccessKey); err != nil {
+			return nil, fmt.Errorf("setenv AWS_SECRET_ACCESS_KEY: %w", err)
+		}
 	}
 	if cfg.AWSRegion != "" {
-		os.Setenv("AWS_REGION", cfg.AWSRegion)
+		if err := os.Setenv("AWS_REGION", cfg.AWSRegion); err != nil {
+			return nil, fmt.Errorf("setenv AWS_REGION: %w", err)
+		}
 	}
 	if cfg.AWSHostedZoneID != "" {
-		os.Setenv("AWS_HOSTED_ZONE_ID", cfg.AWSHostedZoneID)
+		if err := os.Setenv("AWS_HOSTED_ZONE_ID", cfg.AWSHostedZoneID); err != nil {
+			return nil, fmt.Errorf("setenv AWS_HOSTED_ZONE_ID: %w", err)
+		}
 	}
 	if cfg.AWSProfile != "" {
-		os.Setenv("AWS_PROFILE", cfg.AWSProfile)
+		if err := os.Setenv("AWS_PROFILE", cfg.AWSProfile); err != nil {
+			return nil, fmt.Errorf("setenv AWS_PROFILE: %w", err)
+		}
 	}
 
 	// Increase propagation timeout - Route53 changes can take time to propagate
 	// Default is 2 minutes, increase to 5 minutes
-	os.Setenv("AWS_PROPAGATION_TIMEOUT", "300")
-	os.Setenv("AWS_POLLING_INTERVAL", "10")
+	if err := os.Setenv("AWS_PROPAGATION_TIMEOUT", "300"); err != nil {
+		return nil, fmt.Errorf("setenv AWS_PROPAGATION_TIMEOUT: %w", err)
+	}
+	if err := os.Setenv("AWS_POLLING_INTERVAL", "10"); err != nil {
+		return nil, fmt.Errorf("setenv AWS_POLLING_INTERVAL: %w", err)
+	}
 
 	provider, err := route53.NewDNSProvider()
 	if err != nil {
@@ -165,10 +181,14 @@ func createRoute53Provider(cfg *DNSProviderConfig) (challenge.Provider, error) {
 func createNamecomProvider(cfg *DNSProviderConfig) (challenge.Provider, error) {
 	// Set environment variables for lego's namedotcom provider
 	if cfg.NamecomUsername != "" {
-		os.Setenv("NAMECOM_USERNAME", cfg.NamecomUsername)
+		if err := os.Setenv("NAMECOM_USERNAME", cfg.NamecomUsername); err != nil {
+			return nil, fmt.Errorf("setenv NAMECOM_USERNAME: %w", err)
+		}
 	}
 	if cfg.NamecomAPIToken != "" {
-		os.Setenv("NAMECOM_API_TOKEN", cfg.NamecomAPIToken)
+		if err := os.Setenv("NAMECOM_API_TOKEN", cfg.NamecomAPIToken); err != nil {
+			return nil, fmt.Errorf("setenv NAMECOM_API_TOKEN: %w", err)
+		}
 	}
 
 	provider, err := namedotcom.NewDNSProvider()
@@ -183,10 +203,14 @@ func createNamecomProvider(cfg *DNSProviderConfig) (challenge.Provider, error) {
 func createCloudflareProvider(cfg *DNSProviderConfig) (challenge.Provider, error) {
 	// Set environment variables for lego's cloudflare provider
 	if cfg.CloudflareAPIToken != "" {
-		os.Setenv("CF_DNS_API_TOKEN", cfg.CloudflareAPIToken)
+		if err := os.Setenv("CF_DNS_API_TOKEN", cfg.CloudflareAPIToken); err != nil {
+			return nil, fmt.Errorf("setenv CF_DNS_API_TOKEN: %w", err)
+		}
 	}
 	if cfg.CloudflareZoneID != "" {
-		os.Setenv("CF_ZONE_API_TOKEN", cfg.CloudflareAPIToken) // Same token for zone API
+		if err := os.Setenv("CF_ZONE_API_TOKEN", cfg.CloudflareAPIToken); err != nil { // Same token for zone API
+			return nil, fmt.Errorf("setenv CF_ZONE_API_TOKEN: %w", err)
+		}
 	}
 
 	provider, err := cloudflare.NewDNSProvider()

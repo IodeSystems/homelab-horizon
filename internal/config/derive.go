@@ -2,15 +2,16 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"homelab-horizon/internal/haproxy"
-	"homelab-horizon/internal/letsencrypt"
-	"homelab-horizon/internal/route53"
+	"github.com/iodesystems/homelab-horizon/internal/haproxy"
+	"github.com/iodesystems/homelab-horizon/internal/letsencrypt"
+	"github.com/iodesystems/homelab-horizon/internal/route53"
 )
 
 // DefaultPublicIPMaxAge is the staleness threshold used when PublicIPMaxAge
@@ -126,11 +127,17 @@ func (c *Config) DeriveDNSMappings() map[string]string {
 			continue
 		}
 		ip := svc.InternalDNS.IP
-		// Replace localhost with LocalInterface IP - dnsmasq requires an IP address
+		// Replace localhost with LocalInterface IP - dnsmasq requires an IP address.
+		// Publishing a loopback address into dnsmasq would broadcast it LAN-wide,
+		// making every client resolve the domain to its own 127.0.0.1. If we can't
+		// resolve a real interface IP, skip the mapping rather than leak loopback.
 		if ip == "localhost" || ip == "127.0.0.1" {
-			if c.LocalInterface != "" {
-				ip = c.LocalInterface
+			if c.LocalInterface == "" {
+				slog.Warn("skipping loopback DNS mapping: local_interface unset",
+					"service", svc.Name, "domains", svc.Domains)
+				continue
 			}
+			ip = c.LocalInterface
 		}
 		for _, domain := range svc.Domains {
 			mappings[domain] = ip
@@ -187,6 +194,13 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 			b.TimeoutTunnel = svc.Proxy.Timeouts.TunnelSeconds
 		}
 
+		// Metrics endpoint: deny it from non-local sources at the edge (the
+		// public domain path stays closed; Prometheus scrapes the backend
+		// directly over the internal network). Default path /metrics.
+		if svc.Integrations != nil && svc.Integrations.Metrics != nil && !svc.Integrations.Metrics.Disabled {
+			b.MetricsPath = svc.Integrations.Metrics.MetricsPath()
+		}
+
 		backends = append(backends, b)
 	}
 	return backends
@@ -222,7 +236,7 @@ func (c *Config) WriteMaintenancePageFiles() error {
 	}
 	for _, e := range entries {
 		if strings.HasSuffix(e.Name(), "_503.http") && !active[e.Name()] {
-			os.Remove(filepath.Join(errorsDir, e.Name()))
+			_ = os.Remove(filepath.Join(errorsDir, e.Name()))
 		}
 	}
 	return nil
@@ -337,11 +351,12 @@ func (c *Config) DeriveSSLDomains() []letsencrypt.DomainConfig {
 		// Empty string "" means root domain, "*" means root wildcard, otherwise append to zone name
 		var allDomains []string
 		for _, subZone := range zone.SubZones {
-			if subZone == "" {
+			switch subZone {
+			case "":
 				allDomains = append(allDomains, zone.Name)
-			} else if subZone == "*" {
+			case "*":
 				allDomains = append(allDomains, "*."+zone.Name)
-			} else {
+			default:
 				allDomains = append(allDomains, subZone+"."+zone.Name)
 			}
 		}

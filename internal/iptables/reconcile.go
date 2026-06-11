@@ -10,9 +10,9 @@ import (
 // layer can surface it to the UI and logs can show what happened.
 type Report struct {
 	Summary     Summary          `json:"summary"`
-	Deleted     []Rule           `json:"deleted,omitempty"`     // stale rules removed
-	Added       []Rule           `json:"added,omitempty"`       // missing expected rules added
-	LeftAlone   []ClassifiedRule `json:"left_alone,omitempty"`  // unknown + blessed (surfaced only)
+	Deleted     []Rule           `json:"deleted,omitempty"`      // stale rules removed
+	Added       []Rule           `json:"added,omitempty"`        // missing expected rules added
+	LeftAlone   []ClassifiedRule `json:"left_alone,omitempty"`   // unknown + blessed (surfaced only)
 	InferredOld string           `json:"inferred_old,omitempty"` // iface inferred when LastLocalIface was empty
 	Errors      []string         `json:"errors,omitempty"`
 }

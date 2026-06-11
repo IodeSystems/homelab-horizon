@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	homelabUI "homelab-horizon/ui"
+	homelabUI "github.com/iodesystems/homelab-horizon/ui"
 )
 
 func (s *Server) setupSPA(mux *http.ServeMux) {
@@ -23,7 +23,7 @@ func (s *Server) setupSPA(mux *http.ServeMux) {
 
 		// If the file exists in the embedded FS, serve it directly
 		if f, err := distFS.Open(path); err == nil {
-			f.Close()
+			_ = f.Close()
 			// Serve the static file
 			http.ServeFileFS(w, r, distFS, path)
 			return

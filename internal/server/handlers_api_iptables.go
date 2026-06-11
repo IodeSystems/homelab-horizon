@@ -8,8 +8,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/iptables"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/iptables"
 )
 
 // buildClassifierInputs gathers the data the iptables classifier + reconciler

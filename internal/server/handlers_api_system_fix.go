@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"homelab-horizon/internal/apitypes"
-	"homelab-horizon/internal/autoheal"
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/dnsmasq"
-	"homelab-horizon/internal/wireguard"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/autoheal"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
+	"github.com/iodesystems/homelab-horizon/internal/wireguard"
 )
 
 // Fixer endpoints for on-host system state. These restore the "fix this"
@@ -270,7 +270,7 @@ func (s *Server) recordAptAudit(entry aptAuditEntry) {
 		fmt.Fprintf(os.Stderr, "apt-audit open: %v\n", err)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if err := json.NewEncoder(f).Encode(entry); err != nil {
 		fmt.Fprintf(os.Stderr, "apt-audit write: %v\n", err)
 	}
@@ -346,7 +346,7 @@ func (s *Server) handleAPISystemAptAudit(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	entries := []aptAuditEntry{}
 	dec := json.NewDecoder(f)
@@ -524,6 +524,7 @@ func (s *Server) handleAPIDNSMasqStart(w http.ResponseWriter, r *http.Request) {
 //  1. rsyslogd apparmor profile missing `attach_disconnected` flag.
 //  2. /var/log/haproxy.log doesn't exist (rsyslog can't create it after
 //     dropping privileges).
+//
 // Collects errors rather than bailing on the first — each sub-fix is
 // independent and partial success is useful.
 func (s *Server) handleAPIHAProxyFixLogging(w http.ResponseWriter, r *http.Request) {

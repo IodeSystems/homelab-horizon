@@ -3,7 +3,7 @@ package iptables
 import (
 	"testing"
 
-	"homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
 func TestRuleCanonical(t *testing.T) {

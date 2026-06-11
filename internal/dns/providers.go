@@ -3,7 +3,7 @@ package dns
 import (
 	"fmt"
 
-	"homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 
 	"github.com/libdns/digitalocean"
 	"github.com/libdns/duckdns"

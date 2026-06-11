@@ -7,10 +7,10 @@ import (
 	"os/exec"
 	"strings"
 
-	"homelab-horizon/internal/apitypes"
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/dnsmasq"
-	"homelab-horizon/internal/letsencrypt"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
+	"github.com/iodesystems/homelab-horizon/internal/letsencrypt"
 )
 
 // handleAPISystemHealth returns per-component facts about the on-host software
@@ -94,8 +94,8 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 		apparmorOK, apparmorReason := checkHAProxyApparmor()
 		logFileOK := fileExists("/var/log/haproxy.log")
 		hap.Extras = map[string]any{
-			"logging_apparmor_ok":  apparmorOK,
-			"logging_file_exists":  logFileOK,
+			"logging_apparmor_ok": apparmorOK,
+			"logging_file_exists": logFileOK,
 		}
 		if !apparmorOK {
 			hap.Errors = append(hap.Errors, "logging: "+apparmorReason)

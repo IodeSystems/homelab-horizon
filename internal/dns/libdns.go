@@ -3,6 +3,7 @@ package dns
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"strings"
 	"time"
@@ -51,7 +52,7 @@ func (p *LibdnsAdapter) Name() string {
 }
 
 func (p *LibdnsAdapter) log(action string) {
-	fmt.Printf("[%s] %s\n", p.name, action)
+	slog.Debug(action, "provider", p.name)
 }
 
 // Route53ZoneLister is an interface for providers that can list zones with IDs (Route53-specific)

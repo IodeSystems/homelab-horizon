@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
-	"homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
 const namecomAPIBase = "https://api.name.com/v4"
@@ -93,7 +94,7 @@ func (p *NamecomProvider) Name() string {
 }
 
 func (p *NamecomProvider) log(action string) {
-	fmt.Printf("[Name.com/%s] %s\n", p.username, action)
+	slog.Debug(action, "provider", "namecom", "username", p.username)
 }
 
 func (p *NamecomProvider) doRequest(method, path string, body interface{}) ([]byte, error) {
@@ -123,7 +124,7 @@ func (p *NamecomProvider) doRequest(method, path string, body interface{}) ([]by
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

@@ -97,7 +97,7 @@ func TestLoadNonExistent(t *testing.T) {
 	}
 
 	if cfg == nil {
-		t.Error("Expected default config for non-existent file")
+		t.Fatal("Expected default config for non-existent file")
 	}
 
 	if cfg.ListenAddr != ":8080" {

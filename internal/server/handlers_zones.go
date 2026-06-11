@@ -1,7 +1,7 @@
 package server
 
 import (
-	"homelab-horizon/internal/letsencrypt"
+	"github.com/iodesystems/homelab-horizon/internal/letsencrypt"
 )
 
 func (s *Server) syncLetsEncrypt() {

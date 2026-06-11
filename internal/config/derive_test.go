@@ -255,16 +255,41 @@ func TestDeriveDNSMappings(t *testing.T) {
 	}
 }
 
+func TestDeriveDNSMappings_LoopbackSkippedWhenNoLocalInterface(t *testing.T) {
+	cfg := &Config{
+		LocalInterface: "", // unset: cannot normalize loopback to a real IP
+		Services: []Service{
+			{Name: "hz", Domains: []string{"hz.office.example.com"}, InternalDNS: &InternalDNS{IP: "localhost"}},
+			{Name: "lo", Domains: []string{"loopback.example.com"}, InternalDNS: &InternalDNS{IP: "127.0.0.1"}},
+			{Name: "real", Domains: []string{"real.example.com"}, InternalDNS: &InternalDNS{IP: "192.168.1.50"}},
+		},
+	}
+
+	mappings := cfg.DeriveDNSMappings()
+
+	// Loopback entries must be skipped, never published as 127.0.0.1 LAN-wide.
+	if ip, ok := mappings["hz.office.example.com"]; ok {
+		t.Errorf("loopback hz mapping should be skipped, got %q", ip)
+	}
+	if ip, ok := mappings["loopback.example.com"]; ok {
+		t.Errorf("loopback mapping should be skipped, got %q", ip)
+	}
+	// Real IPs are unaffected.
+	if ip := mappings["real.example.com"]; ip != "192.168.1.50" {
+		t.Errorf("real.example.com = %q, want 192.168.1.50", ip)
+	}
+}
+
 func TestDeriveHAProxyBackends(t *testing.T) {
 	cfg := &Config{
 		Services: []Service{
 			{
-				Name:   "grafana",
+				Name:    "grafana",
 				Domains: []string{"grafana.example.com"},
-				Proxy:  &ProxyConfig{Backend: "192.168.1.50:3000"},
+				Proxy:   &ProxyConfig{Backend: "192.168.1.50:3000"},
 			},
 			{
-				Name:   "prom",
+				Name:    "prom",
 				Domains: []string{"prom.example.com"},
 				Proxy: &ProxyConfig{
 					Backend:     "192.168.1.51:9090",
@@ -272,14 +297,14 @@ func TestDeriveHAProxyBackends(t *testing.T) {
 				},
 			},
 			{
-				Name:   "internal",
+				Name:    "internal",
 				Domains: []string{"internal.example.com"},
-				Proxy:  nil,
+				Proxy:   nil,
 			},
 			{
-				Name:   "empty-backend",
+				Name:    "empty-backend",
 				Domains: []string{"empty.example.com"},
-				Proxy:  &ProxyConfig{Backend: ""},
+				Proxy:   &ProxyConfig{Backend: ""},
 			},
 		},
 	}
