@@ -1,7 +1,7 @@
 # Vanilla Ubuntu LTS — no pre-installed dependencies.
 # The binary's auto_heal feature installs wireguard-tools, dnsmasq,
 # haproxy, etc. on first startup, demonstrating self-configuration.
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 COPY dist/homelab-horizon-linux-amd64 /usr/local/bin/homelab-horizon
 RUN chmod +x /usr/local/bin/homelab-horizon
