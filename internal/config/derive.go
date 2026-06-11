@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -126,11 +127,17 @@ func (c *Config) DeriveDNSMappings() map[string]string {
 			continue
 		}
 		ip := svc.InternalDNS.IP
-		// Replace localhost with LocalInterface IP - dnsmasq requires an IP address
+		// Replace localhost with LocalInterface IP - dnsmasq requires an IP address.
+		// Publishing a loopback address into dnsmasq would broadcast it LAN-wide,
+		// making every client resolve the domain to its own 127.0.0.1. If we can't
+		// resolve a real interface IP, skip the mapping rather than leak loopback.
 		if ip == "localhost" || ip == "127.0.0.1" {
-			if c.LocalInterface != "" {
-				ip = c.LocalInterface
+			if c.LocalInterface == "" {
+				slog.Warn("skipping loopback DNS mapping: local_interface unset",
+					"service", svc.Name, "domains", svc.Domains)
+				continue
 			}
+			ip = c.LocalInterface
 		}
 		for _, domain := range svc.Domains {
 			mappings[domain] = ip
