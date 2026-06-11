@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -10,8 +11,8 @@ import (
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 
-	"homelab-horizon/internal/apitypes"
-	"homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
 // getPeerFromRequest identifies the VPN peer making the request by their VPN IP.
@@ -60,7 +61,7 @@ func (s *Server) handleAPIMFAStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // handleAPIMFAEnroll generates a new TOTP secret for the requesting peer.
@@ -97,12 +98,15 @@ func (s *Server) handleAPIMFAEnroll(w http.ResponseWriter, r *http.Request) {
 
 	// Store pending secret — it becomes active when the user confirms with a valid code.
 	// We store it immediately so the user can scan the QR and verify in the next step.
-	s.updateConfig(func(cfg *config.Config) {
+	if err := s.updateConfig(func(cfg *config.Config) {
 		cfg.SetMFASecret(peerName, key.Secret())
-	})
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.MFAEnrollResponse{
+	_ = json.NewEncoder(w).Encode(apitypes.MFAEnrollResponse{
 		OK:              true,
 		ProvisioningURI: key.URL(),
 		Secret:          key.Secret(),
@@ -180,9 +184,12 @@ func (s *Server) handleAPIMFAVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.updateConfig(func(cfg *config.Config) {
+	if err := s.updateConfig(func(cfg *config.Config) {
 		cfg.SetMFASession(peerName, expiry)
-	})
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
 	s.rebuildWGForwardChain()
 
 	resp := apitypes.MFAVerifyResponse{OK: true}
@@ -191,7 +198,7 @@ func (s *Server) handleAPIMFAVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // handleAPIMFAReset clears a peer's TOTP secret (admin only, forces re-enrollment).
@@ -219,13 +226,16 @@ func (s *Server) handleAPIMFAReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.updateConfig(func(cfg *config.Config) {
+	if err := s.updateConfig(func(cfg *config.Config) {
 		cfg.ClearMFASecret(name)
-	})
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
 	s.rebuildWGForwardChain()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 // handleAPIMFAGrantSession grants an MFA session to a peer (admin only).
@@ -267,13 +277,16 @@ func (s *Server) handleAPIMFAGrantSession(w http.ResponseWriter, r *http.Request
 		expiry = time.Now().Add(d).Unix()
 	}
 
-	s.updateConfig(func(cfg *config.Config) {
+	if err := s.updateConfig(func(cfg *config.Config) {
 		cfg.SetMFASession(name, expiry)
-	})
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
 	s.rebuildWGForwardChain()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 // handleAPIMFARevokeSession revokes a peer's MFA session (admin only).
@@ -301,13 +314,16 @@ func (s *Server) handleAPIMFARevokeSession(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	s.updateConfig(func(cfg *config.Config) {
+	if err := s.updateConfig(func(cfg *config.Config) {
 		cfg.ClearMFASession(name)
-	})
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
 	s.rebuildWGForwardChain()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 // handleAPIMFASettings returns/updates global MFA settings (admin only).
@@ -324,7 +340,7 @@ func (s *Server) handleAPIMFASettings(w http.ResponseWriter, r *http.Request) {
 			durations = []string{}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(apitypes.MFASettingsResponse{
+		_ = json.NewEncoder(w).Encode(apitypes.MFASettingsResponse{
 			Enabled:   cfg.VPNMFAEnabled,
 			Durations: durations,
 		})
@@ -345,16 +361,19 @@ func (s *Server) handleAPIMFASettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.updateConfig(func(cfg *config.Config) {
+	if err := s.updateConfig(func(cfg *config.Config) {
 		cfg.VPNMFAEnabled = req.Enabled
 		if len(req.Durations) > 0 {
 			cfg.VPNMFADurations = req.Durations
 		}
-	})
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
 	s.rebuildWGForwardChain()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 // startMFASessionPruner starts a goroutine that periodically prunes expired MFA sessions.
@@ -373,9 +392,11 @@ func (s *Server) startMFASessionPruner(done <-chan struct{}) {
 				// Check if any sessions expired
 				if s.cfg().PruneExpiredMFASessions() {
 					// Persist the pruned config
-					s.updateConfig(func(cfg *config.Config) {
+					if err := s.updateConfig(func(cfg *config.Config) {
 						cfg.PruneExpiredMFASessions()
-					})
+					}); err != nil {
+						slog.Warn("updateConfig prune MFA sessions", "err", err)
+					}
 					s.rebuildWGForwardChain()
 				}
 			}

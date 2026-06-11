@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
 // CheckStatus represents the current status of a service check
@@ -29,8 +29,8 @@ type CheckStatus struct {
 // CheckResult records a single check execution for history tracking
 type CheckResult struct {
 	Timestamp time.Time `json:"timestamp"`
-	Status    string    `json:"status"`          // "ok", "failed"
-	Latency   int64     `json:"latency"`         // milliseconds
+	Status    string    `json:"status"`  // "ok", "failed"
+	Latency   int64     `json:"latency"` // milliseconds
 	Error     string    `json:"error,omitempty"`
 }
 
@@ -40,8 +40,8 @@ const maxHistoryPerCheck = 100
 type Monitor struct {
 	mu       sync.RWMutex
 	config   *config.Config
-	statuses map[string]*CheckStatus   // keyed by check name
-	history  map[string][]CheckResult   // keyed by check name, ring buffer of last 100 results
+	statuses map[string]*CheckStatus  // keyed by check name
+	history  map[string][]CheckResult // keyed by check name, ring buffer of last 100 results
 	ctx      context.Context
 	cancel   context.CancelFunc
 	client   *http.Client
@@ -391,7 +391,7 @@ func (m *Monitor) doPing(target string) error {
 
 		conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 		if err == nil {
-			conn.Close()
+			_ = conn.Close()
 			return nil
 		}
 	}
@@ -401,7 +401,7 @@ func (m *Monitor) doPing(target string) error {
 	if err != nil {
 		return fmt.Errorf("host unreachable: %s", target)
 	}
-	conn.Close()
+	_ = conn.Close()
 	return nil
 }
 
@@ -416,7 +416,7 @@ func (m *Monitor) doHTTP(target string) error {
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("expected 200, got %d", resp.StatusCode)
@@ -449,7 +449,7 @@ func (m *Monitor) sendNotification(check config.ServiceCheck, checkErr error) {
 	if err != nil {
 		return
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 // RunCheck manually runs a check and returns the result.

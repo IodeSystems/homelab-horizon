@@ -4,14 +4,15 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"homelab-horizon/internal/apitypes"
-	"homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
 // unixOrZero returns t.Unix() unless t is the zero value, in which case it
@@ -26,7 +27,7 @@ func unixOrZero(t time.Time) int64 {
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
 func (s *Server) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +91,7 @@ func (s *Server) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +208,7 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 	wg.Wait()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(sorted)
+	_ = json.NewEncoder(w).Encode(sorted)
 }
 
 func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
@@ -253,11 +254,12 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 	for _, zone := range s.cfg().Zones {
 		for _, sub := range zone.SubZones {
 			var domain string
-			if sub == "" {
+			switch sub {
+			case "":
 				domain = zone.Name
-			} else if sub == "*" {
+			case "*":
 				domain = "*." + zone.Name
-			} else {
+			default:
 				domain = sub + "." + zone.Name
 			}
 			if _, exists := domainMap[domain]; !exists {
@@ -309,11 +311,12 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 
 		for _, sub := range zone.SubZones {
 			var pattern string
-			if sub == "" {
+			switch sub {
+			case "":
 				pattern = zone.Name
-			} else if sub == "*" {
+			case "*":
 				pattern = "*." + zone.Name
-			} else {
+			default:
 				pattern = sub + "." + zone.Name
 			}
 			for _, dr := range domainMap {
@@ -436,11 +439,12 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 			ExtraSANs:         []string{},
 		}
 		for _, sub := range zone.SubZones {
-			if sub == "" {
+			switch sub {
+			case "":
 				zs.ConfiguredDomains = append(zs.ConfiguredDomains, zone.Name)
-			} else if sub == "*" {
+			case "*":
 				zs.ConfiguredDomains = append(zs.ConfiguredDomains, "*."+zone.Name)
-			} else {
+			default:
 				zs.ConfiguredDomains = append(zs.ConfiguredDomains, sub+"."+zone.Name)
 			}
 		}
@@ -518,7 +522,7 @@ func (s *Server) handleAPIDomains(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.DomainsResponse{
+	_ = json.NewEncoder(w).Encode(apitypes.DomainsResponse{
 		Domains:         domains,
 		TotalCount:      len(domains),
 		IntDNSCount:     intDNS,
@@ -536,7 +540,9 @@ func (s *Server) handleAPIVPNPeers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.wg.Load()
+	if err := s.wg.Load(); err != nil {
+		slog.Warn("wg.Load", "err", err)
+	}
 	ifaceStatus := s.wg.GetInterfaceStatus()
 	configPeers := s.wg.GetPeers()
 
@@ -579,7 +585,7 @@ func (s *Server) handleAPIVPNPeers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(peers)
+	_ = json.NewEncoder(w).Encode(peers)
 }
 
 func (s *Server) handleAPIZones(w http.ResponseWriter, r *http.Request) {
@@ -609,7 +615,7 @@ func (s *Server) handleAPIZones(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(zones)
+	_ = json.NewEncoder(w).Encode(zones)
 }
 
 // handleAPIServiceIntegration returns the service token and integration instructions.
@@ -640,14 +646,17 @@ func (s *Server) handleAPIServiceIntegration(w http.ResponseWriter, r *http.Requ
 
 	// Ensure token exists
 	if svc.Token == "" {
-		s.updateConfig(func(cfg *config.Config) {
+		if err := s.updateConfig(func(cfg *config.Config) {
 			for i := range cfg.Services {
 				if cfg.Services[i].Name == name && cfg.Services[i].Token == "" {
 					cfg.Services[i].EnsureToken()
 					break
 				}
 			}
-		})
+		}); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "failed to persist token: "+err.Error())
+			return
+		}
 		// Re-lookup svc from the new config
 		for i := range s.cfg().Services {
 			if s.cfg().Services[i].Name == name {
@@ -667,7 +676,7 @@ func (s *Server) handleAPIServiceIntegration(w http.ResponseWriter, r *http.Requ
 	hasDeploy := svc.Proxy != nil && svc.Proxy.Deploy != nil
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.ServiceIntegration{
+	_ = json.NewEncoder(w).Encode(apitypes.ServiceIntegration{
 		Name:      svc.Name,
 		Token:     svc.Token,
 		BaseURL:   baseURL,

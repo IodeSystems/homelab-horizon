@@ -112,37 +112,37 @@ type ServiceResp struct {
 // Domains
 
 type DomainResp struct {
-	Domain               string `json:"domain"`
-	ZoneName             string `json:"zoneName"`
-	ZoneHasSSL           bool   `json:"zoneHasSSL"`
-	HasZone              bool   `json:"hasZone"`
-	ServiceName          string `json:"serviceName"`
-	HasService           bool   `json:"hasService"`
-	HasInternalDNS       bool   `json:"hasInternalDNS"`
-	InternalIP           string `json:"internalIP"`
-	HasExternalDNS       bool     `json:"hasExternalDNS"`
-	ExternalIP           string   `json:"externalIP"`
-	ExternalIPs          []string `json:"externalIPs,omitempty"` // All IPs for round-robin DNS
-	DnsmasqResolvedIP    string `json:"dnsmasqResolvedIP"`
-	RemoteResolvedIP     string `json:"remoteResolvedIP"`
-	DnsmasqDNSMatch      bool   `json:"dnsmasqDNSMatch"`
-	RemoteDNSMatch       bool   `json:"remoteDNSMatch"`
-	HasProxy             bool   `json:"hasProxy"`
-	ProxyBackend         string `json:"proxyBackend"`
-	InternalOnly         bool   `json:"internalOnly"`
-	HasHealthCheck       bool   `json:"hasHealthCheck"`
-	HealthPath           string `json:"healthPath"`
-	HasSSLCoverage       bool   `json:"hasSSLCoverage"`
-	CertExists           bool   `json:"certExists"`
-	CertExpiry           string `json:"certExpiry"`
-	CertDomain           string `json:"certDomain"`
-	CanEnableHTTPS       bool   `json:"canEnableHTTPS"`
-	NeededSubZone        string `json:"neededSubZone"`
-	NeededSubZoneDisplay string `json:"neededSubZoneDisplay"`
-	CanRequestCert       bool     `json:"canRequestCert"`
-	CanSyncDNS           bool     `json:"canSyncDNS"`
-	CoveredBy            string   `json:"coveredBy,omitempty"`     // wildcard that covers this domain (e.g., "*.iodesystems.com")
-	IsRedundant          bool     `json:"isRedundant"`             // SubZone is redundant with a wildcard on the same zone
+	Domain               string           `json:"domain"`
+	ZoneName             string           `json:"zoneName"`
+	ZoneHasSSL           bool             `json:"zoneHasSSL"`
+	HasZone              bool             `json:"hasZone"`
+	ServiceName          string           `json:"serviceName"`
+	HasService           bool             `json:"hasService"`
+	HasInternalDNS       bool             `json:"hasInternalDNS"`
+	InternalIP           string           `json:"internalIP"`
+	HasExternalDNS       bool             `json:"hasExternalDNS"`
+	ExternalIP           string           `json:"externalIP"`
+	ExternalIPs          []string         `json:"externalIPs,omitempty"` // All IPs for round-robin DNS
+	DnsmasqResolvedIP    string           `json:"dnsmasqResolvedIP"`
+	RemoteResolvedIP     string           `json:"remoteResolvedIP"`
+	DnsmasqDNSMatch      bool             `json:"dnsmasqDNSMatch"`
+	RemoteDNSMatch       bool             `json:"remoteDNSMatch"`
+	HasProxy             bool             `json:"hasProxy"`
+	ProxyBackend         string           `json:"proxyBackend"`
+	InternalOnly         bool             `json:"internalOnly"`
+	HasHealthCheck       bool             `json:"hasHealthCheck"`
+	HealthPath           string           `json:"healthPath"`
+	HasSSLCoverage       bool             `json:"hasSSLCoverage"`
+	CertExists           bool             `json:"certExists"`
+	CertExpiry           string           `json:"certExpiry"`
+	CertDomain           string           `json:"certDomain"`
+	CanEnableHTTPS       bool             `json:"canEnableHTTPS"`
+	NeededSubZone        string           `json:"neededSubZone"`
+	NeededSubZoneDisplay string           `json:"neededSubZoneDisplay"`
+	CanRequestCert       bool             `json:"canRequestCert"`
+	CanSyncDNS           bool             `json:"canSyncDNS"`
+	CoveredBy            string           `json:"coveredBy,omitempty"`       // wildcard that covers this domain (e.g., "*.iodesystems.com")
+	IsRedundant          bool             `json:"isRedundant"`               // SubZone is redundant with a wildcard on the same zone
 	AbsorbedDomains      []AbsorbedDomain `json:"absorbedDomains,omitempty"` // for wildcards: service domains this covers
 }
 
@@ -185,29 +185,29 @@ type DomainsResponse struct {
 // VPN Peers
 
 type PeerResp struct {
-	Name            string `json:"name"`
-	PublicKey       string `json:"publicKey"`
-	AllowedIPs      string `json:"allowedIPs"`
-	Endpoint        string `json:"endpoint,omitempty"`
-	LatestHandshake string `json:"latestHandshake,omitempty"`
-	TransferRx      string `json:"transferRx,omitempty"`
-	TransferTx      string `json:"transferTx,omitempty"`
-	Online          bool   `json:"online"`
-	IsAdmin         bool   `json:"isAdmin"`
-	Profile         string `json:"profile"`
-	MFAEnrolled     bool   `json:"mfaEnrolled"`
-	MFASessionActive bool  `json:"mfaSessionActive"`
+	Name             string `json:"name"`
+	PublicKey        string `json:"publicKey"`
+	AllowedIPs       string `json:"allowedIPs"`
+	Endpoint         string `json:"endpoint,omitempty"`
+	LatestHandshake  string `json:"latestHandshake,omitempty"`
+	TransferRx       string `json:"transferRx,omitempty"`
+	TransferTx       string `json:"transferTx,omitempty"`
+	Online           bool   `json:"online"`
+	IsAdmin          bool   `json:"isAdmin"`
+	Profile          string `json:"profile"`
+	MFAEnrolled      bool   `json:"mfaEnrolled"`
+	MFASessionActive bool   `json:"mfaSessionActive"`
 	MFASessionExpiry string `json:"mfaSessionExpiry,omitempty"`
 }
 
 // MFA types
 
 type MFAStatusResponse struct {
-	Enrolled       bool     `json:"enrolled"`
-	SessionActive  bool     `json:"sessionActive"`
-	SessionExpiry  string   `json:"sessionExpiry,omitempty"`
-	Durations      []string `json:"durations"`
-	ProvisioningURI string  `json:"provisioningUri,omitempty"` // only during enrollment
+	Enrolled        bool     `json:"enrolled"`
+	SessionActive   bool     `json:"sessionActive"`
+	SessionExpiry   string   `json:"sessionExpiry,omitempty"`
+	Durations       []string `json:"durations"`
+	ProvisioningURI string   `json:"provisioningUri,omitempty"` // only during enrollment
 }
 
 type MFAEnrollResponse struct {
@@ -244,9 +244,9 @@ type PeerConfigResponse struct {
 }
 
 type RekeyPeerResponse struct {
-	OK        bool   `json:"ok"`
-	Config    string `json:"config"`
-	QRCode    string `json:"qrCode"`
+	OK         bool   `json:"ok"`
+	Config     string `json:"config"`
+	QRCode     string `json:"qrCode"`
 	ShareToken string `json:"shareToken"`
 	ShareURL   string `json:"shareURL"`
 }
@@ -411,9 +411,9 @@ type DeploySwapResponse struct {
 // Service mutations
 
 type ServiceRequest struct {
-	OriginalName string `json:"originalName,omitempty"`
-	Name         string `json:"name"`
-	Domains      []string `json:"domains"`
+	OriginalName string                     `json:"originalName,omitempty"`
+	Name         string                     `json:"name"`
+	Domains      []string                   `json:"domains"`
 	InternalDNS  *ServiceRequestInternalDNS `json:"internalDNS,omitempty"`
 	ExternalDNS  *ServiceRequestExternalDNS `json:"externalDNS,omitempty"`
 	Proxy        *ServiceRequestProxy       `json:"proxy,omitempty"`
@@ -573,13 +573,13 @@ type ServiceIntegration struct {
 // HA Fleet
 
 type HAFleetPeer struct {
-	ID              string            `json:"id"`
-	WGAddr          string            `json:"wgAddr"`
-	Primary         bool              `json:"primary,omitempty"`
-	Online          bool              `json:"online,omitempty"`
-	LastSyncAt      string            `json:"lastSyncAt,omitempty"`
-	LastSyncErr     string            `json:"lastSyncErr,omitempty"`
-	IPTablesSummary *IPTablesSummary  `json:"iptables_summary,omitempty"` // peer's local rule classification counts
+	ID              string           `json:"id"`
+	WGAddr          string           `json:"wgAddr"`
+	Primary         bool             `json:"primary,omitempty"`
+	Online          bool             `json:"online,omitempty"`
+	LastSyncAt      string           `json:"lastSyncAt,omitempty"`
+	LastSyncErr     string           `json:"lastSyncErr,omitempty"`
+	IPTablesSummary *IPTablesSummary `json:"iptables_summary,omitempty"` // peer's local rule classification counts
 }
 
 // IPTablesSummary mirrors internal/iptables.Summary for the wire format.
@@ -623,23 +623,23 @@ type HAJoinCompleteRequest struct {
 // in /api/v1/checks (the Monitor package).
 
 type ComponentHealth struct {
-	Name         string            `json:"name"`          // "wireguard", "haproxy", "dnsmasq", "letsencrypt"
-	Installed    bool              `json:"installed"`     // binary on PATH
-	ConfigExists bool              `json:"config_exists"` // component config file present
-	Enabled      bool              `json:"enabled"`       // systemd unit enabled at boot
-	Running      bool              `json:"running"`       // systemd unit currently active
-	Version      string            `json:"version,omitempty"`
-	Extras       map[string]any    `json:"extras,omitempty"` // component-specific facts
-	Errors       []string          `json:"errors,omitempty"`
+	Name         string         `json:"name"`          // "wireguard", "haproxy", "dnsmasq", "letsencrypt"
+	Installed    bool           `json:"installed"`     // binary on PATH
+	ConfigExists bool           `json:"config_exists"` // component config file present
+	Enabled      bool           `json:"enabled"`       // systemd unit enabled at boot
+	Running      bool           `json:"running"`       // systemd unit currently active
+	Version      string         `json:"version,omitempty"`
+	Extras       map[string]any `json:"extras,omitempty"` // component-specific facts
+	Errors       []string       `json:"errors,omitempty"`
 }
 
 type SystemHealthResponse struct {
-	Components            []ComponentHealth `json:"components"`
-	IPForwarding          bool              `json:"ip_forwarding"`
-	IPForwardingError     string            `json:"ip_forwarding_error,omitempty"`
-	HorizonUnitInstalled  bool              `json:"horizon_unit_installed"`
-	HorizonEnabled        bool              `json:"horizon_enabled"`
-	HorizonRunning        bool              `json:"horizon_running"`
+	Components           []ComponentHealth `json:"components"`
+	IPForwarding         bool              `json:"ip_forwarding"`
+	IPForwardingError    string            `json:"ip_forwarding_error,omitempty"`
+	HorizonUnitInstalled bool              `json:"horizon_unit_installed"`
+	HorizonEnabled       bool              `json:"horizon_enabled"`
+	HorizonRunning       bool              `json:"horizon_running"`
 }
 
 // Live host metrics — point-in-time snapshot. CPU/network counters are

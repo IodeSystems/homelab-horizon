@@ -10,20 +10,20 @@ import (
 	"path/filepath"
 	"testing"
 
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/monitor"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/monitor"
 )
 
 func TestMergeRemoteIntoLocal(t *testing.T) {
 	local := &config.Config{
-		PeerID:          "site-b",
-		ConfigPrimary:   false,
-		Peers:           []config.Peer{{ID: "site-a", WGAddr: "10.0.0.1", Primary: true}},
-		ListenAddr:      ":8080",
-		WGInterface:     "wg0",
-		WGConfigPath:    "/etc/wireguard/wg0.conf",
-		ServerEndpoint:  "b.example.com:51820",
-		ServerPublicKey: "B-pubkey",
+		PeerID:              "site-b",
+		ConfigPrimary:       false,
+		Peers:               []config.Peer{{ID: "site-a", WGAddr: "10.0.0.1", Primary: true}},
+		ListenAddr:          ":8080",
+		WGInterface:         "wg0",
+		WGConfigPath:        "/etc/wireguard/wg0.conf",
+		ServerEndpoint:      "b.example.com:51820",
+		ServerPublicKey:     "B-pubkey",
 		PublicIP:            "203.0.113.2", // local public IP
 		PublicIPOverride:    "203.0.113.50",
 		PublicIPLastChecked: 1700000000,
@@ -34,14 +34,14 @@ func TestMergeRemoteIntoLocal(t *testing.T) {
 	}
 
 	remote := &config.Config{
-		PeerID:          "site-a",
-		ConfigPrimary:   true,
-		Peers:           []config.Peer{{ID: "site-b", WGAddr: "10.0.0.2"}},
-		ListenAddr:      ":9090", // different on remote — must NOT clobber
-		WGInterface:     "wg-remote",
-		WGConfigPath:    "/etc/wireguard/wg-remote.conf",
-		ServerEndpoint:  "a.example.com:51820",
-		ServerPublicKey: "A-pubkey",
+		PeerID:              "site-a",
+		ConfigPrimary:       true,
+		Peers:               []config.Peer{{ID: "site-b", WGAddr: "10.0.0.2"}},
+		ListenAddr:          ":9090", // different on remote — must NOT clobber
+		WGInterface:         "wg-remote",
+		WGConfigPath:        "/etc/wireguard/wg-remote.conf",
+		ServerEndpoint:      "a.example.com:51820",
+		ServerPublicKey:     "A-pubkey",
 		PublicIP:            "203.0.113.1", // remote's IP — must NOT clobber local
 		PublicIPOverride:    "203.0.113.99",
 		PublicIPLastChecked: 1700009999,
@@ -713,10 +713,10 @@ func startPeerHTTPServerWithCerts(t *testing.T, s *Server) string {
 
 // TestCertOwnershipShiftOnPeerDown is the Phase 2 end-to-end test (item 7).
 // It sets up two peers (site-a, site-b), each with a cert dir. We verify:
-//   1. With both alive, certOwner deterministically assigns each domain to one.
-//   2. The non-owner peer pulls the cert from the owner.
-//   3. When the owner dies (server shut down), ownership shifts to the
-//      surviving peer, which now takes the "renew" code path instead of "pull".
+//  1. With both alive, certOwner deterministically assigns each domain to one.
+//  2. The non-owner peer pulls the cert from the owner.
+//  3. When the owner dies (server shut down), ownership shifts to the
+//     surviving peer, which now takes the "renew" code path instead of "pull".
 func TestCertOwnershipShiftOnPeerDown(t *testing.T) {
 	// Create cert dirs and seed site-a with a cert.
 	certDirA := t.TempDir()
@@ -741,10 +741,10 @@ func TestCertOwnershipShiftOnPeerDown(t *testing.T) {
 
 	// Configure site-b to know about site-a.
 	cfgB := &config.Config{
-		PeerID:          "site-b",
-		ConfigPrimary:   false,
-		SSLEnabled:      true,
-		SSLCertDir:      certDirB,
+		PeerID:            "site-b",
+		ConfigPrimary:     false,
+		SSLEnabled:        true,
+		SSLCertDir:        certDirB,
 		SSLHAProxyCertDir: haproxyDirB,
 		Peers: []config.Peer{
 			{ID: "site-a", WGAddr: addrA, Primary: true},
@@ -854,9 +854,9 @@ func TestPullCertFromPeer(t *testing.T) {
 	pullerCertDir := t.TempDir()
 	pullerHADir := t.TempDir()
 	pullerCfg := &config.Config{
-		PeerID:          "site-b",
-		ConfigPrimary:   false,
-		SSLCertDir:      pullerCertDir,
+		PeerID:            "site-b",
+		ConfigPrimary:     false,
+		SSLCertDir:        pullerCertDir,
 		SSLHAProxyCertDir: pullerHADir,
 		Peers: []config.Peer{
 			{ID: "site-a", WGAddr: ownerAddr, Primary: true},

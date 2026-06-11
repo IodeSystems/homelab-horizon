@@ -6,15 +6,15 @@ import (
 	"net/http"
 	"strings"
 
-	"homelab-horizon/internal/apitypes"
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/dns"
-	"homelab-horizon/internal/letsencrypt"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/dns"
+	"github.com/iodesystems/homelab-horizon/internal/letsencrypt"
 )
 
 func writeJSONOK(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
 
 // requestProxyTimeouts converts API timeout overrides into config form,
@@ -382,7 +382,7 @@ func (s *Server) handleAPISyncDNS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.DNSSyncResponse{OK: true, Changed: changed})
+	_ = json.NewEncoder(w).Encode(apitypes.DNSSyncResponse{OK: true, Changed: changed})
 }
 
 // POST /api/v1/dns/sync-all
@@ -469,7 +469,7 @@ func (s *Server) handleAPISyncAllDNS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.DNSSyncAllResponse{OK: true, Updated: updated, Failed: failed})
+	_ = json.NewEncoder(w).Encode(apitypes.DNSSyncAllResponse{OK: true, Updated: updated, Failed: failed})
 }
 
 // POST /api/v1/zones/subzone
@@ -672,7 +672,7 @@ func (s *Server) handleAPIDomainSSLAdd(w http.ResponseWriter, r *http.Request) {
 
 	s.syncServices()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.DomainSSLAddResponse{
+	_ = json.NewEncoder(w).Encode(apitypes.DomainSSLAddResponse{
 		OK:      true,
 		Zone:    zone.Name,
 		SubZone: subZone,
@@ -717,11 +717,12 @@ func (s *Server) handleAPIDomainSSLRemove(w http.ResponseWriter, r *http.Request
 		}
 		for j, sz := range s.cfg().Zones[i].SubZones {
 			var expanded string
-			if sz == "" {
+			switch sz {
+			case "":
 				expanded = zone.Name
-			} else if sz == "*" {
+			case "*":
 				expanded = "*." + zone.Name
-			} else {
+			default:
 				expanded = sz + "." + zone.Name
 			}
 			if expanded == req.Domain {
@@ -750,11 +751,12 @@ func (s *Server) handleAPIDomainSSLRemove(w http.ResponseWriter, r *http.Request
 
 	// Build the pattern this SubZone covers
 	var pattern string
-	if subZone == "" {
+	switch subZone {
+	case "":
 		pattern = zone.Name
-	} else if subZone == "*" {
+	case "*":
 		pattern = "*." + zone.Name
-	} else {
+	default:
 		pattern = subZone + "." + zone.Name
 	}
 
@@ -764,11 +766,12 @@ func (s *Server) handleAPIDomainSSLRemove(w http.ResponseWriter, r *http.Request
 		if sz == subZone {
 			continue
 		}
-		if sz == "" {
+		switch sz {
+		case "":
 			remainingPatterns = append(remainingPatterns, zone.Name)
-		} else if sz == "*" {
+		case "*":
 			remainingPatterns = append(remainingPatterns, "*."+zone.Name)
-		} else {
+		default:
 			remainingPatterns = append(remainingPatterns, sz+"."+zone.Name)
 		}
 	}
@@ -840,5 +843,5 @@ func (s *Server) handleAPITriggerSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.TriggerSyncResponse{OK: true, Started: started})
+	_ = json.NewEncoder(w).Encode(apitypes.TriggerSyncResponse{OK: true, Started: started})
 }

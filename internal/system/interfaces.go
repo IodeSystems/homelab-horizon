@@ -377,15 +377,6 @@ func (fi *mockFileInfo) ModTime() time.Time { return time.Time{} }
 func (fi *mockFileInfo) Sys() any           { return nil }
 func (fi *mockFileInfo) IsDir() bool        { return fi.isDir }
 
-type mockFile struct {
-	path string
-}
-
-func (f *mockFile) Read(p []byte) (int, error)  { return 0, io.EOF }
-func (f *mockFile) Write(p []byte) (int, error) { return len(p), nil }
-func (f *mockFile) Close() error                { return nil }
-func (f *mockFile) Stat() (os.FileInfo, error)  { return &mockFileInfo{path: f.path}, nil }
-
 type mockProcess struct{}
 
 func (p *mockProcess) Wait() error                        { return nil }

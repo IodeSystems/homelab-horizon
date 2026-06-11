@@ -7,11 +7,10 @@ import (
 	"net/http"
 	"strings"
 
-	"homelab-horizon/internal/apitypes"
-	"homelab-horizon/internal/config"
-	"homelab-horizon/internal/haproxy"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/haproxy"
 )
-
 
 // findServiceByToken returns the service index matching either the service token
 // or the legacy deploy token.
@@ -164,7 +163,7 @@ func (s *Server) handleDeployStatus(w http.ResponseWriter, svc *config.Service, 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(status)
+	_ = json.NewEncoder(w).Encode(status)
 }
 
 func (s *Server) handleDeployStateChange(w http.ResponseWriter, backendName, slot, action string) {
@@ -187,7 +186,7 @@ func (s *Server) handleDeployStateChange(w http.ResponseWriter, backendName, slo
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.DeployStateChangeResponse{
+	_ = json.NewEncoder(w).Encode(apitypes.DeployStateChangeResponse{
 		Status: "ok",
 		Server: slot,
 		State:  action,
@@ -234,9 +233,9 @@ func (s *Server) handleDeployMaintPage(w http.ResponseWriter, r *http.Request, s
 	w.Header().Set("Content-Type", "application/json")
 	if html != "" {
 		sum := md5.Sum([]byte(html))
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "maintenance_page_md5": fmt.Sprintf("%x", sum)})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "maintenance_page_md5": fmt.Sprintf("%x", sum)})
 	} else {
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}
 }
 
@@ -267,11 +266,10 @@ func (s *Server) handleDeploySwap(w http.ResponseWriter, svcIdx int) {
 	deploy := svc.Proxy.Deploy
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apitypes.DeploySwapResponse{
+	_ = json.NewEncoder(w).Encode(apitypes.DeploySwapResponse{
 		Status:     "ok",
 		ActiveSlot: deploy.ActiveSlot,
 		Current:    deploy.CurrentServer(svc.Proxy.Backend),
 		Next:       deploy.InactiveServer(svc.Proxy.Backend),
 	})
 }
-

@@ -14,18 +14,19 @@ import (
 // Backend represents a HAProxy backend service
 type Backend struct {
 	Name          string   `json:"name"`
-	DomainMatch   string   `json:"domain_match,omitempty"`  // Deprecated: use DomainMatches
+	DomainMatch   string   `json:"domain_match,omitempty"`   // Deprecated: use DomainMatches
 	DomainMatches []string `json:"domain_matches,omitempty"` // e.g., [".example.com", "app.other.com"]
-	Server        string   `json:"server"`                  // e.g., "192.168.1.10:8080"
-	HTTPCheck    bool   `json:"http_check"`
-	CheckPath    string `json:"check_path"`    // e.g., "/health"
-	InternalOnly bool   `json:"internal_only"` // Restrict to local network access only
+	Server        string   `json:"server"`                   // e.g., "192.168.1.10:8080"
+	HTTPCheck     bool     `json:"http_check"`
+	CheckPath     string   `json:"check_path"`             // e.g., "/health"
+	InternalOnly  bool     `json:"internal_only"`          // Restrict to local network access only
+	MetricsPath   string   `json:"metrics_path,omitempty"` // if set, deny this path from non-local sources (Prometheus scrapes the backend directly)
 
 	// Blue-green deploy fields (when Deploy is true, CurrentServer/NextServer are used instead of Server)
 	Deploy        bool   `json:"deploy,omitempty"`
-	CurrentServer string `json:"current_server,omitempty"`  // host:port for active slot
-	NextServer    string `json:"next_server,omitempty"`     // host:port for inactive slot
-	DeployBalance string `json:"deploy_balance,omitempty"`  // "first" or "roundrobin" (default "first")
+	CurrentServer string `json:"current_server,omitempty"` // host:port for active slot
+	NextServer    string `json:"next_server,omitempty"`    // host:port for inactive slot
+	DeployBalance string `json:"deploy_balance,omitempty"` // "first" or "roundrobin" (default "first")
 
 	// Custom error pages
 	ErrorFile503 string `json:"error_file_503,omitempty"` // path to custom 503.http file
@@ -177,9 +178,9 @@ func (h *HAProxy) getHAProxyStats() map[string]haStatInfo {
 	if err != nil {
 		return result
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	if _, err := conn.Write([]byte("show stat\n")); err != nil {
 		return result
 	}
@@ -283,13 +284,15 @@ func (h *HAProxy) WriteConfig(httpPort, httpsPort int, ssl *SSLConfig) error {
 	// Ensure directory exists
 	dir := strings.TrimSuffix(h.configPath, "/haproxy.cfg")
 	if dir != h.configPath {
-		os.MkdirAll(dir, 0755)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", dir, err)
+		}
 	}
 
 	// Write default 503 error page (overrides vanilla HAProxy; per-service pages override this)
 	errorsDir := dir + "/errors"
 	if err := os.MkdirAll(errorsDir, 0755); err == nil {
-		os.WriteFile(errorsDir+"/503.http", []byte(default503Page), 0644)
+		_ = os.WriteFile(errorsDir+"/503.http", []byte(default503Page), 0644)
 	}
 
 	return os.WriteFile(h.configPath, []byte(config), 0644)
@@ -366,11 +369,12 @@ listen stats
 		}
 	}
 
-	// Check if any backends are internal-only
-	hasInternalOnly := false
+	// Whether to emit the local_access ACL: any internal-only backend (whole-
+	// service restriction) or any metrics endpoint (path restriction) needs it.
+	needLocalAccess := false
 	for _, b := range backends {
-		if b.InternalOnly {
-			hasInternalOnly = true
+		if b.InternalOnly || b.MetricsPath != "" {
+			needLocalAccess = true
 			break
 		}
 	}
@@ -378,7 +382,7 @@ listen stats
 	// HTTP frontend
 	if sslEnabled {
 		// Redirect HTTP to HTTPS only for domains with SSL certificates
-		sb.WriteString(fmt.Sprintf(`frontend http_front
+		fmt.Fprintf(&sb, `frontend http_front
     bind *:%d
     mode http
     option forwardfor
@@ -386,10 +390,10 @@ listen stats
     acl is_router_check path /router-check
     acl has_horizon_header hdr(X-Homelab-Horizon-Check) -m found
     http-request return status 200 content-type "text/plain" string "OK" if is_router_check has_horizon_header
-`, httpPort))
+`, httpPort)
 
-		// Add local_access ACL if any backend is internal-only
-		if hasInternalOnly {
+		// Add local_access ACL if any backend is internal-only or metrics-restricted
+		if needLocalAccess {
 			sb.WriteString(`    # Local network access ACL (RFC1918 private ranges)
     acl local_access src 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8
 `)
@@ -400,12 +404,12 @@ listen stats
 			sb.WriteString("    # Domains with SSL certificates\n")
 			for i, domain := range sslDomains {
 				aclPattern := domainToACLPattern(domain)
-				sb.WriteString(fmt.Sprintf("    acl ssl_domain_%d hdr_end(host) -i %s\n", i, aclPattern))
+				fmt.Fprintf(&sb, "    acl ssl_domain_%d hdr_end(host) -i %s\n", i, aclPattern)
 			}
 			// Redirect to HTTPS for each SSL domain
 			sb.WriteString("    # Only redirect to HTTPS for domains with SSL certificates\n")
 			for i := range sslDomains {
-				sb.WriteString(fmt.Sprintf("    redirect scheme https code 301 if ssl_domain_%d !is_router_check\n", i))
+				fmt.Fprintf(&sb, "    redirect scheme https code 301 if ssl_domain_%d !is_router_check\n", i)
 			}
 		}
 
@@ -417,19 +421,27 @@ listen stats
 			for _, dm := range b.GetDomainMatches() {
 				patterns = append(patterns, domainToACLPattern(dm))
 			}
-			sb.WriteString(fmt.Sprintf("    acl host_%s hdr_end(host) -i %s\n", aclName, strings.Join(patterns, " ")))
+			fmt.Fprintf(&sb, "    acl host_%s hdr_end(host) -i %s\n", aclName, strings.Join(patterns, " "))
 		}
 		sb.WriteString("\n")
 		// Deny external access to internal-only backends
 		for _, b := range backends {
 			if b.InternalOnly {
 				aclName := sanitizeName(b.Name)
-				sb.WriteString(fmt.Sprintf("    http-request deny deny_status 403 if host_%s !local_access\n", aclName))
+				fmt.Fprintf(&sb, "    http-request deny deny_status 403 if host_%s !local_access\n", aclName)
+			}
+		}
+		// Deny external access to metrics endpoints. Prometheus scrapes backends
+		// directly over the internal network; the public domain path stays closed.
+		for _, b := range backends {
+			if b.MetricsPath != "" {
+				aclName := sanitizeName(b.Name)
+				fmt.Fprintf(&sb, "    http-request deny deny_status 403 if host_%s { path %s } !local_access\n", aclName, b.MetricsPath)
 			}
 		}
 		for _, b := range backends {
 			aclName := sanitizeName(b.Name)
-			sb.WriteString(fmt.Sprintf("    use_backend %s_backend if host_%s\n", aclName, aclName))
+			fmt.Fprintf(&sb, "    use_backend %s_backend if host_%s\n", aclName, aclName)
 		}
 		sb.WriteString("\n")
 
@@ -438,7 +450,7 @@ listen stats
 		if !strings.HasSuffix(certDir, "/") {
 			certDir += "/"
 		}
-		sb.WriteString(fmt.Sprintf(`frontend https_front
+		fmt.Fprintf(&sb, `frontend https_front
     bind *:%d ssl crt %s
     mode http
     option forwardfor
@@ -452,10 +464,10 @@ listen stats
     http-response cache-store mycache
     # Router check endpoint - returns 200 OK directly (requires special header to avoid conflicts)
     http-request return status 200 content-type "text/plain" string "OK" if { path /router-check } { hdr(X-Homelab-Horizon-Check) -m found }
-`, httpsPort, certDir))
+`, httpsPort, certDir)
 
-		// Add local_access ACL if any backend is internal-only
-		if hasInternalOnly {
+		// Add local_access ACL if any backend is internal-only or metrics-restricted
+		if needLocalAccess {
 			sb.WriteString(`    # Local network access ACL (RFC1918 private ranges)
     acl local_access src 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8
 `)
@@ -468,24 +480,32 @@ listen stats
 			for _, dm := range b.GetDomainMatches() {
 				patterns = append(patterns, domainToACLPattern(dm))
 			}
-			sb.WriteString(fmt.Sprintf("    acl host_%s hdr_end(host) -i %s\n", aclName, strings.Join(patterns, " ")))
+			fmt.Fprintf(&sb, "    acl host_%s hdr_end(host) -i %s\n", aclName, strings.Join(patterns, " "))
 		}
 		sb.WriteString("\n")
 		// Deny external access to internal-only backends
 		for _, b := range backends {
 			if b.InternalOnly {
 				aclName := sanitizeName(b.Name)
-				sb.WriteString(fmt.Sprintf("    http-request deny deny_status 403 if host_%s !local_access\n", aclName))
+				fmt.Fprintf(&sb, "    http-request deny deny_status 403 if host_%s !local_access\n", aclName)
+			}
+		}
+		// Deny external access to metrics endpoints. Prometheus scrapes backends
+		// directly over the internal network; the public domain path stays closed.
+		for _, b := range backends {
+			if b.MetricsPath != "" {
+				aclName := sanitizeName(b.Name)
+				fmt.Fprintf(&sb, "    http-request deny deny_status 403 if host_%s { path %s } !local_access\n", aclName, b.MetricsPath)
 			}
 		}
 		for _, b := range backends {
 			aclName := sanitizeName(b.Name)
-			sb.WriteString(fmt.Sprintf("    use_backend %s_backend if host_%s\n", aclName, aclName))
+			fmt.Fprintf(&sb, "    use_backend %s_backend if host_%s\n", aclName, aclName)
 		}
 		sb.WriteString("\n")
 	} else {
 		// HTTP only - no SSL
-		sb.WriteString(fmt.Sprintf(`frontend http_front
+		fmt.Fprintf(&sb, `frontend http_front
     bind *:%d
     mode http
     option forwardfor
@@ -498,10 +518,10 @@ listen stats
     http-response cache-store mycache
     # Router check endpoint - returns 200 OK directly (requires special header to avoid conflicts)
     http-request return status 200 content-type "text/plain" string "OK" if { path /router-check } { hdr(X-Homelab-Horizon-Check) -m found }
-`, httpPort))
+`, httpPort)
 
-		// Add local_access ACL if any backend is internal-only
-		if hasInternalOnly {
+		// Add local_access ACL if any backend is internal-only or metrics-restricted
+		if needLocalAccess {
 			sb.WriteString(`    # Local network access ACL (RFC1918 private ranges)
     acl local_access src 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8
 `)
@@ -514,19 +534,27 @@ listen stats
 			for _, dm := range b.GetDomainMatches() {
 				patterns = append(patterns, domainToACLPattern(dm))
 			}
-			sb.WriteString(fmt.Sprintf("    acl host_%s hdr_end(host) -i %s\n", aclName, strings.Join(patterns, " ")))
+			fmt.Fprintf(&sb, "    acl host_%s hdr_end(host) -i %s\n", aclName, strings.Join(patterns, " "))
 		}
 		sb.WriteString("\n")
 		// Deny external access to internal-only backends
 		for _, b := range backends {
 			if b.InternalOnly {
 				aclName := sanitizeName(b.Name)
-				sb.WriteString(fmt.Sprintf("    http-request deny deny_status 403 if host_%s !local_access\n", aclName))
+				fmt.Fprintf(&sb, "    http-request deny deny_status 403 if host_%s !local_access\n", aclName)
+			}
+		}
+		// Deny external access to metrics endpoints. Prometheus scrapes backends
+		// directly over the internal network; the public domain path stays closed.
+		for _, b := range backends {
+			if b.MetricsPath != "" {
+				aclName := sanitizeName(b.Name)
+				fmt.Fprintf(&sb, "    http-request deny deny_status 403 if host_%s { path %s } !local_access\n", aclName, b.MetricsPath)
 			}
 		}
 		for _, b := range backends {
 			aclName := sanitizeName(b.Name)
-			sb.WriteString(fmt.Sprintf("    use_backend %s_backend if host_%s\n", aclName, aclName))
+			fmt.Fprintf(&sb, "    use_backend %s_backend if host_%s\n", aclName, aclName)
 		}
 		sb.WriteString("\n")
 	}
@@ -534,21 +562,21 @@ listen stats
 	// Backend definitions
 	for _, b := range backends {
 		aclName := sanitizeName(b.Name)
-		sb.WriteString(fmt.Sprintf("backend %s_backend\n", aclName))
+		fmt.Fprintf(&sb, "backend %s_backend\n", aclName)
 		sb.WriteString("    mode http\n")
 		if b.ErrorFile503 != "" {
-			sb.WriteString(fmt.Sprintf("    errorfile 503 %s\n", b.ErrorFile503))
+			fmt.Fprintf(&sb, "    errorfile 503 %s\n", b.ErrorFile503)
 		}
 
 		// Per-backend timeout overrides. Omitted timeouts inherit the defaults section.
 		if b.TimeoutConnect > 0 {
-			sb.WriteString(fmt.Sprintf("    timeout connect %ds\n", b.TimeoutConnect))
+			fmt.Fprintf(&sb, "    timeout connect %ds\n", b.TimeoutConnect)
 		}
 		if b.TimeoutServer > 0 {
-			sb.WriteString(fmt.Sprintf("    timeout server %ds\n", b.TimeoutServer))
+			fmt.Fprintf(&sb, "    timeout server %ds\n", b.TimeoutServer)
 		}
 		if b.TimeoutTunnel > 0 {
-			sb.WriteString(fmt.Sprintf("    timeout tunnel %ds\n", b.TimeoutTunnel))
+			fmt.Fprintf(&sb, "    timeout tunnel %ds\n", b.TimeoutTunnel)
 		}
 
 		if b.Deploy {
@@ -556,15 +584,15 @@ listen stats
 			if balance == "" {
 				balance = "first"
 			}
-			sb.WriteString(fmt.Sprintf("    balance %s\n", balance))
+			fmt.Fprintf(&sb, "    balance %s\n", balance)
 			checkPath := b.CheckPath
 			if checkPath == "" {
 				checkPath = "/"
 			}
-			sb.WriteString(fmt.Sprintf("    option httpchk GET %s\n", checkPath))
+			fmt.Fprintf(&sb, "    option httpchk GET %s\n", checkPath)
 			sb.WriteString("    http-check expect status 200\n")
-			sb.WriteString(fmt.Sprintf("    server next %s check inter 3s fall 2 rise 2\n", b.NextServer))
-			sb.WriteString(fmt.Sprintf("    server current %s check inter 3s fall 2 rise 2\n", b.CurrentServer))
+			fmt.Fprintf(&sb, "    server next %s check inter 3s fall 2 rise 2\n", b.NextServer)
+			fmt.Fprintf(&sb, "    server current %s check inter 3s fall 2 rise 2\n", b.CurrentServer)
 		} else {
 			sb.WriteString("    balance roundrobin\n")
 			if b.HTTPCheck {
@@ -572,10 +600,10 @@ listen stats
 				if checkPath == "" {
 					checkPath = "/"
 				}
-				sb.WriteString(fmt.Sprintf("    option httpchk GET %s\n", checkPath))
-				sb.WriteString(fmt.Sprintf("    server %s %s check\n", aclName, b.Server))
+				fmt.Fprintf(&sb, "    option httpchk GET %s\n", checkPath)
+				fmt.Fprintf(&sb, "    server %s %s check\n", aclName, b.Server)
 			} else {
-				sb.WriteString(fmt.Sprintf("    server %s %s\n", aclName, b.Server))
+				fmt.Fprintf(&sb, "    server %s %s\n", aclName, b.Server)
 			}
 		}
 		sb.WriteString("\n")
@@ -684,9 +712,9 @@ func (h *HAProxy) SetServerState(backend, server, state string) error {
 	if err != nil {
 		return fmt.Errorf("connecting to haproxy socket: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	cmd := fmt.Sprintf("set server %s/%s state %s\n", backend, server, state)
 	if _, err := conn.Write([]byte(cmd)); err != nil {
 		return fmt.Errorf("writing to haproxy socket: %w", err)
@@ -709,9 +737,9 @@ func (h *HAProxy) GetServerState(backend string) (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connecting to haproxy socket: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	cmd := fmt.Sprintf("show servers state %s\n", backend)
 	if _, err := conn.Write([]byte(cmd)); err != nil {
 		return nil, fmt.Errorf("writing to haproxy socket: %w", err)

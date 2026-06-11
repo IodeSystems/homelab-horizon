@@ -4,13 +4,14 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"homelab-horizon/internal/acme"
+	"github.com/iodesystems/homelab-horizon/internal/acme"
 )
 
 // DNSProviderType identifies the DNS provider for ACME challenges
@@ -303,7 +304,7 @@ func (m *Manager) PackageAllForHAProxy() error {
 	for _, d := range m.config.Domains {
 		if err := m.PackageForHAProxyDomain(d.Domain); err != nil {
 			// Continue with other domains even if one fails
-			fmt.Printf("Warning: failed to package cert for %s: %v\n", d.Domain, err)
+			slog.Warn("failed to package cert for haproxy", "domain", d.Domain, "err", err)
 		}
 	}
 	return nil

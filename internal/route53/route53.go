@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -18,7 +19,7 @@ func logAWS(profile, action string) {
 	if profile == "" {
 		profile = "default"
 	}
-	fmt.Printf("[AWS/%s] %s\n", profile, action)
+	slog.Debug(action, "aws_profile", profile)
 }
 
 // Record represents a DNS record
@@ -197,14 +198,14 @@ func GetPublicIP() (string, error) {
 		if resp.StatusCode == 200 {
 			buf := make([]byte, 64)
 			n, _ := resp.Body.Read(buf)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			ip := strings.TrimSpace(string(buf[:n]))
 			if net.ParseIP(ip) != nil {
 				return ip, nil
 			}
 			lastErr = fmt.Errorf("%s: invalid IP response: %q", svc, ip)
 		} else {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("%s: status %d", svc, resp.StatusCode)
 		}
 	}
@@ -282,7 +283,7 @@ func CheckIPv6() IPv6Status {
 		}
 		return status
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == 200 {
 		buf := make([]byte, 64)

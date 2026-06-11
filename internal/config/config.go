@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -251,7 +252,7 @@ type Peer struct {
 	// Phase 3: needed for multi-site client config generation.
 	// When populated, GenerateMultiSiteClientConfig emits one [Peer]
 	// block per site. When empty, single-site mode is assumed.
-	ServerEndpoint  string `json:"server_endpoint,omitempty"`  // e.g. "b.example.com:51820"
+	ServerEndpoint  string `json:"server_endpoint,omitempty"` // e.g. "b.example.com:51820"
 	ServerPublicKey string `json:"server_public_key,omitempty"`
 	VPNRange        string `json:"vpn_range,omitempty"` // e.g. "10.0.2.0/24"
 }
@@ -297,8 +298,8 @@ func (c *Config) ValidateFleet() error {
 	// Validate VPN ranges don't overlap when configured (site-to-site).
 	if c.VPNRange != "" {
 		ranges := []struct {
-			id    string
-			cidr  string
+			id   string
+			cidr string
 		}{{c.PeerID, c.VPNRange}}
 		for _, p := range c.Peers {
 			if p.VPNRange != "" {
@@ -368,12 +369,42 @@ type ZoneSSL struct {
 
 // Service represents a unified service configuration with clear separation of concerns
 type Service struct {
-	Name        string       `json:"name"`                   // Human-readable, e.g., "grafana"
-	Token       string       `json:"token,omitempty"`        // API token for service integration (ban, status)
-	Domains     []string     `json:"domains"`                // FQDNs, e.g., ["app.example.com", "book.example.com"]
-	InternalDNS *InternalDNS `json:"internal_dns,omitempty"` // dnsmasq config for VPN clients
-	ExternalDNS *ExternalDNS `json:"external_dns,omitempty"` // Route53 config for public access
-	Proxy       *ProxyConfig `json:"proxy,omitempty"`        // HAProxy reverse proxy config
+	Name         string        `json:"name"`                   // Human-readable, e.g., "grafana"
+	Token        string        `json:"token,omitempty"`        // API token for service integration (ban, status)
+	Domains      []string      `json:"domains"`                // FQDNs, e.g., ["app.example.com", "book.example.com"]
+	InternalDNS  *InternalDNS  `json:"internal_dns,omitempty"` // dnsmasq config for VPN clients
+	ExternalDNS  *ExternalDNS  `json:"external_dns,omitempty"` // Route53 config for public access
+	Proxy        *ProxyConfig  `json:"proxy,omitempty"`        // HAProxy reverse proxy config
+	Integrations *Integrations `json:"integrations,omitempty"` // Observability integrations (metrics, ...)
+}
+
+// Integrations holds optional per-service observability integrations that hz
+// auto-detects and exposes. Pull-style integrations (Prometheus) are detected by
+// probing the service and served as a discovery config under /integration/<tool>/
+// for a central consumer to pull; push-style integrations (Loki via alloy) run a
+// per-host agent and are handled separately.
+type Integrations struct {
+	Metrics *MetricsIntegration `json:"metrics,omitempty"` // Prometheus /metrics scraping
+}
+
+// MetricsIntegration enables Prometheus metrics discovery for a service. hz probes
+// Path on the service's backend slot(s); a service appears in the served scrape
+// config only if the probe succeeds (observed compatibility, not just declared).
+// Auth is either network-restriction (the default — metrics are reachable only
+// from the internal/VPN network, enforced at the hz edge) or an optional bearer
+// token for endpoints that aren't network-isolated.
+type MetricsIntegration struct {
+	Disabled bool   `json:"disabled,omitempty"` // opt this service out of metrics discovery
+	Path     string `json:"path,omitempty"`     // metrics path; default "/metrics"
+	Bearer   string `json:"bearer,omitempty"`   // optional token; sent as Authorization: Bearer on probe + scrape
+}
+
+// MetricsPath returns the configured metrics path, defaulting to "/metrics".
+func (m *MetricsIntegration) MetricsPath() string {
+	if m == nil || m.Path == "" {
+		return "/metrics"
+	}
+	return m.Path
 }
 
 // EnsureToken generates a token for this service if one doesn't exist.
@@ -644,7 +675,7 @@ func LoadAuto() (*Config, string, error) {
 			return nil, "", fmt.Errorf("parsing HZ_CONFIG: %w", err)
 		}
 		path := SearchPaths[0] // default save path
-		fmt.Printf("Loaded config from HZ_CONFIG environment variable\n")
+		slog.Info("loaded config from HZ_CONFIG environment variable")
 		return cfg, path, nil
 	}
 
@@ -654,10 +685,9 @@ func LoadAuto() (*Config, string, error) {
 		return nil, "", err
 	}
 	if !found {
-		fmt.Printf("No config file found, using defaults\n")
-		fmt.Printf("Create %s to customize settings\n", path)
+		slog.Info("no config file found, using defaults", "create_at", path)
 	} else {
-		fmt.Printf("Loaded config from %s\n", path)
+		slog.Info("loaded config", "path", path)
 	}
 	return cfg, path, nil
 }

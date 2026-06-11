@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"sort"
@@ -19,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
 const (
@@ -31,14 +32,14 @@ const (
 // No-op when this instance is the primary or no fleet is configured.
 func (s *Server) startPeerSync() {
 	if err := s.cfg().ValidateFleet(); err != nil {
-		fmt.Printf("[peer-sync] fleet config invalid: %v — running standalone\n", err)
+		slog.Warn("peer-sync: fleet config invalid, running standalone", "err", err)
 		return
 	}
 	if s.cfg().PeerID == "" {
 		return // single-instance mode
 	}
 	if s.cfg().ConfigPrimary {
-		fmt.Printf("[peer-sync] this instance (%s) is the config primary\n", s.cfg().PeerID)
+		slog.Info("peer-sync: this instance is the config primary", "peer_id", s.cfg().PeerID)
 		return
 	}
 	primary := s.cfg().PrimaryPeer()
@@ -46,8 +47,8 @@ func (s *Server) startPeerSync() {
 		s.autoPromote()
 		return
 	}
-	fmt.Printf("[peer-sync] starting pull loop: self=%s primary=%s@%s every %s\n",
-		s.cfg().PeerID, primary.ID, primary.WGAddr, peerSyncInterval)
+	slog.Info("peer-sync: starting pull loop",
+		"self", s.cfg().PeerID, "primary", primary.ID, "primary_addr", primary.WGAddr, "interval", peerSyncInterval)
 
 	go func() {
 		// First attempt soon after startup so warm spares converge fast.
@@ -67,11 +68,11 @@ func (s *Server) startPeerSync() {
 // contains no entry marked primary — the operator's act of removing the
 // primary peer is the explicit signal that promotion is intended.
 func (s *Server) autoPromote() {
-	fmt.Printf("[peer-sync] no primary peer configured — auto-promoting %s to primary\n", s.cfg().PeerID)
+	slog.Info("peer-sync: no primary peer configured, auto-promoting to primary", "peer_id", s.cfg().PeerID)
 	if err := s.updateConfig(func(cfg *config.Config) {
 		cfg.ConfigPrimary = true
 	}); err != nil {
-		fmt.Printf("[peer-sync] auto-promote: save failed: %v\n", err)
+		slog.Error("peer-sync: auto-promote save failed", "err", err)
 	}
 }
 
@@ -99,17 +100,17 @@ func (s *Server) pullConfigOnce() {
 	ping, err := fetchPeerPing(pingURL)
 	if err != nil {
 		pullErr = fmt.Errorf("ping %s: %w", pingURL, err)
-		fmt.Printf("[peer-sync] %v\n", pullErr)
+		slog.Warn("peer-sync: ping failed", "err", pullErr)
 		return
 	}
 	if ping.PeerID != primary.ID {
 		pullErr = fmt.Errorf("split-config guard: %s reports peer_id=%q, expected %q", pingURL, ping.PeerID, primary.ID)
-		fmt.Printf("[peer-sync] %v — refusing pull\n", pullErr)
+		slog.Warn("peer-sync: split-config guard, refusing pull", "err", pullErr)
 		return
 	}
 	if !ping.ConfigPrimary {
 		pullErr = fmt.Errorf("split-config guard: %s no longer claims to be primary", primary.ID)
-		fmt.Printf("[peer-sync] %v — refusing pull\n", pullErr)
+		slog.Warn("peer-sync: split-config guard, refusing pull", "err", pullErr)
 		return
 	}
 
@@ -118,7 +119,7 @@ func (s *Server) pullConfigOnce() {
 	body, err := fetchPeerBody(cfgURL)
 	if err != nil {
 		pullErr = fmt.Errorf("fetch %s: %w", cfgURL, err)
-		fmt.Printf("[peer-sync] %v\n", pullErr)
+		slog.Warn("peer-sync: fetch failed", "err", pullErr)
 		return
 	}
 
@@ -128,19 +129,19 @@ func (s *Server) pullConfigOnce() {
 	remoteCfg, err := config.LoadFromJSON(body)
 	if err != nil {
 		pullErr = fmt.Errorf("parse remote config: %w", err)
-		fmt.Printf("[peer-sync] %v\n", pullErr)
+		slog.Warn("peer-sync: parse failed", "err", pullErr)
 		return
 	}
 	if err := remoteCfg.ValidateFleet(); err != nil {
 		pullErr = fmt.Errorf("remote fleet config invalid: %w", err)
-		fmt.Printf("[peer-sync] %v — refusing\n", pullErr)
+		slog.Warn("peer-sync: remote fleet config invalid, refusing", "err", pullErr)
 		return
 	}
 	// Remote should still claim itself as primary.
 	if !remoteCfg.ConfigPrimary || remoteCfg.PeerID != primary.ID {
 		pullErr = fmt.Errorf("split-config guard: remote config peer_id=%q config_primary=%v",
 			remoteCfg.PeerID, remoteCfg.ConfigPrimary)
-		fmt.Printf("[peer-sync] %v — refusing\n", pullErr)
+		slog.Warn("peer-sync: split-config guard, refusing", "err", pullErr)
 		return
 	}
 
@@ -157,11 +158,11 @@ func (s *Server) pullConfigOnce() {
 
 	if err := s.applyNewConfig(merged); err != nil {
 		pullErr = fmt.Errorf("apply: %w", err)
-		fmt.Printf("[peer-sync] %v\n", pullErr)
+		slog.Error("peer-sync: failed to apply config", "err", pullErr)
 		return
 	}
 	applied = true
-	fmt.Printf("[peer-sync] applied new config from %s\n", primary.ID)
+	slog.Info("peer-sync: applied new config", "primary", primary.ID)
 }
 
 // recordPullAttempt updates s.peerSyncStatus after pullConfigOnce returns.
@@ -284,11 +285,11 @@ func (s *Server) alivePeers() []string {
 			url := buildPeerURL(peer.WGAddr, "/api/peer/ping")
 			resp, err := fetchPeerPing(url)
 			if err != nil {
-				fmt.Printf("[peer-liveness] %s (%s): unreachable: %v\n", peer.ID, url, err)
+				slog.Debug("peer-liveness: unreachable", "peer", peer.ID, "url", url, "err", err)
 				return
 			}
 			if resp.PeerID != peer.ID {
-				fmt.Printf("[peer-liveness] %s: responded with peer_id=%q, skipping\n", peer.ID, resp.PeerID)
+				slog.Warn("peer-liveness: peer_id mismatch, skipping", "peer", peer.ID, "got", resp.PeerID)
 				return
 			}
 			mu.Lock()
@@ -311,8 +312,7 @@ func (s *Server) startBanSync() {
 	if cfg.PeerID == "" || len(cfg.Peers) == 0 {
 		return
 	}
-	fmt.Printf("[ban-sync] starting LWW sync every %s with %d peer(s)\n",
-		banSyncInterval, len(cfg.Peers))
+	slog.Info("ban-sync: starting LWW sync", "interval", banSyncInterval, "peers", len(cfg.Peers))
 
 	go func() {
 		time.Sleep(5 * time.Second) // let other subsystems start first
@@ -341,7 +341,7 @@ func (s *Server) banSyncOnce() {
 		}
 		var resp PeerStateResponse
 		if err := json.Unmarshal(body, &resp); err != nil {
-			fmt.Printf("[ban-sync] decode %s: %v\n", p.ID, err)
+			slog.Warn("ban-sync: decode error", "peer", p.ID, "err", err)
 			continue
 		}
 		allRemoteBans = append(allRemoteBans, resp.Bans...)
@@ -370,11 +370,13 @@ func (s *Server) banSyncOnce() {
 		}
 	}
 
-	s.updateConfig(func(c *config.Config) {
+	if err := s.updateConfig(func(c *config.Config) {
 		c.IPBans = merged
-	})
+	}); err != nil {
+		slog.Warn("ban-sync: updateConfig", "err", err)
+	}
 	s.reapplyBans()
-	fmt.Printf("[ban-sync] merged bans: %d total\n", len(merged))
+	slog.Info("ban-sync: merged bans", "total", len(merged))
 }
 
 // mergeBansLWW merges two ban lists using last-write-wins per IP.
@@ -468,7 +470,7 @@ func (s *Server) pullCertFromPeer(domain, ownerID string, cfg *config.Config) er
 		}
 	}
 
-	fmt.Printf("[cert-renewal] %s: pulled from %s\n", domain, ownerID)
+	slog.Info("cert-renewal: pulled cert from peer", "domain", domain, "owner", ownerID)
 	return nil
 }
 
@@ -479,7 +481,7 @@ func fetchPeerPing(url string) (*PeerPingResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
@@ -495,7 +497,7 @@ func fetchPeerBody(url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}

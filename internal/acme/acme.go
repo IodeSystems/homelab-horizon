@@ -284,13 +284,13 @@ func checkDomainSOA(domain string, logFn func(string)) error {
 		nsOutput, _ := cmd.CombinedOutput()
 		ns := strings.TrimSpace(string(nsOutput))
 		if ns == "" {
-			logFn(fmt.Sprintf("  ✗ No NS records found - domain does not exist in public DNS"))
-			logFn(fmt.Sprintf("  → Update nameservers at your domain registrar to point to Route53"))
-			logFn(fmt.Sprintf("  → Run: aws route53 get-hosted-zone --id <zone-id> --query DelegationSet.NameServers"))
+			logFn("  ✗ No NS records found - domain does not exist in public DNS")
+			logFn("  → Update nameservers at your domain registrar to point to Route53")
+			logFn("  → Run: aws route53 get-hosted-zone --id <zone-id> --query DelegationSet.NameServers")
 			return fmt.Errorf("domain %s is not delegated - no SOA/NS records in public DNS", domain)
 		} else {
 			logFn(fmt.Sprintf("  Current NS records: %s", strings.ReplaceAll(ns, "\n", ", ")))
-			logFn(fmt.Sprintf("  → These should be Route53 nameservers (ns-*.awsdns-*.com/net/org/co.uk)"))
+			logFn("  → These should be Route53 nameservers (ns-*.awsdns-*.com/net/org/co.uk)")
 			return fmt.Errorf("domain %s has NS records but no SOA - delegation may be incomplete", domain)
 		}
 	}
