@@ -174,7 +174,7 @@ A service can serve a folder of files instead of proxying to a backend. Set `pro
   "name": "docs",
   "domains": ["docs.example.com"],
   "external_dns": { "ttl": 300 },
-  "proxy": { "static_root": "/etc/homelab-horizon/site" }
+  "proxy": { "static_root": "/var/lib/homelab-horizon/docs" }
 }
 ```
 
@@ -198,7 +198,7 @@ For single-page apps, set `"spa": true` so a browser refresh on a client-side ro
 
 ```json
 { "name": "app", "domains": ["app.example.com"],
-  "proxy": { "static_root": "/etc/homelab-horizon/app", "spa": true } }
+  "proxy": { "static_root": "/var/lib/homelab-horizon/app", "spa": true } }
 ```
 
 ### Deploying a static site
