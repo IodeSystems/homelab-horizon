@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.24
 	github.com/aws/aws-sdk-go-v2/service/route53 v1.63.3
 	github.com/go-acme/lego/v4 v4.35.2
+	github.com/go-acme/lego/v5 v5.2.2
 	github.com/libdns/cloudflare v0.2.2
 	github.com/libdns/digitalocean v0.0.0-20250606071607-dfa7af5c2e31
 	github.com/libdns/duckdns v0.3.0
