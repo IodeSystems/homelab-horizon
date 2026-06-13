@@ -362,8 +362,7 @@ listen stats
 					sslEnabled = true
 					// Extract domain name from filename (e.g., "example.com.pem" -> "example.com")
 					domain := strings.TrimSuffix(e.Name(), ".pem")
-					// Convert to wildcard pattern for matching (e.g., "example.com" -> "*.example.com")
-					sslDomains = append(sslDomains, "*."+domain)
+					sslDomains = append(sslDomains, domain)
 				}
 			}
 		}
@@ -399,12 +398,15 @@ listen stats
 `)
 		}
 
-		// Add ACLs for domains with SSL certificates
+		// Add ACLs for domains with SSL certificates. Each cert covers both the
+		// domain itself (exact host) and its subdomains, so emit both an exact
+		// match and a suffix match under the same ACL name (HAProxy ORs them).
+		// hdr_end(host) -i .example.com alone would skip example.com itself.
 		if len(sslDomains) > 0 {
 			sb.WriteString("    # Domains with SSL certificates\n")
 			for i, domain := range sslDomains {
-				aclPattern := domainToACLPattern(domain)
-				fmt.Fprintf(&sb, "    acl ssl_domain_%d hdr_end(host) -i %s\n", i, aclPattern)
+				fmt.Fprintf(&sb, "    acl ssl_domain_%d hdr(host) -i %s\n", i, domain)
+				fmt.Fprintf(&sb, "    acl ssl_domain_%d hdr_end(host) -i .%s\n", i, domain)
 			}
 			// Redirect to HTTPS for each SSL domain
 			sb.WriteString("    # Only redirect to HTTPS for domains with SSL certificates\n")
