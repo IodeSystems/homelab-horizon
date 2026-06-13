@@ -158,14 +158,26 @@ func (c *Config) haproxyErrorsDir() string {
 func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 	var backends []haproxy.Backend
 	for _, svc := range c.Services {
-		if svc.Proxy == nil || svc.Proxy.Backend == "" {
+		if svc.Proxy == nil {
+			continue
+		}
+
+		// A service routes either to an upstream host:port (Backend) or, for a
+		// static-folder service, to hz's own loopback static listener. Validation
+		// guarantees these are mutually exclusive.
+		static := svc.Proxy.StaticRoot != ""
+		server := svc.Proxy.Backend
+		if static {
+			server = c.StaticServeAddr()
+		}
+		if server == "" {
 			continue
 		}
 
 		b := haproxy.Backend{
 			Name:          svc.Name,
 			DomainMatches: svc.Domains,
-			Server:        svc.Proxy.Backend,
+			Server:        server,
 			InternalOnly:  svc.Proxy.InternalOnly,
 		}
 		if svc.Proxy.HealthCheck != nil && svc.Proxy.HealthCheck.Path != "" {
@@ -173,8 +185,9 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 			b.CheckPath = svc.Proxy.HealthCheck.Path
 		}
 
-		// Blue-green deploy: override server with current/next slots
-		if svc.Proxy.Deploy != nil {
+		// Blue-green deploy: override server with current/next slots.
+		// Not applicable to static services (validation rejects the combo).
+		if !static && svc.Proxy.Deploy != nil {
 			b.Deploy = true
 			b.HTTPCheck = true
 			b.DeployBalance = svc.Proxy.Deploy.Balance
@@ -614,6 +627,19 @@ func (c *Config) ValidateService(svc *Service) error {
 		_, _, err := net.SplitHostPort(svc.Proxy.Backend)
 		if err != nil {
 			return &ValidationError{Field: "proxy.backend", Message: "invalid address format (expected host:port)"}
+		}
+	}
+
+	// Validate static-folder backend: mutually exclusive with proxying, absolute path.
+	if svc.Proxy != nil && svc.Proxy.StaticRoot != "" {
+		if svc.Proxy.Backend != "" {
+			return &ValidationError{Field: "proxy.static_root", Message: "static_root and backend are mutually exclusive"}
+		}
+		if svc.Proxy.Deploy != nil {
+			return &ValidationError{Field: "proxy.static_root", Message: "static_root cannot be combined with blue-green deploy"}
+		}
+		if !filepath.IsAbs(svc.Proxy.StaticRoot) {
+			return &ValidationError{Field: "proxy.static_root", Message: "must be an absolute path"}
 		}
 	}
 

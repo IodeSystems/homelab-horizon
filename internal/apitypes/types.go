@@ -56,6 +56,7 @@ type DeployResp struct {
 
 type ProxyResp struct {
 	Backend            string             `json:"backend"`
+	StaticRoot         string             `json:"staticRoot,omitempty"` // absolute dir served as static files (mutually exclusive with backend)
 	HealthCheck        *HealthCheckResp   `json:"healthCheck,omitempty"`
 	InternalOnly       bool               `json:"internalOnly"`
 	Deploy             *DeployResp        `json:"deploy,omitempty"`
@@ -431,6 +432,7 @@ type ServiceRequestExternalDNS struct {
 
 type ServiceRequestProxy struct {
 	Backend      string                     `json:"backend"`
+	StaticRoot   string                     `json:"staticRoot,omitempty"` // absolute dir served as static files (mutually exclusive with backend)
 	HealthCheck  *ServiceRequestHealthCheck `json:"healthCheck,omitempty"`
 	InternalOnly bool                       `json:"internalOnly"`
 	Deploy       *ServiceRequestDeploy      `json:"deploy,omitempty"`

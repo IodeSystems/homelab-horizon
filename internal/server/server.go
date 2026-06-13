@@ -218,6 +218,7 @@ type Server struct {
 	sync           *SyncBroadcaster
 	health         *HealthStatus
 	metrics        *integration.Detector // Prometheus metrics discovery (pull integration)
+	static         *staticServer         // loopback file server for static-folder services
 
 	configSharesMu sync.Mutex
 	configShares   map[string]*configShare // token -> share
@@ -398,10 +399,12 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		sync:         NewSyncBroadcaster(),
 		health:       &HealthStatus{healthy: true},
 		metrics:      integration.NewDetector(),
+		static:       newStaticServer(),
 		configShares: make(map[string]*configShare),
 		joinTokens:   newJoinTokenStore(),
 	}
 	s.config.Store(cfg)
+	s.static.Rebuild(cfg)
 
 	return s, nil
 }
@@ -1361,6 +1364,12 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	// Start service health monitor
 	s.monitor.Start()
 	slog.Info("service monitor started")
+
+	// Start the loopback static file server for static-folder services.
+	// Loopback-only; skip under dry-run (no real network binds).
+	if !s.dryRun {
+		s.static.Start(s.cfg().StaticServeAddr())
+	}
 
 	// Start unattended cert renewal (Phase 2 prereq)
 	s.startCertRenewal()

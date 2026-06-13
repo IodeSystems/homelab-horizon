@@ -54,6 +54,7 @@ export interface DeployResp {
 }
 export interface ProxyResp {
   backend: string;
+  staticRoot?: string; // absolute dir served as static files (mutually exclusive with backend)
   healthCheck?: HealthCheckResp;
   internalOnly: boolean;
   deploy?: DeployResp;
@@ -378,6 +379,7 @@ export interface ServiceRequestExternalDNS {
 }
 export interface ServiceRequestProxy {
   backend: string;
+  staticRoot?: string; // absolute dir served as static files (mutually exclusive with backend)
   healthCheck?: ServiceRequestHealthCheck;
   internalOnly: boolean;
   deploy?: ServiceRequestDeploy;

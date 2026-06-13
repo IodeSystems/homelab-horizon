@@ -106,7 +106,8 @@ export interface ServiceMutationInput {
   internalDNS?: { ip: string } | null;
   externalDNS?: { ip: string; ips?: string[]; ttl: number } | null;
   proxy?: {
-    backend: string;
+    backend?: string;
+    staticRoot?: string;
     healthCheck?: { path: string } | null;
     internalOnly: boolean;
     deploy?: { nextBackend: string; balance?: string } | null;

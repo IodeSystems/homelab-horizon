@@ -90,6 +90,9 @@ func (m *MCPServer) registerTools() {
 			mcp.WithString("proxy_backend",
 				mcp.Description("HAProxy backend address (host:port)"),
 			),
+			mcp.WithString("proxy_static_root",
+				mcp.Description("Absolute directory served as static files instead of proxying to a backend (mutually exclusive with proxy_backend)"),
+			),
 			mcp.WithString("health_check_path",
 				mcp.Description("HTTP health check path for HAProxy (e.g. /health)"),
 			),
@@ -345,9 +348,11 @@ func (m *MCPServer) buildService(name, domain string, req mcp.CallToolRequest) c
 
 	if req.GetBool("proxy_enabled", false) {
 		backend := req.GetString("proxy_backend", "")
-		if backend != "" {
+		staticRoot := req.GetString("proxy_static_root", "")
+		if backend != "" || staticRoot != "" {
 			svc.Proxy = &config.ProxyConfig{
 				Backend:      backend,
+				StaticRoot:   staticRoot,
 				InternalOnly: req.GetBool("internal_only", false),
 			}
 			if checkPath := req.GetString("health_check_path", ""); checkPath != "" {

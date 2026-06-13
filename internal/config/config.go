@@ -193,6 +193,11 @@ type Config struct {
 	HAProxyHTTPPort   int    `json:"haproxy_http_port"`
 	HAProxyHTTPSPort  int    `json:"haproxy_https_port"`
 
+	// StaticServePort is the loopback port hz binds to serve static-folder
+	// services (ProxyConfig.StaticRoot). HAProxy routes those services here.
+	// Bound to 127.0.0.1 only — never publicly reachable. Defaults to 8091.
+	StaticServePort int `json:"static_serve_port,omitempty"`
+
 	// SSL/Let's Encrypt configuration
 	SSLEnabled        bool   `json:"ssl_enabled"`
 	SSLCertDir        string `json:"ssl_cert_dir"`
@@ -469,14 +474,35 @@ func (e *ExternalDNS) GetIPs() []string {
 	return nil
 }
 
-// ProxyConfig configures HAProxy reverse proxying for this service
+// ProxyConfig configures HAProxy reverse proxying for this service.
+//
+// A service routes to one of two backend sources, mutually exclusive:
+//   - Backend: an upstream host:port that HAProxy forwards to (reverse proxy).
+//   - StaticRoot: a local directory whose files hz serves itself. HAProxy
+//     routes the service's domains to hz's internal static listener
+//     (see Config.StaticServeAddr); the document root is chosen by Host.
+//
+// Static services still inherit wildcard SSL, split-horizon DNS, health
+// checks, timeouts, and internal-only restriction exactly like proxied ones.
 type ProxyConfig struct {
-	Backend         string         `json:"backend"`                    // host:port for HAProxy to forward to
+	Backend         string         `json:"backend"`                    // host:port for HAProxy to forward to (mutually exclusive with StaticRoot)
+	StaticRoot      string         `json:"static_root,omitempty"`      // absolute path to a directory served as static files instead of proxying
 	HealthCheck     *HealthCheck   `json:"health_check,omitempty"`     // Optional health check
 	InternalOnly    bool           `json:"internal_only,omitempty"`    // Restrict to local network access only
 	Deploy          *DeployConfig  `json:"deploy,omitempty"`           // Blue-green deploy with current/next slots
 	MaintenancePage string         `json:"maintenance_page,omitempty"` // HTML body served as 503 during maintenance
 	Timeouts        *ProxyTimeouts `json:"timeouts,omitempty"`         // Optional per-backend HAProxy timeout overrides
+}
+
+// StaticServeAddr returns the loopback address hz binds to serve static-folder
+// services, and that HAProxy backends for those services point at. Defaults to
+// 127.0.0.1:8091 when StaticServePort is unset.
+func (c *Config) StaticServeAddr() string {
+	port := c.StaticServePort
+	if port == 0 {
+		port = 8091
+	}
+	return fmt.Sprintf("127.0.0.1:%d", port)
 }
 
 // ProxyTimeouts holds optional per-backend HAProxy timeout overrides, in
@@ -582,6 +608,7 @@ func Default() *Config {
 		HAProxyConfigPath: "/etc/haproxy/haproxy.cfg",
 		HAProxyHTTPPort:   80,
 		HAProxyHTTPSPort:  443,
+		StaticServePort:   8091,
 
 		// SSL/Let's Encrypt configuration
 		SSLEnabled:        false,

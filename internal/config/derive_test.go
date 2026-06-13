@@ -336,6 +336,37 @@ func TestDeriveHAProxyBackends(t *testing.T) {
 	}
 }
 
+func TestDeriveHAProxyBackends_Static(t *testing.T) {
+	cfg := &Config{
+		Services: []Service{
+			{
+				Name:    "docs",
+				Domains: []string{"docs.example.com"},
+				Proxy:   &ProxyConfig{StaticRoot: "/var/www/docs", InternalOnly: true},
+			},
+		},
+	}
+
+	backends := cfg.DeriveHAProxyBackends()
+	if len(backends) != 1 {
+		t.Fatalf("Expected 1 backend, got %d", len(backends))
+	}
+	// Static services route to hz's own loopback static listener, not an upstream.
+	if backends[0].Server != cfg.StaticServeAddr() {
+		t.Errorf("Expected static backend server %s, got %s", cfg.StaticServeAddr(), backends[0].Server)
+	}
+	if !backends[0].InternalOnly {
+		t.Error("Expected static backend to inherit InternalOnly")
+	}
+
+	// A custom StaticServePort changes the derived backend address.
+	cfg.StaticServePort = 9099
+	backends = cfg.DeriveHAProxyBackends()
+	if backends[0].Server != "127.0.0.1:9099" {
+		t.Errorf("Expected static backend server 127.0.0.1:9099, got %s", backends[0].Server)
+	}
+}
+
 func TestDeriveHAProxyBackends_MultiDomain(t *testing.T) {
 	cfg := &Config{
 		Services: []Service{
@@ -561,6 +592,27 @@ func TestValidateService(t *testing.T) {
 			name:    "invalid wildcard - single label",
 			svc:     Service{Name: "bad", Domains: []string{"*.com"}},
 			wantErr: "domain",
+		},
+		// Static-folder backend validation
+		{
+			name:    "valid static root",
+			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{StaticRoot: "/var/www/docs"}},
+			wantErr: "",
+		},
+		{
+			name:    "static root relative path",
+			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{StaticRoot: "var/www/docs"}},
+			wantErr: "proxy.static_root",
+		},
+		{
+			name:    "static root and backend mutually exclusive",
+			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{StaticRoot: "/var/www/docs", Backend: "192.168.1.1:8080"}},
+			wantErr: "proxy.static_root",
+		},
+		{
+			name:    "static root with deploy rejected",
+			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{StaticRoot: "/var/www/docs", Deploy: &DeployConfig{NextBackend: "192.168.1.1:8081"}}},
+			wantErr: "proxy.static_root",
 		},
 	}
 

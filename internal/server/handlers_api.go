@@ -121,9 +121,10 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 				TTL:           svc.ExternalDNS.TTL,
 			}
 		}
-		if svc.Proxy != nil && svc.Proxy.Backend != "" {
+		if svc.Proxy != nil && (svc.Proxy.Backend != "" || svc.Proxy.StaticRoot != "") {
 			pr := &apitypes.ProxyResp{
 				Backend:      svc.Proxy.Backend,
+				StaticRoot:   svc.Proxy.StaticRoot,
 				InternalOnly: svc.Proxy.InternalOnly,
 			}
 			if svc.Proxy.HealthCheck != nil {
