@@ -194,6 +194,42 @@ func TestGenerateConfig_WithSSL(t *testing.T) {
 	}
 }
 
+func TestGenerateConfig_SSLRedirectCoversExactHost(t *testing.T) {
+	// A cert named after an exact host (no wildcard) must still redirect that
+	// host. The bug: the ACL was always a wildcard suffix (.hz.office...),
+	// which can never match the host hz.office... itself.
+	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
+	h.SetBackends([]Backend{
+		{
+			Name:        "hz",
+			DomainMatch: "hz.office.iodesystems.com",
+			Server:      "192.168.1.10:8080",
+		},
+	})
+
+	tempDir := t.TempDir()
+	pemFile := filepath.Join(tempDir, "hz.office.iodesystems.com.pem")
+	if err := os.WriteFile(pemFile, []byte("dummy cert"), 0644); err != nil {
+		t.Fatalf("failed to create test pem file: %v", err)
+	}
+
+	ssl := &SSLConfig{Enabled: true, CertDir: tempDir}
+	config := h.GenerateConfig(80, 443, ssl)
+
+	expectedStrings := []string{
+		// Exact host match — covers the host itself and apex domains.
+		"acl ssl_domain_0 hdr(host) -i hz.office.iodesystems.com",
+		// Suffix match — covers deeper subdomains.
+		"acl ssl_domain_0 hdr_end(host) -i .hz.office.iodesystems.com",
+		"redirect scheme https code 301 if ssl_domain_0 !is_router_check",
+	}
+	for _, expected := range expectedStrings {
+		if !strings.Contains(config, expected) {
+			t.Errorf("SSL config missing: %s\n--- config ---\n%s", expected, config)
+		}
+	}
+}
+
 func TestGenerateConfig_SSLDisabled(t *testing.T) {
 	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
 	h.SetBackends([]Backend{
