@@ -131,7 +131,10 @@ interface ServiceFormState {
   externalIPs: string;
   externalTTL: string;
   proxyEnabled: boolean;
+  proxyMode: "proxy" | "static";
   proxyBackend: string;
+  staticRoot: string;
+  spa: boolean;
   healthCheckPath: string;
   internalOnly: boolean;
   deployEnabled: boolean;
@@ -151,7 +154,10 @@ const emptyForm: ServiceFormState = {
   externalIPs: "",
   externalTTL: "300",
   proxyEnabled: false,
+  proxyMode: "proxy",
   proxyBackend: "",
+  staticRoot: "",
+  spa: false,
   healthCheckPath: "",
   internalOnly: false,
   deployEnabled: false,
@@ -175,7 +181,10 @@ function serviceToForm(svc: Service): ServiceFormState {
     externalIPs: svc.externalDNS?.configuredIPs?.join(", ") ?? "",
     externalTTL: String(svc.externalDNS?.ttl ?? 300),
     proxyEnabled: !!svc.proxy,
+    proxyMode: svc.proxy?.staticRoot ? "static" : "proxy",
     proxyBackend: svc.proxy?.backend ?? "",
+    staticRoot: svc.proxy?.staticRoot ?? "",
+    spa: svc.proxy?.spa ?? false,
     healthCheckPath: svc.proxy?.healthCheck?.path ?? "",
     internalOnly: svc.proxy?.internalOnly ?? false,
     deployEnabled: !!svc.proxy?.deploy,
@@ -224,7 +233,20 @@ function formToInput(form: ServiceFormState, originalName?: string): ServiceMuta
     };
   }
 
-  if (form.proxyEnabled && form.proxyBackend) {
+  // Static-folder services serve files from a local directory; HAProxy routes
+  // to hz's internal file server. Deploy/timeouts are proxy-only concepts.
+  if (form.proxyEnabled && form.proxyMode === "static" && form.staticRoot) {
+    input.proxy = {
+      staticRoot: form.staticRoot,
+      internalOnly: form.internalOnly,
+    };
+    if (form.spa) {
+      input.proxy.spa = true;
+    }
+    if (form.healthCheckPath) {
+      input.proxy.healthCheck = { path: form.healthCheckPath };
+    }
+  } else if (form.proxyEnabled && form.proxyMode === "proxy" && form.proxyBackend) {
     input.proxy = {
       backend: form.proxyBackend,
       internalOnly: form.internalOnly,
@@ -764,17 +786,51 @@ function ServiceFormDialog({
             onChange={(e) => update("proxyEnabled", e.target.checked)}
             size="small"
           />
-          <Typography variant="body2">Proxy</Typography>
+          <Typography variant="body2">Expose via HAProxy</Typography>
         </Box>
         {form.proxyEnabled && (
           <>
             <TextField
-              label="Backend (host:port)"
-              value={form.proxyBackend}
-              onChange={(e) => update("proxyBackend", e.target.value)}
+              select
+              label="Backend type"
+              value={form.proxyMode}
+              onChange={(e) => update("proxyMode", e.target.value as "proxy" | "static")}
               size="small"
               fullWidth
-            />
+            >
+              <MenuItem value="proxy">Reverse proxy (host:port)</MenuItem>
+              <MenuItem value="static">Static folder (path)</MenuItem>
+            </TextField>
+            {form.proxyMode === "static" ? (
+              <>
+                <TextField
+                  label="Static folder"
+                  value={form.staticRoot}
+                  onChange={(e) => update("staticRoot", e.target.value)}
+                  size="small"
+                  fullWidth
+                  helperText="Absolute path hz serves files from, e.g. /etc/homelab-horizon/site"
+                />
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                  <Switch
+                    checked={form.spa}
+                    onChange={(e) => update("spa", e.target.checked)}
+                    size="small"
+                  />
+                  <Typography variant="body2">
+                    SPA fallback (serve index.html for unknown routes)
+                  </Typography>
+                </Box>
+              </>
+            ) : (
+              <TextField
+                label="Backend (host:port)"
+                value={form.proxyBackend}
+                onChange={(e) => update("proxyBackend", e.target.value)}
+                size="small"
+                fullWidth
+              />
+            )}
             <TextField
               label="Health Check Path"
               value={form.healthCheckPath}
@@ -792,6 +848,8 @@ function ServiceFormDialog({
               <Typography variant="body2">Internal only</Typography>
             </Box>
 
+            {form.proxyMode === "proxy" && (
+              <>
             <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
               <Switch
                 checked={form.deployEnabled}
@@ -888,6 +946,8 @@ function ServiceFormDialog({
                 </Typography>
               </Collapse>
             </Box>
+              </>
+            )}
           </>
         )}
       </DialogContent>
@@ -1095,6 +1155,7 @@ function buildPortMapRows(services: Service[]): PortMapRow[] {
   const rows: PortMapRow[] = [];
   for (const svc of services) {
     if (!svc.proxy) continue;
+    if (svc.proxy.staticRoot) continue; // served locally by hz, no host:port to map
     const hasDeploy = !!svc.proxy.deploy;
     const noCheck = !svc.proxy.healthCheck;
     rows.push({
@@ -1467,9 +1528,9 @@ function ServiceRow({
                       indeterminate={proxyIndeterminate}
                     />
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                      {hasDeploy ? "Current" : "Backend"}:
+                      {service.proxy!.staticRoot ? "Static folder" : hasDeploy ? "Current" : "Backend"}:
                     </Typography>
-                    <Typography variant="body2"><code>{service.proxy!.backend}</code></Typography>
+                    <Typography variant="body2"><code>{service.proxy!.staticRoot || service.proxy!.backend}</code></Typography>
                     {service.status.proxyState && (
                       <Chip
                         label={service.status.proxyState}

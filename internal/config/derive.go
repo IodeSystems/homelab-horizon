@@ -158,14 +158,26 @@ func (c *Config) haproxyErrorsDir() string {
 func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 	var backends []haproxy.Backend
 	for _, svc := range c.Services {
-		if svc.Proxy == nil || svc.Proxy.Backend == "" {
+		if svc.Proxy == nil {
+			continue
+		}
+
+		// A service routes either to an upstream host:port (Backend) or, for a
+		// static-folder service, to hz's own loopback static listener. Validation
+		// guarantees these are mutually exclusive.
+		static := svc.Proxy.StaticRoot != ""
+		server := svc.Proxy.Backend
+		if static {
+			server = c.StaticServeAddr()
+		}
+		if server == "" {
 			continue
 		}
 
 		b := haproxy.Backend{
 			Name:          svc.Name,
 			DomainMatches: svc.Domains,
-			Server:        svc.Proxy.Backend,
+			Server:        server,
 			InternalOnly:  svc.Proxy.InternalOnly,
 		}
 		if svc.Proxy.HealthCheck != nil && svc.Proxy.HealthCheck.Path != "" {
@@ -173,8 +185,9 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 			b.CheckPath = svc.Proxy.HealthCheck.Path
 		}
 
-		// Blue-green deploy: override server with current/next slots
-		if svc.Proxy.Deploy != nil {
+		// Blue-green deploy: override server with current/next slots.
+		// Not applicable to static services (validation rejects the combo).
+		if !static && svc.Proxy.Deploy != nil {
 			b.Deploy = true
 			b.HTTPCheck = true
 			b.DeployBalance = svc.Proxy.Deploy.Balance
@@ -579,6 +592,14 @@ func (c *Config) ValidateService(svc *Service) error {
 			return &ValidationError{Field: "domain", Message: "domain must not be empty"}
 		}
 
+		// Reject anything that isn't a plain hostname. Domains are written
+		// verbatim into haproxy.cfg ACLs (hdr_end(host) -i <domain>); a stray
+		// newline or metacharacter that still suffix-matched a zone would let a
+		// crafted domain inject HAProxy directives.
+		if !isValidDomainName(domain) {
+			return &ValidationError{Field: "domain", Message: "domain contains invalid characters"}
+		}
+
 		// Validate wildcard domain format if present
 		if strings.HasPrefix(domain, "*") {
 			if !strings.HasPrefix(domain, "*.") {
@@ -617,7 +638,51 @@ func (c *Config) ValidateService(svc *Service) error {
 		}
 	}
 
+	// Validate static-folder backend: mutually exclusive with proxying, absolute path.
+	if svc.Proxy != nil && svc.Proxy.StaticRoot != "" {
+		if svc.Proxy.Backend != "" {
+			return &ValidationError{Field: "proxy.static_root", Message: "static_root and backend are mutually exclusive"}
+		}
+		if svc.Proxy.Deploy != nil {
+			return &ValidationError{Field: "proxy.static_root", Message: "static_root cannot be combined with blue-green deploy"}
+		}
+		if !filepath.IsAbs(svc.Proxy.StaticRoot) {
+			return &ValidationError{Field: "proxy.static_root", Message: "must be an absolute path"}
+		}
+		// Guardrail against the catastrophic copy-paste (serving / or /etc as
+		// root). This is a footgun stop, not the isolation boundary — the
+		// runtime os.Root confinement in the static server is.
+		if isSensitiveRoot(svc.Proxy.StaticRoot) {
+			return &ValidationError{Field: "proxy.static_root", Message: "refusing to serve a system directory"}
+		}
+	}
+
+	// SPA fallback only applies to static-folder services.
+	if svc.Proxy != nil && svc.Proxy.SPA && svc.Proxy.StaticRoot == "" {
+		return &ValidationError{Field: "proxy.spa", Message: "spa requires static_root"}
+	}
+
 	return nil
+}
+
+// isValidDomainName reports whether d is a plain DNS hostname (optionally a
+// leading "*." wildcard) made only of letters, digits, dots and hyphens. It
+// deliberately rejects control characters, spaces, and HAProxy metacharacters
+// so a domain cannot inject directives into the generated haproxy.cfg.
+func isValidDomainName(d string) bool {
+	d = strings.TrimPrefix(d, "*.")
+	if d == "" || len(d) > 253 {
+		return false
+	}
+	for _, r := range d {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.' || r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // ValidateZone validates a zone configuration
@@ -642,6 +707,32 @@ type ValidationError struct {
 
 func (e *ValidationError) Error() string {
 	return e.Field + ": " + e.Message
+}
+
+// isSensitiveRoot reports whether p is, or resolves to, the filesystem root or
+// a system directory that should never be exposed as a static site. The
+// literal path and its symlink-resolved target are both checked, so a
+// static_root that is a symlink to /etc can't slip past the guard.
+func isSensitiveRoot(p string) bool {
+	if isSensitivePath(filepath.Clean(p)) {
+		return true
+	}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return isSensitivePath(resolved)
+	}
+	return false
+}
+
+func isSensitivePath(clean string) bool {
+	if clean == "/" {
+		return true
+	}
+	for _, s := range []string{"/etc", "/root", "/boot", "/proc", "/sys", "/dev", "/run"} {
+		if clean == s || strings.HasPrefix(clean, s+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // extractIP extracts the IP address from an address string (removes port if present)
