@@ -641,6 +641,12 @@ func (c *Config) ValidateService(svc *Service) error {
 		if !filepath.IsAbs(svc.Proxy.StaticRoot) {
 			return &ValidationError{Field: "proxy.static_root", Message: "must be an absolute path"}
 		}
+		// Guardrail against the catastrophic copy-paste (serving / or /etc as
+		// root). This is a footgun stop, not the isolation boundary — the
+		// runtime os.Root confinement in the static server is.
+		if isSensitiveRoot(svc.Proxy.StaticRoot) {
+			return &ValidationError{Field: "proxy.static_root", Message: "refusing to serve a system directory"}
+		}
 	}
 
 	return nil
@@ -668,6 +674,22 @@ type ValidationError struct {
 
 func (e *ValidationError) Error() string {
 	return e.Field + ": " + e.Message
+}
+
+// isSensitiveRoot reports whether p is the filesystem root or a system
+// directory that should never be exposed as a static site. Since hz runs as
+// root, serving one of these would publish credentials, keys, or kernel state.
+func isSensitiveRoot(p string) bool {
+	clean := filepath.Clean(p)
+	if clean == "/" {
+		return true
+	}
+	for _, s := range []string{"/etc", "/root", "/boot", "/proc", "/sys", "/dev", "/run"} {
+		if clean == s || strings.HasPrefix(clean, s+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // extractIP extracts the IP address from an address string (removes port if present)

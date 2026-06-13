@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
@@ -65,11 +66,6 @@ func TestStaticServer_RejectsTraversal(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("ok"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	// A secret outside the served root that traversal must not reach.
-	secretDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(secretDir, "secret.txt"), []byte("top secret"), 0644); err != nil {
-		t.Fatal(err)
-	}
 
 	ss := newStaticServer()
 	ss.Rebuild(&config.Config{
@@ -83,10 +79,91 @@ func TestStaticServer_RejectsTraversal(t *testing.T) {
 	rec := httptest.NewRecorder()
 	ss.ServeHTTP(rec, req)
 
-	if rec.Body.String() == "top secret" || rec.Code == http.StatusOK && rec.Body.Len() > 0 && rec.Body.String() != "ok" {
-		// http.FileServer cleans the path and confines it to root; we should
-		// never see content from outside it.
-		t.Errorf("traversal leaked content: code=%d body=%q", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("traversal not rejected: code=%d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+// A symlink inside the root pointing outside it must not be followed — the
+// nastiest escape, since hz runs as root.
+func TestStaticServer_RejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	secretDir := t.TempDir()
+	secret := filepath.Join(secretDir, "secret.txt")
+	if err := os.WriteFile(secret, []byte("top secret"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(root, "leak")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	ss := newStaticServer()
+	ss.Rebuild(&config.Config{Services: []config.Service{
+		{Name: "a", Domains: []string{"a.example.com"}, Proxy: &config.ProxyConfig{StaticRoot: root}},
+	}})
+
+	req := httptest.NewRequest(http.MethodGet, "/leak", nil)
+	req.Host = "a.example.com"
+	rec := httptest.NewRecorder()
+	ss.ServeHTTP(rec, req)
+
+	if rec.Body.String() == "top secret" {
+		t.Errorf("symlink escape leaked secret: code=%d", rec.Code)
+	}
+}
+
+// Dotfiles (.env, .git/config, .ssh) must never be served.
+func TestStaticServer_DeniesDotfiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("SECRET=1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[core]"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ss := newStaticServer()
+	ss.Rebuild(&config.Config{Services: []config.Service{
+		{Name: "a", Domains: []string{"a.example.com"}, Proxy: &config.ProxyConfig{StaticRoot: root}},
+	}})
+
+	for _, p := range []string{"/.env", "/.git/config"} {
+		req := httptest.NewRequest(http.MethodGet, p, nil)
+		req.Host = "a.example.com"
+		rec := httptest.NewRecorder()
+		ss.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s: code = %d, want 404 (body %q)", p, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// Directories are not listed: a dir without index.html 404s instead of leaking
+// a file listing.
+func TestStaticServer_NoDirectoryListing(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "private-name.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ss := newStaticServer()
+	ss.Rebuild(&config.Config{Services: []config.Service{
+		{Name: "a", Domains: []string{"a.example.com"}, Proxy: &config.ProxyConfig{StaticRoot: root}},
+	}})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "a.example.com"
+	rec := httptest.NewRecorder()
+	ss.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("dir without index served: code=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "private-name.txt") {
+		t.Errorf("directory listing leaked filenames: %q", rec.Body.String())
 	}
 }
 

@@ -180,6 +180,16 @@ A service can serve a folder of files instead of proxying to a backend. Set `pro
 
 HAProxy can't serve a directory itself, so hz runs a small internal file server (loopback-only, port `static_serve_port`, default `8091`) and routes the service's domains to it by Host header. Static services inherit wildcard SSL, split-horizon DNS, and the `internal_only` restriction exactly like proxied ones.
 
+Because hz runs as root, the file server is deliberately strict:
+
+- Bound to `127.0.0.1` only — never directly reachable off-box.
+- Every file open is pinned inside `static_root` via `os.Root`; `../` and symlinks **cannot** escape the directory.
+- Dotfiles and dot-directories (`.git`, `.env`, `.ssh`) are never served.
+- Directories are never listed — a directory serves its `index.html` or returns 404.
+- `static_root` cannot be the filesystem root or a system directory (`/etc`, `/root`, `/proc`, …).
+
+Point `static_root` at a directory containing only files you intend to publish.
+
 This is how the project hosts its own landing page (`docs/`): a static service on the public domain, served by hz, with auto SSL.
 
 ## High Availability

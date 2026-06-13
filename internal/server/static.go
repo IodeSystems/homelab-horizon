@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -60,9 +62,72 @@ func (ss *staticServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no static service for host", http.StatusNotFound)
 		return
 	}
-	// http.Dir + FileServer reject path-traversal ("../") and serve index.html
-	// for directory requests.
-	http.FileServer(http.Dir(root)).ServeHTTP(w, r)
+	ss.serveFile(w, r, root)
+}
+
+// serveFile serves a single file from dir for the request. Because hz runs as
+// root, this handler is deliberately strict beyond the loopback bind:
+//   - os.Root confines every open to dir — no "../" and no symlink can escape
+//     it, so a stray symlink inside the root can't leak /etc/shadow et al.
+//   - hidden path segments (.git, .env, .ssh, dotfiles) are never served.
+//   - directories are never listed; a directory serves its index.html or 404s.
+func (ss *staticServer) serveFile(w http.ResponseWriter, r *http.Request, dir string) {
+	upath := r.URL.Path
+	if !strings.HasPrefix(upath, "/") {
+		upath = "/" + upath
+	}
+	name := strings.TrimPrefix(path.Clean(upath), "/")
+
+	// Refuse any hidden segment outright (also covers a residual "..").
+	for _, seg := range strings.Split(name, "/") {
+		if seg != "." && strings.HasPrefix(seg, ".") {
+			http.NotFound(w, r)
+			return
+		}
+	}
+	if name == "" {
+		name = "."
+	}
+
+	// os.Root pins all subsequent opens inside dir, rejecting symlink/".." escape.
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		slog.Warn("static: cannot open root", "dir", dir, "err", err)
+		http.NotFound(w, r)
+		return
+	}
+	defer func() { _ = root.Close() }()
+
+	f, err := root.Open(name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer func() { _ = f.Close() }()
+
+	info, err := f.Stat()
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	// No directory listing: a directory request must resolve to its index.html.
+	if info.IsDir() {
+		_ = f.Close()
+		f, err = root.Open(path.Join(name, "index.html"))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		info, err = f.Stat()
+		if err != nil || info.IsDir() {
+			http.NotFound(w, r)
+			return
+		}
+	}
+
+	// ServeContent handles Content-Type sniffing, Range, and If-Modified-Since.
+	http.ServeContent(w, r, info.Name(), info.ModTime(), f)
 }
 
 // Start binds the loopback listener and serves in the background. A bind

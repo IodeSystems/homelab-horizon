@@ -614,6 +614,16 @@ func TestValidateService(t *testing.T) {
 			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{StaticRoot: "/var/www/docs", Deploy: &DeployConfig{NextBackend: "192.168.1.1:8081"}}},
 			wantErr: "proxy.static_root",
 		},
+		{
+			name:    "static root filesystem root rejected",
+			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{StaticRoot: "/"}},
+			wantErr: "proxy.static_root",
+		},
+		{
+			name:    "static root /etc rejected",
+			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{StaticRoot: "/etc/ssl"}},
+			wantErr: "proxy.static_root",
+		},
 	}
 
 	for _, tt := range tests {
