@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"mime"
 	"net"
@@ -134,12 +135,31 @@ func (ss *staticServer) serveFile(w http.ResponseWriter, r *http.Request, site s
 				return
 			}
 		}
-		ss.writeError(w, http.StatusNotFound)
+		ss.notFound(w, r, root)
 		return
 	}
 	defer func() { _ = f.Close() }()
 
 	serveContent(w, r, info.Name(), info, f)
+}
+
+// notFound serves the site's own 404.html (with a 404 status) when present,
+// falling back to the built-in error page.
+func (ss *staticServer) notFound(w http.ResponseWriter, r *http.Request, root *os.Root) {
+	if f, err := root.Open("404.html"); err == nil {
+		info, statErr := f.Stat()
+		if statErr == nil && !info.IsDir() {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusNotFound)
+			if r.Method != http.MethodHead {
+				_, _ = io.Copy(w, f)
+			}
+			_ = f.Close()
+			return
+		}
+		_ = f.Close()
+	}
+	ss.writeError(w, http.StatusNotFound)
 }
 
 // openServable opens name within root, resolving a directory to its index.html.

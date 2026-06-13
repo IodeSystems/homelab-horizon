@@ -270,6 +270,49 @@ func TestStaticServer_SPAFallback(t *testing.T) {
 	}
 }
 
+// A site-provided 404.html is served (with a 404 status) for not-found paths;
+// otherwise the built-in error page is used.
+func TestStaticServer_Custom404(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("home"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "404.html"), []byte("custom not found"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ss := newStaticServer()
+	ss.Rebuild(&config.Config{Services: []config.Service{
+		{Name: "a", Domains: []string{"a.example.com"}, Proxy: &config.ProxyConfig{StaticRoot: root}},
+	}})
+
+	req := httptest.NewRequest(http.MethodGet, "/missing", nil)
+	req.Host = "a.example.com"
+	rec := httptest.NewRecorder()
+	ss.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("code = %d, want 404", rec.Code)
+	}
+	if rec.Body.String() != "custom not found" {
+		t.Errorf("body = %q, want custom 404.html content", rec.Body.String())
+	}
+
+	// A site without 404.html falls back to the built-in page.
+	root2 := t.TempDir()
+	ss.Rebuild(&config.Config{Services: []config.Service{
+		{Name: "b", Domains: []string{"b.example.com"}, Proxy: &config.ProxyConfig{StaticRoot: root2}},
+	}})
+	req = httptest.NewRequest(http.MethodGet, "/missing", nil)
+	req.Host = "b.example.com"
+	rec = httptest.NewRecorder()
+	ss.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("fallback code = %d, want 404", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Not Found") {
+		t.Errorf("built-in page missing status text: %q", rec.Body.String())
+	}
+}
+
 func TestStaticServer_HardeningHeaders(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<h1>hi</h1>"), 0644); err != nil {

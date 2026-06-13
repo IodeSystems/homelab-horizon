@@ -190,7 +190,7 @@ On top of that, the file server is deliberately strict:
 - Directories are never listed — a directory serves its `index.html` or returns 404.
 - `static_root` cannot be the filesystem root or a system directory (`/etc`, `/root`, `/proc`, …) — checked even through symlinks.
 - `Content-Type` is set explicitly from the file extension (no content sniffing), and `X-Content-Type-Options: nosniff` is sent on every response.
-- Errors render a standard hz error page.
+- Errors render a standard hz error page, or the site's own `404.html` if present.
 
 Point `static_root` at a directory containing only files you intend to publish.
 
