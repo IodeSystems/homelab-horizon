@@ -41,6 +41,11 @@ COMMANDS
     maint-page set <file>    Set a custom 503 page from file ("-" for stdin)
     maint-page clear         Remove the custom 503 page (revert to default)
 
+  Static site (static-folder services):
+    site push <dir> [--validate]   Upload <dir> as a new release (atomic swap)
+    site rollback                  Revert to the previous release
+    site releases                  List retained releases
+
 ROLLING DEPLOY FLOW
   hz-client rolling start
   # next slot is now down — deploy new code to its backend
@@ -63,6 +68,9 @@ EXAMPLES
   hz-client maint-page set maintenance.html
   echo "<h1>Down for upgrade</h1>" | hz-client maint-page set -
   hz-client maint-page clear
+  hz-client site push ./public
+  hz-client site push ./public --validate
+  hz-client site rollback
 HELP
 }
 
@@ -98,6 +106,7 @@ HZ_URL="${HZ_URL%/}"
 AUTH="Authorization: Bearer $HZ_TOKEN"
 DEPLOY_API="$HZ_URL/api/deploy"
 BAN_API="$HZ_URL/api/ban"
+SITE_API="$HZ_URL/api/site"
 
 CMD="$1"
 shift
@@ -469,12 +478,56 @@ print(f'Maintenance page set. MD5: {md5}')
     esac
     ;;
 
+  site)
+    SUBCMD="${1:?Missing site subcommand (push|rollback|releases)}"
+    shift
+    case "$SUBCMD" in
+      push)
+        DIR="${1:?Missing directory}"
+        shift
+        VALIDATE=0
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --validate) VALIDATE=1; shift ;;
+            *) echo "Unknown site push option: $1" >&2; exit 1 ;;
+          esac
+        done
+        [ -d "$DIR" ] || { echo "Not a directory: $DIR" >&2; exit 1; }
+        Q=""
+        if [ "$VALIDATE" = 1 ]; then
+          Q="?validate=1"
+          echo "Validating $DIR (dry run, no swap)..."
+        else
+          echo "Uploading $DIR..."
+        fi
+        resp=$(tar czf - -C "$DIR" . | curl -sf -X POST -H "$AUTH" \
+          -H "Content-Type: application/gzip" --data-binary @- "$SITE_API/upload$Q") \
+          || { echo "FAILED: site upload" >&2; exit 1; }
+        echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
+        ;;
+      rollback)
+        resp=$(curl -sf -X POST -H "$AUTH" "$SITE_API/rollback") || { echo "FAILED: site rollback" >&2; exit 1; }
+        echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
+        ;;
+      releases)
+        resp=$(curl -sf -H "$AUTH" "$SITE_API/releases") || { echo "FAILED: site releases" >&2; exit 1; }
+        echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
+        ;;
+      *)
+        echo "Unknown site subcommand: $SUBCMD"
+        echo "Subcommands: push <dir> [--validate] | rollback | releases"
+        exit 1
+        ;;
+    esac
+    ;;
+
   *)
     echo "Unknown command: $CMD"
     echo ""
     echo "Deploy:  status | current|next (up|drain|down) | swap | promote | rolling (...)"
     echo "Bans:    ban <ip> | unban <ip> | bans"
     echo "Maint:   maint-page set <file> | maint-page clear"
+    echo "Site:    site push <dir> [--validate] | site rollback | site releases"
     echo ""
     echo "Run 'hz-client --help' for full usage."
     exit 1

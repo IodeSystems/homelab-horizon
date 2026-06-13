@@ -1060,6 +1060,17 @@ function IntegrationDialog({
               `./hz-client maint-page clear                 # Restore default after upgrade`,
             ]
           : []),
+        ...(data.hasStatic
+          ? [
+              ``,
+              `# --- Static site ---`,
+              ``,
+              `./hz-client site push ./public             # Upload dir as a new release (atomic swap)`,
+              `./hz-client site push ./public --validate  # Dry run: validate without swapping`,
+              `./hz-client site releases                  # List retained releases`,
+              `./hz-client site rollback                  # Revert to the previous release`,
+            ]
+          : []),
       ].join("\n")
     : "";
 

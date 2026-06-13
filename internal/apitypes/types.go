@@ -572,6 +572,7 @@ type ServiceIntegration struct {
 	Token     string `json:"token"`
 	BaseURL   string `json:"baseURL"`
 	HasDeploy bool   `json:"hasDeploy"`
+	HasStatic bool   `json:"hasStatic"` // static-folder service: site upload available
 }
 
 // HA Fleet
