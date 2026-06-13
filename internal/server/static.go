@@ -135,7 +135,14 @@ func (ss *staticServer) serveFile(w http.ResponseWriter, r *http.Request, site s
 				return
 			}
 		}
-		ss.notFound(w, r, root)
+		// Missing file -> 404. Anything else (exists but unreadable by the
+		// unprivileged user, I/O error) is a server-side problem -> 500.
+		if os.IsNotExist(err) {
+			ss.errorResponse(w, r, root, http.StatusNotFound, "404.html")
+		} else {
+			slog.Warn("static: serving file failed", "name", name, "err", err)
+			ss.errorResponse(w, r, root, http.StatusInternalServerError, "5xx.html")
+		}
 		return
 	}
 	defer func() { _ = f.Close() }()
@@ -143,14 +150,16 @@ func (ss *staticServer) serveFile(w http.ResponseWriter, r *http.Request, site s
 	serveContent(w, r, info.Name(), info, f)
 }
 
-// notFound serves the site's own 404.html (with a 404 status) when present,
-// falling back to the built-in error page.
-func (ss *staticServer) notFound(w http.ResponseWriter, r *http.Request, root *os.Root) {
-	if f, err := root.Open("404.html"); err == nil {
+// errorResponse serves the site's own error page (page, e.g. 404.html or
+// 5xx.html) from root with the given status when present, falling back to the
+// built-in page. Note: when the whole root is unopenable there is no page to
+// read, so that case always uses the built-in page.
+func (ss *staticServer) errorResponse(w http.ResponseWriter, r *http.Request, root *os.Root, code int, page string) {
+	if f, err := root.Open(page); err == nil {
 		info, statErr := f.Stat()
 		if statErr == nil && !info.IsDir() {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(http.StatusNotFound)
+			w.WriteHeader(code)
 			if r.Method != http.MethodHead {
 				_, _ = io.Copy(w, f)
 			}
@@ -159,7 +168,7 @@ func (ss *staticServer) notFound(w http.ResponseWriter, r *http.Request, root *o
 		}
 		_ = f.Close()
 	}
-	ss.writeError(w, http.StatusNotFound)
+	ss.writeError(w, code)
 }
 
 // openServable opens name within root, resolving a directory to its index.html.

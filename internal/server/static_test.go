@@ -313,6 +313,42 @@ func TestStaticServer_Custom404(t *testing.T) {
 	}
 }
 
+// An existing-but-unreadable file is a server-side error (500), and the site's
+// 5xx.html is served for it. Skipped as root, which bypasses file permissions.
+func TestStaticServer_Custom5xx(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses file permissions")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "5xx.html"), []byte("server boom"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(root, "secret.txt")
+	if err := os.WriteFile(secret, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(secret, 0000); err != nil {
+		t.Fatal(err)
+	}
+
+	ss := newStaticServer()
+	ss.Rebuild(&config.Config{Services: []config.Service{
+		{Name: "a", Domains: []string{"a.example.com"}, Proxy: &config.ProxyConfig{StaticRoot: root}},
+	}})
+
+	req := httptest.NewRequest(http.MethodGet, "/secret.txt", nil)
+	req.Host = "a.example.com"
+	rec := httptest.NewRecorder()
+	ss.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("code = %d, want 500", rec.Code)
+	}
+	if rec.Body.String() != "server boom" {
+		t.Errorf("body = %q, want custom 5xx.html content", rec.Body.String())
+	}
+}
+
 func TestStaticServer_HardeningHeaders(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<h1>hi</h1>"), 0644); err != nil {
