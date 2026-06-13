@@ -676,6 +676,7 @@ func (s *Server) handleAPIServiceIntegration(w http.ResponseWriter, r *http.Requ
 	baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
 
 	hasDeploy := svc.Proxy != nil && svc.Proxy.Deploy != nil
+	hasStatic := svc.Proxy != nil && svc.Proxy.StaticRoot != ""
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(apitypes.ServiceIntegration{
@@ -683,5 +684,6 @@ func (s *Server) handleAPIServiceIntegration(w http.ResponseWriter, r *http.Requ
 		Token:     svc.Token,
 		BaseURL:   baseURL,
 		HasDeploy: hasDeploy,
+		HasStatic: hasStatic,
 	})
 }

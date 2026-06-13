@@ -486,6 +486,7 @@ export interface ServiceIntegration {
   token: string;
   baseURL: string;
   hasDeploy: boolean;
+  hasStatic: boolean; // static-folder service: site upload available
 }
 export interface HAFleetPeer {
   id: string;
