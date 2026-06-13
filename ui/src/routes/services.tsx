@@ -780,7 +780,7 @@ function ServiceFormDialog({
             onChange={(e) => update("proxyEnabled", e.target.checked)}
             size="small"
           />
-          <Typography variant="body2">Proxy</Typography>
+          <Typography variant="body2">Expose via HAProxy</Typography>
         </Box>
         {form.proxyEnabled && (
           <>
