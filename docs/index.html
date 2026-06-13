@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>Homelab Horizon — WireGuard VPN, Split-Horizon DNS &amp; Reverse Proxy in One Tool</title>
+<meta name="description" content="Homelab Horizon is a single-binary homelab manager for WireGuard VPN, split-horizon DNS, HAProxy reverse proxy with automatic Let's Encrypt wildcard SSL, and service health monitoring. Self-hosted, open source, runs on Ubuntu/Debian.">
+<meta name="keywords" content="homelab, homelab horizon, wireguard, vpn, split-horizon dns, reverse proxy, haproxy, lets encrypt, wildcard ssl, self-hosted, dnsmasq, route53, cloudflare, service monitoring, network management">
+<meta name="author" content="IodeSystems">
+<link rel="canonical" href="https://iodesystems.github.io/homelab-horizon/">
+
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Homelab Horizon">
+<meta property="og:title" content="Homelab Horizon — WireGuard VPN, Split-Horizon DNS & Reverse Proxy in One Tool">
+<meta property="og:description" content="One self-hosted binary for WireGuard VPN, split-horizon DNS, HAProxy reverse proxy with automatic wildcard SSL, and service monitoring. Runs on Ubuntu/Debian.">
+<meta property="og:url" content="https://iodesystems.github.io/homelab-horizon/">
+<meta property="og:image" content="https://iodesystems.github.io/homelab-horizon/screenshots/dashboard.png">
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Homelab Horizon — WireGuard VPN, Split-Horizon DNS & Reverse Proxy">
+<meta name="twitter:description" content="One self-hosted binary for WireGuard VPN, split-horizon DNS, HAProxy reverse proxy with automatic wildcard SSL, and service monitoring.">
+<meta name="twitter:image" content="https://iodesystems.github.io/homelab-horizon/screenshots/dashboard.png">
+
+<!-- Structured data: helps Google understand this is the canonical open-source project -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Homelab Horizon",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Ubuntu, Debian, Linux",
+  "description": "A self-contained homelab management tool for WireGuard VPN, split-horizon DNS, HAProxy reverse proxy with automatic Let's Encrypt wildcard SSL, and service health monitoring. Single static binary.",
+  "url": "https://iodesystems.github.io/homelab-horizon/",
+  "codeRepository": "https://github.com/IodeSystems/homelab-horizon",
+  "license": "https://opensource.org/licenses/MIT",
+  "author": { "@type": "Organization", "name": "IodeSystems", "url": "https://github.com/IodeSystems" },
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
+
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#e6edf3;
+    --muted:#9da7b3; --accent:#3fb6ff; --accent2:#7ee787; --max:1040px;
+  }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  .wrap { max-width:var(--max); margin:0 auto; padding:0 24px; }
+  header.hero { text-align:center; padding:96px 24px 64px; border-bottom:1px solid var(--border);
+    background:radial-gradient(ellipse at top,#13202e 0%,var(--bg) 70%); }
+  header.hero h1 { font-size:clamp(2.2rem,5vw,3.4rem); margin:0 0 .4em; line-height:1.1; }
+  header.hero .tag { color:var(--accent2); font-weight:600; letter-spacing:.05em; text-transform:uppercase; font-size:.8rem; }
+  header.hero p.lede { font-size:clamp(1.05rem,2.2vw,1.35rem); color:var(--muted); max-width:720px; margin:1em auto 2em; }
+  .cta { display:inline-flex; gap:12px; flex-wrap:wrap; justify-content:center; }
+  .btn { display:inline-block; padding:12px 22px; border-radius:8px; font-weight:600; border:1px solid var(--border); }
+  .btn.primary { background:var(--accent); color:#04121d; border-color:var(--accent); }
+  .btn.primary:hover { text-decoration:none; filter:brightness(1.08); }
+  .btn.ghost:hover { text-decoration:none; border-color:var(--accent); }
+  section { padding:64px 0; border-bottom:1px solid var(--border); }
+  section h2 { font-size:clamp(1.6rem,3vw,2.1rem); margin:0 0 .6em; }
+  .grid { display:grid; gap:20px; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:22px; }
+  .card h3 { margin:0 0 .4em; font-size:1.1rem; }
+  .card p { margin:0; color:var(--muted); font-size:.95rem; }
+  pre { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:18px;
+    overflow:auto; font-size:.9rem; }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .shots { display:grid; gap:18px; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); }
+  .shots figure { margin:0; background:var(--panel); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+  .shots img { width:100%; display:block; }
+  .shots figcaption { padding:10px 14px; color:var(--muted); font-size:.85rem; }
+  ul.checks { list-style:none; padding:0; margin:0; columns:2; column-gap:32px; }
+  ul.checks li { padding:6px 0 6px 26px; position:relative; break-inside:avoid; }
+  ul.checks li::before { content:"✓"; color:var(--accent2); position:absolute; left:0; font-weight:700; }
+  footer { text-align:center; padding:48px 24px; color:var(--muted); font-size:.9rem; }
+  @media (max-width:640px){ ul.checks { columns:1; } }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="tag">Open Source · Single Binary · MIT</div>
+    <h1>Homelab Horizon</h1>
+    <p class="lede">
+      One self-hosted tool for <strong>WireGuard VPN</strong>, <strong>split-horizon DNS</strong>,
+      <strong>HAProxy reverse proxy</strong> with automatic Let's Encrypt wildcard SSL, and
+      <strong>service health monitoring</strong> — managed from a single web UI. Runs on Ubuntu/Debian.
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/IodeSystems/homelab-horizon">View on GitHub</a>
+      <a class="btn ghost" href="#quick-start">Quick Start</a>
+    </div>
+  </div>
+</header>
+
+<section id="problem">
+  <div class="wrap">
+    <h2>Stop juggling certs, DNS, and VPN configs</h2>
+    <p style="color:var(--muted);max-width:760px">
+      Running a homelab with external access usually means stitching together systems that don't talk to
+      each other: SSL certificate sprawl, broken internal HTTPS, manual DNS edits on every IP change, and a
+      new WireGuard config file for every device. Homelab Horizon consolidates all of it.
+    </p>
+    <div class="grid">
+      <div class="card"><h3>Consolidated SSL</h3><p>Wildcard Let's Encrypt certs per zone, plus easy extra SANs for sub-zones. Inspect exactly what each cert covers — no more mystery broken HTTPS.</p></div>
+      <div class="card"><h3>HTTPS everywhere</h3><p>The same valid cert works on your LAN and from the public internet. No HTTP fallbacks, no browser warnings.</p></div>
+      <div class="card"><h3>Automatic DNS sync</h3><p>Add a service and DNS records update automatically across Route53, Cloudflare, Name.com, Hetzner, Gandi, DigitalOcean, Google Cloud DNS, and DuckDNS.</p></div>
+      <div class="card"><h3>Split-horizon built in</h3><p>Services resolve to internal IPs on your network or VPN, public IPs from the internet — the classic split-horizon problem, solved.</p></div>
+      <div class="card"><h3>Self-service VPN</h3><p>Generate invite links. Users scan a QR code and they're connected — no manual peer setup.</p></div>
+      <div class="card"><h3>Unified dashboard</h3><p>Every service, its health, DNS records, and SSL certs in one place.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <h2>Features</h2>
+    <ul class="checks">
+      <li><strong>WireGuard VPN management</strong> — clients, QR codes, peers</li>
+      <li><strong>Split-horizon DNS</strong> — dnsmasq internal, cloud external</li>
+      <li><strong>HAProxy reverse proxy</strong> — automatic wildcard SSL</li>
+      <li><strong>Service monitoring</strong> — health checks + ntfy push alerts</li>
+      <li><strong>Auto-heal</strong> — installs missing deps on fresh Ubuntu</li>
+      <li><strong>Self-service onboarding</strong> — redeemable VPN invite tokens</li>
+      <li><strong>IP banning</strong> — per-service bans with timeouts</li>
+      <li><strong>Rolling deploys</strong> — blue-green via the hz-client CLI</li>
+      <li><strong>Multi-instance HA</strong> — config replication, cert &amp; DNS failover</li>
+      <li><strong>MCP server</strong> — machine-readable API for AI-assisted ops</li>
+    </ul>
+  </div>
+</section>
+
+<section id="screenshots">
+  <div class="wrap">
+    <h2>Screenshots</h2>
+    <div class="shots">
+      <figure><img src="screenshots/dashboard.png" alt="Homelab Horizon dashboard showing services, health, DNS and SSL status" loading="lazy"><figcaption>Dashboard</figcaption></figure>
+      <figure><img src="screenshots/services.png" alt="Service management — domains, DNS, proxy backends and health" loading="lazy"><figcaption>Services</figcaption></figure>
+      <figure><img src="screenshots/services-detail.png" alt="Service detail view with proxy and DNS configuration" loading="lazy"><figcaption>Service detail</figcaption></figure>
+      <figure><img src="screenshots/vpn.png" alt="WireGuard VPN client management with QR codes and invites" loading="lazy"><figcaption>VPN clients</figcaption></figure>
+      <figure><img src="screenshots/port-map.png" alt="Port map overview of homelab services" loading="lazy"><figcaption>Port map</figcaption></figure>
+      <figure><img src="screenshots/settings.png" alt="Settings — zones, HAProxy, SSL and health checks" loading="lazy"><figcaption>Settings</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section id="quick-start">
+  <div class="wrap">
+    <h2>Quick start</h2>
+    <p style="color:var(--muted)">Kick the tires with Docker:</p>
+    <pre><code>cd examples/simple
+./setup.sh            # generate WireGuard keys and config
+docker compose up -d  # start Homelab Horizon
+
+# open http://localhost:8090 and grab the admin token:
+docker exec hz cat /etc/homelab-horizon/config.json.token</code></pre>
+    <p style="color:var(--muted)">Or build the single static binary (Go 1.25+ and Node.js):</p>
+    <pre><code>make
+sudo ./homelab-horizon   # installs systemd service, writes admin token</code></pre>
+    <p>Full setup guide, configuration reference, and HA topologies in the
+       <a href="https://github.com/IodeSystems/homelab-horizon#readme">README on GitHub</a>.</p>
+  </div>
+</section>
+
+<footer>
+  <p><strong>Homelab Horizon</strong> by
+     <a href="https://github.com/IodeSystems">IodeSystems</a> · MIT License ·
+     <a href="https://github.com/IodeSystems/homelab-horizon">github.com/IodeSystems/homelab-horizon</a></p>
+  <p>The official, original project. Accept no clones.</p>
+</footer>
+
+</body>
+</html>
