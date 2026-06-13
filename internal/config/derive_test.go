@@ -369,6 +369,28 @@ func TestDeriveHAProxyBackends_Static(t *testing.T) {
 	}
 }
 
+func TestDeriveHAProxyBackends_Self(t *testing.T) {
+	cfg := &Config{
+		ListenAddr: ":8080",
+		Services: []Service{
+			{Name: "admin", Domains: []string{"hz.example.com"}, Proxy: &ProxyConfig{Self: true, InternalOnly: true}},
+		},
+	}
+	backends := cfg.DeriveHAProxyBackends()
+	if len(backends) != 1 {
+		t.Fatalf("expected 1 backend, got %d", len(backends))
+	}
+	if backends[0].Server != "127.0.0.1:8080" {
+		t.Errorf("self backend = %s, want 127.0.0.1:8080 (local listen addr)", backends[0].Server)
+	}
+
+	// Backend tracks a custom listen port (no hardcoded value).
+	cfg.ListenAddr = "0.0.0.0:9999"
+	if backends = cfg.DeriveHAProxyBackends(); backends[0].Server != "127.0.0.1:9999" {
+		t.Errorf("self backend = %s, want 127.0.0.1:9999", backends[0].Server)
+	}
+}
+
 func TestDeriveHAProxyBackends_MultiDomain(t *testing.T) {
 	cfg := &Config{
 		Services: []Service{
@@ -640,6 +662,21 @@ func TestValidateService(t *testing.T) {
 			name:    "domain with control character rejected",
 			svc:     Service{Name: "x", Domains: []string{"evil\n  acl.example.com"}},
 			wantErr: "domain",
+		},
+		{
+			name:    "self ok",
+			svc:     Service{Name: "admin", Domains: []string{"app.example.com"}, Proxy: &ProxyConfig{Self: true}},
+			wantErr: "",
+		},
+		{
+			name:    "self with backend rejected",
+			svc:     Service{Name: "admin", Domains: []string{"app.example.com"}, Proxy: &ProxyConfig{Self: true, Backend: "192.168.1.1:80"}},
+			wantErr: "proxy.self",
+		},
+		{
+			name:    "self with static_root rejected",
+			svc:     Service{Name: "admin", Domains: []string{"app.example.com"}, Proxy: &ProxyConfig{Self: true, StaticRoot: "/var/lib/homelab-horizon/x"}},
+			wantErr: "proxy.self",
 		},
 	}
 

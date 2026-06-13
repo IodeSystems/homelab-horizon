@@ -30,6 +30,19 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
+// selfServiceDomain returns the primary domain of the service marked
+// proxy.self (this hz instance's own admin UI), or "" if none. It is the
+// canonical address for integration snippets.
+func (s *Server) selfServiceDomain() string {
+	for i := range s.cfg().Services {
+		svc := &s.cfg().Services[i]
+		if svc.Proxy != nil && svc.Proxy.Self {
+			return svc.PrimaryDomain()
+		}
+	}
+	return ""
+}
+
 // requestScheme returns the client-facing scheme. HAProxy terminates TLS and
 // proxies plain HTTP to us, setting X-Forwarded-Proto; honor it so URLs we hand
 // back (e.g. the self-service integration snippet) reflect https. Falls back to
@@ -138,10 +151,11 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 				TTL:           svc.ExternalDNS.TTL,
 			}
 		}
-		if svc.Proxy != nil && (svc.Proxy.Backend != "" || svc.Proxy.StaticRoot != "") {
+		if svc.Proxy != nil && (svc.Proxy.Backend != "" || svc.Proxy.StaticRoot != "" || svc.Proxy.Self) {
 			pr := &apitypes.ProxyResp{
 				Backend:      svc.Proxy.Backend,
 				StaticRoot:   svc.Proxy.StaticRoot,
+				Self:         svc.Proxy.Self,
 				SPA:          svc.Proxy.SPA,
 				InternalOnly: svc.Proxy.InternalOnly,
 			}
@@ -685,11 +699,20 @@ func (s *Server) handleAPIServiceIntegration(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	// Build base URL from the request. HAProxy terminates TLS and forwards
-	// plain HTTP to us, so r.TLS is nil even for HTTPS clients — honor the
-	// proxy's X-Forwarded-Proto so the self-service snippet (which carries the
-	// token as a Bearer header) uses https and never leaks it over cleartext.
-	baseURL := fmt.Sprintf("%s://%s", requestScheme(r), r.Host)
+	// Build the base URL for the integration snippet. Prefer the canonical
+	// admin domain (the service marked proxy.self) over whatever host the admin
+	// happened to browse, so snippets are consistent. HAProxy terminates TLS
+	// and forwards plain HTTP (r.TLS nil), so honor X-Forwarded-Proto; the
+	// snippet carries the token as a Bearer header and must use https.
+	scheme := requestScheme(r)
+	host := r.Host
+	if d := s.selfServiceDomain(); d != "" {
+		host = d
+		if s.cfg().SSLEnabled {
+			scheme = "https"
+		}
+	}
+	baseURL := fmt.Sprintf("%s://%s", scheme, host)
 
 	hasDeploy := svc.Proxy != nil && svc.Proxy.Deploy != nil
 	hasStatic := svc.Proxy != nil && svc.Proxy.StaticRoot != ""
