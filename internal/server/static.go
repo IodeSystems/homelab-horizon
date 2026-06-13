@@ -10,22 +10,35 @@ import (
 	"path"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
-// staticSite is the resolved serving config for one host.
+// staticSite is the serving config for one host. It is also the JSON wire form
+// sent from the root parent process to the unprivileged child over its stdin,
+// hence the exported, tagged fields.
 type staticSite struct {
-	root string // document root directory
-	spa  bool   // serve index.html for unknown non-asset paths (client-side routing)
+	Root string `json:"root"` // document root directory
+	SPA  bool   `json:"spa"`  // serve index.html for unknown non-asset paths (client-side routing)
 }
 
-// staticServer serves per-service static folders on an internal loopback
-// listener. HAProxy routes a static-folder service's domains here (see
-// Config.StaticServeAddr); the document root is selected by the request Host
-// header. The listener binds to 127.0.0.1 only, so it is reachable solely by
-// the local HAProxy — never directly from the network.
+// deriveStaticSites builds the host->site map from the services in cfg.
+func deriveStaticSites(cfg *config.Config) map[string]staticSite {
+	sites := make(map[string]staticSite)
+	for _, svc := range cfg.Services {
+		if svc.Proxy == nil || svc.Proxy.StaticRoot == "" {
+			continue
+		}
+		for _, d := range svc.Domains {
+			sites[strings.ToLower(d)] = staticSite{Root: svc.Proxy.StaticRoot, SPA: svc.Proxy.SPA}
+		}
+	}
+	return sites
+}
+
+// staticServer is the HTTP handler that serves per-service static folders. The
+// document root is selected by the request Host header. It holds no privileges
+// of its own; in production it runs inside the unprivileged child process.
 type staticServer struct {
 	mu    sync.RWMutex
 	sites map[string]staticSite // lowercased host -> serving config
@@ -35,21 +48,16 @@ func newStaticServer() *staticServer {
 	return &staticServer{sites: make(map[string]staticSite)}
 }
 
-// Rebuild refreshes the host->site map from the current config. Safe to call on
-// every config sync; the swap is atomic for in-flight requests.
-func (ss *staticServer) Rebuild(cfg *config.Config) {
-	sites := make(map[string]staticSite)
-	for _, svc := range cfg.Services {
-		if svc.Proxy == nil || svc.Proxy.StaticRoot == "" {
-			continue
-		}
-		for _, d := range svc.Domains {
-			sites[strings.ToLower(d)] = staticSite{root: svc.Proxy.StaticRoot, spa: svc.Proxy.SPA}
-		}
-	}
+// setSites atomically swaps the host->site map for in-flight requests.
+func (ss *staticServer) setSites(sites map[string]staticSite) {
 	ss.mu.Lock()
 	ss.sites = sites
 	ss.mu.Unlock()
+}
+
+// Rebuild refreshes the map from cfg (used in-process / by tests).
+func (ss *staticServer) Rebuild(cfg *config.Config) {
+	ss.setSites(deriveStaticSites(cfg))
 }
 
 // siteFor returns the serving config for the given request host, stripping any
@@ -107,9 +115,9 @@ func (ss *staticServer) serveFile(w http.ResponseWriter, r *http.Request, site s
 
 	// os.Root pins all opens inside the document root, rejecting symlink/".."
 	// escape even though hz runs as root.
-	root, err := os.OpenRoot(site.root)
+	root, err := os.OpenRoot(site.Root)
 	if err != nil {
-		slog.Warn("static: cannot open root", "dir", site.root, "err", err)
+		slog.Warn("static: cannot open root", "dir", site.Root, "err", err)
 		ss.writeError(w, http.StatusInternalServerError)
 		return
 	}
@@ -119,7 +127,7 @@ func (ss *staticServer) serveFile(w http.ResponseWriter, r *http.Request, site s
 	if err != nil {
 		// SPA fallback: a browser refresh on a client-side route (no file
 		// extension) serves index.html so the app boots and routes itself.
-		if site.spa && path.Ext(name) == "" {
+		if site.SPA && path.Ext(name) == "" {
 			if idx, idxInfo, idxErr := openServable(root, "index.html"); idxErr == nil {
 				serveContent(w, r, "index.html", idxInfo, idx)
 				_ = idx.Close()
@@ -240,26 +248,3 @@ const errorPageTmpl = `<!DOCTYPE html>
 <style>html,body{height:100%%;margin:0}body{font:16px/1.5 system-ui,-apple-system,sans-serif;background:#0d1117;color:#e6edf3;display:grid;place-items:center}div{text-align:center}h1{font-size:3.5rem;margin:0 0 .2em}p{color:#9da7b3;margin:0}</style>
 </head><body><div><h1>%d</h1><p>%s</p></div></body></html>
 `
-
-// Start binds the loopback listener and serves in the background. A bind
-// failure is logged and non-fatal: only static-folder services are affected,
-// and the rest of hz continues to run.
-func (ss *staticServer) Start(addr string) {
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           ss,
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		slog.Warn("static file server: could not bind, static services disabled", "addr", addr, "err", err)
-		return
-	}
-	slog.Info("static file server listening", "addr", addr)
-	go func() {
-		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-			slog.Warn("static file server stopped", "err", err)
-		}
-	}()
-}

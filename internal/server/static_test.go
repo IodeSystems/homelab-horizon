@@ -183,6 +183,41 @@ func TestStaticServer_RebuildReplaces(t *testing.T) {
 	}
 }
 
+func TestDeriveStaticSites(t *testing.T) {
+	sites := deriveStaticSites(&config.Config{Services: []config.Service{
+		{Name: "docs", Domains: []string{"docs.example.com", "www.example.com"},
+			Proxy: &config.ProxyConfig{StaticRoot: "/srv/docs", SPA: true}},
+		{Name: "api", Domains: []string{"api.example.com"},
+			Proxy: &config.ProxyConfig{Backend: "127.0.0.1:9000"}},
+	}})
+	if len(sites) != 2 {
+		t.Fatalf("want 2 static hosts, got %d: %+v", len(sites), sites)
+	}
+	if s := sites["docs.example.com"]; s.Root != "/srv/docs" || !s.SPA {
+		t.Errorf("docs site = %+v, want {/srv/docs true}", s)
+	}
+	if _, ok := sites["api.example.com"]; ok {
+		t.Error("proxied service must not appear as a static site")
+	}
+}
+
+// consumeSites applies newline-delimited JSON maps from the parent; the last
+// one wins (atomic replace), which is the child's update path.
+func TestStaticServer_ConsumeSites(t *testing.T) {
+	ss := newStaticServer()
+	input := `{"a.example.com":{"root":"/srv/a"}}` + "\n" +
+		`{"b.example.com":{"root":"/srv/b","spa":true}}` + "\n"
+	ss.consumeSites(strings.NewReader(input))
+
+	if _, ok := ss.siteFor("a.example.com"); ok {
+		t.Error("a.example.com should be gone after the second map replaced it")
+	}
+	site, ok := ss.siteFor("b.example.com")
+	if !ok || site.Root != "/srv/b" || !site.SPA {
+		t.Errorf("b site = %+v ok=%v, want {/srv/b true}", site, ok)
+	}
+}
+
 func TestStaticServer_SPAFallback(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("APP"), 0644); err != nil {

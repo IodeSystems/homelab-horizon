@@ -218,7 +218,7 @@ type Server struct {
 	sync           *SyncBroadcaster
 	health         *HealthStatus
 	metrics        *integration.Detector // Prometheus metrics discovery (pull integration)
-	static         *staticServer         // loopback file server for static-folder services
+	static         *staticSupervisor     // supervises the unprivileged static file server child
 
 	configSharesMu sync.Mutex
 	configShares   map[string]*configShare // token -> share
@@ -399,7 +399,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		sync:         NewSyncBroadcaster(),
 		health:       &HealthStatus{healthy: true},
 		metrics:      integration.NewDetector(),
-		static:       newStaticServer(),
+		static:       newStaticSupervisor(cfg.StaticServeAddr(), dryRun),
 		configShares: make(map[string]*configShare),
 		joinTokens:   newJoinTokenStore(),
 	}
@@ -1378,11 +1378,9 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	s.monitor.Start()
 	slog.Info("service monitor started")
 
-	// Start the loopback static file server for static-folder services.
-	// Loopback-only; skip under dry-run (no real network binds).
-	if !s.dryRun {
-		s.static.Start(s.cfg().StaticServeAddr())
-	}
+	// Start the static file server (unprivileged child process; see
+	// staticSupervisor). No-op under dry-run.
+	s.static.Start()
 
 	// Start unattended cert renewal (Phase 2 prereq)
 	s.startCertRenewal()
@@ -1424,6 +1422,7 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 		return err
 	case <-sig:
 		slog.Info("shutting down (draining in-flight requests)")
+		s.static.Stop()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		return server.Shutdown(ctx)
