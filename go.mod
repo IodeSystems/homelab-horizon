@@ -14,6 +14,7 @@ require (
 	github.com/libdns/gandi v1.1.0
 	github.com/libdns/googleclouddns v1.2.0
 	github.com/libdns/hetzner v1.0.0
+	github.com/libdns/hetzner/v2 v2.0.1
 	github.com/libdns/libdns v1.1.1
 	github.com/libdns/route53 v1.6.2
 	github.com/mark3labs/mcp-go v0.54.1
