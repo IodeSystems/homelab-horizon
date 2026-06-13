@@ -30,6 +30,23 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
+// requestScheme returns the client-facing scheme. HAProxy terminates TLS and
+// proxies plain HTTP to us, setting X-Forwarded-Proto; honor it so URLs we hand
+// back (e.g. the self-service integration snippet) reflect https. Falls back to
+// the direct connection's TLS state for non-proxied access.
+func requestScheme(r *http.Request) string {
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		if proto == "https" {
+			return "https"
+		}
+		return "http"
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
 func (s *Server) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {
 		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
@@ -668,12 +685,11 @@ func (s *Server) handleAPIServiceIntegration(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	// Build base URL from request
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
+	// Build base URL from the request. HAProxy terminates TLS and forwards
+	// plain HTTP to us, so r.TLS is nil even for HTTPS clients — honor the
+	// proxy's X-Forwarded-Proto so the self-service snippet (which carries the
+	// token as a Bearer header) uses https and never leaks it over cleartext.
+	baseURL := fmt.Sprintf("%s://%s", requestScheme(r), r.Host)
 
 	hasDeploy := svc.Proxy != nil && svc.Proxy.Deploy != nil
 	hasStatic := svc.Proxy != nil && svc.Proxy.StaticRoot != ""
