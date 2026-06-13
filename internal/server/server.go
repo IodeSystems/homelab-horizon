@@ -218,6 +218,7 @@ type Server struct {
 	sync           *SyncBroadcaster
 	health         *HealthStatus
 	metrics        *integration.Detector // Prometheus metrics discovery (pull integration)
+	static         *staticSupervisor     // supervises the unprivileged static file server child
 
 	configSharesMu sync.Mutex
 	configShares   map[string]*configShare // token -> share
@@ -398,10 +399,12 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		sync:         NewSyncBroadcaster(),
 		health:       &HealthStatus{healthy: true},
 		metrics:      integration.NewDetector(),
+		static:       newStaticSupervisor(cfg.StaticServeAddr(), dryRun),
 		configShares: make(map[string]*configShare),
 		joinTokens:   newJoinTokenStore(),
 	}
 	s.config.Store(cfg)
+	s.static.Rebuild(cfg)
 
 	return s, nil
 }
@@ -1029,7 +1032,20 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 // handler returns the fully-wrapped HTTP handler (mux + middlewares).
 func (s *Server) handler() http.Handler {
-	return s.nonPrimaryGuardMiddleware(s.setupRoutes())
+	return securityHeadersMiddleware(s.nonPrimaryGuardMiddleware(s.setupRoutes()))
+}
+
+// securityHeadersMiddleware sets baseline security response headers on the
+// admin UI/API. No CSP — the React SPA would need a tailored policy, tracked
+// separately; these are the safe, app-agnostic headers.
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "same-origin")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) ensureServicesRunning() {
@@ -1362,6 +1378,10 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	s.monitor.Start()
 	slog.Info("service monitor started")
 
+	// Start the static file server (unprivileged child process; see
+	// staticSupervisor). No-op under dry-run.
+	s.static.Start()
+
 	// Start unattended cert renewal (Phase 2 prereq)
 	s.startCertRenewal()
 
@@ -1402,6 +1422,7 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 		return err
 	case <-sig:
 		slog.Info("shutting down (draining in-flight requests)")
+		s.static.Stop()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		return server.Shutdown(ctx)

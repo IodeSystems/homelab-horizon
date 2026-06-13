@@ -2,6 +2,8 @@ package config
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -336,6 +338,37 @@ func TestDeriveHAProxyBackends(t *testing.T) {
 	}
 }
 
+func TestDeriveHAProxyBackends_Static(t *testing.T) {
+	cfg := &Config{
+		Services: []Service{
+			{
+				Name:    "docs",
+				Domains: []string{"docs.example.com"},
+				Proxy:   &ProxyConfig{StaticRoot: "/var/www/docs", InternalOnly: true},
+			},
+		},
+	}
+
+	backends := cfg.DeriveHAProxyBackends()
+	if len(backends) != 1 {
+		t.Fatalf("Expected 1 backend, got %d", len(backends))
+	}
+	// Static services route to hz's own loopback static listener, not an upstream.
+	if backends[0].Server != cfg.StaticServeAddr() {
+		t.Errorf("Expected static backend server %s, got %s", cfg.StaticServeAddr(), backends[0].Server)
+	}
+	if !backends[0].InternalOnly {
+		t.Error("Expected static backend to inherit InternalOnly")
+	}
+
+	// A custom StaticServePort changes the derived backend address.
+	cfg.StaticServePort = 9099
+	backends = cfg.DeriveHAProxyBackends()
+	if backends[0].Server != "127.0.0.1:9099" {
+		t.Errorf("Expected static backend server 127.0.0.1:9099, got %s", backends[0].Server)
+	}
+}
+
 func TestDeriveHAProxyBackends_MultiDomain(t *testing.T) {
 	cfg := &Config{
 		Services: []Service{
@@ -562,6 +595,52 @@ func TestValidateService(t *testing.T) {
 			svc:     Service{Name: "bad", Domains: []string{"*.com"}},
 			wantErr: "domain",
 		},
+		// Static-folder backend validation
+		{
+			name:    "valid static root",
+			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{StaticRoot: "/var/www/docs"}},
+			wantErr: "",
+		},
+		{
+			name:    "static root relative path",
+			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{StaticRoot: "var/www/docs"}},
+			wantErr: "proxy.static_root",
+		},
+		{
+			name:    "static root and backend mutually exclusive",
+			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{StaticRoot: "/var/www/docs", Backend: "192.168.1.1:8080"}},
+			wantErr: "proxy.static_root",
+		},
+		{
+			name:    "static root with deploy rejected",
+			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{StaticRoot: "/var/www/docs", Deploy: &DeployConfig{NextBackend: "192.168.1.1:8081"}}},
+			wantErr: "proxy.static_root",
+		},
+		{
+			name:    "static root filesystem root rejected",
+			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{StaticRoot: "/"}},
+			wantErr: "proxy.static_root",
+		},
+		{
+			name:    "static root /etc rejected",
+			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{StaticRoot: "/etc/ssl"}},
+			wantErr: "proxy.static_root",
+		},
+		{
+			name:    "spa with static root ok",
+			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{StaticRoot: "/var/www/docs", SPA: true}},
+			wantErr: "",
+		},
+		{
+			name:    "spa without static root rejected",
+			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{Backend: "192.168.1.1:80", SPA: true}},
+			wantErr: "proxy.spa",
+		},
+		{
+			name:    "domain with control character rejected",
+			svc:     Service{Name: "x", Domains: []string{"evil\n  acl.example.com"}},
+			wantErr: "domain",
+		},
 	}
 
 	for _, tt := range tests {
@@ -582,6 +661,24 @@ func TestValidateService(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A static_root that is a symlink to a system directory must be rejected — the
+// literal path looks innocent, so the guard has to resolve symlinks.
+func TestValidateService_RejectsSymlinkedSensitiveRoot(t *testing.T) {
+	cfg := &Config{Zones: []Zone{{Name: "example.com", ZoneID: "Z1"}}}
+
+	link := filepath.Join(t.TempDir(), "innocent")
+	if err := os.Symlink("/etc", link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	svc := Service{Name: "x", Domains: []string{"x.example.com"}, Proxy: &ProxyConfig{StaticRoot: link}}
+	err := cfg.ValidateService(&svc)
+	ve, ok := err.(*ValidationError)
+	if !ok || ve.Field != "proxy.static_root" {
+		t.Fatalf("expected proxy.static_root error, got %v", err)
 	}
 }
 

@@ -52,6 +52,7 @@ Homelab Horizon consolidates all of this into a single web UI:
 - **WireGuard VPN Management**: Create clients, generate QR codes, manage peers
 - **Split-Horizon DNS**: Internal DNS via dnsmasq, external DNS via Route53, Name.com, Cloudflare, and more
 - **Reverse Proxy**: HAProxy with automatic Let's Encrypt wildcard SSL certificates
+- **Static Sites**: Serve a folder of files as a service — hz hosts it directly, HAProxy routes to it with the same auto SSL/DNS
 - **Service Monitoring**: Health checks with ntfy push notifications
 - **Self-Service Onboarding**: Users redeem invite tokens to get VPN configs
 - **IP Banning**: Per-service IP bans with timeout support
@@ -163,6 +164,44 @@ Once your zone is set up, adding a service is straightforward:
 - **Proxy**: HAProxy backend (`host:port`) — can be a LAN service or an external host
 
 Services don't have to be on your local network. The proxy backend can point to any reachable host:port — a Raspberry Pi on your LAN, a VM in the cloud, or a container on the same machine.
+
+### Static Sites
+
+A service can serve a folder of files instead of proxying to a backend. Set `proxy.static_root` to an absolute directory (mutually exclusive with `proxy.backend`):
+
+```json
+{
+  "name": "docs",
+  "domains": ["docs.example.com"],
+  "external_dns": { "ttl": 300 },
+  "proxy": { "static_root": "/etc/homelab-horizon/site" }
+}
+```
+
+HAProxy can't serve a directory itself, so hz runs a small internal file server (loopback-only, port `static_serve_port`, default `8091`) and routes the service's domains to it by Host header. Static services inherit wildcard SSL, split-horizon DNS, and the `internal_only` restriction exactly like proxied ones.
+
+hz runs as root, but **the file server does not**: it runs as a separate child process dropped to the unprivileged `nobody` user, so it physically cannot read files `nobody` can't — even a bug in the handler can't leak root-only secrets. (If hz can't drop privileges, it refuses to serve static rather than serve as root.) The served directory must therefore be readable by `nobody`.
+
+On top of that, the file server is deliberately strict:
+
+- Bound to `127.0.0.1` only — never directly reachable off-box.
+- Every file open is pinned inside `static_root` via `os.Root`; `../` and symlinks **cannot** escape the directory.
+- Dotfiles and dot-directories (`.git`, `.env`, `.ssh`) are never served.
+- Directories are never listed — a directory serves its `index.html` or returns 404.
+- `static_root` cannot be the filesystem root or a system directory (`/etc`, `/root`, `/proc`, …) — checked even through symlinks.
+- `Content-Type` is set explicitly from the file extension (no content sniffing), and `X-Content-Type-Options: nosniff` is sent on every response.
+- Errors render a standard hz error page, or the site's own `404.html` / `5xx.html` if present. (A wholly missing/unreadable root can't read its own error page, so that case always shows the built-in page.)
+
+Point `static_root` at a directory containing only files you intend to publish.
+
+For single-page apps, set `"spa": true` so a browser refresh on a client-side route (a path with no file extension) serves `index.html` instead of 404:
+
+```json
+{ "name": "app", "domains": ["app.example.com"],
+  "proxy": { "static_root": "/etc/homelab-horizon/app", "spa": true } }
+```
+
+This is how the project hosts its own landing page (`docs/`): a static service on the public domain, served by hz, with auto SSL.
 
 ## High Availability
 

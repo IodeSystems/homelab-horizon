@@ -62,9 +62,11 @@ func serviceRequestToService(req *apitypes.ServiceRequest) config.Service {
 		}
 		svc.ExternalDNS = extDNS
 	}
-	if req.Proxy != nil && req.Proxy.Backend != "" {
+	if req.Proxy != nil && (req.Proxy.Backend != "" || req.Proxy.StaticRoot != "") {
 		svc.Proxy = &config.ProxyConfig{
 			Backend:      req.Proxy.Backend,
+			StaticRoot:   req.Proxy.StaticRoot,
+			SPA:          req.Proxy.SPA,
 			InternalOnly: req.Proxy.InternalOnly,
 		}
 		if req.Proxy.HealthCheck != nil && req.Proxy.HealthCheck.Path != "" {
@@ -198,7 +200,7 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Proxy
-			if req.Proxy != nil && req.Proxy.Backend != "" {
+			if req.Proxy != nil && (req.Proxy.Backend != "" || req.Proxy.StaticRoot != "") {
 				// Preserve existing deploy config (token/activeSlot) and the
 				// maintenance page, which the editor doesn't round-trip.
 				var existingDeploy *config.DeployConfig
@@ -209,6 +211,8 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 				}
 				cfg.Services[i].Proxy = &config.ProxyConfig{
 					Backend:         req.Proxy.Backend,
+					StaticRoot:      req.Proxy.StaticRoot,
+					SPA:             req.Proxy.SPA,
 					InternalOnly:    req.Proxy.InternalOnly,
 					MaintenancePage: existingMaintenancePage,
 					Timeouts:        requestProxyTimeouts(req.Proxy.Timeouts),

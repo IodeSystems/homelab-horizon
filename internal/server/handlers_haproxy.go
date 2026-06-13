@@ -17,6 +17,12 @@ func (s *Server) syncHAProxyBackends() {
 	if err := s.cfg().WriteMaintenancePageFiles(); err != nil {
 		slog.Warn("WriteMaintenancePageFiles", "err", err)
 	}
+	// Refresh the host->root map for static-folder services so the internal
+	// file server reflects the current config alongside the HAProxy backends
+	// that route to it.
+	if s.static != nil {
+		s.static.Rebuild(s.cfg())
+	}
 	// Derive HAProxy backends from services
 	s.haproxy.SetBackends(s.cfg().DeriveHAProxyBackends())
 }

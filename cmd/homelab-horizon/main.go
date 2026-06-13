@@ -26,6 +26,16 @@ var (
 const servicePath = "/etc/systemd/system/homelab-horizon.service"
 
 func main() {
+	// Unprivileged static-file-server child mode. hz re-execs itself with this
+	// env set (dropped to an unprivileged user) and feeds the host->site map
+	// over stdin. Handle it before flag parsing and the MCP stdin-pipe probe,
+	// which would otherwise mistake our control pipe for an MCP client.
+	if addr := os.Getenv(server.StaticServerEnvAddr); addr != "" {
+		hzlog.Setup()
+		server.RunStaticServerChild(addr)
+		return
+	}
+
 	configPath := flag.String("config", "", "Path to configuration file (optional)")
 	install := flag.Bool("install", false, "Install systemd service")
 	check := flag.Bool("check", false, "Check system configuration and offer to fix issues")
