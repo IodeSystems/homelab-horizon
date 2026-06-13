@@ -134,6 +134,7 @@ interface ServiceFormState {
   proxyMode: "proxy" | "static";
   proxyBackend: string;
   staticRoot: string;
+  spa: boolean;
   healthCheckPath: string;
   internalOnly: boolean;
   deployEnabled: boolean;
@@ -156,6 +157,7 @@ const emptyForm: ServiceFormState = {
   proxyMode: "proxy",
   proxyBackend: "",
   staticRoot: "",
+  spa: false,
   healthCheckPath: "",
   internalOnly: false,
   deployEnabled: false,
@@ -182,6 +184,7 @@ function serviceToForm(svc: Service): ServiceFormState {
     proxyMode: svc.proxy?.staticRoot ? "static" : "proxy",
     proxyBackend: svc.proxy?.backend ?? "",
     staticRoot: svc.proxy?.staticRoot ?? "",
+    spa: svc.proxy?.spa ?? false,
     healthCheckPath: svc.proxy?.healthCheck?.path ?? "",
     internalOnly: svc.proxy?.internalOnly ?? false,
     deployEnabled: !!svc.proxy?.deploy,
@@ -237,6 +240,9 @@ function formToInput(form: ServiceFormState, originalName?: string): ServiceMuta
       staticRoot: form.staticRoot,
       internalOnly: form.internalOnly,
     };
+    if (form.spa) {
+      input.proxy.spa = true;
+    }
     if (form.healthCheckPath) {
       input.proxy.healthCheck = { path: form.healthCheckPath };
     }
@@ -796,14 +802,26 @@ function ServiceFormDialog({
               <MenuItem value="static">Static folder (path)</MenuItem>
             </TextField>
             {form.proxyMode === "static" ? (
-              <TextField
-                label="Static folder"
-                value={form.staticRoot}
-                onChange={(e) => update("staticRoot", e.target.value)}
-                size="small"
-                fullWidth
-                helperText="Absolute path hz serves files from, e.g. /etc/homelab-horizon/site"
-              />
+              <>
+                <TextField
+                  label="Static folder"
+                  value={form.staticRoot}
+                  onChange={(e) => update("staticRoot", e.target.value)}
+                  size="small"
+                  fullWidth
+                  helperText="Absolute path hz serves files from, e.g. /etc/homelab-horizon/site"
+                />
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                  <Switch
+                    checked={form.spa}
+                    onChange={(e) => update("spa", e.target.checked)}
+                    size="small"
+                  />
+                  <Typography variant="body2">
+                    SPA fallback (serve index.html for unknown routes)
+                  </Typography>
+                </Box>
+              </>
             ) : (
               <TextField
                 label="Backend (host:port)"

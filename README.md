@@ -186,9 +186,18 @@ Because hz runs as root, the file server is deliberately strict:
 - Every file open is pinned inside `static_root` via `os.Root`; `../` and symlinks **cannot** escape the directory.
 - Dotfiles and dot-directories (`.git`, `.env`, `.ssh`) are never served.
 - Directories are never listed — a directory serves its `index.html` or returns 404.
-- `static_root` cannot be the filesystem root or a system directory (`/etc`, `/root`, `/proc`, …).
+- `static_root` cannot be the filesystem root or a system directory (`/etc`, `/root`, `/proc`, …) — checked even through symlinks.
+- `Content-Type` is set explicitly from the file extension (no content sniffing), and `X-Content-Type-Options: nosniff` is sent on every response.
+- Errors render a standard hz error page.
 
 Point `static_root` at a directory containing only files you intend to publish.
+
+For single-page apps, set `"spa": true` so a browser refresh on a client-side route (a path with no file extension) serves `index.html` instead of 404:
+
+```json
+{ "name": "app", "domains": ["app.example.com"],
+  "proxy": { "static_root": "/etc/homelab-horizon/app", "spa": true } }
+```
 
 This is how the project hosts its own landing page (`docs/`): a static service on the public domain, served by hz, with auto SSL.
 

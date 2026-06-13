@@ -66,6 +66,7 @@ func serviceRequestToService(req *apitypes.ServiceRequest) config.Service {
 		svc.Proxy = &config.ProxyConfig{
 			Backend:      req.Proxy.Backend,
 			StaticRoot:   req.Proxy.StaticRoot,
+			SPA:          req.Proxy.SPA,
 			InternalOnly: req.Proxy.InternalOnly,
 		}
 		if req.Proxy.HealthCheck != nil && req.Proxy.HealthCheck.Path != "" {
@@ -211,6 +212,7 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 				cfg.Services[i].Proxy = &config.ProxyConfig{
 					Backend:         req.Proxy.Backend,
 					StaticRoot:      req.Proxy.StaticRoot,
+					SPA:             req.Proxy.SPA,
 					InternalOnly:    req.Proxy.InternalOnly,
 					MaintenancePage: existingMaintenancePage,
 					Timeouts:        requestProxyTimeouts(req.Proxy.Timeouts),

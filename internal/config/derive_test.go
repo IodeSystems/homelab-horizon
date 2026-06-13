@@ -2,6 +2,8 @@ package config
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -624,6 +626,21 @@ func TestValidateService(t *testing.T) {
 			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{StaticRoot: "/etc/ssl"}},
 			wantErr: "proxy.static_root",
 		},
+		{
+			name:    "spa with static root ok",
+			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{StaticRoot: "/var/www/docs", SPA: true}},
+			wantErr: "",
+		},
+		{
+			name:    "spa without static root rejected",
+			svc:     Service{Name: "docs", Domains: []string{"docs.example.com"}, Proxy: &ProxyConfig{Backend: "192.168.1.1:80", SPA: true}},
+			wantErr: "proxy.spa",
+		},
+		{
+			name:    "domain with control character rejected",
+			svc:     Service{Name: "x", Domains: []string{"evil\n  acl.example.com"}},
+			wantErr: "domain",
+		},
 	}
 
 	for _, tt := range tests {
@@ -644,6 +661,24 @@ func TestValidateService(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A static_root that is a symlink to a system directory must be rejected — the
+// literal path looks innocent, so the guard has to resolve symlinks.
+func TestValidateService_RejectsSymlinkedSensitiveRoot(t *testing.T) {
+	cfg := &Config{Zones: []Zone{{Name: "example.com", ZoneID: "Z1"}}}
+
+	link := filepath.Join(t.TempDir(), "innocent")
+	if err := os.Symlink("/etc", link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	svc := Service{Name: "x", Domains: []string{"x.example.com"}, Proxy: &ProxyConfig{StaticRoot: link}}
+	err := cfg.ValidateService(&svc)
+	ve, ok := err.(*ValidationError)
+	if !ok || ve.Field != "proxy.static_root" {
+		t.Fatalf("expected proxy.static_root error, got %v", err)
 	}
 }
 

@@ -1032,7 +1032,20 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 // handler returns the fully-wrapped HTTP handler (mux + middlewares).
 func (s *Server) handler() http.Handler {
-	return s.nonPrimaryGuardMiddleware(s.setupRoutes())
+	return securityHeadersMiddleware(s.nonPrimaryGuardMiddleware(s.setupRoutes()))
+}
+
+// securityHeadersMiddleware sets baseline security response headers on the
+// admin UI/API. No CSP — the React SPA would need a tailored policy, tracked
+// separately; these are the safe, app-agnostic headers.
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "same-origin")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) ensureServicesRunning() {

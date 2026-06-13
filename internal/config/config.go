@@ -487,6 +487,7 @@ func (e *ExternalDNS) GetIPs() []string {
 type ProxyConfig struct {
 	Backend         string         `json:"backend"`                    // host:port for HAProxy to forward to (mutually exclusive with StaticRoot)
 	StaticRoot      string         `json:"static_root,omitempty"`      // absolute path to a directory served as static files instead of proxying
+	SPA             bool           `json:"spa,omitempty"`              // static only: serve index.html for unknown non-asset paths (client-side routing)
 	HealthCheck     *HealthCheck   `json:"health_check,omitempty"`     // Optional health check
 	InternalOnly    bool           `json:"internal_only,omitempty"`    // Restrict to local network access only
 	Deploy          *DeployConfig  `json:"deploy,omitempty"`           // Blue-green deploy with current/next slots

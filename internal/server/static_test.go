@@ -174,11 +174,98 @@ func TestStaticServer_RebuildReplaces(t *testing.T) {
 	ss.Rebuild(&config.Config{Services: []config.Service{
 		{Name: "a", Domains: []string{"a.example.com"}, Proxy: &config.ProxyConfig{StaticRoot: root}},
 	}})
-	if _, ok := ss.rootFor("a.example.com"); !ok {
+	if _, ok := ss.siteFor("a.example.com"); !ok {
 		t.Fatal("expected a.example.com after first rebuild")
 	}
 	ss.Rebuild(&config.Config{Services: nil})
-	if _, ok := ss.rootFor("a.example.com"); ok {
+	if _, ok := ss.siteFor("a.example.com"); ok {
 		t.Error("expected a.example.com to be gone after rebuild with no services")
+	}
+}
+
+func TestStaticServer_SPAFallback(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("APP"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "app.js"), []byte("code"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ss := newStaticServer()
+	ss.Rebuild(&config.Config{Services: []config.Service{
+		{Name: "a", Domains: []string{"a.example.com"}, Proxy: &config.ProxyConfig{StaticRoot: root, SPA: true}},
+	}})
+
+	tests := []struct {
+		name     string
+		path     string
+		wantCode int
+		wantBody string
+	}{
+		{"client route falls back to index", "/dashboard/settings", http.StatusOK, "APP"},
+		{"existing asset served normally", "/app.js", http.StatusOK, "code"},
+		{"missing asset still 404s (not index)", "/missing.js", http.StatusNotFound, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			req.Host = "a.example.com"
+			rec := httptest.NewRecorder()
+			ss.ServeHTTP(rec, req)
+			if rec.Code != tt.wantCode {
+				t.Fatalf("code = %d, want %d", rec.Code, tt.wantCode)
+			}
+			if tt.wantBody != "" && rec.Body.String() != tt.wantBody {
+				t.Errorf("body = %q, want %q", rec.Body.String(), tt.wantBody)
+			}
+		})
+	}
+
+	// Without the SPA flag, an unknown client route 404s.
+	ss.Rebuild(&config.Config{Services: []config.Service{
+		{Name: "a", Domains: []string{"a.example.com"}, Proxy: &config.ProxyConfig{StaticRoot: root}},
+	}})
+	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	req.Host = "a.example.com"
+	rec := httptest.NewRecorder()
+	ss.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("non-SPA unknown route: code = %d, want 404", rec.Code)
+	}
+}
+
+func TestStaticServer_HardeningHeaders(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<h1>hi</h1>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "app.js"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ss := newStaticServer()
+	ss.Rebuild(&config.Config{Services: []config.Service{
+		{Name: "a", Domains: []string{"a.example.com"}, Proxy: &config.ProxyConfig{StaticRoot: root}},
+	}})
+
+	// nosniff present and explicit content-type by extension.
+	req := httptest.NewRequest(http.MethodGet, "/app.js", nil)
+	req.Host = "a.example.com"
+	rec := httptest.NewRecorder()
+	ss.ServeHTTP(rec, req)
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("nosniff = %q, want nosniff", got)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/javascript") {
+		t.Errorf("content-type = %q, want text/javascript", ct)
+	}
+
+	// Non-GET/HEAD is rejected.
+	req = httptest.NewRequest(http.MethodPost, "/index.html", nil)
+	req.Host = "a.example.com"
+	rec = httptest.NewRecorder()
+	ss.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST code = %d, want 405", rec.Code)
 	}
 }

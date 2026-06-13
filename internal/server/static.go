@@ -1,7 +1,9 @@
 package server
 
 import (
+	"fmt"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -13,6 +15,12 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
+// staticSite is the resolved serving config for one host.
+type staticSite struct {
+	root string // document root directory
+	spa  bool   // serve index.html for unknown non-asset paths (client-side routing)
+}
+
 // staticServer serves per-service static folders on an internal loopback
 // listener. HAProxy routes a static-folder service's domains here (see
 // Config.StaticServeAddr); the document root is selected by the request Host
@@ -20,115 +28,218 @@ import (
 // the local HAProxy — never directly from the network.
 type staticServer struct {
 	mu    sync.RWMutex
-	roots map[string]string // lowercased host -> filesystem root directory
+	sites map[string]staticSite // lowercased host -> serving config
 }
 
 func newStaticServer() *staticServer {
-	return &staticServer{roots: make(map[string]string)}
+	return &staticServer{sites: make(map[string]staticSite)}
 }
 
-// Rebuild refreshes the host->root map from the current config. Safe to call on
+// Rebuild refreshes the host->site map from the current config. Safe to call on
 // every config sync; the swap is atomic for in-flight requests.
 func (ss *staticServer) Rebuild(cfg *config.Config) {
-	roots := make(map[string]string)
+	sites := make(map[string]staticSite)
 	for _, svc := range cfg.Services {
 		if svc.Proxy == nil || svc.Proxy.StaticRoot == "" {
 			continue
 		}
 		for _, d := range svc.Domains {
-			roots[strings.ToLower(d)] = svc.Proxy.StaticRoot
+			sites[strings.ToLower(d)] = staticSite{root: svc.Proxy.StaticRoot, spa: svc.Proxy.SPA}
 		}
 	}
 	ss.mu.Lock()
-	ss.roots = roots
+	ss.sites = sites
 	ss.mu.Unlock()
 }
 
-// rootFor returns the document root configured for the given request host,
-// stripping any port. ok is false when no static service claims the host.
-func (ss *staticServer) rootFor(host string) (string, bool) {
+// siteFor returns the serving config for the given request host, stripping any
+// port. ok is false when no static service claims the host.
+func (ss *staticServer) siteFor(host string) (staticSite, bool) {
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
-	root, ok := ss.roots[strings.ToLower(host)]
-	return root, ok
+	s, ok := ss.sites[strings.ToLower(host)]
+	return s, ok
 }
 
 func (ss *staticServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	root, ok := ss.rootFor(r.Host)
-	if !ok {
-		http.Error(w, "no static service for host", http.StatusNotFound)
+	// Security headers on every response, including errors. nosniff is the
+	// important one — it stops a served file from being reinterpreted as a
+	// different (executable) type regardless of our Content-Type.
+	h := w.Header()
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("Referrer-Policy", "same-origin")
+
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		h.Set("Allow", "GET, HEAD")
+		ss.writeError(w, http.StatusMethodNotAllowed)
 		return
 	}
-	ss.serveFile(w, r, root)
+
+	site, ok := ss.siteFor(r.Host)
+	if !ok {
+		ss.writeError(w, http.StatusNotFound)
+		return
+	}
+	ss.serveFile(w, r, site)
 }
 
-// serveFile serves a single file from dir for the request. Because hz runs as
-// root, this handler is deliberately strict beyond the loopback bind:
-//   - os.Root confines every open to dir — no "../" and no symlink can escape
-//     it, so a stray symlink inside the root can't leak /etc/shadow et al.
+// serveFile serves a single file for the request. Because hz runs as root (for
+// now), this handler is deliberately strict beyond the loopback bind:
+//   - os.Root confines every open to the document root — no "../" and no
+//     symlink can escape it.
 //   - hidden path segments (.git, .env, .ssh, dotfiles) are never served.
 //   - directories are never listed; a directory serves its index.html or 404s.
-func (ss *staticServer) serveFile(w http.ResponseWriter, r *http.Request, dir string) {
-	upath := r.URL.Path
-	if !strings.HasPrefix(upath, "/") {
-		upath = "/" + upath
-	}
-	name := strings.TrimPrefix(path.Clean(upath), "/")
+//   - Content-Type is set explicitly from the extension (no content sniffing).
+func (ss *staticServer) serveFile(w http.ResponseWriter, r *http.Request, site staticSite) {
+	name := cleanRequestPath(r.URL.Path)
 
 	// Refuse any hidden segment outright (also covers a residual "..").
 	for _, seg := range strings.Split(name, "/") {
 		if seg != "." && strings.HasPrefix(seg, ".") {
-			http.NotFound(w, r)
+			ss.writeError(w, http.StatusNotFound)
 			return
 		}
 	}
-	if name == "" {
-		name = "."
-	}
 
-	// os.Root pins all subsequent opens inside dir, rejecting symlink/".." escape.
-	root, err := os.OpenRoot(dir)
+	// os.Root pins all opens inside the document root, rejecting symlink/".."
+	// escape even though hz runs as root.
+	root, err := os.OpenRoot(site.root)
 	if err != nil {
-		slog.Warn("static: cannot open root", "dir", dir, "err", err)
-		http.NotFound(w, r)
+		slog.Warn("static: cannot open root", "dir", site.root, "err", err)
+		ss.writeError(w, http.StatusInternalServerError)
 		return
 	}
 	defer func() { _ = root.Close() }()
 
-	f, err := root.Open(name)
+	f, info, err := openServable(root, name)
 	if err != nil {
-		http.NotFound(w, r)
+		// SPA fallback: a browser refresh on a client-side route (no file
+		// extension) serves index.html so the app boots and routes itself.
+		if site.spa && path.Ext(name) == "" {
+			if idx, idxInfo, idxErr := openServable(root, "index.html"); idxErr == nil {
+				serveContent(w, r, "index.html", idxInfo, idx)
+				_ = idx.Close()
+				return
+			}
+		}
+		ss.writeError(w, http.StatusNotFound)
 		return
 	}
 	defer func() { _ = f.Close() }()
 
+	serveContent(w, r, info.Name(), info, f)
+}
+
+// openServable opens name within root, resolving a directory to its index.html.
+// It never returns a directory — callers get a regular file or an error, so
+// there is no directory listing.
+func openServable(root *os.Root, name string) (*os.File, os.FileInfo, error) {
+	if name == "" {
+		name = "."
+	}
+	f, err := root.Open(name)
+	if err != nil {
+		return nil, nil, err
+	}
 	info, err := f.Stat()
 	if err != nil {
-		http.NotFound(w, r)
-		return
+		_ = f.Close()
+		return nil, nil, err
 	}
-
-	// No directory listing: a directory request must resolve to its index.html.
 	if info.IsDir() {
 		_ = f.Close()
 		f, err = root.Open(path.Join(name, "index.html"))
 		if err != nil {
-			http.NotFound(w, r)
-			return
+			return nil, nil, err
 		}
 		info, err = f.Stat()
-		if err != nil || info.IsDir() {
-			http.NotFound(w, r)
-			return
+		if err != nil {
+			_ = f.Close()
+			return nil, nil, err
+		}
+		if info.IsDir() {
+			_ = f.Close()
+			return nil, nil, fmt.Errorf("index.html is a directory")
 		}
 	}
-
-	// ServeContent handles Content-Type sniffing, Range, and If-Modified-Since.
-	http.ServeContent(w, r, info.Name(), info.ModTime(), f)
+	return f, info, nil
 }
+
+// serveContent sets an explicit Content-Type from the file extension before
+// delegating to http.ServeContent (which then handles Range and
+// If-Modified-Since). Setting it ourselves sidesteps content-sniffing and
+// system mime.types inconsistencies.
+func serveContent(w http.ResponseWriter, r *http.Request, name string, info os.FileInfo, f *os.File) {
+	if ct := contentType(name); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	http.ServeContent(w, r, name, info.ModTime(), f)
+}
+
+// staticContentTypes pins the Content-Type for common web assets so serving
+// does not depend on the host's /etc/mime.types. mime.TypeByExtension is the
+// fallback for anything not listed.
+var staticContentTypes = map[string]string{
+	".html":  "text/html; charset=utf-8",
+	".htm":   "text/html; charset=utf-8",
+	".css":   "text/css; charset=utf-8",
+	".js":    "text/javascript; charset=utf-8",
+	".mjs":   "text/javascript; charset=utf-8",
+	".json":  "application/json",
+	".map":   "application/json",
+	".xml":   "application/xml",
+	".txt":   "text/plain; charset=utf-8",
+	".svg":   "image/svg+xml",
+	".png":   "image/png",
+	".jpg":   "image/jpeg",
+	".jpeg":  "image/jpeg",
+	".gif":   "image/gif",
+	".webp":  "image/webp",
+	".avif":  "image/avif",
+	".ico":   "image/x-icon",
+	".woff":  "font/woff",
+	".woff2": "font/woff2",
+	".ttf":   "font/ttf",
+	".wasm":  "application/wasm",
+	".pdf":   "application/pdf",
+}
+
+func contentType(name string) string {
+	ext := strings.ToLower(path.Ext(name))
+	if ct, ok := staticContentTypes[ext]; ok {
+		return ct
+	}
+	return mime.TypeByExtension(ext)
+}
+
+// cleanRequestPath normalizes the URL path to a root-relative, cleaned name
+// with no leading slash (e.g. "/a/../b/" -> "b").
+func cleanRequestPath(p string) string {
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return strings.TrimPrefix(path.Clean(p), "/")
+}
+
+// writeError renders the static server's standard error page for code.
+func (ss *staticServer) writeError(w http.ResponseWriter, code int) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	text := http.StatusText(code)
+	_, _ = fmt.Fprintf(w, errorPageTmpl, code, text, code, text)
+}
+
+const errorPageTmpl = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>%d %s</title>
+<style>html,body{height:100%%;margin:0}body{font:16px/1.5 system-ui,-apple-system,sans-serif;background:#0d1117;color:#e6edf3;display:grid;place-items:center}div{text-align:center}h1{font-size:3.5rem;margin:0 0 .2em}p{color:#9da7b3;margin:0}</style>
+</head><body><div><h1>%d</h1><p>%s</p></div></body></html>
+`
 
 // Start binds the loopback listener and serves in the background. A bind
 // failure is logged and non-fatal: only static-folder services are affected,
@@ -138,6 +249,7 @@ func (ss *staticServer) Start(addr string) {
 		Addr:              addr,
 		Handler:           ss,
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {

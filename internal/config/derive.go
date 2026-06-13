@@ -592,6 +592,14 @@ func (c *Config) ValidateService(svc *Service) error {
 			return &ValidationError{Field: "domain", Message: "domain must not be empty"}
 		}
 
+		// Reject anything that isn't a plain hostname. Domains are written
+		// verbatim into haproxy.cfg ACLs (hdr_end(host) -i <domain>); a stray
+		// newline or metacharacter that still suffix-matched a zone would let a
+		// crafted domain inject HAProxy directives.
+		if !isValidDomainName(domain) {
+			return &ValidationError{Field: "domain", Message: "domain contains invalid characters"}
+		}
+
 		// Validate wildcard domain format if present
 		if strings.HasPrefix(domain, "*") {
 			if !strings.HasPrefix(domain, "*.") {
@@ -649,7 +657,32 @@ func (c *Config) ValidateService(svc *Service) error {
 		}
 	}
 
+	// SPA fallback only applies to static-folder services.
+	if svc.Proxy != nil && svc.Proxy.SPA && svc.Proxy.StaticRoot == "" {
+		return &ValidationError{Field: "proxy.spa", Message: "spa requires static_root"}
+	}
+
 	return nil
+}
+
+// isValidDomainName reports whether d is a plain DNS hostname (optionally a
+// leading "*." wildcard) made only of letters, digits, dots and hyphens. It
+// deliberately rejects control characters, spaces, and HAProxy metacharacters
+// so a domain cannot inject directives into the generated haproxy.cfg.
+func isValidDomainName(d string) bool {
+	d = strings.TrimPrefix(d, "*.")
+	if d == "" || len(d) > 253 {
+		return false
+	}
+	for _, r := range d {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.' || r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // ValidateZone validates a zone configuration
@@ -676,11 +709,21 @@ func (e *ValidationError) Error() string {
 	return e.Field + ": " + e.Message
 }
 
-// isSensitiveRoot reports whether p is the filesystem root or a system
-// directory that should never be exposed as a static site. Since hz runs as
-// root, serving one of these would publish credentials, keys, or kernel state.
+// isSensitiveRoot reports whether p is, or resolves to, the filesystem root or
+// a system directory that should never be exposed as a static site. The
+// literal path and its symlink-resolved target are both checked, so a
+// static_root that is a symlink to /etc can't slip past the guard.
 func isSensitiveRoot(p string) bool {
-	clean := filepath.Clean(p)
+	if isSensitivePath(filepath.Clean(p)) {
+		return true
+	}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return isSensitivePath(resolved)
+	}
+	return false
+}
+
+func isSensitivePath(clean string) bool {
 	if clean == "/" {
 		return true
 	}
