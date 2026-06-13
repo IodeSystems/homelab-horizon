@@ -809,7 +809,7 @@ function ServiceFormDialog({
                   onChange={(e) => update("staticRoot", e.target.value)}
                   size="small"
                   fullWidth
-                  helperText="Absolute path hz serves files from, e.g. /etc/homelab-horizon/site"
+                  helperText="Absolute path hz serves files from, e.g. /var/lib/homelab-horizon/docs"
                 />
                 <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                   <Switch
