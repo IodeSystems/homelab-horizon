@@ -1565,6 +1565,14 @@ function ServiceRow({
                       />
                     )}
                   </Box>
+                  {service.proxy!.servedBy && (
+                    <Box sx={{ display: "flex", gap: 1, alignItems: "center", mb: 0.5 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>Served by:</Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        <code>{service.proxy!.servedBy}</code> (hz internal)
+                      </Typography>
+                    </Box>
+                  )}
                   {hasDeploy && (
                     <Box sx={{ display: "flex", gap: 1, alignItems: "center", mb: 0.5 }}>
                       <StatusDot configured={true} detected={service.status.proxyNextState === "up"} />
