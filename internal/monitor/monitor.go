@@ -71,7 +71,7 @@ func (m *Monitor) getAllChecks() []config.ServiceCheck {
 
 	// Auto-generate checks from HAProxy-proxied services
 	for _, svc := range m.config.Services {
-		if svc.Proxy == nil || svc.Proxy.Backend == "" {
+		if svc.Proxy == nil {
 			continue
 		}
 
@@ -87,15 +87,25 @@ func (m *Monitor) getAllChecks() []config.ServiceCheck {
 			continue
 		}
 
-		// Create auto-generated check
+		// Resolve what to probe:
+		//   - proxied service: its backend host:port (http if a health path is set).
+		//   - static service: hz's internal file server, which confirms the
+		//     unprivileged child process is alive. Ping only — it host-routes,
+		//     so a plain HTTP check without the right Host header would 404.
+		//   - self service: hz itself; pointless to self-monitor, so skip.
 		checkType := "ping"
-		target := svc.Proxy.Backend
-
-		// If service has a health check path, use HTTP check
-		if svc.Proxy.HealthCheck != nil && svc.Proxy.HealthCheck.Path != "" {
-			checkType = "http"
-			// Build HTTP URL from backend
-			target = "http://" + svc.Proxy.Backend + svc.Proxy.HealthCheck.Path
+		var target string
+		switch {
+		case svc.Proxy.StaticRoot != "":
+			target = m.config.StaticServeAddr()
+		case svc.Proxy.Backend != "":
+			target = svc.Proxy.Backend
+			if svc.Proxy.HealthCheck != nil && svc.Proxy.HealthCheck.Path != "" {
+				checkType = "http"
+				target = "http://" + svc.Proxy.Backend + svc.Proxy.HealthCheck.Path
+			}
+		default:
+			continue
 		}
 
 		// Check if this auto-generated check was disabled
