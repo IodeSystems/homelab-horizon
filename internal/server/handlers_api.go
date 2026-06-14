@@ -30,6 +30,29 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
+// integrationBaseURL returns the base URL for integration snippets, in
+// precedence order:
+//  1. the configured admin_url (authoritative override);
+//  2. the self service's domain (https when SSL is enabled);
+//  3. the request host (what the admin browsed — always reachable).
+//
+// The snippet carries the service token as a Bearer header, so HTTPS is
+// preferred via requestScheme (honoring X-Forwarded-Proto behind HAProxy).
+func (s *Server) integrationBaseURL(r *http.Request) string {
+	if u := strings.TrimRight(s.cfg().AdminURL, "/"); u != "" {
+		return u
+	}
+	scheme := requestScheme(r)
+	host := r.Host
+	if d := s.selfServiceDomain(); d != "" {
+		host = d
+		if s.cfg().SSLEnabled {
+			scheme = "https"
+		}
+	}
+	return fmt.Sprintf("%s://%s", scheme, host)
+}
+
 // selfServiceDomain returns the primary domain of the service marked
 // proxy.self (this hz instance's own admin UI), or "" if none. It is the
 // canonical address for integration snippets.
@@ -699,20 +722,7 @@ func (s *Server) handleAPIServiceIntegration(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	// Build the base URL for the integration snippet. Prefer the canonical
-	// admin domain (the service marked proxy.self) over whatever host the admin
-	// happened to browse, so snippets are consistent. HAProxy terminates TLS
-	// and forwards plain HTTP (r.TLS nil), so honor X-Forwarded-Proto; the
-	// snippet carries the token as a Bearer header and must use https.
-	scheme := requestScheme(r)
-	host := r.Host
-	if d := s.selfServiceDomain(); d != "" {
-		host = d
-		if s.cfg().SSLEnabled {
-			scheme = "https"
-		}
-	}
-	baseURL := fmt.Sprintf("%s://%s", scheme, host)
+	baseURL := s.integrationBaseURL(r)
 
 	hasDeploy := svc.Proxy != nil && svc.Proxy.Deploy != nil
 	hasStatic := svc.Proxy != nil && svc.Proxy.StaticRoot != ""
