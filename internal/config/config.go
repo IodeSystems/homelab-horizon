@@ -121,6 +121,11 @@ type Config struct {
 	ListenAddr string `json:"listen_addr"`
 	AdminToken string `json:"admin_token,omitempty"`
 	KioskURL   string `json:"kiosk_url"`
+	// AdminURL, when set, is the canonical base URL hz uses for integration
+	// snippets (e.g. "https://hz.example.com"). It overrides the self-service
+	// domain and the request host. Set this when neither is what an integration
+	// client should target.
+	AdminURL string `json:"admin_url,omitempty"`
 
 	// WireGuard VPN configuration (Layer 1: VPN Clients)
 	WGInterface     string `json:"wg_interface"`
