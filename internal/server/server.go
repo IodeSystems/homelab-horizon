@@ -868,6 +868,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// the deploy token authenticates regardless of which peer serves.
 	s.handlePeerInstanceSubtree(mux, "/api/deploy/", s.handleDeployAPI)
 
+	// Static site upload API (per-service token auth, no admin/CSRF).
+	// Per-instance: site files are local to each box, like deploy slots.
+	s.handlePeerInstanceSubtree(mux, "/api/site/", s.handleSiteAPI)
+
 	// IP Ban API (deploy token auth, no CSRF). Per-instance until Phase 4
 	// LWW sync.
 	s.handlePeerInstanceSubtree(mux, "/api/ban/", s.handleBanAPI)

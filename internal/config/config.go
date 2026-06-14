@@ -121,6 +121,11 @@ type Config struct {
 	ListenAddr string `json:"listen_addr"`
 	AdminToken string `json:"admin_token,omitempty"`
 	KioskURL   string `json:"kiosk_url"`
+	// AdminURL, when set, is the canonical base URL hz uses for integration
+	// snippets (e.g. "https://hz.example.com"). It overrides the self-service
+	// domain and the request host. Set this when neither is what an integration
+	// client should target.
+	AdminURL string `json:"admin_url,omitempty"`
 
 	// WireGuard VPN configuration (Layer 1: VPN Clients)
 	WGInterface     string `json:"wg_interface"`
@@ -485,14 +490,27 @@ func (e *ExternalDNS) GetIPs() []string {
 // Static services still inherit wildcard SSL, split-horizon DNS, health
 // checks, timeouts, and internal-only restriction exactly like proxied ones.
 type ProxyConfig struct {
-	Backend         string         `json:"backend"`                    // host:port for HAProxy to forward to (mutually exclusive with StaticRoot)
+	Backend         string         `json:"backend"`                    // host:port for HAProxy to forward to (mutually exclusive with StaticRoot/Self)
 	StaticRoot      string         `json:"static_root,omitempty"`      // absolute path to a directory served as static files instead of proxying
+	Self            bool           `json:"self,omitempty"`             // route to THIS hz instance's own admin UI (resolves to the local listen addr; HA-correct)
 	SPA             bool           `json:"spa,omitempty"`              // static only: serve index.html for unknown non-asset paths (client-side routing)
 	HealthCheck     *HealthCheck   `json:"health_check,omitempty"`     // Optional health check
 	InternalOnly    bool           `json:"internal_only,omitempty"`    // Restrict to local network access only
 	Deploy          *DeployConfig  `json:"deploy,omitempty"`           // Blue-green deploy with current/next slots
 	MaintenancePage string         `json:"maintenance_page,omitempty"` // HTML body served as 503 during maintenance
 	Timeouts        *ProxyTimeouts `json:"timeouts,omitempty"`         // Optional per-backend HAProxy timeout overrides
+}
+
+// SelfBackendAddr returns the loopback address of this hz instance's own admin
+// UI, derived from ListenAddr. Used by services with proxy.self so HAProxy
+// routes to the local hz (correct per-instance, even in an HA fleet) without a
+// hardcoded host:port.
+func (c *Config) SelfBackendAddr() string {
+	_, port, err := net.SplitHostPort(c.ListenAddr)
+	if err != nil || port == "" {
+		port = "8080"
+	}
+	return "127.0.0.1:" + port
 }
 
 // StaticServeAddr returns the loopback address hz binds to serve static-folder
@@ -1222,7 +1240,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStartPre=+/bin/mkdir -p %s /etc/letsencrypt /etc/haproxy/certs
+ExecStartPre=+/bin/mkdir -p %s /etc/letsencrypt /etc/haproxy/certs /var/lib/homelab-horizon
 ExecStart=%s
 WorkingDirectory=%s
 Restart=on-failure
@@ -1230,9 +1248,10 @@ RestartSec=5
 User=root
 Group=root
 
-# File system isolation
+# File system isolation. /var/lib/homelab-horizon holds static-site releases
+# (the only writable, non-sensitive place for served files under the sandbox).
 ProtectSystem=strict
-ReadWritePaths=-/etc/wireguard -/etc/dnsmasq.d -/etc/haproxy -/etc/letsencrypt -/etc/systemd/system -/proc/sys/net/ipv4 -/var/lib/haproxy -%s
+ReadWritePaths=-/etc/wireguard -/etc/dnsmasq.d -/etc/haproxy -/etc/letsencrypt -/etc/systemd/system -/proc/sys/net/ipv4 -/var/lib/haproxy -/var/lib/homelab-horizon -%s
 ProtectHome=read-only
 PrivateTmp=true
 ProtectKernelTunables=true

@@ -30,6 +30,59 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
+// integrationBaseURL returns the base URL for integration snippets, in
+// precedence order:
+//  1. the configured admin_url (authoritative override);
+//  2. the self service's domain (https when SSL is enabled);
+//  3. the request host (what the admin browsed — always reachable).
+//
+// The snippet carries the service token as a Bearer header, so HTTPS is
+// preferred via requestScheme (honoring X-Forwarded-Proto behind HAProxy).
+func (s *Server) integrationBaseURL(r *http.Request) string {
+	if u := strings.TrimRight(s.cfg().AdminURL, "/"); u != "" {
+		return u
+	}
+	scheme := requestScheme(r)
+	host := r.Host
+	if d := s.selfServiceDomain(); d != "" {
+		host = d
+		if s.cfg().SSLEnabled {
+			scheme = "https"
+		}
+	}
+	return fmt.Sprintf("%s://%s", scheme, host)
+}
+
+// selfServiceDomain returns the primary domain of the service marked
+// proxy.self (this hz instance's own admin UI), or "" if none. It is the
+// canonical address for integration snippets.
+func (s *Server) selfServiceDomain() string {
+	for i := range s.cfg().Services {
+		svc := &s.cfg().Services[i]
+		if svc.Proxy != nil && svc.Proxy.Self {
+			return svc.PrimaryDomain()
+		}
+	}
+	return ""
+}
+
+// requestScheme returns the client-facing scheme. HAProxy terminates TLS and
+// proxies plain HTTP to us, setting X-Forwarded-Proto; honor it so URLs we hand
+// back (e.g. the self-service integration snippet) reflect https. Falls back to
+// the direct connection's TLS state for non-proxied access.
+func requestScheme(r *http.Request) string {
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		if proto == "https" {
+			return "https"
+		}
+		return "http"
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
 func (s *Server) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {
 		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
@@ -121,12 +174,21 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 				TTL:           svc.ExternalDNS.TTL,
 			}
 		}
-		if svc.Proxy != nil && (svc.Proxy.Backend != "" || svc.Proxy.StaticRoot != "") {
+		if svc.Proxy != nil && (svc.Proxy.Backend != "" || svc.Proxy.StaticRoot != "" || svc.Proxy.Self) {
 			pr := &apitypes.ProxyResp{
 				Backend:      svc.Proxy.Backend,
 				StaticRoot:   svc.Proxy.StaticRoot,
+				Self:         svc.Proxy.Self,
 				SPA:          svc.Proxy.SPA,
 				InternalOnly: svc.Proxy.InternalOnly,
+			}
+			// Surface the resolved runtime address HAProxy routes to. For
+			// static/self the config backend is empty; it's hz's own loopback.
+			switch {
+			case svc.Proxy.StaticRoot != "":
+				pr.ServedBy = s.cfg().StaticServeAddr()
+			case svc.Proxy.Self:
+				pr.ServedBy = s.cfg().SelfBackendAddr()
 			}
 			if svc.Proxy.HealthCheck != nil {
 				pr.HealthCheck = &apitypes.HealthCheckResp{Path: svc.Proxy.HealthCheck.Path}
@@ -668,14 +730,10 @@ func (s *Server) handleAPIServiceIntegration(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	// Build base URL from request
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
+	baseURL := s.integrationBaseURL(r)
 
 	hasDeploy := svc.Proxy != nil && svc.Proxy.Deploy != nil
+	hasStatic := svc.Proxy != nil && svc.Proxy.StaticRoot != ""
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(apitypes.ServiceIntegration{
@@ -683,5 +741,6 @@ func (s *Server) handleAPIServiceIntegration(w http.ResponseWriter, r *http.Requ
 		Token:     svc.Token,
 		BaseURL:   baseURL,
 		HasDeploy: hasDeploy,
+		HasStatic: hasStatic,
 	})
 }
