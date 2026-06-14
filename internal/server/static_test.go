@@ -349,6 +349,55 @@ func TestStaticServer_Custom5xx(t *testing.T) {
 	}
 }
 
+func TestStaticServer_CacheHeaders(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "app.js"), []byte("code"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ss := newStaticServer()
+	ss.Rebuild(&config.Config{Services: []config.Service{
+		{Name: "a", Domains: []string{"a.example.com"}, Proxy: &config.ProxyConfig{StaticRoot: root}},
+	}})
+
+	// First GET: Cache-Control + ETag present.
+	req := httptest.NewRequest(http.MethodGet, "/app.js", nil)
+	req.Host = "a.example.com"
+	rec := httptest.NewRecorder()
+	ss.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", rec.Code)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != staticCacheControl {
+		t.Errorf("Cache-Control = %q, want %q", cc, staticCacheControl)
+	}
+	etag := rec.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("missing ETag")
+	}
+
+	// Conditional GET with that ETag revalidates to 304, no body.
+	req2 := httptest.NewRequest(http.MethodGet, "/app.js", nil)
+	req2.Host = "a.example.com"
+	req2.Header.Set("If-None-Match", etag)
+	rec2 := httptest.NewRecorder()
+	ss.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusNotModified {
+		t.Errorf("conditional GET = %d, want 304", rec2.Code)
+	}
+	if rec2.Body.Len() != 0 {
+		t.Errorf("304 should have no body, got %d bytes", rec2.Body.Len())
+	}
+
+	// Errors are not cacheable.
+	req3 := httptest.NewRequest(http.MethodGet, "/missing.js", nil)
+	req3.Host = "a.example.com"
+	rec3 := httptest.NewRecorder()
+	ss.ServeHTTP(rec3, req3)
+	if cc := rec3.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("error Cache-Control = %q, want no-store", cc)
+	}
+}
+
 func TestStaticServer_HardeningHeaders(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<h1>hi</h1>"), 0644); err != nil {
