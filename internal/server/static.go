@@ -159,6 +159,7 @@ func (ss *staticServer) errorResponse(w http.ResponseWriter, r *http.Request, ro
 		info, statErr := f.Stat()
 		if statErr == nil && !info.IsDir() {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
 			w.WriteHeader(code)
 			if r.Method != http.MethodHead {
 				_, _ = io.Copy(w, f)
@@ -206,14 +207,26 @@ func openServable(root *os.Root, name string) (*os.File, os.FileInfo, error) {
 	return f, info, nil
 }
 
-// serveContent sets an explicit Content-Type from the file extension before
-// delegating to http.ServeContent (which then handles Range and
-// If-Modified-Since). Setting it ourselves sidesteps content-sniffing and
-// system mime.types inconsistencies.
+// staticCacheControl is sent on served files. The explicit freshness both
+// enables browser/CDN caching and lets HAProxy's RAM cache store the object
+// (it won't cache responses without Cache-Control/Expires). The window is kept
+// short so an atomic deploy (which bumps the file modtime → new ETag) is
+// visible quickly; within it, ETag/If-Modified-Since revalidation returns 304.
+const staticCacheControl = "public, max-age=60"
+
+// serveContent sets an explicit Content-Type from the file extension, adds
+// cache headers, then delegates to http.ServeContent (which handles Range,
+// If-Modified-Since, and — because we set ETag — If-None-Match → 304). Setting
+// the content type ourselves sidesteps content-sniffing and system mime.types
+// inconsistencies.
 func serveContent(w http.ResponseWriter, r *http.Request, name string, info os.FileInfo, f *os.File) {
+	h := w.Header()
 	if ct := contentType(name); ct != "" {
-		w.Header().Set("Content-Type", ct)
+		h.Set("Content-Type", ct)
 	}
+	h.Set("Cache-Control", staticCacheControl)
+	// Cheap strong-ish validator: size + mtime. Changes on every deploy.
+	h.Set("ETag", fmt.Sprintf(`"%x-%x"`, info.Size(), info.ModTime().UnixNano()))
 	http.ServeContent(w, r, name, info.ModTime(), f)
 }
 
@@ -265,6 +278,7 @@ func cleanRequestPath(p string) string {
 // writeError renders the static server's standard error page for code.
 func (ss *staticServer) writeError(w http.ResponseWriter, code int) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
 	text := http.StatusText(code)
 	_, _ = fmt.Fprintf(w, errorPageTmpl, code, text, code, text)
