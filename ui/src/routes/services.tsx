@@ -131,7 +131,7 @@ interface ServiceFormState {
   externalIPs: string;
   externalTTL: string;
   proxyEnabled: boolean;
-  proxyMode: "proxy" | "static";
+  proxyMode: "proxy" | "static" | "self";
   proxyBackend: string;
   staticRoot: string;
   spa: boolean;
@@ -181,7 +181,7 @@ function serviceToForm(svc: Service): ServiceFormState {
     externalIPs: svc.externalDNS?.configuredIPs?.join(", ") ?? "",
     externalTTL: String(svc.externalDNS?.ttl ?? 300),
     proxyEnabled: !!svc.proxy,
-    proxyMode: svc.proxy?.staticRoot ? "static" : "proxy",
+    proxyMode: svc.proxy?.self ? "self" : svc.proxy?.staticRoot ? "static" : "proxy",
     proxyBackend: svc.proxy?.backend ?? "",
     staticRoot: svc.proxy?.staticRoot ?? "",
     spa: svc.proxy?.spa ?? false,
@@ -235,7 +235,15 @@ function formToInput(form: ServiceFormState, originalName?: string): ServiceMuta
 
   // Static-folder services serve files from a local directory; HAProxy routes
   // to hz's internal file server. Deploy/timeouts are proxy-only concepts.
-  if (form.proxyEnabled && form.proxyMode === "static" && form.staticRoot) {
+  if (form.proxyEnabled && form.proxyMode === "self") {
+    input.proxy = {
+      self: true,
+      internalOnly: form.internalOnly,
+    };
+    if (form.healthCheckPath) {
+      input.proxy.healthCheck = { path: form.healthCheckPath };
+    }
+  } else if (form.proxyEnabled && form.proxyMode === "static" && form.staticRoot) {
     input.proxy = {
       staticRoot: form.staticRoot,
       internalOnly: form.internalOnly,
@@ -800,6 +808,7 @@ function ServiceFormDialog({
             >
               <MenuItem value="proxy">Reverse proxy (host:port)</MenuItem>
               <MenuItem value="static">Static folder (path)</MenuItem>
+              <MenuItem value="self">Homelab admin UI (this instance)</MenuItem>
             </TextField>
             {form.proxyMode === "static" ? (
               <>
@@ -809,7 +818,7 @@ function ServiceFormDialog({
                   onChange={(e) => update("staticRoot", e.target.value)}
                   size="small"
                   fullWidth
-                  helperText="Absolute path hz serves files from, e.g. /etc/homelab-horizon/site"
+                  helperText="Absolute path hz serves files from, e.g. /var/lib/homelab-horizon/docs"
                 />
                 <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                   <Switch
@@ -822,6 +831,11 @@ function ServiceFormDialog({
                   </Typography>
                 </Box>
               </>
+            ) : form.proxyMode === "self" ? (
+              <Typography variant="caption" color="text.secondary">
+                Routes this domain to this Homelab Horizon instance's own admin
+                UI. The backend tracks the local listen address automatically.
+              </Typography>
             ) : (
               <TextField
                 label="Backend (host:port)"
@@ -1060,6 +1074,17 @@ function IntegrationDialog({
               `./hz-client maint-page clear                 # Restore default after upgrade`,
             ]
           : []),
+        ...(data.hasStatic
+          ? [
+              ``,
+              `# --- Static site ---`,
+              ``,
+              `./hz-client site push ./public             # Upload dir as a new release (atomic swap)`,
+              `./hz-client site push ./public --validate  # Dry run: validate without swapping`,
+              `./hz-client site releases                  # List retained releases`,
+              `./hz-client site rollback                  # Revert to the previous release`,
+            ]
+          : []),
       ].join("\n")
     : "";
 
@@ -1155,7 +1180,7 @@ function buildPortMapRows(services: Service[]): PortMapRow[] {
   const rows: PortMapRow[] = [];
   for (const svc of services) {
     if (!svc.proxy) continue;
-    if (svc.proxy.staticRoot) continue; // served locally by hz, no host:port to map
+    if (svc.proxy.staticRoot || svc.proxy.self) continue; // served locally by hz, no host:port to map
     const hasDeploy = !!svc.proxy.deploy;
     const noCheck = !svc.proxy.healthCheck;
     rows.push({
@@ -1528,9 +1553,9 @@ function ServiceRow({
                       indeterminate={proxyIndeterminate}
                     />
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                      {service.proxy!.staticRoot ? "Static folder" : hasDeploy ? "Current" : "Backend"}:
+                      {service.proxy!.self ? "Admin UI" : service.proxy!.staticRoot ? "Static folder" : hasDeploy ? "Current" : "Backend"}:
                     </Typography>
-                    <Typography variant="body2"><code>{service.proxy!.staticRoot || service.proxy!.backend}</code></Typography>
+                    <Typography variant="body2"><code>{service.proxy!.self ? "this instance" : service.proxy!.staticRoot || service.proxy!.backend}</code></Typography>
                     {service.status.proxyState && (
                       <Chip
                         label={service.status.proxyState}
@@ -1540,6 +1565,14 @@ function ServiceRow({
                       />
                     )}
                   </Box>
+                  {service.proxy!.servedBy && (
+                    <Box sx={{ display: "flex", gap: 1, alignItems: "center", mb: 0.5 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>Served by:</Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        <code>{service.proxy!.servedBy}</code> (hz internal)
+                      </Typography>
+                    </Box>
+                  )}
                   {hasDeploy && (
                     <Box sx={{ display: "flex", gap: 1, alignItems: "center", mb: 0.5 }}>
                       <StatusDot configured={true} detected={service.status.proxyNextState === "up"} />

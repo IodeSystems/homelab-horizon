@@ -166,9 +166,13 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 		// static-folder service, to hz's own loopback static listener. Validation
 		// guarantees these are mutually exclusive.
 		static := svc.Proxy.StaticRoot != ""
+		self := svc.Proxy.Self
 		server := svc.Proxy.Backend
-		if static {
+		switch {
+		case static:
 			server = c.StaticServeAddr()
+		case self:
+			server = c.SelfBackendAddr()
 		}
 		if server == "" {
 			continue
@@ -186,8 +190,8 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 		}
 
 		// Blue-green deploy: override server with current/next slots.
-		// Not applicable to static services (validation rejects the combo).
-		if !static && svc.Proxy.Deploy != nil {
+		// Not applicable to static or self services (validation rejects the combo).
+		if !static && !self && svc.Proxy.Deploy != nil {
 			b.Deploy = true
 			b.HTTPCheck = true
 			b.DeployBalance = svc.Proxy.Deploy.Balance
@@ -654,6 +658,17 @@ func (c *Config) ValidateService(svc *Service) error {
 		// runtime os.Root confinement in the static server is.
 		if isSensitiveRoot(svc.Proxy.StaticRoot) {
 			return &ValidationError{Field: "proxy.static_root", Message: "refusing to serve a system directory"}
+		}
+	}
+
+	// Self (proxy to this hz instance) is mutually exclusive with the other
+	// backend sources and with blue-green deploy.
+	if svc.Proxy != nil && svc.Proxy.Self {
+		if svc.Proxy.Backend != "" || svc.Proxy.StaticRoot != "" {
+			return &ValidationError{Field: "proxy.self", Message: "self is mutually exclusive with backend and static_root"}
+		}
+		if svc.Proxy.Deploy != nil {
+			return &ValidationError{Field: "proxy.self", Message: "self cannot be combined with blue-green deploy"}
 		}
 	}
 

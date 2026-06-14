@@ -24,3 +24,6 @@ secrets.env
 *.secret
 *.secret.*
 *.secret.properties
+
+# Generated doc-deploy integration (contains a service token)
+bin/deploy-doc

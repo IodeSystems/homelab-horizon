@@ -174,7 +174,7 @@ A service can serve a folder of files instead of proxying to a backend. Set `pro
   "name": "docs",
   "domains": ["docs.example.com"],
   "external_dns": { "ttl": 300 },
-  "proxy": { "static_root": "/etc/homelab-horizon/site" }
+  "proxy": { "static_root": "/var/lib/homelab-horizon/docs" }
 }
 ```
 
@@ -198,8 +198,24 @@ For single-page apps, set `"spa": true` so a browser refresh on a client-side ro
 
 ```json
 { "name": "app", "domains": ["app.example.com"],
-  "proxy": { "static_root": "/etc/homelab-horizon/app", "spa": true } }
+  "proxy": { "static_root": "/var/lib/homelab-horizon/app", "spa": true } }
 ```
+
+### Deploying a static site
+
+Upload a directory with `hz-client` (the same token-authed client used for rolling deploys; grab the snippet + token from the service's **Integration** panel in the UI):
+
+```bash
+export HZ_TOKEN=<service token>  HZ_URL=https://hz.example.com
+curl -sO "$HZ_URL/admin/haproxy/hz-client" && chmod +x hz-client
+
+./hz-client site push ./public             # upload as a new release, atomic swap
+./hz-client site push ./public --validate  # dry run: extract + validate, no swap
+./hz-client site releases                  # list retained releases
+./hz-client site rollback                  # revert to the previous release
+```
+
+Deploys are **atomic**: the upload is extracted into a fresh release directory, then `static_root` (an hz-managed symlink) is repointed in a single rename — requests never see a half-written site. The last few releases are retained for `rollback`. Uploads are received by the root process, validated (no path traversal, no symlinks, size/file caps), and the files are owned by `nobody` so the unprivileged file server can read them.
 
 This is how the project hosts its own landing page (`docs/`): a static service on the public domain, served by hz, with auto SSL.
 

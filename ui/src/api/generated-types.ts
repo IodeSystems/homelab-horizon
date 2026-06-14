@@ -55,6 +55,8 @@ export interface DeployResp {
 export interface ProxyResp {
   backend: string;
   staticRoot?: string; // absolute dir served as static files (mutually exclusive with backend)
+  self?: boolean; // route to this hz instance's own admin UI
+  servedBy?: string; // resolved runtime address HAProxy routes to (static/self: hz's loopback)
   spa?: boolean; // static only: serve index.html for unknown non-asset paths
   healthCheck?: HealthCheckResp;
   internalOnly: boolean;
@@ -381,6 +383,7 @@ export interface ServiceRequestExternalDNS {
 export interface ServiceRequestProxy {
   backend: string;
   staticRoot?: string; // absolute dir served as static files (mutually exclusive with backend)
+  self?: boolean; // route to this hz instance's own admin UI
   spa?: boolean; // static only: serve index.html for unknown non-asset paths
   healthCheck?: ServiceRequestHealthCheck;
   internalOnly: boolean;
@@ -486,6 +489,7 @@ export interface ServiceIntegration {
   token: string;
   baseURL: string;
   hasDeploy: boolean;
+  hasStatic: boolean; // static-folder service: site upload available
 }
 export interface HAFleetPeer {
   id: string;

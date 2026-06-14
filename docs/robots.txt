@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://iodesystems.github.io/homelab-horizon/sitemap.xml
+Sitemap: https://homelab-horizon.iodesystems.com/sitemap.xml
