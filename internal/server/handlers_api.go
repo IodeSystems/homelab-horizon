@@ -182,6 +182,14 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 				SPA:          svc.Proxy.SPA,
 				InternalOnly: svc.Proxy.InternalOnly,
 			}
+			// Surface the resolved runtime address HAProxy routes to. For
+			// static/self the config backend is empty; it's hz's own loopback.
+			switch {
+			case svc.Proxy.StaticRoot != "":
+				pr.ServedBy = s.cfg().StaticServeAddr()
+			case svc.Proxy.Self:
+				pr.ServedBy = s.cfg().SelfBackendAddr()
+			}
 			if svc.Proxy.HealthCheck != nil {
 				pr.HealthCheck = &apitypes.HealthCheckResp{Path: svc.Proxy.HealthCheck.Path}
 			}

@@ -56,6 +56,7 @@ export interface ProxyResp {
   backend: string;
   staticRoot?: string; // absolute dir served as static files (mutually exclusive with backend)
   self?: boolean; // route to this hz instance's own admin UI
+  servedBy?: string; // resolved runtime address HAProxy routes to (static/self: hz's loopback)
   spa?: boolean; // static only: serve index.html for unknown non-asset paths
   healthCheck?: HealthCheckResp;
   internalOnly: boolean;
