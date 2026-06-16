@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -261,7 +263,18 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 
 		// Check HAProxy backend health
 		if sr.Proxy != nil {
-			if bi, ok := backendMap[sr.Name]; ok {
+			if sr.Proxy.StaticRoot != "" {
+				// Static folders are served by hz's own loopback listener, so
+				// HAProxy's "no check" status carries no signal. The real health
+				// question is whether the doc root has an index.html to serve at
+				// "/" — without one the file server 404s the site root.
+				if _, err := os.Stat(filepath.Join(sr.Proxy.StaticRoot, "index.html")); err == nil {
+					sr.Status.ProxyUp = true
+					sr.Status.ProxyState = "up"
+				} else {
+					sr.Status.ProxyError = "no index.html — serves 404 at /"
+				}
+			} else if bi, ok := backendMap[sr.Name]; ok {
 				sr.Status.ProxyUp = bi.healthy
 				sr.Status.ProxyError = bi.err
 				sr.Status.ProxyState = bi.state
