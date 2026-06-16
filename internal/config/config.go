@@ -357,6 +357,51 @@ type Zone struct {
 	DNSProvider *DNSProviderConfig `json:"dns_provider,omitempty"` // DNS provider configuration
 	SSL         *ZoneSSL           `json:"ssl,omitempty"`
 	SubZones    []string           `json:"sub_zones,omitempty"` // Sub-domains needing wildcard certs (e.g., "vpn" for *.vpn.example.com)
+	Records     []DNSRecord        `json:"records,omitempty"`   // Statically-declared records hz publishes to the provider (e.g. TXT verification)
+}
+
+// DNSRecord is a statically-declared DNS record that hz publishes to the zone's
+// DNS provider on sync. Use it for records not derived from services — domain
+// verification (Google/etc), SPF, DKIM, DMARC, static CNAMEs.
+//
+// Ownership: hz owns the full record set for each (Name, Type). On sync it
+// publishes exactly the declared values and replaces any others at that
+// name/type (libdns SetRecords semantics). So declare ALL values you want for
+// a given name+type together — an undeclared TXT at the same name will be
+// removed. Records at other names are untouched. The transient _acme-challenge
+// TXT records used for SSL are at distinct names and are unaffected.
+type DNSRecord struct {
+	Name  string `json:"name"`          // FQDN ("foo.example.com"), zone apex (the zone name or "@"), or a label relative to the zone
+	Type  string `json:"type"`          // A, AAAA, CNAME, TXT
+	Value string `json:"value"`         // record value (e.g. "google-site-verification=...")
+	TTL   int    `json:"ttl,omitempty"` // seconds; defaults to 300
+}
+
+// NormalizedType returns the upper-cased record type.
+func (r DNSRecord) NormalizedType() string {
+	return strings.ToUpper(strings.TrimSpace(r.Type))
+}
+
+// EffectiveTTL returns the configured TTL or the 300s default.
+func (r DNSRecord) EffectiveTTL() int {
+	if r.TTL > 0 {
+		return r.TTL
+	}
+	return 300
+}
+
+// Validate checks the record has the required fields.
+func (r DNSRecord) Validate() error {
+	if strings.TrimSpace(r.Name) == "" {
+		return errors.New("dns record requires a name")
+	}
+	if r.NormalizedType() == "" {
+		return errors.New("dns record requires a type")
+	}
+	if strings.TrimSpace(r.Value) == "" {
+		return fmt.Errorf("dns record %s (%s) requires a value", r.Name, r.NormalizedType())
+	}
+	return nil
 }
 
 // GetDNSProvider returns the DNS provider config with zone name populated
@@ -1110,7 +1155,14 @@ func Template() string {
       "ssl": {
         "enabled": true,
         "email": "admin@example.com"
-      }
+      },
+      // Static records hz publishes on DNS sync (verification, SPF, DKIM, ...).
+      // hz owns each (name, type) set: it publishes exactly these values and
+      // replaces any others at that name/type. Declare all values for a name
+      // together. Name may be an FQDN, the zone apex ("@"), or a relative label.
+      "records": [
+        { "name": "app.example.com", "type": "TXT", "value": "google-site-verification=XXdummyTokenXX", "ttl": 3600 }
+      ]
     }
   ],
 
