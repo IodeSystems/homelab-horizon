@@ -26,7 +26,6 @@ import {
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import WarningIcon from "@mui/icons-material/Warning";
-import SyncIcon from "@mui/icons-material/Sync";
 import HttpsIcon from "@mui/icons-material/Https";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
@@ -35,7 +34,7 @@ import {
   useAddDomainSSL,
   useRemoveDomainSSL,
 } from "../api/hooks";
-import { useSyncContext } from "../components/SyncProvider";
+import SyncButton from "../components/SyncButton";
 import type { DomainAnalysis } from "../api/types";
 
 /**
@@ -350,7 +349,6 @@ function DomainRow({
 
 function DomainsPage() {
   const { data, isLoading, error } = useDomains();
-  const { startSync, isSyncing } = useSyncContext();
   const addSSLMutation = useAddDomainSSL();
   const [addOpen, setAddOpen] = useState(false);
   const [addDomain, setAddDomain] = useState("");
@@ -369,10 +367,6 @@ function DomainsPage() {
       },
       onError: (err) => showSnack(err.message, "error"),
     });
-  };
-
-  const handleSyncAll = () => {
-    startSync();
   };
 
   if (isLoading) {
@@ -396,14 +390,7 @@ function DomainsPage() {
           Domains
         </Typography>
         <Box sx={{ display: "flex", gap: 1 }}>
-          <Button
-            variant="outlined"
-            startIcon={isSyncing ? <CircularProgress size={16} /> : <SyncIcon />}
-            onClick={handleSyncAll}
-            disabled={isSyncing}
-          >
-            {isSyncing ? "Syncing..." : "Sync"}
-          </Button>
+          <SyncButton />
           <Button
             variant="contained"
             startIcon={<AddIcon />}

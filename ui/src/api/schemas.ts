@@ -333,3 +333,22 @@ export const CheckHistoryResponseSchema = z.object({
 });
 
 export const ChecksListSchema = z.array(CheckStatusSchema);
+
+export const FieldChangeSchema = z.object({
+  path: z.string(),
+  before: z.string().optional(),
+  after: z.string().optional(),
+});
+
+export const PendingItemSchema = z.object({
+  kind: z.string(),
+  name: z.string(),
+  change: z.string(),
+  fields: z.array(FieldChangeSchema).optional(),
+});
+
+export const PendingChangesSchema = z.object({
+  hasPending: z.boolean(),
+  count: z.number(),
+  items: z.array(PendingItemSchema),
+});

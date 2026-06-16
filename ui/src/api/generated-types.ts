@@ -442,6 +442,35 @@ export interface TriggerSyncResponse {
   ok: boolean;
   started: boolean;
 }
+/**
+ * PendingChanges describes config edits made since the last successful full
+ * sync, computed by diffing the live config against the snapshot saved at that
+ * sync. Shared server-side, so a second admin's unsynced edits surface for
+ * everyone — the cue that a Sync is needed and what it will push.
+ */
+export interface PendingChanges {
+  hasPending: boolean;
+  count: number /* int */; // number of changed services + zones
+  items: PendingItem[];
+}
+/**
+ * PendingItem is one added, removed, or modified service or zone.
+ */
+export interface PendingItem {
+  kind: string; // "service" | "zone"
+  name: string;
+  change: string; // "added" | "removed" | "modified"
+  fields?: FieldChange[]; // changed fields (modified only)
+}
+/**
+ * FieldChange is a single changed field within a modified item, before and
+ * after rendered as compact strings for display.
+ */
+export interface FieldChange {
+  path: string;
+  before?: string;
+  after?: string;
+}
 export interface RunCheckResponse {
   ok: boolean;
   status: string;

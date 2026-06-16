@@ -405,6 +405,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 	}
 	s.config.Store(cfg)
 	s.static.Rebuild(cfg)
+	s.initSyncedBaseline()
 
 	return s, nil
 }
@@ -926,6 +927,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/domains", s.handleAPIDomains)
 	mux.HandleFunc("/api/v1/vpn/peers", s.handleAPIVPNPeers)
 	mux.HandleFunc("/api/v1/zones", s.handleAPIZones)
+	mux.HandleFunc("/api/v1/sync/pending", s.handleAPIPendingChanges)
 
 	// API v1 mutation routes
 	mux.HandleFunc("/api/v1/services/add", s.handleAPIAddService)
