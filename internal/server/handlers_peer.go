@@ -359,5 +359,9 @@ func (s *Server) applyNewConfig(newCfg *config.Config) error {
 		old.WGConfigPath != newCfg.WGConfigPath {
 		slog.Warn("peer-sync: low-level config changed (listen/wg) — restart required to take effect")
 	}
+
+	// A pulled peer config is, by definition, the synced state for this
+	// instance — track it so a non-primary never shows phantom pending changes.
+	s.markSynced()
 	return nil
 }

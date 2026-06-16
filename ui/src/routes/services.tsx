@@ -35,7 +35,6 @@ import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
-import SyncIcon from "@mui/icons-material/Sync";
 import IntegrationInstructionsIcon from "@mui/icons-material/IntegrationInstructions";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import LanIcon from "@mui/icons-material/Lan";
@@ -50,7 +49,7 @@ import {
   useAddDomainSSL,
   useRemoveDomainSSL,
 } from "../api/hooks";
-import { useSyncContext } from "../components/SyncProvider";
+import SyncButton from "../components/SyncButton";
 import type { Service, Zone } from "../api/types";
 import type { ServiceMutationInput } from "../api/hooks";
 
@@ -1695,7 +1694,6 @@ function ServicesPage() {
   const addMutation = useAddService();
   const editMutation = useEditService();
   const deleteMutation = useDeleteService();
-  const { startSync } = useSyncContext();
 
   const localInterface = settings?.config?.localInterface ?? "";
   const publicIP = settings?.config?.publicIP ?? "";
@@ -1795,13 +1793,7 @@ function ServicesPage() {
           >
             Port Map
           </Button>
-          <Button
-            variant="outlined"
-            startIcon={<SyncIcon />}
-            onClick={startSync}
-          >
-            Sync
-          </Button>
+          <SyncButton />
           <Button
             variant="contained"
             startIcon={<AddIcon />}

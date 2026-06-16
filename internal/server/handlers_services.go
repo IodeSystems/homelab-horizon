@@ -600,6 +600,9 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 		log.Warning("Sync completed with errors")
 	} else {
 		log.Success("All services synced successfully")
+		// Snapshot the now-published config so pending-change detection
+		// resets to clean.
+		s.markSynced()
 	}
 	log.Done(!hasErrors)
 }

@@ -513,6 +513,34 @@ type TriggerSyncResponse struct {
 	Started bool `json:"started"`
 }
 
+// Pending changes
+
+// PendingChanges describes config edits made since the last successful full
+// sync, computed by diffing the live config against the snapshot saved at that
+// sync. Shared server-side, so a second admin's unsynced edits surface for
+// everyone — the cue that a Sync is needed and what it will push.
+type PendingChanges struct {
+	HasPending bool          `json:"hasPending"`
+	Count      int           `json:"count"` // number of changed services + zones
+	Items      []PendingItem `json:"items"`
+}
+
+// PendingItem is one added, removed, or modified service or zone.
+type PendingItem struct {
+	Kind   string        `json:"kind"` // "service" | "zone"
+	Name   string        `json:"name"`
+	Change string        `json:"change"`           // "added" | "removed" | "modified"
+	Fields []FieldChange `json:"fields,omitempty"` // changed fields (modified only)
+}
+
+// FieldChange is a single changed field within a modified item, before and
+// after rendered as compact strings for display.
+type FieldChange struct {
+	Path   string `json:"path"`
+	Before string `json:"before,omitempty"`
+	After  string `json:"after,omitempty"`
+}
+
 // Run check
 
 type RunCheckResponse struct {

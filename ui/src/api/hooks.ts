@@ -22,6 +22,7 @@ import type {
   MFASettingsResponse,
   MFAStatusResponse,
   MFAVerifyResponse,
+  PendingChanges,
   PeerConfigResponse,
   RekeyPeerResponse,
   Service,
@@ -47,6 +48,7 @@ import {
   SettingsDataSchema,
   HAProxyConfigPreviewSchema,
   InvitesSchema,
+  PendingChangesSchema,
 } from "./schemas";
 
 export function useDashboard() {
@@ -135,6 +137,7 @@ export function useAddService() {
       qc.invalidateQueries({ queryKey: ["services"] });
       qc.invalidateQueries({ queryKey: ["domains"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["pending"] });
     },
   });
 }
@@ -151,6 +154,7 @@ export function useEditService() {
       qc.invalidateQueries({ queryKey: ["services"] });
       qc.invalidateQueries({ queryKey: ["domains"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["pending"] });
     },
   });
 }
@@ -167,6 +171,7 @@ export function useDeleteService() {
       qc.invalidateQueries({ queryKey: ["services"] });
       qc.invalidateQueries({ queryKey: ["domains"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["pending"] });
     },
   });
 }
@@ -185,6 +190,7 @@ export function useAddSubZone() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["zones"] });
+      qc.invalidateQueries({ queryKey: ["pending"] });
       qc.invalidateQueries({ queryKey: ["domains"] });
     },
   });
@@ -204,6 +210,7 @@ export function useAddDomainSSL() {
       qc.invalidateQueries({ queryKey: ["domains"] });
       qc.invalidateQueries({ queryKey: ["settings"] });
       qc.invalidateQueries({ queryKey: ["zones"] });
+      qc.invalidateQueries({ queryKey: ["pending"] });
     },
   });
 }
@@ -220,6 +227,7 @@ export function useRemoveDomainSSL() {
       qc.invalidateQueries({ queryKey: ["domains"] });
       qc.invalidateQueries({ queryKey: ["settings"] });
       qc.invalidateQueries({ queryKey: ["zones"] });
+      qc.invalidateQueries({ queryKey: ["pending"] });
     },
   });
 }
@@ -237,7 +245,24 @@ export function useRequestCert() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["domains"] });
       qc.invalidateQueries({ queryKey: ["zones"] });
+      qc.invalidateQueries({ queryKey: ["pending"] });
     },
+  });
+}
+
+// --- Pending changes ---
+
+// Config edits apply locally at once but external DNS/SSL only publish on a
+// full Sync. This surfaces what's diverged from the last sync. Polled so a
+// second admin's unsynced edits show up here too.
+export function usePendingChanges() {
+  return useQuery({
+    queryKey: ["pending"],
+    queryFn: () =>
+      apiFetch<PendingChanges>("/sync/pending", {
+        schema: PendingChangesSchema,
+      }),
+    refetchInterval: 10000,
   });
 }
 
@@ -514,6 +539,7 @@ export function useAddZone() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings"] });
       qc.invalidateQueries({ queryKey: ["zones"] });
+      qc.invalidateQueries({ queryKey: ["pending"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
   });
@@ -534,6 +560,7 @@ export function useEditZone() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings"] });
       qc.invalidateQueries({ queryKey: ["zones"] });
+      qc.invalidateQueries({ queryKey: ["pending"] });
     },
   });
 }
@@ -549,6 +576,7 @@ export function useDeleteZone() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings"] });
       qc.invalidateQueries({ queryKey: ["zones"] });
+      qc.invalidateQueries({ queryKey: ["pending"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
   });
