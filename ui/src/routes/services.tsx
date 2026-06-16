@@ -1467,7 +1467,11 @@ function ServiceRow({
             configured={hasProxy}
             detected={service.status.proxyUp}
             indeterminate={proxyIndeterminate}
-            title={proxyIndeterminate ? "No health check configured" : undefined}
+            title={
+              proxyIndeterminate
+                ? service.status.proxyError || "No health check configured"
+                : undefined
+            }
           />
         </TableCell>
       </TableRow>
