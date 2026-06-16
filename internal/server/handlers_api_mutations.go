@@ -474,6 +474,11 @@ func (s *Server) handleAPISyncAllDNS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Publish statically-declared zone records (TXT verification, SPF, etc).
+	zUpdated, zFailed := s.syncZoneRecords()
+	updated += zUpdated
+	failed += zFailed
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(apitypes.DNSSyncAllResponse{OK: true, Updated: updated, Failed: failed})
 }
