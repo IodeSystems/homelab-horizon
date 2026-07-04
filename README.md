@@ -165,6 +165,40 @@ Once your zone is set up, adding a service is straightforward:
 
 Services don't have to be on your local network. The proxy backend can point to any reachable host:port — a Raspberry Pi on your LAN, a VM in the cloud, or a container on the same machine.
 
+### Managing services from the CLI (`hz`)
+
+`hz` is an operator CLI for driving a whole instance from your workstation — service list/show/create/edit/delete plus a global sync. It's distinct from the per-service `hz-client` (which is service-token scoped, for deploys/bans/site uploads): `hz` authenticates with the instance **admin token**.
+
+Install it straight from the instance (detects your OS/arch, drops the binary in `~/.local/bin` or `/usr/local/bin`, and — if you pass a token — writes `~/.hz_config`):
+
+```bash
+curl -fsSL $HZ_URL/admin/hz/install | HZ_HOST=$HZ_URL HZ_TOKEN=<admin-token> bash
+```
+
+The binaries are served by the instance itself (no GitHub needed). Omit `HZ_TOKEN` to install the binary only, or build locally with `make build-hz`. Either way `hz` reads `~/.hz_config`:
+
+```json
+{ "host": "http://192.168.1.89:8080", "token": "<admin-token>" }
+```
+
+(`HZ_HOST`/`HZ_TOKEN` env or `--host`/`--token` flags override the file.)
+
+```bash
+hz service list                      # table of all services
+hz service show grafana --json       # one service
+hz setup                             # interactive questionnaire -> create + sync
+hz service create --name ebb --domain ebb.example.com \
+    --backend 192.168.1.76:8300 --internal-only --health-check /healthz --sync
+hz service edit ebb --public         # only the flags you pass change
+hz sync --wait                       # trigger a global sync, block until done
+hz pending                           # show unsynced config changes
+hz ports next --host 192.168.1.76 --count 100 --from 8000
+                                     # find the next free contiguous port range on a host
+hz schema service                    # dump the request schema (reflected from apitypes)
+```
+
+`hz --help` lists every command and flag; `hz schema service` prints the exact JSON request shape the server accepts (generated from the shared `internal/apitypes` structs, so it never drifts).
+
 ### Static Sites
 
 A service can serve a folder of files instead of proxying to a backend. Set `proxy.static_root` to an absolute directory (mutually exclusive with `proxy.backend`):
