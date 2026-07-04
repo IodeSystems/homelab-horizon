@@ -56,9 +56,9 @@ func TestBuildZoneRecordSetsValidation(t *testing.T) {
 		Name:   "example.com",
 		ZoneID: "Z123",
 		Records: []config.DNSRecord{
-			{Name: "", Type: "TXT", Value: "x"},                 // missing name
-			{Name: "ok.example.com", Type: "", Value: "x"},      // missing type
-			{Name: "ok.example.com", Type: "TXT", Value: ""},    // missing value
+			{Name: "", Type: "TXT", Value: "x"},                  // missing name
+			{Name: "ok.example.com", Type: "", Value: "x"},       // missing type
+			{Name: "ok.example.com", Type: "TXT", Value: ""},     // missing value
 			{Name: "ok.example.com", Type: "TXT", Value: "good"}, // valid
 		},
 	}
