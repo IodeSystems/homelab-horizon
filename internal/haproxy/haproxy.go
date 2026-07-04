@@ -457,10 +457,14 @@ listen stats
     mode http
     option forwardfor
     http-request set-header X-Forwarded-Proto https
-    # Compression
+    # Compression: gzip is a FALLBACK for backends that return raw responses. No 'offload' —
+    # that strips Accept-Encoding before the backend, forcing it to send raw so HAProxy re-gzips
+    # (and HAProxy only does gzip, never brotli). Without offload, Accept-Encoding reaches the
+    # backend, so a backend serving PRECOMPRESSED assets (its response already carries a
+    # Content-Encoding) passes straight through untouched — letting a brotli-precompressing
+    # backend (e.g. redline's webui) deliver brotli to clients instead of a mediocre re-gzip.
     compression algo gzip
     compression type text/html text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript image/svg+xml
-    compression offload
     # HAProxy LRU cache
     http-request cache-use mycache
     http-response cache-store mycache
@@ -511,10 +515,14 @@ listen stats
     bind *:%d
     mode http
     option forwardfor
-    # Compression
+    # Compression: gzip is a FALLBACK for backends that return raw responses. No 'offload' —
+    # that strips Accept-Encoding before the backend, forcing it to send raw so HAProxy re-gzips
+    # (and HAProxy only does gzip, never brotli). Without offload, Accept-Encoding reaches the
+    # backend, so a backend serving PRECOMPRESSED assets (its response already carries a
+    # Content-Encoding) passes straight through untouched — letting a brotli-precompressing
+    # backend (e.g. redline's webui) deliver brotli to clients instead of a mediocre re-gzip.
     compression algo gzip
     compression type text/html text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript image/svg+xml
-    compression offload
     # HAProxy LRU cache
     http-request cache-use mycache
     http-response cache-store mycache

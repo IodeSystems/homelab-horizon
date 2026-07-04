@@ -398,6 +398,14 @@ func TestGenerateConfig_Compression(t *testing.T) {
 			t.Errorf("config missing compression setting: %s", expected)
 		}
 	}
+
+	// 'compression offload' must NOT be present: it strips Accept-Encoding before the backend,
+	// which forces backends to send raw and blocks precompressed/brotli pass-through (HAProxy
+	// only re-gzips). Keep compression pass-through so a brotli-precompressing backend reaches
+	// clients directly.
+	if strings.Contains(config, "compression offload") {
+		t.Error("config has 'compression offload' — that blocks precompressed/brotli pass-through from backends")
+	}
 }
 
 func TestGenerateConfig_Caching(t *testing.T) {
