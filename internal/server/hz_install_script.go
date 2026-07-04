@@ -62,10 +62,14 @@ ${SUDO} mv "$tmp" "$dir/hz"
 trap - EXIT
 echo "hz-install: installed $dir/hz"
 
+cfg="${HZ_CONFIG:-$HOME/.hz_config}"
+write_config() { # host token
+  ( umask 077; printf '{\n  "host": "%s",\n  "token": "%s"\n}\n' "$1" "$2" > "$cfg" )
+  echo "hz-install: wrote $cfg (host=$1)"
+}
+
 if [ -n "${HZ_TOKEN:-}" ]; then
-  cfg="${HZ_CONFIG:-$HOME/.hz_config}"
-  ( umask 077; printf '{\n  "host": "%s",\n  "token": "%s"\n}\n' "$BASE" "$HZ_TOKEN" > "$cfg" )
-  echo "hz-install: wrote $cfg (host=$BASE)"
+  write_config "$BASE" "$HZ_TOKEN"
 fi
 
 case ":$PATH:" in
@@ -73,9 +77,30 @@ case ":$PATH:" in
   *) echo "hz-install: note — $dir is not on your PATH; add it to use 'hz' directly." >&2 ;;
 esac
 
+# Interactive init: when run with a real terminal (i.e. NOT 'curl ... | bash')
+# and no token was supplied, prompt for host/token, write the config, and offer
+# to scaffold a service. A piped run skips this and stays non-interactive.
+if [ -z "${HZ_TOKEN:-}" ] && [ -t 0 ]; then
+  echo
+  echo "hz-install: interactive setup (press Ctrl-C to skip)"
+  printf '  Horizon host [%s]: ' "$BASE"; read -r _host
+  _host="${_host:-$BASE}"; _host="${_host%/}"
+  printf '  Admin token: '; read -r _tok
+  if [ -n "$_tok" ]; then
+    write_config "$_host" "$_tok"
+    printf '  Create a service now with '"'"'hz setup'"'"'? [y/N]: '; read -r _yn
+    case "$_yn" in
+      [Yy]*) exec "$dir/hz" --host "$_host" --token "$_tok" setup ;;
+    esac
+    echo
+    echo "Done. Try: hz service list"
+    exit 0
+  fi
+fi
+
 echo
 echo "Done. Next steps:"
-if [ -n "${HZ_TOKEN:-}" ]; then
+if [ -f "$cfg" ]; then
   echo "  hz service list      # verify connectivity"
   echo "  hz setup             # create a service (interactive)"
 else
