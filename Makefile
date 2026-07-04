@@ -6,6 +6,12 @@ VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_TIME=$(shell date -u '+%Y-%m-%d_%H:%M:%S')
 LDFLAGS=-ldflags "-s -w -X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME)"
 
+# Server builds embed the per-arch hz operator-CLI binaries (served at
+# /admin/hz/*) behind the 'hzembed' tag; the hz-embed target cross-compiles them
+# into this dir first. A plain `go build`/CI omits the tag and needs no binaries.
+SERVER_TAGS=hzembed
+HZ_EMBED_DIR=internal/server/hzbin/bin
+
 # Default target
 .PHONY: all
 all: build
@@ -27,13 +33,28 @@ ui/dist/index.html:
 
 # Build for current platform (includes frontend)
 .PHONY: build
-build: ui
-	CGO_ENABLED=0 go build $(LDFLAGS) -o $(BINARY_NAME) $(CMD_PATH)
+build: ui hz-embed
+	CGO_ENABLED=0 go build -tags $(SERVER_TAGS) $(LDFLAGS) -o $(BINARY_NAME) $(CMD_PATH)
 
 # Build Go only (uses stub frontend if ui/dist doesn't exist)
 .PHONY: build-go
-build-go: ui/dist/index.html
-	CGO_ENABLED=0 go build $(LDFLAGS) -o $(BINARY_NAME) $(CMD_PATH)
+build-go: ui/dist/index.html hz-embed
+	CGO_ENABLED=0 go build -tags $(SERVER_TAGS) $(LDFLAGS) -o $(BINARY_NAME) $(CMD_PATH)
+
+# Build the hz operator CLI (admin-token client: service CRUD + sync + setup)
+.PHONY: build-hz
+build-hz:
+	CGO_ENABLED=0 go build $(LDFLAGS) -o hz ./cmd/hz
+
+# Cross-compile the hz binaries the server embeds and serves at /admin/hz/bin/.
+# Always builds all served arches regardless of the server's own arch.
+.PHONY: hz-embed
+hz-embed:
+	@rm -rf $(HZ_EMBED_DIR)
+	@mkdir -p $(HZ_EMBED_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64        go build $(LDFLAGS) -o $(HZ_EMBED_DIR)/hz-linux-amd64 ./cmd/hz
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64        go build $(LDFLAGS) -o $(HZ_EMBED_DIR)/hz-linux-arm64 ./cmd/hz
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7  go build $(LDFLAGS) -o $(HZ_EMBED_DIR)/hz-linux-arm ./cmd/hz
 
 # Run backend + frontend dev servers together (Ctrl-C stops both)
 .PHONY: run
@@ -64,25 +85,26 @@ build-all: ui build-linux-amd64 build-linux-arm64 build-linux-arm
 
 # Linux AMD64 (most servers, x86_64)
 .PHONY: build-linux-amd64
-build-linux-amd64: ui dist
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-amd64 $(CMD_PATH)
+build-linux-amd64: ui dist hz-embed
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags $(SERVER_TAGS) $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-amd64 $(CMD_PATH)
 
 # Linux ARM64 (Raspberry Pi 4/5, modern ARM servers)
 .PHONY: build-linux-arm64
-build-linux-arm64: ui dist
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-arm64 $(CMD_PATH)
+build-linux-arm64: ui dist hz-embed
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags $(SERVER_TAGS) $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-arm64 $(CMD_PATH)
 
 # Linux ARM (Raspberry Pi 2/3, older 32-bit ARM)
 .PHONY: build-linux-arm
-build-linux-arm: ui dist
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-armv7 $(CMD_PATH)
+build-linux-arm: ui dist hz-embed
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -tags $(SERVER_TAGS) $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-armv7 $(CMD_PATH)
 
 # Clean build artifacts
 .PHONY: clean
 clean:
-	rm -f $(BINARY_NAME)
+	rm -f $(BINARY_NAME) hz
 	rm -rf dist/
 	rm -rf ui/dist/
+	rm -rf $(HZ_EMBED_DIR)
 
 # Run tests
 .PHONY: test
@@ -163,6 +185,7 @@ help:
 	@echo "  make              - Build for current platform (includes frontend)"
 	@echo "  make ui           - Build frontend only (React SPA)"
 	@echo "  make build-go     - Build Go only (stub frontend)"
+	@echo "  make build-hz     - Build the hz operator CLI (admin-token client)"
 	@echo "  make run          - Run backend + frontend dev servers together"
 	@echo "  make run-backend  - Run Go backend only (:8080)"
 	@echo "  make run-frontend - Run Vite frontend dev server only (:5173)"

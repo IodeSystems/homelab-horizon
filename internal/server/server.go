@@ -894,6 +894,8 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// Kept admin routes
 	mux.HandleFunc("/admin/haproxy/deploy-script", s.handleHZClientScript) // services download this
 	mux.HandleFunc("/admin/haproxy/hz-client", s.handleHZClientScript)     // new canonical path
+	mux.HandleFunc("/admin/hz/install", s.handleHZInstallScript)           // curl|bash installer for the hz operator CLI
+	mux.HandleFunc("/admin/hz/bin/", s.handleHZBinary)                     // per-arch hz binaries (needs -tags hzembed)
 
 	// Backup/restore API (Bearer token auth)
 	mux.HandleFunc("/admin/backup/export", s.backupAuthMiddleware(s.handleBackupExport))
