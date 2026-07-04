@@ -192,6 +192,7 @@ func TestWriteConfig(t *testing.T) {
 		"server=1.1.1.1",
 		"bind-dynamic",
 		"no-resolv",
+		"no-hosts",
 		"cache-size=1000",
 	}
 
