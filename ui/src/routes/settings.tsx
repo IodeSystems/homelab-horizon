@@ -972,6 +972,102 @@ function VPNMFATab() {
   );
 }
 
+// --- hz CLI Tab ---
+
+function CodeBlock({ text, onCopy }: { text: string; onCopy: () => void }) {
+  return (
+    <Paper
+      sx={{
+        p: 2,
+        pr: 8,
+        bgcolor: "#1a1a2e",
+        color: "#e0e0e0",
+        fontFamily: "monospace",
+        fontSize: "0.85rem",
+        wordBreak: "break-all",
+        whiteSpace: "pre-wrap",
+        position: "relative",
+      }}
+    >
+      {text}
+      <Button
+        size="small"
+        sx={{ position: "absolute", top: 4, right: 4 }}
+        onClick={() => {
+          navigator.clipboard.writeText(text);
+          onCopy();
+        }}
+      >
+        Copy
+      </Button>
+    </Paper>
+  );
+}
+
+function HzCliTab() {
+  const [snack, setSnack] = useState("");
+  const base = window.location.origin;
+  const install = `curl -fsSL ${base}/admin/hz/install | HZ_HOST=${base} HZ_TOKEN=<admin-token> bash`;
+  const installBinOnly = `curl -fsSL ${base}/admin/hz/install | bash`;
+
+  return (
+    <Box>
+      <Paper sx={{ p: 3 }}>
+        <Typography variant="h6" sx={{ mb: 1 }}>
+          hz operator CLI
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Manage this instance from your workstation — list/create/edit/delete
+          services, trigger a global sync, or scaffold a new service with{" "}
+          <code>hz setup</code>. Authenticates with the admin token (distinct
+          from the per-service tokens in the Integration panel).
+        </Typography>
+
+        <Typography variant="subtitle2" sx={{ mb: 1 }}>
+          Install &amp; configure (detects OS/arch, writes ~/.hz_config):
+        </Typography>
+        <CodeBlock text={install} onCopy={() => setSnack("Copied install command")} />
+        <Alert severity="info" sx={{ mt: 1, mb: 3 }}>
+          Replace <code>&lt;admin-token&gt;</code> with the admin token you log
+          in with. Installs <code>hz</code> to <code>/usr/local/bin</code> (or{" "}
+          <code>~/.local/bin</code>) and writes <code>~/.hz_config</code>.
+          Binaries are served by this instance — no internet needed. Linux
+          amd64/arm64/armv7 only; elsewhere build from source with{" "}
+          <code>make build-hz</code>.
+        </Alert>
+
+        <Typography variant="subtitle2" sx={{ mb: 1 }}>
+          Binary only (configure ~/.hz_config yourself):
+        </Typography>
+        <CodeBlock
+          text={installBinOnly}
+          onCopy={() => setSnack("Copied install command")}
+        />
+
+        <Typography variant="subtitle2" sx={{ mt: 3, mb: 1 }}>
+          Then:
+        </Typography>
+        <CodeBlock
+          text={[
+            "hz service list                 # all services",
+            "hz setup                        # create a service (interactive)",
+            "hz sync --wait                  # publish config changes",
+            "hz schema service               # request schema",
+          ].join("\n")}
+          onCopy={() => setSnack("Copied")}
+        />
+      </Paper>
+
+      <Snackbar
+        open={!!snack}
+        autoHideDuration={3000}
+        onClose={() => setSnack("")}
+        message={snack}
+      />
+    </Box>
+  );
+}
+
 // --- Main Settings Page ---
 
 function SettingsPage() {
@@ -1011,6 +1107,7 @@ function SettingsPage() {
         <Tab label="VPN MFA" />
         <Tab label="HA Fleet" />
         <Tab label="IPTables" />
+        <Tab label="hz CLI" />
       </Tabs>
 
       {tab === 0 && (
@@ -1043,6 +1140,7 @@ function SettingsPage() {
       {tab === 3 && <VPNMFATab />}
       {tab === 4 && <HAFleetTab />}
       {tab === 5 && <IPTablesTab />}
+      {tab === 6 && <HzCliTab />}
     </Box>
   );
 }
