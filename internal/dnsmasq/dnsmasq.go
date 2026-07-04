@@ -60,6 +60,13 @@ func (d *DNSMasq) WriteConfig() error {
 	config.WriteString("# Don't use /etc/resolv.conf\n")
 	config.WriteString("no-resolv\n\n")
 
+	// Ignore /etc/hosts entirely — our records come from the conf-file below.
+	// Otherwise a stray /etc/hosts line (e.g. a loopback entry for a service
+	// domain) gets served to every VPN/LAN client and overrides our address=
+	// mapping, pointing clients at 127.0.0.1 instead of the horizon host.
+	config.WriteString("# Ignore /etc/hosts — records come from conf-file below\n")
+	config.WriteString("no-hosts\n\n")
+
 	config.WriteString("# Cache settings\n")
 	config.WriteString("cache-size=1000\n\n")
 
