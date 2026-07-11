@@ -2,10 +2,13 @@ package haproxy
 
 import (
 	"bufio"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -351,21 +354,14 @@ listen stats
 
 `)
 
-	// Check if SSL is enabled and collect domains with certs
+	// Check if SSL is enabled and collect the HTTP->HTTPS redirect host patterns.
+	// Patterns are derived from each cert's SANs (not its filename): a single cert
+	// covers many subzones, so matching only the filename would redirect just the
+	// primary subzone to HTTPS and leave every other SAN on plain HTTP.
 	sslEnabled := false
-	var sslDomains []string
+	var sslExact, sslSuffix []string
 	if ssl != nil && ssl.Enabled && ssl.CertDir != "" {
-		entries, err := os.ReadDir(ssl.CertDir)
-		if err == nil {
-			for _, e := range entries {
-				if !e.IsDir() && strings.HasSuffix(e.Name(), ".pem") {
-					sslEnabled = true
-					// Extract domain name from filename (e.g., "example.com.pem" -> "example.com")
-					domain := strings.TrimSuffix(e.Name(), ".pem")
-					sslDomains = append(sslDomains, domain)
-				}
-			}
-		}
+		sslExact, sslSuffix, sslEnabled = certRedirectPatterns(ssl.CertDir)
 	}
 
 	// Whether to emit the local_access ACL: any internal-only backend (whole-
@@ -398,21 +394,21 @@ listen stats
 `)
 		}
 
-		// Add ACLs for domains with SSL certificates. Each cert covers both the
-		// domain itself (exact host) and its subdomains, so emit both an exact
-		// match and a suffix match under the same ACL name (HAProxy ORs them).
-		// hdr_end(host) -i .example.com alone would skip example.com itself.
-		if len(sslDomains) > 0 {
-			sb.WriteString("    # Domains with SSL certificates\n")
-			for i, domain := range sslDomains {
-				fmt.Fprintf(&sb, "    acl ssl_domain_%d hdr(host) -i %s\n", i, domain)
-				fmt.Fprintf(&sb, "    acl ssl_domain_%d hdr_end(host) -i .%s\n", i, domain)
+		// Add ACLs for hosts covered by an SSL certificate, derived from cert SANs.
+		// Non-wildcard SANs (example.com, dev.example.com) become exact host
+		// matches; wildcard SANs (*.office.example.com) become suffix matches
+		// (.office.example.com). All patterns share one ACL name so HAProxy ORs
+		// them, and a single redirect covers every SSL-backed host.
+		if len(sslExact) > 0 || len(sslSuffix) > 0 {
+			sb.WriteString("    # Hosts covered by an SSL certificate (from cert SANs)\n")
+			if len(sslExact) > 0 {
+				fmt.Fprintf(&sb, "    acl ssl_host hdr(host) -i %s\n", strings.Join(sslExact, " "))
 			}
-			// Redirect to HTTPS for each SSL domain
-			sb.WriteString("    # Only redirect to HTTPS for domains with SSL certificates\n")
-			for i := range sslDomains {
-				fmt.Fprintf(&sb, "    redirect scheme https code 301 if ssl_domain_%d !is_router_check\n", i)
+			if len(sslSuffix) > 0 {
+				fmt.Fprintf(&sb, "    acl ssl_host hdr_end(host) -i %s\n", strings.Join(sslSuffix, " "))
 			}
+			sb.WriteString("    # Only redirect to HTTPS for hosts with SSL certificates\n")
+			sb.WriteString("    redirect scheme https code 301 if ssl_host !is_router_check\n")
 		}
 
 		// Add backend ACLs and routing to HTTP frontend (for non-SSL domains)
@@ -688,6 +684,81 @@ func domainToACLPattern(domain string) string {
 		return domain[1:] // Remove the asterisk, keep the dot
 	}
 	return domain
+}
+
+// certRedirectPatterns reads every .pem cert in certDir and returns the HAProxy
+// host-match patterns used to redirect HTTP->HTTPS, derived from each cert's SANs
+// rather than its filename. Non-wildcard SANs become exact matches; wildcard SANs
+// (*.x) become suffix matches (.x). found reports whether any cert file exists
+// (i.e. whether SSL should be considered enabled). Results are sorted for
+// deterministic config output.
+func certRedirectPatterns(certDir string) (exact, suffix []string, found bool) {
+	entries, err := os.ReadDir(certDir)
+	if err != nil {
+		return nil, nil, false
+	}
+	exactSet := map[string]struct{}{}
+	suffixSet := map[string]struct{}{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".pem") {
+			continue
+		}
+		found = true
+		names := certDNSNames(filepath.Join(certDir, e.Name()))
+		if len(names) == 0 {
+			// Cert couldn't be parsed (or has no SANs): fall back to the filename
+			// so redirect coverage isn't silently lost. The filename is the primary
+			// domain's base, matched both exactly and as a suffix.
+			base := strings.ToLower(strings.TrimSuffix(e.Name(), ".pem"))
+			exactSet[base] = struct{}{}
+			suffixSet["."+base] = struct{}{}
+			continue
+		}
+		for _, n := range names {
+			n = strings.ToLower(strings.TrimSuffix(n, "."))
+			if n == "" {
+				continue
+			}
+			if strings.HasPrefix(n, "*.") {
+				suffixSet[n[1:]] = struct{}{} // "*.office.x" -> ".office.x"
+			} else {
+				exactSet[n] = struct{}{}
+			}
+		}
+	}
+	for k := range exactSet {
+		exact = append(exact, k)
+	}
+	for k := range suffixSet {
+		suffix = append(suffix, k)
+	}
+	sort.Strings(exact)
+	sort.Strings(suffix)
+	return exact, suffix, found
+}
+
+// certDNSNames parses the leaf certificate from a PEM bundle (fullchain+key) and
+// returns its DNS SANs. Returns nil if the file can't be read or parsed.
+func certDNSNames(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	for {
+		var block *pem.Block
+		block, data = pem.Decode(data)
+		if block == nil {
+			return nil
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil
+		}
+		return cert.DNSNames
+	}
 }
 
 // Reload reloads HAProxy configuration
