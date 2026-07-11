@@ -1,11 +1,43 @@
 package haproxy
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+// writeTestCert writes a self-signed leaf cert with the given DNS SANs to path.
+func writeTestCert(t *testing.T, path string, sans []string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: sans[0]},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		DNSNames:     sans,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	if err := os.WriteFile(path, pemBytes, 0644); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+}
 
 func TestSanitizeName(t *testing.T) {
 	tests := []struct {
@@ -216,17 +248,54 @@ func TestGenerateConfig_SSLRedirectCoversExactHost(t *testing.T) {
 	ssl := &SSLConfig{Enabled: true, CertDir: tempDir}
 	config := h.GenerateConfig(80, 443, ssl)
 
+	// The cert here is unparseable ("dummy cert"), so redirect patterns fall back
+	// to the filename — matched both exactly (the host itself) and as a suffix
+	// (deeper subdomains).
 	expectedStrings := []string{
-		// Exact host match — covers the host itself and apex domains.
-		"acl ssl_domain_0 hdr(host) -i hz.office.iodesystems.com",
-		// Suffix match — covers deeper subdomains.
-		"acl ssl_domain_0 hdr_end(host) -i .hz.office.iodesystems.com",
-		"redirect scheme https code 301 if ssl_domain_0 !is_router_check",
+		"acl ssl_host hdr(host) -i hz.office.iodesystems.com",
+		"acl ssl_host hdr_end(host) -i .hz.office.iodesystems.com",
+		"redirect scheme https code 301 if ssl_host !is_router_check",
 	}
 	for _, expected := range expectedStrings {
 		if !strings.Contains(config, expected) {
 			t.Errorf("SSL config missing: %s\n--- config ---\n%s", expected, config)
 		}
+	}
+}
+
+func TestGenerateConfig_SSLRedirectFromSANs(t *testing.T) {
+	// A single multi-SAN cert must redirect every host it covers, not just the
+	// subzone its filename is named after. Redirect ACLs come from the cert's
+	// SANs: non-wildcard SANs -> exact host match; wildcard SANs -> suffix match.
+	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
+	h.SetBackends([]Backend{
+		{Name: "hz", DomainMatch: "hz.office.iodesystems.com", Server: "192.168.1.10:8080"},
+	})
+
+	tempDir := t.TempDir()
+	// The cert filename is the primary subzone (*.vpn), but its SANs span the
+	// whole zone — the case that exposed the filename-only bug.
+	writeTestCert(t, filepath.Join(tempDir, "vpn.iodesystems.com.pem"),
+		[]string{"*.vpn.iodesystems.com", "*.office.iodesystems.com", "iodesystems.com", "dev.iodesystems.com"})
+
+	config := h.GenerateConfig(80, 443, &SSLConfig{Enabled: true, CertDir: tempDir})
+
+	expected := []string{
+		// exact matches (sorted): dev.iodesystems.com, iodesystems.com
+		"acl ssl_host hdr(host) -i dev.iodesystems.com iodesystems.com",
+		// suffix matches (sorted): .office..., .vpn...
+		"acl ssl_host hdr_end(host) -i .office.iodesystems.com .vpn.iodesystems.com",
+		"redirect scheme https code 301 if ssl_host !is_router_check",
+	}
+	for _, e := range expected {
+		if !strings.Contains(config, e) {
+			t.Errorf("SSL config missing: %s\n--- config ---\n%s", e, config)
+		}
+	}
+	// hz.office.iodesystems.com must be covered (via the *.office suffix) — the
+	// exact host it was previously missing.
+	if !strings.Contains(config, ".office.iodesystems.com") {
+		t.Error("hz.office.iodesystems.com not covered by redirect ACLs")
 	}
 }
 
