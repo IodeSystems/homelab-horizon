@@ -18,7 +18,7 @@ require (
 	github.com/libdns/hetzner/v2 v2.0.1
 	github.com/libdns/libdns v1.1.1
 	github.com/libdns/route53 v1.6.2
-	github.com/mark3labs/mcp-go v0.55.0
+	github.com/mark3labs/mcp-go v0.56.0
 	github.com/pquerna/otp v1.5.0
 )
 
