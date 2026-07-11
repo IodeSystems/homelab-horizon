@@ -680,6 +680,54 @@ func (c *Config) ValidateService(svc *Service) error {
 	return nil
 }
 
+// StaticWebDir is the base directory for hz-managed static-site roots. It sits
+// under the systemd unit's state dir (/var/lib/homelab-horizon), namespaced
+// beneath web/ so managed roots are grouped and kept separate from other state.
+const StaticWebDir = "/var/lib/homelab-horizon/web"
+
+// DeriveStaticRoot returns an hz-managed static-root path for a service, derived
+// from its name (StaticWebDir/<slug>). The path is made unique against every
+// other service's static_root by appending -2, -3, ... so two services never
+// share a managed directory.
+func (c *Config) DeriveStaticRoot(name string) string {
+	slug := staticRootSlug(name)
+	if slug == "" {
+		slug = "site"
+	}
+
+	taken := make(map[string]bool)
+	for i := range c.Services {
+		if p := c.Services[i].Proxy; p != nil && p.StaticRoot != "" {
+			taken[p.StaticRoot] = true
+		}
+	}
+
+	base := filepath.Join(StaticWebDir, slug)
+	candidate := base
+	for n := 2; taken[candidate]; n++ {
+		candidate = fmt.Sprintf("%s-%d", base, n)
+	}
+	return candidate
+}
+
+// staticRootSlug turns a service name into a safe single path segment:
+// lowercased, with any run of characters outside [a-z0-9._-] collapsed to a
+// single dash, and leading/trailing dashes/dots trimmed.
+func staticRootSlug(name string) string {
+	var b strings.Builder
+	prevDash := false
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '.' || r == '-' {
+			b.WriteRune(r)
+			prevDash = false
+		} else if !prevDash {
+			b.WriteRune('-')
+			prevDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-.")
+}
+
 // isValidDomainName reports whether d is a plain DNS hostname (optionally a
 // leading "*." wildcard) made only of letters, digits, dots and hyphens. It
 // deliberately rejects control characters, spaces, and HAProxy metacharacters

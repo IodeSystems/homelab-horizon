@@ -110,6 +110,7 @@ export interface ServiceMutationInput {
   proxy?: {
     backend?: string;
     staticRoot?: string;
+    static?: boolean;
     self?: boolean;
     spa?: boolean;
     healthCheck?: { path: string } | null;

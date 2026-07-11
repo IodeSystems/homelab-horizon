@@ -197,6 +197,7 @@ type serviceFlags struct {
 	domainsCSV  string
 	backend     string
 	staticRoot  string
+	static      bool
 	self        bool
 	spa         bool
 	internal    bool
@@ -229,6 +230,7 @@ func newServiceFlags(name string) *serviceFlags {
 	f.StringVar(&sf.domainsCSV, "domains", "", "comma-separated domains")
 	f.StringVar(&sf.backend, "backend", "", "proxy backend host:port")
 	f.StringVar(&sf.staticRoot, "static-root", "", "static folder to serve")
+	f.BoolVar(&sf.static, "static", false, "serve an hz-managed static folder (auto path when --static-root omitted)")
 	f.BoolVar(&sf.self, "self", false, "route to hz's own admin UI")
 	f.BoolVar(&sf.spa, "spa", false, "static: serve index.html for unknown paths")
 	f.BoolVar(&sf.internal, "internal-only", false, "not publicly reachable")
@@ -297,12 +299,13 @@ func (sf *serviceFlags) buildRequest() (apitypes.ServiceRequest, error) {
 }
 
 func (sf *serviceFlags) buildProxy() *apitypes.ServiceRequestProxy {
-	if sf.backend == "" && sf.staticRoot == "" && !sf.self {
+	if sf.backend == "" && sf.staticRoot == "" && !sf.self && !sf.static {
 		return nil
 	}
 	p := &apitypes.ServiceRequestProxy{
 		Backend:      sf.backend,
 		StaticRoot:   sf.staticRoot,
+		Static:       sf.static,
 		Self:         sf.self,
 		SPA:          sf.spa,
 		InternalOnly: sf.internal,
@@ -442,6 +445,9 @@ func serviceEdit(c *client, args []string) error {
 		if set["static-root"] {
 			p.StaticRoot = sf.staticRoot
 		}
+		if set["static"] {
+			p.Static = sf.static
+		}
 		if set["self"] {
 			p.Self = sf.self
 		}
@@ -494,7 +500,7 @@ func serviceEdit(c *client, args []string) error {
 }
 
 func proxyFlagSet(set map[string]bool) bool {
-	for _, k := range []string{"backend", "static-root", "self", "spa", "internal-only",
+	for _, k := range []string{"backend", "static-root", "static", "self", "spa", "internal-only",
 		"public", "health-check", "deploy-next-backend", "balance",
 		"timeout-connect", "timeout-server", "timeout-tunnel"} {
 		if set[k] {

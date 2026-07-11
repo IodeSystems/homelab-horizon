@@ -242,11 +242,18 @@ function formToInput(form: ServiceFormState, originalName?: string): ServiceMuta
     if (form.healthCheckPath) {
       input.proxy.healthCheck = { path: form.healthCheckPath };
     }
-  } else if (form.proxyEnabled && form.proxyMode === "static" && form.staticRoot) {
+  } else if (form.proxyEnabled && form.proxyMode === "static") {
+    // static: true tells the server to serve an hz-managed folder. If the user
+    // left the path blank, the server assigns a default (/var/lib/homelab-horizon/
+    // web/<name>) instead of dropping the proxy — otherwise the service would
+    // silently fall through to the zone's catch-all backend.
     input.proxy = {
-      staticRoot: form.staticRoot,
+      static: true,
       internalOnly: form.internalOnly,
     };
+    if (form.staticRoot) {
+      input.proxy.staticRoot = form.staticRoot;
+    }
     if (form.spa) {
       input.proxy.spa = true;
     }
@@ -812,12 +819,13 @@ function ServiceFormDialog({
             {form.proxyMode === "static" ? (
               <>
                 <TextField
-                  label="Static folder"
+                  label="Static folder (optional)"
                   value={form.staticRoot}
                   onChange={(e) => update("staticRoot", e.target.value)}
                   size="small"
                   fullWidth
-                  helperText="Absolute path hz serves files from, e.g. /var/lib/homelab-horizon/docs"
+                  placeholder="/var/lib/homelab-horizon/web/<name>"
+                  helperText="Absolute path hz serves files from. Leave blank to let hz assign a managed folder for this service."
                 />
                 <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                   <Switch
