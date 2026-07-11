@@ -42,6 +42,9 @@ COMMANDS
     site push <dir> [--validate]   Upload <dir> as a new release (atomic swap)
     site rollback                  Revert to the previous release
     site releases                  List retained releases
+    Note: each push replaces the WHOLE site (fresh release, atomic swap).
+          Files removed locally are gone after the next push — there is no
+          incremental/merge mode, so no --purge flag is needed.
 
 ROLLING DEPLOY FLOW
   hz-client rolling start
@@ -65,8 +68,9 @@ EXAMPLES
   hz-client maint-page set maintenance.html
   echo "<h1>Down for upgrade</h1>" | hz-client maint-page set -
   hz-client maint-page clear
-  hz-client site push ./public
-  hz-client site push ./public --validate
+  hz-client site push ./public              # replace live site with ./public
+  hz-client site push ./public --validate   # dry run: check the tarball, no swap
+  hz-client site releases
   hz-client site rollback
 HELP
 }
