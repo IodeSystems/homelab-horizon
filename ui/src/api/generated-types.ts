@@ -383,6 +383,7 @@ export interface ServiceRequestExternalDNS {
 export interface ServiceRequestProxy {
   backend: string;
   staticRoot?: string; // absolute dir served as static files (mutually exclusive with backend)
+  static?: boolean; // request static serving; if StaticRoot is empty the server assigns an hz-managed default path
   self?: boolean; // route to this hz instance's own admin UI
   spa?: boolean; // static only: serve index.html for unknown non-asset paths
   healthCheck?: ServiceRequestHealthCheck;

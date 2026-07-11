@@ -62,7 +62,7 @@ func serviceRequestToService(req *apitypes.ServiceRequest) config.Service {
 		}
 		svc.ExternalDNS = extDNS
 	}
-	if req.Proxy != nil && (req.Proxy.Backend != "" || req.Proxy.StaticRoot != "" || req.Proxy.Self) {
+	if req.Proxy != nil && (req.Proxy.Backend != "" || req.Proxy.StaticRoot != "" || req.Proxy.Self || req.Proxy.Static) {
 		svc.Proxy = &config.ProxyConfig{
 			Backend:      req.Proxy.Backend,
 			StaticRoot:   req.Proxy.StaticRoot,
@@ -84,6 +84,20 @@ func serviceRequestToService(req *apitypes.ServiceRequest) config.Service {
 		svc.Proxy.Timeouts = requestProxyTimeouts(req.Proxy.Timeouts)
 	}
 	return svc
+}
+
+// applyManagedStaticRoot fills an hz-managed default static_root
+// (config.StaticWebDir/<name>) when the request asked for static serving
+// (proxy.static) but supplied no explicit path. No-op when a path was given or
+// another backend source (backend/self) is set. Must run inside an updateConfig
+// closure so uniqueness is checked against the live service list.
+func applyManagedStaticRoot(cfg *config.Config, p *config.ProxyConfig, name string, reqProxy *apitypes.ServiceRequestProxy) {
+	if p == nil || reqProxy == nil {
+		return
+	}
+	if reqProxy.Static && p.StaticRoot == "" && p.Backend == "" && !p.Self {
+		p.StaticRoot = cfg.DeriveStaticRoot(name)
+	}
 }
 
 // POST /api/v1/services/add
@@ -122,6 +136,7 @@ func (s *Server) handleAPIAddService(w http.ResponseWriter, r *http.Request) {
 
 	var addErr error
 	if err := s.updateConfig(func(cfg *config.Config) {
+		applyManagedStaticRoot(cfg, svc.Proxy, svc.Name, req.Proxy)
 		addErr = cfg.AddService(svc)
 	}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
@@ -201,7 +216,7 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Proxy
-			if req.Proxy != nil && (req.Proxy.Backend != "" || req.Proxy.StaticRoot != "" || req.Proxy.Self) {
+			if req.Proxy != nil && (req.Proxy.Backend != "" || req.Proxy.StaticRoot != "" || req.Proxy.Self || req.Proxy.Static) {
 				// Preserve existing deploy config (token/activeSlot) and the
 				// maintenance page, which the editor doesn't round-trip.
 				var existingDeploy *config.DeployConfig
@@ -219,6 +234,7 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 					MaintenancePage: existingMaintenancePage,
 					Timeouts:        requestProxyTimeouts(req.Proxy.Timeouts),
 				}
+				applyManagedStaticRoot(cfg, cfg.Services[i].Proxy, req.Name, req.Proxy)
 				if req.Proxy.HealthCheck != nil && req.Proxy.HealthCheck.Path != "" {
 					cfg.Services[i].Proxy.HealthCheck = &config.HealthCheck{Path: req.Proxy.HealthCheck.Path}
 				}

@@ -1091,3 +1091,47 @@ func TestFilterRedundantDomains(t *testing.T) {
 		})
 	}
 }
+
+func TestDeriveStaticRoot(t *testing.T) {
+	base := "/var/lib/homelab-horizon/web"
+
+	t.Run("derives from name", func(t *testing.T) {
+		c := &Config{}
+		if got := c.DeriveStaticRoot("life"); got != base+"/life" {
+			t.Errorf("DeriveStaticRoot(life) = %q, want %q", got, base+"/life")
+		}
+	})
+
+	t.Run("slugifies spaces and case", func(t *testing.T) {
+		c := &Config{}
+		if got := c.DeriveStaticRoot("Veliode Beta"); got != base+"/veliode-beta" {
+			t.Errorf("got %q, want %q", got, base+"/veliode-beta")
+		}
+	})
+
+	t.Run("appends -2 on collision with an existing static root", func(t *testing.T) {
+		c := &Config{Services: []Service{
+			{Name: "other", Proxy: &ProxyConfig{StaticRoot: base + "/life"}},
+		}}
+		if got := c.DeriveStaticRoot("life"); got != base+"/life-2" {
+			t.Errorf("got %q, want %q", got, base+"/life-2")
+		}
+	})
+
+	t.Run("keeps incrementing past multiple collisions", func(t *testing.T) {
+		c := &Config{Services: []Service{
+			{Name: "a", Proxy: &ProxyConfig{StaticRoot: base + "/life"}},
+			{Name: "b", Proxy: &ProxyConfig{StaticRoot: base + "/life-2"}},
+		}}
+		if got := c.DeriveStaticRoot("life"); got != base+"/life-3" {
+			t.Errorf("got %q, want %q", got, base+"/life-3")
+		}
+	})
+
+	t.Run("falls back to site for an empty slug", func(t *testing.T) {
+		c := &Config{}
+		if got := c.DeriveStaticRoot("!!!"); got != base+"/site" {
+			t.Errorf("got %q, want %q", got, base+"/site")
+		}
+	})
+}
