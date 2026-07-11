@@ -1,0 +1,78 @@
+#!/bin/bash
+# dev - local developer helpers for homelab-horizon.
+#
+# Usage:
+#   ./bin/dev deps upgrade     # bump Go + npm deps within their version ranges,
+#                              # tidy, regenerate types, then build+test to verify
+#   ./bin/dev deps outdated    # list outdated Go modules and npm packages (read-only)
+#   ./bin/dev help
+#
+# Scope: `deps upgrade` performs the SAFE bulk upgrade that is tedious by hand —
+# latest minor/patch for Go modules (go get -u) and within-range updates for npm.
+# Major version bumps are intentionally left to Renovate PRs, which build and
+# gate each one in isolation.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
+
+deps_upgrade() {
+  say "Go: go get -u ./..."
+  go get -u ./...
+  say "Go: go mod tidy"
+  go mod tidy
+
+  say "UI: npm update (within package.json ranges)"
+  (cd ui && npm update)
+
+  say "Regenerating types (make generate)"
+  make generate
+
+  say "Verifying: go build ./..."
+  go build ./...
+  say "Verifying: go test ./..."
+  go test ./...
+  say "Verifying: UI build"
+  (cd ui && npm run build)
+
+  say "Changed files"
+  git status --porcelain -- go.mod go.sum ui/package.json ui/package-lock.json ui/src/api/generated-types.ts || true
+  echo
+  echo "Review the diff, then commit. Major bumps are handled by Renovate PRs."
+}
+
+deps_outdated() {
+  say "Go modules with newer minor/patch (go list -m -u all)"
+  go list -m -u all 2>/dev/null | grep -F '[' || echo "  (all up to date)"
+
+  say "npm packages (npm outdated)"
+  (cd ui && npm outdated) || true
+}
+
+usage() {
+  sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+cmd="${1:-help}"
+case "$cmd" in
+  deps)
+    sub="${2:-}"
+    case "$sub" in
+      upgrade)  deps_upgrade ;;
+      outdated) deps_outdated ;;
+      *) echo "Unknown 'deps' subcommand: ${sub:-<none>}" >&2
+         echo "Try: deps upgrade | deps outdated" >&2
+         exit 1 ;;
+    esac
+    ;;
+  help | -h | --help)
+    usage
+    ;;
+  *)
+    echo "Unknown command: $cmd" >&2
+    usage >&2
+    exit 1
+    ;;
+esac
