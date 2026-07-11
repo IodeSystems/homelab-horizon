@@ -481,62 +481,115 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 			HAProxyCertDir: s.cfg().SSLHAProxyCertDir,
 		})
 
-		for _, domain := range sslDomains {
-			// Skip domains that failed DNS propagation
-			if unpropagatedDomains[domain.Domain] {
-				log.Warning(fmt.Sprintf("  %s: skipped - DNS not propagated yet", domain.Domain))
-				continue
-			}
+		// Request/verify each zone's certificate concurrently. A single cert's
+		// DNS-01 challenge already stages all of its TXT records before waiting
+		// for propagation once (lego parallelSolve), so running the zones in
+		// parallel overlaps those per-zone waits — total wall-clock ≈ the slowest
+		// single zone instead of the sum. Per-zone output is buffered and replayed
+		// in config order so concurrent logs don't interleave. (The env race that
+		// would otherwise make concurrent route53 obtains unsafe is handled in
+		// acme.createRoute53Provider, which pins HostedZoneID per provider.)
+		log.Info(fmt.Sprintf("  Requesting/verifying %d certificate(s) in parallel...", len(sslDomains)))
 
-			status := s.letsencrypt.GetDomainStatus(domain)
-			if status.CertExists {
-				// Check if cert has all expected SANs (including sub-zones)
-				hasCert, missingSANs, _ := s.letsencrypt.CheckCertSANs(domain)
-				if hasCert && len(missingSANs) > 0 {
-					log.Warning(fmt.Sprintf("  %s: valid but missing SANs: %v", domain.Domain, missingSANs))
-					log.Info(fmt.Sprintf("  %s: requesting new certificate with updated SANs...", domain.Domain))
-					err := s.letsencrypt.RequestCertForDomainWithLog(domain, func(line string) {
-						log.Info(line)
-					})
-					if err != nil {
-						log.Error(fmt.Sprintf("  %s: cert request failed: %s", domain.Domain, err))
-						hasErrors = true
+		type certLine struct {
+			level string
+			msg   string
+		}
+		type certOutcome struct {
+			lines   []certLine
+			failed  bool
+			permErr bool
+		}
+
+		outcomes := make([]certOutcome, len(sslDomains))
+		var certWg sync.WaitGroup
+		for i := range sslDomains {
+			certWg.Add(1)
+			// Each goroutine writes only its own outcomes[idx] slot and reads only
+			// per-domain state, so no locking is needed. unpropagatedDomains is
+			// read-only here (populated by the Route53 phase above).
+			go func(idx int) {
+				defer certWg.Done()
+				domain := sslDomains[idx]
+				var out certOutcome
+				add := func(level, msg string) { out.lines = append(out.lines, certLine{level, msg}) }
+				requestCert := func(okMsg string) {
+					if err := s.letsencrypt.RequestCertForDomainWithLog(domain, func(line string) { add("info", line) }); err != nil {
+						add("error", fmt.Sprintf("  %s: cert request failed: %s", domain.Domain, err))
+						out.failed = true
+						errStr := err.Error()
+						if strings.Contains(errStr, "AccessDenied") || strings.Contains(errStr, "not authorized") {
+							out.permErr = true
+						}
 					} else {
-						log.Success(fmt.Sprintf("  %s: certificate updated with new SANs", domain.Domain))
-					}
-				} else {
-					log.Success(fmt.Sprintf("  %s: valid (expires %s)", domain.Domain, status.ExpiryInfo))
-					if !status.HAProxyCertReady {
-						log.Warning(fmt.Sprintf("  %s: not packaged for HAProxy", domain.Domain))
+						add("success", okMsg)
 					}
 				}
-			} else {
-				log.Info(fmt.Sprintf("  %s: no certificate found, requesting...", domain.Domain))
-				err := s.letsencrypt.RequestCertForDomainWithLog(domain, func(line string) {
-					log.Info(line)
-				})
-				if err != nil {
-					log.Error(fmt.Sprintf("  %s: cert request failed: %s", domain.Domain, err))
-					// Check for AWS permission errors and show IAM policy hint
-					errStr := err.Error()
-					if strings.Contains(errStr, "AccessDenied") || strings.Contains(errStr, "not authorized") {
-						// Get zone IDs for the domains
-						var zoneIDs []string
-						for _, zone := range s.cfg().Zones {
-							if zone.SSL != nil && zone.SSL.Enabled {
-								zoneIDs = append(zoneIDs, zone.ZoneID)
-							}
-						}
-						log.Warning("  AWS IAM permissions required for certbot-dns-route53. Add this policy:")
-						policy := route53.GenerateIAMPolicy(zoneIDs)
-						for _, line := range strings.Split(policy, "\n") {
-							log.Info("  " + line)
+
+				if unpropagatedDomains[domain.Domain] {
+					add("warning", fmt.Sprintf("  %s: skipped - DNS not propagated yet", domain.Domain))
+					outcomes[idx] = out
+					return
+				}
+
+				status := s.letsencrypt.GetDomainStatus(domain)
+				if status.CertExists {
+					// Check if cert has all expected SANs (including sub-zones)
+					hasCert, missingSANs, _ := s.letsencrypt.CheckCertSANs(domain)
+					if hasCert && len(missingSANs) > 0 {
+						add("warning", fmt.Sprintf("  %s: valid but missing SANs: %v", domain.Domain, missingSANs))
+						add("info", fmt.Sprintf("  %s: requesting new certificate with updated SANs...", domain.Domain))
+						requestCert(fmt.Sprintf("  %s: certificate updated with new SANs", domain.Domain))
+					} else {
+						add("success", fmt.Sprintf("  %s: valid (expires %s)", domain.Domain, status.ExpiryInfo))
+						if !status.HAProxyCertReady {
+							add("warning", fmt.Sprintf("  %s: not packaged for HAProxy", domain.Domain))
 						}
 					}
-					hasErrors = true
 				} else {
-					log.Success(fmt.Sprintf("  %s: certificate obtained", domain.Domain))
+					add("info", fmt.Sprintf("  %s: no certificate found, requesting...", domain.Domain))
+					requestCert(fmt.Sprintf("  %s: certificate obtained", domain.Domain))
 				}
+				outcomes[idx] = out
+			}(i)
+		}
+		certWg.Wait()
+
+		// Replay buffered output in config order; keep hasErrors and the IAM-policy
+		// hint on the main goroutine.
+		sawPermErr := false
+		for _, out := range outcomes {
+			for _, ln := range out.lines {
+				switch ln.level {
+				case "success":
+					log.Success(ln.msg)
+				case "warning":
+					log.Warning(ln.msg)
+				case "error":
+					log.Error(ln.msg)
+				default:
+					log.Info(ln.msg)
+				}
+			}
+			if out.failed {
+				hasErrors = true
+			}
+			if out.permErr {
+				sawPermErr = true
+			}
+		}
+		if sawPermErr {
+			// Get zone IDs for the SSL-enabled zones
+			var zoneIDs []string
+			for _, zone := range s.cfg().Zones {
+				if zone.SSL != nil && zone.SSL.Enabled {
+					zoneIDs = append(zoneIDs, zone.ZoneID)
+				}
+			}
+			log.Warning("  AWS IAM permissions required for certbot-dns-route53. Add this policy:")
+			policy := route53.GenerateIAMPolicy(zoneIDs)
+			for _, line := range strings.Split(policy, "\n") {
+				log.Info("  " + line)
 			}
 		}
 

@@ -31,8 +31,12 @@ func (p *LoggingProvider) Present(domain, token, keyAuth string) error {
 		return err
 	}
 
-	p.logFn(fmt.Sprintf("  ✓ DNS record created (%v)", duration))
-	p.logFn("  Waiting for DNS propagation (this may take 30-120 seconds)...")
+	// Note: lego presents ALL challenge records first, then waits for
+	// propagation once (parallelSolve). Do not log a per-record "waiting"
+	// message here — the wait happens later, once, after every record below
+	// is staged. Logging it per Present made a single batched wait look like
+	// one serial wait per record.
+	p.logFn(fmt.Sprintf("  ✓ DNS record staged (%v)", duration))
 	return nil
 }
 
@@ -130,10 +134,19 @@ func CreateChallengeProvider(cfg *DNSProviderConfig, logFn func(string)) (challe
 	return wrapWithLogging(provider, logFn), nil
 }
 
-// createRoute53Provider creates a Lego Route53 provider
+// createRoute53Provider creates a Lego Route53 provider.
+//
+// Credentials, profile, and region flow through the AWS default credential chain
+// via environment variables. These are process-global, but they are identical
+// across every zone in a single sync, so setting them repeatedly is race-free
+// even when several certificates are obtained concurrently (the same value is
+// written every time).
+//
+// The per-zone HostedZoneID is the ONE value that differs between zones, so it is
+// passed on the provider Config below rather than via a shared AWS_HOSTED_ZONE_ID
+// env var. If it went through the environment, two concurrent obtains would clobber
+// each other's zone and could write challenge records to the wrong hosted zone.
 func createRoute53Provider(cfg *DNSProviderConfig) (challenge.Provider, error) {
-	// Set environment variables for lego's route53 provider
-	// The provider reads these during initialization
 	if cfg.AWSAccessKeyID != "" {
 		if err := os.Setenv("AWS_ACCESS_KEY_ID", cfg.AWSAccessKeyID); err != nil {
 			return nil, fmt.Errorf("setenv AWS_ACCESS_KEY_ID: %w", err)
@@ -144,32 +157,26 @@ func createRoute53Provider(cfg *DNSProviderConfig) (challenge.Provider, error) {
 			return nil, fmt.Errorf("setenv AWS_SECRET_ACCESS_KEY: %w", err)
 		}
 	}
-	if cfg.AWSRegion != "" {
-		if err := os.Setenv("AWS_REGION", cfg.AWSRegion); err != nil {
-			return nil, fmt.Errorf("setenv AWS_REGION: %w", err)
-		}
-	}
-	if cfg.AWSHostedZoneID != "" {
-		if err := os.Setenv("AWS_HOSTED_ZONE_ID", cfg.AWSHostedZoneID); err != nil {
-			return nil, fmt.Errorf("setenv AWS_HOSTED_ZONE_ID: %w", err)
-		}
-	}
 	if cfg.AWSProfile != "" {
 		if err := os.Setenv("AWS_PROFILE", cfg.AWSProfile); err != nil {
 			return nil, fmt.Errorf("setenv AWS_PROFILE: %w", err)
 		}
 	}
 
-	// Increase propagation timeout - Route53 changes can take time to propagate
-	// Default is 2 minutes, increase to 5 minutes
-	if err := os.Setenv("AWS_PROPAGATION_TIMEOUT", "300"); err != nil {
-		return nil, fmt.Errorf("setenv AWS_PROPAGATION_TIMEOUT: %w", err)
+	rcfg := route53.NewDefaultConfig()
+	// Pin the hosted zone per provider (not via env) so parallel obtains don't race.
+	// Setting it also skips lego's ListHostedZonesByName lookup at challenge time.
+	if cfg.AWSHostedZoneID != "" {
+		rcfg.HostedZoneID = cfg.AWSHostedZoneID
 	}
-	if err := os.Setenv("AWS_POLLING_INTERVAL", "10"); err != nil {
-		return nil, fmt.Errorf("setenv AWS_POLLING_INTERVAL: %w", err)
+	if cfg.AWSRegion != "" {
+		rcfg.Region = cfg.AWSRegion
 	}
+	// Route53 changes can take time to propagate; allow up to 5 minutes.
+	rcfg.PropagationTimeout = 5 * time.Minute
+	rcfg.PollingInterval = 10 * time.Second
 
-	provider, err := route53.NewDNSProvider()
+	provider, err := route53.NewDNSProviderConfig(rcfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create route53 provider: %w", err)
 	}
