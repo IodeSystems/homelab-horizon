@@ -432,3 +432,26 @@ func TestStaticServer_HardeningHeaders(t *testing.T) {
 		t.Errorf("POST code = %d, want 405", rec.Code)
 	}
 }
+
+// A static service whose root directory does not exist yet (created but not
+// deployed) must return 404, not 500.
+func TestStaticServer_MissingRootIs404(t *testing.T) {
+	// A path under a temp dir that is never created.
+	missing := filepath.Join(t.TempDir(), "web", "undeployed")
+
+	ss := newStaticServer()
+	ss.Rebuild(&config.Config{
+		Services: []config.Service{
+			{Name: "u", Domains: []string{"u.example.com"}, Proxy: &config.ProxyConfig{StaticRoot: missing}},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "u.example.com"
+	rec := httptest.NewRecorder()
+	ss.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("undeployed static root: code=%d, want 404", rec.Code)
+	}
+}

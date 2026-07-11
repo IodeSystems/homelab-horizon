@@ -118,6 +118,14 @@ func (ss *staticServer) serveFile(w http.ResponseWriter, r *http.Request, site s
 	// escape even though hz runs as root.
 	root, err := os.OpenRoot(site.Root)
 	if err != nil {
+		// A static service whose root hasn't been deployed yet (e.g. a freshly
+		// created service with an hz-managed static_root, before its first
+		// `site push`) has no directory on disk. That's "nothing here" -> 404,
+		// not a server error. Genuine failures (permissions, I/O) stay 500.
+		if os.IsNotExist(err) {
+			ss.writeError(w, http.StatusNotFound)
+			return
+		}
 		slog.Warn("static: cannot open root", "dir", site.Root, "err", err)
 		ss.writeError(w, http.StatusInternalServerError)
 		return
