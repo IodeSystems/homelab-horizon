@@ -137,6 +137,7 @@ func (c *Client) ObtainCertificate(email string, domains []string, providerCfg *
 
 	logFn(fmt.Sprintf("Requesting certificate for: %v", domains))
 	logFn("Starting ACME challenge process...")
+	logFn(fmt.Sprintf("Staging all %d DNS challenge record(s), then checking propagation once (30-120s)...", len(domains)))
 
 	// Request certificate
 	request := certificate.ObtainRequest{
