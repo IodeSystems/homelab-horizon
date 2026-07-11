@@ -1,9 +1,13 @@
 package server
 
 import (
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	homelabUI "github.com/iodesystems/homelab-horizon/ui"
 )
 
 // TestSPACacheHeaders guards the post-deploy staleness fix: the app shell
@@ -15,6 +19,12 @@ func TestSPACacheHeaders(t *testing.T) {
 	mux := http.NewServeMux()
 	(&Server{}).setupSPA(mux)
 
+	// Use a real content-hashed asset discovered from the embedded build rather
+	// than a hardcoded Vite hash — the hash changes on every UI rebuild, so a
+	// literal filename here goes stale and the request falls through to the SPA
+	// shell (this test's original flakiness).
+	asset := firstHashedAsset(t)
+
 	cases := []struct {
 		name   string
 		path   string
@@ -22,7 +32,7 @@ func TestSPACacheHeaders(t *testing.T) {
 	}{
 		{"index", "/app/", "no-cache"},
 		{"spa-fallback", "/app/services", "no-cache"},
-		{"hashed-asset", "/app/assets/index-B_yT2LCx.js", "public, max-age=31536000, immutable"},
+		{"hashed-asset", "/app/assets/" + asset, "public, max-age=31536000, immutable"},
 	}
 
 	for _, tc := range cases {
@@ -39,4 +49,26 @@ func TestSPACacheHeaders(t *testing.T) {
 			}
 		})
 	}
+}
+
+// firstHashedAsset returns the name of a real .js/.css file under the embedded
+// dist/assets, skipping the test when the UI hasn't been built (no assets to
+// serve).
+func firstHashedAsset(t *testing.T) string {
+	t.Helper()
+	distFS, err := fs.Sub(homelabUI.DistFS, "dist")
+	if err != nil {
+		t.Skipf("no embedded dist: %v", err)
+	}
+	entries, err := fs.ReadDir(distFS, "assets")
+	if err != nil {
+		t.Skipf("no embedded dist/assets (UI not built): %v", err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() && (strings.HasSuffix(e.Name(), ".js") || strings.HasSuffix(e.Name(), ".css")) {
+			return e.Name()
+		}
+	}
+	t.Skip("no hashed asset in embedded dist/assets")
+	return ""
 }
