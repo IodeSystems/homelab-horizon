@@ -1077,6 +1077,8 @@ function IntegrationDialog({
           ? [
               ``,
               `# --- Static site ---`,
+              `# Each push replaces the WHOLE site (fresh release + atomic swap).`,
+              `# Files removed locally disappear on the next push — no --purge needed.`,
               ``,
               `./hz-client site push ./public             # Upload dir as a new release (atomic swap)`,
               `./hz-client site push ./public --validate  # Dry run: validate without swapping`,
