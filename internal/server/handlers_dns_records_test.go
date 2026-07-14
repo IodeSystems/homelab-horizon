@@ -460,9 +460,9 @@ func equalStrSlices(a, b []string) bool {
 
 func TestClassifyDrift(t *testing.T) {
 	tests := []struct {
-		name                   string
+		name                    string
 		live, expected, desired []string
-		want                   driftDecision
+		want                    driftDecision
 	}{
 		{"live equals desired -> noop", []string{"a"}, []string{"a"}, []string{"a"}, driftNoop},
 		{"live equals desired, stale expected -> noop", []string{"b"}, []string{"a"}, []string{"b"}, driftNoop},
