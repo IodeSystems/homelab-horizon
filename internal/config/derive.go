@@ -477,6 +477,27 @@ func (c *Config) DeriveHostPortMap() HostPortMap {
 			Service: svc.Name,
 			Domain:  svc.PrimaryDomain(),
 		})
+
+		// Blue-green deploy reserves a second "next" backend port for the
+		// standby release — it's in use even when the service points at the
+		// active one, so allocation must not hand it out.
+		if svc.Proxy.Deploy != nil && svc.Proxy.Deploy.NextBackend != "" {
+			if nh, np, err := net.SplitHostPort(svc.Proxy.Deploy.NextBackend); err == nil {
+				if nh == "localhost" || nh == "127.0.0.1" {
+					if c.LocalInterface != "" {
+						nh = c.LocalInterface
+					} else {
+						nh = gateway
+					}
+				}
+				m[nh] = append(m[nh], HostPortEntry{
+					Port:    np,
+					Proto:   "tcp",
+					Service: svc.Name + " (deploy-next)",
+					Domain:  svc.PrimaryDomain(),
+				})
+			}
+		}
 	}
 
 	// HAProxy listen ports (on gateway)
