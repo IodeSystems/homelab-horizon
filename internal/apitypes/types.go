@@ -525,6 +525,21 @@ type DNSDriftStatusResponse struct {
 	Detail  *DNSDriftInfoResp `json:"detail,omitempty"`
 }
 
+// Host port map — reserved ports per host, derived from service backends,
+// blue-green deploy next-backends, HAProxy, WireGuard, dnsmasq, and the admin
+// server.
+
+type HostPortEntry struct {
+	Port    string `json:"port"`
+	Proto   string `json:"proto"`
+	Service string `json:"service"`
+	Domain  string `json:"domain,omitempty"`
+}
+
+type HostPortMapResponse struct {
+	Hosts map[string][]HostPortEntry `json:"hosts"`
+}
+
 type DNSSyncAllResponse struct {
 	OK      bool `json:"ok"`
 	Updated int  `json:"updated"`

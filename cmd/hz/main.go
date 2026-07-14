@@ -53,7 +53,9 @@ COMMANDS
   sync [--wait]                      Trigger a global sync (--wait: block til done)
   pending                            Show unsynced config changes
   ports next --host IP [--count N] [--from PORT]
-                                     Find the next free contiguous port range on a host
+                                     Find the next free port range on a host (safe band, common ports skipped)
+  ports list --host IP [--count N] [--from PORT]
+                                     List reserved ports on a host + suggested free ports
   schema [service]                   Dump the JSON request schema
   version                            Print version
 

@@ -194,8 +194,9 @@ hz service create --name ebb --domain ebb.example.com \
 hz service edit ebb --public         # only the flags you pass change
 hz sync --wait                       # trigger a global sync, block until done
 hz pending                           # show unsynced config changes
-hz ports next --host 192.168.1.76 --count 100 --from 8000
-                                     # find the next free contiguous port range on a host
+hz ports list --host 192.168.1.76    # reserved ports on a host + suggested free ports
+hz ports next --host 192.168.1.76 --count 100
+                                     # next free port range (safe band 20000+, common dev ports skipped)
 hz schema service                    # dump the request schema (reflected from apitypes)
 ```
 

@@ -940,6 +940,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// touch another peer's A record.
 	s.handlePeerInstance(mux, "/api/v1/dns/sync", s.handleAPISyncDNS)
 	s.handlePeerInstance(mux, "/api/v1/dns/sync-all", s.handleAPISyncAllDNS)
+	mux.HandleFunc("/api/v1/ports", s.handleAPIPorts)
 	mux.HandleFunc("/api/v1/dns/drift", s.handleAPIDNSDriftStatus)
 	mux.HandleFunc("/api/v1/dns/drift/clear", s.handleAPIClearDNSDrift)
 	mux.HandleFunc("/api/v1/zones/records", s.handleAPIZoneRecords)
