@@ -2,6 +2,7 @@
 .claude
 dist
 homelab-horizon
+/hz
 homelab-horizon.service
 coverage.out
 coverage.html
