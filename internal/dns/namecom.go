@@ -236,6 +236,39 @@ func (p *NamecomProvider) GetRecord(zoneID, name, recordType string) (*Record, e
 	return nil, nil // Record not found
 }
 
+// ListRecords returns every record live in the zone at Name.com.
+func (p *NamecomProvider) ListRecords(zoneID string) ([]Record, error) {
+	domainName := zoneID
+
+	respBody, err := p.doRequest("GET", fmt.Sprintf("/domains/%s/records", domainName), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list records: %w", err)
+	}
+
+	var result struct {
+		Records []namecomRecord `json:"records"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	out := make([]Record, 0, len(result.Records))
+	for _, r := range result.Records {
+		name := domainName
+		if r.Host != "" {
+			name = r.Host + "." + domainName
+		}
+		out = append(out, Record{
+			Name:   name,
+			Type:   r.Type,
+			Value:  r.Answer,
+			TTL:    r.TTL,
+			ZoneID: zoneID,
+		})
+	}
+	return out, nil
+}
+
 // CreateRecord creates a new DNS record
 func (p *NamecomProvider) CreateRecord(zoneID string, record Record) error {
 	p.log(fmt.Sprintf("Creating %s -> %s...", record.Name, record.Value))

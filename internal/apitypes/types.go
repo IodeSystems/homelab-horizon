@@ -494,6 +494,37 @@ type DNSSyncResponse struct {
 	Changed bool `json:"changed"`
 }
 
+// DNS record management
+
+type DNSRecordResp struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Value   string `json:"value"`
+	TTL     int    `json:"ttl"`
+	Managed bool   `json:"managed"` // declared in Zone.Records (HZ owns it)
+}
+
+type ZoneRecordsResponse struct {
+	Zone    string          `json:"zone"`
+	Records []DNSRecordResp `json:"records"`
+}
+
+// DNSDriftInfoResp describes an out-of-band change detected at a DNS provider
+// that has halted sync.
+type DNSDriftInfoResp struct {
+	Zone       string   `json:"zone"`
+	Name       string   `json:"name"`
+	Type       string   `json:"type"`
+	Expected   []string `json:"expected"` // what hz last published
+	Live       []string `json:"live"`     // what's live at the provider now
+	DetectedAt int64    `json:"detectedAt"`
+}
+
+type DNSDriftStatusResponse struct {
+	Blocked bool              `json:"blocked"`
+	Detail  *DNSDriftInfoResp `json:"detail,omitempty"`
+}
+
 type DNSSyncAllResponse struct {
 	OK      bool `json:"ok"`
 	Updated int  `json:"updated"`
