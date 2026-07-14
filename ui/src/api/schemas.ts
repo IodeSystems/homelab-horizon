@@ -238,6 +238,36 @@ export const ZoneSchema = z.object({
 
 export const ZonesSchema = z.array(ZoneSchema);
 
+// Zone DNS records (live at the provider, tagged with whether HZ manages them)
+export const DNSRecordSchema = z.object({
+  name: z.string(),
+  type: z.string(),
+  value: z.string(),
+  ttl: z.number(),
+  managed: z.boolean(),
+});
+
+export const ZoneRecordsResponseSchema = z.object({
+  zone: z.string(),
+  records: z.array(DNSRecordSchema),
+});
+
+// DNS drift — an out-of-band change at a provider that halts all DNS sync
+// until an operator reviews and clears it.
+export const DNSDriftInfoSchema = z.object({
+  zone: z.string(),
+  name: z.string(),
+  type: z.string(),
+  expected: z.array(z.string()),
+  live: z.array(z.string()),
+  detectedAt: z.number(),
+});
+
+export const DNSDriftStatusResponseSchema = z.object({
+  blocked: z.boolean(),
+  detail: DNSDriftInfoSchema.optional(),
+});
+
 // Settings
 export const HAProxyStatusSchema = z.object({
   running: z.boolean(),

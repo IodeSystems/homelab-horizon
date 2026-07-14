@@ -145,6 +145,30 @@ func (p *LibdnsAdapter) GetRecord(zoneID, name, recordType string) (*Record, err
 	return nil, nil // Not found
 }
 
+// ListRecords returns every record live in the zone at the provider.
+func (p *LibdnsAdapter) ListRecords(zoneID string) ([]Record, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	records, err := p.provider.GetRecords(ctx, p.zone)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list records: %w", err)
+	}
+
+	out := make([]Record, 0, len(records))
+	for _, r := range records {
+		rr := r.RR()
+		out = append(out, Record{
+			Name:   p.toFQDN(rr.Name),
+			Type:   rr.Type,
+			Value:  rr.Data,
+			TTL:    int(rr.TTL.Seconds()),
+			ZoneID: zoneID,
+		})
+	}
+	return out, nil
+}
+
 // CreateRecord creates a new DNS record
 func (p *LibdnsAdapter) CreateRecord(zoneID string, record Record) error {
 	p.log(fmt.Sprintf("Creating %s -> %s...", record.Name, record.Value))
@@ -346,6 +370,19 @@ func (p *LibdnsAdapter) toRelativeName(name string) string {
 	}
 
 	return name
+}
+
+// toFQDN converts a libdns relative name back to a fully-qualified name in
+// this zone. "@" (or empty) is the zone apex.
+func (p *LibdnsAdapter) toFQDN(name string) string {
+	zoneName := strings.TrimSuffix(p.zone, ".")
+	if name == "" || name == "@" {
+		return zoneName
+	}
+	if strings.HasSuffix(name, ".") {
+		return strings.TrimSuffix(name, ".")
+	}
+	return name + "." + zoneName
 }
 
 // toLibdnsRecord converts our Record to a libdns Record

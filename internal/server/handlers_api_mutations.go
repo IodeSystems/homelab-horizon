@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -321,6 +322,10 @@ func (s *Server) handleAPISyncDNS(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
+	if s.dnsSyncBlocked() {
+		writeDNSDriftBlocked(w, s)
+		return
+	}
 
 	var req struct {
 		Domain string `json:"domain"`
@@ -397,7 +402,11 @@ func (s *Server) handleAPISyncDNS(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	changed, err := provider.SyncRecordSet(zone.ZoneID, records)
+	changed, err := s.newDNSSyncRun().publish(provider, *zone, req.Domain, "A", records)
+	if errors.Is(err, errDNSDriftBlocked) {
+		writeDNSDriftBlocked(w, s)
+		return
+	}
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "Sync failed: "+err.Error())
 		return
@@ -433,8 +442,13 @@ func (s *Server) handleAPISyncAllDNS(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
+	if s.dnsSyncBlocked() {
+		writeDNSDriftBlocked(w, s)
+		return
+	}
 
 	var updated, failed int
+	run := s.newDNSSyncRun() // one live-fetch cache for the whole run
 
 	for _, svc := range s.cfg().Services {
 		if svc.ExternalDNS == nil {
@@ -481,7 +495,11 @@ func (s *Server) handleAPISyncAllDNS(w http.ResponseWriter, r *http.Request) {
 				})
 			}
 
-			changed, err := provider.SyncRecordSet(zone.ZoneID, records)
+			changed, err := run.publish(provider, *zone, domain, "A", records)
+			if errors.Is(err, errDNSDriftBlocked) {
+				writeDNSDriftBlocked(w, s)
+				return // abort the whole run on first drift
+			}
 			if err != nil {
 				failed++
 			} else if changed {
@@ -491,7 +509,11 @@ func (s *Server) handleAPISyncAllDNS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Publish statically-declared zone records (TXT verification, SPF, etc).
-	zUpdated, zFailed := s.syncZoneRecords()
+	zUpdated, zFailed, err := s.syncZoneRecords(run)
+	if errors.Is(err, errDNSDriftBlocked) {
+		writeDNSDriftBlocked(w, s)
+		return
+	}
 	updated += zUpdated
 	failed += zFailed
 

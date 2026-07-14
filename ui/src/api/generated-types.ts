@@ -430,6 +430,42 @@ export interface DNSSyncResponse {
   ok: boolean;
   changed: boolean;
 }
+export interface DNSRecordResp {
+  name: string;
+  type: string;
+  value: string;
+  ttl: number /* int */;
+  managed: boolean; // declared in Zone.Records (HZ owns it)
+}
+export interface ZoneRecordsResponse {
+  zone: string;
+  records: DNSRecordResp[];
+}
+/**
+ * DNSDriftInfoResp describes an out-of-band change detected at a DNS provider
+ * that has halted sync.
+ */
+export interface DNSDriftInfoResp {
+  zone: string;
+  name: string;
+  type: string;
+  expected: string[]; // what hz last published
+  live: string[]; // what's live at the provider now
+  detectedAt: number /* int64 */;
+}
+export interface DNSDriftStatusResponse {
+  blocked: boolean;
+  detail?: DNSDriftInfoResp;
+}
+export interface HostPortEntry {
+  port: string;
+  proto: string;
+  service: string;
+  domain?: string;
+}
+export interface HostPortMapResponse {
+  hosts: { [key: string]: HostPortEntry[]};
+}
 export interface DNSSyncAllResponse {
   ok: boolean;
   updated: number /* int */;

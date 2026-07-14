@@ -192,6 +192,23 @@ type Config struct {
 	// synced config.
 	BlessedIPTablesRules []string `json:"blessed_iptables_rules,omitempty"`
 
+	// LastPublishedRecords is the last value set hz successfully published to a
+	// DNS provider, keyed "zone|name|TYPE" (values order-independent). Drift
+	// detection compares live provider state against this to tell an intentional
+	// change (live == last published) from an out-of-band edit (live differs from
+	// both what we published and what we want now).
+	// Local-only: each peer publishes its own records; excluded from peer-sync
+	// (pinned in mergeRemoteIntoLocal).
+	LastPublishedRecords map[string][]string `json:"last_published_records,omitempty"`
+
+	// DNSDriftBlocked halts ALL DNS publishing: an out-of-band change was
+	// detected at a provider, so hz refuses to sync until an operator accepts the
+	// live state via POST /api/v1/dns/drift/clear. DNSDriftDetail describes the
+	// first drift that triggered the block.
+	// Local-only: excluded from peer-sync (pinned in mergeRemoteIntoLocal).
+	DNSDriftBlocked bool          `json:"dns_drift_blocked,omitempty"`
+	DNSDriftDetail  *DNSDriftInfo `json:"dns_drift_detail,omitempty"`
+
 	// HAProxy configuration
 	HAProxyEnabled    bool   `json:"haproxy_enabled"`
 	HAProxyConfigPath string `json:"haproxy_config_path"`
@@ -375,6 +392,19 @@ type DNSRecord struct {
 	Type  string `json:"type"`          // A, AAAA, CNAME, TXT
 	Value string `json:"value"`         // record value (e.g. "google-site-verification=...")
 	TTL   int    `json:"ttl,omitempty"` // seconds; defaults to 300
+}
+
+// DNSDriftInfo records an out-of-band change detected at a DNS provider: the
+// record set hz last published (Expected) no longer matches what's live (Live),
+// and it isn't what hz was about to publish either. Its presence with
+// DNSDriftBlocked halts sync until an operator clears it.
+type DNSDriftInfo struct {
+	Zone       string   `json:"zone"`
+	Name       string   `json:"name"`
+	Type       string   `json:"type"`
+	Expected   []string `json:"expected"` // what hz last published for (name,type)
+	Live       []string `json:"live"`     // what's actually at the provider now
+	DetectedAt int64    `json:"detected_at"`
 }
 
 // NormalizedType returns the upper-cased record type.

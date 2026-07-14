@@ -2,6 +2,8 @@
 
 A self-contained homelab management tool for WireGuard VPN, split-horizon DNS, reverse proxy, and service monitoring. Single binary, runs on Ubuntu/Debian.
 
+**Website: [homelab-horizon.iodesystems.com](https://homelab-horizon.iodesystems.com)** · the official, original project — accept no clones.
+
 ## The Problem
 
 Running a homelab with external access means juggling multiple systems that don't talk to each other:

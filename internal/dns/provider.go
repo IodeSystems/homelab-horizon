@@ -38,6 +38,10 @@ type Provider interface {
 	// GetRecord retrieves a DNS record
 	GetRecord(zoneID, name, recordType string) (*Record, error)
 
+	// ListRecords returns every record currently live in the zone at the
+	// provider (all names and types). Names are returned as FQDNs.
+	ListRecords(zoneID string) ([]Record, error)
+
 	// CreateRecord creates a new DNS record
 	CreateRecord(zoneID string, record Record) error
 

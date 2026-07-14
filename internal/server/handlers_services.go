@@ -320,8 +320,14 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 	}
 
 	// Step 2: Route53 DNS records (external DNS - needed before SSL certs)
+	// Halted while DNS drift is unresolved: an out-of-band change was detected
+	// and hz must not publish until an operator clears it (see Phase 3 drift
+	// handling). This legacy Route53 path is redundant with sync-all's
+	// dns.Provider publish, which is where drift is actually detected.
 	records := s.cfg().DeriveRoute53Records()
-	if len(records) > 0 && route53.Available() {
+	if s.dnsSyncBlocked() {
+		log.Step("Skipping Route53 DNS sync: DNS drift block active (clear drift to resume)")
+	} else if len(records) > 0 && route53.Available() {
 		log.Step("Syncing Route53 DNS records (parallel)...")
 
 		// Group records by (Name, Type, ZoneID) for round-robin record sets

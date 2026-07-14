@@ -10,7 +10,9 @@ import type {
   ConfigShare,
   CreateInviteResponse,
   DashboardData,
+  DNSDriftStatusResponse,
   DomainsData,
+  ZoneRecordsResponse,
   HACreateJoinTokenResponse,
   HAProxyConfigPreview,
   HAStatusResponse,
@@ -39,12 +41,14 @@ import {
   ChecksListSchema,
   ConfigSharesSchema,
   DashboardDataSchema,
+  DNSDriftStatusResponseSchema,
   ServicesSchema,
   DomainsDataSchema,
   PeerConfigResponseSchema,
   RekeyPeerResponseSchema,
   VPNPeersSchema,
   ZonesSchema,
+  ZoneRecordsResponseSchema,
   SettingsDataSchema,
   HAProxyConfigPreviewSchema,
   InvitesSchema,
@@ -177,7 +181,33 @@ export function useDeleteService() {
   });
 }
 
-// --- DNS mutations ---
+// --- DNS drift ---
+//
+// A drift-detected zone halts ALL DNS sync (server-side) until an operator
+// reviews the diff and clears it. Normal refetch is enough here — no
+// aggressive polling, the banner just needs to reflect the current block.
+
+export function useDNSDriftStatus() {
+  return useQuery({
+    queryKey: ["dns", "drift"],
+    queryFn: () =>
+      apiFetch<DNSDriftStatusResponse>("/dns/drift", {
+        schema: DNSDriftStatusResponseSchema,
+      }),
+  });
+}
+
+export function useClearDNSDrift() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<{ ok: boolean }>("/dns/drift/clear", { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["dns", "drift"] });
+      qc.invalidateQueries({ queryKey: ["zones", "records"] });
+    },
+  });
+}
 
 // --- Zone mutations ---
 
@@ -579,6 +609,89 @@ export function useDeleteZone() {
       qc.invalidateQueries({ queryKey: ["zones"] });
       qc.invalidateQueries({ queryKey: ["pending"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+}
+
+// --- Zone DNS records ---
+//
+// Set-based, drift-guarded on the server: a mutation carries `expectedFrom`,
+// the values the UI last saw live for that (name, type), and the server
+// refuses with 409 if the live set no longer matches. Invalidate onSettled
+// (not just onSuccess) so a 409 response also refreshes the list — the next
+// attempt needs the fresh live values to build a correct expectedFrom.
+
+export function useZoneRecords(zoneName: string) {
+  return useQuery({
+    queryKey: ["zones", "records", zoneName],
+    queryFn: () =>
+      apiFetch<ZoneRecordsResponse>(
+        `/zones/records?zone=${encodeURIComponent(zoneName)}`,
+        { schema: ZoneRecordsResponseSchema },
+      ),
+    enabled: !!zoneName,
+  });
+}
+
+export interface RecordMutationInput {
+  zone: string;
+  name: string;
+  type: string;
+  value: string;
+  ttl: number;
+  expectedFrom: string[];
+}
+
+export interface RecordEditInput extends RecordMutationInput {
+  oldValue: string;
+}
+
+export interface RecordDeleteInput {
+  zone: string;
+  name: string;
+  type: string;
+  value: string;
+  expectedFrom: string[];
+}
+
+export function useAddRecord() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RecordMutationInput) =>
+      apiFetch<{ ok: boolean; values: string[] }>("/zones/records/add", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSettled: (_data, _err, variables) => {
+      qc.invalidateQueries({ queryKey: ["zones", "records", variables.zone] });
+    },
+  });
+}
+
+export function useEditRecord() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RecordEditInput) =>
+      apiFetch<{ ok: boolean; values: string[] }>("/zones/records/edit", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSettled: (_data, _err, variables) => {
+      qc.invalidateQueries({ queryKey: ["zones", "records", variables.zone] });
+    },
+  });
+}
+
+export function useDeleteRecord() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RecordDeleteInput) =>
+      apiFetch<{ ok: boolean; values: string[] }>("/zones/records/delete", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSettled: (_data, _err, variables) => {
+      qc.invalidateQueries({ queryKey: ["zones", "records", variables.zone] });
     },
   });
 }

@@ -246,6 +246,13 @@ func mergeRemoteIntoLocal(remote, local *config.Config) *config.Config {
 	// doesn't apply to this host's adjacent tooling.
 	out.BlessedIPTablesRules = local.BlessedIPTablesRules
 
+	// DNS publish memory + drift block are local-only: each peer publishes its
+	// own records and detects drift against its own baseline, so the primary's
+	// snapshot/block must not be inherited (would falsely block or mislead).
+	out.LastPublishedRecords = local.LastPublishedRecords
+	out.DNSDriftBlocked = local.DNSDriftBlocked
+	out.DNSDriftDetail = local.DNSDriftDetail
+
 	// IPBans: take the LWW-merged result from the remote config.
 	// The ban sync loop on each peer independently merges bans from all
 	// peers, so the primary's ban list is the authoritative merged set.
