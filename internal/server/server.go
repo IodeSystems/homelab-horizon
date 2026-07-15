@@ -1310,6 +1310,7 @@ func (s *Server) certRenewalSweep() {
 		HAProxyCertDir: cfg.SSLHAProxyCertDir,
 	})
 
+	renewedAny := false
 	for _, domain := range sslDomains {
 		// In a fleet, non-owners pull certs from the owner instead of
 		// renewing. This is the "eager poll" from Phase 2 item 6.
@@ -1319,6 +1320,8 @@ func (s *Server) certRenewalSweep() {
 				slog.Debug("cert-renewal: pulling cert from owner", "domain", domain.Domain, "owner", owner)
 				if err := s.pullCertFromPeer(domain.Domain, owner, cfg); err != nil {
 					slog.Warn("cert-renewal: pull from peer failed", "domain", domain.Domain, "owner", owner, "err", err)
+				} else {
+					renewedAny = true
 				}
 				continue
 			}
@@ -1332,6 +1335,7 @@ func (s *Server) certRenewalSweep() {
 			if err := le.RequestCertForDomain(domain); err != nil {
 				slog.Error("cert-renewal: request failed", "domain", domain.Domain, "err", err)
 			} else {
+				renewedAny = true
 				slog.Info("cert-renewal: obtained", "domain", domain.Domain)
 			}
 			continue
@@ -1344,6 +1348,7 @@ func (s *Server) certRenewalSweep() {
 			if err := le.RequestCertForDomain(domain); err != nil {
 				slog.Error("cert-renewal: renewal failed", "domain", domain.Domain, "err", err)
 			} else {
+				renewedAny = true
 				slog.Info("cert-renewal: renewed with updated SANs", "domain", domain.Domain)
 			}
 			continue
@@ -1355,10 +1360,41 @@ func (s *Server) certRenewalSweep() {
 			if err := le.RequestCertForDomain(domain); err != nil {
 				slog.Error("cert-renewal: renewal failed", "domain", domain.Domain, "err", err)
 			} else {
+				renewedAny = true
 				slog.Info("cert-renewal: renewed", "domain", domain.Domain)
 			}
 			continue
 		}
+	}
+
+	if !cfg.HAProxyEnabled {
+		return
+	}
+
+	// Repackage + prune the HAProxy cert dir so orphaned certs (from removed
+	// subzones) don't linger and get served via SNI after they expire.
+	if err := le.PackageAllForHAProxy(); err != nil {
+		slog.Warn("cert-renewal: repackage failed", "err", err)
+	}
+	pruned := le.PruneHAProxyCerts()
+
+	// Validate what HAProxy actually serves — the ground truth CertExists can't
+	// give us. A running HAProxy keeps a deleted/renewed cert in memory until
+	// reloaded, so reload when the on-disk set changed OR when a probe shows the
+	// served cert is wrong (expired/mismatched), then re-probe to confirm.
+	problems := s.validateServedCerts(sslDomains)
+	if renewedAny || pruned > 0 || len(problems) > 0 {
+		if err := s.haproxy.Reload(); err != nil {
+			slog.Warn("cert-renewal: haproxy reload failed", "err", err)
+		} else {
+			slog.Info("cert-renewal: reloaded haproxy", "renewed", renewedAny, "pruned", pruned, "served_problems", len(problems))
+			if len(problems) > 0 {
+				problems = s.validateServedCerts(sslDomains) // re-probe after reload
+			}
+		}
+	}
+	for _, p := range problems {
+		slog.Warn("cert-renewal: served cert problem", "domain", p.Domain, "sni", p.SNI, "reason", p.Reason)
 	}
 }
 

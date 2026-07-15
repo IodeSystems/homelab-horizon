@@ -199,8 +199,10 @@ func (m *Manager) RequestCertForDomainWithLog(d DomainConfig, logFn LogFunc) err
 		CloudflareZoneID:   providerCfg.CloudflareZoneID,
 	}
 
-	// Build domain list - primary domain plus any extra SANs
-	// Note: ExtraSANs should include the base domain if needed (no auto-add)
+	// Build the SAN list: exactly the configured domains — primary plus extra
+	// SANs. The apex is included only when it is itself a configured domain
+	// (DeriveSSLDomains makes an explicit "" subzone the primary or an extra
+	// SAN); a bare "*" wildcard subzone does NOT pull in the apex.
 	domains := []string{d.Domain}
 	domains = append(domains, d.ExtraSANs...)
 
@@ -299,7 +301,9 @@ func (m *Manager) PackageForHAProxyDomain(domain string) error {
 	return nil
 }
 
-// PackageAllForHAProxy packages all configured domain certs for HAProxy
+// PackageAllForHAProxy packages all configured domain certs for HAProxy.
+// It does not prune orphans — callers pair this with PruneHAProxyCerts so they
+// can act on the prune result (e.g. reload HAProxy only when the set changed).
 func (m *Manager) PackageAllForHAProxy() error {
 	for _, d := range m.config.Domains {
 		if err := m.PackageForHAProxyDomain(d.Domain); err != nil {
@@ -308,6 +312,40 @@ func (m *Manager) PackageAllForHAProxy() error {
 		}
 	}
 	return nil
+}
+
+// PruneHAProxyCerts deletes <base>.pem files in the HAProxy cert dir that don't
+// correspond to any currently-configured domain, returning the number removed.
+// HAProxy loads *every* file in `crt <dir>`, so a stale cert (e.g. from a
+// subzone that was removed from the config) keeps being served via SNI — and
+// once it expires it shadows the valid cert for any hostname listed in its
+// SANs. Reconciling the directory to exactly the configured set prevents that.
+func (m *Manager) PruneHAProxyCerts() int {
+	valid := make(map[string]bool, len(m.config.Domains))
+	for _, d := range m.config.Domains {
+		base := strings.TrimPrefix(d.Domain, "*.")
+		valid[base+".pem"] = true
+	}
+
+	entries, err := os.ReadDir(m.config.HAProxyCertDir)
+	if err != nil {
+		return 0 // dir may not exist yet; nothing to prune
+	}
+	removed := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".pem") || valid[name] {
+			continue
+		}
+		path := filepath.Join(m.config.HAProxyCertDir, name)
+		if err := os.Remove(path); err != nil {
+			slog.Warn("failed to remove orphaned haproxy cert", "file", path, "err", err)
+			continue
+		}
+		removed++
+		slog.Info("removed orphaned haproxy cert", "file", path)
+	}
+	return removed
 }
 
 // CertInfo holds detailed certificate information
@@ -415,16 +453,14 @@ func (m *Manager) CheckCertSANs(d DomainConfig) (bool, []string, error) {
 		return false, nil, nil // Cert doesn't exist
 	}
 
-	// Build expected SANs set
+	// Build the expected SAN set: exactly the configured domains. This mirrors
+	// what RequestCertForDomainWithLog asks for. A wildcard primary does NOT
+	// imply its apex — the apex is expected only when it's a configured domain
+	// (an explicit "" subzone, which appears here as the primary or an extra
+	// SAN). Expecting an unconfigured apex would flag it as perpetually missing
+	// and trigger a re-request every renewal sweep.
 	expected := make(map[string]bool)
-
-	// Primary wildcard and its base
 	expected[d.Domain] = true
-	if strings.HasPrefix(d.Domain, "*.") {
-		expected[strings.TrimPrefix(d.Domain, "*.")] = true
-	}
-
-	// Extra SANs (sub-zone wildcards only, not their bases)
 	for _, san := range d.ExtraSANs {
 		expected[san] = true
 	}

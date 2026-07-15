@@ -51,6 +51,45 @@ func writeSelfSignedCert(t *testing.T, certDir, domain string, notAfter time.Tim
 	os.WriteFile(filepath.Join(dir, "privkey.pem"), keyPEM, 0600)
 }
 
+func TestPruneOrphanedHAProxyCerts(t *testing.T) {
+	certDir := t.TempDir()
+	m := New(Config{
+		HAProxyCertDir: certDir,
+		Domains: []DomainConfig{
+			{Domain: "veliode.com"},           // base veliode.com.pem
+			{Domain: "*.vpn.iodesystems.com"}, // base vpn.iodesystems.com.pem
+		},
+	})
+
+	write := func(name string) {
+		if err := os.WriteFile(filepath.Join(certDir, name), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("veliode.com.pem")         // configured — keep
+	write("vpn.iodesystems.com.pem") // configured — keep
+	write("dev.veliode.com.pem")     // orphan — remove
+	write("notacert.txt")            // non-pem — keep
+
+	if removed := m.PruneHAProxyCerts(); removed != 1 {
+		t.Errorf("expected 1 orphan removed, got %d", removed)
+	}
+
+	exists := func(name string) bool {
+		_, err := os.Stat(filepath.Join(certDir, name))
+		return err == nil
+	}
+	if !exists("veliode.com.pem") || !exists("vpn.iodesystems.com.pem") {
+		t.Error("configured certs must be kept")
+	}
+	if exists("dev.veliode.com.pem") {
+		t.Error("orphaned cert should have been removed")
+	}
+	if !exists("notacert.txt") {
+		t.Error("non-pem files must be left untouched")
+	}
+}
+
 func TestNeedsRenewal(t *testing.T) {
 	certDir := t.TempDir()
 	m := New(Config{CertDir: certDir})

@@ -607,6 +607,11 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 			} else {
 				log.Success("  Packaged certificates for HAProxy")
 			}
+			// Remove orphaned certs (from removed subzones); HAProxy loads every
+			// file in its cert dir, so a stale one keeps being served via SNI.
+			if n := s.letsencrypt.PruneHAProxyCerts(); n > 0 {
+				log.Info(fmt.Sprintf("  Removed %d orphaned certificate(s)", n))
+			}
 		}
 	} else if len(sslDomains) > 0 {
 		log.Info("SSL disabled, skipping certificate check")
@@ -649,6 +654,16 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 			hasErrors = true
 		} else {
 			log.Success("  Reloaded HAProxy")
+		}
+
+		// Validate what HAProxy actually serves per SNI (expiry + coverage),
+		// not just that a cert file exists. Runs after the reload so it reflects
+		// the final state.
+		if s.cfg().SSLEnabled {
+			for _, p := range s.validateServedCerts(sslDomains) {
+				log.Warning(fmt.Sprintf("  Served cert issue: %s", p.String()))
+				hasErrors = true
+			}
 		}
 	} else {
 		log.Info("HAProxy disabled, skipping")
