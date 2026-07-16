@@ -80,7 +80,7 @@ func probeServedCert(addr, sni, domain string) *servedCertProblem {
 	if err != nil {
 		return &servedCertProblem{Domain: domain, SNI: sni, Reason: fmt.Sprintf("TLS dial failed: %v", err)}
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	certs := conn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
