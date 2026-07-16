@@ -23,6 +23,8 @@ note() { printf "release: %s\n" "$*"; }
 
 command -v gh >/dev/null 2>&1 || err "gh CLI not installed (https://cli.github.com)"
 gh auth status >/dev/null 2>&1 || err "gh not authenticated — run 'gh auth login'"
+command -v golangci-lint >/dev/null 2>&1 \
+  || err "golangci-lint not installed — go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2"
 [ -f Makefile ] || err "must run from the repo root"
 
 branch="$(git rev-parse --abbrev-ref HEAD)"
@@ -65,9 +67,13 @@ fi
 
 # ----- build / tag / build / push / publish --------------------------------
 
-# Smoke build before tagging so a broken build doesn't litter the repo with
-# stranded tags. Hits the same code path as `make release` for the current
-# host arch — if this fails, the cross-compile would too.
+# Gate before tagging so a broken build / lint failure doesn't litter the repo
+# with stranded tags (and doesn't ship a red-CI commit as a release).
+# `make check` mirrors CI: gofmt-clean + vet + golangci-lint.
+note "check (gofmt + vet + lint)..."
+make check
+# Smoke build hits the same code path as `make release` for the current host
+# arch — if this fails, the cross-compile would too.
 note "smoke build..."
 make build >/dev/null
 
