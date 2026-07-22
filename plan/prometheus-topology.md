@@ -39,6 +39,14 @@ Refactor `ScrapeYAML`/`HTTPSDTargets` to consume `[]ScrapeJob{Name,MetricsPath,B
 - ◐ **Docs** — `~/doc` deployment.md/standards.md (subagent).
 - ◻ **MCP** — host/exporter tools. Deferred (optional).
 
+## Hardening pass (user, 2026-07-21)
+- ✅ **Probe hardening** — verify body looks like exposition (HELP/TYPE or sample line); reject catchall/SPA 200s. `looksLikeExposition`.
+- ✅ **Multi-path rules** — `Exporter.Path` CSV candidates; probe-resolved per target; per-target `__metrics_path__` (renderer refactored off job-level path). Falls back to first candidate (down) if none respond.
+- ✅ **Scrape-token auth** — scrape.yaml/targets.json require admin OR read-only scrape token (header or `?token=`); dropped RFC1918-open (closed bearer leak). setup.sh admin-only + bakes token into cron. `GET/POST /api/v1/integration/scrape-token`. Tests: scrape_auth_test.go.
+- ◐ **UI** — exporter path CSV hint + resolved/candidate path display; Output zone: setup.sh is admin-only (drop curl one-liner → copy-and-run), scrape-token show/rotate (subagent).
+- ◐ **Docs** — auth + multi-path + probe (subagent).
+- ⚠️ **Re-wire note**: the earlier unauthenticated prometheus.yml/refresh script (scratchpad) now 401s against token-gated scrape.yaml. Re-wire via the NEW served setup.sh (admin, token-baked): the refresh cron carries `Authorization: Bearer <scrape-token>`.
+
 ## Simplified model pass (user, 2026-07-21) — supersedes the scan/reconciliation UI
 Decisions: ONE exporters list, each with `mode: port|service|static`. Per-service metrics toggle KEPT;
 service-mode rules cover service backends NOT already opted-in (skip to avoid dup jobs). DROP the

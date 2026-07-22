@@ -40,6 +40,7 @@ import type {
   ServiceScanMetricsResp,
   HostPortMapResponse,
   PortRange,
+  ScrapeTokenResp,
 } from "./types";
 import {
   BanListResponseSchema,
@@ -62,6 +63,7 @@ import {
   TopologyDataSchema,
   ServiceScanMetricsRespSchema,
   HostPortMapResponseSchema,
+  ScrapeTokenRespSchema,
 } from "./schemas";
 
 export function useDashboard() {
@@ -1182,6 +1184,33 @@ export function useSetupScript() {
   return useQuery({
     queryKey: ["topology", "setup-script"],
     queryFn: () => apiFetchText("/integration/prometheus/setup.sh"),
+  });
+}
+
+// Read-only scrape token gating scrape.yaml/targets.json for unauthenticated
+// pullers (e.g. a Prometheus box running setup.sh's refresh timer).
+export function useScrapeToken() {
+  return useQuery({
+    queryKey: ["scrape-token"],
+    queryFn: () =>
+      apiFetch<ScrapeTokenResp>("/integration/scrape-token", {
+        schema: ScrapeTokenRespSchema,
+      }),
+  });
+}
+
+export function useRotateScrapeToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<ScrapeTokenResp>("/integration/scrape-token", {
+        method: "POST",
+        schema: ScrapeTokenRespSchema,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["scrape-token"] });
+      qc.invalidateQueries({ queryKey: ["topology", "setup-script"] });
+    },
   });
 }
 

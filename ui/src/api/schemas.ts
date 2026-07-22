@@ -416,6 +416,7 @@ export const ExporterTargetSchema = z.object({
   job: z.string(),
   address: z.string(),
   path: z.string(),
+  paths: z.array(z.string()).optional(),
   labels: z.record(z.string(), z.string()).optional(),
   alive: z.boolean(),
 });
@@ -425,6 +426,10 @@ export const TopologyDataSchema = z.object({
   exporters: z.array(ExporterSchema),
   targets: z.array(ExporterTargetSchema),
   knownHosts: z.array(z.string()),
+});
+
+export const ScrapeTokenRespSchema = z.object({
+  token: z.string(),
 });
 
 // Service metrics-path scan
