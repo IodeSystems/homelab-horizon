@@ -99,6 +99,15 @@ func (m *MCPServer) registerTools() {
 			mcp.WithBoolean("internal_only",
 				mcp.Description("Restrict HAProxy to local network only"),
 			),
+			mcp.WithBoolean("metrics_enabled",
+				mcp.Description("Enable Prometheus metrics discovery: hz probes the backend and includes it in the served scrape config"),
+			),
+			mcp.WithString("metrics_path",
+				mcp.Description("Metrics path to scrape (default /metrics)"),
+			),
+			mcp.WithString("metrics_bearer",
+				mcp.Description("Optional bearer token sent when probing/scraping metrics"),
+			),
 		),
 		m.handleUpdateService,
 	)
@@ -358,6 +367,15 @@ func (m *MCPServer) buildService(name, domain string, req mcp.CallToolRequest) c
 			if checkPath := req.GetString("health_check_path", ""); checkPath != "" {
 				svc.Proxy.HealthCheck = &config.HealthCheck{Path: checkPath}
 			}
+		}
+	}
+
+	if req.GetBool("metrics_enabled", false) {
+		svc.Integrations = &config.Integrations{
+			Metrics: &config.MetricsIntegration{
+				Path:   req.GetString("metrics_path", ""),
+				Bearer: req.GetString("metrics_bearer", ""),
+			},
 		}
 	}
 

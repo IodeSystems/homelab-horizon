@@ -143,6 +143,9 @@ interface ServiceFormState {
   timeoutServer: string;
   timeoutConnect: string;
   timeoutTunnel: string;
+  metricsEnabled: boolean;
+  metricsPath: string;
+  metricsBearer: string;
 }
 
 const emptyForm: ServiceFormState = {
@@ -165,6 +168,9 @@ const emptyForm: ServiceFormState = {
   timeoutServer: "",
   timeoutConnect: "",
   timeoutTunnel: "",
+  metricsEnabled: false,
+  metricsPath: "",
+  metricsBearer: "",
 };
 
 function serviceToForm(svc: Service): ServiceFormState {
@@ -198,6 +204,9 @@ function serviceToForm(svc: Service): ServiceFormState {
     timeoutTunnel: svc.proxy?.timeouts?.tunnelSeconds
       ? String(svc.proxy.timeouts.tunnelSeconds)
       : "",
+    metricsEnabled: !!svc.integrations?.metrics?.enabled,
+    metricsPath: svc.integrations?.metrics?.path ?? "",
+    metricsBearer: svc.integrations?.metrics?.bearer ?? "",
   };
 }
 
@@ -284,6 +293,16 @@ function formToInput(form: ServiceFormState, originalName?: string): ServiceMuta
     if (Object.keys(timeouts).length > 0) {
       input.proxy.timeouts = timeouts;
     }
+  }
+
+  if (form.metricsEnabled) {
+    input.integrations = {
+      metrics: {
+        enabled: true,
+        path: form.metricsPath || undefined,
+        bearer: form.metricsBearer || undefined,
+      },
+    };
   }
 
   return input;
@@ -970,6 +989,35 @@ function ServiceFormDialog({
               </>
             )}
           </>
+        )}
+
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <Switch
+            checked={form.metricsEnabled}
+            onChange={(e) => update("metricsEnabled", e.target.checked)}
+            size="small"
+          />
+          <Typography variant="body2">Prometheus metrics</Typography>
+        </Box>
+        {form.metricsEnabled && (
+          <Box sx={{ display: "flex", gap: 2 }}>
+            <TextField
+              label="Metrics path"
+              value={form.metricsPath}
+              onChange={(e) => update("metricsPath", e.target.value)}
+              size="small"
+              fullWidth
+              placeholder="/metrics"
+              helperText="Leave blank to use /metrics"
+            />
+            <TextField
+              label="Bearer token (optional)"
+              value={form.metricsBearer}
+              onChange={(e) => update("metricsBearer", e.target.value)}
+              size="small"
+              fullWidth
+            />
+          </Box>
         )}
       </DialogContent>
       <DialogActions>

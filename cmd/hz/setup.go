@@ -92,6 +92,13 @@ func runSetup(c *client, _ []string) error {
 		req.ExternalDNS = ext
 	}
 
+	if askBool(in, "Enable Prometheus metrics scraping?", false) {
+		m := &apitypes.ServiceRequestMetrics{Enabled: true}
+		m.Path = ask(in, "  Metrics path", "/metrics")
+		m.Bearer = ask(in, "  Bearer token (optional)", "")
+		req.Integrations = &apitypes.ServiceRequestIntegrations{Metrics: m}
+	}
+
 	fmt.Println()
 	fmt.Println("Request to be sent:")
 	b, _ := json.MarshalIndent(req, "  ", "  ")

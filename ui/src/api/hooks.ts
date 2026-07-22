@@ -126,6 +126,13 @@ export interface ServiceMutationInput {
       tunnelSeconds?: number;
     } | null;
   } | null;
+  integrations?: {
+    metrics?: {
+      enabled: boolean;
+      path?: string;
+      bearer?: string;
+    };
+  } | null;
 }
 
 // --- Service mutations ---
