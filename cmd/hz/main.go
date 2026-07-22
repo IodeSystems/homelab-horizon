@@ -56,6 +56,14 @@ COMMANDS
                                      Find the next free port range on a host (safe band, common ports skipped)
   ports list --host IP [--count N] [--from PORT]
                                      List reserved ports on a host + suggested free ports
+  host list                          List declared hosts (table)
+  host add --name N --ip IP [--label k=v ...]
+                                     Declare a host (error if name/ip already used)
+  host rm <name|ip>                  Remove a declared host
+  exporter list                      List exporter jobs, then expanded live targets (up/down)
+  exporter add --job J [--target host:port ...] [--port N --host H ...] [--path P] [--bearer T] [--label k=v ...]
+                                     Add a Prometheus exporter job (error if job exists)
+  exporter rm <job>                  Remove an exporter job
   schema [service]                   Dump the JSON request schema
   version                            Print version
 
@@ -79,6 +87,27 @@ SERVICE FLAGS (create/edit)
   --metrics-bearer TOK      optional bearer token for probing/scraping metrics
   --sync                    trigger a global sync after the mutation
 
+HOST FLAGS (add)
+  --name N                  host name (required)
+  --ip IP                   host IP (required)
+  --label k=v               label (repeatable)
+  --sync                    trigger a global sync after the mutation
+
+EXPORTER FLAGS (add)
+  --job J                   exporter job name (required)
+  --target HOST:PORT        explicit scrape target (repeatable)
+  --port N                  port to expand across --host entries
+  --host H                  host name/IP to expand --port across (repeatable); --host '*' = all known hosts
+  --path P                  metrics path (default /metrics)
+  --bearer TOK              optional bearer token
+  --label k=v               label (repeatable)
+  --sync                    trigger a global sync after the mutation
+                            (need --target, or --port with at least one --host)
+
+The generated Prometheus scrape config is served at
+  GET /integration/prometheus/scrape.yaml
+  GET /integration/prometheus/targets.json
+
 EXAMPLES
   hz service list
   hz setup
@@ -87,6 +116,10 @@ EXAMPLES
   hz service edit grafana.iodesystems.com --metrics --sync   # opt into /metrics scraping
   hz sync --wait
   hz schema service
+  hz host add --name nas --ip 192.168.1.50 --label role=storage
+  hz exporter add --job node --port 9100 --host '*' --sync        # node_exporter on every known host
+  hz exporter add --job postgres --target 192.168.1.60:9187 --label db=main
+  hz exporter list
 `
 
 func main() {
@@ -157,6 +190,10 @@ func main() {
 		err = runPending(c, rest)
 	case "ports":
 		err = runPorts(c, rest)
+	case "host":
+		err = runHost(c, rest)
+	case "exporter":
+		err = runExporter(c, rest)
 	default:
 		err = fmt.Errorf("unknown command: %s\nRun 'hz --help'", cmd)
 	}
