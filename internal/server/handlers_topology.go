@@ -43,8 +43,14 @@ func (s *Server) handleAPITopology(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	cfg := s.cfg()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.buildTopologyResp())
+}
 
+// buildTopologyResp assembles the topology read view from current config and the
+// last exporter-probe results. Shared by GET /topology and the reprobe handler.
+func (s *Server) buildTopologyResp() apitypes.TopologyResp {
+	cfg := s.cfg()
 	resp := apitypes.TopologyResp{
 		Hosts:      make([]apitypes.HostDecl, 0, len(cfg.Hosts)),
 		Exporters:  make([]apitypes.Exporter, 0, len(cfg.Exporters)),
@@ -68,8 +74,22 @@ func (s *Server) handleAPITopology(w http.ResponseWriter, r *http.Request) {
 			Alive:   pr.Alive,
 		})
 	}
+	return resp
+}
+
+// handleAPITopologyReprobe forces a synchronous exporter re-probe (rather than
+// waiting for the 60s background loop) and returns the refreshed topology.
+// Admin-only.
+func (s *Server) handleAPITopologyReprobe(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	s.refreshExporterStatus(ctx)
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(s.buildTopologyResp())
 }
 
 // handleAPITopologyHosts replaces the declared-host list (read-modify-write from

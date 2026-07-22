@@ -39,6 +39,7 @@ import {
   useTopology,
   useSaveTopologyHosts,
   useSaveTopologyExporters,
+  useReprobeExporters,
   useScrapeYaml,
   useSetupScript,
   useScrapeToken,
@@ -969,12 +970,16 @@ function ExportersSection({
   onAdd,
   onEdit,
   onDelete,
+  onReprobe,
+  isReprobing,
 }: {
   exporters: Exporter[];
   targets: ExporterTargetResp[];
   onAdd: () => void;
   onEdit: (exp: Exporter) => void;
   onDelete: (job: string) => void;
+  onReprobe: () => void;
+  isReprobing: boolean;
 }) {
   return (
     <Box sx={{ mb: 4 }}>
@@ -982,12 +987,25 @@ function ExportersSection({
         <Typography variant="h6" sx={{ fontWeight: 600 }}>
           Exporters
         </Typography>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={onAdd}>
-          Add Exporter
-        </Button>
+        <Stack direction="row" spacing={1}>
+          <Button
+            variant="outlined"
+            startIcon={
+              isReprobing ? <CircularProgress size={16} color="inherit" /> : <AutorenewIcon />
+            }
+            onClick={onReprobe}
+            disabled={isReprobing || exporters.length === 0}
+          >
+            Re-probe
+          </Button>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={onAdd}>
+            Add Exporter
+          </Button>
+        </Stack>
       </Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Down targets are still scraped — Prometheus owns up/down alerting.
+        Status auto-refreshes every 60s. Down targets are still scraped — Prometheus owns up/down
+        alerting.
       </Typography>
       <TableContainer component={Paper}>
         <Table size="small">
@@ -1037,6 +1055,7 @@ function ObservabilityPage() {
   const { data, isLoading, error } = useTopology();
   const saveHosts = useSaveTopologyHosts();
   const saveExporters = useSaveTopologyExporters();
+  const reprobe = useReprobeExporters();
 
   const [addExporterOpen, setAddExporterOpen] = useState(false);
   const [editExporterTarget, setEditExporterTarget] = useState<Exporter | null>(null);
@@ -1173,6 +1192,13 @@ function ObservabilityPage() {
         onAdd={() => setAddExporterOpen(true)}
         onEdit={setEditExporterTarget}
         onDelete={setDeleteExporterTarget}
+        onReprobe={() =>
+          reprobe.mutate(undefined, {
+            onSuccess: () => showSnack("Exporters re-probed", "success"),
+            onError: (e) => showSnack(String(e), "error"),
+          })
+        }
+        isReprobing={reprobe.isPending}
       />
 
       {/* Exporter dialogs */}
