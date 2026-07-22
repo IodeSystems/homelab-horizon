@@ -61,7 +61,7 @@ COMMANDS
                                      Declare a host (error if name/ip already used)
   host rm <name|ip>                  Remove a declared host
   exporter list                      List exporter jobs, then expanded live targets (up/down)
-  exporter add --job J [--target host:port ...] [--port N --host H ...] [--path P] [--bearer T] [--label k=v ...]
+  exporter add --job J --mode port|service|static [mode flags] [--path P] [--bearer T] [--label k=v ...]
                                      Add a Prometheus exporter job (error if job exists)
   exporter rm <job>                  Remove an exporter job
   schema [service]                   Dump the JSON request schema
@@ -95,14 +95,16 @@ HOST FLAGS (add)
 
 EXPORTER FLAGS (add)
   --job J                   exporter job name (required)
-  --target HOST:PORT        explicit scrape target (repeatable)
-  --port N                  port to expand across --host entries
-  --host H                  host name/IP to expand --port across (repeatable); --host '*' = all known hosts
-  --path P                  metrics path (default /metrics)
+  --mode M                  port | service | static (inferred from flags if omitted)
+  --port N                  port mode: port to expand across --host (default --host '*')
+  --host H                  port mode: host name/IP (repeatable); '*' = all known hosts
+  --target HOST:PORT        static mode: explicit scrape target (repeatable)
+  --path P                  metrics path (default /metrics); service mode e.g. /api/metrics
   --bearer TOK              optional bearer token
   --label k=v               label (repeatable)
   --sync                    trigger a global sync after the mutation
-                            (need --target, or --port with at least one --host)
+  Modes: port = expand a port over hosts; service = one target per service
+         backend not already opted-in per-service; static = explicit --target list.
 
 The generated Prometheus scrape config is served at
   GET /integration/prometheus/scrape.yaml
@@ -117,8 +119,9 @@ EXAMPLES
   hz sync --wait
   hz schema service
   hz host add --name nas --ip 192.168.1.50 --label role=storage
-  hz exporter add --job node --port 9100 --host '*' --sync        # node_exporter on every known host
-  hz exporter add --job postgres --target 192.168.1.60:9187 --label db=main
+  hz exporter add --job node --mode port --port 9100 --sync       # node_exporter on every known host
+  hz exporter add --job app-metrics --mode service --path /api/metrics  # every non-opted-in service backend
+  hz exporter add --job pg --mode static --target 192.168.1.60:9187 --label db=main
   hz exporter list
 `
 

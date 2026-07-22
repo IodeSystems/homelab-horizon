@@ -82,8 +82,6 @@ export type {
   Exporter,
   ExporterTargetResp,
   TopologyResp as TopologyData,
-  ScanResult,
-  TopologyScanResp,
   ServiceScanMetricsRequest,
   ServiceScanSlot,
   ServiceScanMetricsResp,

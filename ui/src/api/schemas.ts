@@ -403,6 +403,7 @@ export const HostDeclSchema = z.object({
 
 export const ExporterSchema = z.object({
   job: z.string(),
+  mode: z.string().optional(),
   targets: z.array(z.string()).optional(),
   port: z.number().optional(),
   hosts: z.array(z.string()).optional(),
@@ -423,21 +424,6 @@ export const TopologyDataSchema = z.object({
   hosts: z.array(HostDeclSchema),
   exporters: z.array(ExporterSchema),
   targets: z.array(ExporterTargetSchema),
-  knownHosts: z.array(z.string()),
-});
-
-// Topology scan (discovery) — probes a port/path across known + extra hosts.
-export const ScanResultSchema = z.object({
-  address: z.string(),
-  host: z.string(),
-  alive: z.boolean(),
-  configured: z.boolean(),
-});
-
-export const TopologyScanRespSchema = z.object({
-  port: z.number(),
-  path: z.string(),
-  results: z.array(ScanResultSchema),
   knownHosts: z.array(z.string()),
 });
 

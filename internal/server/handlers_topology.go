@@ -3,12 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"net"
 	"net/http"
-	"sort"
-	"strconv"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
@@ -28,14 +23,14 @@ func hostDeclFromAPI(h apitypes.HostDecl) config.HostDecl {
 
 func exporterToAPI(e config.Exporter) apitypes.Exporter {
 	return apitypes.Exporter{
-		Job: e.Job, Targets: e.Targets, Port: e.Port, Hosts: e.Hosts,
+		Job: e.Job, Mode: e.EffectiveMode(), Targets: e.Targets, Port: e.Port, Hosts: e.Hosts,
 		Path: e.Path, Bearer: e.Bearer, Labels: e.Labels,
 	}
 }
 
 func exporterFromAPI(e apitypes.Exporter) config.Exporter {
 	return config.Exporter{
-		Job: e.Job, Targets: e.Targets, Port: e.Port, Hosts: e.Hosts,
+		Job: e.Job, Mode: e.Mode, Targets: e.Targets, Port: e.Port, Hosts: e.Hosts,
 		Path: e.Path, Bearer: e.Bearer, Labels: e.Labels,
 	}
 }
@@ -140,92 +135,6 @@ func (s *Server) handleAPITopologyExporters(w http.ResponseWriter, r *http.Reque
 
 // metricsPathCandidates is the ordered set the service metrics-path scan tries.
 var metricsPathCandidates = []string{"/metrics", "/api/metrics"}
-
-// handleAPITopologyScan probes a port/path across the known hosts plus any typed
-// extra hosts, returning which respond and which are already configured — the
-// discovery half of the reconciliation view. Admin-only.
-func (s *Server) handleAPITopologyScan(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-	var req apitypes.TopologyScanRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
-		return
-	}
-	if req.Port <= 0 {
-		writeJSONError(w, http.StatusBadRequest, "port is required")
-		return
-	}
-	path := req.Path
-	if path == "" {
-		path = "/metrics"
-	}
-	cfg := s.cfg()
-
-	// Population: known hosts + typed extras (names resolved to IPs), deduped.
-	ipByName := map[string]string{}
-	for _, h := range cfg.Hosts {
-		if h.Name != "" && h.IP != "" {
-			ipByName[h.Name] = h.IP
-		}
-	}
-	seen := map[string]bool{}
-	var hosts []string
-	addHost := func(h string) {
-		h = strings.TrimSpace(h)
-		if h == "" {
-			return
-		}
-		if ip, ok := ipByName[h]; ok {
-			h = ip
-		}
-		if !seen[h] {
-			seen[h] = true
-			hosts = append(hosts, h)
-		}
-	}
-	for _, h := range cfg.DeriveKnownHostIPs() {
-		addHost(h)
-	}
-	for _, h := range req.Hosts {
-		addHost(h)
-	}
-
-	// Addresses already configured as exporter targets (added vs addable).
-	configured := map[string]bool{}
-	for _, t := range cfg.DeriveExporterTargets() {
-		configured[t.Address] = true
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-	defer cancel()
-
-	results := make([]apitypes.ScanResult, len(hosts))
-	var wg sync.WaitGroup
-	for i, h := range hosts {
-		addr := net.JoinHostPort(h, strconv.Itoa(req.Port))
-		results[i] = apitypes.ScanResult{Address: addr, Host: h, Configured: configured[addr]}
-		wg.Add(1)
-		go func(i int, addr string) {
-			defer wg.Done()
-			alive := s.metrics.Probe(ctx, integration.Target{Address: addr, MetricsPath: path})
-			results[i].Alive = alive
-		}(i, addr)
-	}
-	wg.Wait()
-
-	sort.Slice(results, func(i, j int) bool { return results[i].Address < results[j].Address })
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(apitypes.TopologyScanResp{
-		Port: req.Port, Path: path, Results: results, KnownHosts: cfg.DeriveKnownHostIPs(),
-	})
-}
 
 // handleAPIServiceScanMetrics discovers a service's metrics path by probing its
 // backend slot(s) at the candidate paths in order; the first path any slot
