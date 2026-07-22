@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as VpnRouteImport } from './routes/vpn'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as ServicesRouteImport } from './routes/services'
+import { Route as PortsRouteImport } from './routes/ports'
 import { Route as ObservabilityRouteImport } from './routes/observability'
 import { Route as MfaRouteImport } from './routes/mfa'
 import { Route as DomainsRouteImport } from './routes/domains'
@@ -33,6 +34,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const ServicesRoute = ServicesRouteImport.update({
   id: '/services',
   path: '/services',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PortsRoute = PortsRouteImport.update({
+  id: '/ports',
+  path: '/ports',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ObservabilityRoute = ObservabilityRouteImport.update({
@@ -79,6 +85,7 @@ export interface FileRoutesByFullPath {
   '/domains': typeof DomainsRoute
   '/mfa': typeof MfaRoute
   '/observability': typeof ObservabilityRoute
+  '/ports': typeof PortsRoute
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
@@ -91,6 +98,7 @@ export interface FileRoutesByTo {
   '/domains': typeof DomainsRoute
   '/mfa': typeof MfaRoute
   '/observability': typeof ObservabilityRoute
+  '/ports': typeof PortsRoute
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
@@ -104,6 +112,7 @@ export interface FileRoutesById {
   '/domains': typeof DomainsRoute
   '/mfa': typeof MfaRoute
   '/observability': typeof ObservabilityRoute
+  '/ports': typeof PortsRoute
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
@@ -118,6 +127,7 @@ export interface FileRouteTypes {
     | '/domains'
     | '/mfa'
     | '/observability'
+    | '/ports'
     | '/services'
     | '/settings'
     | '/vpn'
@@ -130,6 +140,7 @@ export interface FileRouteTypes {
     | '/domains'
     | '/mfa'
     | '/observability'
+    | '/ports'
     | '/services'
     | '/settings'
     | '/vpn'
@@ -142,6 +153,7 @@ export interface FileRouteTypes {
     | '/domains'
     | '/mfa'
     | '/observability'
+    | '/ports'
     | '/services'
     | '/settings'
     | '/vpn'
@@ -155,6 +167,7 @@ export interface RootRouteChildren {
   DomainsRoute: typeof DomainsRoute
   MfaRoute: typeof MfaRoute
   ObservabilityRoute: typeof ObservabilityRoute
+  PortsRoute: typeof PortsRoute
   ServicesRoute: typeof ServicesRoute
   SettingsRoute: typeof SettingsRoute
   VpnRoute: typeof VpnRoute
@@ -181,6 +194,13 @@ declare module '@tanstack/react-router' {
       path: '/services'
       fullPath: '/services'
       preLoaderRoute: typeof ServicesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/ports': {
+      id: '/ports'
+      path: '/ports'
+      fullPath: '/ports'
+      preLoaderRoute: typeof PortsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/observability': {
@@ -243,6 +263,7 @@ const rootRouteChildren: RootRouteChildren = {
   DomainsRoute: DomainsRoute,
   MfaRoute: MfaRoute,
   ObservabilityRoute: ObservabilityRoute,
+  PortsRoute: PortsRoute,
   ServicesRoute: ServicesRoute,
   SettingsRoute: SettingsRoute,
   VpnRoute: VpnRoute,

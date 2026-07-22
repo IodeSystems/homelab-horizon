@@ -441,3 +441,27 @@ export const ServiceScanMetricsRespSchema = z.object({
   candidates: z.array(z.string()),
   slots: z.array(ServiceScanSlotSchema),
 });
+
+// Ports (reservations + allocation exclusions)
+export const HostPortEntrySchema = z.object({
+  port: z.string(),
+  proto: z.string(),
+  service: z.string(),
+  domain: z.string().optional(),
+});
+
+export const PortRangeSchema = z.object({
+  from: z.number(),
+  to: z.number().optional(),
+  note: z.string().optional(),
+});
+
+export const PortExclusionsRespSchema = z.object({
+  builtin: z.array(PortRangeSchema),
+  custom: z.array(PortRangeSchema),
+});
+
+export const HostPortMapResponseSchema = z.object({
+  hosts: z.record(z.string(), z.array(HostPortEntrySchema)),
+  exclusions: PortExclusionsRespSchema,
+});
