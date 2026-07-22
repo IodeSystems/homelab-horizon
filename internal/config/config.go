@@ -262,6 +262,11 @@ type Config struct {
 	// jobs for endpoints hz does not proxy (see plan/prometheus-topology.md).
 	Hosts     []HostDecl `json:"hosts,omitempty"`     // extra hosts beyond those derived from the port map
 	Exporters []Exporter `json:"exporters,omitempty"` // Prometheus exporter jobs (node, postgres, ...)
+
+	// PortExclusions are operator additions to the built-in port denylist that
+	// `ports next`/`ports list` (and any /api/v1/ports client) must skip when
+	// allocating. See internal/config/ports.go.
+	PortExclusions []PortRange `json:"port_exclusions,omitempty"`
 }
 
 // HostDecl is an operator-declared host in the topology, beyond the hosts hz

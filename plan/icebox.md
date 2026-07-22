@@ -31,3 +31,13 @@ centrally editable and a different/older client could ignore it.
 **Risks**: changing allocation could strand existing services already on now-excluded ports (exclusions
 apply to *new* allocation only — never evict). `ports list` should flag any reserved port that sits in an
 exclusion as "grandfathered".
+
+## Hosts UX clarity on the Observability page (queued 2026-07-21, user feedback)
+**Problem**: the Hosts section only lets you add *declared* hosts, and doesn't make clear that *derived*
+(port-map) hosts are ALWAYS known and already covered by a `hosts:['*']` port rule. User read it as "why
+can't I add the known hosts" → confusing.
+**Fix**: unify the Hosts view — list every known host (`knownHosts` = derived ∪ declared), each badged
+**derived** or **declared**, showing labels. On a derived host, a one-click **Declare / add labels**
+action prefills its IP into the host form (no retyping) so you can attach a name/labels. Copy: "Derived
+hosts come from the port map and are already scannable; declare one only to label it, or add a host hz
+doesn't route to." Fold into the Ports/portmap UI pass.

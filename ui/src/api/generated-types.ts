@@ -582,6 +582,29 @@ export interface HostPortEntry {
 }
 export interface HostPortMapResponse {
   hosts: { [key: string]: HostPortEntry[]};
+  exclusions: PortExclusionsResp;
+}
+/**
+ * PortRange is an inclusive [from,to] port span (single port when to<=from).
+ */
+export interface PortRange {
+  from: number /* int */;
+  to?: number /* int */;
+  note?: string;
+}
+/**
+ * PortExclusionsResp carries the allocation denylist: Builtin is the read-only
+ * server default; Custom is the operator-editable set. Clients skip both.
+ */
+export interface PortExclusionsResp {
+  builtin: PortRange[];
+  custom: PortRange[];
+}
+/**
+ * PortExclusionsRequest replaces the custom exclusion list (whole-list).
+ */
+export interface PortExclusionsRequest {
+  custom: PortRange[];
 }
 export interface DNSSyncAllResponse {
   ok: boolean;

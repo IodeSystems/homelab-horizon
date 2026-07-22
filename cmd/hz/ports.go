@@ -111,7 +111,7 @@ func runPortsNext(c *client, args []string) error {
 	}
 	used := usedTCP(pm, *host)
 
-	base := findFreeRange(used, *from, *count)
+	base := findFreeRange(used, *from, *count, excludedFunc(pm))
 	if base == 0 {
 		return fmt.Errorf("no free %d-port range >= %d below 65536 on %s (used + common ports excluded)", *count, *from, *host)
 	}
@@ -158,8 +158,23 @@ func runPortsList(c *client, args []string) error {
 		}
 	}
 
-	free := suggestFree(usedTCP(pm, *host), *from, *count)
-	fmt.Printf("\nSUGGESTED FREE (safe band %d–%d, common ports skipped)\n", safeBandLow, safeBandHigh)
+	if len(pm.Exclusions.Custom) > 0 {
+		fmt.Printf("\nCUSTOM EXCLUSIONS (%d) — edit in the Ports UI\n", len(pm.Exclusions.Custom))
+		for _, r := range pm.Exclusions.Custom {
+			span := strconv.Itoa(r.From)
+			if r.To > r.From {
+				span = fmt.Sprintf("%d-%d", r.From, r.To)
+			}
+			note := ""
+			if r.Note != "" {
+				note = "  " + r.Note
+			}
+			fmt.Printf("  %s%s\n", span, note)
+		}
+	}
+
+	free := suggestFree(usedTCP(pm, *host), *from, *count, excludedFunc(pm))
+	fmt.Printf("\nSUGGESTED FREE (safe band %d–%d, common + excluded ports skipped)\n", safeBandLow, safeBandHigh)
 	if len(free) == 0 {
 		fmt.Println("  (none available)")
 		return nil
@@ -201,16 +216,38 @@ func usedTCP(pm apitypes.HostPortMapResponse, host string) map[int]bool {
 	return used
 }
 
+// excludedFunc builds the port-denylist predicate from the server-provided
+// exclusions (builtin + custom). Falls back to the CLI's hardcoded common-port
+// list only when an older server returns no exclusions.
+func excludedFunc(pm apitypes.HostPortMapResponse) func(int) bool {
+	ranges := append(append([]apitypes.PortRange{}, pm.Exclusions.Builtin...), pm.Exclusions.Custom...)
+	if len(ranges) == 0 {
+		return isCommonPort
+	}
+	return func(p int) bool {
+		for _, r := range ranges {
+			hi := r.To
+			if hi < r.From {
+				hi = r.From
+			}
+			if p >= r.From && p <= hi {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 // findFreeRange returns the lowest base >= from where [base, base+count) is all
-// free — skipping used ports and the common-port denylist.
-func findFreeRange(used map[int]bool, from, count int) int {
+// free — skipping used ports and the excluded denylist.
+func findFreeRange(used map[int]bool, from, count int, excluded func(int) bool) int {
 	if from < 1 {
 		from = 1
 	}
 	for base := from; base+count-1 <= 65535; base++ {
 		free := true
 		for p := base; p < base+count; p++ {
-			if used[p] || isCommonPort(p) {
+			if used[p] || excluded(p) {
 				free = false
 				base = p // skip past the conflict
 				break
@@ -224,14 +261,14 @@ func findFreeRange(used map[int]bool, from, count int) int {
 }
 
 // suggestFree returns up to count free ports at or above from (never below the
-// safe band), skipping used and common ports.
-func suggestFree(used map[int]bool, from, count int) []int {
+// safe band), skipping used and excluded ports.
+func suggestFree(used map[int]bool, from, count int, excluded func(int) bool) []int {
 	if from < safeBandLow {
 		from = safeBandLow
 	}
 	var out []int
 	for p := from; p <= 65535 && len(out) < count; p++ {
-		if used[p] || isCommonPort(p) {
+		if used[p] || excluded(p) {
 			continue
 		}
 		out = append(out, p)
