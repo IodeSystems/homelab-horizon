@@ -257,6 +257,44 @@ type Config struct {
 	PeerID        string `json:"peer_id,omitempty"`        // local identity within the fleet
 	ConfigPrimary bool   `json:"config_primary,omitempty"` // true if THIS instance is the config primary
 	Peers         []Peer `json:"peers,omitempty"`          // every other instance in the fleet
+
+	// Observability topology — declared hosts and Prometheus exporter scrape
+	// jobs for endpoints hz does not proxy (see plan/prometheus-topology.md).
+	Hosts     []HostDecl `json:"hosts,omitempty"`     // extra hosts beyond those derived from the port map
+	Exporters []Exporter `json:"exporters,omitempty"` // Prometheus exporter jobs (node, postgres, ...)
+}
+
+// HostDecl is an operator-declared host in the topology, beyond the hosts hz
+// derives from service backends / HAProxy / WireGuard. It gives hz somewhere to
+// attach exporters and static labels for a box it doesn't itself route to (a
+// NAS, a DB server). Declared hosts also surface in the derived host/port map.
+type HostDecl struct {
+	Name   string            `json:"name"`             // logical name, e.g. "nas"
+	IP     string            `json:"ip"`               // host address
+	Labels map[string]string `json:"labels,omitempty"` // static labels applied to this host's exporter targets
+}
+
+// Exporter is a Prometheus scrape job for endpoints hz does NOT proxy — host or
+// datastore exporters (node_exporter, postgres_exporter). Its targets are either
+// listed explicitly (Targets) or expanded from Port across Hosts (a name, an IP,
+// or "*" for every known host). hz probes each target for liveness but always
+// emits it in the served scrape config — Prometheus owns up/down alerting.
+type Exporter struct {
+	Job     string            `json:"job"`               // Prometheus job_name, e.g. "node"
+	Targets []string          `json:"targets,omitempty"` // explicit host:port targets
+	Port    int               `json:"port,omitempty"`    // with Hosts: expand each resolved host -> host:port
+	Hosts   []string          `json:"hosts,omitempty"`   // host names/IPs, or ["*"] = all known hosts
+	Path    string            `json:"path,omitempty"`    // metrics path; default "/metrics"
+	Bearer  string            `json:"bearer,omitempty"`  // optional token, sent as Authorization: Bearer
+	Labels  map[string]string `json:"labels,omitempty"`  // static labels applied to every target in this job
+}
+
+// MetricsPath returns the exporter's metrics path, defaulting to "/metrics".
+func (e *Exporter) MetricsPath() string {
+	if e == nil || e.Path == "" {
+		return "/metrics"
+	}
+	return e.Path
 }
 
 // WGPeer represents a WireGuard VPN client peer. This is the shared-state

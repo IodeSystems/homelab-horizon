@@ -100,7 +100,7 @@ func TestScrapeYAML(t *testing.T) {
 		{Service: "ragtag", Slot: "next", Address: "10.0.0.5:7702", MetricsPath: "/metrics"},
 		{Service: "secured", Address: "10.0.0.6:9000", MetricsPath: "/m", Bearer: "tok"},
 	}
-	out := ScrapeYAML(targets)
+	out := ScrapeYAML(ServiceJobs(targets))
 
 	for _, want := range []string{
 		"job_name: ragtag",
@@ -126,7 +126,7 @@ func TestHTTPSDTargets(t *testing.T) {
 	targets := []Target{
 		{Service: "ragtag", Slot: "current", Address: "10.0.0.5:7700", MetricsPath: "/metrics"},
 	}
-	body, err := HTTPSDTargets(targets)
+	body, err := HTTPSDTargets(ServiceJobs(targets))
 	if err != nil {
 		t.Fatal(err)
 	}
