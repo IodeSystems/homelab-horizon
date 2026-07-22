@@ -39,7 +39,19 @@ Refactor `ScrapeYAML`/`HTTPSDTargets` to consume `[]ScrapeJob{Name,MetricsPath,B
 - ◐ **Docs** — `~/doc` deployment.md/standards.md (subagent).
 - ◻ **MCP** — host/exporter tools. Deferred (optional).
 
-## Reconciliation / discovery pass (user, 2026-07-21)
+## Simplified model pass (user, 2026-07-21) — supersedes the scan/reconciliation UI
+Decisions: ONE exporters list, each with `mode: port|service|static`. Per-service metrics toggle KEPT;
+service-mode rules cover service backends NOT already opted-in (skip to avoid dup jobs). DROP the
+endpoint-scan/reconciliation panel. Keep services-page path scan + the output zone (scrape.yaml/setup.sh).
+- Exporter: `{job, mode, path, port(port), hosts(port,default *), targets(static), bearer, labels}`. Mode
+  inferred when empty (port>0→port, targets→static) for back-compat with the live node exporter.
+- derive: port = port×hosts; static = targets; service = per service-backend (blue-green per slot) at path,
+  skipping opted-in services; label-merge host labels in all modes.
+- Remove `/api/v1/topology/scan` + its DTOs/test/UI. Keep `/services/scan-metrics`.
+- UI: Hosts (port-map derived + declared) · Rules (port/service) · Direct (static) · Output zone.
+◐ in progress.
+
+## Reconciliation / discovery pass (user, 2026-07-21) — SUPERSEDED (scan UI dropped)
 Decisions: scan population = known hosts + typed extras (no CIDR sweep); service path candidates = `/metrics` then `/api/metrics`; install script served by hz + copyable in UI; keep always-emit + curate (no regression).
 - ✅ **Backend** — `POST /api/v1/topology/scan` (probe known∪extras at port/path, mark alive+configured), `POST /api/v1/services/scan-metrics` (probe backend slot(s) across candidate paths → suggestedPath), `GET /integration/prometheus/setup.sh` (served bootstrap, hz URL baked in). Tests: topology_scan_test.go (service scan finds /api/metrics, topology scan marks live+unconfigured, admin gate). setup.sh render bash-n verified. `make check` 0 issues.
 - ◐ **UI redesign** — rename Topology→Observability; Zone1 scrape.yaml + setup.sh copy; Zone2 reconciliation (present&added / added-but-missing→remove / present-but-not-added→add + add-host) + scan control; Zone3 editors; services page metrics-path scan button (subagent).

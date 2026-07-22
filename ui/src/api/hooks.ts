@@ -37,7 +37,6 @@ import type {
   HostDecl,
   Exporter,
   TopologyData,
-  TopologyScanResp,
   ServiceScanMetricsResp,
 } from "./types";
 import {
@@ -59,7 +58,6 @@ import {
   InvitesSchema,
   PendingChangesSchema,
   TopologyDataSchema,
-  TopologyScanRespSchema,
   ServiceScanMetricsRespSchema,
 } from "./schemas";
 
@@ -1181,19 +1179,6 @@ export function useSetupScript() {
   return useQuery({
     queryKey: ["topology", "setup-script"],
     queryFn: () => apiFetchText("/integration/prometheus/setup.sh"),
-  });
-}
-
-// Discovery scan — probes a port/path across known + extra hosts to find
-// live exporter endpoints that may not yet be configured as targets.
-export function useScanTopology() {
-  return useMutation({
-    mutationFn: (input: { port: number; path?: string; hosts?: string[] }) =>
-      apiFetch<TopologyScanResp>("/topology/scan", {
-        method: "POST",
-        body: JSON.stringify(input),
-        schema: TopologyScanRespSchema,
-      }),
   });
 }
 

@@ -4,7 +4,6 @@ import {
   Alert,
   Box,
   Button,
-  Checkbox,
   Chip,
   CircularProgress,
   Collapse,
@@ -13,6 +12,7 @@ import {
   DialogContent,
   DialogTitle,
   IconButton,
+  MenuItem,
   Paper,
   Snackbar,
   Stack,
@@ -23,14 +23,12 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
-import SearchIcon from "@mui/icons-material/Search";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import {
@@ -39,9 +37,8 @@ import {
   useSaveTopologyExporters,
   useScrapeYaml,
   useSetupScript,
-  useScanTopology,
 } from "../api/hooks";
-import type { HostDecl, Exporter, ExporterTargetResp, ScanResult } from "../api/types";
+import type { HostDecl, Exporter, ExporterTargetResp } from "../api/types";
 
 // --- Labels editor (shared by host + exporter forms) ---
 
@@ -308,14 +305,49 @@ function HostFormDialog({
   );
 }
 
+// --- Exporter model ---
+//
+// mode picks how an exporter's targets are generated (see Exporter comment in
+// generated-types.ts): port (Port × Hosts), service (one per service backend),
+// static (explicit host:port list). Mirrors Exporter.EffectiveMode in Go for
+// back-compat with configs saved before the Mode field existed.
+
+type ExporterMode = "port" | "service" | "static";
+
+function effectiveMode(exp: Exporter): ExporterMode {
+  if (exp.mode === "port" || exp.mode === "service" || exp.mode === "static") {
+    return exp.mode;
+  }
+  if ((exp.targets?.length ?? 0) > 0 && !exp.port) return "static";
+  return "port";
+}
+
+function modeSummary(exp: Exporter): string {
+  const mode = effectiveMode(exp);
+  if (mode === "port") {
+    const hosts = exp.hosts && exp.hosts.length > 0 ? exp.hosts : ["*"];
+    return `:${exp.port ?? "?"} × ${hosts.join(", ")}`;
+  }
+  if (mode === "service") {
+    return `service backends @ ${exp.path || "/metrics"}`;
+  }
+  return (exp.targets ?? []).join(", ") || "—";
+}
+
+function ModeChip({ mode }: { mode: ExporterMode }) {
+  const color = mode === "port" ? "info" : mode === "service" ? "secondary" : "default";
+  return <Chip label={mode} size="small" color={color} variant="outlined" />;
+}
+
 // --- Exporter form ---
 
 interface ExporterFormState {
   originalJob?: string;
   job: string;
-  targetsText: string;
+  mode: ExporterMode;
   port: string;
   hostsText: string;
+  targetsText: string;
   path: string;
   bearer: string;
   labelRows: LabelRow[];
@@ -323,9 +355,10 @@ interface ExporterFormState {
 
 const emptyExporterForm: ExporterFormState = {
   job: "",
-  targetsText: "",
+  mode: "port",
   port: "",
   hostsText: "",
+  targetsText: "",
   path: "",
   bearer: "",
   labelRows: [],
@@ -335,9 +368,10 @@ function exporterToForm(exp: Exporter): ExporterFormState {
   return {
     originalJob: exp.job,
     job: exp.job,
-    targetsText: (exp.targets ?? []).join(", "),
+    mode: effectiveMode(exp),
     port: exp.port != null ? String(exp.port) : "",
     hostsText: (exp.hosts ?? []).join(", "),
+    targetsText: (exp.targets ?? []).join(", "),
     path: exp.path ?? "",
     bearer: exp.bearer ?? "",
     labelRows: labelsToRows(exp.labels),
@@ -345,134 +379,44 @@ function exporterToForm(exp: Exporter): ExporterFormState {
 }
 
 function formToExporter(form: ExporterFormState): Exporter {
-  const targets = form.targetsText
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const hosts = form.hostsText
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const port = form.port.trim() ? parseInt(form.port, 10) : NaN;
-
-  const exp: Exporter = { job: form.job.trim() };
-  if (targets.length > 0) exp.targets = targets;
-  if (!Number.isNaN(port)) exp.port = port;
-  if (hosts.length > 0) exp.hosts = hosts;
+  const exp: Exporter = { job: form.job.trim(), mode: form.mode };
   if (form.path.trim()) exp.path = form.path.trim();
   if (form.bearer.trim()) exp.bearer = form.bearer.trim();
   const labels = rowsToLabels(form.labelRows);
   if (labels) exp.labels = labels;
+
+  if (form.mode === "port") {
+    const port = parseInt(form.port, 10);
+    if (!Number.isNaN(port)) exp.port = port;
+    const hosts = form.hostsText
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    exp.hosts = hosts.length > 0 ? hosts : ["*"];
+  } else if (form.mode === "static") {
+    exp.targets = form.targetsText
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  // service mode carries no port/hosts/targets — targets are derived server-side.
+
   return exp;
 }
 
-// Scan-hosts helper embedded in the exporter dialog: probes the dialog's
-// port/path across every known host and lets the operator tick which live
-// addresses become explicit targets, instead of hand-typing host:port pairs.
-function ExporterScanHostsHelper({
-  port,
-  path,
-  onAddTargets,
-}: {
-  port: string;
-  path: string;
-  onAddTargets: (addresses: string[]) => void;
-}) {
-  const scan = useScanTopology();
-  const [results, setResults] = useState<ScanResult[] | null>(null);
-  const [checked, setChecked] = useState<Set<string>>(new Set());
-
-  const portNum = parseInt(port, 10);
-  const canScan = !Number.isNaN(portNum) && portNum > 0;
-
-  const handleScan = () => {
-    if (!canScan) return;
-    scan.mutate(
-      { port: portNum, path: path.trim() || undefined },
-      {
-        onSuccess: (resp) => {
-          setResults(resp.results);
-          setChecked(new Set());
-        },
-      },
-    );
-  };
-
-  const toggle = (address: string) => {
-    setChecked((s) => {
-      const next = new Set(s);
-      if (next.has(address)) next.delete(address);
-      else next.add(address);
-      return next;
-    });
-  };
-
-  const alive = (results ?? []).filter((r) => r.alive);
-
-  return (
-    <Box sx={{ border: "1px solid rgba(127,127,127,0.25)", borderRadius: 1, p: 1.5 }}>
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-        <Button
-          size="small"
-          startIcon={scan.isPending ? <CircularProgress size={14} /> : <SearchIcon />}
-          onClick={handleScan}
-          disabled={!canScan || scan.isPending}
-        >
-          Scan hosts
-        </Button>
-        <Typography variant="caption" color="text.secondary">
-          Probes port {canScan ? portNum : "?"} across known hosts to find live endpoints.
-        </Typography>
-      </Box>
-      {scan.isError && (
-        <Alert severity="error" sx={{ mt: 1 }}>
-          {scan.error instanceof Error ? scan.error.message : "Scan failed"}
-        </Alert>
-      )}
-      {results && (
-        <Box sx={{ mt: 1 }}>
-          {alive.length === 0 ? (
-            <Typography variant="body2" color="text.secondary">
-              No live endpoints found on this port.
-            </Typography>
-          ) : (
-            <>
-              <Stack spacing={0.25} sx={{ maxHeight: 180, overflow: "auto" }}>
-                {alive.map((r) => (
-                  <Box key={r.address} sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                    <Checkbox
-                      size="small"
-                      checked={checked.has(r.address)}
-                      onChange={() => toggle(r.address)}
-                      disabled={r.configured}
-                    />
-                    <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                      {r.address}
-                    </Typography>
-                    {r.configured && (
-                      <Chip label="already a target" size="small" variant="outlined" />
-                    )}
-                  </Box>
-                ))}
-              </Stack>
-              <Button
-                size="small"
-                variant="outlined"
-                sx={{ mt: 1 }}
-                disabled={checked.size === 0}
-                onClick={() => {
-                  onAddTargets([...checked]);
-                  setChecked(new Set());
-                }}
-              >
-                Add checked as explicit targets
-              </Button>
-            </>
-          )}
-        </Box>
-      )}
-    </Box>
-  );
+function canSubmitExporter(form: ExporterFormState): boolean {
+  if (!form.job.trim()) return false;
+  if (form.mode === "port") {
+    const port = parseInt(form.port, 10);
+    return !Number.isNaN(port) && port > 0;
+  }
+  if (form.mode === "static") {
+    return form.targetsText
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean).length > 0;
+  }
+  return true; // service mode only needs a job name
 }
 
 function ExporterFormDialog({
@@ -492,17 +436,6 @@ function ExporterFormDialog({
 }) {
   const [form, setForm] = useState<ExporterFormState>(initialValues);
 
-  const addTargets = (addresses: string[]) => {
-    const existing = new Set(
-      form.targetsText
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-    );
-    for (const a of addresses) existing.add(a);
-    setForm((f) => ({ ...f, targetsText: [...existing].join(", ") }));
-  };
-
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle>{title}</DialogTitle>
@@ -517,40 +450,68 @@ function ExporterFormDialog({
           helperText="Prometheus job name"
         />
         <TextField
-          label="Targets (host:port, comma-separated)"
-          value={form.targetsText}
-          onChange={(e) => setForm((f) => ({ ...f, targetsText: e.target.value }))}
+          select
+          label="Mode"
+          value={form.mode}
+          onChange={(e) => setForm((f) => ({ ...f, mode: e.target.value as ExporterMode }))}
           size="small"
           fullWidth
-          placeholder="10.0.0.5:9100, 10.0.0.6:9100"
-          helperText="Explicit endpoints. Leave blank if using Port + Hosts instead."
-        />
-        <Box sx={{ display: "flex", gap: 2 }}>
+          helperText="How targets for this job are generated"
+        >
+          <MenuItem value="port">Port — scan a port across hosts</MenuItem>
+          <MenuItem value="service">Service — one target per service backend</MenuItem>
+          <MenuItem value="static">Static — explicit host:port targets (direct add)</MenuItem>
+        </TextField>
+
+        {form.mode === "port" && (
+          <Box sx={{ display: "flex", gap: 2 }}>
+            <TextField
+              label="Port"
+              value={form.port}
+              onChange={(e) => setForm((f) => ({ ...f, port: e.target.value }))}
+              size="small"
+              type="number"
+              required
+              sx={{ width: 140 }}
+            />
+            <TextField
+              label="Hosts (comma-separated)"
+              value={form.hostsText}
+              onChange={(e) => setForm((f) => ({ ...f, hostsText: e.target.value }))}
+              size="small"
+              fullWidth
+              placeholder="* (all known hosts)"
+              helperText="Defaults to * = every known host"
+            />
+          </Box>
+        )}
+
+        {form.mode === "service" && (
+          <Typography variant="body2" color="text.secondary">
+            One target per service backend (blue-green ⇒ per slot), automatically skipping
+            services that already have per-service metrics enabled.
+          </Typography>
+        )}
+
+        {form.mode === "static" && (
           <TextField
-            label="Port"
-            value={form.port}
-            onChange={(e) => setForm((f) => ({ ...f, port: e.target.value }))}
-            size="small"
-            type="number"
-            sx={{ width: 140 }}
-          />
-          <TextField
-            label="Hosts (comma-separated)"
-            value={form.hostsText}
-            onChange={(e) => setForm((f) => ({ ...f, hostsText: e.target.value }))}
+            label="Targets (host:port, comma-separated)"
+            value={form.targetsText}
+            onChange={(e) => setForm((f) => ({ ...f, targetsText: e.target.value }))}
             size="small"
             fullWidth
-            placeholder="* or host1, host2"
-            helperText="Expanded with Port above. Use * to target every known host."
+            required
+            placeholder="10.0.0.5:9100, 10.0.0.6:9100"
           />
-        </Box>
+        )}
+
         <TextField
           label="Path"
           value={form.path}
           onChange={(e) => setForm((f) => ({ ...f, path: e.target.value }))}
           size="small"
           fullWidth
-          placeholder="/metrics"
+          placeholder={form.mode === "service" ? "/metrics or /api/metrics" : "/metrics"}
           helperText="Defaults to /metrics"
         />
         <TextField
@@ -560,7 +521,6 @@ function ExporterFormDialog({
           size="small"
           fullWidth
         />
-        <ExporterScanHostsHelper port={form.port} path={form.path} onAddTargets={addTargets} />
         <LabelsEditor
           rows={form.labelRows}
           onChange={(rows) => setForm((f) => ({ ...f, labelRows: rows }))}
@@ -573,7 +533,7 @@ function ExporterFormDialog({
         <Button
           variant="contained"
           onClick={() => onSubmit(form)}
-          disabled={isSubmitting || !form.job.trim()}
+          disabled={isSubmitting || !canSubmitExporter(form)}
         >
           {isSubmitting ? <CircularProgress size={20} /> : "Save"}
         </Button>
@@ -683,462 +643,7 @@ function OutputZone() {
   );
 }
 
-// --- Zone 2: Targets & reconciliation ---
-
-function groupTargets(targets: ExporterTargetResp[]): [string, ExporterTargetResp[]][] {
-  const map = new Map<string, ExporterTargetResp[]>();
-  for (const t of targets) {
-    const arr = map.get(t.job) ?? [];
-    arr.push(t);
-    map.set(t.job, arr);
-  }
-  for (const arr of map.values()) {
-    arr.sort((a, b) => a.address.localeCompare(b.address));
-  }
-  return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-}
-
-// An address is "explicit" for a job if it's literally listed in that
-// exporter's targets[]. Anything else alive-but-configured comes from a
-// hosts/port template (e.g. hosts:['*']) — you can't remove one templated
-// target without editing the template itself.
-function explicitAddressesByJob(exporters: Exporter[]): Map<string, Set<string>> {
-  const map = new Map<string, Set<string>>();
-  for (const exp of exporters) {
-    map.set(exp.job, new Set(exp.targets ?? []));
-  }
-  return map;
-}
-
-function TargetRow({
-  target,
-  isExplicit,
-  onRemove,
-  onEditExporter,
-  isRemoving,
-}: {
-  target: ExporterTargetResp;
-  isExplicit: boolean;
-  onRemove: () => void;
-  onEditExporter: () => void;
-  isRemoving: boolean;
-}) {
-  return (
-    <TableRow hover>
-      <TableCell sx={{ width: 140 }}>
-        {target.alive ? (
-          <Chip label="up" size="small" color="success" variant="outlined" />
-        ) : isExplicit ? (
-          <Chip label="down / missing" size="small" color="error" variant="outlined" />
-        ) : (
-          <Chip label="templated" size="small" color="warning" variant="outlined" />
-        )}
-      </TableCell>
-      <TableCell>
-        <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-          {target.address}
-        </Typography>
-      </TableCell>
-      <TableCell>
-        <Typography variant="body2" color="text.secondary">
-          {target.path}
-        </Typography>
-      </TableCell>
-      <TableCell>
-        <LabelChips labels={target.labels} />
-      </TableCell>
-      <TableCell align="right" sx={{ width: 160 }}>
-        {!target.alive && isExplicit && (
-          <Button size="small" color="error" onClick={onRemove} disabled={isRemoving}>
-            Remove
-          </Button>
-        )}
-        {!target.alive && !isExplicit && (
-          <Button size="small" onClick={onEditExporter}>
-            Edit exporter
-          </Button>
-        )}
-      </TableCell>
-    </TableRow>
-  );
-}
-
-function TargetsSection({
-  targets,
-  exporters,
-  onRemoveTarget,
-  onEditExporter,
-  isRemoving,
-}: {
-  targets: ExporterTargetResp[];
-  exporters: Exporter[];
-  onRemoveTarget: (job: string, address: string) => void;
-  onEditExporter: (job: string) => void;
-  isRemoving: boolean;
-}) {
-  const grouped = useMemo(() => groupTargets(targets), [targets]);
-  const explicitByJob = useMemo(() => explicitAddressesByJob(exporters), [exporters]);
-
-  return (
-    <Box>
-      {grouped.length === 0 ? (
-        <Paper variant="outlined" sx={{ p: 3, textAlign: "center" }}>
-          <Typography variant="body2" color="text.secondary">
-            No configured targets yet.
-          </Typography>
-        </Paper>
-      ) : (
-        grouped.map(([job, jobTargets]) => {
-          const upCount = jobTargets.filter((t) => t.alive).length;
-          const explicit = explicitByJob.get(job) ?? new Set<string>();
-          return (
-            <Paper key={job} variant="outlined" sx={{ mb: 2 }}>
-              <Box
-                sx={{
-                  px: 2,
-                  py: 1,
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  borderBottom: "1px solid rgba(127,127,127,0.2)",
-                }}
-              >
-                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                  {job}
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {upCount}/{jobTargets.length} up
-                </Typography>
-              </Box>
-              <TableContainer>
-                <Table size="small">
-                  <TableBody>
-                    {jobTargets.map((t, i) => (
-                      <TargetRow
-                        key={`${t.address}-${i}`}
-                        target={t}
-                        isExplicit={explicit.has(t.address)}
-                        onRemove={() => onRemoveTarget(job, t.address)}
-                        onEditExporter={() => onEditExporter(job)}
-                        isRemoving={isRemoving}
-                      />
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            </Paper>
-          );
-        })
-      )}
-    </Box>
-  );
-}
-
-interface ScanFormState {
-  job: string;
-  port: string;
-  path: string;
-  hostsText: string;
-}
-
-const emptyScanForm: ScanFormState = { job: "", port: "", path: "/metrics", hostsText: "" };
-
-function ScanResultRow({
-  result,
-  knownHosts,
-  jobSet,
-  onAdd,
-  onAddHost,
-  isAdding,
-}: {
-  result: ScanResult;
-  knownHosts: string[];
-  jobSet: boolean;
-  onAdd: () => void;
-  onAddHost: () => void;
-  isAdding: boolean;
-}) {
-  const hostKnown = knownHosts.includes(result.host);
-  return (
-    <TableRow hover>
-      <TableCell sx={{ width: 90 }}>
-        <Chip
-          label={result.alive ? "up" : "down"}
-          size="small"
-          color={result.alive ? "success" : "default"}
-          variant="outlined"
-        />
-      </TableCell>
-      <TableCell>
-        <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-          {result.address}
-        </Typography>
-      </TableCell>
-      <TableCell>
-        <Typography variant="body2" color="text.secondary">
-          {result.host}
-        </Typography>
-      </TableCell>
-      <TableCell sx={{ width: 110 }}>
-        {result.configured ? (
-          <Chip label="added" size="small" color="success" variant="outlined" />
-        ) : result.alive ? (
-          <Chip label="not added" size="small" color="warning" variant="outlined" />
-        ) : null}
-      </TableCell>
-      <TableCell align="right" sx={{ width: 220 }}>
-        {result.alive && !result.configured && (
-          <Box sx={{ display: "flex", gap: 1, justifyContent: "flex-end" }}>
-            {!hostKnown && (
-              <Button size="small" onClick={onAddHost}>
-                Add host
-              </Button>
-            )}
-            <Tooltip title={jobSet ? "" : "Set a job name above to enable Add"}>
-              <span>
-                <Button size="small" variant="outlined" onClick={onAdd} disabled={!jobSet || isAdding}>
-                  Add
-                </Button>
-              </span>
-            </Tooltip>
-          </Box>
-        )}
-      </TableCell>
-    </TableRow>
-  );
-}
-
-function ScanPanel({
-  knownHosts,
-  onAddTarget,
-  onAddHost,
-  isAdding,
-}: {
-  knownHosts: string[];
-  onAddTarget: (job: string, address: string, path?: string) => void;
-  onAddHost: (host: string) => void;
-  isAdding: boolean;
-}) {
-  const scan = useScanTopology();
-  const [form, setForm] = useState<ScanFormState>(emptyScanForm);
-  const [results, setResults] = useState<ScanResult[] | null>(null);
-
-  const portNum = parseInt(form.port, 10);
-  const canScan = !Number.isNaN(portNum) && portNum > 0;
-  const jobSet = form.job.trim().length > 0;
-
-  const handleScan = () => {
-    if (!canScan) return;
-    const extraHosts = form.hostsText
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    scan.mutate(
-      { port: portNum, path: form.path.trim() || undefined, hosts: extraHosts.length > 0 ? extraHosts : undefined },
-      { onSuccess: (resp) => setResults(resp.results) },
-    );
-  };
-
-  return (
-    <Box>
-      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 0.5 }}>
-        Scan for endpoints
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-        Probe a port across known (and optional extra) hosts to find live endpoints not yet
-        configured as targets.
-      </Typography>
-      <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "flex-start", mb: 1.5 }}>
-        <TextField
-          label="Job (to add into)"
-          size="small"
-          value={form.job}
-          onChange={(e) => setForm((f) => ({ ...f, job: e.target.value }))}
-          sx={{ width: 180 }}
-        />
-        <TextField
-          label="Port"
-          size="small"
-          type="number"
-          required
-          value={form.port}
-          onChange={(e) => setForm((f) => ({ ...f, port: e.target.value }))}
-          sx={{ width: 120 }}
-        />
-        <TextField
-          label="Path"
-          size="small"
-          value={form.path}
-          onChange={(e) => setForm((f) => ({ ...f, path: e.target.value }))}
-          sx={{ width: 140 }}
-        />
-        <TextField
-          label="Extra hosts (CSV)"
-          size="small"
-          value={form.hostsText}
-          onChange={(e) => setForm((f) => ({ ...f, hostsText: e.target.value }))}
-          sx={{ flex: 1, minWidth: 200 }}
-          placeholder="10.0.0.20, 10.0.0.21"
-        />
-        <Button
-          variant="contained"
-          startIcon={scan.isPending ? <CircularProgress size={16} /> : <SearchIcon />}
-          onClick={handleScan}
-          disabled={!canScan || scan.isPending}
-        >
-          Scan
-        </Button>
-      </Box>
-      {!jobSet && (
-        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
-          Set a job name to enable adding discovered targets.
-        </Typography>
-      )}
-      {scan.isError && (
-        <Alert severity="error" sx={{ mb: 1.5 }}>
-          {scan.error instanceof Error ? scan.error.message : "Scan failed"}
-        </Alert>
-      )}
-      {results && (
-        <TableContainer component={Paper} variant="outlined">
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Status</TableCell>
-                <TableCell>Address</TableCell>
-                <TableCell>Host</TableCell>
-                <TableCell>Configured</TableCell>
-                <TableCell align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {results.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={5} align="center">
-                    <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
-                      No results.
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                results.map((r, i) => (
-                  <ScanResultRow
-                    key={`${r.address}-${i}`}
-                    result={r}
-                    knownHosts={knownHosts}
-                    jobSet={jobSet}
-                    onAdd={() => onAddTarget(form.job.trim(), r.address, form.path.trim() || undefined)}
-                    onAddHost={() => onAddHost(r.host)}
-                    isAdding={isAdding}
-                  />
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      )}
-    </Box>
-  );
-}
-
-// --- Exporters section (Zone 3) ---
-
-function ExportersSection({
-  exporters,
-  onAdd,
-  onEdit,
-  onDelete,
-}: {
-  exporters: Exporter[];
-  onAdd: () => void;
-  onEdit: (exp: Exporter) => void;
-  onDelete: (job: string) => void;
-}) {
-  return (
-    <Box sx={{ mb: 4 }}>
-      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2 }}>
-        <Typography variant="h6" sx={{ fontWeight: 600 }}>
-          Exporters
-        </Typography>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={onAdd}>
-          Add Exporter
-        </Button>
-      </Box>
-      <TableContainer component={Paper}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Job</TableCell>
-              <TableCell>Targets</TableCell>
-              <TableCell>Port</TableCell>
-              <TableCell>Hosts</TableCell>
-              <TableCell>Path</TableCell>
-              <TableCell>Labels</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {exporters.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} align="center">
-                  <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
-                    No exporters configured.
-                  </Typography>
-                </TableCell>
-              </TableRow>
-            ) : (
-              exporters.map((exp) => (
-                <TableRow key={exp.job} hover>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                      {exp.job}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
-                      {(exp.targets ?? []).map((t) => (
-                        <Chip key={t} label={t} size="small" variant="outlined" />
-                      ))}
-                      {(exp.targets ?? []).length === 0 && (
-                        <Typography variant="body2" color="text.secondary">—</Typography>
-                      )}
-                    </Box>
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2">{exp.port ?? "—"}</Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                      {(exp.hosts ?? []).join(", ") || "—"}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" color="text.secondary">
-                      {exp.path || "/metrics"}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <LabelChips labels={exp.labels} />
-                  </TableCell>
-                  <TableCell align="right">
-                    <IconButton size="small" onClick={() => onEdit(exp)}>
-                      <EditIcon fontSize="small" />
-                    </IconButton>
-                    <IconButton size="small" color="error" onClick={() => onDelete(exp.job)}>
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
-    </Box>
-  );
-}
-
-// --- Hosts section (Zone 3) ---
+// --- Zone 2: Hosts ---
 
 function HostsSection({
   hosts,
@@ -1213,44 +718,177 @@ function HostsSection({
         </Table>
       </TableContainer>
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
-        {knownHosts.length} host{knownHosts.length === 1 ? "" : "s"} known to hz;{" "}
-        <code>*</code> in an exporter's hosts targets all of them.
+        {knownHosts.length} host{knownHosts.length === 1 ? "" : "s"} known to hz; a port rule
+        with hosts <code>['*']</code> covers all of them.
       </Typography>
     </Box>
   );
 }
 
-// --- Exporter list mutation helpers ---
+// --- Zone 3: Exporters (rules) ---
+//
+// Each row is a scrape rule; expanding it shows the targets hz has already
+// generated for that job, each with its last probe result. No scan button —
+// this reflects the 60s background probe hz already runs.
 
-function removeExplicitTarget(exporters: Exporter[], job: string, address: string): Exporter[] {
-  return exporters.map((exp) => {
-    if (exp.job !== job) return exp;
-    const targets = (exp.targets ?? []).filter((a) => a !== address);
-    const next: Exporter = { ...exp };
-    if (targets.length > 0) next.targets = targets;
-    else delete next.targets;
-    return next;
-  });
+function ExporterRow({
+  exp,
+  targets,
+  onEdit,
+  onDelete,
+}: {
+  exp: Exporter;
+  targets: ExporterTargetResp[];
+  onEdit: (exp: Exporter) => void;
+  onDelete: (job: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const mode = effectiveMode(exp);
+  const jobTargets = useMemo(
+    () =>
+      targets
+        .filter((t) => t.job === exp.job)
+        .slice()
+        .sort((a, b) => a.address.localeCompare(b.address)),
+    [targets, exp.job],
+  );
+  const upCount = jobTargets.filter((t) => t.alive).length;
+
+  return (
+    <>
+      <TableRow hover sx={{ "& > *": { borderBottom: "unset" } }}>
+        <TableCell sx={{ width: 40, p: 1 }}>
+          <IconButton size="small" onClick={() => setOpen((o) => !o)}>
+            {open ? <KeyboardArrowUpIcon fontSize="small" /> : <KeyboardArrowDownIcon fontSize="small" />}
+          </IconButton>
+        </TableCell>
+        <TableCell>
+          <ModeChip mode={mode} />
+        </TableCell>
+        <TableCell>
+          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            {exp.job}
+          </Typography>
+        </TableCell>
+        <TableCell>
+          <Typography variant="body2" sx={{ fontFamily: mode === "static" ? "monospace" : undefined }}>
+            {modeSummary(exp)}
+          </Typography>
+        </TableCell>
+        <TableCell>
+          <Typography variant="body2" color="text.secondary">
+            {exp.path || "/metrics"}
+          </Typography>
+        </TableCell>
+        <TableCell>
+          {jobTargets.length > 0 && (
+            <Typography variant="caption" color="text.secondary">
+              {upCount}/{jobTargets.length} up
+            </Typography>
+          )}
+        </TableCell>
+        <TableCell align="right">
+          <IconButton size="small" onClick={() => onEdit(exp)}>
+            <EditIcon fontSize="small" />
+          </IconButton>
+          <IconButton size="small" color="error" onClick={() => onDelete(exp.job)}>
+            <DeleteIcon fontSize="small" />
+          </IconButton>
+        </TableCell>
+      </TableRow>
+      <TableRow>
+        <TableCell sx={{ py: 0 }} colSpan={7}>
+          <Collapse in={open} timeout="auto" unmountOnExit>
+            <Box sx={{ py: 1.5, pl: 5 }}>
+              {jobTargets.length === 0 ? (
+                <Typography variant="body2" color="text.secondary">
+                  No generated targets yet.
+                </Typography>
+              ) : (
+                <Stack spacing={0.75}>
+                  {jobTargets.map((t, i) => (
+                    <Box key={`${t.address}-${i}`} sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+                      <Chip
+                        label={t.alive ? "up" : "down"}
+                        size="small"
+                        color={t.alive ? "success" : "default"}
+                        variant="outlined"
+                        sx={{ width: 60 }}
+                      />
+                      <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                        {t.address}
+                      </Typography>
+                      <LabelChips labels={t.labels} />
+                    </Box>
+                  ))}
+                </Stack>
+              )}
+            </Box>
+          </Collapse>
+        </TableCell>
+      </TableRow>
+    </>
+  );
 }
 
-function addExplicitTarget(
-  exporters: Exporter[],
-  job: string,
-  address: string,
-  path?: string,
-): Exporter[] {
-  const idx = exporters.findIndex((e) => e.job === job);
-  if (idx === -1) {
-    const newExp: Exporter = { job, targets: [address] };
-    if (path) newExp.path = path;
-    return [...exporters, newExp];
-  }
-  return exporters.map((exp, i) => {
-    if (i !== idx) return exp;
-    const targets = exp.targets ?? [];
-    if (targets.includes(address)) return exp;
-    return { ...exp, targets: [...targets, address] };
-  });
+function ExportersSection({
+  exporters,
+  targets,
+  onAdd,
+  onEdit,
+  onDelete,
+}: {
+  exporters: Exporter[];
+  targets: ExporterTargetResp[];
+  onAdd: () => void;
+  onEdit: (exp: Exporter) => void;
+  onDelete: (job: string) => void;
+}) {
+  return (
+    <Box sx={{ mb: 4 }}>
+      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
+        <Typography variant="h6" sx={{ fontWeight: 600 }}>
+          Exporters
+        </Typography>
+        <Button variant="contained" startIcon={<AddIcon />} onClick={onAdd}>
+          Add Exporter
+        </Button>
+      </Box>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        Down targets are still scraped — Prometheus owns up/down alerting.
+      </Typography>
+      <TableContainer component={Paper}>
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell sx={{ width: 40 }} />
+              <TableCell>Mode</TableCell>
+              <TableCell>Job</TableCell>
+              <TableCell>Targets</TableCell>
+              <TableCell>Path</TableCell>
+              <TableCell>Status</TableCell>
+              <TableCell align="right">Actions</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {exporters.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={7} align="center">
+                  <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
+                    No exporters configured.
+                  </Typography>
+                </TableCell>
+              </TableRow>
+            ) : (
+              exporters.map((exp) => (
+                <ExporterRow key={exp.job} exp={exp} targets={targets} onEdit={onEdit} onDelete={onDelete} />
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </TableContainer>
+    </Box>
+  );
 }
 
 // --- Snackbar state ---
@@ -1275,8 +913,6 @@ function ObservabilityPage() {
   const [addHostOpen, setAddHostOpen] = useState(false);
   const [editHostTarget, setEditHostTarget] = useState<HostDecl | null>(null);
   const [deleteHostTarget, setDeleteHostTarget] = useState<string | null>(null);
-  // Prefills the Add Host dialog with a scanned IP that isn't declared yet.
-  const [addHostFromIP, setAddHostFromIP] = useState<string | null>(null);
 
   const [snack, setSnack] = useState<SnackState>({ open: false, message: "", severity: "success" });
   const showSnack = (message: string, severity: "success" | "error") =>
@@ -1339,7 +975,6 @@ function ObservabilityPage() {
     saveHosts.mutate([...hosts, formToHost(form)], {
       onSuccess: () => {
         setAddHostOpen(false);
-        setAddHostFromIP(null);
         showSnack("Host added", "success");
       },
       onError: (err) => showSnack(err.message, "error"),
@@ -1370,26 +1005,6 @@ function ObservabilityPage() {
     });
   };
 
-  const handleRemoveTarget = (job: string, address: string) => {
-    saveExporters.mutate(removeExplicitTarget(exporters, job, address), {
-      onSuccess: () => showSnack("Target removed", "success"),
-      onError: (err) => showSnack(err.message, "error"),
-    });
-  };
-
-  const handleAddTarget = (job: string, address: string, path?: string) => {
-    if (!job) return;
-    saveExporters.mutate(addExplicitTarget(exporters, job, address, path), {
-      onSuccess: () => showSnack(`Added ${address} to ${job}`, "success"),
-      onError: (err) => showSnack(err.message, "error"),
-    });
-  };
-
-  const handleEditExporterByJob = (job: string) => {
-    const exp = exporters.find((e) => e.job === job);
-    if (exp) setEditExporterTarget(exp);
-  };
-
   return (
     <Box>
       <Box sx={{ mb: 3 }}>
@@ -1397,49 +1012,27 @@ function ObservabilityPage() {
           Observability
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          Declare hosts and exporters, reconcile discovered targets, and ship a scrape config
-          to your Prometheus server.
+          Declare hosts and exporter rules, then ship the generated scrape config to your
+          Prometheus server.
         </Typography>
       </Box>
 
       <OutputZone />
 
-      <Box sx={{ mb: 4 }}>
-        <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
-          Targets
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Down targets are still scraped — Prometheus owns up/down alerting.
-        </Typography>
-        <TargetsSection
-          targets={targets}
-          exporters={exporters}
-          onRemoveTarget={handleRemoveTarget}
-          onEditExporter={handleEditExporterByJob}
-          isRemoving={saveExporters.isPending}
-        />
-        <Box sx={{ mt: 3 }}>
-          <ScanPanel
-            knownHosts={knownHosts}
-            onAddTarget={handleAddTarget}
-            onAddHost={(host) => setAddHostFromIP(host)}
-            isAdding={saveExporters.isPending}
-          />
-        </Box>
-      </Box>
-
-      <ExportersSection
-        exporters={exporters}
-        onAdd={() => setAddExporterOpen(true)}
-        onEdit={setEditExporterTarget}
-        onDelete={setDeleteExporterTarget}
-      />
       <HostsSection
         hosts={hosts}
         knownHosts={knownHosts}
         onAdd={() => setAddHostOpen(true)}
         onEdit={setEditHostTarget}
         onDelete={setDeleteHostTarget}
+      />
+
+      <ExportersSection
+        exporters={exporters}
+        targets={targets}
+        onAdd={() => setAddExporterOpen(true)}
+        onEdit={setEditExporterTarget}
+        onDelete={setDeleteExporterTarget}
       />
 
       {/* Exporter dialogs */}
@@ -1479,16 +1072,6 @@ function ObservabilityPage() {
           title="Add Host"
           initialValues={emptyHostForm}
           onClose={() => setAddHostOpen(false)}
-          onSubmit={handleAddHost}
-          isSubmitting={saveHosts.isPending}
-        />
-      )}
-      {addHostFromIP && (
-        <HostFormDialog
-          open
-          title="Add Host"
-          initialValues={{ name: "", ip: addHostFromIP, labelRows: [] }}
-          onClose={() => setAddHostFromIP(null)}
           onSubmit={handleAddHost}
           isSubmitting={saveHosts.isPending}
         />

@@ -591,11 +591,18 @@ type ExporterTarget struct {
 	Labels  map[string]string // static + per-host declared labels (job/instance are set by Prometheus)
 }
 
-// DeriveExporterTargets expands every configured Exporter into concrete targets:
-// explicit Targets are taken as-is; Port is expanded across the resolved Hosts
-// (a name, an IP, or "*" = all known hosts). Per-host declared labels are merged
-// under the exporter's own Labels. Output is sorted (job, then address) for
-// stable served config. Duplicate addresses within a job are collapsed.
+// metricsOptedIn reports whether a service already has per-service Prometheus
+// metrics enabled, so a service-mode exporter rule can skip it (no duplicate job).
+func (s *Service) metricsOptedIn() bool {
+	return s.Integrations != nil && s.Integrations.Metrics != nil && !s.Integrations.Metrics.Disabled
+}
+
+// DeriveExporterTargets expands every configured Exporter into concrete targets
+// per its mode: port (Port × Hosts, "*" = all known hosts), service (one target
+// per non-opted-in service backend, blue-green per slot), or static (the Targets
+// list). Per-host declared labels merge under the exporter's own Labels (exporter
+// wins). Output is sorted (job, then address); duplicate addresses within a job
+// collapse.
 func (c *Config) DeriveExporterTargets() []ExporterTarget {
 	// name/ip -> declared labels, and name -> ip resolution.
 	labelsByIP := map[string]map[string]string{}
@@ -619,52 +626,82 @@ func (c *Config) DeriveExporterTargets() []ExporterTarget {
 		}
 		path := e.MetricsPath()
 
-		// Collect addresses: explicit targets, then Port×Hosts expansion.
-		seen := map[string]bool{}
-		var addrs []string
-		add := func(a string) {
-			if a == "" || seen[a] {
+		// emit adds one target, merging declared host labels (by IP) under the
+		// per-target labels already set (caller/exporter labels win).
+		emit := func(addr string, labels map[string]string) {
+			if addr == "" {
 				return
 			}
-			seen[a] = true
-			addrs = append(addrs, a)
+			if labels == nil {
+				labels = map[string]string{}
+			}
+			for k, v := range e.Labels {
+				if _, ok := labels[k]; !ok {
+					labels[k] = v
+				}
+			}
+			if host, _, err := net.SplitHostPort(addr); err == nil {
+				for k, v := range labelsByIP[host] {
+					if _, ok := labels[k]; !ok {
+						labels[k] = v
+					}
+				}
+			}
+			out = append(out, ExporterTarget{Job: e.Job, Address: addr, Path: path, Bearer: e.Bearer, Labels: labels})
 		}
-		for _, t := range e.Targets {
-			add(strings.TrimSpace(t))
+
+		seen := map[string]bool{}
+		emitOnce := func(addr string, labels map[string]string) {
+			if addr == "" || seen[addr] {
+				return
+			}
+			seen[addr] = true
+			emit(addr, labels)
 		}
-		if e.Port > 0 && len(e.Hosts) > 0 {
+
+		switch e.EffectiveMode() {
+		case "static":
+			for _, t := range e.Targets {
+				emitOnce(strings.TrimSpace(t), nil)
+			}
+
+		case "service":
+			for i := range c.Services {
+				svc := &c.Services[i]
+				if svc.Proxy == nil || svc.Proxy.Backend == "" || svc.metricsOptedIn() {
+					continue
+				}
+				if svc.Proxy.Deploy != nil && svc.Proxy.Deploy.NextBackend != "" {
+					emitOnce(svc.Proxy.Backend, map[string]string{"service": svc.Name, "slot": "current"})
+					emitOnce(svc.Proxy.Deploy.NextBackend, map[string]string{"service": svc.Name, "slot": "next"})
+					continue
+				}
+				emitOnce(svc.Proxy.Backend, map[string]string{"service": svc.Name})
+			}
+
+		default: // "port"
 			hosts := e.Hosts
-			for _, h := range e.Hosts {
+			if len(hosts) == 0 {
+				hosts = []string{"*"}
+			}
+			for _, h := range hosts {
 				if h == "*" {
 					hosts = c.DeriveKnownHostIPs()
 					break
 				}
 			}
-			for _, h := range hosts {
-				ip := strings.TrimSpace(h)
-				if ip == "*" {
-					continue
-				}
-				if resolved, ok := ipByName[ip]; ok {
-					ip = resolved
-				}
-				add(net.JoinHostPort(ip, strconv.Itoa(e.Port)))
-			}
-		}
-
-		for _, a := range addrs {
-			labels := map[string]string{}
-			for k, v := range e.Labels {
-				labels[k] = v
-			}
-			if host, _, err := net.SplitHostPort(a); err == nil {
-				for k, v := range labelsByIP[host] {
-					if _, exists := labels[k]; !exists {
-						labels[k] = v
+			if e.Port > 0 {
+				for _, h := range hosts {
+					ip := strings.TrimSpace(h)
+					if ip == "*" {
+						continue
 					}
+					if resolved, ok := ipByName[ip]; ok {
+						ip = resolved
+					}
+					emitOnce(net.JoinHostPort(ip, strconv.Itoa(e.Port)), nil)
 				}
 			}
-			out = append(out, ExporterTarget{Job: e.Job, Address: a, Path: path, Bearer: e.Bearer, Labels: labels})
 		}
 	}
 

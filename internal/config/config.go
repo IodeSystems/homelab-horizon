@@ -274,17 +274,23 @@ type HostDecl struct {
 	Labels map[string]string `json:"labels,omitempty"` // static labels applied to this host's exporter targets
 }
 
-// Exporter is a Prometheus scrape job for endpoints hz does NOT proxy — host or
-// datastore exporters (node_exporter, postgres_exporter). Its targets are either
-// listed explicitly (Targets) or expanded from Port across Hosts (a name, an IP,
-// or "*" for every known host). hz probes each target for liveness but always
-// emits it in the served scrape config — Prometheus owns up/down alerting.
+// Exporter is a Prometheus scrape job for endpoints hz does NOT proxy. Its Mode
+// picks how its targets are generated:
+//
+//	port    — expand Port across Hosts (a name, an IP, or "*" = every known host).
+//	service — one target per service backend (blue-green: per slot), for services
+//	          not already opted-in via per-service metrics, probed at Path.
+//	static  — the explicit host:port list in Targets.
+//
+// hz probes each target for liveness but always emits it in the served scrape
+// config — Prometheus owns up/down alerting.
 type Exporter struct {
 	Job     string            `json:"job"`               // Prometheus job_name, e.g. "node"
-	Targets []string          `json:"targets,omitempty"` // explicit host:port targets
-	Port    int               `json:"port,omitempty"`    // with Hosts: expand each resolved host -> host:port
-	Hosts   []string          `json:"hosts,omitempty"`   // host names/IPs, or ["*"] = all known hosts
+	Mode    string            `json:"mode,omitempty"`    // "port" | "service" | "static" (inferred if empty)
 	Path    string            `json:"path,omitempty"`    // metrics path; default "/metrics"
+	Port    int               `json:"port,omitempty"`    // port mode: expand across Hosts
+	Hosts   []string          `json:"hosts,omitempty"`   // port mode: host names/IPs, or ["*"] = all known
+	Targets []string          `json:"targets,omitempty"` // static mode: explicit host:port targets
 	Bearer  string            `json:"bearer,omitempty"`  // optional token, sent as Authorization: Bearer
 	Labels  map[string]string `json:"labels,omitempty"`  // static labels applied to every target in this job
 }
@@ -295,6 +301,20 @@ func (e *Exporter) MetricsPath() string {
 		return "/metrics"
 	}
 	return e.Path
+}
+
+// EffectiveMode returns the exporter's mode, inferring one for back-compat with
+// configs written before the Mode field existed (Port set -> port; Targets set
+// -> static; otherwise port).
+func (e *Exporter) EffectiveMode() string {
+	switch e.Mode {
+	case "port", "service", "static":
+		return e.Mode
+	}
+	if len(e.Targets) > 0 && e.Port == 0 {
+		return "static"
+	}
+	return "port"
 }
 
 // WGPeer represents a WireGuard VPN client peer. This is the shared-state

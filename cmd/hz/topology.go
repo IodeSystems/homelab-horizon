@@ -191,12 +191,17 @@ func exporterList(c *client) error {
 	if len(topo.Exporters) == 0 {
 		fmt.Println("No exporters.")
 	} else {
-		fmt.Printf("%-16s  %-24s  %-20s  %s\n", "JOB", "TARGETS/PORT", "HOSTS", "PATH")
+		fmt.Printf("%-16s  %-8s  %-24s  %-20s  %s\n", "JOB", "MODE", "TARGETS/PORT", "HOSTS", "PATH")
 		for _, e := range topo.Exporters {
+			mode := e.Mode
+			if mode == "" {
+				mode = "port"
+			}
 			tp := "-"
-			if len(e.Targets) > 0 {
+			switch {
+			case len(e.Targets) > 0:
 				tp = strings.Join(e.Targets, ",")
-			} else if e.Port != 0 {
+			case e.Port != 0:
 				tp = fmt.Sprintf("%d", e.Port)
 			}
 			hosts := "-"
@@ -207,7 +212,7 @@ func exporterList(c *client) error {
 			if path == "" {
 				path = "-"
 			}
-			fmt.Printf("%-16s  %-24s  %-20s  %s\n", e.Job, tp, hosts, path)
+			fmt.Printf("%-16s  %-8s  %-24s  %-20s  %s\n", e.Job, mode, tp, hosts, path)
 		}
 	}
 	fmt.Println()
@@ -225,11 +230,12 @@ func exporterList(c *client) error {
 func exporterAdd(c *client, args []string) error {
 	fs := flag.NewFlagSet("exporter add", flag.ContinueOnError)
 	job := fs.String("job", "", "exporter job name")
+	mode := fs.String("mode", "", "port | service | static (inferred if omitted)")
 	var targets multiFlag
-	fs.Var(&targets, "target", "explicit host:port target (repeatable)")
-	port := fs.Int("port", 0, "port to expand across --host entries")
+	fs.Var(&targets, "target", "static mode: explicit host:port target (repeatable)")
+	port := fs.Int("port", 0, "port mode: port to expand across --host entries")
 	var hosts multiFlag
-	fs.Var(&hosts, "host", "host name/IP to expand --port across (repeatable); '*' = all known hosts")
+	fs.Var(&hosts, "host", "port mode: host name/IP to expand --port across (repeatable); '*' = all known hosts")
 	path := fs.String("path", "", "metrics path (default /metrics)")
 	bearer := fs.String("bearer", "", "optional bearer token")
 	var labels multiFlag
@@ -241,8 +247,34 @@ func exporterAdd(c *client, args []string) error {
 	if *job == "" {
 		return fmt.Errorf("--job is required")
 	}
-	if len(targets) == 0 && (*port == 0 || len(hosts) == 0) {
-		return fmt.Errorf("need --target, or --port with at least one --host")
+	// Infer mode when omitted, then validate the fields that mode needs.
+	m := *mode
+	if m == "" {
+		switch {
+		case len(targets) > 0:
+			m = "static"
+		case *port > 0:
+			m = "port"
+		default:
+			return fmt.Errorf("need --mode, or one of: --target (static), --port+--host (port)")
+		}
+	}
+	switch m {
+	case "port":
+		if *port == 0 {
+			return fmt.Errorf("port mode needs --port")
+		}
+		if len(hosts) == 0 {
+			hosts = multiFlag{"*"} // default: all known hosts
+		}
+	case "service":
+		// generated from service backends; no port/hosts/targets needed
+	case "static":
+		if len(targets) == 0 {
+			return fmt.Errorf("static mode needs at least one --target")
+		}
+	default:
+		return fmt.Errorf("invalid --mode %q (want port|service|static)", m)
 	}
 	lbls, err := parseLabels(labels)
 	if err != nil {
@@ -260,6 +292,7 @@ func exporterAdd(c *client, args []string) error {
 	}
 	topo.Exporters = append(topo.Exporters, apitypes.Exporter{
 		Job:     *job,
+		Mode:    m,
 		Targets: targets,
 		Port:    *port,
 		Hosts:   hosts,

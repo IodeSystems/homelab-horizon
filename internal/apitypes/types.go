@@ -139,14 +139,16 @@ type HostDecl struct {
 	Labels map[string]string `json:"labels,omitempty"`
 }
 
-// Exporter is a Prometheus scrape job for endpoints hz does not proxy. Targets
-// are explicit host:port entries and/or Port expanded across Hosts (name/IP/"*").
+// Exporter is a Prometheus scrape job for endpoints hz does not proxy. Mode picks
+// how targets are generated: "port" (Port × Hosts, "*"=all known), "service" (one
+// per non-opted-in service backend at Path), or "static" (the Targets list).
 type Exporter struct {
 	Job     string            `json:"job"`
-	Targets []string          `json:"targets,omitempty"`
+	Mode    string            `json:"mode,omitempty"`
+	Path    string            `json:"path,omitempty"`
 	Port    int               `json:"port,omitempty"`
 	Hosts   []string          `json:"hosts,omitempty"`
-	Path    string            `json:"path,omitempty"`
+	Targets []string          `json:"targets,omitempty"`
 	Bearer  string            `json:"bearer,omitempty"`
 	Labels  map[string]string `json:"labels,omitempty"`
 }
@@ -179,31 +181,6 @@ type TopologyHostsRequest struct {
 
 type TopologyExportersRequest struct {
 	Exporters []Exporter `json:"exporters"`
-}
-
-// TopologyScanRequest probes a port/path across the known hosts plus any extra
-// hosts the operator types, to discover live exporter endpoints that may not yet
-// be configured ("present but not added").
-type TopologyScanRequest struct {
-	Port  int      `json:"port"`
-	Path  string   `json:"path,omitempty"`  // default /metrics
-	Hosts []string `json:"hosts,omitempty"` // extra hosts (name/IP) to probe beyond the known set
-}
-
-// ScanResult is one probed candidate. Configured is true when the address is
-// already an exporter target (so the UI can mark added vs addable).
-type ScanResult struct {
-	Address    string `json:"address"`
-	Host       string `json:"host"`
-	Alive      bool   `json:"alive"`
-	Configured bool   `json:"configured"`
-}
-
-type TopologyScanResp struct {
-	Port       int          `json:"port"`
-	Path       string       `json:"path"`
-	Results    []ScanResult `json:"results"`
-	KnownHosts []string     `json:"knownHosts"`
 }
 
 // ServiceScanMetricsRequest asks hz to discover a service's metrics path by

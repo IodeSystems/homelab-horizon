@@ -137,15 +137,17 @@ export interface HostDecl {
   labels?: { [key: string]: string};
 }
 /**
- * Exporter is a Prometheus scrape job for endpoints hz does not proxy. Targets
- * are explicit host:port entries and/or Port expanded across Hosts (name/IP/"*").
+ * Exporter is a Prometheus scrape job for endpoints hz does not proxy. Mode picks
+ * how targets are generated: "port" (Port × Hosts, "*"=all known), "service" (one
+ * per non-opted-in service backend at Path), or "static" (the Targets list).
  */
 export interface Exporter {
   job: string;
-  targets?: string[];
+  mode?: string;
+  path?: string;
   port?: number /* int */;
   hosts?: string[];
-  path?: string;
+  targets?: string[];
   bearer?: string;
   labels?: { [key: string]: string};
 }
@@ -180,32 +182,6 @@ export interface TopologyHostsRequest {
 }
 export interface TopologyExportersRequest {
   exporters: Exporter[];
-}
-/**
- * TopologyScanRequest probes a port/path across the known hosts plus any extra
- * hosts the operator types, to discover live exporter endpoints that may not yet
- * be configured ("present but not added").
- */
-export interface TopologyScanRequest {
-  port: number /* int */;
-  path?: string; // default /metrics
-  hosts?: string[]; // extra hosts (name/IP) to probe beyond the known set
-}
-/**
- * ScanResult is one probed candidate. Configured is true when the address is
- * already an exporter target (so the UI can mark added vs addable).
- */
-export interface ScanResult {
-  address: string;
-  host: string;
-  alive: boolean;
-  configured: boolean;
-}
-export interface TopologyScanResp {
-  port: number /* int */;
-  path: string;
-  results: ScanResult[];
-  knownHosts: string[];
 }
 /**
  * ServiceScanMetricsRequest asks hz to discover a service's metrics path by

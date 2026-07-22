@@ -2,10 +2,8 @@ package server
 
 import (
 	"encoding/json"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -31,13 +29,6 @@ func adminServer(cfg *config.Config) (*Server, *http.Cookie) {
 	s := &Server{csrfSecret: "test-csrf", metrics: integration.NewDetector(), exporterAlive: map[string]bool{}}
 	s.config.Store(cfg)
 	return s, &http.Cookie{Name: "session", Value: s.signCookie("admin")}
-}
-
-func hostPort(ts *httptest.Server) (string, int) {
-	u := strings.TrimPrefix(ts.URL, "http://")
-	host, portStr, _ := net.SplitHostPort(u)
-	port, _ := strconv.Atoi(portStr)
-	return host, port
 }
 
 func TestServiceScanMetricsFindsApiMetrics(t *testing.T) {
@@ -67,49 +58,11 @@ func TestServiceScanMetricsFindsApiMetrics(t *testing.T) {
 	}
 }
 
-func TestTopologyScanMarksLiveAndUnconfigured(t *testing.T) {
-	ts := expositionAt("/metrics")
-	defer ts.Close()
-	host, port := hostPort(ts)
-
-	s, admin := adminServer(&config.Config{})
-
-	// Probe the httptest host via typed extras (avoids localhost normalization).
-	body, _ := json.Marshal(apitypes.TopologyScanRequest{Port: port, Path: "/metrics", Hosts: []string{host}})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/topology/scan", strings.NewReader(string(body)))
-	req.AddCookie(admin)
-	rec := httptest.NewRecorder()
-	s.handleAPITopologyScan(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
-	}
-	var resp apitypes.TopologyScanResp
-	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
-
-	want := net.JoinHostPort(host, strconv.Itoa(port))
-	var found *apitypes.ScanResult
-	for i := range resp.Results {
-		if resp.Results[i].Address == want {
-			found = &resp.Results[i]
-		}
-	}
-	if found == nil {
-		t.Fatalf("scan did not include %s: %+v", want, resp.Results)
-	}
-	if !found.Alive {
-		t.Errorf("%s should be alive", want)
-	}
-	if found.Configured {
-		t.Errorf("%s should be unconfigured (no exporter references it)", want)
-	}
-}
-
 func TestScanRequiresAdmin(t *testing.T) {
 	s, _ := adminServer(&config.Config{})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/topology/scan", strings.NewReader(`{"port":9100}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/scan-metrics", strings.NewReader(`{"name":"x"}`))
 	rec := httptest.NewRecorder()
-	s.handleAPITopologyScan(rec, req) // no cookie
+	s.handleAPIServiceScanMetrics(rec, req) // no cookie
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("unauth scan = %d, want 401", rec.Code)
 	}

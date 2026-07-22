@@ -93,6 +93,58 @@ func TestDeriveExporterTargets(t *testing.T) {
 	})
 }
 
+func TestDeriveExporterTargetsServiceMode(t *testing.T) {
+	cfg := &Config{
+		Services: []Service{
+			// opted-in per-service metrics -> skipped by the service rule
+			{Name: "grafana", Proxy: &ProxyConfig{Backend: "192.168.1.76:3000"},
+				Integrations: &Integrations{Metrics: &MetricsIntegration{Path: "/metrics"}}},
+			// not opted-in, blue-green -> two slots
+			{Name: "app", Proxy: &ProxyConfig{Backend: "10.0.0.1:8300", Deploy: &DeployConfig{NextBackend: "10.0.0.1:8301"}}},
+			// not opted-in, single backend
+			{Name: "api", Proxy: &ProxyConfig{Backend: "10.0.0.2:9000"}},
+			// no backend -> ignored
+			{Name: "static", Proxy: &ProxyConfig{StaticRoot: "/srv"}},
+		},
+		Exporters: []Exporter{
+			{Job: "svc-metrics", Mode: "service", Path: "/api/metrics"},
+		},
+	}
+	got := cfg.DeriveExporterTargets()
+
+	if findTarget(got, "192.168.1.76:3000") != nil {
+		t.Error("opted-in service must be skipped by the service rule")
+	}
+	cur := findTarget(got, "10.0.0.1:8300")
+	if cur == nil || cur.Path != "/api/metrics" || cur.Labels["service"] != "app" || cur.Labels["slot"] != "current" {
+		t.Errorf("blue-green current slot wrong: %+v", cur)
+	}
+	if nx := findTarget(got, "10.0.0.1:8301"); nx == nil || nx.Labels["slot"] != "next" {
+		t.Errorf("blue-green next slot wrong: %+v", nx)
+	}
+	single := findTarget(got, "10.0.0.2:9000")
+	if single == nil || single.Labels["service"] != "api" || single.Labels["slot"] != "" {
+		t.Errorf("single-backend service target wrong: %+v", single)
+	}
+}
+
+func TestExporterEffectiveModeInference(t *testing.T) {
+	cases := []struct {
+		e    Exporter
+		want string
+	}{
+		{Exporter{Port: 9100}, "port"},                          // legacy port-only
+		{Exporter{Targets: []string{"1.2.3.4:9187"}}, "static"}, // legacy explicit targets
+		{Exporter{Mode: "service"}, "service"},
+		{Exporter{}, "port"},
+	}
+	for _, c := range cases {
+		if got := c.e.EffectiveMode(); got != c.want {
+			t.Errorf("%+v EffectiveMode = %q, want %q", c.e, got, c.want)
+		}
+	}
+}
+
 func TestDeriveKnownHostIPsIncludesDeclared(t *testing.T) {
 	cfg := &Config{
 		Services: []Service{{Name: "app", Proxy: &ProxyConfig{Backend: "192.168.1.76:8300"}}},
