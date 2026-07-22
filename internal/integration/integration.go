@@ -84,15 +84,22 @@ func (d *Detector) Probe(ctx context.Context, t Target) bool {
 
 // metricSampleLine matches a single Prometheus exposition sample:
 //
-//	metric_name{label="v",...}? <value>
+//	metric_name{label="v",...}? <value> [timestamp]
 //
-// where value is a float, NaN, or ±Inf. Anchored so a stray word won't match.
-var metricSampleLine = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*(\{[^}]*\})?[ \t]+-?([0-9][0-9.eE+-]*|\+?Inf|NaN)([ \t]+[0-9]+)?$`)
+// where value is a real float, NaN, or ±Inf. The value is a strict float
+// grammar (not a loose "digit then any of .eE+-" run) so junk like an IP
+// "192.168.1.1" is rejected instead of mistaken for a numeric value. Anchored
+// so a stray word won't match.
+var metricSampleLine = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*(\{[^}]*\})?[ \t]+[+-]?((?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?|Inf|NaN)([ \t]+[0-9]+)?$`)
 
 // looksLikeExposition reports whether body is plausibly Prometheus text
-// exposition: it carries HELP/TYPE markers or at least one metric-sample line,
-// and is not obviously HTML/JSON. Deliberately lenient on exporter quirks but
-// strict enough to reject catchall pages.
+// exposition. HELP/TYPE markers are definitive. Otherwise EVERY non-comment,
+// non-blank line must be a valid sample line (with at least one present) —
+// per the exposition spec every content line is a sample, so a single stray
+// "word 123" line inside prose is NOT enough. Returning on the first match
+// (the old behavior) let catchall/status pages through: "uptime 12345" or
+// "version 192.168.1.1" match metricSampleLine, so any plaintext page carrying
+// one numeric line was mistaken for a metrics endpoint.
 func looksLikeExposition(body string) bool {
 	s := strings.TrimSpace(body)
 	if s == "" {
@@ -104,16 +111,18 @@ func looksLikeExposition(body string) bool {
 	if strings.Contains(body, "# TYPE ") || strings.Contains(body, "# HELP ") {
 		return true
 	}
+	samples := 0
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		if metricSampleLine.MatchString(line) {
-			return true
+		if !metricSampleLine.MatchString(line) {
+			return false // a content line that isn't a sample ⇒ not exposition
 		}
+		samples++
 	}
-	return false
+	return samples > 0
 }
 
 // Refresh probes all candidates concurrently and replaces the healthy set with

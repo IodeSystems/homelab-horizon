@@ -16,6 +16,11 @@ func TestLooksLikeExposition(t *testing.T) {
 		"Not Found",
 		"",
 		"just some words here",
+		// Catchall/status pages carrying one numeric line: a stray sample line
+		// must NOT rescue an otherwise non-exposition body (former false positive).
+		"Service is running\nuptime 12345",
+		"version 192.168.1.1",
+		"Welcome to the API\nrequests 42\nSee docs at /help",
 	}
 	for _, s := range yes {
 		if !looksLikeExposition(s) {
