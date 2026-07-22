@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as VpnRouteImport } from './routes/vpn'
+import { Route as TopologyRouteImport } from './routes/topology'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as ServicesRouteImport } from './routes/services'
 import { Route as MfaRouteImport } from './routes/mfa'
@@ -22,6 +23,11 @@ import { Route as IndexRouteImport } from './routes/index'
 const VpnRoute = VpnRouteImport.update({
   id: '/vpn',
   path: '/vpn',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TopologyRoute = TopologyRouteImport.update({
+  id: '/topology',
+  path: '/topology',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsRoute = SettingsRouteImport.update({
@@ -74,6 +80,7 @@ export interface FileRoutesByFullPath {
   '/mfa': typeof MfaRoute
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
+  '/topology': typeof TopologyRoute
   '/vpn': typeof VpnRoute
 }
 export interface FileRoutesByTo {
@@ -85,6 +92,7 @@ export interface FileRoutesByTo {
   '/mfa': typeof MfaRoute
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
+  '/topology': typeof TopologyRoute
   '/vpn': typeof VpnRoute
 }
 export interface FileRoutesById {
@@ -97,6 +105,7 @@ export interface FileRoutesById {
   '/mfa': typeof MfaRoute
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
+  '/topology': typeof TopologyRoute
   '/vpn': typeof VpnRoute
 }
 export interface FileRouteTypes {
@@ -110,6 +119,7 @@ export interface FileRouteTypes {
     | '/mfa'
     | '/services'
     | '/settings'
+    | '/topology'
     | '/vpn'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -121,6 +131,7 @@ export interface FileRouteTypes {
     | '/mfa'
     | '/services'
     | '/settings'
+    | '/topology'
     | '/vpn'
   id:
     | '__root__'
@@ -132,6 +143,7 @@ export interface FileRouteTypes {
     | '/mfa'
     | '/services'
     | '/settings'
+    | '/topology'
     | '/vpn'
   fileRoutesById: FileRoutesById
 }
@@ -144,6 +156,7 @@ export interface RootRouteChildren {
   MfaRoute: typeof MfaRoute
   ServicesRoute: typeof ServicesRoute
   SettingsRoute: typeof SettingsRoute
+  TopologyRoute: typeof TopologyRoute
   VpnRoute: typeof VpnRoute
 }
 
@@ -154,6 +167,13 @@ declare module '@tanstack/react-router' {
       path: '/vpn'
       fullPath: '/vpn'
       preLoaderRoute: typeof VpnRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/topology': {
+      id: '/topology'
+      path: '/topology'
+      fullPath: '/topology'
+      preLoaderRoute: typeof TopologyRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings': {
@@ -224,6 +244,7 @@ const rootRouteChildren: RootRouteChildren = {
   MfaRoute: MfaRoute,
   ServicesRoute: ServicesRoute,
   SettingsRoute: SettingsRoute,
+  TopologyRoute: TopologyRoute,
   VpnRoute: VpnRoute,
 }
 export const routeTree = rootRouteImport

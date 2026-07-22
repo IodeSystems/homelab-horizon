@@ -78,6 +78,10 @@ export type {
   ZoneRecordsResponse,
   DNSDriftInfoResp,
   DNSDriftStatusResponse,
+  HostDecl,
+  Exporter,
+  ExporterTargetResp,
+  TopologyResp as TopologyData,
 } from "./generated-types";
 
 // Apt-audit entries aren't in apitypes (internal-only struct in the server
