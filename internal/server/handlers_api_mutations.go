@@ -42,10 +42,26 @@ func requestProxyTimeouts(t *apitypes.ServiceRequestTimeouts) *config.ProxyTimeo
 	return pt
 }
 
+// requestIntegrations converts the write-path integrations DTO into config form.
+// Returns nil when metrics is absent or disabled (Enabled=false), so a service
+// with no target contributes nothing to the scrape config.
+func requestIntegrations(in *apitypes.ServiceRequestIntegrations) *config.Integrations {
+	if in == nil || in.Metrics == nil || !in.Metrics.Enabled {
+		return nil
+	}
+	return &config.Integrations{
+		Metrics: &config.MetricsIntegration{
+			Path:   in.Metrics.Path,
+			Bearer: in.Metrics.Bearer,
+		},
+	}
+}
+
 func serviceRequestToService(req *apitypes.ServiceRequest) config.Service {
 	svc := config.Service{
-		Name:    req.Name,
-		Domains: req.Domains,
+		Name:         req.Name,
+		Domains:      req.Domains,
+		Integrations: requestIntegrations(req.Integrations),
 	}
 	if req.InternalDNS != nil && req.InternalDNS.IP != "" {
 		svc.InternalDNS = &config.InternalDNS{IP: req.InternalDNS.IP}
@@ -259,6 +275,10 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 			} else {
 				cfg.Services[i].Proxy = nil
 			}
+
+			// Integrations: full-replace, mirroring Proxy/DNS. The write path
+			// round-trips this, so an omit means "off".
+			cfg.Services[i].Integrations = requestIntegrations(req.Integrations)
 
 			found = true
 			return

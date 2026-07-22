@@ -94,6 +94,17 @@ export const ServiceSchema = z.object({
       deploy: DeployConfigSchema,
     })
     .optional(),
+  integrations: z
+    .object({
+      metrics: z
+        .object({
+          enabled: z.boolean(),
+          path: z.string().optional(),
+          bearer: z.string().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
   status: ServiceStatusSchema,
 });
 

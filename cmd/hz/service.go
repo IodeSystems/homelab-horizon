@@ -176,6 +176,14 @@ func serviceShow(c *client, args []string) error {
 		}
 		fmt.Printf("  status:       %s%s\n", state, errSuffix(svc.Status.ProxyError))
 	}
+	if svc.Integrations != nil && svc.Integrations.Metrics != nil && svc.Integrations.Metrics.Enabled {
+		m := svc.Integrations.Metrics
+		bearer := ""
+		if m.Bearer != "" {
+			bearer = " (bearer set)"
+		}
+		fmt.Printf("Metrics:      %s%s\n", m.Path, bearer)
+	}
 	return nil
 }
 
@@ -192,26 +200,29 @@ type serviceFlags struct {
 	fs  *flag.FlagSet
 	set map[string]bool
 
-	name        string
-	domains     multiFlag
-	domainsCSV  string
-	backend     string
-	staticRoot  string
-	static      bool
-	self        bool
-	spa         bool
-	internal    bool
-	public      bool
-	healthCheck string
-	deployNext  string
-	balance     string
-	intDNSIP    string
-	extDNSIP    multiFlag
-	ttl         int
-	tConnect    int
-	tServer     int
-	tTunnel     int
-	sync        bool
+	name          string
+	domains       multiFlag
+	domainsCSV    string
+	backend       string
+	staticRoot    string
+	static        bool
+	self          bool
+	spa           bool
+	internal      bool
+	public        bool
+	healthCheck   string
+	deployNext    string
+	balance       string
+	intDNSIP      string
+	extDNSIP      multiFlag
+	ttl           int
+	tConnect      int
+	tServer       int
+	tTunnel       int
+	metrics       bool
+	metricsPath   string
+	metricsBearer string
+	sync          bool
 }
 
 type multiFlag []string
@@ -244,6 +255,9 @@ func newServiceFlags(name string) *serviceFlags {
 	f.IntVar(&sf.tConnect, "timeout-connect", 0, "HAProxy connect timeout override (s)")
 	f.IntVar(&sf.tServer, "timeout-server", 0, "HAProxy server timeout override (s)")
 	f.IntVar(&sf.tTunnel, "timeout-tunnel", 0, "HAProxy tunnel timeout override (s)")
+	f.BoolVar(&sf.metrics, "metrics", false, "enable Prometheus metrics discovery for this service")
+	f.StringVar(&sf.metricsPath, "metrics-path", "", "metrics path to scrape (default /metrics)")
+	f.StringVar(&sf.metricsBearer, "metrics-bearer", "", "optional bearer token for probing/scraping metrics")
 	f.BoolVar(&sf.sync, "sync", false, "trigger a global sync after the mutation")
 	f.Usage = func() {
 		_, _ = fmt.Fprintf(f.Output(), "Flags for 'hz service %s':\n", name)
@@ -294,6 +308,15 @@ func (sf *serviceFlags) buildRequest() (apitypes.ServiceRequest, error) {
 	proxy := sf.buildProxy()
 	if proxy != nil {
 		req.Proxy = proxy
+	}
+	if sf.metrics {
+		req.Integrations = &apitypes.ServiceRequestIntegrations{
+			Metrics: &apitypes.ServiceRequestMetrics{
+				Enabled: true,
+				Path:    sf.metricsPath,
+				Bearer:  sf.metricsBearer,
+			},
+		}
 	}
 	return req, nil
 }
@@ -382,6 +405,15 @@ func respToRequest(s *apitypes.ServiceResp) apitypes.ServiceRequest {
 			}
 		}
 		req.Proxy = rp
+	}
+	if s.Integrations != nil && s.Integrations.Metrics != nil {
+		req.Integrations = &apitypes.ServiceRequestIntegrations{
+			Metrics: &apitypes.ServiceRequestMetrics{
+				Enabled: s.Integrations.Metrics.Enabled,
+				Path:    s.Integrations.Metrics.Path,
+				Bearer:  s.Integrations.Metrics.Bearer,
+			},
+		}
 	}
 	return req
 }
@@ -489,6 +521,26 @@ func serviceEdit(c *client, args []string) error {
 			if set["timeout-tunnel"] {
 				p.Timeouts.TunnelSeconds = sf.tTunnel
 			}
+		}
+	}
+
+	// Metrics integration (top-level, not under proxy).
+	if set["metrics"] || set["metrics-path"] || set["metrics-bearer"] {
+		if set["metrics"] && !sf.metrics {
+			req.Integrations = nil
+		} else {
+			m := &apitypes.ServiceRequestMetrics{Enabled: true}
+			if req.Integrations != nil && req.Integrations.Metrics != nil {
+				m = req.Integrations.Metrics
+				m.Enabled = true
+			}
+			if set["metrics-path"] {
+				m.Path = sf.metricsPath
+			}
+			if set["metrics-bearer"] {
+				m.Bearer = sf.metricsBearer
+			}
+			req.Integrations = &apitypes.ServiceRequestIntegrations{Metrics: m}
 		}
 	}
 

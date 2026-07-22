@@ -74,6 +74,9 @@ SERVICE FLAGS (create/edit)
   --internal-dns-ip IP      publish an internal (dnsmasq) A record
   --external-dns-ip IP      external A record (repeatable); --ttl SEC
   --timeout-connect/-server/-tunnel SEC   HAProxy timeout overrides
+  --metrics                 enable Prometheus metrics discovery (probed + served in scrape config)
+  --metrics-path PATH       metrics path to scrape (default /metrics)
+  --metrics-bearer TOK      optional bearer token for probing/scraping metrics
   --sync                    trigger a global sync after the mutation
 
 EXAMPLES
@@ -81,6 +84,7 @@ EXAMPLES
   hz setup
   hz service create --name ebb --domain ebb.iodesystems.com \
     --backend 192.168.1.76:8300 --internal-only --health-check /healthz --sync
+  hz service edit grafana.iodesystems.com --metrics --sync   # opt into /metrics scraping
   hz sync --wait
   hz schema service
 `

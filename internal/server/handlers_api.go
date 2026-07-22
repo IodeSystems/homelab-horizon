@@ -215,6 +215,16 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 			}
 			sr.Proxy = pr
 		}
+		if svc.Integrations != nil && svc.Integrations.Metrics != nil {
+			m := svc.Integrations.Metrics
+			sr.Integrations = &apitypes.IntegrationsResp{
+				Metrics: &apitypes.MetricsResp{
+					Enabled: !m.Disabled,
+					Path:    m.MetricsPath(),
+					Bearer:  m.Bearer,
+				},
+			}
+		}
 		sorted = append(sorted, sr)
 	}
 
