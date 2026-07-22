@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiFetch } from "./client";
+import { apiFetch, apiFetchText } from "./client";
 import type {
   AddPeerResponse,
   AllCheckHistoryResponse,
@@ -37,6 +37,8 @@ import type {
   HostDecl,
   Exporter,
   TopologyData,
+  TopologyScanResp,
+  ServiceScanMetricsResp,
 } from "./types";
 import {
   BanListResponseSchema,
@@ -57,6 +59,8 @@ import {
   InvitesSchema,
   PendingChangesSchema,
   TopologyDataSchema,
+  TopologyScanRespSchema,
+  ServiceScanMetricsRespSchema,
 } from "./schemas";
 
 export function useDashboard() {
@@ -1161,6 +1165,48 @@ export function useSaveTopologyExporters() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["topology"] });
     },
+  });
+}
+
+// scrape.yaml / setup.sh are served outside /api/v1 as raw text, so they use
+// apiFetchText (raw fetch) rather than the JSON apiFetch wrapper.
+export function useScrapeYaml() {
+  return useQuery({
+    queryKey: ["topology", "scrape-yaml"],
+    queryFn: () => apiFetchText("/integration/prometheus/scrape.yaml"),
+  });
+}
+
+export function useSetupScript() {
+  return useQuery({
+    queryKey: ["topology", "setup-script"],
+    queryFn: () => apiFetchText("/integration/prometheus/setup.sh"),
+  });
+}
+
+// Discovery scan — probes a port/path across known + extra hosts to find
+// live exporter endpoints that may not yet be configured as targets.
+export function useScanTopology() {
+  return useMutation({
+    mutationFn: (input: { port: number; path?: string; hosts?: string[] }) =>
+      apiFetch<TopologyScanResp>("/topology/scan", {
+        method: "POST",
+        body: JSON.stringify(input),
+        schema: TopologyScanRespSchema,
+      }),
+  });
+}
+
+// Service metrics-path scan — probes a service's backend slot(s) for a
+// working Prometheus metrics path.
+export function useScanServiceMetrics() {
+  return useMutation({
+    mutationFn: (input: { name: string }) =>
+      apiFetch<ServiceScanMetricsResp>("/services/scan-metrics", {
+        method: "POST",
+        body: JSON.stringify(input),
+        schema: ServiceScanMetricsRespSchema,
+      }),
   });
 }
 

@@ -4,8 +4,10 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Chip,
   CircularProgress,
+  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
@@ -21,17 +23,25 @@ import {
   TableHead,
   TableRow,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import SearchIcon from "@mui/icons-material/Search";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import {
   useTopology,
   useSaveTopologyHosts,
   useSaveTopologyExporters,
+  useScrapeYaml,
+  useSetupScript,
+  useScanTopology,
 } from "../api/hooks";
-import type { HostDecl, Exporter, ExporterTargetResp } from "../api/types";
+import type { HostDecl, Exporter, ExporterTargetResp, ScanResult } from "../api/types";
 
 // --- Labels editor (shared by host + exporter forms) ---
 
@@ -163,6 +173,52 @@ function DeleteConfirmDialog({
         </Button>
       </DialogActions>
     </Dialog>
+  );
+}
+
+// --- Copy-to-clipboard helpers ---
+
+function CopyIconButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <IconButton
+      size="small"
+      onClick={() => {
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+      title={copied ? "Copied!" : "Copy to clipboard"}
+    >
+      <ContentCopyIcon fontSize="small" />
+    </IconButton>
+  );
+}
+
+function CodeBlock({ text, maxHeight = 320 }: { text: string; maxHeight?: number }) {
+  return (
+    <Box sx={{ position: "relative" }}>
+      <Box sx={{ position: "absolute", top: 8, right: 8, zIndex: 1 }}>
+        <CopyIconButton text={text} />
+      </Box>
+      <Box
+        component="pre"
+        sx={{
+          bgcolor: "#0f3460",
+          color: "#eee",
+          p: 2,
+          borderRadius: 1,
+          overflow: "auto",
+          maxHeight,
+          fontSize: "0.8rem",
+          fontFamily: "monospace",
+          whiteSpace: "pre",
+          m: 0,
+        }}
+      >
+        {text}
+      </Box>
+    </Box>
   );
 }
 
@@ -310,6 +366,115 @@ function formToExporter(form: ExporterFormState): Exporter {
   return exp;
 }
 
+// Scan-hosts helper embedded in the exporter dialog: probes the dialog's
+// port/path across every known host and lets the operator tick which live
+// addresses become explicit targets, instead of hand-typing host:port pairs.
+function ExporterScanHostsHelper({
+  port,
+  path,
+  onAddTargets,
+}: {
+  port: string;
+  path: string;
+  onAddTargets: (addresses: string[]) => void;
+}) {
+  const scan = useScanTopology();
+  const [results, setResults] = useState<ScanResult[] | null>(null);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+
+  const portNum = parseInt(port, 10);
+  const canScan = !Number.isNaN(portNum) && portNum > 0;
+
+  const handleScan = () => {
+    if (!canScan) return;
+    scan.mutate(
+      { port: portNum, path: path.trim() || undefined },
+      {
+        onSuccess: (resp) => {
+          setResults(resp.results);
+          setChecked(new Set());
+        },
+      },
+    );
+  };
+
+  const toggle = (address: string) => {
+    setChecked((s) => {
+      const next = new Set(s);
+      if (next.has(address)) next.delete(address);
+      else next.add(address);
+      return next;
+    });
+  };
+
+  const alive = (results ?? []).filter((r) => r.alive);
+
+  return (
+    <Box sx={{ border: "1px solid rgba(127,127,127,0.25)", borderRadius: 1, p: 1.5 }}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        <Button
+          size="small"
+          startIcon={scan.isPending ? <CircularProgress size={14} /> : <SearchIcon />}
+          onClick={handleScan}
+          disabled={!canScan || scan.isPending}
+        >
+          Scan hosts
+        </Button>
+        <Typography variant="caption" color="text.secondary">
+          Probes port {canScan ? portNum : "?"} across known hosts to find live endpoints.
+        </Typography>
+      </Box>
+      {scan.isError && (
+        <Alert severity="error" sx={{ mt: 1 }}>
+          {scan.error instanceof Error ? scan.error.message : "Scan failed"}
+        </Alert>
+      )}
+      {results && (
+        <Box sx={{ mt: 1 }}>
+          {alive.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">
+              No live endpoints found on this port.
+            </Typography>
+          ) : (
+            <>
+              <Stack spacing={0.25} sx={{ maxHeight: 180, overflow: "auto" }}>
+                {alive.map((r) => (
+                  <Box key={r.address} sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                    <Checkbox
+                      size="small"
+                      checked={checked.has(r.address)}
+                      onChange={() => toggle(r.address)}
+                      disabled={r.configured}
+                    />
+                    <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                      {r.address}
+                    </Typography>
+                    {r.configured && (
+                      <Chip label="already a target" size="small" variant="outlined" />
+                    )}
+                  </Box>
+                ))}
+              </Stack>
+              <Button
+                size="small"
+                variant="outlined"
+                sx={{ mt: 1 }}
+                disabled={checked.size === 0}
+                onClick={() => {
+                  onAddTargets([...checked]);
+                  setChecked(new Set());
+                }}
+              >
+                Add checked as explicit targets
+              </Button>
+            </>
+          )}
+        </Box>
+      )}
+    </Box>
+  );
+}
+
 function ExporterFormDialog({
   open,
   title,
@@ -326,6 +491,17 @@ function ExporterFormDialog({
   isSubmitting: boolean;
 }) {
   const [form, setForm] = useState<ExporterFormState>(initialValues);
+
+  const addTargets = (addresses: string[]) => {
+    const existing = new Set(
+      form.targetsText
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
+    for (const a of addresses) existing.add(a);
+    setForm((f) => ({ ...f, targetsText: [...existing].join(", ") }));
+  };
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
@@ -384,6 +560,7 @@ function ExporterFormDialog({
           size="small"
           fullWidth
         />
+        <ExporterScanHostsHelper port={form.port} path={form.path} onAddTargets={addTargets} />
         <LabelsEditor
           rows={form.labelRows}
           onChange={(rows) => setForm((f) => ({ ...f, labelRows: rows }))}
@@ -405,7 +582,108 @@ function ExporterFormDialog({
   );
 }
 
-// --- Live targets (grouped by job) ---
+// --- Zone 1: Output — what an operator does with this config ---
+
+function OutputZone() {
+  const scrapeYaml = useScrapeYaml();
+  const setupScript = useSetupScript();
+  const [scriptOpen, setScriptOpen] = useState(false);
+
+  const origin = window.location.origin;
+  const installCmd = `curl -fsSL ${origin}/integration/prometheus/setup.sh | sudo bash`;
+
+  return (
+    <Box sx={{ mb: 4 }}>
+      <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
+        Output
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        Point a Prometheus server at hz using the generated scrape config, or
+        one-line install a Prometheus server that's already wired up.
+      </Typography>
+
+      <Stack spacing={2}>
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
+            scrape.yaml
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+            <code>GET /integration/prometheus/scrape.yaml</code> — add this as a scrape config
+            on any Prometheus server.
+          </Typography>
+          {scrapeYaml.isLoading ? (
+            <CircularProgress size={20} />
+          ) : scrapeYaml.error ? (
+            <Alert severity="error">Failed to load scrape.yaml: {scrapeYaml.error.message}</Alert>
+          ) : (
+            <CodeBlock text={scrapeYaml.data ?? ""} />
+          )}
+        </Paper>
+
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
+            Install a Prometheus server
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+            Run on the box that should run Prometheus. Bakes in this hz instance's URL.
+          </Typography>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              bgcolor: "#0f3460",
+              color: "#eee",
+              p: 1.5,
+              borderRadius: 1,
+              fontFamily: "monospace",
+              fontSize: "0.8rem",
+            }}
+          >
+            <Box component="code" sx={{ flex: 1, overflow: "auto", whiteSpace: "nowrap" }}>
+              {installCmd}
+            </Box>
+            <CopyIconButton text={installCmd} />
+          </Box>
+
+          <Box
+            onClick={() => setScriptOpen((o) => !o)}
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 0.5,
+              cursor: "pointer",
+              userSelect: "none",
+              mt: 1.5,
+            }}
+          >
+            <IconButton size="small" sx={{ p: 0.25 }}>
+              {scriptOpen ? (
+                <KeyboardArrowUpIcon fontSize="small" />
+              ) : (
+                <KeyboardArrowDownIcon fontSize="small" />
+              )}
+            </IconButton>
+            <Typography variant="body2">View full install script</Typography>
+          </Box>
+          <Collapse in={scriptOpen} timeout="auto" unmountOnExit>
+            <Box sx={{ mt: 1 }}>
+              {setupScript.isLoading ? (
+                <CircularProgress size={20} />
+              ) : setupScript.error ? (
+                <Alert severity="error">Failed to load setup.sh: {setupScript.error.message}</Alert>
+              ) : (
+                <CodeBlock text={setupScript.data ?? ""} />
+              )}
+            </Box>
+          </Collapse>
+        </Paper>
+      </Stack>
+    </Box>
+  );
+}
+
+// --- Zone 2: Targets & reconciliation ---
 
 function groupTargets(targets: ExporterTargetResp[]): [string, ExporterTargetResp[]][] {
   const map = new Map<string, ExporterTargetResp[]>();
@@ -420,26 +698,99 @@ function groupTargets(targets: ExporterTargetResp[]): [string, ExporterTargetRes
   return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 }
 
-function LiveTargetsSection({ targets }: { targets: ExporterTargetResp[] }) {
+// An address is "explicit" for a job if it's literally listed in that
+// exporter's targets[]. Anything else alive-but-configured comes from a
+// hosts/port template (e.g. hosts:['*']) — you can't remove one templated
+// target without editing the template itself.
+function explicitAddressesByJob(exporters: Exporter[]): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  for (const exp of exporters) {
+    map.set(exp.job, new Set(exp.targets ?? []));
+  }
+  return map;
+}
+
+function TargetRow({
+  target,
+  isExplicit,
+  onRemove,
+  onEditExporter,
+  isRemoving,
+}: {
+  target: ExporterTargetResp;
+  isExplicit: boolean;
+  onRemove: () => void;
+  onEditExporter: () => void;
+  isRemoving: boolean;
+}) {
+  return (
+    <TableRow hover>
+      <TableCell sx={{ width: 140 }}>
+        {target.alive ? (
+          <Chip label="up" size="small" color="success" variant="outlined" />
+        ) : isExplicit ? (
+          <Chip label="down / missing" size="small" color="error" variant="outlined" />
+        ) : (
+          <Chip label="templated" size="small" color="warning" variant="outlined" />
+        )}
+      </TableCell>
+      <TableCell>
+        <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+          {target.address}
+        </Typography>
+      </TableCell>
+      <TableCell>
+        <Typography variant="body2" color="text.secondary">
+          {target.path}
+        </Typography>
+      </TableCell>
+      <TableCell>
+        <LabelChips labels={target.labels} />
+      </TableCell>
+      <TableCell align="right" sx={{ width: 160 }}>
+        {!target.alive && isExplicit && (
+          <Button size="small" color="error" onClick={onRemove} disabled={isRemoving}>
+            Remove
+          </Button>
+        )}
+        {!target.alive && !isExplicit && (
+          <Button size="small" onClick={onEditExporter}>
+            Edit exporter
+          </Button>
+        )}
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function TargetsSection({
+  targets,
+  exporters,
+  onRemoveTarget,
+  onEditExporter,
+  isRemoving,
+}: {
+  targets: ExporterTargetResp[];
+  exporters: Exporter[];
+  onRemoveTarget: (job: string, address: string) => void;
+  onEditExporter: (job: string) => void;
+  isRemoving: boolean;
+}) {
   const grouped = useMemo(() => groupTargets(targets), [targets]);
+  const explicitByJob = useMemo(() => explicitAddressesByJob(exporters), [exporters]);
 
   return (
-    <Box sx={{ mb: 4 }}>
-      <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
-        Live Targets
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Down targets are still scraped — Prometheus owns up/down alerting.
-      </Typography>
+    <Box>
       {grouped.length === 0 ? (
         <Paper variant="outlined" sx={{ p: 3, textAlign: "center" }}>
           <Typography variant="body2" color="text.secondary">
-            No probed targets yet.
+            No configured targets yet.
           </Typography>
         </Paper>
       ) : (
         grouped.map(([job, jobTargets]) => {
           const upCount = jobTargets.filter((t) => t.alive).length;
+          const explicit = explicitByJob.get(job) ?? new Set<string>();
           return (
             <Paper key={job} variant="outlined" sx={{ mb: 2 }}>
               <Box
@@ -463,29 +814,14 @@ function LiveTargetsSection({ targets }: { targets: ExporterTargetResp[] }) {
                 <Table size="small">
                   <TableBody>
                     {jobTargets.map((t, i) => (
-                      <TableRow key={`${t.address}-${i}`} hover>
-                        <TableCell sx={{ width: 90 }}>
-                          <Chip
-                            label={t.alive ? "up" : "down"}
-                            size="small"
-                            color={t.alive ? "success" : "error"}
-                            variant="outlined"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                            {t.address}
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Typography variant="body2" color="text.secondary">
-                            {t.path}
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <LabelChips labels={t.labels} />
-                        </TableCell>
-                      </TableRow>
+                      <TargetRow
+                        key={`${t.address}-${i}`}
+                        target={t}
+                        isExplicit={explicit.has(t.address)}
+                        onRemove={() => onRemoveTarget(job, t.address)}
+                        onEditExporter={() => onEditExporter(job)}
+                        isRemoving={isRemoving}
+                      />
                     ))}
                   </TableBody>
                 </Table>
@@ -498,7 +834,214 @@ function LiveTargetsSection({ targets }: { targets: ExporterTargetResp[] }) {
   );
 }
 
-// --- Exporters section ---
+interface ScanFormState {
+  job: string;
+  port: string;
+  path: string;
+  hostsText: string;
+}
+
+const emptyScanForm: ScanFormState = { job: "", port: "", path: "/metrics", hostsText: "" };
+
+function ScanResultRow({
+  result,
+  knownHosts,
+  jobSet,
+  onAdd,
+  onAddHost,
+  isAdding,
+}: {
+  result: ScanResult;
+  knownHosts: string[];
+  jobSet: boolean;
+  onAdd: () => void;
+  onAddHost: () => void;
+  isAdding: boolean;
+}) {
+  const hostKnown = knownHosts.includes(result.host);
+  return (
+    <TableRow hover>
+      <TableCell sx={{ width: 90 }}>
+        <Chip
+          label={result.alive ? "up" : "down"}
+          size="small"
+          color={result.alive ? "success" : "default"}
+          variant="outlined"
+        />
+      </TableCell>
+      <TableCell>
+        <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+          {result.address}
+        </Typography>
+      </TableCell>
+      <TableCell>
+        <Typography variant="body2" color="text.secondary">
+          {result.host}
+        </Typography>
+      </TableCell>
+      <TableCell sx={{ width: 110 }}>
+        {result.configured ? (
+          <Chip label="added" size="small" color="success" variant="outlined" />
+        ) : result.alive ? (
+          <Chip label="not added" size="small" color="warning" variant="outlined" />
+        ) : null}
+      </TableCell>
+      <TableCell align="right" sx={{ width: 220 }}>
+        {result.alive && !result.configured && (
+          <Box sx={{ display: "flex", gap: 1, justifyContent: "flex-end" }}>
+            {!hostKnown && (
+              <Button size="small" onClick={onAddHost}>
+                Add host
+              </Button>
+            )}
+            <Tooltip title={jobSet ? "" : "Set a job name above to enable Add"}>
+              <span>
+                <Button size="small" variant="outlined" onClick={onAdd} disabled={!jobSet || isAdding}>
+                  Add
+                </Button>
+              </span>
+            </Tooltip>
+          </Box>
+        )}
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function ScanPanel({
+  knownHosts,
+  onAddTarget,
+  onAddHost,
+  isAdding,
+}: {
+  knownHosts: string[];
+  onAddTarget: (job: string, address: string, path?: string) => void;
+  onAddHost: (host: string) => void;
+  isAdding: boolean;
+}) {
+  const scan = useScanTopology();
+  const [form, setForm] = useState<ScanFormState>(emptyScanForm);
+  const [results, setResults] = useState<ScanResult[] | null>(null);
+
+  const portNum = parseInt(form.port, 10);
+  const canScan = !Number.isNaN(portNum) && portNum > 0;
+  const jobSet = form.job.trim().length > 0;
+
+  const handleScan = () => {
+    if (!canScan) return;
+    const extraHosts = form.hostsText
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    scan.mutate(
+      { port: portNum, path: form.path.trim() || undefined, hosts: extraHosts.length > 0 ? extraHosts : undefined },
+      { onSuccess: (resp) => setResults(resp.results) },
+    );
+  };
+
+  return (
+    <Box>
+      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 0.5 }}>
+        Scan for endpoints
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+        Probe a port across known (and optional extra) hosts to find live endpoints not yet
+        configured as targets.
+      </Typography>
+      <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "flex-start", mb: 1.5 }}>
+        <TextField
+          label="Job (to add into)"
+          size="small"
+          value={form.job}
+          onChange={(e) => setForm((f) => ({ ...f, job: e.target.value }))}
+          sx={{ width: 180 }}
+        />
+        <TextField
+          label="Port"
+          size="small"
+          type="number"
+          required
+          value={form.port}
+          onChange={(e) => setForm((f) => ({ ...f, port: e.target.value }))}
+          sx={{ width: 120 }}
+        />
+        <TextField
+          label="Path"
+          size="small"
+          value={form.path}
+          onChange={(e) => setForm((f) => ({ ...f, path: e.target.value }))}
+          sx={{ width: 140 }}
+        />
+        <TextField
+          label="Extra hosts (CSV)"
+          size="small"
+          value={form.hostsText}
+          onChange={(e) => setForm((f) => ({ ...f, hostsText: e.target.value }))}
+          sx={{ flex: 1, minWidth: 200 }}
+          placeholder="10.0.0.20, 10.0.0.21"
+        />
+        <Button
+          variant="contained"
+          startIcon={scan.isPending ? <CircularProgress size={16} /> : <SearchIcon />}
+          onClick={handleScan}
+          disabled={!canScan || scan.isPending}
+        >
+          Scan
+        </Button>
+      </Box>
+      {!jobSet && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+          Set a job name to enable adding discovered targets.
+        </Typography>
+      )}
+      {scan.isError && (
+        <Alert severity="error" sx={{ mb: 1.5 }}>
+          {scan.error instanceof Error ? scan.error.message : "Scan failed"}
+        </Alert>
+      )}
+      {results && (
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Status</TableCell>
+                <TableCell>Address</TableCell>
+                <TableCell>Host</TableCell>
+                <TableCell>Configured</TableCell>
+                <TableCell align="right">Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {results.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} align="center">
+                    <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
+                      No results.
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                results.map((r, i) => (
+                  <ScanResultRow
+                    key={`${r.address}-${i}`}
+                    result={r}
+                    knownHosts={knownHosts}
+                    jobSet={jobSet}
+                    onAdd={() => onAddTarget(form.job.trim(), r.address, form.path.trim() || undefined)}
+                    onAddHost={() => onAddHost(r.host)}
+                    isAdding={isAdding}
+                  />
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+    </Box>
+  );
+}
+
+// --- Exporters section (Zone 3) ---
 
 function ExportersSection({
   exporters,
@@ -595,7 +1138,7 @@ function ExportersSection({
   );
 }
 
-// --- Hosts section ---
+// --- Hosts section (Zone 3) ---
 
 function HostsSection({
   hosts,
@@ -677,6 +1220,39 @@ function HostsSection({
   );
 }
 
+// --- Exporter list mutation helpers ---
+
+function removeExplicitTarget(exporters: Exporter[], job: string, address: string): Exporter[] {
+  return exporters.map((exp) => {
+    if (exp.job !== job) return exp;
+    const targets = (exp.targets ?? []).filter((a) => a !== address);
+    const next: Exporter = { ...exp };
+    if (targets.length > 0) next.targets = targets;
+    else delete next.targets;
+    return next;
+  });
+}
+
+function addExplicitTarget(
+  exporters: Exporter[],
+  job: string,
+  address: string,
+  path?: string,
+): Exporter[] {
+  const idx = exporters.findIndex((e) => e.job === job);
+  if (idx === -1) {
+    const newExp: Exporter = { job, targets: [address] };
+    if (path) newExp.path = path;
+    return [...exporters, newExp];
+  }
+  return exporters.map((exp, i) => {
+    if (i !== idx) return exp;
+    const targets = exp.targets ?? [];
+    if (targets.includes(address)) return exp;
+    return { ...exp, targets: [...targets, address] };
+  });
+}
+
 // --- Snackbar state ---
 
 interface SnackState {
@@ -687,7 +1263,7 @@ interface SnackState {
 
 // --- Main page ---
 
-function TopologyPage() {
+function ObservabilityPage() {
   const { data, isLoading, error } = useTopology();
   const saveHosts = useSaveTopologyHosts();
   const saveExporters = useSaveTopologyExporters();
@@ -699,6 +1275,8 @@ function TopologyPage() {
   const [addHostOpen, setAddHostOpen] = useState(false);
   const [editHostTarget, setEditHostTarget] = useState<HostDecl | null>(null);
   const [deleteHostTarget, setDeleteHostTarget] = useState<string | null>(null);
+  // Prefills the Add Host dialog with a scanned IP that isn't declared yet.
+  const [addHostFromIP, setAddHostFromIP] = useState<string | null>(null);
 
   const [snack, setSnack] = useState<SnackState>({ open: false, message: "", severity: "success" });
   const showSnack = (message: string, severity: "success" | "error") =>
@@ -761,6 +1339,7 @@ function TopologyPage() {
     saveHosts.mutate([...hosts, formToHost(form)], {
       onSuccess: () => {
         setAddHostOpen(false);
+        setAddHostFromIP(null);
         showSnack("Host added", "success");
       },
       onError: (err) => showSnack(err.message, "error"),
@@ -791,19 +1370,64 @@ function TopologyPage() {
     });
   };
 
+  const handleRemoveTarget = (job: string, address: string) => {
+    saveExporters.mutate(removeExplicitTarget(exporters, job, address), {
+      onSuccess: () => showSnack("Target removed", "success"),
+      onError: (err) => showSnack(err.message, "error"),
+    });
+  };
+
+  const handleAddTarget = (job: string, address: string, path?: string) => {
+    if (!job) return;
+    saveExporters.mutate(addExplicitTarget(exporters, job, address, path), {
+      onSuccess: () => showSnack(`Added ${address} to ${job}`, "success"),
+      onError: (err) => showSnack(err.message, "error"),
+    });
+  };
+
+  const handleEditExporterByJob = (job: string) => {
+    const exp = exporters.find((e) => e.job === job);
+    if (exp) setEditExporterTarget(exp);
+  };
+
   return (
     <Box>
       <Box sx={{ mb: 3 }}>
         <Typography variant="h5" sx={{ fontWeight: 600 }}>
-          Observability Topology
+          Observability
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          Served config: <code>GET /integration/prometheus/scrape.yaml</code> ·{" "}
-          <code>GET /integration/prometheus/targets.json</code> (network-restricted)
+          Declare hosts and exporters, reconcile discovered targets, and ship a scrape config
+          to your Prometheus server.
         </Typography>
       </Box>
 
-      <LiveTargetsSection targets={targets} />
+      <OutputZone />
+
+      <Box sx={{ mb: 4 }}>
+        <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
+          Targets
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Down targets are still scraped — Prometheus owns up/down alerting.
+        </Typography>
+        <TargetsSection
+          targets={targets}
+          exporters={exporters}
+          onRemoveTarget={handleRemoveTarget}
+          onEditExporter={handleEditExporterByJob}
+          isRemoving={saveExporters.isPending}
+        />
+        <Box sx={{ mt: 3 }}>
+          <ScanPanel
+            knownHosts={knownHosts}
+            onAddTarget={handleAddTarget}
+            onAddHost={(host) => setAddHostFromIP(host)}
+            isAdding={saveExporters.isPending}
+          />
+        </Box>
+      </Box>
+
       <ExportersSection
         exporters={exporters}
         onAdd={() => setAddExporterOpen(true)}
@@ -859,6 +1483,16 @@ function TopologyPage() {
           isSubmitting={saveHosts.isPending}
         />
       )}
+      {addHostFromIP && (
+        <HostFormDialog
+          open
+          title="Add Host"
+          initialValues={{ name: "", ip: addHostFromIP, labelRows: [] }}
+          onClose={() => setAddHostFromIP(null)}
+          onSubmit={handleAddHost}
+          isSubmitting={saveHosts.isPending}
+        />
+      )}
       {editHostTarget && (
         <HostFormDialog
           open
@@ -897,6 +1531,6 @@ function TopologyPage() {
   );
 }
 
-export const Route = createFileRoute("/topology")({
-  component: TopologyPage,
+export const Route = createFileRoute("/observability")({
+  component: ObservabilityPage,
 });

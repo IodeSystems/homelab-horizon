@@ -425,3 +425,33 @@ export const TopologyDataSchema = z.object({
   targets: z.array(ExporterTargetSchema),
   knownHosts: z.array(z.string()),
 });
+
+// Topology scan (discovery) — probes a port/path across known + extra hosts.
+export const ScanResultSchema = z.object({
+  address: z.string(),
+  host: z.string(),
+  alive: z.boolean(),
+  configured: z.boolean(),
+});
+
+export const TopologyScanRespSchema = z.object({
+  port: z.number(),
+  path: z.string(),
+  results: z.array(ScanResultSchema),
+  knownHosts: z.array(z.string()),
+});
+
+// Service metrics-path scan
+export const ServiceScanSlotSchema = z.object({
+  slot: z.string().optional(),
+  address: z.string(),
+  path: z.string(),
+  ok: z.boolean(),
+});
+
+export const ServiceScanMetricsRespSchema = z.object({
+  name: z.string(),
+  suggestedPath: z.string().optional(),
+  candidates: z.array(z.string()),
+  slots: z.array(ServiceScanSlotSchema),
+});
