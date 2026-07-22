@@ -56,3 +56,22 @@ export async function apiFetch<T>(
 
   return data as T;
 }
+
+/**
+ * Fetch a plain-text/YAML/shell-script response from a path OUTSIDE the
+ * /api/v1 prefix (e.g. /integration/prometheus/scrape.yaml). Used for the
+ * generated Prometheus config + install script, which are served as raw
+ * text rather than JSON.
+ */
+export async function apiFetchText(path: string): Promise<string> {
+  const res = await fetch(path, { credentials: "include" });
+
+  if (res.status === 401) {
+    throw new ApiError(401, "Unauthorized");
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, res.statusText);
+  }
+
+  return res.text();
+}

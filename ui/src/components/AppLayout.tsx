@@ -42,7 +42,7 @@ const navItems: NavItem[] = [
   { icon: <VpnKeyIcon />, label: "VPN Clients", path: "/vpn" },
   { icon: <BlockIcon />, label: "IP Bans", path: "/bans" },
   { icon: <MonitorHeartIcon />, label: "Checks", path: "/checks" },
-  { icon: <HubIcon />, label: "Topology", path: "/topology" },
+  { icon: <HubIcon />, label: "Observability", path: "/observability" },
   { icon: <SettingsIcon />, label: "Settings", path: "/settings" },
 ];
 

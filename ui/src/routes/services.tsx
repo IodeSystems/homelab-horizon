@@ -38,6 +38,7 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import IntegrationInstructionsIcon from "@mui/icons-material/IntegrationInstructions";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import LanIcon from "@mui/icons-material/Lan";
+import SearchIcon from "@mui/icons-material/Search";
 import {
   useServices,
   useAddService,
@@ -48,9 +49,10 @@ import {
   useZones,
   useAddDomainSSL,
   useRemoveDomainSSL,
+  useScanServiceMetrics,
 } from "../api/hooks";
 import SyncButton from "../components/SyncButton";
-import type { Service, Zone } from "../api/types";
+import type { Service, Zone, ServiceScanMetricsResp } from "../api/types";
 import type { ServiceMutationInput } from "../api/hooks";
 
 function StatusDot({
@@ -666,6 +668,103 @@ function DomainCoverageList({
   );
 }
 
+// MetricsPathFields renders the metrics-path + bearer fields plus a "Scan
+// path" button that probes the service's live backend slot(s) for a working
+// Prometheus metrics path (POST /services/scan-metrics). Disabled when the
+// service is unsaved or has no reverse-proxy backend to probe.
+function MetricsPathFields({
+  path,
+  bearer,
+  onPathChange,
+  onBearerChange,
+  serviceName,
+  canScan,
+}: {
+  path: string;
+  bearer: string;
+  onPathChange: (v: string) => void;
+  onBearerChange: (v: string) => void;
+  serviceName?: string;
+  canScan: boolean;
+}) {
+  const scanMetrics = useScanServiceMetrics();
+  const [result, setResult] = useState<ServiceScanMetricsResp | null>(null);
+
+  const disabled = !serviceName || !canScan || scanMetrics.isPending;
+  const tooltip = !serviceName
+    ? "Save the service first"
+    : !canScan
+    ? "Needs a reverse-proxy backend to scan"
+    : "";
+
+  const handleScan = () => {
+    if (!serviceName) return;
+    scanMetrics.mutate(
+      { name: serviceName },
+      {
+        onSuccess: (resp) => {
+          setResult(resp);
+          if (resp.suggestedPath) onPathChange(resp.suggestedPath);
+        },
+      },
+    );
+  };
+
+  return (
+    <Box>
+      <Box sx={{ display: "flex", gap: 2 }}>
+        <TextField
+          label="Metrics path"
+          value={path}
+          onChange={(e) => onPathChange(e.target.value)}
+          size="small"
+          fullWidth
+          placeholder="/metrics"
+          helperText="Leave blank to use /metrics"
+        />
+        <TextField
+          label="Bearer token (optional)"
+          value={bearer}
+          onChange={(e) => onBearerChange(e.target.value)}
+          size="small"
+          fullWidth
+        />
+        <Tooltip title={tooltip}>
+          <span>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={scanMetrics.isPending ? <CircularProgress size={14} /> : <SearchIcon />}
+              onClick={handleScan}
+              disabled={disabled}
+              sx={{ whiteSpace: "nowrap", mt: 0.5 }}
+            >
+              Scan path
+            </Button>
+          </span>
+        </Tooltip>
+      </Box>
+      {scanMetrics.isError && (
+        <Typography variant="caption" color="error.main" sx={{ display: "block", mt: 0.5 }}>
+          {scanMetrics.error instanceof Error ? scanMetrics.error.message : "Scan failed"}
+        </Typography>
+      )}
+      {result && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+          {result.slots.length === 0
+            ? "No slots responded."
+            : result.slots
+                .map(
+                  (s) =>
+                    `${s.slot ? s.slot + " " : ""}${s.address} ${s.path} ${s.ok ? "✓" : "✗"}`,
+                )
+                .join(" · ")}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
 function ServiceFormDialog({
   open,
   onClose,
@@ -675,6 +774,7 @@ function ServiceFormDialog({
   title,
   localInterface,
   publicIP,
+  serviceName,
 }: {
   open: boolean;
   onClose: () => void;
@@ -684,6 +784,10 @@ function ServiceFormDialog({
   title: string;
   localInterface: string;
   publicIP: string;
+  // Original saved name of the service being edited — undefined when adding
+  // a new (unsaved) service. Metrics-path scanning probes the live backend,
+  // so it only makes sense once the service (and its backend) exist.
+  serviceName?: string;
 }) {
   const [form, setForm] = useState<ServiceFormState>(initialValues);
   // Timeouts start expanded only when the service already overrides one.
@@ -1000,24 +1104,16 @@ function ServiceFormDialog({
           <Typography variant="body2">Prometheus metrics</Typography>
         </Box>
         {form.metricsEnabled && (
-          <Box sx={{ display: "flex", gap: 2 }}>
-            <TextField
-              label="Metrics path"
-              value={form.metricsPath}
-              onChange={(e) => update("metricsPath", e.target.value)}
-              size="small"
-              fullWidth
-              placeholder="/metrics"
-              helperText="Leave blank to use /metrics"
-            />
-            <TextField
-              label="Bearer token (optional)"
-              value={form.metricsBearer}
-              onChange={(e) => update("metricsBearer", e.target.value)}
-              size="small"
-              fullWidth
-            />
-          </Box>
+          <MetricsPathFields
+            path={form.metricsPath}
+            bearer={form.metricsBearer}
+            onPathChange={(v) => update("metricsPath", v)}
+            onBearerChange={(v) => update("metricsBearer", v)}
+            serviceName={serviceName}
+            canScan={
+              form.proxyEnabled && form.proxyMode === "proxy" && !!form.proxyBackend.trim()
+            }
+          />
         )}
       </DialogContent>
       <DialogActions>
@@ -1948,6 +2044,7 @@ function ServicesPage() {
           isSubmitting={editMutation.isPending}
           localInterface={localInterface}
           publicIP={publicIP}
+          serviceName={editTarget.name}
         />
       )}
 

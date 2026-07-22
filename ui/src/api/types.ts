@@ -82,6 +82,11 @@ export type {
   Exporter,
   ExporterTargetResp,
   TopologyResp as TopologyData,
+  ScanResult,
+  TopologyScanResp,
+  ServiceScanMetricsRequest,
+  ServiceScanSlot,
+  ServiceScanMetricsResp,
 } from "./generated-types";
 
 // Apt-audit entries aren't in apitypes (internal-only struct in the server
