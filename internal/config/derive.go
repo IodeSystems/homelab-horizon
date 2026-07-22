@@ -582,11 +582,15 @@ func (c *Config) DeriveKnownHostIPs() []string {
 	return out
 }
 
-// ExporterTarget is one expanded, renderable exporter endpoint.
+// ExporterTarget is one expanded exporter endpoint. Path is the primary/first
+// candidate; Paths is the full ordered candidate set (>1 for multi-path rules,
+// which hz probes to pick the live path per target). Servers that resolve a live
+// path override Path with it.
 type ExporterTarget struct {
 	Job     string
 	Address string // host:port
 	Path    string
+	Paths   []string
 	Bearer  string
 	Labels  map[string]string // static + per-host declared labels (job/instance are set by Prometheus)
 }
@@ -624,7 +628,7 @@ func (c *Config) DeriveExporterTargets() []ExporterTarget {
 		if e.Job == "" {
 			continue
 		}
-		path := e.MetricsPath()
+		paths := e.PathList()
 
 		// emit adds one target, merging declared host labels (by IP) under the
 		// per-target labels already set (caller/exporter labels win).
@@ -647,7 +651,7 @@ func (c *Config) DeriveExporterTargets() []ExporterTarget {
 					}
 				}
 			}
-			out = append(out, ExporterTarget{Job: e.Job, Address: addr, Path: path, Bearer: e.Bearer, Labels: labels})
+			out = append(out, ExporterTarget{Job: e.Job, Address: addr, Path: paths[0], Paths: paths, Bearer: e.Bearer, Labels: labels})
 		}
 
 		seen := map[string]bool{}

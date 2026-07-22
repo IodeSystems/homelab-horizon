@@ -26,7 +26,7 @@ func expositionAt(path string) *httptest.Server {
 }
 
 func adminServer(cfg *config.Config) (*Server, *http.Cookie) {
-	s := &Server{csrfSecret: "test-csrf", metrics: integration.NewDetector(), exporterAlive: map[string]bool{}}
+	s := &Server{csrfSecret: "test-csrf", metrics: integration.NewDetector(), exporterStatus: map[string]exporterProbe{}}
 	s.config.Store(cfg)
 	return s, &http.Cookie{Name: "session", Value: s.signCookie("admin")}
 }

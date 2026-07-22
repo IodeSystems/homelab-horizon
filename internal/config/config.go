@@ -267,6 +267,12 @@ type Config struct {
 	// `ports next`/`ports list` (and any /api/v1/ports client) must skip when
 	// allocating. See internal/config/ports.go.
 	PortExclusions []PortRange `json:"port_exclusions,omitempty"`
+
+	// ScrapeToken is a read-only bearer that authorizes the Prometheus discovery
+	// endpoints (/integration/prometheus/{scrape.yaml,targets.json}). Generated
+	// on first use; rotatable. Separate from the admin token so a scraper never
+	// holds admin rights. Empty until first requested.
+	ScrapeToken string `json:"scrape_token,omitempty"`
 }
 
 // HostDecl is an operator-declared host in the topology, beyond the hosts hz
@@ -300,12 +306,37 @@ type Exporter struct {
 	Labels  map[string]string `json:"labels,omitempty"`  // static labels applied to every target in this job
 }
 
-// MetricsPath returns the exporter's metrics path, defaulting to "/metrics".
+// MetricsPath returns the exporter's first/primary metrics path, defaulting to
+// "/metrics". Use PathList for the full candidate set (multi-path rules).
 func (e *Exporter) MetricsPath() string {
-	if e == nil || e.Path == "" {
-		return "/metrics"
+	if ps := e.PathList(); len(ps) > 0 {
+		return ps[0]
 	}
-	return e.Path
+	return "/metrics"
+}
+
+// PathList returns the exporter's metrics-path candidates, parsed from the
+// comma-separated Path field (e.g. "/metrics,/api/metrics"). Blanks are dropped;
+// an empty Path yields ["/metrics"]. hz probes candidates in order and scrapes
+// the first that responds per target.
+func (e *Exporter) PathList() []string {
+	if e == nil || strings.TrimSpace(e.Path) == "" {
+		return []string{"/metrics"}
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range strings.Split(e.Path, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return []string{"/metrics"}
+	}
+	return out
 }
 
 // EffectiveMode returns the exporter's mode, inferring one for back-compat with

@@ -58,12 +58,14 @@ func (s *Server) handleAPITopology(w http.ResponseWriter, r *http.Request) {
 		resp.Exporters = append(resp.Exporters, exporterToAPI(e))
 	}
 	for _, t := range cfg.DeriveExporterTargets() {
+		pr := s.exporterProbeFor(t.Job, t.Address, t.Path)
 		resp.Targets = append(resp.Targets, apitypes.ExporterTargetResp{
 			Job:     t.Job,
 			Address: t.Address,
-			Path:    t.Path,
+			Path:    pr.Path,
+			Paths:   t.Paths,
 			Labels:  t.Labels,
-			Alive:   s.exporterAliveFor(t.Address),
+			Alive:   pr.Alive,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")

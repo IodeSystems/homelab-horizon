@@ -159,7 +159,8 @@ type Exporter struct {
 type ExporterTargetResp struct {
 	Job     string            `json:"job"`
 	Address string            `json:"address"`
-	Path    string            `json:"path"`
+	Path    string            `json:"path"`            // resolved live path (or primary candidate)
+	Paths   []string          `json:"paths,omitempty"` // candidate paths (>1 for multi-path rules)
 	Labels  map[string]string `json:"labels,omitempty"`
 	Alive   bool              `json:"alive"`
 }
@@ -171,6 +172,11 @@ type TopologyResp struct {
 	Exporters  []Exporter           `json:"exporters"`
 	Targets    []ExporterTargetResp `json:"targets"`
 	KnownHosts []string             `json:"knownHosts"` // all host IPs hz knows (derived + declared); the "*" population
+}
+
+// ScrapeTokenResp carries the read-only Prometheus scrape token.
+type ScrapeTokenResp struct {
+	Token string `json:"token"`
 }
 
 // TopologyHostsRequest / TopologyExportersRequest replace the whole list

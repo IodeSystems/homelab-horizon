@@ -104,12 +104,12 @@ func TestScrapeYAML(t *testing.T) {
 
 	for _, want := range []string{
 		"job_name: ragtag",
-		"metrics_path: /metrics",
+		"__metrics_path__: /metrics",
 		"10.0.0.5:7700",
 		"slot: current",
 		"slot: next",
 		"job_name: secured",
-		"metrics_path: /m",
+		"__metrics_path__: /m",
 		"credentials: tok",
 	} {
 		if !strings.Contains(out, want) {
