@@ -35,16 +35,19 @@ Refactor `ScrapeYAML`/`HTTPSDTargets` to consume `[]ScrapeJob{Name,MetricsPath,B
 - ✅ **Probe status** — `refreshExporterStatus` on the 60s loop + `kickExporterStatus` after writes; `exporterAlive` map; surfaced via GET /api/v1/topology (not a serving gate).
 - ✅ **API write path** — apitypes DTOs (HostDecl/Exporter/ExporterTargetResp/TopologyResp), GET /api/v1/topology + PUT /topology/{hosts,exporters} (whole-list replace), tygo regenerated. `make check` 0 issues.
 - ◐ **hz CLI** — `hz host {list,add,rm}`, `hz exporter {list,add,rm}` (subagent).
-- ◐ **UI** — topology route: hosts + exporters editor + per-target status chips (subagent).
-- ◐ **Docs** — `~/doc` deployment.md/standards.md (subagent).
+- ✅ **UI** — topology route: hosts + exporters editor + per-target status chips (`observability.tsx`).
+- ✅ **Docs** — `~/doc` deployment.md §Metrics scrape + standards.md METRICS-4/EDGE-5 (exporter modes, hosts). Committed `f9561f0`.
 - ◻ **MCP** — host/exporter tools. Deferred (optional).
 
 ## Hardening pass (user, 2026-07-21)
 - ✅ **Probe hardening** — verify body looks like exposition (HELP/TYPE or sample line); reject catchall/SPA 200s. `looksLikeExposition`.
+- ✅ **Probe false-positive fix (user, 2026-07-21)** — `looksLikeExposition` returned true on the *first* matching sample line, so a catchall/status page carrying one `word 123` line passed (e.g. `Service is running\nuptime 12345`); and the value regex accepted junk like an IP `192.168.1.1`. Now EVERY non-comment/non-blank line must be a valid sample (spec: all content lines are samples) and the value uses a strict float grammar. Tests: exposition_test.go mixed-content cases.
+- ✅ **Exporter re-probe button (user, 2026-07-21)** — on-demand sync probe instead of waiting for the 60s loop. `POST /api/v1/topology/reprobe` (admin) → refresh + return TopologyResp; UI button in Exporters header (`useReprobeExporters`, seeds cache).
 - ✅ **Multi-path rules** — `Exporter.Path` CSV candidates; probe-resolved per target; per-target `__metrics_path__` (renderer refactored off job-level path). Falls back to first candidate (down) if none respond.
 - ✅ **Scrape-token auth** — scrape.yaml/targets.json require admin OR read-only scrape token (header or `?token=`); dropped RFC1918-open (closed bearer leak). setup.sh admin-only + bakes token into cron. `GET/POST /api/v1/integration/scrape-token`. Tests: scrape_auth_test.go.
-- ◐ **UI** — exporter path CSV hint + resolved/candidate path display; Output zone: setup.sh is admin-only (drop curl one-liner → copy-and-run), scrape-token show/rotate (subagent).
-- ◐ **Docs** — auth + multi-path + probe (subagent).
+- ✅ **UI** — exporter path CSV hint + resolved/candidate path display (`TargetPath`); Output zone: setup.sh admin-only copy-and-run, scrape-token show/rotate. Shipped `49d0f05`.
+- ✅ **Refresh timer** — served setup.sh installs `hz-scrape-refresh.{sh,service,timer}` (systemd, 2min, bearer-baked) re-fetching scrape.yaml + reloading Prometheus on change (`handlers_integration.go:187-223`).
+- ✅ **Docs** — auth + multi-path + probe: deployment.md 264-347, standards METRICS-4. Verified accurate vs shipped code. Committed `f9561f0`.
 - ⚠️ **Re-wire note**: the earlier unauthenticated prometheus.yml/refresh script (scratchpad) now 401s against token-gated scrape.yaml. Re-wire via the NEW served setup.sh (admin, token-baked): the refresh cron carries `Authorization: Bearer <scrape-token>`.
 
 ## Simplified model pass (user, 2026-07-21) — supersedes the scan/reconciliation UI
@@ -63,7 +66,7 @@ endpoint-scan/reconciliation panel. Keep services-page path scan + the output zo
 Decisions: scan population = known hosts + typed extras (no CIDR sweep); service path candidates = `/metrics` then `/api/metrics`; install script served by hz + copyable in UI; keep always-emit + curate (no regression).
 - ✅ **Backend** — `POST /api/v1/topology/scan` (probe known∪extras at port/path, mark alive+configured), `POST /api/v1/services/scan-metrics` (probe backend slot(s) across candidate paths → suggestedPath), `GET /integration/prometheus/setup.sh` (served bootstrap, hz URL baked in). Tests: topology_scan_test.go (service scan finds /api/metrics, topology scan marks live+unconfigured, admin gate). setup.sh render bash-n verified. `make check` 0 issues.
 - ◐ **UI redesign** — rename Topology→Observability; Zone1 scrape.yaml + setup.sh copy; Zone2 reconciliation (present&added / added-but-missing→remove / present-but-not-added→add + add-host) + scan control; Zone3 editors; services page metrics-path scan button (subagent).
-- ◻ **Docs** — note setup.sh endpoint + scan/reconciliation + curl|bash install one-liner.
+- ✅ **Docs** — setup.sh endpoint (admin-only) + scan-metrics documented (deployment.md 279,342). Reconciliation dropped (superseded); curl|bash one-liner intentionally removed (admin-only gate) and doc says so.
 - ◻ **CLI scan** (optional) — `hz exporter scan --job --port [--host …]`. Not requested; deferred.
 
 ## Blocking decisions (user owns)

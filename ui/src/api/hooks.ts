@@ -1171,6 +1171,22 @@ export function useSaveTopologyExporters() {
   });
 }
 
+// Force a synchronous exporter re-probe (rather than waiting for the 60s
+// background loop). Returns the refreshed topology; seed the cache with it.
+export function useReprobeExporters() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<TopologyData>("/topology/reprobe", {
+        method: "POST",
+        schema: TopologyDataSchema,
+      }),
+    onSuccess: (data) => {
+      qc.setQueryData(["topology"], data);
+    },
+  });
+}
+
 // scrape.yaml / setup.sh are served outside /api/v1 as raw text, so they use
 // apiFetchText (raw fetch) rather than the JSON apiFetch wrapper.
 export function useScrapeYaml() {
