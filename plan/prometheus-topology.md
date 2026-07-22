@@ -39,6 +39,13 @@ Refactor `ScrapeYAML`/`HTTPSDTargets` to consume `[]ScrapeJob{Name,MetricsPath,B
 - ◐ **Docs** — `~/doc` deployment.md/standards.md (subagent).
 - ◻ **MCP** — host/exporter tools. Deferred (optional).
 
+## Reconciliation / discovery pass (user, 2026-07-21)
+Decisions: scan population = known hosts + typed extras (no CIDR sweep); service path candidates = `/metrics` then `/api/metrics`; install script served by hz + copyable in UI; keep always-emit + curate (no regression).
+- ✅ **Backend** — `POST /api/v1/topology/scan` (probe known∪extras at port/path, mark alive+configured), `POST /api/v1/services/scan-metrics` (probe backend slot(s) across candidate paths → suggestedPath), `GET /integration/prometheus/setup.sh` (served bootstrap, hz URL baked in). Tests: topology_scan_test.go (service scan finds /api/metrics, topology scan marks live+unconfigured, admin gate). setup.sh render bash-n verified. `make check` 0 issues.
+- ◐ **UI redesign** — rename Topology→Observability; Zone1 scrape.yaml + setup.sh copy; Zone2 reconciliation (present&added / added-but-missing→remove / present-but-not-added→add + add-host) + scan control; Zone3 editors; services page metrics-path scan button (subagent).
+- ◻ **Docs** — note setup.sh endpoint + scan/reconciliation + curl|bash install one-liner.
+- ◻ **CLI scan** (optional) — `hz exporter scan --job --port [--host …]`. Not requested; deferred.
+
 ## Blocking decisions (user owns)
 - Consumption on this box: switch prometheus.yml to `scrape_config_files: [hz.yml]` + a refresh cron (`curl scrape.yaml > hz.yml`), OR keep the http_sd job (targets.json) and let exporters flow through it too. http_sd can't carry a `scrape_config_files`-style multi-job doc; exporters via http_sd need per-target `job` labels. Decide before wiring this box.
 

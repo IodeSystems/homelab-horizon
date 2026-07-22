@@ -3,11 +3,17 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/integration"
 )
 
 // --- config <-> apitypes mapping (plain data, field-for-field) ---------------
@@ -130,6 +136,159 @@ func (s *Server) handleAPITopologyExporters(w http.ResponseWriter, r *http.Reque
 	}
 	s.kickExporterStatus()
 	writeJSONOK(w)
+}
+
+// metricsPathCandidates is the ordered set the service metrics-path scan tries.
+var metricsPathCandidates = []string{"/metrics", "/api/metrics"}
+
+// handleAPITopologyScan probes a port/path across the known hosts plus any typed
+// extra hosts, returning which respond and which are already configured — the
+// discovery half of the reconciliation view. Admin-only.
+func (s *Server) handleAPITopologyScan(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	var req apitypes.TopologyScanRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	if req.Port <= 0 {
+		writeJSONError(w, http.StatusBadRequest, "port is required")
+		return
+	}
+	path := req.Path
+	if path == "" {
+		path = "/metrics"
+	}
+	cfg := s.cfg()
+
+	// Population: known hosts + typed extras (names resolved to IPs), deduped.
+	ipByName := map[string]string{}
+	for _, h := range cfg.Hosts {
+		if h.Name != "" && h.IP != "" {
+			ipByName[h.Name] = h.IP
+		}
+	}
+	seen := map[string]bool{}
+	var hosts []string
+	addHost := func(h string) {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			return
+		}
+		if ip, ok := ipByName[h]; ok {
+			h = ip
+		}
+		if !seen[h] {
+			seen[h] = true
+			hosts = append(hosts, h)
+		}
+	}
+	for _, h := range cfg.DeriveKnownHostIPs() {
+		addHost(h)
+	}
+	for _, h := range req.Hosts {
+		addHost(h)
+	}
+
+	// Addresses already configured as exporter targets (added vs addable).
+	configured := map[string]bool{}
+	for _, t := range cfg.DeriveExporterTargets() {
+		configured[t.Address] = true
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	results := make([]apitypes.ScanResult, len(hosts))
+	var wg sync.WaitGroup
+	for i, h := range hosts {
+		addr := net.JoinHostPort(h, strconv.Itoa(req.Port))
+		results[i] = apitypes.ScanResult{Address: addr, Host: h, Configured: configured[addr]}
+		wg.Add(1)
+		go func(i int, addr string) {
+			defer wg.Done()
+			alive := s.metrics.Probe(ctx, integration.Target{Address: addr, MetricsPath: path})
+			results[i].Alive = alive
+		}(i, addr)
+	}
+	wg.Wait()
+
+	sort.Slice(results, func(i, j int) bool { return results[i].Address < results[j].Address })
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(apitypes.TopologyScanResp{
+		Port: req.Port, Path: path, Results: results, KnownHosts: cfg.DeriveKnownHostIPs(),
+	})
+}
+
+// handleAPIServiceScanMetrics discovers a service's metrics path by probing its
+// backend slot(s) at the candidate paths in order; the first path any slot
+// answers on is suggested. Admin-only.
+func (s *Server) handleAPIServiceScanMetrics(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	var req apitypes.ServiceScanMetricsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	var svc *config.Service
+	for i := range s.cfg().Services {
+		if s.cfg().Services[i].Name == req.Name {
+			svc = &s.cfg().Services[i]
+			break
+		}
+	}
+	if svc == nil {
+		writeJSONError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if svc.Proxy == nil || svc.Proxy.Backend == "" {
+		writeJSONError(w, http.StatusBadRequest, "service has no proxy backend to scan")
+		return
+	}
+
+	// Slots to probe: single backend, or blue-green current+next.
+	type slot struct{ name, addr string }
+	slots := []slot{{"", svc.Proxy.Backend}}
+	if svc.Proxy.Deploy != nil && svc.Proxy.Deploy.NextBackend != "" {
+		slots = []slot{{"current", svc.Proxy.Backend}, {"next", svc.Proxy.Deploy.NextBackend}}
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	resp := apitypes.ServiceScanMetricsResp{Name: svc.Name, Candidates: metricsPathCandidates}
+	for _, path := range metricsPathCandidates {
+		var slotResults []apitypes.ServiceScanSlot
+		anyOK := false
+		for _, sl := range slots {
+			ok := s.metrics.Probe(ctx, integration.Target{Address: sl.addr, MetricsPath: path})
+			anyOK = anyOK || ok
+			slotResults = append(slotResults, apitypes.ServiceScanSlot{Slot: sl.name, Address: sl.addr, Path: path, OK: ok})
+		}
+		if anyOK {
+			resp.SuggestedPath = path
+			resp.Slots = slotResults
+			break
+		}
+		// Keep the last attempt's detail if nothing ever responds.
+		resp.Slots = slotResults
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // kickExporterStatus refreshes exporter liveness off the request path so a newly

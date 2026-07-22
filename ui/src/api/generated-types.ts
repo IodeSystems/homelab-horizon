@@ -181,6 +181,58 @@ export interface TopologyHostsRequest {
 export interface TopologyExportersRequest {
   exporters: Exporter[];
 }
+/**
+ * TopologyScanRequest probes a port/path across the known hosts plus any extra
+ * hosts the operator types, to discover live exporter endpoints that may not yet
+ * be configured ("present but not added").
+ */
+export interface TopologyScanRequest {
+  port: number /* int */;
+  path?: string; // default /metrics
+  hosts?: string[]; // extra hosts (name/IP) to probe beyond the known set
+}
+/**
+ * ScanResult is one probed candidate. Configured is true when the address is
+ * already an exporter target (so the UI can mark added vs addable).
+ */
+export interface ScanResult {
+  address: string;
+  host: string;
+  alive: boolean;
+  configured: boolean;
+}
+export interface TopologyScanResp {
+  port: number /* int */;
+  path: string;
+  results: ScanResult[];
+  knownHosts: string[];
+}
+/**
+ * ServiceScanMetricsRequest asks hz to discover a service's metrics path by
+ * probing its backend slot(s) at the standard candidate paths.
+ */
+export interface ServiceScanMetricsRequest {
+  name: string;
+}
+/**
+ * ServiceScanSlot is the probe result for one backend slot at the chosen path.
+ */
+export interface ServiceScanSlot {
+  slot?: string; // "current"/"next" for blue-green; "" for single-backend
+  address: string;
+  path: string;
+  ok: boolean;
+}
+/**
+ * ServiceScanMetricsResp reports the discovered metrics path (first candidate a
+ * slot answered on) and the per-slot detail at that path.
+ */
+export interface ServiceScanMetricsResp {
+  name: string;
+  suggestedPath?: string; // empty if nothing responded
+  candidates: string[]; // paths tried, in order
+  slots: ServiceScanSlot[];
+}
 export interface DomainResp {
   domain: string;
   zoneName: string;
