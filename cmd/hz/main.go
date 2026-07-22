@@ -99,7 +99,8 @@ EXPORTER FLAGS (add)
   --port N                  port mode: port to expand across --host (default --host '*')
   --host H                  port mode: host name/IP (repeatable); '*' = all known hosts
   --target HOST:PORT        static mode: explicit scrape target (repeatable)
-  --path P                  metrics path (default /metrics); service mode e.g. /api/metrics
+  --path P                  metrics path(s), CSV for candidates hz probes in order
+                            (default /metrics; e.g. /metrics,/api/metrics)
   --bearer TOK              optional bearer token
   --label k=v               label (repeatable)
   --sync                    trigger a global sync after the mutation

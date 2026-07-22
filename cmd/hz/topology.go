@@ -236,7 +236,7 @@ func exporterAdd(c *client, args []string) error {
 	port := fs.Int("port", 0, "port mode: port to expand across --host entries")
 	var hosts multiFlag
 	fs.Var(&hosts, "host", "port mode: host name/IP to expand --port across (repeatable); '*' = all known hosts")
-	path := fs.String("path", "", "metrics path (default /metrics)")
+	path := fs.String("path", "", "metrics path(s); CSV probes candidates in order, e.g. /metrics,/api/metrics")
 	bearer := fs.String("bearer", "", "optional bearer token")
 	var labels multiFlag
 	fs.Var(&labels, "label", "label key=value (repeatable)")

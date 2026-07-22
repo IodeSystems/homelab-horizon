@@ -159,3 +159,26 @@ func TestDeriveKnownHostIPsIncludesDeclared(t *testing.T) {
 		t.Errorf("known hosts should include derived + declared, got %v", ips)
 	}
 }
+
+func TestExporterPathListMultiAndDedup(t *testing.T) {
+	e := Exporter{Path: "/metrics, /api/metrics ,/metrics"}
+	got := e.PathList()
+	if len(got) != 2 || got[0] != "/metrics" || got[1] != "/api/metrics" {
+		t.Errorf("PathList = %v, want [/metrics /api/metrics]", got)
+	}
+	if p := (&Exporter{}).PathList(); len(p) != 1 || p[0] != "/metrics" {
+		t.Errorf("empty PathList should default to [/metrics], got %v", p)
+	}
+}
+
+func TestDeriveExporterTargetsCarriesCandidatePaths(t *testing.T) {
+	cfg := &Config{
+		Services:  []Service{{Name: "app", Proxy: &ProxyConfig{Backend: "10.0.0.9:8300"}}},
+		Exporters: []Exporter{{Job: "svc", Mode: "service", Path: "/metrics,/api/metrics"}},
+	}
+	got := cfg.DeriveExporterTargets()
+	tg := findTarget(got, "10.0.0.9:8300")
+	if tg == nil || len(tg.Paths) != 2 || tg.Path != "/metrics" {
+		t.Errorf("target should carry both candidate paths, got %+v", tg)
+	}
+}

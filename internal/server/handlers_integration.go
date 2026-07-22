@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
-	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/integration"
 )
@@ -52,12 +54,22 @@ func (s *Server) refreshMetricsTargets() {
 	s.refreshExporterStatus(ctx)
 }
 
-// refreshExporterStatus probes every configured exporter target concurrently and
-// replaces the liveness map. Status-only: a dead target stays in the served
-// scrape config so Prometheus can alert on up==0.
+// exporterProbe is the resolved probe state for one exporter target: the live
+// metrics path (or the first candidate when none respond) and whether it answered.
+type exporterProbe struct {
+	Path  string
+	Alive bool
+}
+
+func exporterKey(job, addr string) string { return job + "|" + addr }
+
+// refreshExporterStatus probes every configured exporter target concurrently. For
+// a multi-path rule it tries each candidate path in order and records the first
+// that responds (the resolved path the served config then scrapes). Status-only:
+// a dead target stays in the served config so Prometheus can alert on up==0.
 func (s *Server) refreshExporterStatus(ctx context.Context) {
 	targets := s.cfg().DeriveExporterTargets()
-	next := make(map[string]bool, len(targets))
+	next := make(map[string]exporterProbe, len(targets))
 	var (
 		wg sync.WaitGroup
 		mu sync.Mutex
@@ -66,25 +78,34 @@ func (s *Server) refreshExporterStatus(ctx context.Context) {
 		wg.Add(1)
 		go func(t config.ExporterTarget) {
 			defer wg.Done()
-			alive := s.metrics.Probe(ctx, integration.Target{Address: t.Address, MetricsPath: t.Path, Bearer: t.Bearer})
+			resolved, alive := t.Path, false
+			for _, p := range t.Paths {
+				if s.metrics.Probe(ctx, integration.Target{Address: t.Address, MetricsPath: p, Bearer: t.Bearer}) {
+					resolved, alive = p, true
+					break
+				}
+			}
 			mu.Lock()
-			next[t.Address] = alive
+			next[exporterKey(t.Job, t.Address)] = exporterProbe{Path: resolved, Alive: alive}
 			mu.Unlock()
 		}(t)
 	}
 	wg.Wait()
 
 	s.exporterMu.Lock()
-	s.exporterAlive = next
+	s.exporterStatus = next
 	s.exporterMu.Unlock()
 }
 
-// exporterAliveFor returns the last probe result for an exporter target address
-// (false if never probed).
-func (s *Server) exporterAliveFor(addr string) bool {
+// exporterProbeFor returns the resolved probe state for a target, falling back to
+// the given path with alive=false when it hasn't been probed yet.
+func (s *Server) exporterProbeFor(job, addr, fallbackPath string) exporterProbe {
 	s.exporterMu.RLock()
 	defer s.exporterMu.RUnlock()
-	return s.exporterAlive[addr]
+	if p, ok := s.exporterStatus[exporterKey(job, addr)]; ok {
+		return p
+	}
+	return exporterProbe{Path: fallbackPath, Alive: false}
 }
 
 // scrapeJobs assembles the full set of Prometheus jobs hz serves: probed-healthy
@@ -108,9 +129,12 @@ func (s *Server) exporterJobs() []integration.ScrapeJob {
 		if !ok {
 			i = len(jobs)
 			idx[t.Job] = i
-			jobs = append(jobs, integration.ScrapeJob{Name: t.Job, MetricsPath: t.Path, Bearer: t.Bearer})
+			jobs = append(jobs, integration.ScrapeJob{Name: t.Job, Bearer: t.Bearer})
 		}
-		jobs[i].Targets = append(jobs[i].Targets, integration.ScrapeTarget{Address: t.Address, Labels: t.Labels})
+		// Use the probe-resolved live path for multi-path rules (falls back to
+		// the primary candidate before the first probe completes).
+		pr := s.exporterProbeFor(t.Job, t.Address, t.Path)
+		jobs[i].Targets = append(jobs[i].Targets, integration.ScrapeTarget{Address: t.Address, Path: pr.Path, Labels: t.Labels})
 	}
 	return jobs
 }
@@ -125,6 +149,7 @@ const promSetupScript = `#!/usr/bin/env bash
 set -euo pipefail
 
 HZ_URL="%s"
+HZ_TOKEN="%s"
 PROM_DIR="/etc/prometheus"
 PROM_YML="$PROM_DIR/prometheus.yml"
 HZ_YML="$PROM_DIR/hz.yml"
@@ -136,7 +161,7 @@ command -v promtool >/dev/null || { echo "promtool not found"; exit 1; }
 
 echo "==> seeding $HZ_YML from hz"
 tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
-curl -fsS "$HZ_URL" | tee "$tmp" >/dev/null
+curl -fsS -H "Authorization: Bearer $HZ_TOKEN" "$HZ_URL" | tee "$tmp" >/dev/null
 grep -q 'scrape_configs:' "$tmp" || { echo "hz returned unexpected content"; exit 1; }
 install -m0644 "$tmp" "$HZ_YML"
 
@@ -164,7 +189,7 @@ install -m0755 /dev/stdin "$REFRESH_BIN" <<REFRESH
 #!/bin/bash
 set -euo pipefail
 DEST="$HZ_YML"; TMP="\$(mktemp)"; trap 'rm -f "\$TMP"' EXIT
-curl -fsS "$HZ_URL" -o "\$TMP"
+curl -fsS -H "Authorization: Bearer $HZ_TOKEN" "$HZ_URL" -o "\$TMP"
 grep -q 'scrape_configs:' "\$TMP" || exit 0
 if ! cmp -s "\$TMP" "\$DEST"; then
   install -m0644 "\$TMP" "\$DEST"; systemctl reload prometheus
@@ -199,23 +224,96 @@ systemctl reload prometheus
 echo "done. see Prometheus > Status > Targets"
 `
 
+// handleIntegrationScrapeToken (admin) returns the read-only scrape token,
+// creating one on GET if absent; POST rotates it. The token authorizes the
+// Prometheus discovery endpoints.
+func (s *Server) handleIntegrationScrapeToken(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method == http.MethodPost {
+		var tok string
+		if err := s.updateConfig(func(cfg *config.Config) {
+			cfg.ScrapeToken = config.GenerateDeployToken()
+			tok = cfg.ScrapeToken
+		}); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, apitypes.ScrapeTokenResp{Token: tok})
+		return
+	}
+	tok, err := s.ensureScrapeToken()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, apitypes.ScrapeTokenResp{Token: tok})
+}
+
 // handleIntegrationSetupScript serves the Prometheus bootstrap script for this hz
-// instance (its scrape.yaml URL baked in). Pipe to sudo bash. Network-restricted.
+// instance (its scrape.yaml URL and scrape token baked in). Admin-only — it
+// embeds the read-only scrape token, so it must not be handed to every LAN
+// client. Pipe to sudo bash on the Prometheus box.
 func (s *Server) handleIntegrationSetupScript(w http.ResponseWriter, r *http.Request) {
-	if !s.isLocalOrAdmin(r) {
-		writeJSONError(w, http.StatusForbidden, "Forbidden")
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	token, err := s.ensureScrapeToken()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not provision scrape token")
 		return
 	}
 	scrapeURL := s.integrationBaseURL(r) + "/integration/prometheus/scrape.yaml"
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
-	_, _ = fmt.Fprintf(w, promSetupScript, scrapeURL)
+	_, _ = fmt.Fprintf(w, promSetupScript, scrapeURL, token)
+}
+
+// requestBearer returns the token from an Authorization: Bearer header, or the
+// ?token= query param (so Prometheus's http_sd URL can carry it).
+func requestBearer(r *http.Request) string {
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+		return strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
+	}
+	return r.URL.Query().Get("token")
+}
+
+// isAdminOrScrapeToken authorizes the Prometheus discovery endpoints: an admin
+// session, or a valid read-only scrape token. Unlike the rest of the topology
+// surface there is NO blanket LAN allow — the served config may embed per-target
+// bearer credentials, so it must not be readable by every RFC1918 client.
+func (s *Server) isAdminOrScrapeToken(r *http.Request) bool {
+	if s.isAdmin(r) {
+		return true
+	}
+	st := s.cfg().ScrapeToken
+	tok := requestBearer(r)
+	return st != "" && tok != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(st)) == 1
+}
+
+// ensureScrapeToken returns the scrape token, generating and persisting one on
+// first use.
+func (s *Server) ensureScrapeToken() (string, error) {
+	if t := s.cfg().ScrapeToken; t != "" {
+		return t, nil
+	}
+	var tok string
+	err := s.updateConfig(func(cfg *config.Config) {
+		if cfg.ScrapeToken == "" {
+			cfg.ScrapeToken = config.GenerateDeployToken()
+		}
+		tok = cfg.ScrapeToken
+	})
+	return tok, err
 }
 
 // handleIntegrationPromScrape serves a Prometheus scrape_configs document for all
-// currently-compatible services plus configured exporters. Network-restricted
-// (local/VPN/admin).
+// currently-compatible services plus configured exporters. Requires an admin
+// session or the scrape token.
 func (s *Server) handleIntegrationPromScrape(w http.ResponseWriter, r *http.Request) {
-	if !s.isLocalOrAdmin(r) {
+	if !s.isAdminOrScrapeToken(r) {
 		writeJSONError(w, http.StatusForbidden, "Forbidden")
 		return
 	}
@@ -224,10 +322,10 @@ func (s *Server) handleIntegrationPromScrape(w http.ResponseWriter, r *http.Requ
 }
 
 // handleIntegrationPromTargets serves the Prometheus http_sd_config JSON for all
-// currently-compatible services plus configured exporters. Network-restricted
-// (local/VPN/admin).
+// currently-compatible services plus configured exporters. Requires an admin
+// session or the scrape token.
 func (s *Server) handleIntegrationPromTargets(w http.ResponseWriter, r *http.Request) {
-	if !s.isLocalOrAdmin(r) {
+	if !s.isAdminOrScrapeToken(r) {
 		writeJSONError(w, http.StatusForbidden, "Forbidden")
 		return
 	}
@@ -238,24 +336,4 @@ func (s *Server) handleIntegrationPromTargets(w http.ResponseWriter, r *http.Req
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(body)
-}
-
-// isLocalOrAdmin allows a request from the internal network (loopback, the VPN
-// range, a trusted proxy, or an RFC1918 LAN address) or from an authenticated
-// admin. This is the "no per-service config" network restriction: a central
-// Prometheus on the LAN/VPN can pull the discovery config without a token, but it
-// is never exposed to the public internet.
-func (s *Server) isLocalOrAdmin(r *http.Request) bool {
-	if s.isAdmin(r) {
-		return true
-	}
-	ip := s.getClientIP(r)
-	if ip == "" {
-		return false
-	}
-	if s.isTrustedProxy(ip) || s.isInVPNRange(ip) {
-		return true
-	}
-	parsed := net.ParseIP(ip)
-	return parsed != nil && parsed.IsPrivate()
 }

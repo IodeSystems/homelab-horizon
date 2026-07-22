@@ -16,6 +16,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -72,14 +73,47 @@ func (d *Detector) Probe(ctx context.Context, t Target) bool {
 	if resp.StatusCode != http.StatusOK {
 		return false
 	}
-	ct := resp.Header.Get("Content-Type")
-	if strings.HasPrefix(ct, "text/plain") {
+	// Verify the body actually looks like Prometheus exposition — never trust
+	// the status or Content-Type alone. A catchall/SPA that answers 200 with
+	// HTML (or a plain-text "ok") must NOT be mistaken for a metrics endpoint;
+	// this matters especially for multi-path resolution, where telling a real
+	// /metrics from a catchall is the whole job.
+	buf, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	return looksLikeExposition(string(buf))
+}
+
+// metricSampleLine matches a single Prometheus exposition sample:
+//
+//	metric_name{label="v",...}? <value>
+//
+// where value is a float, NaN, or ±Inf. Anchored so a stray word won't match.
+var metricSampleLine = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*(\{[^}]*\})?[ \t]+-?([0-9][0-9.eE+-]*|\+?Inf|NaN)([ \t]+[0-9]+)?$`)
+
+// looksLikeExposition reports whether body is plausibly Prometheus text
+// exposition: it carries HELP/TYPE markers or at least one metric-sample line,
+// and is not obviously HTML/JSON. Deliberately lenient on exporter quirks but
+// strict enough to reject catchall pages.
+func looksLikeExposition(body string) bool {
+	s := strings.TrimSpace(body)
+	if s == "" {
+		return false
+	}
+	if s[0] == '<' || s[0] == '{' || s[0] == '[' { // HTML / JSON
+		return false
+	}
+	if strings.Contains(body, "# TYPE ") || strings.Contains(body, "# HELP ") {
 		return true
 	}
-	// Fall back to sniffing the body for the exposition format markers.
-	buf, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-	s := string(buf)
-	return strings.Contains(s, "# TYPE ") || strings.Contains(s, "# HELP ")
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if metricSampleLine.MatchString(line) {
+			return true
+		}
+	}
+	return false
 }
 
 // Refresh probes all candidates concurrently and replaces the healthy set with

@@ -159,7 +159,8 @@ export interface Exporter {
 export interface ExporterTargetResp {
   job: string;
   address: string;
-  path: string;
+  path: string; // resolved live path (or primary candidate)
+  paths?: string[]; // candidate paths (>1 for multi-path rules)
   labels?: { [key: string]: string};
   alive: boolean;
 }
@@ -172,6 +173,12 @@ export interface TopologyResp {
   exporters: Exporter[];
   targets: ExporterTargetResp[];
   knownHosts: string[]; // all host IPs hz knows (derived + declared); the "*" population
+}
+/**
+ * ScrapeTokenResp carries the read-only Prometheus scrape token.
+ */
+export interface ScrapeTokenResp {
+  token: string;
 }
 /**
  * TopologyHostsRequest / TopologyExportersRequest replace the whole list

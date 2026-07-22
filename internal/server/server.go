@@ -220,8 +220,8 @@ type Server struct {
 	metrics        *integration.Detector // Prometheus metrics discovery (pull integration)
 	static         *staticSupervisor     // supervises the unprivileged static file server child
 
-	exporterMu    sync.RWMutex    // guards exporterAlive
-	exporterAlive map[string]bool // exporter target address -> last probe result (status only, not a serving gate)
+	exporterMu     sync.RWMutex             // guards exporterStatus
+	exporterStatus map[string]exporterProbe // job|address -> resolved live path + liveness (status only, not a serving gate)
 
 	configSharesMu sync.Mutex
 	configShares   map[string]*configShare // token -> share
@@ -387,25 +387,25 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 	mon := monitor.New(cfg)
 
 	s := &Server{
-		configPath:    configPath,
-		adminToken:    adminToken,
-		csrfSecret:    generateToken(32),
-		dryRun:        dryRun,
-		version:       version,
-		fs:            fs,
-		runner:        runner,
-		wg:            wg,
-		dns:           dns,
-		haproxy:       hap,
-		letsencrypt:   le,
-		monitor:       mon,
-		sync:          NewSyncBroadcaster(),
-		health:        &HealthStatus{healthy: true},
-		metrics:       integration.NewDetector(),
-		exporterAlive: map[string]bool{},
-		static:        newStaticSupervisor(cfg.StaticServeAddr(), dryRun),
-		configShares:  make(map[string]*configShare),
-		joinTokens:    newJoinTokenStore(),
+		configPath:     configPath,
+		adminToken:     adminToken,
+		csrfSecret:     generateToken(32),
+		dryRun:         dryRun,
+		version:        version,
+		fs:             fs,
+		runner:         runner,
+		wg:             wg,
+		dns:            dns,
+		haproxy:        hap,
+		letsencrypt:    le,
+		monitor:        mon,
+		sync:           NewSyncBroadcaster(),
+		health:         &HealthStatus{healthy: true},
+		metrics:        integration.NewDetector(),
+		exporterStatus: map[string]exporterProbe{},
+		static:         newStaticSupervisor(cfg.StaticServeAddr(), dryRun),
+		configShares:   make(map[string]*configShare),
+		joinTokens:     newJoinTokenStore(),
 	}
 	s.config.Store(cfg)
 	s.static.Rebuild(cfg)
@@ -1044,6 +1044,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/integration/prometheus/scrape.yaml", s.handleIntegrationPromScrape)
 	mux.HandleFunc("/integration/prometheus/targets.json", s.handleIntegrationPromTargets)
 	mux.HandleFunc("/integration/prometheus/setup.sh", s.handleIntegrationSetupScript)
+	mux.HandleFunc("/api/v1/integration/scrape-token", s.handleIntegrationScrapeToken)
 
 	// Observability topology (admin): declared hosts + Prometheus exporters.
 	mux.HandleFunc("/api/v1/topology", s.handleAPITopology)
