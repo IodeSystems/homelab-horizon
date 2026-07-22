@@ -393,3 +393,35 @@ export const PendingChangesSchema = z.object({
   count: z.number(),
   items: z.array(PendingItemSchema),
 });
+
+// Observability topology (declared hosts + Prometheus exporters)
+export const HostDeclSchema = z.object({
+  name: z.string(),
+  ip: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+});
+
+export const ExporterSchema = z.object({
+  job: z.string(),
+  targets: z.array(z.string()).optional(),
+  port: z.number().optional(),
+  hosts: z.array(z.string()).optional(),
+  path: z.string().optional(),
+  bearer: z.string().optional(),
+  labels: z.record(z.string(), z.string()).optional(),
+});
+
+export const ExporterTargetSchema = z.object({
+  job: z.string(),
+  address: z.string(),
+  path: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  alive: z.boolean(),
+});
+
+export const TopologyDataSchema = z.object({
+  hosts: z.array(HostDeclSchema),
+  exporters: z.array(ExporterSchema),
+  targets: z.array(ExporterTargetSchema),
+  knownHosts: z.array(z.string()),
+});

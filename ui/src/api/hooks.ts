@@ -34,6 +34,9 @@ import type {
   SystemMetrics,
   VPNPeer,
   Zone,
+  HostDecl,
+  Exporter,
+  TopologyData,
 } from "./types";
 import {
   BanListResponseSchema,
@@ -53,6 +56,7 @@ import {
   HAProxyConfigPreviewSchema,
   InvitesSchema,
   PendingChangesSchema,
+  TopologyDataSchema,
 } from "./schemas";
 
 export function useDashboard() {
@@ -1115,6 +1119,47 @@ export function useRemoveIPTablesRule() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["iptables", "rules"] });
+    },
+  });
+}
+
+// --- Observability topology ---
+//
+// Read-modify-write, mirroring services: load the whole TopologyResp, mutate
+// the hosts/exporters array client-side, PUT the whole array back.
+
+export function useTopology() {
+  return useQuery({
+    queryKey: ["topology"],
+    queryFn: () =>
+      apiFetch<TopologyData>("/topology", { schema: TopologyDataSchema }),
+  });
+}
+
+export function useSaveTopologyHosts() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (hosts: HostDecl[]) =>
+      apiFetch("/topology/hosts", {
+        method: "PUT",
+        body: JSON.stringify({ hosts }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["topology"] });
+    },
+  });
+}
+
+export function useSaveTopologyExporters() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (exporters: Exporter[]) =>
+      apiFetch("/topology/exporters", {
+        method: "PUT",
+        body: JSON.stringify({ exporters }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["topology"] });
     },
   });
 }
