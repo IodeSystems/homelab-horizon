@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   Alert,
   Box,
@@ -28,6 +28,7 @@ import {
 import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
+import LabelIcon from "@mui/icons-material/Label";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
@@ -644,20 +645,37 @@ function OutputZone() {
 }
 
 // --- Zone 2: Hosts ---
+//
+// knownHosts is the full union of derived (port-map) and declared IPs — every
+// host hz knows about, whether or not an operator gave it a name. Declaring a
+// host is optional: it only exists to attach a name/labels, since a port rule
+// with hosts ['*'] already reaches every known host regardless.
+
+interface UnifiedHostRow {
+  ip: string;
+  declared?: HostDecl;
+}
 
 function HostsSection({
   hosts,
   knownHosts,
   onAdd,
+  onDeclare,
   onEdit,
   onDelete,
 }: {
   hosts: HostDecl[];
   knownHosts: string[];
   onAdd: () => void;
+  onDeclare: (ip: string) => void;
   onEdit: (host: HostDecl) => void;
   onDelete: (name: string) => void;
 }) {
+  const rows = useMemo<UnifiedHostRow[]>(() => {
+    const byIP = new Map(hosts.map((h) => [h.ip, h]));
+    return [...knownHosts].sort().map((ip) => ({ ip, declared: byIP.get(ip) }));
+  }, [hosts, knownHosts]);
+
   return (
     <Box sx={{ mb: 4 }}>
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2 }}>
@@ -672,44 +690,73 @@ function HostsSection({
         <Table size="small">
           <TableHead>
             <TableRow>
-              <TableCell>Name</TableCell>
               <TableCell>IP</TableCell>
+              <TableCell>Source</TableCell>
+              <TableCell>Name</TableCell>
               <TableCell>Labels</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {hosts.length === 0 ? (
+            {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4} align="center">
+                <TableCell colSpan={5} align="center">
                   <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
-                    No hosts declared.
+                    No hosts known yet.
                   </Typography>
                 </TableCell>
               </TableRow>
             ) : (
-              hosts.map((host) => (
-                <TableRow key={host.name} hover>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                      {host.name}
-                    </Typography>
-                  </TableCell>
+              rows.map((row) => (
+                <TableRow key={row.ip} hover>
                   <TableCell>
                     <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                      {host.ip}
+                      {row.ip}
                     </Typography>
                   </TableCell>
                   <TableCell>
-                    <LabelChips labels={host.labels} />
+                    <Chip
+                      label={row.declared ? "declared" : "derived"}
+                      size="small"
+                      color={row.declared ? "primary" : "default"}
+                      variant="outlined"
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Typography
+                      variant="body2"
+                      sx={{ fontWeight: row.declared ? 600 : 400 }}
+                      color={row.declared ? "text.primary" : "text.secondary"}
+                    >
+                      {row.declared?.name ?? "—"}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <LabelChips labels={row.declared?.labels} />
                   </TableCell>
                   <TableCell align="right">
-                    <IconButton size="small" onClick={() => onEdit(host)}>
-                      <EditIcon fontSize="small" />
-                    </IconButton>
-                    <IconButton size="small" color="error" onClick={() => onDelete(host.name)}>
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
+                    {row.declared ? (
+                      <>
+                        <IconButton size="small" onClick={() => onEdit(row.declared as HostDecl)}>
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                        <IconButton
+                          size="small"
+                          color="error"
+                          onClick={() => onDelete((row.declared as HostDecl).name)}
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </>
+                    ) : (
+                      <Button
+                        size="small"
+                        startIcon={<LabelIcon fontSize="small" />}
+                        onClick={() => onDeclare(row.ip)}
+                      >
+                        Declare / add labels
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))
@@ -718,8 +765,12 @@ function HostsSection({
         </Table>
       </TableContainer>
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
-        {knownHosts.length} host{knownHosts.length === 1 ? "" : "s"} known to hz; a port rule
-        with hosts <code>['*']</code> covers all of them.
+        Derived hosts come from the{" "}
+        <Link to="/ports" style={{ color: "inherit" }}>
+          port map
+        </Link>{" "}
+        and are already known — a port rule with hosts <code>['*']</code> covers all of them.
+        Declare a host only to label it, or to add one hz doesn't route to.
       </Typography>
     </Box>
   );
@@ -911,6 +962,7 @@ function ObservabilityPage() {
   const [deleteExporterTarget, setDeleteExporterTarget] = useState<string | null>(null);
 
   const [addHostOpen, setAddHostOpen] = useState(false);
+  const [addHostPrefillIP, setAddHostPrefillIP] = useState("");
   const [editHostTarget, setEditHostTarget] = useState<HostDecl | null>(null);
   const [deleteHostTarget, setDeleteHostTarget] = useState<string | null>(null);
 
@@ -1022,7 +1074,14 @@ function ObservabilityPage() {
       <HostsSection
         hosts={hosts}
         knownHosts={knownHosts}
-        onAdd={() => setAddHostOpen(true)}
+        onAdd={() => {
+          setAddHostPrefillIP("");
+          setAddHostOpen(true);
+        }}
+        onDeclare={(ip) => {
+          setAddHostPrefillIP(ip);
+          setAddHostOpen(true);
+        }}
         onEdit={setEditHostTarget}
         onDelete={setDeleteHostTarget}
       />
@@ -1069,8 +1128,8 @@ function ObservabilityPage() {
       {addHostOpen && (
         <HostFormDialog
           open
-          title="Add Host"
-          initialValues={emptyHostForm}
+          title={addHostPrefillIP ? "Declare Host" : "Add Host"}
+          initialValues={{ ...emptyHostForm, ip: addHostPrefillIP }}
           onClose={() => setAddHostOpen(false)}
           onSubmit={handleAddHost}
           isSubmitting={saveHosts.isPending}

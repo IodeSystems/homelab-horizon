@@ -38,6 +38,8 @@ import type {
   Exporter,
   TopologyData,
   ServiceScanMetricsResp,
+  HostPortMapResponse,
+  PortRange,
 } from "./types";
 import {
   BanListResponseSchema,
@@ -59,6 +61,7 @@ import {
   PendingChangesSchema,
   TopologyDataSchema,
   ServiceScanMetricsRespSchema,
+  HostPortMapResponseSchema,
 } from "./schemas";
 
 export function useDashboard() {
@@ -1192,6 +1195,34 @@ export function useScanServiceMetrics() {
         body: JSON.stringify(input),
         schema: ServiceScanMetricsRespSchema,
       }),
+  });
+}
+
+// --- Ports (reservations + allocation exclusions) ---
+//
+// Read-modify-write for the custom exclusion list, mirroring topology: load
+// the whole PortExclusionsResp, mutate the custom array client-side, PUT it
+// back whole. Builtin is server-constant and never sent.
+
+export function usePorts() {
+  return useQuery({
+    queryKey: ["ports"],
+    queryFn: () =>
+      apiFetch<HostPortMapResponse>("/ports", { schema: HostPortMapResponseSchema }),
+  });
+}
+
+export function useSaveCustomExclusions() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (custom: PortRange[]) =>
+      apiFetch("/ports/exclusions", {
+        method: "PUT",
+        body: JSON.stringify({ custom }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["ports"] });
+    },
   });
 }
 

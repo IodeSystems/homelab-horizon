@@ -85,6 +85,11 @@ export type {
   ServiceScanMetricsRequest,
   ServiceScanSlot,
   ServiceScanMetricsResp,
+  HostPortEntry,
+  HostPortMapResponse,
+  PortRange,
+  PortExclusionsResp,
+  PortExclusionsRequest,
 } from "./generated-types";
 
 // Apt-audit entries aren't in apitypes (internal-only struct in the server
