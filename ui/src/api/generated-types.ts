@@ -109,7 +109,24 @@ export interface ServiceResp {
   internalDNS?: InternalDNSResp;
   externalDNS?: ExternalDNSResp;
   proxy?: ProxyResp;
+  integrations?: IntegrationsResp;
   status: ServiceStatus;
+}
+/**
+ * IntegrationsResp mirrors config.Integrations for read/round-trip.
+ */
+export interface IntegrationsResp {
+  metrics?: MetricsResp;
+}
+/**
+ * MetricsResp reports a service's Prometheus metrics integration. Path is the
+ * effective path (defaulted to /metrics). Enabled is false when the service opts
+ * out (config Disabled) — the write path uses the same flag.
+ */
+export interface MetricsResp {
+  enabled: boolean;
+  path?: string;
+  bearer?: string;
 }
 export interface DomainResp {
   domain: string;
@@ -371,6 +388,25 @@ export interface ServiceRequest {
   internalDNS?: ServiceRequestInternalDNS;
   externalDNS?: ServiceRequestExternalDNS;
   proxy?: ServiceRequestProxy;
+  integrations?: ServiceRequestIntegrations;
+}
+/**
+ * ServiceRequestIntegrations carries per-service observability integrations from
+ * the write path (API / hz / UI). Full-replace semantics like Proxy/DNS: an edit
+ * that omits this clears it.
+ */
+export interface ServiceRequestIntegrations {
+  metrics?: ServiceRequestMetrics;
+}
+/**
+ * ServiceRequestMetrics enables Prometheus metrics discovery for a service.
+ * Enabled=false clears the integration. Path defaults to /metrics server-side.
+ * Bearer is optional (non-network-isolated endpoints).
+ */
+export interface ServiceRequestMetrics {
+  enabled: boolean;
+  path?: string;
+  bearer?: string;
 }
 export interface ServiceRequestInternalDNS {
   ip: string;

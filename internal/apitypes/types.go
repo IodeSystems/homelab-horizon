@@ -105,12 +105,27 @@ type ServiceStatus struct {
 }
 
 type ServiceResp struct {
-	Name        string           `json:"name"`
-	Domains     []string         `json:"domains"`
-	InternalDNS *InternalDNSResp `json:"internalDNS,omitempty"`
-	ExternalDNS *ExternalDNSResp `json:"externalDNS,omitempty"`
-	Proxy       *ProxyResp       `json:"proxy,omitempty"`
-	Status      ServiceStatus    `json:"status"`
+	Name         string            `json:"name"`
+	Domains      []string          `json:"domains"`
+	InternalDNS  *InternalDNSResp  `json:"internalDNS,omitempty"`
+	ExternalDNS  *ExternalDNSResp  `json:"externalDNS,omitempty"`
+	Proxy        *ProxyResp        `json:"proxy,omitempty"`
+	Integrations *IntegrationsResp `json:"integrations,omitempty"`
+	Status       ServiceStatus     `json:"status"`
+}
+
+// IntegrationsResp mirrors config.Integrations for read/round-trip.
+type IntegrationsResp struct {
+	Metrics *MetricsResp `json:"metrics,omitempty"`
+}
+
+// MetricsResp reports a service's Prometheus metrics integration. Path is the
+// effective path (defaulted to /metrics). Enabled is false when the service opts
+// out (config Disabled) — the write path uses the same flag.
+type MetricsResp struct {
+	Enabled bool   `json:"enabled"`
+	Path    string `json:"path,omitempty"`
+	Bearer  string `json:"bearer,omitempty"`
 }
 
 // Domains
@@ -415,12 +430,29 @@ type DeploySwapResponse struct {
 // Service mutations
 
 type ServiceRequest struct {
-	OriginalName string                     `json:"originalName,omitempty"`
-	Name         string                     `json:"name"`
-	Domains      []string                   `json:"domains"`
-	InternalDNS  *ServiceRequestInternalDNS `json:"internalDNS,omitempty"`
-	ExternalDNS  *ServiceRequestExternalDNS `json:"externalDNS,omitempty"`
-	Proxy        *ServiceRequestProxy       `json:"proxy,omitempty"`
+	OriginalName string                      `json:"originalName,omitempty"`
+	Name         string                      `json:"name"`
+	Domains      []string                    `json:"domains"`
+	InternalDNS  *ServiceRequestInternalDNS  `json:"internalDNS,omitempty"`
+	ExternalDNS  *ServiceRequestExternalDNS  `json:"externalDNS,omitempty"`
+	Proxy        *ServiceRequestProxy        `json:"proxy,omitempty"`
+	Integrations *ServiceRequestIntegrations `json:"integrations,omitempty"`
+}
+
+// ServiceRequestIntegrations carries per-service observability integrations from
+// the write path (API / hz / UI). Full-replace semantics like Proxy/DNS: an edit
+// that omits this clears it.
+type ServiceRequestIntegrations struct {
+	Metrics *ServiceRequestMetrics `json:"metrics,omitempty"`
+}
+
+// ServiceRequestMetrics enables Prometheus metrics discovery for a service.
+// Enabled=false clears the integration. Path defaults to /metrics server-side.
+// Bearer is optional (non-network-isolated endpoints).
+type ServiceRequestMetrics struct {
+	Enabled bool   `json:"enabled"`
+	Path    string `json:"path,omitempty"`
+	Bearer  string `json:"bearer,omitempty"`
 }
 
 type ServiceRequestInternalDNS struct {
