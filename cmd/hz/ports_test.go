@@ -40,7 +40,7 @@ func TestFindFreeRangeSkipsUsedAndCommon(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := findFreeRange(tt.used, tt.from, tt.count); got != tt.want {
+			if got := findFreeRange(tt.used, tt.from, tt.count, isCommonPort); got != tt.want {
 				t.Errorf("findFreeRange(from=%d,count=%d) = %d, want %d", tt.from, tt.count, got, tt.want)
 			}
 		})
@@ -49,13 +49,13 @@ func TestFindFreeRangeSkipsUsedAndCommon(t *testing.T) {
 
 func TestSuggestFree(t *testing.T) {
 	used := map[int]bool{20000: true, 20001: true}
-	got := suggestFree(used, 20000, 3)
+	got := suggestFree(used, 20000, 3, isCommonPort)
 	want := []int{20002, 20003, 20004}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("suggestFree = %v, want %v", got, want)
 	}
 	// from below the safe band is clamped up to safeBandLow.
-	if got := suggestFree(map[int]bool{}, 500, 1); len(got) != 1 || got[0] != safeBandLow {
+	if got := suggestFree(map[int]bool{}, 500, 1, isCommonPort); len(got) != 1 || got[0] != safeBandLow {
 		t.Errorf("suggestFree(from=500) = %v, want [%d]", got, safeBandLow)
 	}
 }

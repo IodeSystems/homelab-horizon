@@ -647,7 +647,27 @@ type HostPortEntry struct {
 }
 
 type HostPortMapResponse struct {
-	Hosts map[string][]HostPortEntry `json:"hosts"`
+	Hosts      map[string][]HostPortEntry `json:"hosts"`
+	Exclusions PortExclusionsResp         `json:"exclusions"`
+}
+
+// PortRange is an inclusive [from,to] port span (single port when to<=from).
+type PortRange struct {
+	From int    `json:"from"`
+	To   int    `json:"to,omitempty"`
+	Note string `json:"note,omitempty"`
+}
+
+// PortExclusionsResp carries the allocation denylist: Builtin is the read-only
+// server default; Custom is the operator-editable set. Clients skip both.
+type PortExclusionsResp struct {
+	Builtin []PortRange `json:"builtin"`
+	Custom  []PortRange `json:"custom"`
+}
+
+// PortExclusionsRequest replaces the custom exclusion list (whole-list).
+type PortExclusionsRequest struct {
+	Custom []PortRange `json:"custom"`
 }
 
 type DNSSyncAllResponse struct {
