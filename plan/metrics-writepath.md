@@ -31,12 +31,11 @@ semantics, mirrors Proxy/DNS). Same shape mirrored on `ServiceResp` for CLI/UI r
 - ✅ **Docs** — `~/doc` deployment.md metrics section + standards.md METRICS-3/4 + EDGE-5 reframed to served endpoints; "prefix vs tag" naming note added.
 - ✅ **Deployed** `v0.0.6-4-g517eda9` to ubuntu@192.168.1.160 (`bin/deploy`). Local `hz` CLI updated to match.
 - ✅ **Enabled grafana + prometheus** (`hz service edit … --metrics`). Both discovered; `targets.json`/`scrape.yaml` serve them with `service` labels. Backends probe 200.
-- ◐ **Wire local Prometheus** — validated `prometheus.yml` with an `hz-services` http_sd job written to scratchpad; promtool OK. Apply needs the user's local sudo (see below).
+- ✅ **Superseded** — the write path plus the whole topology/hardening line shipped; see `prometheus-topology.md` for the exporter model, token auth, multi-path, probe hardening, re-probe button, and served `setup.sh`. All merged to `origin/main` (through `aa1445c`); docs on `~/doc` main (local).
 
 ## Remaining (user action)
-- Install the prepared prometheus.yml + reload prometheus (local sudo needs a password I can't supply):
-  `sudo cp <scratchpad>/prometheus.yml /etc/prometheus/prometheus.yml && sudo systemctl reload prometheus`
-- Branches unpushed: `feat/metrics-writepath` (homelab-horizon), `docs/metrics-served-endpoints` (~/doc).
+- Wire the Prometheus box via the served bootstrap (replaces the old scratchpad `prometheus.yml`):
+  fetch `GET /integration/prometheus/setup.sh` as admin (or copy from the Observability page) → `sudo bash`. It installs the token-baked `scrape_config_files: [hz.yml]` include + refresh timer.
 
 ## Optional extensions (out of scope now)
 - Expose `Disabled` (pause without unconfiguring) via write path — dropped for KISS.

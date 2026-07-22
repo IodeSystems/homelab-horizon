@@ -31,10 +31,12 @@ Refactor `ScrapeYAML`/`HTTPSDTargets` to consume `[]ScrapeJob{Name,MetricsPath,B
 - served = serviceJobs + exporterJobs.
 
 ## Active work
+**Status: all code shipped + on `origin/main` (through `aa1445c`).** Only user-side box wiring (run setup.sh) and optional MCP/CLI-scan tools remain.
+
 - ✅ **Core** — config types (HostDecl/Exporter), `DeriveKnownHostIPs` + `DeriveExporterTargets` (explicit/templated/`*`/name-resolve/label-merge), neutral `ScrapeJob` refactor of ScrapeYAML/HTTPSDTargets (+ http_sd `job` label), serve merge (`scrapeJobs`). Tests: config/exporters_test.go, server/topology_test.go, integration_test updated.
 - ✅ **Probe status** — `refreshExporterStatus` on the 60s loop + `kickExporterStatus` after writes; `exporterAlive` map; surfaced via GET /api/v1/topology (not a serving gate).
 - ✅ **API write path** — apitypes DTOs (HostDecl/Exporter/ExporterTargetResp/TopologyResp), GET /api/v1/topology + PUT /topology/{hosts,exporters} (whole-list replace), tygo regenerated. `make check` 0 issues.
-- ◐ **hz CLI** — `hz host {list,add,rm}`, `hz exporter {list,add,rm}` (subagent).
+- ✅ **hz CLI** — `hz host {list,add,rm}`, `hz exporter {list,add,rm}` (`cmd/hz/main.go`, `--mode port|service|static`).
 - ✅ **UI** — topology route: hosts + exporters editor + per-target status chips (`observability.tsx`).
 - ✅ **Docs** — `~/doc` deployment.md §Metrics scrape + standards.md METRICS-4/EDGE-5 (exporter modes, hosts). Committed `f9561f0`.
 - ◻ **MCP** — host/exporter tools. Deferred (optional).
@@ -60,17 +62,17 @@ endpoint-scan/reconciliation panel. Keep services-page path scan + the output zo
   skipping opted-in services; label-merge host labels in all modes.
 - Remove `/api/v1/topology/scan` + its DTOs/test/UI. Keep `/services/scan-metrics`.
 - UI: Hosts (port-map derived + declared) · Rules (port/service) · Direct (static) · Output zone.
-◐ in progress.
+✅ shipped — mode model (port/service/static) in config, CLI, API, and the Observability UI; `/topology/scan` removed, `/services/scan-metrics` kept.
 
 ## Reconciliation / discovery pass (user, 2026-07-21) — SUPERSEDED (scan UI dropped)
 Decisions: scan population = known hosts + typed extras (no CIDR sweep); service path candidates = `/metrics` then `/api/metrics`; install script served by hz + copyable in UI; keep always-emit + curate (no regression).
 - ✅ **Backend** — `POST /api/v1/topology/scan` (probe known∪extras at port/path, mark alive+configured), `POST /api/v1/services/scan-metrics` (probe backend slot(s) across candidate paths → suggestedPath), `GET /integration/prometheus/setup.sh` (served bootstrap, hz URL baked in). Tests: topology_scan_test.go (service scan finds /api/metrics, topology scan marks live+unconfigured, admin gate). setup.sh render bash-n verified. `make check` 0 issues.
-- ◐ **UI redesign** — rename Topology→Observability; Zone1 scrape.yaml + setup.sh copy; Zone2 reconciliation (present&added / added-but-missing→remove / present-but-not-added→add + add-host) + scan control; Zone3 editors; services page metrics-path scan button (subagent).
+- ✅/⛔ **UI redesign** — SUPERSEDED by the simplified-model pass. Shipped: rename Topology→Observability, Zone1 scrape.yaml + setup.sh copy, Zone3 editors, services-page metrics-path scan button. Dropped: Zone2 reconciliation panel + scan control (the whole scan/reconcile UI was cut).
 - ✅ **Docs** — setup.sh endpoint (admin-only) + scan-metrics documented (deployment.md 279,342). Reconciliation dropped (superseded); curl|bash one-liner intentionally removed (admin-only gate) and doc says so.
 - ◻ **CLI scan** (optional) — `hz exporter scan --job --port [--host …]`. Not requested; deferred.
 
 ## Blocking decisions (user owns)
-- Consumption on this box: switch prometheus.yml to `scrape_config_files: [hz.yml]` + a refresh cron (`curl scrape.yaml > hz.yml`), OR keep the http_sd job (targets.json) and let exporters flow through it too. http_sd can't carry a `scrape_config_files`-style multi-job doc; exporters via http_sd need per-target `job` labels. Decide before wiring this box.
+- ✅ **Resolved by shipping `setup.sh`**: the served bootstrap chose the `scrape_config_files: [hz.yml]` include + refresh timer (`curl scrape.yaml > hz.yml`) over http_sd. Remaining user action = run setup.sh on the Prometheus box (see metrics-writepath.md "Remaining").
 
 ## Optional extensions (out of scope now)
 - Unify service-metrics to the always-include+status model (currently reachable-only) — consistency, but changes shipped behavior.
