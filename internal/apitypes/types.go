@@ -128,6 +128,59 @@ type MetricsResp struct {
 	Bearer  string `json:"bearer,omitempty"`
 }
 
+// Observability topology — declared hosts + Prometheus exporter jobs. These
+// mirror config.HostDecl / config.Exporter one-to-one (plain data, no derived
+// fields) and are read/written whole-list via /api/v1/topology.
+
+// HostDecl is an operator-declared host beyond those hz derives from the port map.
+type HostDecl struct {
+	Name   string            `json:"name"`
+	IP     string            `json:"ip"`
+	Labels map[string]string `json:"labels,omitempty"`
+}
+
+// Exporter is a Prometheus scrape job for endpoints hz does not proxy. Targets
+// are explicit host:port entries and/or Port expanded across Hosts (name/IP/"*").
+type Exporter struct {
+	Job     string            `json:"job"`
+	Targets []string          `json:"targets,omitempty"`
+	Port    int               `json:"port,omitempty"`
+	Hosts   []string          `json:"hosts,omitempty"`
+	Path    string            `json:"path,omitempty"`
+	Bearer  string            `json:"bearer,omitempty"`
+	Labels  map[string]string `json:"labels,omitempty"`
+}
+
+// ExporterTargetResp is one expanded exporter endpoint with its last probe
+// result — the resolved view the UI renders (status chips) and the served config
+// emits. Alive is status only; a dead target is still scraped.
+type ExporterTargetResp struct {
+	Job     string            `json:"job"`
+	Address string            `json:"address"`
+	Path    string            `json:"path"`
+	Labels  map[string]string `json:"labels,omitempty"`
+	Alive   bool              `json:"alive"`
+}
+
+// TopologyResp is the read view of the observability topology: the raw declared
+// hosts and exporters (for editing) plus the fully-expanded targets with status.
+type TopologyResp struct {
+	Hosts      []HostDecl           `json:"hosts"`
+	Exporters  []Exporter           `json:"exporters"`
+	Targets    []ExporterTargetResp `json:"targets"`
+	KnownHosts []string             `json:"knownHosts"` // all host IPs hz knows (derived + declared); the "*" population
+}
+
+// TopologyHostsRequest / TopologyExportersRequest replace the whole list
+// (read-modify-write from the client), mirroring how services are edited.
+type TopologyHostsRequest struct {
+	Hosts []HostDecl `json:"hosts"`
+}
+
+type TopologyExportersRequest struct {
+	Exporters []Exporter `json:"exporters"`
+}
+
 // Domains
 
 type DomainResp struct {

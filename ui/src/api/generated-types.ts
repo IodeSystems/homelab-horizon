@@ -128,6 +128,59 @@ export interface MetricsResp {
   path?: string;
   bearer?: string;
 }
+/**
+ * HostDecl is an operator-declared host beyond those hz derives from the port map.
+ */
+export interface HostDecl {
+  name: string;
+  ip: string;
+  labels?: { [key: string]: string};
+}
+/**
+ * Exporter is a Prometheus scrape job for endpoints hz does not proxy. Targets
+ * are explicit host:port entries and/or Port expanded across Hosts (name/IP/"*").
+ */
+export interface Exporter {
+  job: string;
+  targets?: string[];
+  port?: number /* int */;
+  hosts?: string[];
+  path?: string;
+  bearer?: string;
+  labels?: { [key: string]: string};
+}
+/**
+ * ExporterTargetResp is one expanded exporter endpoint with its last probe
+ * result — the resolved view the UI renders (status chips) and the served config
+ * emits. Alive is status only; a dead target is still scraped.
+ */
+export interface ExporterTargetResp {
+  job: string;
+  address: string;
+  path: string;
+  labels?: { [key: string]: string};
+  alive: boolean;
+}
+/**
+ * TopologyResp is the read view of the observability topology: the raw declared
+ * hosts and exporters (for editing) plus the fully-expanded targets with status.
+ */
+export interface TopologyResp {
+  hosts: HostDecl[];
+  exporters: Exporter[];
+  targets: ExporterTargetResp[];
+  knownHosts: string[]; // all host IPs hz knows (derived + declared); the "*" population
+}
+/**
+ * TopologyHostsRequest / TopologyExportersRequest replace the whole list
+ * (read-modify-write from the client), mirroring how services are edited.
+ */
+export interface TopologyHostsRequest {
+  hosts: HostDecl[];
+}
+export interface TopologyExportersRequest {
+  exporters: Exporter[];
+}
 export interface DomainResp {
   domain: string;
   zoneName: string;

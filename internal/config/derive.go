@@ -6,6 +6,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -553,7 +555,126 @@ func (c *Config) DeriveHostPortMap() HostPortMap {
 		}
 	}
 
+	// Declared hosts — ensure they appear in the map even if no service routes
+	// to them, so the topology view (and exporter "*" expansion) sees them.
+	for _, h := range c.Hosts {
+		if h.IP == "" {
+			continue
+		}
+		if _, ok := m[h.IP]; !ok {
+			m[h.IP] = nil
+		}
+	}
+
 	return HostPortMap{Hosts: m}
+}
+
+// DeriveKnownHostIPs returns the sorted, unique set of host IPs hz knows about —
+// every key of the derived host/port map (service backends, gateway, declared
+// hosts). This is the population an exporter's Hosts:["*"] expands over.
+func (c *Config) DeriveKnownHostIPs() []string {
+	m := c.DeriveHostPortMap()
+	out := make([]string, 0, len(m.Hosts))
+	for ip := range m.Hosts {
+		out = append(out, ip)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ExporterTarget is one expanded, renderable exporter endpoint.
+type ExporterTarget struct {
+	Job     string
+	Address string // host:port
+	Path    string
+	Bearer  string
+	Labels  map[string]string // static + per-host declared labels (job/instance are set by Prometheus)
+}
+
+// DeriveExporterTargets expands every configured Exporter into concrete targets:
+// explicit Targets are taken as-is; Port is expanded across the resolved Hosts
+// (a name, an IP, or "*" = all known hosts). Per-host declared labels are merged
+// under the exporter's own Labels. Output is sorted (job, then address) for
+// stable served config. Duplicate addresses within a job are collapsed.
+func (c *Config) DeriveExporterTargets() []ExporterTarget {
+	// name/ip -> declared labels, and name -> ip resolution.
+	labelsByIP := map[string]map[string]string{}
+	ipByName := map[string]string{}
+	for _, h := range c.Hosts {
+		if h.IP == "" {
+			continue
+		}
+		if len(h.Labels) > 0 {
+			labelsByIP[h.IP] = h.Labels
+		}
+		if h.Name != "" {
+			ipByName[h.Name] = h.IP
+		}
+	}
+
+	var out []ExporterTarget
+	for _, e := range c.Exporters {
+		if e.Job == "" {
+			continue
+		}
+		path := e.MetricsPath()
+
+		// Collect addresses: explicit targets, then Port×Hosts expansion.
+		seen := map[string]bool{}
+		var addrs []string
+		add := func(a string) {
+			if a == "" || seen[a] {
+				return
+			}
+			seen[a] = true
+			addrs = append(addrs, a)
+		}
+		for _, t := range e.Targets {
+			add(strings.TrimSpace(t))
+		}
+		if e.Port > 0 && len(e.Hosts) > 0 {
+			hosts := e.Hosts
+			for _, h := range e.Hosts {
+				if h == "*" {
+					hosts = c.DeriveKnownHostIPs()
+					break
+				}
+			}
+			for _, h := range hosts {
+				ip := strings.TrimSpace(h)
+				if ip == "*" {
+					continue
+				}
+				if resolved, ok := ipByName[ip]; ok {
+					ip = resolved
+				}
+				add(net.JoinHostPort(ip, strconv.Itoa(e.Port)))
+			}
+		}
+
+		for _, a := range addrs {
+			labels := map[string]string{}
+			for k, v := range e.Labels {
+				labels[k] = v
+			}
+			if host, _, err := net.SplitHostPort(a); err == nil {
+				for k, v := range labelsByIP[host] {
+					if _, exists := labels[k]; !exists {
+						labels[k] = v
+					}
+				}
+			}
+			out = append(out, ExporterTarget{Job: e.Job, Address: a, Path: path, Bearer: e.Bearer, Labels: labels})
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Job != out[j].Job {
+			return out[i].Job < out[j].Job
+		}
+		return out[i].Address < out[j].Address
+	})
+	return out
 }
 
 // GetServicesForZone returns all services belonging to a zone

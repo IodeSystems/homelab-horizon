@@ -29,15 +29,14 @@ semantics, mirrors Proxy/DNS). Same shape mirrored on `ServiceResp` for CLI/UI r
 - ✅ **UI** — metrics toggle+path/bearer on services form; schemas.ts + hooks.ts `ServiceMutationInput` round-trip integrations.
 - ✅ **`make generate` + `make check`** — 0 lint issues, go tests + `ui tsc --noEmit` clean.
 - ✅ **Docs** — `~/doc` deployment.md metrics section + standards.md METRICS-3/4 + EDGE-5 reframed to served endpoints; "prefix vs tag" naming note added.
-- ❓ **Enable grafana + prometheus** — BLOCKED on deploy (below).
-- ◻ **Wire local Prometheus** at `http://192.168.1.160:8080/integration/prometheus/targets.json` (http_sd). Only useful after enablement. Edits this box's prometheus.yml. (hz endpoint host corrected: 192.168.1.160:8080, not .76.)
+- ✅ **Deployed** `v0.0.6-4-g517eda9` to ubuntu@192.168.1.160 (`bin/deploy`). Local `hz` CLI updated to match.
+- ✅ **Enabled grafana + prometheus** (`hz service edit … --metrics`). Both discovered; `targets.json`/`scrape.yaml` serve them with `service` labels. Backends probe 200.
+- ◐ **Wire local Prometheus** — validated `prometheus.yml` with an `hz-services` http_sd job written to scratchpad; promtool OK. Apply needs the user's local sudo (see below).
 
-## Blocking decisions (user owns)
-- **Deploy rebuilt hz to 192.168.1.160** — the API/CLI write path is committed locally but the *running* server has the old binary (no `integrations` in ServiceRequest). Enable path options:
-  1. Deploy new hz, then `hz service edit grafana.iodesystems.com --metrics --sync` (+ prometheus). Clean.
-  2. Edit prod `config.json` on 192.168.1.160 directly (add `integrations.metrics` to the two services) + sync. Works WITHOUT deploy — read/probe/serve path is already live — but is a manual prod-config mutation on critical infra.
-  Both are prod-affecting; not doing unilaterally.
-- **Edit this box's prometheus.yml** to add the http_sd job — local but touches a running monitoring config.
+## Remaining (user action)
+- Install the prepared prometheus.yml + reload prometheus (local sudo needs a password I can't supply):
+  `sudo cp <scratchpad>/prometheus.yml /etc/prometheus/prometheus.yml && sudo systemctl reload prometheus`
+- Branches unpushed: `feat/metrics-writepath` (homelab-horizon), `docs/metrics-served-endpoints` (~/doc).
 
 ## Optional extensions (out of scope now)
 - Expose `Disabled` (pause without unconfiguring) via write path — dropped for KISS.
