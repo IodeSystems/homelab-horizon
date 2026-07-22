@@ -1042,11 +1042,14 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// Pull-style integrations: a central consumer scrapes hz for the config.
 	mux.HandleFunc("/integration/prometheus/scrape.yaml", s.handleIntegrationPromScrape)
 	mux.HandleFunc("/integration/prometheus/targets.json", s.handleIntegrationPromTargets)
+	mux.HandleFunc("/integration/prometheus/setup.sh", s.handleIntegrationSetupScript)
 
 	// Observability topology (admin): declared hosts + Prometheus exporters.
 	mux.HandleFunc("/api/v1/topology", s.handleAPITopology)
 	mux.HandleFunc("/api/v1/topology/hosts", s.handleAPITopologyHosts)
 	mux.HandleFunc("/api/v1/topology/exporters", s.handleAPITopologyExporters)
+	mux.HandleFunc("/api/v1/topology/scan", s.handleAPITopologyScan)
+	mux.HandleFunc("/api/v1/services/scan-metrics", s.handleAPIServiceScanMetrics)
 
 	// React SPA
 	s.setupSPA(mux)

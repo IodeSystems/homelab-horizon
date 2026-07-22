@@ -181,6 +181,54 @@ type TopologyExportersRequest struct {
 	Exporters []Exporter `json:"exporters"`
 }
 
+// TopologyScanRequest probes a port/path across the known hosts plus any extra
+// hosts the operator types, to discover live exporter endpoints that may not yet
+// be configured ("present but not added").
+type TopologyScanRequest struct {
+	Port  int      `json:"port"`
+	Path  string   `json:"path,omitempty"`  // default /metrics
+	Hosts []string `json:"hosts,omitempty"` // extra hosts (name/IP) to probe beyond the known set
+}
+
+// ScanResult is one probed candidate. Configured is true when the address is
+// already an exporter target (so the UI can mark added vs addable).
+type ScanResult struct {
+	Address    string `json:"address"`
+	Host       string `json:"host"`
+	Alive      bool   `json:"alive"`
+	Configured bool   `json:"configured"`
+}
+
+type TopologyScanResp struct {
+	Port       int          `json:"port"`
+	Path       string       `json:"path"`
+	Results    []ScanResult `json:"results"`
+	KnownHosts []string     `json:"knownHosts"`
+}
+
+// ServiceScanMetricsRequest asks hz to discover a service's metrics path by
+// probing its backend slot(s) at the standard candidate paths.
+type ServiceScanMetricsRequest struct {
+	Name string `json:"name"`
+}
+
+// ServiceScanSlot is the probe result for one backend slot at the chosen path.
+type ServiceScanSlot struct {
+	Slot    string `json:"slot,omitempty"` // "current"/"next" for blue-green; "" for single-backend
+	Address string `json:"address"`
+	Path    string `json:"path"`
+	OK      bool   `json:"ok"`
+}
+
+// ServiceScanMetricsResp reports the discovered metrics path (first candidate a
+// slot answered on) and the per-slot detail at that path.
+type ServiceScanMetricsResp struct {
+	Name          string            `json:"name"`
+	SuggestedPath string            `json:"suggestedPath,omitempty"` // empty if nothing responded
+	Candidates    []string          `json:"candidates"`              // paths tried, in order
+	Slots         []ServiceScanSlot `json:"slots"`
+}
+
 // Domains
 
 type DomainResp struct {
