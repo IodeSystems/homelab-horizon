@@ -32,12 +32,17 @@ import LabelIcon from "@mui/icons-material/Label";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
+import VisibilityIcon from "@mui/icons-material/Visibility";
+import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
+import AutorenewIcon from "@mui/icons-material/Autorenew";
 import {
   useTopology,
   useSaveTopologyHosts,
   useSaveTopologyExporters,
   useScrapeYaml,
   useSetupScript,
+  useScrapeToken,
+  useRotateScrapeToken,
 } from "../api/hooks";
 import type { HostDecl, Exporter, ExporterTargetResp } from "../api/types";
 
@@ -512,8 +517,8 @@ function ExporterFormDialog({
           onChange={(e) => setForm((f) => ({ ...f, path: e.target.value }))}
           size="small"
           fullWidth
-          placeholder={form.mode === "service" ? "/metrics or /api/metrics" : "/metrics"}
-          helperText="Defaults to /metrics"
+          placeholder="/metrics"
+          helperText="Comma-separated to probe candidates in order — e.g. /metrics,/api/metrics. Defaults to /metrics."
         />
         <TextField
           label="Bearer token (optional)"
@@ -545,13 +550,103 @@ function ExporterFormDialog({
 
 // --- Zone 1: Output — what an operator does with this config ---
 
+function maskToken(token: string): string {
+  if (token.length <= 4) return "•".repeat(token.length);
+  return `${"•".repeat(token.length - 4)}${token.slice(-4)}`;
+}
+
+function ScrapeTokenSection() {
+  const scrapeToken = useScrapeToken();
+  const rotateToken = useRotateScrapeToken();
+  const [revealed, setRevealed] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const token = scrapeToken.data?.token ?? "";
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2 }}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
+        Scrape token
+      </Typography>
+      <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+        The Prometheus discovery endpoints (scrape.yaml / targets.json) require this token or an
+        admin session. <code>setup.sh</code> bakes it into the refresh cron. Rotating it stops
+        existing pullers until they re-run setup.sh.
+      </Typography>
+      {scrapeToken.isLoading ? (
+        <CircularProgress size={20} />
+      ) : scrapeToken.error ? (
+        <Alert severity="error">Failed to load scrape token: {scrapeToken.error.message}</Alert>
+      ) : (
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <Box
+            component="code"
+            sx={{
+              flex: 1,
+              bgcolor: "#0f3460",
+              color: "#eee",
+              p: 1,
+              borderRadius: 1,
+              fontFamily: "monospace",
+              fontSize: "0.8rem",
+              overflow: "auto",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {revealed ? token : maskToken(token)}
+          </Box>
+          <IconButton
+            size="small"
+            onClick={() => setRevealed((r) => !r)}
+            title={revealed ? "Hide token" : "Reveal token"}
+          >
+            {revealed ? <VisibilityOffIcon fontSize="small" /> : <VisibilityIcon fontSize="small" />}
+          </IconButton>
+          <CopyIconButton text={token} />
+          <Button
+            size="small"
+            color="warning"
+            startIcon={<AutorenewIcon fontSize="small" />}
+            onClick={() => setConfirmOpen(true)}
+          >
+            Rotate
+          </Button>
+        </Box>
+      )}
+
+      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Rotate scrape token</DialogTitle>
+        <DialogContent>
+          <Typography>
+            This invalidates the current token immediately. Any Prometheus box still using the
+            old token — until it re-runs setup.sh — will get 401s from scrape.yaml / targets.json.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmOpen(false)} disabled={rotateToken.isPending}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="warning"
+            onClick={() =>
+              rotateToken.mutate(undefined, {
+                onSuccess: () => setConfirmOpen(false),
+              })
+            }
+            disabled={rotateToken.isPending}
+          >
+            {rotateToken.isPending ? <CircularProgress size={20} /> : "Rotate"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Paper>
+  );
+}
+
 function OutputZone() {
   const scrapeYaml = useScrapeYaml();
   const setupScript = useSetupScript();
-  const [scriptOpen, setScriptOpen] = useState(false);
-
-  const origin = window.location.origin;
-  const installCmd = `curl -fsSL ${origin}/integration/prometheus/setup.sh | sudo bash`;
 
   return (
     <Box sx={{ mb: 4 }}>
@@ -559,8 +654,8 @@ function OutputZone() {
         Output
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Point a Prometheus server at hz using the generated scrape config, or
-        one-line install a Prometheus server that's already wired up.
+        Point a Prometheus server at hz using the generated scrape config, or install a
+        Prometheus server that's already wired up.
       </Typography>
 
       <Stack spacing={2}>
@@ -586,59 +681,21 @@ function OutputZone() {
             Install a Prometheus server
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
-            Run on the box that should run Prometheus. Bakes in this hz instance's URL.
+            Copy this to your Prometheus box and run: <code>sudo bash setup.sh</code> — it embeds
+            a read-only scrape token and installs a refresh timer. Requires an admin session to
+            fetch (it embeds a secret), so it can no longer be piped straight from curl on an
+            unauthenticated box.
           </Typography>
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: 1,
-              bgcolor: "#0f3460",
-              color: "#eee",
-              p: 1.5,
-              borderRadius: 1,
-              fontFamily: "monospace",
-              fontSize: "0.8rem",
-            }}
-          >
-            <Box component="code" sx={{ flex: 1, overflow: "auto", whiteSpace: "nowrap" }}>
-              {installCmd}
-            </Box>
-            <CopyIconButton text={installCmd} />
-          </Box>
-
-          <Box
-            onClick={() => setScriptOpen((o) => !o)}
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: 0.5,
-              cursor: "pointer",
-              userSelect: "none",
-              mt: 1.5,
-            }}
-          >
-            <IconButton size="small" sx={{ p: 0.25 }}>
-              {scriptOpen ? (
-                <KeyboardArrowUpIcon fontSize="small" />
-              ) : (
-                <KeyboardArrowDownIcon fontSize="small" />
-              )}
-            </IconButton>
-            <Typography variant="body2">View full install script</Typography>
-          </Box>
-          <Collapse in={scriptOpen} timeout="auto" unmountOnExit>
-            <Box sx={{ mt: 1 }}>
-              {setupScript.isLoading ? (
-                <CircularProgress size={20} />
-              ) : setupScript.error ? (
-                <Alert severity="error">Failed to load setup.sh: {setupScript.error.message}</Alert>
-              ) : (
-                <CodeBlock text={setupScript.data ?? ""} />
-              )}
-            </Box>
-          </Collapse>
+          {setupScript.isLoading ? (
+            <CircularProgress size={20} />
+          ) : setupScript.error ? (
+            <Alert severity="error">Failed to load setup.sh: {setupScript.error.message}</Alert>
+          ) : (
+            <CodeBlock text={setupScript.data ?? ""} />
+          )}
         </Paper>
+
+        <ScrapeTokenSection />
       </Stack>
     </Box>
   );
@@ -782,6 +839,29 @@ function HostsSection({
 // generated for that job, each with its last probe result. No scan button —
 // this reflects the 60s background probe hz already runs.
 
+function TargetPath({ target }: { target: ExporterTargetResp }) {
+  const candidates = target.paths ?? [];
+  if (candidates.length <= 1) {
+    return (
+      <Typography variant="caption" color="text.secondary" sx={{ fontFamily: "monospace" }}>
+        {target.path}
+      </Typography>
+    );
+  }
+  return (
+    <Typography variant="caption" color="text.secondary">
+      resolved{" "}
+      <Box component="span" sx={{ fontFamily: "monospace", fontWeight: 600, color: "text.primary" }}>
+        {target.path}
+      </Box>{" "}
+      of{" "}
+      <Box component="span" sx={{ fontFamily: "monospace" }}>
+        {candidates.join(",")}
+      </Box>
+    </Typography>
+  );
+}
+
 function ExporterRow({
   exp,
   targets,
@@ -869,6 +949,7 @@ function ExporterRow({
                       <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
                         {t.address}
                       </Typography>
+                      <TargetPath target={t} />
                       <LabelChips labels={t.labels} />
                     </Box>
                   ))}

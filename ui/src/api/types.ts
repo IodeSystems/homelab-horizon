@@ -81,6 +81,7 @@ export type {
   HostDecl,
   Exporter,
   ExporterTargetResp,
+  ScrapeTokenResp,
   TopologyResp as TopologyData,
   ServiceScanMetricsRequest,
   ServiceScanSlot,
