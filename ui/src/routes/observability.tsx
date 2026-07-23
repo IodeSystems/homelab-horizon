@@ -232,22 +232,29 @@ interface HostFormState {
   originalName?: string;
   name: string;
   ip: string;
+  aliases: string; // comma-separated alternate IPs for the same machine
   labelRows: LabelRow[];
 }
 
-const emptyHostForm: HostFormState = { name: "", ip: "", labelRows: [] };
+const emptyHostForm: HostFormState = { name: "", ip: "", aliases: "", labelRows: [] };
 
 function hostToForm(host: HostDecl): HostFormState {
   return {
     originalName: host.name,
     name: host.name,
     ip: host.ip,
+    aliases: (host.aliases ?? []).join(", "),
     labelRows: labelsToRows(host.labels),
   };
 }
 
 function formToHost(form: HostFormState): HostDecl {
   const host: HostDecl = { name: form.name.trim(), ip: form.ip.trim() };
+  const aliases = form.aliases
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s && s !== host.ip);
+  if (aliases.length) host.aliases = aliases;
   const labels = rowsToLabels(form.labelRows);
   if (labels) host.labels = labels;
   return host;
@@ -290,6 +297,16 @@ function HostFormDialog({
           required
           fullWidth
           placeholder="192.168.1.10"
+          helperText="Canonical address — the one Prometheus scrapes."
+        />
+        <TextField
+          label="Aliases (comma-separated)"
+          value={form.aliases}
+          onChange={(e) => setForm((f) => ({ ...f, aliases: e.target.value }))}
+          size="small"
+          fullWidth
+          placeholder="10.8.0.10"
+          helperText="Other addresses of the SAME machine (e.g. a VPN IP). Folded into IP so it isn't scraped/listed twice."
         />
         <LabelsEditor
           rows={form.labelRows}
