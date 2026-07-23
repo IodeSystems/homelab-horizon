@@ -168,10 +168,11 @@ type ExporterTargetResp struct {
 // TopologyResp is the read view of the observability topology: the raw declared
 // hosts and exporters (for editing) plus the fully-expanded targets with status.
 type TopologyResp struct {
-	Hosts      []HostDecl           `json:"hosts"`
-	Exporters  []Exporter           `json:"exporters"`
-	Targets    []ExporterTargetResp `json:"targets"`
-	KnownHosts []string             `json:"knownHosts"` // all host IPs hz knows (derived + declared); the "*" population
+	Hosts            []HostDecl           `json:"hosts"`
+	Exporters        []Exporter           `json:"exporters"`
+	Targets          []ExporterTargetResp `json:"targets"`
+	KnownHosts       []string             `json:"knownHosts"`       // all host IPs hz knows (derived + declared); the "*" population
+	ScrapeExclusions []string             `json:"scrapeExclusions"` // IPs/CIDRs dropped from the scrape config (host still listed, just not scraped)
 }
 
 // ScrapeTokenResp carries the read-only Prometheus scrape token.
@@ -187,6 +188,10 @@ type TopologyHostsRequest struct {
 
 type TopologyExportersRequest struct {
 	Exporters []Exporter `json:"exporters"`
+}
+
+type TopologyScrapeExclusionsRequest struct {
+	ScrapeExclusions []string `json:"scrapeExclusions"`
 }
 
 // ServiceScanMetricsRequest asks hz to discover a service's metrics path by

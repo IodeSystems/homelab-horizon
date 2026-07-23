@@ -41,6 +41,11 @@ Refactor `ScrapeYAML`/`HTTPSDTargets` to consume `[]ScrapeJob{Name,MetricsPath,B
 - ✅ **Docs** — `~/doc` deployment.md §Metrics scrape + standards.md METRICS-4/EDGE-5 (exporter modes, hosts). Committed `f9561f0`.
 - ◻ **MCP** — host/exporter tools. Deferred (optional).
 
+## Duplicate-host dedup (user, 2026-07-23)
+Problem: a machine reachable at both a VPN and a LAN address was scraped/listed twice (two known hosts, two exporter targets) — string dedup was on `host:port` and hz had no host identity.
+- ⛔ **Aliases (tried, reverted)** — added `HostDecl.Aliases` + canonical folding (`31e7c57`); reverted (`a1e586b`). Identity-linking was more machinery than the problem needed.
+- ✅ **Scrape exclusions (shipped)** — `Config.ScrapeExclusions []string` (IPs/CIDRs) never emitted as scrape targets. `scrapeExcluder()` applied in `DeriveExporterTargets` emit (all modes). Known hosts still list excluded IPs (so the UI can un-exclude). `PUT /api/v1/topology/scrape-exclusions` (whole-list, admin, validates IP/CIDR); `TopologyResp.ScrapeExclusions`. UI: per-row **Scrape** toggle in the Hosts table (CIDR-covered rows show read-only + reason) + an "Excluded from scrape" chip/add editor. Client mirrors the IPv4 exact+CIDR match. Test: `TestScrapeExclusionsDropTargets`.
+
 ## Hardening pass (user, 2026-07-21)
 - ✅ **Probe hardening** — verify body looks like exposition (HELP/TYPE or sample line); reject catchall/SPA 200s. `looksLikeExposition`.
 - ✅ **Probe false-positive fix (user, 2026-07-21)** — `looksLikeExposition` returned true on the *first* matching sample line, so a catchall/status page carrying one `word 123` line passed (e.g. `Service is running\nuptime 12345`); and the value regex accepted junk like an IP `192.168.1.1`. Now EVERY non-comment/non-blank line must be a valid sample (spec: all content lines are samples) and the value uses a strict float grammar. Tests: exposition_test.go mixed-content cases.

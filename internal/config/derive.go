@@ -582,6 +582,47 @@ func (c *Config) DeriveKnownHostIPs() []string {
 	return out
 }
 
+// scrapeExcluder returns a predicate reporting whether a host IP is excluded
+// from Prometheus scraping by ScrapeExclusions. Each exclusion is a bare IP or a
+// CIDR; malformed entries are ignored. Known hosts stay in DeriveKnownHostIPs
+// (so the UI can still list + un-exclude them) — exclusion only drops the target
+// at emit time, keeping it out of the served scrape config.
+func (c *Config) scrapeExcluder() func(string) bool {
+	if len(c.ScrapeExclusions) == 0 {
+		return func(string) bool { return false }
+	}
+	exact := map[string]bool{}
+	var nets []*net.IPNet
+	for _, e := range c.ScrapeExclusions {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		if strings.Contains(e, "/") {
+			if _, n, err := net.ParseCIDR(e); err == nil {
+				nets = append(nets, n)
+			}
+			continue
+		}
+		exact[e] = true
+	}
+	return func(ip string) bool {
+		if exact[ip] {
+			return true
+		}
+		if len(nets) > 0 {
+			if p := net.ParseIP(ip); p != nil {
+				for _, n := range nets {
+					if n.Contains(p) {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+}
+
 // ExporterTarget is one expanded exporter endpoint. Path is the primary/first
 // candidate; Paths is the full ordered candidate set (>1 for multi-path rules,
 // which hz probes to pick the live path per target). Servers that resolve a live
@@ -608,6 +649,7 @@ func (s *Service) metricsOptedIn() bool {
 // wins). Output is sorted (job, then address); duplicate addresses within a job
 // collapse.
 func (c *Config) DeriveExporterTargets() []ExporterTarget {
+	excluded := c.scrapeExcluder()
 	// name/ip -> declared labels, and name -> ip resolution.
 	labelsByIP := map[string]map[string]string{}
 	ipByName := map[string]string{}
@@ -656,7 +698,16 @@ func (c *Config) DeriveExporterTargets() []ExporterTarget {
 
 		seen := map[string]bool{}
 		emitOnce := func(addr string, labels map[string]string) {
+			addr = strings.TrimSpace(addr)
 			if addr == "" || seen[addr] {
+				return
+			}
+			// Drop targets whose host is excluded from scraping.
+			host := addr
+			if h, _, err := net.SplitHostPort(addr); err == nil {
+				host = h
+			}
+			if excluded(host) {
 				return
 			}
 			seen[addr] = true

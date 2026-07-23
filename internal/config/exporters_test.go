@@ -160,6 +160,39 @@ func TestDeriveKnownHostIPsIncludesDeclared(t *testing.T) {
 	}
 }
 
+func TestScrapeExclusionsDropTargets(t *testing.T) {
+	cfg := &Config{
+		// same box reachable at LAN + VPN; VPN address excluded by CIDR.
+		ScrapeExclusions: []string{"10.8.0.0/24", "192.168.1.99"},
+		Exporters: []Exporter{
+			{Job: "node", Mode: "static", Path: "/metrics", Targets: []string{
+				"192.168.1.50:9100", // kept
+				"10.8.0.50:9100",    // excluded by CIDR
+				"192.168.1.99:9100", // excluded by exact IP
+			}},
+		},
+	}
+	got := cfg.DeriveExporterTargets()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 target after exclusions, got %d: %+v", len(got), got)
+	}
+	if got[0].Address != "192.168.1.50:9100" {
+		t.Errorf("wrong surviving target: %q", got[0].Address)
+	}
+
+	// '*' port expansion must skip excluded hosts too.
+	cfg2 := &Config{
+		Hosts:            []HostDecl{{Name: "nas", IP: "192.168.1.50"}, {Name: "nas-vpn", IP: "10.8.0.50"}},
+		ScrapeExclusions: []string{"10.8.0.0/24"},
+		Exporters:        []Exporter{{Job: "node", Mode: "port", Port: 9100, Hosts: []string{"*"}}},
+	}
+	for _, tg := range cfg2.DeriveExporterTargets() {
+		if tg.Address == "10.8.0.50:9100" {
+			t.Errorf("excluded VPN host must not be scraped: %+v", tg)
+		}
+	}
+}
+
 func TestExporterPathListMultiAndDedup(t *testing.T) {
 	e := Exporter{Path: "/metrics, /api/metrics ,/metrics"}
 	got := e.PathList()

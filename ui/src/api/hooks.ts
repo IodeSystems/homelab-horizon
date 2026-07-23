@@ -1171,6 +1171,21 @@ export function useSaveTopologyExporters() {
   });
 }
 
+// Replace the scrape-exclusion list (IPs/CIDRs never scraped). Whole-list PUT.
+export function useSaveScrapeExclusions() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (scrapeExclusions: string[]) =>
+      apiFetch("/topology/scrape-exclusions", {
+        method: "PUT",
+        body: JSON.stringify({ scrapeExclusions }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["topology"] });
+    },
+  });
+}
+
 // Force a synchronous exporter re-probe (rather than waiting for the 60s
 // background loop). Returns the refreshed topology; seed the cache with it.
 export function useReprobeExporters() {
