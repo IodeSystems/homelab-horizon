@@ -574,57 +574,12 @@ func (c *Config) DeriveHostPortMap() HostPortMap {
 // hosts). This is the population an exporter's Hosts:["*"] expands over.
 func (c *Config) DeriveKnownHostIPs() []string {
 	m := c.DeriveHostPortMap()
-	canon := c.aliasCanonical()
-	set := make(map[string]bool, len(m.Hosts))
+	out := make([]string, 0, len(m.Hosts))
 	for ip := range m.Hosts {
-		if cip, ok := canon[ip]; ok {
-			ip = cip // fold an alias address into its canonical host
-		}
-		set[ip] = true
-	}
-	out := make([]string, 0, len(set))
-	for ip := range set {
 		out = append(out, ip)
 	}
 	sort.Strings(out)
 	return out
-}
-
-// aliasCanonical maps each declared host-alias address to that host's canonical
-// IP. It lets hz collapse one physical machine reachable at several addresses
-// (e.g. a VPN address and a LAN address) so it isn't scraped or listed twice.
-func (c *Config) aliasCanonical() map[string]string {
-	m := map[string]string{}
-	for _, h := range c.Hosts {
-		if h.IP == "" {
-			continue
-		}
-		for _, a := range h.Aliases {
-			a = strings.TrimSpace(a)
-			if a != "" && a != h.IP {
-				m[a] = h.IP
-			}
-		}
-	}
-	return m
-}
-
-// canonicalizeAddr rewrites the host part of addr to its canonical IP when addr
-// (with or without a port) is a declared alias. Unknown addresses pass through.
-func canonicalizeAddr(canon map[string]string, addr string) string {
-	if len(canon) == 0 {
-		return addr
-	}
-	if host, port, err := net.SplitHostPort(addr); err == nil {
-		if cip, ok := canon[host]; ok {
-			return net.JoinHostPort(cip, port)
-		}
-		return addr
-	}
-	if cip, ok := canon[addr]; ok { // bare IP, no port
-		return cip
-	}
-	return addr
 }
 
 // ExporterTarget is one expanded exporter endpoint. Path is the primary/first
@@ -654,7 +609,6 @@ func (s *Service) metricsOptedIn() bool {
 // collapse.
 func (c *Config) DeriveExporterTargets() []ExporterTarget {
 	// name/ip -> declared labels, and name -> ip resolution.
-	canon := c.aliasCanonical()
 	labelsByIP := map[string]map[string]string{}
 	ipByName := map[string]string{}
 	for _, h := range c.Hosts {
@@ -702,7 +656,6 @@ func (c *Config) DeriveExporterTargets() []ExporterTarget {
 
 		seen := map[string]bool{}
 		emitOnce := func(addr string, labels map[string]string) {
-			addr = canonicalizeAddr(canon, strings.TrimSpace(addr))
 			if addr == "" || seen[addr] {
 				return
 			}

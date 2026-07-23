@@ -134,7 +134,6 @@ export interface MetricsResp {
 export interface HostDecl {
   name: string;
   ip: string;
-  aliases?: string[]; // other addresses of the same machine (e.g. a VPN IP), folded into IP
   labels?: { [key: string]: string};
 }
 /**

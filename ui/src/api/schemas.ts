@@ -398,7 +398,6 @@ export const PendingChangesSchema = z.object({
 export const HostDeclSchema = z.object({
   name: z.string(),
   ip: z.string(),
-  aliases: z.array(z.string()).optional(),
   labels: z.record(z.string(), z.string()).optional(),
 });
 
