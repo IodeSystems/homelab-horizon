@@ -134,10 +134,9 @@ type MetricsResp struct {
 
 // HostDecl is an operator-declared host beyond those hz derives from the port map.
 type HostDecl struct {
-	Name    string            `json:"name"`
-	IP      string            `json:"ip"`
-	Aliases []string          `json:"aliases,omitempty"` // other addresses of the same machine (e.g. a VPN IP), folded into IP
-	Labels  map[string]string `json:"labels,omitempty"`
+	Name   string            `json:"name"`
+	IP     string            `json:"ip"`
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // Exporter is a Prometheus scrape job for endpoints hz does not proxy. Mode picks

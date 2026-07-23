@@ -160,48 +160,6 @@ func TestDeriveKnownHostIPsIncludesDeclared(t *testing.T) {
 	}
 }
 
-func TestHostAliasCollapsesSameMachine(t *testing.T) {
-	// nas is reachable at its LAN IP (canonical) and a VPN IP (alias). The same
-	// machine must not be scraped or listed twice.
-	cfg := &Config{
-		Hosts: []HostDecl{
-			{Name: "nas", IP: "192.168.1.50", Aliases: []string{"10.8.0.50"}, Labels: map[string]string{"role": "storage"}},
-		},
-		Exporters: []Exporter{
-			// static rule naming BOTH addresses of the same box
-			{Job: "node", Mode: "static", Port: 0, Path: "/metrics",
-				Targets: []string{"192.168.1.50:9100", "10.8.0.50:9100"}},
-		},
-	}
-
-	// known hosts: alias folded into canonical, listed once.
-	ips := cfg.DeriveKnownHostIPs()
-	n := 0
-	for _, ip := range ips {
-		if ip == "10.8.0.50" {
-			t.Errorf("alias 10.8.0.50 must not appear as a known host: %v", ips)
-		}
-		if ip == "192.168.1.50" {
-			n++
-		}
-	}
-	if n != 1 {
-		t.Errorf("canonical host should appear exactly once, got %d in %v", n, ips)
-	}
-
-	// exporter targets: both addresses collapse to one canonical target.
-	got := cfg.DeriveExporterTargets()
-	if len(got) != 1 {
-		t.Fatalf("expected 1 collapsed target, got %d: %+v", len(got), got)
-	}
-	if got[0].Address != "192.168.1.50:9100" {
-		t.Errorf("target should use canonical IP, got %q", got[0].Address)
-	}
-	if got[0].Labels["role"] != "storage" {
-		t.Errorf("canonical host labels should carry through, got %+v", got[0].Labels)
-	}
-}
-
 func TestExporterPathListMultiAndDedup(t *testing.T) {
 	e := Exporter{Path: "/metrics, /api/metrics ,/metrics"}
 	got := e.PathList()
