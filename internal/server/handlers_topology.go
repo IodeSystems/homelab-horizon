@@ -14,11 +14,11 @@ import (
 // --- config <-> apitypes mapping (plain data, field-for-field) ---------------
 
 func hostDeclToAPI(h config.HostDecl) apitypes.HostDecl {
-	return apitypes.HostDecl{Name: h.Name, IP: h.IP, Labels: h.Labels}
+	return apitypes.HostDecl{Name: h.Name, IP: h.IP, Aliases: h.Aliases, Labels: h.Labels}
 }
 
 func hostDeclFromAPI(h apitypes.HostDecl) config.HostDecl {
-	return config.HostDecl{Name: h.Name, IP: h.IP, Labels: h.Labels}
+	return config.HostDecl{Name: h.Name, IP: h.IP, Aliases: h.Aliases, Labels: h.Labels}
 }
 
 func exporterToAPI(e config.Exporter) apitypes.Exporter {

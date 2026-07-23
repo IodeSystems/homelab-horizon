@@ -280,9 +280,10 @@ type Config struct {
 // attach exporters and static labels for a box it doesn't itself route to (a
 // NAS, a DB server). Declared hosts also surface in the derived host/port map.
 type HostDecl struct {
-	Name   string            `json:"name"`             // logical name, e.g. "nas"
-	IP     string            `json:"ip"`               // host address
-	Labels map[string]string `json:"labels,omitempty"` // static labels applied to this host's exporter targets
+	Name    string            `json:"name"`              // logical name, e.g. "nas"
+	IP      string            `json:"ip"`                // canonical host address (the one scraped)
+	Aliases []string          `json:"aliases,omitempty"` // other addresses of the SAME machine (e.g. a VPN IP); folded into IP so the host isn't scraped/listed twice
+	Labels  map[string]string `json:"labels,omitempty"`  // static labels applied to this host's exporter targets
 }
 
 // Exporter is a Prometheus scrape job for endpoints hz does NOT proxy. Its Mode
