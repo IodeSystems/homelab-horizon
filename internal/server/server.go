@@ -1050,6 +1050,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/topology", s.handleAPITopology)
 	mux.HandleFunc("/api/v1/topology/hosts", s.handleAPITopologyHosts)
 	mux.HandleFunc("/api/v1/topology/exporters", s.handleAPITopologyExporters)
+	mux.HandleFunc("/api/v1/topology/scrape-exclusions", s.handleAPITopologyScrapeExclusions)
 	mux.HandleFunc("/api/v1/topology/reprobe", s.handleAPITopologyReprobe)
 	mux.HandleFunc("/api/v1/services/scan-metrics", s.handleAPIServiceScanMetrics)
 

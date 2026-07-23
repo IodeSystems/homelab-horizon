@@ -173,6 +173,7 @@ export interface TopologyResp {
   exporters: Exporter[];
   targets: ExporterTargetResp[];
   knownHosts: string[]; // all host IPs hz knows (derived + declared); the "*" population
+  scrapeExclusions: string[]; // IPs/CIDRs dropped from the scrape config (host still listed, just not scraped)
 }
 /**
  * ScrapeTokenResp carries the read-only Prometheus scrape token.
@@ -189,6 +190,9 @@ export interface TopologyHostsRequest {
 }
 export interface TopologyExportersRequest {
   exporters: Exporter[];
+}
+export interface TopologyScrapeExclusionsRequest {
+  scrapeExclusions: string[];
 }
 /**
  * ServiceScanMetricsRequest asks hz to discover a service's metrics path by

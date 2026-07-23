@@ -426,6 +426,7 @@ export const TopologyDataSchema = z.object({
   exporters: z.array(ExporterSchema),
   targets: z.array(ExporterTargetSchema),
   knownHosts: z.array(z.string()),
+  scrapeExclusions: z.array(z.string()).default([]),
 });
 
 export const ScrapeTokenRespSchema = z.object({

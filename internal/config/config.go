@@ -263,6 +263,12 @@ type Config struct {
 	Hosts     []HostDecl `json:"hosts,omitempty"`     // extra hosts beyond those derived from the port map
 	Exporters []Exporter `json:"exporters,omitempty"` // Prometheus exporter jobs (node, postgres, ...)
 
+	// ScrapeExclusions are host addresses hz must NOT emit as Prometheus scrape
+	// targets — each entry is a bare IP or a CIDR. Use it to drop a redundant
+	// address of a machine reachable at several (e.g. a VPN IP when the box is
+	// already scraped at its LAN IP), so it isn't counted twice.
+	ScrapeExclusions []string `json:"scrape_exclusions,omitempty"`
+
 	// PortExclusions are operator additions to the built-in port denylist that
 	// `ports next`/`ports list` (and any /api/v1/ports client) must skip when
 	// allocating. See internal/config/ports.go.

@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
@@ -51,11 +53,16 @@ func (s *Server) handleAPITopology(w http.ResponseWriter, r *http.Request) {
 // last exporter-probe results. Shared by GET /topology and the reprobe handler.
 func (s *Server) buildTopologyResp() apitypes.TopologyResp {
 	cfg := s.cfg()
+	exclusions := cfg.ScrapeExclusions
+	if exclusions == nil {
+		exclusions = []string{}
+	}
 	resp := apitypes.TopologyResp{
-		Hosts:      make([]apitypes.HostDecl, 0, len(cfg.Hosts)),
-		Exporters:  make([]apitypes.Exporter, 0, len(cfg.Exporters)),
-		Targets:    []apitypes.ExporterTargetResp{},
-		KnownHosts: cfg.DeriveKnownHostIPs(),
+		Hosts:            make([]apitypes.HostDecl, 0, len(cfg.Hosts)),
+		Exporters:        make([]apitypes.Exporter, 0, len(cfg.Exporters)),
+		Targets:          []apitypes.ExporterTargetResp{},
+		KnownHosts:       cfg.DeriveKnownHostIPs(),
+		ScrapeExclusions: exclusions,
 	}
 	for _, h := range cfg.Hosts {
 		resp.Hosts = append(resp.Hosts, hostDeclToAPI(h))
@@ -148,6 +155,47 @@ func (s *Server) handleAPITopologyExporters(w http.ResponseWriter, r *http.Reque
 		exporters = append(exporters, exporterFromAPI(e))
 	}
 	if err := s.updateConfig(func(cfg *config.Config) { cfg.Exporters = exporters }); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.kickExporterStatus()
+	writeJSONOK(w)
+}
+
+// handleAPITopologyScrapeExclusions replaces the scrape-exclusion list (IPs /
+// CIDRs never emitted as scrape targets). Whole-list replace. Admin-only.
+func (s *Server) handleAPITopologyScrapeExclusions(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost && r.Method != http.MethodPut {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST or PUT required")
+		return
+	}
+	var req apitypes.TopologyScrapeExclusionsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	out := make([]string, 0, len(req.ScrapeExclusions))
+	for _, e := range req.ScrapeExclusions {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		if strings.Contains(e, "/") {
+			if _, _, err := net.ParseCIDR(e); err != nil {
+				writeJSONError(w, http.StatusBadRequest, "invalid CIDR: "+e)
+				return
+			}
+		} else if net.ParseIP(e) == nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid IP: "+e)
+			return
+		}
+		out = append(out, e)
+	}
+	if err := s.updateConfig(func(cfg *config.Config) { cfg.ScrapeExclusions = out }); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

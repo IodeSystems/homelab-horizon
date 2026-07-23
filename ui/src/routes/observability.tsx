@@ -17,6 +17,7 @@ import {
   Paper,
   Snackbar,
   Stack,
+  Switch,
   Table,
   TableBody,
   TableCell,
@@ -24,6 +25,7 @@ import {
   TableHead,
   TableRow,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
@@ -40,6 +42,7 @@ import {
   useTopology,
   useSaveTopologyHosts,
   useSaveTopologyExporters,
+  useSaveScrapeExclusions,
   useReprobeExporters,
   useScrapeYaml,
   useScrapeToken,
@@ -826,9 +829,54 @@ interface UnifiedHostRow {
   declared?: HostDecl;
 }
 
+// --- scrape-exclusion matching (IPv4 exact + CIDR), mirrors config.scrapeExcluder ---
+
+function ipv4ToInt(ip: string): number | null {
+  const parts = ip.split(".");
+  if (parts.length !== 4) return null;
+  let n = 0;
+  for (const p of parts) {
+    if (p.trim() === "") return null;
+    const o = Number(p);
+    if (!Number.isInteger(o) || o < 0 || o > 255) return null;
+    n = (n << 8) | o;
+  }
+  return n >>> 0;
+}
+
+function cidrContains(cidr: string, ip: string): boolean {
+  const [base, bitsStr] = cidr.split("/");
+  if (base === undefined || bitsStr === undefined) return false;
+  const bits = Number(bitsStr);
+  const b = ipv4ToInt(base);
+  const t = ipv4ToInt(ip);
+  if (b === null || t === null || !Number.isInteger(bits) || bits < 0 || bits > 32) return false;
+  if (bits === 0) return true;
+  const mask = (0xffffffff << (32 - bits)) >>> 0;
+  return (b & mask) === (t & mask);
+}
+
+// The exclusion entry matching ip (exact IP or covering CIDR), or null.
+function exclusionFor(
+  exclusions: string[],
+  ip: string,
+): { entry: string; viaCidr: boolean } | null {
+  for (const e of exclusions) {
+    if (e.includes("/")) {
+      if (cidrContains(e, ip)) return { entry: e, viaCidr: true };
+    } else if (e === ip) {
+      return { entry: e, viaCidr: false };
+    }
+  }
+  return null;
+}
+
 function HostsSection({
   hosts,
   knownHosts,
+  scrapeExclusions,
+  onSetExclusions,
+  isSavingExclusions,
   onAdd,
   onDeclare,
   onEdit,
@@ -836,15 +884,29 @@ function HostsSection({
 }: {
   hosts: HostDecl[];
   knownHosts: string[];
+  scrapeExclusions: string[];
+  onSetExclusions: (next: string[]) => void;
+  isSavingExclusions: boolean;
   onAdd: () => void;
   onDeclare: (ip: string) => void;
   onEdit: (host: HostDecl) => void;
   onDelete: (name: string) => void;
 }) {
+  const [newExcl, setNewExcl] = useState("");
   const rows = useMemo<UnifiedHostRow[]>(() => {
     const byIP = new Map(hosts.map((h) => [h.ip, h]));
     return [...knownHosts].sort().map((ip) => ({ ip, declared: byIP.get(ip) }));
   }, [hosts, knownHosts]);
+
+  const addExclusion = () => {
+    const v = newExcl.trim();
+    if (!v || scrapeExclusions.includes(v)) {
+      setNewExcl("");
+      return;
+    }
+    onSetExclusions([...scrapeExclusions, v]);
+    setNewExcl("");
+  };
 
   return (
     <Box sx={{ mb: 4 }}>
@@ -864,72 +926,105 @@ function HostsSection({
               <TableCell>Source</TableCell>
               <TableCell>Name</TableCell>
               <TableCell>Labels</TableCell>
+              <TableCell align="center">Scrape</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} align="center">
+                <TableCell colSpan={6} align="center">
                   <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
                     No hosts known yet.
                   </Typography>
                 </TableCell>
               </TableRow>
             ) : (
-              rows.map((row) => (
-                <TableRow key={row.ip} hover>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                      {row.ip}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Chip
-                      label={row.declared ? "declared" : "derived"}
-                      size="small"
-                      color={row.declared ? "primary" : "default"}
-                      variant="outlined"
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Typography
-                      variant="body2"
-                      sx={{ fontWeight: row.declared ? 600 : 400 }}
-                      color={row.declared ? "text.primary" : "text.secondary"}
-                    >
-                      {row.declared?.name ?? "—"}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <LabelChips labels={row.declared?.labels} />
-                  </TableCell>
-                  <TableCell align="right">
-                    {row.declared ? (
-                      <>
-                        <IconButton size="small" onClick={() => onEdit(row.declared as HostDecl)}>
-                          <EditIcon fontSize="small" />
-                        </IconButton>
-                        <IconButton
-                          size="small"
-                          color="error"
-                          onClick={() => onDelete((row.declared as HostDecl).name)}
-                        >
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
-                      </>
-                    ) : (
-                      <Button
+              rows.map((row) => {
+                const ex = exclusionFor(scrapeExclusions, row.ip);
+                const excluded = ex !== null;
+                const toggle = (
+                  <Switch
+                    size="small"
+                    checked={!excluded}
+                    disabled={isSavingExclusions || (ex?.viaCidr ?? false)}
+                    onChange={(e) =>
+                      onSetExclusions(
+                        e.target.checked
+                          ? scrapeExclusions.filter((x) => x !== row.ip)
+                          : [...scrapeExclusions, row.ip],
+                      )
+                    }
+                  />
+                );
+                return (
+                  <TableRow key={row.ip} hover sx={{ opacity: excluded ? 0.6 : 1 }}>
+                    <TableCell>
+                      <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                        {row.ip}
+                      </Typography>
+                      {excluded ? (
+                        <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                          not scraped{ex?.viaCidr ? ` (via ${ex.entry})` : ""}
+                        </Typography>
+                      ) : null}
+                    </TableCell>
+                    <TableCell>
+                      <Chip
+                        label={row.declared ? "declared" : "derived"}
                         size="small"
-                        startIcon={<LabelIcon fontSize="small" />}
-                        onClick={() => onDeclare(row.ip)}
+                        color={row.declared ? "primary" : "default"}
+                        variant="outlined"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Typography
+                        variant="body2"
+                        sx={{ fontWeight: row.declared ? 600 : 400 }}
+                        color={row.declared ? "text.primary" : "text.secondary"}
                       >
-                        Declare / add labels
-                      </Button>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))
+                        {row.declared?.name ?? "—"}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      <LabelChips labels={row.declared?.labels} />
+                    </TableCell>
+                    <TableCell align="center">
+                      {ex?.viaCidr ? (
+                        <Tooltip title={`Excluded by CIDR ${ex.entry} — edit the list below`}>
+                          <span>{toggle}</span>
+                        </Tooltip>
+                      ) : (
+                        toggle
+                      )}
+                    </TableCell>
+                    <TableCell align="right">
+                      {row.declared ? (
+                        <>
+                          <IconButton size="small" onClick={() => onEdit(row.declared as HostDecl)}>
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                          <IconButton
+                            size="small"
+                            color="error"
+                            onClick={() => onDelete((row.declared as HostDecl).name)}
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </>
+                      ) : (
+                        <Button
+                          size="small"
+                          startIcon={<LabelIcon fontSize="small" />}
+                          onClick={() => onDeclare(row.ip)}
+                        >
+                          Declare / add labels
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>
@@ -940,8 +1035,58 @@ function HostsSection({
           port map
         </Link>{" "}
         and are already known — a port rule with hosts <code>['*']</code> covers all of them.
-        Declare a host only to label it, or to add one hz doesn't route to.
+        Declare a host only to label it, or to add one hz doesn't route to. Turn off{" "}
+        <strong>Scrape</strong> to drop a redundant address (e.g. a VPN IP for a box already
+        scraped at its LAN IP) from the served config.
       </Typography>
+
+      <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
+          Excluded from scrape
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+          IPs or CIDRs hz never emits as scrape targets. Add a CIDR (e.g.{" "}
+          <code>10.8.0.0/24</code>) to drop a whole network.
+        </Typography>
+        <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap", mb: 1 }}>
+          {scrapeExclusions.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">
+              None.
+            </Typography>
+          ) : (
+            scrapeExclusions.map((e) => (
+              <Chip
+                key={e}
+                label={e}
+                size="small"
+                onDelete={
+                  isSavingExclusions
+                    ? undefined
+                    : () => onSetExclusions(scrapeExclusions.filter((x) => x !== e))
+                }
+                sx={{ fontFamily: "monospace" }}
+              />
+            ))
+          )}
+        </Box>
+        <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+          <TextField
+            size="small"
+            placeholder="10.8.0.0/24 or 10.8.0.50"
+            value={newExcl}
+            onChange={(e) => setNewExcl(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                addExclusion();
+              }
+            }}
+          />
+          <Button size="small" onClick={addExclusion} disabled={isSavingExclusions || !newExcl.trim()}>
+            Add
+          </Button>
+        </Box>
+      </Paper>
     </Box>
   );
 }
@@ -1167,6 +1312,7 @@ function ObservabilityPage() {
   const { data, isLoading, error } = useTopology();
   const saveHosts = useSaveTopologyHosts();
   const saveExporters = useSaveTopologyExporters();
+  const saveExclusions = useSaveScrapeExclusions();
   const reprobe = useReprobeExporters();
 
   const [addExporterOpen, setAddExporterOpen] = useState(false);
@@ -1198,6 +1344,7 @@ function ObservabilityPage() {
   const hosts = data?.hosts ?? [];
   const targets = data?.targets ?? [];
   const knownHosts = data?.knownHosts ?? [];
+  const scrapeExclusions = data?.scrapeExclusions ?? [];
 
   const handleAddExporter = (form: ExporterFormState) => {
     saveExporters.mutate([...exporters, formToExporter(form)], {
@@ -1286,6 +1433,13 @@ function ObservabilityPage() {
       <HostsSection
         hosts={hosts}
         knownHosts={knownHosts}
+        scrapeExclusions={scrapeExclusions}
+        onSetExclusions={(next) =>
+          saveExclusions.mutate(next, {
+            onError: (e) => showSnack(String(e), "error"),
+          })
+        }
+        isSavingExclusions={saveExclusions.isPending}
         onAdd={() => {
           setAddHostPrefillIP("");
           setAddHostOpen(true);
