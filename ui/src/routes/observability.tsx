@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   Alert,
@@ -41,7 +42,6 @@ import {
   useSaveTopologyExporters,
   useReprobeExporters,
   useScrapeYaml,
-  useSetupScript,
   useScrapeToken,
   useRotateScrapeToken,
 } from "../api/hooks";
@@ -662,59 +662,171 @@ function ScrapeTokenSection() {
   );
 }
 
-function OutputZone() {
+// Prometheus wiring targets. scrape.yaml is fetched with the scrape token onto
+// the Prometheus box; hz.yml is the include file Prometheus reads via
+// scrape_config_files (matches what setup.sh installs server-side).
+const SCRAPE_YAML_PATH = "/integration/prometheus/scrape.yaml";
+const HZ_YML_DEST = "/etc/prometheus/hz.yml";
+const REFRESH_BIN = "/usr/local/bin/hz-scrape-refresh.sh";
+const CRON_DEST = "/etc/cron.d/hz-scrape-refresh";
+
+function hzOrigin(): string {
+  return typeof window !== "undefined" ? window.location.origin : "";
+}
+
+// One-time pull of scrape.yaml → include → reload.
+function scrapeFetchCommand(token: string): string {
+  return [
+    `# Fetch hz's generated scrape config onto the Prometheus box:`,
+    `curl -fsS -H "Authorization: Bearer ${token}" \\`,
+    `  ${hzOrigin()}${SCRAPE_YAML_PATH} \\`,
+    `  -o ${HZ_YML_DEST}`,
+    ``,
+    `# Include it once in /etc/prometheus/prometheus.yml:`,
+    `#   scrape_config_files:`,
+    `#     - ${HZ_YML_DEST}`,
+    ``,
+    `sudo systemctl reload prometheus`,
+  ].join("\n");
+}
+
+// Self-contained cron: install a refresh script (scrape token baked in) + a
+// cron.d entry that re-pulls scrape.yaml and reloads Prometheus every 2 min.
+function cronInstallCommand(token: string): string {
+  return [
+    `# 1. Install the refresh script:`,
+    `sudo tee ${REFRESH_BIN} >/dev/null <<'EOF'`,
+    `#!/bin/bash`,
+    `set -euo pipefail`,
+    `curl -fsS -H "Authorization: Bearer ${token}" \\`,
+    `  ${hzOrigin()}${SCRAPE_YAML_PATH} \\`,
+    `  -o ${HZ_YML_DEST}`,
+    `systemctl reload prometheus`,
+    `EOF`,
+    `sudo chmod +x ${REFRESH_BIN}`,
+    ``,
+    `# 2. Run it every 2 minutes via cron:`,
+    `echo '*/2 * * * * root ${REFRESH_BIN}' \\`,
+    `  | sudo tee ${CRON_DEST} >/dev/null`,
+  ].join("\n");
+}
+
+function CommandModal({
+  open,
+  onClose,
+  title,
+  description,
+  command,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  description: ReactNode;
+  command: string;
+  children?: ReactNode;
+}) {
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle>{title}</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          {description}
+        </Typography>
+        <CodeBlock text={command} maxHeight={400} />
+        {children}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Close</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+function SetupZone() {
+  const scrapeToken = useScrapeToken();
   const scrapeYaml = useScrapeYaml();
-  const setupScript = useSetupScript();
+  const [openModal, setOpenModal] = useState<null | "scrape" | "cron">(null);
+  const token = scrapeToken.data?.token ?? "";
 
   return (
     <Box sx={{ mb: 4 }}>
       <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
-        Output
+        Setup
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Point a Prometheus server at hz using the generated scrape config, or install a
-        Prometheus server that's already wired up.
+        Wire a Prometheus server to hz. Pull the generated scrape config once, or install a cron
+        job that keeps it current. Both authenticate with the scrape token below.
       </Typography>
 
       <Stack spacing={2}>
-        <Paper variant="outlined" sx={{ p: 2 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
-            scrape.yaml
-          </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
-            <code>GET /integration/prometheus/scrape.yaml</code> — add this as a scrape config
-            on any Prometheus server.
-          </Typography>
-          {scrapeYaml.isLoading ? (
-            <CircularProgress size={20} />
-          ) : scrapeYaml.error ? (
-            <Alert severity="error">Failed to load scrape.yaml: {scrapeYaml.error.message}</Alert>
-          ) : (
-            <CodeBlock text={scrapeYaml.data ?? ""} />
-          )}
-        </Paper>
-
-        <Paper variant="outlined" sx={{ p: 2 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
-            Install a Prometheus server
-          </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
-            Copy this to your Prometheus box and run: <code>sudo bash setup.sh</code> — it embeds
-            a read-only scrape token and installs a refresh timer. Requires an admin session to
-            fetch (it embeds a secret), so it can no longer be piped straight from curl on an
-            unauthenticated box.
-          </Typography>
-          {setupScript.isLoading ? (
-            <CircularProgress size={20} />
-          ) : setupScript.error ? (
-            <Alert severity="error">Failed to load setup.sh: {setupScript.error.message}</Alert>
-          ) : (
-            <CodeBlock text={setupScript.data ?? ""} />
-          )}
-        </Paper>
-
         <ScrapeTokenSection />
+
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>
+            Prometheus wiring
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.5 }}>
+            Each opens a copy-run command (scrape token baked in) for your Prometheus box.
+          </Typography>
+          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", gap: 1 }}>
+            <Button
+              variant="outlined"
+              startIcon={<ContentCopyIcon />}
+              disabled={!token}
+              onClick={() => setOpenModal("scrape")}
+            >
+              scrape.yaml (one-time)
+            </Button>
+            <Button
+              variant="outlined"
+              startIcon={<AutorenewIcon />}
+              disabled={!token}
+              onClick={() => setOpenModal("cron")}
+            >
+              Auto-update (cron)
+            </Button>
+          </Stack>
+        </Paper>
       </Stack>
+
+      <CommandModal
+        open={openModal === "scrape"}
+        onClose={() => setOpenModal(null)}
+        title="Fetch scrape.yaml"
+        description={
+          <>
+            One-time pull of hz's generated scrape config to <code>{HZ_YML_DEST}</code>, then
+            include it and reload. The command below contains your scrape token.
+          </>
+        }
+        command={scrapeFetchCommand(token)}
+      >
+        <Typography variant="subtitle2" sx={{ fontWeight: 600, mt: 2, mb: 1 }}>
+          Current scrape.yaml
+        </Typography>
+        {scrapeYaml.isLoading ? (
+          <CircularProgress size={20} />
+        ) : scrapeYaml.error ? (
+          <Alert severity="error">Failed to load scrape.yaml: {scrapeYaml.error.message}</Alert>
+        ) : (
+          <CodeBlock text={scrapeYaml.data ?? ""} />
+        )}
+      </CommandModal>
+
+      <CommandModal
+        open={openModal === "cron"}
+        onClose={() => setOpenModal(null)}
+        title="Install auto-update cron"
+        description={
+          <>
+            Installs a refresh script + <code>cron.d</code> entry that re-pulls scrape.yaml every 2
+            minutes and reloads Prometheus. Uses the scrape token — no admin token needed on the
+            box. The command below contains your scrape token.
+          </>
+        }
+        command={cronInstallCommand(token)}
+      />
     </Box>
   );
 }
@@ -1186,7 +1298,7 @@ function ObservabilityPage() {
         </Typography>
       </Box>
 
-      <OutputZone />
+      <SetupZone />
 
       <HostsSection
         hosts={hosts}
