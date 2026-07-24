@@ -653,6 +653,7 @@ function ScrapeTokenSection() {
 // scrape_config_files (matches what setup.sh installs server-side).
 const SCRAPE_YAML_PATH = "/integration/prometheus/scrape.yaml";
 const HZ_YML_DEST = "/etc/prometheus/hz.yml";
+const PROM_YML = "/etc/prometheus/prometheus.yml";
 const REFRESH_BIN = "/usr/local/bin/hz-scrape-refresh.sh";
 const CRON_DEST = "/etc/cron.d/hz-scrape-refresh";
 
@@ -660,40 +661,85 @@ function hzOrigin(): string {
   return typeof window !== "undefined" ? window.location.origin : "";
 }
 
-// One-time pull of scrape.yaml → include → reload.
+// Preamble: shell vars every snippet references (PROM_URL is overridable).
+const shellHeader = [
+  `PROM_URL="\${PROM_URL:-http://localhost:9090}"   # Prometheus API — override if not local`,
+  `PROM_YML=${PROM_YML}`,
+  `HZ_YML=${HZ_YML_DEST}`,
+];
+
+// Idempotently wire the scrape_config_files include into prometheus.yml. Without
+// this hz.yml is written but never read — the "not loaded" trap.
+const ensureIncludeSnippet = [
+  `# Ensure prometheus.yml includes hz.yml (idempotent):`,
+  `if ! grep -qF "$HZ_YML" "$PROM_YML"; then`,
+  `  sudo cp -a "$PROM_YML" "$PROM_YML.bak.$(date +%s)"`,
+  `  if grep -qE '^scrape_config_files:' "$PROM_YML"; then`,
+  `    sudo sed -i "/^scrape_config_files:/a\\  - $HZ_YML" "$PROM_YML"`,
+  `  else`,
+  `    printf '\\nscrape_config_files:\\n  - %s\\n' "$HZ_YML" | sudo tee -a "$PROM_YML" >/dev/null`,
+  `  fi`,
+  `fi`,
+];
+
+// Confirm Prometheus actually loaded the include after a reload.
+const verifyLoadedSnippet = [
+  `# Verify hz.yml is loaded by Prometheus:`,
+  `sleep 1`,
+  `if curl -fsS "$PROM_URL/api/v1/status/config" | grep -q hz.yml; then`,
+  `  echo "OK: hz.yml is loaded by Prometheus"`,
+  `else`,
+  `  echo "WARNING: hz.yml NOT loaded — check scrape_config_files in $PROM_YML"`,
+  `fi`,
+];
+
+// One-time: fetch scrape.yaml → wire include → validate → reload → verify.
 function scrapeFetchCommand(token: string): string {
   return [
-    `# Fetch hz's generated scrape config onto the Prometheus box:`,
+    ...shellHeader,
+    ``,
+    `# 1. Fetch hz's generated scrape config:`,
     `curl -fsS -H "Authorization: Bearer ${token}" \\`,
-    `  ${hzOrigin()}${SCRAPE_YAML_PATH} \\`,
-    `  -o ${HZ_YML_DEST}`,
+    `  ${hzOrigin()}${SCRAPE_YAML_PATH} | sudo tee "$HZ_YML" >/dev/null`,
     ``,
-    `# Include it once in /etc/prometheus/prometheus.yml:`,
-    `#   scrape_config_files:`,
-    `#     - ${HZ_YML_DEST}`,
+    `# 2. ${ensureIncludeSnippet[0]?.slice(2)}`,
+    ...ensureIncludeSnippet.slice(1),
     ``,
+    `# 3. Validate + reload:`,
+    `sudo promtool check config "$PROM_YML"`,
     `sudo systemctl reload prometheus`,
+    ``,
+    `# 4. ${verifyLoadedSnippet[0]?.slice(2)}`,
+    ...verifyLoadedSnippet.slice(1),
   ].join("\n");
 }
 
-// Self-contained cron: install a refresh script (scrape token baked in) + a
-// cron.d entry that re-pulls scrape.yaml and reloads Prometheus every 2 min.
+// Self-contained cron: wire the include once, install a refresh script (scrape
+// token baked in) + cron.d entry that re-pulls scrape.yaml and reloads every
+// 2 min, then verify it loaded.
 function cronInstallCommand(token: string): string {
   return [
-    `# 1. Install the refresh script:`,
+    ...shellHeader,
+    ``,
+    `# 1. ${ensureIncludeSnippet[0]?.slice(2)}`,
+    ...ensureIncludeSnippet.slice(1),
+    ``,
+    `# 2. Install the refresh script (scrape token baked in):`,
     `sudo tee ${REFRESH_BIN} >/dev/null <<'EOF'`,
     `#!/bin/bash`,
     `set -euo pipefail`,
     `curl -fsS -H "Authorization: Bearer ${token}" \\`,
-    `  ${hzOrigin()}${SCRAPE_YAML_PATH} \\`,
-    `  -o ${HZ_YML_DEST}`,
+    `  ${hzOrigin()}${SCRAPE_YAML_PATH} -o ${HZ_YML_DEST}`,
     `systemctl reload prometheus`,
     `EOF`,
     `sudo chmod +x ${REFRESH_BIN}`,
     ``,
-    `# 2. Run it every 2 minutes via cron:`,
-    `echo '*/2 * * * * root ${REFRESH_BIN}' \\`,
-    `  | sudo tee ${CRON_DEST} >/dev/null`,
+    `# 3. Pull now, then every 2 minutes via cron:`,
+    `sudo ${REFRESH_BIN}`,
+    `echo '*/2 * * * * root ${REFRESH_BIN}' | sudo tee ${CRON_DEST} >/dev/null`,
+    ``,
+    `# 4. ${verifyLoadedSnippet[0]?.slice(2)}`,
+    ...verifyLoadedSnippet.slice(1),
   ].join("\n");
 }
 
@@ -782,8 +828,10 @@ function SetupZone() {
         title="Fetch scrape.yaml"
         description={
           <>
-            One-time pull of hz's generated scrape config to <code>{HZ_YML_DEST}</code>, then
-            include it and reload. The command below contains your scrape token.
+            One-time pull of hz's generated scrape config to <code>{HZ_YML_DEST}</code>, wires the{" "}
+            <code>scrape_config_files</code> include into <code>prometheus.yml</code> if missing,
+            reloads, then verifies Prometheus actually loaded it. The command contains your scrape
+            token.
           </>
         }
         command={scrapeFetchCommand(token)}
@@ -806,9 +854,10 @@ function SetupZone() {
         title="Install auto-update cron"
         description={
           <>
-            Installs a refresh script + <code>cron.d</code> entry that re-pulls scrape.yaml every 2
-            minutes and reloads Prometheus. Uses the scrape token — no admin token needed on the
-            box. The command below contains your scrape token.
+            Wires the <code>scrape_config_files</code> include once, installs a refresh script +{" "}
+            <code>cron.d</code> entry that re-pulls scrape.yaml every 2 minutes and reloads
+            Prometheus, then verifies it loaded. Uses the scrape token — no admin token needed on
+            the box. The command contains your scrape token.
           </>
         }
         command={cronInstallCommand(token)}
