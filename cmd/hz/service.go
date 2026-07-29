@@ -203,6 +203,10 @@ type serviceFlags struct {
 	name          string
 	domains       multiFlag
 	domainsCSV    string
+	https         bool
+	httpsDomains  multiFlag
+	httpsCSV      string
+	confirm       bool
 	backend       string
 	staticRoot    string
 	static        bool
@@ -239,6 +243,10 @@ func newServiceFlags(name string) *serviceFlags {
 	f.StringVar(&sf.name, "name", "", "service name")
 	f.Var(&sf.domains, "domain", "domain (repeatable)")
 	f.StringVar(&sf.domainsCSV, "domains", "", "comma-separated domains")
+	f.BoolVar(&sf.https, "https", false, "serve every domain over HTTPS (--https=false drops HTTPS from domains not named by --domain-https)")
+	f.Var(&sf.httpsDomains, "domain-https", "domain served over HTTPS (repeatable); also added to the service")
+	f.StringVar(&sf.httpsCSV, "domains-https", "", "comma-separated HTTPS domains")
+	f.BoolVar(&sf.confirm, "confirm", false, "allow changing the HTTPS state of domains that already exist")
 	f.StringVar(&sf.backend, "backend", "", "proxy backend host:port")
 	f.StringVar(&sf.staticRoot, "static-root", "", "static folder to serve")
 	f.BoolVar(&sf.static, "static", false, "serve an hz-managed static folder (auto path when --static-root omitted)")
@@ -277,9 +285,20 @@ func (sf *serviceFlags) parse(args []string) error {
 }
 
 func (sf *serviceFlags) allDomains() []string {
+	return mergeDomains(sf.domains, sf.domainsCSV)
+}
+
+// httpsList is the domains named by --domain-https / --domains-https. They are
+// service domains too, so `--domains a --domains-https b,c` yields a service on
+// a, b and c with HTTPS on b and c only.
+func (sf *serviceFlags) httpsList() []string {
+	return mergeDomains(sf.httpsDomains, sf.httpsCSV)
+}
+
+func mergeDomains(repeated multiFlag, csv string) []string {
 	var out []string
-	out = append(out, sf.domains...)
-	for _, d := range strings.Split(sf.domainsCSV, ",") {
+	out = append(out, repeated...)
+	for _, d := range strings.Split(csv, ",") {
 		if d = strings.TrimSpace(d); d != "" {
 			out = append(out, d)
 		}
@@ -287,11 +306,47 @@ func (sf *serviceFlags) allDomains() []string {
 	return out
 }
 
+// httpsFlagSet reports whether the user expressed any HTTPS intent. Without it
+// a mutation leaves SSL coverage completely alone.
+func (sf *serviceFlags) httpsFlagSet() bool {
+	return sf.set["https"] || sf.set["domain-https"] || sf.set["domains-https"]
+}
+
+// withHTTPSDomains appends --domain-https values not already in base.
+func (sf *serviceFlags) withHTTPSDomains(base []string) []string {
+	seen := make(map[string]bool, len(base))
+	for _, d := range base {
+		seen[d] = true
+	}
+	out := base
+	for _, d := range sf.httpsList() {
+		if !seen[d] {
+			seen[d] = true
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// desiredHTTPS maps every final domain to its wanted HTTPS state: domains named
+// by --domain-https are on, the rest follow --https (so `--https=false` with a
+// --domains-https list means "these over HTTPS, the difference over HTTP").
+func (sf *serviceFlags) desiredHTTPS(domains []string) map[string]bool {
+	want := make(map[string]bool, len(domains))
+	for _, d := range domains {
+		want[d] = sf.https
+	}
+	for _, d := range sf.httpsList() {
+		want[d] = true
+	}
+	return want
+}
+
 // buildRequest constructs a ServiceRequest from scratch (create).
 func (sf *serviceFlags) buildRequest() (apitypes.ServiceRequest, error) {
 	req := apitypes.ServiceRequest{
 		Name:    sf.name,
-		Domains: sf.allDomains(),
+		Domains: sf.withHTTPSDomains(sf.allDomains()),
 	}
 	if req.Name == "" {
 		return req, fmt.Errorf("--name is required")
@@ -358,11 +413,43 @@ func serviceCreate(c *client, args []string) error {
 	if err != nil {
 		return err
 	}
+	want, err := sf.checkHTTPSPlan(c, req.Domains, nil)
+	if err != nil {
+		return err
+	}
 	if err := c.do("POST", "/api/v1/services/add", req, nil); err != nil {
 		return err
 	}
 	fmt.Printf("Created service %q.\n", req.Name)
+	if want != nil {
+		if err := applyHTTPS(c, req.Domains, want); err != nil {
+			return err
+		}
+	}
 	return maybeSync(c, sf.sync)
+}
+
+// checkHTTPSPlan resolves the desired per-domain HTTPS state and refuses, before
+// the service mutation lands, to change any that is already live without
+// --confirm. Returns nil when no HTTPS flag was passed (coverage untouched).
+func (sf *serviceFlags) checkHTTPSPlan(c *client, domains, existing []string) (map[string]bool, error) {
+	if !sf.httpsFlagSet() {
+		return nil, nil
+	}
+	want := sf.desiredHTTPS(domains)
+	dm, err := fetchDomainMap(c)
+	if err != nil {
+		return nil, err
+	}
+	existingSet := make(map[string]bool, len(existing))
+	for _, d := range existing {
+		existingSet[d] = true
+	}
+	_, needConfirm := planHTTPS(domains, want, existingSet, dm)
+	if len(needConfirm) > 0 && !sf.confirm {
+		return nil, fmt.Errorf("this changes HTTPS on domains that already exist (%s): pass --confirm", domainsOf(needConfirm))
+	}
+	return want, nil
 }
 
 // respToRequest converts an existing ServiceResp into a ServiceRequest so an
@@ -443,8 +530,12 @@ func serviceEdit(c *client, args []string) error {
 	if set["name"] {
 		req.Name = sf.name
 	}
+	existingDomains := append([]string(nil), req.Domains...)
 	if set["domain"] || set["domains"] {
-		req.Domains = sf.allDomains()
+		req.Domains = sf.withHTTPSDomains(sf.allDomains())
+	} else if sf.set["domain-https"] || sf.set["domains-https"] {
+		// No explicit domain list: --domain-https only adds to what's there.
+		req.Domains = sf.withHTTPSDomains(req.Domains)
 	}
 	if set["internal-dns-ip"] {
 		if sf.intDNSIP == "" {
@@ -544,10 +635,20 @@ func serviceEdit(c *client, args []string) error {
 		}
 	}
 
+	want, err := sf.checkHTTPSPlan(c, req.Domains, existingDomains)
+	if err != nil {
+		return err
+	}
+
 	if err := c.do("POST", "/api/v1/services/edit", req, nil); err != nil {
 		return err
 	}
 	fmt.Printf("Edited service %q.\n", name)
+	if want != nil {
+		if err := applyHTTPS(c, req.Domains, want); err != nil {
+			return err
+		}
+	}
 	return maybeSync(c, sf.sync)
 }
 

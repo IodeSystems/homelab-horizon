@@ -192,6 +192,14 @@ hz setup                             # interactive questionnaire -> create + syn
 hz service create --name ebb --domain ebb.example.com \
     --backend 192.168.1.76:8300 --internal-only --health-check /healthz --sync
 hz service edit ebb --public         # only the flags you pass change
+hz service create --name shop --domain lan.example.com \
+    --domains-https www.example.com --backend 192.168.1.76:8080
+                                     # lan.example.com stays HTTP, www.example.com gets HTTPS
+hz service edit ebb --https --confirm # HTTPS on every domain of the service
+hz domain list                       # every domain: service, zone, HTTPS coverage, cert
+hz domain ssl add ebb.example.com    # give one domain HTTPS
+hz domain ssl rm ebb.example.com --confirm
+                                     # drop it back to plain HTTP
 hz sync --wait                       # trigger a global sync, block until done
 hz pending                           # show unsynced config changes
 hz ports list --host 192.168.1.76    # reserved ports on a host + suggested free ports

@@ -56,6 +56,10 @@ COMMANDS
                                      Find the next free port range on a host (safe band, common ports skipped)
   ports list --host IP [--count N] [--from PORT]
                                      List reserved ports on a host + suggested free ports
+  domain list [--json]               List every known domain: service, zone, HTTPS coverage, cert
+  domain ssl add <domain>...         Give domains HTTPS (adds the SubZone that covers them)
+  domain ssl rm <domain>... --confirm
+                                     Drop HTTPS from domains (back to plain HTTP)
   host list                          List declared hosts (table)
   host add --name N --ip IP [--label k=v ...]
                                      Declare a host (error if name/ip already used)
@@ -69,7 +73,12 @@ COMMANDS
 
 SERVICE FLAGS (create/edit)
   --name NAME               service name (create: required; edit: rename)
-  --domain D                domain (repeatable) or --domains a,b,c
+  --domain D                domain (repeatable) or --domains a,b,c — plain HTTP
+  --domain-https D          domain served over HTTPS (repeatable) or --domains-https a,b
+                            (also added to the service; combine with --domain for a mixed set)
+  --https                   serve every domain over HTTPS
+  --https=false             drop HTTPS from every domain not named by --domain-https
+  --confirm                 required when the change flips HTTPS on a domain that already exists
   --backend HOST:PORT       proxy backend
   --static-root DIR         serve a static folder instead of a backend
   --self                    route to this hz instance's own admin UI
@@ -116,7 +125,14 @@ EXAMPLES
   hz setup
   hz service create --name ebb --domain ebb.iodesystems.com \
     --backend 192.168.1.76:8300 --internal-only --health-check /healthz --sync
+  hz service create --name ebb --domains-https ebb.iodesystems.com \
+    --backend 192.168.1.76:8300 --sync                            # HTTPS from the start
+  hz service create --name mix --domain lan.example.com --domains-https www.example.com \
+    --backend 192.168.1.76:8080                                   # lan.* stays HTTP, www.* gets HTTPS
+  hz service edit ebb --https --confirm --sync                    # turn on HTTPS for existing domains
   hz service edit grafana.iodesystems.com --metrics --sync   # opt into /metrics scraping
+  hz domain list
+  hz domain ssl add ebb.iodesystems.com --sync
   hz sync --wait
   hz schema service
   hz host add --name nas --ip 192.168.1.50 --label role=storage
@@ -194,6 +210,8 @@ func main() {
 		err = runPending(c, rest)
 	case "ports":
 		err = runPorts(c, rest)
+	case "domain":
+		err = runDomain(c, rest)
 	case "host":
 		err = runHost(c, rest)
 	case "exporter":
