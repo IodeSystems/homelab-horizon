@@ -782,6 +782,10 @@ type DomainSSLAddResponse struct {
 
 type DomainSSLRemoveRequest struct {
 	Domain string `json:"domain"`
+	// Force drops the SubZone even when service domains would lose their only
+	// SSL coverage. The UI never sets it; `hz domain ssl rm --confirm` does, so
+	// an operator can deliberately return a service domain to plain HTTP.
+	Force bool `json:"force,omitempty"`
 }
 
 // Service integration

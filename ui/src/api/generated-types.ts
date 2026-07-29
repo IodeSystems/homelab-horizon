@@ -700,6 +700,12 @@ export interface DomainSSLAddResponse {
 }
 export interface DomainSSLRemoveRequest {
   domain: string;
+  /**
+   * Force drops the SubZone even when service domains would lose their only
+   * SSL coverage. The UI never sets it; `hz domain ssl rm --confirm` does, so
+   * an operator can deliberately return a service domain to plain HTTP.
+   */
+  force?: boolean;
 }
 export interface ServiceIntegration {
   name: string;

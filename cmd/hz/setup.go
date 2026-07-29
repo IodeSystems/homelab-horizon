@@ -37,6 +37,10 @@ func runSetup(c *client, _ []string) error {
 
 	req := apitypes.ServiceRequest{Name: name, Domains: domains}
 
+	// HTTPS coverage lives on the zone (a SubZone -> a SAN on its cert), so it's
+	// applied after the service is created, not as part of the request.
+	enableHTTPS := askBool(in, "Serve these domains over HTTPS (adds SSL coverage on their zone)?", true)
+
 	kind := ask(in, "Target type: [b]ackend / [s]tatic folder / [n]one", "b")
 	switch strings.ToLower(kind) {
 	case "b", "backend", "":
@@ -113,6 +117,16 @@ func runSetup(c *client, _ []string) error {
 		return err
 	}
 	fmt.Printf("Created service %q.\n", req.Name)
+
+	if enableHTTPS {
+		want := make(map[string]bool, len(req.Domains))
+		for _, d := range req.Domains {
+			want[d] = true
+		}
+		if err := applyHTTPS(c, req.Domains, want); err != nil {
+			return err
+		}
+	}
 
 	if askBool(in, "Trigger a global sync now?", true) {
 		return runSync(c, []string{"--wait"})

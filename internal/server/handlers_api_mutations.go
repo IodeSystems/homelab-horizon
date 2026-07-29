@@ -845,9 +845,14 @@ func (s *Server) handleAPIDomainSSLRemove(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	// Check if any service domains are covered ONLY by this SubZone pattern
+	// Check if any service domains are covered ONLY by this SubZone pattern.
+	// Force skips the check: the caller has confirmed those domains should fall
+	// back to plain HTTP.
 	var dependentServices []string
 	for _, svc := range s.cfg().Services {
+		if req.Force {
+			break
+		}
 		for _, domain := range svc.Domains {
 			if !domainMatchesPattern(domain, pattern) {
 				continue
