@@ -475,6 +475,33 @@ type Zone struct {
 	SSL         *ZoneSSL           `json:"ssl,omitempty"`
 	SubZones    []string           `json:"sub_zones,omitempty"` // Sub-domains needing wildcard certs (e.g., "vpn" for *.vpn.example.com)
 	Records     []DNSRecord        `json:"records,omitempty"`   // Statically-declared records hz publishes to the provider (e.g. TXT verification)
+
+	// Tombstones are records hz published and has since been told to delete.
+	// The entry outlives the deletion request on purpose: absence from Records
+	// cannot express "delete this" — it is indistinguishable from "hz never
+	// declared it", which is why a deleted service used to leave its record
+	// resolving forever. A tombstone survives restarts and failed retractions
+	// and is dropped only once the provider confirms the value is gone.
+	Tombstones []DNSTombstone `json:"tombstones,omitempty"`
+
+	// ObservedRecords are records live at the provider that hz does not own.
+	// They are ingested on each sync so the zone's real contents are visible
+	// and can never be mistaken for orphans. Strictly track-only: hz never
+	// publishes or deletes them, so ingesting an MX or a third-party CNAME
+	// cannot put it at risk. Rebuilt every sync, so it self-corrects.
+	ObservedRecords []DNSRecord `json:"observed_records,omitempty"`
+}
+
+// DNSTombstone marks a record hz has been told to delete but has not yet
+// confirmed gone at the provider. Value is part of the identity: a round-robin
+// set is one record per value, so retracting by (name, type) alone would take
+// out siblings hz was never asked to remove.
+type DNSTombstone struct {
+	Name      string `json:"name"`                 // FQDN
+	Type      string `json:"type"`                 // A, AAAA, CNAME, TXT
+	Value     string `json:"value"`                // the specific value being retracted
+	CreatedAt int64  `json:"created_at,omitempty"` // unix seconds, for surfacing a stuck retraction
+	Reason    string `json:"reason,omitempty"`     // e.g. "service ebb deleted"
 }
 
 // DNSRecord is a statically-declared DNS record that hz publishes to the zone's

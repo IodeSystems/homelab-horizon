@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -536,6 +537,21 @@ func (s *Server) handleAPISyncAllDNS(w http.ResponseWriter, r *http.Request) {
 	}
 	updated += zUpdated
 	failed += zFailed
+
+	// Drive pending deletions to completion, then adopt whatever is live that
+	// hz does not own. Retraction runs after publishing so a record re-declared
+	// in the same pass is not deleted right after being written.
+	tRetracted, tFailed, err := s.retractTombstones(run)
+	if errors.Is(err, errDNSDriftBlocked) {
+		writeDNSDriftBlocked(w, s)
+		return
+	}
+	updated += tRetracted
+	failed += tFailed
+
+	if _, err := s.ingestObservedRecords(run); err != nil {
+		slog.Warn("ingesting observed DNS records failed", "err", err)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(apitypes.DNSSyncAllResponse{OK: true, Updated: updated, Failed: failed})

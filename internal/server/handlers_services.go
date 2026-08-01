@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -413,6 +414,34 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 			} else {
 				log.Success(fmt.Sprintf("  %s -> %s (unchanged)", rec.Name, valuesStr))
 			}
+		}
+
+		// Drive pending deletions and refresh the observed inventory. This runs
+		// on the provider-agnostic dns.Provider path even though the publish
+		// above is the legacy Route53 one — a tombstone must be retracted no
+		// matter which provider the zone uses, and `hz sync` is the entrypoint
+		// operators actually run.
+		if tRetracted, tFailed, terr := s.retractTombstones(s.newDNSSyncRun()); terr != nil {
+			if errors.Is(terr, errDNSDriftBlocked) {
+				log.Warning("  Pending DNS deletions held: drift block active")
+			} else {
+				log.Error(fmt.Sprintf("  Pending DNS deletions failed: %s", terr))
+				hasErrors = true
+			}
+		} else {
+			if tRetracted > 0 {
+				log.Success(fmt.Sprintf("  Retracted %d pending DNS deletion(s)", tRetracted))
+			}
+			if tFailed > 0 {
+				log.Warning(fmt.Sprintf("  %d pending DNS deletion(s) still unconfirmed — will retry next sync", tFailed))
+				hasErrors = true
+			}
+		}
+
+		if n, ierr := s.ingestObservedRecords(s.newDNSSyncRun()); ierr != nil {
+			log.Warning(fmt.Sprintf("  Ingesting observed DNS records failed: %s", ierr))
+		} else if n > 0 {
+			log.Info(fmt.Sprintf("  Observed %d record(s) hz does not own", n))
 		}
 
 		// Show IAM policy hint if we saw permission errors
