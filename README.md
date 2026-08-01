@@ -38,11 +38,40 @@ Homelab Horizon consolidates all of this into a single web UI:
 ### Service Detail
 ![Service Detail](docs/screenshots/services-detail.png)
 
+### Deleting a service
+Deleting doesn't silently strand the state a service didn't own — the zone
+SubZone that gave its domain HTTPS, and the record published at your DNS
+provider. Both are listed, and the delete won't proceed until you say whether
+to retract them.
+
+![Delete Service](docs/screenshots/services-delete.png)
+
+### Domains
+Every domain hz knows, with internal DNS, external DNS, proxy and HTTPS state
+side by side — plus the SSL coverage gaps and the zone records it publishes.
+
+![Domains](docs/screenshots/domains.png)
+
+### Observability
+Declare hosts and exporter jobs, then hand Prometheus a generated scrape config.
+
+![Observability](docs/screenshots/observability.png)
+
+### Ports
+Reserved ports per host, and the denylist `hz ports next` skips when allocating.
+
+![Ports](docs/screenshots/ports.png)
+
 ### Port Map
 ![Port Map](docs/screenshots/port-map.png)
 
 ### Settings
 ![Settings](docs/screenshots/settings.png)
+
+> The VPN and Checks pages are captured too (`docs/screenshots/{vpn,checks}.png`)
+> but aren't shown here — the hermetic container has no live WireGuard peers and
+> can't reach the documentation IPs it checks, so both render as empty or all-red
+> and would misrepresent the pages.
 
 > Regenerate with `make screenshots` — boots a hermetic Docker container
 > (daemons off, RFC 5737 documentation IPs, no outbound network) and captures
@@ -56,6 +85,11 @@ Homelab Horizon consolidates all of this into a single web UI:
 - **Reverse Proxy**: HAProxy with automatic Let's Encrypt wildcard SSL certificates
 - **Static Sites**: Serve a folder of files as a service — hz hosts it directly, HAProxy routes to it with the same auto SSL/DNS
 - **Service Monitoring**: Health checks with ntfy push notifications
+- **Prometheus Discovery**: Declare hosts and exporter jobs; hz serves a generated scrape config and probes every target
+- **Port Allocation**: Server-authoritative reservations and denylist, so `hz ports next` never hands out a port something already uses
+- **Operator CLI (`hz`)**: Service CRUD, HTTPS per domain, hosts, exporters, sync — with a preview of what a mutation actually changes
+- **Honest Deletes**: Deleting a service reports the SubZone and DNS record it would strand, and makes you choose
+- **Unsynced-Change Tracking**: `hz pending` and a badge in the UI show what's edited but not yet published
 - **Self-Service Onboarding**: Users redeem invite tokens to get VPN configs
 - **IP Banning**: Per-service IP bans with timeout support
 - **Rolling Deploys**: Blue-green deployment support with hz-client CLI
@@ -200,6 +234,9 @@ hz domain list                       # every domain: service, zone, HTTPS covera
 hz domain ssl add ebb.example.com    # give one domain HTTPS
 hz domain ssl rm ebb.example.com --confirm
                                      # drop it back to plain HTTP
+hz service delete ebb                # reports what the delete would strand, then refuses
+hz service delete ebb --delete-orphans --sync
+                                     # ...also retract the SubZone + published DNS record
 hz sync --wait                       # trigger a global sync, block until done
 hz pending                           # show unsynced config changes
 hz ports list --host 192.168.1.76    # reserved ports on a host + suggested free ports
@@ -209,6 +246,29 @@ hz schema service                    # dump the request schema (reflected from a
 ```
 
 `hz --help` lists every command and flag; `hz schema service` prints the exact JSON request shape the server accepts (generated from the shared `internal/apitypes` structs, so it never drifts).
+
+Deleting is the one mutation that can leave state behind, because a service
+doesn't own everything it depends on. The zone SubZone giving its domain HTTPS
+lives on the *zone*, and the record published at your DNS provider lives at the
+*provider* — neither disappears with the service. `hz service delete` prints
+both and stops until you pick `--delete-orphans` or `--keep-orphans`:
+
+```
+$ hz service delete grafana
+Deleting "grafana" leaves behind:
+
+  ! https grafana.example.com            SubZone "grafana" on zone example.com — keeps a cert SAN and an http->https redirect for a host nothing serves
+  ! dns   grafana.example.com            A 198.51.100.10 at the DNS provider — stays live and keeps resolving after the delete
+  . dns   grafana.example.com            dnsmasq A 192.0.2.50 — removed automatically on the next sync
+
+  ! needs a decision   . goes away on sync   = shared, left alone
+
+error: this delete strands 2 item(s) listed above — re-run with --delete-orphans or --keep-orphans
+```
+
+Coverage inherited from a wildcard SubZone, and any SubZone another service
+still uses, are reported as shared and never offered for deletion. A service
+that strands nothing deletes without asking anything.
 
 ### Static Sites
 
@@ -263,6 +323,57 @@ curl -sO "$HZ_URL/admin/haproxy/hz-client" && chmod +x hz-client
 Deploys are **atomic**: the upload is extracted into a fresh release directory, then `static_root` (an hz-managed symlink) is repointed in a single rename — requests never see a half-written site. The last few releases are retained for `rollback`. Uploads are received by the root process, validated (no path traversal, no symlinks, size/file caps), and the files are owned by `nobody` so the unprivileged file server can read them.
 
 This is how the project hosts its own landing page (`docs/`): a static service on the public domain, served by hz, with auto SSL.
+
+## Observability
+
+hz already knows every host and backend it routes to, so it can hand Prometheus
+a scrape config instead of you maintaining one by hand. Declare the boxes it
+*doesn't* route to (a NAS, a DB server), add exporter jobs, and pull the result.
+
+```bash
+hz host add --name nas --ip 192.0.2.100 --label role=storage
+hz exporter add --job node --mode port --port 9100          # node_exporter on every known host
+hz exporter add --job postgres --mode static --target 192.0.2.110:9187
+hz exporter list                                            # jobs, then live targets with up/down
+```
+
+Three ways a job generates targets:
+
+| Mode | Targets |
+|------|---------|
+| `port` | one port expanded across hosts (`--host '*'` = every host hz knows) |
+| `service` | one target per service backend (per slot for blue-green), for services not already opted in |
+| `static` | the explicit `--target` list |
+
+Per-service metrics are opt-in and probed before they're served, so a service
+only appears once hz has actually seen its endpoint respond:
+
+```bash
+hz service edit grafana --metrics --metrics-path /metrics --sync
+```
+
+The generated config is served at `/integration/prometheus/scrape.yaml` and
+`/integration/prometheus/targets.json`, authorized by a **scrape token** that is
+separate from the admin token — a scraper never holds admin rights. The
+Observability page has copy-run snippets for both a one-time pull and a cron
+that keeps it current.
+
+## Ports
+
+Picking a backend port by hand is how you end up with two services on 8080. hz
+keeps a server-authoritative map of what's reserved — derived from service
+backends, HAProxy and WireGuard — plus a built-in denylist of common ports and
+whatever ranges you exclude yourself.
+
+```bash
+hz ports next --host 192.0.2.50              # next free port, denylist applied
+hz ports next --host 192.0.2.50 --count 2    # a blue-green pair
+hz ports list --host 192.0.2.50              # what's reserved, and what's free
+```
+
+`port_exclusions` in the config adds your own ranges on top of the built-in
+list. The Ports page shows both tabs — reservations per host, and the exclusions
+that allocation skips.
 
 ## High Availability
 
@@ -483,11 +594,13 @@ Alternatively, pass the full config as JSON via the `HZ_CONFIG` environment vari
 |------|-------------|
 | `/app/dashboard` | Overview dashboard |
 | `/app/services` | Service management — domains, DNS, proxy, health status |
-| `/app/domains` | External DNS records and sync status |
+| `/app/domains` | Every domain's DNS/proxy/HTTPS state, SSL gaps, and zone records |
 | `/app/vpn` | VPN client management — create clients, QR codes, invites |
 | `/app/bans` | IP ban management |
 | `/app/checks` | Health check status and notifications |
-| `/app/settings` | Zones, HAProxy, SSL, health checks, system config |
+| `/app/observability` | Prometheus topology — hosts, exporter jobs, scrape config wiring |
+| `/app/ports` | Port reservations per host and the allocation denylist |
+| `/app/settings` | Zones, HAProxy, SSL, health checks, system health, hz CLI install |
 
 ## DNS Providers
 
