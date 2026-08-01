@@ -684,9 +684,10 @@ func (s *Server) handleAPIZones(w http.ResponseWriter, r *http.Request) {
 	zones := make([]apitypes.ZoneResp, 0, len(s.cfg().Zones))
 	for _, z := range s.cfg().Zones {
 		zr := apitypes.ZoneResp{
-			Name:     z.Name,
-			ZoneID:   z.ZoneID,
-			SubZones: z.SubZones,
+			Name:             z.Name,
+			ZoneID:           z.ZoneID,
+			SubZones:         z.SubZones,
+			PendingDeletions: len(z.Tombstones),
 		}
 		if zr.SubZones == nil {
 			zr.SubZones = []string{}

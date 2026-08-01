@@ -20,6 +20,8 @@ import { Route as PortsRouteImport } from './routes/ports'
 import { Route as ServicesRouteImport } from './routes/services'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as VpnRouteImport } from './routes/vpn'
+import { Route as DnsIndexRouteImport } from './routes/dns.index'
+import { Route as DnsZoneRouteImport } from './routes/dns.$zone'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -76,6 +78,16 @@ const VpnRoute = VpnRouteImport.update({
   path: '/vpn',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DnsIndexRoute = DnsIndexRouteImport.update({
+  id: '/dns/',
+  path: '/dns/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DnsZoneRoute = DnsZoneRouteImport.update({
+  id: '/dns/$zone',
+  path: '/dns/$zone',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -89,6 +101,8 @@ export interface FileRoutesByFullPath {
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
+  '/dns/$zone': typeof DnsZoneRoute
+  '/dns/': typeof DnsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -102,6 +116,8 @@ export interface FileRoutesByTo {
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
+  '/dns/$zone': typeof DnsZoneRoute
+  '/dns': typeof DnsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -116,6 +132,8 @@ export interface FileRoutesById {
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
+  '/dns/$zone': typeof DnsZoneRoute
+  '/dns/': typeof DnsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -131,6 +149,8 @@ export interface FileRouteTypes {
     | '/services'
     | '/settings'
     | '/vpn'
+    | '/dns/$zone'
+    | '/dns/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -144,6 +164,8 @@ export interface FileRouteTypes {
     | '/services'
     | '/settings'
     | '/vpn'
+    | '/dns/$zone'
+    | '/dns'
   id:
     | '__root__'
     | '/'
@@ -157,6 +179,8 @@ export interface FileRouteTypes {
     | '/services'
     | '/settings'
     | '/vpn'
+    | '/dns/$zone'
+    | '/dns/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -171,6 +195,8 @@ export interface RootRouteChildren {
   ServicesRoute: typeof ServicesRoute
   SettingsRoute: typeof SettingsRoute
   VpnRoute: typeof VpnRoute
+  DnsZoneRoute: typeof DnsZoneRoute
+  DnsIndexRoute: typeof DnsIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -252,6 +278,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof VpnRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/dns/': {
+      id: '/dns/'
+      path: '/dns'
+      fullPath: '/dns/'
+      preLoaderRoute: typeof DnsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dns/$zone': {
+      id: '/dns/$zone'
+      path: '/dns/$zone'
+      fullPath: '/dns/$zone'
+      preLoaderRoute: typeof DnsZoneRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -267,6 +307,8 @@ const rootRouteChildren: RootRouteChildren = {
   ServicesRoute: ServicesRoute,
   SettingsRoute: SettingsRoute,
   VpnRoute: VpnRoute,
+  DnsZoneRoute: DnsZoneRoute,
+  DnsIndexRoute: DnsIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

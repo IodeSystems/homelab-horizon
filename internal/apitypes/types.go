@@ -387,6 +387,10 @@ type ZoneResp struct {
 	SSLEmail     string   `json:"sslEmail,omitempty"`
 	SubZones     []string `json:"subZones"`
 	ProviderType string   `json:"providerType,omitempty"`
+	// PendingDeletions is how many retractions this zone is still waiting on.
+	// Surfaced on the zone list so a stuck deletion is visible without opening
+	// the zone and hitting the provider.
+	PendingDeletions int `json:"pendingDeletions,omitempty"`
 }
 
 // Settings
@@ -618,16 +622,36 @@ type DNSSyncResponse struct {
 // DNS record management
 
 type DNSRecordResp struct {
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	Value   string `json:"value"`
-	TTL     int    `json:"ttl"`
-	Managed bool   `json:"managed"` // declared in Zone.Records (HZ owns it)
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Value string `json:"value"`
+	TTL   int    `json:"ttl"`
+	// Owner is who authored this record: "derived" (a service publishes it),
+	// "declared" (Zone.Records), "observed" (live but not hz's), or
+	// "tombstoned" (hz's, pending retraction). Replaces an earlier `managed`
+	// bool that was computed from Zone.Records alone and so reported every
+	// service-derived record as un-owned.
+	Owner string `json:"owner"`
+}
+
+// DNSTombstoneResp is a deletion hz has been told to make and not yet confirmed
+// gone at the provider. Surfaced so a retraction that keeps failing is visible
+// rather than silently retrying forever.
+type DNSTombstoneResp struct {
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Value     string `json:"value"`
+	CreatedAt int64  `json:"createdAt,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	// StillLive is true when the value is still present at the provider — i.e.
+	// the retraction has not taken effect yet.
+	StillLive bool `json:"stillLive"`
 }
 
 type ZoneRecordsResponse struct {
-	Zone    string          `json:"zone"`
-	Records []DNSRecordResp `json:"records"`
+	Zone       string             `json:"zone"`
+	Records    []DNSRecordResp    `json:"records"`
+	Tombstones []DNSTombstoneResp `json:"tombstones,omitempty"`
 }
 
 // DNSDriftInfoResp describes an out-of-band change detected at a DNS provider
@@ -636,8 +660,10 @@ type DNSDriftInfoResp struct {
 	Zone       string   `json:"zone"`
 	Name       string   `json:"name"`
 	Type       string   `json:"type"`
-	Expected   []string `json:"expected"` // what hz last published
-	Live       []string `json:"live"`     // what's live at the provider now
+	Expected   []string `json:"expected"`          // what hz last published
+	Live       []string `json:"live"`              // what's live at the provider now
+	Desired    []string `json:"desired,omitempty"` // what hz was about to write
+	Reason     string   `json:"reason,omitempty"`  // "out-of-band-change" | "unclaimed-name"
 	DetectedAt int64    `json:"detectedAt"`
 }
 

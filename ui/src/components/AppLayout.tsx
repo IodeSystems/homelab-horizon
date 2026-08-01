@@ -16,6 +16,7 @@ import {
 import MenuIcon from "@mui/icons-material/Menu";
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import DnsIcon from "@mui/icons-material/Dns";
+import StorageIcon from "@mui/icons-material/Storage";
 import LanguageIcon from "@mui/icons-material/Language";
 import VpnKeyIcon from "@mui/icons-material/VpnKey";
 import BlockIcon from "@mui/icons-material/Block";
@@ -40,6 +41,7 @@ const navItems: NavItem[] = [
   { icon: <DashboardIcon />, label: "Dashboard", path: "/dashboard" },
   { icon: <DnsIcon />, label: "Services", path: "/services" },
   { icon: <LanguageIcon />, label: "Domains", path: "/domains" },
+  { icon: <StorageIcon />, label: "DNS", path: "/dns" },
   { icon: <VpnKeyIcon />, label: "VPN Clients", path: "/vpn" },
   { icon: <BlockIcon />, label: "IP Bans", path: "/bans" },
   { icon: <MonitorHeartIcon />, label: "Checks", path: "/checks" },

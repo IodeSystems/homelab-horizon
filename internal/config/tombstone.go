@@ -163,6 +163,57 @@ func (z *Zone) qualify(name string) string {
 	return n + "." + z.Name
 }
 
+// Who authored a record live at the provider. A single "managed" bool could not
+// say this: it was computed from Zone.Records alone, so a record hz publishes
+// from a service read as un-owned, indistinguishable from a stray MX someone
+// added by hand. These four states are what the operator actually needs to tell
+// apart before touching anything.
+const (
+	RecordOwnerDerived    = "derived"    // published from a service's external DNS
+	RecordOwnerDeclared   = "declared"   // listed in Zone.Records
+	RecordOwnerObserved   = "observed"   // live, but not hz's — never written or deleted
+	RecordOwnerTombstoned = "tombstoned" // hz's, on its way out; awaiting confirmation
+)
+
+// ClassifyRecord reports who owns a record live at the provider. Tombstoned
+// wins over everything: a pending retraction is the most recent statement of
+// intent, and the record is about to stop existing.
+func (c *Config) ClassifyRecord(zoneName, name, recType, value string) string {
+	rn, rt := normalizeRecordKey(name, recType)
+
+	for i := range c.Zones {
+		if c.Zones[i].Name != zoneName {
+			continue
+		}
+		for _, t := range c.Zones[i].Tombstones {
+			if t.Matches(rn, rt, value) {
+				return RecordOwnerTombstoned
+			}
+		}
+		for _, rec := range c.Zones[i].Records {
+			cn, ct := normalizeRecordKey(c.Zones[i].qualify(rec.Name), rec.Type)
+			if cn == rn && ct == rt && rec.Value == value {
+				return RecordOwnerDeclared
+			}
+		}
+	}
+
+	if rt == "A" {
+		for i := range c.Services {
+			if c.Services[i].ExternalDNS == nil {
+				continue
+			}
+			for _, d := range c.Services[i].Domains {
+				if dn, _ := normalizeRecordKey(d, "A"); dn == rn {
+					return RecordOwnerDerived
+				}
+			}
+		}
+	}
+
+	return RecordOwnerObserved
+}
+
 // ingestSkippedTypes are never adopted into ObservedRecords. NS and SOA at the
 // apex are the provider's own delegation records: they are not hz's to track,
 // and surfacing them as inventory invites someone to "clean them up" and break
