@@ -54,6 +54,12 @@ function DNSZonePage() {
         <Alert severity="info">
           This zone has no DNS provider configured, so hz cannot read or publish
           its records. Add one in Settings.
+          {(zoneCfg?.pendingDeletions ?? 0) > 0 && (
+            <Typography variant="caption" component="div" sx={{ mt: 1 }}>
+              {zoneCfg?.pendingDeletions} pending deletion(s) are recorded for
+              this zone and cannot be retracted until a provider is configured.
+            </Typography>
+          )}
         </Alert>
       ) : (
         <ZoneRecordsTable zoneName={zone} />

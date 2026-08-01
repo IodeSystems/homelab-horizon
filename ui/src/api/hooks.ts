@@ -776,6 +776,30 @@ export function useEditRecord() {
   });
 }
 
+// Withdrawing a pending deletion. Nothing is restored — if the record is still
+// live it just stops being retracted, and since the delete already dropped it
+// from Zone.Records hz no longer claims it, so it reclassifies as observed.
+export function useCancelTombstone() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      zone: string;
+      name: string;
+      type: string;
+      value: string;
+    }) =>
+      apiFetch("/zones/tombstones/cancel", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSettled: (_d, _e, variables) => {
+      qc.invalidateQueries({ queryKey: ["zones", "records", variables.zone] });
+      qc.invalidateQueries({ queryKey: ["zones"] });
+      qc.invalidateQueries({ queryKey: ["pending"] });
+    },
+  });
+}
+
 export function useDeleteRecord() {
   const qc = useQueryClient();
   return useMutation({

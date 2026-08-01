@@ -1,10 +1,13 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
 	"strings"
 
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/dns"
 )
@@ -228,4 +231,52 @@ func (s *Server) ingestZoneRecords(run *dnsSyncRun, provider dns.Provider, zone 
 		})
 	}
 	return out, nil
+}
+
+// POST /api/v1/zones/tombstones/cancel
+//
+// Withdraws a pending deletion. This does not restore anything: if the record
+// is still live it simply stops being retracted, and — since the delete already
+// removed it from Zone.Records — hz no longer claims it, so it reclassifies as
+// observed. If the provider already removed it, cancelling cannot bring it
+// back; it only stops hz from confirming a deletion that has happened.
+//
+// The escape hatch matters because the intent is durable: a retraction against
+// a provider that keeps refusing would otherwise retry forever with no way out
+// short of hand-editing config.
+func (s *Server) handleAPITombstoneCancel(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	var req apitypes.TombstoneCancelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	if req.Zone == "" || req.Name == "" || req.Type == "" {
+		writeJSONError(w, http.StatusBadRequest, "zone, name and type are required")
+		return
+	}
+
+	var dropped bool
+	if err := s.updateConfig(func(cfg *config.Config) {
+		dropped = cfg.DropTombstone(req.Zone, req.Name, req.Type, req.Value)
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !dropped {
+		writeJSONError(w, http.StatusNotFound, "No pending deletion matches that record")
+		return
+	}
+
+	slog.Info("pending DNS deletion cancelled",
+		"zone", req.Zone, "name", req.Name, "type", req.Type, "value", req.Value)
+	writeJSONOK(w)
 }

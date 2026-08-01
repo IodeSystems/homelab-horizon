@@ -35,6 +35,7 @@ import {
   useAddRecord,
   useEditRecord,
   useDeleteRecord,
+  useCancelTombstone,
 } from "../api/hooks";
 import type { DNSRecordResp } from "../api/types";
 
@@ -298,6 +299,7 @@ function OwnerChip({ owner }: { owner: string }) {
 export function ZoneRecordsTable({ zoneName }: { zoneName: string }) {
   const { data, isLoading, isFetching, error, refetch } = useZoneRecords(zoneName);
   const deleteRecord = useDeleteRecord();
+  const cancelTombstone = useCancelTombstone();
   const [addOpen, setAddOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<EditRecordTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -396,14 +398,42 @@ export function ZoneRecordsTable({ zoneName }: { zoneName: string }) {
             {pending.length} pending deletion{pending.length > 1 ? "s" : ""}
           </Typography>
           {pending.map((t) => (
-            <Typography key={`${t.type}|${t.name}|${t.value}`} variant="caption" component="div">
-              {t.type} {t.name} → {t.value}
-              {t.stillLive
-                ? " — still live; hz retries the retraction each sync"
-                : " — gone at the provider; clears on the next sync"}
-              {t.reason ? ` (${t.reason})` : ""}
-            </Typography>
+            <Box
+              key={`${t.type}|${t.name}|${t.value}`}
+              sx={{ display: "flex", alignItems: "center", gap: 1, py: 0.25 }}
+            >
+              <Typography variant="caption" sx={{ flexGrow: 1 }}>
+                {t.type} {t.name} → {t.value}
+                {t.stillLive
+                  ? " — still live; hz retries the retraction each sync"
+                  : " — gone at the provider; clears on the next sync"}
+                {t.reason ? ` (${t.reason})` : ""}
+              </Typography>
+              <Tooltip title="Stop retrying this deletion. Nothing is restored — if the record is still live it simply stops being retracted, and hz no longer claims it.">
+                <span>
+                  <Button
+                    size="small"
+                    disabled={cancelTombstone.isPending}
+                    onClick={() =>
+                      cancelTombstone.mutate({
+                        zone: zoneName,
+                        name: t.name,
+                        type: t.type,
+                        value: t.value,
+                      })
+                    }
+                  >
+                    Cancel
+                  </Button>
+                </span>
+              </Tooltip>
+            </Box>
           ))}
+          {cancelTombstone.isError && (
+            <Typography variant="caption" color="error" component="div" sx={{ mt: 0.5 }}>
+              {(cancelTombstone.error as Error).message}
+            </Typography>
+          )}
         </Alert>
       )}
 

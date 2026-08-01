@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   Alert,
   Box,
+  Button,
   Chip,
   CircularProgress,
   Paper,
@@ -14,7 +15,7 @@ import {
   Typography,
 } from "@mui/material";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
-import { useZones, useDNSDriftStatus } from "../api/hooks";
+import { useZones, useDNSDriftStatus, useClearDNSDrift } from "../api/hooks";
 import SyncButton from "../components/SyncButton";
 
 export const Route = createFileRoute("/dns/")({
@@ -27,6 +28,7 @@ function DNSZonesPage() {
   const navigate = useNavigate();
   const { data: zones, isLoading, error } = useZones();
   const { data: drift } = useDNSDriftStatus();
+  const clearDrift = useClearDNSDrift();
 
   return (
     <Box>
@@ -40,8 +42,23 @@ function DNSZonesPage() {
         Zones hz publishes to. Open one to view and edit its records.
       </Typography>
 
+      {/* The block halts every DNS write, so the action belongs beside the
+          explanation — this is the page you are on when you care. */}
       {drift?.blocked && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
+        <Alert
+          severity="warning"
+          sx={{ mb: 2 }}
+          action={
+            <Button
+              size="small"
+              color="inherit"
+              disabled={clearDrift.isPending}
+              onClick={() => clearDrift.mutate()}
+            >
+              {clearDrift.isPending ? "Clearing…" : "Clear & resume"}
+            </Button>
+          }
+        >
           <Typography variant="body2" sx={{ fontWeight: 600 }}>
             DNS sync is halted
           </Typography>

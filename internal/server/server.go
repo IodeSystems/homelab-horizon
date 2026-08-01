@@ -953,6 +953,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/zones/records/add", s.handleAPIRecordAdd)
 	mux.HandleFunc("/api/v1/zones/records/edit", s.handleAPIRecordEdit)
 	mux.HandleFunc("/api/v1/zones/records/delete", s.handleAPIRecordDelete)
+	mux.HandleFunc("/api/v1/zones/tombstones/cancel", s.handleAPITombstoneCancel)
 	mux.HandleFunc("/api/v1/zones/subzone", s.handleAPIAddSubZone)
 	mux.HandleFunc("/api/v1/ssl/request-cert", s.handleAPIRequestCert)
 	mux.HandleFunc("/api/v1/domains/ssl/add", s.handleAPIDomainSSLAdd)

@@ -997,3 +997,13 @@ type ServiceDeletePreviewResponse struct {
 	Domains []string              `json:"domains"`
 	Orphans []ServiceDeleteOrphan `json:"orphans"`
 }
+
+// TombstoneCancelRequest withdraws a pending deletion. Deletion intent is
+// deliberately durable, so abandoning it has to be an explicit act rather than
+// something that decays on its own.
+type TombstoneCancelRequest struct {
+	Zone  string `json:"zone"`
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
