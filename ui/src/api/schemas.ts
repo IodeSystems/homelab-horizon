@@ -471,3 +471,22 @@ export const HostPortMapResponseSchema = z.object({
   hosts: z.record(z.string(), z.array(HostPortEntrySchema)),
   exclusions: PortExclusionsRespSchema,
 });
+
+// Service deletion preview
+export const ServiceDeleteOrphanSchema = z.object({
+  kind: z.string(),
+  action: z.string(),
+  domain: z.string(),
+  detail: z.string(),
+  zone: z.string().optional(),
+  subZone: z.string().optional(),
+  recordType: z.string().optional(),
+  values: z.array(z.string()).optional(),
+  ttl: z.number().optional(),
+});
+
+export const ServiceDeletePreviewResponseSchema = z.object({
+  service: z.string(),
+  domains: z.array(z.string()),
+  orphans: z.array(ServiceDeleteOrphanSchema),
+});

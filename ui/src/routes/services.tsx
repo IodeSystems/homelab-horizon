@@ -44,6 +44,8 @@ import {
   useAddService,
   useEditService,
   useDeleteService,
+  useServiceDeletePreview,
+  orphansNeedingDecision,
   useServiceIntegration,
   useSettings,
   useZones,
@@ -52,7 +54,12 @@ import {
   useScanServiceMetrics,
 } from "../api/hooks";
 import SyncButton from "../components/SyncButton";
-import type { Service, Zone, ServiceScanMetricsResp } from "../api/types";
+import type {
+  Service,
+  Zone,
+  ServiceScanMetricsResp,
+  ServiceDeleteOrphan,
+} from "../api/types";
 import type { ServiceMutationInput } from "../api/hooks";
 
 function StatusDot({
@@ -1134,6 +1141,60 @@ function ServiceFormDialog({
 
 // --- Delete Confirmation Dialog ---
 
+// Not everything a delete touches is equal, and the difference decides whether
+// the operator has to answer anything:
+//
+//   delete — outlives the service and only hz can retract it. The whole reason
+//            this dialog exists; nothing proceeds until one of the two buttons
+//            is chosen.
+//   auto   — derived state (the dnsmasq record), rewritten wholesale on the
+//            next sync. Shown so the picture is complete, never a question.
+//   keep   — shared with a wildcard SubZone or another service, so a single
+//            delete must never remove it.
+function orphanStyle(action: string): {
+  color: "warning" | "info" | "default";
+  meaning: string;
+} {
+  switch (action) {
+    case "delete":
+      return { color: "warning", meaning: "needs a decision" };
+    case "auto":
+      return { color: "default", meaning: "removed on sync" };
+    default:
+      return { color: "info", meaning: "shared, left alone" };
+  }
+}
+
+function OrphanRow({ orphan }: { orphan: ServiceDeleteOrphan }) {
+  const { color, meaning } = orphanStyle(orphan.action);
+  return (
+    <Box sx={{ display: "flex", gap: 1, alignItems: "flex-start", py: 0.75 }}>
+      <Chip
+        size="small"
+        color={color}
+        label={orphan.kind === "https" ? "https" : "dns"}
+        sx={{ minWidth: 64 }}
+      />
+      <Box sx={{ minWidth: 0 }}>
+        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+          {orphan.domain}
+          <Typography
+            component="span"
+            variant="caption"
+            color="text.secondary"
+            sx={{ ml: 1, fontWeight: 400 }}
+          >
+            {meaning}
+          </Typography>
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          {orphan.detail}
+        </Typography>
+      </Box>
+    </Box>
+  );
+}
+
 function DeleteConfirmDialog({
   open,
   serviceName,
@@ -1144,29 +1205,99 @@ function DeleteConfirmDialog({
   open: boolean;
   serviceName: string;
   onClose: () => void;
-  onConfirm: () => void;
+  onConfirm: (orphans: ServiceDeleteOrphan[]) => void;
   isDeleting: boolean;
 }) {
+  const { data, isLoading, error } = useServiceDeletePreview(
+    open ? serviceName : null,
+  );
+  const orphans = data?.orphans ?? [];
+  const actionable = orphansNeedingDecision(orphans);
+
+  // Deleting blind is worse than not deleting. If the preview hasn't answered
+  // yet — or failed — there is no basis for a decision, so offer none.
+  const blocked = isLoading || !!error;
+
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle>Delete Service</DialogTitle>
       <DialogContent>
         <Typography>
           Delete service <strong>{serviceName}</strong>? This cannot be undone.
         </Typography>
+
+        {isLoading && (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 2 }}>
+            <CircularProgress size={16} />
+            <Typography variant="body2" color="text.secondary">
+              Checking what this would leave behind…
+            </Typography>
+          </Box>
+        )}
+
+        {error && (
+          <Alert severity="error" sx={{ mt: 2 }}>
+            Could not determine what this delete would leave behind:{" "}
+            {error.message}
+          </Alert>
+        )}
+
+        {!blocked && orphans.length > 0 && (
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="subtitle2" gutterBottom>
+              This delete leaves behind:
+            </Typography>
+            {orphans.map((o) => (
+              <OrphanRow key={`${o.kind}-${o.domain}`} orphan={o} />
+            ))}
+          </Box>
+        )}
+
+        {!blocked && actionable.length > 0 && (
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            {actionable.length} item(s) will outlive this service unless you
+            retract them. A left-behind SubZone keeps a certificate SAN and an
+            http&rarr;https redirect for a host with no backend; a left-behind
+            DNS record keeps resolving.
+          </Alert>
+        )}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={isDeleting}>
           Cancel
         </Button>
-        <Button
-          variant="contained"
-          color="error"
-          onClick={onConfirm}
-          disabled={isDeleting}
-        >
-          {isDeleting ? <CircularProgress size={20} /> : "Delete"}
-        </Button>
+        {actionable.length > 0 ? (
+          <>
+            <Button
+              color="error"
+              onClick={() => onConfirm([])}
+              disabled={isDeleting || blocked}
+            >
+              Delete, keep orphans
+            </Button>
+            <Button
+              variant="contained"
+              color="error"
+              onClick={() => onConfirm(actionable)}
+              disabled={isDeleting || blocked}
+            >
+              {isDeleting ? (
+                <CircularProgress size={20} />
+              ) : (
+                "Delete and retract"
+              )}
+            </Button>
+          </>
+        ) : (
+          <Button
+            variant="contained"
+            color="error"
+            onClick={() => onConfirm([])}
+            disabled={isDeleting || blocked}
+          >
+            {isDeleting ? <CircularProgress size={20} /> : "Delete"}
+          </Button>
+        )}
       </DialogActions>
     </Dialog>
   );
@@ -1883,15 +2014,29 @@ function ServicesPage() {
     });
   };
 
-  const handleDelete = () => {
+  const handleDelete = (orphans: ServiceDeleteOrphan[]) => {
     if (!deleteTarget) return;
-    deleteMutation.mutate(deleteTarget, {
-      onSuccess: () => {
-        setDeleteTarget(null);
-        showSnack("Service deleted", "success");
+    deleteMutation.mutate(
+      { name: deleteTarget, orphans },
+      {
+        onSuccess: () => {
+          setDeleteTarget(null);
+          showSnack(
+            orphans.length > 0
+              ? `Service deleted, ${orphans.length} orphan(s) retracted`
+              : "Service deleted",
+            "success",
+          );
+        },
+        // The service is already gone whenever this fires — the failure is in
+        // retracting an orphan. Close the dialog so the list reflects reality
+        // and leave the error on screen.
+        onError: (err) => {
+          setDeleteTarget(null);
+          showSnack(err.message, "error");
+        },
       },
-      onError: (err) => showSnack(err.message, "error"),
-    });
+    );
   };
 
   const [tab, setTab] = useState("all");
