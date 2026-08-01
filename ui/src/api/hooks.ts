@@ -41,6 +41,8 @@ import type {
   HostPortMapResponse,
   PortRange,
   ScrapeTokenResp,
+  ServiceDeleteOrphan,
+  ServiceDeletePreviewResponse,
 } from "./types";
 import {
   BanListResponseSchema,
@@ -64,6 +66,7 @@ import {
   ServiceScanMetricsRespSchema,
   HostPortMapResponseSchema,
   ScrapeTokenRespSchema,
+  ServiceDeletePreviewResponseSchema,
 } from "./schemas";
 
 export function useDashboard() {
@@ -182,19 +185,92 @@ export function useEditService() {
   });
 }
 
+// Deleting a service strands state it doesn't own: the zone SubZone giving its
+// domain HTTPS (a cert SAN plus an http->https redirect for a host with no
+// backend) and the record published at the DNS provider (the DNS sync is
+// upsert-only, so nothing retracts it). useServiceDeletePreview asks the server
+// what a delete would leave behind so the dialog can make the operator choose.
+export function useServiceDeletePreview(name: string | null) {
+  return useQuery({
+    queryKey: ["services", "delete-preview", name],
+    enabled: name !== null,
+    // The answer depends on live config, and the dialog is short-lived — never
+    // show a stale orphan set for a decision this hard to walk back.
+    staleTime: 0,
+    gcTime: 0,
+    queryFn: () =>
+      apiFetch<ServiceDeletePreviewResponse>("/services/delete/preview", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+        schema: ServiceDeletePreviewResponseSchema,
+      }),
+  });
+}
+
+export function orphansNeedingDecision(
+  orphans: ServiceDeleteOrphan[] | undefined,
+): ServiceDeleteOrphan[] {
+  return (orphans ?? []).filter((o) => o.action === "delete");
+}
+
 export function useDeleteService() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (name: string) =>
-      apiFetch("/services/delete", {
+    // Orphans are retracted only after the service is gone: with nothing owning
+    // the domain, dropping its SubZone can't strip coverage from a live service.
+    // A failure here leaves the service deleted, so the error says as much
+    // rather than implying the whole operation rolled back.
+    mutationFn: async ({
+      name,
+      orphans,
+    }: {
+      name: string;
+      orphans: ServiceDeleteOrphan[];
+    }) => {
+      await apiFetch("/services/delete", {
         method: "POST",
         body: JSON.stringify({ name }),
-      }),
-    onSuccess: () => {
+      });
+
+      const failed: string[] = [];
+      for (const o of orphans) {
+        try {
+          if (o.kind === "https") {
+            await apiFetch("/domains/ssl/remove", {
+              method: "POST",
+              body: JSON.stringify({ domain: o.domain, force: true }),
+            });
+          } else if (o.kind === "external-dns") {
+            // A round-robin set is one record per value, so each needs its own
+            // delete. No values means drop the whole (name, type) set.
+            for (const value of o.values?.length ? o.values : [""]) {
+              await apiFetch("/zones/records/delete", {
+                method: "POST",
+                body: JSON.stringify({
+                  zone: o.zone,
+                  name: o.domain,
+                  type: o.recordType,
+                  value,
+                }),
+              });
+            }
+          }
+        } catch {
+          failed.push(o.domain);
+        }
+      }
+      if (failed.length > 0) {
+        throw new Error(
+          `Service deleted, but ${failed.length} orphan(s) could not be retracted: ${failed.join(", ")}`,
+        );
+      }
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["services"] });
       qc.invalidateQueries({ queryKey: ["domains"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       qc.invalidateQueries({ queryKey: ["pending"] });
+      qc.invalidateQueries({ queryKey: ["zones"] });
     },
   });
 }

@@ -91,6 +91,8 @@ export type {
   PortRange,
   PortExclusionsResp,
   PortExclusionsRequest,
+  ServiceDeleteOrphan,
+  ServiceDeletePreviewResponse,
 } from "./generated-types";
 
 // Apt-audit entries aren't in apitypes (internal-only struct in the server
