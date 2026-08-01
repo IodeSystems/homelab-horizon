@@ -1151,6 +1151,19 @@ function ServiceFormDialog({
 //            next sync. Shown so the picture is complete, never a question.
 //   keep   — shared with a wildcard SubZone or another service, so a single
 //            delete must never remove it.
+// The two DNS kinds have opposite consequences — one keeps resolving forever,
+// the other is gone on the next sync — so they must not share a label.
+function orphanKindLabel(kind: string): string {
+  switch (kind) {
+    case "https":
+      return "https";
+    case "internal-dns":
+      return "dnsmasq";
+    default:
+      return "dns";
+  }
+}
+
 function orphanStyle(action: string): {
   color: "warning" | "info" | "default";
   meaning: string;
@@ -1172,8 +1185,8 @@ function OrphanRow({ orphan }: { orphan: ServiceDeleteOrphan }) {
       <Chip
         size="small"
         color={color}
-        label={orphan.kind === "https" ? "https" : "dns"}
-        sx={{ minWidth: 64 }}
+        label={orphanKindLabel(orphan.kind)}
+        sx={{ minWidth: 72 }}
       />
       <Box sx={{ minWidth: 0 }}>
         <Typography variant="body2" sx={{ fontWeight: 600 }}>
@@ -1193,6 +1206,22 @@ function OrphanRow({ orphan }: { orphan: ServiceDeleteOrphan }) {
       </Box>
     </Box>
   );
+}
+
+// Name only the consequences that actually apply — a warning that lists both
+// when only one is stranded reads as boilerplate and stops being read.
+function consequenceOf(actionable: ServiceDeleteOrphan[]): string {
+  const parts: string[] = [];
+  if (actionable.some((o) => o.kind === "https")) {
+    parts.push(
+      "the SubZone keeps a certificate SAN and an http→https redirect for a host with no backend",
+    );
+  }
+  if (actionable.some((o) => o.kind === "external-dns")) {
+    parts.push("the DNS record keeps resolving at the provider");
+  }
+  if (parts.length === 0) return "";
+  return `Left in place, ${parts.join("; ")}.`;
 }
 
 function DeleteConfirmDialog({
@@ -1256,9 +1285,8 @@ function DeleteConfirmDialog({
         {!blocked && actionable.length > 0 && (
           <Alert severity="warning" sx={{ mt: 2 }}>
             {actionable.length} item(s) will outlive this service unless you
-            retract them. A left-behind SubZone keeps a certificate SAN and an
-            http&rarr;https redirect for a host with no backend; a left-behind
-            DNS record keeps resolving.
+            retract them.{" "}
+            {consequenceOf(actionable)}
           </Alert>
         )}
       </DialogContent>
