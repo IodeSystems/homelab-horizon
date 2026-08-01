@@ -923,3 +923,14 @@ export interface ServiceDeletePreviewResponse {
   domains: string[];
   orphans: ServiceDeleteOrphan[];
 }
+/**
+ * TombstoneCancelRequest withdraws a pending deletion. Deletion intent is
+ * deliberately durable, so abandoning it has to be an explicit act rather than
+ * something that decays on its own.
+ */
+export interface TombstoneCancelRequest {
+  zone: string;
+  name: string;
+  type: string;
+  value: string;
+}

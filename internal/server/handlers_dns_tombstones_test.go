@@ -251,3 +251,44 @@ func TestFirstPublishMatchingValueIsAdoptedSilently(t *testing.T) {
 		t.Error("must not block when live already equals desired")
 	}
 }
+
+// Cancelling withdraws the intent without restoring anything: the record stays
+// live, and hz stops claiming it.
+func TestCancelTombstoneStopsRetraction(t *testing.T) {
+	cfg := &config.Config{Zones: []config.Zone{tombstoneZone()}}
+	cfg.Zones[0].Tombstones = []config.DNSTombstone{
+		{Name: "keep.example.com", Type: "A", Value: "198.51.100.10"},
+	}
+	s := newTestServer(t, cfg)
+
+	if err := s.updateConfig(func(c *config.Config) {
+		c.DropTombstone("example.com", "keep.example.com", "A", "198.51.100.10")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.cfg().Zones[0].Tombstones; len(got) != 0 {
+		t.Fatalf("tombstone not withdrawn: %v", got)
+	}
+
+	// With the intent gone, a sync must leave the record alone.
+	fp := &fakeProvider{records: []dns.Record{
+		{Name: "keep.example.com", Type: "A", Value: "198.51.100.10", ZoneID: "z1"},
+	}}
+	retracted, failed, err := s.retractZoneTombstones(s.newDNSSyncRun(), fp, s.cfg().Zones[0])
+	if err != nil || failed != 0 || retracted != 0 {
+		t.Fatalf("retracted=%d failed=%d err=%v", retracted, failed, err)
+	}
+	if got := liveValues(fp, "keep.example.com", "A"); len(got) != 1 {
+		t.Errorf("record was removed despite the cancellation: %v", got)
+	}
+}
+
+// A cancelled record is no longer hz's: the delete already dropped it from
+// Zone.Records, so it reclassifies as observed rather than lingering as owned.
+func TestCancelledRecordReclassifiesAsObserved(t *testing.T) {
+	cfg := &config.Config{Zones: []config.Zone{tombstoneZone()}}
+	s := newTestServer(t, cfg)
+	if got := s.cfg().ClassifyRecord("example.com", "orphan.example.com", "A", "198.51.100.10"); got != config.RecordOwnerObserved {
+		t.Errorf("owner = %q, want %q", got, config.RecordOwnerObserved)
+	}
+}
