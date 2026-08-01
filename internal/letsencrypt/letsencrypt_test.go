@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -116,5 +117,101 @@ func TestNeedsRenewal(t *testing.T) {
 	writeSelfSignedCert(t, certDir, "*.example.com", time.Now().Add(60*24*time.Hour))
 	if m.NeedsRenewal(domain, 30) {
 		t.Error("cert expiring in 60d should NOT need renewal within 30d window")
+	}
+}
+
+// writeSelfSignedCertWithSANs is writeSelfSignedCert plus an explicit SAN list,
+// which is what CheckCertSANs actually diffs.
+func writeSelfSignedCertWithSANs(t *testing.T, certDir, domain string, sans []string) {
+	t.Helper()
+	baseDomain := strings.TrimPrefix(domain, "*.")
+	dir := filepath.Join(certDir, "live", baseDomain)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: domain},
+		DNSNames:     sans,
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(60 * 24 * time.Hour),
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyDER, _ := x509.MarshalECPrivateKey(key)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	if err := os.WriteFile(filepath.Join(dir, "fullchain.pem"), certPEM, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "privkey.pem"), keyPEM, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A removed SubZone leaves its domain on the cert. Without a symmetric check
+// nothing ever re-requests, so the retired domain keeps a valid SAN — and with
+// it an http->https redirect — until the cert expires months later.
+func TestCheckCertSANsDetectsRetiredSAN(t *testing.T) {
+	certDir := t.TempDir()
+	d := DomainConfig{Domain: "app.example.com", ExtraSANs: []string{"keep.example.com"}}
+	writeSelfSignedCertWithSANs(t, certDir, d.Domain,
+		[]string{"app.example.com", "keep.example.com", "retired.example.com"})
+
+	m := New(Config{CertDir: certDir, Domains: []DomainConfig{d}})
+	hasCert, missing, extra, err := m.CheckCertSANs(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasCert {
+		t.Fatal("expected the cert to be found")
+	}
+	if len(missing) != 0 {
+		t.Errorf("missing = %v, want none", missing)
+	}
+	if len(extra) != 1 || extra[0] != "retired.example.com" {
+		t.Errorf("extra = %v, want [retired.example.com]", extra)
+	}
+}
+
+func TestCheckCertSANsDetectsMissingSAN(t *testing.T) {
+	certDir := t.TempDir()
+	d := DomainConfig{Domain: "app.example.com", ExtraSANs: []string{"added.example.com"}}
+	writeSelfSignedCertWithSANs(t, certDir, d.Domain, []string{"app.example.com"})
+
+	m := New(Config{CertDir: certDir, Domains: []DomainConfig{d}})
+	_, missing, extra, err := m.CheckCertSANs(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 1 || missing[0] != "added.example.com" {
+		t.Errorf("missing = %v, want [added.example.com]", missing)
+	}
+	if len(extra) != 0 {
+		t.Errorf("extra = %v, want none", extra)
+	}
+}
+
+// A cert that matches its config must not be re-requested — otherwise every
+// sync burns a Let's Encrypt issuance.
+func TestCheckCertSANsQuietWhenInSync(t *testing.T) {
+	certDir := t.TempDir()
+	d := DomainConfig{Domain: "*.example.com", ExtraSANs: []string{"example.com"}}
+	writeSelfSignedCertWithSANs(t, certDir, d.Domain, []string{"*.example.com", "example.com"})
+
+	m := New(Config{CertDir: certDir, Domains: []DomainConfig{d}})
+	_, missing, extra, err := m.CheckCertSANs(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 0 || len(extra) != 0 {
+		t.Errorf("in-sync cert flagged: missing=%v extra=%v", missing, extra)
 	}
 }

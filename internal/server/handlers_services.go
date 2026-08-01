@@ -540,10 +540,16 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 
 				status := s.letsencrypt.GetDomainStatus(domain)
 				if status.CertExists {
-					// Check if cert has all expected SANs (including sub-zones)
-					hasCert, missingSANs, _ := s.letsencrypt.CheckCertSANs(domain)
-					if hasCert && len(missingSANs) > 0 {
-						add("warning", fmt.Sprintf("  %s: valid but missing SANs: %v", domain.Domain, missingSANs))
+					// Check the cert's SANs against the configured set both ways:
+					// missing (sub-zones added) and extra (sub-zones removed).
+					hasCert, missingSANs, extraSANs, _ := s.letsencrypt.CheckCertSANs(domain)
+					if hasCert && (len(missingSANs) > 0 || len(extraSANs) > 0) {
+						if len(missingSANs) > 0 {
+							add("warning", fmt.Sprintf("  %s: valid but missing SANs: %v", domain.Domain, missingSANs))
+						}
+						if len(extraSANs) > 0 {
+							add("warning", fmt.Sprintf("  %s: valid but carries retired SANs: %v", domain.Domain, extraSANs))
+						}
 						add("info", fmt.Sprintf("  %s: requesting new certificate with updated SANs...", domain.Domain))
 						requestCert(fmt.Sprintf("  %s: certificate updated with new SANs", domain.Domain))
 					} else {

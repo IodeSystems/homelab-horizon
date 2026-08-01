@@ -939,6 +939,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/services/add", s.handleAPIAddService)
 	mux.HandleFunc("/api/v1/services/edit", s.handleAPIEditService)
 	mux.HandleFunc("/api/v1/services/delete", s.handleAPIDeleteService)
+	mux.HandleFunc("/api/v1/services/delete/preview", s.handleAPIDeleteServicePreview)
 	// DNS sync routes are per-instance: each peer manages its own A
 	// record (round-robin DNS). See plan/plan.md "External DNS" — never
 	// touch another peer's A record.
@@ -1356,10 +1357,12 @@ func (s *Server) certRenewalSweep() {
 			continue
 		}
 
-		// Check for missing SANs (sub-zones added since last cert).
-		hasCert, missingSANs, _ := le.CheckCertSANs(domain)
-		if hasCert && len(missingSANs) > 0 {
-			slog.Info("cert-renewal: missing SANs, renewing", "domain", domain.Domain, "missing_sans", missingSANs)
+		// Check SANs both ways: sub-zones added since the last cert, and
+		// sub-zones removed that the cert still carries.
+		hasCert, missingSANs, extraSANs, _ := le.CheckCertSANs(domain)
+		if hasCert && (len(missingSANs) > 0 || len(extraSANs) > 0) {
+			slog.Info("cert-renewal: SAN set changed, renewing", "domain", domain.Domain,
+				"missing_sans", missingSANs, "extra_sans", extraSANs)
 			if err := le.RequestCertForDomain(domain); err != nil {
 				slog.Error("cert-renewal: renewal failed", "domain", domain.Domain, "err", err)
 			} else {

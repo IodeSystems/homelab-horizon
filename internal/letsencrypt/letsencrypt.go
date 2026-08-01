@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -445,12 +446,14 @@ func (m *Manager) GetCertInfoForDomain(domain string) (*CertInfo, error) {
 	return GetCertInfo(certPath)
 }
 
-// CheckCertSANs checks if an existing certificate has all expected SANs
-// Returns (hasCert, missingSANs, error)
-func (m *Manager) CheckCertSANs(d DomainConfig) (bool, []string, error) {
+// CheckCertSANs diffs an existing certificate's SANs against the configured
+// set, both ways: missing are configured-but-absent, extra are on the cert but
+// no longer configured. Either one means the cert needs re-requesting.
+// Returns (hasCert, missingSANs, extraSANs, error)
+func (m *Manager) CheckCertSANs(d DomainConfig) (bool, []string, []string, error) {
 	info, err := m.GetCertInfoForDomain(d.Domain)
 	if err != nil {
-		return false, nil, nil // Cert doesn't exist
+		return false, nil, nil, nil // Cert doesn't exist
 	}
 
 	// Build the expected SAN set: exactly the configured domains. This mirrors
@@ -479,7 +482,20 @@ func (m *Manager) CheckCertSANs(d DomainConfig) (bool, []string, error) {
 		}
 	}
 
-	return true, missing, nil
+	// Find retired SANs: on the cert but no longer configured. The check has to
+	// be symmetric or a removed SubZone never actually leaves the certificate —
+	// nothing else triggers a re-request, so the domain keeps a valid SAN (and
+	// with it an http->https redirect) until natural expiry, months later.
+	var extra []string
+	for san := range actual {
+		if !expected[san] {
+			extra = append(extra, san)
+		}
+	}
+
+	sort.Strings(missing)
+	sort.Strings(extra)
+	return true, missing, extra, nil
 }
 
 // GetAWSProfiles returns a list of available AWS profiles

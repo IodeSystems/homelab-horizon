@@ -48,7 +48,9 @@ COMMANDS
   service show <name> [--json]       Show one service
   service create [flags]             Create a service (see 'hz schema service')
   service edit <name> [flags]        Edit a service; only flags you pass change
-  service delete <name>              Delete a service
+  service delete <name>              Delete a service; reports the SubZone/DNS state
+                                     it strands and requires --delete-orphans or
+                                     --keep-orphans when there is any
   setup                              Interactive questionnaire -> create + sync
   sync [--wait]                      Trigger a global sync (--wait: block til done)
   pending                            Show unsynced config changes
@@ -96,6 +98,18 @@ SERVICE FLAGS (create/edit)
   --metrics-bearer TOK      optional bearer token for probing/scraping metrics
   --sync                    trigger a global sync after the mutation
 
+SERVICE FLAGS (delete)
+  --delete-orphans          also retract what the delete strands: the zone SubZone
+                            that gave the domain HTTPS, and the record published
+                            at the DNS provider
+  --keep-orphans            leave both in place (the SubZone keeps a cert SAN and
+                            an http->https redirect; the DNS record keeps resolving)
+  --yes                     skip the confirmation prompt
+  --sync                    trigger a global sync after the mutation
+  One of --delete-orphans/--keep-orphans is required only when the delete would
+  actually strand something. Coverage inherited from a wildcard SubZone, and any
+  SubZone another service still uses, are never touched.
+
 HOST FLAGS (add)
   --name N                  host name (required)
   --ip IP                   host IP (required)
@@ -123,6 +137,7 @@ The generated Prometheus scrape config is served at
 EXAMPLES
   hz service list
   hz setup
+  hz service delete rt.iodesystems.com --delete-orphans --sync
   hz service create --name ebb --domain ebb.iodesystems.com \
     --backend 192.168.1.76:8300 --internal-only --health-check /healthz --sync
   hz service create --name ebb --domains-https ebb.iodesystems.com \
@@ -358,7 +373,10 @@ func (c *client) do(method, path string, body, out interface{}) error {
 	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s %s -> %d: %s", method, path, resp.StatusCode, apiError(raw))
+		return &apiStatusError{
+			Code: resp.StatusCode,
+			Msg:  fmt.Sprintf("%s %s -> %d: %s", method, path, resp.StatusCode, apiError(raw)),
+		}
 	}
 	if out != nil && len(raw) > 0 {
 		if err := json.Unmarshal(raw, out); err != nil {
@@ -367,6 +385,16 @@ func (c *client) do(method, path string, body, out interface{}) error {
 	}
 	return nil
 }
+
+// apiStatusError carries the HTTP status alongside the message so callers can
+// branch on it — chiefly to tell "this server is too old to know that endpoint"
+// apart from a real failure.
+type apiStatusError struct {
+	Code int
+	Msg  string
+}
+
+func (e *apiStatusError) Error() string { return e.Msg }
 
 // apiError extracts the {"error":"..."} message servers return, falling back to
 // the raw body.

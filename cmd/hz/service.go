@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -663,33 +662,8 @@ func proxyFlagSet(set map[string]bool) bool {
 	return false
 }
 
-func serviceDelete(c *client, args []string) error {
-	name, rest := splitNameArgs(args)
-	if name == "" {
-		return fmt.Errorf("usage: hz service delete <name> [--yes] [--sync]")
-	}
-	fs := flag.NewFlagSet("delete", flag.ContinueOnError)
-	doSync := fs.Bool("sync", false, "trigger a global sync after delete")
-	yes := fs.Bool("yes", false, "skip confirmation")
-	if err := fs.Parse(rest); err != nil {
-		return err
-	}
-	if !*yes {
-		fmt.Printf("Delete service %q? [y/N] ", name)
-		var ans string
-		_, _ = fmt.Fscanln(os.Stdin, &ans)
-		if !strings.EqualFold(strings.TrimSpace(ans), "y") {
-			fmt.Println("Aborted.")
-			return nil
-		}
-	}
-	body := map[string]string{"name": name}
-	if err := c.do("POST", "/api/v1/services/delete", body, nil); err != nil {
-		return err
-	}
-	fmt.Printf("Deleted service %q.\n", name)
-	return maybeSync(c, *doSync)
-}
+// serviceDelete lives in service_delete.go — deleting strands state that the
+// other mutations don't, and the orphan handling is the bulk of the command.
 
 // --- sync / pending ---
 
