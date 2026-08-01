@@ -99,8 +99,58 @@ async function main() {
     console.warn("Port Map button not found — skipping port-map.png");
   }
 
-  // Remaining top-level pages
-  for (const p of ["domains", "vpn", "checks", "settings"]) {
+  // Delete dialog — the one flow that refuses to proceed without a decision,
+  // so it needs a service that actually strands something. grafana has an
+  // external DNS record and its own SubZone, giving all three orphan classes.
+  await visit("services");
+  await page.waitForSelector("table");
+  const expandedForDelete = await page.evaluate(() => {
+    for (const td of document.querySelectorAll("td")) {
+      if (td.textContent.trim() === "grafana") {
+        td.closest("tr").click();
+        return true;
+      }
+    }
+    return false;
+  });
+  if (expandedForDelete) {
+    await page.waitForTimeout(600);
+    const clickedDelete = await page.evaluate(() => {
+      for (const b of document.querySelectorAll("button")) {
+        if (b.textContent.trim() === "Delete") {
+          b.click();
+          return true;
+        }
+      }
+      return false;
+    });
+    if (clickedDelete) {
+      await page.waitForSelector('div[role="dialog"]');
+      // The dialog fetches its orphan set; capturing before it lands would
+      // shoot a spinner.
+      await page.waitForFunction(() =>
+        document
+          .querySelector('div[role="dialog"]')
+          ?.textContent?.includes("This delete leaves behind"),
+      );
+      await page.waitForTimeout(400);
+      await shoot("services-delete");
+      console.log("Captured services-delete.png");
+    } else {
+      console.warn("Delete button not found — skipping services-delete.png");
+    }
+  }
+
+  // Remaining top-level pages. Bans is deliberately absent: the demo config
+  // has no bans to seed, so it only ever shoots an empty table.
+  for (const p of [
+    "domains",
+    "ports",
+    "observability",
+    "vpn",
+    "checks",
+    "settings",
+  ]) {
     await visit(p);
     await shoot(p);
     console.log(`Captured ${p}.png`);
