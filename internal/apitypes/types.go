@@ -920,3 +920,54 @@ type SystemMetricsResponse struct {
 	Load15        float64        `json:"load15"`
 	UptimeSeconds float64        `json:"uptime_seconds"`
 }
+
+// --- Service deletion preview ---
+
+// Orphan kinds: which subsystem the leftover state lives in.
+const (
+	OrphanKindHTTPS       = "https"
+	OrphanKindExternalDNS = "external-dns"
+	OrphanKindInternalDNS = "internal-dns"
+)
+
+// Orphan actions: what deleting the service does to this piece of state.
+//
+//	OrphanActionDelete — outlives the service and hz can retract it, but only
+//	                     if asked. These are what force --delete-orphans /
+//	                     --keep-orphans.
+//	OrphanActionAuto   — derived state, rewritten wholesale on the next sync.
+//	                     Reported so the operator sees the full picture.
+//	OrphanActionKeep   — shared with something else (a wildcard SubZone, another
+//	                     service) and so never removed by a single delete.
+const (
+	OrphanActionDelete = "delete"
+	OrphanActionAuto   = "auto"
+	OrphanActionKeep   = "keep"
+)
+
+// ServiceDeleteOrphan is one piece of state that outlives a service deletion.
+type ServiceDeleteOrphan struct {
+	Kind   string `json:"kind"`
+	Action string `json:"action"`
+	Domain string `json:"domain"`
+	Detail string `json:"detail"` // human-readable, already explains the consequence
+
+	// HTTPS
+	Zone    string `json:"zone,omitempty"`
+	SubZone string `json:"subZone,omitempty"`
+
+	// External DNS
+	RecordType string   `json:"recordType,omitempty"`
+	Values     []string `json:"values,omitempty"`
+	TTL        int      `json:"ttl,omitempty"`
+}
+
+type ServiceDeletePreviewRequest struct {
+	Name string `json:"name"`
+}
+
+type ServiceDeletePreviewResponse struct {
+	Service string                `json:"service"`
+	Domains []string              `json:"domains"`
+	Orphans []ServiceDeleteOrphan `json:"orphans"`
+}

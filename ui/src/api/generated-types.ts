@@ -817,3 +817,76 @@ export interface SystemMetricsResponse {
   load15: number /* float64 */;
   uptime_seconds: number /* float64 */;
 }
+/**
+ * Orphan kinds: which subsystem the leftover state lives in.
+ */
+export const OrphanKindHTTPS = "https";
+/**
+ * Orphan kinds: which subsystem the leftover state lives in.
+ */
+export const OrphanKindExternalDNS = "external-dns";
+/**
+ * Orphan kinds: which subsystem the leftover state lives in.
+ */
+export const OrphanKindInternalDNS = "internal-dns";
+/**
+ * Orphan actions: what deleting the service does to this piece of state.
+ * 	OrphanActionDelete — outlives the service and hz can retract it, but only
+ * 	                     if asked. These are what force --delete-orphans /
+ * 	                     --keep-orphans.
+ * 	OrphanActionAuto   — derived state, rewritten wholesale on the next sync.
+ * 	                     Reported so the operator sees the full picture.
+ * 	OrphanActionKeep   — shared with something else (a wildcard SubZone, another
+ * 	                     service) and so never removed by a single delete.
+ */
+export const OrphanActionDelete = "delete";
+/**
+ * Orphan actions: what deleting the service does to this piece of state.
+ * 	OrphanActionDelete — outlives the service and hz can retract it, but only
+ * 	                     if asked. These are what force --delete-orphans /
+ * 	                     --keep-orphans.
+ * 	OrphanActionAuto   — derived state, rewritten wholesale on the next sync.
+ * 	                     Reported so the operator sees the full picture.
+ * 	OrphanActionKeep   — shared with something else (a wildcard SubZone, another
+ * 	                     service) and so never removed by a single delete.
+ */
+export const OrphanActionAuto = "auto";
+/**
+ * Orphan actions: what deleting the service does to this piece of state.
+ * 	OrphanActionDelete — outlives the service and hz can retract it, but only
+ * 	                     if asked. These are what force --delete-orphans /
+ * 	                     --keep-orphans.
+ * 	OrphanActionAuto   — derived state, rewritten wholesale on the next sync.
+ * 	                     Reported so the operator sees the full picture.
+ * 	OrphanActionKeep   — shared with something else (a wildcard SubZone, another
+ * 	                     service) and so never removed by a single delete.
+ */
+export const OrphanActionKeep = "keep";
+/**
+ * ServiceDeleteOrphan is one piece of state that outlives a service deletion.
+ */
+export interface ServiceDeleteOrphan {
+  kind: string;
+  action: string;
+  domain: string;
+  detail: string; // human-readable, already explains the consequence
+  /**
+   * HTTPS
+   */
+  zone?: string;
+  subZone?: string;
+  /**
+   * External DNS
+   */
+  recordType?: string;
+  values?: string[];
+  ttl?: number /* int */;
+}
+export interface ServiceDeletePreviewRequest {
+  name: string;
+}
+export interface ServiceDeletePreviewResponse {
+  service: string;
+  domains: string[];
+  orphans: ServiceDeleteOrphan[];
+}
