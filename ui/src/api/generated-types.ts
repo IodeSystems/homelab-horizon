@@ -363,6 +363,12 @@ export interface ZoneResp {
   sslEmail?: string;
   subZones: string[];
   providerType?: string;
+  /**
+   * PendingDeletions is how many retractions this zone is still waiting on.
+   * Surfaced on the zone list so a stuck deletion is visible without opening
+   * the zone and hitting the provider.
+   */
+  pendingDeletions?: number /* int */;
 }
 export interface HAProxyResp {
   running: boolean;
@@ -563,11 +569,36 @@ export interface DNSRecordResp {
   type: string;
   value: string;
   ttl: number /* int */;
-  managed: boolean; // declared in Zone.Records (HZ owns it)
+  /**
+   * Owner is who authored this record: "derived" (a service publishes it),
+   * "declared" (Zone.Records), "observed" (live but not hz's), or
+   * "tombstoned" (hz's, pending retraction). Replaces an earlier `managed`
+   * bool that was computed from Zone.Records alone and so reported every
+   * service-derived record as un-owned.
+   */
+  owner: string;
+}
+/**
+ * DNSTombstoneResp is a deletion hz has been told to make and not yet confirmed
+ * gone at the provider. Surfaced so a retraction that keeps failing is visible
+ * rather than silently retrying forever.
+ */
+export interface DNSTombstoneResp {
+  name: string;
+  type: string;
+  value: string;
+  createdAt?: number /* int64 */;
+  reason?: string;
+  /**
+   * StillLive is true when the value is still present at the provider — i.e.
+   * the retraction has not taken effect yet.
+   */
+  stillLive: boolean;
 }
 export interface ZoneRecordsResponse {
   zone: string;
   records: DNSRecordResp[];
+  tombstones?: DNSTombstoneResp[];
 }
 /**
  * DNSDriftInfoResp describes an out-of-band change detected at a DNS provider
@@ -579,6 +610,8 @@ export interface DNSDriftInfoResp {
   type: string;
   expected: string[]; // what hz last published
   live: string[]; // what's live at the provider now
+  desired?: string[]; // what hz was about to write
+  reason?: string; // "out-of-band-change" | "unclaimed-name"
   detectedAt: number /* int64 */;
 }
 export interface DNSDriftStatusResponse {

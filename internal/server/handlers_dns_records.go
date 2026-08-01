@@ -59,20 +59,38 @@ func (s *Server) handleAPIZoneRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Index declared records by (name|TYPE|value) so live records can be tagged.
-	managed := make(map[string]bool, len(zone.Records))
-	for _, rec := range zone.Records {
-		managed[recordKey(rec.Name, rec.NormalizedType(), rec.Value)] = true
-	}
-
+	cfg := s.cfg()
 	resp := apitypes.ZoneRecordsResponse{Zone: zone.Name}
 	for _, rec := range live {
+		name := strings.TrimSuffix(rec.Name, ".")
 		resp.Records = append(resp.Records, apitypes.DNSRecordResp{
-			Name:    rec.Name,
-			Type:    rec.Type,
-			Value:   rec.Value,
-			TTL:     rec.TTL,
-			Managed: managed[recordKey(rec.Name, strings.ToUpper(rec.Type), rec.Value)],
+			Name:  rec.Name,
+			Type:  rec.Type,
+			Value: rec.Value,
+			TTL:   rec.TTL,
+			Owner: cfg.ClassifyRecord(zone.Name, name, rec.Type, rec.Value),
+		})
+	}
+
+	// Pending retractions, flagged with whether they are still live. A
+	// tombstone that stays StillLive across syncs is a retraction that keeps
+	// failing — the whole reason deletions are durable is so that is visible
+	// instead of silently retried forever.
+	for _, t := range zone.Tombstones {
+		stillLive := false
+		for _, rec := range live {
+			if t.Matches(strings.TrimSuffix(rec.Name, "."), rec.Type, rec.Value) {
+				stillLive = true
+				break
+			}
+		}
+		resp.Tombstones = append(resp.Tombstones, apitypes.DNSTombstoneResp{
+			Name:      t.Name,
+			Type:      t.Type,
+			Value:     t.Value,
+			CreatedAt: t.CreatedAt,
+			Reason:    t.Reason,
+			StillLive: stillLive,
 		})
 	}
 	writeJSON(w, resp)
@@ -736,7 +754,8 @@ func (s *Server) handleAPIDNSDriftStatus(w http.ResponseWriter, r *http.Request)
 	if d := s.cfg().DNSDriftDetail; d != nil {
 		resp.Detail = &apitypes.DNSDriftInfoResp{
 			Zone: d.Zone, Name: d.Name, Type: d.Type,
-			Expected: d.Expected, Live: d.Live, DetectedAt: d.DetectedAt,
+			Expected: d.Expected, Live: d.Live, Desired: d.Desired,
+			Reason: d.Reason, DetectedAt: d.DetectedAt,
 		}
 	}
 	writeJSON(w, resp)

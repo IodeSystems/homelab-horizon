@@ -255,7 +255,7 @@ export const DNSRecordSchema = z.object({
   type: z.string(),
   value: z.string(),
   ttl: z.number(),
-  managed: z.boolean(),
+  owner: z.string(),
 });
 
 export const ZoneRecordsResponseSchema = z.object({
