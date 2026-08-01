@@ -466,7 +466,8 @@ func TestClassifyDrift(t *testing.T) {
 	}{
 		{"live equals desired -> noop", []string{"a"}, []string{"a"}, []string{"a"}, driftNoop},
 		{"live equals desired, stale expected -> noop", []string{"b"}, []string{"a"}, []string{"b"}, driftNoop},
-		{"first run (no expected), live differs -> publish", []string{"old"}, nil, []string{"new"}, driftPublish},
+		{"no history, name already in use -> takeover", []string{"old"}, nil, []string{"new"}, driftTakeover},
+		{"no history, name already holds what we want -> noop", []string{"new"}, nil, []string{"new"}, driftNoop},
 		{"first run empty live -> publish", nil, nil, []string{"new"}, driftPublish},
 		{"live equals expected, desired differs -> publish", []string{"a"}, []string{"a"}, []string{"b"}, driftPublish},
 		{"out-of-band: live differs from both -> drift", []string{"evil"}, []string{"a"}, []string{"b"}, driftDrift},

@@ -172,3 +172,82 @@ func TestIngestAdoptsForeignRecordsOnly(t *testing.T) {
 		}
 	}
 }
+
+// A name hz has never published, already holding someone else's value, must not
+// be silently overwritten just because no baseline exists. Adding a service for
+// a domain already pointed somewhere else is a conflict, not a first publish.
+func TestFirstPublishOverForeignRecordBlocks(t *testing.T) {
+	cfg := &config.Config{Zones: []config.Zone{tombstoneZone()}}
+	s := newTestServer(t, cfg)
+	fp := &fakeProvider{records: []dns.Record{
+		{Name: "shop.example.com", Type: "A", Value: "203.0.113.9", ZoneID: "z1"},
+	}}
+	desired := []dns.Record{{Name: "shop.example.com", Type: "A", Value: "198.51.100.10", ZoneID: "z1"}}
+
+	changed, err := s.newDNSSyncRun().publish(fp, s.cfg().Zones[0], "shop.example.com", "A", desired)
+	if err == nil {
+		t.Fatal("expected the takeover to be refused")
+	}
+	if changed {
+		t.Error("nothing should have been written")
+	}
+	if got := liveValues(fp, "shop.example.com", "A"); len(got) != 1 || got[0] != "203.0.113.9" {
+		t.Errorf("foreign record was modified: %v", got)
+	}
+	if !s.dnsSyncBlocked() {
+		t.Error("a takeover must halt sync like any other conflict")
+	}
+	if d := s.cfg().DNSDriftDetail; d == nil || d.Reason != config.DNSConflictTakeover {
+		t.Errorf("reason = %+v, want %q so the notice can say which conflict it is",
+			d, config.DNSConflictTakeover)
+	}
+}
+
+// Clearing the block adopts the name: the baseline was synced back to live, so
+// the next publish is an ordinary intentional change.
+func TestClearedTakeoverThenPublishes(t *testing.T) {
+	cfg := &config.Config{Zones: []config.Zone{tombstoneZone()}}
+	s := newTestServer(t, cfg)
+	fp := &fakeProvider{records: []dns.Record{
+		{Name: "shop.example.com", Type: "A", Value: "203.0.113.9", ZoneID: "z1"},
+	}}
+	desired := []dns.Record{{Name: "shop.example.com", Type: "A", Value: "198.51.100.10", ZoneID: "z1"}}
+
+	_, _ = s.newDNSSyncRun().publish(fp, s.cfg().Zones[0], "shop.example.com", "A", desired)
+	if err := s.updateConfig(func(c *config.Config) {
+		c.DNSDriftBlocked = false
+		c.DNSDriftDetail = nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := s.newDNSSyncRun().publish(fp, s.cfg().Zones[0], "shop.example.com", "A", desired)
+	if err != nil || !changed {
+		t.Fatalf("after clearing: changed=%v err=%v", changed, err)
+	}
+	if got := liveValues(fp, "shop.example.com", "A"); len(got) != 1 || got[0] != "198.51.100.10" {
+		t.Errorf("live = %v, want the adopted name overwritten", got)
+	}
+}
+
+// An unclaimed name that already holds exactly what hz wants is adopted in
+// silence — there is nothing to conflict over.
+func TestFirstPublishMatchingValueIsAdoptedSilently(t *testing.T) {
+	cfg := &config.Config{Zones: []config.Zone{tombstoneZone()}}
+	s := newTestServer(t, cfg)
+	fp := &fakeProvider{records: []dns.Record{
+		{Name: "same.example.com", Type: "A", Value: "198.51.100.10", ZoneID: "z1"},
+	}}
+	desired := []dns.Record{{Name: "same.example.com", Type: "A", Value: "198.51.100.10", ZoneID: "z1"}}
+
+	changed, err := s.newDNSSyncRun().publish(fp, s.cfg().Zones[0], "same.example.com", "A", desired)
+	if err != nil {
+		t.Fatalf("adopting a matching record must not block: %v", err)
+	}
+	if changed {
+		t.Error("no write was needed")
+	}
+	if s.dnsSyncBlocked() {
+		t.Error("must not block when live already equals desired")
+	}
+}

@@ -529,10 +529,22 @@ type DNSDriftInfo struct {
 	Zone       string   `json:"zone"`
 	Name       string   `json:"name"`
 	Type       string   `json:"type"`
-	Expected   []string `json:"expected"` // what hz last published for (name,type)
-	Live       []string `json:"live"`     // what's actually at the provider now
+	Expected   []string `json:"expected"`          // what hz last published for (name,type)
+	Live       []string `json:"live"`              // what's actually at the provider now
+	Desired    []string `json:"desired,omitempty"` // what hz was about to write
+	Reason     string   `json:"reason,omitempty"`  // which kind of conflict; see DNSConflict*
 	DetectedAt int64    `json:"detected_at"`
 }
+
+// Why a DNS write was refused. Both halt sync, but they mean different things
+// to whoever has to resolve them: one is a record of hz's that changed under it,
+// the other is a name hz was about to claim from someone else. Telling them
+// apart is the difference between "who edited my record?" and "that name was
+// already in use".
+const (
+	DNSConflictOutOfBand = "out-of-band-change" // hz published here; live no longer matches
+	DNSConflictTakeover  = "unclaimed-name"     // hz never published here; something else holds it
+)
 
 // NormalizedType returns the upper-cased record type.
 func (r DNSRecord) NormalizedType() string {

@@ -470,10 +470,19 @@ func (s *Server) syncZoneRecords(run *dnsSyncRun) (updated, failed int, err erro
 // dnsSyncRun.publish. Before writing a (name,type) set it compares three
 // states: live (at the provider), expected (LastPublishedRecords — what hz last
 // wrote), desired (what hz wants now).
-//   - live == desired            → already correct; no write.
-//   - live == expected / first   → intentional change; publish, record baseline.
+//   - live == desired            → already correct; no write. Covers adopting a
+//                                  name that already holds the right value.
+//   - live == expected           → intentional change; publish, record baseline.
+//   - no expected, nothing live  → the name is unused; publish, record baseline.
+//   - no expected, something live→ TAKEOVER: hz has never written here and the
+//                                  name is in use. Block rather than replace a
+//                                  record hz did not create.
 //   - live != expected & desired → OUT-OF-BAND DRIFT: sync-back baseline to live,
 //                                  set DNSDriftBlocked, ntfy-alert, abort the run.
+//
+// Both blocking cases sync-back the baseline to live, so clearing the block
+// adopts what is there and the next sync proceeds — "clear" means "yes, that
+// name is ours now".
 // Once blocked, every sync entrypoint refuses until an operator clears the drift
 // (POST /api/v1/dns/drift/clear). See plan/dns-records.md Phase 3.
 
@@ -552,6 +561,21 @@ func (r *dnsSyncRun) publish(provider dns.Provider, zone config.Zone, name, recT
 		r.liveByZone[zone.Name] = replaceLiveSet(liveAll, name, recType, desired)
 		return true, nil
 
+	case driftTakeover:
+		// The name is already in use and hz has never written it. Publishing
+		// would silently replace whoever's record it is.
+		r.s.recordDNSDrift(config.DNSDriftInfo{
+			Zone:       zone.Name,
+			Name:       name,
+			Type:       recType,
+			Expected:   nil,
+			Live:       liveVals,
+			Desired:    desiredVals,
+			Reason:     config.DNSConflictTakeover,
+			DetectedAt: time.Now().Unix(),
+		})
+		return false, errDNSDriftBlocked
+
 	default: // driftDrift
 		// Live matches neither what we published nor what we want. Sync-back the
 		// baseline to live, block, alert, and abort.
@@ -561,6 +585,8 @@ func (r *dnsSyncRun) publish(provider dns.Provider, zone config.Zone, name, recT
 			Type:       recType,
 			Expected:   expected,
 			Live:       liveVals,
+			Desired:    desiredVals,
+			Reason:     config.DNSConflictOutOfBand,
 			DetectedAt: time.Now().Unix(),
 		})
 		return false, errDNSDriftBlocked
@@ -570,18 +596,34 @@ func (r *dnsSyncRun) publish(provider dns.Provider, zone config.Zone, name, recT
 type driftDecision int
 
 const (
-	driftNoop    driftDecision = iota // live already equals desired
-	driftPublish                      // safe to write (live == last-published, or first run)
-	driftDrift                        // out-of-band change: live differs from both
+	driftNoop     driftDecision = iota // live already equals desired
+	driftPublish                       // safe to write (live == last-published, or the name is unused)
+	driftTakeover                      // hz never published here, but someone else's record holds the name
+	driftDrift                         // out-of-band change: live differs from both
 )
 
 // classifyDrift decides how to reconcile a (name,type) set from the three
 // observed value sets. All comparisons are order-independent.
+//
+// The rule throughout is: absorb the non-conflicting, block the conflicting.
+// A record hz has never published is not automatically hz's to overwrite —
+// having no baseline means "I have never written here", which is exactly the
+// case where something else may already own the name. So an unclaimed name is
+// only free to publish when nothing is live at it, or when what's live is
+// already what hz wants (adopted silently — there is nothing to conflict over).
+// A different value at a name hz has no history with is a takeover, and gets
+// the same treatment as any other conflict: stop and tell the operator.
 func classifyDrift(live, expected, desired []string) driftDecision {
 	if valueSetsEqual(live, desired) {
 		return driftNoop
 	}
-	if len(expected) == 0 || valueSetsEqual(live, expected) {
+	if len(expected) == 0 {
+		if len(live) == 0 {
+			return driftPublish
+		}
+		return driftTakeover
+	}
+	if valueSetsEqual(live, expected) {
 		return driftPublish
 	}
 	return driftDrift
@@ -627,15 +669,19 @@ func (s *Server) recordDNSDrift(info config.DNSDriftInfo) {
 		}
 		cfg.LastPublishedRecords[key] = info.Live // sync-back: adopt live as baseline
 	})
-	slog.Error("DNS drift detected; halting all DNS sync",
-		"zone", info.Zone, "name", info.Name, "type", info.Type,
-		"expected", info.Expected, "live", info.Live)
-	s.notifyNtfy(
-		"⚠️ DNS drift — sync halted",
+	slog.Error("DNS conflict detected; halting all DNS sync",
+		"zone", info.Zone, "name", info.Name, "type", info.Type, "reason", info.Reason,
+		"expected", info.Expected, "live", info.Live, "desired", info.Desired)
+
+	title, body := "⚠️ DNS drift — sync halted",
 		fmt.Sprintf("%s %s in zone %s changed out-of-band.\n\nhz published: %v\nnow live:     %v\n\nAll DNS sync is halted until you clear the drift.",
-			info.Type, info.Name, info.Zone, info.Expected, info.Live),
-		"warning", "high",
-	)
+			info.Type, info.Name, info.Zone, info.Expected, info.Live)
+	if info.Reason == config.DNSConflictTakeover {
+		title = "⚠️ DNS name already in use — sync halted"
+		body = fmt.Sprintf("%s %s in zone %s already exists and hz has never published it.\n\nnow live:      %v\nhz wanted:     %v\n\nPublishing would have replaced a record hz did not create. All DNS sync is halted until you clear it — clearing adopts the name and lets hz overwrite it.",
+			info.Type, info.Name, info.Zone, info.Live, info.Desired)
+	}
+	s.notifyNtfy(title, body, "warning", "high")
 }
 
 // notifyNtfy posts a best-effort notification to the configured ntfy topic.

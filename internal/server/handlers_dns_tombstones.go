@@ -95,12 +95,14 @@ func (s *Server) retractZoneTombstones(run *dnsSyncRun, provider dns.Provider, z
 
 			// Keep the siblings hz was not asked to remove.
 			var remaining []dns.Record
+			var liveVals []string
 			var present bool
 			for _, rec := range liveAll {
 				if strings.TrimSuffix(rec.Name, ".") != k.name ||
 					strings.ToUpper(rec.Type) != k.recType {
 					continue
 				}
+				liveVals = append(liveVals, rec.Value)
 				if doomed[rec.Value] {
 					present = true
 					continue
@@ -116,6 +118,16 @@ func (s *Server) retractZoneTombstones(run *dnsSyncRun, provider dns.Provider, z
 				retracted += len(grouped[k])
 				continue
 			}
+
+			// The tombstone is itself the claim on this name: an operator asked
+			// for these exact values to go. Adopt live as the baseline so the
+			// removal classifies as an intentional change rather than a
+			// takeover of a name hz has no publish history with — otherwise
+			// retracting a record hz never published would block on the very
+			// rule meant to protect other people's records. Nothing is lost:
+			// `remaining` is computed from live, so a value added out of band
+			// survives the write.
+			s.setLastPublished(driftKey(zone.Name, k.name, k.recType), liveVals)
 
 			_, perr := run.publish(provider, zone, k.name, k.recType, remaining)
 			if errors.Is(perr, errDNSDriftBlocked) {
