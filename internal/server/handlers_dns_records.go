@@ -214,12 +214,32 @@ func (s *Server) applyRecordMutation(w http.ResponseWriter, r *http.Request, op 
 	}
 
 	// Update config Zone.Records to track HZ-managed values.
+	//
+	// A delete also writes a tombstone. Dropping the declaration alone cannot
+	// express the deletion — sync walks outward from config, so an undeclared
+	// name is never visited again and the record survives at the provider. The
+	// tombstone carries the intent forward until the provider confirms it gone;
+	// a failed retraction below is then retried by the next sync rather than
+	// lost. Add/edit clear any tombstone on the set: re-declaring a record is a
+	// later statement of intent than a pending deletion, and leaving both would
+	// have sync publish and retract it on alternating runs.
 	if err := s.updateConfig(func(cfg *config.Config) {
 		for i := range cfg.Zones {
 			if cfg.Zones[i].Name != zone.Name {
 				continue
 			}
 			cfg.Zones[i].Records = applyRecordToConfig(cfg.Zones[i].Records, op, name, recType, value, oldValue, req.TTL)
+		}
+		if op == recordOpDelete {
+			cfg.AddTombstone(zone.Name, config.DNSTombstone{
+				Name:      name,
+				Type:      recType,
+				Value:     value,
+				CreatedAt: time.Now().Unix(),
+				Reason:    "deleted via API",
+			})
+		} else {
+			cfg.ClearTombstonesForSet(zone.Name, name, recType)
 		}
 	}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
@@ -235,6 +255,16 @@ func (s *Server) applyRecordMutation(w http.ResponseWriter, r *http.Request, op 
 	} else if _, err := provider.SyncRecordSet(zone.ZoneID, desired); err != nil {
 		writeJSONError(w, http.StatusBadGateway, "Saved to config but provider publish failed: "+err.Error())
 		return
+	}
+
+	// Retraction confirmed inline — drop the tombstone now rather than making
+	// the operator wait for a sync to clear a deletion they just watched happen.
+	if op == recordOpDelete {
+		if err := s.updateConfig(func(cfg *config.Config) {
+			cfg.DropTombstone(zone.Name, name, recType, value)
+		}); err != nil {
+			slog.Warn("dropping confirmed tombstone failed", "zone", zone.Name, "err", err)
+		}
 	}
 
 	desiredValues := make([]string, len(desired))
