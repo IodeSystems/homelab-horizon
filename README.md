@@ -46,6 +46,13 @@ to retract them.
 
 ![Delete Service](docs/screenshots/services-delete.png)
 
+### DNS
+Zones hz publishes to, and per zone every record live at the provider labelled
+by who owns it — `derived` from a service, `declared` on the zone, `observed`
+(not hz's, never rewritten), or `tombstoned` (deletion pending).
+
+![DNS](docs/screenshots/dns.png)
+
 ### Domains
 Every domain hz knows, with internal DNS, external DNS, proxy and HTTPS state
 side by side — plus the SSL coverage gaps and the zone records it publishes.
@@ -71,11 +78,18 @@ Reserved ports per host, and the denylist `hz ports next` skips when allocating.
 > The VPN and Checks pages are captured too (`docs/screenshots/{vpn,checks}.png`)
 > but aren't shown here — the hermetic container has no live WireGuard peers and
 > can't reach the documentation IPs it checks, so both render as empty or all-red
-> and would misrepresent the pages.
+> and would misrepresent the pages. `dns-zone.png` (the per-zone record table) is
+> likewise captured but not shown: the mock provider serialises the zone's SOA
+> value as a Python repr, which looks like an hz bug and isn't one.
 
 > Regenerate with `make screenshots` — boots a hermetic Docker container
 > (daemons off, RFC 5737 documentation IPs, no outbound network) and captures
 > these with Playwright. See [docs/take-screenshots.mjs](docs/take-screenshots.mjs).
+>
+> `DNS_FIXTURE=1 ./bin/screenshots` additionally boots a mock Route53
+> (`motoserver/moto`) seeded with a zone, so the DNS pages capture real records
+> instead of an empty state. Opt-in: it needs the aws CLI and pulls a ~400MB
+> image. The DNS shots above were taken with it.
 
 ## Features
 
