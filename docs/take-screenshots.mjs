@@ -141,6 +141,23 @@ async function main() {
     }
   }
 
+  // DNS. The zone list works with any config; the per-zone record view needs a
+  // reachable provider, which only the DNS_FIXTURE mock supplies — without it
+  // the page correctly reports "no DNS provider" and is not worth a shot.
+  await visit("dns");
+  await shoot("dns");
+  console.log("Captured dns.png");
+
+  if (process.env.DNS_FIXTURE === "1") {
+    await visit("dns/example.com");
+    await page
+      .waitForSelector("table", { timeout: 15000 })
+      .catch(() => console.warn("dns zone table never rendered"));
+    await page.waitForTimeout(600);
+    await shoot("dns-zone");
+    console.log("Captured dns-zone.png");
+  }
+
   // Remaining top-level pages. Bans is deliberately absent: the demo config
   // has no bans to seed, so it only ever shoots an empty table.
   for (const p of [

@@ -9,8 +9,13 @@
 # Usage: ./bin/screenshots
 #
 # Env overrides:
-#   HZ_PORT     host port to publish (default 18080, bound to 127.0.0.1 only)
-#   KEEP        set to 1 to leave the container running for debugging
+#   HZ_PORT      host port to publish (default 18080, bound to 127.0.0.1 only)
+#   KEEP         set to 1 to leave the container running for debugging
+#   DNS_FIXTURE  set to 1 to also boot a mock Route53 (motoserver/moto) seeded
+#                with a zone, so the DNS pages capture real records instead of
+#                an empty state. Needs the aws CLI + python3 and pulls a ~400MB
+#                image, which is why it is opt-in.
+#   MOTO_PORT    host port for the mock (default 15005, loopback only)
 
 set -euo pipefail
 
@@ -23,6 +28,22 @@ readonly TOKEN="demo-screenshot-token-do-not-use"
 readonly PORT="${HZ_PORT:-18080}"
 readonly BASE="http://127.0.0.1:${PORT}"
 
+# Optional DNS fixture (DNS_FIXTURE=1): a mock Route53 so the DNS pages have
+# real records instead of an empty state. Opt-in because it pulls a ~400MB
+# image and adds a second container — the default run stays "docker + node".
+# Exported (not just readonly) so the capture script can branch on it — a
+# command-prefix assignment would fail against a readonly variable.
+DNS_FIXTURE="${DNS_FIXTURE:-0}"
+readonly DNS_FIXTURE
+export DNS_FIXTURE
+readonly MOTO_IMAGE="motoserver/moto:latest"
+readonly MOTO_NAME="hz-screenshots-moto"
+readonly NET_NAME="hz-screenshots-net"
+readonly MOTO_PORT="${MOTO_PORT:-15005}"
+RUN_CONFIG="$CONFIG"        # replaced by a generated config when the fixture runs
+RUN_NET_ARGS=()
+RUN_ENV_ARGS=()
+
 err()  { printf >&2 "screenshots: %s\n" "$*"; exit 1; }
 note() { printf "screenshots: %s\n" "$*"; }
 
@@ -33,8 +54,105 @@ command -v node   >/dev/null 2>&1 || err "node not installed"
 cleanup() {
   [ "${KEEP:-0}" = "1" ] && { note "KEEP=1 — leaving $NAME running on $BASE"; return; }
   docker rm -f "$NAME" >/dev/null 2>&1 || true
+  docker rm -f "$MOTO_NAME" >/dev/null 2>&1 || true
+  docker network rm "$NET_NAME" >/dev/null 2>&1 || true
+  [ "$RUN_CONFIG" != "$CONFIG" ] && rm -f "$RUN_CONFIG"
+  return 0
 }
 trap cleanup EXIT
+
+# start_dns_fixture boots a mock Route53, seeds a zone that exercises every
+# record-ownership class, and rewrites the demo config to point at it.
+#
+# The config stays mounted read-only in the container on purpose: given a
+# writable config hz migrates admin_token out to a sidecar file on first boot,
+# and the fixed demo token this script logs in with would stop working.
+start_dns_fixture() {
+  command -v aws     >/dev/null 2>&1 || err "DNS_FIXTURE=1 needs the aws CLI (to seed the mock zone)"
+  command -v python3 >/dev/null 2>&1 || err "DNS_FIXTURE=1 needs python3 (to generate the fixture config)"
+
+  note "starting mock Route53 ($MOTO_IMAGE)..."
+  docker network create "$NET_NAME" >/dev/null 2>&1 || true
+  docker rm -f "$MOTO_NAME" >/dev/null 2>&1 || true
+  docker run -d --rm --name "$MOTO_NAME" --network "$NET_NAME" \
+    -p "127.0.0.1:${MOTO_PORT}:5000" "$MOTO_IMAGE" >/dev/null
+
+  local moto_url="http://127.0.0.1:${MOTO_PORT}"
+  local ok=0 i
+  for i in $(seq 1 30); do
+    if curl -fsS -o /dev/null "$moto_url/"; then ok=1; break; fi
+    sleep 1
+  done
+  [ "$ok" = "1" ] || err "mock Route53 never became ready"
+
+  export AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
+  export AWS_DEFAULT_REGION=us-east-1 AWS_ENDPOINT_URL="$moto_url"
+
+  note "seeding the mock zone..."
+  local zid
+  zid=$(aws route53 create-hosted-zone --name example.com \
+          --caller-reference "screenshots-$$" \
+          --query 'HostedZone.Id' --output text | sed 's|/hostedzone/||')
+  [ -n "$zid" ] || err "could not create the mock hosted zone"
+
+  # One record per ownership class: derived (a service publishes it), declared
+  # (Zone.Records), observed (nobody's but the provider's), and tombstoned
+  # (pending retraction).
+  local batch; batch=$(mktemp)
+  cat > "$batch" <<'JSON'
+{"Changes":[
+ {"Action":"UPSERT","ResourceRecordSet":{"Name":"grafana.example.com","Type":"A","TTL":300,"ResourceRecords":[{"Value":"198.51.100.10"}]}},
+ {"Action":"UPSERT","ResourceRecordSet":{"Name":"cloud.example.com","Type":"A","TTL":300,"ResourceRecords":[{"Value":"198.51.100.11"}]}},
+ {"Action":"UPSERT","ResourceRecordSet":{"Name":"example.com","Type":"TXT","TTL":300,"ResourceRecords":[{"Value":"\"v=spf1 -all\""}]}},
+ {"Action":"UPSERT","ResourceRecordSet":{"Name":"example.com","Type":"MX","TTL":300,"ResourceRecords":[{"Value":"10 mail.example.com"}]}},
+ {"Action":"UPSERT","ResourceRecordSet":{"Name":"shop.example.com","Type":"CNAME","TTL":300,"ResourceRecords":[{"Value":"x.shopify.com"}]}}
+]}
+JSON
+  aws route53 change-resource-record-sets --hosted-zone-id "$zid" \
+    --change-batch "file://$batch" >/dev/null || err "seeding records failed"
+  rm -f "$batch"
+
+  RUN_CONFIG=$(mktemp /tmp/hz-screenshot-config.XXXXXX.json)
+  ZONE_ID="$zid" python3 - "$CONFIG" "$RUN_CONFIG" <<'PY'
+import json, os, sys
+src, dst = sys.argv[1], sys.argv[2]
+cfg = json.load(open(src))
+for z in cfg.get("zones", []):
+    if z.get("name") != "example.com":
+        continue
+    z["zone_id"] = os.environ["ZONE_ID"]
+    z["dns_provider"] = {
+        "type": "route53",
+        "aws_access_key_id": "test",
+        "aws_secret_access_key": "test",
+        "aws_region": "us-east-1",
+    }
+    z["records"] = [
+        {"name": "example.com", "type": "TXT", "value": "v=spf1 -all", "ttl": 300},
+    ]
+    # A retraction the provider still shows as live, so the pending-deletion
+    # state is visible rather than instantly resolved.
+    z["tombstones"] = [
+        {"name": "shop.example.com", "type": "CNAME", "value": "x.shopify.com",
+         "reason": "service retired"},
+    ]
+json.dump(cfg, open(dst, "w"), indent=2)
+PY
+  chmod 644 "$RUN_CONFIG"
+
+  # The SDK derives the per-service endpoint override from the service ID, and
+  # Route 53's has a space in it — so the variable is AWS_ENDPOINT_URL_ROUTE_53,
+  # not ..._ROUTE53. The obvious spelling is silently ignored and hz goes out to
+  # the real route53.amazonaws.com.
+  RUN_NET_ARGS=(--network "$NET_NAME")
+  RUN_ENV_ARGS=(
+    -e "AWS_ENDPOINT_URL=http://${MOTO_NAME}:5000"
+    -e "AWS_ENDPOINT_URL_ROUTE_53=http://${MOTO_NAME}:5000"
+    -e AWS_ACCESS_KEY_ID=test
+    -e AWS_SECRET_ACCESS_KEY=test
+    -e AWS_DEFAULT_REGION=us-east-1
+  )
+}
 
 # 1. Build the linux/amd64 binary the Dockerfile expects.
 note "building linux-amd64 binary..."
@@ -45,16 +163,29 @@ make build-linux-amd64 >/dev/null
 note "building docker image..."
 docker build -t "$IMAGE" . >/dev/null
 
-# 3. Run hermetic. Bound to loopback only; the config disables every daemon and
+# 3. Optional DNS fixture, before hz starts so its config can point at the mock.
+if [ "$DNS_FIXTURE" = "1" ]; then
+  start_dns_fixture
+fi
+
+# 4. Run hermetic. Bound to loopback only; the config disables every daemon and
 #    overrides public-IP detection, so the container makes no outbound calls.
+#    With DNS_FIXTURE=1 the only reachable "external" service is the mock
+#    Route53 on a private docker network — still nothing on the real internet.
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 note "starting container on $BASE..."
+case "$RUN_CONFIG" in
+  /*) config_path="$RUN_CONFIG" ;;
+   *) config_path="$(pwd)/$RUN_CONFIG" ;;
+esac
 docker run -d --rm --name "$NAME" \
   -p "127.0.0.1:${PORT}:8080" \
-  -v "$(pwd)/${CONFIG}:/etc/homelab-horizon/config.json:ro" \
+  "${RUN_NET_ARGS[@]+"${RUN_NET_ARGS[@]}"}" \
+  "${RUN_ENV_ARGS[@]+"${RUN_ENV_ARGS[@]}"}" \
+  -v "${config_path}:/etc/homelab-horizon/config.json:ro" \
   "$IMAGE" >/dev/null
 
-# 4. Wait for readiness. NB: /health reflects operational health (DNS + proxy
+# 5. Wait for readiness. NB: /health reflects operational health (DNS + proxy
 #    up), which is intentionally false in this hermetic daemon-off container —
 #    so poll the SPA instead, which serves 200 as soon as the listener is up.
 note "waiting for the app to come up..."
@@ -66,7 +197,7 @@ for i in $(seq 1 60); do
 done
 [ "${ok:-0}" = "1" ] || { docker logs "$NAME" 2>&1 | tail -30; err "container never became healthy"; }
 
-# 5. Install Playwright JS package (browsers are expected to be cached already)
+# 6. Install Playwright JS package (browsers are expected to be cached already)
 #    and capture.
 note "installing playwright (docs/)..."
 ( cd docs && npm install --no-audit --no-fund >/dev/null )
