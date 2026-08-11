@@ -295,6 +295,13 @@ func (s *Server) handleAPIToggleAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Admin status is an MFA-jail input (admins bypass), so promoting or
+	// demoting changes who should be jailed *right now*. Without this the
+	// config says one thing and the chains keep enforcing the other until
+	// some unrelated event rebuilds them — and the dangerous direction is
+	// demotion, where the ex-admin keeps unjailed access.
+	s.rebuildWGChains()
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(apitypes.ToggleAdminResponse{
 		OK:      true,
