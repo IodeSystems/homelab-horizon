@@ -415,6 +415,12 @@ listen stats
     bind *:%d
     mode http
     option forwardfor
+    # Strip any client-supplied X-Forwarded-For before forwardfor adds the
+    # real one. forwardfor APPENDS, and hz trusts the FIRST entry of XFF
+    # when the connection comes from a proxy it trusts -- so without this
+    # a VPN peer can forge another peer's address and be authenticated as
+    # them, including as a VPN admin.
+    http-request del-header X-Forwarded-For
     # Router check endpoint - returns 200 OK directly (requires special header to avoid conflicts)
     acl is_router_check path /router-check
     acl has_horizon_header hdr(X-Homelab-Horizon-Check) -m found
@@ -487,6 +493,12 @@ listen stats
     bind *:%d ssl crt %s
     mode http
     option forwardfor
+    # Strip any client-supplied X-Forwarded-For before forwardfor adds the
+    # real one. forwardfor APPENDS, and hz trusts the FIRST entry of XFF
+    # when the connection comes from a proxy it trusts -- so without this
+    # a VPN peer can forge another peer's address and be authenticated as
+    # them, including as a VPN admin.
+    http-request del-header X-Forwarded-For
     http-request set-header X-Forwarded-Proto https
     # Compression: gzip is a FALLBACK for backends that return raw responses. No 'offload' —
     # that strips Accept-Encoding before the backend, forcing it to send raw so HAProxy re-gzips
@@ -547,6 +559,12 @@ listen stats
     bind *:%d
     mode http
     option forwardfor
+    # Strip any client-supplied X-Forwarded-For before forwardfor adds the
+    # real one. forwardfor APPENDS, and hz trusts the FIRST entry of XFF
+    # when the connection comes from a proxy it trusts -- so without this
+    # a VPN peer can forge another peer's address and be authenticated as
+    # them, including as a VPN admin.
+    http-request del-header X-Forwarded-For
     # Compression: gzip is a FALLBACK for backends that return raw responses. No 'offload' —
     # that strips Accept-Encoding before the backend, forcing it to send raw so HAProxy re-gzips
     # (and HAProxy only does gzip, never brotli). Without offload, Accept-Encoding reaches the

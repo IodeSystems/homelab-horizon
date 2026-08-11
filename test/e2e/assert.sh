@@ -120,6 +120,17 @@ peer_ip=$(printf '%s' "$peer_conf" | awk -F' = ' '/^Address/{print $2}' | cut -d
 server_pub=$(wg pubkey < /etc/wireguard/server.key)
 echo "  peer laptop = $peer_ip"
 
+# A second peer, admin, that never connects — the identity JAILED-6 tries to
+# forge. Created here rather than mid-run: adding a peer reloads WireGuard,
+# which drops the client's handshake and makes later assertions flaky for
+# reasons that have nothing to do with the jail.
+boss_json=$(api POST /api/v1/vpn/peers/add '{"name":"boss","profile":"full-tunnel"}') \
+  || { echo "add admin peer failed"; exit 1; }
+boss_ip=$(printf '%s' "$boss_json" | jq -r '.config' | awk -F' = ' '/^Address/{print $2}' | cut -d/ -f1)
+api POST /api/v1/vpn/peers/toggle-admin '{"name":"boss"}' >/dev/null \
+  || { echo "promoting admin peer failed"; exit 1; }
+echo "  peer boss = $boss_ip (admin, never connects)"
+
 # Own client conf rather than hz's: AllowedIPs 0.0.0.0/0 keeps the test
 # independent of whatever LAN CIDR hz detects inside a multipass VM.
 mkdir -p /etc/wireguard
@@ -204,6 +215,19 @@ grep -q LAN-SECRET-CONTENT /tmp/e2e-last-body \
 # WG-FORWARD never sees them.
 assert_port_blocked "JAILED-4 sshd on the gateway is blocked (WG-INPUT)" "$GW_WG" 22
 assert_blocked      "JAILED-5 LAN host unreachable directly (WG-FORWARD)" "http://$LAN_HOST/"
+
+# A jailed peer reaches the portal through HAProxy, and hz trusts
+# X-Forwarded-For from HAProxy to identify which peer is calling. If HAProxy
+# passes a client-supplied XFF through, a jailed peer forges an admin peer's
+# address, is authenticated as that admin, and turns MFA off from inside the
+# jail. That makes the whole jail one header deep.
+spoof=$(cli curl -s --max-time 4 -H "X-Forwarded-For: $boss_ip" \
+          --resolve "vpn.e2e.test:80:$GW_WG" "http://vpn.e2e.test/api/v1/auth/status")
+case "$spoof" in
+  *'"authenticated":true'*) bad "JAILED-6 forged X-Forwarded-For must not authenticate" \
+                                "spoofing admin peer $boss_ip through HAProxy returned: $spoof" ;;
+  *)                        ok  "JAILED-6 forged X-Forwarded-For does not authenticate" ;;
+esac
 
 # ---- verify TOTP: the jail lifts ----
 head_ "Verified (valid TOTP session)"

@@ -126,6 +126,42 @@ func TestMFAJailMultiplePortalsAllExempt(t *testing.T) {
 	}
 }
 
+// TestEveryFrontendStripsInboundXFF guards a privilege escalation, not a
+// cosmetic header issue. hz identifies VPN peers by source IP and trusts
+// X-Forwarded-For when the connection comes from HAProxy, reading the first
+// entry. `option forwardfor` appends rather than replaces, so a client-supplied
+// value lands ahead of the real one — letting any peer that can reach HAProxy
+// claim another peer's address, including a VPN admin's, and thereby turn MFA
+// off from inside the jail. Verified against a live HAProxy in bin/e2e.
+func TestEveryFrontendStripsInboundXFF(t *testing.T) {
+	certDir := t.TempDir()
+	writeTestCert(t, filepath.Join(certDir, "vpn.pem"), []string{"vpn.example.com"})
+
+	h := New("/tmp/haproxy.cfg", "/tmp/admin.sock")
+	h.SetBackends(jailBackends())
+
+	for _, tc := range []struct {
+		name string
+		ssl  *SSLConfig
+	}{
+		{"ssl", &SSLConfig{Enabled: true, CertDir: certDir}},
+		{"no ssl", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := h.GenerateConfig(80, 443, tc.ssl)
+			forwardfor := strings.Count(got, "option forwardfor")
+			strip := strings.Count(got, "http-request del-header X-Forwarded-For")
+			if forwardfor == 0 {
+				t.Fatal("expected at least one frontend")
+			}
+			if strip != forwardfor {
+				t.Errorf("every frontend using forwardfor must strip inbound XFF: "+
+					"%d forwardfor vs %d del-header\n%s", forwardfor, strip, got)
+			}
+		})
+	}
+}
+
 func TestWriteJailACL(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "mfa-jailed.lst")
 
