@@ -156,6 +156,62 @@ func (c *Config) haproxyErrorsDir() string {
 	return "/etc/haproxy/errors"
 }
 
+// MFAJailACLPath is the file HAProxy reads MFA-jailed source IPs from. Lives
+// beside haproxy.cfg so it's covered by whatever backs that directory up.
+func (c *Config) MFAJailACLPath() string {
+	if c.HAProxyConfigPath != "" {
+		return filepath.Join(filepath.Dir(c.HAProxyConfigPath), "mfa-jailed.lst")
+	}
+	return "/etc/haproxy/mfa-jailed.lst"
+}
+
+// HAProxyJailPorts returns HAProxy's bind ports, which MFA-jailed peers are
+// allowed to reach so the L7 jail rules can decide portal-vs-deny. Empty when
+// HAProxy is disabled — then the jail is L3-only and the portal is reachable
+// only on hz's own port.
+func (c *Config) HAProxyJailPorts() []string {
+	if !c.HAProxyEnabled {
+		return nil
+	}
+	var ports []string
+	for _, p := range []int{c.HAProxyHTTPPort, c.HAProxyHTTPSPort} {
+		if p > 0 {
+			ports = append(ports, strconv.Itoa(p))
+		}
+	}
+	return ports
+}
+
+// JailedPeerIPs returns the WG addresses of every currently MFA-jailed peer,
+// which is what both the HAProxy ACL file and the WG-INPUT chain key off.
+func (c *Config) JailedPeerIPs() []string {
+	jailed := c.GetJailedPeers()
+	if len(jailed) == 0 {
+		return nil
+	}
+	ips := make([]string, 0, len(jailed))
+	for _, p := range c.WGPeers {
+		if !jailed[p.Name] {
+			continue
+		}
+		if ip := firstPeerIP(p.AllowedIPs); ip != "" {
+			ips = append(ips, ip)
+		}
+	}
+	return ips
+}
+
+// firstPeerIP pulls a peer's /32 address out of its AllowedIPs list.
+func firstPeerIP(allowedIPs string) string {
+	for _, part := range strings.Split(allowedIPs, ",") {
+		part = strings.TrimSpace(part)
+		if strings.HasSuffix(part, "/32") {
+			return strings.TrimSuffix(part, "/32")
+		}
+	}
+	return ""
+}
+
 // DeriveHAProxyBackends generates HAProxy backends from services with Proxy config
 func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 	var backends []haproxy.Backend
@@ -185,6 +241,10 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 			DomainMatches: svc.Domains,
 			Server:        server,
 			InternalOnly:  svc.Proxy.InternalOnly,
+			// A proxy.self service routes to hz's own UI, which is where the
+			// MFA portal lives — so it's the one host an MFA-jailed VPN peer
+			// is allowed through HAProxy to reach.
+			MFAPortal: self,
 		}
 		if svc.Proxy.HealthCheck != nil && svc.Proxy.HealthCheck.Path != "" {
 			b.HTTPCheck = true

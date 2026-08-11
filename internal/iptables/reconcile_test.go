@@ -75,9 +75,9 @@ func wgFwdRules(peerIPs ...string) []Rule {
 	return out
 }
 
-func TestWGForwardDriftedAcceptsCorrectOrder(t *testing.T) {
+func TestChainDriftedAcceptsCorrectOrder(t *testing.T) {
 	rules := wgFwdRules("10.100.0.2")
-	if wgForwardDrifted(rules, rules) {
+	if chainDrifted(rules, rules) {
 		t.Errorf("identical sequences must not be flagged as drifted")
 	}
 }
@@ -87,37 +87,37 @@ func TestWGForwardDriftedAcceptsCorrectOrder(t *testing.T) {
 // iterating expected forward, producing the chain in REVERSE order. The
 // catch-all DROP ended up at position 1, silently blocking every VPN packet.
 // Set-membership comparison can't see this — order check must.
-func TestWGForwardDriftedDetectsReversedOrder(t *testing.T) {
+func TestChainDriftedDetectsReversedOrder(t *testing.T) {
 	expected := wgFwdRules("10.100.0.2", "10.100.0.3")
 	live := make([]Rule, len(expected))
 	for i, r := range expected {
 		live[len(expected)-1-i] = r
 	}
-	if !wgForwardDrifted(live, expected) {
+	if !chainDrifted(live, expected) {
 		t.Errorf("reversed-order chain must be flagged as drifted (this is the wg-quick down/up regression)")
 	}
 }
 
-func TestWGForwardDriftedDetectsMissingRule(t *testing.T) {
+func TestChainDriftedDetectsMissingRule(t *testing.T) {
 	expected := wgFwdRules("10.100.0.2")
 	live := expected[1:] // drop the first rule
-	if !wgForwardDrifted(live, expected) {
+	if !chainDrifted(live, expected) {
 		t.Errorf("missing rule must be flagged as drifted")
 	}
 }
 
-func TestWGForwardDriftedDetectsExtraRule(t *testing.T) {
+func TestChainDriftedDetectsExtraRule(t *testing.T) {
 	expected := wgFwdRules("10.100.0.2")
 	live := append([]Rule{}, expected...)
 	live = append(live, Rule{Table: "filter", Chain: ForwardChainName,
 		Args: []string{"-s", "10.100.0.99/32", "-j", "ACCEPT"}})
-	if !wgForwardDrifted(live, expected) {
+	if !chainDrifted(live, expected) {
 		t.Errorf("extra rule must be flagged as drifted")
 	}
 }
 
-func TestWGForwardDriftedBothEmpty(t *testing.T) {
-	if wgForwardDrifted(nil, nil) {
+func TestChainDriftedBothEmpty(t *testing.T) {
+	if chainDrifted(nil, nil) {
 		t.Errorf("both-empty must not be flagged as drifted")
 	}
 }

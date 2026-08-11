@@ -24,6 +24,7 @@ type Backend struct {
 	CheckPath     string   `json:"check_path"`             // e.g., "/health"
 	InternalOnly  bool     `json:"internal_only"`          // Restrict to local network access only
 	MetricsPath   string   `json:"metrics_path,omitempty"` // if set, deny this path from non-local sources (Prometheus scrapes the backend directly)
+	MFAPortal     bool     `json:"mfa_portal,omitempty"`   // this backend is the MFA portal — the one thing an MFA-jailed VPN peer may reach
 
 	// Blue-green deploy fields (when Deploy is true, CurrentServer/NextServer are used instead of Server)
 	Deploy        bool   `json:"deploy,omitempty"`
@@ -62,11 +63,33 @@ type BackendStatus struct {
 	NextState    string // "up", "down", "drain", "maint", "unknown" - for deploy backends
 }
 
+// MFAJail is the L7 half of the VPN MFA jail. The L3 half (internal/iptables
+// WG-INPUT) confines a jailed peer to the gateway's HAProxy ports; this decides
+// what HAProxy will then do for it.
+//
+// Both halves are needed. iptables can't tell "the portal" from "every other
+// service" when they share a listener, and HAProxy can't stop a peer from
+// talking straight to sshd. Each covers the other's blind spot.
+type MFAJail struct {
+	Enabled bool // emit the jail rules at all
+
+	// ACLPath is the file HAProxy reads jailed source IPs from, one per line.
+	// Referenced as `src -f`, so it must exist whenever the rules are emitted —
+	// HAProxy refuses to start on a missing ACL file. WriteJailACL owns it.
+	ACLPath string
+
+	// PortalURL is where a jailed peer is redirected when it asks for anything
+	// else. Empty falls back to a bare 403: correct, but it looks like a broken
+	// service rather than a login prompt.
+	PortalURL string
+}
+
 // HAProxy manages HAProxy configuration
 type HAProxy struct {
 	configPath  string
 	statsSocket string
 	backends    []Backend
+	mfaJail     MFAJail
 }
 
 // New creates a new HAProxy manager
@@ -87,6 +110,17 @@ func (h *HAProxy) SetBackends(backends []Backend) {
 // GetBackends returns the backends list
 func (h *HAProxy) GetBackends() []Backend {
 	return h.backends
+}
+
+// SetMFAJail sets the L7 jail parameters used by the next config generation.
+// Changing it requires WriteConfig + Reload.
+//
+// Jailed *membership* lives in the ACL file instead, but note that a file-backed
+// ACL is loaded into memory at startup — HAProxy does not re-read it per
+// request. Membership changes therefore also need a reload (see WriteJailACL),
+// or an `add acl`/`del acl` runtime-API update.
+func (h *HAProxy) SetMFAJail(j MFAJail) {
+	h.mfaJail = j
 }
 
 // Status returns HAProxy status
@@ -422,6 +456,7 @@ listen stats
 			fmt.Fprintf(&sb, "    acl host_%s hdr_end(host) -i %s\n", aclName, strings.Join(patterns, " "))
 		}
 		sb.WriteString("\n")
+		sb.WriteString(mfaJailRules(h.mfaJail, backends))
 		// Deny external access to internal-only backends
 		for _, b := range backends {
 			if b.InternalOnly {
@@ -485,6 +520,7 @@ listen stats
 			fmt.Fprintf(&sb, "    acl host_%s hdr_end(host) -i %s\n", aclName, strings.Join(patterns, " "))
 		}
 		sb.WriteString("\n")
+		sb.WriteString(mfaJailRules(h.mfaJail, backends))
 		// Deny external access to internal-only backends
 		for _, b := range backends {
 			if b.InternalOnly {
@@ -543,6 +579,7 @@ listen stats
 			fmt.Fprintf(&sb, "    acl host_%s hdr_end(host) -i %s\n", aclName, strings.Join(patterns, " "))
 		}
 		sb.WriteString("\n")
+		sb.WriteString(mfaJailRules(h.mfaJail, backends))
 		// Deny external access to internal-only backends
 		for _, b := range backends {
 			if b.InternalOnly {
@@ -619,6 +656,84 @@ listen stats
 }
 
 // SanitizeName converts a service name to a safe HAProxy identifier
+// mfaJailRules renders the jail's frontend block: the source-list ACL plus the
+// rule that bounces a jailed peer asking for anything but the portal. Returns
+// "" when the jail is off or no backend is flagged as the portal — emitting the
+// deny with no portal exception would lock every jailed peer out of the page
+// that un-jails them.
+//
+// Must be emitted *after* the `acl host_<name>` declarations it references and
+// *before* the `use_backend` lines, so it is generated alongside the other
+// deny rules rather than with the ACL preamble.
+//
+// Interaction with the HTTP→HTTPS upgrade in the SSL http_front: HAProxy runs
+// every `http-request` rule before any legacy `redirect` rule, whatever the
+// textual order (it warns about this at parse time — the same warning the
+// pre-existing internal-only/metrics denies already produce). That ordering is
+// the one we want: a jailed peer asking for some other host is sent to the
+// portal rather than first upgraded to HTTPS on a host it may not reach.
+func mfaJailRules(j MFAJail, backends []Backend) string {
+	if !j.Enabled || j.ACLPath == "" {
+		return ""
+	}
+	var portals []string
+	for _, b := range backends {
+		if b.MFAPortal {
+			portals = append(portals, "!host_"+sanitizeName(b.Name))
+		}
+	}
+	if len(portals) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("    # VPN MFA jail: peers with no verified session may reach only the portal.\n")
+	sb.WriteString("    # Source list is rewritten by horizon on every jail transition.\n")
+	fmt.Fprintf(&sb, "    acl mfa_jailed src -f %s\n", j.ACLPath)
+	cond := "mfa_jailed " + strings.Join(portals, " ")
+	if j.PortalURL != "" {
+		fmt.Fprintf(&sb, "    http-request redirect location %s code 302 if %s\n", j.PortalURL, cond)
+	} else {
+		fmt.Fprintf(&sb, "    http-request deny deny_status 403 if %s\n", cond)
+	}
+	return sb.String()
+}
+
+// WriteJailACL writes the jailed-source list HAProxy reads via `src -f`, and
+// reports whether the contents changed. A changed list needs a reload to take
+// effect — the file is read into memory at load time, not per request.
+//
+// Always writes the file, even when empty: the `acl ... src -f` line references
+// it unconditionally and HAProxy refuses to start if it's missing.
+func WriteJailACL(path string, ips []string) (changed bool, err error) {
+	if path == "" {
+		return false, nil
+	}
+	sorted := append([]string(nil), ips...)
+	sort.Strings(sorted)
+
+	var sb strings.Builder
+	sb.WriteString("# Managed by homelab-horizon — VPN peers without a verified MFA session.\n")
+	for _, ip := range sorted {
+		sb.WriteString(ip)
+		sb.WriteString("\n")
+	}
+	next := sb.String()
+
+	if prev, readErr := os.ReadFile(path); readErr == nil && string(prev) == next {
+		return false, nil
+	}
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return false, fmt.Errorf("mkdir %s: %w", dir, err)
+		}
+	}
+	if err := os.WriteFile(path, []byte(next), 0644); err != nil {
+		return false, fmt.Errorf("write %s: %w", path, err)
+	}
+	return true, nil
+}
+
 func SanitizeName(name string) string {
 	return sanitizeName(name)
 }

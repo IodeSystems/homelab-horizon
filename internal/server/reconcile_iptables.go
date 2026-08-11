@@ -18,6 +18,20 @@ import (
 // know the old iface name (first-reconcile bootstrap case).
 var masqIfaceRe = regexp.MustCompile(`-o \S+ -j MASQUERADE`)
 
+// masqPlaceholder stands in for the iface token when comparing two PostUp
+// lines that should differ only by which iface they NAT through.
+const masqPlaceholder = "-o IFACE -j MASQUERADE"
+
+// priorChainPostUp is the frozen PostUp template from the horizon version that
+// had WG-FORWARD but no WG-INPUT — i.e. the one whose MFA jail could be walked
+// around by addressing the gateway itself. Pinned here (rather than derived)
+// because a migration has to recognize the *old* shape exactly; the current
+// shape lives in wireguard.ExpectedPostUp and will keep moving.
+const priorChainPostUp = "iptables -N WG-FORWARD 2>/dev/null || true; " +
+	"iptables -I FORWARD 1 -i %i -j WG-FORWARD; " +
+	"iptables -I FORWARD 2 -o %i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; " +
+	"iptables -t nat -I POSTROUTING 1 " + masqPlaceholder
+
 // reconcileIPTables is the single-entry self-heal for on-host state that drifts
 // when the LAN interface changes. It runs at startup and on every tick of
 // startHealthCheck (60s), and handles four independent drifts:
@@ -94,6 +108,18 @@ func (s *Server) reconcileIPTables() {
 		}
 	}
 
+	// ---- Axis 5: WG-INPUT jump migration ----
+	// Hosts installed before the MFA jail covered the INPUT path have a
+	// wg0.conf that only sets up WG-FORWARD. Re-emit the current template so
+	// a reboot brings the INPUT jump up with the interface; the live rule
+	// itself is installed by Reconcile below, on this same pass.
+	if isPriorChainPostUp(s.wg.GetPostUp()) {
+		slog.Info("iptables-sync: adding WG-INPUT jump to wg0.conf", "iface", newIface)
+		if err := s.wg.UpdateInterfaceRules(wireguard.ExpectedPostUp(newIface), wireguard.ExpectedPostDown(newIface)); err != nil {
+			slog.Warn("iptables-sync: WG-INPUT wg0.conf migration failed", "err", err)
+		}
+	}
+
 	// ---- Axis 2 & 3: iface name / LAN CIDR drift + iptables classify+heal ----
 	peers := make([]iptables.PeerInput, 0, len(s.wg.GetPeers()))
 	for _, p := range s.wg.GetPeers() {
@@ -115,15 +141,16 @@ func (s *Server) reconcileIPTables() {
 	}
 
 	expected := iptables.ExpectedRules(iptables.Inputs{
-		WGInterface: cfg.WGInterface,
-		OutIface:    newIface,
-		VPNRange:    cfg.VPNRange,
-		LanCIDR:     newLanCIDR,
-		Peers:       peers,
-		ServerWGIP:  serverWGIP,
-		ListenPort:  listenPort,
-		JailedPeers: cfg.GetJailedPeers(),
-		Profiles:    cfg.VPNProfiles,
+		WGInterface:  cfg.WGInterface,
+		OutIface:     newIface,
+		VPNRange:     cfg.VPNRange,
+		LanCIDR:      newLanCIDR,
+		Peers:        peers,
+		ServerWGIP:   serverWGIP,
+		ListenPort:   listenPort,
+		JailedPeers:  cfg.GetJailedPeers(),
+		HAProxyPorts: cfg.HAProxyJailPorts(),
+		Profiles:     cfg.VPNProfiles,
 	})
 	stale := iptables.StaleRules(cfg, peers, serverWGIP, listenPort)
 
@@ -185,4 +212,19 @@ func (s *Server) reconcileIPTables() {
 // misidentified.
 func isLegacyBypassPostUp(postUp string) bool {
 	return strings.Contains(postUp, "-i %i -j ACCEPT") && !strings.Contains(postUp, "WG-FORWARD")
+}
+
+// isPriorChainPostUp reports whether postUp is exactly the pre-WG-INPUT
+// horizon template, ignoring which iface it NATs through.
+//
+// Exact-match rather than "mentions WG-FORWARD but not WG-INPUT": an admin who
+// hand-rolled a PostUp around WG-FORWARD owns that line, and silently
+// rewriting it would throw away their rules. They lose the INPUT-side jail
+// until they adopt the new template — visible in the IPTables tab as a missing
+// expected rule, which is the honest failure mode.
+func isPriorChainPostUp(postUp string) bool {
+	if strings.Contains(postUp, iptables.InputChainName) {
+		return false
+	}
+	return masqIfaceRe.ReplaceAllString(strings.TrimSpace(postUp), masqPlaceholder) == priorChainPostUp
 }

@@ -24,5 +24,7 @@ func (s *Server) syncHAProxyBackends() {
 		s.static.Rebuild(s.cfg())
 	}
 	// Derive HAProxy backends from services
-	s.haproxy.SetBackends(s.cfg().DeriveHAProxyBackends())
+	backends := s.cfg().DeriveHAProxyBackends()
+	s.haproxy.SetBackends(backends)
+	s.haproxy.SetMFAJail(mfaJailFor(s.cfg(), backends))
 }

@@ -87,10 +87,7 @@ func (s *Server) handleAPISystemFixWGForwardChain(w http.ResponseWriter, r *http
 		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
-	cfg := s.cfg()
-	lanCIDR := config.GetLocalNetworkCIDR(config.DetectDefaultInterface())
-	peers := s.wg.GetPeers()
-	if err := wireguard.SetupForwardChain(cfg.WGInterface, peers, cfg.VPNProfiles, cfg.VPNRange, lanCIDR); err != nil {
+	if err := wireguard.SetupForwardChain(s.cfg().WGInterface, s.wgChainOpts()); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

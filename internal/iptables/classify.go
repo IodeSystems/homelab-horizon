@@ -120,9 +120,14 @@ func hasKey(m map[string]struct{}, k string) bool {
 }
 
 // LiveRules reads horizon-managed rules from the host kernel via iptables-save.
-// Scopes the read to the three chains horizon cares about; rules in other
-// chains (OUTPUT, PREROUTING, custom admin chains, etc.) are not returned —
-// that's part of the "horizon only manages what it manages" boundary.
+// Scopes the read to the chains horizon cares about; rules in other chains
+// (OUTPUT, PREROUTING, custom admin chains, etc.) are not returned — that's
+// part of the "horizon only manages what it manages" boundary.
+//
+// INPUT is narrowed further, to just the rules that jump to WG-INPUT. Unlike
+// FORWARD, a normal host's INPUT is full of ufw/docker rules that horizon has
+// no opinion about; reading them all would classify every one as "unknown" and
+// bury the IPTables tab in noise the admin can't act on.
 //
 // Returns an empty slice (not error) when iptables-save isn't available, so
 // the classifier can still run on hosts without iptables installed yet.
@@ -135,13 +140,28 @@ func LiveRules() ([]Rule, error) {
 	}
 	all = append(all, natRules...)
 
-	filterRules, err := runIptablesSave("filter", []string{"FORWARD", ForwardChainName})
+	filterRules, err := runIptablesSave("filter", []string{"FORWARD", ForwardChainName, InputChainName, "INPUT"})
 	if err != nil {
 		return nil, fmt.Errorf("iptables-save filter: %w", err)
 	}
-	all = append(all, filterRules...)
+	for _, r := range filterRules {
+		if r.Chain == "INPUT" && !jumpsTo(r.Args, InputChainName) {
+			continue
+		}
+		all = append(all, r)
+	}
 
 	return all, nil
+}
+
+// jumpsTo reports whether a rule body ends in a jump to the named target.
+func jumpsTo(args []string, target string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "-j" && args[i+1] == target {
+			return true
+		}
+	}
+	return false
 }
 
 // runIptablesSave executes `iptables-save -t <table>` and parses the output,

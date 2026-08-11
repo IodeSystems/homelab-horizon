@@ -60,15 +60,17 @@ func TestExpectedRulesMinimal(t *testing.T) {
 		OutIface:    "eth0",
 	}
 	got := ExpectedRules(in)
-	// Expect: MASQUERADE + FORWARD jump + FORWARD return + default drop.
-	// No peers so no per-peer rules.
-	if len(got) != 4 {
-		t.Fatalf("want 4 rules, got %d: %v", len(got), got)
+	// Expect: MASQUERADE + FORWARD jump + FORWARD return + INPUT jump +
+	// default drop. No peers so no per-peer rules — and in particular no
+	// WG-INPUT body, since only jailed peers get entries there.
+	if len(got) != 5 {
+		t.Fatalf("want 5 rules, got %d: %v", len(got), got)
 	}
 	wantCanon := []string{
 		"nat|POSTROUTING|-o eth0 -j MASQUERADE",
 		"filter|FORWARD|-i wg0 -j WG-FORWARD",
 		"filter|FORWARD|-o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
+		"filter|INPUT|-i wg0 -j WG-INPUT",
 		"filter|WG-FORWARD|-j DROP",
 	}
 	for i, w := range wantCanon {
@@ -88,10 +90,16 @@ func TestExpectedRulesLanAccessProfile(t *testing.T) {
 		Profiles:    map[string]string{"alice": "lan-access"},
 	}
 	got := ExpectedRules(in)
-	// alice gets: VPN allow + LAN allow + DROP = 3 peer rules.
-	// Plus MASQUERADE + FORWARD x2 + default DROP = 4 framing rules.
-	if len(got) != 7 {
-		t.Fatalf("want 7 rules, got %d:\n%v", len(got), got)
+	// alice gets: VPN allow + LAN allow + DROP = 3 peer rules. Nothing in
+	// WG-INPUT — she isn't jailed, so she falls through it.
+	// Plus MASQUERADE + FORWARD x2 + INPUT jump + default DROP = 5 framing.
+	if len(got) != 8 {
+		t.Fatalf("want 8 rules, got %d:\n%v", len(got), got)
+	}
+	for _, r := range got {
+		if r.Chain == InputChainName {
+			t.Errorf("unjailed peer should have no %s rules, got %v", InputChainName, r)
+		}
 	}
 	// Verify alice's LAN-allow rule is present.
 	found := false
@@ -138,21 +146,143 @@ func TestExpectedRulesMFAJailOverridesProfile(t *testing.T) {
 		ListenPort:  "8080",
 	}
 	got := ExpectedRules(in)
-	// Jail should replace full-tunnel with 2 rules: single-port ACCEPT + DROP.
-	foundAccept := false
-	foundDrop := false
+	// Jail replaces full-tunnel with a bare DROP on the transit path, and
+	// portal/DNS exceptions plus a DROP on the gateway-local path.
+	want := map[string]bool{
+		"filter|WG-FORWARD|-s 10.100.0.99/32 -j DROP":                                      false,
+		"filter|WG-INPUT|-s 10.100.0.99/32 -d 10.100.0.1/32 -p tcp --dport 8080 -j ACCEPT": false,
+		"filter|WG-INPUT|-s 10.100.0.99/32 -d 10.100.0.1/32 -p udp --dport 53 -j ACCEPT":   false,
+		"filter|WG-INPUT|-s 10.100.0.99/32 -d 10.100.0.1/32 -p tcp --dport 53 -j ACCEPT":   false,
+		"filter|WG-INPUT|-s 10.100.0.99/32 -j DROP":                                        false,
+	}
 	for _, r := range got {
-		switch r.Canonical() {
-		case "filter|WG-FORWARD|-s 10.100.0.99/32 -d 10.100.0.1/32 -p tcp --dport 8080 -j ACCEPT":
-			foundAccept = true
-		case "filter|WG-FORWARD|-s 10.100.0.99/32 -j DROP":
-			foundDrop = true
-		case "filter|WG-FORWARD|-s 10.100.0.99/32 -j ACCEPT":
+		if _, ok := want[r.Canonical()]; ok {
+			want[r.Canonical()] = true
+		}
+		if r.Canonical() == "filter|WG-FORWARD|-s 10.100.0.99/32 -j ACCEPT" {
 			t.Errorf("MFA jail should suppress full-tunnel ACCEPT, but found it")
 		}
 	}
-	if !foundAccept || !foundDrop {
-		t.Errorf("MFA jail missing accept (%v) or drop (%v) in:\n%v", foundAccept, foundDrop, got)
+	for canon, found := range want {
+		if !found {
+			t.Errorf("MFA jail missing rule %q in:\n%v", canon, got)
+		}
+	}
+}
+
+// TestExpectedRulesMFAJailDropsAfterAcceptsInInputChain pins ordering inside
+// WG-INPUT. iptables is first-match-wins, so a `-s peer -j DROP` emitted
+// before the portal ACCEPT would jail the peer with no way to reach the page
+// that un-jails it — a lockout that looks identical to a broken tunnel.
+func TestExpectedRulesMFAJailDropsAfterAcceptsInInputChain(t *testing.T) {
+	in := Inputs{
+		WGInterface: "wg0",
+		OutIface:    "eth0",
+		Peers:       []PeerInput{{Name: "mallory", IP: "10.100.0.99"}},
+		JailedPeers: map[string]bool{"mallory": true},
+		ServerWGIP:  "10.100.0.1",
+		ListenPort:  "8080",
+	}
+	var inputChain []Rule
+	for _, r := range ExpectedRules(in) {
+		if r.Chain == InputChainName {
+			inputChain = append(inputChain, r)
+		}
+	}
+	if len(inputChain) != 4 {
+		t.Fatalf("want 4 %s rules, got %d: %v", InputChainName, len(inputChain), inputChain)
+	}
+	for i, r := range inputChain[:3] {
+		if r.Args[len(r.Args)-1] != "ACCEPT" {
+			t.Errorf("%s rule[%d] should be an ACCEPT, got %v", InputChainName, i, r)
+		}
+	}
+	if last := inputChain[3]; last.Args[len(last.Args)-1] != "DROP" {
+		t.Errorf("%s must end in the peer DROP, got %v", InputChainName, last)
+	}
+}
+
+// TestExpectedRulesMFAJailOpensHAProxyPorts covers the seam between the two
+// jail layers: L3 must let a jailed peer reach HAProxy, or the L7 rules that
+// decide portal-vs-deny never get a packet to judge and the peer just times
+// out on the portal.
+func TestExpectedRulesMFAJailOpensHAProxyPorts(t *testing.T) {
+	in := Inputs{
+		WGInterface:  "wg0",
+		OutIface:     "eth0",
+		Peers:        []PeerInput{{Name: "mallory", IP: "10.100.0.99"}},
+		JailedPeers:  map[string]bool{"mallory": true},
+		ServerWGIP:   "10.100.0.1",
+		ListenPort:   "8080",
+		HAProxyPorts: []string{"80", "443"},
+	}
+	want := []string{
+		"filter|WG-INPUT|-s 10.100.0.99/32 -d 10.100.0.1/32 -p tcp --dport 8080 -j ACCEPT",
+		"filter|WG-INPUT|-s 10.100.0.99/32 -d 10.100.0.1/32 -p tcp --dport 80 -j ACCEPT",
+		"filter|WG-INPUT|-s 10.100.0.99/32 -d 10.100.0.1/32 -p tcp --dport 443 -j ACCEPT",
+		"filter|WG-INPUT|-s 10.100.0.99/32 -j DROP",
+	}
+	got := ExpectedRules(in)
+	for _, w := range want {
+		found := false
+		for _, r := range got {
+			if r.Canonical() == w {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("missing %q in:\n%v", w, got)
+		}
+	}
+}
+
+// TestJailAllowsSkipsDuplicatePort: when horizon is itself reached on an
+// HAProxy port, the same `--dport` rule would be emitted twice — harmless in
+// iptables but it makes the chain drift-check compare unequal forever, which
+// means a rebuild on every 60s tick.
+func TestJailAllowsSkipsDuplicatePort(t *testing.T) {
+	got := jailAllows("8080", []string{"80", "8080", ""})
+	ports := map[string]int{}
+	for _, a := range got {
+		ports[a[len(a)-1]]++
+	}
+	if ports["8080"] != 1 {
+		t.Errorf("port 8080 should appear once, got %d: %v", ports["8080"], got)
+	}
+	if ports["80"] != 1 {
+		t.Errorf("port 80 should appear once, got %d: %v", ports["80"], got)
+	}
+}
+
+// TestExpectedRulesMFAJailFailsOpenWithoutPortal covers the case where horizon
+// can't name its own portal (no WG address or no listen port parsed). Emitting
+// the DROPs anyway would strand the peer permanently, so the jail is skipped
+// entirely and the peer keeps its profile.
+func TestExpectedRulesMFAJailFailsOpenWithoutPortal(t *testing.T) {
+	in := Inputs{
+		WGInterface: "wg0",
+		OutIface:    "eth0",
+		VPNRange:    "10.100.0.0/24",
+		Peers:       []PeerInput{{Name: "mallory", IP: "10.100.0.99"}},
+		Profiles:    map[string]string{"mallory": "full-tunnel"},
+		JailedPeers: map[string]bool{"mallory": true},
+		ServerWGIP:  "10.100.0.1",
+		ListenPort:  "", // unknown
+	}
+	got := ExpectedRules(in)
+	for _, r := range got {
+		if r.Chain == InputChainName {
+			t.Errorf("no %s rules expected when the portal is unaddressable, got %v", InputChainName, r)
+		}
+	}
+	found := false
+	for _, r := range got {
+		if r.Canonical() == "filter|WG-FORWARD|-s 10.100.0.99/32 -j ACCEPT" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("jail should fail open to the peer's profile, got:\n%v", got)
 	}
 }
 

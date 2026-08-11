@@ -3,15 +3,19 @@
 // config wanted (StaleRules, used to find drift), and a canonical form for
 // set comparison in the classifier.
 //
-// The scope of "what horizon manages" is deliberately narrow — only the three
-// chains it touches:
+// The scope of "what horizon manages" is deliberately narrow — only the chains
+// it touches:
 //   - nat POSTROUTING  (a single MASQUERADE rule pinned to the default iface)
 //   - filter FORWARD   (jump to WG-FORWARD + stateful return traffic)
 //   - filter WG-FORWARD (per-peer profile rules + default drop)
+//   - filter INPUT     (jump to WG-INPUT, for wg-incoming traffic only)
+//   - filter WG-INPUT  (MFA jail rules for traffic to the gateway itself)
 //
 // Other iptables state on the host is none of horizon's business — the
 // classifier treats it as "unknown" and leaves it alone unless the admin
-// explicitly removes it via the IPTables tab.
+// explicitly removes it via the IPTables tab. In particular, INPUT is read
+// back only for rules that jump to WG-INPUT: a typical host has a pile of
+// unrelated INPUT rules (ufw, docker) and horizon must not claim them.
 package iptables
 
 import (
@@ -23,6 +27,27 @@ import (
 // ForwardChainName is the chain horizon inserts per-peer profile rules into.
 // Kept as a constant so both generators and callers use the same spelling.
 const ForwardChainName = "WG-FORWARD"
+
+// InputChainName is the chain that enforces the MFA jail for traffic addressed
+// to the gateway itself.
+//
+// WG-FORWARD cannot do this job. Packets from a peer to the server's own wg0
+// address are locally delivered, so they traverse INPUT and never reach
+// FORWARD — a jailed peer could otherwise reach every daemon listening on the
+// gateway (dnsmasq, sshd, and critically HAProxy, which would then originate
+// LAN-bound connections *from the gateway* and sidestep WG-FORWARD entirely).
+//
+// The chain holds rules for jailed peers only, and has no catch-all DROP:
+// unjailed peers fall through it untouched. With MFA off it is empty, and the
+// INPUT jump is a no-op hash lookup.
+const InputChainName = "WG-INPUT"
+
+// jailDNSPort is opened to the gateway for jailed peers. Clients are handed
+// the gateway as their resolver in the WG config, so with DNS blocked the
+// captive portal is unreachable by name and the whole tunnel reads as "broken"
+// rather than "locked" — a support call instead of a login. It widens the jail
+// by exactly one on-box resolver.
+const jailDNSPort = "53"
 
 // Rule is one iptables rule in a stable, table/chain-aware form. Args is the
 // rule body (everything that would appear after `-A <chain>` on the command
@@ -81,15 +106,21 @@ func (r Rule) String() string {
 // *config.Config so that StaleRules can substitute LastLocalIface / LastLanCIDR
 // without mutating the live config.
 type Inputs struct {
-	WGInterface string            // "wg0"
-	OutIface    string            // default-route iface, e.g. "eth0"
-	VPNRange    string            // "10.100.0.0/24"
-	LanCIDR     string            // "192.168.1.0/24" — may be empty
-	Peers       []PeerInput       // per-peer facts (IP, profile, MFA jail status)
-	ServerWGIP  string            // "10.100.0.1" — for MFA jail rule
-	ListenPort  string            // horizon's HTTP port, for MFA jail rule
-	JailedPeers map[string]bool   // peer name → currently MFA-jailed
-	Profiles    map[string]string // peer name → profile
+	WGInterface string          // "wg0"
+	OutIface    string          // default-route iface, e.g. "eth0"
+	VPNRange    string          // "10.100.0.0/24"
+	LanCIDR     string          // "192.168.1.0/24" — may be empty
+	Peers       []PeerInput     // per-peer facts (IP, profile, MFA jail status)
+	ServerWGIP  string          // "10.100.0.1" — for MFA jail rule
+	ListenPort  string          // horizon's HTTP port, for MFA jail rule
+	JailedPeers map[string]bool // peer name → currently MFA-jailed
+
+	// HAProxyPorts are the gateway's HAProxy bind ports (80/443). Jailed peers
+	// are allowed to reach them so HAProxy can apply the L7 half of the jail —
+	// which vhost they asked for is a question only it can answer. Empty when
+	// HAProxy is disabled, in which case the jail stays purely L3.
+	HAProxyPorts []string
+	Profiles     map[string]string // peer name → profile
 }
 
 // PeerInput is the subset of a WG peer we need to emit forward rules. Keeping
@@ -113,7 +144,7 @@ func ExpectedRules(in Inputs) []Rule {
 		return nil
 	}
 
-	rules := make([]Rule, 0, 8+3*len(in.Peers))
+	rules := make([]Rule, 0, 9+5*len(in.Peers))
 
 	// nat POSTROUTING: one MASQUERADE rule pinned to the default iface.
 	if in.OutIface != "" {
@@ -136,7 +167,17 @@ func ExpectedRules(in Inputs) []Rule {
 		Args:  []string{"-o", in.WGInterface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
 	})
 
-	// WG-FORWARD body: per-peer rules + default drop.
+	// filter INPUT: jump to WG-INPUT for wg-incoming traffic. Emitted
+	// unconditionally (not only when peers are jailed) so the enforcement
+	// point is already in place when MFA is switched on, and so the rule
+	// doesn't flap in and out on every jail transition.
+	rules = append(rules, Rule{
+		Table: "filter",
+		Chain: "INPUT",
+		Args:  []string{"-i", in.WGInterface, "-j", InputChainName},
+	})
+
+	// WG-FORWARD / WG-INPUT bodies: per-peer rules + default drop.
 	for _, p := range in.Peers {
 		ip := p.IP
 		if ip == "" {
@@ -146,17 +187,30 @@ func ExpectedRules(in Inputs) []Rule {
 			continue
 		}
 
-		// MFA jail takes precedence over profile — jailed peer can only
-		// reach horizon's own HTTP port on the server WG IP.
+		// MFA jail takes precedence over profile. Enforced on both paths:
+		// WG-FORWARD drops everything transiting the gateway, WG-INPUT drops
+		// everything addressed to the gateway except the portal (and DNS).
+		//
+		// Fails open when we can't name the portal: emitting the DROPs
+		// without the matching ACCEPTs would strand the peer with no way to
+		// reach the very page that un-jails it.
 		if in.JailedPeers[p.Name] && in.ServerWGIP != "" && in.ListenPort != "" {
 			rules = append(rules, Rule{
 				Table: "filter",
 				Chain: ForwardChainName,
-				Args:  []string{"-s", ip + "/32", "-d", in.ServerWGIP + "/32", "-p", "tcp", "--dport", in.ListenPort, "-j", "ACCEPT"},
+				Args:  []string{"-s", ip + "/32", "-j", "DROP"},
 			})
+			for _, allow := range jailAllows(in.ListenPort, in.HAProxyPorts) {
+				args := append([]string{"-s", ip + "/32", "-d", in.ServerWGIP + "/32"}, allow...)
+				rules = append(rules, Rule{
+					Table: "filter",
+					Chain: InputChainName,
+					Args:  append(args, "-j", "ACCEPT"),
+				})
+			}
 			rules = append(rules, Rule{
 				Table: "filter",
-				Chain: ForwardChainName,
+				Chain: InputChainName,
 				Args:  []string{"-s", ip + "/32", "-j", "DROP"},
 			})
 			continue
@@ -233,17 +287,39 @@ func StaleRules(cfg *config.Config, peers []PeerInput, serverWGIP, listenPort st
 		return nil
 	}
 	in := Inputs{
-		WGInterface: cfg.WGInterface,
-		OutIface:    cfg.LastLocalIface,
-		VPNRange:    cfg.VPNRange,
-		LanCIDR:     cfg.LastLanCIDR,
-		Peers:       peers,
-		ServerWGIP:  serverWGIP,
-		ListenPort:  listenPort,
-		JailedPeers: cfg.GetJailedPeers(),
-		Profiles:    cfg.VPNProfiles,
+		WGInterface:  cfg.WGInterface,
+		OutIface:     cfg.LastLocalIface,
+		VPNRange:     cfg.VPNRange,
+		LanCIDR:      cfg.LastLanCIDR,
+		Peers:        peers,
+		ServerWGIP:   serverWGIP,
+		ListenPort:   listenPort,
+		JailedPeers:  cfg.GetJailedPeers(),
+		HAProxyPorts: cfg.HAProxyJailPorts(),
+		Profiles:     cfg.VPNProfiles,
 	}
 	return ExpectedRules(in)
+}
+
+// jailAllows returns the destination-port matchers a jailed peer is permitted
+// to reach on the gateway, in rule order: horizon direct, HAProxy (where the
+// L7 jail then decides which vhost), DNS.
+//
+// Shared by the generator here and internal/wireguard's immediate-apply path so
+// the two can't drift — a jailed peer allowed through one and not the other is
+// either a lockout or a hole, depending on which way it drifts.
+func jailAllows(listenPort string, haproxyPorts []string) [][]string {
+	allows := [][]string{{"-p", "tcp", "--dport", listenPort}}
+	for _, p := range haproxyPorts {
+		if p == "" || p == listenPort {
+			continue
+		}
+		allows = append(allows, []string{"-p", "tcp", "--dport", p})
+	}
+	return append(allows,
+		[]string{"-p", "udp", "--dport", jailDNSPort},
+		[]string{"-p", "tcp", "--dport", jailDNSPort},
+	)
 }
 
 // peerIP pulls the first /32 IP from an AllowedIPs string, falling back to

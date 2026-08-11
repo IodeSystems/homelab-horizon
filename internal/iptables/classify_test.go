@@ -111,3 +111,29 @@ COMMIT
 		}
 	}
 }
+
+// TestJumpsToMatchesOnlyTheTarget covers the predicate LiveRules uses to keep
+// a host's unrelated INPUT rules (ufw, docker) out of the classifier. Getting
+// this wrong floods the IPTables tab with "unknown" rules horizon has no
+// business touching.
+func TestJumpsToMatchesOnlyTheTarget(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"horizon's INPUT jump", []string{"-i", "wg0", "-j", "WG-INPUT"}, true},
+		{"jump to a different chain", []string{"-i", "wg0", "-j", "WG-FORWARD"}, false},
+		{"ufw rule", []string{"-p", "tcp", "--dport", "22", "-j", "ACCEPT"}, false},
+		{"chain named in a non-jump position", []string{"-m", "comment", "--comment", "WG-INPUT"}, false},
+		{"trailing -j with no target", []string{"-i", "wg0", "-j"}, false},
+		{"empty", nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := jumpsTo(c.args, InputChainName); got != c.want {
+				t.Errorf("jumpsTo(%v) = %v, want %v", c.args, got, c.want)
+			}
+		})
+	}
+}

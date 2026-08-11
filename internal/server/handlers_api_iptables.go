@@ -49,15 +49,16 @@ func (s *Server) buildClassifierInputs() (
 	}
 
 	expected = iptables.ExpectedRules(iptables.Inputs{
-		WGInterface: cfg.WGInterface,
-		OutIface:    currentIface,
-		VPNRange:    cfg.VPNRange,
-		LanCIDR:     lanCIDR,
-		Peers:       peers,
-		ServerWGIP:  serverWGIP,
-		ListenPort:  listenPort,
-		JailedPeers: cfg.GetJailedPeers(),
-		Profiles:    cfg.VPNProfiles,
+		WGInterface:  cfg.WGInterface,
+		OutIface:     currentIface,
+		VPNRange:     cfg.VPNRange,
+		LanCIDR:      lanCIDR,
+		Peers:        peers,
+		ServerWGIP:   serverWGIP,
+		ListenPort:   listenPort,
+		JailedPeers:  cfg.GetJailedPeers(),
+		HAProxyPorts: cfg.HAProxyJailPorts(),
+		Profiles:     cfg.VPNProfiles,
 	})
 	stale = iptables.StaleRules(cfg, peers, serverWGIP, listenPort)
 	blessed = cfg.BlessedIPTablesRules

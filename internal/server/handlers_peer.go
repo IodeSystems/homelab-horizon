@@ -323,7 +323,7 @@ func (s *Server) applyWGPeersFromConfig(cfg *config.Config) {
 		if err := s.wg.Reload(); err != nil {
 			slog.Error("peer-sync: WG reload after peer sync failed", "err", err)
 		}
-		s.rebuildWGForwardChain()
+		s.rebuildWGChains()
 	}
 }
 

@@ -596,9 +596,14 @@ func (w *WGConfig) GetPostDown() string {
 
 // ExpectedPostUp returns the PostUp line we'd generate for a new config with
 // the given output interface. The form is chain-based: it ensures WG-FORWARD
-// exists, jumps to it from FORWARD for wg-incoming traffic (so per-peer
-// profile/jail/DROP rules in WG-FORWARD actually fire), allows return traffic
-// via conntrack, and adds NAT MASQUERADE for the default iface.
+// and WG-INPUT exist, jumps to them from FORWARD and INPUT for wg-incoming
+// traffic (so per-peer profile/jail/DROP rules actually fire), allows return
+// traffic via conntrack, and adds NAT MASQUERADE for the default iface.
+//
+// The INPUT jump is what keeps an MFA-jailed peer off the gateway's own
+// listeners — traffic to the wg0 address is delivered locally and never
+// reaches FORWARD, so WG-FORWARD alone can't see it. The chain is empty
+// unless someone is jailed, so this costs one hash lookup in the common case.
 //
 // `2>/dev/null || true` on the chain create swallows the "chain already
 // exists" error so wg-quick doesn't abort PostUp on a re-up.
@@ -606,23 +611,33 @@ func (w *WGConfig) GetPostDown() string {
 // Earlier versions emitted `iptables -I FORWARD 1 -i %i -j ACCEPT` directly,
 // which short-circuited everything — WG-FORWARD never fired and per-peer
 // policy was bypassed. Hosts upgraded from that template need their wg0.conf
-// rewritten (handlers_api_system_fix.go re-emits via this function).
+// rewritten (handlers_api_system_fix.go re-emits via this function), as do
+// hosts predating the WG-INPUT jump (reconcileIPTables migrates those).
 func ExpectedPostUp(outIface string) string {
-	return fmt.Sprintf("iptables -N %s 2>/dev/null || true; iptables -I FORWARD 1 -i %%i -j %s; iptables -I FORWARD 2 -o %%i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -I POSTROUTING 1 -o %s -j MASQUERADE",
-		forwardChainName, forwardChainName, outIface)
+	return fmt.Sprintf("iptables -N %s 2>/dev/null || true; iptables -N %s 2>/dev/null || true; iptables -I FORWARD 1 -i %%i -j %s; iptables -I FORWARD 2 -o %%i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; iptables -I INPUT 1 -i %%i -j %s; iptables -t nat -I POSTROUTING 1 -o %s -j MASQUERADE",
+		forwardChainName, inputChainName, forwardChainName, inputChainName, outIface)
 }
 
 // ExpectedPostDown returns the PostDown line we'd generate for a new config
 // with the given output interface. Inverse of ExpectedPostUp: removes the
-// FORWARD jump, the conntrack return rule, and the NAT MASQUERADE, then
-// flushes and deletes the WG-FORWARD chain so a subsequent PostUp starts
-// from a clean slate.
+// FORWARD/INPUT jumps, the conntrack return rule, and the NAT MASQUERADE,
+// then flushes and deletes both chains so a subsequent PostUp starts from a
+// clean slate.
 func ExpectedPostDown(outIface string) string {
-	return fmt.Sprintf("iptables -D FORWARD -i %%i -j %s; iptables -D FORWARD -o %%i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE; iptables -F %s; iptables -X %s",
-		forwardChainName, outIface, forwardChainName, forwardChainName)
+	return fmt.Sprintf("iptables -D FORWARD -i %%i -j %s; iptables -D FORWARD -o %%i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; iptables -D INPUT -i %%i -j %s; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE; iptables -F %s; iptables -X %s; iptables -F %s; iptables -X %s",
+		forwardChainName, inputChainName, outIface, forwardChainName, forwardChainName, inputChainName, inputChainName)
 }
 
-const forwardChainName = "WG-FORWARD"
+const (
+	forwardChainName = "WG-FORWARD"
+	inputChainName   = "WG-INPUT"
+
+	// jailDNSPort is opened to the gateway for jailed peers so the captive
+	// portal resolves — clients are handed the gateway as their resolver.
+	// Mirrors internal/iptables, which generates the same rules for the
+	// reconcile path.
+	jailDNSPort = "53"
+)
 
 // peerIP extracts the first /32 IP from a peer's AllowedIPs string
 func peerIP(allowedIPs string) string {
@@ -640,11 +655,25 @@ func peerIP(allowedIPs string) string {
 	return ""
 }
 
-// SetupForwardChain creates the WG-FORWARD chain, adds the jump rule, and populates per-peer rules.
-// Called once at server startup.
-func SetupForwardChain(wgInterface string, peers []Peer, profiles map[string]string, vpnRange, lanCIDR string) error {
-	// Create chain (ignore error if already exists)
+// SetupForwardChain creates the WG-FORWARD and WG-INPUT chains, adds the jump
+// rules, and populates per-peer rules. Called once at server startup.
+//
+// WG-INPUT is created and jumped-to here even though its body is filled in by
+// RebuildInputChain (which needs the MFA jail state the caller holds): the
+// enforcement point has to exist before the first jail transition, and an
+// empty chain is a no-op.
+func SetupForwardChain(wgInterface string, opts ForwardChainOpts) error {
+	// Create chains (ignore error if already exists)
 	_ = exec.Command("iptables", "-N", forwardChainName).Run()
+	_ = exec.Command("iptables", "-N", inputChainName).Run()
+
+	// INPUT jump — scoped to the wg interface, so nothing arriving on a
+	// physical NIC is affected.
+	if err := exec.Command("iptables", "-C", "INPUT", "-i", wgInterface, "-j", inputChainName).Run(); err != nil {
+		if out, err := exec.Command("iptables", "-I", "INPUT", "1", "-i", wgInterface, "-j", inputChainName).CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to add INPUT jump: %s: %w", out, err)
+		}
+	}
 
 	// Check if jump rule already exists, add if not
 	if err := exec.Command("iptables", "-C", "FORWARD", "-i", wgInterface, "-j", forwardChainName).Run(); err != nil {
@@ -660,19 +689,21 @@ func SetupForwardChain(wgInterface string, peers []Peer, profiles map[string]str
 		_ = exec.Command("iptables", "-I", "FORWARD", "2", "-o", wgInterface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run()
 	}
 
-	return RebuildForwardChain(ForwardChainOpts{
-		Peers:    peers,
-		Profiles: profiles,
-		VPNRange: vpnRange,
-		LanCIDR:  lanCIDR,
-	})
+	if err := RebuildForwardChain(opts); err != nil {
+		return err
+	}
+	return RebuildInputChain(opts)
 }
 
-// TeardownForwardChain removes the jump rule, flushes and deletes the chain.
+// TeardownForwardChain removes the jump rules, flushes and deletes both
+// horizon-owned chains.
 func TeardownForwardChain(wgInterface string) error {
 	_ = exec.Command("iptables", "-D", "FORWARD", "-i", wgInterface, "-j", forwardChainName).Run()
 	_ = exec.Command("iptables", "-F", forwardChainName).Run()
 	_ = exec.Command("iptables", "-X", forwardChainName).Run()
+	_ = exec.Command("iptables", "-D", "INPUT", "-i", wgInterface, "-j", inputChainName).Run()
+	_ = exec.Command("iptables", "-F", inputChainName).Run()
+	_ = exec.Command("iptables", "-X", inputChainName).Run()
 	return nil
 }
 
@@ -685,6 +716,11 @@ type ForwardChainOpts struct {
 	JailedPeers map[string]bool // peers currently MFA-jailed
 	ServerWGIP  string          // WG interface address (e.g. "10.100.0.1")
 	ListenPort  string          // Horizon listen port (e.g. "8080")
+
+	// HAProxyPorts are the gateway's HAProxy bind ports. Jailed peers reach
+	// them so HAProxy can apply the L7 half of the jail (portal vs everything
+	// else); empty when HAProxy is disabled.
+	HAProxyPorts []string
 }
 
 // RebuildForwardChain flushes and repopulates the WG-FORWARD chain with per-peer rules.
@@ -707,9 +743,10 @@ func RebuildForwardChain(opts ForwardChainOpts) error {
 			continue
 		}
 
-		// MFA jail: peer can only reach Horizon server
+		// MFA jail: nothing transits the gateway. The portal exception lives
+		// in WG-INPUT (see RebuildInputChain) because the portal is on the
+		// gateway itself, which is an INPUT destination, not a forwarded one.
 		if opts.JailedPeers[p.Name] && opts.ServerWGIP != "" && opts.ListenPort != "" {
-			_ = exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", opts.ServerWGIP+"/32", "-p", "tcp", "--dport", opts.ListenPort, "-j", "ACCEPT").Run()
 			_ = exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "DROP").Run()
 			continue
 		}
@@ -743,6 +780,62 @@ func RebuildForwardChain(opts ForwardChainOpts) error {
 
 	// Default: drop anything not matched (unknown source IPs)
 	_ = exec.Command("iptables", "-A", forwardChainName, "-j", "DROP").Run()
+
+	return nil
+}
+
+// jailAllows returns the destination-port matchers a jailed peer may reach on
+// the gateway, in rule order: horizon direct, HAProxy (whose L7 rules then pick
+// portal vs deny), DNS. Mirrors internal/iptables.jailAllows — the two generate
+// the same jail and must be edited together.
+func jailAllows(listenPort string, haproxyPorts []string) [][]string {
+	allows := [][]string{{"-p", "tcp", "--dport", listenPort}}
+	for _, p := range haproxyPorts {
+		if p == "" || p == listenPort {
+			continue
+		}
+		allows = append(allows, []string{"-p", "tcp", "--dport", p})
+	}
+	return append(allows,
+		[]string{"-p", "udp", "--dport", jailDNSPort},
+		[]string{"-p", "tcp", "--dport", jailDNSPort},
+	)
+}
+
+// RebuildInputChain flushes and repopulates WG-INPUT: the policy for traffic a
+// peer addresses to the gateway itself. Called alongside RebuildForwardChain
+// on every peer/profile/MFA change.
+//
+// Only jailed peers get rules. Everyone else falls through the chain to
+// whatever INPUT policy the host already had — horizon deliberately does not
+// become the arbiter of who may reach the gateway's services in general, only
+// of who may reach them *while jailed*. Hence no catch-all DROP: an empty
+// WG-INPUT is the correct steady state when MFA is off or nobody is jailed.
+//
+// Fails open per-peer when ServerWGIP/ListenPort are unknown, matching
+// RebuildForwardChain — a DROP without the portal ACCEPT would leave the peer
+// unable to reach the page that clears the jail.
+func RebuildInputChain(opts ForwardChainOpts) error {
+	if out, err := exec.Command("iptables", "-F", inputChainName).CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to flush %s: %s: %w", inputChainName, out, err)
+	}
+
+	for _, p := range opts.Peers {
+		ip := peerIP(p.AllowedIPs)
+		if ip == "" {
+			continue
+		}
+		if !opts.JailedPeers[p.Name] || opts.ServerWGIP == "" || opts.ListenPort == "" {
+			continue
+		}
+
+		// Portal (direct + via HAProxy), then DNS so it resolves by name.
+		for _, allow := range jailAllows(opts.ListenPort, opts.HAProxyPorts) {
+			args := append([]string{"-A", inputChainName, "-s", ip + "/32", "-d", opts.ServerWGIP + "/32"}, allow...)
+			_ = exec.Command("iptables", append(args, "-j", "ACCEPT")...).Run()
+		}
+		_ = exec.Command("iptables", "-A", inputChainName, "-s", ip+"/32", "-j", "DROP").Run()
+	}
 
 	return nil
 }
