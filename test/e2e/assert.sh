@@ -202,11 +202,25 @@ assert_reaches "JAILED-2 portal vhost still reachable through HAProxy" \
 # LAN content behind the wiki backend.
 redirect=$(cli curl -s -o /tmp/e2e-last-body -w '%{http_code} %{redirect_url}' --max-time 4 \
              --resolve "wiki.e2e.test:80:$GW_WG" "http://wiki.e2e.test/" 2>&1)
+target=""
 case "$redirect" in
-  302*vpn.e2e.test/mfa*) ok "JAILED-3 wiki vhost redirected to the portal (L7 jail)" ;;
-  403*)                  ok "JAILED-3 wiki vhost denied by HAProxy (L7 jail, 403 fallback)" ;;
-  *)                     bad "JAILED-3 wiki vhost redirected to the portal (L7 jail)" "got: $redirect" ;;
+  302*vpn.e2e.test*) ok "JAILED-3 wiki vhost redirected to the portal (L7 jail)"
+                     target=${redirect#* } ;;
+  403*)              ok "JAILED-3 wiki vhost denied by HAProxy (L7 jail, 403 fallback)" ;;
+  *)                 bad "JAILED-3 wiki vhost redirected to the portal (L7 jail)" "got: $redirect" ;;
 esac
+
+# Follow it. Asserting only on the Location header proved too weak: the first
+# implementation pointed at /mfa, but the UI is a SPA mounted at /app/, so
+# every jailed peer was redirected to a 404 from hz's own mux. The captive
+# portal has to actually be there.
+if [ -n "$target" ]; then
+  code=$(cli curl -s -o /dev/null -w '%{http_code}' --max-time 4 \
+           --resolve "vpn.e2e.test:80:$GW_WG" "$target")
+  [ "$code" = 200 ] \
+    && ok "JAILED-3c the redirect target actually serves the portal" \
+    || bad "JAILED-3c the redirect target actually serves the portal" "$target returned $code"
+fi
 grep -q LAN-SECRET-CONTENT /tmp/e2e-last-body \
   && bad "JAILED-3b LAN content must not leak through HAProxy" "body contained the LAN secret" \
   || ok "JAILED-3b LAN content did not leak through HAProxy"
