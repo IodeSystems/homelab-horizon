@@ -238,7 +238,7 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 		if err := s.wg.Reload(); err != nil {
 			slog.Warn("wg.Reload", "err", err)
 		}
-		s.rebuildWGForwardChain()
+		s.rebuildWGChains()
 		if err := s.removeInvite(token); err != nil {
 			slog.Warn("removeInvite", "err", err)
 		}

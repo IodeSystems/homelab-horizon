@@ -190,7 +190,7 @@ func (s *Server) handleAPIMFAVerify(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
 		return
 	}
-	s.rebuildWGForwardChain()
+	s.rebuildWGChains()
 
 	resp := apitypes.MFAVerifyResponse{OK: true}
 	if expiry != 0 {
@@ -232,7 +232,7 @@ func (s *Server) handleAPIMFAReset(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
 		return
 	}
-	s.rebuildWGForwardChain()
+	s.rebuildWGChains()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
@@ -283,7 +283,7 @@ func (s *Server) handleAPIMFAGrantSession(w http.ResponseWriter, r *http.Request
 		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
 		return
 	}
-	s.rebuildWGForwardChain()
+	s.rebuildWGChains()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
@@ -320,7 +320,7 @@ func (s *Server) handleAPIMFARevokeSession(w http.ResponseWriter, r *http.Reques
 		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
 		return
 	}
-	s.rebuildWGForwardChain()
+	s.rebuildWGChains()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
@@ -370,7 +370,10 @@ func (s *Server) handleAPIMFASettings(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
 		return
 	}
-	s.rebuildWGForwardChain()
+	s.rebuildWGChains()
+	// Toggling MFA changes the rules baked into haproxy.cfg itself, not just
+	// the jailed-source list, so the config has to be regenerated.
+	s.applyMFAJailConfig()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
@@ -397,7 +400,7 @@ func (s *Server) startMFASessionPruner(done <-chan struct{}) {
 					}); err != nil {
 						slog.Warn("updateConfig prune MFA sessions", "err", err)
 					}
-					s.rebuildWGForwardChain()
+					s.rebuildWGChains()
 				}
 			}
 		}

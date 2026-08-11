@@ -918,6 +918,14 @@ function VPNMFATab() {
           When enabled, VPN peers are jailed to only reach the Horizon portal until they
           verify with a TOTP code from their authenticator app. VPN admins bypass MFA.
         </Typography>
+        <Alert severity="info" sx={{ mb: 2 }}>
+          The jail is enforced twice: iptables confines a jailed peer to this host&apos;s HAProxy
+          ports, Horizon&apos;s own port and DNS, and HAProxy then redirects any request that
+          isn&apos;t for the portal. Reaching the portal through HAProxy needs a{" "}
+          <strong>Kiosk URL</strong> whose host routes to a <code>proxy.self</code> service —
+          otherwise jailed peers get a 403 and must use{" "}
+          <code>http://&lt;vpn-server-ip&gt;:&lt;horizon-port&gt;</code> directly.
+        </Alert>
         <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
           <Typography>MFA Enabled</Typography>
           <Switch

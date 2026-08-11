@@ -80,7 +80,7 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 	if err := s.wg.Reload(); err != nil {
 		slog.Warn("wg.Reload", "err", err)
 	}
-	s.rebuildWGForwardChain()
+	s.rebuildWGChains()
 
 	clientConfig := s.generateClientConfig(privKey, strings.TrimSuffix(clientIP, "/32"), profile)
 
@@ -184,7 +184,7 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 	if err := s.wg.Reload(); err != nil {
 		slog.Warn("wg.Reload", "err", err)
 	}
-	s.rebuildWGForwardChain()
+	s.rebuildWGChains()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
@@ -240,7 +240,7 @@ func (s *Server) handleAPIDeletePeer(w http.ResponseWriter, r *http.Request) {
 	if err := s.wg.Reload(); err != nil {
 		slog.Warn("wg.Reload", "err", err)
 	}
-	s.rebuildWGForwardChain()
+	s.rebuildWGChains()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
@@ -317,7 +317,7 @@ func (s *Server) handleAPIReloadWG(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.rebuildWGForwardChain()
+	s.rebuildWGChains()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
@@ -363,7 +363,7 @@ func (s *Server) handleAPISetPeerProfile(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
 		return
 	}
-	s.rebuildWGForwardChain()
+	s.rebuildWGChains()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "profile": profile})
@@ -404,31 +404,46 @@ func (s *Server) generateClientConfig(clientPrivKey, clientIP, profile string) s
 	)
 }
 
-// rebuildWGForwardChain rebuilds the iptables WG-FORWARD chain based on current peers and profiles.
-func (s *Server) rebuildWGForwardChain() {
-	cfg := s.cfg()
-	peers := s.wg.GetPeers()
-	lanCIDR := config.GetLocalNetworkCIDR(config.DetectDefaultInterface())
+// rebuildWGChains rebuilds both horizon-owned iptables chains from the current
+// peers, profiles, and MFA jail state: WG-FORWARD (traffic transiting the
+// gateway) and WG-INPUT (traffic addressed to the gateway itself).
+//
+// Both must be rebuilt together. A jail that only covers WG-FORWARD lets the
+// peer talk to every listener on the gateway — including HAProxy, which would
+// then reach the LAN on its behalf.
+func (s *Server) rebuildWGChains() {
+	opts := s.wgChainOpts()
+	if err := wireguard.RebuildForwardChain(opts); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to rebuild WG-FORWARD chain: %v\n", err)
+	}
+	if err := wireguard.RebuildInputChain(opts); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to rebuild WG-INPUT chain: %v\n", err)
+	}
+	// L7 half of the same transition — see internal/server/mfa_jail.go.
+	s.syncMFAJailACL()
+}
 
-	// Compute MFA jail state
-	serverWGIP := strings.TrimSuffix(strings.Split(s.wg.GetAddress(), "/")[0], "")
+// wgChainOpts snapshots everything the two chain builders need: peers,
+// profiles, network coordinates, and the current MFA jail set. Shared by the
+// rebuild path and the system-fix handler so the jail can't be applied by one
+// and silently dropped by the other.
+func (s *Server) wgChainOpts() wireguard.ForwardChainOpts {
+	cfg := s.cfg()
 	listenPort := ""
 	if addr := cfg.ListenAddr; addr != "" {
 		if _, p, err := net.SplitHostPort(addr); err == nil {
 			listenPort = p
 		}
 	}
-
-	if err := wireguard.RebuildForwardChain(wireguard.ForwardChainOpts{
-		Peers:       peers,
-		Profiles:    cfg.VPNProfiles,
-		VPNRange:    cfg.VPNRange,
-		LanCIDR:     lanCIDR,
-		JailedPeers: cfg.GetJailedPeers(),
-		ServerWGIP:  serverWGIP,
-		ListenPort:  listenPort,
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to rebuild WG-FORWARD chain: %v\n", err)
+	return wireguard.ForwardChainOpts{
+		Peers:        s.wg.GetPeers(),
+		Profiles:     cfg.VPNProfiles,
+		VPNRange:     cfg.VPNRange,
+		LanCIDR:      config.GetLocalNetworkCIDR(config.DetectDefaultInterface()),
+		JailedPeers:  cfg.GetJailedPeers(),
+		HAProxyPorts: cfg.HAProxyJailPorts(),
+		ServerWGIP:   strings.TrimSpace(strings.Split(s.wg.GetAddress(), "/")[0]),
+		ListenPort:   listenPort,
 	}
 }
 

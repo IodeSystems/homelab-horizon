@@ -359,12 +359,26 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		}
 	}
 
-	// Set up WG-FORWARD iptables chain for per-peer routing profiles
+	// Set up the WG-FORWARD / WG-INPUT iptables chains for per-peer routing
+	// profiles. Jail state is passed in from the start: a peer whose MFA
+	// session expired while horizon was down must come back up jailed, not
+	// wait for the first reconcile tick to notice.
 	if !dryRun {
-		lanCIDR := config.GetLocalNetworkCIDR(config.DetectDefaultInterface())
-		peers := wg.GetPeers()
-		if err := wireguard.SetupForwardChain(cfg.WGInterface, peers, cfg.VPNProfiles, cfg.VPNRange, lanCIDR); err != nil {
-			slog.Warn("could not set up WG-FORWARD chain", "err", err)
+		listenPort := ""
+		if _, p, err := net.SplitHostPort(cfg.ListenAddr); err == nil {
+			listenPort = p
+		}
+		if err := wireguard.SetupForwardChain(cfg.WGInterface, wireguard.ForwardChainOpts{
+			Peers:        wg.GetPeers(),
+			Profiles:     cfg.VPNProfiles,
+			VPNRange:     cfg.VPNRange,
+			LanCIDR:      config.GetLocalNetworkCIDR(config.DetectDefaultInterface()),
+			JailedPeers:  cfg.GetJailedPeers(),
+			HAProxyPorts: cfg.HAProxyJailPorts(),
+			ServerWGIP:   strings.TrimSpace(strings.Split(wg.GetAddress(), "/")[0]),
+			ListenPort:   listenPort,
+		}); err != nil {
+			slog.Warn("could not set up WG-FORWARD/WG-INPUT chains", "err", err)
 		}
 	}
 
@@ -374,7 +388,9 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 
 	// Initialize HAProxy with backends derived from services
 	hap := haproxy.New(cfg.HAProxyConfigPath, "/run/haproxy/admin.sock")
-	hap.SetBackends(cfg.DeriveHAProxyBackends())
+	hapBackends := cfg.DeriveHAProxyBackends()
+	hap.SetBackends(hapBackends)
+	hap.SetMFAJail(mfaJailFor(cfg, hapBackends))
 
 	// Initialize Let's Encrypt manager with domains derived from zones
 	le := letsencrypt.New(letsencrypt.Config{
