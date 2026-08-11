@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import QRCode from "qrcode";
 import {
   Alert,
   Box,
@@ -23,6 +24,27 @@ function MFAPage() {
   const [code, setCode] = useState("");
   const [duration, setDuration] = useState("");
   const [error, setError] = useState("");
+
+  // Rendered in the browser from the provisioning URI. This used to be an
+  // <img> pointed at api.qrserver.com, which handed the TOTP shared secret to
+  // a third party in a query string — and could never load anyway, since a
+  // jailed peer has no route off this box. That is the entire point of the
+  // jail.
+  const [qrSvg, setQrSvg] = useState("");
+  const provisioningUri = enroll.data?.provisioningUri;
+  useEffect(() => {
+    if (!provisioningUri) {
+      setQrSvg("");
+      return;
+    }
+    let live = true;
+    QRCode.toString(provisioningUri, { type: "svg", margin: 1, width: 200 })
+      .then((svg) => live && setQrSvg(svg))
+      .catch(() => live && setQrSvg(""));
+    return () => {
+      live = false;
+    };
+  }, [provisioningUri]);
 
   if (status.isLoading) {
     return (
@@ -69,8 +91,16 @@ function MFAPage() {
     );
   }
 
-  // Not enrolled — show enrollment
-  if (!data?.enrolled) {
+  // Not enrolled — show enrollment.
+  //
+  // `enroll.data ||` is load-bearing. hz persists the secret the moment
+  // /enroll is called, so the next poll of /status flips `enrolled` to true
+  // while the user is still mid-scan. Keying only off `enrolled` therefore
+  // swapped the QR out from under them for the bare verify form, stranding
+  // anyone who hadn't finished scanning: the secret is only ever shown once,
+  // and recovering needs an admin reset. Hold this view until a code is
+  // actually confirmed — the session check above is what ends it.
+  if (enroll.data || !data?.enrolled) {
     return (
       <Box sx={{ maxWidth: 480, mx: "auto", mt: 8 }}>
         <Card>
@@ -89,14 +119,23 @@ function MFAPage() {
                   Scan the QR code below with your authenticator app (Google
                   Authenticator, Authy, etc.), then enter the code to confirm.
                 </Alert>
-                <Box sx={{ textAlign: "center", mb: 2 }}>
-                  <img
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(enroll.data.provisioningUri)}`}
-                    alt="TOTP QR Code"
-                    width={200}
-                    height={200}
-                  />
-                </Box>
+                <Box
+                  sx={{
+                    textAlign: "center",
+                    mb: 2,
+                    // The generated SVG is monochrome-on-transparent, which
+                    // disappears against a dark card — and a QR needs a quiet
+                    // light margin to scan reliably.
+                    "& svg": {
+                      width: 200,
+                      height: 200,
+                      background: "#fff",
+                      borderRadius: 1,
+                      padding: 1,
+                    },
+                  }}
+                  dangerouslySetInnerHTML={{ __html: qrSvg }}
+                />
                 <Typography
                   variant="caption"
                   sx={{ fontFamily: "monospace", display: "block", mb: 2, textAlign: "center", wordBreak: "break-all" }}
