@@ -73,6 +73,13 @@ type Rule struct {
 // some distros). Canonical collapses both to the conntrack form so the
 // classifier sees them as the same rule and doesn't dup-insert when the
 // emitted form and the saved form disagree.
+//
+// Likewise the implicit `-m tcp` / `-m udp` match module: `-p tcp --dport N`
+// is accepted on input but always read back as `-p tcp -m tcp --dport N`, so
+// the emitted and saved forms of every port rule differ by those two tokens.
+// Left unnormalized, an MFA-jail chain looks permanently drifted and gets
+// flushed and rebuilt on every reconcile tick — with the jail briefly absent
+// each time — while the live rules pile up in the UI as "unknown".
 func (r Rule) Canonical() string {
 	return r.Table + "|" + r.Chain + "|" + strings.Join(canonicalizeArgs(r.Args), " ")
 }
@@ -87,6 +94,13 @@ func canonicalizeArgs(args []string) []string {
 		if args[i] == "-m" && i+3 < len(args) && args[i+1] == "state" && args[i+2] == "--state" {
 			out = append(out, "-m", "conntrack", "--ctstate", args[i+3])
 			i += 3
+			continue
+		}
+		// Drop the implicit `-m tcp` / `-m udp`: it's what the kernel adds to
+		// a `-p tcp`/`-p udp` rule on readback, and carries no meaning of its
+		// own. Dropped from both sides, so the comparison stays symmetric.
+		if args[i] == "-m" && i+1 < len(args) && (args[i+1] == "tcp" || args[i+1] == "udp") {
+			i++
 			continue
 		}
 		out = append(out, args[i])
