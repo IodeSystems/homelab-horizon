@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# End-to-end test of the VPN MFA jail against a real kernel.
+#
+# Boots a throwaway multipass VM, installs hz plus WireGuard/HAProxy, builds a
+# peer + a stand-in LAN host as network namespaces, and asserts what a VPN peer
+# can actually reach — jailed, verified, and as an admin.
+#
+# Multipass rather than Docker because hz drives systemd: `systemctl` for
+# HAProxy lifecycle and `systemd-run` for its iptables calls. A container has
+# no PID 1 systemd, so those paths — the ones this test exists to cover —
+# can't run there at all.
+#
+# Usage: ./bin/e2e
+#
+# Env overrides:
+#   VM      VM name (default hz-e2e)
+#   IMAGE   multipass image (default lts)
+#   KEEP    set to 1 to leave the VM running for debugging
+#   REUSE   set to 1 to skip launch+provision and re-run assertions only
+#           (needs a VM left behind by KEEP=1)
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+readonly VM="${VM:-hz-e2e}"
+readonly IMAGE="${IMAGE:-lts}"
+readonly BIN=dist/homelab-horizon-linux-amd64
+readonly FIXTURE=test/e2e
+
+err()  { printf >&2 "e2e: %s\n" "$*"; exit 1; }
+note() { printf "e2e: %s\n" "$*"; }
+
+command -v multipass >/dev/null 2>&1 || err "multipass not installed"
+[ -d "$FIXTURE" ] || err "missing $FIXTURE (run from repo root)"
+
+cleanup() {
+  local rc=$?
+  if [ "${KEEP:-0}" = "1" ]; then
+    note "KEEP=1 — leaving $VM running (multipass shell $VM; REUSE=1 ./bin/e2e to re-assert)"
+  else
+    note "deleting $VM..."
+    multipass delete --purge "$VM" >/dev/null 2>&1 || true
+  fi
+  return $rc
+}
+
+if [ "${REUSE:-0}" != "1" ]; then
+  note "building linux/amd64 binary..."
+  make build-linux-amd64 >/dev/null || err "build failed"
+  [ -f "$BIN" ] || err "expected $BIN after build"
+
+  # A stale VM from an interrupted run would silently reuse its old state.
+  multipass delete --purge "$VM" >/dev/null 2>&1 || true
+
+  note "launching $VM ($IMAGE)... this takes a minute"
+  multipass launch "$IMAGE" --name "$VM" --cpus 2 --memory 2G --disk 8G \
+    || err "multipass launch failed"
+  trap cleanup EXIT
+
+  note "transferring binary + fixture..."
+  multipass transfer "$BIN" "$VM:/home/ubuntu/homelab-horizon"
+  multipass transfer "$FIXTURE/config.json" "$VM:/home/ubuntu/e2e-config.json"
+  multipass transfer "$FIXTURE/provision.sh" "$VM:/home/ubuntu/provision.sh"
+  multipass transfer "$FIXTURE/assert.sh" "$VM:/home/ubuntu/assert.sh"
+  multipass exec "$VM" -- sudo install -m 0755 /home/ubuntu/homelab-horizon /usr/local/bin/homelab-horizon
+  multipass exec "$VM" -- chmod +x /home/ubuntu/provision.sh /home/ubuntu/assert.sh
+
+  note "provisioning..."
+  multipass exec "$VM" -- sudo /home/ubuntu/provision.sh || err "provisioning failed"
+else
+  trap cleanup EXIT
+  note "REUSE=1 — re-running assertions against the existing $VM"
+  multipass transfer "$FIXTURE/assert.sh" "$VM:/home/ubuntu/assert.sh"
+  multipass exec "$VM" -- chmod +x /home/ubuntu/assert.sh
+fi
+
+note "asserting..."
+if multipass exec "$VM" -- sudo /home/ubuntu/assert.sh; then
+  note "PASS"
+else
+  note "FAIL — hz log follows"
+  multipass exec "$VM" -- sudo tail -40 /var/log/hz.log 2>/dev/null || true
+  exit 1
+fi
