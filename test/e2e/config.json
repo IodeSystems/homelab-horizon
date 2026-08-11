@@ -1,0 +1,41 @@
+{
+  "//": "E2E fixture config for bin/e2e. Runs inside a throwaway multipass VM,",
+  "//net": "so unlike the screenshot config this one turns the daemons ON — the",
+  "//point": "whole point is exercising real WireGuard, iptables and HAProxy.",
+  "//dns": "dnsmasq stays off: systemd-resolved already owns :53 on an Ubuntu",
+  "//dns2": "image, and the jail's DNS allowance is asserted at the iptables",
+  "//dns3": "rule level rather than by resolving a name.",
+  "listen_addr": ":8080",
+  "admin_token": "e2e-fixture-token-do-not-use",
+  "auto_heal": false,
+  "wg_interface": "wg0",
+  "wg_config_path": "/etc/wireguard/wg0.conf",
+  "server_endpoint": "10.77.0.1:51820",
+  "vpn_range": "10.100.0.0/24",
+  "dns": "10.100.0.1",
+  "public_ip_override": "198.51.100.10",
+  "dnsmasq_enabled": false,
+  "haproxy_enabled": true,
+  "haproxy_http_port": 80,
+  "haproxy_https_port": 443,
+  "ssl_enabled": false,
+  "kiosk_url": "http://vpn.e2e.test",
+  "vpn_mfa_enabled": false,
+  "vpn_mfa_durations": ["2h", "forever"],
+  "services": [
+    {
+      "name": "portal",
+      "domains": ["vpn.e2e.test"],
+      "proxy": {
+        "self": true
+      }
+    },
+    {
+      "name": "wiki",
+      "domains": ["wiki.e2e.test"],
+      "proxy": {
+        "backend": "192.168.77.5:80"
+      }
+    }
+  ]
+}

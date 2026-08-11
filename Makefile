@@ -178,6 +178,12 @@ docker-run: docker
 screenshots:
 	./bin/screenshots
 
+# End-to-end VPN MFA jail test in a throwaway multipass VM (real kernel,
+# real WireGuard/iptables/HAProxy). Needs multipass; takes a few minutes.
+.PHONY: e2e
+e2e:
+	./bin/e2e
+
 .PHONY: help
 help:
 	@echo "Homelab Horizon Build Targets:"
@@ -204,3 +210,4 @@ help:
 	@echo "  make docker       - Build Docker demo image"
 	@echo "  make docker-run   - Build and run Docker demo on :8080"
 	@echo "  make screenshots  - Regenerate README screenshots (hermetic Docker)"
+	@echo "  make e2e          - End-to-end MFA jail test (multipass VM)"
