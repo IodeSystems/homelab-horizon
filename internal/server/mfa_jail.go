@@ -74,8 +74,13 @@ func portalRedirectURL(cfg *config.Config, backends []haproxy.Backend) string {
 			"using 403 instead of a redirect to avoid a redirect loop", "host", host)
 		return ""
 	}
-	return strings.TrimSuffix(raw, "/") + "/mfa"
+	return strings.TrimSuffix(raw, "/") + mfaPortalPath
 }
+
+// mfaPortalPath is where the MFA page actually lives. The UI is a SPA mounted
+// under /app/ (internal/server/spa.go), so bare /mfa is a 404 from the Go mux
+// — which is what a jailed peer would have been redirected to.
+const mfaPortalPath = "/app/mfa"
 
 // hostMatchesDomain mirrors how the generated config matches hosts to backends:
 // a leading-dot pattern is a suffix match (and matches the bare domain too),

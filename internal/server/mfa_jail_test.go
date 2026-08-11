@@ -31,19 +31,19 @@ func TestPortalRedirectURLLoopGuard(t *testing.T) {
 			name:     "kiosk host routes to the portal backend",
 			kioskURL: "https://vpn.example.com",
 			backends: portalBackends(),
-			want:     "https://vpn.example.com/mfa",
+			want:     "https://vpn.example.com/app/mfa",
 		},
 		{
 			name:     "trailing slash trimmed",
 			kioskURL: "https://vpn.example.com/",
 			backends: portalBackends(),
-			want:     "https://vpn.example.com/mfa",
+			want:     "https://vpn.example.com/app/mfa",
 		},
 		{
 			name:     "wildcard portal domain matches subdomain",
 			kioskURL: "https://kiosk.vpn.example.com",
 			backends: []haproxy.Backend{{Name: "portal", DomainMatches: []string{".vpn.example.com"}, MFAPortal: true}},
-			want:     "https://kiosk.vpn.example.com/mfa",
+			want:     "https://kiosk.vpn.example.com/app/mfa",
 		},
 		{
 			name:      "kiosk host routes somewhere else — would loop",
@@ -112,7 +112,7 @@ func TestMFAJailForEnabled(t *testing.T) {
 	if j.ACLPath != "/etc/haproxy/mfa-jailed.lst" {
 		t.Errorf("ACLPath = %q", j.ACLPath)
 	}
-	if j.PortalURL != "https://vpn.example.com/mfa" {
+	if j.PortalURL != "https://vpn.example.com/app/mfa" {
 		t.Errorf("PortalURL = %q", j.PortalURL)
 	}
 }
