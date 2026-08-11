@@ -1,6 +1,7 @@
 package iptables
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
@@ -37,6 +38,42 @@ func TestRuleCanonicalNormalizesStateAndConntrack(t *testing.T) {
 	want := "filter|FORWARD|-o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"
 	if legacy.Canonical() != want {
 		t.Errorf("canonical form should be the conntrack one, got %q", legacy.Canonical())
+	}
+}
+
+// TestRuleCanonicalNormalizesImplicitProtoMatch pins the other readback
+// asymmetry. hz emits `-p tcp --dport N`; iptables-save always reports
+// `-p tcp -m tcp --dport N`. Without collapsing those, every MFA-jail port
+// rule reads as drifted forever — the chain is flushed and rebuilt on each
+// 60s tick (jail momentarily absent) and the live rules show up as "unknown"
+// in the IPTables tab. Caught by bin/e2e, not by rule-generation tests.
+func TestRuleCanonicalNormalizesImplicitProtoMatch(t *testing.T) {
+	emitted := Rule{
+		Table: "filter",
+		Chain: InputChainName,
+		Args:  []string{"-s", "10.100.0.2/32", "-p", "tcp", "--dport", "8080", "-j", "ACCEPT"},
+	}
+	readback := Rule{
+		Table: "filter",
+		Chain: InputChainName,
+		Args:  []string{"-s", "10.100.0.2/32", "-p", "tcp", "-m", "tcp", "--dport", "8080", "-j", "ACCEPT"},
+	}
+	if emitted.Canonical() != readback.Canonical() {
+		t.Errorf("emitted and readback forms must canonicalize equal:\n  emitted:  %q\n  readback: %q",
+			emitted.Canonical(), readback.Canonical())
+	}
+
+	udpEmitted := Rule{Table: "filter", Chain: InputChainName, Args: []string{"-p", "udp", "--dport", "53", "-j", "ACCEPT"}}
+	udpReadback := Rule{Table: "filter", Chain: InputChainName, Args: []string{"-p", "udp", "-m", "udp", "--dport", "53", "-j", "ACCEPT"}}
+	if udpEmitted.Canonical() != udpReadback.Canonical() {
+		t.Errorf("udp forms must canonicalize equal:\n  %q\n  %q", udpEmitted.Canonical(), udpReadback.Canonical())
+	}
+
+	// A non-implicit match module must survive — dropping `-m multiport`
+	// would make two genuinely different rules compare equal.
+	multi := Rule{Table: "filter", Chain: InputChainName, Args: []string{"-p", "tcp", "-m", "multiport", "--dports", "80,443", "-j", "ACCEPT"}}
+	if !strings.Contains(multi.Canonical(), "multiport") {
+		t.Errorf("non-implicit match modules must be preserved, got %q", multi.Canonical())
 	}
 }
 
