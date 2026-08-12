@@ -302,11 +302,25 @@ export interface PeerResp {
   mfaSessionExpiry?: string;
 }
 export interface MFAStatusResponse {
+  /**
+   * Enrolled means a TOTP secret exists. It deliberately does NOT account
+   * for passkeys — a peer may hold either factor or both, so callers
+   * deciding "does this peer need to set anything up?" must check Passkeys
+   * as well.
+   */
   enrolled: boolean;
   sessionActive: boolean;
   sessionExpiry?: string;
   durations: string[];
   provisioningUri?: string; // only during enrollment
+  passkeys?: PasskeyInfo[];
+  /**
+   * PasskeysAvailable is a property of the deployment, not the peer: WebAuthn
+   * needs a secure context, so it requires an https kiosk_url. When false,
+   * PasskeysUnavailableReason says what to fix.
+   */
+  passkeysAvailable: boolean;
+  passkeysUnavailableReason?: string;
 }
 export interface MFAEnrollResponse {
   ok: boolean;
@@ -316,6 +330,35 @@ export interface MFAEnrollResponse {
 export interface MFAVerifyRequest {
   code: string;
   duration: string; // "2h", "4h", "8h", "forever"
+}
+/**
+ * PasskeyBeginResponse starts a WebAuthn ceremony. Options is the library's
+ * own JSON, passed to navigator.credentials verbatim — the challenge inside it
+ * must not be reshaped.
+ */
+export interface PasskeyBeginResponse {
+  ok: boolean;
+  ceremonyId: string;
+  options: any /* json.RawMessage */;
+}
+/**
+ * PasskeyFinishRequest completes either ceremony. Credential is the raw
+ * navigator.credentials result; Duration applies to assertion only.
+ */
+export interface PasskeyFinishRequest {
+  ceremonyId: string;
+  credential: any /* json.RawMessage */;
+  label?: string; // register only
+  duration?: string; // assert only
+}
+/**
+ * PasskeyInfo is one enrolled credential, for display and deletion.
+ */
+export interface PasskeyInfo {
+  label: string;
+  credentialId: string;
+  addedAt?: number /* int64 */;
+  cloneWarning?: boolean;
 }
 export interface MFAVerifyResponse {
   ok: boolean;

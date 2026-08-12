@@ -236,11 +236,16 @@ type Config struct {
 	// Per-peer routing profiles: "lan-access" (default), "full-tunnel", "vpn-only"
 	VPNProfiles map[string]string `json:"vpn_profiles,omitempty"`
 
-	// WireGuard MFA (TOTP per-connect)
+	// WireGuard MFA (TOTP or passkey, per-connect)
 	VPNMFAEnabled   bool              `json:"vpn_mfa_enabled,omitempty"`
 	VPNMFADurations []string          `json:"vpn_mfa_durations,omitempty"` // e.g. ["2h","4h","8h","forever"]
 	VPNMFASecrets   map[string]string `json:"vpn_mfa_secrets,omitempty"`   // peer name -> base32 TOTP secret
 	VPNMFASessions  map[string]int64  `json:"vpn_mfa_sessions,omitempty"`  // peer name -> expiry unix timestamp (0 = forever)
+
+	// Passkeys, an alternative second factor to TOTP. A peer may hold several
+	// (laptop platform authenticator, a hardware key as backup); any one of
+	// them opens a session, and either factor satisfies the jail.
+	VPNMFAPasskeys map[string][]Passkey `json:"vpn_mfa_passkeys,omitempty"` // peer name -> credentials
 
 	// WireGuard VPN client peers — shared state, replicated to non-primary
 	// instances via the pull loop. Handlers update this after every WG
@@ -1196,6 +1201,88 @@ func (c *Config) ClearMFASession(name string) {
 	}
 }
 
+// Passkey is one stored WebAuthn credential, in a form that survives a JSON
+// round-trip through config.json. Binary fields are base64 so the file stays
+// readable and diffable; the webauthn library's own struct is not stable
+// enough to persist directly.
+type Passkey struct {
+	Label        string `json:"label,omitempty"`  // operator-facing, e.g. "work laptop"
+	CredentialID string `json:"credential_id"`    // base64 raw credential ID
+	PublicKey    string `json:"public_key"`       // base64 COSE key
+	AAGUID       string `json:"aaguid,omitempty"` // base64 authenticator model id
+	SignCount    uint32 `json:"sign_count"`       // clone detection — see UpdatePasskeySignCount
+	CloneWarning bool   `json:"clone_warning,omitempty"`
+	Transports   string `json:"transports,omitempty"` // comma-joined hints ("internal,hybrid")
+	AddedAt      int64  `json:"added_at,omitempty"`
+}
+
+// PasskeysFor returns a peer's credentials, nil if it has none.
+func (c *Config) PasskeysFor(name string) []Passkey {
+	if c.VPNMFAPasskeys == nil {
+		return nil
+	}
+	return c.VPNMFAPasskeys[name]
+}
+
+// AddPasskey appends a credential for a peer. Callers must reject duplicate
+// credential IDs before getting here — the WebAuthn ceremony does that by
+// passing the existing set as the exclusion list.
+func (c *Config) AddPasskey(name string, k Passkey) {
+	if c.VPNMFAPasskeys == nil {
+		c.VPNMFAPasskeys = make(map[string][]Passkey)
+	}
+	c.VPNMFAPasskeys[name] = append(c.VPNMFAPasskeys[name], k)
+}
+
+// DeletePasskey removes one credential by its base64 ID. Returns false if the
+// peer never had it.
+func (c *Config) DeletePasskey(name, credentialID string) bool {
+	keys := c.PasskeysFor(name)
+	for i, k := range keys {
+		if k.CredentialID != credentialID {
+			continue
+		}
+		remaining := append(keys[:i:i], keys[i+1:]...)
+		if len(remaining) == 0 {
+			delete(c.VPNMFAPasskeys, name)
+		} else {
+			c.VPNMFAPasskeys[name] = remaining
+		}
+		return true
+	}
+	return false
+}
+
+// UpdatePasskeySignCount records the counter an assertion reported. A counter
+// that fails to advance is the only cloned-authenticator signal the protocol
+// offers, so it is persisted even though nothing rejects on it yet.
+func (c *Config) UpdatePasskeySignCount(name, credentialID string, count uint32, cloneWarning bool) {
+	keys := c.PasskeysFor(name)
+	for i := range keys {
+		if keys[i].CredentialID == credentialID {
+			keys[i].SignCount = count
+			keys[i].CloneWarning = cloneWarning
+			return
+		}
+	}
+}
+
+// ClearPasskeys drops every credential for a peer.
+func (c *Config) ClearPasskeys(name string) {
+	if c.VPNMFAPasskeys != nil {
+		delete(c.VPNMFAPasskeys, name)
+	}
+}
+
+// HasSecondFactor reports whether a peer can satisfy the jail at all — either
+// factor will do. A peer with neither is unenrolled and must set one up.
+func (c *Config) HasSecondFactor(name string) bool {
+	if c.VPNMFASecrets != nil && c.VPNMFASecrets[name] != "" {
+		return true
+	}
+	return len(c.PasskeysFor(name)) > 0
+}
+
 // SetMFASecret sets a peer's TOTP secret.
 func (c *Config) SetMFASecret(name, secret string) {
 	if c.VPNMFASecrets == nil {
@@ -1243,11 +1330,18 @@ func (c *Config) RenameMFAPeer(oldName, newName string) {
 			c.VPNMFASessions[newName] = s
 		}
 	}
+	if c.VPNMFAPasskeys != nil {
+		if k, ok := c.VPNMFAPasskeys[oldName]; ok {
+			delete(c.VPNMFAPasskeys, oldName)
+			c.VPNMFAPasskeys[newName] = k
+		}
+	}
 }
 
 // DeleteMFAPeer removes all MFA state for a peer.
 func (c *Config) DeleteMFAPeer(name string) {
 	c.ClearMFASecret(name)
+	c.ClearPasskeys(name)
 }
 
 // GetAllowedIPsForProfile returns client-side AllowedIPs for a routing profile
