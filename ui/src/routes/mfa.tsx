@@ -8,6 +8,7 @@ import {
   Card,
   CardContent,
   CircularProgress,
+  Divider,
   FormControl,
   InputLabel,
   MenuItem,
@@ -15,12 +16,20 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useMFAStatus, useMFAEnroll, useMFAVerify } from "../api/hooks";
+import {
+  useMFAStatus,
+  useMFAEnroll,
+  useMFAVerify,
+  usePasskeyRegister,
+  usePasskeyAssert,
+} from "../api/hooks";
 
 function MFAPage() {
   const status = useMFAStatus();
   const enroll = useMFAEnroll();
   const verify = useMFAVerify();
+  const passkeyRegister = usePasskeyRegister();
+  const passkeyAssert = usePasskeyAssert();
   const [code, setCode] = useState("");
   const [duration, setDuration] = useState("");
   const [error, setError] = useState("");
@@ -91,7 +100,10 @@ function MFAPage() {
     );
   }
 
-  // Not enrolled — show enrollment.
+  const passkeys = data?.passkeys ?? [];
+  const hasFactor = Boolean(data?.enrolled) || passkeys.length > 0;
+
+  // Not enrolled in anything — show setup.
   //
   // `enroll.data ||` is load-bearing. hz persists the secret the moment
   // /enroll is called, so the next poll of /status flips `enrolled` to true
@@ -100,7 +112,7 @@ function MFAPage() {
   // anyone who hadn't finished scanning: the secret is only ever shown once,
   // and recovering needs an admin reset. Hold this view until a code is
   // actually confirmed — the session check above is what ends it.
-  if (enroll.data || !data?.enrolled) {
+  if (enroll.data || !hasFactor) {
     return (
       <Box sx={{ maxWidth: 480, mx: "auto", mt: 8 }}>
         <Card>
@@ -212,6 +224,11 @@ function MFAPage() {
                 >
                   {enroll.isPending ? "Setting up..." : "Set Up Authenticator"}
                 </Button>
+                <PasskeySetup
+                  register={passkeyRegister}
+                  available={data?.passkeysAvailable ?? false}
+                  unavailableReason={data?.passkeysUnavailableReason}
+                />
               </>
             )}
           </CardContent>
@@ -221,6 +238,15 @@ function MFAPage() {
   }
 
   // Enrolled but no active session — verify
+  // Enrolled in at least one factor, no active session — unlock.
+  //
+  // A peer may hold either factor or both, so each half renders independently.
+  // The duration select and the error line are shared: which factor was used
+  // says nothing about how long the session should last, and hiding the
+  // selector from a passkey-only peer would silently pick a duration for them.
+  const totpEnrolled = Boolean(data?.enrolled);
+  const chosenDuration = duration || durations[0] || "4h";
+
   return (
     <Box sx={{ maxWidth: 480, mx: "auto", mt: 8 }}>
       <Card>
@@ -228,25 +254,11 @@ function MFAPage() {
           <Typography variant="h5" gutterBottom>
             VPN MFA
           </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Enter your authenticator code to unlock VPN access.
-          </Typography>
-          <TextField
-            label="Authenticator code"
-            value={code}
-            onChange={(e) => {
-              setCode(e.target.value);
-              setError("");
-            }}
-            fullWidth
-            sx={{ mb: 2 }}
-            autoFocus
-            slotProps={{ htmlInput: { inputMode: "numeric", pattern: "[0-9]*", maxLength: 6 } }}
-          />
+
           <FormControl fullWidth sx={{ mb: 2 }}>
             <InputLabel>Session Duration</InputLabel>
             <Select
-              value={duration || durations[0]}
+              value={chosenDuration}
               label="Session Duration"
               onChange={(e) => setDuration(e.target.value)}
             >
@@ -257,35 +269,161 @@ function MFAPage() {
               ))}
             </Select>
           </FormControl>
+
+          {passkeys.length > 0 && (
+            <Button
+              variant="contained"
+              fullWidth
+              disabled={passkeyAssert.isPending}
+              onClick={() => {
+                setError("");
+                passkeyAssert.mutate(
+                  { duration: chosenDuration },
+                  {
+                    onSuccess: () => status.refetch(),
+                    onError: (err) =>
+                      setError(
+                        err instanceof Error
+                          ? err.message
+                          : "Passkey authentication failed",
+                      ),
+                  },
+                );
+              }}
+            >
+              {passkeyAssert.isPending
+                ? "Waiting for passkey..."
+                : "Unlock with Passkey"}
+            </Button>
+          )}
+
+          {passkeys.length > 0 && totpEnrolled && (
+            <Divider sx={{ my: 3 }}>
+              <Typography variant="caption" color="text.secondary">
+                or use a code
+              </Typography>
+            </Divider>
+          )}
+
+          {totpEnrolled && (
+            <>
+              <TextField
+                label="Authenticator code"
+                value={code}
+                onChange={(e) => {
+                  setCode(e.target.value);
+                  setError("");
+                }}
+                fullWidth
+                sx={{ mb: 2 }}
+                autoFocus={passkeys.length === 0}
+                slotProps={{
+                  htmlInput: {
+                    inputMode: "numeric",
+                    pattern: "[0-9]*",
+                    maxLength: 6,
+                  },
+                }}
+              />
+              <Button
+                variant={passkeys.length > 0 ? "outlined" : "contained"}
+                fullWidth
+                disabled={!code || verify.isPending}
+                onClick={() => {
+                  verify.mutate(
+                    { code, duration: chosenDuration },
+                    {
+                      onSuccess: () => {
+                        setCode("");
+                        status.refetch();
+                      },
+                      onError: (err) =>
+                        setError(
+                          err instanceof Error ? err.message : "Invalid code",
+                        ),
+                    },
+                  );
+                }}
+              >
+                {verify.isPending ? "Verifying..." : "Unlock VPN Access"}
+              </Button>
+            </>
+          )}
+
           {error && (
-            <Alert severity="error" sx={{ mb: 2 }}>
+            <Alert severity="error" sx={{ mt: 2 }}>
               {error}
             </Alert>
           )}
-          <Button
-            variant="contained"
-            fullWidth
-            disabled={!code || verify.isPending}
-            onClick={() => {
-              verify.mutate(
-                { code, duration: duration || durations[0] || "4h" },
-                {
-                  onSuccess: () => {
-                    setCode("");
-                    status.refetch();
-                  },
-                  onError: (err) =>
-                    setError(
-                      err instanceof Error ? err.message : "Invalid code",
-                    ),
-                },
-              );
-            }}
-          >
-            {verify.isPending ? "Verifying..." : "Unlock VPN Access"}
-          </Button>
         </CardContent>
       </Card>
+    </Box>
+  );
+}
+
+// PasskeySetup offers passkey enrollment alongside the TOTP option. It states
+// why it is unavailable rather than hiding, because the reason is a
+// deployment fix (an https kiosk_url) that the operator seeing this page may
+// well be the one able to make.
+function PasskeySetup({
+  register,
+  available,
+  unavailableReason,
+}: {
+  register: ReturnType<typeof usePasskeyRegister>;
+  available: boolean;
+  unavailableReason?: string;
+}) {
+  const [label, setLabel] = useState("");
+  const [err, setErr] = useState("");
+
+  if (!available) {
+    return (
+      <Alert severity="info" sx={{ mt: 2 }}>
+        Passkeys unavailable{unavailableReason ? `: ${unavailableReason}` : ""}.
+      </Alert>
+    );
+  }
+
+  return (
+    <Box sx={{ mt: 3 }}>
+      <Divider sx={{ mb: 2 }}>
+        <Typography variant="caption" color="text.secondary">
+          or
+        </Typography>
+      </Divider>
+      <TextField
+        label="Device name (optional)"
+        placeholder="work laptop"
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        fullWidth
+        sx={{ mb: 2 }}
+      />
+      <Button
+        variant="outlined"
+        fullWidth
+        disabled={register.isPending}
+        onClick={() => {
+          setErr("");
+          register.mutate(
+            { label: label.trim() },
+            {
+              onError: (e) =>
+                setErr(
+                  e instanceof Error ? e.message : "Passkey setup failed",
+                ),
+            },
+          );
+        }}
+      >
+        {register.isPending ? "Waiting for passkey..." : "Add a Passkey"}
+      </Button>
+      {err && (
+        <Alert severity="error" sx={{ mt: 2 }}>
+          {err}
+        </Alert>
+      )}
     </Box>
   );
 }

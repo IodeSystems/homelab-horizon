@@ -60,6 +60,16 @@ func (s *Server) handleAPIMFAStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	resp.PasskeysAvailable, resp.PasskeysUnavailableReason = PasskeysAvailable(cfg)
+	for _, k := range cfg.PasskeysFor(peerName) {
+		resp.Passkeys = append(resp.Passkeys, apitypes.PasskeyInfo{
+			Label:        k.Label,
+			CredentialID: k.CredentialID,
+			AddedAt:      k.AddedAt,
+			CloneWarning: k.CloneWarning,
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }
@@ -153,34 +163,9 @@ func (s *Server) handleAPIMFAVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse duration
-	var expiry int64
-	duration := strings.TrimSpace(req.Duration)
-	if duration == "" || duration == "forever" {
-		expiry = 0
-	} else {
-		d, err := time.ParseDuration(duration)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "Invalid duration: "+err.Error())
-			return
-		}
-		expiry = time.Now().Add(d).Unix()
-	}
-
-	// Validate duration is in allowed list
-	allowed := cfg.VPNMFADurations
-	if len(allowed) == 0 {
-		allowed = []string{"2h", "4h", "8h", "forever"}
-	}
-	valid := false
-	for _, a := range allowed {
-		if a == duration || (duration == "" && a == "forever") {
-			valid = true
-			break
-		}
-	}
-	if !valid {
-		writeJSONError(w, http.StatusBadRequest, "Duration not allowed")
+	expiry, err := s.mfaSessionExpiry(cfg, req.Duration)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -194,11 +179,53 @@ func (s *Server) handleAPIMFAVerify(w http.ResponseWriter, r *http.Request) {
 
 	resp := apitypes.MFAVerifyResponse{OK: true}
 	if expiry != 0 {
-		resp.Expiry = time.Unix(expiry, 0).Format(time.RFC3339)
+		resp.Expiry = mfaExpiryString(expiry)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// defaultMFADurations is the allowlist when the operator hasn't set one.
+var defaultMFADurations = []string{"2h", "4h", "8h", "forever"}
+
+// mfaSessionExpiry validates a requested session duration against the
+// operator's allowlist and returns the unix expiry (0 = forever).
+//
+// Shared by the TOTP and passkey paths deliberately: which factor was used
+// says nothing about how long a session should last, and two copies of this
+// would drift the moment someone edited one allowlist check.
+func (s *Server) mfaSessionExpiry(cfg *config.Config, requested string) (int64, error) {
+	duration := strings.TrimSpace(requested)
+
+	allowed := cfg.VPNMFADurations
+	if len(allowed) == 0 {
+		allowed = defaultMFADurations
+	}
+	valid := false
+	for _, a := range allowed {
+		if a == duration || (duration == "" && a == "forever") {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		return 0, fmt.Errorf("duration not allowed")
+	}
+
+	if duration == "" || duration == "forever" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(duration)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration: %w", err)
+	}
+	return time.Now().Add(d).Unix(), nil
+}
+
+// mfaExpiryString renders a session expiry for the API.
+func mfaExpiryString(expiry int64) string {
+	return time.Unix(expiry, 0).Format(time.RFC3339)
 }
 
 // handleAPIMFAReset clears a peer's TOTP secret (admin only, forces re-enrollment).
@@ -226,12 +253,18 @@ func (s *Server) handleAPIMFAReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Clears every factor, not just TOTP. An operator resetting a peer is
+	// almost always responding to a lost or compromised device, and leaving a
+	// registered passkey behind would let that device keep clearing the jail —
+	// the opposite of what "reset" means.
 	if err := s.updateConfig(func(cfg *config.Config) {
 		cfg.ClearMFASecret(name)
+		cfg.ClearPasskeys(name)
 	}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
 		return
 	}
+	slog.Info("MFA reset — TOTP secret and passkeys cleared", "peer", name)
 	s.rebuildWGChains()
 
 	w.Header().Set("Content-Type", "application/json")

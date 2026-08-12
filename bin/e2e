@@ -19,6 +19,12 @@
 #   REUSE   set to 1 to skip launch+provision and re-run assertions only
 #           (needs a VM left behind by KEEP=1)
 #
+#   PASSKEY set to 1 to also run the WebAuthn ceremony (test/e2e/passkey.sh).
+#           Reconfigures the VM onto https with a self-signed cert and drives
+#           a virtual authenticator, so it runs after the main assertions and
+#           leaves the VM on that https deployment. Needs a ~150MB Playwright
+#           chromium download inside the VM on first run.
+#
 #   BRIDGED set to 1 to put the VM on your LAN instead of multipass's
 #           host-local NAT network. Only needed to reach the VM from another
 #           machine — e.g. pasting a peer config into WireGuard on a laptop to
@@ -146,6 +152,14 @@ fi
 
 note "asserting..."
 if multipass exec "$VM" -- sudo /home/ubuntu/assert.sh; then
+  if [ "${PASSKEY:-0}" = "1" ]; then
+    note "running the passkey ceremony (https + virtual authenticator)..."
+    multipass transfer "$FIXTURE/install-browser.sh" "$VM:/home/ubuntu/install-browser.sh"
+    multipass transfer "$FIXTURE/passkey.mjs" "$VM:/home/ubuntu/passkey.mjs"
+    multipass transfer "$FIXTURE/passkey.sh" "$VM:/home/ubuntu/passkey.sh"
+    multipass exec "$VM" -- sudo bash /home/ubuntu/install-browser.sh
+    multipass exec "$VM" -- sudo bash /home/ubuntu/passkey.sh || err "passkey flow failed"
+  fi
   note "PASS"
   if [ "${BRIDGED:-0}" = "1" ]; then
     note "VM addresses (the LAN one is your WireGuard Endpoint host):"

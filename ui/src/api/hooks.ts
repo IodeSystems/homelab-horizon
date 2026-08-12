@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { apiFetch, apiFetchText } from "./client";
 import type {
   AddPeerResponse,
@@ -24,6 +25,7 @@ import type {
   MFASettingsResponse,
   MFAStatusResponse,
   MFAVerifyResponse,
+  PasskeyBeginResponse,
   PendingChanges,
   PeerConfigResponse,
   RekeyPeerResponse,
@@ -1008,6 +1010,72 @@ export function useMFAVerify() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["mfa", "status"] });
       qc.invalidateQueries({ queryKey: ["vpn", "peers"] });
+    },
+  });
+}
+
+// --- Passkeys (WebAuthn) ---
+//
+// Each ceremony is two round trips with the browser in the middle: begin gives
+// us options carrying a challenge, the authenticator signs it, finish verifies.
+// The options blob is handed to @simplewebauthn/browser untouched.
+
+async function passkeyCeremony<T>(
+  kind: "register" | "assert",
+  extra: Record<string, unknown>,
+): Promise<T> {
+  const begin = await apiFetch<PasskeyBeginResponse>(
+    `/mfa/passkey/${kind}/begin`,
+    { method: "POST" },
+  );
+  const credential =
+    kind === "register"
+      ? await startRegistration({ optionsJSON: begin.options.publicKey })
+      : await startAuthentication({ optionsJSON: begin.options.publicKey });
+
+  return apiFetch<T>(`/mfa/passkey/${kind}/finish`, {
+    method: "POST",
+    body: JSON.stringify({
+      ceremonyId: begin.ceremonyId,
+      credential,
+      ...extra,
+    }),
+  });
+}
+
+export function usePasskeyRegister() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { label: string }) =>
+      passkeyCeremony<{ ok: boolean }>("register", { label: input.label }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["mfa", "status"] });
+    },
+  });
+}
+
+export function usePasskeyAssert() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { duration: string }) =>
+      passkeyCeremony<MFAVerifyResponse>("assert", { duration: input.duration }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["mfa", "status"] });
+      qc.invalidateQueries({ queryKey: ["vpn", "peers"] });
+    },
+  });
+}
+
+export function usePasskeyDelete() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (credentialId: string) =>
+      apiFetch<{ ok: boolean }>("/mfa/passkey/delete", {
+        method: "POST",
+        body: JSON.stringify({ credentialId }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["mfa", "status"] });
     },
   });
 }

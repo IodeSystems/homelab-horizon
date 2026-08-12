@@ -1,6 +1,9 @@
 package apitypes
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Error response
 type ErrorResponse struct {
@@ -311,11 +314,22 @@ type PeerResp struct {
 // MFA types
 
 type MFAStatusResponse struct {
+	// Enrolled means a TOTP secret exists. It deliberately does NOT account
+	// for passkeys — a peer may hold either factor or both, so callers
+	// deciding "does this peer need to set anything up?" must check Passkeys
+	// as well.
 	Enrolled        bool     `json:"enrolled"`
 	SessionActive   bool     `json:"sessionActive"`
 	SessionExpiry   string   `json:"sessionExpiry,omitempty"`
 	Durations       []string `json:"durations"`
 	ProvisioningURI string   `json:"provisioningUri,omitempty"` // only during enrollment
+
+	Passkeys []PasskeyInfo `json:"passkeys,omitempty"`
+	// PasskeysAvailable is a property of the deployment, not the peer: WebAuthn
+	// needs a secure context, so it requires an https kiosk_url. When false,
+	// PasskeysUnavailableReason says what to fix.
+	PasskeysAvailable         bool   `json:"passkeysAvailable"`
+	PasskeysUnavailableReason string `json:"passkeysUnavailableReason,omitempty"`
 }
 
 type MFAEnrollResponse struct {
@@ -327,6 +341,32 @@ type MFAEnrollResponse struct {
 type MFAVerifyRequest struct {
 	Code     string `json:"code"`
 	Duration string `json:"duration"` // "2h", "4h", "8h", "forever"
+}
+
+// PasskeyBeginResponse starts a WebAuthn ceremony. Options is the library's
+// own JSON, passed to navigator.credentials verbatim — the challenge inside it
+// must not be reshaped.
+type PasskeyBeginResponse struct {
+	OK         bool            `json:"ok"`
+	CeremonyID string          `json:"ceremonyId"`
+	Options    json.RawMessage `json:"options"`
+}
+
+// PasskeyFinishRequest completes either ceremony. Credential is the raw
+// navigator.credentials result; Duration applies to assertion only.
+type PasskeyFinishRequest struct {
+	CeremonyID string          `json:"ceremonyId"`
+	Credential json.RawMessage `json:"credential"`
+	Label      string          `json:"label,omitempty"`    // register only
+	Duration   string          `json:"duration,omitempty"` // assert only
+}
+
+// PasskeyInfo is one enrolled credential, for display and deletion.
+type PasskeyInfo struct {
+	Label        string `json:"label"`
+	CredentialID string `json:"credentialId"`
+	AddedAt      int64  `json:"addedAt,omitempty"`
+	CloneWarning bool   `json:"cloneWarning,omitempty"`
 }
 
 type MFAVerifyResponse struct {

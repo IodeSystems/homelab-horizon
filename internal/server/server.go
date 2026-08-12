@@ -219,6 +219,7 @@ type Server struct {
 	health         *HealthStatus
 	metrics        *integration.Detector // Prometheus metrics discovery (pull integration)
 	static         *staticSupervisor     // supervises the unprivileged static file server child
+	ceremonies     *ceremonyStore        // in-flight WebAuthn ceremonies (see webauthn.go)
 
 	exporterMu     sync.RWMutex             // guards exporterStatus
 	exporterStatus map[string]exporterProbe // job|address -> resolved live path + liveness (status only, not a serving gate)
@@ -422,6 +423,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		static:         newStaticSupervisor(cfg.StaticServeAddr(), dryRun),
 		configShares:   make(map[string]*configShare),
 		joinTokens:     newJoinTokenStore(),
+		ceremonies:     newCeremonyStore(),
 	}
 	s.config.Store(cfg)
 	s.static.Rebuild(cfg)
@@ -1003,6 +1005,13 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/mfa/status", s.handleAPIMFAStatus)
 	mux.HandleFunc("/api/v1/mfa/enroll", s.handleAPIMFAEnroll)
 	mux.HandleFunc("/api/v1/mfa/verify", s.handleAPIMFAVerify)
+	// Passkeys, the other second factor. Same jail-accessible, peer-IP-authed
+	// footing as the TOTP routes above — they are how a jailed peer gets out.
+	mux.HandleFunc("/api/v1/mfa/passkey/register/begin", s.handleAPIPasskeyRegisterBegin)
+	mux.HandleFunc("/api/v1/mfa/passkey/register/finish", s.handleAPIPasskeyRegisterFinish)
+	mux.HandleFunc("/api/v1/mfa/passkey/assert/begin", s.handleAPIPasskeyAssertBegin)
+	mux.HandleFunc("/api/v1/mfa/passkey/assert/finish", s.handleAPIPasskeyAssertFinish)
+	mux.HandleFunc("/api/v1/mfa/passkey/delete", s.handleAPIPasskeyDelete)
 	// MFA admin routes
 	mux.HandleFunc("/api/v1/mfa/settings", s.handleAPIMFASettings)
 	mux.HandleFunc("/api/v1/mfa/reset", s.handleAPIMFAReset)

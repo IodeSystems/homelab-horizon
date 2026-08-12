@@ -92,6 +92,7 @@ sleep 2
 note "jailed peers: $(grep -v '^#' /etc/haproxy/mfa-jailed.lst | tr '\n' ' ')"
 
 # ---- capture ----
+bash /home/ubuntu/install-browser.sh
 note "capturing..."
 # node resolves imports from the script's own directory, so it has to sit
 # beside the node_modules provision installed.

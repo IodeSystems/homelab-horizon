@@ -78,7 +78,7 @@ Reserved ports per host, and the denylist `hz ports next` skips when allocating.
 ### VPN MFA captive portal
 What an MFA-jailed peer sees when it asks for any other service — the request
 is redirected to the portal, and nothing else on the network answers until a
-TOTP code is accepted. See [VPN MFA](#vpn-mfa).
+second factor is accepted. See [VPN MFA](#vpn-mfa).
 
 ![VPN MFA portal](docs/screenshots/mfa.png)
 
@@ -108,7 +108,7 @@ TOTP code is accepted. See [VPN MFA](#vpn-mfa).
 
 - **Auto-Heal**: Detects and installs missing dependencies on a fresh Ubuntu system
 - **WireGuard VPN Management**: Create clients, generate QR codes, manage peers
-- **VPN MFA**: Optional per-peer TOTP. Peers without a verified session are jailed to a captive portal until they authenticate
+- **VPN MFA**: Optional per-peer TOTP or passkey. Peers without a verified session are jailed to a captive portal until they authenticate
 - **Split-Horizon DNS**: Internal DNS via dnsmasq, external DNS via Route53, Name.com, Cloudflare, and more
 - **Reverse Proxy**: HAProxy with automatic Let's Encrypt wildcard SSL certificates
 - **Static Sites**: Serve a folder of files as a service — hz hosts it directly, HAProxy routes to it with the same auto SSL/DNS
@@ -459,14 +459,38 @@ Peers listed in `vpn_admins` are never jailed, so an operator can't lock
 themselves out by enabling MFA. Promoting or demoting a peer takes effect
 immediately, including the demotion direction.
 
+### Choosing a factor
+
+A peer may hold a TOTP secret, one or more passkeys, or both; any one of them
+clears the jail, and the session policy is identical either way.
+
+Passkeys require a secure context, so they appear only when `kiosk_url` is
+`https`. When it isn't, the portal says why rather than offering a button that
+cannot work. RP ID is the kiosk hostname — change that hostname later and every
+enrolled passkey is orphaned.
+
+One caveat specific to **cross-device passkeys** (the QR-on-desktop,
+scan-with-phone flow): that is WebAuthn hybrid transport, and it rendezvous
+through an internet relay. A jailed peer on a **full-tunnel** profile has no
+internet, so hybrid cannot complete; a split-tunnel peer is unaffected because
+its browser reaches the relay over its own connection. Authenticators local to
+the device — Touch ID, Windows Hello, a USB key — always work, because they
+need nothing beyond the portal itself.
+
 ### Enrollment
 
-First contact shows a QR plus the secret in text. The QR is generated in your
-browser — the secret is never sent anywhere but to the peer it belongs to.
+First contact offers both factors. TOTP shows a QR plus the secret in text; the
+QR is generated in your browser, so the secret is never sent anywhere but to
+the peer it belongs to.
 
-**The secret is displayed exactly once.** A peer that loses it before adding it
-to an authenticator needs an admin to hit **reset TOTP** on its row in the VPN
-page, which clears the secret and forces re-enrollment.
+**The TOTP secret is displayed exactly once.** A peer that loses it before
+adding it to an authenticator needs an admin to hit **reset TOTP** on its row
+in the VPN page. That reset clears **every** factor including passkeys — an
+operator resetting a peer is normally responding to a lost device, and leaving
+a registered passkey behind would let that device keep clearing the jail.
+
+A peer can remove its own passkeys from the portal, which is how you retire one
+device while still holding another.
 
 ### Requirements and failure modes
 
@@ -489,6 +513,11 @@ HAProxy, builds a peer and a stand-in LAN host as network namespaces, and
 asserts what a peer can actually reach while jailed, once verified, and as an
 admin. Multipass rather than Docker because hz drives `systemctl` and
 `systemd-run`, which need a real PID 1.
+
+`PASSKEY=1 ./bin/e2e` additionally reconfigures the VM onto https with a
+self-signed cert and drives a full WebAuthn ceremony against Chrome's virtual
+authenticator — real credentials, real signatures, verified by hz — asserting
+that registration alone does *not* open a session and that asserting does.
 
 `KEEP=1 ./bin/e2e` leaves the VM up; `REUSE=1` re-runs the assertions against
 it. To click through the portal yourself from another machine, the VM needs to

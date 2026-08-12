@@ -243,6 +243,24 @@ case "$spoof" in
   *)                        ok  "JAILED-6 forged X-Forwarded-For does not authenticate" ;;
 esac
 
+# Passkeys need a secure context, and this fixture deliberately runs plain
+# HTTP. The right behaviour is a clean refusal with a reason the UI can show —
+# not a dead button, and not a 500.
+status_json=$(cli curl -s --max-time 4 "http://$GW_WG:8080/api/v1/mfa/status")
+case "$status_json" in
+  *'"passkeysAvailable":false'*) ok "JAILED-7 passkeys report unavailable over http" ;;
+  *) bad "JAILED-7 passkeys report unavailable over http" "status was: $status_json" ;;
+esac
+printf '%s' "$status_json" | grep -q 'passkeysUnavailableReason' \
+  && ok "JAILED-7b unavailability comes with a reason" \
+  || bad "JAILED-7b unavailability comes with a reason" "no reason in: $status_json"
+
+pk_code=$(cli curl -s -o /dev/null -w '%{http_code}' --max-time 4 -X POST \
+            "http://$GW_WG:8080/api/v1/mfa/passkey/register/begin")
+[ "$pk_code" = 503 ] \
+  && ok "JAILED-7c passkey ceremony refuses with 503, not 500" \
+  || bad "JAILED-7c passkey ceremony refuses with 503, not 500" "got $pk_code"
+
 # ---- verify TOTP: the jail lifts ----
 head_ "Verified (valid TOTP session)"
 secret=$(cli curl -fsS --max-time 4 -X POST "http://$GW_WG:8080/api/v1/mfa/enroll" | jq -r '.secret')

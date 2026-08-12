@@ -60,6 +60,8 @@ export type {
   MFAEnrollResponse,
   MFAVerifyRequest,
   MFAVerifyResponse,
+  PasskeyBeginResponse,
+  PasskeyInfo,
   MFASettingsResponse,
   HAStatusResponse,
   HAFleetPeer,
