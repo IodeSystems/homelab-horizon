@@ -96,10 +96,6 @@ func (s *Server) handleAPIZoneRecords(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-func recordKey(name, recordType, value string) string {
-	return strings.TrimSuffix(name, ".") + "|" + recordType + "|" + value
-}
-
 // recordMutation is the shared request for add/edit/delete of a single value
 // within a (name, type) record set.
 type recordMutation struct {
