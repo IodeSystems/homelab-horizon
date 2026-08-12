@@ -490,6 +490,21 @@ asserts what a peer can actually reach while jailed, once verified, and as an
 admin. Multipass rather than Docker because hz drives `systemctl` and
 `systemd-run`, which need a real PID 1.
 
+`KEEP=1 ./bin/e2e` leaves the VM up; `REUSE=1` re-runs the assertions against
+it. To click through the portal yourself from another machine, the VM needs to
+be on your LAN rather than multipass's host-local network:
+
+```bash
+BRIDGED=1 BRIDGE_IFACE=<iface> ./bin/e2e
+```
+
+`BRIDGE_IFACE` is worth preferring over multipass's `local.bridged-network`
+setting, which is global to the host and silently applies to every `--bridged`
+launch by any project until someone unsets it. Either way, bridging enslaves a
+physical interface to a new bridge, which can briefly drop the link — don't do
+it on a box you're administering remotely. `bin/e2e` refuses to configure any
+of this for you and says why.
+
 ## High Availability
 
 Run two HZ instances for automatic failover. No orchestrator, no election, no shared state — just two boxes.
