@@ -75,6 +75,19 @@ Reserved ports per host, and the denylist `hz ports next` skips when allocating.
 ### Settings
 ![Settings](docs/screenshots/settings.png)
 
+### VPN MFA captive portal
+What an MFA-jailed peer sees when it asks for any other service — the request
+is redirected to the portal, and nothing else on the network answers until a
+TOTP code is accepted. See [VPN MFA](#vpn-mfa).
+
+![VPN MFA portal](docs/screenshots/mfa.png)
+
+![VPN MFA enrollment](docs/screenshots/mfa-enroll.png)
+
+> These two come from `bin/e2e`, not `make screenshots`: the portal identifies
+> the caller by WireGuard source IP, so the only honest way to photograph a
+> jailed peer's view is to be one. The hermetic container has no WireGuard.
+
 > The VPN and Checks pages are captured too (`docs/screenshots/{vpn,checks}.png`)
 > but aren't shown here — the hermetic container has no live WireGuard peers and
 > can't reach the documentation IPs it checks, so both render as empty or all-red
@@ -95,6 +108,7 @@ Reserved ports per host, and the denylist `hz ports next` skips when allocating.
 
 - **Auto-Heal**: Detects and installs missing dependencies on a fresh Ubuntu system
 - **WireGuard VPN Management**: Create clients, generate QR codes, manage peers
+- **VPN MFA**: Optional per-peer TOTP. Peers without a verified session are jailed to a captive portal until they authenticate
 - **Split-Horizon DNS**: Internal DNS via dnsmasq, external DNS via Route53, Name.com, Cloudflare, and more
 - **Reverse Proxy**: HAProxy with automatic Let's Encrypt wildcard SSL certificates
 - **Static Sites**: Serve a folder of files as a service — hz hosts it directly, HAProxy routes to it with the same auto SSL/DNS
@@ -389,6 +403,93 @@ hz ports list --host 192.0.2.50              # what's reserved, and what's free
 list. The Ports page shows both tabs — reservations per host, and the exclusions
 that allocation skips.
 
+## VPN MFA
+
+WireGuard has no second factor of its own. A peer either holds a valid key or
+it doesn't, and the Noise handshake has no interactive step to hang a prompt
+on. hz adds one *after* the tunnel comes up: a peer with no verified session
+still completes its handshake, but is **jailed** — confined to the Horizon
+portal until it enters a TOTP code.
+
+That is a real distinction worth understanding before relying on it. This
+gates what a peer can *reach*, not whether it can connect. A stolen key still
+brings up a tunnel; it just lands somewhere with nothing in it.
+
+Enable under **Settings → VPN Multi-Factor Authentication**, or set
+`vpn_mfa_enabled` in `config.json`.
+
+### What a jailed peer can reach
+
+Nothing but the portal — enforced in three places, because no single one of
+them covers the whole path:
+
+| Layer | Where | Blocks |
+|---|---|---|
+| `WG-INPUT` | iptables, jumped from `INPUT -i wg0` | everything addressed to the gateway itself, except Horizon's port, HAProxy's ports, and DNS. That means sshd, exporters, and anything else bound to the WireGuard address. |
+| `WG-FORWARD` | iptables, per-peer `DROP` | everything transiting the gateway to the LAN |
+| `mfa_jailed` | HAProxy ACL, source list at `<haproxy dir>/mfa-jailed.lst` | every vhost except the portal; the rest redirect to `<kiosk_url>/app/mfa` |
+
+The HAProxy half is not decoration. HAProxy fronts every other service and
+originates those backend connections *itself*, so a jail that only covered
+`WG-FORWARD` would hand a jailed peer the whole LAN through the proxy.
+Conversely HAProxy never sees traffic aimed straight at sshd — that is
+`WG-INPUT`'s job. Traffic to the gateway's own address is delivered locally and
+never traverses `FORWARD` at all, which is exactly why the second chain exists.
+
+With MFA off, `WG-INPUT` is empty and the ACL file is empty: no behaviour
+changes for anyone not using this.
+
+### Sessions
+
+Verifying a code opens a session for a duration the operator allows
+(`vpn_mfa_durations`, default `2h`/`4h`/`8h`/`forever`). Expiry is pruned on a
+60s tick, so a session outlives its nominal end by up to a minute.
+
+Per-peer controls live on the **VPN** page, on each peer's row — **revoke
+session** re-jails a peer immediately, and **grant session** opens an 8h one
+without a code, for when someone has lost their authenticator. The enable
+toggle and the allowed durations are in **Settings → VPN Multi-Factor
+Authentication**.
+
+`forever` is a real session, not an exemption — revoking still applies.
+
+### Admin bypass
+
+Peers listed in `vpn_admins` are never jailed, so an operator can't lock
+themselves out by enabling MFA. Promoting or demoting a peer takes effect
+immediately, including the demotion direction.
+
+### Enrollment
+
+First contact shows a QR plus the secret in text. The QR is generated in your
+browser — the secret is never sent anywhere but to the peer it belongs to.
+
+**The secret is displayed exactly once.** A peer that loses it before adding it
+to an authenticator needs an admin to hit **reset TOTP** on its row in the VPN
+page, which clears the secret and forces re-enrollment.
+
+### Requirements and failure modes
+
+- **`kiosk_url` must route to a service with `proxy.self`.** That is what makes
+  the portal a vhost HAProxy can exempt. If its host doesn't resolve to a
+  portal backend, hz logs a warning and falls back to a plain `403` instead of
+  a redirect — deliberately, because redirecting to a host that isn't the
+  portal would loop forever for every jailed peer.
+- **The portal lives at `/app/mfa`**, not `/mfa`; the UI is a SPA mounted under
+  `/app/`.
+- **Jailed peers get DNS to the gateway** (udp/tcp 53). Without it the portal
+  can't resolve by name and a jailed tunnel reads as broken rather than locked.
+- **The jail is not a login gate.** It restricts reachability once connected.
+  Revoking a peer's *access* still means removing its key.
+
+### Testing it
+
+`make e2e` boots a throwaway multipass VM with real WireGuard, iptables and
+HAProxy, builds a peer and a stand-in LAN host as network namespaces, and
+asserts what a peer can actually reach while jailed, once verified, and as an
+admin. Multipass rather than Docker because hz drives `systemctl` and
+`systemd-run`, which need a real PID 1.
+
 ## High Availability
 
 Run two HZ instances for automatic failover. No orchestrator, no election, no shared state — just two boxes.
@@ -527,6 +628,14 @@ make release
 ```
 
 Creates `.tar.gz` archives for each platform in `dist/`.
+
+### Tests
+
+```bash
+make check   # gofmt, go vet, golangci-lint
+go test ./...
+make e2e     # VPN MFA jail, end to end in a multipass VM (see VPN MFA)
+```
 
 ### Manual Build (without Make)
 
