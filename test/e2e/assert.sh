@@ -349,6 +349,25 @@ grep -q "haproxy_" <<<"$hap" \
   && ok "METRICS-6 HAProxy serves its built-in exporter on 8405" \
   || bad "METRICS-6 HAProxy serves its built-in exporter on 8405" "$(head -c 120 <<<"$hap")"
 
+# The dashboard is generated per deployment, so it has to be valid JSON and
+# reference metrics this instance actually publishes.
+dash=$(curl -fsS -b "$COOKIE" --max-time 5 "$API/integration/grafana/dashboard.json" 2>&1 || true)
+if jq -e '.panels | length > 0' <<<"$dash" >/dev/null 2>&1; then
+  ok "METRICS-8 the Grafana dashboard generates valid JSON with panels"
+else
+  bad "METRICS-8 the Grafana dashboard generates valid JSON with panels" "$(head -c 160 <<<"$dash")"
+fi
+# Every query must name a metric hz is really exposing; a dashboard referring
+# to a metric that does not exist is the same as no dashboard.
+missing=""
+for m in $(jq -r '[.panels[].targets[].expr] | join(" ")' <<<"$dash" 2>/dev/null \
+            | grep -oE 'hz_[a-z_]+' | sort -u); do
+  grep -q "^# HELP $m " <<<"$body" || missing="$missing $m"
+done
+[ -z "$missing" ] \
+  && ok "METRICS-9 every hz_ metric the dashboard graphs is published" \
+  || bad "METRICS-9 every hz_ metric the dashboard graphs is published" "missing:$missing"
+
 # ---- PCI scope: "all" removes the admin bypass ----
 head_ "Scope: all (no standing bypass)"
 
