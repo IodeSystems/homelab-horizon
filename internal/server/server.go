@@ -220,6 +220,7 @@ type Server struct {
 	metrics        *integration.Detector // Prometheus metrics discovery (pull integration)
 	static         *staticSupervisor     // supervises the unprivileged static file server child
 	ceremonies     *ceremonyStore        // in-flight WebAuthn ceremonies (see webauthn.go)
+	promHandler    http.Handler          // hz's own /metrics exposition
 
 	exporterMu     sync.RWMutex             // guards exporterStatus
 	exporterStatus map[string]exporterProbe // job|address -> resolved live path + liveness (status only, not a serving gate)
@@ -426,6 +427,8 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		ceremonies:     newCeremonyStore(),
 	}
 	s.config.Store(cfg)
+	// After the config is stored: the collector reads live server state.
+	s.promHandler = newPromHandler(s)
 	s.static.Rebuild(cfg)
 	s.initSyncedBaseline()
 
@@ -1070,6 +1073,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// Integration discovery endpoints (network-restricted: local/VPN/admin).
 	// Pull-style integrations: a central consumer scrapes hz for the config.
+	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.HandleFunc("/integration/prometheus/scrape.yaml", s.handleIntegrationPromScrape)
 	mux.HandleFunc("/integration/prometheus/targets.json", s.handleIntegrationPromTargets)
 	mux.HandleFunc("/integration/prometheus/setup.sh", s.handleIntegrationSetupScript)
