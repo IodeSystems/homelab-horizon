@@ -2,10 +2,12 @@ package server
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
@@ -29,18 +31,27 @@ func nodeExporterPort(cfg *config.Config) int {
 	return config.DefaultNodeExporterPort
 }
 
-// probeNodeExporter reports whether something is serving Prometheus metrics on
-// the local node-exporter port.
+// probeMaxBody caps what the probe reads. node-exporter's full output is
+// ~200KB on a stock Ubuntu box; the filtered request below trims that to about
+// 10KB, and this bounds anything unexpected.
+const probeMaxBody = 64 << 10
+
+// probeNodeExporter reports whether node-exporter is serving on the local port.
 //
-// Checks the body rather than just the status: something else listening on
-// 9100 answering 200 is not node-exporter, and silently scraping it would put
-// junk in the dashboard the operator then has to explain.
+// Asks for a single collector (`?collect[]=uname`) rather than the whole
+// exposition. A full scrape is ~200KB and this runs on every 60s health tick,
+// which is a lot of work to answer a yes/no question.
+//
+// Checks the body, not just the status: something else listening on 9100 and
+// answering 200 is not node-exporter, and scraping it would fill the dashboard
+// with junk the operator then has to explain.
 func probeNodeExporter(port int) bool {
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 	ctx, cancel := context.WithTimeout(context.Background(), nodeExporterProbeTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/metrics", nil)
+	url := "http://" + addr + "/metrics?collect%5B%5D=uname"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return false
 	}
@@ -52,21 +63,26 @@ func probeNodeExporter(port int) bool {
 	if resp.StatusCode != http.StatusOK {
 		return false
 	}
-	buf := make([]byte, 2048)
-	n, _ := resp.Body.Read(buf)
-	return looksLikeNodeExporter(string(buf[:n]))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, probeMaxBody))
+	if err != nil {
+		return false
+	}
+	return looksLikeNodeExporter(string(body))
 }
 
-// looksLikeNodeExporter checks for a metric name node-exporter always emits.
-// node_exporter_build_info is present in every version and unique to it.
+// looksLikeNodeExporter checks for a metric only node-exporter emits.
+//
+// Both markers are needed and neither is near the start: a stock Ubuntu box
+// leads with apt_* from the textfile collector, and node_cpu_seconds_total
+// doesn't appear until line 131 — which is why an earlier version of this,
+// sniffing the first 2KB, never detected a running exporter.
 func looksLikeNodeExporter(body string) bool {
-	return len(body) > 0 &&
-		(containsAny(body, "node_exporter_build_info") || containsAny(body, "node_cpu_seconds_total"))
-}
-
-func containsAny(haystack, needle string) bool {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
+	for _, marker := range []string{
+		"node_uname_info",          // uname collector, what the filter requests
+		"node_exporter_build_info", // present in every version
+		"node_cpu_seconds_total",   // fallback for an unfiltered response
+	} {
+		if strings.Contains(body, marker) {
 			return true
 		}
 	}

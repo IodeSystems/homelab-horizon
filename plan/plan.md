@@ -254,9 +254,74 @@ Phase 3 replaces this with: restart horizon, done.
 
 ## Active work
 
-Nothing in flight. Recently finished trees are archived in [done.md](done.md):
-the VPN MFA jail (WG-INPUT + HAProxy L7), passkeys as a second factor, and the
-multipass e2e fixture that found five pre-existing bugs along the way.
+### ◻ Runtime TLS check: prove the cert is valid FOR THE HOSTNAME
+
+**HTTPS shows green from declared config, never from a handshake.** Nothing
+anywhere completes a TLS connection to a public domain and checks that the cert
+served actually covers that name. The UI reports a *cert domain* and an expiry
+taken from the SubZone that is supposed to cover the domain — not from the
+certificate a client is really handed.
+
+Observed 2026-08-13, setting up `dev.pb.iodesystems.com`:
+
+- `service create` → `+ https dev.pb.iodesystems.com … SubZone "dev.pb"`
+- `domain list` → `HTTPS yes … CERT Nov 5 19:12:17 2026`
+- `domain ssl add` → `= https dev.pb.iodesystems.com (already covered)`
+
+while HAProxy was serving the **`veliode.com` default cert**, which does not
+carry that SAN, and every verifying client failed the handshake outright. Three
+separate surfaces said covered/green for a name no served cert covered. The
+expiry shown was the zone bundle's; the cert that eventually covered the domain
+expires `Nov 11`. `*.iodesystems.com` matches ONE label, so a three-level name is
+never wildcard-covered — it needs an explicit SAN, and whether it got one is
+exactly what nothing verifies.
+
+The failure mode this leaves open is a cert that silently stops covering a
+domain — expiry, a SubZone edit, a reissue that drops a SAN. It is invisible
+until a user hits it, and the dashboard stays green throughout.
+
+**Most of the machinery already exists.** `internal/monitor` runs periodic checks
+and its `http` type uses a plain `http.Client` (`monitor.go:59`) with no
+`InsecureSkipVerify`, so it *does* verify chain and hostname — it is simply never
+pointed at a public URL. Auto-generated checks target
+`"http://" + svc.Proxy.Backend + …HealthCheck.Path` (`monitor.go:106`): the
+BACKEND, over plain HTTP. Backend liveness is genuinely probed; the TLS edge in
+front of it is not covered at all.
+
+**next** — auto-generate a second check per HTTPS domain targeting
+`https://<domain><healthcheck path>`, so hostname verification runs on the real
+edge. Then add cert expiry as its own signal: a 200 today says nothing about a
+cert expiring in six days, so surface days-remaining and fail the check under a
+threshold rather than at midnight on expiry day.
+
+**risks** — auto-generating a check per domain multiplies check volume across the
+fleet; reuse `DisabledAutoChecks` so a domain can opt out. Internal-only domains
+resolve to the proxy from inside and may not be reachable from wherever the
+monitor runs, which would produce failures that are about routing rather than
+TLS — distinguish "could not connect" from "connected, cert is wrong", because
+conflating them is how a real cert failure gets muted as noise.
+
+**blocking decisions (owner: Carl)** — should a cert nearing expiry be a FAILED
+check (pages via ntfy) or a distinct warning state? The checks model is currently
+binary `ok`/`failed`, and adding a third state touches history storage and the
+`/checks` UI.
+
+**optional extensions** — assert the served leaf matches the cert horizon
+believes it issued (it already inspects leaves directly in
+`internal/server/certserve.go:78`), which would also catch HAProxy loading a
+stale bundle after a reissue.
+
+**scope note** — this is a network/downstream check, the category the
+[scope boundary](#scope-boundary-system-vs-network-checks) above deliberately
+excludes from the Phase 0–5 iptables/system-health tree. It belongs to `Monitor`
+and the `/checks` page, and shares nothing with that work but this file.
+
+---
+
+The iptables tree is finished. Recently finished trees are archived in
+[done.md](done.md): the VPN MFA jail (WG-INPUT + HAProxy L7), passkeys as a
+second factor, and the multipass e2e fixture that found five pre-existing bugs
+along the way.
 
 The original point of this plan — **Phase 0, the System Health + Fixer
 dashboard** — is still unbuilt. Phases 1–5 (the iptables classifier and

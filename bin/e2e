@@ -19,6 +19,11 @@
 #   REUSE   set to 1 to skip launch+provision and re-run assertions only
 #           (needs a VM left behind by KEEP=1)
 #
+#   METRICS set to 1 to also run the metrics integration checks
+#           (test/e2e/metrics.sh). Installs real dnsmasq and node-exporter and
+#           verifies hz reads and merges them — the format risk unit tests
+#           cannot cover. Leaves the VM with both installed.
+#
 #   PASSKEY set to 1 to also run the WebAuthn ceremony (test/e2e/passkey.sh).
 #           Reconfigures the VM onto https with a self-signed cert and drives
 #           a virtual authenticator, so it runs after the main assertions and
@@ -152,6 +157,11 @@ fi
 
 note "asserting..."
 if multipass exec "$VM" -- sudo /home/ubuntu/assert.sh; then
+  if [ "${METRICS:-0}" = "1" ]; then
+    note "running the metrics integration checks (real dnsmasq + node-exporter)..."
+    multipass transfer "$FIXTURE/metrics.sh" "$VM:/home/ubuntu/metrics.sh"
+    multipass exec "$VM" -- sudo bash /home/ubuntu/metrics.sh || err "metrics checks failed"
+  fi
   if [ "${PASSKEY:-0}" = "1" ]; then
     note "running the passkey ceremony (https + virtual authenticator)..."
     multipass transfer "$FIXTURE/install-browser.sh" "$VM:/home/ubuntu/install-browser.sh"

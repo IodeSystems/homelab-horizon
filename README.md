@@ -611,6 +611,11 @@ asserts what a peer can actually reach while jailed, once verified, and as an
 admin. Multipass rather than Docker because hz drives `systemctl` and
 `systemd-run`, which need a real PID 1.
 
+`METRICS=1 ./bin/e2e` additionally installs real dnsmasq and real
+node-exporter in the VM and checks hz reads and merges them — the format risk
+unit tests can't cover, since a test double only proves hz parses what hz
+expects.
+
 `PASSKEY=1 ./bin/e2e` additionally reconfigures the VM onto https with a
 self-signed cert and drives a full WebAuthn ceremony against Chrome's virtual
 authenticator — real credentials, real signatures, verified by hz — asserting
