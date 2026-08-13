@@ -1090,10 +1090,45 @@ export function useMFASettings() {
 export function useUpdateMFASettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { enabled: boolean; durations: string[] }) =>
+    mutationFn: (input: {
+      enabled: boolean;
+      durations: string[];
+      scope?: string;
+      force?: boolean;
+    }) =>
       apiFetch("/mfa/settings", {
         method: "POST",
         body: JSON.stringify(input),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["mfa", "settings"] });
+      qc.invalidateQueries({ queryKey: ["vpn", "peers"] });
+    },
+  });
+}
+
+export function useMFAException() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; duration: string; reason: string }) =>
+      apiFetch("/mfa/exception", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["mfa", "settings"] });
+      qc.invalidateQueries({ queryKey: ["vpn", "peers"] });
+    },
+  });
+}
+
+export function useMFAExceptionRevoke() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) =>
+      apiFetch("/mfa/exception/revoke", {
+        method: "POST",
+        body: JSON.stringify({ name }),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["mfa", "settings"] });

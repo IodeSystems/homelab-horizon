@@ -77,6 +77,14 @@ api() {
   fi
 }
 
+# api_err is api() without -f: on a 4xx, curl -f exits non-zero and prints
+# nothing, so the assertions that check *why* a request was rejected need the
+# response body rather than curl's own error text.
+api_err() {
+  local method="$1" path="$2" body="${3:-}"
+  curl -sS -b "$COOKIE" -X "$method" -H 'Content-Type: application/json' -d "$body" "$API$path"
+}
+
 # reset returns hz, wg0 and the client netns to their post-provision state, so
 # a re-run (bin/e2e REUSE=1) starts from the same place a fresh VM would.
 # Without it the second run adds a *second* peer named "laptop" and the jail —
@@ -296,6 +304,59 @@ api POST /api/v1/vpn/peers/toggle-admin '{"name":"laptop"}' >/dev/null \
   || { echo "toggle-admin (demote) failed"; exit 1; }
 sleep 2
 assert_port_blocked "ADMIN-3 demoting an admin re-jails immediately" "$GW_WG" 22
+
+# ---- PCI scope: "all" removes the admin bypass ----
+head_ "Scope: all (no standing bypass)"
+
+# laptop is an admin at this point (ADMIN-2 promoted it, ADMIN-3 demoted it),
+# so re-promote and confirm the bypass works before removing it — otherwise a
+# pass here could just mean the peer was jailed for some unrelated reason.
+api POST /api/v1/vpn/peers/toggle-admin '{"name":"laptop"}' >/dev/null
+sleep 2
+assert_port_open "SCOPE-0 admin bypasses under the default scope" "$GW_WG" 22
+
+# An admin with no factor enrolled would be stranded, so the switch is refused
+# and names them. laptop enrolled TOTP earlier, so use boss — never enrolled.
+guard=$(api_err POST /api/v1/mfa/settings \
+  '{"enabled":true,"durations":["2h","forever"],"scope":"all"}')
+case "$guard" in
+  *boss*) ok "SCOPE-1 switching to all is refused, naming the stranded admin" ;;
+  *)      bad "SCOPE-1 switching to all is refused, naming the stranded admin" "got: $guard" ;;
+esac
+
+# Forced through, the bypass is gone: an admin with no live session is jailed
+# like anyone else. This is the property PCI DSS 8.5.1 actually asks about.
+api POST /api/v1/mfa/settings \
+  '{"enabled":true,"durations":["2h","forever"],"scope":"all","force":true}' >/dev/null \
+  || { echo "forced scope change failed"; exit 1; }
+api POST /api/v1/mfa/revoke-session '{"name":"laptop"}' >/dev/null || true
+sleep 2
+assert_port_blocked "SCOPE-2 admins are jailed under scope=all" "$GW_WG" 22
+
+# The sanctioned escape hatch, and the recovery path in the runbook.
+api POST /api/v1/mfa/exception \
+  '{"name":"laptop","duration":"1h","reason":"e2e recovery check"}' >/dev/null \
+  || { echo "granting exception failed"; exit 1; }
+sleep 2
+assert_port_open "SCOPE-3 a live exception bypasses the jail" "$GW_WG" 22
+
+# Reason and expiry are mandatory — a bypass nobody justified or renewed is the
+# standing exemption this whole mode exists to remove.
+noreason=$(api_err POST /api/v1/mfa/exception '{"name":"laptop","duration":"1h"}')
+case "$noreason" in
+  *[Rr]eason*) ok "SCOPE-4 an exception without a reason is rejected" ;;
+  *)           bad "SCOPE-4 an exception without a reason is rejected" "got: $noreason" ;;
+esac
+forever=$(api_err POST /api/v1/mfa/exception \
+  '{"name":"laptop","duration":"9999h","reason":"forever"}')
+case "$forever" in
+  *maximum*|*exceeds*) ok "SCOPE-5 an over-long exception is rejected" ;;
+  *)                   bad "SCOPE-5 an over-long exception is rejected" "got: $forever" ;;
+esac
+
+api POST /api/v1/mfa/exception/revoke '{"name":"laptop"}' >/dev/null || true
+sleep 2
+assert_port_blocked "SCOPE-6 revoking an exception re-jails immediately" "$GW_WG" 22
 
 # ---- report ----
 head_ "Result"

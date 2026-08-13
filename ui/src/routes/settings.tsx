@@ -11,6 +11,8 @@ import {
   DialogContent,
   DialogTitle,
   IconButton,
+  FormControl,
+  InputLabel,
   MenuItem,
   Paper,
   Select,
@@ -43,6 +45,7 @@ import {
   useCreateJoinToken,
   useHAStatus,
   useMFASettings,
+  useMFAExceptionRevoke,
   useSettings,
   useSystemHealth,
   useUpdateMFASettings,
@@ -900,7 +903,9 @@ const ALL_DURATIONS = ["2h", "4h", "8h", "forever"];
 function VPNMFATab() {
   const mfa = useMFASettings();
   const updateMFA = useUpdateMFASettings();
+  const revokeException = useMFAExceptionRevoke();
   const [snack, setSnack] = useState("");
+  const [scopeError, setScopeError] = useState("");
 
   if (mfa.isLoading) return <CircularProgress />;
   if (mfa.isError) return <Alert severity="error">Failed to load MFA settings</Alert>;
@@ -926,6 +931,113 @@ function VPNMFATab() {
           otherwise jailed peers get a 403 and must use{" "}
           <code>http://&lt;vpn-server-ip&gt;:&lt;horizon-port&gt;</code> directly.
         </Alert>
+        <Box sx={{ mb: 3, p: 2, border: 1, borderColor: "divider", borderRadius: 1 }}>
+          <Typography variant="subtitle2" gutterBottom>
+            Enforcement scope
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            <strong>Admins exempt</strong> lets anyone in <code>vpn_admins</code> bypass the jail
+            permanently, so an operator can&apos;t lock themselves out.{" "}
+            <strong>All peers</strong> removes that bypass — required by PCI DSS 8.5.1, which
+            allows no standing exemption for any user. The only way out then is a
+            time-limited exception, listed below.
+          </Typography>
+          <FormControl fullWidth sx={{ mb: 2 }}>
+            <InputLabel>Scope</InputLabel>
+            <Select
+              value={mfa.data?.scope ?? "admins-exempt"}
+              label="Scope"
+              onChange={(e) => {
+                setScopeError("");
+                updateMFA.mutate(
+                  {
+                    enabled,
+                    durations: durations.length > 0 ? durations : ALL_DURATIONS,
+                    scope: e.target.value,
+                  },
+                  {
+                    onSuccess: () => setSnack(`Scope set to ${e.target.value}`),
+                    // 409 means admins would be stranded — surface the names
+                    // rather than a generic failure, and make forcing explicit.
+                    onError: (err) =>
+                      setScopeError(
+                        err instanceof Error ? err.message : "Could not change scope",
+                      ),
+                  },
+                );
+              }}
+            >
+              <MenuItem value="admins-exempt">Admins exempt (default)</MenuItem>
+              <MenuItem value="all">All peers, including admins</MenuItem>
+            </Select>
+          </FormControl>
+          {scopeError && (
+            <Alert
+              severity="warning"
+              sx={{ mb: 2 }}
+              action={
+                <Button
+                  size="small"
+                  color="inherit"
+                  onClick={() => {
+                    setScopeError("");
+                    updateMFA.mutate(
+                      {
+                        enabled,
+                        durations: durations.length > 0 ? durations : ALL_DURATIONS,
+                        scope: "all",
+                        force: true,
+                      },
+                      { onSuccess: () => setSnack("Scope set to all (forced)") },
+                    );
+                  }}
+                >
+                  FORCE
+                </Button>
+              }
+            >
+              {scopeError}
+            </Alert>
+          )}
+          {(mfa.data?.exceptions ?? []).length > 0 ? (
+            <>
+              <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
+                Active exceptions
+              </Typography>
+              {(mfa.data?.exceptions ?? []).map((ex) => (
+                <Box
+                  key={ex.name}
+                  sx={{ display: "flex", alignItems: "center", gap: 2, mb: 1 }}
+                >
+                  <Typography variant="body2" sx={{ flex: 1 }}>
+                    <strong>{ex.name}</strong> — {ex.reason}
+                    <br />
+                    <Typography variant="caption" color="text.secondary">
+                      expires {new Date(ex.expires).toLocaleString()}
+                      {ex.grantedBy ? ` · granted by ${ex.grantedBy}` : ""}
+                    </Typography>
+                  </Typography>
+                  <Button
+                    size="small"
+                    color="warning"
+                    onClick={() =>
+                      revokeException.mutate(ex.name, {
+                        onSuccess: () => setSnack(`Exception revoked for ${ex.name}`),
+                      })
+                    }
+                  >
+                    Revoke
+                  </Button>
+                </Box>
+              ))}
+            </>
+          ) : (
+            <Typography variant="caption" color="text.secondary">
+              No active exceptions. Grant one with{" "}
+              <code>POST /api/v1/mfa/exception</code> (name, duration, reason).
+            </Typography>
+          )}
+        </Box>
         <Alert severity="warning" sx={{ mb: 2 }}>
           <strong>Full-tunnel peers cannot use phone-scanned passkeys.</strong> Cross-device
           passkeys relay through an internet service, and a jailed full-tunnel peer has no

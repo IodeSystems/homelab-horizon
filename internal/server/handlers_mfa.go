@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -374,11 +375,27 @@ func (s *Server) handleAPIMFASettings(w http.ResponseWriter, r *http.Request) {
 		if durations == nil {
 			durations = []string{}
 		}
+		resp := apitypes.MFASettingsResponse{
+			Enabled:             cfg.VPNMFAEnabled,
+			Durations:           durations,
+			Scope:               cfg.MFAScope(),
+			AdminsWithoutFactor: cfg.AdminsWithoutSecondFactor(),
+		}
+		for name, e := range cfg.VPNMFAExceptions {
+			if e.Expires <= time.Now().Unix() {
+				continue // lapsed but not yet pruned; never show it as live
+			}
+			resp.Exceptions = append(resp.Exceptions, apitypes.MFAExceptionResp{
+				Name:      name,
+				Expires:   time.Unix(e.Expires, 0).Format(time.RFC3339),
+				Reason:    e.Reason,
+				GrantedBy: e.GrantedBy,
+			})
+		}
+		sort.Slice(resp.Exceptions, func(i, j int) bool { return resp.Exceptions[i].Name < resp.Exceptions[j].Name })
+
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(apitypes.MFASettingsResponse{
-			Enabled:   cfg.VPNMFAEnabled,
-			Durations: durations,
-		})
+		_ = json.NewEncoder(w).Encode(resp)
 		return
 	}
 
@@ -390,16 +407,44 @@ func (s *Server) handleAPIMFASettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Enabled   bool     `json:"enabled"`
 		Durations []string `json:"durations"`
+		Scope     string   `json:"scope,omitempty"` // "" leaves it unchanged
+		Force     bool     `json:"force,omitempty"` // accept the lockout risk below
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
 
+	scope := strings.TrimSpace(req.Scope)
+	if scope != "" && scope != config.MFAScopeAll && scope != config.MFAScopeAdminsExempt {
+		writeJSONError(w, http.StatusBadRequest,
+			"scope must be "+config.MFAScopeAll+" or "+config.MFAScopeAdminsExempt)
+		return
+	}
+
+	// Moving to "all" strips the standing admin bypass. An admin with no
+	// second factor enrolled is then jailed like anyone else — recoverable
+	// (the portal is reachable from inside the jail, and they can enrol
+	// there), but not if they are headless or the portal is misconfigured.
+	// Refuse by default and name the peers, rather than discovering it after
+	// the chains rebuild.
+	if scope == config.MFAScopeAll && req.Enabled && !req.Force {
+		if stranded := s.cfg().AdminsWithoutSecondFactor(); len(stranded) > 0 {
+			writeJSONError(w, http.StatusConflict,
+				"these VPN admins have no TOTP secret or passkey and would be jailed: "+
+					strings.Join(stranded, ", ")+
+					" — enrol them first, or resend with force:true if that is intended")
+			return
+		}
+	}
+
 	if err := s.updateConfig(func(cfg *config.Config) {
 		cfg.VPNMFAEnabled = req.Enabled
 		if len(req.Durations) > 0 {
 			cfg.VPNMFADurations = req.Durations
+		}
+		if scope != "" {
+			cfg.VPNMFAScope = scope
 		}
 	}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
@@ -412,6 +457,147 @@ func (s *Server) handleAPIMFASettings(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
+// maxExceptionDuration caps a bypass. PCI DSS 8.5.1 wants "a limited time
+// period"; a week is long enough to cover a lost-phone weekend or a hardware
+// swap, short enough that nobody quietly runs on one forever.
+const maxExceptionDuration = 7 * 24 * time.Hour
+
+// handleAPIMFAException grants a time-limited, reasoned bypass (admin only).
+//
+// This is the sanctioned escape hatch in "all" scope, and the recovery path
+// when an admin has locked themselves out: it is reachable with the admin
+// token from the LAN, so it does not require the caller to be un-jailed.
+func (s *Server) handleAPIMFAException(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	var req struct {
+		Name     string `json:"name"`
+		Duration string `json:"duration"` // Go duration, e.g. "4h", "24h"
+		Reason   string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	reason := strings.TrimSpace(req.Reason)
+	if name == "" {
+		writeJSONError(w, http.StatusBadRequest, "Peer name required")
+		return
+	}
+	// Mandatory, and not a formality: an unjustified exception is a standing
+	// bypass with extra steps, which is the thing "all" scope exists to stop.
+	if reason == "" {
+		writeJSONError(w, http.StatusBadRequest, "Reason required — exceptions are auditable")
+		return
+	}
+
+	d, err := time.ParseDuration(strings.TrimSpace(req.Duration))
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid duration: "+err.Error())
+		return
+	}
+	if d <= 0 {
+		writeJSONError(w, http.StatusBadRequest, "Duration must be positive — exceptions always expire")
+		return
+	}
+	if d > maxExceptionDuration {
+		writeJSONError(w, http.StatusBadRequest,
+			"Duration exceeds the "+maxExceptionDuration.String()+" maximum")
+		return
+	}
+
+	expires := time.Now().Add(d).Unix()
+	if err := s.updateConfig(func(cfg *config.Config) {
+		cfg.GrantMFAException(name, config.MFAException{
+			Expires:   expires,
+			Reason:    reason,
+			GrantedAt: time.Now().Unix(),
+			GrantedBy: s.adminActor(r),
+		})
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
+	// Loud on purpose: this is the one path that weakens the control, so it
+	// should be trivially greppable in the journal during an assessment.
+	slog.Warn("MFA exception granted",
+		"peer", name, "reason", reason, "expires", time.Unix(expires, 0).Format(time.RFC3339),
+		"granted_by", s.adminActor(r))
+	s.rebuildWGChains()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok":      true,
+		"expires": time.Unix(expires, 0).Format(time.RFC3339),
+	})
+}
+
+// handleAPIMFAExceptionRevoke ends an exception early (admin only).
+func (s *Server) handleAPIMFAExceptionRevoke(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		writeJSONError(w, http.StatusBadRequest, "Peer name required")
+		return
+	}
+
+	revoked := false
+	if err := s.updateConfig(func(cfg *config.Config) {
+		revoked = cfg.RevokeMFAException(name)
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
+	if !revoked {
+		writeJSONError(w, http.StatusNotFound, "no active exception for that peer")
+		return
+	}
+	slog.Info("MFA exception revoked", "peer", name, "by", s.adminActor(r))
+	s.rebuildWGChains()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
+// adminActor is best-effort attribution for the audit line.
+//
+// hz has no user model, so this is honest about its ceiling: a request from a
+// VPN admin can be named, because the source IP maps to a peer. A request
+// bearing the admin token cannot be attributed past "whoever holds it" — the
+// token is shared by construction. Anything claiming more precision than that
+// would be inventing it.
+func (s *Server) adminActor(r *http.Request) string {
+	if ip := s.getClientIP(r); ip != "" && s.isInVPNRange(ip) {
+		if peer := s.wg.GetPeerByIP(ip); peer != nil {
+			return "vpn-admin:" + peer.Name
+		}
+	}
+	return "admin-token"
 }
 
 // startMFASessionPruner starts a goroutine that periodically prunes expired MFA sessions.
@@ -427,13 +613,18 @@ func (s *Server) startMFASessionPruner(done <-chan struct{}) {
 				if !s.cfg().VPNMFAEnabled {
 					continue
 				}
-				// Check if any sessions expired
-				if s.cfg().PruneExpiredMFASessions() {
-					// Persist the pruned config
+				// Sessions and exceptions both lapse on wall-clock time, and
+				// a lapsed exception left in the map is a bypass outliving
+				// its authorisation — prune them on the same tick.
+				cur := s.cfg()
+				if cur.PruneExpiredMFASessions() || cur.PruneExpiredMFAExceptions() {
 					if err := s.updateConfig(func(cfg *config.Config) {
 						cfg.PruneExpiredMFASessions()
+						if cfg.PruneExpiredMFAExceptions() {
+							slog.Info("MFA exception expired")
+						}
 					}); err != nil {
-						slog.Warn("updateConfig prune MFA sessions", "err", err)
+						slog.Warn("updateConfig prune MFA state", "err", err)
 					}
 					s.rebuildWGChains()
 				}

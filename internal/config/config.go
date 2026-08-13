@@ -247,6 +247,23 @@ type Config struct {
 	// them opens a session, and either factor satisfies the jail.
 	VPNMFAPasskeys map[string][]Passkey `json:"vpn_mfa_passkeys,omitempty"` // peer name -> credentials
 
+	// VPNMFAScope decides whether VPN admins are exempt from the jail.
+	//
+	// "" / MFAScopeAdminsExempt (default, and the historical behaviour):
+	// anyone in VPNAdmins bypasses MFA permanently, so an operator can't lock
+	// themselves out.
+	//
+	// MFAScopeAll: nobody is exempt, admins included. Required by PCI DSS
+	// 8.5.1, which permits no standing bypass for any user — the only escape
+	// is a documented, time-limited exception, which is what VPNMFAExceptions
+	// is for.
+	VPNMFAScope string `json:"vpn_mfa_scope,omitempty"`
+
+	// VPNMFAExceptions are time-limited, reasoned bypasses. They always
+	// expire: a permanent exception is the thing "all" mode exists to
+	// eliminate, so there is deliberately no way to express one.
+	VPNMFAExceptions map[string]MFAException `json:"vpn_mfa_exceptions,omitempty"` // peer name -> exception
+
 	// WireGuard VPN client peers — shared state, replicated to non-primary
 	// instances via the pull loop. Handlers update this after every WG
 	// mutation; applyNewConfig applies it to the local WG config file.
@@ -1152,10 +1169,19 @@ func (c *Config) IsPeerMFAJailed(name string) bool {
 	if !c.VPNMFAEnabled {
 		return false
 	}
-	// VPN admins bypass MFA
-	for _, admin := range c.VPNAdmins {
-		if admin == name {
-			return false
+	// A live, time-limited exception. Honoured in both scopes — it is the only
+	// bypass "all" mode permits, and the only one an assessor can audit.
+	if c.HasActiveMFAException(name) {
+		return false
+	}
+	// VPN admins bypass MFA — unless scope is "all", where the whole point is
+	// that nobody has a standing bypass, admins least of all: they are the
+	// highest-privilege identities on the box.
+	if c.MFAScope() != MFAScopeAll {
+		for _, admin := range c.VPNAdmins {
+			if admin == name {
+				return false
+			}
 		}
 	}
 	if c.VPNMFASessions != nil {
@@ -1199,6 +1225,26 @@ func (c *Config) ClearMFASession(name string) {
 	if c.VPNMFASessions != nil {
 		delete(c.VPNMFASessions, name)
 	}
+}
+
+// MFA scope modes. See Config.VPNMFAScope.
+const (
+	MFAScopeAdminsExempt = "admins-exempt" // default; VPN admins bypass the jail
+	MFAScopeAll          = "all"           // nobody is exempt, admins included
+)
+
+// MFAException is a time-limited bypass of the MFA jail for one peer.
+//
+// Expires is mandatory and always in the future when granted — PCI DSS 8.5.1
+// allows a bypass only "on an exception basis, for a limited time period",
+// and a field that can express "never" would be used that way. Reason is
+// mandatory for the same reason: an exception nobody had to justify is a
+// standing bypass with extra steps.
+type MFAException struct {
+	Expires   int64  `json:"expires"`              // unix seconds; never 0
+	Reason    string `json:"reason"`               // why, for the audit trail
+	GrantedAt int64  `json:"granted_at,omitempty"` // unix seconds
+	GrantedBy string `json:"granted_by,omitempty"` // best-effort attribution
 }
 
 // Passkey is one stored WebAuthn credential, in a form that survives a JSON
@@ -1300,6 +1346,78 @@ func (c *Config) ClearMFASecret(name string) {
 	c.ClearMFASession(name)
 }
 
+// MFAScope returns the configured scope, defaulting to admins-exempt so an
+// existing deployment keeps behaving exactly as it did before this field
+// existed. Opting into "all" is a deliberate act.
+func (c *Config) MFAScope() string {
+	if c.VPNMFAScope == MFAScopeAll {
+		return MFAScopeAll
+	}
+	return MFAScopeAdminsExempt
+}
+
+// HasActiveMFAException reports whether a peer holds an unexpired exception.
+func (c *Config) HasActiveMFAException(name string) bool {
+	if c.VPNMFAExceptions == nil {
+		return false
+	}
+	e, ok := c.VPNMFAExceptions[name]
+	return ok && e.Expires > time.Now().Unix()
+}
+
+// GrantMFAException records a time-limited bypass. Callers validate the
+// duration and reason; this only stores what it is given.
+func (c *Config) GrantMFAException(name string, e MFAException) {
+	if c.VPNMFAExceptions == nil {
+		c.VPNMFAExceptions = make(map[string]MFAException)
+	}
+	c.VPNMFAExceptions[name] = e
+}
+
+// RevokeMFAException ends an exception early. Returns false if there wasn't one.
+func (c *Config) RevokeMFAException(name string) bool {
+	if c.VPNMFAExceptions == nil {
+		return false
+	}
+	if _, ok := c.VPNMFAExceptions[name]; !ok {
+		return false
+	}
+	delete(c.VPNMFAExceptions, name)
+	return true
+}
+
+// PruneExpiredMFAExceptions drops lapsed exceptions. Returns true if any went,
+// so the caller knows to rebuild the chains — an expired exception that stays
+// in the map is a bypass that outlived its authorisation.
+func (c *Config) PruneExpiredMFAExceptions() bool {
+	if c.VPNMFAExceptions == nil {
+		return false
+	}
+	now := time.Now().Unix()
+	pruned := false
+	for name, e := range c.VPNMFAExceptions {
+		if e.Expires <= now {
+			delete(c.VPNMFAExceptions, name)
+			pruned = true
+		}
+	}
+	return pruned
+}
+
+// AdminsWithoutSecondFactor lists VPN admins holding neither a TOTP secret nor
+// a passkey. Switching to "all" scope strips their standing bypass, so these
+// are exactly the peers that would be jailed with no way to unlock — the set
+// the API refuses on unless the caller forces it.
+func (c *Config) AdminsWithoutSecondFactor() []string {
+	var out []string
+	for _, name := range c.VPNAdmins {
+		if !c.HasSecondFactor(name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // PruneExpiredMFASessions removes expired MFA sessions. Returns true if any were pruned.
 func (c *Config) PruneExpiredMFASessions() bool {
 	if c.VPNMFASessions == nil {
@@ -1336,12 +1454,19 @@ func (c *Config) RenameMFAPeer(oldName, newName string) {
 			c.VPNMFAPasskeys[newName] = k
 		}
 	}
+	if c.VPNMFAExceptions != nil {
+		if e, ok := c.VPNMFAExceptions[oldName]; ok {
+			delete(c.VPNMFAExceptions, oldName)
+			c.VPNMFAExceptions[newName] = e
+		}
+	}
 }
 
 // DeleteMFAPeer removes all MFA state for a peer.
 func (c *Config) DeleteMFAPeer(name string) {
 	c.ClearMFASecret(name)
 	c.ClearPasskeys(name)
+	c.RevokeMFAException(name)
 }
 
 // GetAllowedIPsForProfile returns client-side AllowedIPs for a routing profile

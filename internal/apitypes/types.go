@@ -383,9 +383,26 @@ type MFAVerifyResponse struct {
 	Expiry string `json:"expiry,omitempty"`
 }
 
+// MFAExceptionResp is a live, time-limited bypass — the only kind "all" scope
+// permits.
+type MFAExceptionResp struct {
+	Name      string `json:"name"`
+	Expires   string `json:"expires"`
+	Reason    string `json:"reason"`
+	GrantedBy string `json:"grantedBy,omitempty"`
+}
+
 type MFASettingsResponse struct {
 	Enabled   bool     `json:"enabled"`
 	Durations []string `json:"durations"`
+	// Scope is "admins-exempt" (default) or "all". "all" removes the standing
+	// admin bypass, which PCI DSS 8.5.1 requires.
+	Scope string `json:"scope"`
+	// AdminsWithoutFactor are VPN admins holding neither a TOTP secret nor a
+	// passkey. In "all" scope they are jailed like anyone else; the UI warns
+	// before the switch rather than after.
+	AdminsWithoutFactor []string           `json:"adminsWithoutFactor,omitempty"`
+	Exceptions          []MFAExceptionResp `json:"exceptions,omitempty"`
 }
 
 type AddPeerResponse struct {
