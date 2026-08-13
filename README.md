@@ -108,7 +108,7 @@ second factor is accepted. See [VPN MFA](#vpn-mfa).
 
 - **Auto-Heal**: Detects and installs missing dependencies on a fresh Ubuntu system
 - **WireGuard VPN Management**: Create clients, generate QR codes, manage peers
-- **VPN MFA**: Optional per-peer TOTP or passkey. Peers without a verified session are jailed to a captive portal until they authenticate
+- **VPN MFA**: Optional per-peer TOTP or passkey (codes recommended for full-tunnel peers — [why](#️-full-tunnel-peers-phone-scanned-passkeys-do-not-work)). Peers without a verified session are jailed to a captive portal until they authenticate
 - **Split-Horizon DNS**: Internal DNS via dnsmasq, external DNS via Route53, Name.com, Cloudflare, and more
 - **Reverse Proxy**: HAProxy with automatic Let's Encrypt wildcard SSL certificates
 - **Static Sites**: Serve a folder of files as a service — hz hosts it directly, HAProxy routes to it with the same auto SSL/DNS
@@ -469,13 +469,27 @@ Passkeys require a secure context, so they appear only when `kiosk_url` is
 cannot work. RP ID is the kiosk hostname — change that hostname later and every
 enrolled passkey is orphaned.
 
-One caveat specific to **cross-device passkeys** (the QR-on-desktop,
-scan-with-phone flow): that is WebAuthn hybrid transport, and it rendezvous
-through an internet relay. A jailed peer on a **full-tunnel** profile has no
-internet, so hybrid cannot complete; a split-tunnel peer is unaffected because
-its browser reaches the relay over its own connection. Authenticators local to
-the device — Touch ID, Windows Hello, a USB key — always work, because they
-need nothing beyond the portal itself.
+> ### ⚠️ Full-tunnel peers: phone-scanned passkeys do not work
+>
+> **If your peers are on the `full-tunnel` profile, steer them to authenticator
+> codes.** The QR-on-desktop, scan-with-phone flow is WebAuthn *hybrid
+> transport*, and it is not what it looks like: the QR carries no challenge and
+> the phone never contacts hz. It bootstraps an encrypted tunnel between the two
+> devices **through a relay service on the public internet**, run by Google or
+> Apple. A jailed full-tunnel peer routes everything through WireGuard, the jail
+> drops it, and the browser cannot reach that relay — so the ceremony stalls
+> with no useful error.
+>
+> Unaffected: `lan-access` and `vpn-only` peers, whose ordinary traffic never
+> enters the tunnel and who therefore reach the relay over their own connection.
+>
+> Always fine, on any profile, because nothing leaves the machine:
+> **authenticator codes (TOTP)**, a passkey built into the browsing device
+> (Touch ID, Windows Hello), or a **USB/NFC security key**.
+>
+> hz knows each peer's profile, so the portal shows this warning to affected
+> peers before they enroll — but it cannot detect *which kind* of passkey
+> someone is about to reach for, so the warning is advisory, not a block.
 
 ### Enrollment
 

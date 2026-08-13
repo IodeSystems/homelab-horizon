@@ -926,6 +926,14 @@ function VPNMFATab() {
           otherwise jailed peers get a 403 and must use{" "}
           <code>http://&lt;vpn-server-ip&gt;:&lt;horizon-port&gt;</code> directly.
         </Alert>
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          <strong>Full-tunnel peers cannot use phone-scanned passkeys.</strong> Cross-device
+          passkeys relay through an internet service, and a jailed full-tunnel peer has no
+          internet — only the portal. Those users need an authenticator code, a passkey built
+          into the device they browse from, or a USB security key. Peers on{" "}
+          <code>lan-access</code> or <code>vpn-only</code> are unaffected, since their normal
+          traffic never enters the tunnel. The portal warns affected peers directly.
+        </Alert>
         <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
           <Typography>MFA Enabled</Typography>
           <Switch

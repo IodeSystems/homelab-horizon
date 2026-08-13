@@ -228,6 +228,7 @@ function MFAPage() {
                   register={passkeyRegister}
                   available={data?.passkeysAvailable ?? false}
                   unavailableReason={data?.passkeysUnavailableReason}
+                  fullTunnel={data?.fullTunnel ?? false}
                 />
               </>
             )}
@@ -369,10 +370,12 @@ function PasskeySetup({
   register,
   available,
   unavailableReason,
+  fullTunnel,
 }: {
   register: ReturnType<typeof usePasskeyRegister>;
   available: boolean;
   unavailableReason?: string;
+  fullTunnel: boolean;
 }) {
   const [label, setLabel] = useState("");
   const [err, setErr] = useState("");
@@ -392,6 +395,20 @@ function PasskeySetup({
           or
         </Typography>
       </Divider>
+      {/* Shown before the button, not after a failure: enrolling a passkey
+          this peer can never use is a dead end that needs an admin reset. */}
+      {fullTunnel && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          <strong>Full-tunnel peer — use a passkey on this device only.</strong>
+          <br />
+          Scanning a QR code with your phone <strong>will not work</strong>.
+          That flow needs the internet to reach a relay service, and while
+          you&apos;re locked out this device has no internet — only this
+          portal. Use a passkey built into this device (Touch ID, Windows
+          Hello) or a USB security key. If you only have a phone,{" "}
+          <strong>set up an authenticator code instead</strong>.
+        </Alert>
+      )}
       <TextField
         label="Device name (optional)"
         placeholder="work laptop"

@@ -330,6 +330,15 @@ type MFAStatusResponse struct {
 	// PasskeysUnavailableReason says what to fix.
 	PasskeysAvailable         bool   `json:"passkeysAvailable"`
 	PasskeysUnavailableReason string `json:"passkeysUnavailableReason,omitempty"`
+
+	// Profile is the peer's routing profile ("full-tunnel", "lan-access",
+	// "vpn-only"). Surfaced because it changes which passkey *types* can work:
+	// a full-tunnel peer has no internet while jailed, so cross-device
+	// (phone-scans-QR) passkeys cannot reach the vendor tunnel service they
+	// depend on. The portal warns rather than letting someone enroll into a
+	// flow that will strand them.
+	Profile    string `json:"profile,omitempty"`
+	FullTunnel bool   `json:"fullTunnel,omitempty"`
 }
 
 type MFAEnrollResponse struct {
