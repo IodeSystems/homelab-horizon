@@ -24,6 +24,12 @@ var dependencies = []dependency{
 	{"qrencode", "qrencode", "qrencode", func(*config.Config) bool { return true }},
 	{"dnsmasq", "dnsmasq", "dnsmasq", func(c *config.Config) bool { return c.DNSMasqEnabled }},
 	{"HAProxy", "haproxy", "haproxy", func(c *config.Config) bool { return c.HAProxyEnabled }},
+	// Opt-in: hz does not need node-exporter to work, it just folds it into
+	// the scrape config it serves when present. Listing it here also puts it
+	// on the KnownPackages allowlist, so the install endpoint can fetch it on
+	// request without widening that allowlist to arbitrary packages.
+	{"Prometheus node exporter", "prometheus-node-exporter", "prometheus-node-exporter",
+		func(c *config.Config) bool { return c.NodeExporterEnabled }},
 }
 
 // KnownPackages returns the set of apt package names autoheal knows how to

@@ -27,4 +27,5 @@ func (s *Server) syncHAProxyBackends() {
 	backends := s.cfg().DeriveHAProxyBackends()
 	s.haproxy.SetBackends(backends)
 	s.haproxy.SetMFAJail(mfaJailFor(s.cfg(), backends))
+	s.haproxy.SetMetricsPort(s.cfg().HAProxyMetricsPort)
 }

@@ -393,6 +393,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 	hapBackends := cfg.DeriveHAProxyBackends()
 	hap.SetBackends(hapBackends)
 	hap.SetMFAJail(mfaJailFor(cfg, hapBackends))
+	hap.SetMetricsPort(cfg.HAProxyMetricsPort)
 
 	// Initialize Let's Encrypt manager with domains derived from zones
 	le := letsencrypt.New(letsencrypt.Config{
@@ -854,6 +855,9 @@ func (s *Server) runHealthCheck() {
 	// Re-probe observability integrations (Prometheus metrics discovery) so the
 	// served scrape config tracks which services are currently compatible.
 	s.refreshMetricsTargets()
+
+	// Notice node-exporter if someone installed it outside hz.
+	s.detectNodeExporter()
 }
 
 // startHealthCheck starts background health monitoring every 60 seconds

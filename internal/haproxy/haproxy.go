@@ -90,6 +90,7 @@ type HAProxy struct {
 	statsSocket string
 	backends    []Backend
 	mfaJail     MFAJail
+	metricsPort int
 }
 
 // New creates a new HAProxy manager
@@ -110,6 +111,12 @@ func (h *HAProxy) SetBackends(backends []Backend) {
 // GetBackends returns the backends list
 func (h *HAProxy) GetBackends() []Backend {
 	return h.backends
+}
+
+// SetMetricsPort sets the port HAProxy's built-in Prometheus exporter listens
+// on. 0 omits the listener entirely.
+func (h *HAProxy) SetMetricsPort(port int) {
+	h.metricsPort = port
 }
 
 // SetMFAJail sets the L7 jail parameters used by the next config generation.
@@ -406,6 +413,26 @@ listen stats
 			needLocalAccess = true
 			break
 		}
+	}
+
+	// Prometheus exporter frontend. HAProxy has carried this service since
+	// 2.0, so exposing it costs a listener rather than another process
+	// scraping the stats socket from outside.
+	//
+	// Restricted to RFC1918 sources on its own port: HAProxy's metrics name
+	// every backend and their health, which is a map of the estate. The deny
+	// comes first so a non-local request never reaches the service.
+	if h.metricsPort > 0 {
+		fmt.Fprintf(&sb, `frontend prometheus_metrics
+    bind *:%d
+    mode http
+    no log
+    acl local_access src 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8
+    http-request deny deny_status 403 unless local_access
+    http-request use-service prometheus-exporter if { path /metrics }
+    http-request return status 404
+
+`, h.metricsPort)
 	}
 
 	// HTTP frontend
