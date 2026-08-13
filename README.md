@@ -451,6 +451,19 @@ hz doesn't reimplement what already exists — it owns, installs, or detects:
 So a central Prometheus points at one discovery endpoint and gets hz, HAProxy,
 node-exporter and every compatible service, without per-host scrape config.
 
+### Grafana dashboard
+
+**Observability → Grafana dashboard** generates a ready-to-import dashboard for
+everything above: VPN and MFA posture, the security controls, edge health,
+iptables drift, plus dnsmasq and host panels when those are present. Copy it,
+then in Grafana pick **Dashboards → New → Import**, paste, and choose your
+Prometheus data source.
+
+It's generated per deployment rather than shipped as a static file — a box
+without node-exporter doesn't get a row of "No data" CPU panels, and one
+without dnsmasq doesn't get cache-hit graphs that will never fill in. A
+dashboard with dead panels teaches people to ignore panels.
+
 ## VPN MFA
 
 WireGuard has no second factor of its own. A peer either holds a valid key or

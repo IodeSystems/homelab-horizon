@@ -559,6 +559,68 @@ function maskToken(token: string): string {
   return `${"•".repeat(token.length - 4)}${token.slice(-4)}`;
 }
 
+// The dashboard is generated server-side so it matches this deployment: no
+// node-exporter row on a box without it, no dnsmasq panels when dnsmasq is
+// off. A dashboard full of "No data" teaches people to ignore panels.
+function GrafanaDashboardSection() {
+  const [json, setJson] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch("/integration/grafana/dashboard.json", {
+        credentials: "same-origin",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setJson(await res.text());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not fetch the dashboard");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
+        Grafana dashboard
+      </Typography>
+      <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+        A dashboard for everything hz publishes — VPN and MFA posture, security controls,
+        edge health, iptables drift, plus dnsmasq and host panels when those are present.
+        In Grafana: <strong>Dashboards → New → Import</strong>, paste, then pick your
+        Prometheus data source.
+      </Typography>
+      {!json && (
+        <Button variant="outlined" size="small" onClick={load} disabled={loading}>
+          {loading ? "Generating..." : "Generate dashboard JSON"}
+        </Button>
+      )}
+      {error && (
+        <Alert severity="error" sx={{ mt: 1 }}>
+          {error}
+        </Alert>
+      )}
+      {json && (
+        <>
+          <Box sx={{ display: "flex", gap: 1, alignItems: "center", mb: 1 }}>
+            <Button size="small" onClick={load} disabled={loading}>
+              Regenerate
+            </Button>
+            <Typography variant="caption" color="text.secondary">
+              {Math.round(json.length / 1024)} KB
+            </Typography>
+          </Box>
+          <CodeBlock text={json} maxHeight={240} />
+        </>
+      )}
+    </Paper>
+  );
+}
+
 function ScrapeTokenSection() {
   const scrapeToken = useScrapeToken();
   const rotateToken = useRotateScrapeToken();
@@ -793,6 +855,7 @@ function SetupZone() {
 
       <Stack spacing={2}>
         <ScrapeTokenSection />
+        <GrafanaDashboardSection />
 
         <Paper variant="outlined" sx={{ p: 2 }}>
           <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>

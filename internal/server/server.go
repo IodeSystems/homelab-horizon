@@ -1081,6 +1081,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/integration/prometheus/scrape.yaml", s.handleIntegrationPromScrape)
 	mux.HandleFunc("/integration/prometheus/targets.json", s.handleIntegrationPromTargets)
 	mux.HandleFunc("/integration/prometheus/setup.sh", s.handleIntegrationSetupScript)
+	mux.HandleFunc("/integration/grafana/dashboard.json", s.handleIntegrationGrafanaDashboard)
 	mux.HandleFunc("/api/v1/integration/scrape-token", s.handleIntegrationScrapeToken)
 
 	// Observability topology (admin): declared hosts + Prometheus exporters.
