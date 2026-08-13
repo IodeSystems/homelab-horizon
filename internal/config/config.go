@@ -214,6 +214,12 @@ type Config struct {
 	HAProxyConfigPath string `json:"haproxy_config_path"`
 	HAProxyHTTPPort   int    `json:"haproxy_http_port"`
 	HAProxyHTTPSPort  int    `json:"haproxy_https_port"`
+	// HAProxyMetricsPort exposes HAProxy's built-in Prometheus exporter on a
+	// dedicated listener, restricted to RFC1918 sources. 0 disables it.
+	// HAProxy has carried the exporter since 2.0, so this needs no extra
+	// package or process — unlike prometheus-haproxy-exporter, which would
+	// scrape the stats socket from the outside for strictly less detail.
+	HAProxyMetricsPort int `json:"haproxy_metrics_port,omitempty"`
 
 	// StaticServePort is the loopback port hz binds to serve static-folder
 	// services (ProxyConfig.StaticRoot). HAProxy routes those services here.
@@ -268,6 +274,17 @@ type Config struct {
 	// instances via the pull loop. Handlers update this after every WG
 	// mutation; applyNewConfig applies it to the local WG config file.
 	WGPeers []WGPeer `json:"wg_peers,omitempty"`
+
+	// NodeExporterEnabled folds prometheus-node-exporter into the scrape
+	// config hz serves, and lets autoheal install it. hz deliberately does not
+	// reimplement host metrics — node-exporter does that better — so this is
+	// how CPU/memory/disk reach a dashboard.
+	//
+	// Set automatically when hz detects node-exporter already running, so an
+	// operator who installed it by hand doesn't have to tell hz twice. Visible
+	// in config either way, and switchable off.
+	NodeExporterEnabled bool `json:"node_exporter_enabled,omitempty"`
+	NodeExporterPort    int  `json:"node_exporter_port,omitempty"` // default 9100
 
 	// IP banning
 	IPBans []IPBan `json:"ip_bans,omitempty"`
@@ -859,11 +876,12 @@ func Default() *Config {
 		LocalInterface:    "", // Auto-detected from eth0 or falls back to VPN server IP
 
 		// HAProxy configuration
-		HAProxyEnabled:    false,
-		HAProxyConfigPath: "/etc/haproxy/haproxy.cfg",
-		HAProxyHTTPPort:   80,
-		HAProxyHTTPSPort:  443,
-		StaticServePort:   8091,
+		HAProxyEnabled:     false,
+		HAProxyConfigPath:  "/etc/haproxy/haproxy.cfg",
+		HAProxyHTTPPort:    80,
+		HAProxyHTTPSPort:   443,
+		HAProxyMetricsPort: 8405,
+		StaticServePort:    8091,
 
 		// SSL/Let's Encrypt configuration
 		SSLEnabled:        false,

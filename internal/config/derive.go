@@ -702,6 +702,46 @@ func (s *Service) metricsOptedIn() bool {
 	return s.Integrations != nil && s.Integrations.Metrics != nil && !s.Integrations.Metrics.Disabled
 }
 
+// NodeExporterJob is the job name hz uses for the synthesized node-exporter
+// scrape. Fixed so dashboards and recording rules can rely on it.
+const NodeExporterJob = "node"
+
+// DefaultNodeExporterPort is prometheus-node-exporter's listening port.
+const DefaultNodeExporterPort = 9100
+
+// EffectiveExporters returns the declared exporters plus the ones hz
+// synthesizes for software it manages or detects.
+//
+// node-exporter is expressed as an ordinary port-mode exporter over every
+// known host rather than as a special case, so it inherits the whole existing
+// pipeline: host expansion, scrape exclusions, dedup, probing, and the served
+// scrape.yaml / targets.json. "Merged into the scrape endpoint" is then a
+// property of the data, not a second code path that can drift from the first.
+//
+// An explicitly declared job of the same name wins — an operator who has
+// written their own node job meant it.
+func (c *Config) EffectiveExporters() []Exporter {
+	if !c.NodeExporterEnabled {
+		return c.Exporters
+	}
+	for _, e := range c.Exporters {
+		if e.Job == NodeExporterJob {
+			return c.Exporters
+		}
+	}
+	port := c.NodeExporterPort
+	if port <= 0 {
+		port = DefaultNodeExporterPort
+	}
+	return append([]Exporter{{
+		Job:   NodeExporterJob,
+		Mode:  "port",
+		Port:  port,
+		Hosts: []string{"*"},
+		Path:  "/metrics",
+	}}, c.Exporters...)
+}
+
 // DeriveExporterTargets expands every configured Exporter into concrete targets
 // per its mode: port (Port × Hosts, "*" = all known hosts), service (one target
 // per non-opted-in service backend, blue-green per slot), or static (the Targets
@@ -726,7 +766,7 @@ func (c *Config) DeriveExporterTargets() []ExporterTarget {
 	}
 
 	var out []ExporterTarget
-	for _, e := range c.Exporters {
+	for _, e := range c.EffectiveExporters() {
 		if e.Job == "" {
 			continue
 		}
