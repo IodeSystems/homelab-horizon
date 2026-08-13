@@ -18,6 +18,7 @@ require (
 	github.com/libdns/libdns v1.1.1
 	github.com/libdns/route53 v1.6.2
 	github.com/mark3labs/mcp-go v0.58.0
+	github.com/miekg/dns v1.1.72
 	github.com/pquerna/otp v1.5.0
 	github.com/prometheus/client_golang v1.24.1
 )
@@ -60,7 +61,6 @@ require (
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-retryablehttp v0.7.8 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
-	github.com/miekg/dns v1.1.72 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/namedotcom/go/v4 v4.0.2 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
