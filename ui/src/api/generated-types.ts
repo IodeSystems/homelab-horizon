@@ -374,9 +374,31 @@ export interface MFAVerifyResponse {
   ok: boolean;
   expiry?: string;
 }
+/**
+ * MFAExceptionResp is a live, time-limited bypass — the only kind "all" scope
+ * permits.
+ */
+export interface MFAExceptionResp {
+  name: string;
+  expires: string;
+  reason: string;
+  grantedBy?: string;
+}
 export interface MFASettingsResponse {
   enabled: boolean;
   durations: string[];
+  /**
+   * Scope is "admins-exempt" (default) or "all". "all" removes the standing
+   * admin bypass, which PCI DSS 8.5.1 requires.
+   */
+  scope: string;
+  /**
+   * AdminsWithoutFactor are VPN admins holding neither a TOTP secret nor a
+   * passkey. In "all" scope they are jailed like anyone else; the UI warns
+   * before the switch rather than after.
+   */
+  adminsWithoutFactor?: string[];
+  exceptions?: MFAExceptionResp[];
 }
 export interface AddPeerResponse {
   ok: boolean;

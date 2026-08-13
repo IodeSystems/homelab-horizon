@@ -453,11 +453,46 @@ Authentication**.
 
 `forever` is a real session, not an exemption — revoking still applies.
 
-### Admin bypass
+### Enforcement scope
 
-Peers listed in `vpn_admins` are never jailed, so an operator can't lock
-themselves out by enabling MFA. Promoting or demoting a peer takes effect
-immediately, including the demotion direction.
+`vpn_mfa_scope` decides whether admins are exempt:
+
+| Scope | Behaviour |
+|---|---|
+| `admins-exempt` *(default)* | Peers in `vpn_admins` are never jailed, so an operator can't lock themselves out. |
+| `all` | Nobody is exempt, admins included. Required by **PCI DSS 8.5.1**, which permits no standing bypass for any user. |
+
+Promoting or demoting an admin takes effect immediately, in both directions.
+
+Switching to `all` is refused — with the peers named — if any VPN admin has
+neither a TOTP secret nor a passkey, since those are exactly the accounts that
+would lose a bypass with nothing to replace it. Pass `"force": true` if that's
+intended.
+
+### Exceptions
+
+The only bypass `all` scope allows is a **time-limited, reasoned exception**:
+
+```bash
+curl -b cookie -X POST -H 'Content-Type: application/json' \
+  -d '{"name":"laptop","duration":"4h","reason":"lost phone, replacement Tuesday"}' \
+  http://<hz>:8080/api/v1/mfa/exception
+```
+
+Duration and reason are both mandatory, the maximum is 7 days, and there is no
+permanent form — a bypass nobody has to renew is the thing `all` scope exists
+to remove. Grants and revocations are logged at WARN so they're greppable
+during an assessment, and live exceptions are listed in Settings → VPN MFA.
+
+Headless peers (NAS, printers, site-to-site links) can never complete a portal.
+Under `all` scope they need a standing decision rather than a renewed
+exception: scope them out of the CDE, or treat them as system accounts with
+documented compensating controls (PCI DSS 8.6).
+
+> **Locked out?** [docs/mfa-lockout-recovery.md](docs/mfa-lockout-recovery.md)
+> — keep a copy somewhere reachable *without* the VPN. Short version: the jail
+> is scoped `-i wg0`, so LAN SSH and the admin UI over the LAN are unaffected,
+> and a jailed peer can still reach the portal to enrol.
 
 ### Choosing a factor
 
