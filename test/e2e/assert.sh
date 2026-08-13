@@ -19,6 +19,10 @@ pass=0
 fail=0
 
 ok()   { printf '  \033[32mPASS\033[0m  %s\n' "$1"; pass=$((pass + 1)); }
+# Match with `grep -q ... <<<"$body"`, never `printf | grep -q`. With pipefail
+# set, grep -q exits on its first match, printf takes SIGPIPE, and the pipeline
+# reports that failure — so a body that DOES match reads as a failed assertion,
+# but only once it is bigger than the pipe buffer. That cost an afternoon.
 bad()  { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; printf '        %s\n' "${2:-}"; fail=$((fail + 1)); }
 head_() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
@@ -259,7 +263,7 @@ case "$status_json" in
   *'"passkeysAvailable":false'*) ok "JAILED-7 passkeys report unavailable over http" ;;
   *) bad "JAILED-7 passkeys report unavailable over http" "status was: $status_json" ;;
 esac
-printf '%s' "$status_json" | grep -q 'passkeysUnavailableReason' \
+grep -q 'passkeysUnavailableReason' <<<"$status_json" \
   && ok "JAILED-7b unavailability comes with a reason" \
   || bad "JAILED-7b unavailability comes with a reason" "no reason in: $status_json"
 
@@ -304,6 +308,46 @@ api POST /api/v1/vpn/peers/toggle-admin '{"name":"laptop"}' >/dev/null \
   || { echo "toggle-admin (demote) failed"; exit 1; }
 sleep 2
 assert_port_blocked "ADMIN-3 demoting an admin re-jails immediately" "$GW_WG" 22
+
+# ---- metrics ----
+head_ "Metrics"
+
+# /metrics names every peer's MFA posture and where the gateway is soft, so it
+# must not be readable by a VPN peer that merely reached the box.
+code=$(cli curl -s -o /dev/null -w '%{http_code}' --max-time 4 "http://$GW_WG:8080/metrics")
+[ "$code" = 401 ] \
+  && ok "METRICS-1 /metrics refuses an unauthenticated peer" \
+  || bad "METRICS-1 /metrics refuses an unauthenticated peer" "got $code"
+
+body=$(curl -fsS -b "$COOKIE" --max-time 5 "$API/metrics" 2>&1 || true)
+grep -q '^hz_up 1' <<<"$body" \
+  && ok "METRICS-2 authenticated scrape serves hz_up" \
+  || bad "METRICS-2 authenticated scrape serves hz_up" "$(head -c 120 <<<"$body")"
+
+grep -qE '^hz_vpn_peers [0-9]' <<<"$body" \
+  && ok "METRICS-3 VPN gauges are present and numeric" \
+  || bad "METRICS-3 VPN gauges are present and numeric" "no hz_vpn_peers line"
+
+# The control gauges must track real config, not report a constant.
+grep -q 'hz_control_state{control="vpn_mfa_enabled",requirement="8.4.3"} 1' <<<"$body" \
+  && ok "METRICS-4 control gauge reflects MFA being on" \
+  || bad "METRICS-4 control gauge reflects MFA being on" "$(grep hz_control_state <<<"$body" | head -3)"
+grep -q 'hz_control_state{control="vpn_mfa_no_admin_bypass",requirement="8.5.1"} 0' <<<"$body" \
+  && ok "METRICS-5 no-admin-bypass reads 0 before scope=all" \
+  || bad "METRICS-5 no-admin-bypass reads 0 before scope=all" "$(grep no_admin_bypass <<<"$body")"
+
+# HAProxy's own exporter, which hz switched on by generating the frontend.
+# Retried: the jail transitions above each reload HAProxy, and a reload is
+# near-seamless but not atomic.
+hap=""
+for _ in $(seq 1 10); do
+  hap=$(curl -sS --max-time 4 "http://127.0.0.1:8405/metrics" 2>&1 || true)
+  grep -q "haproxy_" <<<"$hap" && break
+  sleep 1
+done
+grep -q "haproxy_" <<<"$hap" \
+  && ok "METRICS-6 HAProxy serves its built-in exporter on 8405" \
+  || bad "METRICS-6 HAProxy serves its built-in exporter on 8405" "$(head -c 120 <<<"$hap")"
 
 # ---- PCI scope: "all" removes the admin bypass ----
 head_ "Scope: all (no standing bypass)"
@@ -357,6 +401,11 @@ esac
 api POST /api/v1/mfa/exception/revoke '{"name":"laptop"}' >/dev/null || true
 sleep 2
 assert_port_blocked "SCOPE-6 revoking an exception re-jails immediately" "$GW_WG" 22
+
+after=$(curl -fsS -b "$COOKIE" --max-time 5 "$API/metrics" 2>&1 || true)
+grep -q 'hz_control_state{control="vpn_mfa_no_admin_bypass",requirement="8.5.1"} 1' <<<"$after" \
+  && ok "METRICS-7 the control gauge flips with the scope change" \
+  || bad "METRICS-7 the control gauge flips with the scope change" "$(grep no_admin_bypass <<<"$after")"
 
 # ---- report ----
 head_ "Result"

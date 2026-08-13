@@ -30,7 +30,10 @@ func TestLooksLikeNodeExporter(t *testing.T) {
 
 func TestProbeNodeExporterAgainstServer(t *testing.T) {
 	real := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("# HELP node_exporter_build_info\nnode_exporter_build_info 1\n"))
+		// Lead with the metrics a real node-exporter leads with — apt_* and
+		// go_* — so the marker sits well past the start, as it does in life.
+		_, _ = w.Write([]byte(strings.Repeat("# HELP apt_upgrades_pending x\napt_upgrades_pending 0\n", 200)))
+		_, _ = w.Write([]byte("node_uname_info{nodename=\"box\"} 1\n"))
 	}))
 	defer real.Close()
 	imposter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
