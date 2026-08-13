@@ -60,6 +60,8 @@ func (s *Server) handleAPIMFAStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	resp.Profile = cfg.GetPeerProfile(peerName)
+	resp.FullTunnel = resp.Profile == config.ProfileFullTunnel
 	resp.PasskeysAvailable, resp.PasskeysUnavailableReason = PasskeysAvailable(cfg)
 	for _, k := range cfg.PasskeysFor(peerName) {
 		resp.Passkeys = append(resp.Passkeys, apitypes.PasskeyInfo{
