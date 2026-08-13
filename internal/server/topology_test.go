@@ -44,8 +44,10 @@ func TestExporterJobsRenderIntoScrapeYAML(t *testing.T) {
 	}
 }
 
-// scrapeJobs concatenates service jobs (probed) and exporter jobs (always). With
-// no healthy services and no detector state, only exporters should appear.
+// scrapeJobs concatenates service jobs (probed), hz's own endpoints, and
+// exporter jobs (always). With no healthy services and no detector state, hz
+// plus the exporters should appear — hz always scrapes itself, or the config it
+// serves would describe everything around hz and nothing about hz.
 func TestScrapeJobsMergesServicesAndExporters(t *testing.T) {
 	s := &Server{metrics: integration.NewDetector()}
 	s.config.Store(&config.Config{
@@ -53,8 +55,18 @@ func TestScrapeJobsMergesServicesAndExporters(t *testing.T) {
 			{Job: "node", Targets: []string{"10.0.0.1:9100"}},
 		},
 	})
-	jobs := s.scrapeJobs()
-	if len(jobs) != 1 || jobs[0].Name != "node" {
-		t.Fatalf("expected only the node exporter job, got %+v", jobs)
+
+	names := map[string]bool{}
+	for _, j := range s.scrapeJobs() {
+		names[j.Name] = true
+	}
+	for _, want := range []string{"hz", "node"} {
+		if !names[want] {
+			t.Errorf("expected a %q job, got %v", want, names)
+		}
+	}
+	// HAProxy is off in this config, so its exporter must not be scraped.
+	if names["haproxy"] {
+		t.Error("haproxy job should be absent when HAProxy is disabled")
 	}
 }

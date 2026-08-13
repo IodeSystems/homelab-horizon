@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -114,7 +116,52 @@ func (s *Server) exporterProbeFor(job, addr, fallbackPath string) exporterProbe 
 // services and among themselves by job then address for stable output.
 func (s *Server) scrapeJobs() []integration.ScrapeJob {
 	jobs := integration.ServiceJobs(s.metrics.Healthy())
+	jobs = append(jobs, s.selfJobs()...)
 	jobs = append(jobs, s.exporterJobs()...)
+	return jobs
+}
+
+// selfJobs are the two endpoints hz publishes on its own host: hz's /metrics
+// and, when enabled, HAProxy's built-in exporter.
+//
+// Without these the served scrape config describes everything *around* hz and
+// nothing about hz — so a Prometheus wired up exactly as instructed still
+// shows no hz_ metrics, and the dashboard hz generates sits empty forever with
+// no error anywhere to explain it.
+//
+// hz's own endpoint needs the scrape token: it names every peer's MFA posture
+// and the security-control state. Emitting the token here leaks nothing new,
+// since fetching this document already required it.
+func (s *Server) selfJobs() []integration.ScrapeJob {
+	cfg := s.cfg()
+	addr := cfg.LocalInterface
+	if addr == "" {
+		addr = "127.0.0.1"
+	}
+
+	_, port, err := net.SplitHostPort(cfg.ListenAddr)
+	if err != nil || port == "" {
+		port = "8080"
+	}
+
+	jobs := []integration.ScrapeJob{{
+		Name:   "hz",
+		Bearer: cfg.ScrapeToken,
+		Targets: []integration.ScrapeTarget{{
+			Address: net.JoinHostPort(addr, port),
+			Path:    "/metrics",
+		}},
+	}}
+
+	if cfg.HAProxyEnabled && cfg.HAProxyMetricsPort > 0 {
+		jobs = append(jobs, integration.ScrapeJob{
+			Name: "haproxy",
+			Targets: []integration.ScrapeTarget{{
+				Address: net.JoinHostPort(addr, strconv.Itoa(cfg.HAProxyMetricsPort)),
+				Path:    "/metrics",
+			}},
+		})
+	}
 	return jobs
 }
 

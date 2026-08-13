@@ -349,6 +349,17 @@ grep -q "haproxy_" <<<"$hap" \
   && ok "METRICS-6 HAProxy serves its built-in exporter on 8405" \
   || bad "METRICS-6 HAProxy serves its built-in exporter on 8405" "$(head -c 120 <<<"$hap")"
 
+# hz must appear in the scrape config it serves. Without this the document
+# describes everything around hz and nothing about hz, and the dashboard it
+# generates sits empty with no error to explain it.
+scrape=$(curl -fsS -b "$COOKIE" --max-time 5 "$API/integration/prometheus/scrape.yaml" 2>&1 || true)
+grep -q 'job_name: hz' <<<"$scrape" \
+  && ok "METRICS-10 hz scrapes itself in the config it serves" \
+  || bad "METRICS-10 hz scrapes itself in the config it serves" "$(grep job_name <<<"$scrape" | head -5)"
+grep -q 'job_name: haproxy' <<<"$scrape" \
+  && ok "METRICS-11 HAProxy's exporter is scraped too" \
+  || bad "METRICS-11 HAProxy's exporter is scraped too" "$(grep job_name <<<"$scrape" | head -5)"
+
 # The dashboard is generated per deployment, so it has to be valid JSON and
 # reference metrics this instance actually publishes.
 dash=$(curl -fsS -b "$COOKIE" --max-time 5 "$API/integration/grafana/dashboard.json" 2>&1 || true)
