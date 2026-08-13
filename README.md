@@ -403,6 +403,54 @@ hz ports list --host 192.0.2.50              # what's reserved, and what's free
 list. The Ports page shows both tabs — reservations per host, and the exclusions
 that allocation skips.
 
+## Metrics
+
+hz serves its own Prometheus exposition at `/metrics`, guarded by the same
+admin-or-scrape-token check as the discovery endpoints — it names every peer's
+MFA posture and where the gateway is soft.
+
+It covers what only hz can answer, and **deliberately not host metrics**:
+
+| Area | Examples |
+|---|---|
+| VPN | `hz_vpn_peers`, `hz_vpn_peers_recently_handshaked` |
+| MFA | `hz_vpn_mfa_jailed_peers`, `hz_vpn_mfa_active_sessions`, `hz_vpn_mfa_enrolled_peers{factor}`, `hz_vpn_mfa_active_exceptions` |
+| Edge | `hz_haproxy_backend_up{backend}`, `hz_banned_ips` |
+| DNS | `hz_dnsmasq_cache_{hits,misses,insertions,evictions}_total`, `hz_dnsmasq_upstream_{queries,failures}_total{server}` |
+| Drift | `hz_iptables_rules{state}` — sustained `unknown` or `stale` means something is editing your firewall |
+| Controls | `hz_control_state{control,requirement}` |
+
+`hz_control_state` reports whether a configurable security control is in its
+hardened setting — `vpn_mfa_no_admin_bypass`, `vpn_mfa_session_bounded`, and so
+on, labelled with the PCI DSS requirement each speaks to. It describes **hz's
+configuration only**. Whether that satisfies a requirement is an assessor's
+judgement over a defined scope, which is why nothing here is named
+`hz_pci_compliant`.
+
+### Everything else on the box
+
+hz doesn't reimplement what already exists — it owns, installs, or detects:
+
+- **HAProxy** — hz generates its config, so it switches on HAProxy's built-in
+  exporter (`haproxy_metrics_port`, default 8405, `0` disables), restricted to
+  RFC1918. No extra process; `prometheus-haproxy-exporter` would scrape the
+  stats socket from outside for less detail.
+- **dnsmasq** — hz reads dnsmasq's own CHAOS counters (`hits.bind`,
+  `misses.bind`, `servers.bind`, …) directly and publishes them above. That's
+  the same source [`google/dnsmasq_exporter`](https://github.com/google/dnsmasq_exporter)
+  uses, but it isn't packaged for Debian or Ubuntu, so hz couldn't install it
+  through the vetted allowlist it uses for everything else.
+- **node-exporter** — hz *does not* compete with it for CPU/memory/disk. Set
+  `node_exporter_enabled` and hz installs it; if you installed it yourself hz
+  notices on its next health tick and switches the flag on for you. Either way
+  it's folded into the scrape config hz serves as an ordinary `node` job over
+  every known host.
+- **Your services** — anything declaring `integrations.metrics` is probed and
+  published in `/integration/prometheus/{scrape.yaml,targets.json}`.
+
+So a central Prometheus points at one discovery endpoint and gets hz, HAProxy,
+node-exporter and every compatible service, without per-host scrape config.
+
 ## VPN MFA
 
 WireGuard has no second factor of its own. A peer either holds a valid key or

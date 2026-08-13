@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
 )
 
 // hz's own Prometheus surface.
@@ -44,6 +45,15 @@ type hzCollector struct {
 	bans             *prometheus.Desc
 	iptablesRules    *prometheus.Desc
 	controlState     *prometheus.Desc
+
+	dnsmasqUp         *prometheus.Desc
+	dnsmasqCacheSize  *prometheus.Desc
+	dnsmasqInsertions *prometheus.Desc
+	dnsmasqEvictions  *prometheus.Desc
+	dnsmasqHits       *prometheus.Desc
+	dnsmasqMisses     *prometheus.Desc
+	dnsmasqSrvQueries *prometheus.Desc
+	dnsmasqSrvFailed  *prometheus.Desc
 }
 
 func newHZCollector(s *Server) *hzCollector {
@@ -73,6 +83,22 @@ func newHZCollector(s *Server) *hzCollector {
 			"IP addresses currently banned at the edge.", nil, nil),
 		iptablesRules: prometheus.NewDesc("hz_iptables_rules",
 			"Live horizon-relevant iptables rules by classification. Sustained non-zero 'unknown' or 'stale' means drift.", []string{"state"}, nil),
+		dnsmasqUp: prometheus.NewDesc("hz_dnsmasq_up",
+			"1 when dnsmasq answered its CHAOS counter queries.", nil, nil),
+		dnsmasqCacheSize: prometheus.NewDesc("hz_dnsmasq_cache_size",
+			"Configured dnsmasq cache entries.", nil, nil),
+		dnsmasqInsertions: prometheus.NewDesc("hz_dnsmasq_cache_insertions_total",
+			"Entries inserted into the dnsmasq cache since start.", nil, nil),
+		dnsmasqEvictions: prometheus.NewDesc("hz_dnsmasq_cache_evictions_total",
+			"Entries evicted from the dnsmasq cache to make room. Rising with a full cache means it is undersized.", nil, nil),
+		dnsmasqHits: prometheus.NewDesc("hz_dnsmasq_cache_hits_total",
+			"Queries answered from the dnsmasq cache.", nil, nil),
+		dnsmasqMisses: prometheus.NewDesc("hz_dnsmasq_cache_misses_total",
+			"Queries dnsmasq had to forward upstream.", nil, nil),
+		dnsmasqSrvQueries: prometheus.NewDesc("hz_dnsmasq_upstream_queries_total",
+			"Queries sent to an upstream resolver.", []string{"server"}, nil),
+		dnsmasqSrvFailed: prometheus.NewDesc("hz_dnsmasq_upstream_failures_total",
+			"Queries an upstream resolver failed to answer. Rising on one server while its siblings are flat is the signal worth alerting on.", []string{"server"}, nil),
 		controlState: prometheus.NewDesc("hz_control_state",
 			"State of a configurable security control: 1 when the control is in its hardened setting. Describes hz's configuration only — it is not an assertion of compliance.", []string{"control", "requirement"}, nil),
 	}
@@ -87,6 +113,8 @@ func (c *hzCollector) Describe(ch chan<- *prometheus.Desc) {
 		c.up, c.buildInfo, c.peers, c.peersHandshaking,
 		c.mfaEnabled, c.mfaJailed, c.mfaSessions, c.mfaEnrolled, c.mfaExceptions,
 		c.backendUp, c.bans, c.iptablesRules, c.controlState,
+		c.dnsmasqUp, c.dnsmasqCacheSize, c.dnsmasqInsertions, c.dnsmasqEvictions,
+		c.dnsmasqHits, c.dnsmasqMisses, c.dnsmasqSrvQueries, c.dnsmasqSrvFailed,
 	} {
 		ch <- d
 	}
@@ -173,6 +201,31 @@ func (c *hzCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 	}
 	gauge(c.bans, float64(len(cfg.IPBans)))
+
+	// ---- dnsmasq ----
+	//
+	// Read straight from dnsmasq's own CHAOS counters, the same source
+	// google/dnsmasq_exporter uses. hz queries them itself because that
+	// exporter isn't packaged for Debian or Ubuntu, so it could not be
+	// installed through the vetted allowlist — and hz already owns dnsmasq.
+	if cfg.DNSMasqEnabled {
+		counter := func(d *prometheus.Desc, v float64, labels ...string) {
+			ch <- prometheus.MustNewConstMetric(d, prometheus.CounterValue, v, labels...)
+		}
+		st, err := dnsmasq.ReadStats(dnsmasq.StatsAddr())
+		gauge(c.dnsmasqUp, b2f(err == nil))
+		if err == nil {
+			gauge(c.dnsmasqCacheSize, st.CacheSize)
+			counter(c.dnsmasqInsertions, st.Insertions)
+			counter(c.dnsmasqEvictions, st.Evictions)
+			counter(c.dnsmasqHits, st.Hits)
+			counter(c.dnsmasqMisses, st.Misses)
+			for _, srv := range st.Servers {
+				counter(c.dnsmasqSrvQueries, srv.QueriesSent, srv.Address)
+				counter(c.dnsmasqSrvFailed, srv.QueriesFailed, srv.Address)
+			}
+		}
+	}
 
 	// ---- Drift ----
 	if sum, ok := c.s.iptablesSummary(); ok {
