@@ -86,11 +86,12 @@ type MFAJail struct {
 
 // HAProxy manages HAProxy configuration
 type HAProxy struct {
-	configPath  string
-	statsSocket string
-	backends    []Backend
-	mfaJail     MFAJail
-	metricsPort int
+	configPath    string
+	statsSocket   string
+	backends      []Backend
+	mfaJail       MFAJail
+	metricsPort   int
+	tlsMinVersion string
 }
 
 // New creates a new HAProxy manager
@@ -117,6 +118,13 @@ func (h *HAProxy) GetBackends() []Backend {
 // on. 0 omits the listener entirely.
 func (h *HAProxy) SetMetricsPort(port int) {
 	h.metricsPort = port
+}
+
+// SetTLSMinVersion sets the ssl-min-ver floor applied to every bind. Empty
+// falls back to TLSv1.2 rather than emitting nothing, so a caller that forgets
+// still gets a floor.
+func (h *HAProxy) SetTLSMinVersion(v string) {
+	h.tlsMinVersion = v
 }
 
 // SetMFAJail sets the L7 jail parameters used by the next config generation.
@@ -287,6 +295,9 @@ type SSLConfig struct {
 
 // GenerateConfig returns the HAProxy configuration as a string (for preview)
 func (h *HAProxy) GenerateConfig(httpPort, httpsPort int, ssl *SSLConfig) string {
+	if h.tlsMinVersion == "" {
+		h.tlsMinVersion = "TLSv1.2"
+	}
 	return h.generateConfig(httpPort, httpsPort, ssl)
 }
 
@@ -360,6 +371,21 @@ func (h *HAProxy) generateConfig(httpPort, httpsPort int, ssl *SSLConfig) string
     user haproxy
     group haproxy
     daemon
+`)
+
+	// TLS floor and cipher policy, applied to every bind.
+	//
+	// Previously absent, so the config inherited whatever the distro build
+	// defaulted to — probably TLS 1.2+ on a modern Ubuntu, but inheritance is
+	// not evidence, and PCI DSS 4.2.1 has prohibited TLS 1.0/1.1 since 2018.
+	// The cipher lists are Mozilla's "intermediate" profile: forward secrecy
+	// and AEAD only, no RSA key exchange, no CBC.
+	fmt.Fprintf(&sb, `    ssl-default-bind-options ssl-min-ver %s no-tls-tickets
+    ssl-default-bind-ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384
+    ssl-default-bind-ciphersuites TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+`, h.tlsMinVersion)
+
+	sb.WriteString(`
 
 # Cache configuration (RAM-based)
 cache mycache

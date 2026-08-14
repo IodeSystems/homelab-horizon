@@ -394,6 +394,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 	hap.SetBackends(hapBackends)
 	hap.SetMFAJail(mfaJailFor(cfg, hapBackends))
 	hap.SetMetricsPort(cfg.HAProxyMetricsPort)
+	hap.SetTLSMinVersion(cfg.TLSMinVersion())
 
 	// Initialize Let's Encrypt manager with domains derived from zones
 	le := letsencrypt.New(letsencrypt.Config{

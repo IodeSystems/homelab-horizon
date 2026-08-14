@@ -157,3 +157,20 @@ func mustJSON(t *testing.T, v any) string {
 	}
 	return string(b)
 }
+
+// The per-service table appears only when something is scoped in. An empty
+// compliance table on a deployment that never opted into PCI is another dead
+// panel, and dead panels are how people learn to ignore panels.
+func TestServiceScopePanelOnlyWhenScoped(t *testing.T) {
+	bare := mustJSON(t, buildDashboard(&config.Config{}))
+	if strings.Contains(bare, "hz_service_control_state") {
+		t.Error("no scoped services should mean no per-service panel")
+	}
+
+	scoped := mustJSON(t, buildDashboard(&config.Config{
+		Services: []config.Service{{Name: "shop", PCIScope: config.PCIScopeCDE}},
+	}))
+	if !strings.Contains(scoped, "hz_service_control_state") {
+		t.Error("a scoped service should add the per-service panel")
+	}
+}

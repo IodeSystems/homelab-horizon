@@ -45,6 +45,8 @@ type hzCollector struct {
 	bans             *prometheus.Desc
 	iptablesRules    *prometheus.Desc
 	controlState     *prometheus.Desc
+	serviceControl   *prometheus.Desc
+	servicesInScope  *prometheus.Desc
 
 	dnsmasqUp         *prometheus.Desc
 	dnsmasqCacheSize  *prometheus.Desc
@@ -99,6 +101,12 @@ func newHZCollector(s *Server) *hzCollector {
 			"Queries sent to an upstream resolver.", []string{"server"}, nil),
 		dnsmasqSrvFailed: prometheus.NewDesc("hz_dnsmasq_upstream_failures_total",
 			"Queries an upstream resolver failed to answer. Rising on one server while its siblings are flat is the signal worth alerting on.", []string{"server"}, nil),
+		serviceControl: prometheus.NewDesc("hz_service_control_state",
+			"Edge control state for a service in PCI scope: 1 when the control holds. Only services the operator scoped in are reported — an unassessed service emits nothing, so \"not evaluated\" never looks like \"compliant\".",
+			[]string{"service", "scope", "control", "requirement"}, nil),
+		servicesInScope: prometheus.NewDesc("hz_services_in_pci_scope",
+			"Services declared in or connected to the cardholder data environment, by scope.",
+			[]string{"scope"}, nil),
 		controlState: prometheus.NewDesc("hz_control_state",
 			"State of a configurable security control: 1 when the control is in its hardened setting. Describes hz's configuration only — it is not an assertion of compliance.", []string{"control", "requirement"}, nil),
 	}
@@ -115,6 +123,7 @@ func (c *hzCollector) Describe(ch chan<- *prometheus.Desc) {
 		c.backendUp, c.bans, c.iptablesRules, c.controlState,
 		c.dnsmasqUp, c.dnsmasqCacheSize, c.dnsmasqInsertions, c.dnsmasqEvictions,
 		c.dnsmasqHits, c.dnsmasqMisses, c.dnsmasqSrvQueries, c.dnsmasqSrvFailed,
+		c.serviceControl, c.servicesInScope,
 	} {
 		ch <- d
 	}
@@ -244,6 +253,21 @@ func (c *hzCollector) Collect(ch chan<- prometheus.Metric) {
 	for _, ctl := range hzControls(cfg) {
 		gauge(c.controlState, b2f(ctl.ok), ctl.name, ctl.requirement)
 	}
+
+	// Per-service edge controls, for scoped services only.
+	byScope := map[string]int{}
+	for _, svc := range cfg.PCIScopedServices() {
+		byScope[svc.EffectivePCIScope()]++
+	}
+	for scope, n := range byScope {
+		gauge(c.servicesInScope, float64(n), scope)
+	}
+	if len(byScope) > 0 {
+		covered := c.s.coveredDomains()
+		for _, sc := range cfg.ServiceControls(covered) {
+			gauge(c.serviceControl, b2f(sc.OK), sc.Service, sc.Scope, sc.Control, sc.Requirement)
+		}
+	}
 }
 
 // iptablesSummary classifies the live rule set for the drift gauge, reusing
@@ -287,6 +311,9 @@ func hzControls(cfg *config.Config) []control {
 		// and nothing longer than 15 minutes is offered".
 		{"vpn_mfa_session_bounded", "8.2.8", cfg.VPNMFAEnabled && !unlimited && longestSession > 0 && longestSession <= 15},
 		{"tls_enabled", "4.2.1", cfg.SSLEnabled},
+		// 4.2.1 also prohibits TLS 1.0/1.1. The floor is configurable, so this
+		// reports what was configured rather than assuming the default held.
+		{"tls_min_version", "4.2.1", cfg.SSLEnabled && cfg.TLSFloorMeetsPCI()},
 	}
 }
 
@@ -352,4 +379,28 @@ func newPromHandler(s *Server) http.Handler {
 		// daemon read shouldn't cost you every other metric on the box.
 		ErrorHandling: promhttp.ContinueOnError,
 	})
+}
+
+// coveredDomains is the set of names a live certificate actually covers,
+// lowercased, read from the certs hz manages.
+//
+// Derived from the certificates on disk rather than from config, because the
+// question a service control answers is "is this domain really served over
+// TLS", and a configured intent that never issued is exactly the gap worth
+// reporting.
+func (s *Server) coveredDomains() map[string]bool {
+	covered := map[string]bool{}
+	if s.letsencrypt == nil {
+		return covered
+	}
+	for _, dc := range s.cfg().DeriveSSLDomains() {
+		info, err := s.letsencrypt.GetCertInfoForDomain(dc.Domain)
+		if err != nil || info == nil {
+			continue
+		}
+		for _, san := range info.SANs {
+			covered[strings.ToLower(strings.TrimSpace(san))] = true
+		}
+	}
+	return covered
 }
