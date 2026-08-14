@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   Alert,
@@ -5,6 +6,7 @@ import {
   Button,
   Chip,
   CircularProgress,
+  IconButton,
   Paper,
   Table,
   TableBody,
@@ -15,8 +17,13 @@ import {
   Typography,
 } from "@mui/material";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
-import { useZones, useDNSDriftStatus, useClearDNSDrift } from "../api/hooks";
+import AddIcon from "@mui/icons-material/Add";
+import DeleteIcon from "@mui/icons-material/Delete";
+import EditIcon from "@mui/icons-material/Edit";
+import { useZones, useDNSDriftStatus, useClearDNSDrift, useDeleteZone } from "../api/hooks";
 import SyncButton from "../components/SyncButton";
+import { AddZoneDialog, EditZoneDialog, ZoneCertChip } from "../components/ZoneDialogs";
+import type { Zone } from "../api/types";
 
 export const Route = createFileRoute("/dns/")({
   component: DNSZonesPage,
@@ -29,6 +36,9 @@ function DNSZonesPage() {
   const { data: zones, isLoading, error } = useZones();
   const { data: drift } = useDNSDriftStatus();
   const clearDrift = useClearDNSDrift();
+  const deleteZone = useDeleteZone();
+  const [addOpen, setAddOpen] = useState(false);
+  const [editZone, setEditZone] = useState<Zone | null>(null);
 
   return (
     <Box>
@@ -36,6 +46,15 @@ function DNSZonesPage() {
         <Typography variant="h4" sx={{ flexGrow: 1 }}>
           DNS
         </Typography>
+        <Button
+          variant="contained"
+          size="small"
+          startIcon={<AddIcon />}
+          onClick={() => setAddOpen(true)}
+          sx={{ mr: 1 }}
+        >
+          Add Zone
+        </Button>
         <SyncButton />
       </Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
@@ -81,9 +100,12 @@ function DNSZonesPage() {
         <Alert severity="error">Failed to load zones: {error.message}</Alert>
       ) : !zones || zones.length === 0 ? (
         <Paper variant="outlined" sx={{ p: 4, textAlign: "center" }}>
-          <Typography variant="body2" color="text.secondary">
-            No zones configured. Add one in Settings.
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            No zones configured yet.
           </Typography>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setAddOpen(true)}>
+            Add Zone
+          </Button>
         </Paper>
       ) : (
         <TableContainer component={Paper} variant="outlined">
@@ -92,9 +114,12 @@ function DNSZonesPage() {
               <TableRow>
                 <TableCell>Zone</TableCell>
                 <TableCell>Provider</TableCell>
+                <TableCell>Zone ID</TableCell>
                 <TableCell>SSL</TableCell>
+                <TableCell>Cert</TableCell>
+                <TableCell>Sub-Zones</TableCell>
                 <TableCell align="right">Pending deletions</TableCell>
-                <TableCell sx={{ width: 48 }} />
+                <TableCell align="right" sx={{ width: 120 }} />
               </TableRow>
             </TableHead>
             <TableBody>
@@ -122,12 +147,33 @@ function DNSZonesPage() {
                         )}
                       </TableCell>
                       <TableCell>
+                        <Typography variant="caption" color="text.secondary">
+                          {zone.zoneId || "—"}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
                         <Chip
                           size="small"
                           variant="outlined"
                           color={zone.sslEnabled ? "success" : "default"}
                           label={zone.sslEnabled ? "enabled" : "off"}
                         />
+                      </TableCell>
+                      <TableCell>
+                        <ZoneCertChip zoneName={zone.name} />
+                      </TableCell>
+                      <TableCell>
+                        {zone.subZones && zone.subZones.length > 0 ? (
+                          <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
+                            {zone.subZones.map((sz) => (
+                              <Chip key={sz} label={sz || "(root)"} size="small" variant="outlined" />
+                            ))}
+                          </Box>
+                        ) : (
+                          <Typography variant="caption" color="text.secondary">
+                            —
+                          </Typography>
+                        )}
                       </TableCell>
                       <TableCell align="right">
                         {pending > 0 ? (
@@ -138,7 +184,25 @@ function DNSZonesPage() {
                           </Typography>
                         )}
                       </TableCell>
-                      <TableCell>
+                      <TableCell align="right" onClick={(e) => e.stopPropagation()}>
+                        <IconButton size="small" onClick={() => setEditZone(zone)} title="Edit zone">
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                        <IconButton
+                          size="small"
+                          title="Delete zone"
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                `Delete zone ${zone.name}? Records already published at the provider are left alone.`,
+                              )
+                            ) {
+                              deleteZone.mutate(zone.name);
+                            }
+                          }}
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
                         <ChevronRightIcon fontSize="small" color="disabled" />
                       </TableCell>
                     </TableRow>
@@ -148,6 +212,9 @@ function DNSZonesPage() {
           </Table>
         </TableContainer>
       )}
+
+      <AddZoneDialog open={addOpen} onClose={() => setAddOpen(false)} />
+      <EditZoneDialog zone={editZone} onClose={() => setEditZone(null)} />
     </Box>
   );
 }
