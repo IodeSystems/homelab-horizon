@@ -58,17 +58,18 @@ type gfTemplateVar struct {
 }
 
 type gfPanel struct {
-	Type        string       `json:"type"`
-	Title       string       `json:"title"`
-	Description string       `json:"description,omitempty"`
-	Datasource  gfDatasource `json:"datasource"`
-	GridPos     gfGridPos    `json:"gridPos"`
-	Targets     []gfTarget   `json:"targets,omitempty"`
-	FieldConfig *gfFieldCfg  `json:"fieldConfig,omitempty"`
-	Options     any          `json:"options,omitempty"`
-	Collapsed   *bool        `json:"collapsed,omitempty"`
-	SubPanels   []gfPanel    `json:"panels,omitempty"`
-	ID          int          `json:"id"`
+	Type            string       `json:"type"`
+	Title           string       `json:"title"`
+	Description     string       `json:"description,omitempty"`
+	Datasource      gfDatasource `json:"datasource"`
+	GridPos         gfGridPos    `json:"gridPos"`
+	Targets         []gfTarget   `json:"targets,omitempty"`
+	FieldConfig     *gfFieldCfg  `json:"fieldConfig,omitempty"`
+	Options         any          `json:"options,omitempty"`
+	Collapsed       *bool        `json:"collapsed,omitempty"`
+	SubPanels       []gfPanel    `json:"panels,omitempty"`
+	Transformations []any        `json:"transformations,omitempty"`
+	ID              int          `json:"id"`
 }
 
 type gfDatasource struct {
@@ -89,6 +90,11 @@ type gfTarget struct {
 	RefID        string       `json:"refId"`
 	Datasource   gfDatasource `json:"datasource"`
 	Instant      bool         `json:"instant,omitempty"`
+	// Format must be "table" for a table panel. Without it Grafana renders a
+	// Prometheus result as time-series shaped data — Time and Value columns
+	// with every label collapsed into the series name — so a per-label table
+	// shows none of its labels as columns.
+	Format string `json:"format,omitempty"`
 }
 
 type gfFieldCfg struct {
@@ -214,17 +220,23 @@ func buildDashboard(cfg *config.Config) gfDashboard {
 	)
 
 	// ---- top line: is anything wrong right now ----
-	b.add(stat("hz", "1 when hz is serving the scrape.", "hz_up", "", okBad), 3, 4)
-	b.add(stat("VPN peers", "Configured WireGuard peers.", "hz_vpn_peers", "", nil), 3, 4)
+	b.add(stat("hz up", "1 when hz is serving the scrape.", "hz_up", "", okBad), 6, 4)
+	b.add(stat("VPN peers", "Configured WireGuard peers.", "hz_vpn_peers", "", nil), 6, 4)
 	b.add(stat("Peers online", "Handshaked within the last three minutes.",
-		"hz_vpn_peers_recently_handshaked", "", nil), 3, 4)
+		"hz_vpn_peers_recently_handshaked", "", nil), 6, 4)
 	b.add(stat("Jailed by MFA", "Peers confined to the portal until they authenticate.",
-		"hz_vpn_mfa_jailed_peers", "", nil), 3, 4)
+		"hz_vpn_mfa_jailed_peers", "", nil), 6, 4)
+	b.newRow()
 	b.add(stat("MFA exceptions", "Live time-limited bypasses. Expected during an incident, worth asking about otherwise.",
-		"hz_vpn_mfa_active_exceptions", "", badWhenAny), 4, 4)
-	b.add(stat("Banned IPs", "Addresses blocked at the edge.", "hz_banned_ips", "", nil), 4, 4)
-	b.add(stat("iptables drift", "Live rules hz does not recognise. Sustained non-zero means something else is editing the firewall.",
-		`sum(hz_iptables_rules{state=~"unknown|stale"})`, "", badWhenAny), 4, 4)
+		"hz_vpn_mfa_active_exceptions", "", badWhenAny), 8, 4)
+	b.add(stat("Banned IPs", "Addresses blocked at the edge.", "hz_banned_ips", "", nil), 8, 4)
+	// Only "stale" counts as drift. "unknown" means a rule hz did not write and
+	// deliberately leaves alone — on any host running Docker that is permanently
+	// non-zero (its per-network MASQUERADE rules), so colouring it orange would
+	// leave every such box showing a warning it can never clear, which is how a
+	// dashboard trains people to ignore it.
+	b.add(stat("iptables drift", "Rules hz wrote under a previous interface or CIDR and will auto-remove. Unmanaged third-party rules are counted separately, in the classification graph.",
+		`sum(hz_iptables_rules{state="stale"})`, "", badWhenAny), 8, 4)
 
 	// ---- security posture ----
 	b.newRow()
@@ -239,14 +251,58 @@ func buildDashboard(cfg *config.Config) gfDashboard {
 	b.newRow()
 	b.add(gfPanel{
 		Type:  "table",
-		Title: "Security controls",
-		Description: "1 = the control is in its hardened setting. This describes hz's configuration; " +
-			"whether it satisfies a requirement is an assessor's judgement over a defined scope.",
-		Targets: []gfTarget{{Expr: "hz_control_state", LegendFormat: "{{control}}", Instant: true}},
-		FieldConfig: &gfFieldCfg{
-			Defaults:  gfFieldDefaults{Mappings: []any{}, Thresholds: okBad},
-			Overrides: []any{},
+		Title: "PCI DSS controls",
+		Description: "Configurable security controls, labelled with the PCI DSS requirement each " +
+			"speaks to. Met = the control is in its hardened setting. This describes hz's " +
+			"configuration only; whether it satisfies a requirement is an assessor's judgement " +
+			"over a defined scope.",
+		Targets: []gfTarget{{Expr: "hz_control_state", Instant: true, Format: "table"}},
+		// An instant Prometheus query returns one frame per series, each with a
+		// Time and a value column and the labels attached to the frame rather
+		// than as columns — so a table panel shows four rows of numbers and no
+		// control names. labelsToFields promotes the labels to columns, merge
+		// collapses the frames into one table, and organize tidies the result.
+		// format:"table" above is necessary but, on its own, not sufficient.
+		Transformations: []any{
+			map[string]any{"id": "labelsToFields", "options": map[string]any{}},
+			map[string]any{"id": "merge", "options": map[string]any{}},
+			map[string]any{
+				"id": "organize",
+				"options": map[string]any{
+					"excludeByName": map[string]bool{
+						"Time": true, "__name__": true, "instance": true, "job": true,
+					},
+					"renameByName": map[string]string{
+						"control": "Control", "requirement": "PCI DSS", "Value": "Met",
+					},
+					"indexByName": map[string]int{"requirement": 0, "control": 1, "Value": 2},
+				},
+			},
 		},
+		FieldConfig: &gfFieldCfg{
+			Defaults: gfFieldDefaults{
+				// 0/1 is not readable at a glance in a compliance table.
+				Mappings: []any{map[string]any{
+					"type": "value",
+					"options": map[string]any{
+						"0": map[string]any{"text": "NOT MET", "color": "red", "index": 0},
+						"1": map[string]any{"text": "met", "color": "green", "index": 1},
+					},
+				}},
+				Thresholds: okBad,
+			},
+			Overrides: []any{
+				map[string]any{
+					"matcher":    map[string]any{"id": "byName", "options": "Met"},
+					"properties": []any{map[string]any{"id": "custom.width", "value": 110}},
+				},
+				map[string]any{
+					"matcher":    map[string]any{"id": "byName", "options": "PCI DSS"},
+					"properties": []any{map[string]any{"id": "custom.width", "value": 110}},
+				},
+			},
+		},
+		Options: map[string]any{"cellHeight": "sm"},
 	}, 12, 8)
 	b.add(series("iptables rules by classification", "Expected, stale, blessed and unknown, as the reconciler sees them.", "",
 		target("hz_iptables_rules", "{{state}}", "A"),
@@ -342,3 +398,7 @@ func (s *Server) handleIntegrationGrafanaDashboard(w http.ResponseWriter, r *htt
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(d)
 }
+
+// DashboardJSONForTooling renders the dashboard for the validation tooling in
+// bin/. Exported only so that tooling can run outside this package.
+func DashboardJSONForTooling(cfg *config.Config) any { return buildDashboard(cfg) }

@@ -112,6 +112,43 @@ func TestDashboardRefIDsUniqueWithinPanel(t *testing.T) {
 	}
 }
 
+// A Prometheus query in a table panel needs format:"table". Without it Grafana
+// renders the result as time-series shaped data — Time and Value columns, every
+// label collapsed into the series name — so a per-label table shows none of its
+// labels. The panel still "works", which is why this shipped once already.
+func TestTablePanelsRequestTableFormat(t *testing.T) {
+	d := buildDashboard(&config.Config{})
+	found := false
+	for _, p := range d.Panels {
+		if p.Type != "table" {
+			continue
+		}
+		found = true
+		for _, tg := range p.Targets {
+			if tg.Format != "table" {
+				t.Errorf("table panel %q queries without format:table", p.Title)
+			}
+			if !tg.Instant {
+				t.Errorf("table panel %q should use an instant query", p.Title)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected at least one table panel")
+	}
+}
+
+// Someone hunting for compliance state searches for "PCI", not "controls".
+func TestControlsPanelIsFindable(t *testing.T) {
+	d := buildDashboard(&config.Config{})
+	for _, p := range d.Panels {
+		if strings.Contains(p.Title, "PCI") {
+			return
+		}
+	}
+	t.Error("no panel title mentions PCI; the control table is what people come looking for")
+}
+
 func mustJSON(t *testing.T, v any) string {
 	t.Helper()
 	b, err := json.Marshal(v)
