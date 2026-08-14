@@ -420,6 +420,51 @@ It covers what only hz can answer, and **deliberately not host metrics**:
 | Drift | `hz_iptables_rules{state}` — sustained `unknown` or `stale` means something is editing your firewall |
 | Controls | `hz_control_state{control,requirement}` |
 
+### PCI scope
+
+PCI applies to the **cardholder data environment** — the services that store,
+process or transmit account data, plus what connects to them. Not the whole
+box. Mark them:
+
+```jsonc
+"services": [
+  { "name": "shop",    "pci_scope": "cde" },
+  { "name": "grafana", "pci_scope": "connected" },
+  { "name": "wiki" }                              // default: out of scope
+]
+```
+
+Scoped services get `hz_service_control_state{service,scope,control,requirement}`
+and a per-service table on the dashboard. Unscoped services emit **nothing** —
+"not evaluated" must never look like "compliant" — and the default is out,
+because keeping a service out of the CDE is the cheapest compliance there is.
+
+What hz can observe from the edge:
+
+| Control | Requirement | Means |
+|---|---|---|
+| `not_internet_exposed` | 1.3.1 | the service is restricted to the local network (`proxy.internal_only`) |
+| `tls_covered` | 4.2.1 | a live certificate covers every domain it answers on |
+| `backend_not_cleartext_offhost` | 4.2.1 | hz reaches the backend on loopback rather than in cleartext across a network |
+
+**What hz cannot see, and does not claim:** Requirement 3 (stored account
+data), 6.2 (secure development), key management, and access control inside the
+application. hz is an edge control — it can evidence Requirements 1 and 4 well,
+parts of 10 and 11, and nothing about what an app does with a card number once
+it has one.
+
+### TLS floor
+
+`haproxy_tls_min_version` sets `ssl-min-ver` on every bind, defaulting to
+**TLSv1.2** — PCI DSS 4.2.1 has prohibited TLS 1.0 and 1.1 since 2018, and 1.2
+is still what a long tail of clients speaks, so defaulting to 1.3 would break
+them silently. Set `"TLSv1.3"` to raise it. Ciphers are Mozilla's intermediate
+profile: forward secrecy and AEAD only.
+
+Setting a lower floor is allowed and reported honestly — `hz_control_state`
+shows `tls_min_version` as not met rather than the config quietly disagreeing
+with the dashboard.
+
 `hz_control_state` reports whether a configurable security control is in its
 hardened setting — `vpn_mfa_no_admin_bypass`, `vpn_mfa_session_bounded`, and so
 on, labelled with the PCI DSS requirement each speaks to. It describes **hz's

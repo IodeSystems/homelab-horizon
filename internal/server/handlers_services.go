@@ -669,6 +669,7 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 		s.haproxy.SetBackends(backends)
 		s.haproxy.SetMFAJail(mfaJailFor(s.cfg(), backends))
 		s.haproxy.SetMetricsPort(s.cfg().HAProxyMetricsPort)
+		s.haproxy.SetTLSMinVersion(s.cfg().TLSMinVersion())
 		log.Info(fmt.Sprintf("  Configured %d backends", len(backends)))
 
 		var sslConfig *haproxy.SSLConfig

@@ -360,6 +360,20 @@ grep -q 'job_name: haproxy' <<<"$scrape" \
   && ok "METRICS-11 HAProxy's exporter is scraped too" \
   || bad "METRICS-11 HAProxy's exporter is scraped too" "$(grep job_name <<<"$scrape" | head -5)"
 
+# TLS floor: the generated config must state a minimum rather than inheriting
+# whatever the distro built. PCI DSS 4.2.1 has prohibited TLS 1.0/1.1 since 2018.
+grep -q 'hz_control_state{control="tls_min_version"' <<<"$body" \
+  && ok "METRICS-12 the TLS floor is reported as a control" \
+  || bad "METRICS-12 the TLS floor is reported as a control" "$(grep tls_ <<<"$body" | head -3)"
+
+# Scope gates emission: nothing in this fixture is scoped in, so there must be
+# no per-service controls at all. "Not evaluated" must not look like "passing".
+if grep -q '^hz_service_control_state' <<<"$body"; then
+  bad "METRICS-13 unscoped services emit no PCI controls" "$(grep '^hz_service_control_state' <<<"$body" | head -2)"
+else
+  ok "METRICS-13 unscoped services emit no PCI controls"
+fi
+
 # The dashboard is generated per deployment, so it has to be valid JSON and
 # reference metrics this instance actually publishes.
 dash=$(curl -fsS -b "$COOKIE" --max-time 5 "$API/integration/grafana/dashboard.json" 2>&1 || true)

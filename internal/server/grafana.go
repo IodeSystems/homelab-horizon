@@ -304,6 +304,58 @@ func buildDashboard(cfg *config.Config) gfDashboard {
 		},
 		Options: map[string]any{"cellHeight": "sm"},
 	}, 12, 8)
+	// Per-service edge posture. Present only when something is scoped in —
+	// an empty compliance table on a deployment that never opted into PCI is
+	// just another dead panel.
+	if len(cfg.PCIScopedServices()) > 0 {
+		b.newRow()
+		b.add(gfPanel{
+			Type:  "table",
+			Title: "PCI scope — per-service edge controls",
+			Description: "What hz can observe from the edge for services declared in or connected to " +
+				"the CDE. hz never sees inside an application, so Requirement 3, secure development " +
+				"and application-level access control are not represented here.",
+			Targets: []gfTarget{{Expr: "hz_service_control_state", Instant: true, Format: "table"}},
+			Transformations: []any{
+				map[string]any{"id": "labelsToFields", "options": map[string]any{}},
+				map[string]any{"id": "merge", "options": map[string]any{}},
+				map[string]any{
+					"id": "organize",
+					"options": map[string]any{
+						"excludeByName": map[string]bool{
+							"Time": true, "__name__": true, "instance": true, "job": true,
+						},
+						"renameByName": map[string]string{
+							"service": "Service", "scope": "Scope", "control": "Control",
+							"requirement": "PCI DSS", "Value": "Met",
+						},
+						"indexByName": map[string]int{
+							"service": 0, "scope": 1, "requirement": 2, "control": 3, "Value": 4,
+						},
+					},
+				},
+			},
+			FieldConfig: &gfFieldCfg{
+				Defaults: gfFieldDefaults{
+					Mappings: []any{map[string]any{
+						"type": "value",
+						"options": map[string]any{
+							"0": map[string]any{"text": "NOT MET", "color": "red", "index": 0},
+							"1": map[string]any{"text": "met", "color": "green", "index": 1},
+						},
+					}},
+					Thresholds: okBad,
+				},
+				Overrides: []any{map[string]any{
+					"matcher":    map[string]any{"id": "byName", "options": "Met"},
+					"properties": []any{map[string]any{"id": "custom.width", "value": 110}},
+				}},
+			},
+			Options: map[string]any{"cellHeight": "sm"},
+		}, 24, 8)
+		b.newRow()
+	}
+
 	b.add(series("iptables rules by classification", "Expected, stale, blessed and unknown, as the reconciler sees them.", "",
 		target("hz_iptables_rules", "{{state}}", "A"),
 	), 12, 8)

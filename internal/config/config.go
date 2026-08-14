@@ -221,6 +221,16 @@ type Config struct {
 	// scrape the stats socket from the outside for strictly less detail.
 	HAProxyMetricsPort int `json:"haproxy_metrics_port,omitempty"`
 
+	// HAProxyTLSMinVersion is the floor for TLS on every bind. Default
+	// TLSv1.2: PCI DSS 4.2.1 has prohibited TLS 1.0/1.1 since 2018, and 1.2
+	// is still what a long tail of clients speaks — defaulting to 1.3 would
+	// silently break them. Set "TLSv1.3" to raise it.
+	//
+	// Previously unset, so the generated config inherited whatever the distro
+	// build defaulted to. Probably fine on a modern Ubuntu, but "probably, by
+	// inheritance" is not something an assessor can be shown.
+	HAProxyTLSMinVersion string `json:"haproxy_tls_min_version,omitempty"`
+
 	// StaticServePort is the loopback port hz binds to serve static-folder
 	// services (ProxyConfig.StaticRoot). HAProxy routes those services here.
 	// Bound to 127.0.0.1 only — never publicly reachable. Defaults to 8091.
@@ -632,12 +642,26 @@ type ZoneSSL struct {
 
 // Service represents a unified service configuration with clear separation of concerns
 type Service struct {
-	Name         string        `json:"name"`                   // Human-readable, e.g., "grafana"
-	Token        string        `json:"token,omitempty"`        // API token for service integration (ban, status)
-	Domains      []string      `json:"domains"`                // FQDNs, e.g., ["app.example.com", "book.example.com"]
-	InternalDNS  *InternalDNS  `json:"internal_dns,omitempty"` // dnsmasq config for VPN clients
-	ExternalDNS  *ExternalDNS  `json:"external_dns,omitempty"` // Route53 config for public access
-	Proxy        *ProxyConfig  `json:"proxy,omitempty"`        // HAProxy reverse proxy config
+	Name        string       `json:"name"`                   // Human-readable, e.g., "grafana"
+	Token       string       `json:"token,omitempty"`        // API token for service integration (ban, status)
+	Domains     []string     `json:"domains"`                // FQDNs, e.g., ["app.example.com", "book.example.com"]
+	InternalDNS *InternalDNS `json:"internal_dns,omitempty"` // dnsmasq config for VPN clients
+	ExternalDNS *ExternalDNS `json:"external_dns,omitempty"` // Route53 config for public access
+	Proxy       *ProxyConfig `json:"proxy,omitempty"`        // HAProxy reverse proxy config
+
+	// PCIScope marks a service's relationship to the cardholder data
+	// environment: "cde" (stores, processes or transmits account data),
+	// "connected" (can reach the CDE), or empty/"out" (neither).
+	//
+	// Defaults to out, deliberately. Scope is the whole game in PCI — every
+	// service kept out of the CDE is one you never have to evidence — so
+	// scoping in is an explicit act. Defaulting to in would also flood the
+	// compliance view with services nobody assessed, which trains people to
+	// ignore it.
+	//
+	// hz cannot infer this. It sees traffic, not what an application does
+	// with a card number.
+	PCIScope     string        `json:"pci_scope,omitempty"`
 	Integrations *Integrations `json:"integrations,omitempty"` // Observability integrations (metrics, ...)
 }
 
@@ -876,12 +900,13 @@ func Default() *Config {
 		LocalInterface:    "", // Auto-detected from eth0 or falls back to VPN server IP
 
 		// HAProxy configuration
-		HAProxyEnabled:     false,
-		HAProxyConfigPath:  "/etc/haproxy/haproxy.cfg",
-		HAProxyHTTPPort:    80,
-		HAProxyHTTPSPort:   443,
-		HAProxyMetricsPort: 8405,
-		StaticServePort:    8091,
+		HAProxyEnabled:       false,
+		HAProxyConfigPath:    "/etc/haproxy/haproxy.cfg",
+		HAProxyHTTPPort:      80,
+		HAProxyHTTPSPort:     443,
+		HAProxyMetricsPort:   8405,
+		HAProxyTLSMinVersion: TLSMinDefault,
+		StaticServePort:      8091,
 
 		// SSL/Let's Encrypt configuration
 		SSLEnabled:        false,
@@ -1243,6 +1268,69 @@ func (c *Config) ClearMFASession(name string) {
 	if c.VPNMFASessions != nil {
 		delete(c.VPNMFASessions, name)
 	}
+}
+
+// PCI scope values for Service.PCIScope.
+const (
+	PCIScopeOut       = "out"       // default: not in the CDE
+	PCIScopeConnected = "connected" // can reach the CDE
+	PCIScopeCDE       = "cde"       // stores, processes or transmits account data
+)
+
+// EffectivePCIScope normalises the declared scope, defaulting to out.
+func (s *Service) EffectivePCIScope() string {
+	switch s.PCIScope {
+	case PCIScopeCDE, PCIScopeConnected:
+		return s.PCIScope
+	}
+	return PCIScopeOut
+}
+
+// InPCIScope reports whether a service is assessed at all.
+func (s *Service) InPCIScope() bool {
+	return s.EffectivePCIScope() != PCIScopeOut
+}
+
+// PCIScopedServices returns the services declared in or connected to the CDE.
+func (c *Config) PCIScopedServices() []Service {
+	var out []Service
+	for _, svc := range c.Services {
+		if svc.InPCIScope() {
+			out = append(out, svc)
+		}
+	}
+	return out
+}
+
+// TLS floor values accepted for HAProxyTLSMinVersion.
+const (
+	TLSMinDefault = "TLSv1.2"
+)
+
+// ValidTLSMinVersions are the values HAProxy accepts for ssl-min-ver. 1.0 and
+// 1.1 are listed because hz reports configuration truthfully rather than
+// refusing it — an operator with a legacy client may need them, and the
+// control metric will say so rather than the config silently lying.
+var ValidTLSMinVersions = []string{"TLSv1.0", "TLSv1.1", "TLSv1.2", "TLSv1.3"}
+
+// TLSMinVersion returns the configured floor, defaulting to TLSv1.2.
+func (c *Config) TLSMinVersion() string {
+	for _, v := range ValidTLSMinVersions {
+		if c.HAProxyTLSMinVersion == v {
+			return v
+		}
+	}
+	return TLSMinDefault
+}
+
+// TLSFloorMeetsPCI reports whether the floor is TLS 1.2 or better, which is
+// what PCI DSS 4.2.1 requires.
+func (c *Config) TLSFloorMeetsPCI() bool {
+	switch c.TLSMinVersion() {
+	case "TLSv1.2", "TLSv1.3":
+		return true
+	}
+	return false
 }
 
 // MFA scope modes. See Config.VPNMFAScope.
