@@ -123,6 +123,25 @@ profile until the rebuild, so the whole VPN is unrestricted in that window.
 
 ---
 
+## The admin token is disabled and VPN admins are unreachable
+
+Same shape as the MFA jail, one level up. Disabling the shared admin token
+leaves VPN admin peers as the only way in; if none of them can reach the box,
+nothing on the network can administer it. That is deliberate — a remote
+re-enable would be exactly what an attacker holding the token would use.
+
+Recovery is at the console:
+
+```bash
+sudo systemctl stop homelab-horizon
+sudo /usr/local/bin/homelab-horizon -enable-admin-token   # clears it, persists, then serves
+```
+
+Or edit `/etc/homelab-horizon/config.json` and set `"admin_token_disabled": false`.
+
+The token itself is unchanged and still in
+`/etc/homelab-horizon/config.json.token`.
+
 ## Avoiding it next time
 
 - **Before switching to `all` scope**, enrol a factor for every VPN admin. hz
@@ -135,6 +154,9 @@ profile until the rebuild, so the whole VPN is unrestricted in that window.
   exception: scope them out of the CDE, or model them as system accounts with
   documented compensating controls (PCI DSS 8.6). Renewing a 7-day exception
   forever is not a design.
+- **Before disabling the admin token**, promote at least one VPN peer to admin
+  and confirm it can actually administer the box. hz refuses the switch when no
+  VPN admins exist, but it cannot tell whether the ones configured still work.
 - **Verify the portal works before you need it**: `kiosk_url` must route to a
   `proxy.self` service or the redirect degrades to a 403, and a jailed peer
   then has only `http://<wg-ip>:<hz-port>` — which cannot run passkeys, since

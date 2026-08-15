@@ -353,6 +353,10 @@ func hzControls(cfg *config.Config, facts hostFactsSnapshot) []control {
 		{"tls_min_version", "4.2.1", cfg.SSLEnabled && cfg.TLSFloorMeetsPCI()},
 		// 10.6 — synchronised clocks. Also the thing TOTP silently depends on.
 		{"time_synchronised", "10.6", facts.measured && facts.timeSynced},
+		// 8.2.1 — every user individually identified. A shared bearer token
+		// attributes every action to "whoever holds it", so the hardened state
+		// is having it off with VPN admin peers as the way in.
+		{"no_shared_admin_token", "8.2.1", cfg.AdminTokenDisabled},
 		// 6.3.3 — critical patches within a month. hz reports pending security
 		// updates rather than their age, which is the conservative reading:
 		// anything outstanding is a finding until installed.

@@ -57,6 +57,18 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 
 	token := strings.TrimSpace(body.Token)
 
+	// Refuse before comparing, so a disabled token cannot be probed for
+	// correctness by timing or by error message.
+	if s.cfg().AdminTokenDisabled {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "The admin token is disabled. Administer over the VPN as an admin peer, " +
+				"or restart hz with -enable-admin-token from the console.",
+		})
+		return
+	}
+
 	if token == s.adminToken {
 		http.SetCookie(w, &http.Cookie{
 			Name:     "session",
