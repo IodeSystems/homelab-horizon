@@ -26,6 +26,7 @@ func TestControlsReportHardenedOnly(t *testing.T) {
 		VPNMFADurations:      []string{"15m"},
 		SSLEnabled:           true,
 		HAProxyTLSMinVersion: "TLSv1.3",
+		AdminTokenDisabled:   true,
 	}, hostFactsSnapshot{measured: true, timeSynced: true})
 	for _, c := range hard {
 		if !c.ok {
