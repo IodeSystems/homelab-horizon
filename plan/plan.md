@@ -329,6 +329,34 @@ reconciler) all shipped; Phase 0 was independent of them and got skipped.
 Nine fixer handlers stripped in the React migration are still orphaned Go
 primitives with no HTTP route (see Context, item 1).
 
+### ◻ Real users, replacing the shared admin token
+
+The token can now be switched off (`admin_token_disabled`, console-only
+recovery via `-enable-admin-token`, reported as `no_shared_admin_token` /
+8.2.1). That is only half the answer: switching it off currently leaves VPN
+admin peers as the sole way in, which works but is not a user model.
+
+**Decided:** the token survives as break-glass — disableable from the UI,
+re-enabled only by a restart flag at the console. A remote re-enable is what an
+attacker holding the token would reach for.
+
+- **next**: agree the shape before writing code — local users vs OIDC, and what
+  happens to an existing single-token deployment on upgrade.
+- **scope**: users, invites, passwords, OTP/passkeys, rotation, idle timeout.
+  All of it changes how people log in daily, so the disruptive parts stay
+  behind an explicit Settings → Users page rather than arriving on upgrade.
+- **reusable**: the passkey work is directly applicable — `go-webauthn`, the
+  ceremony store and the register/assert endpoints exist and are e2e-verified.
+  Identity would attach to a user rather than a peer name; the crypto and
+  ceremony handling do not change.
+- **blocking decision (USER)**: local users or OIDC. Everything else follows
+  from it.
+- **also unblocks**: `8.2.8` idle timeout, which currently reads NOT MET
+  because the admin cookie is a 24h absolute with no idle concept. Fixing it
+  before users exist would just log one shared operator out more often.
+- **UI note**: the disable toggle sits on Settings → System today; it belongs
+  on Settings → Users once that page exists.
+
 ## Known cleanups (not blocking)
 
 - `internal/wireguard` and `internal/iptables` both build the same rule set — one shells out immediately on change, the other generates for the reconcile diff. They must be edited in lockstep, which is what let the FORWARD-only jail persist. Collapse `wireguard.Rebuild{Forward,Input}Chain` onto `iptables.ExpectedRules` (touches ~4 call sites).

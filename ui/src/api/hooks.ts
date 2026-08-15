@@ -1107,6 +1107,20 @@ export function useUpdateMFASettings() {
   });
 }
 
+export function useDisableAdminToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { force?: boolean }) =>
+      apiFetch<{ ok: boolean; recovery: string }>("/admin-token/disable", {
+        method: "POST",
+        body: JSON.stringify({ disabled: true, ...input }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+}
+
 export function useMFAException() {
   const qc = useQueryClient();
   return useMutation({

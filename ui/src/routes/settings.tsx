@@ -35,6 +35,7 @@ import {
   useHAStatus,
   useMFASettings,
   useMFAExceptionRevoke,
+  useDisableAdminToken,
   useSettings,
   useUpdateMFASettings,
 } from "../api/hooks";
@@ -477,6 +478,64 @@ function HAFleetTab() {
 
 const ALL_DURATIONS = ["2h", "4h", "8h", "forever"];
 
+// Admin access. Lives on the System tab for now; it belongs on Settings →
+// Users once that exists, alongside accounts, rotation and idle timeout.
+function AdminAccessSection({ vpnAdmins }: { vpnAdmins?: string[] }) {
+  const disable = useDisableAdminToken();
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState("");
+  const admins = vpnAdmins ?? [];
+
+  return (
+    <Paper sx={{ p: 3, mt: 2 }}>
+      <Typography variant="h6" gutterBottom>
+        Admin access
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        The admin token is a single shared credential: every action it takes is
+        attributable to whoever holds it and nothing finer. With VPN admin peers
+        configured you have a better way in, and the token can be switched off.
+      </Typography>
+      <Alert severity="warning" sx={{ mb: 2 }}>
+        <strong>This cannot be undone from the UI.</strong> Re-enabling requires
+        console access: restart hz with <code>-enable-admin-token</code>. That is
+        deliberate — a remote re-enable is exactly what someone holding a stolen
+        token would use. Disabling also signs out sessions the token created.
+      </Alert>
+      <Typography variant="body2" sx={{ mb: 2 }}>
+        VPN admins who would keep access:{" "}
+        {admins.length > 0 ? (
+          admins.map((a) => <Chip key={a} label={a} size="small" sx={{ mr: 0.5 }} />)
+        ) : (
+          <strong>none — you would be left with console recovery only</strong>
+        )}
+      </Typography>
+      {done && <Alert severity="success" sx={{ mb: 2 }}>{done}</Alert>}
+      {err && <Alert severity="error" sx={{ mb: 2 }}>{err}</Alert>}
+      <Button
+        variant="outlined"
+        color="warning"
+        disabled={disable.isPending}
+        onClick={() => {
+          setErr("");
+          if (!window.confirm(
+            "Disable the shared admin token? Re-enabling needs console access to this machine.",
+          )) return;
+          disable.mutate(
+            {},
+            {
+              onSuccess: (r) => setDone(r.recovery),
+              onError: (e) => setErr(e instanceof Error ? e.message : "Could not disable"),
+            },
+          );
+        }}
+      >
+        {disable.isPending ? "Disabling..." : "Disable admin token"}
+      </Button>
+    </Paper>
+  );
+}
+
 function VPNMFATab() {
   const mfa = useMFASettings();
   const updateMFA = useUpdateMFASettings();
@@ -830,6 +889,7 @@ function SettingsPage() {
           zones={data.zones}
         />
       )}
+      {tab === 0 && <AdminAccessSection vpnAdmins={data.config.vpnAdmins} />}
       {tab === 1 && (
         <HAProxyTab
           running={data.haproxy.running}
