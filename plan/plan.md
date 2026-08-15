@@ -257,131 +257,88 @@ Phase 3 replaces this with: restart horizon, done.
 
 ## Active work
 
-Nothing is in progress. Ordered by what I'd pick up next:
+Phase 1 of the user model is in progress. Ordered by what I'd pick up next:
 
 | | Item | Blocked? |
 |---|---|---|
 | 1 | [VPN inactivity timeout](#-vpn-inactivity-timeout-last-wag-parity-item) | no |
 | 2 | [PCI 10.5.1 + 2.2.7](#-pci-the-two-remaining-controls-hz-can-actually-detect) | no |
-| 3 | [Runtime TLS check](#-runtime-tls-check-prove-the-cert-is-valid-for-the-hostname) | warn-vs-fail call (Carl) |
-| 4 | [Real users](#-real-users-replacing-the-shared-admin-token) | **local users vs OIDC (Carl)** |
-| 5 | [Phase 0 leftovers](#-phase-0-leftovers) · [canon writeback](#-canon-writeback-to-doc-cross-repo) · [cleanups](#known-cleanups-not-blocking) | no |
-| 6 | [Org alignment backlog](#-org-alignment-backlog--this-repo-owns-it-now) (10 items) | no |
+| 3 | [Real users](#-real-users-local-credentials--oidc-on-sqlite) — local + OIDC on SQLite, phased | decided; ◐ Phase 1 |
+| 4 | [Phase 0 leftovers](#-phase-0-leftovers) · [canon writeback](#-canon-writeback-to-doc-cross-repo) · [cleanups](#known-cleanups-not-blocking) | no |
+| 5 | [Org alignment backlog](#-org-alignment-backlog--this-repo-owns-it-now) (10 items) | no |
 
-Two decisions are mine to make and yours to answer; everything else can start
-cold. The user model is the expensive one — it gates `8.2.8` and the shape of
-every login afterwards.
+The runtime TLS check shipped with that decision and moved to
+[done.md](done.md). Both open decisions were answered on 2026-08-15: certificates get a warning
+state at 7 days (shipped, `21da93b`), and the user model is local credentials
+plus OIDC on SQLite (phased below, Phase 1 in progress). Nothing is blocked on
+me now.
 
-### ◻ Runtime TLS check: prove the cert is valid FOR THE HOSTNAME
-
-**HTTPS shows green from declared config, never from a handshake.** Nothing
-anywhere completes a TLS connection to a public domain and checks that the cert
-served actually covers that name. The UI reports a *cert domain* and an expiry
-taken from the SubZone that is supposed to cover the domain — not from the
-certificate a client is really handed.
-
-Observed 2026-08-13, setting up `dev.pb.iodesystems.com`:
-
-- `service create` → `+ https dev.pb.iodesystems.com … SubZone "dev.pb"`
-- `domain list` → `HTTPS yes … CERT Nov 5 19:12:17 2026`
-- `domain ssl add` → `= https dev.pb.iodesystems.com (already covered)`
-
-while HAProxy was serving the **`veliode.com` default cert**, which does not
-carry that SAN, and every verifying client failed the handshake outright. Three
-separate surfaces said covered/green for a name no served cert covered. The
-expiry shown was the zone bundle's; the cert that eventually covered the domain
-expires `Nov 11`. `*.iodesystems.com` matches ONE label, so a three-level name is
-never wildcard-covered — it needs an explicit SAN, and whether it got one is
-exactly what nothing verifies.
-
-The failure mode this leaves open is a cert that silently stops covering a
-domain — expiry, a SubZone edit, a reissue that drops a SAN. It is invisible
-until a user hits it, and the dashboard stays green throughout.
-
-**Most of the machinery already exists.** `internal/monitor` runs periodic checks
-and its `http` type uses a plain `http.Client` (`monitor.go:59`) with no
-`InsecureSkipVerify`, so it *does* verify chain and hostname — it is simply never
-pointed at a public URL. Auto-generated checks target
-`"http://" + svc.Proxy.Backend + …HealthCheck.Path` (`monitor.go:106`): the
-BACKEND, over plain HTTP. Backend liveness is genuinely probed; the TLS edge in
-front of it is not covered at all.
-
-**next** — auto-generate a second check per HTTPS domain targeting
-`https://<domain><healthcheck path>`, so hostname verification runs on the real
-edge. Then add cert expiry as its own signal: a 200 today says nothing about a
-cert expiring in six days, so surface days-remaining and fail the check under a
-threshold rather than at midnight on expiry day.
-
-**risks** — auto-generating a check per domain multiplies check volume across the
-fleet; reuse `DisabledAutoChecks` so a domain can opt out. Internal-only domains
-resolve to the proxy from inside and may not be reachable from wherever the
-monitor runs, which would produce failures that are about routing rather than
-TLS — distinguish "could not connect" from "connected, cert is wrong", because
-conflating them is how a real cert failure gets muted as noise.
-
-**blocking decisions (owner: Carl)** — should a cert nearing expiry be a FAILED
-check (pages via ntfy) or a distinct warning state? The checks model is currently
-binary `ok`/`failed`, and adding a third state touches history storage and the
-`/checks` UI.
-
-**optional extensions** — assert the served leaf matches the cert horizon
-believes it issued (it already inspects leaves directly in
-`internal/server/certserve.go:78`), which would also catch HAProxy loading a
-stale bundle after a reissue.
-
-**scope note** — this is a network/downstream check, the category the
-[scope boundary](#scope-boundary-system-vs-network-checks) above deliberately
-excludes from the Phase 0–5 iptables/system-health tree. It belongs to `Monitor`
-and the `/checks` page, and shares nothing with that work but this file.
-
----
-
-The iptables tree is finished. Recently finished trees are archived in
-[done.md](done.md): the VPN MFA jail (WG-INPUT + HAProxy L7), passkeys as a
-second factor, and the multipass e2e fixture that found five pre-existing bugs
-along the way.
-
-**Phase 0 is done** — and had been for a while; this plan simply never said
-so. `SystemHealthTab` renders System / WireGuard / HAProxy / dnsmasq /
-Let's Encrypt / apt cards over `GET /api/v1/system/health`, and 19 checks pair
-with inline fixers. Of the nine handlers Context item 1 lists as lost, eight
-came back as `/api/v1/system/*` endpoints.
-
-The last gap closed with the renew button: Let's Encrypt was the only card that
-reported a problem without offering the fix, though `/api/v1/ssl/request-cert`
-had existed the whole time. `publicIP` is now in the health payload too.
-
-Remaining Phase 0 items, deliberately not built: a "listening on
-LocalInterface" check for dnsmasq, and re-detect for public IP. Both are
-nice-to-haves rather than the missing-surface problem this plan described.
-
-### ◻ Real users, replacing the shared admin token
+### ◐ Real users: local credentials + OIDC, on SQLite
 
 The token can now be switched off (`admin_token_disabled`, console-only
 recovery via `-enable-admin-token`, reported as `no_shared_admin_token` /
 8.2.1). That is only half the answer: switching it off currently leaves VPN
 admin peers as the sole way in, which works but is not a user model.
 
-**Decided:** the token survives as break-glass — disableable from the UI,
-re-enabled only by a restart flag at the console. A remote re-enable is what an
-attacker holding the token would reach for.
+**Decided (2026-08-15):** build **both** — a local credentials store *and*
+OIDC/OAuth — with local as the floor that always works. Persistence is
+**SQLite**. The token survives as break-glass: disableable from the UI,
+re-enabled only by a restart flag at the console, because a remote re-enable is
+what an attacker holding the token would reach for.
 
-- **next**: agree the shape before writing code — local users vs OIDC, and what
-  happens to an existing single-token deployment on upgrade.
-- **scope**: users, invites, passwords, OTP/passkeys, rotation, idle timeout.
-  All of it changes how people log in daily, so the disruptive parts stay
-  behind an explicit Settings → Users page rather than arriving on upgrade.
-- **reusable**: the passkey work is directly applicable — `go-webauthn`, the
-  ceremony store and the register/assert endpoints exist and are e2e-verified.
-  Identity would attach to a user rather than a peer name; the crypto and
-  ceremony handling do not change.
-- **blocking decision (USER)**: local users or OIDC. Everything else follows
-  from it.
-- **also unblocks**: `8.2.8` idle timeout, which currently reads NOT MET
-  because the admin cookie is a 24h absolute with no idle concept. Fixing it
-  before users exist would just log one shared operator out more often.
-- **UI note**: the disable toggle sits on Settings → System today; it belongs
-  on Settings → Users once that page exists.
+Local-first is not a preference here, it is a bootstrap constraint: hz is the
+edge. An IdP behind hz cannot be used to log in and fix hz when HAProxy or the
+certificate is what broke, and that outage is hz's whole reason to exist. OIDC
+is therefore additive — an alternative sign-in for people, never the only one,
+and never on the VPN portal, where a jailed peer would need the IdP and its
+assets punched through the jail.
+
+**Design decisions that follow, all revisitable before Phase 1 lands:**
+
+- **Driver: `modernc.org/sqlite`** (pure Go). cgo would end the static
+  cross-compiled binary, which is how hz ships.
+- **Location: `/var/lib/homelab-horizon/hz.db`.** State, not config — the
+  systemd unit already creates that directory. `config.json` keeps infra
+  (peers, services, zones); the DB takes users, credentials, sessions, OIDC
+  identities and the audit log. That boundary is the thing to hold: a user
+  table in `config.json` would be synced to peers, which is wrong.
+- **Passwords: bcrypt at `DefaultCost`**, per canon `AUTH-1` — matching joko,
+  veliode-go and redline2 rather than inventing an argon2id variant here.
+- **Migrations: golang-migrate + `//go:embed`**, per `API-8`, with `DEPLOY-10`
+  checksums. **Deviation:** applied at boot, not in the deploy. `DEPLOY-11`
+  assumes a Postgres owner role and a rolling slot; hz is a single process that
+  owns its own file, so there is no other actor to apply them. Record it as a
+  carve-out like `CFG-1`, not an oversight.
+- **Sessions move server-side** into the DB. Today's signed `"admin"` cookie is
+  stateless, which cannot express revocation or idle timeout — both of which
+  are the point (`8.2.8`).
+- **OAuth vs OIDC**: generic OIDC discovery covers Google, Authentik, Keycloak,
+  Zitadel. GitHub is OAuth2-only and needs a provider-specific userinfo call —
+  treat it as a named provider, not the generic path.
+
+**Phasing** — each phase ships and is useful alone:
+
+- ◻ **1. Foundation.** DB package, migrations, `users` / `credentials` /
+  `sessions` tables, bcrypt verify, tests. Nothing wired to login yet, so no
+  lockout risk while the shape settles.
+- ◻ **2. Local login.** Sessions in the DB, first-user bootstrap from the admin
+  token, Settings → Users (invite, disable, reset). Token still works.
+- ◻ **3. Second factors.** Re-point the existing passkey ceremony at users
+  instead of peers, plus TOTP. The crypto and ceremony handling do not change —
+  only the identity they attach to.
+- ◻ **4. OIDC.** Discovery, code+PKCE, JWKS cache, group claim → role. Local
+  login stays reachable at a fixed URL, always.
+- ◻ **5. Policy.** Idle timeout (`8.2.8`), rotation, lockout — the annoying
+  parts, gated behind the Users page rather than arriving on upgrade.
+
+- **risks**: this is the one feature that can lock everyone out of the gateway.
+  Every phase keeps the previous way in working, and Phase 2 must not be able
+  to disable the token until a user has actually logged in successfully once.
+  The lockout runbook needs a section per phase as it lands.
+- **also unblocks**: `8.2.8`, which reads NOT MET today because the admin
+  cookie is a 24h absolute with no idle concept.
+- **UI note**: the disable toggle sits on Settings → System today; it moves to
+  Settings → Users in Phase 2.
 
 ### ◻ VPN inactivity timeout (last wag-parity item)
 

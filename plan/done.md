@@ -43,3 +43,26 @@ Neither was reachable by rule-generation unit tests; both are why the fixture ex
 1. **Toggling VPN admin never rebuilt the chains.** `handleAPIToggleAdmin` mutated `VPNAdmins` and returned. Admin status is a jail input, so config and enforcement disagreed until some unrelated event triggered a rebuild — and the 60s pruner only rebuilds when a session actually expires, so in practice never. The dangerous direction is demotion: an ex-admin kept unjailed access indefinitely. Fixed by calling `rebuildWGChains()`; pinned by ADMIN-2/ADMIN-3.
 2. **The jail chain never converged.** hz emits `-p tcp --dport N`; `iptables-save` always reads it back as `-p tcp -m tcp --dport N`. `Canonical()` didn't collapse that, so every jail port rule looked permanently drifted: WG-INPUT was flushed and rebuilt on **every 60s tick** — with the jail briefly absent each time — while the live rules accumulated in the IPTables tab as `unknown` (10 and climbing). Same class as the existing `-m state`/`-m conntrack` normalization, fixed in the same place. Verified by reconciler silence across two ticks with six live rules present.
 
+## ✅ Runtime TLS check + the warning state (2026-08-15, `21da93b`)
+
+Certificates are now verified by handshake against the public hostname rather
+than read out of config, and checks gained a third state so "expires Friday"
+stops having to be either a lie or a silence.
+
+The bug it closes: three surfaces reported `dev.pb.iodesystems.com` as covered
+and green while HAProxy served the `veliode.com` default certificate, which
+carried no such SAN and failed every verifying client. All three read intended
+coverage; none completed a handshake.
+
+- `monitor.WarningError` + `StatusWarning`; ntfy pages warnings at default
+  priority, failures at high.
+- `tls` check type: wrong name fails, expiry inside 7 days warns
+  (`cert_warning_days` to change it).
+- One check per served domain, hourly; wildcards and `ssl_enabled: false` skipped.
+- Hairpin: a domain resolving to our own public IP is dialled on loopback with
+  SNI preserved, so a router that will not hairpin cannot mute a real finding.
+
+Left undone deliberately: the served leaf is not compared against the leaf hz
+believes it issued, which would also catch HAProxy holding a stale bundle after
+a reissue.
+
