@@ -30,10 +30,11 @@ type ServiceControl struct {
 
 // ServiceControls evaluates the edge controls for every in-scope service.
 //
-// coveredDomains is the set of domains a live certificate actually covers,
-// which the caller supplies because it comes from reading certs off disk
-// rather than from config.
-func (c *Config) ServiceControls(coveredDomains map[string]bool) []ServiceControl {
+// coveredDomains is the set of domains a live certificate actually covers and
+// expiringDomains those whose certificate lapses soon; both come from reading
+// certs off disk rather than from config, because the question is what is
+// actually served, not what was intended.
+func (c *Config) ServiceControls(coveredDomains map[string]bool, expiringDomains map[string]bool) []ServiceControl {
 	var out []ServiceControl
 
 	for _, svc := range c.PCIScopedServices() {
@@ -59,6 +60,19 @@ func (c *Config) ServiceControls(coveredDomains map[string]bool) []ServiceContro
 		add("tls_covered", "4.2.1", len(uncovered) == 0,
 			detailIf(len(uncovered) > 0, "no certificate covers: "+strings.Join(uncovered, ", ")))
 
+		// 4.2.1 — a certificate existing is not the same as TLS being served.
+		// With ssl_enabled off hz serves plain HTTP on every vhost regardless
+		// of what certs are on disk, so this catches the case tls_covered
+		// alone would call fine.
+		add("served_over_https", "4.2.1", c.SSLEnabled && len(uncovered) == 0,
+			detailIf(!c.SSLEnabled, "ssl_enabled is off; hz serves plain HTTP for every domain"))
+
+		// 4.2.1 — an expired certificate stops the service rather than
+		// degrading it, so the warning has to arrive well before.
+		expiring := expiringSoon(svc.Domains, expiringDomains)
+		add("cert_not_expiring", "4.2.1", len(expiring) == 0,
+			detailIf(len(expiring) > 0, "certificate expires within 30 days for: "+strings.Join(expiring, ", ")))
+
 		// 4.2.1 — the hop from hz to the backend. Loopback never leaves the
 		// machine; anything else is cleartext HTTP across a network. Whether
 		// that network counts as "open, public" is a scoping argument, but an
@@ -79,6 +93,22 @@ func detailIf(cond bool, msg string) string {
 		return msg
 	}
 	return ""
+}
+
+// expiringSoon returns the service domains whose covering certificate lapses
+// inside the caller's warning window.
+func expiringSoon(domains []string, expiring map[string]bool) []string {
+	var out []string
+	for _, d := range domains {
+		d = strings.ToLower(strings.TrimSpace(d))
+		if d == "" {
+			continue
+		}
+		if expiring[d] || expiring["*."+parentDomain(d)] {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // uncoveredDomains returns the service domains no certificate covers.

@@ -221,6 +221,7 @@ type Server struct {
 	static         *staticSupervisor     // supervises the unprivileged static file server child
 	ceremonies     *ceremonyStore        // in-flight WebAuthn ceremonies (see webauthn.go)
 	promHandler    http.Handler          // hz's own /metrics exposition
+	hostFacts      hostFacts             // cached clock + patch state (see hostfacts.go)
 
 	exporterMu     sync.RWMutex             // guards exporterStatus
 	exporterStatus map[string]exporterProbe // job|address -> resolved live path + liveness (status only, not a serving gate)
@@ -859,6 +860,9 @@ func (s *Server) runHealthCheck() {
 
 	// Notice node-exporter if someone installed it outside hz.
 	s.detectNodeExporter()
+
+	// Clock and pending patches: measured here, never during a scrape.
+	s.hostFacts.refresh()
 }
 
 // startHealthCheck starts background health monitoring every 60 seconds

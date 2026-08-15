@@ -13,7 +13,7 @@ import (
 // 1 means the control is in its hardened setting, and the default deployment
 // must not read as hardened just because nothing was configured.
 func TestControlsReportHardenedOnly(t *testing.T) {
-	off := hzControls(&config.Config{})
+	off := hzControls(&config.Config{}, hostFactsSnapshot{})
 	for _, c := range off {
 		if c.ok {
 			t.Errorf("control %q reads hardened on a bare config", c.name)
@@ -21,11 +21,12 @@ func TestControlsReportHardenedOnly(t *testing.T) {
 	}
 
 	hard := hzControls(&config.Config{
-		VPNMFAEnabled:   true,
-		VPNMFAScope:     config.MFAScopeAll,
-		VPNMFADurations: []string{"15m"},
-		SSLEnabled:      true,
-	})
+		VPNMFAEnabled:        true,
+		VPNMFAScope:          config.MFAScopeAll,
+		VPNMFADurations:      []string{"15m"},
+		SSLEnabled:           true,
+		HAProxyTLSMinVersion: "TLSv1.3",
+	}, hostFactsSnapshot{measured: true, timeSynced: true})
 	for _, c := range hard {
 		if !c.ok {
 			t.Errorf("control %q should be satisfied by a hardened config", c.name)
@@ -42,7 +43,7 @@ func TestSessionBoundedRejectsForever(t *testing.T) {
 		{"2h"},
 		{},
 	} {
-		for _, c := range hzControls(&config.Config{VPNMFAEnabled: true, VPNMFADurations: durations}) {
+		for _, c := range hzControls(&config.Config{VPNMFAEnabled: true, VPNMFADurations: durations}, hostFactsSnapshot{}) {
 			if c.name == "vpn_mfa_session_bounded" && c.ok {
 				t.Errorf("durations %v must not read as bounded", durations)
 			}
@@ -51,7 +52,7 @@ func TestSessionBoundedRejectsForever(t *testing.T) {
 }
 
 func TestControlNamesAreNotComplianceClaims(t *testing.T) {
-	for _, c := range hzControls(&config.Config{}) {
+	for _, c := range hzControls(&config.Config{}, hostFactsSnapshot{}) {
 		if strings.Contains(c.name, "compliant") || strings.Contains(c.name, "pci") {
 			t.Errorf("control %q claims compliance; these describe hz's config only", c.name)
 		}
@@ -113,5 +114,50 @@ func TestCollectorOmitsUnmeasurable(t *testing.T) {
 	}
 	if names["hz_vpn_peers"] {
 		t.Error("peer count must be omitted when there is no config to read, not reported as 0")
+	}
+}
+
+func TestParseOpenSSLTime(t *testing.T) {
+	// The exact shape `openssl x509 -noout -dates` emits.
+	got, ok := parseOpenSSLTime("Nov  5 12:00:00 2026 GMT")
+	if !ok {
+		t.Fatal("should parse openssl's own date format")
+	}
+	if got.Year() != 2026 || got.Month() != 11 || got.Day() != 5 {
+		t.Errorf("parsed %v", got)
+	}
+	// Double-digit days are not space-padded.
+	if _, ok := parseOpenSSLTime("Dec 25 01:02:03 2027 GMT"); !ok {
+		t.Error("should parse a two-digit day")
+	}
+	for _, bad := range []string{"", "not a date", "2026-11-05"} {
+		if _, ok := parseOpenSSLTime(bad); ok {
+			t.Errorf("%q should not parse", bad)
+		}
+	}
+}
+
+// Host facts are measured on the health tick. Before the first tick the
+// controls must read not-met rather than claiming a synchronised clock and a
+// patched system nobody has looked at yet.
+func TestHostFactControlsUnmeasured(t *testing.T) {
+	for _, c := range hzControls(&config.Config{}, hostFactsSnapshot{}) {
+		if (c.name == "time_synchronised" || c.name == "patches_current") && c.ok {
+			t.Errorf("control %q reads met before anything was measured", c.name)
+		}
+	}
+	measured := hostFactsSnapshot{measured: true, timeSynced: true, securityUpdates: 0}
+	got := map[string]bool{}
+	for _, c := range hzControls(&config.Config{}, measured) {
+		got[c.name] = c.ok
+	}
+	if !got["time_synchronised"] || !got["patches_current"] {
+		t.Errorf("a synced, patched host should satisfy both: %v", got)
+	}
+	pending := hostFactsSnapshot{measured: true, timeSynced: true, securityUpdates: 3}
+	for _, c := range hzControls(&config.Config{}, pending) {
+		if c.name == "patches_current" && c.ok {
+			t.Error("pending security updates must not read as patched")
+		}
 	}
 }
