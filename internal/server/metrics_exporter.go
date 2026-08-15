@@ -46,6 +46,10 @@ type hzCollector struct {
 	iptablesRules    *prometheus.Desc
 	controlState     *prometheus.Desc
 	serviceControl   *prometheus.Desc
+	certExpiryDays   *prometheus.Desc
+	timeSynced       *prometheus.Desc
+	pendingUpdates   *prometheus.Desc
+	aptListAge       *prometheus.Desc
 	servicesInScope  *prometheus.Desc
 
 	dnsmasqUp         *prometheus.Desc
@@ -101,6 +105,14 @@ func newHZCollector(s *Server) *hzCollector {
 			"Queries sent to an upstream resolver.", []string{"server"}, nil),
 		dnsmasqSrvFailed: prometheus.NewDesc("hz_dnsmasq_upstream_failures_total",
 			"Queries an upstream resolver failed to answer. Rising on one server while its siblings are flat is the signal worth alerting on.", []string{"server"}, nil),
+		certExpiryDays: prometheus.NewDesc("hz_certificate_expiry_days",
+			"Days until a managed certificate expires. Negative means it already has.", []string{"domain"}, nil),
+		timeSynced: prometheus.NewDesc("hz_time_synchronised",
+			"1 when the system clock is disciplined by NTP. TOTP is a function of the clock, so drift rejects every correct code at once.", nil, nil),
+		pendingUpdates: prometheus.NewDesc("hz_pending_updates",
+			"Package updates awaiting installation, by kind.", []string{"kind"}, nil),
+		aptListAge: prometheus.NewDesc("hz_apt_lists_age_seconds",
+			"Age of the package lists. A pending-update count is only as trustworthy as the cache it came from.", nil, nil),
 		serviceControl: prometheus.NewDesc("hz_service_control_state",
 			"Edge control state for a service in PCI scope: 1 when the control holds. Only services the operator scoped in are reported — an unassessed service emits nothing, so \"not evaluated\" never looks like \"compliant\".",
 			[]string{"service", "scope", "control", "requirement"}, nil),
@@ -124,6 +136,7 @@ func (c *hzCollector) Describe(ch chan<- *prometheus.Desc) {
 		c.dnsmasqUp, c.dnsmasqCacheSize, c.dnsmasqInsertions, c.dnsmasqEvictions,
 		c.dnsmasqHits, c.dnsmasqMisses, c.dnsmasqSrvQueries, c.dnsmasqSrvFailed,
 		c.serviceControl, c.servicesInScope,
+		c.certExpiryDays, c.timeSynced, c.pendingUpdates, c.aptListAge,
 	} {
 		ch <- d
 	}
@@ -244,13 +257,29 @@ func (c *hzCollector) Collect(ch chan<- prometheus.Metric) {
 		gauge(c.iptablesRules, float64(sum.Unknown), "unknown")
 	}
 
+	// ---- Host facts (measured on the health tick, not here) ----
+	facts := c.s.hostFacts.snapshot()
+	if facts.measured {
+		gauge(c.timeSynced, b2f(facts.timeSynced))
+		gauge(c.pendingUpdates, float64(facts.securityUpdates), "security")
+		gauge(c.pendingUpdates, float64(facts.totalUpdates), "all")
+		if !facts.lastAptUpdate.IsZero() {
+			gauge(c.aptListAge, time.Since(facts.lastAptUpdate).Seconds())
+		}
+	}
+
+	// ---- Certificates ----
+	for domain, notAfter := range c.s.certExpiries() {
+		gauge(c.certExpiryDays, time.Until(notAfter).Hours()/24, domain)
+	}
+
 	// ---- Controls ----
 	//
 	// Named hz_control_state, never hz_pci_compliant. These report how hz is
 	// configured; whether that satisfies a requirement is an assessor's call
 	// over a defined scope, and a dashboard reading "PCI: green" because a
 	// gateway said so is worse than no dashboard.
-	for _, ctl := range hzControls(cfg) {
+	for _, ctl := range hzControls(cfg, facts) {
 		gauge(c.controlState, b2f(ctl.ok), ctl.name, ctl.requirement)
 	}
 
@@ -264,7 +293,15 @@ func (c *hzCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 	if len(byScope) > 0 {
 		covered := c.s.coveredDomains()
-		for _, sc := range cfg.ServiceControls(covered) {
+		// 30 days: long enough that a failed renewal still has three Let's
+		// Encrypt attempts left before anything breaks.
+		expiring := map[string]bool{}
+		for domain, notAfter := range c.s.certExpiries() {
+			if time.Until(notAfter) < 30*24*time.Hour {
+				expiring[domain] = true
+			}
+		}
+		for _, sc := range cfg.ServiceControls(covered, expiring) {
 			gauge(c.serviceControl, b2f(sc.OK), sc.Service, sc.Scope, sc.Control, sc.Requirement)
 		}
 	}
@@ -289,7 +326,7 @@ type control struct {
 	ok          bool
 }
 
-func hzControls(cfg *config.Config) []control {
+func hzControls(cfg *config.Config, facts hostFactsSnapshot) []control {
 	longestSession := int64(0)
 	unlimited := false
 	for _, d := range cfg.VPNMFADurations {
@@ -314,6 +351,12 @@ func hzControls(cfg *config.Config) []control {
 		// 4.2.1 also prohibits TLS 1.0/1.1. The floor is configurable, so this
 		// reports what was configured rather than assuming the default held.
 		{"tls_min_version", "4.2.1", cfg.SSLEnabled && cfg.TLSFloorMeetsPCI()},
+		// 10.6 — synchronised clocks. Also the thing TOTP silently depends on.
+		{"time_synchronised", "10.6", facts.measured && facts.timeSynced},
+		// 6.3.3 — critical patches within a month. hz reports pending security
+		// updates rather than their age, which is the conservative reading:
+		// anything outstanding is a finding until installed.
+		{"patches_current", "6.3.3", facts.measured && facts.securityUpdates == 0},
 	}
 }
 
@@ -403,4 +446,44 @@ func (s *Server) coveredDomains() map[string]bool {
 		}
 	}
 	return covered
+}
+
+// certExpiries returns the expiry of every managed certificate, keyed by the
+// domain it was issued for.
+//
+// Read from the certificates on disk rather than from config: the question is
+// when the served cert actually stops working, and a configured intent that
+// never issued has no expiry to report.
+func (s *Server) certExpiries() map[string]time.Time {
+	out := map[string]time.Time{}
+	if s.letsencrypt == nil {
+		return out
+	}
+	for _, dc := range s.cfg().DeriveSSLDomains() {
+		info, err := s.letsencrypt.GetCertInfoForDomain(dc.Domain)
+		if err != nil || info == nil {
+			continue
+		}
+		notAfter, ok := parseOpenSSLTime(info.NotAfter)
+		if !ok {
+			continue
+		}
+		out[strings.ToLower(dc.Domain)] = notAfter
+	}
+	return out
+}
+
+// parseOpenSSLTime parses the date string `openssl x509 -dates` prints, e.g.
+// "Nov  5 12:00:00 2026 GMT". The day is space-padded, hence _2.
+func parseOpenSSLTime(v string) (time.Time, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{"Jan _2 15:04:05 2006 MST", "Jan _2 15:04:05 2006"} {
+		if t, err := time.Parse(layout, v); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }

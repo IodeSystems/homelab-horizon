@@ -418,6 +418,7 @@ It covers what only hz can answer, and **deliberately not host metrics**:
 | Edge | `hz_haproxy_backend_up{backend}`, `hz_banned_ips` |
 | DNS | `hz_dnsmasq_cache_{hits,misses,insertions,evictions}_total`, `hz_dnsmasq_upstream_{queries,failures}_total{server}` |
 | Drift | `hz_iptables_rules{state}` — sustained `unknown` or `stale` means something is editing your firewall |
+| Host | `hz_time_synchronised`, `hz_pending_updates{kind}`, `hz_apt_lists_age_seconds`, `hz_certificate_expiry_days{domain}` |
 | Controls | `hz_control_state{control,requirement}` |
 
 ### PCI scope
@@ -445,6 +446,8 @@ What hz can observe from the edge:
 |---|---|---|
 | `not_internet_exposed` | 1.3.1 | the service is restricted to the local network (`proxy.internal_only`) |
 | `tls_covered` | 4.2.1 | a live certificate covers every domain it answers on |
+| `served_over_https` | 4.2.1 | TLS is actually being served, not merely a cert existing on disk |
+| `cert_not_expiring` | 4.2.1 | no covering certificate lapses within 30 days |
 | `backend_not_cleartext_offhost` | 4.2.1 | hz reaches the backend on loopback rather than in cleartext across a network |
 
 **What hz cannot see, and does not claim:** Requirement 3 (stored account

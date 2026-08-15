@@ -18,12 +18,12 @@ func scopedCfg() *Config {
 // avoid.
 func TestOnlyScopedServicesAreEvaluated(t *testing.T) {
 	covered := map[string]bool{"shop.example.com": true}
-	for _, c := range scopedCfg().ServiceControls(covered) {
+	for _, c := range scopedCfg().ServiceControls(covered, nil) {
 		if c.Service == "wiki" {
 			t.Errorf("out-of-scope service produced a control: %+v", c)
 		}
 	}
-	if len(scopedCfg().ServiceControls(covered)) == 0 {
+	if len(scopedCfg().ServiceControls(covered, nil)) == 0 {
 		t.Error("the in-scope service should produce controls")
 	}
 }
@@ -47,7 +47,7 @@ func TestControlsReflectRealPosture(t *testing.T) {
 		Proxy: &ProxyConfig{Backend: "10.0.0.5:8080"}, // remote, cleartext
 	}}}
 	got := map[string]ServiceControl{}
-	for _, c := range cfg.ServiceControls(map[string]bool{}) {
+	for _, c := range cfg.ServiceControls(map[string]bool{}, nil) {
 		got[c.Control] = c
 	}
 
@@ -114,5 +114,48 @@ func TestTLSFloor(t *testing.T) {
 	}
 	if (&Config{HAProxyTLSMinVersion: "TLSv1.0"}).TLSMinVersion() != "TLSv1.0" {
 		t.Error("an explicit legacy floor should still be honoured in the config")
+	}
+}
+
+func TestCertExpiryControl(t *testing.T) {
+	cfg := &Config{SSLEnabled: true, Services: []Service{{
+		Name: "shop", PCIScope: PCIScopeCDE, Domains: []string{"shop.example.com"},
+		Proxy: &ProxyConfig{Backend: "127.0.0.1:9000", InternalOnly: true},
+	}}}
+	covered := map[string]bool{"shop.example.com": true}
+
+	for _, c := range cfg.ServiceControls(covered, nil) {
+		if c.Control == "cert_not_expiring" && !c.OK {
+			t.Error("a cert with plenty of life left should pass")
+		}
+	}
+	for _, c := range cfg.ServiceControls(covered, map[string]bool{"shop.example.com": true}) {
+		if c.Control == "cert_not_expiring" && c.OK {
+			t.Error("an expiring cert must fail")
+		}
+	}
+}
+
+// A certificate existing is not the same as TLS being served: with ssl_enabled
+// off hz serves plain HTTP on every vhost regardless of what is on disk.
+func TestServedOverHTTPSNeedsSSLEnabled(t *testing.T) {
+	svc := Service{Name: "shop", PCIScope: PCIScopeCDE, Domains: []string{"shop.example.com"},
+		Proxy: &ProxyConfig{Backend: "127.0.0.1:9000"}}
+	covered := map[string]bool{"shop.example.com": true}
+
+	off := &Config{SSLEnabled: false, Services: []Service{svc}}
+	for _, c := range off.ServiceControls(covered, nil) {
+		if c.Control == "served_over_https" && c.OK {
+			t.Error("ssl_enabled off must fail served_over_https even with a valid cert")
+		}
+		if c.Control == "tls_covered" && !c.OK {
+			t.Error("the cert does cover it; tls_covered should still pass")
+		}
+	}
+	on := &Config{SSLEnabled: true, Services: []Service{svc}}
+	for _, c := range on.ServiceControls(covered, nil) {
+		if c.Control == "served_over_https" && !c.OK {
+			t.Error("ssl on plus a covering cert should pass")
+		}
 	}
 }

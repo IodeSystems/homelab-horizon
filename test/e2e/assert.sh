@@ -374,6 +374,27 @@ else
   ok "METRICS-13 unscoped services emit no PCI controls"
 fi
 
+# Host facts are measured on the health tick, so they must be present by now
+# and must not have been gathered during the scrape itself.
+grep -q '^hz_time_synchronised ' <<<"$body" \
+  && ok "METRICS-14 clock synchronisation is reported (10.6)" \
+  || bad "METRICS-14 clock synchronisation is reported (10.6)" "no hz_time_synchronised"
+grep -q 'hz_control_state{control="time_synchronised"' <<<"$body" \
+  && ok "METRICS-15 clock sync is exposed as a control" \
+  || bad "METRICS-15 clock sync is exposed as a control" "$(grep hz_control_state <<<"$body" | head -3)"
+grep -q 'hz_control_state{control="patches_current"' <<<"$body" \
+  && ok "METRICS-16 patch currency is exposed as a control (6.3.3)" \
+  || bad "METRICS-16 patch currency is exposed as a control (6.3.3)" "missing"
+
+# A scrape must stay fast: apt-check reads the whole package cache, so it
+# belongs on the 60s tick, not in the scrape path.
+start=$(date +%s%N)
+curl -fsS -b "$COOKIE" --max-time 10 "$API/metrics" >/dev/null 2>&1
+ms=$(( ($(date +%s%N) - start) / 1000000 ))
+[ "$ms" -lt 1000 ] \
+  && ok "METRICS-17 a scrape completes in ${ms}ms, so host facts are cached not gathered" \
+  || bad "METRICS-17 a scrape completes quickly" "took ${ms}ms — something is shelling out per scrape"
+
 # The dashboard is generated per deployment, so it has to be valid JSON and
 # reference metrics this instance actually publishes.
 dash=$(curl -fsS -b "$COOKIE" --max-time 5 "$API/integration/grafana/dashboard.json" 2>&1 || true)
