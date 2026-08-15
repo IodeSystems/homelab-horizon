@@ -3,9 +3,12 @@ package monitor
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -13,12 +16,44 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
+// Check states.
+//
+// StatusWarning is the third state: the check succeeded, and something about
+// the answer says it will stop succeeding. A certificate six days from expiry
+// serves perfectly today, so calling it "failed" is a lie the operator learns
+// to ignore — and calling it "ok" is the silence this state exists to break.
+const (
+	StatusOK       = "ok"
+	StatusWarning  = "warning"
+	StatusFailed   = "failed"
+	StatusPending  = "pending"
+	StatusDisabled = "disabled"
+)
+
+// WarningError marks a check result as degraded rather than broken. A check
+// returns it in place of a plain error; everything else about the check's
+// contract is unchanged.
+type WarningError struct{ Msg string }
+
+func (w *WarningError) Error() string { return w.Msg }
+
+// Warnf builds a WarningError.
+func Warnf(format string, args ...any) error {
+	return &WarningError{Msg: fmt.Sprintf(format, args...)}
+}
+
+// isWarning reports whether an error is a warning rather than a failure.
+func isWarning(err error) bool {
+	var w *WarningError
+	return errors.As(err, &w)
+}
+
 // CheckStatus represents the current status of a service check
 type CheckStatus struct {
 	Name      string    `json:"name"`
 	Type      string    `json:"type"`
 	Target    string    `json:"target"`
-	Status    string    `json:"status"` // "ok", "failed", "pending", "disabled"
+	Status    string    `json:"status"` // "ok", "warning", "failed", "pending", "disabled"
 	LastCheck time.Time `json:"last_check"`
 	LastError string    `json:"last_error,omitempty"`
 	Interval  int       `json:"interval"`
@@ -29,12 +64,27 @@ type CheckStatus struct {
 // CheckResult records a single check execution for history tracking
 type CheckResult struct {
 	Timestamp time.Time `json:"timestamp"`
-	Status    string    `json:"status"`  // "ok", "failed"
+	Status    string    `json:"status"`  // "ok", "warning", "failed"
 	Latency   int64     `json:"latency"` // milliseconds
 	Error     string    `json:"error,omitempty"`
 }
 
 const maxHistoryPerCheck = 100
+
+// defaultCertWarningDays is how far ahead of expiry a certificate starts
+// warning. Seven days covers a weekend plus slack: Let's Encrypt renews at 30
+// days left, so anything still unrenewed inside a week means renewal is broken
+// rather than pending, and there is still time to fix it by hand.
+const defaultCertWarningDays = 7
+
+// certWarningWindow is the configured lead time, or the default.
+func (m *Monitor) certWarningWindow() time.Duration {
+	days := defaultCertWarningDays
+	if m.config != nil && m.config.CertWarningDays > 0 {
+		days = m.config.CertWarningDays
+	}
+	return time.Duration(days) * 24 * time.Hour
+}
 
 // Monitor manages service health checks and notifications
 type Monitor struct {
@@ -127,7 +177,63 @@ func (m *Monitor) getAllChecks() []config.ServiceCheck {
 		})
 	}
 
+	checks = append(checks, m.tlsChecks()...)
+
 	return checks
+}
+
+// tlsChecks generates one TLS check per served domain.
+//
+// The backend checks above prove the application is alive; none of them touch
+// the TLS edge in front of it, which is why a domain could read green while
+// HAProxy served a certificate that did not carry its name. This closes that
+// gap by asking the only question that settles it: complete a handshake for
+// this hostname and look at what comes back.
+//
+// Hourly, not every five minutes. The two things it detects — a certificate
+// that stops covering a name, and one running out of time — move on the scale
+// of days, and the check costs a full handshake per domain.
+func (m *Monitor) tlsChecks() []config.ServiceCheck {
+	if !m.config.SSLEnabled {
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	var out []config.ServiceCheck
+
+	for _, svc := range m.config.Services {
+		if svc.Proxy == nil {
+			continue
+		}
+		for _, domain := range svc.Domains {
+			domain = strings.ToLower(strings.TrimSpace(domain))
+			// A wildcard is not a hostname a client can connect to; the
+			// concrete names it covers are checked on their own.
+			if domain == "" || seen[domain] || strings.HasPrefix(domain, "*.") {
+				continue
+			}
+			seen[domain] = true
+
+			name := "tls:" + domain
+			enabled := true
+			for _, disabled := range m.config.DisabledAutoChecks {
+				if disabled == name {
+					enabled = false
+					break
+				}
+			}
+
+			out = append(out, config.ServiceCheck{
+				Name:     name,
+				Type:     "tls",
+				Target:   domain,
+				Interval: 3600,
+				Enabled:  enabled,
+			})
+		}
+	}
+
+	return out
 }
 
 // Start begins running health checks in the background
@@ -141,9 +247,9 @@ func (m *Monitor) Start() {
 		if interval <= 0 {
 			interval = 300
 		}
-		status := "pending"
+		status := StatusPending
 		if !check.Enabled {
-			status = "disabled"
+			status = StatusDisabled
 		}
 		m.statuses[check.Name] = &CheckStatus{
 			Name:     check.Name,
@@ -152,7 +258,7 @@ func (m *Monitor) Start() {
 			Status:   status,
 			Interval: interval,
 			Enabled:  check.Enabled,
-			AutoGen:  strings.HasPrefix(check.Name, "svc:"),
+			AutoGen:  isAutoGen(check.Name),
 		}
 	}
 	m.mu.Unlock()
@@ -163,6 +269,13 @@ func (m *Monitor) Start() {
 			go m.runCheck(check)
 		}
 	}
+}
+
+// isAutoGen reports whether a check was generated rather than declared. Both
+// prefixes are reserved: a manual check may not claim one, or it would collide
+// with the generated check it shadows.
+func isAutoGen(name string) bool {
+	return strings.HasPrefix(name, "svc:") || strings.HasPrefix(name, "tls:")
 }
 
 // Stop halts all health checks
@@ -252,9 +365,9 @@ func (m *Monitor) SetCheckEnabled(name string, enabled bool) bool {
 
 	status.Enabled = enabled
 	if !enabled {
-		status.Status = "disabled"
-	} else if status.Status == "disabled" {
-		status.Status = "pending"
+		status.Status = StatusDisabled
+	} else if status.Status == StatusDisabled {
+		status.Status = StatusPending
 	}
 
 	return true
@@ -322,16 +435,21 @@ func (m *Monitor) executeCheck(check config.ServiceCheck) {
 		err = m.doPing(check.Target)
 	case "http":
 		err = m.doHTTP(check.Target)
+	case "tls":
+		err = m.doTLS(check.Target)
 	default:
 		err = fmt.Errorf("unknown check type: %s", check.Type)
 	}
 
 	latency := time.Since(start).Milliseconds()
 
-	if err != nil {
-		newStatus = "failed"
-	} else {
-		newStatus = "ok"
+	switch {
+	case err == nil:
+		newStatus = StatusOK
+	case isWarning(err):
+		newStatus = StatusWarning
+	default:
+		newStatus = StatusFailed
 	}
 
 	// Build history result
@@ -356,7 +474,7 @@ func (m *Monitor) executeCheck(check config.ServiceCheck) {
 			Name:     check.Name,
 			Type:     check.Type,
 			Target:   check.Target,
-			Status:   "pending",
+			Status:   StatusPending,
 			Interval: interval,
 		}
 		m.statuses[check.Name] = status
@@ -381,9 +499,14 @@ func (m *Monitor) executeCheck(check config.ServiceCheck) {
 
 	m.mu.Unlock()
 
-	// Send notification if transitioning to failed
-	if newStatus == "failed" && previousStatus != "failed" {
-		m.sendNotification(check, err)
+	// Notify on entering a bad state, once per transition.
+	//
+	// Warnings page too: an expiring certificate that only warns silently is
+	// indistinguishable from one nobody is watching, and the whole point of the
+	// state is to arrive before the outage. They go out at lower priority so
+	// they read as "this needs scheduling", not "this is on fire".
+	if newStatus != previousStatus && (newStatus == StatusFailed || newStatus == StatusWarning) {
+		m.sendNotification(check, err, newStatus)
 	}
 }
 
@@ -435,8 +558,109 @@ func (m *Monitor) doHTTP(target string) error {
 	return nil
 }
 
-// sendNotification sends an ntfy notification for a failed check
-func (m *Monitor) sendNotification(check config.ServiceCheck, checkErr error) {
+// doTLS completes a real TLS handshake and reports on the certificate the
+// server actually hands a client.
+//
+// This is the check nothing else performs. Everywhere else — the Domains page,
+// `domain list`, the SSL coverage map — reads what the config says should be
+// covered, so a domain reads green while HAProxy serves a default certificate
+// that does not carry its name. Only a handshake against the public hostname
+// can tell the difference, because hostname verification is exactly the step
+// those surfaces skip.
+//
+// Failure vs warning splits on whether it works today: a name the certificate
+// does not cover is broken for every verifying client right now, while one
+// expiring on Friday is fine until Friday.
+func (m *Monitor) doTLS(target string) error {
+	host, port := tlsHostPort(target)
+	if host == "" {
+		return fmt.Errorf("invalid TLS target: %s", target)
+	}
+
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	// ServerName drives SNI and hostname verification both: the gateway picks
+	// its certificate from it, and the client then holds the server to it.
+	// It stays the public hostname even when the dial is redirected below.
+	conn, err := tls.DialWithDialer(dialer, "tcp", m.dialAddrFor(host, port), &tls.Config{
+		ServerName: host,
+		MinVersion: tls.VersionTLS12,
+	})
+	if err != nil {
+		return fmt.Errorf("TLS handshake failed for %s: %w", host, err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	chain := conn.ConnectionState().PeerCertificates
+	if len(chain) == 0 {
+		return fmt.Errorf("no certificate presented by %s", host)
+	}
+	leaf := chain[0]
+
+	left := time.Until(leaf.NotAfter)
+	switch {
+	case left <= 0:
+		return fmt.Errorf("certificate for %s expired %s", host, leaf.NotAfter.Format(time.DateOnly))
+	case left <= m.certWarningWindow():
+		return Warnf("certificate for %s expires in %d day(s), on %s",
+			host, int(left.Hours()/24), leaf.NotAfter.Format(time.DateOnly))
+	}
+	return nil
+}
+
+// dialAddrFor decides where to actually connect for a TLS check.
+//
+// Normally that is the hostname itself. But hz sits behind its own public IP,
+// and a domain it serves resolves to exactly that address — so a check running
+// on the gateway leaves the box, arrives back at its own WAN interface, and
+// needs the router to hairpin it. Plenty of routers don't, and the check then
+// fails with a timeout that says nothing about TLS. Detecting our own public
+// IP and dialling loopback instead keeps the handshake pointed at the same
+// HAProxy while removing the round trip that has nothing to do with what is
+// being tested. SNI is unchanged, so HAProxy still picks the certificate by
+// name and verification is still against the public hostname.
+func (m *Monitor) dialAddrFor(host, port string) string {
+	direct := net.JoinHostPort(host, port)
+	if m.config == nil || m.config.PublicIP == "" {
+		return direct
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return direct
+	}
+	for _, ip := range ips {
+		if ip.String() == m.config.PublicIP {
+			return net.JoinHostPort("127.0.0.1", port)
+		}
+	}
+	return direct
+}
+
+// tlsHostPort splits a check target into host and port, accepting a bare
+// hostname, host:port, or an https:// URL.
+func tlsHostPort(target string) (host, port string) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "", ""
+	}
+	if strings.Contains(target, "://") {
+		u, err := url.Parse(target)
+		if err != nil || u.Hostname() == "" {
+			return "", ""
+		}
+		port = u.Port()
+		if port == "" {
+			port = "443"
+		}
+		return u.Hostname(), port
+	}
+	if h, p, err := net.SplitHostPort(target); err == nil {
+		return h, p
+	}
+	return target, "443"
+}
+
+// sendNotification sends an ntfy notification for a check entering a bad state
+func (m *Monitor) sendNotification(check config.ServiceCheck, checkErr error, status string) {
 	if m.config.NtfyURL == "" {
 		return
 	}
@@ -444,6 +668,14 @@ func (m *Monitor) sendNotification(check config.ServiceCheck, checkErr error) {
 	title := fmt.Sprintf("🔴 %s is DOWN", check.Name)
 	message := fmt.Sprintf("Health check failed for %s (%s)\n\nTarget: %s\nError: %s",
 		check.Name, check.Type, check.Target, checkErr.Error())
+	priority, tags := "high", "warning,skull"
+
+	if status == StatusWarning {
+		title = fmt.Sprintf("🟡 %s needs attention", check.Name)
+		message = fmt.Sprintf("Health check degraded for %s (%s)\n\nTarget: %s\nWarning: %s",
+			check.Name, check.Type, check.Target, checkErr.Error())
+		priority, tags = "default", "warning"
+	}
 
 	body := bytes.NewBufferString(message)
 	req, err := http.NewRequest("POST", m.config.NtfyURL, body)
@@ -452,8 +684,8 @@ func (m *Monitor) sendNotification(check config.ServiceCheck, checkErr error) {
 	}
 
 	req.Header.Set("Title", title)
-	req.Header.Set("Priority", "high")
-	req.Header.Set("Tags", "warning,skull")
+	req.Header.Set("Priority", priority)
+	req.Header.Set("Tags", tags)
 
 	resp, err := m.client.Do(req)
 	if err != nil {
