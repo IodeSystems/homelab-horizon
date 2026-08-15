@@ -1,11 +1,14 @@
-# System Health + IPTables Rules — Plan
+# homelab-horizon — Plan
 
 > How this plan works: current state and in-flight work only. Finished trees
 > move to [done.md](done.md) with a pointer; deferred opt-ins move to
 > [icebox.md](icebox.md). Every active slice carries next / risks / blocking
 > decisions. Maintained in the same pass as the work.
+>
+> Jump to **[Active work](#active-work)** — everything above it is the finished
+> system-health / iptables tree, kept for its context and decisions.
 
-## Context
+## Context — the system health + iptables tree (done)
 
 Two gaps surfaced while fixing the "added an eth, nothing works" outage:
 
@@ -254,6 +257,21 @@ Phase 3 replaces this with: restart horizon, done.
 
 ## Active work
 
+Nothing is in progress. Ordered by what I'd pick up next:
+
+| | Item | Blocked? |
+|---|---|---|
+| 1 | [VPN inactivity timeout](#-vpn-inactivity-timeout-last-wag-parity-item) | no |
+| 2 | [PCI 10.5.1 + 2.2.7](#-pci-the-two-remaining-controls-hz-can-actually-detect) | no |
+| 3 | [Runtime TLS check](#-runtime-tls-check-prove-the-cert-is-valid-for-the-hostname) | warn-vs-fail call (Carl) |
+| 4 | [Real users](#-real-users-replacing-the-shared-admin-token) | **local users vs OIDC (Carl)** |
+| 5 | [Phase 0 leftovers](#-phase-0-leftovers) · [canon writeback](#-canon-writeback-to-doc-cross-repo) · [cleanups](#known-cleanups-not-blocking) | no |
+| 6 | [Org alignment backlog](#-org-alignment-backlog--this-repo-owns-it-now) (10 items) | no |
+
+Two decisions are mine to make and yours to answer; everything else can start
+cold. The user model is the expensive one — it gates `8.2.8` and the shape of
+every login afterwards.
+
 ### ◻ Runtime TLS check: prove the cert is valid FOR THE HOSTNAME
 
 **HTTPS shows green from declared config, never from a handshake.** Nothing
@@ -364,6 +382,101 @@ attacker holding the token would reach for.
   before users exist would just log one shared operator out more often.
 - **UI note**: the disable toggle sits on Settings → System today; it belongs
   on Settings → Users once that page exists.
+
+### ◻ VPN inactivity timeout (last wag-parity item)
+
+A peer clears MFA once and stays cleared until its window expires, however long
+it has been silent. wag deauthenticates on inactivity; hz does not.
+
+- **next**: fold last-handshake into `IsPeerMFAJailed` — `wg show` already
+  reports it, and the reconciler already runs every 60s, so this is a comparison
+  and a re-jail, not new plumbing.
+- **risks**: WireGuard is silent by design. An idle-but-connected peer stops
+  handshaking, so too tight a threshold re-jails someone who never left; keep
+  the default well above the 120s keepalive and make it configurable.
+- **why now**: independent of the user model, and the multipass fixture already
+  exercises jail transitions, so the expensive part is already paid for.
+- **optional extensions**: surface remaining-session time in the portal, so a
+  timeout is visible before it happens rather than as a sudden loss of network.
+
+### ◻ PCI: the two remaining controls hz can actually detect
+
+Both are observable from the edge today, unlike the rest of the unmet list which
+needs the user model.
+
+- **10.5.1 — log retention.** journald is volatile on this box, so the audit
+  trail dies at reboot. Detect `Storage=` / a missing `/var/log/journal`, report
+  it, and offer the one-line fix as a fixer button.
+- **2.2.7 — non-console admin encryption.** hz serves `:8080` as plain HTTP on
+  the LAN; the admin token crosses the wire in the clear. Report it, and treat
+  admin-behind-its-own-HTTPS-vhost as the remediation.
+- **risks**: 2.2.7 is the one control whose remediation can lock the operator
+  out of the box — enabling TLS on the admin port with a bad cert path leaves no
+  way back in. It needs the same console-recovery story as the admin token.
+- **note**: keep both honest about "not evaluated" vs "compliant", per
+  [pci.go](../internal/config/pci.go)'s existing rule.
+
+### ◻ Phase 0 leftovers
+
+Named for completeness; neither is the missing-surface problem Phase 0 solved.
+
+- dnsmasq "listening on LocalInterface" check.
+- public IP re-detect (the value is now in the health payload, but it is only
+  read at startup).
+
+### ◻ Canon writeback to `~/doc` (cross-repo)
+
+- `AUTH-4` is still a proposal blockquote at `patterns/webauthn.md:171`; it was
+  accepted in practice and belongs in `patterns/standards.md`.
+- That doc names joko and veliode-go; hz is the **third** implementation and the
+  only one that identifies the peer *before* the ceremony and holds ceremony
+  state in-process rather than in a shared store — a variant worth recording,
+  since it is what makes a captive portal work without a user table.
+
+### ⏸ Org alignment backlog — this repo owns it now
+
+**waits-on:** nothing; it is queued behind the work above.
+
+Not lost in the `~/doc` reorg as I first read it: commit `0f02917` deleted
+`plan/` deliberately — *"the canon repo holds the canon; projects own their own
+compliance."* So these belong here. Recovered from `0f02917^:plan/homelab-horizon.md`
+and **re-verified against the tree on 2026-08-15** — all ten are still open.
+`METRICS-1` (hz's own `/metrics`) was open in that file and shipped this session.
+
+Score at capture: ✅14 · ⚠️4 · ❌11 · P1 · effort L.
+
+- ◻ **CLI-1** — `cmd/homelab-horizon/main.go` still uses stdlib `flag`; canon is
+  cobra `newRoot()` + `loader`. Reference: `ragtag/cmd/cli`. · M
+- ◻ **WEB-5 / DEPLOY-5** — `ui/embed.go` embeds `dist` and `internal/server/spa.go`
+  serves it. hz is slot-deployed, so the lib/tool embed exception does not apply.
+  Drop the embed, serve from `STATIC_DIR`, copy `ui/dist/` → payload `public/`. · M
+- ◻ **DEPLOY-9** — no `payload:` target in the Makefile; pairs with WEB-5. · S
+- ◻ **WEB-1** — MUI `^7.3.11` (canon v9) and npm (canon pnpm). · M
+- ◻ **WEB-2** — `@vitejs/plugin-react` (Babel); canon is `plugin-react-swc`. · S
+- ◻ **WEB-3** — `@/*` alias is in `tsconfig.app.json` but not in
+  `vite.config.ts`, so TS resolves it and the bundler does not. · S
+- ◻ **WEB-9** — the Vite proxy has no `ws: true`, `host: '127.0.0.1'`, or
+  `strictPort: true`. · S
+- ◻ **WEB-8** — `ui/src/` has no `providers/`. · S
+- ◻ **CFG-2 / CFG-4** — tracking gap only; hz is exempt from layered
+  `.properties` under the single-mode carve-out. · S
+- ◻ **EDGE-4** — coarse table-based edge rate limiting, **uniquely owned by hz**
+  and blocking org-wide abuse protection: a volume threshold table per IP/service
+  above today's flat IP bans, with services pushing blocks down via the existing
+  ban API. · L
+
+**sequencing** (from the recovered file): WEB-5 + DEPLOY-9 together; WEB-1/2/3/9
+as one UI modernisation pass; CLI-1 on its own; EDGE-4 last, after the
+reliability and lint gates.
+
+### Operator follow-ups (not code)
+
+- **Re-import the Grafana dashboard** — the deployed one predates
+  `no_shared_admin_token`, `time_synchronised` and `patches_current`, so it is
+  three controls short. Copy it again from the Observability page.
+- **Set `pci_scope` on the real services.** Default is out-of-scope by design,
+  so the per-service table stays empty until someone scopes services in — which
+  reads identically to "nothing wrong".
 
 ## Known cleanups (not blocking)
 
