@@ -955,6 +955,7 @@ type ComponentHealth struct {
 
 type SystemHealthResponse struct {
 	Components           []ComponentHealth `json:"components"`
+	PublicIP             string            `json:"publicIP,omitempty"`
 	IPForwarding         bool              `json:"ip_forwarding"`
 	IPForwardingError    string            `json:"ip_forwarding_error,omitempty"`
 	HorizonUnitInstalled bool              `json:"horizon_unit_installed"`

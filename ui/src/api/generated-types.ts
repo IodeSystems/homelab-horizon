@@ -878,6 +878,7 @@ export interface ComponentHealth {
 }
 export interface SystemHealthResponse {
   components: ComponentHealth[];
+  publicIP?: string;
   ip_forwarding: boolean;
   ip_forwarding_error?: string;
   horizon_unit_installed: boolean;
