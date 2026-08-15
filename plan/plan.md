@@ -323,11 +323,19 @@ The iptables tree is finished. Recently finished trees are archived in
 second factor, and the multipass e2e fixture that found five pre-existing bugs
 along the way.
 
-The original point of this plan — **Phase 0, the System Health + Fixer
-dashboard** — is still unbuilt. Phases 1–5 (the iptables classifier and
-reconciler) all shipped; Phase 0 was independent of them and got skipped.
-Nine fixer handlers stripped in the React migration are still orphaned Go
-primitives with no HTTP route (see Context, item 1).
+**Phase 0 is done** — and had been for a while; this plan simply never said
+so. `SystemHealthTab` renders System / WireGuard / HAProxy / dnsmasq /
+Let's Encrypt / apt cards over `GET /api/v1/system/health`, and 19 checks pair
+with inline fixers. Of the nine handlers Context item 1 lists as lost, eight
+came back as `/api/v1/system/*` endpoints.
+
+The last gap closed with the renew button: Let's Encrypt was the only card that
+reported a problem without offering the fix, though `/api/v1/ssl/request-cert`
+had existed the whole time. `publicIP` is now in the health payload too.
+
+Remaining Phase 0 items, deliberately not built: a "listening on
+LocalInterface" check for dnsmasq, and re-detect for public IP. Both are
+nice-to-haves rather than the missing-surface problem this plan described.
 
 ### ◻ Real users, replacing the shared admin token
 

@@ -195,10 +195,13 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 		}
 		le.Running = allHaveCerts
 		le.Extras = map[string]any{"domains": perDomain}
+
 	} else {
 		le.Extras = map[string]any{"disabled": true}
 	}
 	resp.Components = append(resp.Components, le)
+
+	resp.PublicIP = cfg.PublicIP
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)

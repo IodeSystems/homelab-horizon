@@ -40,6 +40,7 @@ import {
   useFixWGRules,
   useInstallHorizonUnit,
   useInstallPackage,
+  useRequestCert,
   useRefreshPublicIP,
   useReloadDNSMasq,
   useSetPublicIPOverride,
@@ -446,6 +447,7 @@ function LetsEncryptCard({
       </ComponentCard>
     );
   }
+  const requestCert = useRequestCert();
   const domains = (extras.domains ?? []) as Array<{
     domain: string;
     sans?: string[];
@@ -531,7 +533,18 @@ function LetsEncryptCard({
                     variant={d.cert_exists ? "outlined" : "filled"}
                   />
                   {d.needs_renewal ? (
-                    <Chip size="small" color="warning" label={d.expiry_info || "renew soon"} />
+                    <>
+                      <Chip size="small" color="warning" label={d.expiry_info || "renew soon"} />
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        sx={{ ml: 1 }}
+                        disabled={requestCert.isPending}
+                        onClick={() => requestCert.mutate(d.domain)}
+                      >
+                        {requestCert.isPending ? "Requesting..." : "Renew"}
+                      </Button>
+                    </>
                   ) : d.expiry_info ? (
                     <Typography variant="caption" color="text.secondary">
                       {d.expiry_info}
