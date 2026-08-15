@@ -45,6 +45,7 @@ func main() {
 	showSystemdService := flag.Bool("show-systemd", false, "Show the systemd service file that would be generated")
 	version := flag.Bool("version", false, "Print version and exit")
 	noMCP := flag.Bool("no-mcp", false, "Disable MCP tool server (default: MCP enabled over stdio)")
+	enableAdminToken := flag.Bool("enable-admin-token", false, "Re-enable the shared admin token and exit to normal startup (console recovery)")
 	flag.Parse()
 
 	hzlog.Setup() // structured slog → stderr (JSON under journald, text on a TTY)
@@ -69,7 +70,7 @@ func main() {
 			os.Exit(1)
 		}
 	default:
-		runServer(*configPath, *dryRun, !*noMCP)
+		runServer(*configPath, *dryRun, !*noMCP, *enableAdminToken)
 	}
 }
 
@@ -83,7 +84,7 @@ func isMCPClient() bool {
 	return fi.Mode()&os.ModeCharDevice == 0
 }
 
-func runServer(configPath string, dryRun bool, mcpEnabled bool) {
+func runServer(configPath string, dryRun bool, mcpEnabled bool, enableAdminToken bool) {
 	// If MCP is enabled and stdin is a pipe, run as MCP stdio server
 	if mcpEnabled && isMCPClient() {
 		runMCPStdio(configPath, dryRun)
@@ -107,6 +108,19 @@ func runServer(configPath string, dryRun bool, mcpEnabled bool) {
 	}
 
 	slog.Debug("config search paths", "paths", strings.Join(config.SearchPaths, ", "))
+
+	// Console recovery for a box whose admin token was switched off and whose
+	// VPN admin peers are unreachable. Deliberately requires a restart and
+	// therefore local or out-of-band access: someone locked out over the
+	// network cannot use it, and someone at the console always can.
+	if enableAdminToken && cfg.AdminTokenDisabled {
+		cfg.AdminTokenDisabled = false
+		if err := config.Save(cfgPath, cfg); err != nil {
+			slog.Error("could not re-enable the admin token", "err", err)
+			os.Exit(1)
+		}
+		slog.Warn("admin token re-enabled by -enable-admin-token", "config", cfgPath)
+	}
 
 	if cfg.AutoHeal {
 		slog.Info("auto-heal enabled, checking dependencies")

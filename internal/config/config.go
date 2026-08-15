@@ -285,6 +285,20 @@ type Config struct {
 	// mutation; applyNewConfig applies it to the local WG config file.
 	WGPeers []WGPeer `json:"wg_peers,omitempty"`
 
+	// AdminTokenDisabled turns off the shared admin token, leaving VPN admin
+	// peers as the only way in.
+	//
+	// A shared bearer token means no individual accountability — every action
+	// is attributable to "whoever holds it" and nothing finer, which is what
+	// PCI DSS 8.2.1 exists to prevent. Disabling it is the hardened state once
+	// there is another way to administer the box.
+	//
+	// Recovery is deliberately physical rather than remote: restart hz with
+	// -enable-admin-token, which clears this and persists. Someone locked out
+	// of the network cannot re-enable it, and someone at the console always
+	// can.
+	AdminTokenDisabled bool `json:"admin_token_disabled,omitempty"`
+
 	// NodeExporterEnabled folds prometheus-node-exporter into the scrape
 	// config hz serves, and lets autoheal install it. hz deliberately does not
 	// reimplement host metrics — node-exporter does that better — so this is

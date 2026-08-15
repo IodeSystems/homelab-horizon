@@ -613,12 +613,17 @@ func (s *Server) mcpAuthMiddleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) isAdmin(r *http.Request) bool {
-	// Check session cookie first
-	cookie, err := r.Cookie("session")
-	if err == nil {
-		value, valid := s.verifyCookie(cookie.Value)
-		if valid && value == "admin" {
-			return true
+	// Session cookie, which is minted by the admin token. Both are gated by
+	// the same switch: leaving existing sessions alive after the token is
+	// disabled would mean the shared credential still works until the cookie
+	// happens to expire.
+	if !s.cfg().AdminTokenDisabled {
+		cookie, err := r.Cookie("session")
+		if err == nil {
+			value, valid := s.verifyCookie(cookie.Value)
+			if valid && value == "admin" {
+				return true
+			}
 		}
 	}
 
@@ -1029,6 +1034,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/mfa/reset", s.handleAPIMFAReset)
 	mux.HandleFunc("/api/v1/mfa/grant-session", s.handleAPIMFAGrantSession)
 	mux.HandleFunc("/api/v1/mfa/revoke-session", s.handleAPIMFARevokeSession)
+	mux.HandleFunc("/api/v1/admin-token/disable", s.handleAPIAdminTokenDisable)
 	mux.HandleFunc("/api/v1/mfa/exception", s.handleAPIMFAException)
 	mux.HandleFunc("/api/v1/mfa/exception/revoke", s.handleAPIMFAExceptionRevoke)
 
