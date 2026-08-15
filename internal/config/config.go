@@ -231,6 +231,12 @@ type Config struct {
 	// inheritance" is not something an assessor can be shown.
 	HAProxyTLSMinVersion string `json:"haproxy_tls_min_version,omitempty"`
 
+	// CertWarningDays is how many days before expiry a TLS check starts
+	// warning instead of passing. Defaults to 7 — see
+	// monitor.defaultCertWarningDays for why. Raise it if renewal needs a
+	// human in the loop and that human is not always around.
+	CertWarningDays int `json:"cert_warning_days,omitempty"`
+
 	// StaticServePort is the loopback port hz binds to serve static-folder
 	// services (ProxyConfig.StaticRoot). HAProxy routes those services here.
 	// Bound to 127.0.0.1 only — never publicly reachable. Defaults to 8091.

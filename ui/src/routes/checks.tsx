@@ -61,7 +61,9 @@ function StatusDot({ status }: { status: string }) {
       ? "success.main"
       : status === "failed"
         ? "error.main"
-        : "text.disabled";
+        : status === "warning"
+          ? "warning.main"
+          : "text.disabled";
   return (
     <Box
       sx={{
@@ -115,8 +117,8 @@ function CheckRow({ check }: { check: CheckStatus }) {
             <StatusDot status={check.status} />
             <Typography variant="body2">{check.status}</Typography>
           </Box>
-          {check.status === "failed" && check.last_error && (
-            <Typography variant="caption" color="error.main" sx={{ display: "block", mt: 0.25, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={check.last_error}>
+          {(check.status === "failed" || check.status === "warning") && check.last_error && (
+            <Typography variant="caption" color={check.status === "warning" ? "warning.main" : "error.main"} sx={{ display: "block", mt: 0.25, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={check.last_error}>
               {check.last_error}
             </Typography>
           )}
@@ -196,6 +198,7 @@ function ChecksPage() {
   const checksList = checks ?? [];
   const healthy = checksList.filter((c) => c.status === "ok").length;
   const failed = checksList.filter((c) => c.status === "failed").length;
+  const warning = checksList.filter((c) => c.status === "warning").length;
   const total = checksList.length;
 
   return (
@@ -206,7 +209,8 @@ function ChecksPage() {
             Health Checks
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            {healthy} healthy, {failed} failed, {total} total
+            {healthy} healthy, {warning > 0 ? `${warning} warning, ` : ""}
+            {failed} failed, {total} total
           </Typography>
         </Box>
         <Button

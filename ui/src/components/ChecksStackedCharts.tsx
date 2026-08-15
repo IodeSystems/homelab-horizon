@@ -154,7 +154,9 @@ export function ChecksStackedCharts({ series }: { series: AllCheckHistoryEntry[]
                     ? "#2e7d32"
                     : cell.status === "failed"
                       ? "#c62828"
-                      : "#9e9e9e"
+                      : cell.status === "warning"
+                        ? "#ed6c02"
+                        : "#9e9e9e"
                   : "#f5f5f5";
                 return (
                   <rect
