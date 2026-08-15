@@ -257,13 +257,13 @@ Phase 3 replaces this with: restart horizon, done.
 
 ## Active work
 
-Phase 1 of the user model is in progress. Ordered by what I'd pick up next:
+Phase 2 of the user model is next. Ordered by what I'd pick up next:
 
 | | Item | Blocked? |
 |---|---|---|
 | 1 | [VPN inactivity timeout](#-vpn-inactivity-timeout-last-wag-parity-item) | no |
 | 2 | [PCI 10.5.1 + 2.2.7](#-pci-the-two-remaining-controls-hz-can-actually-detect) | no |
-| 3 | [Real users](#-real-users-local-credentials--oidc-on-sqlite) — local + OIDC on SQLite, phased | decided; ◐ Phase 1 |
+| 3 | [Real users](#-real-users-local-credentials--oidc-on-sqlite) — local + OIDC on SQLite | ◐ Phase 1 done, Phase 2 next |
 | 4 | [Phase 0 leftovers](#-phase-0-leftovers) · [canon writeback](#-canon-writeback-to-doc-cross-repo) · [cleanups](#known-cleanups-not-blocking) | no |
 | 5 | [Org alignment backlog](#-org-alignment-backlog--this-repo-owns-it-now) (10 items) | no |
 
@@ -318,9 +318,13 @@ assets punched through the jail.
 
 **Phasing** — each phase ships and is useful alone:
 
-- ◻ **1. Foundation.** DB package, migrations, `users` / `credentials` /
-  `sessions` tables, bcrypt verify, tests. Nothing wired to login yet, so no
-  lockout risk while the shape settles.
+- ✅ **1. Foundation** (`7036167`). `internal/db` on SQLite: migrations with
+  DEPLOY-10 checksum enforcement, `users` / `credentials` / `sessions`, bcrypt
+  per AUTH-1, SHA-256 session tokens per AUTH-2, idle + absolute expiry, tests
+  against real SQLite. Unwired — hz still authenticates exactly as before.
+  `CountEnabledUsers` is the guard Phase 2 needs: it counts only accounts that
+  hold a credential, so an invite that nobody has accepted cannot be mistaken
+  for a way back in.
 - ◻ **2. Local login.** Sessions in the DB, first-user bootstrap from the admin
   token, Settings → Users (invite, disable, reset). Token still works.
 - ◻ **3. Second factors.** Re-point the existing passkey ceremony at users
