@@ -367,7 +367,10 @@ type PasskeyFinishRequest struct {
 	CeremonyID string          `json:"ceremonyId"`
 	Credential json.RawMessage `json:"credential"`
 	Label      string          `json:"label,omitempty"`    // register only
-	Duration   string          `json:"duration,omitempty"` // assert only
+	Duration   string          `json:"duration,omitempty"` // assert only (peer portal)
+	// PendingID ties an account login assertion to its password step. Peer
+	// ceremonies leave it empty; they are authorised by source IP instead.
+	PendingID string `json:"pendingId,omitempty"`
 }
 
 // PasskeyInfo is one enrolled credential, for display and deletion.
@@ -568,6 +571,14 @@ type LoginResponse struct {
 	OK       bool   `json:"ok"`
 	Invite   bool   `json:"invite,omitempty"`
 	Redirect string `json:"redirect,omitempty"`
+
+	// The password was right but the account has a second factor. Not an
+	// error: the caller continues with pendingId rather than starting over.
+	MFARequired bool   `json:"mfaRequired,omitempty"`
+	PendingID   string `json:"pendingId,omitempty"`
+	// Which factors this account can finish with, so the UI offers what
+	// exists instead of a code box for someone who only has a passkey.
+	Factors []string `json:"factors,omitempty"`
 }
 
 // Users
@@ -605,6 +616,40 @@ type SetPasswordRequest struct {
 type DisableUserRequest struct {
 	UserID   string `json:"userId"`
 	Disabled bool   `json:"disabled"`
+}
+
+// Account second factors
+
+type AccountTOTPEnrollResponse struct {
+	ProvisioningURI string `json:"provisioningUri"`
+	Secret          string `json:"secret"`
+}
+
+type AccountTOTPConfirmRequest struct {
+	Code string `json:"code"`
+}
+
+type AccountFactor struct {
+	ID           string `json:"id"`
+	Kind         string `json:"kind"`
+	Label        string `json:"label,omitempty"`
+	CreatedAt    string `json:"createdAt,omitempty"`
+	LastUsed     string `json:"lastUsed,omitempty"`
+	CloneWarning bool   `json:"cloneWarning,omitempty"`
+}
+
+type AccountFactorsResponse struct {
+	Factors           []AccountFactor `json:"factors"`
+	PasskeysAvailable bool            `json:"passkeysAvailable"`
+	// Why passkeys cannot be offered, when they cannot. Shown verbatim: the
+	// cause is always a config problem the operator can fix.
+	PasskeysUnavailableReason string `json:"passkeysUnavailableReason,omitempty"`
+}
+
+// LoginFactorRequest completes a login that stopped for a second factor.
+type LoginFactorRequest struct {
+	PendingID string `json:"pendingId"`
+	Code      string `json:"code,omitempty"`
 }
 
 // Deploy

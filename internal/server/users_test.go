@@ -24,7 +24,15 @@ func userServer(t *testing.T) *Server {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	s := &Server{adminToken: "test-admin-token", users: store}
+	// Mirrors what NewWithConfig builds. The in-process stores are not
+	// optional: a Server without them panics on the first login.
+	s := &Server{
+		adminToken:    "test-admin-token",
+		users:         store,
+		ceremonies:    newCeremonyStore(),
+		pendingLogins: newPendingLoginStore(),
+		pendingTOTP:   newPendingTOTPStore(),
+	}
 	s.config.Store(&config.Config{})
 	return s
 }

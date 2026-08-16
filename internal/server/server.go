@@ -222,6 +222,8 @@ type Server struct {
 	static         *staticSupervisor     // supervises the unprivileged static file server child
 	ceremonies     *ceremonyStore        // in-flight WebAuthn ceremonies (see webauthn.go)
 	users          *db.DB                // identity store; nil when unavailable (see users.go)
+	pendingLogins  *pendingLoginStore    // password done, second factor outstanding
+	pendingTOTP    *pendingTOTPStore     // TOTP secrets awaiting confirmation
 	promHandler    http.Handler          // hz's own /metrics exposition
 	hostFacts      hostFacts             // cached clock + patch state (see hostfacts.go)
 
@@ -430,6 +432,8 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		configShares:   make(map[string]*configShare),
 		joinTokens:     newJoinTokenStore(),
 		ceremonies:     newCeremonyStore(),
+		pendingLogins:  newPendingLoginStore(),
+		pendingTOTP:    newPendingTOTPStore(),
 	}
 
 	// Identity store. A failure here must not stop hz from serving: the admin
@@ -986,6 +990,14 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/auth/logout", s.handleAPILogout)
 
 	// API v1 user accounts
+	s.handlePeerInstance(mux, "/api/v1/auth/login/totp", s.handleAPILoginTOTP)
+	s.handlePeerInstance(mux, "/api/v1/auth/login/passkey/begin", s.handleAPILoginPasskeyBegin)
+	s.handlePeerInstance(mux, "/api/v1/auth/login/passkey/finish", s.handleAPILoginPasskeyFinish)
+	mux.HandleFunc("/api/v1/account/factors", s.handleAPIAccountFactors)
+	mux.HandleFunc("/api/v1/account/totp/enroll", s.handleAPIAccountTOTPEnroll)
+	mux.HandleFunc("/api/v1/account/totp/confirm", s.handleAPIAccountTOTPConfirm)
+	mux.HandleFunc("/api/v1/account/passkey/register/begin", s.handleAPIAccountPasskeyRegisterBegin)
+	mux.HandleFunc("/api/v1/account/passkey/register/finish", s.handleAPIAccountPasskeyRegisterFinish)
 	mux.HandleFunc("/api/v1/users", s.handleAPIUsers)
 	mux.HandleFunc("/api/v1/users/password", s.handleAPIUserPassword)
 	mux.HandleFunc("/api/v1/users/disable", s.handleAPIUserDisable)

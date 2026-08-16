@@ -359,7 +359,12 @@ export interface PasskeyFinishRequest {
   ceremonyId: string;
   credential: any /* json.RawMessage */;
   label?: string; // register only
-  duration?: string; // assert only
+  duration?: string; // assert only (peer portal)
+  /**
+   * PendingID ties an account login assertion to its password step. Peer
+   * ceremonies leave it empty; they are authorised by source IP instead.
+   */
+  pendingId?: string;
 }
 /**
  * PasskeyInfo is one enrolled credential, for display and deletion.
@@ -548,6 +553,17 @@ export interface LoginResponse {
   ok: boolean;
   invite?: boolean;
   redirect?: string;
+  /**
+   * The password was right but the account has a second factor. Not an
+   * error: the caller continues with pendingId rather than starting over.
+   */
+  mfaRequired?: boolean;
+  pendingId?: string;
+  /**
+   * Which factors this account can finish with, so the UI offers what
+   * exists instead of a code box for someone who only has a passkey.
+   */
+  factors?: string[];
 }
 export interface User {
   id: string;
@@ -580,6 +596,37 @@ export interface SetPasswordRequest {
 export interface DisableUserRequest {
   userId: string;
   disabled: boolean;
+}
+export interface AccountTOTPEnrollResponse {
+  provisioningUri: string;
+  secret: string;
+}
+export interface AccountTOTPConfirmRequest {
+  code: string;
+}
+export interface AccountFactor {
+  id: string;
+  kind: string;
+  label?: string;
+  createdAt?: string;
+  lastUsed?: string;
+  cloneWarning?: boolean;
+}
+export interface AccountFactorsResponse {
+  factors: AccountFactor[];
+  passkeysAvailable: boolean;
+  /**
+   * Why passkeys cannot be offered, when they cannot. Shown verbatim: the
+   * cause is always a config problem the operator can fix.
+   */
+  passkeysUnavailableReason?: string;
+}
+/**
+ * LoginFactorRequest completes a login that stopped for a second factor.
+ */
+export interface LoginFactorRequest {
+  pendingId: string;
+  code?: string;
 }
 export interface DeploySlotStatus {
   slot: string;

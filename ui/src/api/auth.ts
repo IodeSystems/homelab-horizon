@@ -1,4 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
+import type {
+  PublicKeyCredentialCreationOptionsJSON,
+  PublicKeyCredentialRequestOptionsJSON,
+} from "@simplewebauthn/browser";
 import { apiFetch } from "./client";
 
 interface AuthStatus {
@@ -24,6 +29,11 @@ interface LoginResponse {
   error?: string;
   invite?: boolean;
   redirect?: string;
+  // The password was right but the account has a second factor. Continue with
+  // pendingId rather than starting over.
+  mfaRequired?: boolean;
+  pendingId?: string;
+  factors?: string[];
 }
 
 export interface User {
@@ -128,5 +138,129 @@ export function useSetUserDisabled() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["users"] });
     },
+  });
+}
+
+// --- Account second factors ---
+
+export interface AccountFactor {
+  id: string;
+  kind: string;
+  label?: string;
+  createdAt?: string;
+  lastUsed?: string;
+  cloneWarning?: boolean;
+}
+
+interface AccountFactorsResponse {
+  factors: AccountFactor[];
+  passkeysAvailable: boolean;
+  passkeysUnavailableReason?: string;
+}
+
+interface TOTPEnrollResponse {
+  provisioningUri: string;
+  secret: string;
+}
+
+interface PasskeyBegin {
+  ceremonyId: string;
+  options: { publicKey: PublicKeyCredentialCreationOptionsJSON };
+}
+
+export function useAccountFactors() {
+  return useQuery({
+    queryKey: ["account", "factors"],
+    queryFn: () => apiFetch<AccountFactorsResponse>("/account/factors"),
+  });
+}
+
+export function useTOTPEnroll() {
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<TOTPEnrollResponse>("/account/totp/enroll", { method: "POST" }),
+  });
+}
+
+export function useTOTPConfirm() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (code: string) =>
+      apiFetch<{ ok: boolean }>("/account/totp/confirm", {
+        method: "POST",
+        body: JSON.stringify({ code }),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["account", "factors"] }),
+  });
+}
+
+export function useRemoveFactor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<{ ok: boolean }>(`/account/factors?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["account", "factors"] }),
+  });
+}
+
+// Enrolling a passkey on the signed-in account. Two round trips with the
+// authenticator in the middle; the options blob passes through untouched.
+export function useAccountPasskeyRegister() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (label: string) => {
+      const begin = await apiFetch<PasskeyBegin>(
+        "/account/passkey/register/begin",
+        { method: "POST" },
+      );
+      const credential = await startRegistration({
+        optionsJSON: begin.options.publicKey,
+      });
+      return apiFetch<{ ok: boolean }>("/account/passkey/register/finish", {
+        method: "POST",
+        body: JSON.stringify({ ceremonyId: begin.ceremonyId, credential, label }),
+      });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["account", "factors"] }),
+  });
+}
+
+// Completing a login that stopped for a second factor.
+export function useLoginTOTP() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { pendingId: string; code: string }) =>
+      apiFetch<LoginResponse>("/auth/login/totp", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["auth"] }),
+  });
+}
+
+export function useLoginPasskey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (pendingId: string) => {
+      const begin = await apiFetch<PasskeyBegin>("/auth/login/passkey/begin", {
+        method: "POST",
+        body: JSON.stringify({ pendingId }),
+      });
+      const credential = await startAuthentication({
+        optionsJSON: begin.options
+          .publicKey as unknown as PublicKeyCredentialRequestOptionsJSON,
+      });
+      return apiFetch<LoginResponse>("/auth/login/passkey/finish", {
+        method: "POST",
+        body: JSON.stringify({
+          pendingId,
+          ceremonyId: begin.ceremonyId,
+          credential,
+        }),
+      });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["auth"] }),
   });
 }

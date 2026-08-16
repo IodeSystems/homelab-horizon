@@ -172,6 +172,28 @@ func (s *Server) loginWithPassword(w http.ResponseWriter, r *http.Request, usern
 		return
 	}
 
+	// A correct password is not a session when the account has a second
+	// factor. The pending id proves this step happened and confers nothing
+	// else; the session is issued only by the factor handlers.
+	hasFactor, err := s.users.HasSecondFactor(r.Context(), user.ID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "Could not check second factors")
+		return
+	}
+	if hasFactor {
+		pendingID, err := s.pendingLogins.add(user.ID)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "Could not start sign-in")
+			return
+		}
+		_ = json.NewEncoder(w).Encode(apitypes.LoginResponse{
+			MFARequired: true,
+			PendingID:   pendingID,
+			Factors:     s.factorKinds(r, user.ID),
+		})
+		return
+	}
+
 	if err := s.startUserSession(w, r, user); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "Could not start session")
 		return
@@ -179,4 +201,22 @@ func (s *Server) loginWithPassword(w http.ResponseWriter, r *http.Request, usern
 
 	slog.Info("login", "user", user.Username, "ip", s.getClientIP(r))
 	_ = json.NewEncoder(w).Encode(apitypes.LoginResponse{OK: true})
+}
+
+// factorKinds lists which second factors an account can finish with.
+//
+// Only kinds that will actually work: a passkey the relying party cannot be
+// built for is offered nowhere, or the UI would present a button that fails
+// after the browser prompt rather than before it.
+func (s *Server) factorKinds(r *http.Request, userID string) []string {
+	var kinds []string
+	if _, err := s.users.TOTPSecret(r.Context(), userID); err == nil {
+		kinds = append(kinds, db.KindTOTP)
+	}
+	if available, _ := s.accountPasskeysAvailable(); available {
+		if creds, err := s.users.CredentialsFor(r.Context(), userID, db.KindPasskey); err == nil && len(creds) > 0 {
+			kinds = append(kinds, db.KindPasskey)
+		}
+	}
+	return kinds
 }
