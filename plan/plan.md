@@ -337,10 +337,10 @@ assets punched through the jail.
   relying party, not a re-point: RPID scopes a credential to a hostname, so
   kiosk-enrolled keys do not exist at the admin origin. Requires an https
   `admin_url`; the option is withheld otherwise.
-  **Gap:** no end-to-end run — hz wants root for WireGuard and dry-run disables
-  the store, so `test/e2e` is where the account MFA assertions belong. Worth
-  doing before Phase 4, since that fixture already drives a virtual
-  authenticator. **Not yet deployed.**
+  Covered end to end by `make e2e-auth` (`ACCOUNT=1 ACCOUNT_PASSKEY=1`): 32
+  shell assertions on a real systemd install plus a browser ceremony against
+  the admin relying party. TOTP codes come from oathtool, not hz — hz agreeing
+  with itself would prove nothing. **Not yet deployed.**
 - ◻ **4. OIDC.** Discovery, code+PKCE, JWKS cache, group claim → role. Local
   login stays reachable at a fixed URL, always.
 - ◻ **5. Policy.** Idle timeout (`8.2.8`), rotation, lockout — the annoying
