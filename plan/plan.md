@@ -257,13 +257,13 @@ Phase 3 replaces this with: restart horizon, done.
 
 ## Active work
 
-Phase 3 of the user model is next. Ordered by what I'd pick up next:
+Phase 4 of the user model (OIDC) is next. Ordered by what I'd pick up next:
 
 | | Item | Blocked? |
 |---|---|---|
 | 1 | [VPN inactivity timeout](#-vpn-inactivity-timeout-last-wag-parity-item) | no |
 | 2 | [PCI 10.5.1 + 2.2.7](#-pci-the-two-remaining-controls-hz-can-actually-detect) | no |
-| 3 | [Real users](#-real-users-local-credentials--oidc-on-sqlite) — local + OIDC on SQLite | ◐ Phases 1–2 done, Phase 3 next |
+| 3 | [Real users](#-real-users-local-credentials--oidc-on-sqlite) — local + OIDC on SQLite | ◐ Phases 1–3 done, Phase 4 (OIDC) next |
 | 4 | [Phase 0 leftovers](#-phase-0-leftovers) · [canon writeback](#-canon-writeback-to-doc-cross-repo) · [cleanups](#known-cleanups-not-blocking) | no |
 | 5 | [Org alignment backlog](#-org-alignment-backlog--this-repo-owns-it-now) (10 items) | no |
 
@@ -332,9 +332,15 @@ assets punched through the jail.
   in, and the last enabled admin cannot be disabled once it is off.
   Verified against a running instance, which is how the UTC timestamp bug was
   found. **Not yet deployed.**
-- ◻ **3. Second factors.** Re-point the existing passkey ceremony at users
-  instead of peers, plus TOTP. The crypto and ceremony handling do not change —
-  only the identity they attach to.
+- ✅ **3. Second factors** (`3a3e53e`). TOTP and passkeys on accounts, with
+  login split into password → pending id → factor. Passkeys needed their own
+  relying party, not a re-point: RPID scopes a credential to a hostname, so
+  kiosk-enrolled keys do not exist at the admin origin. Requires an https
+  `admin_url`; the option is withheld otherwise.
+  **Gap:** no end-to-end run — hz wants root for WireGuard and dry-run disables
+  the store, so `test/e2e` is where the account MFA assertions belong. Worth
+  doing before Phase 4, since that fixture already drives a virtual
+  authenticator. **Not yet deployed.**
 - ◻ **4. OIDC.** Discovery, code+PKCE, JWKS cache, group claim → role. Local
   login stays reachable at a fixed URL, always.
 - ◻ **5. Policy.** Idle timeout (`8.2.8`), rotation, lockout — the annoying
