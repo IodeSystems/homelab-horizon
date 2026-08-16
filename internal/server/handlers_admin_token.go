@@ -46,12 +46,17 @@ func (s *Server) handleAPIAdminTokenDisable(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Two ways to survive without the token: a real account, or an admin VPN
+	// peer. A user account is the better one — it is checkable here, whereas
+	// "a peer is configured as admin" says nothing about whether anyone can
+	// still reach the box from it.
 	cfg := s.cfg()
-	if len(cfg.VPNAdmins) == 0 && !req.Force {
+	hasAccount := s.hasUsableAccount(r.Context())
+	if !hasAccount && len(cfg.VPNAdmins) == 0 && !req.Force {
 		writeJSONError(w, http.StatusConflict,
-			"No VPN admin peers exist, so disabling the token would leave no way to administer hz "+
-				"except a console restart with -enable-admin-token. Promote a peer to admin first, "+
-				"or resend with force:true if that is intended.")
+			"No user accounts and no VPN admin peers exist, so disabling the token would leave no way "+
+				"to administer hz except a console restart with -enable-admin-token. Create a user "+
+				"account first, or promote a peer to admin, or resend with force:true if that is intended.")
 		return
 	}
 
@@ -61,8 +66,8 @@ func (s *Server) handleAPIAdminTokenDisable(w http.ResponseWriter, r *http.Reque
 		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
 		return
 	}
-	slog.Warn("admin token disabled; VPN admin peers are now the only way in",
-		"vpn_admins", len(cfg.VPNAdmins), "by", s.adminActor(r))
+	slog.Warn("admin token disabled",
+		"user_accounts", hasAccount, "vpn_admins", len(cfg.VPNAdmins), "by", s.adminActor(r))
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{

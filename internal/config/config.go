@@ -231,6 +231,17 @@ type Config struct {
 	// inheritance" is not something an assessor can be shown.
 	HAProxyTLSMinVersion string `json:"haproxy_tls_min_version,omitempty"`
 
+	// UsersDB is where the identity store lives. Defaults to
+	// /var/lib/homelab-horizon/hz.db. State, not config: unlike this file it
+	// is never synced to HA peers, because replicating credentials as a side
+	// effect of editing a service would be indefensible.
+	UsersDB string `json:"users_db,omitempty"`
+
+	// SessionIdleMinutes logs an admin out after this long without a request.
+	// Zero disables it, which is the default: the absolute session lifetime
+	// still applies. PCI DSS 8.2.8 wants 15.
+	SessionIdleMinutes int `json:"session_idle_minutes,omitempty"`
+
 	// CertWarningDays is how many days before expiry a TLS check starts
 	// warning instead of passing. Defaults to 7 — see
 	// monitor.defaultCertWarningDays for why. Raise it if renewal needs a
@@ -1320,6 +1331,14 @@ func (c *Config) PCIScopedServices() []Service {
 		}
 	}
 	return out
+}
+
+// UsersDBPath is the configured identity store path, or the default.
+func (c *Config) UsersDBPath() string {
+	if strings.TrimSpace(c.UsersDB) != "" {
+		return c.UsersDB
+	}
+	return "/var/lib/homelab-horizon/hz.db"
 }
 
 // TLS floor values accepted for HAProxyTLSMinVersion.

@@ -537,6 +537,18 @@ type AuthStatusResponse struct {
 	Authenticated bool   `json:"authenticated"`
 	Method        string `json:"method,omitempty"`
 
+	// Populated when the caller is a real account rather than the shared
+	// token or a VPN peer.
+	Username string `json:"username,omitempty"`
+	Role     string `json:"role,omitempty"`
+
+	// True while no account exists, so the login page can offer to create the
+	// first one instead of asking for a password nobody has set.
+	NeedsBootstrap bool `json:"needsBootstrap,omitempty"`
+	// True when local accounts are usable at all; false if the store failed
+	// to open, in which case the UI must not offer a login it cannot honour.
+	UsersAvailable bool `json:"usersAvailable,omitempty"`
+
 	// Multi-instance HA — populated when this instance is part of a fleet.
 	PeerID        string `json:"peerId,omitempty"`        // local instance identity
 	ConfigPrimary bool   `json:"configPrimary,omitempty"` // true if this instance is the config primary
@@ -545,12 +557,54 @@ type AuthStatusResponse struct {
 
 type LoginRequest struct {
 	Token string `json:"token"`
+
+	// Local account credentials. A request carries either these or a token,
+	// never both.
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
 }
 
 type LoginResponse struct {
 	OK       bool   `json:"ok"`
 	Invite   bool   `json:"invite,omitempty"`
 	Redirect string `json:"redirect,omitempty"`
+}
+
+// Users
+
+type User struct {
+	ID        string `json:"id"`
+	Username  string `json:"username"`
+	Email     string `json:"email,omitempty"`
+	Role      string `json:"role"`
+	Disabled  bool   `json:"disabled,omitempty"`
+	CreatedAt string `json:"createdAt,omitempty"`
+	LastLogin string `json:"lastLogin,omitempty"`
+}
+
+type UsersResponse struct {
+	Users []User `json:"users"`
+	// Whether at least one account can log in, which is what makes turning
+	// off the shared admin token survivable.
+	CanDisableAdminToken bool `json:"canDisableAdminToken"`
+}
+
+type CreateUserRequest struct {
+	Username string `json:"username"`
+	Email    string `json:"email,omitempty"`
+	Role     string `json:"role,omitempty"`
+	Password string `json:"password,omitempty"`
+}
+
+type SetPasswordRequest struct {
+	UserID          string `json:"userId,omitempty"`
+	CurrentPassword string `json:"currentPassword,omitempty"`
+	Password        string `json:"password"`
+}
+
+type DisableUserRequest struct {
+	UserID   string `json:"userId"`
+	Disabled bool   `json:"disabled"`
 }
 
 // Deploy

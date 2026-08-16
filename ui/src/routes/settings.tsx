@@ -41,6 +41,7 @@ import {
 } from "../api/hooks";
 import type { HAFleetPeer } from "../api/types";
 import { SystemHealthTab } from "../components/SystemHealthTab";
+import UsersTab from "../components/UsersTab";
 import { IPTablesTab } from "../components/IPTablesTab";
 
 // --- Zone Tab ---
@@ -870,6 +871,7 @@ function SettingsPage() {
         <Tab label="VPN MFA" />
         <Tab label="HA Fleet" />
         <Tab label="IPTables" />
+        <Tab label="Users" />
         <Tab label="hz CLI" />
       </Tabs>
 
@@ -903,7 +905,8 @@ function SettingsPage() {
       {tab === 2 && <VPNMFATab />}
       {tab === 3 && <HAFleetTab />}
       {tab === 4 && <IPTablesTab />}
-      {tab === 5 && <HzCliTab />}
+      {tab === 5 && <UsersTab />}
+      {tab === 6 && <HzCliTab />}
     </Box>
   );
 }

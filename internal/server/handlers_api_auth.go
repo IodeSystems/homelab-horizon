@@ -2,10 +2,13 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/db"
 )
 
 func (s *Server) handleAPIAuthStatus(w http.ResponseWriter, r *http.Request) {
@@ -16,26 +19,39 @@ func (s *Server) handleAPIAuthStatus(w http.ResponseWriter, r *http.Request) {
 		primaryID = p.ID
 	}
 
+	usersAvailable := s.users != nil
+
 	if s.isAdmin(r) {
 		method := "cookie"
 		if s.isVPNAdmin(r) {
 			method = "vpn"
 		}
-		_ = json.NewEncoder(w).Encode(apitypes.AuthStatusResponse{
-			Authenticated: true,
-			Method:        method,
-			PeerID:        s.cfg().PeerID,
-			ConfigPrimary: s.cfg().ConfigPrimary,
-			PrimaryID:     primaryID,
-		})
+		resp := apitypes.AuthStatusResponse{
+			Authenticated:  true,
+			Method:         method,
+			PeerID:         s.cfg().PeerID,
+			ConfigPrimary:  s.cfg().ConfigPrimary,
+			PrimaryID:      primaryID,
+			UsersAvailable: usersAvailable,
+		}
+		// A named account outranks the other two for reporting: it is the
+		// only one the UI can address as a person.
+		if u := s.currentUser(r); u != nil {
+			resp.Method = "user"
+			resp.Username = u.Username
+			resp.Role = u.Role
+		}
+		_ = json.NewEncoder(w).Encode(resp)
 		return
 	}
 
 	_ = json.NewEncoder(w).Encode(apitypes.AuthStatusResponse{
-		Authenticated: false,
-		PeerID:        s.cfg().PeerID,
-		ConfigPrimary: s.cfg().ConfigPrimary,
-		PrimaryID:     primaryID,
+		Authenticated:  false,
+		PeerID:         s.cfg().PeerID,
+		ConfigPrimary:  s.cfg().ConfigPrimary,
+		PrimaryID:      primaryID,
+		UsersAvailable: usersAvailable,
+		NeedsBootstrap: s.bootstrapAllowed(r.Context()),
 	})
 }
 
@@ -56,6 +72,14 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token := strings.TrimSpace(body.Token)
+
+	// A local account, when credentials were supplied. Checked before the
+	// token so that an operator with an account never depends on the shared
+	// secret still being enabled.
+	if body.Username != "" && body.Password != "" {
+		s.loginWithPassword(w, r, body.Username, body.Password)
+		return
+	}
 
 	// Refuse before comparing, so a disabled token cannot be probed for
 	// correctness by timing or by error message.
@@ -106,6 +130,8 @@ func (s *Server) handleAPILogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Both cookies: a browser may hold a token-minted session and an account
+	// session at once, and logging out must not leave either behind.
 	http.SetCookie(w, &http.Cookie{
 		Name:     "session",
 		Value:    "",
@@ -114,6 +140,43 @@ func (s *Server) handleAPILogout(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})
+	s.endUserSession(w, r)
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+// loginWithPassword authenticates a local account.
+//
+// The failure message never distinguishes an unknown user from a wrong
+// password: the login form must not double as a way to enumerate accounts. A
+// disabled account is the one exception, and only because the password already
+// matched — saying so leaks nothing to someone who cannot authenticate, and
+// saves the person a support round trip.
+func (s *Server) loginWithPassword(w http.ResponseWriter, r *http.Request, username, password string) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if s.users == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, errNoIdentityStore.Error())
+		return
+	}
+
+	user, err := s.users.VerifyPassword(r.Context(), username, password)
+	switch {
+	case errors.Is(err, db.ErrUserDisabled):
+		writeJSONError(w, http.StatusForbidden, "That account is disabled.")
+		return
+	case err != nil:
+		slog.Warn("failed login", "username", db.NormalizeUsername(username), "ip", s.getClientIP(r))
+		writeJSONError(w, http.StatusUnauthorized, "Invalid username or password")
+		return
+	}
+
+	if err := s.startUserSession(w, r, user); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "Could not start session")
+		return
+	}
+
+	slog.Info("login", "user", user.Username, "ip", s.getClientIP(r))
+	_ = json.NewEncoder(w).Encode(apitypes.LoginResponse{OK: true})
 }
