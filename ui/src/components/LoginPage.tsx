@@ -8,12 +8,28 @@ import {
   Alert,
   Link,
 } from "@mui/material";
-import { useLogin, useAuthStatus, useCreateUser } from "../api/auth";
+import {
+  useLogin,
+  useAuthStatus,
+  useCreateUser,
+  useLoginTOTP,
+  useLoginPasskey,
+} from "../api/auth";
 
 export default function LoginPage() {
   const status = useAuthStatus();
   const login = useLogin();
   const createUser = useCreateUser();
+
+  const loginTOTP = useLoginTOTP();
+  const loginPasskey = useLoginPasskey();
+
+  // Set when the password was right but the account has a second factor. The
+  // form becomes a challenge rather than starting over.
+  const [pending, setPending] = useState<{ id: string; factors: string[] } | null>(
+    null,
+  );
+  const [code, setCode] = useState("");
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -24,8 +40,16 @@ export default function LoginPage() {
 
   const needsBootstrap = status.data?.needsBootstrap === true;
   const usersAvailable = status.data?.usersAvailable !== false;
-  const pending = login.isPending || createUser.isPending;
-  const error = login.error?.message ?? createUser.error?.message;
+  const busy =
+    login.isPending ||
+    createUser.isPending ||
+    loginTOTP.isPending ||
+    loginPasskey.isPending;
+  const error =
+    login.error?.message ??
+    createUser.error?.message ??
+    loginTOTP.error?.message ??
+    loginPasskey.error?.message;
 
   // With no identity store there is nothing but the token, so do not offer a
   // username form that cannot work.
@@ -41,11 +65,21 @@ export default function LoginPage() {
       createUser.mutate({ username: username.trim(), password });
       return;
     }
-    login.mutate({ username: username.trim(), password });
+    login.mutate(
+      { username: username.trim(), password },
+      {
+        onSuccess: (res) => {
+          if (res.mfaRequired && res.pendingId) {
+            setPending({ id: res.pendingId, factors: res.factors ?? [] });
+            setPassword("");
+          }
+        },
+      },
+    );
   };
 
   const submitLabel = () => {
-    if (pending) return "Working...";
+    if (busy) return "Working...";
     if (tokenOnly) return "Sign in with token";
     return needsBootstrap ? "Create admin account" : "Sign in";
   };
@@ -89,6 +123,24 @@ export default function LoginPage() {
           </Alert>
         )}
 
+        {pending ? (
+          <SecondFactorStep
+            pending={pending}
+            code={code}
+            setCode={setCode}
+            busy={busy}
+            onTOTP={() =>
+              loginTOTP.mutate({ pendingId: pending.id, code: code.trim() })
+            }
+            onPasskey={() => loginPasskey.mutate(pending.id)}
+            onCancel={() => {
+              // A pending id is single use and already spent on failure, so
+              // going back has to mean starting the password step again.
+              setPending(null);
+              setCode("");
+            }}
+          />
+        ) : (
         <form onSubmit={handleSubmit}>
           {tokenOnly ? (
             <TextField
@@ -128,14 +180,15 @@ export default function LoginPage() {
             fullWidth
             type="submit"
             variant="contained"
-            disabled={pending || !canSubmit}
+            disabled={busy || !canSubmit}
             size="large"
           >
             {submitLabel()}
           </Button>
         </form>
+        )}
 
-        {usersAvailable && (
+        {usersAvailable && !pending && (
           <Typography variant="body2" sx={{ mt: 2, textAlign: "center" }}>
             <Link
               component="button"
@@ -148,6 +201,83 @@ export default function LoginPage() {
           </Typography>
         )}
       </Paper>
+    </Box>
+  );
+}
+
+function SecondFactorStep({
+  pending,
+  code,
+  setCode,
+  busy,
+  onTOTP,
+  onPasskey,
+  onCancel,
+}: {
+  pending: { id: string; factors: string[] };
+  code: string;
+  setCode: (v: string) => void;
+  busy: boolean;
+  onTOTP: () => void;
+  onPasskey: () => void;
+  onCancel: () => void;
+}) {
+  const hasTOTP = pending.factors.includes("totp");
+  const hasPasskey = pending.factors.includes("passkey");
+
+  return (
+    <Box>
+      <Alert severity="info" sx={{ mb: 2 }}>
+        One more step.
+      </Alert>
+
+      {hasPasskey && (
+        <Button
+          fullWidth
+          variant={hasTOTP ? "outlined" : "contained"}
+          size="large"
+          disabled={busy}
+          onClick={onPasskey}
+          sx={{ mb: hasTOTP ? 2 : 1 }}
+        >
+          Use a passkey
+        </Button>
+      )}
+
+      {hasTOTP && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (code.trim().length >= 6) onTOTP();
+          }}
+        >
+          <TextField
+            fullWidth
+            label="Code from your authenticator app"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            autoFocus
+            autoComplete="one-time-code"
+            slotProps={{ htmlInput: { inputMode: "numeric", maxLength: 6 } }}
+            sx={{ mb: 2 }}
+          />
+          <Button
+            fullWidth
+            type="submit"
+            variant="contained"
+            size="large"
+            disabled={busy || code.trim().length < 6}
+          >
+            {busy ? "Checking..." : "Sign in"}
+          </Button>
+        </form>
+      )}
+
+      <Typography variant="body2" sx={{ mt: 2, textAlign: "center" }}>
+        <Link component="button" type="button" underline="hover" onClick={onCancel}>
+          Start over
+        </Link>
+      </Typography>
     </Box>
   );
 }

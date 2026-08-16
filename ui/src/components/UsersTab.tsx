@@ -21,6 +21,7 @@ import {
   CircularProgress,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
+import AccountSecurity from "./AccountSecurity";
 import {
   useUsers,
   useCreateUser,
@@ -175,6 +176,8 @@ export default function UsersTab() {
           {setDisabled.error.message}
         </Alert>
       )}
+
+      {me && <AccountSecurity />}
 
       <AddUserDialog open={addOpen} onClose={() => setAddOpen(false)} />
       <SetPasswordDialog user={pwUser} onClose={() => setPwUser(null)} />
