@@ -24,6 +24,19 @@
 #           verifies hz reads and merges them — the format risk unit tests
 #           cannot cover. Leaves the VM with both installed.
 #
+#   ACCOUNT set to 1 to also run the admin ACCOUNT auth checks
+#           (test/e2e/account.sh): bootstrap, password login, TOTP enrolment
+#           against oathtool, the second-factor gate, and the guards that stop
+#           an operator locking themselves out. Resets the identity store, so
+#           it leaves the VM with one account (carl) and the token re-enabled.
+#
+#   ACCOUNT_PASSKEY
+#           set to 1 to also drive a passkey ceremony for an admin ACCOUNT
+#           (test/e2e/account-passkey.sh). Needs https and an admin_url, so it
+#           reconfigures the VM the same way PASSKEY does and leaves it there.
+#           Implies the browser download. This is the second relying party --
+#           account passkeys are scoped to admin_url, not kiosk_url.
+#
 #   PASSKEY set to 1 to also run the WebAuthn ceremony (test/e2e/passkey.sh).
 #           Reconfigures the VM onto https with a self-signed cert and drives
 #           a virtual authenticator, so it runs after the main assertions and
@@ -161,6 +174,19 @@ if multipass exec "$VM" -- sudo /home/ubuntu/assert.sh; then
     note "running the metrics integration checks (real dnsmasq + node-exporter)..."
     multipass transfer "$FIXTURE/metrics.sh" "$VM:/home/ubuntu/metrics.sh"
     multipass exec "$VM" -- sudo bash /home/ubuntu/metrics.sh || err "metrics checks failed"
+  fi
+  if [ "${ACCOUNT:-0}" = "1" ]; then
+    note "running the admin account auth checks (bootstrap, TOTP, lockout guards)..."
+    multipass transfer "$FIXTURE/account.sh" "$VM:/home/ubuntu/account.sh"
+    multipass exec "$VM" -- sudo bash /home/ubuntu/account.sh || err "account checks failed"
+  fi
+  if [ "${ACCOUNT_PASSKEY:-0}" = "1" ]; then
+    note "running the account passkey ceremony (https admin_url + virtual authenticator)..."
+    multipass transfer "$FIXTURE/install-browser.sh" "$VM:/home/ubuntu/install-browser.sh"
+    multipass transfer "$FIXTURE/account-passkey.mjs" "$VM:/home/ubuntu/account-passkey.mjs"
+    multipass transfer "$FIXTURE/account-passkey.sh" "$VM:/home/ubuntu/account-passkey.sh"
+    multipass exec "$VM" -- sudo bash /home/ubuntu/install-browser.sh
+    multipass exec "$VM" -- sudo bash /home/ubuntu/account-passkey.sh || err "account passkey flow failed"
   fi
   if [ "${PASSKEY:-0}" = "1" ]; then
     note "running the passkey ceremony (https + virtual authenticator)..."
