@@ -586,12 +586,15 @@ func (s *Server) handleAPIMFAExceptionRevoke(w http.ResponseWriter, r *http.Requ
 
 // adminActor is best-effort attribution for the audit line.
 //
-// hz has no user model, so this is honest about its ceiling: a request from a
-// VPN admin can be named, because the source IP maps to a peer. A request
+// Honest about its ceiling, in three tiers. A logged-in user is named exactly.
+// A VPN admin can be named because the source IP maps to a peer. A request
 // bearing the admin token cannot be attributed past "whoever holds it" — the
-// token is shared by construction. Anything claiming more precision than that
-// would be inventing it.
+// token is shared by construction, which is the reason accounts exist.
 func (s *Server) adminActor(r *http.Request) string {
+	// A logged-in account is the one case where attribution is exact.
+	if u := s.currentUser(r); u != nil {
+		return "user:" + u.Username
+	}
 	if ip := s.getClientIP(r); ip != "" && s.isInVPNRange(ip) {
 		if peer := s.wg.GetPeerByIP(ip); peer != nil {
 			return "vpn-admin:" + peer.Name

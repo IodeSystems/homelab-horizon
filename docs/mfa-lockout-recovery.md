@@ -123,6 +123,66 @@ profile until the rebuild, so the whole VPN is unrestricted in that window.
 
 ---
 
+## No account can log in
+
+User accounts are the intended replacement for the shared token, so they
+introduce their own way to be locked out.
+
+hz refuses the two obvious ones. It will not disable the last enabled admin
+while the token is already off, and it will not let the token be disabled
+unless at least one account can actually log in — an invited account with no
+password does not count, because nobody can use it. Neither guard helps with a
+forgotten password.
+
+Reset one from the LAN with the token, if the token is still enabled:
+
+```bash
+TOKEN=$(sudo cat /etc/homelab-horizon/config.json.token)
+HZ=http://<hz-lan-ip>:8080
+
+curl -sS -c /tmp/hz.cookie -X POST -H 'Content-Type: application/json' \
+  -d "{\"token\":\"$TOKEN\"}" "$HZ/api/v1/auth/login"
+
+# Find the user id
+curl -sS -b /tmp/hz.cookie "$HZ/api/v1/users"
+
+# Set a new password (an admin resetting someone else's needs no old one)
+curl -sS -b /tmp/hz.cookie -X POST -H 'Content-Type: application/json' \
+  -d '{"userId":"usr_...","password":"a-new-password-12"}' \
+  "$HZ/api/v1/users/password"
+```
+
+If the token is disabled too, recovery is at the console — re-enable it, then
+reset the password as above:
+
+```bash
+sudo systemctl stop homelab-horizon
+sudo /usr/local/bin/homelab-horizon -enable-admin-token
+```
+
+### Last resort: edit the database
+
+The accounts live in `/var/lib/homelab-horizon/hz.db`, not in `config.json`.
+Disabling an account is a timestamp, so clearing it re-enables them:
+
+```bash
+sudo sqlite3 /var/lib/homelab-horizon/hz.db \
+  "UPDATE users SET disabled_at = NULL WHERE username = 'carl';"
+```
+
+Passwords are bcrypt hashes and cannot be written by hand. To hand an account
+back without knowing its password, delete its password credential and set a
+new one through the API above once you can log in another way:
+
+```bash
+sudo sqlite3 /var/lib/homelab-horizon/hz.db \
+  "DELETE FROM credentials WHERE kind = 'password' AND user_id = (
+     SELECT id FROM users WHERE username = 'carl');"
+```
+
+Sessions are rows too, so `DELETE FROM sessions;` signs everyone out
+immediately — useful if a session is believed stolen.
+
 ## The admin token is disabled and VPN admins are unreachable
 
 Same shape as the MFA jail, one level up. Disabling the shared admin token
@@ -154,9 +214,14 @@ The token itself is unchanged and still in
   exception: scope them out of the CDE, or model them as system accounts with
   documented compensating controls (PCI DSS 8.6). Renewing a 7-day exception
   forever is not a design.
-- **Before disabling the admin token**, promote at least one VPN peer to admin
-  and confirm it can actually administer the box. hz refuses the switch when no
-  VPN admins exist, but it cannot tell whether the ones configured still work.
+- **Before disabling the admin token**, create a user account and log in with
+  it once, or promote at least one VPN peer to admin and confirm it can
+  actually administer the box. hz refuses the switch unless one of those
+  exists, but it cannot tell whether a configured VPN admin still works — an
+  account it has seen log in is the stronger evidence.
+- **Create a second admin account.** The last-admin guard means a single
+  account cannot be disabled once the token is off, which protects you from a
+  UI toggle but not from a forgotten password.
 - **Verify the portal works before you need it**: `kiosk_url` must route to a
   `proxy.self` service or the redirect degrades to a 403, and a jailed peer
   then has only `http://<wg-ip>:<hz-port>` — which cannot run passkeys, since

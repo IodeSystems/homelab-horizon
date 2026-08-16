@@ -513,6 +513,22 @@ export interface AuthStatusResponse {
   authenticated: boolean;
   method?: string;
   /**
+   * Populated when the caller is a real account rather than the shared
+   * token or a VPN peer.
+   */
+  username?: string;
+  role?: string;
+  /**
+   * True while no account exists, so the login page can offer to create the
+   * first one instead of asking for a password nobody has set.
+   */
+  needsBootstrap?: boolean;
+  /**
+   * True when local accounts are usable at all; false if the store failed
+   * to open, in which case the UI must not offer a login it cannot honour.
+   */
+  usersAvailable?: boolean;
+  /**
    * Multi-instance HA — populated when this instance is part of a fleet.
    */
   peerId?: string; // local instance identity
@@ -521,11 +537,49 @@ export interface AuthStatusResponse {
 }
 export interface LoginRequest {
   token: string;
+  /**
+   * Local account credentials. A request carries either these or a token,
+   * never both.
+   */
+  username?: string;
+  password?: string;
 }
 export interface LoginResponse {
   ok: boolean;
   invite?: boolean;
   redirect?: string;
+}
+export interface User {
+  id: string;
+  username: string;
+  email?: string;
+  role: string;
+  disabled?: boolean;
+  createdAt?: string;
+  lastLogin?: string;
+}
+export interface UsersResponse {
+  users: User[];
+  /**
+   * Whether at least one account can log in, which is what makes turning
+   * off the shared admin token survivable.
+   */
+  canDisableAdminToken: boolean;
+}
+export interface CreateUserRequest {
+  username: string;
+  email?: string;
+  role?: string;
+  password?: string;
+}
+export interface SetPasswordRequest {
+  userId?: string;
+  currentPassword?: string;
+  password: string;
+}
+export interface DisableUserRequest {
+  userId: string;
+  disabled: boolean;
 }
 export interface DeploySlotStatus {
   slot: string;

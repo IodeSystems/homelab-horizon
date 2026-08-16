@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/db"
 	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
 	"github.com/iodesystems/homelab-horizon/internal/haproxy"
 	"github.com/iodesystems/homelab-horizon/internal/integration"
@@ -220,6 +221,7 @@ type Server struct {
 	metrics        *integration.Detector // Prometheus metrics discovery (pull integration)
 	static         *staticSupervisor     // supervises the unprivileged static file server child
 	ceremonies     *ceremonyStore        // in-flight WebAuthn ceremonies (see webauthn.go)
+	users          *db.DB                // identity store; nil when unavailable (see users.go)
 	promHandler    http.Handler          // hz's own /metrics exposition
 	hostFacts      hostFacts             // cached clock + patch state (see hostfacts.go)
 
@@ -429,6 +431,20 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		joinTokens:     newJoinTokenStore(),
 		ceremonies:     newCeremonyStore(),
 	}
+
+	// Identity store. A failure here must not stop hz from serving: the admin
+	// token and VPN-admin paths do not depend on it, and a gateway that
+	// refuses to boot because a database file is unwritable is a worse outage
+	// than one running without user accounts. s.users stays nil and every
+	// caller checks.
+	if !dryRun {
+		if store, err := db.Open(cfg.UsersDBPath()); err != nil {
+			slog.Error("identity store unavailable; user accounts are disabled this run", "error", err)
+		} else {
+			s.users = store
+			slog.Info("identity store ready", "path", store.Path())
+		}
+	}
 	s.config.Store(cfg)
 	// After the config is stored: the collector reads live server state.
 	s.promHandler = newPromHandler(s)
@@ -613,6 +629,13 @@ func (s *Server) mcpAuthMiddleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) isAdmin(r *http.Request) bool {
+	// A real account, checked first because it is the only path that names a
+	// person. Unlike the token below it survives the token being disabled --
+	// that is the entire point of having it.
+	if u := s.currentUser(r); u != nil && u.Role == db.RoleAdmin {
+		return true
+	}
+
 	// Session cookie, which is minted by the admin token. Both are gated by
 	// the same switch: leaving existing sessions alive after the token is
 	// disabled would mean the shared credential still works until the cookie
@@ -961,6 +984,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/auth/status", s.handleAPIAuthStatus)
 	s.handlePeerInstance(mux, "/api/v1/auth/login", s.handleAPILogin)
 	s.handlePeerInstance(mux, "/api/v1/auth/logout", s.handleAPILogout)
+
+	// API v1 user accounts
+	mux.HandleFunc("/api/v1/users", s.handleAPIUsers)
+	mux.HandleFunc("/api/v1/users/password", s.handleAPIUserPassword)
+	mux.HandleFunc("/api/v1/users/disable", s.handleAPIUserDisable)
 
 	// API v1 data routes
 	mux.HandleFunc("/api/v1/dashboard", s.handleAPIDashboard)
