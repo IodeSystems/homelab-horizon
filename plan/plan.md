@@ -257,13 +257,13 @@ Phase 3 replaces this with: restart horizon, done.
 
 ## Active work
 
-Phase 2 of the user model is next. Ordered by what I'd pick up next:
+Phase 3 of the user model is next. Ordered by what I'd pick up next:
 
 | | Item | Blocked? |
 |---|---|---|
 | 1 | [VPN inactivity timeout](#-vpn-inactivity-timeout-last-wag-parity-item) | no |
 | 2 | [PCI 10.5.1 + 2.2.7](#-pci-the-two-remaining-controls-hz-can-actually-detect) | no |
-| 3 | [Real users](#-real-users-local-credentials--oidc-on-sqlite) — local + OIDC on SQLite | ◐ Phase 1 done, Phase 2 next |
+| 3 | [Real users](#-real-users-local-credentials--oidc-on-sqlite) — local + OIDC on SQLite | ◐ Phases 1–2 done, Phase 3 next |
 | 4 | [Phase 0 leftovers](#-phase-0-leftovers) · [canon writeback](#-canon-writeback-to-doc-cross-repo) · [cleanups](#known-cleanups-not-blocking) | no |
 | 5 | [Org alignment backlog](#-org-alignment-backlog--this-repo-owns-it-now) (10 items) | no |
 
@@ -325,8 +325,13 @@ assets punched through the jail.
   `CountEnabledUsers` is the guard Phase 2 needs: it counts only accounts that
   hold a credential, so an invite that nobody has accepted cannot be mistaken
   for a way back in.
-- ◻ **2. Local login.** Sessions in the DB, first-user bootstrap from the admin
-  token, Settings → Users (invite, disable, reset). Token still works.
+- ✅ **2. Local login** (`099f83c`). Username/password beside the token,
+  sessions in the DB, bootstrap for the first account, Settings → Users.
+  `isAdmin` order is account → token → VPN admin, so nothing was taken away.
+  Two guards: the token cannot be disabled unless an account can actually log
+  in, and the last enabled admin cannot be disabled once it is off.
+  Verified against a running instance, which is how the UTC timestamp bug was
+  found. **Not yet deployed.**
 - ◻ **3. Second factors.** Re-point the existing passkey ceremony at users
   instead of peers, plus TOTP. The crypto and ceremony handling do not change —
   only the identity they attach to.
