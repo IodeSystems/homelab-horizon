@@ -159,16 +159,34 @@ func (s *Server) deleteLocalDNS(w http.ResponseWriter, r *http.Request) {
 // without dropping the cache or the DHCP leases it may be holding, and a
 // resolver that blinks every time someone adds a record is a resolver people
 // stop using.
+// applyLocalDNS rewrites the served records and reloads the resolver.
+//
+// A reload failure is reported but not returned as an error: by the time it
+// runs, the record is already persisted in config and written to the file, so
+// the change HAS taken effect and will be live on the next successful reload.
+// Returning 500 for that made the UI show a failure for a change that
+// succeeded — worse than a warning, because the operator's next move is to
+// retry something that already happened.
 func (s *Server) applyLocalDNS() error {
 	if !s.cfg().DNSMasqEnabled {
 		// Recorded in config and served whenever dnsmasq is turned on. Saying
 		// so beats silently accepting a record that answers nothing.
 		return nil
 	}
+	// The domain lives on the resolver object, so a config change has to be
+	// pushed into it before the config file is regenerated.
+	s.dns.SetLocalDomain(s.cfg().LocalDNSDomain)
+	if err := s.dns.WriteConfig(); err != nil {
+		return err
+	}
 	if err := s.dns.SetRecords(s.cfg().DeriveDNSRecords()); err != nil {
 		return err
 	}
-	return s.dns.Reload()
+	if err := s.dns.Reload(); err != nil {
+		slog.Warn("records written but dnsmasq did not reload; they are live on its next reload",
+			"err", err)
+	}
+	return nil
 }
 
 func isLocalRecord(records []config.LocalDNSRecord, name string) bool {
@@ -178,4 +196,63 @@ func isLocalRecord(records []config.LocalDNSRecord, name string) bool {
 		}
 	}
 	return false
+}
+
+// handleAPILocalDNSDomain reads and writes the local domain.
+//
+// Its own endpoint rather than a field on the record POST: it applies to every
+// record at once and rewrites dnsmasq's main config, which is a different kind
+// of change from adding one answer.
+func (s *Server) handleAPILocalDNSDomain(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		_ = json.NewEncoder(w).Encode(map[string]string{"domain": s.cfg().LocalDNSDomain})
+
+	case http.MethodPost:
+		var body struct {
+			Domain string `json:"domain"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "Invalid request body")
+			return
+		}
+		domain := strings.ToLower(strings.TrimSpace(strings.Trim(body.Domain, ".")))
+
+		switch {
+		case domain != "" && strings.ContainsAny(domain, " \t/"):
+			writeJSONError(w, http.StatusBadRequest, "that is not a domain")
+			return
+		case domain == "local":
+			// RFC 6762 reserves .local for mDNS. Serving it over unicast DNS
+			// works on some clients and confuses others, and the failure looks
+			// like "DNS is broken on one device" rather than a configuration
+			// choice.
+			writeJSONError(w, http.StatusBadRequest,
+				"'local' is reserved for mDNS (RFC 6762) and answering it over DNS breaks on some clients — 'lan' or 'home.arpa' are the conventional choices")
+			return
+		}
+
+		if err := s.updateConfig(func(c *config.Config) {
+			c.LocalDNSDomain = domain
+		}); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+			return
+		}
+		if err := s.applyLocalDNS(); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		slog.Info("local DNS domain set", "domain", domain, "by", s.adminActor(r))
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+
+	default:
+		writeJSONError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
 }

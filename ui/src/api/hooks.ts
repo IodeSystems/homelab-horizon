@@ -1565,3 +1565,24 @@ export function useDeleteLocalDNSRecord() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["dns", "local"] }),
   });
 }
+
+export function useLocalDNSDomain() {
+  return useQuery({
+    queryKey: ["dns", "local", "domain"],
+    queryFn: () => apiFetch<{ domain: string }>("/dns/local/domain"),
+  });
+}
+
+export function useSetLocalDNSDomain() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (domain: string) =>
+      apiFetch<{ ok: boolean }>("/dns/local/domain", {
+        method: "POST",
+        body: JSON.stringify({ domain }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["dns", "local"] });
+    },
+  });
+}

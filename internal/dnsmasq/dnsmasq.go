@@ -18,8 +18,11 @@ type DNSMasq struct {
 	mu         sync.Mutex
 	configPath string
 	hostsPath  string
-	interfaces []string
-	upstream   []string
+	// localDomain, when set, is appended to bare host records so a single
+	// record answers for both "desktop" and "desktop.<domain>".
+	localDomain string
+	interfaces  []string
+	upstream    []string
 }
 
 func New(configPath, hostsPath string, interfaces []string, upstream []string) *DNSMasq {
@@ -60,6 +63,25 @@ func (d *DNSMasq) WriteConfig() error {
 
 	config.WriteString("# Don't use /etc/resolv.conf\n")
 	config.WriteString("no-resolv\n\n")
+
+	// A local domain exists because a resolver upstream of hz will not forward
+	// a single-label name at all — there is no domain to forward it for — so a
+	// bare "desktop" only ever resolves for clients pointed straight at hz.
+	//
+	// The expansion itself is done by writing both names onto the record (see
+	// SetRecords), NOT by expand-hosts: that directive applies to hosts-file
+	// and DHCP names and leaves host-record entries alone, which is a
+	// difference worth stating because the config looks like it should work.
+	//
+	// domain= is still right for DHCP-derived names, and local=/domain/ stops
+	// hz forwarding its own domain upstream, so an unknown name in it fails
+	// immediately instead of after a round trip to a public resolver that has
+	// never heard of it.
+	if d.localDomain != "" {
+		config.WriteString("# Local domain (expansion is done per-record, see wg-hosts.conf)\n")
+		fmt.Fprintf(&config, "domain=%s\n", d.localDomain)
+		fmt.Fprintf(&config, "local=/%s/\n\n", d.localDomain)
+	}
 
 	// Ignore /etc/hosts entirely — our records come from the conf-file below.
 	// Otherwise a stray /etc/hosts line (e.g. a loopback entry for a service
@@ -149,6 +171,14 @@ type Record struct {
 // Kept because that is what hz has always written for service domains, and
 // narrowing them to exact-match now would silently stop answering for any
 // subdomain someone has come to rely on. New callers should prefer SetRecords.
+// SetLocalDomain sets the domain appended to bare host records. Empty disables
+// expansion, which is the previous behaviour.
+func (d *DNSMasq) SetLocalDomain(domain string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.localDomain = strings.ToLower(strings.TrimSpace(domain))
+}
+
 func (d *DNSMasq) SetMappings(mappings map[string]string) error {
 	records := make([]Record, 0, len(mappings))
 	for name, ip := range mappings {
@@ -188,7 +218,14 @@ func (d *DNSMasq) SetRecords(records []Record) error {
 			fmt.Fprintf(&hosts, "address=/%s/%s\n", r.Name, r.IP)
 			continue
 		}
-		fmt.Fprintf(&hosts, "host-record=%s,%s\n", r.Name, r.IP)
+		// host-record takes several names for one address, so a bare label and
+		// its domain-qualified form are one record rather than two that could
+		// drift apart.
+		names := r.Name
+		if d.localDomain != "" && !strings.Contains(r.Name, ".") {
+			names = r.Name + "," + r.Name + "." + d.localDomain
+		}
+		fmt.Fprintf(&hosts, "host-record=%s,%s\n", names, r.IP)
 	}
 
 	if err := os.WriteFile(d.hostsPath, []byte(hosts.String()), 0644); err != nil {
@@ -218,10 +255,23 @@ func (d *DNSMasq) RemoveMapping(hostname string) error {
 	return d.SetMappings(mappings)
 }
 
+// Reload applies configuration changes by restarting dnsmasq.
+//
+// A restart rather than SIGHUP because hz's records live in a conf-file
+// include, and SIGHUP only re-reads /etc/hosts and addn-hosts files — it would
+// clear the cache and change nothing.
+//
+// The failure counter is cleared first, and that is not defensive noise: hz
+// restarts dnsmasq on every record change, and systemd's StartLimitBurst stops
+// honouring starts after a handful in quick succession. An operator adding
+// three records in a row would leave the LAN with no resolver at all, needing a
+// manual reset-failed to recover — a self-inflicted outage on the box whose job
+// is resolving names.
 func (d *DNSMasq) Reload() error {
 	if err := d.ensureServiceUnit(); err != nil {
 		return err
 	}
+	d.clearStartLimit()
 	return systemctlWithJournal("restart", "dnsmasq")
 }
 
@@ -229,7 +279,16 @@ func (d *DNSMasq) Start() error {
 	if err := d.ensureServiceUnit(); err != nil {
 		return err
 	}
+	d.clearStartLimit()
 	return systemctlWithJournal("start", "dnsmasq")
+}
+
+// clearStartLimit resets systemd's restart rate limiter for dnsmasq.
+//
+// Best-effort: a failure here means the start below reports the real problem,
+// and reset-failed on a healthy unit is a no-op.
+func (d *DNSMasq) clearStartLimit() {
+	_ = systemctlWithJournal("reset-failed", "dnsmasq")
 }
 
 // ensureServiceUnit creates dnsmasq.service if it doesn't exist.
