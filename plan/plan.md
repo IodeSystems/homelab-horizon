@@ -257,13 +257,13 @@ Phase 3 replaces this with: restart horizon, done.
 
 ## Active work
 
-Phases 4b and 5 of the user model are what remain. Ordered by what I'd pick up next:
+Phase 4b of the user model is what remains. Ordered by what I'd pick up next:
 
 | | Item | Blocked? |
 |---|---|---|
 | 1 | [VPN inactivity timeout](#-vpn-inactivity-timeout-last-wag-parity-item) | no |
 | 2 | [PCI 10.5.1 + 2.2.7](#-pci-the-two-remaining-controls-hz-can-actually-detect) | no |
-| 3 | [Real users](#-real-users-local-credentials--oidc-on-sqlite) — local + OIDC on SQLite | ◐ Phases 1–4 done; 4b + 5 left |
+| 3 | [Real users](#-real-users-local-credentials--oidc-on-sqlite) — local + OIDC on SQLite | ◐ Phases 1–5 done; 4b left |
 | 4 | [Phase 0 leftovers](#-phase-0-leftovers) · [canon writeback](#-canon-writeback-to-doc-cross-repo) · [cleanups](#known-cleanups-not-blocking) | no |
 | 5 | [Org alignment backlog](#-org-alignment-backlog--this-repo-owns-it-now) (10 items) | no |
 
@@ -354,8 +354,16 @@ assets punched through the jail.
   viewer is refused at login rather than shown a limited UI. Either implement
   read-only across the admin surfaces or remove the role — a role that only
   produces a refusal is a trap for whoever configures `admin_groups` next.
-- ◻ **5. Policy.** Idle timeout (`8.2.8`), rotation, lockout — the annoying
-  parts, gated behind the Users page rather than arriving on upgrade.
+- ✅ **5. Policy** (`b02fe1b`). Idle timeout (8.2.8), lockout (8.3.4), reuse
+  (8.3.7) and rotation (8.3.9), each reported as a control. Lockout and reuse
+  default on; idle and expiry default off and read unmet until an operator
+  turns them on. 15 more e2e assertions.
+  **Found by the e2e run:** the current password was not treated as reuse, and
+  history ordering was ambiguous within a one-second window. **Not yet
+  deployed.**
+
+**Remaining: 4b only.** The five planned phases are done; what is left is the
+viewer role decision below and whatever the operator follow-ups turn up.
 
 - **risks**: this is the one feature that can lock everyone out of the gateway.
   Every phase keeps the previous way in working, and Phase 2 must not be able
