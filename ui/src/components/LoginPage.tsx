@@ -14,6 +14,7 @@ import {
   useCreateUser,
   useLoginTOTP,
   useLoginPasskey,
+  useOIDCStatus,
 } from "../api/auth";
 
 export default function LoginPage() {
@@ -21,6 +22,7 @@ export default function LoginPage() {
   const login = useLogin();
   const createUser = useCreateUser();
 
+  const sso = useOIDCStatus();
   const loginTOTP = useLoginTOTP();
   const loginPasskey = useLoginPasskey();
 
@@ -37,6 +39,10 @@ export default function LoginPage() {
   // The token is still a first-class way in, not a hidden fallback: it is what
   // a fresh install has, and what recovery documentation tells people to use.
   const [useToken, setUseToken] = useState(false);
+
+  // A failed SSO round trip comes back as a redirect carrying the reason,
+  // because the browser is mid-navigation and cannot be handed JSON.
+  const ssoError = new URLSearchParams(window.location.search).get("sso_error");
 
   const needsBootstrap = status.data?.needsBootstrap === true;
   const usersAvailable = status.data?.usersAvailable !== false;
@@ -117,9 +123,9 @@ export default function LoginPage() {
           </Alert>
         )}
 
-        {error && (
+        {(error || ssoError) && (
           <Alert severity="error" sx={{ mb: 2 }}>
-            {error}
+            {error ?? ssoError}
           </Alert>
         )}
 
@@ -186,6 +192,29 @@ export default function LoginPage() {
             {submitLabel()}
           </Button>
         </form>
+        )}
+
+        {sso.data?.enabled && !pending && !tokenOnly && (
+          <>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: "block", textAlign: "center", mt: 2, mb: 1 }}
+            >
+              or
+            </Typography>
+            <Button
+              fullWidth
+              variant="outlined"
+              size="large"
+              // A plain link, not a fetch: the provider needs to navigate the
+              // browser, and an XHR cannot follow a cross-origin redirect into
+              // a login page the person has to interact with.
+              href="/api/v1/auth/oidc/start"
+            >
+              Sign in with {sso.data.name}
+            </Button>
+          </>
         )}
 
         {usersAvailable && !pending && (

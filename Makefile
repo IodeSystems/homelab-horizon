@@ -188,7 +188,7 @@ e2e:
 # the lockout guards, and a passkey ceremony against the admin relying party.
 .PHONY: e2e-auth
 e2e-auth:
-	ACCOUNT=1 ACCOUNT_PASSKEY=1 ./bin/e2e
+	ACCOUNT=1 ACCOUNT_PASSKEY=1 OIDC=1 ./bin/e2e
 
 .PHONY: help
 help:
@@ -217,4 +217,4 @@ help:
 	@echo "  make docker-run   - Build and run Docker demo on :8080"
 	@echo "  make screenshots  - Regenerate README screenshots (hermetic Docker)"
 	@echo "  make e2e          - End-to-end MFA jail test (multipass VM)"
-	@echo "  make e2e-auth     - End-to-end admin account auth test (multipass VM)"
+	@echo "  make e2e-auth     - End-to-end admin account auth test: accounts, passkeys, SSO"

@@ -237,6 +237,14 @@ type Config struct {
 	// effect of editing a service would be indefensible.
 	UsersDB string `json:"users_db,omitempty"`
 
+	// OIDC, when configured, adds a single-sign-on option to the login page.
+	//
+	// Additive by design: local accounts and the admin token keep working, and
+	// hz must never depend on the provider to let someone in. hz fronts the
+	// network an IdP is usually reached over, so an outage that takes the IdP
+	// down is exactly when an operator needs to log in and fix it.
+	OIDC *OIDCConfig `json:"oidc,omitempty"`
+
 	// SessionIdleMinutes logs an admin out after this long without a request.
 	// Zero disables it, which is the default: the absolute session lifetime
 	// still applies. PCI DSS 8.2.8 wants 15.
@@ -1331,6 +1339,77 @@ func (c *Config) PCIScopedServices() []Service {
 		}
 	}
 	return out
+}
+
+// OIDCConfig configures hz as an OpenID Connect relying party.
+type OIDCConfig struct {
+	Enabled bool `json:"enabled"`
+
+	// Issuer is the provider's base URL; discovery hangs off it. Everything
+	// else -- endpoints, JWKS -- is read from the provider rather than
+	// configured here, because a hand-copied endpoint that disagrees with the
+	// discovery document fails in ways nobody can debug from the UI.
+	Issuer       string `json:"issuer"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret,omitempty"`
+
+	// Name is what the login button says ("Sign in with Authentik").
+	Name string `json:"name,omitempty"`
+
+	// Scopes beyond the openid/profile/email baseline -- typically the one
+	// that carries groups, which varies by provider.
+	Scopes []string `json:"scopes,omitempty"`
+
+	// GroupsClaim names the ID token claim holding group membership.
+	GroupsClaim string `json:"groups_claim,omitempty"`
+	// AdminGroups grants admin. Empty means every authenticated user who
+	// passes AllowedGroups is an admin, which is only reasonable on a
+	// provider dedicated to this gateway.
+	AdminGroups []string `json:"admin_groups,omitempty"`
+	// AllowedGroups gates access entirely. Empty means any account the
+	// provider authenticates may sign in -- correct for a private IdP, wrong
+	// for a shared one, so it is worth stating rather than defaulting.
+	AllowedGroups []string `json:"allowed_groups,omitempty"`
+
+	// AutoProvision creates a local user on first successful sign-in. With it
+	// off, someone must already have an account for SSO to attach to, which
+	// is how an operator keeps the account list a deliberate thing.
+	AutoProvision bool `json:"auto_provision,omitempty"`
+}
+
+// OIDCReady reports whether single sign-on can be offered, and why not.
+//
+// Requires an https admin_url for the same reason passkeys do: the redirect
+// URI is derived from it, and a provider will not redirect to a URL that was
+// guessed from a request host.
+func (c *Config) OIDCReady() (bool, string) {
+	if c.OIDC == nil || !c.OIDC.Enabled {
+		return false, ""
+	}
+	switch {
+	case strings.TrimSpace(c.OIDC.Issuer) == "":
+		return false, "oidc.issuer is not set"
+	case strings.TrimSpace(c.OIDC.ClientID) == "":
+		return false, "oidc.client_id is not set"
+	case strings.TrimSpace(c.AdminURL) == "":
+		return false, "admin_url is not set, so there is no redirect URI to give the provider"
+	case !strings.HasPrefix(strings.TrimSpace(c.AdminURL), "https://"):
+		return false, "admin_url must be https for an OIDC redirect"
+	}
+	return true, ""
+}
+
+// OIDCRedirectURI is the callback the provider must have registered.
+func (c *Config) OIDCRedirectURI() string {
+	return strings.TrimRight(strings.TrimSpace(c.AdminURL), "/") + "/api/v1/auth/oidc/callback"
+}
+
+// OIDCDisplayName is the label for the login button.
+func (c *Config) OIDCDisplayName() string {
+	if c.OIDC != nil && strings.TrimSpace(c.OIDC.Name) != "" {
+		return c.OIDC.Name
+	}
+	return "single sign-on"
 }
 
 // UsersDBPath is the configured identity store path, or the default.

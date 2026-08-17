@@ -224,6 +224,8 @@ type Server struct {
 	users          *db.DB                // identity store; nil when unavailable (see users.go)
 	pendingLogins  *pendingLoginStore    // password done, second factor outstanding
 	pendingTOTP    *pendingTOTPStore     // TOTP secrets awaiting confirmation
+	oidcFlows      *oidcFlowStore        // in-flight OIDC authorizations
+	oidcProviders  *oidcProviderCache    // discovered provider metadata
 	promHandler    http.Handler          // hz's own /metrics exposition
 	hostFacts      hostFacts             // cached clock + patch state (see hostfacts.go)
 
@@ -434,6 +436,8 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		ceremonies:     newCeremonyStore(),
 		pendingLogins:  newPendingLoginStore(),
 		pendingTOTP:    newPendingTOTPStore(),
+		oidcFlows:      newOIDCFlowStore(),
+		oidcProviders:  &oidcProviderCache{},
 	}
 
 	// Identity store. A failure here must not stop hz from serving: the admin
@@ -990,6 +994,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/auth/logout", s.handleAPILogout)
 
 	// API v1 user accounts
+	s.handlePeerInstance(mux, "/api/v1/auth/oidc/status", s.handleAPIOIDCStatus)
+	s.handlePeerInstance(mux, "/api/v1/auth/oidc/start", s.handleAPIOIDCStart)
+	s.handlePeerInstance(mux, "/api/v1/auth/oidc/callback", s.handleAPIOIDCCallback)
 	s.handlePeerInstance(mux, "/api/v1/auth/login/totp", s.handleAPILoginTOTP)
 	s.handlePeerInstance(mux, "/api/v1/auth/login/passkey/begin", s.handleAPILoginPasskeyBegin)
 	s.handlePeerInstance(mux, "/api/v1/auth/login/passkey/finish", s.handleAPILoginPasskeyFinish)

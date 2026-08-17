@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	ashid "github.com/IodeSystems/ashid/go"
@@ -236,4 +237,31 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// UserByOIDCSubject finds the account linked to a provider subject.
+//
+// The subject is the only stable identifier in an OIDC token: usernames and
+// emails are the parts a provider lets people change, so matching on those
+// would let a renamed account inherit somebody else's access here.
+func (d *DB) UserByOIDCSubject(ctx context.Context, subject string) (*User, *Credential, error) {
+	if strings.TrimSpace(subject) == "" {
+		return nil, nil, ErrNotFound
+	}
+	row := d.QueryRowContext(ctx,
+		selectCredential+` WHERE kind = 'oidc' AND secret = ? AND disabled_at IS NULL`, subject)
+	cred, err := scanCredential(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, ErrNotFound
+	} else if err != nil {
+		return nil, nil, err
+	}
+	user, err := d.UserByID(ctx, cred.UserID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := d.TouchCredential(ctx, cred.ID, cred.SignCount, cred.CloneWarning); err != nil {
+		return nil, nil, err
+	}
+	return user, cred, nil
 }
