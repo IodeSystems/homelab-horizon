@@ -1,7 +1,11 @@
 .idea
 .claude
 dist
-homelab-horizon
+# Built binaries, anchored to the repo root. Unanchored, "homelab-horizon" also
+# matched the SOURCE directory cmd/homelab-horizon/, so every new file added
+# there was silently untracked — which is exactly how root.go reached CI as an
+# undefined symbol while building fine locally.
+/homelab-horizon
 /hz
 homelab-horizon.service
 coverage.out
