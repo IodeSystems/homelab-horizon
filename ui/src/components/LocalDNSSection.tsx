@@ -27,6 +27,8 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
 import {
   useLocalDNS,
+  useLocalDNSDomain,
+  useSetLocalDNSDomain,
   useSetLocalDNSRecord,
   useDeleteLocalDNSRecord,
   type LocalDNSRecord,
@@ -78,6 +80,8 @@ export default function LocalDNSSection() {
         exists publicly. Use them to name a machine that has no public record,
         or to point a public name at a LAN address for people inside.
       </Typography>
+
+      <LocalDomainField />
 
       {data && !data.enabled && (
         <Alert severity="info" sx={{ mb: 2 }}>
@@ -199,6 +203,63 @@ export default function LocalDNSSection() {
           setEditing(null);
         }}
       />
+    </Box>
+  );
+}
+
+// One record, both forms.
+//
+// A bare label like "desktop" only resolves for clients pointed straight at hz:
+// a resolver upstream will not forward a single-label query, because there is no
+// domain to forward it for, so it answers from its own empty table instead. With
+// a domain set, the same record also answers as "desktop.<domain>", which does
+// get forwarded.
+function LocalDomainField() {
+  const { data } = useLocalDNSDomain();
+  const save = useSetLocalDNSDomain();
+  const [value, setValue] = useState<string | null>(null);
+
+  const current = data?.domain ?? "";
+  const shown = value ?? current;
+
+  return (
+    <Box sx={{ mb: 3, p: 2, border: 1, borderColor: "divider", borderRadius: 1 }}>
+      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+        Local domain
+      </Typography>
+      <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.5 }}>
+        Appended to bare host records, so <code>desktop</code> also answers as{" "}
+        <code>desktop.{shown || "lan"}</code>. Worth setting: a router forwarding
+        to hz will not forward a name with no dot in it, so bare names reach only
+        clients pointed directly at hz. <code>lan</code> is conventional;{" "}
+        <code>local</code> is reserved for mDNS and rejected.
+      </Typography>
+      <Box sx={{ display: "flex", gap: 1, alignItems: "flex-start" }}>
+        <TextField
+          size="small"
+          label="Domain"
+          placeholder="lan"
+          value={shown}
+          onChange={(e) => setValue(e.target.value)}
+          sx={{ maxWidth: 240 }}
+        />
+        <Button
+          variant="outlined"
+          disabled={save.isPending || shown === current}
+          onClick={() => save.mutate(shown, { onSuccess: () => setValue(null) })}
+          sx={{ mt: 0.25 }}
+        >
+          {save.isPending ? "Saving..." : "Save"}
+        </Button>
+        {current !== "" && shown === current && (
+          <Chip size="small" sx={{ mt: 1 }} label={`records also answer as *.${current}`} />
+        )}
+      </Box>
+      {save.error && (
+        <Alert severity="error" sx={{ mt: 1 }}>
+          {save.error.message}
+        </Alert>
+      )}
     </Box>
   );
 }

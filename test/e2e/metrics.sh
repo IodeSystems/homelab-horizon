@@ -112,6 +112,14 @@ grep -q 'hz_dnsmasq_upstream_queries_total{server=' <<<"$body" \
 # The liveness probe. Distinct from the config cross-check above it: that one
 # says local_interface sits on an interface dnsmasq binds, this one says
 # something actually replied there.
+# dig1 asks the local resolver for one answer and never fails the script.
+#
+# dig exits 9 when it cannot reach a server, and with `set -o pipefail` that
+# takes the whole run down inside a command substitution — so a momentarily
+# stopped resolver looks like a broken assertion three lines later instead of
+# the assertion it belongs to.
+dig1() { dig +short +time=2 +tries=1 @127.0.0.1 "$1" 2>/dev/null | head -1 || true; }
+
 probe() {
   curl -fsS -b "$COOKIE" "$API/api/v1/system/health" \
     | jq -r '.components[]|select(.name=="dnsmasq")|.extras.answers_on_local_interface'
@@ -184,13 +192,13 @@ st=$(curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE" -X POST -H 'Content-Ty
   || bad "LOCALDNS-1 a local record is accepted" "status $st"
 
 # Served by the real resolver, not merely stored.
-answer=$(dig +short +time=2 +tries=1 @127.0.0.1 desktop 2>/dev/null | head -1)
+answer=$(dig1 desktop)
 [ "$answer" = "192.168.1.76" ] \
   && ok "LOCALDNS-2 dnsmasq answers for it" \
   || bad "LOCALDNS-2 dnsmasq answers for it" "got '$answer'"
 
 # Exact by default: a host record must not capture everything beneath it.
-sub=$(dig +short +time=2 +tries=1 @127.0.0.1 anything.desktop 2>/dev/null | head -1)
+sub=$(dig1 anything.desktop)
 [ -z "$sub" ] \
   && ok "LOCALDNS-3 an exact record does not answer for subdomains" \
   || bad "LOCALDNS-3 an exact record does not answer for subdomains" "got '$sub'"
@@ -198,7 +206,7 @@ sub=$(dig +short +time=2 +tries=1 @127.0.0.1 anything.desktop 2>/dev/null | head
 # And a wildcard does, when asked for.
 curl -fsS -b "$COOKIE" -X POST -H 'Content-Type: application/json' \
   -d '{"name":"lab.e2e.test","ip":"192.168.1.90","wildcard":true}' "$API/api/v1/dns/local" >/dev/null
-wild=$(dig +short +time=2 +tries=1 @127.0.0.1 anything.lab.e2e.test 2>/dev/null | head -1)
+wild=$(dig1 anything.lab.e2e.test)
 [ "$wild" = "192.168.1.90" ] \
   && ok "LOCALDNS-4 a wildcard record answers for subdomains" \
   || bad "LOCALDNS-4 a wildcard record answers for subdomains" "got '$wild'"
@@ -216,7 +224,7 @@ sleep 2
 # A sync can bounce the resolver; the assertion is about the record surviving,
 # not about systemd's rate limiter.
 systemctl is-active --quiet dnsmasq || dnsmasq_up || true
-answer=$(dig +short +time=2 +tries=1 @127.0.0.1 desktop 2>/dev/null | head -1)
+answer=$(dig1 desktop)
 [ "$answer" = "192.168.1.76" ] \
   && ok "LOCALDNS-6 the record survives a service sync" \
   || bad "LOCALDNS-6 the record survives a service sync" "got '$answer'"
@@ -230,12 +238,34 @@ curl -fsS -c "$COOKIE" -X POST -H 'Content-Type: application/json' \
   && ok "LOCALDNS-7 it survives a restart" \
   || bad "LOCALDNS-7 it survives a restart" "$(curl -sS -b "$COOKIE" "$API/api/v1/dns/local" | head -c 200)"
 
+# The local domain: one record, both forms. This is what makes a bare label
+# reachable through a resolver upstream of hz, which will not forward a
+# single-label query at all.
+curl -fsS -b "$COOKIE" -X POST -H 'Content-Type: application/json' \
+  -d '{"domain":"lan"}' "$API/api/v1/dns/local/domain" >/dev/null
+sleep 2
+systemctl is-active --quiet dnsmasq || dnsmasq_up || true
+
+bare=$(dig1 desktop)
+dotted=$(dig1 desktop.lan)
+[ "$bare" = "192.168.1.76" ] && [ "$dotted" = "192.168.1.76" ] \
+  && ok "LOCALDNS-10 one record answers bare and as host.domain" \
+  || bad "LOCALDNS-10 one record answers bare and as host.domain" "bare='$bare' dotted='$dotted'"
+
+# .local is reserved for mDNS; answering it over unicast DNS breaks on some
+# clients and works on others, which is the worst kind of bug to chase.
+st=$(curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE" -X POST -H 'Content-Type: application/json' \
+  -d '{"domain":"local"}' "$API/api/v1/dns/local/domain")
+[ "$st" = "400" ] \
+  && ok "LOCALDNS-11 .local is refused as a local domain" \
+  || bad "LOCALDNS-11 .local is refused as a local domain" "status $st"
+
 st=$(curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE" -X DELETE "$API/api/v1/dns/local?name=desktop")
 [ "$st" = "200" ] \
   && ok "LOCALDNS-8 it can be removed" \
   || bad "LOCALDNS-8 it can be removed" "status $st"
 sleep 1
-gone=$(dig +short +time=2 +tries=1 @127.0.0.1 desktop 2>/dev/null | head -1)
+gone=$(dig1 desktop)
 [ -z "$gone" ] \
   && ok "LOCALDNS-9 the resolver stops answering once removed" \
   || bad "LOCALDNS-9 the resolver stops answering once removed" "still '$gone'"

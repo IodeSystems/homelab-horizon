@@ -244,6 +244,16 @@ type Config struct {
 	// (WEB-5/DEPLOY-5).
 	UIDir string `json:"ui_dir,omitempty"`
 
+	// LocalDNSDomain is appended to bare local records, so one record answers
+	// for both "desktop" and "desktop.<domain>".
+	//
+	// Worth setting, because a bare label is not reachable through anything
+	// but hz: an upstream resolver has no domain to forward a single-label
+	// query for, and answers it out of its own empty table. "lan" is the
+	// conventional choice; ".local" is not, being reserved for mDNS by
+	// RFC 6762.
+	LocalDNSDomain string `json:"local_dns_domain,omitempty"`
+
 	// LocalDNSRecords are operator-authored answers hz's resolver serves to
 	// the LAN and VPN, on top of the ones derived from services.
 	//

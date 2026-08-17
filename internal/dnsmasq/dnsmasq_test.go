@@ -237,3 +237,98 @@ func TestUpdateUpstream(t *testing.T) {
 		t.Error("config should contain updated upstream 9.9.9.9")
 	}
 }
+
+// The local domain is what makes a bare host record reachable through an
+// upstream resolver: a single-label query is never forwarded, because there is
+// no domain to forward it for.
+func TestWriteConfigLocalDomain(t *testing.T) {
+	dir := t.TempDir()
+	d := New(filepath.Join(dir, "hz.conf"), filepath.Join(dir, "hosts.conf"), []string{"wg0"}, []string{"1.1.1.1"})
+
+	// Off by default: no domain directives at all.
+	if err := d.WriteConfig(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	body, _ := os.ReadFile(filepath.Join(dir, "hz.conf"))
+	if strings.Contains(string(body), "expand-hosts") {
+		t.Error("expand-hosts appeared without a domain configured")
+	}
+
+	d.SetLocalDomain("LAN")
+	if err := d.WriteConfig(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	body, _ = os.ReadFile(filepath.Join(dir, "hz.conf"))
+	got := string(body)
+
+	for _, want := range []string{"domain=lan", "local=/lan/"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("config missing %q:\n%s", want, got)
+		}
+	}
+	// Deliberately NOT expand-hosts: it applies to hosts-file and DHCP names
+	// and leaves host-record alone, so relying on it produced a config that
+	// looked right and answered nothing for host.domain. The expansion is done
+	// per record instead — see TestRecordsExpandBareNames.
+	if strings.Contains(got, "expand-hosts") {
+		t.Error("expand-hosts does not apply to host-record; it should not be emitted")
+	}
+}
+
+// The expansion that actually works: both names on one host-record, so a bare
+// label and its qualified form cannot drift apart.
+func TestRecordsExpandBareNames(t *testing.T) {
+	dir := t.TempDir()
+	hosts := filepath.Join(dir, "hosts.conf")
+	d := New(filepath.Join(dir, "hz.conf"), hosts, []string{"wg0"}, []string{"1.1.1.1"})
+	d.SetLocalDomain("lan")
+
+	if err := d.SetRecords([]Record{
+		{Name: "desktop", IP: "192.168.1.76"},
+		// Already qualified: nothing to expand.
+		{Name: "wiki.example.com", IP: "192.168.1.50"},
+		// A wildcard is a different directive and is not expanded.
+		{Name: "lab.example.com", IP: "192.168.1.90", Wildcard: true},
+	}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	body, _ := os.ReadFile(hosts)
+	got := string(body)
+
+	if !strings.Contains(got, "host-record=desktop,desktop.lan,192.168.1.76") {
+		t.Errorf("bare name was not expanded:\n%s", got)
+	}
+	if !strings.Contains(got, "host-record=wiki.example.com,192.168.1.50") {
+		t.Errorf("a qualified name should not gain a domain:\n%s", got)
+	}
+	if !strings.Contains(got, "address=/lab.example.com/192.168.1.90") {
+		t.Errorf("wildcard directive wrong:\n%s", got)
+	}
+
+	// Without a domain, a bare name stays bare.
+	d.SetLocalDomain("")
+	if err := d.SetRecords([]Record{{Name: "desktop", IP: "192.168.1.76"}}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	body, _ = os.ReadFile(hosts)
+	if !strings.Contains(string(body), "host-record=desktop,192.168.1.76") {
+		t.Errorf("no domain should mean no expansion:\n%s", body)
+	}
+}
+
+// Clearing it must remove the directives, not leave a stale domain behind.
+func TestWriteConfigLocalDomainCleared(t *testing.T) {
+	dir := t.TempDir()
+	d := New(filepath.Join(dir, "hz.conf"), filepath.Join(dir, "hosts.conf"), []string{"wg0"}, []string{"1.1.1.1"})
+
+	d.SetLocalDomain("lan")
+	_ = d.WriteConfig()
+	d.SetLocalDomain("")
+	_ = d.WriteConfig()
+
+	body, _ := os.ReadFile(filepath.Join(dir, "hz.conf"))
+	if strings.Contains(string(body), "domain=") || strings.Contains(string(body), "expand-hosts") {
+		t.Errorf("clearing the domain left directives behind:\n%s", body)
+	}
+}

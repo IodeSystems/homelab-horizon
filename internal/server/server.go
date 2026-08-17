@@ -394,6 +394,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 	// Build list of interfaces for dnsmasq: WG interface + any additional configured interfaces
 	dnsInterfaces := append([]string{cfg.WGInterface}, cfg.DNSMasqInterfaces...)
 	dns := dnsmasq.New(cfg.DNSMasqConfigPath, cfg.DNSMasqHostsPath, dnsInterfaces, cfg.UpstreamDNS)
+	dns.SetLocalDomain(cfg.LocalDNSDomain)
 
 	// Initialize HAProxy with backends derived from services
 	hap := haproxy.New(cfg.HAProxyConfigPath, "/run/haproxy/admin.sock")
@@ -1012,6 +1013,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/users/disable", s.handleAPIUserDisable)
 	mux.HandleFunc("/api/v1/policy", s.handleAPIPolicy)
 	mux.HandleFunc("/api/v1/dns/local", s.handleAPILocalDNS)
+	mux.HandleFunc("/api/v1/dns/local/domain", s.handleAPILocalDNSDomain)
 
 	// API v1 data routes
 	mux.HandleFunc("/api/v1/dashboard", s.handleAPIDashboard)
