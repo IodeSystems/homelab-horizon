@@ -564,6 +564,11 @@ export interface LoginResponse {
    * exists instead of a code box for someone who only has a passkey.
    */
   factors?: string[];
+  /**
+   * The password was right but has expired and must be changed before a
+   * session is issued. Continues with pendingId, like the MFA step.
+   */
+  passwordExpired?: boolean;
 }
 export interface User {
   id: string;
@@ -627,6 +632,18 @@ export interface AccountFactorsResponse {
 export interface LoginFactorRequest {
   pendingId: string;
   code?: string;
+}
+export interface AccountPolicyResponse {
+  idleMinutes: number /* int */;
+  maxFailedAttempts: number /* int */;
+  lockoutMinutes: number /* int */;
+  passwordMaxAgeDays: number /* int */;
+  passwordHistory: number /* int */;
+  /**
+   * Read-only: the floor is compiled in, not configurable, and the form
+   * needs it to tell people what to type.
+   */
+  minPasswordLength?: number /* int */;
 }
 export interface DeploySlotStatus {
   slot: string;

@@ -15,6 +15,7 @@ import {
   useLoginTOTP,
   useLoginPasskey,
   useOIDCStatus,
+  useLoginChangePassword,
 } from "../api/auth";
 
 export default function LoginPage() {
@@ -23,6 +24,7 @@ export default function LoginPage() {
   const createUser = useCreateUser();
 
   const sso = useOIDCStatus();
+  const changePassword = useLoginChangePassword();
   const loginTOTP = useLoginTOTP();
   const loginPasskey = useLoginPasskey();
 
@@ -31,6 +33,10 @@ export default function LoginPage() {
   const [pending, setPending] = useState<{ id: string; factors: string[] } | null>(
     null,
   );
+  // Set when the password was right but has expired: the form becomes a
+  // change-password step rather than a rejection.
+  const [expired, setExpired] = useState<{ id: string; old: string } | null>(null);
+  const [newPassword, setNewPassword] = useState("");
   const [code, setCode] = useState("");
 
   const [username, setUsername] = useState("");
@@ -50,12 +56,14 @@ export default function LoginPage() {
     login.isPending ||
     createUser.isPending ||
     loginTOTP.isPending ||
-    loginPasskey.isPending;
+    loginPasskey.isPending ||
+    changePassword.isPending;
   const error =
     login.error?.message ??
     createUser.error?.message ??
     loginTOTP.error?.message ??
-    loginPasskey.error?.message;
+    loginPasskey.error?.message ??
+    changePassword.error?.message;
 
   // With no identity store there is nothing but the token, so do not offer a
   // username form that cannot work.
@@ -75,6 +83,11 @@ export default function LoginPage() {
       { username: username.trim(), password },
       {
         onSuccess: (res) => {
+          if (res.passwordExpired && res.pendingId) {
+            setExpired({ id: res.pendingId, old: password });
+            setPassword("");
+            return;
+          }
           if (res.mfaRequired && res.pendingId) {
             setPending({ id: res.pendingId, factors: res.factors ?? [] });
             setPassword("");
@@ -129,7 +142,44 @@ export default function LoginPage() {
           </Alert>
         )}
 
-        {pending ? (
+        {expired ? (
+          <Box>
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              This password has expired. Choose a new one to continue.
+            </Alert>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                changePassword.mutate({
+                  pendingId: expired.id,
+                  currentPassword: expired.old,
+                  password: newPassword,
+                });
+              }}
+            >
+              <TextField
+                fullWidth
+                type="password"
+                label="New password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                autoFocus
+                autoComplete="new-password"
+                helperText="At least 12 characters, and not one you have used recently"
+                sx={{ mb: 2 }}
+              />
+              <Button
+                fullWidth
+                type="submit"
+                variant="contained"
+                size="large"
+                disabled={busy || newPassword.length < 12}
+              >
+                {busy ? "Saving..." : "Set password and sign in"}
+              </Button>
+            </form>
+          </Box>
+        ) : pending ? (
           <SecondFactorStep
             pending={pending}
             code={code}
@@ -194,7 +244,7 @@ export default function LoginPage() {
         </form>
         )}
 
-        {sso.data?.enabled && !pending && !tokenOnly && (
+        {sso.data?.enabled && !pending && !expired && !tokenOnly && (
           <>
             <Typography
               variant="caption"
@@ -217,7 +267,7 @@ export default function LoginPage() {
           </>
         )}
 
-        {usersAvailable && !pending && (
+        {usersAvailable && !pending && !expired && (
           <Typography variant="body2" sx={{ mt: 2, textAlign: "center" }}>
             <Link
               component="button"

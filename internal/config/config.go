@@ -237,6 +237,12 @@ type Config struct {
 	// effect of editing a service would be indefensible.
 	UsersDB string `json:"users_db,omitempty"`
 
+	// Policy is the account rules an operator opts into: idle timeout,
+	// lockout, password age and reuse. Grouped rather than scattered across
+	// the config because they are decided together, usually because an
+	// assessor asked.
+	Policy AccountPolicy `json:"account_policy,omitempty"`
+
 	// OIDC, when configured, adds a single-sign-on option to the login page.
 	//
 	// Additive by design: local accounts and the admin token keep working, and
@@ -244,11 +250,6 @@ type Config struct {
 	// network an IdP is usually reached over, so an outage that takes the IdP
 	// down is exactly when an operator needs to log in and fix it.
 	OIDC *OIDCConfig `json:"oidc,omitempty"`
-
-	// SessionIdleMinutes logs an admin out after this long without a request.
-	// Zero disables it, which is the default: the absolute session lifetime
-	// still applies. PCI DSS 8.2.8 wants 15.
-	SessionIdleMinutes int `json:"session_idle_minutes,omitempty"`
 
 	// CertWarningDays is how many days before expiry a TLS check starts
 	// warning instead of passing. Defaults to 7 — see
@@ -1339,6 +1340,76 @@ func (c *Config) PCIScopedServices() []Service {
 		}
 	}
 	return out
+}
+
+// AccountPolicy holds the opt-in account rules.
+//
+// Defaults are deliberately split. Lockout and password reuse are on, because
+// they only ever act on someone doing something wrong and cost a correct user
+// nothing. Idle timeout and password expiry are off, because both log people
+// out of a working session and neither should arrive unannounced with an
+// upgrade — the PCI controls report them as unmet until an operator decides.
+type AccountPolicy struct {
+	// IdleMinutes signs an account out after this long without a request.
+	// Zero disables it; the absolute session lifetime still applies.
+	// PCI DSS 8.2.8 wants 15.
+	IdleMinutes int `json:"idle_minutes,omitempty"`
+
+	// MaxFailedAttempts locks an account after this many consecutive failures.
+	// PCI DSS 8.3.4 wants no more than 10.
+	MaxFailedAttempts int `json:"max_failed_attempts,omitempty"`
+	// LockoutMinutes is how long the lock lasts. 8.3.4 wants at least 30.
+	LockoutMinutes int `json:"lockout_minutes,omitempty"`
+
+	// PasswordMaxAgeDays forces a change after this long. Zero disables it.
+	// 8.3.9 wants 90 when a password is the only factor — which is why the
+	// control reports met for an account that also holds a second factor.
+	PasswordMaxAgeDays int `json:"password_max_age_days,omitempty"`
+
+	// PasswordHistory is how many previous passwords may not be reused.
+	// 8.3.7 wants 4.
+	PasswordHistory int `json:"password_history,omitempty"`
+}
+
+// Policy defaults. Applied by the accessors below rather than written into the
+// config on load, so an unset field stays unset on disk and the default can
+// move without rewriting everyone's file.
+const (
+	DefaultMaxFailedAttempts = 10
+	DefaultLockoutMinutes    = 30
+	DefaultPasswordHistory   = 4
+)
+
+// EffectiveMaxFailedAttempts returns the lockout threshold, or the default.
+// Negative disables lockout entirely, which is a choice an operator can make
+// but has to make explicitly.
+func (p AccountPolicy) EffectiveMaxFailedAttempts() int {
+	if p.MaxFailedAttempts == 0 {
+		return DefaultMaxFailedAttempts
+	}
+	if p.MaxFailedAttempts < 0 {
+		return 0
+	}
+	return p.MaxFailedAttempts
+}
+
+// EffectiveLockoutMinutes returns how long a lock lasts, or the default.
+func (p AccountPolicy) EffectiveLockoutMinutes() int {
+	if p.LockoutMinutes <= 0 {
+		return DefaultLockoutMinutes
+	}
+	return p.LockoutMinutes
+}
+
+// EffectivePasswordHistory returns how many old passwords are barred.
+func (p AccountPolicy) EffectivePasswordHistory() int {
+	if p.PasswordHistory == 0 {
+		return DefaultPasswordHistory
+	}
+	if p.PasswordHistory < 0 {
+		return 0
+	}
+	return p.PasswordHistory
 }
 
 // OIDCConfig configures hz as an OpenID Connect relying party.

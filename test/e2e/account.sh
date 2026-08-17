@@ -37,10 +37,12 @@ status_of() {
   curl "${args[@]}" "$API$path"
 }
 
-command -v oathtool >/dev/null 2>&1 || {
-  note "installing oathtool..."
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq oathtool >/dev/null 2>&1
-}
+for tool in oathtool sqlite3; do
+  command -v "$tool" >/dev/null 2>&1 || {
+    note "installing $tool..."
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$tool" >/dev/null 2>&1
+  }
+done
 
 # A previous run leaves accounts behind, and bootstrap is only open while none
 # exist. Start from nothing so the first assertion means what it says.
@@ -262,6 +264,114 @@ st=$(status_of POST /api/v1/auth/login "{\"token\":\"$TOKEN\"}")
 [ "$st" = "200" ] \
   && ok "ACC-32 editing the config re-enables the token, as the runbook says" \
   || bad "ACC-32 editing the config re-enables the token, as the runbook says" "status $st"
+
+printf '\n\033[1mAccount policy\033[0m\n'
+
+# Fresh account for the policy checks: the one above is mid-lockout-guard and
+# carries a TOTP factor, which exempts it from password expiry.
+curl -fsS -b "$UC" -X POST -H 'Content-Type: application/json' \
+  -d '{"username":"polly","password":"first-password-aa1"}' "$API/api/v1/users" >/dev/null
+pid=$(curl -fsS -b "$UC" "$API/api/v1/users" | jq -r '.users[] | select(.username == "polly") | .id')
+
+st=$(curl -fsS -b "$UC" "$API/api/v1/policy")
+[ "$(jq -r '.maxFailedAttempts' <<<"$st")" = "10" ] && [ "$(jq -r '.lockoutMinutes' <<<"$st")" = "30" ] \
+  && ok "ACC-33 lockout is on by default at the PCI thresholds" \
+  || bad "ACC-33 lockout is on by default at the PCI thresholds" "$st"
+
+[ "$(jq -r '.idleMinutes' <<<"$st")" = "0" ] \
+  && ok "ACC-34 idle timeout is off until an operator sets it" \
+  || bad "ACC-34 idle timeout is off until an operator sets it" "$st"
+
+st=$(status_of PUT /api/v1/policy '{"idleMinutes":9999,"maxFailedAttempts":3,"lockoutMinutes":30,"passwordMaxAgeDays":0,"passwordHistory":4}' "$UC")
+[ "$st" = "400" ] \
+  && ok "ACC-35 an out-of-range idle timeout is refused" \
+  || bad "ACC-35 an out-of-range idle timeout is refused" "status $st"
+
+st=$(status_of PUT /api/v1/policy '{"idleMinutes":15,"maxFailedAttempts":3,"lockoutMinutes":30,"passwordMaxAgeDays":90,"passwordHistory":4}' "$UC")
+[ "$st" = "200" ] \
+  && ok "ACC-36 a valid policy is accepted" \
+  || bad "ACC-36 a valid policy is accepted" "status $st"
+
+# Lockout, against a real install rather than a unit test's clock.
+for _ in 1 2 3; do
+  curl -sS -o /dev/null -X POST -H 'Content-Type: application/json' \
+    -d '{"username":"polly","password":"wrong-password-xx"}' "$API/api/v1/auth/login"
+done
+st=$(status_of POST /api/v1/auth/login '{"username":"polly","password":"first-password-aa1"}')
+[ "$st" = "429" ] \
+  && ok "ACC-37 the account locks after the configured failures" \
+  || bad "ACC-37 the account locks after the configured failures" "status $st"
+
+# The correct password must stay refused while locked, or the lock is theatre.
+body=$(curl -sS -X POST -H 'Content-Type: application/json' \
+  -d '{"username":"polly","password":"first-password-aa1"}' "$API/api/v1/auth/login")
+grep -qi 'too many' <<<"$body" \
+  && ok "ACC-38 the lock says how long to wait" \
+  || bad "ACC-38 the lock says how long to wait" "$body"
+
+# Clear it the way an admin would, then prove reuse is barred.
+sqlite3 "$DB" "UPDATE users SET locked_until = NULL, failed_attempts = 0 WHERE username = 'polly';" 2>/dev/null \
+  || apt-get install -y -qq sqlite3 >/dev/null 2>&1 && sqlite3 "$DB" "UPDATE users SET locked_until = NULL, failed_attempts = 0 WHERE username = 'polly';"
+
+rm -f /tmp/polly-cookie
+curl -fsS -c /tmp/polly-cookie -X POST -H 'Content-Type: application/json' \
+  -d '{"username":"polly","password":"first-password-aa1"}' "$API/api/v1/auth/login" >/dev/null
+st=$(status_of POST /api/v1/users/password '{"currentPassword":"first-password-aa1","password":"first-password-aa1"}' /tmp/polly-cookie)
+[ "$st" = "400" ] \
+  && ok "ACC-39 reusing the current password is refused" \
+  || bad "ACC-39 reusing the current password is refused" "status $st"
+
+st=$(status_of POST /api/v1/users/password '{"currentPassword":"first-password-aa1","password":"second-password-b2"}' /tmp/polly-cookie)
+[ "$st" = "200" ] \
+  && ok "ACC-40 a fresh password is accepted" \
+  || bad "ACC-40 a fresh password is accepted" "status $st"
+
+# Expiry: backdate the credential and check the login stops for a change.
+sqlite3 "$DB" "UPDATE credentials SET created_at = datetime('now','-200 days') WHERE kind='password' AND user_id='$pid';"
+body=$(curl -sS -X POST -H 'Content-Type: application/json' \
+  -d '{"username":"polly","password":"second-password-b2"}' "$API/api/v1/auth/login")
+grep -q '"passwordExpired":true' <<<"$body" \
+  && ok "ACC-41 an expired password stops the login" \
+  || bad "ACC-41 an expired password stops the login" "$body"
+
+pend=$(jq -r '.pendingId' <<<"$body")
+rm -f /tmp/polly-cookie2
+finish=$(curl -sS -c /tmp/polly-cookie2 -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+  -d "{\"pendingId\":\"$pend\",\"currentPassword\":\"second-password-b2\",\"password\":\"third-password-cc3\"}" \
+  "$API/api/v1/auth/login/change-password")
+[ "$finish" = "200" ] \
+  && ok "ACC-42 changing it completes the login" \
+  || bad "ACC-42 changing it completes the login" "status $finish"
+
+grep -q '"method":"user"' <<<"$(curl -fsS -b /tmp/polly-cookie2 "$API/api/v1/auth/status")" \
+  && ok "ACC-43 the rotated account is signed in" \
+  || bad "ACC-43 the rotated account is signed in" "$(curl -sS -b /tmp/polly-cookie2 "$API/api/v1/auth/status")"
+
+# And the new password is no longer expired.
+st=$(status_of POST /api/v1/auth/login '{"username":"polly","password":"third-password-cc3"}')
+[ "$st" = "200" ] \
+  && ok "ACC-44 the fresh password signs in normally" \
+  || bad "ACC-44 the fresh password signs in normally" "status $st"
+
+# The policy controls must reach the scrape, since that is where an assessor
+# looks rather than at the config file.
+metrics=$(curl -fsS -b "$UC" "$API/metrics")
+grep -q 'hz_control_state{control="session_idle_timeout",requirement="8.2.8"} 1' <<<"$metrics" \
+  && ok "ACC-45 the idle timeout control reports met once configured" \
+  || bad "ACC-45 the idle timeout control reports met once configured" "$(grep session_idle <<<"$metrics")"
+
+grep -q 'hz_control_state{control="password_rotation",requirement="8.3.9"} 1' <<<"$metrics" \
+  && ok "ACC-46 the rotation control reports met once configured" \
+  || bad "ACC-46 the rotation control reports met once configured" "$(grep password_rotation <<<"$metrics")"
+
+grep -q 'hz_control_state{control="login_lockout",requirement="8.3.4"} 1' <<<"$metrics" \
+  && ok "ACC-47 the lockout control reports met" \
+  || bad "ACC-47 the lockout control reports met" "$(grep login_lockout <<<"$metrics")"
+
+# Put the policy back so the fixture leaves a box a human can log into.
+curl -fsS -b "$UC" -X PUT -H 'Content-Type: application/json' \
+  -d '{"idleMinutes":0,"maxFailedAttempts":10,"lockoutMinutes":30,"passwordMaxAgeDays":0,"passwordHistory":4}' \
+  "$API/api/v1/policy" >/dev/null
 
 printf '\n\033[1mResult\033[0m\n'
 printf '  %d passed, %d failed\n\n' "$pass" "$fail"

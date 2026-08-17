@@ -579,6 +579,10 @@ type LoginResponse struct {
 	// Which factors this account can finish with, so the UI offers what
 	// exists instead of a code box for someone who only has a passkey.
 	Factors []string `json:"factors,omitempty"`
+
+	// The password was right but has expired and must be changed before a
+	// session is issued. Continues with pendingId, like the MFA step.
+	PasswordExpired bool `json:"passwordExpired,omitempty"`
 }
 
 // Users
@@ -650,6 +654,17 @@ type AccountFactorsResponse struct {
 type LoginFactorRequest struct {
 	PendingID string `json:"pendingId"`
 	Code      string `json:"code,omitempty"`
+}
+
+type AccountPolicyResponse struct {
+	IdleMinutes        int `json:"idleMinutes"`
+	MaxFailedAttempts  int `json:"maxFailedAttempts"`
+	LockoutMinutes     int `json:"lockoutMinutes"`
+	PasswordMaxAgeDays int `json:"passwordMaxAgeDays"`
+	PasswordHistory    int `json:"passwordHistory"`
+	// Read-only: the floor is compiled in, not configurable, and the form
+	// needs it to tell people what to type.
+	MinPasswordLength int `json:"minPasswordLength,omitempty"`
 }
 
 // Deploy

@@ -998,6 +998,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/auth/oidc/start", s.handleAPIOIDCStart)
 	s.handlePeerInstance(mux, "/api/v1/auth/oidc/callback", s.handleAPIOIDCCallback)
 	s.handlePeerInstance(mux, "/api/v1/auth/login/totp", s.handleAPILoginTOTP)
+	s.handlePeerInstance(mux, "/api/v1/auth/login/change-password", s.handleAPILoginChangePassword)
 	s.handlePeerInstance(mux, "/api/v1/auth/login/passkey/begin", s.handleAPILoginPasskeyBegin)
 	s.handlePeerInstance(mux, "/api/v1/auth/login/passkey/finish", s.handleAPILoginPasskeyFinish)
 	mux.HandleFunc("/api/v1/account/factors", s.handleAPIAccountFactors)
@@ -1008,6 +1009,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/users", s.handleAPIUsers)
 	mux.HandleFunc("/api/v1/users/password", s.handleAPIUserPassword)
 	mux.HandleFunc("/api/v1/users/disable", s.handleAPIUserDisable)
+	mux.HandleFunc("/api/v1/policy", s.handleAPIPolicy)
 
 	// API v1 data routes
 	mux.HandleFunc("/api/v1/dashboard", s.handleAPIDashboard)

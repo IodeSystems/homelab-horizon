@@ -34,6 +34,9 @@ interface LoginResponse {
   mfaRequired?: boolean;
   pendingId?: string;
   factors?: string[];
+  // The password was right but has expired; it must be changed before a
+  // session is issued.
+  passwordExpired?: boolean;
 }
 
 export interface User {
@@ -277,5 +280,50 @@ export function useOIDCStatus() {
     queryFn: () => apiFetch<OIDCStatus>("/auth/oidc/status"),
     retry: false,
     staleTime: 60_000,
+  });
+}
+
+export interface AccountPolicy {
+  idleMinutes: number;
+  maxFailedAttempts: number;
+  lockoutMinutes: number;
+  passwordMaxAgeDays: number;
+  passwordHistory: number;
+  minPasswordLength?: number;
+}
+
+export function usePolicy() {
+  return useQuery({
+    queryKey: ["policy"],
+    queryFn: () => apiFetch<AccountPolicy>("/policy"),
+  });
+}
+
+export function useSavePolicy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: AccountPolicy) =>
+      apiFetch<{ ok: boolean }>("/policy", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["policy"] }),
+  });
+}
+
+// Completing a login that stopped because the password expired.
+export function useLoginChangePassword() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      pendingId: string;
+      currentPassword: string;
+      password: string;
+    }) =>
+      apiFetch<{ ok: boolean }>("/auth/login/change-password", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["auth"] }),
   });
 }

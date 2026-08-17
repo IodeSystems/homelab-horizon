@@ -361,6 +361,24 @@ func hzControls(cfg *config.Config, facts hostFactsSnapshot) []control {
 		// updates rather than their age, which is the conservative reading:
 		// anything outstanding is a finding until installed.
 		{"patches_current", "6.3.3", facts.measured && facts.securityUpdates == 0},
+		// 8.2.8 — an idle session must not stay usable. Off by default because
+		// it logs working admins out, so this reads unmet until an operator
+		// sets a limit inside the 15 minutes the standard names.
+		{"session_idle_timeout", "8.2.8", cfg.Policy.IdleMinutes > 0 && cfg.Policy.IdleMinutes <= 15},
+		// 8.3.4 — lock an account after no more than 10 failed attempts, for
+		// at least 30 minutes. On by default: it only ever acts on someone
+		// already failing, so it costs a correct user nothing.
+		{"login_lockout", "8.3.4",
+			cfg.Policy.EffectiveMaxFailedAttempts() > 0 &&
+				cfg.Policy.EffectiveMaxFailedAttempts() <= 10 &&
+				cfg.Policy.EffectiveLockoutMinutes() >= 30},
+		// 8.3.7 — the last four passwords may not be reused.
+		{"password_history", "8.3.7", cfg.Policy.EffectivePasswordHistory() >= 4},
+		// 8.3.9 — rotate every 90 days when a password is the only factor.
+		// hz exempts accounts holding a second factor, which is what the
+		// requirement itself allows.
+		{"password_rotation", "8.3.9",
+			cfg.Policy.PasswordMaxAgeDays > 0 && cfg.Policy.PasswordMaxAgeDays <= 90},
 	}
 }
 

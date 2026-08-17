@@ -25,11 +25,11 @@ const userSessionCookie = "hz_user"
 
 // idleTimeout is the configured inactivity limit, or zero for none.
 //
-// Zero by default in this phase. Turning an idle timeout on is a change to how
-// every admin's day feels, so it belongs with the rest of the policy switches
-// rather than arriving unannounced with the feature that made it possible.
+// Off unless an operator turns it on. An idle timeout changes how every
+// admin's day feels, so it is not something an upgrade should decide for
+// them — the PCI control reports it unmet until they do.
 func (s *Server) idleTimeout() time.Duration {
-	mins := s.cfg().SessionIdleMinutes
+	mins := s.cfg().Policy.IdleMinutes
 	if mins <= 0 {
 		return 0
 	}
@@ -121,3 +121,34 @@ func (s *Server) bootstrapAllowed(ctx context.Context) bool {
 // not open. Naming it beats a generic 500: the cause is on disk, not in the
 // request.
 var errNoIdentityStore = errors.New("identity store unavailable; check the hz log for the database error")
+
+// lockoutPolicy is the store-facing view of the configured policy.
+func (s *Server) lockoutPolicy() db.LockoutPolicy {
+	p := s.cfg().Policy
+	return db.LockoutPolicy{
+		MaxAttempts: p.EffectiveMaxFailedAttempts(),
+		Duration:    time.Duration(p.EffectiveLockoutMinutes()) * time.Minute,
+	}
+}
+
+// passwordExpired reports whether the account must change its password before
+// it can do anything else.
+//
+// Expiry applies only to accounts whose password is their only factor. PCI DSS
+// 8.3.9 says exactly that, and it is the right rule regardless: rotation is a
+// hedge against an undetected compromise of a single secret, and an account
+// with a second factor is not relying on a single secret.
+func (s *Server) passwordExpired(ctx context.Context, userID string) bool {
+	days := s.cfg().Policy.PasswordMaxAgeDays
+	if days <= 0 || s.users == nil {
+		return false
+	}
+	if has, err := s.users.HasSecondFactor(ctx, userID); err != nil || has {
+		return false
+	}
+	age, err := s.users.PasswordAge(ctx, userID)
+	if err != nil {
+		return false
+	}
+	return age > time.Duration(days)*24*time.Hour
+}

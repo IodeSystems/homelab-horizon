@@ -9,13 +9,28 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
+// hardenedByDefault lists the controls hz satisfies with no configuration.
+//
+// Both are enforced out of the box because they only ever act on someone
+// already failing or reusing a password, so they cost a correct user nothing.
+// Reporting them unmet on a bare config would understate compliance, which is
+// the same dishonesty as overstating it pointed the other way.
+var hardenedByDefault = map[string]bool{
+	"login_lockout":    true,
+	"password_history": true,
+}
+
 // TestControlsReportHardenedOnly pins the honest direction of hz_control_state:
-// 1 means the control is in its hardened setting, and the default deployment
-// must not read as hardened just because nothing was configured.
+// 1 means the control is in its hardened setting. A control an operator has to
+// turn on must not read as hardened just because nothing was configured, and a
+// control hz enforces by default must not read as unmet.
 func TestControlsReportHardenedOnly(t *testing.T) {
 	off := hzControls(&config.Config{}, hostFactsSnapshot{})
 	for _, c := range off {
-		if c.ok {
+		switch {
+		case hardenedByDefault[c.name] && !c.ok:
+			t.Errorf("control %q is enforced by default but reads unmet", c.name)
+		case !hardenedByDefault[c.name] && c.ok:
 			t.Errorf("control %q reads hardened on a bare config", c.name)
 		}
 	}
@@ -27,11 +42,59 @@ func TestControlsReportHardenedOnly(t *testing.T) {
 		SSLEnabled:           true,
 		HAProxyTLSMinVersion: "TLSv1.3",
 		AdminTokenDisabled:   true,
+		Policy: config.AccountPolicy{
+			IdleMinutes:        15,
+			PasswordMaxAgeDays: 90,
+		},
 	}, hostFactsSnapshot{measured: true, timeSynced: true})
 	for _, c := range hard {
 		if !c.ok {
 			t.Errorf("control %q should be satisfied by a hardened config", c.name)
 		}
+	}
+}
+
+// The policy controls must track the thresholds the standard names rather than
+// merely being set to something.
+func TestPolicyControlsHonourThresholds(t *testing.T) {
+	find := func(cfg config.Config, name string) bool {
+		for _, c := range hzControls(&cfg, hostFactsSnapshot{}) {
+			if c.name == name {
+				return c.ok
+			}
+		}
+		t.Fatalf("control %q not reported", name)
+		return false
+	}
+
+	// 8.2.8 wants 15 minutes or less.
+	if find(config.Config{Policy: config.AccountPolicy{IdleMinutes: 30}}, "session_idle_timeout") {
+		t.Error("a 30 minute idle timeout should not satisfy 8.2.8")
+	}
+	if !find(config.Config{Policy: config.AccountPolicy{IdleMinutes: 15}}, "session_idle_timeout") {
+		t.Error("15 minutes should satisfy 8.2.8")
+	}
+
+	// 8.3.4 wants at most 10 attempts and at least 30 minutes.
+	if find(config.Config{Policy: config.AccountPolicy{MaxFailedAttempts: 20}}, "login_lockout") {
+		t.Error("20 attempts should not satisfy 8.3.4")
+	}
+	if find(config.Config{Policy: config.AccountPolicy{LockoutMinutes: 5}}, "login_lockout") {
+		t.Error("a 5 minute lockout should not satisfy 8.3.4")
+	}
+	// Explicitly disabled must read unmet rather than falling back to a default.
+	if find(config.Config{Policy: config.AccountPolicy{MaxFailedAttempts: -1}}, "login_lockout") {
+		t.Error("lockout turned off should not satisfy 8.3.4")
+	}
+
+	// 8.3.7 wants four.
+	if find(config.Config{Policy: config.AccountPolicy{PasswordHistory: 2}}, "password_history") {
+		t.Error("a history of 2 should not satisfy 8.3.7")
+	}
+
+	// 8.3.9 wants 90 days or less.
+	if find(config.Config{Policy: config.AccountPolicy{PasswordMaxAgeDays: 365}}, "password_rotation") {
+		t.Error("365 days should not satisfy 8.3.9")
 	}
 }
 
