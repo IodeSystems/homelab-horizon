@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -144,6 +145,22 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 		}
 		dns.Errors = append(dns.Errors, msg)
 	}
+	// Configuration coherence is one question; whether anything is listening is
+	// another. With bind-dynamic dnsmasq starts happily and binds addresses as
+	// they appear, so a correct config can still be answering on nothing.
+	if cfg.DNSMasqEnabled && cfg.LocalInterface != "" {
+		answering := dnsmasq.Answers(net.JoinHostPort(cfg.LocalInterface, "53"))
+		if dns.Extras == nil {
+			dns.Extras = map[string]any{}
+		}
+		dns.Extras["answers_on_local_interface"] = answering
+		if !answering && dnsStatus.Running {
+			dns.Errors = append(dns.Errors,
+				"dnsmasq is running but not answering on "+cfg.LocalInterface+
+					":53 — services bound to localhost will not resolve for VPN clients")
+		}
+	}
+
 	resp.Components = append(resp.Components, dns)
 
 	// Let's Encrypt. "Installed" here means acme account configured, not a

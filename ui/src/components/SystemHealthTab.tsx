@@ -340,6 +340,9 @@ function DNSMasqCard({ health }: { health: SystemHealth }) {
     configured_ifs?: string[];
   } | null;
   const localBindOK = !localBind;
+  // undefined when hz did not probe (dnsmasq off, or no local_interface), which
+  // is different from "probed and got nothing".
+  const answersProbe = dns.extras?.answers_on_local_interface as boolean | undefined;
   const owningIface = localBind?.owning_iface ?? "";
   return (
     <ComponentCard title="dnsmasq" component={dns}>
@@ -390,6 +393,21 @@ function DNSMasqCard({ health }: { health: SystemHealth }) {
         fixRunning={fixIfaces.isPending}
         fixLabel={owningIface ? `Add ${owningIface}` : "Fix"}
       />
+      {answersProbe !== undefined && (
+        <CheckRow
+          // Distinct from the row above: that one says the config is coherent,
+          // this one says something actually replied. With bind-dynamic a
+          // correct config can still be answering on nothing.
+          label={`Answering DNS on local_interface`}
+          ok={answersProbe}
+          okLabel="Responding"
+          failingLabel="No reply"
+          fix={() => reload.mutate()}
+          fixDisabled={!dns.running}
+          fixRunning={reload.isPending}
+          fixLabel="Reload"
+        />
+      )}
       <Box sx={{ mt: 1 }}>
         <Button
           size="small"
