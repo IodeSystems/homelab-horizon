@@ -198,7 +198,14 @@ deploy_one() {
       echo 'Installing admin UI...'
       sudo rm -rf ${REMOTE_UI_DIR}.new
       sudo mkdir -p ${REMOTE_UI_DIR}.new
-      sudo tar -xzf /tmp/hz-ui.tar.gz -C ${REMOTE_UI_DIR}.new
+      # --no-same-owner plus an explicit chown: tar preserves the uid from the
+      # build machine, and if that uid exists on the target, that user can
+      # rewrite the admin interface's JavaScript. hz serves this directory to
+      # whoever administers the box, so it belongs to root.
+      sudo tar -xzf /tmp/hz-ui.tar.gz --no-same-owner -C ${REMOTE_UI_DIR}.new
+      sudo chown -R root:root ${REMOTE_UI_DIR}.new
+      sudo find ${REMOTE_UI_DIR}.new -type d -exec chmod 755 {} +
+      sudo find ${REMOTE_UI_DIR}.new -type f -exec chmod 644 {} +
       if [ -f ${REMOTE_UI_DIR}.new/index.html ]; then
         sudo mkdir -p ${REMOTE_UI_DIR%/*}
         sudo rm -rf ${REMOTE_UI_DIR}.old
