@@ -26,6 +26,11 @@ type Backend struct {
 	MetricsPath   string   `json:"metrics_path,omitempty"` // if set, deny this path from non-local sources (Prometheus scrapes the backend directly)
 	MFAPortal     bool     `json:"mfa_portal,omitempty"`   // this backend is the MFA portal — the one thing an MFA-jailed VPN peer may reach
 
+	// RateLimitRequests is the per-source threshold for this backend within
+	// the gateway's rate window. Zero means use the global default; negative
+	// means never limit this one.
+	RateLimitRequests int `json:"rate_limit_requests,omitempty"`
+
 	// Blue-green deploy fields (when Deploy is true, CurrentServer/NextServer are used instead of Server)
 	Deploy        bool   `json:"deploy,omitempty"`
 	CurrentServer string `json:"current_server,omitempty"` // host:port for active slot
@@ -92,6 +97,12 @@ type HAProxy struct {
 	mfaJail       MFAJail
 	metricsPort   int
 	tlsMinVersion string
+	rateLimit     *RateLimit
+}
+
+// SetRateLimit configures the edge volume tier. Nil disables it.
+func (h *HAProxy) SetRateLimit(rl *RateLimit) {
+	h.rateLimit = rl
 }
 
 // New creates a new HAProxy manager
@@ -515,6 +526,7 @@ listen stats
 			fmt.Fprintf(&sb, "    acl host_%s hdr_end(host) -i %s\n", aclName, strings.Join(patterns, " "))
 		}
 		sb.WriteString("\n")
+		sb.WriteString(rateLimitRules(h.rateLimit, backends))
 		sb.WriteString(mfaJailRules(h.mfaJail, backends))
 		// Deny external access to internal-only backends
 		for _, b := range backends {
@@ -585,6 +597,7 @@ listen stats
 			fmt.Fprintf(&sb, "    acl host_%s hdr_end(host) -i %s\n", aclName, strings.Join(patterns, " "))
 		}
 		sb.WriteString("\n")
+		sb.WriteString(rateLimitRules(h.rateLimit, backends))
 		sb.WriteString(mfaJailRules(h.mfaJail, backends))
 		// Deny external access to internal-only backends
 		for _, b := range backends {
@@ -650,6 +663,7 @@ listen stats
 			fmt.Fprintf(&sb, "    acl host_%s hdr_end(host) -i %s\n", aclName, strings.Join(patterns, " "))
 		}
 		sb.WriteString("\n")
+		sb.WriteString(rateLimitRules(h.rateLimit, backends))
 		sb.WriteString(mfaJailRules(h.mfaJail, backends))
 		// Deny external access to internal-only backends
 		for _, b := range backends {
@@ -672,6 +686,11 @@ listen stats
 		}
 		sb.WriteString("\n")
 	}
+
+	// The rate-limit table, before the backends that reference it. A backend
+	// with no servers: HAProxy carries stick-tables this way and never routes
+	// to it.
+	sb.WriteString(rateLimitBackend(h.rateLimit))
 
 	// Backend definitions
 	for _, b := range backends {
@@ -767,6 +786,87 @@ func mfaJailRules(j MFAJail, backends []Backend) string {
 	} else {
 		fmt.Fprintf(&sb, "    http-request deny deny_status 403 if %s\n", cond)
 	}
+	return sb.String()
+}
+
+// RateLimit is the edge volume tier (EDGE-4), or nil when disabled.
+type RateLimit struct {
+	WindowSeconds int
+	Requests      int // global default; per-backend overrides win
+	ExemptLocal   bool
+}
+
+// rateLimitTable is the stick-table backend name. One table for the gateway:
+// each distinct window would need its own, and the thresholds are per-service
+// anyway.
+const rateLimitTable = "hz_rate_limit"
+
+// rateLimitBackend emits the stick-table that holds per-source request rates.
+//
+// A backend with no servers, which is how HAProxy carries a table that
+// frontends reference — it is never routed to.
+func rateLimitBackend(rl *RateLimit) string {
+	if rl == nil {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("# Edge rate limiting (EDGE-4): per-source request rates.\n")
+	sb.WriteString("# A table, not a WAF — it catches volume, which is the tier that sat\n")
+	sb.WriteString("# missing between \"no limit at all\" and an iptables ban.\n")
+	fmt.Fprintf(&sb, "backend %s\n", rateLimitTable)
+	// 1m entries is ~1MB and covers far more distinct sources than a homelab
+	// edge will see; expire well past the window so a burst stays counted.
+	fmt.Fprintf(&sb, "    stick-table type ip size 1m expire %ds store http_req_rate(%ds)\n\n",
+		rl.WindowSeconds*6, rl.WindowSeconds)
+	return sb.String()
+}
+
+// rateLimitRules emits the tracking and deny rules for one frontend.
+//
+// Tracking is unconditional so the table reflects real traffic even for exempt
+// sources — an operator looking at the table wants to see what is arriving, not
+// a filtered view. The exemption applies to the deny, which is where it matters.
+func rateLimitRules(rl *RateLimit, backends []Backend) string {
+	if rl == nil {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("    # Rate limiting: track every source, deny the ones over threshold\n")
+	fmt.Fprintf(&sb, "    http-request track-sc0 src table %s\n", rateLimitTable)
+
+	exempt := ""
+	if rl.ExemptLocal {
+		// local_access is already defined in both frontends for internal-only
+		// services; reusing it keeps one definition of "inside".
+		exempt = " !local_access"
+	}
+
+	for _, b := range backends {
+		// Never limit the MFA portal. These rules are evaluated before the
+		// jail rules, so a jailed peer hammering the portal would be answered
+		// 429 by the very endpoint that exists to un-jail them — locking them
+		// out of the recovery path with no way back. The portal is already the
+		// one host a jailed peer may reach; it is exempt here for the same
+		// reason.
+		if b.MFAPortal {
+			continue
+		}
+
+		threshold := b.RateLimitRequests
+		if threshold == 0 {
+			threshold = rl.Requests
+		}
+		if threshold <= 0 {
+			// Negative is an explicit opt-out, zero with no global default
+			// means nothing to enforce.
+			continue
+		}
+		fmt.Fprintf(&sb,
+			"    http-request deny deny_status 429 if host_%s%s { sc_http_req_rate(0) gt %d }\n",
+			sanitizeName(b.Name), exempt, threshold)
+	}
+	sb.WriteString("\n")
 	return sb.String()
 }
 

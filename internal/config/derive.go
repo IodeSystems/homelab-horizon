@@ -288,6 +288,8 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 			// MFA portal lives — so it's the one host an MFA-jailed VPN peer
 			// is allowed through HAProxy to reach.
 			MFAPortal: self,
+			// Per-service threshold; zero falls back to the gateway default.
+			RateLimitRequests: svc.Proxy.RateLimitRequests,
 		}
 		if svc.Proxy.HealthCheck != nil && svc.Proxy.HealthCheck.Path != "" {
 			b.HTTPCheck = true
