@@ -153,10 +153,30 @@ func (d *DB) SetUserDisabled(ctx context.Context, id string, disabled bool) erro
 	return tx.Commit()
 }
 
-// SetPassword sets or replaces a user's password.
+// SetPassword sets or replaces a user's password, keeping no history.
 func (d *DB) SetPassword(ctx context.Context, userID, password string) error {
+	return d.SetPasswordWithHistory(ctx, userID, password, 0)
+}
+
+// SetPasswordWithHistory sets a password, refusing the last `history` ones.
+//
+// The comparison is bcrypt against every retained hash, which is deliberately
+// the slow way round: hashes are salted, so there is nothing to look up. That
+// caps how many can sensibly be retained, and four — what PCI DSS 8.3.7 asks
+// for — is well inside it.
+func (d *DB) SetPasswordWithHistory(ctx context.Context, userID, password string, history int) error {
 	if len(password) < MinPasswordLength {
 		return fmt.Errorf("password must be at least %d characters", MinPasswordLength)
+	}
+
+	if history > 0 {
+		reused, err := d.passwordWasUsed(ctx, userID, password, history)
+		if err != nil {
+			return err
+		}
+		if reused {
+			return ErrPasswordReused
+		}
 	}
 	// DefaultCost, never a hardcoded number (AUTH-1): the library's default
 	// tracks hardware, a literal does not.
@@ -173,7 +193,78 @@ func (d *DB) SetPassword(ctx context.Context, userID, password string) error {
 	if err != nil {
 		return fmt.Errorf("set password: %w", err)
 	}
+
+	if history > 0 {
+		if err := d.recordPasswordHistory(ctx, userID, string(hash), history); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// passwordWasUsed reports whether the candidate matches a retained hash.
+//
+// The current password counts, and is checked separately: it lives in
+// credentials rather than password_history, and an account whose password
+// predates the history feature has no rows at all — so comparing only the
+// table would wave through "change it to what it already is", which is the
+// most obvious reuse there is.
+func (d *DB) passwordWasUsed(ctx context.Context, userID, password string, history int) (bool, error) {
+	var current string
+	err := d.QueryRowContext(ctx,
+		`SELECT secret FROM credentials WHERE user_id = ? AND kind = 'password'`, userID).Scan(&current)
+	switch {
+	case err == nil:
+		if bcrypt.CompareHashAndPassword([]byte(current), []byte(password)) == nil {
+			return true, nil
+		}
+	case !errors.Is(err, sql.ErrNoRows):
+		return false, err
+	}
+
+	// Ordered by id as well as time: CURRENT_TIMESTAMP is second-granularity,
+	// so two changes inside the same second are indistinguishable by time
+	// alone and the window would be chosen arbitrarily. ashid is
+	// time-sortable, which makes it the tiebreaker rather than a second
+	// column to maintain.
+	rows, err := d.QueryContext(ctx,
+		`SELECT hash FROM password_history
+		 WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`,
+		userID, history)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			return false, err
+		}
+		if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// recordPasswordHistory stores the new hash and trims to the retained window.
+func (d *DB) recordPasswordHistory(ctx context.Context, userID, hash string, history int) error {
+	if _, err := d.ExecContext(ctx,
+		`INSERT INTO password_history (id, user_id, hash) VALUES (?, ?, ?)`,
+		ashid.New("pwh"), userID, hash); err != nil {
+		return err
+	}
+	// Trim rather than keep forever: a retired hash is a credential nobody
+	// uses, and there is no reason to hold more than the policy compares.
+	_, err := d.ExecContext(ctx, `
+		DELETE FROM password_history
+		WHERE user_id = ?
+		  AND id NOT IN (
+			SELECT id FROM password_history
+			WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?
+		  )`, userID, userID, history)
+	return err
 }
 
 // MinPasswordLength is the floor. PCI DSS 8.3.6 wants 12 for CDE access, and
@@ -189,6 +280,15 @@ const MinPasswordLength = 12
 // surface, so they get their own error — but only after the password matched,
 // so the distinction leaks nothing to someone who cannot authenticate.
 func (d *DB) VerifyPassword(ctx context.Context, username, password string) (*User, error) {
+	return d.VerifyPasswordWithPolicy(ctx, username, password, LockoutPolicy{})
+}
+
+// VerifyPasswordWithPolicy checks credentials and enforces lockout.
+//
+// A locked account is refused before the password is compared, so the lock
+// cannot be probed for correctness by timing — and so that a locked-out
+// attacker cannot keep confirming a password they already guessed.
+func (d *DB) VerifyPasswordWithPolicy(ctx context.Context, username, password string, policy LockoutPolicy) (*User, error) {
 	user, err := d.UserByUsername(ctx, username)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -198,6 +298,16 @@ func (d *DB) VerifyPassword(ctx context.Context, username, password string) (*Us
 			return nil, ErrBadCredentials
 		}
 		return nil, err
+	}
+
+	if policy.MaxAttempts > 0 {
+		_, until, err := d.lockState(ctx, user.ID)
+		if err != nil {
+			return nil, err
+		}
+		if !until.IsZero() && time.Now().Before(until) {
+			return nil, &ErrAccountLocked{Until: until}
+		}
 	}
 
 	var hash string
@@ -212,7 +322,13 @@ func (d *DB) VerifyPassword(ctx context.Context, username, password string) (*Us
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err != nil {
+		if until, ferr := d.recordFailure(ctx, user.ID, policy); ferr == nil && !until.IsZero() {
+			return nil, &ErrAccountLocked{Until: until}
+		}
 		return nil, ErrBadCredentials
+	}
+	if err := d.clearFailures(ctx, user.ID); err != nil {
+		return nil, err
 	}
 	if !user.Enabled() {
 		return nil, ErrUserDisabled
@@ -278,4 +394,87 @@ func nullString(s string) any {
 
 func isUniqueViolation(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "unique constraint")
+}
+
+// Account policy: lockout and password reuse.
+//
+// Enforced in the store rather than the handlers because both are properties
+// of the account, and a second caller that forgot to check would be a silent
+// hole rather than a visible bug.
+
+// ErrAccountLocked means too many failures have locked the account.
+type ErrAccountLocked struct{ Until time.Time }
+
+func (e *ErrAccountLocked) Error() string {
+	return "account locked until " + e.Until.Format(time.RFC3339)
+}
+
+// ErrPasswordReused means the new password matches a recent one.
+var ErrPasswordReused = errors.New("that password was used recently; choose one you have not used before")
+
+// LockoutPolicy is what the store needs to know to enforce lockout.
+type LockoutPolicy struct {
+	MaxAttempts int
+	Duration    time.Duration
+}
+
+// lockState reads an account's lockout position.
+func (d *DB) lockState(ctx context.Context, userID string) (attempts int, until time.Time, err error) {
+	var lockedUntil sql.NullTime
+	err = d.QueryRowContext(ctx,
+		`SELECT failed_attempts, locked_until FROM users WHERE id = ?`, userID).Scan(&attempts, &lockedUntil)
+	if lockedUntil.Valid {
+		until = lockedUntil.Time
+	}
+	return attempts, until, err
+}
+
+// recordFailure counts a failed attempt and locks the account at the
+// threshold. Returns the lock expiry when this failure caused one.
+func (d *DB) recordFailure(ctx context.Context, userID string, policy LockoutPolicy) (time.Time, error) {
+	if policy.MaxAttempts <= 0 {
+		return time.Time{}, nil
+	}
+
+	attempts, _, err := d.lockState(ctx, userID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	attempts++
+
+	if attempts < policy.MaxAttempts {
+		_, err := d.ExecContext(ctx,
+			`UPDATE users SET failed_attempts = ?, last_failed_at = CURRENT_TIMESTAMP WHERE id = ?`,
+			attempts, userID)
+		return time.Time{}, err
+	}
+
+	// At the threshold: lock, and reset the counter so the next lock needs a
+	// fresh run of failures rather than one more attempt forever.
+	until := time.Now().Add(policy.Duration)
+	_, err = d.ExecContext(ctx, `
+		UPDATE users
+		SET failed_attempts = 0, last_failed_at = CURRENT_TIMESTAMP, locked_until = ?
+		WHERE id = ?`, until, userID)
+	return until, err
+}
+
+// clearFailures resets the counter after a success.
+func (d *DB) clearFailures(ctx context.Context, userID string) error {
+	_, err := d.ExecContext(ctx,
+		`UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?`, userID)
+	return err
+}
+
+// PasswordAge reports how long ago the password was set.
+func (d *DB) PasswordAge(ctx context.Context, userID string) (time.Duration, error) {
+	var created time.Time
+	err := d.QueryRowContext(ctx,
+		`SELECT created_at FROM credentials WHERE user_id = ? AND kind = 'password'`, userID).Scan(&created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNoFactor
+	} else if err != nil {
+		return 0, err
+	}
+	return time.Since(created), nil
 }

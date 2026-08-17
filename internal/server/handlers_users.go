@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/db"
 )
 
@@ -159,7 +160,15 @@ func (s *Server) handleAPIUserPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.users.SetPassword(r.Context(), target, body.Password); err != nil {
+	// History applies to a self-service change. An admin resetting somebody
+	// else's is exempt: they are usually resetting it precisely because the
+	// account is stuck, and a reuse check that blocks the fix would turn a
+	// lockout into a worse one.
+	history := 0
+	if self != nil && target == self.ID {
+		history = s.cfg().Policy.EffectivePasswordHistory()
+	}
+	if err := s.users.SetPasswordWithHistory(r.Context(), target, body.Password, history); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -258,4 +267,144 @@ func toAPIUser(u db.User) apitypes.User {
 		out.LastLogin = u.LastLoginAt.UTC().Format(time.RFC3339)
 	}
 	return out
+}
+
+// handleAPILoginChangePassword completes a login that stopped because the
+// password expired.
+//
+// Separate from the ordinary change endpoint because the caller has no session
+// yet: they proved the old password at the password step and hold a pending
+// id, which is exactly as much authority as changing that password needs.
+func (s *Server) handleAPILoginChangePassword(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	if s.users == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, errNoIdentityStore.Error())
+		return
+	}
+
+	var body struct {
+		PendingID       string `json:"pendingId"`
+		CurrentPassword string `json:"currentPassword"`
+		Password        string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	userID, ok := s.pendingLogins.take(body.PendingID)
+	if !ok {
+		writeJSONError(w, http.StatusUnauthorized, "That sign-in expired. Start again.")
+		return
+	}
+	user, err := s.users.UserByID(r.Context(), userID)
+	if err != nil || !user.Enabled() {
+		writeJSONError(w, http.StatusForbidden, "That account is disabled.")
+		return
+	}
+
+	// The old password again: a pending id proves the password step happened,
+	// but this endpoint replaces that password, so it is worth proving twice
+	// rather than letting a captured id rewrite the credential.
+	if _, err := s.users.VerifyPassword(r.Context(), user.Username, body.CurrentPassword); err != nil {
+		writeJSONError(w, http.StatusForbidden, "Current password is incorrect")
+		return
+	}
+
+	if err := s.users.SetPasswordWithHistory(r.Context(), user.ID, body.Password,
+		s.cfg().Policy.EffectivePasswordHistory()); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.users.RevokeUserSessions(r.Context(), user.ID); err != nil {
+		slog.Warn("could not revoke sessions after a forced change", "user", user.ID, "error", err)
+	}
+	if err := s.startUserSession(w, r, user); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "Could not start session")
+		return
+	}
+
+	slog.Info("password rotated at login", "user", user.Username, "ip", s.getClientIP(r))
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
+// handleAPIPolicy reads and writes the account policy.
+//
+// Its own endpoint rather than another corner of /settings: these are the
+// switches an operator changes when an assessor asks, they are decided
+// together, and each one can log people out — worth being able to see the set
+// as a set.
+func (s *Server) handleAPIPolicy(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		p := s.cfg().Policy
+		_ = json.NewEncoder(w).Encode(apitypes.AccountPolicyResponse{
+			IdleMinutes:        p.IdleMinutes,
+			MaxFailedAttempts:  p.EffectiveMaxFailedAttempts(),
+			LockoutMinutes:     p.EffectiveLockoutMinutes(),
+			PasswordMaxAgeDays: p.PasswordMaxAgeDays,
+			PasswordHistory:    p.EffectivePasswordHistory(),
+			MinPasswordLength:  db.MinPasswordLength,
+		})
+
+	case http.MethodPut:
+		var body apitypes.AccountPolicyResponse
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "Invalid request body")
+			return
+		}
+		// Bounds rather than free numbers: a 1-minute idle timeout logs
+		// everyone out mid-task and a 10-year password age is rotation in
+		// name only. Refusing beats storing a value that reads as configured
+		// and behaves as broken.
+		switch {
+		case body.IdleMinutes < 0 || body.IdleMinutes > 1440:
+			writeJSONError(w, http.StatusBadRequest, "Idle timeout must be between 0 (off) and 1440 minutes")
+			return
+		case body.MaxFailedAttempts < -1 || body.MaxFailedAttempts > 100:
+			writeJSONError(w, http.StatusBadRequest, "Failed attempts must be between -1 (off) and 100")
+			return
+		case body.LockoutMinutes < 0 || body.LockoutMinutes > 1440:
+			writeJSONError(w, http.StatusBadRequest, "Lockout must be between 0 and 1440 minutes")
+			return
+		case body.PasswordMaxAgeDays < 0 || body.PasswordMaxAgeDays > 3650:
+			writeJSONError(w, http.StatusBadRequest, "Password age must be between 0 (off) and 3650 days")
+			return
+		case body.PasswordHistory < -1 || body.PasswordHistory > 24:
+			writeJSONError(w, http.StatusBadRequest, "Password history must be between -1 (off) and 24")
+			return
+		}
+
+		if err := s.updateConfig(func(c *config.Config) {
+			c.Policy = config.AccountPolicy{
+				IdleMinutes:        body.IdleMinutes,
+				MaxFailedAttempts:  body.MaxFailedAttempts,
+				LockoutMinutes:     body.LockoutMinutes,
+				PasswordMaxAgeDays: body.PasswordMaxAgeDays,
+				PasswordHistory:    body.PasswordHistory,
+			}
+		}); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+			return
+		}
+
+		slog.Info("account policy updated",
+			"idle_minutes", body.IdleMinutes, "max_failed", body.MaxFailedAttempts,
+			"lockout_minutes", body.LockoutMinutes, "password_age_days", body.PasswordMaxAgeDays,
+			"password_history", body.PasswordHistory, "by", s.adminActor(r))
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+
+	default:
+		writeJSONError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
 }

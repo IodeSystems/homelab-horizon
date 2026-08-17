@@ -3,9 +3,11 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/db"
@@ -161,14 +163,41 @@ func (s *Server) loginWithPassword(w http.ResponseWriter, r *http.Request, usern
 		return
 	}
 
-	user, err := s.users.VerifyPassword(r.Context(), username, password)
+	user, err := s.users.VerifyPasswordWithPolicy(r.Context(), username, password, s.lockoutPolicy())
+
+	var locked *db.ErrAccountLocked
 	switch {
+	case errors.As(err, &locked):
+		// Naming the wait is the difference between a user retrying forever
+		// and a user coming back later. It reveals nothing: whoever triggered
+		// the lock already knows they were failing.
+		mins := int(time.Until(locked.Until).Minutes()) + 1
+		writeJSONError(w, http.StatusTooManyRequests,
+			fmt.Sprintf("Too many failed attempts. Try again in %d minute(s).", mins))
+		return
 	case errors.Is(err, db.ErrUserDisabled):
 		writeJSONError(w, http.StatusForbidden, "That account is disabled.")
 		return
 	case err != nil:
 		slog.Warn("failed login", "username", db.NormalizeUsername(username), "ip", s.getClientIP(r))
 		writeJSONError(w, http.StatusUnauthorized, "Invalid username or password")
+		return
+	}
+
+	// An expired password is not a session either. Checked before the second
+	// factor so that someone with both is asked for the code first and the
+	// change second — the change endpoint needs an authenticated caller, and
+	// a half-authenticated one is not that.
+	if s.passwordExpired(r.Context(), user.ID) {
+		pendingID, err := s.pendingLogins.add(user.ID)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "Could not start sign-in")
+			return
+		}
+		_ = json.NewEncoder(w).Encode(apitypes.LoginResponse{
+			PasswordExpired: true,
+			PendingID:       pendingID,
+		})
 		return
 	}
 
