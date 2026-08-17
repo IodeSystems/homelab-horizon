@@ -262,7 +262,6 @@ The user model is complete; the items below are what remain. Ordered by what I'd
 | | Item | Blocked? |
 |---|---|---|
 | 1 | [VPN inactivity timeout](#-vpn-inactivity-timeout-last-wag-parity-item) | no |
-| 2 | [PCI 10.5.1 + 2.2.7](#-pci-the-two-remaining-controls-hz-can-actually-detect) | no |
 | 3 | ~~Real users~~ — ✅ done, all phases | — |
 | 4 | [Phase 0 leftovers](#-phase-0-leftovers) · [canon writeback](#-canon-writeback-to-doc-cross-repo) · [cleanups](#known-cleanups-not-blocking) | no |
 | 5 | [Org alignment backlog](#-org-alignment-backlog--this-repo-owns-it-now) (10 items) | no |
@@ -393,22 +392,20 @@ it has been silent. wag deauthenticates on inactivity; hz does not.
 - **optional extensions**: surface remaining-session time in the portal, so a
   timeout is visible before it happens rather than as a sudden loss of network.
 
-### ◻ PCI: the two remaining controls hz can actually detect
+### ✅ PCI: the two remaining controls (`59db133`)
 
-Both are observable from the edge today, unlike the rest of the unmet list which
-needs the user model.
+Shipped as one health card, since both are properties of the host rather than
+of a service. 10 e2e assertions including the fixer against real journald.
 
-- **10.5.1 — log retention.** journald is volatile on this box, so the audit
-  trail dies at reboot. Detect `Storage=` / a missing `/var/log/journal`, report
-  it, and offer the one-line fix as a fixer button.
-- **2.2.7 — non-console admin encryption.** hz serves `:8080` as plain HTTP on
-  the LAN; the admin token crosses the wire in the clear. Report it, and treat
-  admin-behind-its-own-HTTPS-vhost as the remediation.
-- **risks**: 2.2.7 is the one control whose remediation can lock the operator
-  out of the box — enabling TLS on the admin port with a bad cert path leaves no
-  way back in. It needs the same console-recovery story as the admin token.
-- **note**: keep both honest about "not evaluated" vs "compliant", per
-  [pci.go](../internal/config/pci.go)'s existing rule.
+- **10.5.1** checks persistence *and* retention: either alone is misleading.
+  `Storage=auto` is the case that catches people — it is the default and
+  persists only if `/var/log/journal` already exists.
+- **2.2.7** turns on whether hz's listener is loopback-only. Plain HTTP is fine
+  behind HAProxy's TLS frontend; binding a LAN address puts the session cookie
+  on the wire. **No fixer, deliberately**: rebinding cuts off anyone reaching
+  hz by its LAN address, possibly the person reading the warning.
+- **Prod reads 2.2.7 unmet**: `listen_addr` is `:8080`. Fixing it is an
+  operator decision — confirm the HTTPS vhost works, then bind loopback.
 
 ### ◻ Phase 0 leftovers
 
