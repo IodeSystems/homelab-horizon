@@ -115,3 +115,31 @@ func TestEveryLegacyFlagHasACommand(t *testing.T) {
 		}
 	}
 }
+
+// --listen is a start option rather than a config write, because the change it
+// makes can cut off whoever is making it. Both spellings must reach the flag.
+func TestListenFlagTranslates(t *testing.T) {
+	tests := []struct {
+		in   []string
+		want []string
+	}{
+		{[]string{"-listen", "127.0.0.1:8080"}, []string{"--listen", "127.0.0.1:8080"}},
+		{[]string{"-listen=127.0.0.1:8080"}, []string{"--listen=127.0.0.1:8080"}},
+		{[]string{"--listen", "127.0.0.1:8080"}, []string{"--listen", "127.0.0.1:8080"}},
+		// Alongside the flag the live systemd unit actually passes.
+		{[]string{"-config", "/etc/homelab-horizon/config.json", "-listen", "127.0.0.1:8080"},
+			[]string{"--config", "/etc/homelab-horizon/config.json", "--listen", "127.0.0.1:8080"}},
+	}
+	for _, tc := range tests {
+		got, _ := translateLegacyArgs(tc.in)
+		if strings.Join(got, " ") != strings.Join(tc.want, " ") {
+			t.Errorf("translateLegacyArgs(%v) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+
+	// And the flag exists on the root, not on a subcommand: serving is the
+	// root's action.
+	if newRoot().Flags().Lookup("listen") == nil {
+		t.Error("--listen is not registered on the root command")
+	}
+}

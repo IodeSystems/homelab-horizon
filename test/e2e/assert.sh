@@ -734,6 +734,42 @@ jq -e '.components[] | select(.name=="audit") | .errors[]? | select(test("2.2.7"
   && ok "AUDIT-9 the card explains the exposure rather than only scoring it" \
   || bad "AUDIT-9 the card explains the exposure" "$(jq -c '.components[]|select(.name=="audit")|.errors' <<<"$health")"
 
+# --listen is the safe way to try the 2.2.7 remediation: it binds loopback for
+# one run and reverts on a plain restart, so an operator who cuts themselves off
+# gets back in by restarting rather than by finding a console.
+mkdir -p /etc/systemd/system/hz.service.d
+cat > /etc/systemd/system/hz.service.d/10-listen.conf <<'UNIT'
+[Service]
+ExecStart=
+ExecStart=/usr/local/bin/homelab-horizon -config /etc/homelab-horizon/config.json --listen 127.0.0.1:8080
+UNIT
+systemctl daemon-reload
+relogin
+
+listening=$(ss -ltnH "sport = :8080" | awk '{print $4}' | head -1)
+[ "$listening" = "127.0.0.1:8080" ] \
+  && ok "AUDIT-11 --listen binds loopback only" \
+  || bad "AUDIT-11 --listen binds loopback only" "listening on '$listening'"
+
+metrics=$(curl -fsS -b "$COOKIE" "$API/metrics")
+grep -q 'hz_control_state{control="admin_access_encrypted",requirement="2.2.7"} 1' <<<"$metrics" \
+  && ok "AUDIT-12 the control reflects the flag, not just the config file" \
+  || bad "AUDIT-12 the control reflects the flag" "$(grep admin_access <<<"$metrics")"
+
+[ "$(jq -r '.listen_addr' /etc/homelab-horizon/config.json)" = ":8080" ] \
+  && ok "AUDIT-13 the override is not written to config.json" \
+  || bad "AUDIT-13 the override is not written to config.json" "$(jq -r '.listen_addr' /etc/homelab-horizon/config.json)"
+
+# The recovery: drop the flag, restart, and the old binding is back.
+rm -f /etc/systemd/system/hz.service.d/10-listen.conf
+rmdir /etc/systemd/system/hz.service.d 2>/dev/null || true
+systemctl daemon-reload
+relogin
+listening=$(ss -ltnH "sport = :8080" | awk '{print $4}' | head -1)
+[ "$listening" = "0.0.0.0:8080" ] || [ "$listening" = "*:8080" ] \
+  && ok "AUDIT-14 a restart without the flag reverts the binding" \
+  || bad "AUDIT-14 a restart without the flag reverts the binding" "listening on '$listening'"
+
 # Binding loopback is the remediation, so it must actually satisfy the control.
 systemctl stop hz
 jq '.listen_addr = "127.0.0.1:8080"' /etc/homelab-horizon/config.json > /tmp/c.json

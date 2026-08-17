@@ -52,7 +52,7 @@ func isMCPClient() bool {
 	return fi.Mode()&os.ModeCharDevice == 0
 }
 
-func runServer(configPath string, dryRun bool, mcpEnabled bool, enableAdminToken bool) {
+func runServer(configPath string, dryRun bool, mcpEnabled bool, enableAdminToken bool, listenAddr string) {
 	// If MCP is enabled and stdin is a pipe, run as MCP stdio server
 	if mcpEnabled && isMCPClient() {
 		runMCPStdio(configPath, dryRun)
@@ -88,6 +88,24 @@ func runServer(configPath string, dryRun bool, mcpEnabled bool, enableAdminToken
 			os.Exit(1)
 		}
 		slog.Warn("admin token re-enabled by -enable-admin-token", "config", cfgPath)
+	}
+
+	// A start-option bind override, deliberately NOT persisted.
+	//
+	// This exists for PCI DSS 2.2.7: hz speaks plain HTTP, so the admin
+	// interface should be reachable only through HAProxy's TLS frontend over
+	// loopback. Making that change is also the easiest way to lock yourself
+	// out of the box you are changing it on — if the HTTPS vhost is not
+	// actually working, the address you were using stops answering and the
+	// config now says to keep doing that.
+	//
+	// As a flag, the recovery is `systemctl restart` with the flag gone. Try it
+	// here, confirm the vhost works, then write it into config.json once it is
+	// proven. That ordering is the whole point of not persisting it.
+	if listenAddr != "" && listenAddr != cfg.ListenAddr {
+		slog.Warn("listen address overridden for this run only; a restart without --listen reverts it",
+			"listen", listenAddr, "config_says", cfg.ListenAddr)
+		cfg.ListenAddr = listenAddr
 	}
 
 	if cfg.AutoHeal {
