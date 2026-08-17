@@ -342,6 +342,13 @@ reliability and lint gates.
 
 ### Operator follow-ups (not code)
 
+- **Point the LAN's DHCP DNS at hz (192.168.1.160).** `desktop → 192.168.1.76`
+  is live and hz answers it, but the router hands out **itself** (192.168.1.1)
+  as the resolver and does not forward to hz — so nothing on the LAN asks hz for
+  local names, and the record helps only devices pointed at it explicitly. This
+  is the setting that makes local DNS records worth having; hz cannot change it
+  from here. Until then: `mosh 192.168.1.76` by address works.
+
 - **Re-import the Grafana dashboard** — the deployed one predates
   `no_shared_admin_token`, `time_synchronised` and `patches_current`, so it is
   three controls short. Copy it again from the Observability page.
