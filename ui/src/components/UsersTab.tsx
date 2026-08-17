@@ -11,7 +11,6 @@ import {
   DialogContent,
   DialogActions,
   TextField,
-  MenuItem,
   Table,
   TableBody,
   TableCell,
@@ -105,7 +104,6 @@ export default function UsersTab() {
             <TableHead>
               <TableRow>
                 <TableCell>User</TableCell>
-                <TableCell>Role</TableCell>
                 <TableCell>Last login</TableCell>
                 <TableCell align="right">Actions</TableCell>
               </TableRow>
@@ -133,14 +131,6 @@ export default function UsersTab() {
                         {u.email}
                       </Typography>
                     )}
-                  </TableCell>
-                  <TableCell>
-                    <Chip
-                      size="small"
-                      variant="outlined"
-                      color={u.role === "admin" ? "primary" : "default"}
-                      label={u.role}
-                    />
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" color="text.secondary">
@@ -197,12 +187,11 @@ function AddUserDialog({
   const create = useCreateUser();
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState("admin");
   const [password, setPassword] = useState("");
 
   const submit = () => {
     create.mutate(
-      { username: username.trim(), email: email.trim(), role, password },
+      { username: username.trim(), email: email.trim(), password },
       {
         onSuccess: () => {
           setUsername("");
@@ -237,17 +226,6 @@ function AddUserDialog({
           onChange={(e) => setEmail(e.target.value)}
           sx={{ mb: 2 }}
         />
-        <TextField
-          select
-          fullWidth
-          label="Role"
-          value={role}
-          onChange={(e) => setRole(e.target.value)}
-          sx={{ mb: 2 }}
-        >
-          <MenuItem value="admin">admin — full control</MenuItem>
-          <MenuItem value="viewer">viewer — read only</MenuItem>
-        </TextField>
         <TextField
           fullWidth
           type="password"

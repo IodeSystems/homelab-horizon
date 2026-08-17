@@ -20,12 +20,13 @@ var (
 	ErrUsernameTaken  = errors.New("username already taken")
 )
 
-// Roles. hz has had exactly one privilege level since it existed; viewer is
-// here so that read-only access does not require a schema change later.
-const (
-	RoleAdmin  = "admin"
-	RoleViewer = "viewer"
-)
+// Roles. hz has exactly one privilege level.
+//
+// A viewer role existed briefly and was removed in migration 0003: nothing
+// enforced it, and enforcing it would mean auditing what every response body
+// exposes rather than which verb was used — peer configurations carry private
+// keys. See plan/icebox.md if read-only is wanted for real.
+const RoleAdmin = "admin"
 
 // Credential kinds.
 const (
@@ -66,8 +67,8 @@ func (d *DB) CreateUser(ctx context.Context, username, email, role string) (*Use
 	if role == "" {
 		role = RoleAdmin
 	}
-	if role != RoleAdmin && role != RoleViewer {
-		return nil, fmt.Errorf("unknown role %q", role)
+	if role != RoleAdmin {
+		return nil, fmt.Errorf("unknown role %q: hz has only %q", role, RoleAdmin)
 	}
 
 	id := ashid.New("usr")

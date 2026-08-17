@@ -257,13 +257,13 @@ Phase 3 replaces this with: restart horizon, done.
 
 ## Active work
 
-Phase 4b of the user model is what remains. Ordered by what I'd pick up next:
+The user model is complete; the items below are what remain. Ordered by what I'd pick up next:
 
 | | Item | Blocked? |
 |---|---|---|
 | 1 | [VPN inactivity timeout](#-vpn-inactivity-timeout-last-wag-parity-item) | no |
 | 2 | [PCI 10.5.1 + 2.2.7](#-pci-the-two-remaining-controls-hz-can-actually-detect) | no |
-| 3 | [Real users](#-real-users-local-credentials--oidc-on-sqlite) — local + OIDC on SQLite | ◐ Phases 1–5 done; 4b left |
+| 3 | ~~Real users~~ — ✅ done, all phases | — |
 | 4 | [Phase 0 leftovers](#-phase-0-leftovers) · [canon writeback](#-canon-writeback-to-doc-cross-repo) · [cleanups](#known-cleanups-not-blocking) | no |
 | 5 | [Org alignment backlog](#-org-alignment-backlog--this-repo-owns-it-now) (10 items) | no |
 
@@ -349,11 +349,13 @@ assets punched through the jail.
   **Found by the e2e run:** a non-admin OIDC user got a session that
   authenticated nothing, because hz has no read-only mode. Refused outright
   for now — see the viewer entry below.
-- ◻ **4b. Viewer role, or drop it.** `db.RoleViewer` exists and OIDC can map
-  to it, but nothing enforces read-only: `isAdmin` is the only gate, so a
-  viewer is refused at login rather than shown a limited UI. Either implement
-  read-only across the admin surfaces or remove the role — a role that only
-  produces a refusal is a trap for whoever configures `admin_groups` next.
+- ✅ **4b. Viewer role removed** (`0003_drop_viewer_role`). Decided against
+  implementing it: read-only is not a permission bit here, because hz serves
+  peer configurations carrying private keys, so it would mean auditing every
+  response body rather than checking the verb. The UI was offering a role that
+  produced accounts able to log in and do nothing — that shipped in phase 2
+  and is now fixed. Existing viewers convert to disabled admins rather than
+  being promoted by an upgrade. Revival notes in [icebox.md](icebox.md).
 - ✅ **5. Policy** (`b02fe1b`). Idle timeout (8.2.8), lockout (8.3.4), reuse
   (8.3.7) and rotation (8.3.9), each reported as a control. Lockout and reuse
   default on; idle and expiry default off and read unmet until an operator
@@ -362,8 +364,9 @@ assets punched through the jail.
   history ordering was ambiguous within a one-second window. **Not yet
   deployed.**
 
-**Remaining: 4b only.** The five planned phases are done; what is left is the
-viewer role decision below and whatever the operator follow-ups turn up.
+**The user model is done.** Local accounts, second factors, SSO and policy all
+shipped and are covered by `make e2e-auth`. What remains is unrelated: the two
+PCI controls, the inactivity timeout, and the org backlog.
 
 - **risks**: this is the one feature that can lock everyone out of the gateway.
   Every phase keeps the previous way in working, and Phase 2 must not be able
