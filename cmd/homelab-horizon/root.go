@@ -32,6 +32,7 @@ type serveOpts struct {
 	dryRun           bool
 	noMCP            bool
 	enableAdminToken bool
+	listenAddr       string
 }
 
 func newRoot() *cobra.Command {
@@ -49,7 +50,7 @@ func newRoot() *cobra.Command {
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			runServer(opts.configPath, opts.dryRun, !opts.noMCP, opts.enableAdminToken)
+			runServer(opts.configPath, opts.dryRun, !opts.noMCP, opts.enableAdminToken, opts.listenAddr)
 			return nil
 		},
 	}
@@ -65,6 +66,10 @@ func newRoot() *cobra.Command {
 		"disable the MCP tool server (enabled over stdio by default)")
 	root.Flags().BoolVar(&opts.enableAdminToken, "enable-admin-token", false,
 		"re-enable the shared admin token, then serve (console recovery)")
+	root.Flags().StringVar(&opts.listenAddr, "listen", "",
+		"override the listen address for this run only, e.g. 127.0.0.1:8080 "+
+			"(PCI DSS 2.2.7: reachable only via the HTTPS vhost). Not persisted — "+
+			"restart without it to revert")
 
 	root.AddCommand(
 		newVersionCmd(),
@@ -164,6 +169,7 @@ var legacyFlags = map[string]string{
 // legacyValueFlags are the single-dash forms that keep a value or stay a flag on
 // the root rather than becoming a subcommand.
 var legacyValueFlags = map[string]bool{
+	"-listen":             true,
 	"-config":             true,
 	"-dry-run":            true,
 	"-no-mcp":             true,

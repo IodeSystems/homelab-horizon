@@ -509,12 +509,14 @@ function AuditCard({ health }: { health: SystemHealth }) {
           <Alert severity="warning">
             hz speaks plain HTTP. While it listens on {listenAddr || "all interfaces"}, the
             admin interface and its session cookie cross your network in the clear (PCI DSS
-            2.2.7). Set <code>listen_addr</code> to <code>127.0.0.1:8080</code> and reach it
-            through the HTTPS vhost instead.
+            2.2.7).
             <br />
-            <strong>No button on purpose:</strong> rebinding the listener would cut off
-            anyone reaching hz directly by its LAN address — possibly you, reading this.
-            Confirm the HTTPS route works first.
+            <strong>Try it as a start option first:</strong> restart hz with{" "}
+            <code>--listen 127.0.0.1:8080</code>. That binding is not persisted, so if the
+            HTTPS vhost is not actually working, a plain restart puts it back — which matters,
+            because the change can cut off whoever is making it, possibly you reading this.
+            Once it is proven, set <code>listen_addr</code> in <code>config.json</code> to
+            keep it.
           </Alert>
         )}
       </Box>

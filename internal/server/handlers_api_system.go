@@ -254,7 +254,9 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 		// HAProxy vhost rather than on anything hz can decide.
 		audit.Errors = append(audit.Errors, fmt.Sprintf(
 			"the admin interface listens on %s, so it is reachable in cleartext off this host "+
-				"(PCI DSS 2.2.7). Bind listen_addr to 127.0.0.1 and reach it through the HTTPS vhost.",
+				"(PCI DSS 2.2.7). Try it first as a start option — restart hz with "+
+				"--listen 127.0.0.1:8080, which reverts on the next restart — then set "+
+				"listen_addr in config.json once the HTTPS vhost is confirmed working.",
 			cfg.ListenAddr))
 	}
 	audit.Extras = map[string]any{
