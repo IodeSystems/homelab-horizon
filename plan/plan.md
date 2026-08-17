@@ -257,13 +257,13 @@ Phase 3 replaces this with: restart horizon, done.
 
 ## Active work
 
-Phase 4 of the user model (OIDC) is next. Ordered by what I'd pick up next:
+Phases 4b and 5 of the user model are what remain. Ordered by what I'd pick up next:
 
 | | Item | Blocked? |
 |---|---|---|
 | 1 | [VPN inactivity timeout](#-vpn-inactivity-timeout-last-wag-parity-item) | no |
 | 2 | [PCI 10.5.1 + 2.2.7](#-pci-the-two-remaining-controls-hz-can-actually-detect) | no |
-| 3 | [Real users](#-real-users-local-credentials--oidc-on-sqlite) — local + OIDC on SQLite | ◐ Phases 1–3 done, Phase 4 (OIDC) next |
+| 3 | [Real users](#-real-users-local-credentials--oidc-on-sqlite) — local + OIDC on SQLite | ◐ Phases 1–4 done; 4b + 5 left |
 | 4 | [Phase 0 leftovers](#-phase-0-leftovers) · [canon writeback](#-canon-writeback-to-doc-cross-repo) · [cleanups](#known-cleanups-not-blocking) | no |
 | 5 | [Org alignment backlog](#-org-alignment-backlog--this-repo-owns-it-now) (10 items) | no |
 
@@ -341,8 +341,19 @@ assets punched through the jail.
   shell assertions on a real systemd install plus a browser ceremony against
   the admin relying party. TOTP codes come from oathtool, not hz — hz agreeing
   with itself would prove nothing. **Not yet deployed.**
-- ◻ **4. OIDC.** Discovery, code+PKCE, JWKS cache, group claim → role. Local
-  login stays reachable at a fixed URL, always.
+- ✅ **4. OIDC** (`a7e0b58`). Discovery, code+PKCE S256, JWKS-verified RS256,
+  nonce, group claims. Identity is the subject claim, so a provider-side
+  rename cannot transfer access. 21 e2e assertions against a stub provider
+  (`make e2e-auth`), including that hz stays administrable with the provider
+  killed. **Not yet deployed.**
+  **Found by the e2e run:** a non-admin OIDC user got a session that
+  authenticated nothing, because hz has no read-only mode. Refused outright
+  for now — see the viewer entry below.
+- ◻ **4b. Viewer role, or drop it.** `db.RoleViewer` exists and OIDC can map
+  to it, but nothing enforces read-only: `isAdmin` is the only gate, so a
+  viewer is refused at login rather than shown a limited UI. Either implement
+  read-only across the admin surfaces or remove the role — a role that only
+  produces a refusal is a trap for whoever configures `admin_groups` next.
 - ◻ **5. Policy.** Idle timeout (`8.2.8`), rotation, lockout — the annoying
   parts, gated behind the Users page rather than arriving on upgrade.
 
