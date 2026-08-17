@@ -238,6 +238,14 @@ type Config struct {
 	// effect of editing a service would be indefensible.
 	UsersDB string `json:"users_db,omitempty"`
 
+	// RateLimit is the coarse volume tier at the edge (EDGE-4).
+	//
+	// hz already had two blunt instruments: an iptables ban, which is binary
+	// and permanent until lifted, and nothing at all below it. Between them
+	// sits the common case — a client hammering an expensive endpoint, which
+	// deserves a 429 rather than a ban or a shrug.
+	RateLimit *RateLimit `json:"rate_limit,omitempty"`
+
 	// UIDir is where the admin frontend lives on disk. Empty means the
 	// STATIC_DIR env var, then the working tree, then the install default —
 	// see server.uiDir. The UI ships beside the binary rather than inside it
@@ -850,15 +858,20 @@ func (e *ExternalDNS) GetIPs() []string {
 // Static services still inherit wildcard SSL, split-horizon DNS, health
 // checks, timeouts, and internal-only restriction exactly like proxied ones.
 type ProxyConfig struct {
-	Backend         string         `json:"backend"`                    // host:port for HAProxy to forward to (mutually exclusive with StaticRoot/Self)
-	StaticRoot      string         `json:"static_root,omitempty"`      // absolute path to a directory served as static files instead of proxying
-	Self            bool           `json:"self,omitempty"`             // route to THIS hz instance's own admin UI (resolves to the local listen addr; HA-correct)
-	SPA             bool           `json:"spa,omitempty"`              // static only: serve index.html for unknown non-asset paths (client-side routing)
-	HealthCheck     *HealthCheck   `json:"health_check,omitempty"`     // Optional health check
-	InternalOnly    bool           `json:"internal_only,omitempty"`    // Restrict to local network access only
-	Deploy          *DeployConfig  `json:"deploy,omitempty"`           // Blue-green deploy with current/next slots
-	MaintenancePage string         `json:"maintenance_page,omitempty"` // HTML body served as 503 during maintenance
-	Timeouts        *ProxyTimeouts `json:"timeouts,omitempty"`         // Optional per-backend HAProxy timeout overrides
+	Backend      string       `json:"backend"`                 // host:port for HAProxy to forward to (mutually exclusive with StaticRoot/Self)
+	StaticRoot   string       `json:"static_root,omitempty"`   // absolute path to a directory served as static files instead of proxying
+	Self         bool         `json:"self,omitempty"`          // route to THIS hz instance's own admin UI (resolves to the local listen addr; HA-correct)
+	SPA          bool         `json:"spa,omitempty"`           // static only: serve index.html for unknown non-asset paths (client-side routing)
+	HealthCheck  *HealthCheck `json:"health_check,omitempty"`  // Optional health check
+	InternalOnly bool         `json:"internal_only,omitempty"` // Restrict to local network access only
+
+	// RateLimitRequests overrides the global threshold for this service.
+	// Negative disables limiting for it entirely, which is what an endpoint
+	// that legitimately takes sustained traffic needs.
+	RateLimitRequests int            `json:"rate_limit_requests,omitempty"`
+	Deploy            *DeployConfig  `json:"deploy,omitempty"`           // Blue-green deploy with current/next slots
+	MaintenancePage   string         `json:"maintenance_page,omitempty"` // HTML body served as 503 during maintenance
+	Timeouts          *ProxyTimeouts `json:"timeouts,omitempty"`         // Optional per-backend HAProxy timeout overrides
 }
 
 // SelfBackendAddr returns the loopback address of this hz instance's own admin
@@ -1495,6 +1508,80 @@ func (c *Config) LocalDNSConflicts() map[string]string {
 		}
 	}
 	return out
+}
+
+// RateLimit configures edge request limiting.
+//
+// Deliberately coarse: one stick-table with one window, and a per-service
+// request threshold compared against it. HAProxy tracks the rate per source IP
+// in that window, so this catches volume rather than patterns — which is the
+// tier that was missing, not a WAF.
+type RateLimit struct {
+	Enabled bool `json:"enabled"`
+
+	// WindowSeconds is the period rates are measured over. One window for the
+	// whole gateway, because each distinct window costs another stick-table
+	// and the difference between 10s and 15s is not worth that.
+	WindowSeconds int `json:"window_seconds,omitempty"`
+
+	// Requests is the default threshold per source IP per window. A service
+	// may override it; zero means unlimited.
+	Requests int `json:"requests,omitempty"`
+
+	// ExemptLocal skips limiting for RFC1918 and loopback sources, which is
+	// the default: rate-limiting your own LAN and VPN traffic mostly means
+	// throttling yourself, and the admin UI lives behind the same frontend.
+	// Turn it off when the inside is not trusted either.
+	ExemptLocal *bool `json:"exempt_local,omitempty"`
+}
+
+// Rate limit defaults. Ten seconds is short enough to catch a burst and long
+// enough that a page loading twenty assets does not trip it.
+const (
+	DefaultRateWindowSeconds = 10
+	DefaultRateRequests      = 100
+)
+
+// EffectiveWindowSeconds returns the measurement window.
+func (r *RateLimit) EffectiveWindowSeconds() int {
+	if r == nil || r.WindowSeconds <= 0 {
+		return DefaultRateWindowSeconds
+	}
+	return r.WindowSeconds
+}
+
+// EffectiveRequests returns the default threshold.
+func (r *RateLimit) EffectiveRequests() int {
+	if r == nil || r.Requests <= 0 {
+		return DefaultRateRequests
+	}
+	return r.Requests
+}
+
+// ExemptsLocal reports whether internal sources skip limiting.
+func (r *RateLimit) ExemptsLocal() bool {
+	if r == nil || r.ExemptLocal == nil {
+		return true
+	}
+	return *r.ExemptLocal
+}
+
+// RateLimitActive reports whether the edge should emit limiting rules at all.
+func (c *Config) RateLimitActive() bool {
+	if c.RateLimit == nil || !c.RateLimit.Enabled {
+		return false
+	}
+	// A global threshold, or at least one service that sets its own: without
+	// either, the rules would track traffic and never deny anything.
+	if c.RateLimit.Requests > 0 {
+		return true
+	}
+	for _, svc := range c.Services {
+		if svc.Proxy != nil && svc.Proxy.RateLimitRequests > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // AccountPolicy holds the opt-in account rules.

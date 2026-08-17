@@ -475,6 +475,74 @@ grep -q 'hz_control_state{control="vpn_mfa_no_admin_bypass",requirement="8.5.1"}
   && ok "METRICS-7 the control gauge flips with the scope change" \
   || bad "METRICS-7 the control gauge flips with the scope change" "$(grep no_admin_bypass <<<"$after")"
 
+head_ "Edge rate limiting (EDGE-4)"
+
+# MFA off first. Earlier sections leave the peer jailed, which answers 403 for
+# every vhost — and the rate rules are evaluated before the jail rules, so a
+# "not 200" here would be the jail rather than the limiter, and a 429 would
+# prove nothing about ordinary traffic.
+api POST /api/v1/mfa/settings '{"enabled":false,"durations":["2h"]}' >/dev/null || true
+sleep 2
+
+# exempt_local is off here on purpose: every source in this fixture is RFC1918,
+# so with the default exemption there would be nothing to limit and the test
+# would pass without exercising anything.
+api POST /api/v1/rate-limit '{"enabled":true,"windowSeconds":10,"requests":5,"exemptLocal":false}' >/dev/null \
+  && ok "RATE-1 the limit is accepted" \
+  || bad "RATE-1 the limit is accepted" "POST failed"
+sleep 2
+
+grep -q "backend hz_rate_limit" /etc/haproxy/haproxy.cfg \
+  && ok "RATE-2 the stick-table reached the generated config" \
+  || bad "RATE-2 the stick-table reached the generated config" "$(grep -c stick-table /etc/haproxy/haproxy.cfg) stick-table lines"
+
+systemctl is-active --quiet haproxy \
+  && ok "RATE-3 haproxy accepted the config and stayed up" \
+  || bad "RATE-3 haproxy accepted the config and stayed up" "$(journalctl -u haproxy -n 5 --no-pager | tail -3)"
+
+# Under the threshold: ordinary traffic must not be touched.
+under_ok=1
+for _ in $(seq 1 4); do
+  code=$(cli curl -s -o /dev/null -w '%{http_code}' --max-time 4 --resolve "wiki.e2e.test:80:$GW_WG" "http://wiki.e2e.test/" || true)
+  [ "$code" = "200" ] || under_ok=0
+done
+[ "$under_ok" = "1" ] \
+  && ok "RATE-4 requests under the threshold are served normally" \
+  || bad "RATE-4 requests under the threshold are served normally" "a request under the limit did not return 200"
+
+# Over it: HAProxy should start answering 429 rather than proxying.
+got429=0
+for _ in $(seq 1 20); do
+  code=$(cli curl -s -o /dev/null -w '%{http_code}' --max-time 4 --resolve "wiki.e2e.test:80:$GW_WG" "http://wiki.e2e.test/" || true)
+  [ "$code" = "429" ] && { got429=1; break; }
+done
+[ "$got429" = "1" ] \
+  && ok "RATE-5 hammering the vhost gets 429 from the edge" \
+  || bad "RATE-5 hammering the vhost gets 429 from the edge" "no 429 in 20 requests over a threshold of 5"
+
+# The limit is per source, and it must not become a global outage: the gateway
+# itself still answers while one source is being denied.
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 "$API/api/v1/auth/status" || true)
+[ "$code" = "200" ] \
+  && ok "RATE-6 a limited source does not take the gateway down with it" \
+  || bad "RATE-6 a limited source does not take the gateway down with it" "status $code"
+
+# Wait out the window and the same source is served again — a limit, not a ban.
+sleep 12
+recovered=0
+for _ in $(seq 1 5); do
+  code=$(cli curl -s -o /dev/null -w '%{http_code}' --max-time 4 --resolve "wiki.e2e.test:80:$GW_WG" "http://wiki.e2e.test/" || true)
+  [ "$code" = "200" ] && { recovered=1; break; }
+  sleep 2
+done
+[ "$recovered" = "1" ] \
+  && ok "RATE-7 the source recovers once the window passes" \
+  || bad "RATE-7 the source recovers once the window passes" "still limited after the window"
+
+# Off again, so later sections are not fighting a limiter.
+api POST /api/v1/rate-limit '{"enabled":false}' >/dev/null || true
+sleep 2
+
 head_ "MFA inactivity timeout"
 
 # hz's output goes to a file in this fixture (StandardOutput=append:) and to the

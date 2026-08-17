@@ -134,6 +134,7 @@ func (s *Server) applyMFAJailConfig() {
 	backends := cfg.DeriveHAProxyBackends()
 	s.haproxy.SetBackends(backends)
 	s.haproxy.SetMFAJail(mfaJailFor(cfg, backends))
+	s.haproxy.SetRateLimit(rateLimitFor(cfg))
 
 	// Order matters: the ACL file must exist before HAProxy parses a config
 	// that references it, or it refuses to start.
@@ -152,5 +153,23 @@ func (s *Server) applyMFAJailConfig() {
 	}
 	if err := s.haproxy.Reload(); err != nil {
 		slog.Warn("mfa jail: haproxy reload", "err", err)
+	}
+}
+
+// rateLimitFor translates the configured rate limit into the generator's form,
+// or nil when nothing would be enforced.
+//
+// Nil rather than a zeroed struct so the generator emits no stick-table and no
+// tracking at all: a table that counts every request on the edge to enforce
+// nothing is pure overhead, and a config full of inert rules is harder to read
+// than one without them.
+func rateLimitFor(cfg *config.Config) *haproxy.RateLimit {
+	if !cfg.RateLimitActive() {
+		return nil
+	}
+	return &haproxy.RateLimit{
+		WindowSeconds: cfg.RateLimit.EffectiveWindowSeconds(),
+		Requests:      cfg.RateLimit.Requests,
+		ExemptLocal:   cfg.RateLimit.ExemptsLocal(),
 	}
 }
