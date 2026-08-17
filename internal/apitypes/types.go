@@ -673,6 +673,29 @@ type AccountPolicyResponse struct {
 	MinPasswordLength int `json:"minPasswordLength,omitempty"`
 }
 
+// Local DNS
+
+type LocalDNSRecord struct {
+	Name     string `json:"name"`
+	IP       string `json:"ip"`
+	Wildcard bool   `json:"wildcard,omitempty"`
+	Comment  string `json:"comment,omitempty"`
+	// ShadowsDerived is the address a service would otherwise resolve to,
+	// when this record overrides one. Empty when it does not.
+	ShadowsDerived string `json:"shadowsDerived,omitempty"`
+}
+
+type LocalDNSResponse struct {
+	Records []LocalDNSRecord `json:"records"`
+	// Derived are the records hz generates from services, shown so the page
+	// can present everything the resolver answers rather than half of it.
+	Derived []LocalDNSRecord `json:"derived,omitempty"`
+	// Enabled is false when dnsmasq is off, in which case records are stored
+	// and served the moment it is turned on.
+	Enabled  bool   `json:"enabled"`
+	ServedAt string `json:"servedAt,omitempty"`
+}
+
 // Deploy
 
 type DeploySlotStatus struct {

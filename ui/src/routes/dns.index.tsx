@@ -23,6 +23,7 @@ import EditIcon from "@mui/icons-material/Edit";
 import { useZones, useDNSDriftStatus, useClearDNSDrift, useDeleteZone } from "../api/hooks";
 import SyncButton from "../components/SyncButton";
 import { AddZoneDialog, EditZoneDialog, ZoneCertChip } from "../components/ZoneDialogs";
+import LocalDNSSection from "../components/LocalDNSSection";
 import type { Zone } from "../api/types";
 
 export const Route = createFileRoute("/dns/")({
@@ -212,6 +213,8 @@ function DNSZonesPage() {
           </Table>
         </TableContainer>
       )}
+
+      <LocalDNSSection />
 
       <AddZoneDialog open={addOpen} onClose={() => setAddOpen(false)} />
       <EditZoneDialog zone={editZone} onClose={() => setEditZone(null)} />

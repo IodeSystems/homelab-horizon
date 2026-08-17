@@ -24,7 +24,7 @@ func (s *Server) syncServices() {
 
 	// Update DNSMasq
 	if s.cfg().DNSMasqEnabled {
-		if err := s.dns.SetMappings(s.cfg().DeriveDNSMappings()); err != nil {
+		if err := s.dns.SetRecords(s.cfg().DeriveDNSRecords()); err != nil {
 			slog.Warn("dns.SetMappings", "err", err)
 		}
 		if err := s.dns.Reload(); err != nil {
@@ -276,10 +276,10 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 	if s.cfg().DNSMasqEnabled {
 		log.Step("Syncing DNSMasq...")
 
-		mappings := s.cfg().DeriveDNSMappings()
-		log.Info(fmt.Sprintf("  Generated %d DNS mappings", len(mappings)))
+		records := s.cfg().DeriveDNSRecords()
+		log.Info(fmt.Sprintf("  Generated %d DNS records", len(records)))
 
-		if err := s.dns.SetMappings(mappings); err != nil {
+		if err := s.dns.SetRecords(records); err != nil {
 			log.Error(fmt.Sprintf("  Failed to write mappings: %s", err))
 			hasErrors = true
 		} else {

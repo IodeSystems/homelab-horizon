@@ -1,6 +1,8 @@
 package config
 
 import (
+	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
+
 	"fmt"
 	"log/slog"
 	"net"
@@ -123,6 +125,30 @@ func (c *Config) PublishablePublicIPs(svc *Service) []string {
 // Maps domain -> internal IP from InternalDNS config
 // Replaces localhost/127.0.0.1 with LocalInterface IP since dnsmasq requires an IP address
 func (c *Config) DeriveDNSMappings() map[string]string {
+	mappings := c.deriveServiceDNSMappings()
+
+	// Operator records last, so they win. A local record that shadows a
+	// derived one is the override case this feature exists for; hz surfaces
+	// the shadowing rather than refusing it (see LocalDNSConflicts).
+	for _, r := range c.LocalDNSRecords {
+		r = r.Normalized()
+		if r.Validate() != nil {
+			slog.Warn("skipping invalid local DNS record", "name", r.Name, "ip", r.IP)
+			continue
+		}
+		mappings[r.Name] = r.IP
+	}
+
+	return mappings
+}
+
+// deriveServiceDNSMappings is the service-derived half, before operator
+// records are layered on.
+//
+// Separate because LocalDNSConflicts has to compare against what a service
+// WOULD resolve to: asking the merged map is asking after the override has
+// already won, which reports no conflicts, ever.
+func (c *Config) deriveServiceDNSMappings() map[string]string {
 	mappings := make(map[string]string)
 	for _, svc := range c.Services {
 		if svc.InternalDNS == nil || svc.InternalDNS.IP == "" {
@@ -146,6 +172,23 @@ func (c *Config) DeriveDNSMappings() map[string]string {
 		}
 	}
 	return mappings
+}
+
+// DeriveWildcardDNSNames returns the local record names that should answer for
+// their subdomains too.
+//
+// Separate from the mapping set because the two need different dnsmasq
+// directives, and the mapping set is a plain name→IP map shared with callers
+// that do not care about the distinction.
+func (c *Config) DeriveWildcardDNSNames() map[string]bool {
+	out := map[string]bool{}
+	for _, r := range c.LocalDNSRecords {
+		r = r.Normalized()
+		if r.Wildcard && r.Validate() == nil {
+			out[r.Name] = true
+		}
+	}
+	return out
 }
 
 // haproxyErrorsDir returns the directory where per-service HAProxy error files are written.
@@ -1250,4 +1293,46 @@ func (c *Config) GetService(name string) *Service {
 		}
 	}
 	return nil
+}
+
+// DeriveDNSRecords returns everything hz's resolver should answer for, tagged
+// with how each should be served.
+//
+// Service domains stay wildcards, which is what hz has always written for them:
+// they front a vhost, and narrowing them now would stop answering for
+// subdomains someone may rely on. Operator records follow their own flag, and
+// default to exact — a machine called "desktop" should not also answer for
+// "anything.desktop".
+func (c *Config) DeriveDNSRecords() []dnsmasq.Record {
+	comments := map[string]string{}
+	wildcards := c.DeriveWildcardDNSNames()
+	local := map[string]bool{}
+	for _, r := range c.LocalDNSRecords {
+		r = r.Normalized()
+		if r.Validate() != nil {
+			continue
+		}
+		local[r.Name] = true
+		comments[r.Name] = r.Comment
+	}
+
+	mappings := c.DeriveDNSMappings()
+	records := make([]dnsmasq.Record, 0, len(mappings))
+	for name, ip := range mappings {
+		records = append(records, dnsmasq.Record{
+			Name: name,
+			IP:   ip,
+			// A derived service domain is a wildcard; an operator record is
+			// one only if it says so.
+			Wildcard: !local[name] || wildcards[name],
+			Comment:  comments[name],
+		})
+	}
+	return records
+}
+
+// DeriveDNSRecordsDerivedOnly exposes the service-derived mappings for the UI,
+// which shows them beside the operator's own records.
+func (c *Config) DeriveDNSRecordsDerivedOnly() map[string]string {
+	return c.deriveServiceDNSMappings()
 }

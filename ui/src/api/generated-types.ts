@@ -652,6 +652,31 @@ export interface AccountPolicyResponse {
    */
   minPasswordLength?: number /* int */;
 }
+export interface LocalDNSRecord {
+  name: string;
+  ip: string;
+  wildcard?: boolean;
+  comment?: string;
+  /**
+   * ShadowsDerived is the address a service would otherwise resolve to,
+   * when this record overrides one. Empty when it does not.
+   */
+  shadowsDerived?: string;
+}
+export interface LocalDNSResponse {
+  records: LocalDNSRecord[];
+  /**
+   * Derived are the records hz generates from services, shown so the page
+   * can present everything the resolver answers rather than half of it.
+   */
+  derived?: LocalDNSRecord[];
+  /**
+   * Enabled is false when dnsmasq is off, in which case records are stored
+   * and served the moment it is turned on.
+   */
+  enabled: boolean;
+  servedAt?: string;
+}
 export interface DeploySlotStatus {
   slot: string;
   backend: string;

@@ -238,6 +238,20 @@ type Config struct {
 	// effect of editing a service would be indefensible.
 	UsersDB string `json:"users_db,omitempty"`
 
+	// LocalDNSRecords are operator-authored answers hz's resolver serves to
+	// the LAN and VPN, on top of the ones derived from services.
+	//
+	// This is the split-horizon half of the product that was missing: hz
+	// published names outward through Route53 and derived internal names from
+	// services, but there was no way to say "this name means this address in
+	// here" — neither for a host that has no public presence at all, nor to
+	// point a public name at a LAN address for clients inside.
+	//
+	// In config rather than only in the generated hosts file, because the
+	// file is rewritten wholesale from the derivation on every sync: a record
+	// added there by hand survives exactly until the next service change.
+	LocalDNSRecords []LocalDNSRecord `json:"local_dns_records,omitempty"`
+
 	// Policy is the account rules an operator opts into: idle timeout,
 	// lockout, password age and reuse. Grouped rather than scattered across
 	// the config because they are decided together, usually because an
@@ -1398,6 +1412,70 @@ func (c *Config) PCIScopedServices() []Service {
 	for _, svc := range c.Services {
 		if svc.InPCIScope() {
 			out = append(out, svc)
+		}
+	}
+	return out
+}
+
+// LocalDNSRecord is one operator-authored DNS answer.
+type LocalDNSRecord struct {
+	// Name is the hostname. A bare label ("desktop") is served as-is, which
+	// is what a phone or a Linux box asks for; macOS finds the same machine
+	// over mDNS without this, which is exactly why an operator can be the
+	// only one on the network who cannot reach it by name.
+	Name string `json:"name"`
+	IP   string `json:"ip"`
+
+	// Wildcard also answers for every subdomain of Name.
+	//
+	// Off by default because it is the surprising behaviour: dnsmasq's
+	// `address=/name/ip` matches the name AND everything under it, so a
+	// record for "example.com" quietly captures every host in the domain.
+	// That is occasionally what you want and rarely what you meant.
+	Wildcard bool `json:"wildcard,omitempty"`
+
+	// Comment is why this record exists, which is the thing nobody can
+	// reconstruct in six months.
+	Comment string `json:"comment,omitempty"`
+}
+
+// Normalized returns the record with its name lowercased and trimmed, which is
+// how it is compared and written.
+func (r LocalDNSRecord) Normalized() LocalDNSRecord {
+	r.Name = strings.ToLower(strings.TrimSpace(r.Name))
+	r.IP = strings.TrimSpace(r.IP)
+	r.Comment = strings.TrimSpace(r.Comment)
+	return r
+}
+
+// Validate reports why a record cannot be served, or nil.
+func (r LocalDNSRecord) Validate() error {
+	r = r.Normalized()
+	switch {
+	case r.Name == "":
+		return errors.New("name is required")
+	case net.ParseIP(r.IP) == nil:
+		return fmt.Errorf("%q is not an IP address; local records answer with an address, not another name", r.IP)
+	case strings.ContainsAny(r.Name, " 	/"):
+		return fmt.Errorf("%q is not a hostname", r.Name)
+	}
+	return nil
+}
+
+// LocalDNSConflicts returns the local records that shadow a name hz already
+// derives from a service.
+//
+// Not an error: overriding a service's own name is a legitimate reason to want
+// this feature — pointing a public domain at a LAN address for clients inside
+// is the textbook split-horizon case. But it is worth showing, because the
+// alternative is an operator wondering why their service moved.
+func (c *Config) LocalDNSConflicts() map[string]string {
+	derived := c.deriveServiceDNSMappings()
+	out := map[string]string{}
+	for _, r := range c.LocalDNSRecords {
+		r = r.Normalized()
+		if ip, ok := derived[r.Name]; ok && ip != r.IP {
+			out[r.Name] = ip
 		}
 	}
 	return out
