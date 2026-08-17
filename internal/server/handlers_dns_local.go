@@ -126,7 +126,12 @@ func (s *Server) deleteLocalDNS(w http.ResponseWriter, r *http.Request) {
 
 	found := false
 	if err := s.updateConfig(func(c *config.Config) {
-		kept := c.LocalDNSRecords[:0]
+		// A fresh slice, never c.LocalDNSRecords[:0]: updateConfig takes a
+		// SHALLOW copy of the config, so an in-place filter writes into the
+		// backing array the live config is still pointing at. Two deletes in a
+		// row can then drop a record nobody asked to remove — which is exactly
+		// what happened on a live box, taking an unrelated record with it.
+		kept := make([]config.LocalDNSRecord, 0, len(c.LocalDNSRecords))
 		for _, existing := range c.LocalDNSRecords {
 			if existing.Normalized().Name == name {
 				found = true

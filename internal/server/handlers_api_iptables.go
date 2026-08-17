@@ -150,7 +150,9 @@ func (s *Server) handleAPIIPTablesUnbless(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := s.updateConfig(func(c *config.Config) {
-		out := c.BlessedIPTablesRules[:0]
+		// Fresh slice — see the note in handlers_dns_local.go: the config copy
+		// is shallow, so an in-place filter is visible to the live config.
+		out := make([]string, 0, len(c.BlessedIPTablesRules))
 		for _, existing := range c.BlessedIPTablesRules {
 			if existing != req.Canonical {
 				out = append(out, existing)
