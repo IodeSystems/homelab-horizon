@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/iodesystems/homelab-horizon/internal/iptables"
 )
 
 type Peer struct {
@@ -630,32 +632,16 @@ func ExpectedPostDown(outIface string) string {
 		forwardChainName, inputChainName, outIface, forwardChainName, forwardChainName, inputChainName, inputChainName)
 }
 
+// Chain names come from the generator so the two cannot disagree about which
+// chains they are talking about.
 const (
-	forwardChainName = "WG-FORWARD"
-	inputChainName   = "WG-INPUT"
+	forwardChainName = iptables.ForwardChainName
+	inputChainName   = iptables.InputChainName
 
-	// jailDNSPort is opened to the gateway for jailed peers so the captive
-	// portal resolves — clients are handed the gateway as their resolver.
-	// Mirrors internal/iptables, which generates the same rules for the
-	// reconcile path.
-	jailDNSPort = "53"
+	// defaultWGInterface is what the chain-body rebuilds pass to the generator
+	// when a caller has no interface to give. The body rules never mention it.
+	defaultWGInterface = "wg0"
 )
-
-// peerIP extracts the first /32 IP from a peer's AllowedIPs string
-func peerIP(allowedIPs string) string {
-	for _, part := range strings.Split(allowedIPs, ",") {
-		part = strings.TrimSpace(part)
-		if strings.HasSuffix(part, "/32") {
-			return strings.TrimSuffix(part, "/32")
-		}
-	}
-	// Fallback: take IP from first entry
-	parts := strings.Split(strings.TrimSpace(allowedIPs), "/")
-	if len(parts) > 0 {
-		return parts[0]
-	}
-	return ""
-}
 
 // SetupForwardChain creates the WG-FORWARD and WG-INPUT chains, adds the jump
 // rules, and populates per-peer rules. Called once at server startup.
@@ -711,6 +697,9 @@ func TeardownForwardChain(wgInterface string) error {
 
 // ForwardChainOpts holds options for rebuilding the WG-FORWARD chain.
 type ForwardChainOpts struct {
+	// WGInterface is optional: these entry points rebuild chain bodies, which
+	// do not reference it. Empty means the package default.
+	WGInterface string
 	Peers       []Peer
 	Profiles    map[string]string
 	VPNRange    string
@@ -728,118 +717,93 @@ type ForwardChainOpts struct {
 // RebuildForwardChain flushes and repopulates the WG-FORWARD chain with per-peer rules.
 // Called whenever peers or profiles change.
 func RebuildForwardChain(opts ForwardChainOpts) error {
-	// Flush existing rules
-	if out, err := exec.Command("iptables", "-F", forwardChainName).CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to flush %s: %s: %w", forwardChainName, out, err)
-	}
-
-	profiles := opts.Profiles
-	if profiles == nil {
-		profiles = map[string]string{}
-	}
-
-	// Add per-peer rules
-	for _, p := range opts.Peers {
-		ip := peerIP(p.AllowedIPs)
-		if ip == "" {
-			continue
-		}
-
-		// MFA jail: nothing transits the gateway. The portal exception lives
-		// in WG-INPUT (see RebuildInputChain) because the portal is on the
-		// gateway itself, which is an INPUT destination, not a forwarded one.
-		if opts.JailedPeers[p.Name] && opts.ServerWGIP != "" && opts.ListenPort != "" {
-			_ = exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "DROP").Run()
-			continue
-		}
-
-		profile := profiles[p.Name]
-		if profile == "" {
-			profile = "lan-access"
-		}
-
-		switch profile {
-		case "full-tunnel":
-			// Allow all traffic from this peer
-			_ = exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "ACCEPT").Run()
-		case "vpn-only":
-			// Allow only VPN range
-			if opts.VPNRange != "" {
-				_ = exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", opts.VPNRange, "-j", "ACCEPT").Run()
-			}
-			_ = exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "DROP").Run()
-		default: // lan-access
-			// Allow VPN range + LAN
-			if opts.VPNRange != "" {
-				_ = exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", opts.VPNRange, "-j", "ACCEPT").Run()
-			}
-			if opts.LanCIDR != "" {
-				_ = exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-d", opts.LanCIDR, "-j", "ACCEPT").Run()
-			}
-			_ = exec.Command("iptables", "-A", forwardChainName, "-s", ip+"/32", "-j", "DROP").Run()
-		}
-	}
-
-	// Default: drop anything not matched (unknown source IPs)
-	_ = exec.Command("iptables", "-A", forwardChainName, "-j", "DROP").Run()
-
-	return nil
+	return rebuildChain(forwardChainName, opts)
 }
 
-// jailAllows returns the destination-port matchers a jailed peer may reach on
-// the gateway, in rule order: horizon direct, HAProxy (whose L7 rules then pick
-// portal vs deny), DNS. Mirrors internal/iptables.jailAllows — the two generate
-// the same jail and must be edited together.
-func jailAllows(listenPort string, haproxyPorts []string) [][]string {
-	allows := [][]string{{"-p", "tcp", "--dport", listenPort}}
-	for _, p := range haproxyPorts {
-		if p == "" || p == listenPort {
-			continue
-		}
-		allows = append(allows, []string{"-p", "tcp", "--dport", p})
-	}
-	return append(allows,
-		[]string{"-p", "udp", "--dport", jailDNSPort},
-		[]string{"-p", "tcp", "--dport", jailDNSPort},
-	)
-}
-
-// RebuildInputChain flushes and repopulates WG-INPUT: the policy for traffic a
-// peer addresses to the gateway itself. Called alongside RebuildForwardChain
-// on every peer/profile/MFA change.
+// RebuildInputChain flushes and repopulates WG-INPUT.
 //
-// Only jailed peers get rules. Everyone else falls through the chain to
-// whatever INPUT policy the host already had — horizon deliberately does not
-// become the arbiter of who may reach the gateway's services in general, only
-// of who may reach them *while jailed*. Hence no catch-all DROP: an empty
-// WG-INPUT is the correct steady state when MFA is off or nobody is jailed.
-//
-// Fails open per-peer when ServerWGIP/ListenPort are unknown, matching
-// RebuildForwardChain — a DROP without the portal ACCEPT would leave the peer
-// unable to reach the page that clears the jail.
+// Separate entry point from RebuildForwardChain because callers change one
+// concern at a time, but both now derive their rules from the same generator —
+// see rebuildChain.
 func RebuildInputChain(opts ForwardChainOpts) error {
-	if out, err := exec.Command("iptables", "-F", inputChainName).CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to flush %s: %s: %w", inputChainName, out, err)
+	return rebuildChain(inputChainName, opts)
+}
+
+// rebuildChain flushes one owned chain and repopulates it from
+// iptables.ExpectedRules.
+//
+// This package used to build the same rules a second time, by hand, in order to
+// apply them immediately — and the reconciler built them again for its diff. The
+// two drifted, which is how the MFA jail shipped covering FORWARD but not INPUT:
+// the fix went into one builder and the other kept emitting the old set. There
+// is now one definition of what the rules are, and two things that do something
+// with it.
+//
+// Applying stays here rather than moving to the iptables package: that one is
+// deliberately a pure generator plus a differ, and giving it a shell-out path
+// would put "decide" and "do" back in the same place.
+func rebuildChain(chain string, opts ForwardChainOpts) error {
+	if out, err := exec.Command("iptables", "-F", chain).CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to flush %s: %s: %w", chain, out, err)
 	}
 
-	for _, p := range opts.Peers {
-		ip := peerIP(p.AllowedIPs)
-		if ip == "" {
+	for _, rule := range iptables.ExpectedRules(opts.expectedRulesInputs()) {
+		if rule.Chain != chain || rule.Table != "filter" {
 			continue
 		}
-		if !opts.JailedPeers[p.Name] || opts.ServerWGIP == "" || opts.ListenPort == "" {
-			continue
-		}
-
-		// Portal (direct + via HAProxy), then DNS so it resolves by name.
-		for _, allow := range jailAllows(opts.ListenPort, opts.HAProxyPorts) {
-			args := append([]string{"-A", inputChainName, "-s", ip + "/32", "-d", opts.ServerWGIP + "/32"}, allow...)
-			_ = exec.Command("iptables", append(args, "-j", "ACCEPT")...).Run()
-		}
-		_ = exec.Command("iptables", "-A", inputChainName, "-s", ip+"/32", "-j", "DROP").Run()
+		args := append([]string{"-A", chain}, rule.Args...)
+		// Errors are ignored per rule, as they were before: a duplicate or a
+		// rule the kernel rejects must not abort the rest of the chain and
+		// leave it half-built. The reconciler notices the difference on its
+		// next pass, which is what it is for.
+		_ = exec.Command("iptables", args...).Run()
 	}
-
 	return nil
+}
+
+// expectedRulesInputs translates this package's options into the generator's.
+//
+// The two structs carry the same facts under different names because they were
+// written apart; keeping the translation in one function means a new field is a
+// compile error here rather than a rule that silently stops being emitted on the
+// immediate-apply path.
+func (opts ForwardChainOpts) expectedRulesInputs() iptables.Inputs {
+	peers := make([]iptables.PeerInput, 0, len(opts.Peers))
+	for _, p := range opts.Peers {
+		// Profile travels in Inputs.Profiles, keyed by name — PeerInput itself
+		// carries only identity.
+		peers = append(peers, iptables.PeerInput{
+			Name:       p.Name,
+			AllowedIPs: p.AllowedIPs,
+		})
+	}
+	return iptables.Inputs{
+		// WGInterface only has to be non-empty: the generator returns nothing
+		// without one, and the FORWARD/INPUT jump rules it emits for it are
+		// filtered out below by chain.
+		WGInterface:  wgInterfaceForRules(opts),
+		VPNRange:     opts.VPNRange,
+		LanCIDR:      opts.LanCIDR,
+		Peers:        peers,
+		ServerWGIP:   opts.ServerWGIP,
+		ListenPort:   opts.ListenPort,
+		JailedPeers:  opts.JailedPeers,
+		HAProxyPorts: opts.HAProxyPorts,
+		Profiles:     opts.Profiles,
+	}
+}
+
+// wgInterfaceForRules returns the interface name the generator needs.
+//
+// These two entry points only ever rebuild the chain bodies, and the body rules
+// do not mention the interface — but the generator refuses to emit anything
+// without one, so this supplies the package default rather than making every
+// caller pass a value it has no use for.
+func wgInterfaceForRules(opts ForwardChainOpts) string {
+	if opts.WGInterface != "" {
+		return opts.WGInterface
+	}
+	return defaultWGInterface
 }
 
 // UpdateInterfaceRules rewrites PostUp and PostDown in the config file, preserving everything else.
