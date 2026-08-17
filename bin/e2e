@@ -37,6 +37,13 @@
 #           Implies the browser download. This is the second relying party --
 #           account passkeys are scoped to admin_url, not kiosk_url.
 #
+#   OIDC    set to 1 to also run the single-sign-on flow (test/e2e/oidc.sh)
+#           against a stub provider served by test/e2e/oidc-idp.mjs. The
+#           provider is stubbed but the protocol is not: real discovery, real
+#           JWKS, real RS256 verification, and the stub checks hz's PKCE
+#           verifier. Needs https, so it reconfigures the VM and leaves it
+#           there.
+#
 #   PASSKEY set to 1 to also run the WebAuthn ceremony (test/e2e/passkey.sh).
 #           Reconfigures the VM onto https with a self-signed cert and drives
 #           a virtual authenticator, so it runs after the main assertions and
@@ -187,6 +194,12 @@ if multipass exec "$VM" -- sudo /home/ubuntu/assert.sh; then
     multipass transfer "$FIXTURE/account-passkey.sh" "$VM:/home/ubuntu/account-passkey.sh"
     multipass exec "$VM" -- sudo bash /home/ubuntu/install-browser.sh
     multipass exec "$VM" -- sudo bash /home/ubuntu/account-passkey.sh || err "account passkey flow failed"
+  fi
+  if [ "${OIDC:-0}" = "1" ]; then
+    note "running the single sign-on flow (stub provider, real protocol)..."
+    multipass transfer "$FIXTURE/oidc-idp.mjs" "$VM:/home/ubuntu/oidc-idp.mjs"
+    multipass transfer "$FIXTURE/oidc.sh" "$VM:/home/ubuntu/oidc.sh"
+    multipass exec "$VM" -- sudo bash /home/ubuntu/oidc.sh || err "oidc flow failed"
   fi
   if [ "${PASSKEY:-0}" = "1" ]; then
     note "running the passkey ceremony (https + virtual authenticator)..."

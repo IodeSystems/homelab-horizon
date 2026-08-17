@@ -264,3 +264,18 @@ export function useLoginPasskey() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["auth"] }),
   });
 }
+
+interface OIDCStatus {
+  enabled: boolean;
+  name: string;
+  reason?: string;
+}
+
+export function useOIDCStatus() {
+  return useQuery({
+    queryKey: ["auth", "oidc"],
+    queryFn: () => apiFetch<OIDCStatus>("/auth/oidc/status"),
+    retry: false,
+    staleTime: 60_000,
+  });
+}
