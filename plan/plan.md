@@ -257,13 +257,11 @@ Phase 3 replaces this with: restart horizon, done.
 
 ## Active work
 
-Nothing is in flight. Ordered by what I'd pick up next:
+Nothing is in flight and the backlog is empty. What remains is yours, not mine:
 
 | | Item | Blocked? |
 |---|---|---|
-| 1 | [Collapse the duplicate rule builders](#known-cleanups-not-blocking) | no |
-| 2 | [Org alignment backlog](#-org-alignment-backlog--this-repo-owns-it-now) (10 items) | no |
-| 3 | [Operator follow-ups](#operator-follow-ups-not-code) — yours, not mine | — |
+| 1 | [Operator follow-ups](#operator-follow-ups-not-code) — yours, not mine | — |
 
 Everything decided between 2026-08-15 and 2026-08-17 shipped and is archived in
 [done.md](done.md): the 7-day certificate warning, the whole user model
@@ -301,44 +299,26 @@ that doc fails `go get`. Noted that ashid's time-sortability is the right
 tiebreaker against a second-granularity timestamp — which is what bit the
 password history here.
 
-### ◐ Org alignment backlog — this repo owns it now
+### ✅ Org alignment backlog — all ten, this repo owns it
 
-**Six of ten done** (2026-08-17). What remains is the coupled deploy change, the
-UI modernisation, and one net-new feature — see the marks below.
+Recovered from `~/doc` (`0f02917^:plan/homelab-horizon.md`) on 2026-08-15 and
+finished 2026-08-17. Score at capture: ✅14 · ⚠️4 · ❌11.
 
-Not lost in the `~/doc` reorg as I first read it: commit `0f02917` deleted
-`plan/` deliberately — *"the canon repo holds the canon; projects own their own
-compliance."* So these belong here. Recovered from `0f02917^:plan/homelab-horizon.md`
-and **re-verified against the tree on 2026-08-15** — all ten are still open.
-`METRICS-1` (hz's own `/metrics`) was open in that file and shipped this session.
-
-Score at capture: ✅14 · ⚠️4 · ❌11 · P1 · effort L.
-
-- ✅ **CLI-1** (`0f602b9`) — cobra tree; serving stays the root's action because
-  the installed unit runs the binary bare. Old single-dash flags translate at the
-  edge, since `-enable-admin-token` is a printed recovery step and pflag rejects
-  that spelling.
-- ◻ **WEB-5 / DEPLOY-5** — `ui/embed.go` embeds `dist` and `internal/server/spa.go`
-  serves it. hz is slot-deployed, so the lib/tool embed exception does not apply.
-  Drop the embed, serve from `STATIC_DIR`, copy `ui/dist/` → payload `public/`. · M
-- ◻ **DEPLOY-9** — no `payload:` target in the Makefile; pairs with WEB-5. · S
-- ◻ **WEB-1** — MUI `^7.3.11` (canon v9) and npm (canon pnpm). · M
-- ✅ **WEB-2** (`8198c69`)
-- ✅ **WEB-3** (`8198c69`) — was an import that passed tsc and failed the build.
-- ✅ **WEB-9** (`8198c69`) — the dev server was binding every interface, so
-  `npm run dev` on a shared box was an open proxy to hz's admin API.
-- ✅ **WEB-8** (`8198c69`)
-- ✅ **CFG-2 / CFG-4** — nothing to do: the secret-variant gitignore entries
-  already exist, and adding a `.secret.properties.example` for a pattern hz is
-  exempt from would be cargo cult rather than compliance.
-- ◻ **EDGE-4** — coarse table-based edge rate limiting, **uniquely owned by hz**
-  and blocking org-wide abuse protection: a volume threshold table per IP/service
-  above today's flat IP bans, with services pushing blocks down via the existing
-  ban API. · L
-
-**sequencing** (from the recovered file): WEB-5 + DEPLOY-9 together; WEB-1/2/3/9
-as one UI modernisation pass; CLI-1 on its own; EDGE-4 last, after the
-reliability and lint gates.
+- ✅ **CLI-1** (`0f602b9`) cobra, with the old single-dash flags translated at
+  the edge so a printed recovery step keeps working.
+- ✅ **WEB-5 / DEPLOY-5 + DEPLOY-9** — UI served from disk, `payload:` target,
+  release archives carry `public/`, deploy installs both halves atomically and
+  root-owned. A missing UI explains itself rather than 404ing the login page.
+- ✅ **WEB-1** — MUI v9 and pnpm. pnpm immediately caught a phantom
+  `@mui/system` dependency that npm had been hoisting.
+- ✅ **WEB-2, WEB-3, WEB-8, WEB-9** (`8198c69`) — two were real bugs rather than
+  paperwork: an alias tsc resolved and the bundler did not, and a dev server
+  bound to every interface.
+- ✅ **CFG-2 / CFG-4** — nothing to do, and the reason is written down rather
+  than a placeholder added for a pattern hz is exempt from.
+- ✅ **EDGE-4** — coarse edge rate limiting, proven against real HAProxy. The
+  MFA portal is exempt: these rules run before the jail rules, so limiting it
+  would lock a jailed peer out of un-jailing themselves.
 
 ### Operator follow-ups (not code)
 
@@ -358,7 +338,7 @@ reliability and lint gates.
 
 ## Known cleanups (not blocking)
 
-- `internal/wireguard` and `internal/iptables` both build the same rule set — one shells out immediately on change, the other generates for the reconcile diff. They must be edited in lockstep, which is what let the FORWARD-only jail persist. Collapse `wireguard.Rebuild{Forward,Input}Chain` onto `iptables.ExpectedRules` (touches ~4 call sites).
+- ✅ **Collapsed** (`2b03ed0`). Was: `internal/wireguard` and `internal/iptables` both build the same rule set — one shells out immediately on change, the other generates for the reconcile diff. They must be edited in lockstep, which is what let the FORWARD-only jail persist. Collapse `wireguard.Rebuild{Forward,Input}Chain` onto `iptables.ExpectedRules` (touches ~4 call sites).
 
 ## Decisions
 
