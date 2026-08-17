@@ -127,3 +127,34 @@ func TestServersBindSkipsMalformed(t *testing.T) {
 		t.Errorf("want the 2 well-formed upstreams, got %+v", st.Servers)
 	}
 }
+
+// Answers is a liveness probe, distinct from CheckLocalBind's config check: it
+// asks whether a socket is there and responding at all.
+func TestAnswers(t *testing.T) {
+	addr := fakeDNSMasq(t, map[string][]string{
+		"cachesize.bind.": {"150"},
+	})
+	if !Answers(addr) {
+		t.Error("a responding resolver was reported as not answering")
+	}
+
+	// Nothing listening. Port 1 on loopback is a reliable refusal, and the
+	// point is that this returns rather than hanging the health handler.
+	if Answers("127.0.0.1:1") {
+		t.Error("an unreachable address was reported as answering")
+	}
+
+	if Answers("") {
+		t.Error("an empty address was reported as answering")
+	}
+}
+
+// A resolver that is up but refuses the CHAOS record still counts as not
+// answering for this purpose: hz uses the same record for its metrics, so a
+// server that will not serve it cannot be the dnsmasq hz configured.
+func TestAnswersRejectsAResolverWithoutTheCounter(t *testing.T) {
+	addr := fakeDNSMasq(t, map[string][]string{})
+	if Answers(addr) {
+		t.Error("a resolver with no cachesize.bind was reported as answering")
+	}
+}

@@ -82,6 +82,51 @@ grep -q 'hz_dnsmasq_upstream_queries_total{server=' <<<"$body" \
   || bad "DNSMASQ-4 per-upstream stats parsed from servers.bind" \
        "$(grep upstream <<<"$body" | head -2)"
 
+# The liveness probe. Distinct from the config cross-check above it: that one
+# says local_interface sits on an interface dnsmasq binds, this one says
+# something actually replied there.
+probe() {
+  curl -fsS -b "$COOKIE" "$API/api/v1/system/health" \
+    | jq -r '.components[]|select(.name=="dnsmasq")|.extras.answers_on_local_interface'
+}
+extras() {
+  curl -fsS -b "$COOKIE" "$API/api/v1/system/health" \
+    | jq -c '.components[]|select(.name=="dnsmasq")|.extras'
+}
+local_iface=$(curl -fsS -b "$COOKIE" "$API/api/v1/system/health" \
+  | jq -r '.components[]|select(.name=="dnsmasq")|.extras.local_bind.local_ip // empty')
+
+# This fixture deliberately binds dnsmasq to loopback so it can coexist with
+# systemd-resolved, so local_interface is genuinely unserved — and both checks
+# should say so. Agreement on a real misconfiguration is the useful assertion
+# here, not a green light.
+[ "$(probe)" = "false" ] \
+  && ok "DNSMASQ-5 the probe agrees with the config check on an unserved local_interface" \
+  || bad "DNSMASQ-5 the probe agrees with the config check" "$(extras)"
+
+# Now make dnsmasq actually serve it, which is what a correct deployment looks
+# like, and the probe must flip.
+if [ -n "$local_iface" ]; then
+  printf 'listen-address=%s\n' "$local_iface" >> /etc/dnsmasq.d/e2e.conf
+  systemctl restart dnsmasq
+  sleep 2
+  [ "$(probe)" = "true" ] \
+    && ok "DNSMASQ-5b it flips to true once dnsmasq serves local_interface" \
+    || bad "DNSMASQ-5b it flips to true once dnsmasq serves local_interface" "$(extras)"
+else
+  bad "DNSMASQ-5b it flips to true once dnsmasq serves local_interface" "no local_interface reported"
+fi
+
+# Stop dnsmasq and the probe must notice, or it is reporting config rather than
+# liveness — which is the whole reason it exists.
+systemctl stop dnsmasq
+sleep 2
+[ "$(probe)" = "false" ] \
+  && ok "DNSMASQ-6 the probe notices when dnsmasq stops answering" \
+  || bad "DNSMASQ-6 the probe notices when dnsmasq stops answering" "$(extras)"
+systemctl start dnsmasq
+sleep 2
+
 printf '\n\033[1mnode-exporter (detect + merge)\033[0m\n'
 systemctl is-active --quiet prometheus-node-exporter \
   && ok "NODE-1 node-exporter is running" \

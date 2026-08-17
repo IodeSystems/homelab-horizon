@@ -161,3 +161,29 @@ func queryTXT(ctx context.Context, c *dns.Client, addr, name string) ([]string, 
 func StatsAddr() string {
 	return net.JoinHostPort("127.0.0.1", "53")
 }
+
+// Answers reports whether a resolver at addr actually answers queries.
+//
+// CheckLocalBind proves the configuration is coherent — that local_interface's
+// IP sits on an interface dnsmasq is told to bind. This proves the socket is
+// there and responding, which is a different claim: with bind-dynamic dnsmasq
+// starts happily and picks up addresses as they appear, so a correct config can
+// still be answering on nothing yet.
+//
+// Queries the CHAOS record dnsmasq always serves rather than a real name, so
+// the result does not depend on upstream reachability or a populated cache. A
+// forwarding resolver with no upstream is still a working resolver for the
+// question being asked here.
+func Answers(addr string) bool {
+	if strings.TrimSpace(addr) == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	c := &dns.Client{Timeout: 2 * time.Second}
+	if _, err := queryTXT(ctx, c, addr, "cachesize.bind"); err != nil {
+		return false
+	}
+	return true
+}

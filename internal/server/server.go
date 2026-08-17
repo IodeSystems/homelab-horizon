@@ -899,6 +899,7 @@ func (s *Server) runHealthCheck() {
 
 	// Clock and pending patches: measured here, never during a scrape.
 	s.hostFacts.refresh()
+
 }
 
 // startHealthCheck starts background health monitoring every 60 seconds
