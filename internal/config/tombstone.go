@@ -69,7 +69,9 @@ func (c *Config) DropTombstone(zoneName, name, recType, value string) bool {
 		if c.Zones[i].Name != zoneName {
 			continue
 		}
-		kept := c.Zones[i].Tombstones[:0]
+		// Fresh slice: callers mutate a shallow copy of Config, so filtering in
+		// place writes into an array the previous copy still points at.
+		kept := make([]DNSTombstone, 0, len(c.Zones[i].Tombstones))
 		var dropped bool
 		for _, t := range c.Zones[i].Tombstones {
 			if t.Matches(name, recType, value) {
@@ -96,7 +98,9 @@ func (c *Config) ClearTombstonesForSet(zoneName, name, recType string) int {
 		if c.Zones[i].Name != zoneName {
 			continue
 		}
-		kept := c.Zones[i].Tombstones[:0]
+		// Fresh slice: callers mutate a shallow copy of Config, so filtering in
+		// place writes into an array the previous copy still points at.
+		kept := make([]DNSTombstone, 0, len(c.Zones[i].Tombstones))
 		cleared := 0
 		for _, t := range c.Zones[i].Tombstones {
 			if t.MatchesSet(name, recType) {

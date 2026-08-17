@@ -106,7 +106,9 @@ func (s *Server) unbanIP(ip string) error {
 	slog.Info("ban: IP unbanned", "ip", ip)
 
 	return s.updateConfig(func(cfg *config.Config) {
-		filtered := cfg.IPBans[:0]
+		// Fresh slice: updateConfig copies the config shallowly, so filtering
+		// in place mutates the array the live config still reads from.
+		filtered := make([]config.IPBan, 0, len(cfg.IPBans))
 		for _, b := range cfg.IPBans {
 			if b.IP != ip {
 				filtered = append(filtered, b)
