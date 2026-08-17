@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -211,5 +212,95 @@ func TestCurrentPasswordCountsAsReuse(t *testing.T) {
 
 	if err := d.SetPasswordWithHistory(ctx, u.ID, "current-password-x", 4); !errors.Is(err, ErrPasswordReused) {
 		t.Fatalf("reusing the current password = %v, want ErrPasswordReused", err)
+	}
+}
+
+// The viewer role is gone. It was never enforced, so an account holding it
+// could log in and then be refused by everything.
+func TestViewerRoleIsRejected(t *testing.T) {
+	d := open(t)
+	if _, err := d.CreateUser(context.Background(), "carl", "", "viewer"); err == nil {
+		t.Fatal("the viewer role was accepted")
+	}
+}
+
+// Migration 0003 must not silently promote a viewer into a working admin: an
+// upgrade that grants privileges is worse than one that asks a question.
+func TestExistingViewersBecomeDisabledAdmins(t *testing.T) {
+	d := open(t)
+	ctx := context.Background()
+
+	// Insert straight past the application layer, the way a row written by an
+	// older build would look. The CHECK constraint still permits the value.
+	if _, err := d.Exec(
+		`INSERT INTO users (id, username, role) VALUES ('usr_legacy', 'legacy', 'viewer')`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Re-run the conversion the migration performs.
+	if _, err := d.Exec(`
+		UPDATE users
+		SET role = 'admin', disabled_at = COALESCE(disabled_at, CURRENT_TIMESTAMP)
+		WHERE role = 'viewer'`); err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+
+	u, err := d.UserByID(ctx, "usr_legacy")
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if u.Role != RoleAdmin {
+		t.Errorf("role = %q, want admin", u.Role)
+	}
+	if u.Enabled() {
+		t.Error("a converted viewer must be disabled, not silently promoted")
+	}
+}
+
+// The migration itself, not a re-run of its SQL: rewind the recorded version,
+// plant a viewer the way an older build would have, and reopen so 0003
+// actually executes on an existing database.
+func TestMigration0003RunsOnAnExistingDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hz.db")
+
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := d.Exec(
+		`INSERT INTO users (id, username, role) VALUES ('usr_v', 'legacy', 'viewer')`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// Rewind to the state a v0002 install would be in.
+	if _, err := d.Exec(`UPDATE schema_migrations SET version = 2, dirty = 0`); err != nil {
+		t.Fatalf("rewind: %v", err)
+	}
+	if _, err := d.Exec(`DELETE FROM applied_migrations WHERE version = '0003'`); err != nil {
+		t.Fatalf("rewind checksum: %v", err)
+	}
+	_ = d.Close()
+
+	upgraded, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = upgraded.Close() }()
+
+	u, err := upgraded.UserByID(context.Background(), "usr_v")
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if u.Role != RoleAdmin || u.Enabled() {
+		t.Fatalf("after upgrade: role=%q enabled=%v, want admin and disabled", u.Role, u.Enabled())
+	}
+
+	// And the checksum row is back, so a later edit to 0003 would be caught.
+	var n int
+	if err := upgraded.QueryRow(
+		`SELECT COUNT(*) FROM applied_migrations WHERE version = '0003'`).Scan(&n); err != nil {
+		t.Fatalf("checksum: %v", err)
+	}
+	if n != 1 {
+		t.Fatal("the migration ran without recording its checksum")
 	}
 }

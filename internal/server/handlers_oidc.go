@@ -166,16 +166,13 @@ func (s *Server) handleAPIOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// deliberate configuration, so honour it rather than quietly demoting.
 	isAdmin := len(cfg.OIDC.AdminGroups) == 0 || anyGroupMatches(groups, cfg.OIDC.AdminGroups)
 
-	// Read-only accounts are refused rather than admitted, because hz has no
-	// read-only mode yet: every admin surface checks for the admin role, so a
-	// viewer would get a valid session that authenticates nothing and an app
-	// that errors on every panel. Failing closed with a reason beats handing
-	// out a login that does not work. When viewer enforcement lands, this
-	// becomes a role assignment instead.
+	// hz has one privilege level, so a user outside the admin groups has no
+	// role to be given. Refusing with a reason beats issuing a session that
+	// authenticates nothing.
 	if !isAdmin {
 		slog.Warn("oidc sign-in refused: not in an admin group",
 			"subject", claims.Subject, "groups", groups, "admin_groups", cfg.OIDC.AdminGroups)
-		s.oidcFail(w, r, "That account is not in an admin group, and hz has no read-only access yet.")
+		s.oidcFail(w, r, "That account is not in an admin group.")
 		return
 	}
 	role := db.RoleAdmin
