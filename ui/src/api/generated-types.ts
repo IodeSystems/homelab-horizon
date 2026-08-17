@@ -404,6 +404,13 @@ export interface MFASettingsResponse {
    */
   adminsWithoutFactor?: string[];
   exceptions?: MFAExceptionResp[];
+  /**
+   * Inactivity re-jailing. Zero means off; the floor is the smallest
+   * non-zero value the API accepts, and the form needs it to say so rather
+   * than letting someone discover it by being refused.
+   */
+  inactivityMinutes?: number /* int */;
+  inactivityFloor?: number /* int */;
 }
 export interface AddPeerResponse {
   ok: boolean;

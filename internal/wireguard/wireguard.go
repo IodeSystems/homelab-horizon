@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Peer struct {
@@ -1055,4 +1057,39 @@ func (w *WGConfig) GetInterfaceStatus() InterfaceStatus {
 	}
 
 	return status
+}
+
+// LatestHandshakes returns the last successful handshake per peer public key.
+//
+// Reads `wg show <iface> latest-handshakes`, which emits unix seconds, rather
+// than parsing the human-readable "1 minute, 2 seconds ago" from `wg show`.
+// That prose is localised and formatted for people; deriving a timeout from it
+// would break on a phrasing change with no compile error.
+//
+// A peer that has never completed a handshake reports zero, and is returned as
+// the zero Time so callers can distinguish "never" from "a long time ago" —
+// the two mean different things when deciding whether someone went idle.
+func (w *WGConfig) LatestHandshakes() (map[string]time.Time, error) {
+	out, err := exec.Command("wg", "show", w.iface, "latest-handshakes").Output()
+	if err != nil {
+		return nil, fmt.Errorf("wg show %s latest-handshakes: %w", w.iface, err)
+	}
+
+	handshakes := make(map[string]time.Time)
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		secs, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			continue
+		}
+		if secs == 0 {
+			handshakes[fields[0]] = time.Time{}
+			continue
+		}
+		handshakes[fields[0]] = time.Unix(secs, 0)
+	}
+	return handshakes, nil
 }

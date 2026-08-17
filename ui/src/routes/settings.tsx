@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import {
   Alert,
@@ -80,15 +80,29 @@ function HAProxyTab({
 
   return (
     <Box>
-      <Typography variant="h6" sx={{ mb: 2 }}>HAProxy</Typography>
+      <Typography variant="h6" sx={{ mb: 2 }}>
+        HAProxy
+      </Typography>
 
       <Paper sx={{ p: 2, mb: 2 }}>
-        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr 1fr" }, gap: 2 }}>
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr 1fr" },
+            gap: 2,
+          }}
+        >
           <Box>
-            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase", letterSpacing: 1 }}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ textTransform: "uppercase", letterSpacing: 1 }}
+            >
               Status
             </Typography>
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 0.5 }}>
+            <Box
+              sx={{ display: "flex", alignItems: "center", gap: 1, mt: 0.5 }}
+            >
               <Box
                 sx={{
                   width: 10,
@@ -97,17 +111,29 @@ function HAProxyTab({
                   bgcolor: running ? "success.main" : "error.main",
                 }}
               />
-              <Typography variant="body2">{running ? "Running" : "Stopped"}</Typography>
+              <Typography variant="body2">
+                {running ? "Running" : "Stopped"}
+              </Typography>
             </Box>
           </Box>
           <Box>
-            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase", letterSpacing: 1 }}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ textTransform: "uppercase", letterSpacing: 1 }}
+            >
               Version
             </Typography>
-            <Typography variant="body2" sx={{ mt: 0.5 }}>{version || "N/A"}</Typography>
+            <Typography variant="body2" sx={{ mt: 0.5 }}>
+              {version || "N/A"}
+            </Typography>
           </Box>
           <Box>
-            <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase", letterSpacing: 1 }}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ textTransform: "uppercase", letterSpacing: 1 }}
+            >
               Config
             </Typography>
             <Typography variant="body2" sx={{ mt: 0.5 }}>
@@ -117,7 +143,11 @@ function HAProxyTab({
           </Box>
         </Box>
         <Box sx={{ mt: 1 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase", letterSpacing: 1 }}>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ textTransform: "uppercase", letterSpacing: 1 }}
+          >
             Ports
           </Typography>
           <Typography variant="body2" sx={{ mt: 0.5 }}>
@@ -156,15 +186,28 @@ function HAProxyTab({
       </Box>
 
       {writeConfig.isError && (
-        <Alert severity="error" sx={{ mb: 2 }}>{(writeConfig.error as Error).message}</Alert>
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {(writeConfig.error as Error).message}
+        </Alert>
       )}
       {reload.isError && (
-        <Alert severity="error" sx={{ mb: 2 }}>{(reload.error as Error).message}</Alert>
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {(reload.error as Error).message}
+        </Alert>
       )}
 
       {configPreview.data && (
         <Paper sx={{ p: 2 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1, textTransform: "uppercase", letterSpacing: 1 }}>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{
+              display: "block",
+              mb: 1,
+              textTransform: "uppercase",
+              letterSpacing: 1,
+            }}
+          >
             Config Preview
           </Typography>
           <Box
@@ -259,7 +302,8 @@ function HAFleetTab() {
                   <TableBody>
                     {ha.data.peers.map((peer: HAFleetPeer) => {
                       const sum = peer.iptables_summary;
-                      const hasDrift = !!sum && (sum.stale > 0 || sum.unknown > 0);
+                      const hasDrift =
+                        !!sum && (sum.stale > 0 || sum.unknown > 0);
                       return (
                         <TableRow key={peer.id}>
                           <TableCell>{peer.id}</TableCell>
@@ -268,7 +312,11 @@ function HAFleetTab() {
                           </TableCell>
                           <TableCell>
                             {peer.primary ? (
-                              <Chip label="Primary" size="small" color="success" />
+                              <Chip
+                                label="Primary"
+                                size="small"
+                                color="success"
+                              />
                             ) : (
                               <Chip label="Spare" size="small" />
                             )}
@@ -292,7 +340,10 @@ function HAFleetTab() {
                           </TableCell>
                           <TableCell>
                             {!sum ? (
-                              <Typography variant="caption" color="text.secondary">
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                              >
                                 —
                               </Typography>
                             ) : hasDrift ? (
@@ -312,7 +363,12 @@ function HAFleetTab() {
                               <Tooltip
                                 title={`expected=${sum.expected} blessed=${sum.blessed}`}
                               >
-                                <Chip size="small" color="success" variant="outlined" label="Clean" />
+                                <Chip
+                                  size="small"
+                                  color="success"
+                                  variant="outlined"
+                                  label="Clean"
+                                />
                               </Tooltip>
                             )}
                           </TableCell>
@@ -415,7 +471,9 @@ function HAFleetTab() {
                   },
                   onError: (err) =>
                     setSnack(
-                      err instanceof Error ? err.message : "Failed to create token",
+                      err instanceof Error
+                        ? err.message
+                        : "Failed to create token",
                     ),
                 },
               );
@@ -499,34 +557,49 @@ function AdminAccessSection({ vpnAdmins }: { vpnAdmins?: string[] }) {
       </Typography>
       <Alert severity="warning" sx={{ mb: 2 }}>
         <strong>This cannot be undone from the UI.</strong> Re-enabling requires
-        console access: restart hz with <code>-enable-admin-token</code>. That is
-        deliberate — a remote re-enable is exactly what someone holding a stolen
-        token would use. Disabling also signs out sessions the token created.
+        console access: restart hz with <code>-enable-admin-token</code>. That
+        is deliberate — a remote re-enable is exactly what someone holding a
+        stolen token would use. Disabling also signs out sessions the token
+        created.
       </Alert>
       <Typography variant="body2" sx={{ mb: 2 }}>
         VPN admins who would keep access:{" "}
         {admins.length > 0 ? (
-          admins.map((a) => <Chip key={a} label={a} size="small" sx={{ mr: 0.5 }} />)
+          admins.map((a) => (
+            <Chip key={a} label={a} size="small" sx={{ mr: 0.5 }} />
+          ))
         ) : (
           <strong>none — you would be left with console recovery only</strong>
         )}
       </Typography>
-      {done && <Alert severity="success" sx={{ mb: 2 }}>{done}</Alert>}
-      {err && <Alert severity="error" sx={{ mb: 2 }}>{err}</Alert>}
+      {done && (
+        <Alert severity="success" sx={{ mb: 2 }}>
+          {done}
+        </Alert>
+      )}
+      {err && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {err}
+        </Alert>
+      )}
       <Button
         variant="outlined"
         color="warning"
         disabled={disable.isPending}
         onClick={() => {
           setErr("");
-          if (!window.confirm(
-            "Disable the shared admin token? Re-enabling needs console access to this machine.",
-          )) return;
+          if (
+            !window.confirm(
+              "Disable the shared admin token? Re-enabling needs console access to this machine.",
+            )
+          )
+            return;
           disable.mutate(
             {},
             {
               onSuccess: (r) => setDone(r.recovery),
-              onError: (e) => setErr(e instanceof Error ? e.message : "Could not disable"),
+              onError: (e) =>
+                setErr(e instanceof Error ? e.message : "Could not disable"),
             },
           );
         }}
@@ -545,7 +618,8 @@ function VPNMFATab() {
   const [scopeError, setScopeError] = useState("");
 
   if (mfa.isLoading) return <CircularProgress />;
-  if (mfa.isError) return <Alert severity="error">Failed to load MFA settings</Alert>;
+  if (mfa.isError)
+    return <Alert severity="error">Failed to load MFA settings</Alert>;
 
   const enabled = mfa.data?.enabled ?? false;
   const durations = mfa.data?.durations ?? [];
@@ -557,27 +631,39 @@ function VPNMFATab() {
           VPN Multi-Factor Authentication
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          When enabled, VPN peers are jailed to only reach the Horizon portal until they
-          verify with a TOTP code from their authenticator app. VPN admins bypass MFA.
+          When enabled, VPN peers are jailed to only reach the Horizon portal
+          until they verify with a TOTP code from their authenticator app. VPN
+          admins bypass MFA.
         </Typography>
         <Alert severity="info" sx={{ mb: 2 }}>
-          The jail is enforced twice: iptables confines a jailed peer to this host&apos;s HAProxy
-          ports, Horizon&apos;s own port and DNS, and HAProxy then redirects any request that
-          isn&apos;t for the portal. Reaching the portal through HAProxy needs a{" "}
-          <strong>Kiosk URL</strong> whose host routes to a <code>proxy.self</code> service —
-          otherwise jailed peers get a 403 and must use{" "}
-          <code>http://&lt;vpn-server-ip&gt;:&lt;horizon-port&gt;</code> directly.
+          The jail is enforced twice: iptables confines a jailed peer to this
+          host&apos;s HAProxy ports, Horizon&apos;s own port and DNS, and
+          HAProxy then redirects any request that isn&apos;t for the portal.
+          Reaching the portal through HAProxy needs a <strong>Kiosk URL</strong>{" "}
+          whose host routes to a <code>proxy.self</code> service — otherwise
+          jailed peers get a 403 and must use{" "}
+          <code>http://&lt;vpn-server-ip&gt;:&lt;horizon-port&gt;</code>{" "}
+          directly.
         </Alert>
-        <Box sx={{ mb: 3, p: 2, border: 1, borderColor: "divider", borderRadius: 1 }}>
+        <Box
+          sx={{
+            mb: 3,
+            p: 2,
+            border: 1,
+            borderColor: "divider",
+            borderRadius: 1,
+          }}
+        >
           <Typography variant="subtitle2" gutterBottom>
             Enforcement scope
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            <strong>Admins exempt</strong> lets anyone in <code>vpn_admins</code> bypass the jail
-            permanently, so an operator can&apos;t lock themselves out.{" "}
-            <strong>All peers</strong> removes that bypass — required by PCI DSS 8.5.1, which
-            allows no standing exemption for any user. The only way out then is a
-            time-limited exception, listed below.
+            <strong>Admins exempt</strong> lets anyone in{" "}
+            <code>vpn_admins</code> bypass the jail permanently, so an operator
+            can&apos;t lock themselves out. <strong>All peers</strong> removes
+            that bypass — required by PCI DSS 8.5.1, which allows no standing
+            exemption for any user. The only way out then is a time-limited
+            exception, listed below.
           </Typography>
           <FormControl fullWidth sx={{ mb: 2 }}>
             <InputLabel>Scope</InputLabel>
@@ -598,7 +684,9 @@ function VPNMFATab() {
                     // rather than a generic failure, and make forcing explicit.
                     onError: (err) =>
                       setScopeError(
-                        err instanceof Error ? err.message : "Could not change scope",
+                        err instanceof Error
+                          ? err.message
+                          : "Could not change scope",
                       ),
                   },
                 );
@@ -608,6 +696,8 @@ function VPNMFATab() {
               <MenuItem value="all">All peers, including admins</MenuItem>
             </Select>
           </FormControl>
+
+          <InactivityTimeoutField />
           {scopeError && (
             <Alert
               severity="warning"
@@ -621,11 +711,14 @@ function VPNMFATab() {
                     updateMFA.mutate(
                       {
                         enabled,
-                        durations: durations.length > 0 ? durations : ALL_DURATIONS,
+                        durations:
+                          durations.length > 0 ? durations : ALL_DURATIONS,
                         scope: "all",
                         force: true,
                       },
-                      { onSuccess: () => setSnack("Scope set to all (forced)") },
+                      {
+                        onSuccess: () => setSnack("Scope set to all (forced)"),
+                      },
                     );
                   }}
                 >
@@ -659,7 +752,8 @@ function VPNMFATab() {
                     color="warning"
                     onClick={() =>
                       revokeException.mutate(ex.name, {
-                        onSuccess: () => setSnack(`Exception revoked for ${ex.name}`),
+                        onSuccess: () =>
+                          setSnack(`Exception revoked for ${ex.name}`),
                       })
                     }
                   >
@@ -676,12 +770,13 @@ function VPNMFATab() {
           )}
         </Box>
         <Alert severity="warning" sx={{ mb: 2 }}>
-          <strong>Full-tunnel peers cannot use phone-scanned passkeys.</strong> Cross-device
-          passkeys relay through an internet service, and a jailed full-tunnel peer has no
-          internet — only the portal. Those users need an authenticator code, a passkey built
-          into the device they browse from, or a USB security key. Peers on{" "}
-          <code>lan-access</code> or <code>vpn-only</code> are unaffected, since their normal
-          traffic never enters the tunnel. The portal warns affected peers directly.
+          <strong>Full-tunnel peers cannot use phone-scanned passkeys.</strong>{" "}
+          Cross-device passkeys relay through an internet service, and a jailed
+          full-tunnel peer has no internet — only the portal. Those users need
+          an authenticator code, a passkey built into the device they browse
+          from, or a USB security key. Peers on <code>lan-access</code> or{" "}
+          <code>vpn-only</code> are unaffected, since their normal traffic never
+          enters the tunnel. The portal warns affected peers directly.
         </Alert>
         <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
           <Typography>MFA Enabled</Typography>
@@ -689,8 +784,14 @@ function VPNMFATab() {
             checked={enabled}
             onChange={(_, checked) =>
               updateMFA.mutate(
-                { enabled: checked, durations: durations.length > 0 ? durations : ALL_DURATIONS },
-                { onSuccess: () => setSnack(checked ? "MFA enabled" : "MFA disabled") },
+                {
+                  enabled: checked,
+                  durations: durations.length > 0 ? durations : ALL_DURATIONS,
+                },
+                {
+                  onSuccess: () =>
+                    setSnack(checked ? "MFA enabled" : "MFA disabled"),
+                },
               )
             }
           />
@@ -769,6 +870,83 @@ function CodeBlock({ text, onCopy }: { text: string; onCopy: () => void }) {
   );
 }
 
+// Re-jail a peer that has gone quiet, without waiting for its session to run
+// out. Off by default: shortening a session someone was already granted is a
+// change to how the VPN feels, not a default worth assuming.
+function InactivityTimeoutField() {
+  const mfa = useMFASettings();
+  const updateMFA = useUpdateMFASettings();
+  const [value, setValue] = useState<string>("");
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  const current = mfa.data?.inactivityMinutes ?? 0;
+  const floor = mfa.data?.inactivityFloor ?? 5;
+
+  useEffect(() => {
+    setValue(String(current));
+  }, [current]);
+
+  const submit = () => {
+    setError("");
+    setSaved(false);
+    updateMFA.mutate(
+      {
+        enabled: mfa.data?.enabled ?? false,
+        durations: mfa.data?.durations ?? [],
+        inactivityMinutes: Number(value),
+      },
+      {
+        onSuccess: () => setSaved(true),
+        onError: (err) =>
+          setError(err instanceof Error ? err.message : "Could not save"),
+      },
+    );
+  };
+
+  return (
+    <Box sx={{ mb: 2 }}>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+        <strong>Inactivity timeout</strong> re-jails a peer that stops using the
+        tunnel, so a session does not stay open on an unattended laptop for its
+        full duration. 0 turns it off. Minimum {floor} minutes: WireGuard only
+        handshakes on traffic or rekey, so a shorter window would re-jail people
+        whose tunnel is healthy and merely idle.
+      </Typography>
+      <Box sx={{ display: "flex", gap: 1, alignItems: "flex-start" }}>
+        <TextField
+          type="number"
+          size="small"
+          label="Minutes idle before re-jailing"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          sx={{ maxWidth: 260 }}
+        />
+        <Button
+          variant="outlined"
+          disabled={updateMFA.isPending || Number(value) === current}
+          onClick={submit}
+          sx={{ mt: 0.25 }}
+        >
+          {updateMFA.isPending ? "Saving..." : "Save"}
+        </Button>
+      </Box>
+      {error && (
+        <Alert severity="error" sx={{ mt: 1 }}>
+          {error}
+        </Alert>
+      )}
+      {saved && !error && (
+        <Alert severity="success" sx={{ mt: 1 }}>
+          {Number(value) === 0
+            ? "Inactivity re-jailing is off."
+            : `Peers idle for ${value} minutes will be re-jailed.`}
+        </Alert>
+      )}
+    </Box>
+  );
+}
+
 function HzCliTab() {
   const [snack, setSnack] = useState("");
   const base = window.location.origin;
@@ -791,7 +969,10 @@ function HzCliTab() {
         <Typography variant="subtitle2" sx={{ mb: 1 }}>
           Install &amp; configure (detects OS/arch, writes ~/.hz_config):
         </Typography>
-        <CodeBlock text={install} onCopy={() => setSnack("Copied install command")} />
+        <CodeBlock
+          text={install}
+          onCopy={() => setSnack("Copied install command")}
+        />
         <Alert severity="info" sx={{ mt: 1, mb: 3 }}>
           Replace <code>&lt;admin-token&gt;</code> with the admin token you log
           in with. Installs <code>hz</code> to <code>/usr/local/bin</code> (or{" "}
@@ -848,7 +1029,9 @@ function SettingsPage() {
   }
 
   if (error) {
-    return <Alert severity="error">Failed to load settings: {error.message}</Alert>;
+    return (
+      <Alert severity="error">Failed to load settings: {error.message}</Alert>
+    );
   }
 
   if (!data) return null;

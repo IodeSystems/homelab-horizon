@@ -1095,6 +1095,8 @@ export function useUpdateMFASettings() {
       durations: string[];
       scope?: string;
       force?: boolean;
+      // Omitted leaves it unchanged; 0 turns it off.
+      inactivityMinutes?: number;
     }) =>
       apiFetch("/mfa/settings", {
         method: "POST",

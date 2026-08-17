@@ -380,6 +380,8 @@ func (s *Server) handleAPIMFASettings(w http.ResponseWriter, r *http.Request) {
 			Durations:           durations,
 			Scope:               cfg.MFAScope(),
 			AdminsWithoutFactor: cfg.AdminsWithoutSecondFactor(),
+			InactivityMinutes:   cfg.VPNMFAInactivityMinutes,
+			InactivityFloor:     config.MFAInactivityFloorMinutes,
 		}
 		for name, e := range cfg.VPNMFAExceptions {
 			if e.Expires <= time.Now().Unix() {
@@ -409,6 +411,8 @@ func (s *Server) handleAPIMFASettings(w http.ResponseWriter, r *http.Request) {
 		Durations []string `json:"durations"`
 		Scope     string   `json:"scope,omitempty"` // "" leaves it unchanged
 		Force     bool     `json:"force,omitempty"` // accept the lockout risk below
+		// nil leaves the inactivity timeout unchanged; 0 turns it off.
+		InactivityMinutes *int `json:"inactivityMinutes,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
@@ -420,6 +424,26 @@ func (s *Server) handleAPIMFASettings(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest,
 			"scope must be "+config.MFAScopeAll+" or "+config.MFAScopeAdminsExempt)
 		return
+	}
+
+	// A value between 1 and the floor would read as configured and behave as
+	// off, which is the worst of both: refuse it and say what the floor is.
+	if req.InactivityMinutes != nil {
+		v := *req.InactivityMinutes
+		switch {
+		case v < 0:
+			writeJSONError(w, http.StatusBadRequest, "inactivityMinutes cannot be negative")
+			return
+		case v > 0 && v < config.MFAInactivityFloorMinutes:
+			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf(
+				"inactivityMinutes must be 0 (off) or at least %d: WireGuard only handshakes "+
+					"on traffic or rekey, so a shorter window re-jails peers whose tunnel is "+
+					"healthy and merely idle", config.MFAInactivityFloorMinutes))
+			return
+		case v > 1440:
+			writeJSONError(w, http.StatusBadRequest, "inactivityMinutes cannot exceed 1440 (a day)")
+			return
+		}
 	}
 
 	// Moving to "all" strips the standing admin bypass. An admin with no
@@ -445,6 +469,9 @@ func (s *Server) handleAPIMFASettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if scope != "" {
 			cfg.VPNMFAScope = scope
+		}
+		if req.InactivityMinutes != nil {
+			cfg.VPNMFAInactivityMinutes = *req.InactivityMinutes
 		}
 	}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
@@ -620,6 +647,26 @@ func (s *Server) startMFASessionPruner(done <-chan struct{}) {
 				// a lapsed exception left in the map is a bypass outliving
 				// its authorisation — prune them on the same tick.
 				cur := s.cfg()
+				// Inactivity, when configured, revokes on top of wall-clock
+				// expiry: a peer that stopped using the tunnel should not keep
+				// an open session simply because the clock has not run out.
+				if stale := s.staleMFAPeers(cur); len(stale) > 0 {
+					if err := s.updateConfig(func(cfg *config.Config) {
+						for _, name := range stale {
+							cfg.ClearMFASession(name)
+						}
+					}); err != nil {
+						slog.Warn("updateConfig revoke idle MFA sessions", "err", err)
+					} else {
+						slog.Info("MFA sessions revoked for inactivity",
+							"peers", strings.Join(stale, ","),
+							"after_minutes", cur.VPNMFAInactivityMinutes)
+						s.rebuildWGChains()
+						s.syncMFAJailACL()
+					}
+					cur = s.cfg()
+				}
+
 				if cur.PruneExpiredMFASessions() || cur.PruneExpiredMFAExceptions() {
 					if err := s.updateConfig(func(cfg *config.Config) {
 						cfg.PruneExpiredMFASessions()
@@ -634,4 +681,32 @@ func (s *Server) startMFASessionPruner(done <-chan struct{}) {
 			}
 		}
 	}()
+}
+
+// staleMFAPeers lists peers whose MFA session has gone idle.
+//
+// Resolves each peer's last handshake by name here, because the mapping lives
+// in the WireGuard config while the sessions live in hz's; the decision itself
+// is config.StaleMFASessions so it can be tested without a kernel.
+func (s *Server) staleMFAPeers(cur *config.Config) []string {
+	if cur.MFAInactivityTimeout() == 0 || s.wg == nil {
+		return nil
+	}
+
+	handshakes, err := s.wg.LatestHandshakes()
+	if err != nil {
+		// A failed read must not revoke anything: "wg is unavailable" is not
+		// evidence that anyone went idle, and guessing would log out the whole
+		// VPN over a transient error.
+		slog.Warn("could not read WireGuard handshakes; leaving MFA sessions alone", "err", err)
+		return nil
+	}
+
+	lastByPeer := make(map[string]time.Time, len(handshakes))
+	for _, peer := range s.wg.GetPeers() {
+		if last, ok := handshakes[peer.PublicKey]; ok {
+			lastByPeer[peer.Name] = last
+		}
+	}
+	return cur.StaleMFASessions(lastByPeer, time.Now())
 }

@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -283,6 +284,18 @@ type Config struct {
 	VPNMFADurations []string          `json:"vpn_mfa_durations,omitempty"` // e.g. ["2h","4h","8h","forever"]
 	VPNMFASecrets   map[string]string `json:"vpn_mfa_secrets,omitempty"`   // peer name -> base32 TOTP secret
 	VPNMFASessions  map[string]int64  `json:"vpn_mfa_sessions,omitempty"`  // peer name -> expiry unix timestamp (0 = forever)
+
+	// VPNMFAInactivityMinutes re-jails a peer that has gone quiet, without
+	// waiting for its session to expire. Zero disables it, which is the
+	// default: a session that lasts as long as it was granted for is the
+	// behaviour an operator already agreed to, and shortening it silently
+	// would strand people mid-task.
+	//
+	// Opt-in and floored rather than free: WireGuard only handshakes when
+	// there is traffic or on rekey, so a threshold near the rekey interval
+	// re-jails a peer whose tunnel is perfectly healthy and merely idle for a
+	// minute. See MFAInactivityFloorMinutes.
+	VPNMFAInactivityMinutes int `json:"vpn_mfa_inactivity_minutes,omitempty"`
 
 	// Passkeys, an alternative second factor to TOTP. A peer may hold several
 	// (laptop platform authenticator, a hardware key as backup); any one of
@@ -1292,6 +1305,54 @@ func (c *Config) GetJailedPeers() map[string]bool {
 		}
 	}
 	return jailed
+}
+
+// MFAInactivityFloorMinutes is the lowest inactivity timeout hz accepts.
+//
+// WireGuard rekeys roughly every two minutes under load and not at all when
+// idle, so "last handshake" lags real activity by minutes even on a healthy
+// tunnel. Anything under five minutes would mostly measure that lag and
+// re-jail people who never went away.
+const MFAInactivityFloorMinutes = 5
+
+// MFAInactivityTimeout is the configured inactivity window, or zero when off.
+func (c *Config) MFAInactivityTimeout() time.Duration {
+	if c.VPNMFAInactivityMinutes < MFAInactivityFloorMinutes {
+		return 0
+	}
+	return time.Duration(c.VPNMFAInactivityMinutes) * time.Minute
+}
+
+// StaleMFASessions returns the peers whose MFA session should be revoked for
+// inactivity, given each peer's last handshake by peer NAME.
+//
+// Keyed by name rather than public key because peers live in the WireGuard
+// config rather than here; the caller already holds both and resolving it there
+// keeps this a decision rather than a lookup.
+//
+// A peer with no recorded handshake is left alone rather than revoked. Zero
+// means "never since this interface came up", which is what every peer reports
+// after a WireGuard restart — revoking on it would clear every session on the
+// box the moment wg0 bounced. A peer with no tunnel cannot reach anything
+// anyway, so its jail state is moot until it handshakes again.
+func (c *Config) StaleMFASessions(lastByPeer map[string]time.Time, now time.Time) []string {
+	timeout := c.MFAInactivityTimeout()
+	if timeout == 0 || len(c.VPNMFASessions) == 0 {
+		return nil
+	}
+
+	stale := make([]string, 0, len(c.VPNMFASessions))
+	for name := range c.VPNMFASessions {
+		last, ok := lastByPeer[name]
+		if !ok || last.IsZero() {
+			continue
+		}
+		if now.Sub(last) > timeout {
+			stale = append(stale, name)
+		}
+	}
+	sort.Strings(stale)
+	return stale
 }
 
 // SetMFASession sets an MFA session for a peer with the given expiry timestamp.
