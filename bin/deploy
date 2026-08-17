@@ -22,6 +22,11 @@ set -euo pipefail
 DEFAULT_HOST="ubuntu@192.168.1.89"
 CONFIG_FILE=".hz.json"
 REMOTE_PATH="/usr/local/bin/homelab-horizon"
+# The UI is served from disk rather than embedded (WEB-5), so a deploy ships two
+# things. Kept in one variable because both halves must land together: a binary
+# without its UI answers the API and shows an explanatory page where the login
+# form should be.
+REMOTE_UI_DIR="/usr/local/share/homelab-horizon/ui"
 
 CLI_HOST=""
 CLI_VERSION=""
@@ -152,23 +157,60 @@ deploy_one() {
 
   if [ -z "$version" ]; then
     scp "dist/homelab-horizon-$arch" "$host:/tmp/homelab-horizon.new"
+    # The frontend, as a tarball: scp -r of a directory tree is slower and
+    # leaves a half-copied directory behind if it dies mid-transfer.
+    [ -f ui/dist/index.html ] || err "ui/dist is empty — run 'make ui' first"
+    tar -czf /tmp/hz-ui.tar.gz -C ui/dist .
+    scp /tmp/hz-ui.tar.gz "$host:/tmp/hz-ui.tar.gz"
+    rm -f /tmp/hz-ui.tar.gz
   else
     local url="https://github.com/$REPO/releases/download/$version/homelab-horizon-$arch.tar.gz"
     echo "Fetching $url on $host..."
     # -f turns a 404 (bad tag) into a real error instead of writing the
     # HTML error page to disk and "succeeding".
+    # Release archives carry the binary and public/ side by side (see the
+    # release target); repackage the UI half into the same shape the local
+    # build path uses, so the install step below is identical either way.
     ssh "$host" "set -e
-      cd /tmp
+      rm -rf /tmp/hz-release && mkdir -p /tmp/hz-release
+      cd /tmp/hz-release
       curl -fSL -o homelab-horizon-$arch.tar.gz '$url'
       tar -xzf homelab-horizon-$arch.tar.gz
-      mv homelab-horizon-$arch homelab-horizon.new
-      rm -f homelab-horizon-$arch.tar.gz
+      mv homelab-horizon-$arch /tmp/homelab-horizon.new
+      if [ -d public ]; then
+        tar -czf /tmp/hz-ui.tar.gz -C public .
+      else
+        echo 'deploy: release $version has no public/ — it predates WEB-5; the UI will not be updated' >&2
+        rm -f /tmp/hz-ui.tar.gz
+      fi
+      cd /tmp && rm -rf /tmp/hz-release
     "
   fi
 
   ssh "$host" -t "
     sudo mv /tmp/homelab-horizon.new $REMOTE_PATH
     sudo chmod +x $REMOTE_PATH
+
+    # Install the UI into a staging directory and swap it in, so a client
+    # loading the page mid-deploy never sees a half-written tree. The old
+    # directory is kept until the swap succeeds.
+    if [ -f /tmp/hz-ui.tar.gz ]; then
+      echo 'Installing admin UI...'
+      sudo rm -rf ${REMOTE_UI_DIR}.new
+      sudo mkdir -p ${REMOTE_UI_DIR}.new
+      sudo tar -xzf /tmp/hz-ui.tar.gz -C ${REMOTE_UI_DIR}.new
+      if [ -f ${REMOTE_UI_DIR}.new/index.html ]; then
+        sudo mkdir -p ${REMOTE_UI_DIR%/*}
+        sudo rm -rf ${REMOTE_UI_DIR}.old
+        if [ -d $REMOTE_UI_DIR ]; then sudo mv $REMOTE_UI_DIR ${REMOTE_UI_DIR}.old; fi
+        sudo mv ${REMOTE_UI_DIR}.new $REMOTE_UI_DIR
+        sudo rm -rf ${REMOTE_UI_DIR}.old
+      else
+        echo '*** UI archive had no index.html — leaving the installed UI alone ***' >&2
+        sudo rm -rf ${REMOTE_UI_DIR}.new
+      fi
+      rm -f /tmp/hz-ui.tar.gz
+    fi
     echo 'Installing systemd service using binary...'
     sudo mkdir -p /etc/homelab-horizon
     cd /etc/homelab-horizon
@@ -180,6 +222,12 @@ deploy_one() {
       echo 'Checking status...'
       sudo systemctl status homelab-horizon --no-pager -l | head -20
       echo ''
+      echo 'Checking the admin UI is installed...'
+      if [ -f $REMOTE_UI_DIR/index.html ]; then
+        echo "  ok: $REMOTE_UI_DIR"
+      else
+        echo "  *** WARNING: no UI at $REMOTE_UI_DIR — the API works, the admin page will not ***"
+      fi
       echo 'Auth token:'
       for i in {1..5}; do
         if [ -f /etc/homelab-horizon/config.json.token ]; then
