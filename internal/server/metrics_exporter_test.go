@@ -3,6 +3,7 @@ package server
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -42,11 +43,19 @@ func TestControlsReportHardenedOnly(t *testing.T) {
 		SSLEnabled:           true,
 		HAProxyTLSMinVersion: "TLSv1.3",
 		AdminTokenDisabled:   true,
+		// Loopback-only: the admin UI is then reachable solely through
+		// HAProxy's TLS frontend, which is what 2.2.7 asks for.
+		ListenAddr: "127.0.0.1:8080",
 		Policy: config.AccountPolicy{
 			IdleMinutes:        15,
 			PasswordMaxAgeDays: 90,
 		},
-	}, hostFactsSnapshot{measured: true, timeSynced: true})
+	}, hostFactsSnapshot{
+		measured:          true,
+		timeSynced:        true,
+		journalPersistent: true,
+		journalRetention:  400 * 24 * time.Hour,
+	})
 	for _, c := range hard {
 		if !c.ok {
 			t.Errorf("control %q should be satisfied by a hardened config", c.name)
@@ -223,5 +232,62 @@ func TestHostFactControlsUnmeasured(t *testing.T) {
 		if c.name == "patches_current" && c.ok {
 			t.Error("pending security updates must not read as patched")
 		}
+	}
+}
+
+// 2.2.7 turns on where hz listens, so the parsing of that address is the
+// control. A wildcard bind is the common default and the actual finding.
+func TestAdminBoundToLoopback(t *testing.T) {
+	tests := []struct {
+		addr string
+		want bool
+	}{
+		{"127.0.0.1:8080", true},
+		{"localhost:8080", true},
+		{"[::1]:8080", true},
+		{":8080", false},        // every interface — hz's own default
+		{"0.0.0.0:8080", false}, // the same thing spelled out
+		{"[::]:8080", false},    // and again, for v6
+		{"192.168.1.160:8080", false},
+		{"", false},
+	}
+	for _, tc := range tests {
+		cfg := config.Config{ListenAddr: tc.addr}
+		if got := cfg.AdminBoundToLoopback(); got != tc.want {
+			t.Errorf("AdminBoundToLoopback(%q) = %v, want %v", tc.addr, got, tc.want)
+		}
+	}
+}
+
+// 10.5.1 needs both halves. Either one alone reports a compliance hz does not
+// have: a volatile journal loses everything at reboot however long its
+// retention says, and a persistent one with no retention limit rotates on size.
+func TestLogPersistenceNeedsBothHalves(t *testing.T) {
+	find := func(facts hostFactsSnapshot) bool {
+		for _, c := range hzControls(&config.Config{}, facts) {
+			if c.name == "log_persistence" {
+				return c.ok
+			}
+		}
+		t.Fatal("log_persistence not reported")
+		return false
+	}
+
+	year := 400 * 24 * time.Hour
+	if find(hostFactsSnapshot{measured: true, journalRetention: year}) {
+		t.Error("a volatile journal should not satisfy 10.5.1")
+	}
+	if find(hostFactsSnapshot{measured: true, journalPersistent: true}) {
+		t.Error("persistence with no retention limit should not satisfy 10.5.1")
+	}
+	if find(hostFactsSnapshot{measured: true, journalPersistent: true, journalRetention: 30 * 24 * time.Hour}) {
+		t.Error("a month of retention should not satisfy a twelve month requirement")
+	}
+	if !find(hostFactsSnapshot{measured: true, journalPersistent: true, journalRetention: year}) {
+		t.Error("persistent with a year of retention should satisfy 10.5.1")
+	}
+	// Unmeasured must never read as compliant.
+	if find(hostFactsSnapshot{journalPersistent: true, journalRetention: year}) {
+		t.Error("unmeasured facts should not satisfy 10.5.1")
 	}
 }

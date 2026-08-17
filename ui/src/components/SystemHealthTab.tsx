@@ -48,6 +48,7 @@ import {
   useFixDNSMasqInterfaces,
   useSystemHealth,
   useWriteDNSMasqConfig,
+  useFixLogRetention,
 } from "../api/hooks";
 import type { ComponentHealth, SystemHealth, Zone } from "../api/types";
 import { SystemMetricsCard } from "./SystemMetricsCard";
@@ -419,6 +420,88 @@ function DNSMasqCard({ health }: { health: SystemHealth }) {
 // facts used to live on the separate SSL tab; merged here).
 function certMatchesZone(certPrimary: string, zoneName: string): boolean {
   return certPrimary === zoneName || certPrimary.endsWith("." + zoneName);
+}
+
+// Audit logging and admin exposure: the two PCI controls that belong to the
+// host rather than to any service.
+function AuditCard({ health }: { health: SystemHealth }) {
+  const audit = byName(health, "audit");
+  const fixRetention = useFixLogRetention();
+  if (!audit) return null;
+
+  const extras = audit.extras ?? {};
+  const persistent = extras.persistent === true;
+  const retentionDays = (extras.retention_days as number) ?? 0;
+  const loopbackOnly = extras.admin_loopback_only === true;
+  const listenAddr = (extras.listen_addr as string) ?? "";
+
+  return (
+    <ComponentCard title="Audit logging & admin access" component={audit}>
+      <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+          <Typography variant="body2" sx={{ minWidth: 150 }}>
+            Journal storage
+          </Typography>
+          <Chip
+            size="small"
+            color={persistent ? "success" : "error"}
+            label={persistent ? "persistent" : "volatile"}
+          />
+          <Chip
+            size="small"
+            color={retentionDays >= 365 ? "success" : "warning"}
+            variant="outlined"
+            label={retentionDays > 0 ? `${retentionDays} day retention` : "no retention limit"}
+          />
+          {(!persistent || retentionDays < 365) && (
+            <Button
+              size="small"
+              variant="outlined"
+              disabled={fixRetention.isPending}
+              onClick={() => fixRetention.mutate()}
+            >
+              {fixRetention.isPending ? "Applying..." : "Keep 12 months"}
+            </Button>
+          )}
+        </Box>
+
+        {!persistent && (
+          <Alert severity="error">
+            The journal is volatile: everything logged is lost at the next reboot, which is
+            the reboot you would be investigating. PCI DSS 10.5.1 wants twelve months.
+          </Alert>
+        )}
+
+        {fixRetention.error && (
+          <Alert severity="error">{(fixRetention.error as Error).message}</Alert>
+        )}
+
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+          <Typography variant="body2" sx={{ minWidth: 150 }}>
+            Admin interface
+          </Typography>
+          <Chip
+            size="small"
+            color={loopbackOnly ? "success" : "warning"}
+            label={loopbackOnly ? "loopback only" : `listening on ${listenAddr || "all interfaces"}`}
+          />
+        </Box>
+
+        {!loopbackOnly && (
+          <Alert severity="warning">
+            hz speaks plain HTTP. While it listens on {listenAddr || "all interfaces"}, the
+            admin interface and its session cookie cross your network in the clear (PCI DSS
+            2.2.7). Set <code>listen_addr</code> to <code>127.0.0.1:8080</code> and reach it
+            through the HTTPS vhost instead.
+            <br />
+            <strong>No button on purpose:</strong> rebinding the listener would cut off
+            anyone reaching hz directly by its LAN address — possibly you, reading this.
+            Confirm the HTTPS route works first.
+          </Alert>
+        )}
+      </Box>
+    </ComponentCard>
+  );
 }
 
 function LetsEncryptCard({
@@ -1013,6 +1096,7 @@ export function SystemHealthTab({
         haproxyCertDir={haproxyCertDir}
         zones={zones}
       />
+      <AuditCard health={health} />
       <AptInstallCard />
     </Stack>
   );

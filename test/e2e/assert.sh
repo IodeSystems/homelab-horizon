@@ -472,6 +472,101 @@ grep -q 'hz_control_state{control="vpn_mfa_no_admin_bypass",requirement="8.5.1"}
   && ok "METRICS-7 the control gauge flips with the scope change" \
   || bad "METRICS-7 the control gauge flips with the scope change" "$(grep no_admin_bypass <<<"$after")"
 
+head_ "Audit logging and admin exposure"
+
+# 10.5.1 — a fresh Ubuntu image is the interesting case: Storage defaults to
+# auto, and whether auto means persistent depends on a directory existing.
+relogin() {
+  systemctl restart hz
+  for _ in $(seq 1 30); do curl -fsS -o /dev/null "$API/api/v1/auth/status" 2>/dev/null && break; sleep 1; done
+  curl -fsS -c "$COOKIE" -X POST -H 'Content-Type: application/json' \
+    -d "{\"token\":\"$TOKEN\"}" "$API/api/v1/auth/login" >/dev/null
+  sleep 2
+}
+
+# Storage=volatile rather than deleting /var/log/journal: the platform
+# recreates that directory, so removing it tests nothing reliably. The
+# auto-with-no-directory case — the one that actually catches people — is a
+# unit test on journalPersistence, where it can be stated exactly.
+rm -f /etc/systemd/journald.conf.d/99-homelab-horizon.conf
+mkdir -p /etc/systemd/journald.conf.d
+printf '[Journal]\nStorage=volatile\n' > /etc/systemd/journald.conf.d/00-e2e-volatile.conf
+systemctl restart systemd-journald
+sleep 1
+relogin
+
+metrics=$(curl -fsS -b "$COOKIE" "$API/metrics")
+grep -q 'hz_control_state{control="log_persistence",requirement="10.5.1"} 0' <<<"$metrics" \
+  && ok "AUDIT-1 a volatile journal reports 10.5.1 unmet" \
+  || bad "AUDIT-1 a volatile journal reports 10.5.1 unmet" "$(grep log_persistence <<<"$metrics")"
+
+# Separately from the control, because the control also reads 0 when retention
+# is merely unset — passing on that would prove nothing about persistence.
+health=$(curl -fsS -b "$COOKIE" "$API/api/v1/system/health")
+[ "$(jq -r '.components[] | select(.name=="audit") | .extras.persistent' <<<"$health")" = "false" ] \
+  && ok "AUDIT-2 hz reads the volatile journal as volatile" \
+  || bad "AUDIT-2 hz reads the volatile journal as volatile" "$(jq -c '.components[]|select(.name=="audit")' <<<"$health")"
+
+# The fixer's drop-in sorts after the volatile one, so it wins — which is what
+# an operator gets when their own config says something else.
+st=$(curl -fsS -b "$COOKIE" -o /dev/null -w '%{http_code}' -X POST "$API/api/v1/system/fix/log-retention")
+[ "$st" = "200" ] \
+  && ok "AUDIT-3 the fixer runs against real journald" \
+  || bad "AUDIT-3 the fixer runs against real journald" "status $st"
+
+[ -d /var/log/journal ] \
+  && ok "AUDIT-4 /var/log/journal exists, which is what journald keys on" \
+  || bad "AUDIT-4 /var/log/journal exists" "missing"
+
+grep -q 'MaxRetentionSec=1year' /etc/systemd/journald.conf.d/99-homelab-horizon.conf 2>/dev/null \
+  && ok "AUDIT-5 retention is a drop-in, not an edit to the packaged file" \
+  || bad "AUDIT-5 retention is a drop-in" "$(cat /etc/systemd/journald.conf.d/99-homelab-horizon.conf 2>&1 | head -3)"
+
+# hz re-measures inside the fix, so the control flips without a health tick.
+metrics=$(curl -fsS -b "$COOKIE" "$API/metrics")
+grep -q 'hz_control_state{control="log_persistence",requirement="10.5.1"} 1' <<<"$metrics" \
+  && ok "AUDIT-6 the control flips as soon as the fix lands" \
+  || bad "AUDIT-6 the control flips as soon as the fix lands" "$(grep log_persistence <<<"$metrics")"
+
+# And it survives the restart it exists to survive.
+systemctl restart systemd-journald
+sleep 1
+relogin
+metrics=$(curl -fsS -b "$COOKIE" "$API/metrics")
+grep -q 'hz_control_state{control="log_persistence",requirement="10.5.1"} 1' <<<"$metrics" \
+  && ok "AUDIT-7 still met after journald restarts" \
+  || bad "AUDIT-7 still met after journald restarts" "$(grep log_persistence <<<"$metrics")"
+
+# 2.2.7 — the fixture binds all interfaces, which is hz's default and exactly
+# the finding this control exists for.
+grep -q 'hz_control_state{control="admin_access_encrypted",requirement="2.2.7"} 0' <<<"$metrics" \
+  && ok "AUDIT-8 a wildcard bind reports 2.2.7 unmet" \
+  || bad "AUDIT-8 a wildcard bind reports 2.2.7 unmet" "$(grep admin_access <<<"$metrics")"
+
+health=$(curl -fsS -b "$COOKIE" "$API/api/v1/system/health")
+jq -e '.components[] | select(.name=="audit") | .errors[]? | select(test("2.2.7"))' <<<"$health" >/dev/null 2>&1 \
+  && ok "AUDIT-9 the card explains the exposure rather than only scoring it" \
+  || bad "AUDIT-9 the card explains the exposure" "$(jq -c '.components[]|select(.name=="audit")|.errors' <<<"$health")"
+
+# Binding loopback is the remediation, so it must actually satisfy the control.
+systemctl stop hz
+jq '.listen_addr = "127.0.0.1:8080"' /etc/homelab-horizon/config.json > /tmp/c.json
+mv /tmp/c.json /etc/homelab-horizon/config.json
+relogin
+metrics=$(curl -fsS -b "$COOKIE" "$API/metrics")
+grep -q 'hz_control_state{control="admin_access_encrypted",requirement="2.2.7"} 1' <<<"$metrics" \
+  && ok "AUDIT-10 binding loopback satisfies 2.2.7" \
+  || bad "AUDIT-10 binding loopback satisfies 2.2.7" "$(grep admin_access <<<"$metrics")"
+
+rm -f /etc/systemd/journald.conf.d/00-e2e-volatile.conf
+
+# Put it back, or every later fixture is talking to a listener the VM's other
+# namespaces cannot reach.
+systemctl stop hz
+jq '.listen_addr = ":8080"' /etc/homelab-horizon/config.json > /tmp/c.json
+mv /tmp/c.json /etc/homelab-horizon/config.json
+relogin
+
 # ---- report ----
 head_ "Result"
 printf '  %d passed, %d failed\n\n' "$pass" "$fail"

@@ -1267,6 +1267,7 @@ export const useFixIPForwarding = () => useSystemFix("system/fix/ip-forwarding")
 export const useFixMasquerade = () => useSystemFix("system/fix/masquerade");
 export const useFixWGForwardChain = () => useSystemFix("system/fix/wg-forward-chain");
 export const useFixWGRules = () => useSystemFix("system/fix/wg-rules");
+export const useFixLogRetention = () => useSystemFix("system/fix/log-retention");
 export const useCreateWGConfig = () => useSystemFix("wg/create-config");
 export const useInstallHorizonUnit = () => useSystemFix("system/install/horizon-unit");
 export const useEnableHorizon = () => useSystemFix("system/enable/horizon");

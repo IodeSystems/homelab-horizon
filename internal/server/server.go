@@ -1095,6 +1095,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/system/fix/masquerade", s.handleAPISystemFixMasquerade)
 	s.handlePeerInstance(mux, "/api/v1/system/fix/wg-forward-chain", s.handleAPISystemFixWGForwardChain)
 	s.handlePeerInstance(mux, "/api/v1/system/fix/wg-rules", s.handleAPISystemFixWGRules)
+	s.handlePeerInstance(mux, "/api/v1/system/fix/log-retention", s.handleAPISystemFixLogRetention)
 	s.handlePeerInstance(mux, "/api/v1/wg/create-config", s.handleAPIWGCreateConfig)
 	s.handlePeerInstance(mux, "/api/v1/system/install/horizon-unit", s.handleAPISystemInstallHorizonUnit)
 	s.handlePeerInstance(mux, "/api/v1/system/enable/horizon", s.handleAPISystemEnableHorizon)
