@@ -78,9 +78,9 @@ function CheckRow({
   return (
     <Stack
       direction="row"
-      alignItems="center"
+     
       spacing={2}
-      sx={{ py: 0.75, borderBottom: 1, borderColor: "divider" }}
+      sx={{ alignItems: "center", py: 0.75, borderBottom: 1, borderColor: "divider" }}
     >
       <Typography variant="body2" sx={{ flex: 1 }}>
         {label}
@@ -122,7 +122,7 @@ function ComponentCard({
     <Card variant="outlined">
       <CardHeader
         title={
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
             <Typography variant="h6">{title}</Typography>
             {component.version && (
               <Typography variant="caption" color="text.secondary">
@@ -626,7 +626,7 @@ function LetsEncryptCard({
             const zone = zones.find((z) => certMatchesZone(d.domain, z.name));
             return (
               <Paper key={d.domain} variant="outlined" sx={{ p: 1.5 }}>
-                <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 1 }}>
                   <Chip
                     size="small"
                     label={d.cert_exists ? "present" : "missing"}
@@ -829,7 +829,7 @@ function PublicIPField({
         Public IP
       </Typography>
       {editing ? (
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
           <TextField
             size="small"
             placeholder="leave empty for auto-detect"
@@ -856,7 +856,7 @@ function PublicIPField({
           </Button>
         </Stack>
       ) : (
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+        <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
           <Typography variant="body1" sx={{ fontFamily: "monospace" }}>
             {publicIP || "—"}
           </Typography>

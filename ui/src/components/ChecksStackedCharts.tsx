@@ -111,7 +111,7 @@ export function ChecksStackedCharts({ series }: { series: AllCheckHistoryEntry[]
 
   return (
     <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
-      <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 1 }}>
+      <Stack direction="row" spacing={2} sx={{ alignItems: "center", mb: 1 }}>
         <Typography variant="subtitle2">Fleet check history</Typography>
         <Typography variant="caption" color="text.secondary">
           {xAxis.length} samples · {rangeLabel}
@@ -119,7 +119,7 @@ export function ChecksStackedCharts({ series }: { series: AllCheckHistoryEntry[]
       </Stack>
 
       {/* Legend — shared across both charts. */}
-      <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mb: 2 }}>
+      <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", mb: 2 }}>
         {perCheck.map((c) => (
           <Chip
             key={c.name}

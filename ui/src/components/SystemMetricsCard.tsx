@@ -194,7 +194,7 @@ function MetricBlock({
 }) {
   return (
     <Box>
-      <Stack direction="row" alignItems="baseline" spacing={1} sx={{ mb: 0.5 }}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: "baseline", mb: 0.5 }}>
         <Typography variant="subtitle2">{title}</Typography>
         <Box sx={{ flex: 1 }} />
         <Typography variant="caption" sx={{ fontFamily: "monospace" }}>
@@ -302,7 +302,7 @@ export function SystemMetricsCard() {
     <Card variant="outlined">
       <CardHeader
         title={
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
             <Typography variant="h6">Live Metrics</Typography>
             <Typography variant="caption" color="text.secondary">
               {data.cpu.cores} cores · load {data.load1.toFixed(2)} / {data.load5.toFixed(2)} / {data.load15.toFixed(2)}
@@ -361,7 +361,7 @@ export function SystemMetricsCard() {
                   const usedPct = d.total_bytes > 0 ? (d.used_bytes / d.total_bytes) * 100 : 0;
                   return (
                     <Box key={d.mount}>
-                      <Stack direction="row" spacing={1} alignItems="baseline" sx={{ mb: 0.25 }}>
+                      <Stack direction="row" spacing={1} sx={{ alignItems: "baseline", mb: 0.25 }}>
                         <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
                           {d.mount}
                         </Typography>

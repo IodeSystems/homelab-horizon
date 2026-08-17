@@ -2,13 +2,13 @@
 # dev - local developer helpers for homelab-horizon.
 #
 # Usage:
-#   ./bin/dev deps upgrade     # bump Go + npm deps within their version ranges,
+#   ./bin/dev deps upgrade     # bump Go + UI deps within their version ranges,
 #                              # tidy, regenerate types, then build+test to verify
-#   ./bin/dev deps outdated    # list outdated Go modules and npm packages (read-only)
+#   ./bin/dev deps outdated    # list outdated Go modules and UI packages (read-only)
 #   ./bin/dev help
 #
 # Scope: `deps upgrade` performs the SAFE bulk upgrade that is tedious by hand —
-# latest minor/patch for Go modules (go get -u) and within-range updates for npm.
+# latest minor/patch for Go modules (go get -u) and within-range updates for the UI.
 # Major version bumps are intentionally left to Renovate PRs, which build and
 # gate each one in isolation.
 
@@ -24,8 +24,8 @@ deps_upgrade() {
   say "Go: go mod tidy"
   go mod tidy
 
-  say "UI: npm update (within package.json ranges)"
-  (cd ui && npm update)
+  say "UI: pnpm update (within package.json ranges)"
+  (cd ui && pnpm update)
 
   say "Regenerating types (make generate)"
   make generate
@@ -35,7 +35,7 @@ deps_upgrade() {
   say "Verifying: go test ./..."
   go test ./...
   say "Verifying: UI build"
-  (cd ui && npm run build)
+  (cd ui && pnpm build)
 
   say "Changed files"
   git status --porcelain -- go.mod go.sum ui/package.json ui/package-lock.json ui/src/api/generated-types.ts || true
@@ -47,8 +47,8 @@ deps_outdated() {
   say "Go modules with newer minor/patch (go list -m -u all)"
   go list -m -u all 2>/dev/null | grep -F '[' || echo "  (all up to date)"
 
-  say "npm packages (npm outdated)"
-  (cd ui && npm outdated) || true
+  say "npm packages (pnpm outdated)"
+  (cd ui && pnpm outdated) || true
 }
 
 usage() {

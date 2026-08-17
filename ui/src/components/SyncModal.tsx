@@ -316,8 +316,13 @@ export default function SyncModal({
       open={open}
       maxWidth="md"
       fullWidth
-      disableEscapeKeyDown={!done}
-      onClose={done ? onDismiss : undefined}
+      // v9 removed disableEscapeKeyDown; the reason argument replaces it. Same
+      // intent: a sync in progress must not be dismissable by a stray Escape,
+      // because the modal is the only place its progress is visible.
+      onClose={(_event, reason) => {
+        if (!done) return;
+        if (reason === "escapeKeyDown" || reason === "backdropClick") onDismiss();
+      }}
       slotProps={{ backdrop: { sx: { backdropFilter: "blur(4px)" } } }}
     >
       <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 2 }}>
