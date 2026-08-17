@@ -261,7 +261,7 @@ Nothing is in flight. Ordered by what I'd pick up next:
 
 | | Item | Blocked? |
 |---|---|---|
-| 1 | [Canon writeback](#-canon-writeback-to-doc-cross-repo) · [cleanups](#known-cleanups-not-blocking) | no |
+| 1 | [Collapse the duplicate rule builders](#known-cleanups-not-blocking) | no |
 | 2 | [Org alignment backlog](#-org-alignment-backlog--this-repo-owns-it-now) (10 items) | no |
 | 3 | [Operator follow-ups](#operator-follow-ups-not-code) — yours, not mine | — |
 
@@ -282,14 +282,24 @@ Both closed, and one of them was never open:
   it running with `public_ip_interval: 300`. My plan entry was wrong, not the
   code. Worth remembering next time this file asserts something is missing.
 
-### ◻ Canon writeback to `~/doc` (cross-repo)
+### ✅ Canon writeback to `~/doc` (`902c1fc` in that repo, committed not pushed)
 
-- `AUTH-4` is still a proposal blockquote at `patterns/webauthn.md:171`; it was
-  accepted in practice and belongs in `patterns/standards.md`.
-- That doc names joko and veliode-go; hz is the **third** implementation and the
-  only one that identifies the peer *before* the ceremony and holds ceremony
-  state in-process rather than in a shared store — a variant worth recording,
-  since it is what makes a captive portal work without a user table.
+`AUTH-4` moved from a proposal blockquote in `patterns/webauthn.md` into
+`patterns/standards.md`, gaining three clauses the proposal lacked: the ceremony
+store must be readable by every instance that can serve `finish`, RPID comes
+from a configured origin and never the request host, and **one relying party per
+origin**.
+
+hz is documented as the third implementation for the two shapes the others do
+not have — two relying parties in one service, and a ceremony with no username
+because the WireGuard source IP identifies the caller first. Also wrote down the
+state that is *not* the ceremony store, since conflating the pending-login and
+the WebAuthn challenge is an easy mistake and an unpleasant one to find.
+
+Fixed `DATA-1`: the ashid module path is capitalised, and the lowercase form in
+that doc fails `go get`. Noted that ashid's time-sortability is the right
+tiebreaker against a second-granularity timestamp — which is what bit the
+password history here.
 
 ### ⏸ Org alignment backlog — this repo owns it now
 
