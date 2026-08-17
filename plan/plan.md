@@ -301,9 +301,10 @@ that doc fails `go get`. Noted that ashid's time-sortability is the right
 tiebreaker against a second-granularity timestamp — which is what bit the
 password history here.
 
-### ⏸ Org alignment backlog — this repo owns it now
+### ◐ Org alignment backlog — this repo owns it now
 
-**waits-on:** nothing; it is queued behind the work above.
+**Six of ten done** (2026-08-17). What remains is the coupled deploy change, the
+UI modernisation, and one net-new feature — see the marks below.
 
 Not lost in the `~/doc` reorg as I first read it: commit `0f02917` deleted
 `plan/` deliberately — *"the canon repo holds the canon; projects own their own
@@ -313,21 +314,23 @@ and **re-verified against the tree on 2026-08-15** — all ten are still open.
 
 Score at capture: ✅14 · ⚠️4 · ❌11 · P1 · effort L.
 
-- ◻ **CLI-1** — `cmd/homelab-horizon/main.go` still uses stdlib `flag`; canon is
-  cobra `newRoot()` + `loader`. Reference: `ragtag/cmd/cli`. · M
+- ✅ **CLI-1** (`0f602b9`) — cobra tree; serving stays the root's action because
+  the installed unit runs the binary bare. Old single-dash flags translate at the
+  edge, since `-enable-admin-token` is a printed recovery step and pflag rejects
+  that spelling.
 - ◻ **WEB-5 / DEPLOY-5** — `ui/embed.go` embeds `dist` and `internal/server/spa.go`
   serves it. hz is slot-deployed, so the lib/tool embed exception does not apply.
   Drop the embed, serve from `STATIC_DIR`, copy `ui/dist/` → payload `public/`. · M
 - ◻ **DEPLOY-9** — no `payload:` target in the Makefile; pairs with WEB-5. · S
 - ◻ **WEB-1** — MUI `^7.3.11` (canon v9) and npm (canon pnpm). · M
-- ◻ **WEB-2** — `@vitejs/plugin-react` (Babel); canon is `plugin-react-swc`. · S
-- ◻ **WEB-3** — `@/*` alias is in `tsconfig.app.json` but not in
-  `vite.config.ts`, so TS resolves it and the bundler does not. · S
-- ◻ **WEB-9** — the Vite proxy has no `ws: true`, `host: '127.0.0.1'`, or
-  `strictPort: true`. · S
-- ◻ **WEB-8** — `ui/src/` has no `providers/`. · S
-- ◻ **CFG-2 / CFG-4** — tracking gap only; hz is exempt from layered
-  `.properties` under the single-mode carve-out. · S
+- ✅ **WEB-2** (`8198c69`)
+- ✅ **WEB-3** (`8198c69`) — was an import that passed tsc and failed the build.
+- ✅ **WEB-9** (`8198c69`) — the dev server was binding every interface, so
+  `npm run dev` on a shared box was an open proxy to hz's admin API.
+- ✅ **WEB-8** (`8198c69`)
+- ✅ **CFG-2 / CFG-4** — nothing to do: the secret-variant gitignore entries
+  already exist, and adding a `.secret.properties.example` for a pattern hz is
+  exempt from would be cargo cult rather than compliance.
 - ◻ **EDGE-4** — coarse table-based edge rate limiting, **uniquely owned by hz**
   and blocking org-wide abuse protection: a volume threshold table per IP/service
   above today's flat IP bans, with services pushing blocks down via the existing
