@@ -277,6 +277,9 @@ pk_code=$(cli curl -s -o /dev/null -w '%{http_code}' --max-time 4 -X POST \
 head_ "Verified (valid TOTP session)"
 secret=$(cli curl -fsS --max-time 4 -X POST "http://$GW_WG:8080/api/v1/mfa/enroll" | jq -r '.secret')
 [ -n "$secret" ] && [ "$secret" != null ] || { echo "enroll failed"; exit 1; }
+# Kept for the inactivity section: enrolment is once-only per peer, so it has
+# to reuse this secret rather than asking for another.
+code_secret="$secret"
 code=$(oathtool --totp -b "$secret")
 cli curl -fsS --max-time 4 -X POST -H 'Content-Type: application/json' \
   -d "{\"code\":\"$code\",\"duration\":\"2h\"}" "http://$GW_WG:8080/api/v1/mfa/verify" >/dev/null \
@@ -471,6 +474,121 @@ after=$(curl -fsS -b "$COOKIE" --max-time 5 "$API/metrics" 2>&1 || true)
 grep -q 'hz_control_state{control="vpn_mfa_no_admin_bypass",requirement="8.5.1"} 1' <<<"$after" \
   && ok "METRICS-7 the control gauge flips with the scope change" \
   || bad "METRICS-7 the control gauge flips with the scope change" "$(grep no_admin_bypass <<<"$after")"
+
+head_ "MFA inactivity timeout"
+
+# hz's output goes to a file in this fixture (StandardOutput=append:) and to the
+# journal on a normal systemd install. Read both, or an assertion about what hz
+# logged passes by looking at an empty stream — which is exactly how the first
+# version of IDLE-8 below "passed".
+# One stream, not both concatenated: a line offset into "file then journal"
+# lands inside the journal half once either grows, so the new file lines get
+# skipped and every assertion about them reads empty.
+hz_log() {
+  if [ -f /var/log/hz.log ]; then
+    cat /var/log/hz.log
+  else
+    journalctl -u hz --no-pager 2>/dev/null || true
+  fi
+}
+# Anchored to a line count taken before this section, so a revocation logged by
+# an earlier IDLE_SLOW run cannot satisfy or break these.
+hz_log_since() { hz_log | tail -n +"$(( ${1:-0} + 1 ))"; }
+idle_mark=$(hz_log | wc -l)
+
+# The floor exists so nobody configures a value that reads as on and behaves
+# like a stampede. WireGuard handshakes lag real activity by minutes.
+st=$(curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE" -X POST -H 'Content-Type: application/json' \
+  -d '{"enabled":true,"durations":["2h"],"inactivityMinutes":2}' "$API/api/v1/mfa/settings")
+[ "$st" = "400" ] \
+  && ok "IDLE-1 a sub-floor inactivity timeout is refused" \
+  || bad "IDLE-1 a sub-floor inactivity timeout is refused" "status $st"
+
+st=$(curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE" -X POST -H 'Content-Type: application/json' \
+  -d '{"enabled":true,"durations":["2h"],"inactivityMinutes":5}' "$API/api/v1/mfa/settings")
+[ "$st" = "200" ] \
+  && ok "IDLE-2 the floor value is accepted" \
+  || bad "IDLE-2 the floor value is accepted" "status $st"
+
+settings=$(curl -fsS -b "$COOKIE" "$API/api/v1/mfa/settings")
+[ "$(jq -r '.inactivityMinutes' <<<"$settings")" = "5" ] \
+  && ok "IDLE-3 the setting round-trips" \
+  || bad "IDLE-3 the setting round-trips" "$settings"
+
+[ "$(jq -r '.inactivityFloor' <<<"$settings")" = "5" ] \
+  && ok "IDLE-4 the floor is published so the form can state it" \
+  || bad "IDLE-4 the floor is published" "$settings"
+
+# hz must read handshakes as timestamps rather than the localised prose from
+# `wg show`, against the real kernel interface.
+handshakes=$(wg show wg0 latest-handshakes | wc -l)
+[ "$handshakes" -ge 1 ] \
+  && ok "IDLE-5 the kernel reports handshakes in the machine-readable form hz reads" \
+  || bad "IDLE-5 the kernel reports handshakes" "$(wg show wg0 latest-handshakes 2>&1)"
+
+# The false-positive risk is the one worth proving against a real kernel: a
+# peer with a live tunnel must survive a prune tick with the timeout armed. The
+# reverse — an idle peer losing its session — is a unit test, because waiting
+# out the five minute floor would add five minutes to every run to prove what a
+# clock argument already proves.
+#
+# Give the peer a session, keep the tunnel busy, and wait past one 60s prune.
+# Reuses the secret from the Verified section: enrolment is once per peer, so
+# asking again would be refused rather than issuing a second one.
+cli curl -fsS --max-time 4 -X POST -H 'Content-Type: application/json' \
+  -d "{\"code\":\"$(oathtool --totp -b "$code_secret")\",\"duration\":\"2h\"}" \
+  "http://$GW_WG:8080/api/v1/mfa/verify" >/dev/null 2>&1 || true
+sleep 2
+assert_port_open    "IDLE-6 the peer holds a session with the timeout armed" "$GW_WG" 22
+
+# Traffic across the prune boundary, so the handshake stays recent.
+for _ in $(seq 1 8); do
+  ip netns exec client timeout 2 ping -c1 -W1 "$GW_WG" >/dev/null 2>&1 || true
+  sleep 8
+done
+assert_port_open    "IDLE-7 an active peer is not re-jailed by the prune tick" "$GW_WG" 22
+
+hz_log_since "$idle_mark" | grep -q "revoked for inactivity" \
+  && bad "IDLE-8 no revocation was logged for an active peer" \
+       "$(hz_log_since "$idle_mark" | grep 'revoked for inactivity' | tail -2)" \
+  || ok "IDLE-8 no revocation was logged for an active peer"
+
+# The revocation side needs to outwait the five minute floor, so it is opt-in
+# rather than six minutes added to every run. Everything it proves beyond the
+# unit tests is the wiring: pruner reads the kernel, clears the session,
+# rebuilds the chains.
+if [ "${IDLE_SLOW:-0}" = "1" ]; then
+  note_idle() { printf '  ...  %s\n' "$1"; }
+  note_idle "IDLE_SLOW=1: taking the tunnel down and waiting out the 5 minute floor"
+  # No tunnel means no new handshakes, so the recorded one ages out.
+  ip -n client link set wgc down 2>/dev/null || true
+  sleep 380
+  ip -n client link set wgc up 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    ip netns exec client timeout 2 ping -c1 -W1 "$GW_WG" >/dev/null 2>&1 && break
+    sleep 1
+  done
+  sleep 3
+
+  hz_log_since "$idle_mark" | grep -q '"msg":"MFA sessions revoked for inactivity"' \
+    && ok "IDLE-9 an idle peer's session is revoked, and the reason is logged" \
+    || bad "IDLE-9 an idle peer's session is revoked" \
+         "nothing logged since this section began"
+
+  # The log line has to name the peer and the threshold, or an operator reading
+  # it later cannot tell which session went or why.
+  hz_log_since "$idle_mark" | grep '"msg":"MFA sessions revoked for inactivity"' \
+    | grep -q '"after_minutes":5' \
+    && ok "IDLE-9b the revocation names the threshold that caused it" \
+    || bad "IDLE-9b the revocation names the threshold" \
+         "$(hz_log_since "$idle_mark" | grep 'revoked for inactivity' | tail -1)"
+
+  assert_port_blocked "IDLE-10 the re-jail actually took effect in the chains" "$GW_WG" 22
+fi
+
+# Back off, so the later sections are not racing a re-jail.
+curl -fsS -b "$COOKIE" -X POST -H 'Content-Type: application/json' \
+  -d '{"enabled":true,"durations":["2h"],"inactivityMinutes":0}' "$API/api/v1/mfa/settings" >/dev/null
 
 head_ "Audit logging and admin exposure"
 

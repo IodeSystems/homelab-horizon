@@ -406,6 +406,12 @@ type MFASettingsResponse struct {
 	// before the switch rather than after.
 	AdminsWithoutFactor []string           `json:"adminsWithoutFactor,omitempty"`
 	Exceptions          []MFAExceptionResp `json:"exceptions,omitempty"`
+
+	// Inactivity re-jailing. Zero means off; the floor is the smallest
+	// non-zero value the API accepts, and the form needs it to say so rather
+	// than letting someone discover it by being refused.
+	InactivityMinutes int `json:"inactivityMinutes,omitempty"`
+	InactivityFloor   int `json:"inactivityFloor,omitempty"`
 }
 
 type AddPeerResponse struct {

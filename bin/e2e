@@ -37,6 +37,12 @@
 #           Implies the browser download. This is the second relying party --
 #           account passkeys are scoped to admin_url, not kiosk_url.
 #
+#   IDLE_SLOW
+#           set to 1 to also prove the MFA inactivity REVOCATION path, which
+#           has to outwait the five minute floor — about six extra minutes.
+#           The default run proves the opposite and more dangerous direction:
+#           that an active peer is never re-jailed.
+#
 #   OIDC    set to 1 to also run the single-sign-on flow (test/e2e/oidc.sh)
 #           against a stub provider served by test/e2e/oidc-idp.mjs. The
 #           provider is stubbed but the protocol is not: real discovery, real
