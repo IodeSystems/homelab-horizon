@@ -261,10 +261,9 @@ The user model is complete; the items below are what remain. Ordered by what I'd
 
 | | Item | Blocked? |
 |---|---|---|
-| 1 | [VPN inactivity timeout](#-vpn-inactivity-timeout-last-wag-parity-item) | no |
 | 3 | ~~Real users~~ — ✅ done, all phases | — |
-| 4 | [Phase 0 leftovers](#-phase-0-leftovers) · [canon writeback](#-canon-writeback-to-doc-cross-repo) · [cleanups](#known-cleanups-not-blocking) | no |
-| 5 | [Org alignment backlog](#-org-alignment-backlog--this-repo-owns-it-now) (10 items) | no |
+| 1 | [Phase 0 leftovers](#-phase-0-leftovers) · [canon writeback](#-canon-writeback-to-doc-cross-repo) · [cleanups](#known-cleanups-not-blocking) | no |
+| 2 | [Org alignment backlog](#-org-alignment-backlog--this-repo-owns-it-now) (10 items) | no |
 
 The runtime TLS check shipped with that decision and moved to
 [done.md](done.md). Both open decisions were answered on 2026-08-15: certificates get a warning
@@ -376,21 +375,20 @@ PCI controls, the inactivity timeout, and the org backlog.
 - **UI note**: the disable toggle sits on Settings → System today; it moves to
   Settings → Users in Phase 2.
 
-### ◻ VPN inactivity timeout (last wag-parity item)
+### ✅ VPN inactivity timeout (`9546d7e`)
 
-A peer clears MFA once and stays cleared until its window expires, however long
-it has been silent. wag deauthenticates on inactivity; hz does not.
+`vpn_mfa_inactivity_minutes`, off by default, floored at 5. The risk this entry
+predicted was real and is handled: WireGuard only handshakes on traffic or
+rekey, so a sub-floor threshold measures that lag rather than absence. A zero
+handshake — what every peer reports after wg0 bounces — is left alone rather
+than treated as idle.
 
-- **next**: fold last-handshake into `IsPeerMFAJailed` — `wg show` already
-  reports it, and the reconciler already runs every 60s, so this is a comparison
-  and a re-jail, not new plumbing.
-- **risks**: WireGuard is silent by design. An idle-but-connected peer stops
-  handshaking, so too tight a threshold re-jails someone who never left; keep
-  the default well above the 120s keepalive and make it configurable.
-- **why now**: independent of the user model, and the multipass fixture already
-  exercises jail transitions, so the expensive part is already paid for.
-- **optional extensions**: surface remaining-session time in the portal, so a
-  timeout is visible before it happens rather than as a sudden loss of network.
+Revocation is proven by `IDLE_SLOW=1`, which outwaits the floor; the default run
+proves the more dangerous direction, that an active peer is never re-jailed.
+
+- **optional extension, still open**: surface remaining-session time in the
+  portal, so a timeout is visible before it happens rather than arriving as a
+  sudden loss of network.
 
 ### ✅ PCI: the two remaining controls (`59db133`)
 
