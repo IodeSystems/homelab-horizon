@@ -200,7 +200,7 @@ done
 # 6. Install Playwright JS package (browsers are expected to be cached already)
 #    and capture.
 note "installing playwright (docs/)..."
-( cd docs && npm install --no-audit --no-fund >/dev/null )
+( cd docs && pnpm install --no-audit --no-fund >/dev/null )
 
 note "capturing screenshots..."
 node docs/take-screenshots.mjs "$BASE" "$TOKEN"

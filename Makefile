@@ -24,9 +24,9 @@ generate:
 # Build frontend (React SPA)
 .PHONY: ui
 ui: generate
-	cd ui && npm ci && npm run build
+	cd ui && pnpm install --frozen-lockfile && pnpm build
 
-# Create stub ui/dist for Go-only builds (no npm required)
+# Create stub ui/dist for Go-only builds (no node toolchain required)
 ui/dist/index.html:
 	mkdir -p ui/dist
 	echo '<!DOCTYPE html><html><body>Run <code>make ui</code> to build the frontend.</body></html>' > ui/dist/index.html
@@ -60,7 +60,7 @@ hz-embed:
 .PHONY: run
 run: ui/node_modules
 	@trap 'kill 0' EXIT; \
-	cd ui && npm run dev & \
+	cd ui && pnpm dev & \
 	go run $(CMD_PATH) & \
 	wait
 
@@ -72,11 +72,11 @@ run-backend: ui
 # Run Vite frontend dev server only (proxies API to :8080)
 .PHONY: run-frontend
 run-frontend: ui/node_modules
-	cd ui && npm run dev
+	cd ui && pnpm dev
 
 # Install frontend dependencies if needed
 ui/node_modules: ui/package.json
-	cd ui && npm install
+	cd ui && pnpm install
 	@touch ui/node_modules
 
 # Build for all platforms

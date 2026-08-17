@@ -24,7 +24,7 @@ import {
 } from "@mui/material";
 import DeleteIcon from "@mui/icons-material/Delete";
 import VerifiedUserIcon from "@mui/icons-material/VerifiedUser";
-import RemoveCircleOutlineIcon from "@mui/icons-material/RemoveCircleOutline";
+import RemoveCircleOutlineIcon from "@mui/icons-material/RemoveCircleOutlined";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import {
   useBlessIPTablesRule,
@@ -138,7 +138,7 @@ function FilterChips({
   );
   const total = summary.expected + summary.stale + summary.blessed + summary.unknown;
   return (
-    <Stack direction="row" spacing={1} flexWrap="wrap">
+    <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }}>
       {chipFor("All", "all", total)}
       {chipFor("Expected", "expected", summary.expected)}
       {chipFor("Stale", "stale", summary.stale)}
@@ -282,7 +282,7 @@ export function IPTablesTab() {
       </Paper>
 
       <Paper variant="outlined" sx={{ p: 2 }}>
-        <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 2 }}>
+        <Stack direction="row" spacing={2} sx={{ alignItems: "center", mb: 2 }}>
           <FilterChips summary={data.summary} filter={filter} onFilter={setFilter} />
           <Box sx={{ flex: 1 }} />
           <Button

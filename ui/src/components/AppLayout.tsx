@@ -157,7 +157,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           <Drawer
             open={drawerOpen}
             onClose={() => setDrawerOpen(false)}
-            PaperProps={{ sx: { width: SIDEBAR_WIDTH, bgcolor: "#16213e" } }}
+            slotProps={{ paper: { sx: { width: SIDEBAR_WIDTH, bgcolor: "#16213e" } } }}
           >
             <SidebarContent onNavigate={() => setDrawerOpen(false)} />
           </Drawer>

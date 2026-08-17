@@ -18,18 +18,23 @@ jobs:
         with:
           go-version: '1.26'
           cache: true
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-          cache: 'npm'
-          cache-dependency-path: ui/package-lock.json
-      # Build the embedded SPA so //go:embed all:dist resolves on a clean
-      # checkout (ui/dist is gitignored). Also gates the UI build itself.
+          cache: 'pnpm'
+          cache-dependency-path: ui/pnpm-lock.yaml
+      # The SPA is no longer embedded (WEB-5) — it ships beside the binary and
+      # is installed by bin/deploy. Built here to gate the UI on every push,
+      # and because ui/dist is gitignored.
       - name: build ui
         working-directory: ui
         run: |
-          npm ci
-          npm run build
+          pnpm install --frozen-lockfile
+          pnpm build
       - name: golangci-lint
         run: |
           go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2

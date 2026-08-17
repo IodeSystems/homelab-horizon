@@ -1,6 +1,10 @@
 import { Badge, Box, Button, CircularProgress, Tooltip } from "@mui/material";
 import SyncIcon from "@mui/icons-material/Sync";
-import { keyframes } from "@mui/system";
+// From @mui/material, which re-exports it: @mui/system was never a declared
+// dependency here and only resolved because npm's flat node_modules hoisted it.
+// pnpm's strict linking turned that phantom into a compile error, which is the
+// point of the migration.
+import { keyframes } from "@mui/material";
 import { useSyncContext } from "./SyncProvider";
 import { usePendingChanges } from "../api/hooks";
 
