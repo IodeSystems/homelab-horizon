@@ -1483,6 +1483,36 @@ func (c *Config) OIDCDisplayName() string {
 	return "single sign-on"
 }
 
+// AdminBoundToLoopback reports whether hz's own listener is reachable only
+// from the machine itself.
+//
+// This is what decides PCI DSS 2.2.7 for hz. The admin UI speaks plain HTTP:
+// that is fine when the only way to reach it is through HAProxy's TLS
+// frontend, because the cleartext hop is loopback and never touches a network.
+// It is a finding when hz binds a LAN address, because then the admin
+// interface — and its session cookie — cross the wire in the clear.
+func (c *Config) AdminBoundToLoopback() bool {
+	addr := strings.TrimSpace(c.ListenAddr)
+	if addr == "" {
+		return false
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+
+	// ":8080" and "0.0.0.0:8080" both mean every interface.
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "*" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // UsersDBPath is the configured identity store path, or the default.
 func (c *Config) UsersDBPath() string {
 	if strings.TrimSpace(c.UsersDB) != "" {

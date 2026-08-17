@@ -379,6 +379,18 @@ func hzControls(cfg *config.Config, facts hostFactsSnapshot) []control {
 		// requirement itself allows.
 		{"password_rotation", "8.3.9",
 			cfg.Policy.PasswordMaxAgeDays > 0 && cfg.Policy.PasswordMaxAgeDays <= 90},
+		// 10.5.1 — twelve months of audit history, three immediately
+		// available. Both halves are checked because either alone is
+		// misleading: a persistent journal that rotates on size can still
+		// lose last month, and a long retention setting on a volatile journal
+		// keeps nothing past the next reboot.
+		{"log_persistence", "10.5.1",
+			facts.measured && facts.journalPersistent && facts.journalRetention >= 365*24*time.Hour},
+		// 2.2.7 — non-console administrative access must be encrypted. hz's
+		// own listener speaks plain HTTP, which is fine while the only route
+		// to it is HAProxy's TLS frontend over loopback, and a finding the
+		// moment it binds a LAN address.
+		{"admin_access_encrypted", "2.2.7", cfg.AdminBoundToLoopback()},
 	}
 }
 

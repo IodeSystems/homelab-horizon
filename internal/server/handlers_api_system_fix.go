@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -574,5 +575,65 @@ func (s *Server) handleAPIHAProxyFixLogging(w http.ResponseWriter, r *http.Reque
 		writeJSONError(w, http.StatusInternalServerError, strings.Join(errs, "; "))
 		return
 	}
+	s.writeFixOK(w)
+}
+
+// POST /api/v1/system/fix/log-retention — make the journal survive reboots and
+// keep a year of it (PCI DSS 10.5.1).
+//
+// Written as a drop-in rather than an edit to journald.conf: the main file is
+// a package-managed default full of commented examples, and rewriting it means
+// owning a merge with every future upgrade. A drop-in is additive, obvious in
+// `systemd-analyze cat-config`, and removable by deleting one file.
+func (s *Server) handleAPISystemFixLogRetention(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	// journald creates nothing itself: with Storage=persistent and no
+	// directory it silently stays volatile, so the directory comes first.
+	if err := s.fs.MkdirAll("/var/log/journal", 0o755); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not create /var/log/journal: "+err.Error())
+		return
+	}
+
+	const dropInDir = "/etc/systemd/journald.conf.d"
+	if err := s.fs.MkdirAll(dropInDir, 0o755); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not create "+dropInDir+": "+err.Error())
+		return
+	}
+
+	// SystemMaxUse is set alongside retention because the two bounds are
+	// independent: without a size cap a year of logs can fill the disk, and
+	// filling the disk on a gateway takes far more than logging with it.
+	const conf = `# Written by homelab-horizon for PCI DSS 10.5.1.
+# Twelve months of audit history, with a size cap so a year of logs cannot
+# fill the disk this gateway runs on.
+[Journal]
+Storage=persistent
+MaxRetentionSec=1year
+SystemMaxUse=2G
+`
+	if err := s.fs.WriteFile(dropInDir+"/99-homelab-horizon.conf", []byte(conf), 0o644); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not write the drop-in: "+err.Error())
+		return
+	}
+
+	if err := s.runner.Run(r.Context(), "systemctl", "restart", "systemd-journald"); err != nil {
+		writeJSONError(w, http.StatusInternalServerError,
+			"config written, but journald did not restart: "+err.Error())
+		return
+	}
+
+	// Re-measure now rather than waiting for the health tick, so the card the
+	// operator is looking at reflects what they just did.
+	s.hostFacts.refresh()
+
+	slog.Info("journal made persistent with a year of retention", "by", s.adminActor(r))
 	s.writeFixOK(w)
 }
