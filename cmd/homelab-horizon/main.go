@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -36,42 +35,11 @@ func main() {
 		return
 	}
 
-	configPath := flag.String("config", "", "Path to configuration file (optional)")
-	install := flag.Bool("install", false, "Install systemd service")
-	check := flag.Bool("check", false, "Check system configuration and offer to fix issues")
-	configTemplate := flag.Bool("config-template", false, "Print a commented config template and exit")
-	iamPolicy := flag.Bool("iam-policy", false, "Print IAM policy template for Route53 access")
-	dryRun := flag.Bool("dry-run", false, "Dry run mode - show what would be done without making changes")
-	showSystemdService := flag.Bool("show-systemd", false, "Show the systemd service file that would be generated")
-	version := flag.Bool("version", false, "Print version and exit")
-	noMCP := flag.Bool("no-mcp", false, "Disable MCP tool server (default: MCP enabled over stdio)")
-	enableAdminToken := flag.Bool("enable-admin-token", false, "Re-enable the shared admin token and exit to normal startup (console recovery)")
-	flag.Parse()
+	ensureLogging() // structured slog → stderr (JSON under journald, text on a TTY)
 
-	hzlog.Setup() // structured slog → stderr (JSON under journald, text on a TTY)
-
-	switch {
-	case *version:
-		fmt.Printf("homelab-horizon %s (built %s)\n", Version, BuildTime)
-	case *configTemplate:
-		fmt.Print(config.Template())
-	case *iamPolicy:
-		fmt.Print(config.IAMPolicyTemplate())
-	case *showSystemdService:
-		fmt.Println(generateSystemdService(*configPath))
-	case *check:
-		if err := runCheck(*dryRun); err != nil {
-			slog.Error("check failed", "err", err)
-			os.Exit(1)
-		}
-	case *install:
-		if err := installService(*dryRun); err != nil {
-			slog.Error("installation failed", "err", err)
-			os.Exit(1)
-		}
-	default:
-		runServer(*configPath, *dryRun, !*noMCP, *enableAdminToken)
-	}
+	// Dispatch through cobra (CLI-1). The old single-dash mode flags are
+	// translated at the edge — see translateLegacyArgs.
+	exitWith(runCLI(os.Args[1:]))
 }
 
 // isMCPClient detects if stdin is a pipe (i.e., an MCP client launched us as a subprocess).
