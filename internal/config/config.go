@@ -238,6 +238,12 @@ type Config struct {
 	// effect of editing a service would be indefensible.
 	UsersDB string `json:"users_db,omitempty"`
 
+	// UIDir is where the admin frontend lives on disk. Empty means the
+	// STATIC_DIR env var, then the working tree, then the install default —
+	// see server.uiDir. The UI ships beside the binary rather than inside it
+	// (WEB-5/DEPLOY-5).
+	UIDir string `json:"ui_dir,omitempty"`
+
 	// LocalDNSRecords are operator-authored answers hz's resolver serves to
 	// the LAN and VPN, on top of the ones derived from services.
 	//

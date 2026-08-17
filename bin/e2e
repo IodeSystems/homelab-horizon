@@ -164,12 +164,26 @@ if [ "${REUSE:-0}" != "1" ]; then
     || err "multipass launch failed"
   trap cleanup EXIT
 
-  note "transferring binary + fixture..."
+  note "transferring binary + UI + fixture..."
   multipass transfer "$BIN" "$VM:/home/ubuntu/homelab-horizon"
+  # The UI is served from disk now (WEB-5), so the VM needs it too — the
+  # passkey fixtures drive the real SPA at /app/, and without this they would
+  # fail against hz's "UI not installed" page rather than against hz.
+  [ -f ui/dist/index.html ] || err "ui/dist is empty (make ui)"
+  # Staged in dist/, not /tmp: multipass runs under snap confinement and cannot
+  # read /tmp, so a transfer from there fails with "cannot access".
+  tar -czf dist/hz-e2e-ui.tar.gz -C ui/dist .
+  multipass transfer dist/hz-e2e-ui.tar.gz "$VM:/home/ubuntu/hz-ui.tar.gz"
+  rm -f dist/hz-e2e-ui.tar.gz
   multipass transfer "$FIXTURE/config.json" "$VM:/home/ubuntu/e2e-config.json"
   multipass transfer "$FIXTURE/provision.sh" "$VM:/home/ubuntu/provision.sh"
   multipass transfer "$FIXTURE/assert.sh" "$VM:/home/ubuntu/assert.sh"
   multipass exec "$VM" -- sudo install -m 0755 /home/ubuntu/homelab-horizon /usr/local/bin/homelab-horizon
+  multipass exec "$VM" -- sudo rm -rf /usr/local/share/homelab-horizon/ui
+  multipass exec "$VM" -- sudo mkdir -p /usr/local/share/homelab-horizon/ui
+  multipass exec "$VM" -- sudo tar -xzf /home/ubuntu/hz-ui.tar.gz -C /usr/local/share/homelab-horizon/ui
+  multipass exec "$VM" -- test -f /usr/local/share/homelab-horizon/ui/index.html \
+    || err "UI did not install in the VM"
   multipass exec "$VM" -- chmod +x /home/ubuntu/provision.sh /home/ubuntu/assert.sh
 
   note "provisioning..."

@@ -147,13 +147,45 @@ test-all: test-unit test-integration check
 dist:
 	mkdir -p dist
 
+# DEPLOY-9: assemble a deployable payload — the binary plus the frontend it now
+# serves from disk (WEB-5). One tree to copy, so the two cannot arrive
+# separately: a binary without its UI answers the API and shows an explanatory
+# page where the login form should be.
+#
+# PAYLOAD_ARCH selects the binary; defaults to this machine's build.
+PAYLOAD_ARCH ?=
+.PHONY: payload
+payload: ui
+	@rm -rf dist/payload
+	@mkdir -p dist/payload/public
+	@if [ -n "$(PAYLOAD_ARCH)" ]; then \
+		$(MAKE) build-$(PAYLOAD_ARCH) >/dev/null; \
+		cp dist/$(BINARY_NAME)-$(PAYLOAD_ARCH) dist/payload/$(BINARY_NAME); \
+	else \
+		$(MAKE) build >/dev/null; \
+		cp $(BINARY_NAME) dist/payload/$(BINARY_NAME); \
+	fi
+	cp -r ui/dist/. dist/payload/public/
+	@echo "payload: dist/payload (binary + public/)"
+	@du -sh dist/payload/public | sed 's/^/  ui: /'
+
+
 # Build release archives
 .PHONY: release
+# Each archive carries the binary AND public/, because the UI is no longer
+# inside the binary: an archive with only the executable would install a gateway
+# whose admin page cannot render. bin/deploy relies on this layout for
+# --version deploys.
 release: clean dist ui build-all
 	@echo "Creating release archives..."
-	cd dist && tar -czf $(BINARY_NAME)-linux-amd64.tar.gz $(BINARY_NAME)-linux-amd64
-	cd dist && tar -czf $(BINARY_NAME)-linux-arm64.tar.gz $(BINARY_NAME)-linux-arm64
-	cd dist && tar -czf $(BINARY_NAME)-linux-armv7.tar.gz $(BINARY_NAME)-linux-armv7
+	@for arch in linux-amd64 linux-arm64 linux-armv7; do \
+		rm -rf dist/stage-$$arch; \
+		mkdir -p dist/stage-$$arch/public; \
+		cp dist/$(BINARY_NAME)-$$arch dist/stage-$$arch/$(BINARY_NAME)-$$arch; \
+		cp -r ui/dist/. dist/stage-$$arch/public/; \
+		tar -czf dist/$(BINARY_NAME)-$$arch.tar.gz -C dist/stage-$$arch .; \
+		rm -rf dist/stage-$$arch; \
+	done
 	@echo "Release archives created in dist/"
 	@ls -la dist/*.tar.gz
 
@@ -216,5 +248,6 @@ help:
 	@echo "  make docker       - Build Docker demo image"
 	@echo "  make docker-run   - Build and run Docker demo on :8080"
 	@echo "  make screenshots  - Regenerate README screenshots (hermetic Docker)"
+	@echo "  make payload      - Assemble dist/payload (binary + public/) for deploy"
 	@echo "  make e2e          - End-to-end MFA jail test (multipass VM)"
 	@echo "  make e2e-auth     - End-to-end admin account auth test: accounts, passkeys, SSO"

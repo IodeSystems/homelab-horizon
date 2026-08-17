@@ -1,74 +1,137 @@
 package server
 
 import (
-	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	homelabUI "github.com/iodesystems/homelab-horizon/ui"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
-// TestSPACacheHeaders guards the post-deploy staleness fix: the app shell
-// (index.html, and the SPA fallback for unknown routes) must be revalidated on
-// every load, while content-hashed assets are cached immutably. If index.html
-// were cacheable, a deploy that changes the bundle hash would leave clients on a
-// stale shell pointing at chunks that 404, white-screening the app.
-func TestSPACacheHeaders(t *testing.T) {
-	mux := http.NewServeMux()
-	(&Server{}).setupSPA(mux)
-
-	// Use a real content-hashed asset discovered from the embedded build rather
-	// than a hardcoded Vite hash — the hash changes on every UI rebuild, so a
-	// literal filename here goes stale and the request falls through to the SPA
-	// shell (this test's original flakiness).
-	asset := firstHashedAsset(t)
-
-	cases := []struct {
-		name   string
-		path   string
-		wantCC string
-	}{
-		{"index", "/app/", "no-cache"},
-		{"spa-fallback", "/app/services", "no-cache"},
-		{"hashed-asset", "/app/assets/" + asset, "public, max-age=31536000, immutable"},
+// spaServer returns a Server whose UI lives in a temp dir, plus the dir.
+func spaServer(t *testing.T, files map[string]string) (*Server, string) {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range files {
+		full := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
-			mux.ServeHTTP(rec, req)
+	s := &Server{}
+	s.config.Store(&config.Config{UIDir: dir})
+	return s, dir
+}
 
-			if rec.Code != http.StatusOK {
-				t.Fatalf("%s: status = %d, want 200", tc.path, rec.Code)
-			}
-			if cc := rec.Header().Get("Cache-Control"); cc != tc.wantCC {
-				t.Errorf("%s: Cache-Control = %q, want %q", tc.path, cc, tc.wantCC)
-			}
-		})
+func get(s *Server, path string) *httptest.ResponseRecorder {
+	mux := http.NewServeMux()
+	s.setupSPA(mux)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+	return w
+}
+
+func TestSPAServesFromDisk(t *testing.T) {
+	s, _ := spaServer(t, map[string]string{
+		"index.html":           "<title>hz</title>",
+		"assets/app-abc123.js": "console.log(1)",
+	})
+
+	if w := get(s, "/app/"); w.Code != 200 || !strings.Contains(w.Body.String(), "hz") {
+		t.Fatalf("index: %d %q", w.Code, w.Body.String())
+	}
+	if w := get(s, "/app/assets/app-abc123.js"); w.Code != 200 {
+		t.Fatalf("asset: %d", w.Code)
 	}
 }
 
-// firstHashedAsset returns the name of a real .js/.css file under the embedded
-// dist/assets, skipping the test when the UI hasn't been built (no assets to
-// serve).
-func firstHashedAsset(t *testing.T) string {
-	t.Helper()
-	distFS, err := fs.Sub(homelabUI.DistFS, "dist")
-	if err != nil {
-		t.Skipf("no embedded dist: %v", err)
+// The cache rules are load-bearing: a cached index.html after a deploy points
+// at hashed chunks that no longer exist, and the app white-screens.
+func TestSPACacheHeaders(t *testing.T) {
+	s, _ := spaServer(t, map[string]string{
+		"index.html":           "<title>hz</title>",
+		"assets/app-abc123.js": "console.log(1)",
+	})
+
+	if got := get(s, "/app/assets/app-abc123.js").Header().Get("Cache-Control"); !strings.Contains(got, "immutable") {
+		t.Errorf("hashed asset Cache-Control = %q, want immutable", got)
 	}
-	entries, err := fs.ReadDir(distFS, "assets")
-	if err != nil {
-		t.Skipf("no embedded dist/assets (UI not built): %v", err)
+	if got := get(s, "/app/").Header().Get("Cache-Control"); got != "no-cache" {
+		t.Errorf("index Cache-Control = %q, want no-cache", got)
 	}
-	for _, e := range entries {
-		if !e.IsDir() && (strings.HasSuffix(e.Name(), ".js") || strings.HasSuffix(e.Name(), ".css")) {
-			return e.Name()
+	// A client-side route falls back to index.html, which must also revalidate.
+	if got := get(s, "/app/settings").Header().Get("Cache-Control"); got != "no-cache" {
+		t.Errorf("SPA fallback Cache-Control = %q, want no-cache", got)
+	}
+}
+
+// Client-side routes must serve the shell with the URL preserved, or TanStack
+// Router cannot pick up the route.
+func TestSPAFallbackForUnknownPaths(t *testing.T) {
+	s, _ := spaServer(t, map[string]string{"index.html": "SHELL"})
+	w := get(s, "/app/dns/some-zone")
+	if w.Code != 200 || w.Body.String() != "SHELL" {
+		t.Fatalf("fallback: %d %q", w.Code, w.Body.String())
+	}
+}
+
+// The embedded FS could not be walked out of; a directory on disk can. This is
+// the vulnerability un-embedding introduces if the path is trusted.
+func TestSPARefusesPathTraversal(t *testing.T) {
+	s, dir := spaServer(t, map[string]string{"index.html": "SHELL"})
+	secret := filepath.Join(filepath.Dir(dir), "secret.txt")
+	if err := os.WriteFile(secret, []byte("TOKEN"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	for _, path := range []string{
+		"/app/../secret.txt",
+		"/app/..%2fsecret.txt",
+		"/app/assets/../../secret.txt",
+	} {
+		w := get(s, path)
+		if strings.Contains(w.Body.String(), "TOKEN") {
+			t.Errorf("%s escaped the UI directory", path)
 		}
 	}
-	t.Skip("no hashed asset in embedded dist/assets")
-	return ""
+}
+
+// A missing UI is the failure un-embedding introduces, and it lands on the
+// login page. It has to explain itself rather than 404.
+func TestSPAExplainsAMissingUI(t *testing.T) {
+	s := &Server{}
+	s.config.Store(&config.Config{UIDir: filepath.Join(t.TempDir(), "absent")})
+
+	w := get(s, "/app/")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{"not installed", "bin/deploy", "API"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the explanation should mention %q: %s", want, body)
+		}
+	}
+}
+
+// STATIC_DIR wins, because that is how a slot deploy points hz at its payload.
+func TestSPAPrefersStaticDirEnv(t *testing.T) {
+	s, _ := spaServer(t, map[string]string{"index.html": "CONFIG"})
+
+	other := t.TempDir()
+	if err := os.WriteFile(filepath.Join(other, "index.html"), []byte("ENV"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	t.Setenv("STATIC_DIR", other)
+
+	if got := get(s, "/app/").Body.String(); got != "ENV" {
+		t.Fatalf("served %q, want the STATIC_DIR copy", got)
+	}
 }
