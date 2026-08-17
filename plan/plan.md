@@ -261,7 +261,7 @@ Nothing is in flight. Ordered by what I'd pick up next:
 
 | | Item | Blocked? |
 |---|---|---|
-| 1 | [Phase 0 leftovers](#-phase-0-leftovers) · [canon writeback](#-canon-writeback-to-doc-cross-repo) · [cleanups](#known-cleanups-not-blocking) | no |
+| 1 | [Canon writeback](#-canon-writeback-to-doc-cross-repo) · [cleanups](#known-cleanups-not-blocking) | no |
 | 2 | [Org alignment backlog](#-org-alignment-backlog--this-repo-owns-it-now) (10 items) | no |
 | 3 | [Operator follow-ups](#operator-follow-ups-not-code) — yours, not mine | — |
 
@@ -270,13 +270,17 @@ Everything decided between 2026-08-15 and 2026-08-17 shipped and is archived in
 (accounts, second factors, SSO, policy), both remaining PCI controls, and the
 VPN inactivity timeout.
 
-### ◻ Phase 0 leftovers
+### ✅ Phase 0 leftovers (`aae461c`)
 
-Named for completeness; neither is the missing-surface problem Phase 0 solved.
+Both closed, and one of them was never open:
 
-- dnsmasq "listening on LocalInterface" check.
-- public IP re-detect (the value is now in the health payload, but it is only
-  read at startup).
+- **dnsmasq answering on `local_interface`** — half real. `CheckLocalBind`
+  already proved the config coherent; nothing proved anything replied. Added a
+  CHAOS-record liveness probe, surfaced as its own row beside the config row.
+- **Public IP re-detect** — **already built.** `startRoute53Sync` re-detects
+  every 5 minutes and republishes the Route53 records on change; prod confirms
+  it running with `public_ip_interval: 300`. My plan entry was wrong, not the
+  code. Worth remembering next time this file asserts something is missing.
 
 ### ◻ Canon writeback to `~/doc` (cross-repo)
 
