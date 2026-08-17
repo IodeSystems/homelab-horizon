@@ -1517,3 +1517,51 @@ export function useReconcileIPTables() {
     },
   });
 }
+
+// --- Local DNS records (split horizon) ---
+
+export interface LocalDNSRecord {
+  name: string;
+  ip: string;
+  wildcard?: boolean;
+  comment?: string;
+  // Set when this record overrides one derived from a service.
+  shadowsDerived?: string;
+}
+
+interface LocalDNSResponse {
+  records: LocalDNSRecord[];
+  derived?: LocalDNSRecord[];
+  enabled: boolean;
+  servedAt?: string;
+}
+
+export function useLocalDNS() {
+  return useQuery({
+    queryKey: ["dns", "local"],
+    queryFn: () => apiFetch<LocalDNSResponse>("/dns/local"),
+  });
+}
+
+export function useSetLocalDNSRecord() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (record: LocalDNSRecord) =>
+      apiFetch<{ ok: boolean }>("/dns/local", {
+        method: "POST",
+        body: JSON.stringify(record),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["dns", "local"] }),
+  });
+}
+
+export function useDeleteLocalDNSRecord() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) =>
+      apiFetch<{ ok: boolean }>(`/dns/local?name=${encodeURIComponent(name)}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["dns", "local"] }),
+  });
+}

@@ -384,8 +384,8 @@ func (s *Server) handleAPIDNSMasqWriteConfig(w http.ResponseWriter, r *http.Requ
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if mappings := s.cfg().DeriveDNSMappings(); len(mappings) > 0 {
-		if err := s.dns.SetMappings(mappings); err != nil {
+	if records := s.cfg().DeriveDNSRecords(); len(records) > 0 {
+		if err := s.dns.SetRecords(records); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "mappings: "+err.Error())
 			return
 		}
@@ -408,8 +408,8 @@ func (s *Server) handleAPIDNSMasqReload(w http.ResponseWriter, r *http.Request) 
 		writeJSONError(w, http.StatusInternalServerError, "write-config: "+err.Error())
 		return
 	}
-	if mappings := s.cfg().DeriveDNSMappings(); len(mappings) > 0 {
-		if err := s.dns.SetMappings(mappings); err != nil {
+	if records := s.cfg().DeriveDNSRecords(); len(records) > 0 {
+		if err := s.dns.SetRecords(records); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "mappings: "+err.Error())
 			return
 		}
@@ -475,8 +475,8 @@ func (s *Server) handleAPIDNSMasqFixInterfaces(w http.ResponseWriter, r *http.Re
 		writeJSONError(w, http.StatusInternalServerError, "write-config: "+err.Error())
 		return
 	}
-	if mappings := s.cfg().DeriveDNSMappings(); len(mappings) > 0 {
-		if err := s.dns.SetMappings(mappings); err != nil {
+	if records := s.cfg().DeriveDNSRecords(); len(records) > 0 {
+		if err := s.dns.SetRecords(records); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "mappings: "+err.Error())
 			return
 		}
@@ -504,8 +504,8 @@ func (s *Server) handleAPIDNSMasqStart(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "write-config: "+err.Error())
 		return
 	}
-	if mappings := s.cfg().DeriveDNSMappings(); len(mappings) > 0 {
-		if err := s.dns.SetMappings(mappings); err != nil {
+	if records := s.cfg().DeriveDNSRecords(); len(records) > 0 {
+		if err := s.dns.SetRecords(records); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "mappings: "+err.Error())
 			return
 		}

@@ -1011,6 +1011,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/users/password", s.handleAPIUserPassword)
 	mux.HandleFunc("/api/v1/users/disable", s.handleAPIUserDisable)
 	mux.HandleFunc("/api/v1/policy", s.handleAPIPolicy)
+	mux.HandleFunc("/api/v1/dns/local", s.handleAPILocalDNS)
 
 	// API v1 data routes
 	mux.HandleFunc("/api/v1/dashboard", s.handleAPIDashboard)
@@ -1226,7 +1227,7 @@ func (s *Server) ensureServicesRunning() {
 				slog.Error("failed to regenerate dnsmasq config", "err", err)
 			} else {
 				slog.Info("dnsmasq config regenerated")
-				if err := s.dns.SetMappings(s.cfg().DeriveDNSMappings()); err != nil {
+				if err := s.dns.SetRecords(s.cfg().DeriveDNSRecords()); err != nil {
 					slog.Warn("dns.SetMappings", "err", err)
 				}
 				if dnsStatus.Running {

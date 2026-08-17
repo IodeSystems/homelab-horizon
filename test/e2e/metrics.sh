@@ -26,23 +26,57 @@ note() { printf "metrics: %s\n" "$*"; }
 
 scrape() { curl -fsS -b "$COOKIE" --max-time 5 "$API/metrics"; }
 
+# dnsmasq_up starts the resolver, clearing systemd's restart rate limiter first.
+#
+# This fixture cycles dnsmasq several times — once per bind change, once to
+# prove the liveness probe notices a stop — and systemd's default
+# StartLimitBurst refuses further starts after a handful in quick succession
+# ("start-limit-hit"). Without the reset, a later section fails for a reason
+# that has nothing to do with what it is testing.
+dnsmasq_up() {
+  systemctl reset-failed dnsmasq >/dev/null 2>&1 || true
+  systemctl start dnsmasq
+  for _ in $(seq 1 15); do
+    systemctl is-active --quiet dnsmasq && return 0
+    sleep 1
+  done
+  return 1
+}
+
 note "installing dnsmasq + node-exporter..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get install -y -qq dnsmasq prometheus-node-exporter >/dev/null 2>&1
 
-# systemd-resolved owns 127.0.0.53:53; dnsmasq takes 127.0.0.1:53 beside it.
-# bind-interfaces stops it grabbing the wildcard and colliding.
+# hz owns the dnsmasq config here, rather than the fixture hand-writing one
+# beside it. Two configs is not a supported shape: hz writes bind-dynamic and a
+# cache-size, a hand-written file adding bind-interfaces or its own cache-size
+# either contradicts the bind mode or trips "illegal repeated keyword", and
+# dnsmasq then refuses to start at all. Letting hz generate everything is both
+# the real deployment shape and the only one that survives a service sync.
+#
+# systemd-resolved keeps 127.0.0.53; telling hz to bind lo puts dnsmasq on
+# 127.0.0.1 beside it.
 systemctl stop dnsmasq >/dev/null 2>&1 || true
-cat > /etc/dnsmasq.d/e2e.conf <<'CONF'
-listen-address=127.0.0.1
-bind-interfaces
-cache-size=150
-no-resolv
-server=127.0.0.53
-CONF
-systemctl start dnsmasq
-sleep 2
-systemctl is-active --quiet dnsmasq || { echo "dnsmasq failed to start"; journalctl -u dnsmasq -n 15 --no-pager; exit 1; }
+rm -f /etc/dnsmasq.d/e2e.conf
+
+systemctl stop hz
+jq '.dnsmasq_enabled = true | .dnsmasq_interfaces = ["lo"]' /etc/homelab-horizon/config.json > /tmp/c.json \
+  && mv /tmp/c.json /etc/homelab-horizon/config.json
+systemctl start hz
+for _ in $(seq 1 30); do curl -fsS -o /dev/null "$API/api/v1/auth/status" 2>/dev/null && break; sleep 1; done
+curl -fsS -c "$COOKIE" -X POST -H 'Content-Type: application/json' \
+  -d "{\"token\":\"$TOKEN\"}" "$API/api/v1/auth/login" >/dev/null
+
+# Make hz write its dnsmasq config and start the service.
+curl -fsS -b "$COOKIE" -o /dev/null -X POST "$API/api/v1/dnsmasq/write-config" || true
+dnsmasq_up || true
+sleep 1
+systemctl is-active --quiet dnsmasq || {
+  echo "dnsmasq failed to start under hz's own config"
+  dnsmasq --test 2>&1 | tail -3
+  journalctl -u dnsmasq -n 15 --no-pager
+  exit 1
+}
 
 # Give the cache something to count, so hits/misses aren't trivially zero.
 for _ in $(seq 1 3); do
@@ -50,25 +84,18 @@ for _ in $(seq 1 3); do
 done
 note "dnsmasq answering on 127.0.0.1:53"
 
-# hz only reads dnsmasq counters when it believes dnsmasq is enabled.
-systemctl stop hz
-jq '.dnsmasq_enabled = true' /etc/homelab-horizon/config.json > /tmp/c.json && mv /tmp/c.json /etc/homelab-horizon/config.json
-systemctl start hz
-for _ in $(seq 1 30); do curl -fsS -o /dev/null "$API/api/v1/auth/status" 2>/dev/null && break; sleep 1; done
-curl -fsS -c "$COOKIE" -X POST -H 'Content-Type: application/json' \
-  -d "{\"token\":\"$TOKEN\"}" "$API/api/v1/auth/login" >/dev/null
-
 printf '\n\033[1mdnsmasq (real CHAOS counters)\033[0m\n'
 body=$(scrape)
 grep -q '^hz_dnsmasq_up 1' <<<"$body" \
   && ok "DNSMASQ-1 hz reads dnsmasq's CHAOS counters" \
   || bad "DNSMASQ-1 hz reads dnsmasq's CHAOS counters" "$(grep dnsmasq <<<"$body" | head -3)"
 
-# cache-size=150 is set above, so this is hz parsing a known value out of
-# cachesize.bind rather than defaulting to zero.
-grep -q '^hz_dnsmasq_cache_size 150' <<<"$body" \
-  && ok "DNSMASQ-2 cache size matches the configured 150" \
-  || bad "DNSMASQ-2 cache size matches the configured 150" "$(printf '%s' "$body" | grep cache_size)"
+# hz configures the cache size itself (1000 in its generated config), so this
+# is hz reading a known non-default value back out of cachesize.bind rather
+# than reporting zero.
+grep -qE '^hz_dnsmasq_cache_size (150|1000)$' <<<"$body" \
+  && ok "DNSMASQ-2 hz reads the configured cache size, not a default" \
+  || bad "DNSMASQ-2 hz reads the configured cache size" "$(printf '%s' "$body" | grep cache_size)"
 
 for m in hz_dnsmasq_cache_hits_total hz_dnsmasq_cache_misses_total hz_dnsmasq_cache_insertions_total; do
   grep -qE "^${m} [0-9]" <<<"$body" \
@@ -107,8 +134,19 @@ local_iface=$(curl -fsS -b "$COOKIE" "$API/api/v1/system/health" \
 # Now make dnsmasq actually serve it, which is what a correct deployment looks
 # like, and the probe must flip.
 if [ -n "$local_iface" ]; then
-  printf 'listen-address=%s\n' "$local_iface" >> /etc/dnsmasq.d/e2e.conf
-  systemctl restart dnsmasq
+  # Through hz, not a second config file: adding the interface hz binds is the
+  # supported way to make it serve another address, and a hand-written
+  # listen-address beside hz's bind-dynamic is what breaks the daemon.
+  iface_name=$(ip -o -4 addr show | awk -v ip="$local_iface" '$4 ~ ip"/" {print $2; exit}')
+  jq --arg i "${iface_name:-lo}" '.dnsmasq_interfaces = ["lo", $i]' /etc/homelab-horizon/config.json > /tmp/c.json \
+    && mv /tmp/c.json /etc/homelab-horizon/config.json
+  systemctl restart hz
+  for _ in $(seq 1 30); do curl -fsS -o /dev/null "$API/api/v1/auth/status" 2>/dev/null && break; sleep 1; done
+  curl -fsS -c "$COOKIE" -X POST -H 'Content-Type: application/json' \
+    -d "{\"token\":\"$TOKEN\"}" "$API/api/v1/auth/login" >/dev/null
+  curl -fsS -b "$COOKIE" -o /dev/null -X POST "$API/api/v1/dnsmasq/write-config" || true
+  systemctl stop dnsmasq >/dev/null 2>&1 || true
+  dnsmasq_up
   sleep 2
   [ "$(probe)" = "true" ] \
     && ok "DNSMASQ-5b it flips to true once dnsmasq serves local_interface" \
@@ -124,8 +162,83 @@ sleep 2
 [ "$(probe)" = "false" ] \
   && ok "DNSMASQ-6 the probe notices when dnsmasq stops answering" \
   || bad "DNSMASQ-6 the probe notices when dnsmasq stops answering" "$(extras)"
-systemctl start dnsmasq
+dnsmasq_up
+sleep 1
+
+printf '\n\033[1mLocal DNS records (split horizon)\033[0m\n'
+
+# dnsmasq must actually be up for any of this to mean anything. Two drop-ins
+# setting the same keyword stop it dead, and a dig against nothing looks a lot
+# like a wrong answer.
+systemctl is-active --quiet dnsmasq || dnsmasq_up || true
+systemctl is-active --quiet dnsmasq \
+  && ok "LOCALDNS-0 dnsmasq is running before the record assertions" \
+  || bad "LOCALDNS-0 dnsmasq is running" "$(journalctl -u dnsmasq -n 5 --no-pager | tail -3)"
+
+# An operator record for a host with no public presence — the case that
+# started this: a machine every Mac finds over mDNS and no phone can.
+st=$(curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE" -X POST -H 'Content-Type: application/json' \
+  -d '{"name":"desktop","ip":"192.168.1.76","comment":"e2e"}' "$API/api/v1/dns/local")
+[ "$st" = "200" ] \
+  && ok "LOCALDNS-1 a local record is accepted" \
+  || bad "LOCALDNS-1 a local record is accepted" "status $st"
+
+# Served by the real resolver, not merely stored.
+answer=$(dig +short +time=2 +tries=1 @127.0.0.1 desktop 2>/dev/null | head -1)
+[ "$answer" = "192.168.1.76" ] \
+  && ok "LOCALDNS-2 dnsmasq answers for it" \
+  || bad "LOCALDNS-2 dnsmasq answers for it" "got '$answer'"
+
+# Exact by default: a host record must not capture everything beneath it.
+sub=$(dig +short +time=2 +tries=1 @127.0.0.1 anything.desktop 2>/dev/null | head -1)
+[ -z "$sub" ] \
+  && ok "LOCALDNS-3 an exact record does not answer for subdomains" \
+  || bad "LOCALDNS-3 an exact record does not answer for subdomains" "got '$sub'"
+
+# And a wildcard does, when asked for.
+curl -fsS -b "$COOKIE" -X POST -H 'Content-Type: application/json' \
+  -d '{"name":"lab.e2e.test","ip":"192.168.1.90","wildcard":true}' "$API/api/v1/dns/local" >/dev/null
+wild=$(dig +short +time=2 +tries=1 @127.0.0.1 anything.lab.e2e.test 2>/dev/null | head -1)
+[ "$wild" = "192.168.1.90" ] \
+  && ok "LOCALDNS-4 a wildcard record answers for subdomains" \
+  || bad "LOCALDNS-4 a wildcard record answers for subdomains" "got '$wild'"
+
+# A value that is a name rather than an address is the mistake worth catching.
+st=$(curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE" -X POST -H 'Content-Type: application/json' \
+  -d '{"name":"bad","ip":"some.other.host"}' "$API/api/v1/dns/local")
+[ "$st" = "400" ] \
+  && ok "LOCALDNS-5 a non-address value is refused" \
+  || bad "LOCALDNS-5 a non-address value is refused" "status $st"
+
+# Survives a service sync, which is what a hand-edited hosts file did not.
+curl -fsS -b "$COOKIE" --max-time 60 -N "$API/api/v1/services/sync/stream" >/dev/null 2>&1 || true
 sleep 2
+# A sync can bounce the resolver; the assertion is about the record surviving,
+# not about systemd's rate limiter.
+systemctl is-active --quiet dnsmasq || dnsmasq_up || true
+answer=$(dig +short +time=2 +tries=1 @127.0.0.1 desktop 2>/dev/null | head -1)
+[ "$answer" = "192.168.1.76" ] \
+  && ok "LOCALDNS-6 the record survives a service sync" \
+  || bad "LOCALDNS-6 the record survives a service sync" "got '$answer'"
+
+# And survives a restart, because it lives in config rather than the file.
+systemctl restart hz
+for _ in $(seq 1 30); do curl -fsS -o /dev/null "$API/api/v1/auth/status" 2>/dev/null && break; sleep 1; done
+curl -fsS -c "$COOKIE" -X POST -H 'Content-Type: application/json' \
+  -d "{\"token\":\"$TOKEN\"}" "$API/api/v1/auth/login" >/dev/null
+[ "$(curl -fsS -b "$COOKIE" "$API/api/v1/dns/local" | jq -r '[.records[]|select(.name=="desktop")]|length')" = "1" ] \
+  && ok "LOCALDNS-7 it survives a restart" \
+  || bad "LOCALDNS-7 it survives a restart" "$(curl -sS -b "$COOKIE" "$API/api/v1/dns/local" | head -c 200)"
+
+st=$(curl -sS -o /dev/null -w '%{http_code}' -b "$COOKIE" -X DELETE "$API/api/v1/dns/local?name=desktop")
+[ "$st" = "200" ] \
+  && ok "LOCALDNS-8 it can be removed" \
+  || bad "LOCALDNS-8 it can be removed" "status $st"
+sleep 1
+gone=$(dig +short +time=2 +tries=1 @127.0.0.1 desktop 2>/dev/null | head -1)
+[ -z "$gone" ] \
+  && ok "LOCALDNS-9 the resolver stops answering once removed" \
+  || bad "LOCALDNS-9 the resolver stops answering once removed" "still '$gone'"
 
 printf '\n\033[1mnode-exporter (detect + merge)\033[0m\n'
 systemctl is-active --quiet prometheus-node-exporter \
