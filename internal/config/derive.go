@@ -382,7 +382,7 @@ func (c *Config) DeriveRoute53Records() []route53.Record {
 
 		ttl := svc.ExternalDNS.TTL
 		if ttl <= 0 {
-			ttl = 300 // Default TTL
+			ttl = route53.DefaultTTL
 		}
 
 		for _, domain := range svc.Domains {
