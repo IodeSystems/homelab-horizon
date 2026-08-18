@@ -103,9 +103,13 @@ func runServer(configPath string, dryRun bool, mcpEnabled bool, enableAdminToken
 	// here, confirm the vhost works, then write it into config.json once it is
 	// proven. That ordering is the whole point of not persisting it.
 	if listenAddr != "" && listenAddr != cfg.ListenAddr {
+		// SetListenOverride, not an assignment to ListenAddr: hz saves the
+		// config during startup for unrelated reasons, and writing the
+		// override into the persisted field would make it survive the restart
+		// that is supposed to undo it.
+		cfg.SetListenOverride(listenAddr)
 		slog.Warn("listen address overridden for this run only; a restart without --listen reverts it",
 			"listen", listenAddr, "config_says", cfg.ListenAddr)
-		cfg.ListenAddr = listenAddr
 	}
 
 	if cfg.AutoHeal {

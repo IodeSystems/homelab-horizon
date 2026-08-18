@@ -1526,7 +1526,7 @@ func (s *Server) Run() error {
 // RunWithTokenCallback runs the server and calls the callback with the admin token if it was newly generated
 func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	slog.Info("starting Homelab Horizon",
-		"listen", s.cfg().ListenAddr,
+		"listen", s.cfg().EffectiveListenAddr(),
 		"wg_config", s.cfg().WGConfigPath,
 	)
 	if s.cfg().DNSMasqEnabled {
@@ -1568,10 +1568,12 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	s.startMFASessionPruner(mfaDone)
 	defer close(mfaDone)
 
-	slog.Info("server ready", "listen", s.cfg().ListenAddr)
+	slog.Info("server ready", "listen", s.cfg().EffectiveListenAddr())
 
 	server := &http.Server{
-		Addr:         s.cfg().ListenAddr,
+		// EffectiveListenAddr, so a --listen override actually binds. It is not
+		// in the persisted field by design; see config.SetListenOverride.
+		Addr:         s.cfg().EffectiveListenAddr(),
 		Handler:      s.handler(),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 10 * time.Minute, // Long timeout for SSE streams and certbot operations

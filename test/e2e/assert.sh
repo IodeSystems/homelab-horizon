@@ -756,9 +756,16 @@ grep -q 'hz_control_state{control="admin_access_encrypted",requirement="2.2.7"} 
   && ok "AUDIT-12 the control reflects the flag, not just the config file" \
   || bad "AUDIT-12 the control reflects the flag" "$(grep admin_access <<<"$metrics")"
 
+# Force a config write while the override is active, which is the case that
+# actually bites: hz saves during startup for unrelated reasons, and an earlier
+# version leaked the override into the file that way — turning a flag that
+# reverts on restart into a permanent change. Passing without this step proved
+# nothing, because the VM happened not to trigger a save.
+api POST /api/v1/rate-limit '{"enabled":false}' >/dev/null || true
+sleep 2
 [ "$(jq -r '.listen_addr' /etc/homelab-horizon/config.json)" = ":8080" ] \
-  && ok "AUDIT-13 the override is not written to config.json" \
-  || bad "AUDIT-13 the override is not written to config.json" "$(jq -r '.listen_addr' /etc/homelab-horizon/config.json)"
+  && ok "AUDIT-13 the override survives neither a save nor a restart" \
+  || bad "AUDIT-13 the override survives neither a save nor a restart" "config.json now says $(jq -r '.listen_addr' /etc/homelab-horizon/config.json)"
 
 # The recovery: drop the flag, restart, and the old binding is back.
 rm -f /etc/systemd/system/hz.service.d/10-listen.conf

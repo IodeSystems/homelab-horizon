@@ -120,8 +120,19 @@ var SearchPaths = []string{
 type Config struct {
 	// Core server settings
 	ListenAddr string `json:"listen_addr"`
-	AdminToken string `json:"admin_token,omitempty"`
-	KioskURL   string `json:"kiosk_url"`
+
+	// listenOverride is a start-option bind (--listen) that applies to this
+	// run only.
+	//
+	// Unexported so it cannot be serialised. Writing it into ListenAddr would
+	// look equivalent and is not: hz saves the config during startup for
+	// unrelated reasons (public IP detection, EnsureLocalInterface), and any
+	// one of those would persist the override — turning a flag that reverts on
+	// restart into a permanent change nobody asked to make. That is the whole
+	// safety property of --listen, so it gets a field that Save cannot see.
+	listenOverride string
+	AdminToken     string `json:"admin_token,omitempty"`
+	KioskURL       string `json:"kiosk_url"`
 	// AdminURL, when set, is the canonical base URL hz uses for integration
 	// snippets (e.g. "https://hz.example.com"). It overrides the self-service
 	// domain and the request host. Set this when neither is what an integration
@@ -1725,6 +1736,27 @@ func (c *Config) OIDCDisplayName() string {
 	return "single sign-on"
 }
 
+// SetListenOverride applies a start-option bind for this run.
+func (c *Config) SetListenOverride(addr string) {
+	c.listenOverride = strings.TrimSpace(addr)
+}
+
+// ListenOverride returns the start-option bind, or empty.
+func (c *Config) ListenOverride() string { return c.listenOverride }
+
+// EffectiveListenAddr is the address hz actually binds: the start option when
+// given, otherwise the configured one.
+//
+// Everything that reasons about where hz listens must use this rather than
+// ListenAddr — a compliance control reporting the file's value while the
+// process is bound somewhere else is worse than not reporting at all.
+func (c *Config) EffectiveListenAddr() string {
+	if c.listenOverride != "" {
+		return c.listenOverride
+	}
+	return c.ListenAddr
+}
+
 // AdminBoundToLoopback reports whether hz's own listener is reachable only
 // from the machine itself.
 //
@@ -1734,7 +1766,7 @@ func (c *Config) OIDCDisplayName() string {
 // It is a finding when hz binds a LAN address, because then the admin
 // interface — and its session cookie — cross the wire in the clear.
 func (c *Config) AdminBoundToLoopback() bool {
-	addr := strings.TrimSpace(c.ListenAddr)
+	addr := strings.TrimSpace(c.EffectiveListenAddr())
 	if addr == "" {
 		return false
 	}
