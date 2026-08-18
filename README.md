@@ -140,7 +140,21 @@ Open `http://localhost:8090` and log in with the admin token:
 docker exec hz cat /etc/homelab-horizon/config.json.token
 ```
 
-### Bare metal install
+### Install from a release
+
+```bash
+ARCH=linux-amd64   # or linux-arm64, linux-armv7
+curl -fSL -o hz.tar.gz \
+  https://github.com/IodeSystems/homelab-horizon/releases/latest/download/homelab-horizon-$ARCH.tar.gz
+tar -xzf hz.tar.gz
+sudo ./homelab-horizon-$ARCH        # installs itself, then serves
+```
+
+One file: the admin UI is compiled into the binary, so there is nothing else to
+place. Override with `STATIC_DIR` or `ui_dir` only if you want hz to serve a
+frontend of your own.
+
+### Bare metal install (from source)
 
 ```bash
 # Build (requires Go 1.25+ and Node.js)

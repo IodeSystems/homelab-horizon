@@ -258,7 +258,8 @@ type Config struct {
 	RateLimit *RateLimit `json:"rate_limit,omitempty"`
 
 	// UIDir is where the admin frontend lives on disk. Empty means the
-	// STATIC_DIR env var, then the working tree, then the install default —
+	// STATIC_DIR env var, then the working tree, then the copy compiled into
+	// the binary, then the pre-v0.1.0 install directory —
 	// see server.uiDir. The UI ships beside the binary rather than inside it
 	// (WEB-5/DEPLOY-5).
 	UIDir string `json:"ui_dir,omitempty"`
