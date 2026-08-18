@@ -369,6 +369,8 @@ Two things fell out of it:
   to find.
 
 - **next**: nothing outstanding.
-- **risks**: the legacy directory is left in place rather than deleted, so a
-  rollback to a pre-v0.1.0 binary still finds a UI. `bin/deploy` prints a line
-  saying it is now unused.
+- **risks**: `/usr/local/share/homelab-horizon/ui` was deleted from prod on
+  2026-08-18 once v0.1.0 was published and serving from the binary, so a
+  rollback to a pre-v0.1.0 binary on that box would find no UI — the API and the
+  `hz` CLI still work, and `make ui` + a copy to that path restores it.
+  `bin/deploy` prints a line whenever it finds one still present elsewhere.
