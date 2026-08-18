@@ -196,7 +196,12 @@ deploy_one() {
       # Asks the running server rather than looking for files: the UI is inside
       # the binary now, so a filesystem check would prove nothing about what is
       # actually being served.
-      ui_code=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8080/app/ || echo 000)
+      ui_code=000
+      for _ in 1 2 3 4 5; do
+        ui_code=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:8080/app/ 2>/dev/null)
+        [ \"\$ui_code\" != 000 ] && break
+        sleep 1
+      done
       case \$ui_code in
         200) echo '  ok: served from the binary' ;;
         503) echo '  *** WARNING: hz has no UI compiled in — the API works, the admin page will not ***' ;;
