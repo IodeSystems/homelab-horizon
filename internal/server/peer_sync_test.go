@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/monitor"
@@ -128,6 +129,16 @@ func newTestServer(t *testing.T, cfg *config.Config) *Server {
 	if err := config.Save(cfgPath, cfg); err != nil {
 		t.Fatalf("save initial config: %v", err)
 	}
+	// Mark the public-IP cache fresh. syncServices spawns
+	// `go s.refreshPublicIPIfStale()`, which on a stale cache makes a live
+	// network call and then SAVES the config — landing in this t.TempDir()
+	// after the test has finished, which races the cleanup and fails it with
+	// "directory not empty". A test should not depend on a detection service
+	// being reachable either.
+	if cfg.PublicIPLastChecked == 0 {
+		cfg.PublicIPLastChecked = time.Now().Unix()
+	}
+
 	s := &Server{
 		configPath:   cfgPath,
 		adminToken:   "test-admin",
