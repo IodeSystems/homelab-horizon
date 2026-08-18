@@ -265,8 +265,14 @@ Nothing is in flight and the backlog is empty. What remains is yours, not mine:
 
 Everything decided between 2026-08-15 and 2026-08-17 shipped and is archived in
 [done.md](done.md): the 7-day certificate warning, the whole user model
-(accounts, second factors, SSO, policy), both remaining PCI controls, and the
-VPN inactivity timeout.
+(accounts, second factors, SSO, policy), both remaining PCI controls, the VPN
+inactivity timeout, local DNS records with split-horizon overrides, and the
+`--listen` start option that made the 2.2.7 bind safe to try.
+
+**PCI standing on prod (2026-08-18):** 2.2.7 MET via the drop-in. `login_lockout`
+and `password_history` met by default. 10.5.1 is one button away. `8.2.8` idle
+timeout and `8.3.9` rotation are deliberate operator decisions, off until
+someone turns them on.
 
 ### ✅ Phase 0 leftovers (`aae461c`)
 
@@ -322,16 +328,27 @@ finished 2026-08-17. Score at capture: ✅14 · ⚠️4 · ❌11.
 
 ### Operator follow-ups (not code)
 
-- **Point the LAN's DHCP DNS at hz (192.168.1.160).** `desktop → 192.168.1.76`
-  is live and hz answers it, but the router hands out **itself** (192.168.1.1)
-  as the resolver and does not forward to hz — so nothing on the LAN asks hz for
-  local names, and the record helps only devices pointed at it explicitly. This
-  is the setting that makes local DNS records worth having; hz cannot change it
-  from here. Until then: `mosh 192.168.1.76` by address works.
+- **Point the LAN's DHCP DNS at hz (192.168.1.160)** — optional now, still
+  worth it. The router forwards *dotted* names to hz (proved by asking it for
+  `veliode.com` and getting hz's answer), so `desktop.lan` resolves everywhere
+  today. What it will not forward is a single-label name, because there is no
+  domain to forward it for. Pointing DHCP at hz directly makes bare names work
+  too; until then, use the qualified form.
 
-- **Re-import the Grafana dashboard** — the deployed one predates
-  `no_shared_admin_token`, `time_synchronised` and `patches_current`, so it is
-  three controls short. Copy it again from the Observability page.
+- **Anything pinned to `http://192.168.1.160:8080` must move** to
+  `https://hz.office.iodesystems.com` — bookmarks, scripts, `hz` CLI config. The
+  cleartext admin port is closed as of the 2.2.7 drop-in. `bin/deploy` is
+  unaffected; it works over SSH.
+
+- **Re-import the Grafana dashboard.** The deployed one predates nine controls
+  now — `no_shared_admin_token`, `time_synchronised`, `patches_current`,
+  `session_idle_timeout`, `login_lockout`, `password_history`,
+  `password_rotation`, `log_persistence` and `admin_access_encrypted` — so the
+  PCI table on it is missing most of what hz reports. Copy it again from the
+  Observability page.
+- **Click "Keep 12 months" on the audit card** to close 10.5.1. The journal is
+  persistent on that box but has no retention limit, so logs rotate on size
+  alone. One button; it writes a journald drop-in and restarts the journal.
 - **Set `pci_scope` on the real services.** Default is out-of-scope by design,
   so the per-service table stays empty until someone scopes services in — which
   reads identically to "nothing wrong".

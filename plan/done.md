@@ -199,3 +199,72 @@ of a service. 10 e2e assertions including the fixer against real journald.
   hz by its LAN address, possibly the person reading the warning.
 - **Prod reads 2.2.7 unmet**: `listen_addr` is `:8080`. Fixing it is an
   operator decision — confirm the HTTPS vhost works, then bind loopback.
+
+## ✅ Local DNS records — the split horizon (2026-08-17, `52bc315` + `--domain`)
+
+hz published names outward through Route53 and derived internal names from
+services, with no third option: a machine with no public presence had no name on
+the inside, and a public name could not be pointed at a LAN address for clients
+in here. The product is named after the idea.
+
+Found by debugging a live problem, not by reading the backlog. A phone could not
+reach a box every Mac on the network found instantly — the Macs were resolving it
+over mDNS and nothing else could resolve it at all.
+
+- Records live in config, not only in the generated hosts file, which is
+  rewritten wholesale from the service derivation on every sync. A record added
+  there by hand survived until the next service change; that was a trap.
+- Two directives, because they differ: service domains stay `address=/name/ip`
+  (matches the name and everything under it, right for a vhost), operator host
+  records default to `host-record` — exact, with a reverse lookup, because
+  "desktop" should not answer for "anything.desktop".
+- `local_dns_domain` makes one record answer bare AND qualified. This is the
+  part that mattered: a resolver upstream of hz will not forward a single-label
+  name, because there is no domain to forward it for. Proven on the live LAN —
+  through the router, `veliode.com` returned hz's answer and `desktop` returned
+  nothing.
+- `expand-hosts` was the obvious mechanism and the wrong one: it applies to
+  hosts-file and DHCP names and leaves `host-record` alone, so the config looked
+  correct and answered nothing. The expansion is per record instead.
+- `.local` is refused (RFC 6762 reserves it for mDNS; answering it over unicast
+  DNS works on some clients and not others).
+
+**Three bugs found on the way, all in behaviour:**
+
+- **Config slices were filtered in place** (`records[:0]`) while `updateConfig`
+  takes a SHALLOW copy, so the filter wrote into the array the live config still
+  pointed at. Deleting two records on the live box took a third with them and
+  lost the record the feature existed for. The same pattern was already in the
+  ban list, blessed iptables rules and zone tombstones; all four now allocate.
+- **`Reload()` is a `systemctl restart`**, called on every record change, so a
+  few records in quick succession tripped systemd's start limiter and would have
+  left the LAN with no resolver until someone ran `reset-failed` by hand.
+- **A failed reload returned 500** for a change already persisted and written,
+  reporting failure for something that had succeeded.
+
+## ✅ `--listen` as a start option (2026-08-17, `47b1943`, fixed by `9f7d58c`)
+
+Binding hz to loopback is the 2.2.7 remediation and the easiest way to lock
+yourself out of the box you are changing: if the HTTPS vhost is not really
+working, the address you were using stops answering and the config now says to
+keep doing that. So it is a flag that reverts on restart, to be proven before it
+is written into `config.json`.
+
+Applied to prod as a systemd drop-in on 2026-08-17. **2.2.7 now reads MET**:
+bound to `127.0.0.1:8080`, cleartext LAN port closed, `hz.office.iodesystems.com`
+serving app and API over TLS, `config.json` still `:8080` so removing the
+drop-in reverts it.
+
+**The first version defeated its own purpose.** The override was assigned onto
+`Config.ListenAddr`, and hz saves the config during startup for unrelated
+reasons (public IP detection, `EnsureLocalInterface`) — so it persisted, and the
+flag whose point is "a restart puts it back" made a permanent change. Caught by
+applying it to the live box and reading `config.json` afterwards. It now lives in
+an unexported field `Save` cannot serialise, with `EffectiveListenAddr()` used by
+the bind, the 2.2.7 control and the health card.
+
+The fixture assertion covering exactly this had passed and proved nothing: the VM
+never triggers a startup save, so there was no write to catch. It now forces one
+while the override is active. That was the fifth assertion this session that was
+green for the wrong reason — the recurring lesson is that a check which never
+exercises the failing path passes silently.
