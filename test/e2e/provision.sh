@@ -112,6 +112,19 @@ Restart=no
 StandardOutput=append:/var/log/hz.log
 StandardError=append:/var/log/hz.log
 
+# Mirrors the sandboxing hz installs on a real box (see config.go's unit
+# template). Without it this fixture ran hz with unrestricted /etc and happily
+# passed a log-retention fixer that could not write its drop-in in production —
+# a fixture that is softer than the deployment is a fixture that lies.
+ExecStartPre=+/bin/mkdir -p /etc/homelab-horizon /etc/letsencrypt /etc/haproxy/certs /var/lib/homelab-horizon /etc/systemd/journald.conf.d
+ProtectSystem=strict
+ReadWritePaths=-/etc/wireguard -/etc/dnsmasq.d -/etc/haproxy -/etc/letsencrypt -/etc/systemd/system -/etc/systemd/journald.conf.d -/proc/sys/net/ipv4 -/var/lib/haproxy -/var/lib/homelab-horizon -/etc/homelab-horizon
+ProtectHome=read-only
+PrivateTmp=false
+ProtectKernelTunables=true
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=false
+
 [Install]
 WantedBy=multi-user.target
 UNIT
