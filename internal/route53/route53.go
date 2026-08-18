@@ -53,6 +53,35 @@ func GetCurrentValue(zoneID, name, recordType, awsProfile string) (string, error
 
 // GetCurrentValues gets all current values of a DNS record set (for round-robin support)
 func GetCurrentValues(zoneID, name, recordType, awsProfile string) ([]string, error) {
+	current, err := getCurrentRecordSet(zoneID, name, recordType, awsProfile)
+	if err != nil || current == nil {
+		return nil, err
+	}
+	return current.Values, nil
+}
+
+// currentRecordSet is what Route53 holds right now for one name and type.
+type currentRecordSet struct {
+	TTL    int      `json:"TTL"`
+	Values []string `json:"Values"`
+}
+
+// needsUpdate reports whether Route53 has to be written.
+//
+// Split out from the call that shells to the AWS CLI so the decision itself is
+// testable: this comparison silently skipped TTL once, which made lowering a
+// TTL a no-op until the address changed anyway.
+func needsUpdate(current *currentRecordSet, values []string, ttl int) bool {
+	if current == nil {
+		return true
+	}
+	if !stringSlicesEqual(current.Values, values) {
+		return true
+	}
+	return ttl > 0 && current.TTL != ttl
+}
+
+func getCurrentRecordSet(zoneID, name, recordType, awsProfile string) (*currentRecordSet, error) {
 	logAWS(awsProfile, fmt.Sprintf("Getting current values for %s (%s)...", name, recordType))
 
 	ctx, cancel := context.WithTimeout(context.Background(), awsTimeout)
@@ -67,8 +96,8 @@ func GetCurrentValues(zoneID, name, recordType, awsProfile string) ([]string, er
 	args := []string{
 		"route53", "list-resource-record-sets",
 		"--hosted-zone-id", zoneID,
-		"--query", fmt.Sprintf("ResourceRecordSets[?Name=='%s.' && Type=='%s'].ResourceRecords[].Value", queryName, recordType),
-		"--output", "text",
+		"--query", fmt.Sprintf("ResourceRecordSets[?Name=='%s.' && Type=='%s'] | [0].{TTL: TTL, Values: ResourceRecords[].Value}", queryName, recordType),
+		"--output", "json",
 	}
 
 	cmd := exec.CommandContext(ctx, "aws", args...)
@@ -89,21 +118,17 @@ func GetCurrentValues(zoneID, name, recordType, awsProfile string) ([]string, er
 	}
 
 	raw := strings.TrimSpace(string(output))
-	if raw == "None" || raw == "" {
+	if raw == "null" || raw == "None" || raw == "" {
 		logAWS(awsProfile, fmt.Sprintf("Current values for %s: (empty)", name))
 		return nil, nil
 	}
 
-	// AWS CLI --output text separates values with tabs
-	var values []string
-	for _, v := range strings.Fields(raw) {
-		v = strings.TrimSpace(v)
-		if v != "" {
-			values = append(values, v)
-		}
+	var current currentRecordSet
+	if err := json.Unmarshal([]byte(raw), &current); err != nil {
+		return nil, fmt.Errorf("could not read the record set for %s: %w", name, err)
 	}
-	logAWS(awsProfile, fmt.Sprintf("Current values for %s: %v", name, values))
-	return values, nil
+	logAWS(awsProfile, fmt.Sprintf("Current values for %s: %v (ttl %ds)", name, current.Values, current.TTL))
+	return &current, nil
 }
 
 // DefaultTTL is the TTL hz publishes when a service does not name its own.
@@ -317,7 +342,13 @@ func SyncRecord(r Record) (changed bool, err error) {
 // SyncRecordSet updates a record set with multiple values (round-robin DNS).
 // All values are UPSERTed as a single record set so Route53 treats them as round-robin.
 func SyncRecordSet(r Record, values []string) (changed bool, err error) {
-	currentValues, err := GetCurrentValues(r.ZoneID, r.Name, r.Type, r.AWSProfile)
+	// Resolved here rather than inside UpdateRecordSet, so the comparison below
+	// is against the TTL that would actually be written.
+	if r.TTL <= 0 {
+		r.TTL = DefaultTTL
+	}
+
+	current, err := getCurrentRecordSet(r.ZoneID, r.Name, r.Type, r.AWSProfile)
 	if err != nil {
 		errStr := err.Error()
 		if strings.Contains(errStr, "AccessDenied") || strings.Contains(errStr, "not authorized") {
@@ -328,12 +359,12 @@ func SyncRecordSet(r Record, values []string) (changed bool, err error) {
 		return true, UpdateRecordSet(r, values)
 	}
 
-	if stringSlicesEqual(currentValues, values) {
-		logAWS(r.AWSProfile, fmt.Sprintf("%s already set to %v", r.Name, values))
+	if !needsUpdate(current, values, r.TTL) {
+		logAWS(r.AWSProfile, fmt.Sprintf("%s already set to %v (ttl %ds)", r.Name, values, r.TTL))
 		return false, nil
 	}
 
-	logAWS(r.AWSProfile, fmt.Sprintf("%s value mismatch: current=%v new=%v", r.Name, currentValues, values))
+	logAWS(r.AWSProfile, fmt.Sprintf("%s mismatch: current=%v new=%v ttl=%ds", r.Name, current, values, r.TTL))
 	return true, UpdateRecordSet(r, values)
 }
 
