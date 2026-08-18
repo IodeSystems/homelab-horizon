@@ -9,8 +9,12 @@ LDFLAGS=-ldflags "-s -w -X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIM
 # Server builds embed the per-arch hz operator-CLI binaries (served at
 # /admin/hz/*) behind the 'hzembed' tag; the hz-embed target cross-compiles them
 # into this dir first. A plain `go build`/CI omits the tag and needs no binaries.
-SERVER_TAGS=hzembed
+SERVER_TAGS=hzembed,uiembed
 HZ_EMBED_DIR=internal/server/hzbin/bin
+# The admin UI is compiled in for release builds, so a release is one file that
+# renders its own login page. ui-embed stages ui/dist here first; a plain
+# `go build`/CI omits the tag and needs no staged assets.
+UI_EMBED_DIR=internal/server/uiembed/dist
 
 # Default target
 .PHONY: all
@@ -33,12 +37,12 @@ ui/dist/index.html:
 
 # Build for current platform (includes frontend)
 .PHONY: build
-build: ui hz-embed
+build: ui hz-embed ui-embed
 	CGO_ENABLED=0 go build -tags $(SERVER_TAGS) $(LDFLAGS) -o $(BINARY_NAME) $(CMD_PATH)
 
 # Build Go only (uses stub frontend if ui/dist doesn't exist)
 .PHONY: build-go
-build-go: ui/dist/index.html hz-embed
+build-go: ui/dist/index.html hz-embed ui-embed
 	CGO_ENABLED=0 go build -tags $(SERVER_TAGS) $(LDFLAGS) -o $(BINARY_NAME) $(CMD_PATH)
 
 # Build the hz operator CLI (admin-token client: service CRUD + sync + setup)
@@ -48,6 +52,13 @@ build-hz:
 
 # Cross-compile the hz binaries the server embeds and serves at /admin/hz/bin/.
 # Always builds all served arches regardless of the server's own arch.
+.PHONY: ui-embed
+ui-embed: ui/dist/index.html
+	@rm -rf $(UI_EMBED_DIR)
+	@mkdir -p $(UI_EMBED_DIR)
+	@cp -r ui/dist/. $(UI_EMBED_DIR)/
+	@du -sh $(UI_EMBED_DIR) | sed 's/^/  ui embedded: /'
+
 .PHONY: hz-embed
 hz-embed:
 	@rm -rf $(HZ_EMBED_DIR)
@@ -85,17 +96,17 @@ build-all: ui build-linux-amd64 build-linux-arm64 build-linux-arm
 
 # Linux AMD64 (most servers, x86_64)
 .PHONY: build-linux-amd64
-build-linux-amd64: ui dist hz-embed
+build-linux-amd64: ui dist hz-embed ui-embed
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags $(SERVER_TAGS) $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-amd64 $(CMD_PATH)
 
 # Linux ARM64 (Raspberry Pi 4/5, modern ARM servers)
 .PHONY: build-linux-arm64
-build-linux-arm64: ui dist hz-embed
+build-linux-arm64: ui dist hz-embed ui-embed
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags $(SERVER_TAGS) $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-arm64 $(CMD_PATH)
 
 # Linux ARM (Raspberry Pi 2/3, older 32-bit ARM)
 .PHONY: build-linux-arm
-build-linux-arm: ui dist hz-embed
+build-linux-arm: ui dist hz-embed ui-embed
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -tags $(SERVER_TAGS) $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-armv7 $(CMD_PATH)
 
 # Clean build artifacts
@@ -172,19 +183,13 @@ payload: ui
 
 # Build release archives
 .PHONY: release
-# Each archive carries the binary AND public/, because the UI is no longer
-# inside the binary: an archive with only the executable would install a gateway
-# whose admin page cannot render. bin/deploy relies on this layout for
-# --version deploys.
+# One file per archive. The UI is compiled into the binary (SERVER_TAGS
+# includes uiembed), so there is no second artifact to install correctly and no
+# way to land a gateway whose admin page cannot render.
 release: clean dist ui build-all
 	@echo "Creating release archives..."
 	@for arch in linux-amd64 linux-arm64 linux-armv7; do \
-		rm -rf dist/stage-$$arch; \
-		mkdir -p dist/stage-$$arch/public; \
-		cp dist/$(BINARY_NAME)-$$arch dist/stage-$$arch/$(BINARY_NAME)-$$arch; \
-		cp -r ui/dist/. dist/stage-$$arch/public/; \
-		tar -czf dist/$(BINARY_NAME)-$$arch.tar.gz -C dist/stage-$$arch .; \
-		rm -rf dist/stage-$$arch; \
+		tar -czf dist/$(BINARY_NAME)-$$arch.tar.gz -C dist $(BINARY_NAME)-$$arch; \
 	done
 	@echo "Release archives created in dist/"
 	@ls -la dist/*.tar.gz

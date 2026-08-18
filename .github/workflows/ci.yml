@@ -27,9 +27,8 @@ jobs:
           node-version: '24'
           cache: 'pnpm'
           cache-dependency-path: ui/pnpm-lock.yaml
-      # The SPA is no longer embedded (WEB-5) — it ships beside the binary and
-      # is installed by bin/deploy. Built here to gate the UI on every push,
-      # and because ui/dist is gitignored.
+      # Built here to gate the UI on every push, because ui/dist is gitignored,
+      # and because release builds compile it into the binary.
       - name: build ui
         working-directory: ui
         run: |
@@ -43,3 +42,12 @@ jobs:
         run: go test ./...
       - name: build
         run: go build ./...
+
+      # The release build is a different compilation: the embed_on.go files
+      # behind the hzembed/uiembed tags are not type-checked by anything above,
+      # so a broken embed would otherwise surface only while cutting a release.
+      - name: build + test release tags
+        run: |
+          make ui-embed hz-embed
+          go build -tags hzembed,uiembed ./cmd/homelab-horizon
+          go test -tags hzembed,uiembed ./internal/server/ -run 'TestSPA|TestEmbeddedUI'
