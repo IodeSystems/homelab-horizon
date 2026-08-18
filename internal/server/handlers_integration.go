@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -144,11 +145,34 @@ func (s *Server) selfJobs() []integration.ScrapeJob {
 		port = "8080"
 	}
 
+	// Where hz can actually be scraped depends on where it is bound.
+	//
+	// hz serves /metrics on its own listener, which is the one PCI DSS 2.2.7
+	// wants on loopback. Advertising the LAN address after that bind hands
+	// Prometheus a target that refuses connections, and the first symptom is a
+	// dashboard going blank rather than anything naming the cause. When hz is
+	// loopback-bound and an https admin_url exists, the vhost is the reachable
+	// route to the same endpoint, so that is what gets advertised.
+	scheme := ""
+	target := net.JoinHostPort(addr, port)
+	if cfg.AdminBoundToLoopback() {
+		if host, tlsPort, ok := adminVhostTarget(cfg); ok {
+			scheme = "https"
+			target = net.JoinHostPort(host, tlsPort)
+		} else {
+			// No vhost to fall back to: say so with the address rather than
+			// silently advertising one nothing can reach. Only a Prometheus on
+			// this host can scrape it in this state.
+			target = net.JoinHostPort("127.0.0.1", port)
+		}
+	}
+
 	jobs := []integration.ScrapeJob{{
 		Name:   "hz",
 		Bearer: cfg.ScrapeToken,
+		Scheme: scheme,
 		Targets: []integration.ScrapeTarget{{
-			Address: net.JoinHostPort(addr, port),
+			Address: target,
 			Path:    "/metrics",
 		}},
 	}}
@@ -383,4 +407,23 @@ func (s *Server) handleIntegrationPromTargets(w http.ResponseWriter, r *http.Req
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(body)
+}
+
+// adminVhostTarget returns the host and port of hz's own https vhost, from
+// admin_url. Only https counts: an http vhost would defeat the reason hz was
+// bound to loopback in the first place.
+func adminVhostTarget(cfg *config.Config) (host, port string, ok bool) {
+	raw := strings.TrimSpace(cfg.AdminURL)
+	if raw == "" {
+		return "", "", false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+		return "", "", false
+	}
+	port = u.Port()
+	if port == "" {
+		port = "443"
+	}
+	return u.Hostname(), port, true
 }

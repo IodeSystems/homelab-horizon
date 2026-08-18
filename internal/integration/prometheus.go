@@ -13,8 +13,12 @@ import (
 // different paths — needed for multi-path rules. It is the neutral representation
 // both service metrics and non-service exporters are rendered from.
 type ScrapeJob struct {
-	Name    string
-	Bearer  string
+	Name   string
+	Bearer string
+	// Scheme is "https" when the target must be reached over TLS, empty for
+	// Prometheus's default of http. Needed once a target is only reachable
+	// through a TLS vhost rather than at its own address.
+	Scheme  string
 	Targets []ScrapeTarget
 }
 
@@ -70,6 +74,9 @@ func ScrapeYAML(jobs []ScrapeJob) string {
 
 	for _, j := range jobs {
 		fmt.Fprintf(&sb, "  - job_name: %s\n", yamlScalar(j.Name))
+		if j.Scheme != "" {
+			fmt.Fprintf(&sb, "    scheme: %s\n", yamlScalar(j.Scheme))
+		}
 		if j.Bearer != "" {
 			sb.WriteString("    authorization:\n")
 			sb.WriteString("      type: Bearer\n")
