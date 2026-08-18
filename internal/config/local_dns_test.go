@@ -1,6 +1,11 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestLocalDNSRecordValidate(t *testing.T) {
 	tests := []struct {
@@ -119,5 +124,46 @@ func TestLocalRecordsAreNormalized(t *testing.T) {
 	got := cfg.DeriveDNSMappings()
 	if got["desktop"] != "192.168.1.76" {
 		t.Fatalf("not normalized: %v", got)
+	}
+}
+
+// --listen must not survive a save. hz writes the config during startup for
+// unrelated reasons (public IP detection), and persisting the override would
+// turn a flag that reverts on restart into a permanent change — which is
+// exactly what happened on a live box before this was fixed.
+func TestListenOverrideIsNotPersisted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	cfg := &Config{ListenAddr: ":8080"}
+	cfg.SetListenOverride("127.0.0.1:8080")
+
+	if got := cfg.EffectiveListenAddr(); got != "127.0.0.1:8080" {
+		t.Fatalf("effective address = %q, want the override", got)
+	}
+	if !cfg.AdminBoundToLoopback() {
+		t.Error("the 2.2.7 control should follow the effective address")
+	}
+
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if strings.Contains(string(body), "127.0.0.1:8080") {
+		t.Fatalf("the override was written to disk:\n%s", body)
+	}
+
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if reloaded.EffectiveListenAddr() != ":8080" {
+		t.Fatalf("after reload the bind is %q; a restart must revert it", reloaded.EffectiveListenAddr())
+	}
+	if reloaded.AdminBoundToLoopback() {
+		t.Error("a reloaded config should report the file's binding, not the old override")
 	}
 }

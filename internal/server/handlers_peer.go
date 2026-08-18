@@ -337,6 +337,10 @@ func (s *Server) applyNewConfig(newCfg *config.Config) error {
 	old := s.cfg()
 	// Preserve runtime-only fields that should never come from the primary.
 	newCfg.AdminToken = old.AdminToken
+	// The --listen override belongs to this process, not to the fleet: a
+	// config pulled from the primary must not silently move where this
+	// instance is bound.
+	newCfg.SetListenOverride(old.ListenOverride())
 	s.config.Store(newCfg)
 
 	if err := config.Save(s.configPath, newCfg); err != nil {

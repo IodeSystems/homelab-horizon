@@ -257,7 +257,7 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 				"(PCI DSS 2.2.7). Try it first as a start option — restart hz with "+
 				"--listen 127.0.0.1:8080, which reverts on the next restart — then set "+
 				"listen_addr in config.json once the HTTPS vhost is confirmed working.",
-			cfg.ListenAddr))
+			cfg.EffectiveListenAddr()))
 	}
 	audit.Extras = map[string]any{
 		"persistent":     facts.journalPersistent,
@@ -266,7 +266,10 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 		// 2.2.7 rides along on the same card: both are about how this box is
 		// administered and audited, and neither belongs to a service.
 		"admin_loopback_only": cfg.AdminBoundToLoopback(),
-		"listen_addr":         cfg.ListenAddr,
+		"listen_addr":         cfg.EffectiveListenAddr(),
+		// Surfaced separately so the page can say "for this run" rather than
+		// implying the file was changed.
+		"listen_override": cfg.ListenOverride(),
 	}
 	resp.Components = append(resp.Components, audit)
 
