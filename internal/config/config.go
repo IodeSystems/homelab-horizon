@@ -2279,7 +2279,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStartPre=+/bin/mkdir -p %s /etc/letsencrypt /etc/haproxy/certs /var/lib/homelab-horizon
+ExecStartPre=+/bin/mkdir -p %s /etc/letsencrypt /etc/haproxy/certs /var/lib/homelab-horizon /etc/systemd/journald.conf.d
 ExecStart=%s
 WorkingDirectory=%s
 Restart=on-failure
@@ -2290,7 +2290,7 @@ Group=root
 # File system isolation. /var/lib/homelab-horizon holds static-site releases
 # (the only writable, non-sensitive place for served files under the sandbox).
 ProtectSystem=strict
-ReadWritePaths=-/etc/wireguard -/etc/dnsmasq.d -/etc/haproxy -/etc/letsencrypt -/etc/systemd/system -/proc/sys/net/ipv4 -/var/lib/haproxy -/var/lib/homelab-horizon -%s
+ReadWritePaths=-/etc/wireguard -/etc/dnsmasq.d -/etc/haproxy -/etc/letsencrypt -/etc/systemd/system -/etc/systemd/journald.conf.d -/proc/sys/net/ipv4 -/var/lib/haproxy -/var/lib/homelab-horizon -%s
 ProtectHome=read-only
 PrivateTmp=true
 ProtectKernelTunables=true
