@@ -344,18 +344,34 @@ finished 2026-08-17. Score at capture: ✅14 · ⚠️4 · ❌11.
   cleartext admin port is closed as of the 2.2.7 drop-in. `bin/deploy` is
   unaffected; it works over SSH.
 
-- **Re-import the Grafana dashboard.** The deployed one predates nine controls
-  now — `no_shared_admin_token`, `time_synchronised`, `patches_current`,
-  `session_idle_timeout`, `login_lockout`, `password_history`,
-  `password_rotation`, `log_persistence` and `admin_access_encrypted` — so the
-  PCI table on it is missing most of what hz reports. Copy it again from the
-  Observability page.
-- **Click "Keep 12 months" on the audit card** to close 10.5.1. The journal is
-  persistent on that box but has no retention limit, so logs rotate on size
-  alone. One button; it writes a journald drop-in and restarts the journal.
 - **Set `pci_scope` on the real services.** Default is out-of-scope by design,
   so the per-service table stays empty until someone scopes services in — which
   reads identically to "nothing wrong".
+
+Two entries were deleted here on 2026-08-18 because they were wrong, not
+because they were done. Recorded so the same claims are not re-derived:
+
+- ~~Re-import the Grafana dashboard~~ — the deployed dashboard is byte-identical
+  to what hz generates, and its PCI panel queries `hz_control_state`
+  generically, so new controls appear without touching it. The plan asserted it
+  was nine controls behind; nobody had opened it.
+- ~~Click "Keep 12 months" to close 10.5.1~~ — closed in code instead
+  (`ReadWritePaths` for the journald drop-in). `log_persistence` reads 1 on
+  prod.
+
+### PCI switches still off (2026-08-18, read from prod `hz_control_state`)
+
+MET: 2.2.7 admin exposure · 4.2.1 TLS + floor · 6.3.3 patches · 8.3.4 lockout ·
+8.3.7 history · 10.5.1 retention · 10.6 clock.
+
+Unmet, each an operator decision rather than a defect:
+
+| Control | Requirement | What turning it on costs |
+|---|---|---|
+| `no_shared_admin_token` | 8.2.1 | Now genuinely available — accounts exist. Disable the shared token; recovery is `homelab-horizon --enable-admin-token` at the console. Check what still authenticates with it first. |
+| `session_idle_timeout` | 8.2.8 | Signs *you* out too. Standard wants ≤15 min. |
+| `password_rotation` | 8.3.9 | Accounts with a second factor are exempt, which is what the standard allows. |
+| `vpn_mfa_enabled` + `no_admin_bypass` + `session_bounded` | 8.4.3, 8.5.1, 8.2.8 | The VPN MFA jail. Enforcement scope and the admin bypass are separate switches; read the lockout recovery doc before enabling on a remote box. |
 
 ## Known cleanups (not blocking)
 
