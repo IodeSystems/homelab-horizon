@@ -332,3 +332,43 @@ it — a passing unit test would have said yes at every step.
 - **not changed**: hand-entered records in the DNS page still default to 300.
   Those are typed once for a specific purpose and are not all pointed at the
   dynamic address; the field is editable if one should be shorter.
+
+
+## WEB-5 reversed: the UI is compiled in again (2026-08-18)
+
+Cutting v0.1.0 made the cost concrete. Canon serves a deployed service's assets
+from its payload, which is right for a service hz deploys and wrong for hz
+itself: hz is what you scp onto a gateway that is already broken, and a release
+whose admin page depends on a second artifact being installed correctly is a
+release that can land half-working.
+
+So the UI is compiled in behind a `uiembed` build tag, mirroring `hzbin` exactly
+— a plain `go build` and CI still need no prebuilt assets. Release archives are
+one file and `bin/deploy` copies one thing.
+
+**The ordering is the load-bearing decision.** `STATIC_DIR`, then `ui_dir`, then
+`./ui/dist`, then embedded, then the legacy install directory. Embedded
+deliberately outranks `/usr/local/share/homelab-horizon/ui`, because every box
+deployed between v0.0.6 and now has a frontend sitting there, and if disk won,
+each upgrade would keep serving the old UI against a new API — invisibly, and
+looking exactly like an upgrade that did nothing. A tagged test pins it.
+
+Verified on prod rather than argued: with the legacy directory moved aside,
+`/app/` still answered 200, assets still carried `immutable`, and traversal
+still 404'd. Comparing bytes had proved nothing — both copies came from the same
+build, so they were identical either way.
+
+Two things fell out of it:
+
+- Serving goes through `fs.FS` for both sources, which retires the hand-written
+  path-traversal guard the disk-only version needed. `fs.ValidPath` rejects what
+  it used to check by hand.
+- CI now builds and tests the tagged compilation. Nothing was compiling
+  `embed_on.go` before — in `hzbin` either — so a broken embed would only have
+  surfaced while cutting a release, which is precisely when it is most expensive
+  to find.
+
+- **next**: nothing outstanding.
+- **risks**: the legacy directory is left in place rather than deleted, so a
+  rollback to a pre-v0.1.0 binary still finds a UI. `bin/deploy` prints a line
+  saying it is now unused.

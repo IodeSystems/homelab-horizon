@@ -314,7 +314,9 @@ finished 2026-08-17. Score at capture: ✅14 · ⚠️4 · ❌11.
 
 - ✅ **CLI-1** (`0f602b9`) cobra, with the old single-dash flags translated at
   the edge so a printed recovery step keeps working.
-- ✅ **WEB-5 / DEPLOY-5 + DEPLOY-9** — UI served from disk, `payload:` target,
+- ↩️ **WEB-5 / DEPLOY-5 + DEPLOY-9** — **reversed 2026-08-18**, see
+  [done.md](done.md#web-5-reversed-the-ui-is-compiled-in-again-2026-08-18). Was:
+  UI served from disk, `payload:` target,
   release archives carry `public/`, deploy installs both halves atomically and
   root-owned. A missing UI explains itself rather than 404ing the login page.
 - ✅ **WEB-1** — MUI v9 and pnpm. pnpm immediately caught a phantom
