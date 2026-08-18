@@ -2,71 +2,114 @@ package server
 
 import (
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/iodesystems/homelab-horizon/internal/server/uiembed"
 )
 
-// The admin SPA, served from disk rather than from the binary (WEB-5/DEPLOY-5).
+// The admin SPA, served from the binary when it has one and from disk when it
+// does not.
 //
-// hz used to embed ui/dist with //go:embed. Canon serves a deployed service's
-// assets from the payload instead, so the UI ships beside the binary and is
-// installed with it.
+// hz embedded ui/dist, then un-embedded it (WEB-5) to match canon, which serves
+// a deployed service's assets from its payload. That is right for a service hz
+// deploys and wrong for hz itself: hz is the thing you scp onto a gateway that
+// is already broken, and a release whose admin page needs a second artifact
+// installed correctly is a release that can land half-working. So the binary
+// carries the UI again, and the disk paths remain for the cases that need them
+// — a slot deploy pointing at its own payload, and a working tree during
+// development.
 //
-// The tradeoff is real and worth stating where the code is: a single binary
-// with the UI inside it could be scp'd onto a broken gateway and still render.
-// Now it cannot, so the failure has to be legible — a missing directory
-// explains itself below rather than 404ing the login page.
+// Precedence is deliberate: an explicitly configured directory beats the
+// working tree, which beats the embedded copy, which beats the legacy install
+// directory. Embedded outranks DefaultUIDir specifically so a stale directory
+// left by an older deploy cannot shadow the UI compiled into the new binary —
+// that would be invisible and would look like the upgrade silently failed.
 
-// DefaultUIDir is where the deploy installs the built frontend.
-const DefaultUIDir = "/usr/local/share/homelab-horizon/ui"
-
-// uiDir resolves where the SPA lives, in precedence order:
+// DefaultUIDir is where deploys before v0.1.0 installed the built frontend.
+// Still honoured so those installs keep working; no longer written to.
 //
-//  1. STATIC_DIR — the canon env var, so a slot deploy can point at its payload
-//  2. ui_dir in config — for an operator who keeps it somewhere else
-//  3. ./ui/dist — the working tree, so `go run` and `make dev` serve the app
-//     without installing anything
-//  4. DefaultUIDir — where the deploy puts it
-func (s *Server) uiDir() string {
+// A var rather than a const only so tests can point it at a temp directory —
+// the ordering against the embedded copy is the thing worth proving and it
+// cannot be proved against a path the test cannot create.
+var DefaultUIDir = "/usr/local/share/homelab-horizon/ui"
+
+// uiSource is where the SPA is being served from, and how to describe it if
+// nothing can be found.
+type uiSource struct {
+	fsys fs.FS
+	// from names the source for the operator: a path, or "compiled into the
+	// binary". Only surfaced in the missing-UI page and the health card.
+	from string
+}
+
+// resolveUI picks the first source that actually holds an index.html.
+//
+// Every candidate is probed rather than assumed, because the failure this
+// avoids — a configured path that exists but is empty — used to produce a blank
+// page instead of an explanation.
+func (s *Server) resolveUI() (uiSource, bool) {
+	var disk []string
+
+	// 1. STATIC_DIR — the canon env var, so a slot deploy can point at its payload.
 	if dir := strings.TrimSpace(os.Getenv("STATIC_DIR")); dir != "" {
-		return dir
+		disk = append(disk, dir)
 	}
+	// 2. ui_dir in config — for an operator who keeps it somewhere else.
 	if dir := strings.TrimSpace(s.cfg().UIDir); dir != "" {
-		return dir
+		disk = append(disk, dir)
 	}
-	if _, err := os.Stat(filepath.Join("ui", "dist", "index.html")); err == nil {
-		return filepath.Join("ui", "dist")
+	// 3. ./ui/dist — the working tree, so `make dev` serves what was just built
+	//    rather than whatever was compiled in at build time.
+	disk = append(disk, filepath.Join("ui", "dist"))
+
+	for _, dir := range disk {
+		fsys := os.DirFS(dir)
+		if _, err := fs.Stat(fsys, "index.html"); err == nil {
+			return uiSource{fsys: fsys, from: dir}, true
+		}
 	}
-	return DefaultUIDir
+
+	// 4. Compiled in, for a release binary on a real gateway.
+	if fsys, ok := uiembed.FS(); ok {
+		return uiSource{fsys: fsys, from: "compiled into the binary"}, true
+	}
+
+	// 5. Where deploys before v0.1.0 put it.
+	legacy := os.DirFS(DefaultUIDir)
+	if _, err := fs.Stat(legacy, "index.html"); err == nil {
+		return uiSource{fsys: legacy, from: DefaultUIDir}, true
+	}
+
+	return uiSource{}, false
 }
 
 func (s *Server) setupSPA(mux *http.ServeMux) {
 	mux.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {
-		dir := s.uiDir()
-		index := filepath.Join(dir, "index.html")
-		if _, err := os.Stat(index); err != nil {
-			s.serveMissingUI(w, dir)
+		src, ok := s.resolveUI()
+		if !ok {
+			s.serveMissingUI(w)
 			return
 		}
 
-		// Strip /app/ to get the path within the UI directory.
+		// Strip /app/ to get the path within the UI.
 		rel := strings.TrimPrefix(r.URL.Path, "/app/")
 		if rel == "" {
 			rel = "index.html"
 		}
 
-		// Resolve inside dir and refuse anything that escapes it. The embedded
-		// FS could not be walked out of; a directory on disk can, so "../"
-		// has to be rejected rather than trusted.
-		clean := filepath.Join(dir, filepath.Clean("/"+rel))
-		if !strings.HasPrefix(clean, filepath.Clean(dir)+string(os.PathSeparator)) {
+		// fs.FS rejects "..", absolute paths and empty elements by contract, so
+		// this one check replaces the manual traversal guard the disk-only
+		// version needed.
+		if !fs.ValidPath(rel) {
 			http.NotFound(w, r)
 			return
 		}
 
-		if info, err := os.Stat(clean); err == nil && !info.IsDir() {
+		if info, err := fs.Stat(src.fsys, rel); err == nil && !info.IsDir() {
 			// Vite emits content-hashed filenames under assets/, so those are
 			// safe to cache forever. Everything else (notably index.html) must
 			// revalidate every load — otherwise a new deploy leaves clients on
@@ -77,25 +120,24 @@ func (s *Server) setupSPA(mux *http.ServeMux) {
 			} else {
 				w.Header().Set("Cache-Control", "no-cache")
 			}
-			http.ServeFile(w, r, clean)
+			http.ServeFileFS(w, r, src.fsys, rel)
 			return
 		}
 
 		// Not a file — serve index.html so TanStack Router can handle the
 		// route client-side, preserving the URL.
 		w.Header().Set("Cache-Control", "no-cache")
-		http.ServeFile(w, r, index)
+		http.ServeFileFS(w, r, src.fsys, "index.html")
 	})
 }
 
 // serveMissingUI explains an absent frontend instead of 404ing it.
 //
-// This is the failure un-embedding introduces, and the one place an operator
-// meets it is the page they were trying to log into. A bare 404 there reads as
-// "hz is broken"; naming the directory and the fix turns it into a two-minute
-// problem. The API and the hz CLI are unaffected, which is worth saying too,
-// because that is how the box gets administered until this is fixed.
-func (s *Server) serveMissingUI(w http.ResponseWriter, dir string) {
+// Only reachable now for a binary built without the uiembed tag and run with no
+// UI on disk — `go build ./...` output, or a hand-rolled build. The operator
+// meets it on the page they were trying to log into, so it names the fix rather
+// than 404ing.
+func (s *Server) serveMissingUI(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusServiceUnavailable)
@@ -107,11 +149,12 @@ func (s *Server) serveMissingUI(w http.ResponseWriter, dir string) {
  .muted{color:#666}
 </style>
 <h1>The admin UI is not installed</h1>
-<p>hz is running, but it found no frontend at <code>%s</code>.</p>
-<p>The UI ships beside the binary rather than inside it, so an upgrade that
-copied only the binary lands here. Redeploy with <code>./bin/deploy</code>,
-which installs both, or copy <code>ui/dist</code> to that path.</p>
+<p>hz is running, but this build has no UI compiled in and none on disk.</p>
+<p>Release binaries carry the UI inside them — build with <code>make</code>
+rather than a plain <code>go build</code>, or point <code>STATIC_DIR</code> (or
+<code>ui_dir</code> in the config) at a built frontend. Looked in
+<code>%s</code> and <code>%s</code>.</p>
 <p class="muted">The API and the <code>hz</code> CLI are unaffected — the box is
 still administrable while you sort this out.</p>
-`, dir)
+`, filepath.Join("ui", "dist"), DefaultUIDir)
 }

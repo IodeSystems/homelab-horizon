@@ -155,34 +155,24 @@ deploy_one() {
   echo
   echo "=== $host ($arch${version:+, $version})"
 
+  # One artifact. The binary carries the admin UI (SERVER_TAGS includes
+  # uiembed), so there is no second thing to copy and no window where the
+  # binary and the frontend disagree about which version they are.
   if [ -z "$version" ]; then
     scp "dist/homelab-horizon-$arch" "$host:/tmp/homelab-horizon.new"
-    # The frontend, as a tarball: scp -r of a directory tree is slower and
-    # leaves a half-copied directory behind if it dies mid-transfer.
-    [ -f ui/dist/index.html ] || err "ui/dist is empty — run 'make ui' first"
-    tar -czf /tmp/hz-ui.tar.gz -C ui/dist .
-    scp /tmp/hz-ui.tar.gz "$host:/tmp/hz-ui.tar.gz"
-    rm -f /tmp/hz-ui.tar.gz
   else
     local url="https://github.com/$REPO/releases/download/$version/homelab-horizon-$arch.tar.gz"
     echo "Fetching $url on $host..."
     # -f turns a 404 (bad tag) into a real error instead of writing the
     # HTML error page to disk and "succeeding".
-    # Release archives carry the binary and public/ side by side (see the
-    # release target); repackage the UI half into the same shape the local
-    # build path uses, so the install step below is identical either way.
+    # Archives from v0.1.0 on hold just the binary; older ones also contain
+    # public/, which is ignored — the binary that comes with it embeds its own.
     ssh "$host" "set -e
       rm -rf /tmp/hz-release && mkdir -p /tmp/hz-release
       cd /tmp/hz-release
       curl -fSL -o homelab-horizon-$arch.tar.gz '$url'
       tar -xzf homelab-horizon-$arch.tar.gz
       mv homelab-horizon-$arch /tmp/homelab-horizon.new
-      if [ -d public ]; then
-        tar -czf /tmp/hz-ui.tar.gz -C public .
-      else
-        echo 'deploy: release $version has no public/ — it predates WEB-5; the UI will not be updated' >&2
-        rm -f /tmp/hz-ui.tar.gz
-      fi
       cd /tmp && rm -rf /tmp/hz-release
     "
   fi
@@ -191,33 +181,6 @@ deploy_one() {
     sudo mv /tmp/homelab-horizon.new $REMOTE_PATH
     sudo chmod +x $REMOTE_PATH
 
-    # Install the UI into a staging directory and swap it in, so a client
-    # loading the page mid-deploy never sees a half-written tree. The old
-    # directory is kept until the swap succeeds.
-    if [ -f /tmp/hz-ui.tar.gz ]; then
-      echo 'Installing admin UI...'
-      sudo rm -rf ${REMOTE_UI_DIR}.new
-      sudo mkdir -p ${REMOTE_UI_DIR}.new
-      # --no-same-owner plus an explicit chown: tar preserves the uid from the
-      # build machine, and if that uid exists on the target, that user can
-      # rewrite the admin interface's JavaScript. hz serves this directory to
-      # whoever administers the box, so it belongs to root.
-      sudo tar -xzf /tmp/hz-ui.tar.gz --no-same-owner -C ${REMOTE_UI_DIR}.new
-      sudo chown -R root:root ${REMOTE_UI_DIR}.new
-      sudo find ${REMOTE_UI_DIR}.new -type d -exec chmod 755 {} +
-      sudo find ${REMOTE_UI_DIR}.new -type f -exec chmod 644 {} +
-      if [ -f ${REMOTE_UI_DIR}.new/index.html ]; then
-        sudo mkdir -p ${REMOTE_UI_DIR%/*}
-        sudo rm -rf ${REMOTE_UI_DIR}.old
-        if [ -d $REMOTE_UI_DIR ]; then sudo mv $REMOTE_UI_DIR ${REMOTE_UI_DIR}.old; fi
-        sudo mv ${REMOTE_UI_DIR}.new $REMOTE_UI_DIR
-        sudo rm -rf ${REMOTE_UI_DIR}.old
-      else
-        echo '*** UI archive had no index.html — leaving the installed UI alone ***' >&2
-        sudo rm -rf ${REMOTE_UI_DIR}.new
-      fi
-      rm -f /tmp/hz-ui.tar.gz
-    fi
     echo 'Installing systemd service using binary...'
     sudo mkdir -p /etc/homelab-horizon
     cd /etc/homelab-horizon
@@ -229,11 +192,18 @@ deploy_one() {
       echo 'Checking status...'
       sudo systemctl status homelab-horizon --no-pager -l | head -20
       echo ''
-      echo 'Checking the admin UI is installed...'
-      if [ -f $REMOTE_UI_DIR/index.html ]; then
-        echo "  ok: $REMOTE_UI_DIR"
-      else
-        echo "  *** WARNING: no UI at $REMOTE_UI_DIR — the API works, the admin page will not ***"
+      echo 'Checking the admin UI renders...'
+      # Asks the running server rather than looking for files: the UI is inside
+      # the binary now, so a filesystem check would prove nothing about what is
+      # actually being served.
+      ui_code=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8080/app/ || echo 000)
+      case \$ui_code in
+        200) echo '  ok: served from the binary' ;;
+        503) echo '  *** WARNING: hz has no UI compiled in — the API works, the admin page will not ***' ;;
+        *)   printf '  could not check (HTTP %s) — hz may be bound elsewhere\n' \$ui_code ;;
+      esac
+      if [ -d $REMOTE_UI_DIR ]; then
+        echo "  note: $REMOTE_UI_DIR is left over from an older deploy and is no longer used"
       fi
       echo 'Auth token:'
       for i in {1..5}; do

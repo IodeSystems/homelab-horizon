@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/server/uiembed"
 )
 
 // spaServer returns a Server whose UI lives in a temp dir, plus the dir.
@@ -103,9 +104,17 @@ func TestSPARefusesPathTraversal(t *testing.T) {
 	}
 }
 
-// A missing UI is the failure un-embedding introduces, and it lands on the
-// login page. It has to explain itself rather than 404.
+// Reachable only for a build with no UI compiled in and none on disk — which
+// is what `go build ./...` produces. It lands on the login page, so it has to
+// explain itself rather than 404.
 func TestSPAExplainsAMissingUI(t *testing.T) {
+	if _, embedded := uiembed.FS(); embedded {
+		// Not a gap in coverage: with the UI compiled in, resolution always
+		// succeeds and this page cannot be reached. Asserting it here would
+		// require breaking the embed to prove a case that build does not have.
+		t.Skip("this build has the UI compiled in; the missing-UI page is unreachable")
+	}
+
 	s := &Server{}
 	s.config.Store(&config.Config{UIDir: filepath.Join(t.TempDir(), "absent")})
 
@@ -114,7 +123,7 @@ func TestSPAExplainsAMissingUI(t *testing.T) {
 		t.Fatalf("status = %d, want 503", w.Code)
 	}
 	body := w.Body.String()
-	for _, want := range []string{"not installed", "bin/deploy", "API"} {
+	for _, want := range []string{"not installed", "make", "STATIC_DIR", "API"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the explanation should mention %q: %s", want, body)
 		}
