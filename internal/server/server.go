@@ -204,30 +204,37 @@ type Server struct {
 	// separately and out of scope for this refactor.
 	config         atomic.Pointer[config.Config]
 	peerSyncStatus peerSyncStatus
-	configPath     string
-	adminToken     string
-	csrfSecret     string
-	dryRun         bool
-	version        string
-	fs             system.FileSystem
-	runner         system.CommandRunner
-	wg             *wireguard.WGConfig
-	dns            *dnsmasq.DNSMasq
-	haproxy        *haproxy.HAProxy
-	letsencrypt    *letsencrypt.Manager
-	monitor        *monitor.Monitor
-	sync           *SyncBroadcaster
-	health         *HealthStatus
-	metrics        *integration.Detector // Prometheus metrics discovery (pull integration)
-	static         *staticSupervisor     // supervises the unprivileged static file server child
-	ceremonies     *ceremonyStore        // in-flight WebAuthn ceremonies (see webauthn.go)
-	users          *db.DB                // identity store; nil when unavailable (see users.go)
-	pendingLogins  *pendingLoginStore    // password done, second factor outstanding
-	pendingTOTP    *pendingTOTPStore     // TOTP secrets awaiting confirmation
-	oidcFlows      *oidcFlowStore        // in-flight OIDC authorizations
-	oidcProviders  *oidcProviderCache    // discovered provider metadata
-	promHandler    http.Handler          // hz's own /metrics exposition
-	hostFacts      hostFacts             // cached clock + patch state (see hostfacts.go)
+
+	// When published records were last compared against the zone, so a
+	// reconcile happens on its own schedule rather than on every public-IP
+	// check. See recordReconcileInterval.
+	reconcileMu         sync.Mutex
+	lastRecordReconcile time.Time
+
+	configPath    string
+	adminToken    string
+	csrfSecret    string
+	dryRun        bool
+	version       string
+	fs            system.FileSystem
+	runner        system.CommandRunner
+	wg            *wireguard.WGConfig
+	dns           *dnsmasq.DNSMasq
+	haproxy       *haproxy.HAProxy
+	letsencrypt   *letsencrypt.Manager
+	monitor       *monitor.Monitor
+	sync          *SyncBroadcaster
+	health        *HealthStatus
+	metrics       *integration.Detector // Prometheus metrics discovery (pull integration)
+	static        *staticSupervisor     // supervises the unprivileged static file server child
+	ceremonies    *ceremonyStore        // in-flight WebAuthn ceremonies (see webauthn.go)
+	users         *db.DB                // identity store; nil when unavailable (see users.go)
+	pendingLogins *pendingLoginStore    // password done, second factor outstanding
+	pendingTOTP   *pendingTOTPStore     // TOTP secrets awaiting confirmation
+	oidcFlows     *oidcFlowStore        // in-flight OIDC authorizations
+	oidcProviders *oidcProviderCache    // discovered provider metadata
+	promHandler   http.Handler          // hz's own /metrics exposition
+	hostFacts     hostFacts             // cached clock + patch state (see hostfacts.go)
 
 	exporterMu     sync.RWMutex             // guards exporterStatus
 	exporterStatus map[string]exporterProbe // job|address -> resolved live path + liveness (status only, not a serving gate)
@@ -1338,13 +1345,43 @@ func (s *Server) refreshPublicIPIfStale() {
 	}
 }
 
+// recordReconcileInterval is how often published records are compared against
+// the zone even when the public IP has not moved.
+//
+// Without it the only trigger was an address change, which meant nothing else
+// about a record was ever reconciled: a lowered TTL, a record edited by hand in
+// the console, or a value left behind by a sync that failed would all sit wrong
+// until the address happened to move — and for a TTL, that is exactly the event
+// it existed to shorten. Not every cycle, because each record costs an AWS CLI
+// invocation and the public IP is checked far more often than records drift.
+const recordReconcileInterval = 15 * time.Minute
+
+// shouldSyncRecords decides whether to walk the records this cycle, and stamps
+// the reconcile clock when it says yes. Split from the sync itself so the
+// schedule can be tested without reaching AWS.
+func (s *Server) shouldSyncRecords(ipChanged bool) bool {
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+
+	// The zero value is far in the past, so the first cycle after start always
+	// reconciles — which is what makes a config change take effect promptly
+	// rather than at the next address change.
+	due := time.Since(s.lastRecordReconcile) >= recordReconcileInterval
+	if ipChanged || due {
+		s.lastRecordReconcile = time.Now()
+		return true
+	}
+	return false
+}
+
 func (s *Server) syncPublicIPAndRecords() {
 	changed, err := s.refreshPublicIP()
 	if err != nil {
 		slog.Warn("failed to get public IP", "err", err)
 		return
 	}
-	if !changed {
+
+	if !s.shouldSyncRecords(changed) {
 		return
 	}
 
@@ -1354,7 +1391,11 @@ func (s *Server) syncPublicIPAndRecords() {
 		return
 	}
 
-	slog.Info("syncing DNS records", "count", len(records))
+	reason := "reconcile"
+	if changed {
+		reason = "public IP changed"
+	}
+	slog.Info("syncing DNS records", "count", len(records), "reason", reason)
 
 	for _, rec := range records {
 		changed, err := route53.SyncRecord(rec)
