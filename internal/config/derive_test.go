@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iodesystems/homelab-horizon/internal/route53"
 )
 
 func TestGetZoneForDomain(t *testing.T) {
@@ -1134,4 +1136,38 @@ func TestDeriveStaticRoot(t *testing.T) {
 			t.Errorf("got %q, want %q", got, base+"/site")
 		}
 	})
+}
+
+// The TTL on published records is half of how long a client keeps dialling a
+// WAN address that has moved — the other half is how long hz takes to notice.
+// A roaming VPN client pays the sum, so this default is load-bearing rather
+// than cosmetic.
+func TestDeriveRoute53RecordsTTL(t *testing.T) {
+	cfg := &Config{
+		Zones: []Zone{{Name: "example.com", ZoneID: "Z1"}},
+		Services: []Service{
+			{
+				Name:        "vpn",
+				Domains:     []string{"vpn.example.com"},
+				ExternalDNS: &ExternalDNS{IP: "5.6.7.8"},
+			},
+			{
+				Name:        "slow",
+				Domains:     []string{"slow.example.com"},
+				ExternalDNS: &ExternalDNS{IP: "5.6.7.8", TTL: 3600},
+			},
+		},
+	}
+
+	got := map[string]int{}
+	for _, r := range cfg.DeriveRoute53Records() {
+		got[r.Name] = r.TTL
+	}
+
+	if got["vpn.example.com"] != route53.DefaultTTL {
+		t.Errorf("default TTL = %d, want %d", got["vpn.example.com"], route53.DefaultTTL)
+	}
+	if got["slow.example.com"] != 3600 {
+		t.Errorf("explicit TTL = %d, want 3600 (a service's own choice must win)", got["slow.example.com"])
+	}
 }

@@ -8,7 +8,13 @@ import (
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/route53"
 )
+
+// DefaultTTL is what a provider writes when a record names no TTL of its own.
+// Aliased rather than redeclared so there is one value to change; see
+// route53.DefaultTTL for why it is what it is.
+const DefaultTTL = route53.DefaultTTL
 
 // Zone represents a DNS zone
 type Zone struct {

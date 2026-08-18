@@ -106,6 +106,17 @@ func GetCurrentValues(zoneID, name, recordType, awsProfile string) ([]string, er
 	return values, nil
 }
 
+// DefaultTTL is the TTL hz publishes when a service does not name its own.
+//
+// 60 rather than the conventional 300 because every record hz publishes points
+// at the same dynamic WAN address. When that address moves, this TTL is one
+// half of how long clients keep dialling the old one; the other half is how
+// long hz takes to notice the change (public_ip_interval). A roaming VPN client
+// pays the sum of the two, because reconnecting after a network switch is when
+// it re-resolves its endpoint — which is why the delay looks like a roaming
+// problem rather than a DNS one.
+const DefaultTTL = 60
+
 // UpdateRecord creates or updates a DNS record (single value)
 func UpdateRecord(r Record) error {
 	return UpdateRecordSet(r, []string{r.Value})
@@ -116,7 +127,7 @@ func UpdateRecordSet(r Record, values []string) error {
 	logAWS(r.AWSProfile, fmt.Sprintf("Updating %s -> %v...", r.Name, values))
 
 	if r.TTL <= 0 {
-		r.TTL = 300
+		r.TTL = DefaultTTL
 	}
 
 	// Ensure name ends with dot

@@ -844,7 +844,7 @@ type InternalDNS struct {
 type ExternalDNS struct {
 	IP  string   `json:"ip,omitempty"`  // Deprecated: use IPs. Single IP kept for backward compat.
 	IPs []string `json:"ips,omitempty"` // Multiple IPs for round-robin DNS
-	TTL int      `json:"ttl,omitempty"` // Route53 TTL (default 300)
+	TTL int      `json:"ttl,omitempty"` // Record TTL; route53.DefaultTTL when unset
 }
 
 // GetIPs returns all configured IPs, falling back to the legacy single IP field.

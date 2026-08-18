@@ -278,7 +278,7 @@ func (p *NamecomProvider) CreateRecord(zoneID string, record Record) error {
 
 	ttl := record.TTL
 	if ttl <= 0 {
-		ttl = 300
+		ttl = DefaultTTL
 	}
 
 	body := namecomRecord{
@@ -313,7 +313,7 @@ func (p *NamecomProvider) UpdateRecord(zoneID string, record Record) error {
 
 	ttl := record.TTL
 	if ttl <= 0 {
-		ttl = 300
+		ttl = DefaultTTL
 	}
 
 	if recordID == 0 {
@@ -376,12 +376,20 @@ func (p *NamecomProvider) SyncRecord(zoneID string, record Record) (changed bool
 		return true, p.CreateRecord(zoneID, record)
 	}
 
-	if currentRecord.Value == record.Value {
-		p.log(fmt.Sprintf("%s already set to %s", record.Name, record.Value))
+	// The TTL is compared as well as the value. Every record hz publishes
+	// points at one dynamic WAN address, so the TTL is half of how long a
+	// client keeps dialling the old address after it moves. Comparing only the
+	// value would leave a stale TTL in place until the address next changed —
+	// precisely the moment it is too late to shorten anything. A caller that
+	// leaves TTL unset is not asking for one, so it is not churned.
+	if currentRecord.Value == record.Value &&
+		(record.TTL <= 0 || currentRecord.TTL == record.TTL) {
+		p.log(fmt.Sprintf("%s already set to %s (ttl %ds)", record.Name, record.Value, currentRecord.TTL))
 		return false, nil
 	}
 
-	p.log(fmt.Sprintf("%s value mismatch: current=%q new=%q", record.Name, currentRecord.Value, record.Value))
+	p.log(fmt.Sprintf("%s mismatch: current=%q ttl=%ds new=%q ttl=%ds",
+		record.Name, currentRecord.Value, currentRecord.TTL, record.Value, record.TTL))
 	return true, p.UpdateRecord(zoneID, record)
 }
 
