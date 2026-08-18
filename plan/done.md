@@ -268,3 +268,67 @@ never triggers a startup save, so there was no write to catch. It now forces one
 while the override is active. That was the fifth assertion this session that was
 green for the wrong reason — the recurring lesson is that a check which never
 exercises the failing path passes silently.
+
+## VPN slow to reconnect after a network switch (2026-08-18)
+
+Reported as a WireGuard roaming problem: switching networks sometimes left the
+tunnel dead for "something like 10 minutes". It was DNS, and the ten minutes was
+the sum of two independent five-minute windows:
+
+```
+WAN IP changes
+  → up to 300s before hz notices        (public_ip_interval = 300)
+  → up to 300s of cached DNS everywhere (record TTL = 300)
+```
+
+Peer configs use `Endpoint = vpn.iodesystems.com:51820`, a hostname, so the
+endpoint is re-resolved on reconnect. A stale record costs nothing while the
+tunnel stays up — which is why the delay only ever showed itself at a network
+switch, and looked like roaming rather than DNS. `PersistentKeepalive = 25` was
+already emitted, so the usual NAT-timeout suspect was not it.
+
+Both windows cut to ~60s: `public_ip_interval = 60` on prod, and the published
+TTL default lowered to `route53.DefaultTTL = 60`. Every record hz publishes
+points at the same dynamic WAN address, so this is not a per-record choice — the
+13 services carrying an explicit `ttl: 300` (the old default, written in rather
+than chosen) had the key removed so the default reaches them and future changes
+propagate.
+
+**Three fixes were needed, because the first two were unreachable.** Lowering
+the default changed nothing on the zone, twice, and each time the zone said so:
+
+1. `internal/dns` `SyncRecord` compared only the value, so a TTL-only change was
+   a no-op. Fixed — but that is not the path prod runs.
+2. `internal/route53` `SyncRecordSet` had the same value-only comparison, and
+   *is* the live path (`server.go` calls `route53.SyncRecord`). Fixed by
+   returning the TTL from the same `list-resource-record-sets` call that fetches
+   the values, so it costs no extra AWS calls. Reading that answer as JSON
+   rather than tab-separated text also stops a TXT value with spaces —
+   `v=spf1 -all` — being split into separate values and compared as changed.
+3. The real gate: `syncPublicIPAndRecords` returned early unless the public IP
+   had *changed*, so the record walk was unreachable in the steady state. That
+   is why two correct comparison fixes still wrote nothing. Anything else that
+   drifted — a hand edit in the console, a value left by a failed sync — was
+   equally unreachable. Records now reconcile every 15 minutes as well as on
+   every address change.
+
+Verified against the authoritative nameserver rather than a resolver: all 19
+published records at `ttl=60`, wildcard `*.beta.veliode.com` included, which
+also proves the `\052` escaping survived the JSON change.
+
+**The lesson is the one this plan keeps relearning, inverted.** The previous
+five instances were assertions that passed for the wrong reason. This time the
+check was honest and the fix was the thing that was vacuous: two commits that
+were individually correct, tested, and had no effect, because the code path they
+corrected was never entered. Deploying and then reading the zone is what caught
+it — a passing unit test would have said yes at every step.
+
+- **next**: nothing outstanding. Worst case is now ~2 minutes and the floor is
+  ~1 minute — an address that changes while a phone is asleep still costs the
+  remaining TTL on first reconnect.
+- **risks**: the reconcile spends one AWS CLI invocation per record every 15
+  minutes (19 records, ~6s each). Confirmed idempotent — the walk after the
+  first found everything already correct and wrote nothing.
+- **not changed**: hand-entered records in the DNS page still default to 300.
+  Those are typed once for a specific purpose and are not all pointed at the
+  dynamic address; the field is editable if one should be shorter.

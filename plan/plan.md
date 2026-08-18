@@ -263,8 +263,10 @@ Nothing is in flight and the backlog is empty. What remains is yours, not mine:
 |---|---|---|
 | 1 | [Operator follow-ups](#operator-follow-ups-not-code) — yours, not mine | — |
 
-Everything decided between 2026-08-15 and 2026-08-17 shipped and is archived in
-[done.md](done.md): the 7-day certificate warning, the whole user model
+Everything decided between 2026-08-15 and 2026-08-18 shipped and is archived in
+[done.md](done.md): the VPN reconnect delay (DNS staleness, not roaming — and
+three fixes deep, because the first two corrected code the live path never
+reached), the 7-day certificate warning, the whole user model
 (accounts, second factors, SSO, policy), both remaining PCI controls, the VPN
 inactivity timeout, local DNS records with split-horizon overrides, and the
 `--listen` start option that made the 2.2.7 bind safe to try.
