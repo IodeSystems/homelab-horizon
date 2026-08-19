@@ -348,6 +348,11 @@ type Config struct {
 	// MFAInactivityFloorMinutes.
 	VPNMFAInactivityMinutes int `json:"vpn_mfa_inactivity_minutes,omitempty"`
 
+	// PCISAQLevel is the self-assessment questionnaire being validated against
+	// ("a", "a-ep", "d"), or empty for none. Filters the control checklist to
+	// the requirements that level actually asks about — see SAQNone.
+	PCISAQLevel string `json:"pci_saq_level,omitempty"`
+
 	// Passkeys, an alternative second factor to TOTP. A peer may hold several
 	// (laptop platform authenticator, a hardware key as backup); any one of
 	// them opens a session, and either factor satisfies the jail.
@@ -1430,6 +1435,30 @@ func (c *Config) ClearMFASession(name string) {
 	if c.VPNMFASessions != nil {
 		delete(c.VPNMFASessions, name)
 	}
+}
+
+// SAQ levels for PCISAQLevel.
+//
+// Which self-assessment questionnaire an operator is validating against decides
+// which requirements they are answerable for. SAQ A is a few dozen questions
+// for a merchant who has fully outsourced payment handling; SAQ A-EP is ~140
+// for one whose site can affect the payment page without ever seeing card data;
+// SAQ D is the full standard. Showing an SAQ A merchant a finding about audit
+// log retention is noise — Requirement 10 is not in their questionnaire at all.
+const (
+	SAQNone = ""     // no level declared: report every control hz knows
+	SAQA    = "a"    // fully outsourced payments
+	SAQAEP  = "a-ep" // partially outsourced; the site can affect the payment page
+	SAQD    = "d"    // the full standard
+)
+
+// EffectiveSAQLevel normalises the declared level, defaulting to none.
+func (c *Config) EffectiveSAQLevel() string {
+	switch c.PCISAQLevel {
+	case SAQA, SAQAEP, SAQD:
+		return c.PCISAQLevel
+	}
+	return SAQNone
 }
 
 // PCI scope values for Service.PCIScope.

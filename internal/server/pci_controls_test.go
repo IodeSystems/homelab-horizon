@@ -218,3 +218,99 @@ func TestSessionBoundedMeasuresIdleness(t *testing.T) {
 		})
 	}
 }
+
+// The mapping is transcribed from the Council's questionnaires; these pin the
+// transcription so a later edit cannot quietly change what an operator is told
+// they are answerable for.
+func TestSAQMappingMatchesTheQuestionnaires(t *testing.T) {
+	// SAQ A asks about exactly these four of the controls hz reports. Verified
+	// against PCI-DSS-v4-0-SAQ-A.pdf, which contains no Requirement 10 or
+	// Requirement 4 questions at all.
+	inSAQA := map[string]bool{"6.3.3": true, "8.2.1": true, "8.3.7": true, "8.3.9": true}
+
+	for _, ctl := range hzControls(&config.Config{}, hostFactsSnapshot{}) {
+		levels, mapped := saqRequirements[ctl.requirement]
+		if !mapped {
+			t.Errorf("requirement %s (%s) has no SAQ mapping", ctl.requirement, ctl.name)
+			continue
+		}
+
+		got := requirementInSAQ(ctl.requirement, config.SAQA)
+		if got != inSAQA[ctl.requirement] {
+			t.Errorf("%s in SAQ A = %v, want %v", ctl.requirement, got, inSAQA[ctl.requirement])
+		}
+		// A-EP and D ask about every requirement hz reports.
+		if !requirementInSAQ(ctl.requirement, config.SAQAEP) {
+			t.Errorf("%s should be in SAQ A-EP", ctl.requirement)
+		}
+		if !requirementInSAQ(ctl.requirement, config.SAQD) {
+			t.Errorf("%s should be in SAQ D", ctl.requirement)
+		}
+		if len(levels) == 0 {
+			t.Errorf("%s maps to no levels at all", ctl.requirement)
+		}
+	}
+
+	// The specific claim the operator asked about, and the one a vendor blog
+	// got wrong: the 15-minute idle timeout is not SAQ A content.
+	if requirementInSAQ("8.2.8", config.SAQA) {
+		t.Error("8.2.8 must not be in SAQ A")
+	}
+	if !requirementInSAQ("8.2.8", config.SAQAEP) {
+		t.Error("8.2.8 must be in SAQ A-EP")
+	}
+}
+
+// With no level declared hz is a hardening tool: everything shows.
+func TestUndeclaredLevelAsksAboutEverything(t *testing.T) {
+	for _, ctl := range hzControls(&config.Config{}, hostFactsSnapshot{}) {
+		if !requirementInSAQ(ctl.requirement, config.SAQNone) {
+			t.Errorf("%s hidden with no level declared", ctl.requirement)
+		}
+	}
+	// An unmapped requirement is visible rather than silently filtered.
+	if !requirementInSAQ("99.9.9", config.SAQA) {
+		t.Error("an unmapped requirement should stay visible")
+	}
+}
+
+// An SAQ A merchant is not failing Requirement 10; they are not asked about it.
+func TestUnmetCountsOnlyApplicableControls(t *testing.T) {
+	count := func(level string) (unmet, shown int) {
+		s := newTestServer(t, &config.Config{PCISAQLevel: level})
+		s.adminToken = "sekret"
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/pci/controls", nil)
+		r.AddCookie(&http.Cookie{Name: "session", Value: s.signCookie("admin")})
+		s.handleAPIPCIControls(w, r)
+
+		var body struct {
+			Controls []PCIControl `json:"controls"`
+			Unmet    int          `json:"unmet"`
+			SAQLevel string       `json:"saqLevel"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if body.SAQLevel != level {
+			t.Errorf("saqLevel = %q, want %q", body.SAQLevel, level)
+		}
+		return body.Unmet, len(body.Controls)
+	}
+
+	unmetNone, shownNone := count(config.SAQNone)
+	unmetA, shownA := count(config.SAQA)
+
+	// Every control is still reported at either level — filtering changes what
+	// counts as a finding, not what is visible.
+	if shownA != shownNone {
+		t.Errorf("SAQ A hides controls: %d shown vs %d", shownA, shownNone)
+	}
+	// A bare config fails almost everything, so SAQ A must count strictly fewer.
+	if unmetA >= unmetNone {
+		t.Errorf("unmet at SAQ A = %d, want fewer than %d with no level", unmetA, unmetNone)
+	}
+	if unmetA > 4 {
+		t.Errorf("SAQ A can have at most 4 unmet of hz's controls, got %d", unmetA)
+	}
+}

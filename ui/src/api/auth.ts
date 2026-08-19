@@ -344,16 +344,34 @@ export type PCIControl = {
   ok: boolean;
   wants: string;
   detail?: string;
+  applicable: boolean;
   remediation?: PCIRemediation;
 };
+
+export type SAQLevel = "" | "a" | "a-ep" | "d";
 
 export function usePCIControls() {
   return useQuery({
     queryKey: ["pci-controls"],
     queryFn: () =>
-      apiFetch<{ controls: PCIControl[]; unmet: number; disclaimer: string }>(
-        "/pci/controls",
-      ),
+      apiFetch<{
+        controls: PCIControl[];
+        unmet: number;
+        disclaimer: string;
+        saqLevel: SAQLevel;
+      }>("/pci/controls"),
+  });
+}
+
+export function useSetSAQLevel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (level: SAQLevel) =>
+      apiFetch<{ ok: boolean }>("/pci/level", {
+        method: "PUT",
+        body: JSON.stringify({ level }),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["pci-controls"] }),
   });
 }
 

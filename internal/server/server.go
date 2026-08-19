@@ -1102,6 +1102,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/mfa/revoke-session", s.handleAPIMFARevokeSession)
 	mux.HandleFunc("/api/v1/admin-token/disable", s.handleAPIAdminTokenDisable)
 	mux.HandleFunc("/api/v1/pci/controls", s.handleAPIPCIControls)
+	mux.HandleFunc("/api/v1/pci/level", s.handleAPIPCILevel)
 	mux.HandleFunc("/api/v1/mfa/exception", s.handleAPIMFAException)
 	mux.HandleFunc("/api/v1/mfa/exception/revoke", s.handleAPIMFAExceptionRevoke)
 
