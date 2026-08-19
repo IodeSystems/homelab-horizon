@@ -141,3 +141,80 @@ func TestPCIControlsEndpoint(t *testing.T) {
 		t.Error("the response should carry the disclaimer")
 	}
 }
+
+// 8.2.8 asks for re-authentication after 15 minutes IDLE. It says nothing about
+// how long a session may last, and hz has a real inactivity timeout to measure.
+//
+// The control used to demand "no session longer than 15 minutes offered" — a
+// proxy from before that timeout existed. It survived the feature that replaced
+// it and told operators running a correctly configured box to cut working VPN
+// sessions to a quarter of an hour.
+func TestSessionBoundedMeasuresIdleness(t *testing.T) {
+	idle := func(cfg *config.Config) bool {
+		for _, c := range hzControls(cfg, hostFactsSnapshot{}) {
+			if c.name == "vpn_mfa_session_bounded" {
+				return c.ok
+			}
+		}
+		t.Fatal("control not found")
+		return false
+	}
+
+	tests := []struct {
+		name string
+		cfg  *config.Config
+		want bool
+	}{
+		{
+			name: "long sessions with a 15 minute idle timeout are fine",
+			cfg: &config.Config{
+				VPNMFAEnabled:           true,
+				VPNMFADurations:         []string{"8h"},
+				VPNMFAInactivityMinutes: 15,
+			},
+			want: true,
+		},
+		{
+			name: "an unbounded session is fine when idleness is bounded",
+			cfg: &config.Config{
+				VPNMFAEnabled:           true,
+				VPNMFADurations:         []string{"forever"},
+				VPNMFAInactivityMinutes: 10,
+			},
+			want: true,
+		},
+		{
+			name: "short sessions do not substitute for an idle timeout",
+			cfg: &config.Config{
+				VPNMFAEnabled:   true,
+				VPNMFADurations: []string{"15m"},
+			},
+		},
+		{
+			name: "an idle timeout longer than 15 minutes is not enough",
+			cfg: &config.Config{
+				VPNMFAEnabled:           true,
+				VPNMFAInactivityMinutes: 60,
+			},
+		},
+		{
+			name: "below hz's floor the timeout is off, not stricter",
+			cfg: &config.Config{
+				VPNMFAEnabled:           true,
+				VPNMFAInactivityMinutes: 2,
+			},
+		},
+		{
+			name: "nothing applies while MFA is off",
+			cfg:  &config.Config{VPNMFAInactivityMinutes: 15},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := idle(tt.cfg); got != tt.want {
+				t.Errorf("control ok = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

@@ -97,11 +97,14 @@ var pciCatalogue = map[string]pciMeta{
 			"enrolled, and names them.",
 	},
 	"vpn_mfa_session_bounded": {
-		title: "Bounded VPN sessions",
-		wants: "No unlimited session, and nothing longer than 15 minutes offered.",
+		title: "Idle VPN sessions expire",
+		wants: "A VPN session stops working after 15 minutes without traffic.",
 		kind:  remediationManual,
-		hint: "Settings › VPN MFA — offer no session longer than 15 minutes. " +
-			"Peers then re-authenticate at least that often.",
+		hint: "Settings › VPN MFA — set the inactivity timeout to 15 minutes or " +
+			"less (hz will not go below 5: WireGuard rekeys on traffic and not at " +
+			"all when idle, so a shorter window mostly measures that lag). How " +
+			"long a session may last is a separate setting and does not affect " +
+			"this — the requirement is about idleness, not duration.",
 	},
 	"tls_enabled": {
 		title: "TLS on published services",
@@ -248,7 +251,11 @@ func pciDetail(name string, cfg *config.Config, facts hostFactsSnapshot) string 
 		if !cfg.VPNMFAEnabled {
 			return "VPN MFA is off."
 		}
-		return fmt.Sprintf("Offered session lengths: %v.", cfg.VPNMFADurations)
+		if cfg.MFAInactivityTimeout() == 0 {
+			return "No inactivity timeout is set, so a session survives any amount of silence."
+		}
+		return fmt.Sprintf("Sessions go stale after %d minutes idle; the standard wants 15 or less.",
+			int(cfg.MFAInactivityTimeout().Minutes()))
 	case "tls_enabled":
 		return "Let's Encrypt is not enabled, so hz publishes no certificates."
 	case "tls_min_version":
