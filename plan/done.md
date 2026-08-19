@@ -374,3 +374,49 @@ Two things fell out of it:
   rollback to a pre-v0.1.0 binary on that box would find no UI — the API and the
   `hz` CLI still work, and `make ui` + a copy to that path restores it.
   `bin/deploy` prints a line whenever it finds one still present elsewhere.
+
+
+## PCI tab — the checklist with fix buttons (2026-08-18)
+
+The controls existed only as Prometheus gauges and as errors scattered across
+four surfaces (account policy, VPN MFA, SSL, the audit health card). An operator
+could see something was unmet without being told what it wanted or what to do
+about it.
+
+State comes from `hzControls` — the same function the exporter uses — so the tab
+and Prometheus cannot disagree. The tab adds what a gauge cannot carry: a title,
+why it reads unmet *right now* with the actual numbers, and what can be done.
+
+**Three remediation tiers, because these are not equally safe to click:**
+
+| Tier | Meaning | Controls |
+|---|---|---|
+| `fix` | one button, cannot log anyone out | password history, lockout, log retention |
+| `decision` | button behind a dialog naming the risk and the recovery | disable shared admin token, idle timeout, rotation |
+| `manual` | no button; needs a shell or judgment hz lacks | patches, clock, the 2.2.7 bind, all three VPN MFA controls |
+
+The VPN MFA controls started as `decision` and were moved to `manual` during the
+work: enabling them is a multi-field decision (scope, session lengths, who is
+enrolled) that the VPN MFA tab already presents properly, and a one-button
+version here would have had to choose those for the operator.
+
+The tab calls the same endpoints an operator would use by hand rather than a
+generic apply-fix route. Those endpoints carry refusals worth keeping — the
+admin-token disable will not strand the last way in, the MFA scope change will
+not jail admins with no second factor — and a parallel path would eventually
+disagree with them.
+
+**The endpoint was unauthenticated for part of the work**, which would have
+served anyone reaching the port a list of exactly which hardening measures this
+gateway lacks. Caught by checking how a sibling handler enforced admin before
+assuming a middleware existed — there is none; every handler calls `isAdmin`
+itself. There is now a test for it.
+
+Two tests guard the drift this will actually suffer: every control `hzControls`
+emits must have catalogue copy (a missing entry renders a blank row), and no
+control that can lock an operator out may ever be `fix`.
+
+- **next**: nothing outstanding. Prod reads 6 unmet of 14, all operator choices.
+- **risks**: not viewed in a browser — the admin UI is loopback-bound and the
+  browser automation host is not on that LAN. Verified through the API and the
+  production build instead.
