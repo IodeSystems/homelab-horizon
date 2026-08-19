@@ -327,26 +327,27 @@ type control struct {
 }
 
 func hzControls(cfg *config.Config, facts hostFactsSnapshot) []control {
-	longestSession := int64(0)
-	unlimited := false
-	for _, d := range cfg.VPNMFADurations {
-		if d == "forever" {
-			unlimited = true
-			continue
-		}
-		if parsed, err := time.ParseDuration(d); err == nil && int64(parsed.Minutes()) > longestSession {
-			longestSession = int64(parsed.Minutes())
-		}
-	}
+	idleTimeout := cfg.MFAInactivityTimeout()
 
 	return []control{
 		{"vpn_mfa_enabled", "8.4.3", cfg.VPNMFAEnabled},
 		// 8.5.1: no standing bypass for anyone, administrators included.
 		{"vpn_mfa_no_admin_bypass", "8.5.1", cfg.VPNMFAEnabled && cfg.MFAScope() == config.MFAScopeAll},
-		// 8.2.8: re-authenticate after 15 minutes idle. hz has no idle
-		// concept yet, so the closest honest proxy is "no unbounded session
-		// and nothing longer than 15 minutes is offered".
-		{"vpn_mfa_session_bounded", "8.2.8", cfg.VPNMFAEnabled && !unlimited && longestSession > 0 && longestSession <= 15},
+		// 8.2.8: re-authenticate after 15 minutes IDLE. The requirement is
+		// about inactivity, not about how long a session may last — an
+		// 8-hour session in continuous use does not violate it.
+		//
+		// This was once a proxy: "nothing longer than 15 minutes offered",
+		// written when hz had no idle concept and the session length was the
+		// only bound available. hz gained a real inactivity timeout
+		// afterwards, and the proxy outlived its reason — it demanded an
+		// operator cut working VPN sessions to 15 minutes while ignoring the
+		// setting that actually implements the requirement.
+		//
+		// An unbounded session is still fine here: the idle timeout re-jails
+		// it after 15 quiet minutes regardless of its nominal length.
+		{"vpn_mfa_session_bounded", "8.2.8",
+			cfg.VPNMFAEnabled && idleTimeout > 0 && idleTimeout <= 15*time.Minute},
 		{"tls_enabled", "4.2.1", cfg.SSLEnabled},
 		// 4.2.1 also prohibits TLS 1.0/1.1. The floor is configurable, so this
 		// reports what was configured rather than assuming the default held.

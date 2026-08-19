@@ -37,12 +37,15 @@ func TestControlsReportHardenedOnly(t *testing.T) {
 	}
 
 	hard := hzControls(&config.Config{
-		VPNMFAEnabled:        true,
-		VPNMFAScope:          config.MFAScopeAll,
-		VPNMFADurations:      []string{"15m"},
-		SSLEnabled:           true,
-		HAProxyTLSMinVersion: "TLSv1.3",
-		AdminTokenDisabled:   true,
+		VPNMFAEnabled:   true,
+		VPNMFAScope:     config.MFAScopeAll,
+		VPNMFADurations: []string{"8h"},
+		// 8.2.8 is satisfied by the inactivity timeout, not by short sessions:
+		// an 8-hour session in continuous use is not a finding.
+		VPNMFAInactivityMinutes: 15,
+		SSLEnabled:              true,
+		HAProxyTLSMinVersion:    "TLSv1.3",
+		AdminTokenDisabled:      true,
 		// Loopback-only: the admin UI is then reachable solely through
 		// HAProxy's TLS frontend, which is what 2.2.7 asks for.
 		ListenAddr: "127.0.0.1:8080",
@@ -110,19 +113,9 @@ func TestPolicyControlsHonourThresholds(t *testing.T) {
 // A "forever" session is an unbounded one; 8.2.8 wants re-auth after 15
 // minutes idle, so an allowlist offering permanent sessions is not bounded
 // however short its other options are.
-func TestSessionBoundedRejectsForever(t *testing.T) {
-	for _, durations := range [][]string{
-		{"15m", "forever"},
-		{"2h"},
-		{},
-	} {
-		for _, c := range hzControls(&config.Config{VPNMFAEnabled: true, VPNMFADurations: durations}, hostFactsSnapshot{}) {
-			if c.name == "vpn_mfa_session_bounded" && c.ok {
-				t.Errorf("durations %v must not read as bounded", durations)
-			}
-		}
-	}
-}
+// Session durations no longer decide 8.2.8 — the inactivity timeout does. See
+// TestSessionBoundedMeasuresIdleness in pci_controls_test.go, which covers the
+// cases this used to and the ones it could not.
 
 func TestControlNamesAreNotComplianceClaims(t *testing.T) {
 	for _, c := range hzControls(&config.Config{}, hostFactsSnapshot{}) {
