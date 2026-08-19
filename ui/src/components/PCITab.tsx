@@ -2,6 +2,8 @@ import { useState } from "react";
 import {
   Box,
   Button,
+  MenuItem,
+  TextField,
   Card,
   CardContent,
   Chip,
@@ -18,12 +20,14 @@ import CheckCircleIcon from "@mui/icons-material/CheckCircleOutlined";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import {
   usePCIControls,
+  useSetSAQLevel,
   useSavePolicy,
   usePolicy,
   useDisableAdminToken,
   useFixLogRetention,
   type PCIControl,
   type AccountPolicy,
+  type SAQLevel,
 } from "../api/auth";
 
 // The PCI checklist.
@@ -48,8 +52,10 @@ export default function PCITab() {
   }
   if (!data) return null;
 
-  const unmet = data.controls.filter((c) => !c.ok);
-  const met = data.controls.filter((c) => c.ok);
+  const applicable = data.controls.filter((c) => c.applicable);
+  const unmet = applicable.filter((c) => !c.ok);
+  const met = applicable.filter((c) => c.ok);
+  const outOfLevel = data.controls.filter((c) => !c.applicable);
 
   return (
     <Box>
@@ -57,10 +63,12 @@ export default function PCITab() {
         {data.disclaimer}
       </Alert>
 
+      <SAQLevelPicker level={data.saqLevel} />
+
       <Typography variant="h6" sx={{ fontWeight: 600, mb: 0.5 }}>
         {unmet.length === 0
           ? "Every control is in its hardened setting"
-          : `${unmet.length} of ${data.controls.length} controls are not in their hardened setting`}
+          : `${unmet.length} of ${applicable.length} controls are not in their hardened setting`}
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
         Several of these are deliberate choices rather than defects — an idle
@@ -85,6 +93,90 @@ export default function PCITab() {
             ))}
           </Stack>
         </Box>
+      )}
+
+      {outOfLevel.length > 0 && (
+        <Box sx={{ mt: 4, opacity: 0.65 }}>
+          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.5 }}>
+            Not asked about at this level ({outOfLevel.length})
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+            {/* Shown rather than hidden: they are still hardening worth having,
+                and a client on a stricter questionnaire turns them into work. */}
+            Still reported, because they are worth doing anyway — but your
+            questionnaire does not ask about them, so they are not findings.
+          </Typography>
+          <Stack spacing={1}>
+            {outOfLevel.map((c) => (
+              <ControlRow key={c.name} control={c} />
+            ))}
+          </Stack>
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+// Which questionnaire the operator answers decides which requirements are
+// theirs. SAQ A asks about four of the controls hz reports; SAQ A-EP asks about
+// all twelve, which is the gap a client demanding A-EP would open up.
+type SAQOption = { value: SAQLevel; label: string; help: string };
+
+const SAQ_UNDECLARED: SAQOption = {
+  value: "",
+  label: "Not declared",
+  help: "Report everything hz knows how to check.",
+};
+
+const SAQ_LEVELS: SAQOption[] = [
+  SAQ_UNDECLARED,
+  {
+    value: "a",
+    label: "SAQ A",
+    help: "Payments fully outsourced — a redirect or an iframe served entirely by the processor.",
+  },
+  {
+    value: "a-ep",
+    label: "SAQ A-EP",
+    help: "Your site serves the page that creates the payment form, so it can affect the transaction without ever seeing card data.",
+  },
+  {
+    value: "d",
+    label: "SAQ D",
+    help: "The full standard.",
+  },
+];
+
+function SAQLevelPicker({ level }: { level: SAQLevel }) {
+  const save = useSetSAQLevel();
+  const current = SAQ_LEVELS.find((l) => l.value === level) ?? SAQ_UNDECLARED;
+
+  return (
+    <Box sx={{ mb: 3, p: 2, border: 1, borderColor: "divider", borderRadius: 1 }}>
+      <TextField
+        select
+        size="small"
+        label="Questionnaire"
+        value={level}
+        disabled={save.isPending}
+        onChange={(e) => save.mutate(e.target.value as SAQLevel)}
+        sx={{ minWidth: 220 }}
+      >
+        {SAQ_LEVELS.map((l) => (
+          <MenuItem key={l.value} value={l.value}>
+            {l.label}
+          </MenuItem>
+        ))}
+      </TextField>
+      <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
+        {current.help} Requirement mapping is transcribed from the Council's own
+        SAQ documents; re-check it against the current questionnaire before
+        relying on it for an assessment.
+      </Typography>
+      {save.error && (
+        <Alert severity="error" sx={{ mt: 1 }}>
+          {save.error.message}
+        </Alert>
       )}
     </Box>
   );

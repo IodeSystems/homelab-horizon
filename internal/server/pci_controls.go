@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -49,6 +50,10 @@ type PCIControl struct {
 	Wants string `json:"wants"`
 	// Detail is why this control reads as it does right now. Empty when met.
 	Detail string `json:"detail,omitempty"`
+	// Applicable is whether the declared SAQ level asks about this requirement.
+	// Inapplicable controls are still reported — hz is a hardening tool as well
+	// as a compliance one — but they are not findings.
+	Applicable bool `json:"applicable"`
 	// Remediation is absent when the control is already met.
 	Remediation *PCIRemediation `json:"remediation,omitempty"`
 }
@@ -194,10 +199,67 @@ var pciCatalogue = map[string]pciMeta{
 	},
 }
 
+// saqRequirements maps a PCI DSS requirement to the SAQs that ask about it.
+//
+// PROVENANCE. Transcribed from the Council's own questionnaires, not from
+// recollection or from a vendor summary — a blog consulted while writing this
+// listed 8.3.4 and 8.2.8 as SAQ A content, and both are absent from the actual
+// document:
+//
+//	https://listings.pcisecuritystandards.org/documents/PCI-DSS-v4-0-SAQ-A.pdf
+//	https://listings.pcisecuritystandards.org/documents/PCI-DSS-v4-0-SAQ-A-EP.pdf
+//
+// Both are v4.0 (April 2022). v4.0.1 removed 6.4.3 and 11.6.1 from SAQ A and
+// replaced them with an eligibility criterion; neither is a control hz reports,
+// so that revision does not change anything below. Re-derive this table against
+// the current questionnaires before leaning on it for an assessment.
+//
+// SAQ A asks about none of Requirement 10 and none of Requirement 4, which is
+// why a fully-outsourced merchant sees so little here. SAQ D is the full
+// standard, so every requirement hz reports appears in it.
+var saqRequirements = map[string][]string{
+	"2.2.7":  {config.SAQAEP, config.SAQD},
+	"4.2.1":  {config.SAQAEP, config.SAQD},
+	"6.3.3":  {config.SAQA, config.SAQAEP, config.SAQD},
+	"8.2.1":  {config.SAQA, config.SAQAEP, config.SAQD},
+	"8.2.8":  {config.SAQAEP, config.SAQD},
+	"8.3.4":  {config.SAQAEP, config.SAQD},
+	"8.3.7":  {config.SAQA, config.SAQAEP, config.SAQD},
+	"8.3.9":  {config.SAQA, config.SAQAEP, config.SAQD},
+	"8.4.3":  {config.SAQAEP, config.SAQD},
+	"8.5.1":  {config.SAQAEP, config.SAQD},
+	"10.5.1": {config.SAQAEP, config.SAQD},
+	"10.6":   {config.SAQAEP, config.SAQD},
+}
+
+// requirementInSAQ reports whether a level asks about a requirement.
+//
+// An undeclared level asks about everything: hz is a hardening tool first, and
+// hiding controls from someone who has not said which questionnaire they answer
+// would be the wrong default. An unmapped requirement also counts as applicable
+// — a control whose mapping nobody recorded should be visible rather than
+// silently filtered away.
+func requirementInSAQ(requirement, level string) bool {
+	if level == config.SAQNone {
+		return true
+	}
+	levels, mapped := saqRequirements[requirement]
+	if !mapped {
+		return true
+	}
+	for _, l := range levels {
+		if l == level {
+			return true
+		}
+	}
+	return false
+}
+
 // pciControls joins live state with the catalogue.
 func (s *Server) pciControls() []PCIControl {
 	cfg := s.cfg()
 	facts := s.hostFacts.snapshot()
+	level := cfg.EffectiveSAQLevel()
 
 	out := make([]PCIControl, 0, len(pciCatalogue))
 	for _, ctl := range hzControls(cfg, facts) {
@@ -214,6 +276,7 @@ func (s *Server) pciControls() []PCIControl {
 			Title:       meta.title,
 			OK:          ctl.ok,
 			Wants:       meta.wants,
+			Applicable:  requirementInSAQ(ctl.requirement, level),
 		}
 		if !ctl.ok {
 			row.Detail = pciDetail(ctl.name, cfg, facts)
@@ -230,6 +293,11 @@ func (s *Server) pciControls() []PCIControl {
 	// Unmet first, then by requirement, so the checklist opens on the work
 	// rather than on a wall of green.
 	sort.SliceStable(out, func(i, j int) bool {
+		// Work first, then things already done, then things this level does not
+		// ask about at all.
+		if out[i].Applicable != out[j].Applicable {
+			return out[i].Applicable
+		}
 		if out[i].OK != out[j].OK {
 			return !out[i].OK
 		}
@@ -326,15 +394,57 @@ func (s *Server) handleAPIPCIControls(w http.ResponseWriter, r *http.Request) {
 	controls := s.pciControls()
 	unmet := 0
 	for _, c := range controls {
-		if !c.OK {
+		// Only what the declared level actually asks about: an SAQ A merchant
+		// is not failing Requirement 10, they are not being asked about it.
+		if !c.OK && c.Applicable {
 			unmet++
 		}
 	}
 	writeJSON(w, map[string]any{
 		"controls": controls,
 		"unmet":    unmet,
+		"saqLevel": s.cfg().EffectiveSAQLevel(),
 		// Said once, here, so every surface that renders this repeats it: hz
 		// reports how it is configured, not whether an assessor agrees.
 		"disclaimer": "Describes how hz is configured. It is not an assertion of compliance.",
 	})
+}
+
+// PUT /api/v1/pci/level — declare which questionnaire is being answered.
+//
+// Its own endpoint rather than a field on the general config save: it changes
+// what the checklist reports as a finding, and an operator setting it is making
+// a statement about their business, not tuning the gateway.
+func (s *Server) handleAPIPCILevel(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPut {
+		writeJSONError(w, http.StatusMethodNotAllowed, "PUT required")
+		return
+	}
+
+	var req struct {
+		Level string `json:"level"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+	switch req.Level {
+	case config.SAQNone, config.SAQA, config.SAQAEP, config.SAQD:
+	default:
+		writeJSONError(w, http.StatusBadRequest,
+			`level must be "", "a", "a-ep" or "d"`)
+		return
+	}
+
+	if err := s.updateConfig(func(cfg *config.Config) {
+		cfg.PCISAQLevel = req.Level
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "saqLevel": req.Level})
 }
