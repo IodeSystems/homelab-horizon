@@ -685,28 +685,36 @@ func (s *Server) startMFASessionPruner(done <-chan struct{}) {
 
 // staleMFAPeers lists peers whose MFA session has gone idle.
 //
-// Resolves each peer's last handshake by name here, because the mapping lives
-// in the WireGuard config while the sessions live in hz's; the decision itself
-// is config.StaleMFASessions so it can be tested without a kernel.
+// Idleness is measured from byte counters, not from the WireGuard handshake.
+// hz puts PersistentKeepalive = 25 in every client config, and a keepalive is a
+// transmission that makes WireGuard rekey — so handshakes refresh every couple
+// of minutes on a tunnel nobody is using, and an inactivity timeout built on
+// them never fires. See internal/server/peer_activity.go.
+//
+// Resolves peers by name here because the mapping lives in the WireGuard config
+// while the sessions live in hz's; the decision itself stays in
+// config.StaleMFASessions so it can be tested without a kernel.
 func (s *Server) staleMFAPeers(cur *config.Config) []string {
 	if cur.MFAInactivityTimeout() == 0 || s.wg == nil {
 		return nil
 	}
 
-	handshakes, err := s.wg.LatestHandshakes()
+	traffic, err := s.wg.PeerTraffic()
 	if err != nil {
 		// A failed read must not revoke anything: "wg is unavailable" is not
 		// evidence that anyone went idle, and guessing would log out the whole
 		// VPN over a transient error.
-		slog.Warn("could not read WireGuard handshakes; leaving MFA sessions alone", "err", err)
+		slog.Warn("could not read WireGuard traffic; leaving MFA sessions alone", "err", err)
 		return nil
 	}
 
-	lastByPeer := make(map[string]time.Time, len(handshakes))
+	bytesByPeer := make(map[string]uint64, len(traffic))
 	for _, peer := range s.wg.GetPeers() {
-		if last, ok := handshakes[peer.PublicKey]; ok {
-			lastByPeer[peer.Name] = last
+		if t, ok := traffic[peer.PublicKey]; ok {
+			// Both directions: a peer receiving a large download is in use
+			// even while it sends almost nothing.
+			bytesByPeer[peer.Name] = t.RX + t.TX
 		}
 	}
-	return cur.StaleMFASessions(lastByPeer, time.Now())
+	return cur.StaleMFASessions(s.activity.observe(bytesByPeer, time.Now()), time.Now())
 }

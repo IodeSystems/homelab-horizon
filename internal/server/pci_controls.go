@@ -101,10 +101,12 @@ var pciCatalogue = map[string]pciMeta{
 		wants: "A VPN session stops working after 15 minutes without traffic.",
 		kind:  remediationManual,
 		hint: "Settings › VPN MFA — set the inactivity timeout to 15 minutes or " +
-			"less (hz will not go below 5: WireGuard rekeys on traffic and not at " +
-			"all when idle, so a shorter window mostly measures that lag). How " +
-			"long a session may last is a separate setting and does not affect " +
-			"this — the requirement is about idleness, not duration.",
+			"less (hz will not go below 5, because the traffic counters behind it " +
+			"are sampled once a minute). Idleness is measured from bytes moved, " +
+			"not from the tunnel being up: keepalives keep a tunnel handshaking " +
+			"whether or not anyone is using it. How long a session may last is a " +
+			"separate setting and does not affect this — the requirement is about " +
+			"idleness, not duration.",
 	},
 	"tls_enabled": {
 		title: "TLS on published services",

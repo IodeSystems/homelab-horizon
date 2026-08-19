@@ -341,10 +341,11 @@ type Config struct {
 	// behaviour an operator already agreed to, and shortening it silently
 	// would strand people mid-task.
 	//
-	// Opt-in and floored rather than free: WireGuard only handshakes when
-	// there is traffic or on rekey, so a threshold near the rekey interval
-	// re-jails a peer whose tunnel is perfectly healthy and merely idle for a
-	// minute. See MFAInactivityFloorMinutes.
+	// Idleness is measured from the peer's byte counters, not its handshake:
+	// hz ships PersistentKeepalive in every client config, and WireGuard
+	// rekeys on keepalives, so handshakes stay fresh on a tunnel nobody is
+	// using. See internal/server/peer_activity.go and
+	// MFAInactivityFloorMinutes.
 	VPNMFAInactivityMinutes int `json:"vpn_mfa_inactivity_minutes,omitempty"`
 
 	// Passkeys, an alternative second factor to TOTP. A peer may hold several
@@ -1364,10 +1365,15 @@ func (c *Config) GetJailedPeers() map[string]bool {
 
 // MFAInactivityFloorMinutes is the lowest inactivity timeout hz accepts.
 //
-// WireGuard rekeys roughly every two minutes under load and not at all when
-// idle, so "last handshake" lags real activity by minutes even on a healthy
-// tunnel. Anything under five minutes would mostly measure that lag and
-// re-jail people who never went away.
+// The counters behind this are sampled once a minute by the MFA pruner, so a
+// window of one or two minutes would mostly measure sampling granularity —
+// a peer active twice either side of a sample boundary can look quiet in
+// between. Five minutes is several samples wide, so a single missed or late
+// tick cannot re-jail somebody who never went away.
+//
+// This used to be justified by WireGuard's rekey interval, back when idleness
+// was read from handshake times. That mechanism could not detect idleness at
+// all; the floor survives it for the reason above.
 const MFAInactivityFloorMinutes = 5
 
 // MFAInactivityTimeout is the configured inactivity window, or zero when off.
