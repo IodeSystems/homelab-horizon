@@ -506,3 +506,50 @@ mechanism that never worked and a comment explaining why it was good enough.
   someone eventually. `MFAInactivityFloorMinutes` stays at 5 because the counters
   are sampled once a minute and a shorter window would measure sampling
   granularity.
+
+
+## SAQ level on the PCI tab (2026-08-19)
+
+The checklist was enforcing a level the operator was not targeting. Baseline
+here is **SAQ A**; some prospective clients are **SAQ A-EP**. Those are very
+different questionnaires — a few dozen questions versus ~140 — and the tab was
+reporting the union as findings.
+
+Of the twelve requirements hz reports, **SAQ A asks about four**: 6.3.3, 8.2.1,
+8.3.7, 8.3.9. SAQ A-EP asks about all twelve. SAQ A contains no Requirement 10
+and no Requirement 4 questions at all, which is why a fully-outsourced merchant
+sees so little.
+
+Declaring a level filters what counts as a finding. Controls outside it are
+still shown — they are hardening worth having, and an A-EP client turns them
+into work overnight — but they do not count as unmet and sort to the bottom.
+
+**Provenance, because this is the part that could quietly be wrong.** The
+mapping was transcribed from the Council's own questionnaires, fetched as PDFs
+and read:
+
+    listings.pcisecuritystandards.org/documents/PCI-DSS-v4-0-SAQ-A.pdf
+    listings.pcisecuritystandards.org/documents/PCI-DSS-v4-0-SAQ-A-EP.pdf
+
+That mattered. A vendor blog consulted first listed 8.2.8 and 8.3.4 as SAQ A
+content; **both are absent from the actual document**, and 8.2.8 is the one the
+operator had specifically asked about. Had the blog been trusted, the tab would
+have told an SAQ A merchant to enforce a 15-minute idle timeout their
+questionnaire never mentions. The table cites its sources, its version (v4.0,
+April 2022), and the v4.0.1 delta (6.4.3 and 11.6.1 removed from SAQ A — neither
+is a control hz reports, so no effect here).
+
+An undeclared level asks about everything, and an unmapped requirement stays
+visible: a control nobody has mapped should be seen rather than silently
+filtered.
+
+**Prod, set to SAQ A:** 1 unmet — the shared admin token (8.2.1). At A-EP it
+would be 3: the token, the admin session idle timeout (8.2.8), and the VPN admin
+MFA bypass (8.5.1). That second list is the gap sheet for taking on an A-EP
+client.
+
+- **next**: nothing outstanding. Closing 8.2.1 means disabling the shared token,
+  which needs a real account as the way in first.
+- **risks**: the mapping is a transcription of v4.0 documents and will drift.
+  The UI says to re-check against the current questionnaire before relying on it
+  for an assessment; the test pins the transcription so it cannot change quietly.
