@@ -365,7 +365,13 @@ export function useDisableAdminToken() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () =>
-      apiFetch<{ ok: boolean }>("/admin-token/disable", { method: "POST" }),
+      // disabled:true is required — the endpoint refuses to re-enable, because
+      // the token is exactly what an attacker holding it would use to turn
+      // itself back on. Re-enabling is a console restart.
+      apiFetch<{ ok: boolean; recovery: string }>("/admin-token/disable", {
+        method: "POST",
+        body: JSON.stringify({ disabled: true }),
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pci-controls"] }),
   });
 }
