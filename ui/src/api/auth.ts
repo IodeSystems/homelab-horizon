@@ -327,3 +327,54 @@ export function useLoginChangePassword() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["auth"] }),
   });
 }
+
+// --- PCI checklist ---
+
+export type PCIRemediation = {
+  kind: "fix" | "decision" | "manual";
+  label?: string;
+  warning?: string;
+  hint?: string;
+};
+
+export type PCIControl = {
+  name: string;
+  requirement: string;
+  title: string;
+  ok: boolean;
+  wants: string;
+  detail?: string;
+  remediation?: PCIRemediation;
+};
+
+export function usePCIControls() {
+  return useQuery({
+    queryKey: ["pci-controls"],
+    queryFn: () =>
+      apiFetch<{ controls: PCIControl[]; unmet: number; disclaimer: string }>(
+        "/pci/controls",
+      ),
+  });
+}
+
+// Disabling the shared admin token. Its own hook rather than a generic
+// "apply fix" call, because the endpoint has its own refusals — it will not
+// leave the box with no way in — and those messages should reach the operator
+// unchanged.
+export function useDisableAdminToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<{ ok: boolean }>("/admin-token/disable", { method: "POST" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["pci-controls"] }),
+  });
+}
+
+export function useFixLogRetention() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<{ ok: boolean }>("/system/fix/log-retention", { method: "POST" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["pci-controls"] }),
+  });
+}
