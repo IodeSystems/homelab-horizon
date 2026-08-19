@@ -454,3 +454,55 @@ but nothing had connected it to the feature that superseded it.
 - **next**: nothing outstanding.
 - **risks**: none known. Prod reads 2 unmet of 14, both operator choices
   (the shared admin token, and the admin MFA bypass).
+
+
+## The VPN inactivity timeout could not detect inactivity (2026-08-18)
+
+Asked whether hz treats keepalives as traffic. It did, and the consequence was
+worse than the question implied: the inactivity timeout was built on
+`wg show latest-handshakes`, and **hz puts `PersistentKeepalive = 25` in every
+client config it generates** — it has to, or peers behind NAT become
+unreachable. A keepalive is a transmission, WireGuard rekeys when transmitting
+on a session older than REKEY_AFTER_TIME (120s), so handshakes refresh every
+couple of minutes on a tunnel nobody is touching. Against a five minute floor
+the timeout could essentially never fire.
+
+So the feature detected *disconnection* — a peer asleep, off, or out of range —
+and was named, documented and sold as detecting idleness. And the 8.2.8 control
+had just been corrected to depend on it, which turned a false red into a **false
+green**: hz reported the requirement met on a mechanism that could not do the
+thing it claimed.
+
+Idleness now comes from byte counters, read via `wg show dump` in the same
+snapshot as the handshake. Keepalives cost ~77 B/min (32 bytes every 25s); the
+threshold is 1024 B/min — an order of magnitude clear of the noise and far below
+any real session. Two consequences are intended rather than accidental: a peer
+whose only traffic is a DNS lookup a minute reads idle, and an ssh window nobody
+has typed into for fifteen minutes is precisely what 8.2.8 exists to catch.
+
+Counters going backwards mean the interface was recreated, not negative traffic;
+a peer seen for the first time counts as active. Both err towards leaving
+sessions alone, matching the existing rule that a failed read revokes nothing.
+
+**On the measurement.** The prod sample was inconclusive and is recorded as such:
+the only connected peer was actively transferring ~350 KB per 150s, so keepalive
+traffic could not be isolated. What it did show is rekeys at exactly 120s
+intervals, which is the constant the argument rests on. The unit test pins the
+behaviour either way — twenty minutes of keepalive-rate traffic must read idle —
+and that test fails against the old mechanism by construction.
+
+**The lesson, which is not about WireGuard.** A signal was chosen because it was
+the one available (`latest handshake`), and its own comment said so honestly.
+Nothing rechecked whether it could answer the question once it became
+load-bearing for a compliance claim. The proxy problem from the 8.2.8 entry
+above, one layer down: that one had a stale justification, this one had a
+mechanism that never worked and a comment explaining why it was good enough.
+
+- **next**: nothing outstanding. Deployed; the dump read runs every 60s on prod
+  with no errors, and no session has been revoked spuriously.
+- **risks**: the threshold is judgment, not measurement. A peer using very little
+  traffic deliberately (a long-lived idle ssh session held open on purpose) will
+  be re-jailed after the window — which is the requirement, but will surprise
+  someone eventually. `MFAInactivityFloorMinutes` stays at 5 because the counters
+  are sampled once a minute and a shorter window would measure sampling
+  granularity.
