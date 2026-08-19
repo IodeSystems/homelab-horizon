@@ -420,3 +420,37 @@ control that can lock an operator out may ever be `fix`.
 - **risks**: not viewed in a browser — the admin UI is loopback-bound and the
   browser automation host is not on that LAN. Verified through the API and the
   production build instead.
+
+
+## 8.2.8 was measuring the wrong thing (2026-08-18)
+
+The PCI tab told an operator with 8-hour VPN sessions that they were a finding
+and should cut them to 15 minutes. Correct reading of PCI DSS 8.2.8: it asks for
+re-authentication after 15 minutes **idle**. A session in continuous use does
+not violate it, and the standard says nothing about maximum duration.
+
+The old definition — "no unbounded session and nothing longer than 15 minutes
+offered" — was an honest proxy when written, and its comment said so: hz had no
+idle concept, so session length was the only bound available. hz then gained a
+real VPN inactivity timeout (floor 5 minutes, because WireGuard rekeys on
+traffic and not at all when idle) and **the proxy outlived its reason**. Prod
+had the inactivity timeout set to 15 the whole time and still read unmet.
+
+Now: `VPNMFAEnabled && MFAInactivityTimeout() ∈ (0, 15m]`. An unbounded session
+is no longer a finding on its own, because the idle timeout re-jails it after 15
+quiet minutes whatever its nominal length.
+
+`TestSessionBoundedRejectsForever` was deleted rather than adapted. All three of
+its cases lacked an inactivity timeout, so the control reads false for them
+however the durations are set — it had stopped exercising the rule it was named
+for and would have passed no matter how the definition changed.
+
+**The lesson is about proxies, not about PCI.** A measurement adopted because
+the real signal was unavailable needs an owner for the day the real signal
+arrives. This one had a comment explaining exactly why it was a proxy, and that
+comment is what made the fix obvious once someone pushed back on the advice —
+but nothing had connected it to the feature that superseded it.
+
+- **next**: nothing outstanding.
+- **risks**: none known. Prod reads 2 unmet of 14, both operator choices
+  (the shared admin token, and the admin MFA bypass).
