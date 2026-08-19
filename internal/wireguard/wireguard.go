@@ -1023,37 +1023,64 @@ func (w *WGConfig) GetInterfaceStatus() InterfaceStatus {
 	return status
 }
 
-// LatestHandshakes returns the last successful handshake per peer public key.
-//
-// Reads `wg show <iface> latest-handshakes`, which emits unix seconds, rather
-// than parsing the human-readable "1 minute, 2 seconds ago" from `wg show`.
-// That prose is localised and formatted for people; deriving a timeout from it
-// would break on a phrasing change with no compile error.
-//
-// A peer that has never completed a handshake reports zero, and is returned as
-// the zero Time so callers can distinguish "never" from "a long time ago" —
-// the two mean different things when deciding whether someone went idle.
-func (w *WGConfig) LatestHandshakes() (map[string]time.Time, error) {
-	out, err := exec.Command("wg", "show", w.iface, "latest-handshakes").Output()
-	if err != nil {
-		return nil, fmt.Errorf("wg show %s latest-handshakes: %w", w.iface, err)
-	}
+// PeerTraffic is one peer's counters as the kernel currently reports them.
+type PeerTraffic struct {
+	LatestHandshake time.Time
+	// RX and TX are cumulative byte counts since the interface came up. They
+	// reset when it is recreated, so a consumer comparing samples has to treat
+	// a decrease as a restart rather than as negative traffic.
+	RX uint64
+	TX uint64
+}
 
-	handshakes := make(map[string]time.Time)
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) != 2 {
-			continue
-		}
-		secs, err := strconv.ParseInt(fields[1], 10, 64)
-		if err != nil {
-			continue
-		}
-		if secs == 0 {
-			handshakes[fields[0]] = time.Time{}
-			continue
-		}
-		handshakes[fields[0]] = time.Unix(secs, 0)
+// PeerTraffic reads every peer's handshake time and byte counters in one call.
+//
+// `wg show dump` rather than separate `wg show` invocations: the counters and
+// the handshake have to describe the same instant to be compared, and it is one
+// process instead of several on a tick that runs every minute.
+//
+// The dump form also emits unix seconds rather than the human-readable
+// "1 minute, 2 seconds ago" of plain `wg show`. That prose is localised and
+// formatted for people; deriving a timeout from it would break on a phrasing
+// change with no compile error.
+func (w *WGConfig) PeerTraffic() (map[string]PeerTraffic, error) {
+	out, err := exec.Command("wg", "show", w.iface, "dump").Output()
+	if err != nil {
+		return nil, fmt.Errorf("wg show %s dump: %w", w.iface, err)
 	}
-	return handshakes, nil
+	return parseWGDump(string(out)), nil
+}
+
+// parseWGDump reads the tab-separated dump format. Split out so the parsing is
+// testable without a kernel or a wg binary.
+//
+// The first line describes the interface itself (private key, public key,
+// listen port, fwmark) and is skipped; every later line is a peer:
+//
+//	public-key  preshared-key  endpoint  allowed-ips  latest-handshake  rx  tx  keepalive
+func parseWGDump(out string) map[string]PeerTraffic {
+	traffic := make(map[string]PeerTraffic)
+	for i, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if i == 0 {
+			continue // the interface line
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) < 7 {
+			continue
+		}
+		t := PeerTraffic{}
+		// A handshake of 0 means "never", which is not the epoch: leaving it as
+		// the zero Time keeps callers from computing a 56-year-old session.
+		if secs, err := strconv.ParseInt(fields[4], 10, 64); err == nil && secs != 0 {
+			t.LatestHandshake = time.Unix(secs, 0)
+		}
+		if rx, err := strconv.ParseUint(fields[5], 10, 64); err == nil {
+			t.RX = rx
+		}
+		if tx, err := strconv.ParseUint(fields[6], 10, 64); err == nil {
+			t.TX = tx
+		}
+		traffic[fields[0]] = t
+	}
+	return traffic
 }

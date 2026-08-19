@@ -205,6 +205,10 @@ type Server struct {
 	config         atomic.Pointer[config.Config]
 	peerSyncStatus peerSyncStatus
 
+	// Per-peer traffic samples behind the VPN inactivity timeout. Not in the
+	// config: a measurement rather than a setting. See peer_activity.go.
+	activity *activityTracker
+
 	// When published records were last compared against the zone, so a
 	// reconcile happens on its own schedule rather than on every public-IP
 	// check. See recordReconcileInterval.
@@ -441,6 +445,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		static:         newStaticSupervisor(cfg.StaticServeAddr(), dryRun),
 		configShares:   make(map[string]*configShare),
 		joinTokens:     newJoinTokenStore(),
+		activity:       newActivityTracker(),
 		ceremonies:     newCeremonyStore(),
 		pendingLogins:  newPendingLoginStore(),
 		pendingTOTP:    newPendingTOTPStore(),

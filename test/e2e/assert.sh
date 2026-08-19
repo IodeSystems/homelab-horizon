@@ -587,12 +587,16 @@ settings=$(curl -fsS -b "$COOKIE" "$API/api/v1/mfa/settings")
   && ok "IDLE-4 the floor is published so the form can state it" \
   || bad "IDLE-4 the floor is published" "$settings"
 
-# hz must read handshakes as timestamps rather than the localised prose from
-# `wg show`, against the real kernel interface.
-handshakes=$(wg show wg0 latest-handshakes | wc -l)
-[ "$handshakes" -ge 1 ] \
-  && ok "IDLE-5 the kernel reports handshakes in the machine-readable form hz reads" \
-  || bad "IDLE-5 the kernel reports handshakes" "$(wg show wg0 latest-handshakes 2>&1)"
+# hz reads `wg show dump` — tab-separated, timestamps rather than the localised
+# prose of plain `wg show`, and the byte counters in the same snapshot as the
+# handshake. Idleness is measured from those counters: keepalives keep the
+# handshake fresh on a tunnel nobody is using, so the handshake alone cannot
+# answer the question. Assert the fields exist against a real kernel.
+dump_peer=$(wg show wg0 dump | awk -F'\t' 'NR>1 {print; exit}')
+dump_fields=$(printf '%s' "$dump_peer" | awk -F'\t' '{print NF}')
+[ "${dump_fields:-0}" -ge 7 ] \
+  && ok "IDLE-5 the kernel reports handshake and byte counters in the form hz reads" \
+  || bad "IDLE-5 the kernel dump has the fields hz parses" "$(wg show wg0 dump 2>&1 | head -3)"
 
 # The false-positive risk is the one worth proving against a real kernel: a
 # peer with a live tunnel must survive a prune tick with the timeout armed. The
@@ -609,7 +613,9 @@ cli curl -fsS --max-time 4 -X POST -H 'Content-Type: application/json' \
 sleep 2
 assert_port_open    "IDLE-6 the peer holds a session with the timeout armed" "$GW_WG" 22
 
-# Traffic across the prune boundary, so the handshake stays recent.
+# Real traffic across the prune boundary, so the byte counters move. Pings
+# rather than an idle tunnel: keepalives alone are deliberately below the
+# threshold that counts as use.
 for _ in $(seq 1 8); do
   ip netns exec client timeout 2 ping -c1 -W1 "$GW_WG" >/dev/null 2>&1 || true
   sleep 8
@@ -628,7 +634,8 @@ hz_log_since "$idle_mark" | grep -q "revoked for inactivity" \
 if [ "${IDLE_SLOW:-0}" = "1" ]; then
   note_idle() { printf '  ...  %s\n' "$1"; }
   note_idle "IDLE_SLOW=1: taking the tunnel down and waiting out the 5 minute floor"
-  # No tunnel means no new handshakes, so the recorded one ages out.
+  # No tunnel means no traffic at all — not even keepalives — so the peer goes
+  # idle by the only measure that counts.
   ip -n client link set wgc down 2>/dev/null || true
   sleep 380
   ip -n client link set wgc up 2>/dev/null || true
