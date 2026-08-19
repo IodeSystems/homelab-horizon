@@ -42,6 +42,7 @@ import {
 import type { HAFleetPeer } from "../api/types";
 import { SystemHealthTab } from "../components/SystemHealthTab";
 import UsersTab from "../components/UsersTab";
+import PCITab from "../components/PCITab";
 import { IPTablesTab } from "../components/IPTablesTab";
 
 // --- Zone Tab ---
@@ -1055,6 +1056,7 @@ function SettingsPage() {
         <Tab label="HA Fleet" />
         <Tab label="IPTables" />
         <Tab label="Users" />
+        <Tab label="PCI" />
         <Tab label="hz CLI" />
       </Tabs>
 
@@ -1089,7 +1091,8 @@ function SettingsPage() {
       {tab === 3 && <HAFleetTab />}
       {tab === 4 && <IPTablesTab />}
       {tab === 5 && <UsersTab />}
-      {tab === 6 && <HzCliTab />}
+      {tab === 6 && <PCITab />}
+      {tab === 7 && <HzCliTab />}
     </Box>
   );
 }
