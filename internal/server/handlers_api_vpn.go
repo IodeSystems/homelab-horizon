@@ -82,6 +82,16 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 	}
 	s.rebuildWGChains()
 
+	// Record whose device this is, when a person rather than a token created
+	// it. Best effort: the peer exists and works regardless, and failing the
+	// request over a bookkeeping row would be the wrong trade — an unowned peer
+	// is the same state every peer created before this feature is in.
+	if user := s.currentUser(r); user != nil && s.users != nil {
+		if err := s.users.SetPeerOwner(r.Context(), name, user.ID); err != nil {
+			slog.Warn("could not record peer owner", "peer", name, "user", user.Username, "err", err)
+		}
+	}
+
 	clientConfig := s.generateClientConfig(privKey, strings.TrimSuffix(clientIP, "/32"), profile)
 
 	qrCode := qr.GenerateSVG(clientConfig, 256)

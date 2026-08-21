@@ -447,3 +447,34 @@ export function useRevokeAPIToken() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["api-tokens"] }),
   });
 }
+
+// --- My VPN devices ---
+
+export type AccountPeer = {
+  name: string;
+  publicKey: string;
+  allowedIps: string;
+  address?: string;
+  latestHandshake?: string;
+  online: boolean;
+};
+
+export function useAccountPeers() {
+  return useQuery({
+    queryKey: ["account-peers"],
+    queryFn: () =>
+      apiFetch<{ peers: AccountPeer[]; unowned: AccountPeer[] }>("/account/peers"),
+  });
+}
+
+export function usePeerOwnership() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, action }: { name: string; action: "claim" | "release" }) =>
+      apiFetch<{ ok: boolean }>(`/account/peers/${action}`, {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["account-peers"] }),
+  });
+}

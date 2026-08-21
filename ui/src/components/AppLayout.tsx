@@ -8,12 +8,19 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  Avatar,
+  Button,
+  Divider,
+  Menu,
+  MenuItem,
   Tooltip,
   Typography,
   useMediaQuery,
   useTheme,
 } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
+import AccountCircleIcon from "@mui/icons-material/AccountCircle";
+import PersonIcon from "@mui/icons-material/PersonOutlined";
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import DnsIcon from "@mui/icons-material/Dns";
 import StorageIcon from "@mui/icons-material/Storage";
@@ -54,7 +61,6 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const navigate = useNavigate();
   const routerState = useRouterState();
   const currentPath = routerState.location.pathname;
-  const logout = useLogout();
 
   const handleNav = (path: string) => {
     navigate({ to: path });
@@ -119,16 +125,91 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 
       <List sx={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
         <ListItemButton
-          onClick={() => logout.mutate()}
+          onClick={() => handleNav("/account")}
+          selected={currentPath === "/account"}
           sx={{ borderRadius: 1, mx: 1, mb: 1 }}
         >
           <ListItemIcon sx={{ minWidth: 40, color: "text.secondary" }}>
-            <LogoutIcon />
+            <PersonIcon />
           </ListItemIcon>
-          <ListItemText primary="Logout" />
+          <ListItemText primary="Account" />
         </ListItemButton>
       </List>
     </Box>
+  );
+}
+
+// Who is signed in, top right.
+//
+// The sidebar had a Logout button and nothing else — no indication of *whose*
+// session was being ended, which with a shared admin token, a VPN admin peer and
+// real accounts all able to authenticate was the one thing worth showing.
+function UserMenu() {
+  const { data } = useAuthStatus();
+  const logout = useLogout();
+  const navigate = useNavigate();
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+
+  if (!data?.authenticated) return null;
+
+  // Each way in gets its own label: "admin token" is not a person, and showing
+  // a name for it would be a lie.
+  const name = data.username ?? (data.method === "vpn" ? "VPN admin peer" : "admin token");
+  const isAccount = Boolean(data.username);
+
+  return (
+    <>
+      <Button
+        onClick={(e) => setAnchor(e.currentTarget)}
+        startIcon={
+          isAccount ? (
+            <Avatar sx={{ width: 24, height: 24, fontSize: 13 }}>
+              {name.charAt(0).toUpperCase()}
+            </Avatar>
+          ) : (
+            <AccountCircleIcon />
+          )
+        }
+        sx={{ textTransform: "none", color: "text.secondary" }}
+      >
+        {name}
+      </Button>
+      <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>
+        <MenuItem disabled sx={{ opacity: "1 !important" }}>
+          <Box>
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              {name}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              {isAccount ? data.role ?? "signed in" : "not tied to a person"}
+            </Typography>
+          </Box>
+        </MenuItem>
+        <Divider />
+        <MenuItem
+          onClick={() => {
+            setAnchor(null);
+            navigate({ to: "/account" });
+          }}
+        >
+          <ListItemIcon>
+            <PersonIcon fontSize="small" />
+          </ListItemIcon>
+          Account settings
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            setAnchor(null);
+            logout.mutate();
+          }}
+        >
+          <ListItemIcon>
+            <LogoutIcon fontSize="small" />
+          </ListItemIcon>
+          Sign out
+        </MenuItem>
+      </Menu>
+    </>
   );
 }
 
@@ -185,6 +266,9 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           minWidth: 0,
         }}
       >
+        <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1 }}>
+          <UserMenu />
+        </Box>
         {isMobile && (
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
             <IconButton onClick={() => setDrawerOpen(true)} edge="start">

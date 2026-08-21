@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AccountRouteImport } from './routes/account'
 import { Route as BansRouteImport } from './routes/bans'
 import { Route as ChecksRouteImport } from './routes/checks'
 import { Route as DashboardRouteImport } from './routes/dashboard'
@@ -26,6 +27,11 @@ import { Route as DnsZoneRouteImport } from './routes/dns.$zone'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccountRoute = AccountRouteImport.update({
+  id: '/account',
+  path: '/account',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BansRoute = BansRouteImport.update({
@@ -91,6 +97,7 @@ const DnsZoneRoute = DnsZoneRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/account': typeof AccountRoute
   '/bans': typeof BansRoute
   '/checks': typeof ChecksRoute
   '/dashboard': typeof DashboardRoute
@@ -106,6 +113,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/account': typeof AccountRoute
   '/bans': typeof BansRoute
   '/checks': typeof ChecksRoute
   '/dashboard': typeof DashboardRoute
@@ -122,6 +130,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/account': typeof AccountRoute
   '/bans': typeof BansRoute
   '/checks': typeof ChecksRoute
   '/dashboard': typeof DashboardRoute
@@ -139,6 +148,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/account'
     | '/bans'
     | '/checks'
     | '/dashboard'
@@ -154,6 +164,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/account'
     | '/bans'
     | '/checks'
     | '/dashboard'
@@ -169,6 +180,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/account'
     | '/bans'
     | '/checks'
     | '/dashboard'
@@ -185,6 +197,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AccountRoute: typeof AccountRoute
   BansRoute: typeof BansRoute
   ChecksRoute: typeof ChecksRoute
   DashboardRoute: typeof DashboardRoute
@@ -206,6 +219,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/account': {
+      id: '/account'
+      path: '/account'
+      fullPath: '/account'
+      preLoaderRoute: typeof AccountRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/bans': {
@@ -297,6 +317,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AccountRoute: AccountRoute,
   BansRoute: BansRoute,
   ChecksRoute: ChecksRoute,
   DashboardRoute: DashboardRoute,
