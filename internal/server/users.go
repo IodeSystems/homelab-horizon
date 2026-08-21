@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/db"
@@ -41,6 +42,22 @@ func (s *Server) currentUser(r *http.Request) *db.User {
 	if s.users == nil {
 		return nil
 	}
+
+	// A personal API token is checked first, because a request carrying one is
+	// a script saying who it is on purpose. This is the path that lets the
+	// shared admin token be switched off: automation still needs a credential,
+	// and this one names a person, so 8.2.1 holds for scripted actions too.
+	if tok := requestBearer(r); strings.HasPrefix(tok, db.APITokenPrefix) {
+		user, _, err := s.users.LookupAPIToken(r.Context(), tok, s.getClientIP(r))
+		if err != nil {
+			// Deliberately not falling through to the cookie: a request that
+			// presented a token meant to use it, and quietly authenticating it
+			// as somebody else would put the wrong name in the audit log.
+			return nil
+		}
+		return user
+	}
+
 	cookie, err := r.Cookie(userSessionCookie)
 	if err != nil || cookie.Value == "" {
 		return nil

@@ -271,12 +271,18 @@ func TestMigration0003RunsOnAnExistingDatabase(t *testing.T) {
 		`INSERT INTO users (id, username, role) VALUES ('usr_v', 'legacy', 'viewer')`); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	// Rewind to the state a v0002 install would be in.
+	// Rewind to the state a v0002 install would be in. That means removing what
+	// later migrations built as well as moving the version marker: Open() has
+	// already run every migration, so leaving 0004's table behind would make
+	// the replay collide with it rather than test the upgrade.
 	if _, err := d.Exec(`UPDATE schema_migrations SET version = 2, dirty = 0`); err != nil {
 		t.Fatalf("rewind: %v", err)
 	}
-	if _, err := d.Exec(`DELETE FROM applied_migrations WHERE version = '0003'`); err != nil {
+	if _, err := d.Exec(`DELETE FROM applied_migrations WHERE version > '0002'`); err != nil {
 		t.Fatalf("rewind checksum: %v", err)
+	}
+	if _, err := d.Exec(`DROP TABLE IF EXISTS api_tokens`); err != nil {
+		t.Fatalf("rewind 0004: %v", err)
 	}
 	_ = d.Close()
 

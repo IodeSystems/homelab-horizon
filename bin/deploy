@@ -210,14 +210,24 @@ deploy_one() {
       if [ -d $REMOTE_UI_DIR ]; then
         echo "  note: $REMOTE_UI_DIR is left over from an older deploy and is no longer used"
       fi
-      echo 'Auth token:'
-      for i in {1..5}; do
-        if [ -f /etc/homelab-horizon/config.json.token ]; then
-          sudo cat /etc/homelab-horizon/config.json.token
-          break
-        fi
-        sleep 1
-      done || echo '(token file not found)'
+      # The token file survives the token being switched off, so printing it
+      # unconditionally advertised a credential that no longer authenticates
+      # anything. Ask the config, not the filesystem.
+      if [ \"\$(sudo jq -r '.admin_token_disabled // false' /etc/homelab-horizon/config.json 2>/dev/null)\" = true ]; then
+        echo 'Shared admin token: disabled (PCI DSS 8.2.1).'
+        echo '  Sign in with an account, or use a personal API token for scripts:'
+        echo '  Settings > Users > your account > API tokens.'
+        echo '  Console recovery: homelab-horizon --enable-admin-token'
+      else
+        echo 'Auth token:'
+        for i in {1..5}; do
+          if [ -f /etc/homelab-horizon/config.json.token ]; then
+            sudo cat /etc/homelab-horizon/config.json.token
+            break
+          fi
+          sleep 1
+        done || echo '(token file not found)'
+      fi
     else
       echo ''
       echo '*** SERVICE FAILED TO START ***'
