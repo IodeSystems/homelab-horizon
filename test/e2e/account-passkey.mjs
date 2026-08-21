@@ -141,6 +141,51 @@ async function main() {
     bad("the session is a named account", JSON.stringify(status));
   }
 
+  // ---- the test button: a real assertion that issues no session ----
+  //
+  // Worth exercising here rather than in a unit test, because the thing that
+  // can break it is the ceremony purpose: a test ceremony must not be
+  // finishable as a sign-in, and vice versa. Only a real authenticator can
+  // tell us the round trip works.
+  const beforeCookies = (await context.cookies()).find((c) => c.name === "hz_user");
+  const testResult = await page.evaluate(async () => {
+    const begin = await fetch("/api/v1/account/passkey/test/begin", {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!begin.ok) return { stage: "begin", status: begin.status };
+    return { stage: "began", body: await begin.json() };
+  });
+  if (testResult.stage === "began" && testResult.body.ceremonyId) {
+    ok("the passkey test ceremony starts for a signed-in account");
+  } else {
+    bad("the passkey test ceremony starts", JSON.stringify(testResult));
+  }
+
+  // A test ceremony id must not be usable to finish a *login*, or the button
+  // would be a way to mint a session without the password step.
+  const crossUse = await page.evaluate(async (ceremonyId) => {
+    const r = await fetch("/api/v1/auth/login/passkey/finish", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ceremonyId, credential: {} }),
+    });
+    return r.status;
+  }, testResult.body?.ceremonyId ?? "");
+  if (crossUse >= 400) {
+    ok(`a test ceremony cannot be finished as a login (${crossUse})`);
+  } else {
+    bad("a test ceremony cannot be finished as a login", `status ${crossUse}`);
+  }
+
+  const afterCookies = (await context.cookies()).find((c) => c.name === "hz_user");
+  if (beforeCookies?.value === afterCookies?.value) {
+    ok("testing a passkey does not mint a new session");
+  } else {
+    bad("testing a passkey does not mint a new session", "the session cookie changed");
+  }
+
   await browser.close();
   console.log(
     failures === 0
