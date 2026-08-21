@@ -78,6 +78,7 @@ func newRoot() *cobra.Command {
 		newConfigTemplateCmd(),
 		newIAMPolicyCmd(),
 		newShowSystemdCmd(&opts),
+		newTokenCmd(&opts),
 	)
 	return root
 }
