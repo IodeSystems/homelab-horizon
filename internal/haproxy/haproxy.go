@@ -396,11 +396,23 @@ func (h *HAProxy) generateConfig(httpPort, httpsPort int, ssl *SSLConfig) string
     ssl-default-bind-ciphersuites TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
 `, h.tlsMinVersion)
 
+	// total-max-size is MEGABYTES, and this said 1024 — a one-gigabyte RAM
+	// cache on a box whose whole job is proxying. HAProxy allocates it up
+	// front as shared memory, and a reload runs two workers briefly, so the
+	// real requirement was two gigabytes to serve a homelab. On the e2e VM
+	// (2 GB) that meant the kernel OOM-killed HAProxy during reloads, which
+	// surfaced as connections refused for a second or two at exactly the
+	// moments hz rewrites the config — a jail lifting, a rate limit landing.
+	//
+	// 64 MB is enough to keep hot static assets in RAM, which is what the
+	// cache was added for; anything larger is better served by the object
+	// itself being cacheable downstream. max-object-size stays at 512 KB, so
+	// the cache still holds a useful number of objects.
 	sb.WriteString(`
 
-# Cache configuration (RAM-based)
+# Cache configuration (RAM-based). total-max-size is in megabytes.
 cache mycache
-    total-max-size 1024
+    total-max-size 64
     max-object-size 524288
 
 defaults
