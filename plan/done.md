@@ -620,3 +620,43 @@ proved that it agrees with itself.
   the command chained `deploy` after the CI wait without checking the result.
   The failure was lint-only and the binary was sound, but the gate did not hold.
   Later deploys checked the conclusion first.
+
+
+## Test buttons for both second factors (2026-08-21)
+
+A second factor fails silently until it is needed, and that moment is the worst
+one to discover it: no session, and the recovery is a console. Both kinds fail
+in a specific, diagnosable way, so both buttons say which rather than "invalid".
+
+**TOTP breaks on clock drift.** A wrong code is checked against nearby time
+steps, and if it would have been right ninety seconds ago the answer says so and
+by how much — "fix the clock on your phone" instead of "invalid code". The
+search is ±5 minutes at skew 0 per step, so the reported drift is the real one
+rather than the nearest overlapping window; a code from a different secret reads
+as wrong, not as skew, because telling someone to fix a clock that is fine sends
+them after the wrong thing.
+
+**A passkey is bound to the hostname it was enrolled on**, so the usual failure
+is enrolling on one address and signing in from another. The test runs the same
+assertion ceremony a sign-in runs — anything else would prove a different path
+works — and stops before issuing a session, because the caller already has one.
+
+The signature counter is still written back on a test. It was a real assertion,
+so skipping the write would leave the stored counter behind the authenticator's
+and make the next genuine sign-in look like a clone (AUTH-4). A clone warning is
+surfaced in the result rather than buried: a test is exactly when somebody is
+looking.
+
+The test ceremony carries its own purpose, so it cannot be replayed into a
+sign-in and a sign-in cannot be finished by the test endpoint.
+
+- **next**: nothing outstanding.
+- **risks**: the TOTP test endpoint accepts unlimited attempts from an already
+  authenticated session. Not a brute-force oracle in any useful sense — the
+  caller is authenticated and could simply read the enrolled secret's effects
+  another way — but if the account surface ever admits a lesser-privileged role,
+  this needs a limiter.
+- **process note**: the first fixture run was piped through `tail`, which
+  discarded the assertion summary AND made the reported exit status `tail`'s
+  rather than the fixture's. A green exit code from a pipeline says nothing
+  about the command at the head of it.
