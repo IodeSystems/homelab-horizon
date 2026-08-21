@@ -402,3 +402,48 @@ export function useFixLogRetention() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pci-controls"] }),
   });
 }
+
+// --- Personal API tokens ---
+//
+// A credential that belongs to a person rather than to the installation, so a
+// script's actions are attributable (PCI DSS 8.2.1). This is what replaces the
+// shared admin token once it is switched off.
+
+export type APIToken = {
+  id: string;
+  name: string;
+  createdAt: string;
+  expiresAt?: string;
+  lastUsedAt?: string;
+  lastUsedIp?: string;
+};
+
+export function useAPITokens() {
+  return useQuery({
+    queryKey: ["api-tokens"],
+    queryFn: () => apiFetch<{ tokens: APIToken[] }>("/account/tokens"),
+  });
+}
+
+export function useCreateAPIToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { name: string; days: number }) =>
+      apiFetch<{ token: string; meta: APIToken; note: string }>("/account/tokens", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["api-tokens"] }),
+  });
+}
+
+export function useRevokeAPIToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<{ ok: boolean }>(`/account/tokens/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["api-tokens"] }),
+  });
+}

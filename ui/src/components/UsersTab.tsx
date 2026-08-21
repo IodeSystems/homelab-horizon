@@ -21,6 +21,7 @@ import {
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import AccountSecurity from "./AccountSecurity";
+import AccountTokens from "./AccountTokens";
 import AccountPolicyCard from "./AccountPolicyCard";
 import {
   useUsers,
@@ -169,6 +170,7 @@ export default function UsersTab() {
       )}
 
       {me && <AccountSecurity />}
+      {me && <AccountTokens />}
       <AccountPolicyCard />
 
       <AddUserDialog open={addOpen} onClose={() => setAddOpen(false)} />

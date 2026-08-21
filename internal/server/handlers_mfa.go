@@ -14,6 +14,7 @@ import (
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/db"
 )
 
 // getPeerFromRequest identifies the VPN peer making the request by their VPN IP.
@@ -620,6 +621,14 @@ func (s *Server) handleAPIMFAExceptionRevoke(w http.ResponseWriter, r *http.Requ
 func (s *Server) adminActor(r *http.Request) string {
 	// A logged-in account is the one case where attribution is exact.
 	if u := s.currentUser(r); u != nil {
+		// A personal token names the person AND which of their credentials
+		// acted, which is what makes a scripted change investigable: "carl did
+		// this" is useful, "carl's ci-deploy token did this" says where to look.
+		if tok := requestBearer(r); strings.HasPrefix(tok, db.APITokenPrefix) {
+			if _, meta, err := s.users.LookupAPIToken(r.Context(), tok, s.getClientIP(r)); err == nil {
+				return "user:" + u.Username + " (token:" + meta.Name + ")"
+			}
+		}
 		return "user:" + u.Username
 	}
 	if ip := s.getClientIP(r); ip != "" && s.isInVPNRange(ip) {
