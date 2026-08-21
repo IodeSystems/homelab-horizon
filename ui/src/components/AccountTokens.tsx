@@ -14,6 +14,9 @@ import {
   Stack,
   IconButton,
   MenuItem,
+  FormControlLabel,
+  Checkbox,
+  Chip,
 } from "@mui/material";
 import DeleteIcon from "@mui/icons-material/DeleteOutlined";
 import ContentCopyIcon from "@mui/icons-material/ContentCopyOutlined";
@@ -127,6 +130,9 @@ function TokenRow({
       <Box>
         <Typography variant="body2" sx={{ fontWeight: 500 }}>
           {token.name}
+          {token.mfaRequired && (
+            <Chip size="small" variant="outlined" label="needs a code" sx={{ ml: 1 }} />
+          )}
         </Typography>
         <Typography variant="caption" color="text.secondary">
           {/* Last use is the field that decides whether a token can be removed,
@@ -169,10 +175,12 @@ function CreateDialog({
   const create = useCreateAPIToken();
   const [name, setName] = useState("");
   const [days, setDays] = useState(0);
+  const [mfaRequired, setMfaRequired] = useState(false);
 
   const close = () => {
     setName("");
     setDays(0);
+    setMfaRequired(false);
     create.reset();
     onClose();
   };
@@ -210,6 +218,23 @@ function CreateDialog({
             </MenuItem>
           ))}
         </TextField>
+
+        <FormControlLabel
+          sx={{ mt: 2 }}
+          control={
+            <Checkbox
+              checked={mfaRequired}
+              onChange={(e) => setMfaRequired(e.target.checked)}
+            />
+          }
+          label="Also require a one-time code"
+        />
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+          Off by default, because a token exists to work unattended — a job at
+          3am has nobody to read a code off a phone. Turn it on for a token that
+          lives somewhere you trust less than a secrets store: the scripts then
+          need <code>OTP=123456</code> alongside the command.
+        </Typography>
       </DialogContent>
       <DialogActions>
         <Button onClick={close}>Cancel</Button>
@@ -218,7 +243,7 @@ function CreateDialog({
           disabled={create.isPending || !name.trim()}
           onClick={() =>
             create.mutate(
-              { name: name.trim(), days },
+              { name: name.trim(), days, mfaRequired },
               { onSuccess: (r) => onIssued(r.token, r.meta.name) },
             )
           }

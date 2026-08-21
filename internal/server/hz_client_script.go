@@ -13,6 +13,7 @@ USAGE
 
 ENVIRONMENT
   HZ_TOKEN    Service/deploy token (required)
+  OTP         One-time code, when the token is marked as requiring one
   HZ_URL      Horizon server URL, e.g. http://192.168.1.89:8080 (required)
 
 OPTIONS
@@ -108,6 +109,28 @@ fi
 HZ_URL="${HZ_URL%/}"
 
 AUTH="Authorization: Bearer $HZ_TOKEN"
+
+# A token may be marked as needing a one-time code with every request. Most are
+# not — a token exists to work unattended — but for the ones that are, the code
+# comes from OTP= in the environment and travels as a header, never in the URL:
+# query strings end up in access logs and shell history, which is the one place
+# a second factor must not be.
+AUTH_ARGS=("${AUTH_ARGS[@]}")
+if [ -n "${OTP:-}" ]; then
+  AUTH_ARGS+=(-H "X-HZ-OTP: $OTP")
+fi
+
+# Preflight, so a token that needs a code says so once and clearly, instead of
+# every command failing with an unexplained 401.
+preflight=$(curl -sf "${AUTH_ARGS[@]}" "$HZ_URL/api/v1/auth/status" 2>/dev/null || true)
+case "$preflight" in
+  *'"otpRequired":true'*)
+    echo "This token requires a one-time code." >&2
+    echo "  Re-run with the code from your authenticator app:" >&2
+    echo "    OTP=123456 $(basename "$0") $*" >&2
+    exit 2
+    ;;
+esac
 DEPLOY_API="$HZ_URL/api/deploy"
 BAN_API="$HZ_URL/api/ban"
 SITE_API="$HZ_URL/api/site"
@@ -119,7 +142,7 @@ shift
 
 status() {
   local raw
-  raw=$(curl -sf -H "$AUTH" "$DEPLOY_API/status") || { echo "Failed to fetch status"; exit 1; }
+  raw=$(curl -sf "${AUTH_ARGS[@]}" "$DEPLOY_API/status") || { echo "Failed to fetch status"; exit 1; }
   if command -v python3 &>/dev/null; then
     echo "$raw" | python3 -c "
 import sys, json
@@ -144,18 +167,18 @@ for role in ('current', 'next'):
 deploy_post() {
   local path="$1"
   local resp
-  resp=$(curl -sf -X POST -H "$AUTH" "$DEPLOY_API/$path") || { echo "FAILED: $path"; exit 1; }
+  resp=$(curl -sf -X POST "${AUTH_ARGS[@]}" "$DEPLOY_API/$path") || { echo "FAILED: $path"; exit 1; }
   echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
 }
 
 get_state() {
   local slot="$1"
-  curl -sf -H "$AUTH" "$DEPLOY_API/status" | python3 -c "import sys,json; print(json.load(sys.stdin)['$slot']['state'])" 2>/dev/null || echo "unknown"
+  curl -sf "${AUTH_ARGS[@]}" "$DEPLOY_API/status" | python3 -c "import sys,json; print(json.load(sys.stdin)['$slot']['state'])" 2>/dev/null || echo "unknown"
 }
 
 get_backend() {
   local slot="$1"
-  curl -sf -H "$AUTH" "$DEPLOY_API/status" | python3 -c "import sys,json; print(json.load(sys.stdin)['$slot']['backend'])" 2>/dev/null || echo "unknown"
+  curl -sf "${AUTH_ARGS[@]}" "$DEPLOY_API/status" | python3 -c "import sys,json; print(json.load(sys.stdin)['$slot']['backend'])" 2>/dev/null || echo "unknown"
 }
 
 wait_drained() {
@@ -217,7 +240,7 @@ ban_post() {
   local action="$1"
   shift
   local resp
-  resp=$(curl -sf -X POST -H "$AUTH" -H "Content-Type: application/json" -d "$1" "$BAN_API/$action") || {
+  resp=$(curl -sf -X POST "${AUTH_ARGS[@]}" -H "Content-Type: application/json" -d "$1" "$BAN_API/$action") || {
     echo "FAILED: ban/$action"; exit 1
   }
   echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
@@ -423,7 +446,7 @@ print(json.dumps({'ip': sys.argv[1], 'timeout': int(sys.argv[2]), 'reason': sys.
     ;;
 
   bans)
-    raw=$(curl -sf -H "$AUTH" "$BAN_API/list") || { echo "Failed to fetch bans"; exit 1; }
+    raw=$(curl -sf "${AUTH_ARGS[@]}" "$BAN_API/list") || { echo "Failed to fetch bans"; exit 1; }
     if command -v python3 &>/dev/null; then
       echo "$raw" | python3 -c "
 import sys, json
@@ -461,7 +484,7 @@ for b in bans:
           HTML=$(cat "$FILE")
         fi
         PAYLOAD=$(python3 -c "import json,sys; print(json.dumps({'html': sys.stdin.read()}))" <<< "$HTML")
-        resp=$(curl -sf -X POST -H "$AUTH" -H "Content-Type: application/json" \
+        resp=$(curl -sf -X POST "${AUTH_ARGS[@]}" -H "Content-Type: application/json" \
           -d "$PAYLOAD" "$DEPLOY_API/maint-page/set") || { echo "FAILED: maint-page/set"; exit 1; }
         echo "$resp" | python3 -c "
 import sys, json
@@ -471,7 +494,7 @@ print(f'Maintenance page set. MD5: {md5}')
 "
         ;;
       clear)
-        resp=$(curl -sf -X POST -H "$AUTH" "$DEPLOY_API/maint-page/clear") || { echo "FAILED: maint-page/clear"; exit 1; }
+        resp=$(curl -sf -X POST "${AUTH_ARGS[@]}" "$DEPLOY_API/maint-page/clear") || { echo "FAILED: maint-page/clear"; exit 1; }
         echo "Maintenance page cleared."
         ;;
       *)
@@ -504,17 +527,17 @@ print(f'Maintenance page set. MD5: {md5}')
         else
           echo "Uploading $DIR..."
         fi
-        resp=$(tar czf - -C "$DIR" . | curl -sf -X POST -H "$AUTH" \
+        resp=$(tar czf - -C "$DIR" . | curl -sf -X POST "${AUTH_ARGS[@]}" \
           -H "Content-Type: application/gzip" --data-binary @- "$SITE_API/upload$Q") \
           || { echo "FAILED: site upload" >&2; exit 1; }
         echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
         ;;
       rollback)
-        resp=$(curl -sf -X POST -H "$AUTH" "$SITE_API/rollback") || { echo "FAILED: site rollback" >&2; exit 1; }
+        resp=$(curl -sf -X POST "${AUTH_ARGS[@]}" "$SITE_API/rollback") || { echo "FAILED: site rollback" >&2; exit 1; }
         echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
         ;;
       releases)
-        resp=$(curl -sf -H "$AUTH" "$SITE_API/releases") || { echo "FAILED: site releases" >&2; exit 1; }
+        resp=$(curl -sf "${AUTH_ARGS[@]}" "$SITE_API/releases") || { echo "FAILED: site releases" >&2; exit 1; }
         echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
         ;;
       *)

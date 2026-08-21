@@ -56,6 +56,7 @@ func withStore(configPath string, fn func(context.Context, *db.DB) error) error 
 func newTokenCreateCmd(opts *serveOpts) *cobra.Command {
 	var username, name string
 	var days int
+	var requireOTP bool
 
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -74,7 +75,7 @@ func newTokenCreateCmd(opts *serveOpts) *cobra.Command {
 				}
 
 				token, meta, err := store.CreateAPIToken(ctx, user.ID, name,
-					time.Duration(days)*24*time.Hour)
+					time.Duration(days)*24*time.Hour, requireOTP)
 				if err != nil {
 					return err
 				}
@@ -86,6 +87,11 @@ func newTokenCreateCmd(opts *serveOpts) *cobra.Command {
 				if meta.ExpiresAt != nil {
 					fmt.Fprintf(os.Stderr, ", expires %s", meta.ExpiresAt.Format(time.DateOnly))
 				}
+				if requireOTP {
+					fmt.Fprintf(os.Stderr, "\nThis token also needs a one-time code on every "+
+						"request: pass OTP=<code> to the hz scripts, or send it as %s.",
+						"X-HZ-OTP")
+				}
 				fmt.Fprintf(os.Stderr, ".\nShown once — hz stores only a hash.\n")
 				fmt.Println(token)
 				return nil
@@ -96,6 +102,9 @@ func newTokenCreateCmd(opts *serveOpts) *cobra.Command {
 	cmd.Flags().StringVar(&username, "user", "", "the account the token belongs to (required)")
 	cmd.Flags().StringVar(&name, "name", "", "what the token is for, shown in the audit log (required)")
 	cmd.Flags().IntVar(&days, "days", 0, "expire after this many days (0 = never)")
+	cmd.Flags().BoolVar(&requireOTP, "require-otp", false,
+		"also demand a one-time code on every request (default: no, so the token "+
+			"works unattended)")
 	_ = cmd.MarkFlagRequired("user")
 	_ = cmd.MarkFlagRequired("name")
 	return cmd

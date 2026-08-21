@@ -23,6 +23,21 @@ func (s *Server) handleAPIAuthStatus(w http.ResponseWriter, r *http.Request) {
 
 	usersAvailable := s.users != nil
 
+	// Answered before the authenticated branch, because a token that needs a
+	// code is not authenticated yet — and "Unauthorized" with no reason is how
+	// an operator ends up believing their token is broken.
+	if s.tokenNeedsOTP(r) {
+		_ = json.NewEncoder(w).Encode(apitypes.AuthStatusResponse{
+			Authenticated:  false,
+			OTPRequired:    true,
+			UsersAvailable: usersAvailable,
+			PeerID:         s.cfg().PeerID,
+			ConfigPrimary:  s.cfg().ConfigPrimary,
+			PrimaryID:      primaryID,
+		})
+		return
+	}
+
 	if s.isAdmin(r) {
 		method := "cookie"
 		if s.isVPNAdmin(r) {

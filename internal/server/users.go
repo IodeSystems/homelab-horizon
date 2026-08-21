@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pquerna/otp/totp"
+
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/db"
 )
@@ -51,11 +53,15 @@ func (s *Server) currentUser(r *http.Request) *db.User {
 	// shared admin token be switched off: automation still needs a credential,
 	// and this one names a person, so 8.2.1 holds for scripted actions too.
 	if tok := requestBearer(r); strings.HasPrefix(tok, db.APITokenPrefix) {
-		user, _, err := s.users.LookupAPIToken(r.Context(), tok, s.getClientIP(r))
+		user, meta, err := s.users.LookupAPIToken(r.Context(), tok, s.getClientIP(r))
 		if err != nil {
 			// Deliberately not falling through to the cookie: a request that
 			// presented a token meant to use it, and quietly authenticating it
 			// as somebody else would put the wrong name in the audit log.
+			return nil
+		}
+		// A token marked MFA-required is half a credential without the code.
+		if meta.MFARequired && !s.otpAccompanies(r, user.ID) {
 			return nil
 		}
 		return user
@@ -221,4 +227,57 @@ func (s *Server) completeFactorLogin(w http.ResponseWriter, r *http.Request, use
 	}
 	slog.Info("login", "user", user.Username, "ip", s.getClientIP(r), "factor", factor)
 	_ = json.NewEncoder(w).Encode(apitypes.LoginResponse{OK: true})
+}
+
+// otpHeader carries the one-time code alongside an API token.
+//
+// A header rather than a query parameter: query strings land in access logs and
+// shell history, and a code that has been written down somewhere is exactly
+// what a second factor is meant not to be. The scripts read OTP= from the
+// environment and put it here.
+const otpHeader = "X-HZ-OTP"
+
+// otpAccompanies reports whether the request carries a valid one-time code for
+// the user.
+//
+// The code is NOT consumed. A script making six API calls inside one 30-second
+// step would otherwise fail on the second, and telling an operator to wait for
+// a new code between calls would make MFA-required tokens unusable for the
+// automation they exist to protect. The window is the protection here: a
+// captured code is useful for at most a minute, and the token alone is useless.
+func (s *Server) otpAccompanies(r *http.Request, userID string) bool {
+	code := strings.TrimSpace(r.Header.Get(otpHeader))
+	if code == "" {
+		return false
+	}
+	secret, err := s.users.TOTPSecret(r.Context(), userID)
+	if err != nil {
+		// The token demands a factor the account no longer has. Refusing is the
+		// safe reading: the operator can clear the flag or re-enrol.
+		slog.Warn("token requires an OTP but the account has no authenticator",
+			"user_id", userID)
+		return false
+	}
+	if !totp.Validate(code, secret) {
+		slog.Warn("token OTP rejected", "user_id", userID, "ip", s.getClientIP(r))
+		return false
+	}
+	return true
+}
+
+// tokenNeedsOTP reports whether a request failed only because its token wanted
+// a one-time code. Used to answer with instructions rather than a bare 401.
+func (s *Server) tokenNeedsOTP(r *http.Request) bool {
+	if s.users == nil {
+		return false
+	}
+	tok := requestBearer(r)
+	if !strings.HasPrefix(tok, db.APITokenPrefix) {
+		return false
+	}
+	user, meta, err := s.users.LookupAPIToken(r.Context(), tok, "")
+	if err != nil || meta == nil || !meta.MFARequired {
+		return false
+	}
+	return !s.otpAccompanies(r, user.ID)
 }

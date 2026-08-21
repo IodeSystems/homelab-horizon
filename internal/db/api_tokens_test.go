@@ -22,7 +22,7 @@ func TestAPITokenRoundTrip(t *testing.T) {
 	d := open(t)
 	user := newUser(t, d, "carl")
 
-	raw, meta, err := d.CreateAPIToken(ctx, user.ID, "ci-deploy", 0)
+	raw, meta, err := d.CreateAPIToken(ctx, user.ID, "ci-deploy", 0, false)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestAPITokenRejections(t *testing.T) {
 	})
 
 	t.Run("expired token", func(t *testing.T) {
-		raw, meta, err := d.CreateAPIToken(ctx, user.ID, "short", time.Hour)
+		raw, meta, err := d.CreateAPIToken(ctx, user.ID, "short", time.Hour, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -95,7 +95,7 @@ func TestAPITokenRejections(t *testing.T) {
 	})
 
 	t.Run("revoked token", func(t *testing.T) {
-		raw, meta, err := d.CreateAPIToken(ctx, user.ID, "revoke-me", 0)
+		raw, meta, err := d.CreateAPIToken(ctx, user.ID, "revoke-me", 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -111,7 +111,7 @@ func TestAPITokenRejections(t *testing.T) {
 	// access leaves their scripts running as them.
 	t.Run("token of a disabled account", func(t *testing.T) {
 		other := newUser(t, d, "leaver")
-		raw, _, err := d.CreateAPIToken(ctx, other.ID, "theirs", 0)
+		raw, _, err := d.CreateAPIToken(ctx, other.ID, "theirs", 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -126,7 +126,7 @@ func TestAPITokenRejections(t *testing.T) {
 	// Guessing an id must not revoke someone else's credential.
 	t.Run("revoking another user's token", func(t *testing.T) {
 		victim := newUser(t, d, "victim")
-		raw, meta, err := d.CreateAPIToken(ctx, victim.ID, "victims-token", 0)
+		raw, meta, err := d.CreateAPIToken(ctx, victim.ID, "victims-token", 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -139,7 +139,7 @@ func TestAPITokenRejections(t *testing.T) {
 	})
 
 	t.Run("a token needs a name", func(t *testing.T) {
-		if _, _, err := d.CreateAPIToken(ctx, user.ID, "   ", 0); err == nil {
+		if _, _, err := d.CreateAPIToken(ctx, user.ID, "   ", 0, false); err == nil {
 			t.Error("an unnamed token was created")
 		}
 	})
@@ -151,11 +151,11 @@ func TestAPITokensAreDistinct(t *testing.T) {
 	d := open(t)
 	user := newUser(t, d, "carl")
 
-	first, _, err := d.CreateAPIToken(ctx, user.ID, "one", 0)
+	first, _, err := d.CreateAPIToken(ctx, user.ID, "one", 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, _, err := d.CreateAPIToken(ctx, user.ID, "two", 0)
+	second, _, err := d.CreateAPIToken(ctx, user.ID, "two", 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}

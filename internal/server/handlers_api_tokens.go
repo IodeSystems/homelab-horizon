@@ -20,12 +20,13 @@ import (
 // behalf would put their name on something they never created.
 
 type apiTokenView struct {
-	ID         string     `json:"id"`
-	Name       string     `json:"name"`
-	CreatedAt  time.Time  `json:"createdAt"`
-	ExpiresAt  *time.Time `json:"expiresAt,omitempty"`
-	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
-	LastUsedIP string     `json:"lastUsedIp,omitempty"`
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
+	LastUsedAt  *time.Time `json:"lastUsedAt,omitempty"`
+	LastUsedIP  string     `json:"lastUsedIp,omitempty"`
+	MFARequired bool       `json:"mfaRequired"`
 }
 
 func tokenViews(tokens []db.APIToken) []apiTokenView {
@@ -34,6 +35,7 @@ func tokenViews(tokens []db.APIToken) []apiTokenView {
 		out = append(out, apiTokenView{
 			ID: t.ID, Name: t.Name, CreatedAt: t.CreatedAt,
 			ExpiresAt: t.ExpiresAt, LastUsedAt: t.LastUsedAt, LastUsedIP: t.LastUsedIP,
+			MFARequired: t.MFARequired,
 		})
 	}
 	return out
@@ -64,6 +66,8 @@ func (s *Server) handleAPIAccountTokens(w http.ResponseWriter, r *http.Request) 
 		var req struct {
 			Name string `json:"name"`
 			Days int    `json:"days,omitempty"`
+			// Off unless asked for: a token exists to work unattended.
+			MFARequired bool `json:"mfaRequired,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
@@ -80,7 +84,7 @@ func (s *Server) handleAPIAccountTokens(w http.ResponseWriter, r *http.Request) 
 		}
 
 		token, meta, err := s.users.CreateAPIToken(r.Context(), user.ID,
-			req.Name, time.Duration(req.Days)*24*time.Hour)
+			req.Name, time.Duration(req.Days)*24*time.Hour, req.MFARequired)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "could not create token: "+err.Error())
 			return
