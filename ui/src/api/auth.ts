@@ -478,3 +478,49 @@ export function usePeerOwnership() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["account-peers"] }),
   });
 }
+
+// --- Testing a second factor ---
+//
+// Both check a factor without signing anything in. The point is the failure
+// they prevent: finding out at the sign-in prompt, with no session and no way
+// back in, that the codes stopped working or the passkey answers to a hostname
+// this gateway no longer uses.
+
+export type FactorTestResult = {
+  ok: boolean;
+  message: string;
+  skewSeconds?: number;
+  cloneWarning?: boolean;
+  label?: string;
+};
+
+export function useTestTOTP() {
+  return useMutation({
+    mutationFn: (code: string) =>
+      apiFetch<FactorTestResult>("/account/totp/test", {
+        method: "POST",
+        body: JSON.stringify({ code }),
+      }),
+  });
+}
+
+export function useTestPasskey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const begin = await apiFetch<PasskeyBegin>("/account/passkey/test/begin", {
+        method: "POST",
+      });
+      const credential = await startAuthentication({
+        optionsJSON: begin.options.publicKey,
+      });
+      return apiFetch<FactorTestResult>("/account/passkey/test/finish", {
+        method: "POST",
+        body: JSON.stringify({ ceremonyId: begin.ceremonyId, credential }),
+      });
+    },
+    // A test asserts for real, so the stored signature counter moves and a
+    // clone warning may appear: the list has to be re-read.
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["account", "factors"] }),
+  });
+}

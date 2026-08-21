@@ -21,6 +21,9 @@ import {
   useTOTPConfirm,
   useRemoveFactor,
   useAccountPasskeyRegister,
+  useTestTOTP,
+  useTestPasskey,
+  type FactorTestResult,
 } from "../api/auth";
 
 // Second factors for the signed-in account.
@@ -99,14 +102,17 @@ export default function AccountSecurity() {
                     : "never used"}
                 </Typography>
               </Box>
-              <Button
-                size="small"
-                color="warning"
-                disabled={remove.isPending}
-                onClick={() => remove.mutate(f.id)}
-              >
-                Remove
-              </Button>
+              <Box sx={{ display: "flex", gap: 1 }}>
+                <TestFactorButton kind={f.kind} />
+                <Button
+                  size="small"
+                  color="warning"
+                  disabled={remove.isPending}
+                  onClick={() => remove.mutate(f.id)}
+                >
+                  Remove
+                </Button>
+              </Box>
             </Box>
           ))}
         </Stack>
@@ -242,5 +248,114 @@ function TOTPDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
         </Button>
       </DialogActions>
     </Dialog>
+  );
+}
+
+
+// Checking a factor works, before you need it to.
+//
+// A second factor fails silently until the moment it is required, and that
+// moment is the worst one to discover it: no session, and the recovery is a
+// console. TOTP drifts with the device clock; a passkey is bound to the hostname
+// it was enrolled on and stops answering if that changes.
+function TestFactorButton({ kind }: { kind: string }) {
+  const [open, setOpen] = useState(false);
+  const [code, setCode] = useState("");
+  const [result, setResult] = useState<FactorTestResult | null>(null);
+  const testTOTP = useTestTOTP();
+  const testPasskey = useTestPasskey();
+
+  const busy = testTOTP.isPending || testPasskey.isPending;
+  const error = testTOTP.error ?? testPasskey.error;
+
+  const close = () => {
+    setOpen(false);
+    setCode("");
+    setResult(null);
+    testTOTP.reset();
+    testPasskey.reset();
+  };
+
+  // A passkey test needs no input: the browser prompt is the whole interaction.
+  const runPasskey = () => {
+    setResult(null);
+    setOpen(true);
+    testPasskey.mutate(undefined, { onSuccess: setResult });
+  };
+
+  return (
+    <>
+      <Button
+        size="small"
+        disabled={busy}
+        onClick={() => (kind === "totp" ? setOpen(true) : runPasskey())}
+      >
+        {busy ? "Testing..." : "Test"}
+      </Button>
+
+      <Dialog open={open} onClose={close} maxWidth="xs" fullWidth>
+        <DialogTitle>
+          {kind === "totp" ? "Test your authenticator app" : "Test your passkey"}
+        </DialogTitle>
+        <DialogContent>
+          {error && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {error.message}
+            </Alert>
+          )}
+
+          {result && (
+            <Alert
+              severity={result.ok ? (result.cloneWarning ? "warning" : "success") : "warning"}
+              sx={{ mb: 2 }}
+            >
+              {result.message}
+            </Alert>
+          )}
+
+          {kind === "totp" ? (
+            <>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Nothing is signed in or changed. A wrong code caused by a drifting
+                device clock is reported as such, rather than as a bad code.
+              </Typography>
+              <TextField
+                fullWidth
+                autoFocus
+                label="Code from the app"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                slotProps={{ htmlInput: { inputMode: "numeric", maxLength: 6 } }}
+              />
+            </>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              {busy
+                ? "Follow the prompt from your browser or security key."
+                : "Nothing is signed in. The passkey is asked to sign a challenge, exactly as it would at sign-in."}
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={close}>Close</Button>
+          {kind === "totp" ? (
+            <Button
+              variant="contained"
+              disabled={busy || code.trim().length < 6}
+              onClick={() => {
+                setResult(null);
+                testTOTP.mutate(code.trim(), { onSuccess: setResult });
+              }}
+            >
+              {busy ? "Checking..." : "Check code"}
+            </Button>
+          ) : (
+            <Button variant="contained" disabled={busy} onClick={runPasskey}>
+              {busy ? "Waiting..." : "Try again"}
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
+    </>
   );
 }

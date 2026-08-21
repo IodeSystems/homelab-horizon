@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -272,4 +273,143 @@ func (s *Server) handleAPILoginPasskeyFinish(w http.ResponseWriter, r *http.Requ
 	}
 
 	s.completeFactorLogin(w, r, user, "passkey")
+}
+
+// purposeAccountTest is its own ceremony purpose so a test assertion can never
+// be replayed into a sign-in, and a sign-in ceremony can never be finished by
+// the test endpoint. The store checks purpose alongside the user.
+const purposeAccountTest = "account-test"
+
+// POST /api/v1/account/passkey/test/begin
+//
+// Same ceremony as signing in, deliberately: a test that exercised some other
+// path would prove the other path works. What differs is the end — no session
+// is issued, because the caller already has one and minting a second on a
+// button labelled "test" would be a surprise.
+func (s *Server) handleAPIAccountPasskeyTestBegin(w http.ResponseWriter, r *http.Request) {
+	user := s.currentUser(r)
+	if user == nil {
+		writeJSONError(w, http.StatusUnauthorized, "Sign in with an account to test a passkey")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	rp, err := accountWebAuthnRP(s.cfg())
+	if err != nil {
+		writeJSONError(w, http.StatusPreconditionFailed, err.Error())
+		return
+	}
+	waUser, _, err := s.accountWebAuthnUser(r.Context(), user)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if len(waUser.creds) == 0 {
+		writeJSONError(w, http.StatusBadRequest, "No passkey is enrolled on this account")
+		return
+	}
+
+	options, session, err := rp.BeginLogin(waUser)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	id := s.ceremonies.put(user.ID, purposeAccountTest, *session)
+	raw, err := marshalOptions(options)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, apitypes.PasskeyBeginResponse{CeremonyID: id, Options: raw})
+}
+
+// POST /api/v1/account/passkey/test/finish
+//
+// Verifies the assertion and reports which passkey answered, then stops. The
+// signature counter is still written back: this was a real assertion, so
+// skipping it would leave the stored counter behind the authenticator's and
+// make the next real sign-in look like a clone (AUTH-4).
+func (s *Server) handleAPIAccountPasskeyTestFinish(w http.ResponseWriter, r *http.Request) {
+	user := s.currentUser(r)
+	if user == nil {
+		writeJSONError(w, http.StatusUnauthorized, "Sign in with an account to test a passkey")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	var req apitypes.PasskeyFinishRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+	session, err := s.ceremonies.take(req.CeremonyID, user.ID, purposeAccountTest)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "That test expired. Try again.")
+		return
+	}
+
+	rp, err := accountWebAuthnRP(s.cfg())
+	if err != nil {
+		writeJSONError(w, http.StatusPreconditionFailed, err.Error())
+		return
+	}
+	waUser, stored, err := s.accountWebAuthnUser(r.Context(), user)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	parsed, err := protocol.ParseCredentialRequestResponseBody(bytes.NewReader(req.Credential))
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Could not parse the authenticator response: "+err.Error())
+		return
+	}
+	credential, err := rp.ValidateLogin(waUser, session, parsed)
+	if err != nil {
+		slog.Warn("passkey test failed", "user", user.Username, "ip", s.getClientIP(r))
+		writeJSON(w, map[string]any{
+			"ok": false,
+			"message": "That passkey was not accepted. If it was enrolled on a different " +
+				"address for this gateway, it will not work here — a passkey is bound to " +
+				"the hostname it was created for.",
+		})
+		return
+	}
+
+	label, cloned := "passkey", credential.Authenticator.CloneWarning
+	encoded := base64.StdEncoding.EncodeToString(credential.ID)
+	for i := range stored {
+		if stored[i].Secret() != encoded {
+			continue
+		}
+		if stored[i].Label != "" {
+			label = stored[i].Label
+		}
+		if err := s.users.TouchCredential(r.Context(), stored[i].ID,
+			credential.Authenticator.SignCount, cloned); err != nil {
+			slog.Warn("could not update passkey counter", "credential", stored[i].ID, "error", err)
+		}
+		if cloned {
+			slog.Error("passkey signature counter went backwards; the authenticator may be cloned",
+				"user", user.Username, "credential", stored[i].ID)
+		}
+		break
+	}
+
+	slog.Info("passkey test passed", "user", user.Username, "credential", label)
+	message := fmt.Sprintf("%q answered correctly. It will work at sign-in.", label)
+	if cloned {
+		// Reported rather than buried: the test is exactly when someone is
+		// looking, and a counter going backwards is the one signal WebAuthn
+		// gives that a credential may have been copied.
+		message = fmt.Sprintf("%q answered, but its signature counter went backwards, "+
+			"which can mean the authenticator was copied. Remove it and enrol a new one.", label)
+	}
+	writeJSON(w, map[string]any{"ok": true, "cloneWarning": cloned, "label": label, "message": message})
 }
