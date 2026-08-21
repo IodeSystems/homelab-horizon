@@ -10,6 +10,8 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -485,7 +487,6 @@ func TestGenerateConfig_Caching(t *testing.T) {
 
 	expectedStrings := []string{
 		"cache mycache",
-		"total-max-size 1024",
 		"max-object-size 524288",
 		"http-request cache-use mycache",
 		"http-response cache-store mycache",
@@ -495,6 +496,27 @@ func TestGenerateConfig_Caching(t *testing.T) {
 		if !strings.Contains(config, expected) {
 			t.Errorf("config missing caching setting: %s", expected)
 		}
+	}
+
+	// The size is asserted as a bound, not a literal. It was 1024 — and
+	// total-max-size is in MEGABYTES, so hz asked for a gigabyte of shared
+	// memory up front. A reload runs two workers at once, so serving a homelab
+	// needed two gigabytes before anything was proxied; the e2e VM has 2 GB and
+	// the kernel OOM-killed HAProxy mid-reload, which read as connections
+	// refused at exactly the moments hz rewrites the config.
+	m := regexp.MustCompile(`total-max-size (\d+)`).FindStringSubmatch(config)
+	if m == nil {
+		t.Fatal("no total-max-size in the cache section")
+	}
+	size, err := strconv.Atoi(m[1])
+	if err != nil {
+		t.Fatalf("unparsable total-max-size %q", m[1])
+	}
+	// 256 MB doubles to 512 MB across a reload, which leaves room on the
+	// smallest box anyone would run this on.
+	if size > 256 {
+		t.Errorf("cache is %d MB; two of these exist during a reload, so keep it well "+
+			"under the memory of a small gateway", size)
 	}
 }
 
