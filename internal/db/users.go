@@ -189,7 +189,8 @@ func (d *DB) SetPasswordWithHistory(ctx context.Context, userID, password string
 	_, err = d.ExecContext(ctx, `
 		INSERT INTO credentials (id, user_id, kind, secret) VALUES (?, ?, 'password', ?)
 		ON CONFLICT (user_id) WHERE kind = 'password'
-		DO UPDATE SET secret = excluded.secret, created_at = CURRENT_TIMESTAMP, disabled_at = NULL`,
+		DO UPDATE SET secret = excluded.secret, created_at = CURRENT_TIMESTAMP,
+			disabled_at = NULL, must_change = 0`,
 		ashid.New("cred"), userID, string(hash))
 	if err != nil {
 		return fmt.Errorf("set password: %w", err)
@@ -478,4 +479,39 @@ func (d *DB) PasswordAge(ctx context.Context, userID string) (time.Duration, err
 		return 0, err
 	}
 	return time.Since(created), nil
+}
+
+// RequirePasswordChange marks a password as needing replacement at the next
+// sign-in.
+//
+// Separate from age-based expiry (8.3.9) because it means something different.
+// Expiry is a rotation policy and exempts accounts with a second factor, which
+// the requirement itself allows. A reset is an administrator handing a
+// credential over out of band, and it must not survive first use whatever
+// factors the account holds.
+func (d *DB) RequirePasswordChange(ctx context.Context, userID string) error {
+	res, err := d.ExecContext(ctx,
+		`UPDATE credentials SET must_change = 1 WHERE user_id = ? AND kind = 'password'`, userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// PasswordMustChange reports whether a change is required before the account
+// can be used.
+func (d *DB) PasswordMustChange(ctx context.Context, userID string) (bool, error) {
+	var must bool
+	err := d.QueryRowContext(ctx,
+		`SELECT must_change FROM credentials WHERE user_id = ? AND kind = 'password'`,
+		userID).Scan(&must)
+	if errors.Is(err, sql.ErrNoRows) {
+		// No password credential at all: nothing to change, and the account
+		// gets in by some other factor.
+		return false, nil
+	}
+	return must, err
 }

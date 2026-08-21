@@ -200,3 +200,44 @@ func (d *DB) appliedVersions(ctx context.Context) (map[string]bool, error) {
 	}
 	return out, nil
 }
+
+// migrateTo runs migrations up to a specific version and stops there.
+//
+// Exists for tests that need a database as it stood at an older version. The
+// alternative — open fully, then undo what the newer migrations did — has to be
+// edited every time a migration is added, and silently rots into a test that
+// collides with itself rather than one that exercises an upgrade.
+func (d *DB) migrateTo(ctx context.Context, version uint) error {
+	if err := d.ensureChecksumTable(ctx); err != nil {
+		return err
+	}
+	src, err := iofs.New(migrationFS, "migrations")
+	if err != nil {
+		return fmt.Errorf("read migrations: %w", err)
+	}
+	driver, err := sqlitemigrate.WithInstance(d.DB, &sqlitemigrate.Config{})
+	if err != nil {
+		return fmt.Errorf("migration driver: %w", err)
+	}
+	m, err := migrate.NewWithInstance("iofs", src, "sqlite", driver)
+	if err != nil {
+		return fmt.Errorf("migrator: %w", err)
+	}
+	if err := m.Migrate(version); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		return fmt.Errorf("migrate to %d: %w", version, err)
+	}
+	return d.recordChecksums(ctx)
+}
+
+// OpenAt opens a database migrated only as far as `version`. Test helper.
+func OpenAt(path string, version uint) (*DB, error) {
+	d, err := openRaw(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := d.migrateTo(context.Background(), version); err != nil {
+		_ = d.Close()
+		return nil, err
+	}
+	return d, nil
+}

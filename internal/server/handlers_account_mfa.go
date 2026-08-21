@@ -206,13 +206,7 @@ func (s *Server) handleAPILoginTOTP(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusForbidden, "That account is disabled.")
 		return
 	}
-	if err := s.startUserSession(w, r, user); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "Could not start session")
-		return
-	}
-
-	slog.Info("login", "user", user.Username, "ip", s.getClientIP(r), "factor", "totp")
-	_ = json.NewEncoder(w).Encode(apitypes.LoginResponse{OK: true})
+	s.completeFactorLogin(w, r, user, "totp")
 }
 
 // totpIssuer is the label an authenticator app shows. The admin hostname when

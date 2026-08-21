@@ -271,11 +271,5 @@ func (s *Server) handleAPILoginPasskeyFinish(w http.ResponseWriter, r *http.Requ
 		break
 	}
 
-	if err := s.startUserSession(w, r, user); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "Could not start session")
-		return
-	}
-
-	slog.Info("login", "user", user.Username, "ip", s.getClientIP(r), "factor", "passkey")
-	_ = json.NewEncoder(w).Encode(apitypes.LoginResponse{OK: true})
+	s.completeFactorLogin(w, r, user, "passkey")
 }

@@ -124,7 +124,7 @@ func newTokenListCmd(opts *serveOpts) *cobra.Command {
 				}
 
 				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-				fmt.Fprintln(w, "NAME\tCREATED\tEXPIRES\tLAST USED")
+				_, _ = fmt.Fprintln(w, "NAME\tCREATED\tEXPIRES\tLAST USED")
 				for _, t := range tokens {
 					expires, lastUsed := "never", "never"
 					if t.ExpiresAt != nil {
@@ -136,7 +136,7 @@ func newTokenListCmd(opts *serveOpts) *cobra.Command {
 							lastUsed += " from " + t.LastUsedIP
 						}
 					}
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 						t.Name, t.CreatedAt.Format(time.DateOnly), expires, lastUsed)
 				}
 				return w.Flush()

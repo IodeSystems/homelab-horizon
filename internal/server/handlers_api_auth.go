@@ -188,7 +188,11 @@ func (s *Server) loginWithPassword(w http.ResponseWriter, r *http.Request, usern
 	// factor so that someone with both is asked for the code first and the
 	// change second — the change endpoint needs an authenticated caller, and
 	// a half-authenticated one is not that.
-	if s.passwordExpired(r.Context(), user.ID) {
+	// A forced reset is included here only for accounts with no second factor;
+	// for the rest it is enforced after the factor, below.
+	hasFactorEarly, _ := s.users.HasSecondFactor(r.Context(), user.ID)
+	if s.passwordExpired(r.Context(), user.ID) ||
+		(!hasFactorEarly && s.mustChangePassword(r.Context(), user.ID)) {
 		pendingID, err := s.pendingLogins.add(user.ID)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "Could not start sign-in")

@@ -313,6 +313,12 @@ func newClient(flagHost, flagToken string) *client {
 
 // login resolves config (lazily, so offline flag parsing/--help works) and
 // exchanges the admin token for a session cookie (stored in the jar).
+//
+// A personal API token skips all of that: it is sent as a bearer on every
+// request instead. Exchanging one for a cookie would throw away the thing it
+// is for — the audit line naming which of a user's credentials acted — and the
+// login endpoint only ever accepted the shared token, so a personal token
+// presented there is refused with a message about a token that is switched off.
 func (c *client) login() error {
 	if c.loggedn {
 		return nil
@@ -323,6 +329,10 @@ func (c *client) login() error {
 			return err
 		}
 		c.host, c.token = cfg.Host, cfg.Token
+	}
+	if c.isPersonalToken() {
+		c.loggedn = true
+		return nil
 	}
 	body, _ := json.Marshal(apitypes.LoginRequest{Token: c.token})
 	resp, err := c.http.Post(c.host+"/api/v1/auth/login", "application/json", bytes.NewReader(body))
@@ -345,6 +355,24 @@ func (c *client) login() error {
 	return nil
 }
 
+// isPersonalToken reports whether the configured credential is a personal API
+// token rather than the shared admin token.
+//
+// Matched on hz's prefix rather than by trying a login and falling back: a
+// failed login against a server with the shared token disabled is
+// indistinguishable from a wrong token, and guessing wrong would report the
+// misleading "restart hz with -enable-admin-token" to somebody whose credential
+// is perfectly good.
+func (c *client) isPersonalToken() bool {
+	return strings.HasPrefix(c.token, apiTokenPrefix)
+}
+
+// apiTokenPrefix mirrors db.APITokenPrefix. Duplicated rather than imported:
+// cmd/hz is the operator CLI and builds standalone, and pulling in the identity
+// store to read one constant would drag SQLite into a binary that never opens a
+// database.
+const apiTokenPrefix = "hz_pat_"
+
 // do issues an authenticated request. body may be nil. If out is non-nil the
 // JSON response is decoded into it.
 func (c *client) do(method, path string, body, out interface{}) error {
@@ -365,6 +393,9 @@ func (c *client) do(method, path string, body, out interface{}) error {
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.isPersonalToken() {
+		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
