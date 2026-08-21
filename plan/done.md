@@ -553,3 +553,70 @@ client.
 - **risks**: the mapping is a transcription of v4.0 documents and will drift.
   The UI says to re-check against the current questionnaire before relying on it
   for an assessment; the test pins the transcription so it cannot change quietly.
+
+
+## Accounts become the way in: tokens, reset, account page (2026-08-21)
+
+Disabling the shared admin token closed the 8.2.1 hole and opened three others.
+All three are now shut.
+
+**Personal API tokens.** A credential that belongs to a user, so a script's
+actions are attributable. SHA-256 at rest like sessions, shown once, `hz_pat_`
+prefix for greppability (not security — the entropy is). No expiry by default:
+a deploy key that dies silently breaks a pipeline at the worst moment. The audit
+line names the user *and* the token, because "nthalk did this" is useful and
+"nthalk's ci-deploy token did this" says where to look.
+
+A request presenting a token never falls back to the session cookie — quietly
+authenticating a bad token as whoever is logged in would put the wrong name in
+the log, which is the one thing the feature exists to get right.
+
+**The hz CLI could not use one.** It logged in with its configured token, which
+only ever meant the shared token, so a personal token in `~/.hz_config` got
+"the admin token is disabled" — wrong and misleading. It now sends personal
+tokens as a bearer per request, which also preserves the per-request
+attribution that exchanging one for a cookie would throw away.
+
+**Console recovery.** `homelab-horizon token create` and `user set-password`,
+the same escape hatch as `--enable-admin-token` and for the same situations.
+The password is generated and printed on stdout when not supplied: this runs
+over ssh, where a prompt hangs or echoes into a terminal log.
+
+**A reset must not survive first use, and the ordering is the security part.**
+Age-based expiry (8.3.9) could not express it — it exempts accounts holding a
+second factor, which is exactly the admin whose console-reset password most
+needs replacing. Reusing the existing password-expired branch would have been
+worse than useless: it runs *before* the second factor, so anyone holding the
+freshly-set password could reach the change-password endpoint without presenting
+the factor, turning an admin reset into a way around MFA. The demand is enforced
+after the factor instead. Three tests pin it.
+
+**Account page and user menu.** The sidebar had a Logout button that did not say
+whose session it would end, with three kinds of caller able to authenticate. The
+menu now names the caller and is honest about the ones that are not people.
+Account settings moved off Settings > Users: managing your own passkey and
+administering everyone else's accounts are different jobs.
+
+**VPN devices belong to someone.** Peers stay in the WireGuard config, which
+remains the authority, and the VPN page still administers all of them. Ownership
+answers only "which of these is my laptop". Explicitly not a permission — every
+enabled account here is an admin — but claiming someone else's device is still
+refused, because it would rewrite who is answerable for a credential. Prod shows
+4 unclaimed peers, all predating the feature.
+
+**Migrations 0004-0006, each rehearsed against a copy of the live database
+before deploying.** The rehearsal is kept as a skipped-by-default test: a
+migration proved only against a database the migrations themselves built has
+proved that it agrees with itself.
+
+- **next**: nothing outstanding. `~/.hz_config` on the dev box holds a personal
+  token for `nthalk` and the CLI works with it.
+- **risks**: the 0003 migration test broke twice while adding 0004 and 0005,
+  both times because it opened a fully-migrated database and undid the newer
+  migrations — a shape that needed editing for every migration added. It now
+  builds a real v0002 database with `OpenAt`, so the next migration should not
+  touch it.
+- **process note**: a deploy went out on a commit whose CI had failed, because
+  the command chained `deploy` after the CI wait without checking the result.
+  The failure was lint-only and the binary was sound, but the gate did not hold.
+  Later deploys checked the conclusion first.
