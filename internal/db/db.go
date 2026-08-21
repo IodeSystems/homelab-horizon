@@ -83,5 +83,30 @@ func Open(path string) (*DB, error) {
 	return d, nil
 }
 
+// openRaw opens the file without migrating it. Only OpenAt uses this, to build
+// a database as it stood at an older schema version.
+func openRaw(path string) (*DB, error) {
+	if path == "" {
+		path = DefaultPath
+	}
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return nil, fmt.Errorf("create db dir: %w", err)
+		}
+	}
+	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
+	sqlDB, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := sqlDB.PingContext(ctx); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("ping %s: %w", path, err)
+	}
+	return &DB{DB: sqlDB, path: path}, nil
+}
+
 // Path reports where the store lives.
 func (d *DB) Path() string { return d.path }

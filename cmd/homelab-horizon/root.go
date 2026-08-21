@@ -79,6 +79,7 @@ func newRoot() *cobra.Command {
 		newIAMPolicyCmd(),
 		newShowSystemdCmd(&opts),
 		newTokenCmd(&opts),
+		newUserCmd(&opts),
 	)
 	return root
 }

@@ -2,11 +2,14 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/db"
 )
 
@@ -155,6 +158,25 @@ func (s *Server) lockoutPolicy() db.LockoutPolicy {
 // 8.3.9 says exactly that, and it is the right rule regardless: rotation is a
 // hedge against an undetected compromise of a single secret, and an account
 // with a second factor is not relying on a single secret.
+// mustChangePassword reports an administrator-forced reset.
+//
+// Kept apart from passwordExpired because the two are enforced at different
+// points. Expiry exempts accounts with a second factor, so it can be checked
+// before one is presented. A forced change applies regardless of factors, so it
+// must be checked AFTER the second factor — otherwise someone holding only the
+// password an admin just set could reach the change-password step without ever
+// presenting the factor, and walk away with the account.
+func (s *Server) mustChangePassword(ctx context.Context, userID string) bool {
+	if s.users == nil {
+		return false
+	}
+	must, err := s.users.PasswordMustChange(ctx, userID)
+	if err != nil {
+		return false
+	}
+	return must
+}
+
 func (s *Server) passwordExpired(ctx context.Context, userID string) bool {
 	days := s.cfg().Policy.PasswordMaxAgeDays
 	if days <= 0 || s.users == nil {
@@ -168,4 +190,35 @@ func (s *Server) passwordExpired(ctx context.Context, userID string) bool {
 		return false
 	}
 	return age > time.Duration(days)*24*time.Hour
+}
+
+// completeFactorLogin issues the session, unless an administrator has forced a
+// password change — in which case it hands back a pending id for the change
+// step instead.
+//
+// The second factor has already been presented by the time this runs, which is
+// the ordering that makes a forced reset safe: the temporary password alone
+// never reaches the change endpoint.
+func (s *Server) completeFactorLogin(w http.ResponseWriter, r *http.Request, user *db.User, factor string) {
+	if s.mustChangePassword(r.Context(), user.ID) {
+		pendingID, err := s.pendingLogins.add(user.ID)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "Could not start sign-in")
+			return
+		}
+		slog.Info("password change required before sign-in completes",
+			"user", user.Username, "ip", s.getClientIP(r), "factor", factor)
+		_ = json.NewEncoder(w).Encode(apitypes.LoginResponse{
+			PasswordExpired: true,
+			PendingID:       pendingID,
+		})
+		return
+	}
+
+	if err := s.startUserSession(w, r, user); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "Could not start session")
+		return
+	}
+	slog.Info("login", "user", user.Username, "ip", s.getClientIP(r), "factor", factor)
+	_ = json.NewEncoder(w).Encode(apitypes.LoginResponse{OK: true})
 }

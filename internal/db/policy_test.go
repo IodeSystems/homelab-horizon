@@ -263,26 +263,17 @@ func TestExistingViewersBecomeDisabledAdmins(t *testing.T) {
 func TestMigration0003RunsOnAnExistingDatabase(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hz.db")
 
-	d, err := Open(path)
+	// Built at v0002 rather than opened fully and rewound: undoing what later
+	// migrations did meant editing this test every time one was added, and it
+	// twice became a test that collided with itself instead of exercising an
+	// upgrade.
+	d, err := OpenAt(path, 2)
 	if err != nil {
-		t.Fatalf("open: %v", err)
+		t.Fatalf("open at v2: %v", err)
 	}
 	if _, err := d.Exec(
 		`INSERT INTO users (id, username, role) VALUES ('usr_v', 'legacy', 'viewer')`); err != nil {
 		t.Fatalf("seed: %v", err)
-	}
-	// Rewind to the state a v0002 install would be in. That means removing what
-	// later migrations built as well as moving the version marker: Open() has
-	// already run every migration, so leaving 0004's table behind would make
-	// the replay collide with it rather than test the upgrade.
-	if _, err := d.Exec(`UPDATE schema_migrations SET version = 2, dirty = 0`); err != nil {
-		t.Fatalf("rewind: %v", err)
-	}
-	if _, err := d.Exec(`DELETE FROM applied_migrations WHERE version > '0002'`); err != nil {
-		t.Fatalf("rewind checksum: %v", err)
-	}
-	if _, err := d.Exec(`DROP TABLE IF EXISTS api_tokens`); err != nil {
-		t.Fatalf("rewind 0004: %v", err)
 	}
 	_ = d.Close()
 
