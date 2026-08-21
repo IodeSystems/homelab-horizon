@@ -216,7 +216,8 @@ deploy_one() {
       if [ \"\$(sudo jq -r '.admin_token_disabled // false' /etc/homelab-horizon/config.json 2>/dev/null)\" = true ]; then
         echo 'Shared admin token: disabled (PCI DSS 8.2.1).'
         echo '  Sign in with an account, or use a personal API token for scripts:'
-        echo '  Settings > Users > your account > API tokens.'
+        echo '  the Account page > API tokens, or:'
+        echo '    homelab-horizon token create --user <you> --name <what-for>'
         echo '  Console recovery: homelab-horizon --enable-admin-token'
       else
         echo 'Auth token:'
