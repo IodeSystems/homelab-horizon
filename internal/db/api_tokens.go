@@ -39,6 +39,9 @@ type APIToken struct {
 	ExpiresAt  *time.Time
 	LastUsedAt *time.Time
 	LastUsedIP string
+	// MFARequired means a valid one-time code must accompany the token on
+	// every request. Off by default: unattended use is what tokens are for.
+	MFARequired bool
 }
 
 // ErrTokenExpired distinguishes an expired token from one that never existed,
@@ -50,7 +53,7 @@ var ErrTokenExpired = errors.New("api token expired")
 //
 // ttl of zero means it never expires — see the migration for why that is the
 // default rather than a 90-day rotation.
-func (d *DB) CreateAPIToken(ctx context.Context, userID, name string, ttl time.Duration) (token string, t *APIToken, err error) {
+func (d *DB) CreateAPIToken(ctx context.Context, userID, name string, ttl time.Duration, mfaRequired bool) (token string, t *APIToken, err error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "", nil, fmt.Errorf("a token needs a name, so it can be recognised later")
@@ -70,15 +73,16 @@ func (d *DB) CreateAPIToken(ctx context.Context, userID, name string, ttl time.D
 	}
 
 	_, err = d.ExecContext(ctx, `
-		INSERT INTO api_tokens (id, token_hash, user_id, name, expires_at)
-		VALUES (?, ?, ?, ?, ?)`,
-		id, hashToken(token), userID, name, expires)
+		INSERT INTO api_tokens (id, token_hash, user_id, name, expires_at, mfa_required)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		id, hashToken(token), userID, name, expires, mfaRequired)
 	if err != nil {
 		return "", nil, fmt.Errorf("create api token: %w", err)
 	}
 
 	return token, &APIToken{
 		ID: id, UserID: userID, Name: name, CreatedAt: time.Now(), ExpiresAt: expires,
+		MFARequired: mfaRequired,
 	}, nil
 }
 
@@ -97,10 +101,11 @@ func (d *DB) LookupAPIToken(ctx context.Context, token, ip string) (*User, *APIT
 	var expires, lastUsed sql.NullTime
 	var lastIP sql.NullString
 	err := d.QueryRowContext(ctx, `
-		SELECT id, user_id, name, created_at, expires_at, last_used_at, last_used_ip
+		SELECT id, user_id, name, created_at, expires_at, last_used_at, last_used_ip, mfa_required
 		FROM api_tokens
 		WHERE token_hash = ? AND revoked_at IS NULL`,
-		hashToken(token)).Scan(&t.ID, &t.UserID, &t.Name, &t.CreatedAt, &expires, &lastUsed, &lastIP)
+		hashToken(token)).Scan(&t.ID, &t.UserID, &t.Name, &t.CreatedAt, &expires, &lastUsed, &lastIP,
+		&t.MFARequired)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, ErrNotFound
 	} else if err != nil {
@@ -141,7 +146,7 @@ func (d *DB) LookupAPIToken(ctx context.Context, token, ip string) (*User, *APIT
 // returned: the list is for deciding what to revoke next, not a history.
 func (d *DB) ListAPITokens(ctx context.Context, userID string) ([]APIToken, error) {
 	rows, err := d.QueryContext(ctx, `
-		SELECT id, user_id, name, created_at, expires_at, last_used_at, last_used_ip
+		SELECT id, user_id, name, created_at, expires_at, last_used_at, last_used_ip, mfa_required
 		FROM api_tokens
 		WHERE user_id = ? AND revoked_at IS NULL
 		ORDER BY created_at DESC, id DESC`, userID)
@@ -156,7 +161,7 @@ func (d *DB) ListAPITokens(ctx context.Context, userID string) ([]APIToken, erro
 		var expires, lastUsed sql.NullTime
 		var lastIP sql.NullString
 		if err := rows.Scan(&t.ID, &t.UserID, &t.Name, &t.CreatedAt,
-			&expires, &lastUsed, &lastIP); err != nil {
+			&expires, &lastUsed, &lastIP, &t.MFARequired); err != nil {
 			return nil, err
 		}
 		if expires.Valid {

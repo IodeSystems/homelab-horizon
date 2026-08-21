@@ -396,6 +396,12 @@ func (c *client) do(method, path string, body, out interface{}) error {
 	}
 	if c.isPersonalToken() {
 		req.Header.Set("Authorization", "Bearer "+c.token)
+		// OTP= in the environment rather than a flag: it changes every thirty
+		// seconds, so it belongs beside the invocation, not in a config file or
+		// a shell history entry that will be wrong by the time it is read back.
+		if otp := strings.TrimSpace(os.Getenv("OTP")); otp != "" {
+			req.Header.Set("X-HZ-OTP", otp)
+		}
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -403,6 +409,15 @@ func (c *client) do(method, path string, body, out interface{}) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusUnauthorized && c.isPersonalToken() && os.Getenv("OTP") == "" {
+		// Ask the server whether the token wanted a code, so the advice is
+		// based on what it actually said rather than on a guess about why a
+		// request was refused.
+		if c.tokenWantsOTP() {
+			return fmt.Errorf("this token requires a one-time code; re-run with " +
+				"OTP=<code from your authenticator app>")
+		}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return &apiStatusError{
 			Code: resp.StatusCode,
@@ -441,4 +456,28 @@ func apiError(raw []byte) string {
 		return "(empty response)"
 	}
 	return s
+}
+
+// tokenWantsOTP asks the server whether this token is one that needs a
+// one-time code. Best effort: if the check itself fails, the caller falls back
+// to reporting the original error rather than inventing a cause.
+func (c *client) tokenWantsOTP() bool {
+	req, err := http.NewRequest(http.MethodGet, c.host+"/api/v1/auth/status", nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var status struct {
+		OTPRequired bool `json:"otpRequired"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return false
+	}
+	return status.OTPRequired
 }

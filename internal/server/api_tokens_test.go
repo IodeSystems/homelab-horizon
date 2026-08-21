@@ -21,7 +21,7 @@ func TestPersonalTokenAuthenticatesAndNamesTheUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	raw, _, err := s.users.CreateAPIToken(ctx, user.ID, "ci-deploy", 0)
+	raw, _, err := s.users.CreateAPIToken(ctx, user.ID, "ci-deploy", 0, false)
 	if err != nil {
 		t.Fatalf("create token: %v", err)
 	}

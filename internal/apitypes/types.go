@@ -557,6 +557,11 @@ type AuthStatusResponse struct {
 	// True when local accounts are usable at all; false if the store failed
 	// to open, in which case the UI must not offer a login it cannot honour.
 	UsersAvailable bool `json:"usersAvailable,omitempty"`
+	// OTPRequired is set when the request presented an API token marked as
+	// needing a one-time code and did not carry one. Reported here so a script
+	// can say what to do once, instead of every command failing with a bare
+	// 401 that names no cause.
+	OTPRequired bool `json:"otpRequired,omitempty"`
 
 	// Multi-instance HA — populated when this instance is part of a fleet.
 	PeerID        string `json:"peerId,omitempty"`        // local instance identity

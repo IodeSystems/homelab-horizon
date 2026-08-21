@@ -42,7 +42,7 @@ func TestRehearseOnLiveCopy(t *testing.T) {
 
 	// The new table must actually be usable against real data, not merely created.
 	if len(users) > 0 {
-		raw, meta, err := d.CreateAPIToken(context.Background(), users[0].ID, "rehearsal", 0)
+		raw, meta, err := d.CreateAPIToken(context.Background(), users[0].ID, "rehearsal", 0, false)
 		if err != nil {
 			t.Fatalf("create token on live data: %v", err)
 		}

@@ -416,6 +416,7 @@ export type APIToken = {
   expiresAt?: string;
   lastUsedAt?: string;
   lastUsedIp?: string;
+  mfaRequired: boolean;
 };
 
 export function useAPITokens() {
@@ -428,7 +429,7 @@ export function useAPITokens() {
 export function useCreateAPIToken() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { name: string; days: number }) =>
+    mutationFn: (body: { name: string; days: number; mfaRequired: boolean }) =>
       apiFetch<{ token: string; meta: APIToken; note: string }>("/account/tokens", {
         method: "POST",
         body: JSON.stringify(body),
