@@ -112,7 +112,7 @@ AUTH="Authorization: Bearer $HZ_TOKEN"
 # comes from OTP= in the environment and travels as a header, never in the URL:
 # query strings end up in access logs and shell history, which is the one place
 # a second factor must not be.
-AUTH_ARGS=("${AUTH_ARGS[@]}")
+AUTH_ARGS=(-H "$AUTH")
 if [ -n "${OTP:-}" ]; then
   AUTH_ARGS+=(-H "X-HZ-OTP: $OTP")
 fi

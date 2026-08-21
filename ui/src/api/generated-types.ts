@@ -541,6 +541,13 @@ export interface AuthStatusResponse {
    */
   usersAvailable?: boolean;
   /**
+   * OTPRequired is set when the request presented an API token marked as
+   * needing a one-time code and did not carry one. Reported here so a script
+   * can say what to do once, instead of every command failing with a bare
+   * 401 that names no cause.
+   */
+  otpRequired?: boolean;
+  /**
    * Multi-instance HA — populated when this instance is part of a fleet.
    */
   peerId?: string; // local instance identity
