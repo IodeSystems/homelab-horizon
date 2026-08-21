@@ -55,17 +55,21 @@ async function main() {
   await page.getByRole("button", { name: /sign in/i }).click();
   await page.waitForTimeout(2500);
 
-  // ---- enrol a passkey from the Users tab ----
-  await page.goto(`${APP}settings`, { waitUntil: "networkidle" });
+  // ---- enrol a passkey from the account page ----
+  //
+  // These cards used to live under Settings > Users, mixed in with
+  // administering other people. Moving them to /account broke this fixture,
+  // which is the fixture doing its job: the enrolment path an operator follows
+  // is exactly what it is here to walk.
+  await page.goto(`${APP}account`, { waitUntil: "networkidle" });
   await settle(page);
-  const usersTab = page.getByRole("tab", { name: /users/i });
-  if (!(await usersTab.count())) {
-    bad("the Users tab is present", (await page.locator("body").innerText()).slice(0, 300));
+  if (!/your sign-in security/i.test(await page.locator("body").innerText())) {
+    bad("the account page shows sign-in security",
+      (await page.locator("body").innerText()).slice(0, 300));
     await browser.close();
     process.exit(1);
   }
-  await usersTab.click();
-  await settle(page);
+  ok("the account page is reachable and shows sign-in security");
 
   const addPasskey = page.getByRole("button", { name: /add passkey/i });
   if (!(await addPasskey.count())) {
