@@ -660,3 +660,76 @@ sign-in and a sign-in cannot be finished by the test endpoint.
   discarded the assertion summary AND made the reported exit status `tail`'s
   rather than the fixture's. A green exit code from a pipeline says nothing
   about the command at the head of it.
+
+
+## The HAProxy cache asked for a gigabyte (2026-08-21)
+
+Chasing what looked like a regression from this session's work, the e2e fixture
+failed three assertions that all touched the same vhost. The cause was neither
+this session's code nor flakiness in the ordinary sense:
+
+    cache mycache
+        total-max-size 1024      # HAProxy reads this as MEGABYTES
+
+hz reserved a **gigabyte** of shared memory for a cache of static assets, and a
+reload runs two workers briefly, so serving a homelab needed two gigabytes
+before anything was proxied. On the 2 GB fixture VM the kernel OOM-killed
+HAProxy during reloads — 14 restarts in one run, 1.6 GB peak — which surfaced as
+connections refused for a second or two at exactly the moments hz rewrites the
+config: a jail lifting, a rate limit landing.
+
+Now 64 MB. The test asserted the literal `1024`; it asserts a bound with the
+reason attached instead, because what matters is "two of these fit in a small
+gateway", not any particular number.
+
+**The line dates to January 2026 and is in the v0.1.0 baseline**, which passed
+76/76 once and would have failed eventually. Prod had been running with it: the
+config was rewritten and HAProxy reloaded on 2026-08-21, with 10 GB free so the
+overlap was safe.
+
+**How the diagnosis went wrong first, twice.** A single clean baseline run made
+a nondeterministic OOM look like a deterministic regression, and the tell was
+discounted: the two failing runs failed on *different* RATE assertions, which is
+flakiness, not a code path. Before that, two baseline runs were wasted on a
+worktree placed under `/tmp` — multipass is snap-confined and cannot read
+outside `$HOME`, so the transfer failed while the binary sat there correctly
+built.
+
+## API tokens can demand a one-time code (2026-08-21)
+
+Off by default, because a token exists for unattended use — a 3am deploy job has
+nobody to read a code off a phone. Opt in per token for the ones that live
+somewhere less trusted than a secrets store.
+
+The code travels as `X-HZ-OTP`, never a query parameter: query strings land in
+access logs and shell history, which is the one place a second factor must not
+be. `hz-client` and the `hz` CLI both read `OTP=` from the environment, since
+the value is stale within thirty seconds and does not belong in a config file.
+
+**The code is deliberately not consumed.** A script making six calls inside one
+30-second step would fail on the second otherwise, which would make the flag
+unusable for the automation it protects. The window is the protection: a
+captured code is good for a minute, the token alone for nothing.
+
+A refused request says why — `otpRequired` on `/auth/status`, a preflight in
+hz-client, and the CLI turning its 401 into the same instruction. An operator
+told only "Unauthorized" concludes the token is broken and mints another.
+
+- **risks**: TOTP replay inside the valid window is accepted by design (above).
+  An account that loses its authenticator locks out its own guarded tokens —
+  refused rather than waved through, and cleared by removing the flag or
+  re-enrolling.
+
+## Fixtures caught two things this session
+
+- Moving the account cards from Settings > Users to `/account` broke
+  `account-passkey.mjs` at "Add passkey button present". That is the fixture
+  doing its job: it walks the enrolment path an operator follows, so a page move
+  is supposed to fail it.
+- The new passkey **test** ceremony is covered end to end with a real virtual
+  authenticator: it starts for a signed-in account, cannot be finished as a
+  login (401), and mints no session. Those assertions had been written but never
+  run until the cache fix let the fixture reach them.
+
+Final state: `76 passed, 0 failed` plus `account passkey flow: all checks
+passed`, exit 0.
