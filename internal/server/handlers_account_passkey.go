@@ -372,12 +372,20 @@ func (s *Server) handleAPIAccountPasskeyTestFinish(w http.ResponseWriter, r *htt
 	}
 	credential, err := rp.ValidateLogin(waUser, session, parsed)
 	if err != nil {
-		slog.Warn("passkey test failed", "user", user.Username, "ip", s.getClientIP(r))
+		// The library's reason is the whole diagnosis — origin mismatch, bad
+		// challenge, signature failure and user-handle mismatch all arrive
+		// here and mean very different things. Dropping it, as this did,
+		// turned every failure into a guess.
+		slog.Warn("passkey test failed",
+			"user", user.Username, "ip", s.getClientIP(r), "err", err,
+			"rp_id", rp.Config.RPID, "rp_origins", rp.Config.RPOrigins)
 		writeJSON(w, map[string]any{
 			"ok": false,
-			"message": "That passkey was not accepted. If it was enrolled on a different " +
-				"address for this gateway, it will not work here — a passkey is bound to " +
-				"the hostname it was created for.",
+			// Deliberately no longer asserting a cause. The first version
+			// blamed the hostname the passkey was enrolled on, which sent an
+			// operator looking at a setting that was correct.
+			"message": "That passkey was not accepted. The gateway log records why — " +
+				"look for \"passkey test failed\".",
 		})
 		return
 	}
