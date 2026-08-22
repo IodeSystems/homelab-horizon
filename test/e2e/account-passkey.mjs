@@ -145,6 +145,35 @@ async function main() {
     bad("the session is a named account", JSON.stringify(status));
   }
 
+  // ---- the test button, driven the way an operator drives it ----
+  //
+  // The negative cases below were asserted from the start; the HAPPY PATH was
+  // not, and that is the gap an operator fell into — "just re-added my passkey,
+  // and Test says it was not accepted". A ceremony that starts and refuses to
+  // be replayed is worth nothing if it never says yes to a good passkey.
+  await page.goto(`${APP}account`, { waitUntil: "networkidle" });
+  await settle(page);
+
+  const testButton = page.getByRole("button", { name: /^test$/i }).first();
+  if (!(await testButton.count())) {
+    bad("the passkey row offers a Test button", (await page.locator("body").innerText()).slice(0, 300));
+  } else {
+    await testButton.click();
+    await page.waitForTimeout(3500);
+    const dialog = await page.locator("body").innerText();
+    if (/answered correctly|will work at sign-in/i.test(dialog)) {
+      ok("testing an enrolled passkey succeeds");
+    } else {
+      bad("testing an enrolled passkey succeeds", dialog.slice(0, 400));
+    }
+    // Close whatever the dialog left open before the API-level checks below.
+    const close = page.getByRole("button", { name: /close/i }).first();
+    if (await close.count()) {
+      await close.click();
+      await settle(page);
+    }
+  }
+
   // ---- the test button: a real assertion that issues no session ----
   //
   // Worth exercising here rather than in a unit test, because the thing that
