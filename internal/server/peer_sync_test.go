@@ -126,17 +126,34 @@ func newTestServer(t *testing.T, cfg *config.Config) *Server {
 	t.Helper()
 	tmp := t.TempDir()
 	cfgPath := filepath.Join(tmp, "config.json")
-	if err := config.Save(cfgPath, cfg); err != nil {
-		t.Fatalf("save initial config: %v", err)
-	}
-	// Mark the public-IP cache fresh. syncServices spawns
+
+	// Mark the public-IP cache fresh BEFORE saving. syncServices spawns
 	// `go s.refreshPublicIPIfStale()`, which on a stale cache makes a live
 	// network call and then SAVES the config — landing in this t.TempDir()
 	// after the test has finished, which races the cleanup and fails it with
 	// "directory not empty". A test should not depend on a detection service
 	// being reachable either.
+	//
+	// The order matters and did not use to: stamping after the save left
+	// `public_ip_last_checked: 0` in the file, so anything that re-read it from
+	// disk — a peer-sync pull merging the config, above all — got a stale cache
+	// back and spawned exactly the goroutine this guards against. That is what
+	// broke TestWGPeersReplicateViaPullLoop on CI while passing locally: the
+	// slower runner left the late write outside the test's lifetime.
 	if cfg.PublicIPLastChecked == 0 {
 		cfg.PublicIPLastChecked = time.Now().Unix()
+	}
+	// The timestamp alone is not enough, which is the trap here: IsPublicIPStale
+	// reports stale whenever PublicIP is empty, however recently it was checked,
+	// so a bare &config.Config{} spawns the refresh no matter what the clock
+	// says. An override is the only thing refreshPublicIP stands down for.
+	// TEST-NET-1 (RFC 5737), so nothing about it looks routable.
+	if cfg.PublicIPOverride == "" && cfg.PublicIP == "" {
+		cfg.PublicIPOverride = "192.0.2.1"
+	}
+
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatalf("save initial config: %v", err)
 	}
 
 	s := &Server{
@@ -1173,5 +1190,26 @@ func TestBuildPeerURL(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("buildPeerURL(%q, %q) = %q, want %q", tt.addr, tt.path, got, tt.want)
 		}
+	}
+}
+
+// The helper's public-IP guard has to reach the FILE, not just the in-memory
+// config: a peer-sync pull re-reads the config from disk, and a stale cache
+// there spawns the background refresh that writes into t.TempDir() after the
+// test has gone. That ordering broke CI once while passing locally, so it is
+// asserted rather than left to the comment.
+func TestNewTestServerWritesAFreshPublicIPCache(t *testing.T) {
+	s := newTestServer(t, &config.Config{})
+
+	onDisk, err := config.Load(s.configPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if onDisk.PublicIPLastChecked == 0 {
+		t.Error("the saved config says the public-IP cache was never checked, so anything " +
+			"re-reading it will spawn a live refresh and save after the test ends")
+	}
+	if onDisk.IsPublicIPStale() {
+		t.Error("the saved config reads as stale")
 	}
 }
