@@ -1,9 +1,13 @@
 #!/bin/bash
+# NOTE: this file is copied verbatim into a Go raw string literal in
+# internal/server/hz_client_script.go, which is what the server actually
+# serves. Raw strings cannot contain a backtick — do not add one, in code or
+# in comments, or the generated file will not compile.
 set -euo pipefail
 
 # Fatal errors must signal the top-level shell, not just the current one.
-# bash runs every $(...) in a subshell, so an `exit 1` inside one ends only
-# that subshell — the caller carries on with an empty string, and `set -e`
+# bash runs every $(...) in a subshell, so an 'exit 1' inside one ends only
+# that subshell — the caller carries on with an empty string, and set -e
 # does not save you: an assignment from a failed command substitution does
 # not abort the script. That is precisely how an unreachable control plane
 # used to surface as slot state "unknown" instead of an error.
@@ -134,9 +138,9 @@ fi
 # Every HZ call goes through here.
 #
 # -L is load-bearing. The control plane answers http:// with a 301 to https://,
-# and `curl -f` does NOT treat 3xx as an error — so without -L the request
+# and curl -f does NOT treat 3xx as an error — so without -L the request
 # "succeeds" with an empty body and exit 0. That silence is worse than a
-# failure: it defeated -f, defeated every `|| exit 1` guard, and surfaced as a
+# failure: it defeated -f, defeated every '|| exit 1' guard, and surfaced as a
 # phantom "rolling deploy already in progress" that cost a real debugging
 # session. -S restores the error message that -s suppresses.
 #
