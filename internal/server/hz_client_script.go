@@ -2,7 +2,25 @@ package server
 
 // Auto-synced from bin/hz-client. Do not edit directly.
 var hzClientScriptContent = `#!/bin/bash
+# NOTE: this file is copied verbatim into a Go raw string literal in
+# internal/server/hz_client_script.go, which is what the server actually
+# serves. Raw strings cannot contain a backtick — do not add one, in code or
+# in comments, or the generated file will not compile.
 set -euo pipefail
+
+# Fatal errors must signal the top-level shell, not just the current one.
+# bash runs every $(...) in a subshell, so an 'exit 1' inside one ends only
+# that subshell — the caller carries on with an empty string, and set -e
+# does not save you: an assignment from a failed command substitution does
+# not abort the script. That is precisely how an unreachable control plane
+# used to surface as slot state "unknown" instead of an error.
+HZ_TOP_PID=$$
+trap 'exit 1' TERM
+die() {
+  printf '%s\n' "$@" >&2
+  kill -TERM "$HZ_TOP_PID" 2>/dev/null
+  exit 1
+}
 
 usage() {
   cat <<'HELP'
@@ -120,9 +138,44 @@ if [ -n "${OTP:-}" ]; then
   AUTH_ARGS+=(-H "X-HZ-OTP: $OTP")
 fi
 
+# Every HZ call goes through here.
+#
+# -L is load-bearing. The control plane answers http:// with a 301 to https://,
+# and curl -f does NOT treat 3xx as an error — so without -L the request
+# "succeeds" with an empty body and exit 0. That silence is worse than a
+# failure: it defeated -f, defeated every '|| exit 1' guard, and surfaced as a
+# phantom "rolling deploy already in progress" that cost a real debugging
+# session. -S restores the error message that -s suppresses.
+#
+# Deliberately no --retry here: most callers are POSTs that change slot state,
+# and a retried mutation is worse than a reported failure. Read-only callers
+# opt in by passing --retry themselves. Later flags win in curl, so a caller
+# can also override --max-time (the site upload does).
+hz_curl() {
+  curl -fsSL --max-time 15 "${AUTH_ARGS[@]}" "$@"
+}
+
+# An http:// control plane that redirects to https:// is a trap. curl will not
+# resend an Authorization header across a scheme change, so -L follows the
+# redirect and every call returns 401. Deliberately NOT solved with
+# --location-trusted: that would hand the bearer token to whatever the
+# redirect points at. Catch it once, here, and name the fix.
+case "$HZ_URL" in
+  http://*)
+    hz_redirect=$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 10 \
+      "$HZ_URL/api/deploy/status" 2>/dev/null || true)
+    case "$hz_redirect" in
+      https://*)
+        die "hz: $HZ_URL redirects to https, and credentials are dropped on that hop." \
+            "hz: set HZ_URL=https://${HZ_URL#http://} and re-run."
+        ;;
+    esac
+    ;;
+esac
+
 # Preflight, so a token that needs a code says so once and clearly, instead of
 # every command failing with an unexplained 401.
-preflight=$(curl -sf "${AUTH_ARGS[@]}" "$HZ_URL/api/v1/auth/status" 2>/dev/null || true)
+preflight=$(hz_curl "$HZ_URL/api/v1/auth/status" 2>/dev/null || true)
 case "$preflight" in
   *'"otpRequired":true'*)
     echo "This token requires a one-time code." >&2
@@ -142,7 +195,7 @@ shift
 
 status() {
   local raw
-  raw=$(curl -sf "${AUTH_ARGS[@]}" "$DEPLOY_API/status") || { echo "Failed to fetch status"; exit 1; }
+  raw=$(hz_curl --retry 2 --retry-connrefused "$DEPLOY_API/status") || { echo "Failed to fetch status"; exit 1; }
   if command -v python3 &>/dev/null; then
     echo "$raw" | python3 -c "
 import sys, json
@@ -167,18 +220,35 @@ for role in ('current', 'next'):
 deploy_post() {
   local path="$1"
   local resp
-  resp=$(curl -sf -X POST "${AUTH_ARGS[@]}" "$DEPLOY_API/$path") || { echo "FAILED: $path"; exit 1; }
+  resp=$(hz_curl -X POST "$DEPLOY_API/$path") || { echo "FAILED: $path"; exit 1; }
   echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
 }
 
+# deploy_field reads one field of one slot out of the deploy status.
+#
+# It exits rather than returning a placeholder. The old code answered an
+# unreachable control plane with the string "unknown", which callers then
+# compared against "up"/"down" as though it were real state — so a network
+# fault was indistinguishable from a slot genuinely being in an odd state.
+# A control plane we cannot read is a stop condition, not a state.
+deploy_field() {
+  local slot="$1" field="$2" raw out
+  raw=$(hz_curl --retry 2 --retry-connrefused "$DEPLOY_API/status") \
+    || die "hz: cannot reach $DEPLOY_API/status (HZ_URL=$HZ_URL)"
+  [ -n "$raw" ] \
+    || die "hz: empty response from $DEPLOY_API/status (HZ_URL=$HZ_URL)"
+  out=$(printf '%s' "$raw" | python3 -c "import sys,json; print(json.load(sys.stdin)['$slot']['$field'])") \
+    || die "hz: could not read $slot.$field from $DEPLOY_API/status" \
+           "-- response was: $(printf '%s' "$raw" | head -c 200)"
+  printf '%s\n' "$out"
+}
+
 get_state() {
-  local slot="$1"
-  curl -sf "${AUTH_ARGS[@]}" "$DEPLOY_API/status" | python3 -c "import sys,json; print(json.load(sys.stdin)['$slot']['state'])" 2>/dev/null || echo "unknown"
+  deploy_field "$1" state
 }
 
 get_backend() {
-  local slot="$1"
-  curl -sf "${AUTH_ARGS[@]}" "$DEPLOY_API/status" | python3 -c "import sys,json; print(json.load(sys.stdin)['$slot']['backend'])" 2>/dev/null || echo "unknown"
+  deploy_field "$1" backend
 }
 
 wait_drained() {
@@ -240,7 +310,7 @@ ban_post() {
   local action="$1"
   shift
   local resp
-  resp=$(curl -sf -X POST "${AUTH_ARGS[@]}" -H "Content-Type: application/json" -d "$1" "$BAN_API/$action") || {
+  resp=$(hz_curl -X POST -H "Content-Type: application/json" -d "$1" "$BAN_API/$action") || {
     echo "FAILED: ban/$action"; exit 1
   }
   echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
@@ -446,7 +516,7 @@ print(json.dumps({'ip': sys.argv[1], 'timeout': int(sys.argv[2]), 'reason': sys.
     ;;
 
   bans)
-    raw=$(curl -sf "${AUTH_ARGS[@]}" "$BAN_API/list") || { echo "Failed to fetch bans"; exit 1; }
+    raw=$(hz_curl "$BAN_API/list") || { echo "Failed to fetch bans"; exit 1; }
     if command -v python3 &>/dev/null; then
       echo "$raw" | python3 -c "
 import sys, json
@@ -484,7 +554,7 @@ for b in bans:
           HTML=$(cat "$FILE")
         fi
         PAYLOAD=$(python3 -c "import json,sys; print(json.dumps({'html': sys.stdin.read()}))" <<< "$HTML")
-        resp=$(curl -sf -X POST "${AUTH_ARGS[@]}" -H "Content-Type: application/json" \
+        resp=$(hz_curl -X POST -H "Content-Type: application/json" \
           -d "$PAYLOAD" "$DEPLOY_API/maint-page/set") || { echo "FAILED: maint-page/set"; exit 1; }
         echo "$resp" | python3 -c "
 import sys, json
@@ -494,7 +564,7 @@ print(f'Maintenance page set. MD5: {md5}')
 "
         ;;
       clear)
-        resp=$(curl -sf -X POST "${AUTH_ARGS[@]}" "$DEPLOY_API/maint-page/clear") || { echo "FAILED: maint-page/clear"; exit 1; }
+        resp=$(hz_curl -X POST "$DEPLOY_API/maint-page/clear") || { echo "FAILED: maint-page/clear"; exit 1; }
         echo "Maintenance page cleared."
         ;;
       *)
@@ -527,17 +597,20 @@ print(f'Maintenance page set. MD5: {md5}')
         else
           echo "Uploading $DIR..."
         fi
-        resp=$(tar czf - -C "$DIR" . | curl -sf -X POST "${AUTH_ARGS[@]}" \
+        # Overrides hz_curl's 15s cap — a site tarball is not a status ping.
+        # Note the body is a pipe: if HZ ever answers this with a redirect,
+        # curl cannot rewind it and will fail loudly rather than silently.
+        resp=$(tar czf - -C "$DIR" . | hz_curl --max-time 600 -X POST \
           -H "Content-Type: application/gzip" --data-binary @- "$SITE_API/upload$Q") \
           || { echo "FAILED: site upload" >&2; exit 1; }
         echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
         ;;
       rollback)
-        resp=$(curl -sf -X POST "${AUTH_ARGS[@]}" "$SITE_API/rollback") || { echo "FAILED: site rollback" >&2; exit 1; }
+        resp=$(hz_curl -X POST "$SITE_API/rollback") || { echo "FAILED: site rollback" >&2; exit 1; }
         echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
         ;;
       releases)
-        resp=$(curl -sf "${AUTH_ARGS[@]}" "$SITE_API/releases") || { echo "FAILED: site releases" >&2; exit 1; }
+        resp=$(hz_curl "$SITE_API/releases") || { echo "FAILED: site releases" >&2; exit 1; }
         echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
         ;;
       *)
