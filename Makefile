@@ -138,7 +138,7 @@ test-coverage:
 	go test -v -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
 
-# Lint (canon X-LINT-1) — install once: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+# Lint (canon X-LINT-1) — install once: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
 .PHONY: lint
 lint:
 	golangci-lint run ./...
