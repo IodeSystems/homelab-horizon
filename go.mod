@@ -21,7 +21,7 @@ require (
 	github.com/libdns/libdns v1.1.1
 	github.com/libdns/route53 v1.6.2
 	github.com/mark3labs/mcp-go v0.58.0
-	github.com/miekg/dns v1.1.72
+	github.com/miekg/dns v1.1.73
 	github.com/pquerna/otp v1.5.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/spf13/cobra v1.10.2
