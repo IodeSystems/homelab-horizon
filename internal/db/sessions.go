@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"time"
 
-	ashid "github.com/IodeSystems/ashid/go"
+	ashid "github.com/wildeagency/ashid/go"
 )
 
 // Session lifetimes.
