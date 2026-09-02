@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	ashid "github.com/IodeSystems/ashid/go"
+	ashid "github.com/wildeagency/ashid/go"
 )
 
 // Personal API tokens.

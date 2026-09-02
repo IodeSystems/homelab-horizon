@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	ashid "github.com/IodeSystems/ashid/go"
+	ashid "github.com/wildeagency/ashid/go"
 )
 
 // Second factors: TOTP seeds and passkeys, stored as credential rows beside

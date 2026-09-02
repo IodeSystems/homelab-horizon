@@ -3,7 +3,6 @@ module github.com/iodesystems/homelab-horizon
 go 1.26
 
 require (
-	github.com/IodeSystems/ashid/go v0.0.0-20260508000147-cc7785c7629a
 	github.com/aws/aws-sdk-go-v2 v1.43.7
 	github.com/aws/aws-sdk-go-v2/config v1.32.38
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.37
@@ -25,6 +24,7 @@ require (
 	github.com/pquerna/otp v1.5.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/spf13/cobra v1.10.2
+	github.com/wildeagency/ashid/go v0.0.0-20260627205826-4c70d22c1032
 	golang.org/x/crypto v0.55.0
 	golang.org/x/oauth2 v0.36.0
 	modernc.org/sqlite v1.56.0
