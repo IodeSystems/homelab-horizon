@@ -1,6 +1,6 @@
 module github.com/iodesystems/homelab-horizon
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/IodeSystems/ashid/go v0.0.0-20260508000147-cc7785c7629a
@@ -25,7 +25,7 @@ require (
 	github.com/pquerna/otp v1.5.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/oauth2 v0.36.0
 	modernc.org/sqlite v1.56.0
 )
