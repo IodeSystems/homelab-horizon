@@ -480,6 +480,95 @@ export interface CheckStatusResp {
   interval: number /* int */;
   enabled: boolean;
   auto_gen: boolean;
+  /**
+   * Vantage names the remote hz-probe agent this result came from. Empty
+   * means the check ran on hz itself.
+   */
+  vantage?: string;
+}
+/**
+ * RemoteProbeResp is one configured outside-in vantage, plus what hz has
+ * learned by polling it.
+ * The token is never returned. HasToken says one is set; that is everything
+ * the UI needs to render, and returning the credential would put it in every
+ * browser cache and screenshot that ever touches this page.
+ */
+export interface RemoteProbeResp {
+  name: string;
+  url: string;
+  enabled: boolean;
+  poll: number /* int */;
+  probe: number /* int */;
+  timeout: number /* int */;
+  resolvers?: string[];
+  pinSha256?: string;
+  hasToken: boolean;
+  /**
+   * Live state from the poll loop.
+   */
+  reachable: boolean;
+  polled: boolean; // false = configured but never polled yet
+  lastPoll: any /* time.Time */;
+  lastGood: any /* time.Time */;
+  lastError?: string;
+  agentVantage?: string;
+  agentVersion?: string;
+  targetsVersion?: string;
+  targetCount: number /* int */;
+  checkCount: number /* int */; // check rows this vantage contributes
+}
+/**
+ * RemoteProbeRequest adds or edits a vantage.
+ * On edit, an empty Token keeps the stored one — so an operator can change a
+ * URL or a poll interval without re-typing a credential the UI never showed
+ * them.
+ */
+export interface RemoteProbeRequest {
+  name: string;
+  url: string;
+  token?: string;
+  enabled: boolean;
+  poll?: number /* int */;
+  probe?: number /* int */;
+  timeout?: number /* int */;
+  resolvers?: string[];
+  pinSha256?: string;
+  /**
+   * Rename targets an existing entry by its old name, so editing the name
+   * is an edit rather than a delete plus an add.
+   */
+  oldName?: string;
+}
+/**
+ * RemoteProbeTestResp is one trial poll, run before saving.
+ */
+export interface RemoteProbeTestResp {
+  ok: boolean;
+  error?: string;
+  latencyMs: number /* int64 */;
+  agentVantage?: string;
+  agentVersion?: string;
+  targetsVersion?: string;
+  targetCount: number /* int */;
+  wantTargets: boolean;
+  /**
+   * The certificate the agent presented, when the test ran without a pin.
+   * CertTrusted false means it did not chain to a public CA — the normal
+   * case for a self-signed agent, and exactly when pinning is the answer.
+   * Nothing is pinned until the operator saves the fingerprint.
+   */
+  certSha256?: string;
+  certTrusted: boolean;
+  certSubject?: string;
+  certNotAfter?: string;
+}
+/**
+ * RemoteProbeTokenResp is a freshly minted vantage token.
+ * hz generates it rather than the agent, so the install command can carry it
+ * and the operator never copies a credential back by hand.
+ */
+export interface RemoteProbeTokenResp {
+  token: string;
 }
 export interface ConfigResp {
   publicIP: string;
@@ -939,15 +1028,38 @@ export interface CheckHistoryResponse {
   results: CheckResult[];
 }
 /**
- * AllCheckHistoryEntry is one series (check + its history) in the aggregate
- * history response used by the main /checks page's stacked charts.
+ * HistoryRunResp is a stretch of consecutive buckets holding one status.
+ * An empty status means no sample had landed yet.
  */
-export interface AllCheckHistoryEntry {
-  name: string;
-  results: CheckResult[];
+export interface HistoryRunResp {
+  s: string;
+  f: number /* int */;
+  n: number /* int */;
 }
-export interface AllCheckHistoryResponse {
-  series: AllCheckHistoryEntry[];
+/**
+ * HistorySeriesResp is one check over the window.
+ */
+export interface HistorySeriesResp {
+  name: string;
+  type?: string;
+  target?: string;
+  vantage?: string;
+  runs: HistoryRunResp[];
+  /**
+   * Latency is one value per bucket, -1 where nothing was measured. The
+   * slowest sample in the bucket, not the mean — a mean at this resolution
+   * hides the spike worth seeing.
+   */
+  lat: number /* int32 */[];
+  samples: number /* int */;
+  worst: string;
+  steady: boolean;
+}
+export interface BucketedHistoryResponse {
+  from: number /* int64 */; // unix ms at the start of bucket 0
+  bucketMs: number /* int64 */; // width of one bucket
+  buckets: number /* int */;
+  series: HistorySeriesResp[];
 }
 export interface ChecksOverview {
   total: number /* int */;

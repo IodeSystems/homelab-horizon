@@ -38,7 +38,8 @@ import {
   useToggleCheck,
 } from "../api/hooks";
 import type { CheckStatus } from "../api/types";
-import { ChecksStackedCharts } from "../components/ChecksStackedCharts";
+import { ChecksHistory } from "../components/ChecksHistory";
+import { RemoteVantages } from "../components/RemoteVantages";
 
 function relativeTime(isoStr: string): string {
   if (!isoStr) return "Never";
@@ -94,8 +95,19 @@ function CheckRow({ check }: { check: CheckStatus }) {
             <Typography variant="body2" sx={{ fontWeight: 500 }}>
               {check.name}
             </Typography>
-            {check.auto_gen && (
+            {check.auto_gen && !check.vantage && (
               <Chip label="auto" size="small" variant="outlined" sx={{ ml: 0.5, height: 20, fontSize: "0.7rem" }} />
+            )}
+            {check.vantage && (
+              <Tooltip title="Probed from outside the network by an hz-probe agent">
+                <Chip
+                  label={check.vantage}
+                  size="small"
+                  color="info"
+                  variant="outlined"
+                  sx={{ ml: 0.5, height: 20, fontSize: "0.7rem" }}
+                />
+              </Tooltip>
             )}
           </Box>
         </TableCell>
@@ -134,6 +146,11 @@ function CheckRow({ check }: { check: CheckStatus }) {
           </Typography>
         </TableCell>
         <TableCell onClick={(e) => e.stopPropagation()}>
+          {check.vantage ? (
+            <Typography variant="caption" color="text.secondary">
+              agent-driven
+            </Typography>
+          ) : (
           <Box sx={{ display: "flex", gap: 0.5 }}>
             <Tooltip title="Run now">
               <IconButton
@@ -164,6 +181,7 @@ function CheckRow({ check }: { check: CheckStatus }) {
               </Tooltip>
             )}
           </Box>
+          )}
         </TableCell>
       </TableRow>
     </>
@@ -200,6 +218,9 @@ function ChecksPage() {
   const failed = checksList.filter((c) => c.status === "failed").length;
   const warning = checksList.filter((c) => c.status === "warning").length;
   const total = checksList.length;
+  const vantages = new Set(
+    checksList.map((c) => c.vantage).filter((v): v is string => !!v),
+  );
 
   return (
     <Box>
@@ -211,6 +232,8 @@ function ChecksPage() {
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             {healthy} healthy, {warning > 0 ? `${warning} warning, ` : ""}
             {failed} failed, {total} total
+            {vantages.size > 0 &&
+              ` · ${vantages.size} outside vantage${vantages.size > 1 ? "s" : ""}`}
           </Typography>
         </Box>
         <Button
@@ -222,7 +245,9 @@ function ChecksPage() {
         </Button>
       </Box>
 
-      <ChecksStackedCharts series={allHistory?.series ?? []} />
+      <ChecksHistory data={allHistory} />
+
+      <RemoteVantages />
 
       <TableContainer component={Paper}>
         <Table size="small">

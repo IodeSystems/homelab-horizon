@@ -305,7 +305,52 @@ export const CheckStatusSchema = z.object({
   interval: z.number(),
   enabled: z.boolean(),
   auto_gen: z.boolean(),
+  // Set when the result came from a remote hz-probe agent rather than hz.
+  vantage: z.string().optional(),
 });
+
+// One outside-in vantage: its configuration, and what hz learned by polling.
+export const RemoteProbeSchema = z.object({
+  name: z.string(),
+  url: z.string(),
+  enabled: z.boolean(),
+  poll: z.number(),
+  probe: z.number(),
+  timeout: z.number(),
+  resolvers: z.array(z.string()).optional(),
+  pinSha256: z.string().optional(),
+  hasToken: z.boolean(),
+  reachable: z.boolean(),
+  polled: z.boolean(),
+  lastPoll: z.string(),
+  lastGood: z.string(),
+  lastError: z.string().optional(),
+  agentVantage: z.string().optional(),
+  agentVersion: z.string().optional(),
+  targetsVersion: z.string().optional(),
+  targetCount: z.number(),
+  checkCount: z.number(),
+});
+
+export const RemoteProbeListSchema = z.array(RemoteProbeSchema);
+
+export const RemoteProbeTestSchema = z.object({
+  ok: z.boolean(),
+  error: z.string().optional(),
+  latencyMs: z.number(),
+  agentVantage: z.string().optional(),
+  agentVersion: z.string().optional(),
+  targetsVersion: z.string().optional(),
+  targetCount: z.number(),
+  wantTargets: z.boolean(),
+  // The certificate the agent presented, when tested without a pin.
+  certSha256: z.string().optional(),
+  certTrusted: z.boolean(),
+  certSubject: z.string().optional(),
+  certNotAfter: z.string().optional(),
+});
+
+export const RemoteProbeTokenSchema = z.object({ token: z.string() });
 
 export const SystemConfigSchema = z.object({
   publicIP: z.string(),
