@@ -7,6 +7,7 @@ dist
 # undefined symbol while building fine locally.
 /homelab-horizon
 /hz
+/hz-probe
 homelab-horizon.service
 coverage.out
 coverage.html

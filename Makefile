@@ -50,8 +50,21 @@ build-go: ui/dist/index.html hz-embed ui-embed
 build-hz:
 	CGO_ENABLED=0 go build $(LDFLAGS) -o hz ./cmd/hz
 
-# Cross-compile the hz binaries the server embeds and serves at /admin/hz/bin/.
-# Always builds all served arches regardless of the server's own arch.
+# Build hz-probe, the outside-in vantage agent. It runs on a host outside the
+# homelab, so the useful build is a cross-compile you scp to that host.
+.PHONY: build-probe
+build-probe:
+	CGO_ENABLED=0 go build $(LDFLAGS) -o hz-probe ./cmd/hz-probe
+
+.PHONY: build-probe-all
+build-probe-all: dist
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64        go build $(LDFLAGS) -o dist/hz-probe-linux-amd64 ./cmd/hz-probe
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64        go build $(LDFLAGS) -o dist/hz-probe-linux-arm64 ./cmd/hz-probe
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7  go build $(LDFLAGS) -o dist/hz-probe-linux-armv7 ./cmd/hz-probe
+
+# Cross-compile the client binaries the server embeds: hz (served at
+# /admin/hz/bin/) and hz-probe (served at /admin/hz-probe/bin/). Always builds
+# all served arches regardless of the server's own arch.
 .PHONY: ui-embed
 ui-embed: ui/dist/index.html
 	@rm -rf $(UI_EMBED_DIR)
@@ -66,6 +79,9 @@ hz-embed:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64        go build $(LDFLAGS) -o $(HZ_EMBED_DIR)/hz-linux-amd64 ./cmd/hz
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64        go build $(LDFLAGS) -o $(HZ_EMBED_DIR)/hz-linux-arm64 ./cmd/hz
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7  go build $(LDFLAGS) -o $(HZ_EMBED_DIR)/hz-linux-arm ./cmd/hz
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64        go build $(LDFLAGS) -o $(HZ_EMBED_DIR)/hz-probe-linux-amd64 ./cmd/hz-probe
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64        go build $(LDFLAGS) -o $(HZ_EMBED_DIR)/hz-probe-linux-arm64 ./cmd/hz-probe
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7  go build $(LDFLAGS) -o $(HZ_EMBED_DIR)/hz-probe-linux-arm ./cmd/hz-probe
 
 # Run backend + frontend dev servers together (Ctrl-C stops both)
 .PHONY: run
@@ -112,7 +128,7 @@ build-linux-arm: ui dist hz-embed ui-embed
 # Clean build artifacts
 .PHONY: clean
 clean:
-	rm -f $(BINARY_NAME) hz
+	rm -f $(BINARY_NAME) hz hz-probe
 	rm -rf dist/
 	rm -rf ui/dist/
 	rm -rf $(HZ_EMBED_DIR)
@@ -235,6 +251,8 @@ help:
 	@echo "  make ui           - Build frontend only (React SPA)"
 	@echo "  make build-go     - Build Go only (stub frontend)"
 	@echo "  make build-hz     - Build the hz operator CLI (admin-token client)"
+	@echo "  make build-probe  - Build hz-probe (outside-in vantage agent)"
+	@echo "  make build-probe-all - Cross-compile hz-probe for amd64/arm64/armv7"
 	@echo "  make run          - Run backend + frontend dev servers together"
 	@echo "  make run-backend  - Run Go backend only (:8080)"
 	@echo "  make run-frontend - Run Vite frontend dev server only (:5173)"
