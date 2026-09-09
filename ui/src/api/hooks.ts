@@ -3,11 +3,15 @@ import { startAuthentication, startRegistration } from "@simplewebauthn/browser"
 import { apiFetch, apiFetchText } from "./client";
 import type {
   AddPeerResponse,
-  AllCheckHistoryResponse,
+  BucketedHistoryResponse,
   AptAuditResponse,
   BanListResponse,
   CheckHistoryResponse,
   CheckStatus,
+  RemoteProbe,
+  RemoteProbeRequest,
+  RemoteProbeTest,
+  RemoteProbeToken,
   ConfigShare,
   CreateInviteResponse,
   DashboardData,
@@ -69,6 +73,9 @@ import {
   HostPortMapResponseSchema,
   ScrapeTokenRespSchema,
   ServiceDeletePreviewResponseSchema,
+  RemoteProbeListSchema,
+  RemoteProbeTestSchema,
+  RemoteProbeTokenSchema,
 } from "./schemas";
 
 export function useDashboard() {
@@ -918,6 +925,92 @@ export function useChecks() {
   });
 }
 
+// --- Outside-in vantages (hz-probe agents) ---
+//
+// hz polls these; they never dial hz. The token is write-only across the API,
+// so a vantage's response says whether one is set, never what it is.
+
+export function useRemotes() {
+  return useQuery({
+    queryKey: ["remotes"],
+    queryFn: () =>
+      apiFetch<RemoteProbe[]>("/checks/remotes", {
+        schema: RemoteProbeListSchema,
+      }),
+    refetchInterval: 30000,
+  });
+}
+
+// invalidateRemotes refreshes the vantage list and the check rows it feeds.
+function invalidateRemotes(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ["remotes"] });
+  qc.invalidateQueries({ queryKey: ["checks"] });
+  qc.invalidateQueries({ queryKey: ["settings"] });
+}
+
+export function useAddRemote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RemoteProbeRequest) =>
+      apiFetch("/checks/remotes/add", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => invalidateRemotes(qc),
+  });
+}
+
+export function useUpdateRemote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RemoteProbeRequest) =>
+      apiFetch("/checks/remotes/update", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => invalidateRemotes(qc),
+  });
+}
+
+export function useDeleteRemote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) =>
+      apiFetch("/checks/remotes/delete", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: () => invalidateRemotes(qc),
+  });
+}
+
+// useTestRemote polls an agent once without saving anything, so a wrong token
+// or an unreachable host fails in the dialog rather than silently in the poll
+// loop ten minutes later.
+export function useTestRemote() {
+  return useMutation({
+    mutationFn: (input: RemoteProbeRequest) =>
+      apiFetch<RemoteProbeTest>("/checks/remotes/test", {
+        method: "POST",
+        body: JSON.stringify(input),
+        schema: RemoteProbeTestSchema,
+      }),
+  });
+}
+
+// useMintRemoteToken asks hz for a token for a vantage that does not exist
+// yet, so the install command can carry it. hz generating it is what removes
+// the copy-back step: by the time the agent runs, hz already holds it.
+export function useMintRemoteToken() {
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<RemoteProbeToken>("/checks/remotes/token", {
+        method: "POST",
+        schema: RemoteProbeTokenSchema,
+      }),
+  });
+}
+
 export function useCheckHistory(name: string) {
   return useQuery({
     queryKey: ["checks", "history", name],
@@ -930,11 +1023,14 @@ export function useCheckHistory(name: string) {
   });
 }
 
-export function useAllCheckHistory() {
+// useAllCheckHistory fetches every check's history, bucketed and run-length
+// encoded by the server. The raw form was a quarter of a megabyte every
+// thirty seconds once a couple of vantages were configured.
+export function useAllCheckHistory(buckets = 120) {
   return useQuery({
-    queryKey: ["checks", "history", "all"],
+    queryKey: ["checks", "history", "all", buckets],
     queryFn: () =>
-      apiFetch<AllCheckHistoryResponse>("/checks/history/all"),
+      apiFetch<BucketedHistoryResponse>(`/checks/history/all?buckets=${buckets}`),
     refetchInterval: 30000,
   });
 }
