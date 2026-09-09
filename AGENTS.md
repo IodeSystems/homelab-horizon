@@ -13,6 +13,7 @@ Self-contained homelab management: WireGuard VPN, split-horizon DNS (dnsmasq + R
 ```
 homelab-horizon/
 ├── cmd/homelab-horizon/     # Entry point, CLI flags, systemd install, MCP stdio mode
+├── cmd/hz-probe/            # Outside-in vantage agent (serve/install/gen-cert/fingerprint), deployed OUTSIDE the homelab
 ├── internal/
 │   ├── server/              # HTTP handlers (~22 handler files), MCP server, routing
 │   ├── apitypes/            # API DTOs → tygo-generated into ui/src/api/generated-types.ts
@@ -26,12 +27,13 @@ homelab-horizon/
 │   ├── acme/                # ACME provider factory for lego
 │   ├── iptables/            # Rule generator + classifier + reconciler (expected/stale/blessed/unknown)
 │   ├── autoheal/            # On-startup + periodic system fixes (forwarding, masq, chains)
-│   ├── monitor/             # TCP/HTTP health checks, ntfy notifications
+│   ├── monitor/             # TCP/HTTP/TLS health checks, remote-vantage polling, ntfy notifications
+│   ├── probe/               # hz-probe wire types, probes, agent, and hz's polling client
 │   ├── system/              # FileSystem/CommandRunner interfaces (for testing)
 │   └── qr/                  # QR code SVG generation
 ├── ui/                      # React SPA (Vite + MUI + TanStack Router/Query)
 │   ├── src/routes/          # File-based routes: dashboard, services, vpn, domains, checks, settings, mfa, bans
-│   ├── src/components/      # AppLayout, LoginPage, IPTablesTab, SystemHealthTab, SystemMetricsCard, Sync*, ChecksStackedCharts
+│   ├── src/components/      # AppLayout, LoginPage, IPTablesTab, SystemHealthTab, SystemMetricsCard, Sync*, ChecksHistory, RemoteVantages
 │   ├── src/api/             # client, hooks (TanStack Query), generated-types.ts (from tygo), schemas (zod)
 │   └── embed.go             # //go:embed all:dist  → served at /app/
 ├── test/integration/        # Dry-run integration tests
@@ -56,6 +58,11 @@ homelab-horizon/
 | DNS provider | `internal/dns/` | Implement `Provider` interface |
 | iptables rule | `internal/iptables/rules.go` | Add to `ExpectedRules(cfg)`; classifier + reconciler pick it up automatically |
 | System fixer | `internal/server/handlers_api_system_fix.go` | Paired with a check in `handlers_api_system.go` |
+| Outside-in probe | `internal/probe/` | `run.go` adds a probe kind; `agent.go` is the remote side, `client.go` is hz's. Folded into checks by `internal/monitor/remote.go` |
+| Vantage CRUD | `internal/server/handlers_api_remotes.go` | `/api/v1/checks/remotes{,/add,/update,/delete,/test}`; UI in `ui/src/components/RemoteVantages.tsx` |
+| Check history shape | `internal/monitor/history.go` | Bucketed + run-length encoded server-side. Rendered by `ui/src/components/ChecksHistory.tsx` — keep it RLE, do not expand to a node per column |
+| hz-probe systemd unit | `cmd/hz-probe/install.go` | `unitTemplate` is the only copy — `hz-probe show-systemd` prints it, there is no checked-in unit file to drift |
+| Vantage installer | `internal/server/hz_probe_install_script.go` | curl\|bash at `/admin/hz-probe/install`; binaries at `/admin/hz-probe/bin/<os>-<arch>` from `hzbin` (`-tags hzembed`). Mirrors the hz CLI installer beside it |
 | Test mocks | `internal/system/` | `DryRunFileSystem`, `DryRunCommandRunner` |
 | MCP tool | `internal/server/mcp.go` | stdio mode entered via `-no-mcp=false` (default on) |
 
@@ -68,7 +75,13 @@ homelab-horizon/
 - **Version injection**: `main.Version` set via `-ldflags` at build time.
 - **CSRF**: API mutations require `X-CSRF-Token` header; React client handles this automatically via `ui/src/api/client.ts`.
 - **Auth modes**: session cookie (UI), Bearer admin token (API/scripts), VPN-admin (LAN/VPN clients on the admin range). `backupAuthMiddleware` accepts all three for ops scripts.
-- **Peer sync (HA)**: Each peer runs its own classifier/reconciler locally and reports counts via fleet status. Bless is per-host (`BlessedIPTablesRules` excluded from peer sync).
+- **Peer sync (HA)**: Each peer runs its own classifier/reconciler locally and reports counts via fleet status. Bless is per-host (`BlessedIPTablesRules` excluded from peer sync). `RemoteProbes` is excluded too — the token belongs to a host that peer chose.
+- **Outside-in direction**: hz always dials the `hz-probe` agent; the agent never dials hz and holds no hz address or credential. hz therefore needs no inbound reachability, and only public facts (served hostnames, public IP) cross the wire. Check rows from an agent are prefixed `ext:` and carry `Vantage`.
+- **Check history is bucketed and run-length encoded on the server** (`internal/monitor/history.go`). The raw per-sample form made the chart quadratic in fleet size — its x-axis was the union of every check's timestamps and every check got a cell in every column. Two vantages was ~250 KB per refetch and six figures of DOM nodes. Grouping in the UI is by `Vantage`; steady rows collapse behind a toggle.
+- **Reloading the monitor**: `ReloadRemotes(cfg)` for a vantage change — it restarts only the vantages that actually changed and preserves all other history. `Reload(cfg)` is the blunt one; it stops every check and clears everything. `Monitor.config` is an `atomic.Pointer` so the narrow reload can swap it without stopping the local check goroutines.
+- **Vantage tokens are write-only**: `RemoteProbeResp` returns `hasToken`, never the token. An update with an empty `token` keeps the stored one, so editing a URL never requires re-typing a credential the UI cannot show. hz *mints* the token (`/api/v1/checks/remotes/token`) so the install command can carry it — nothing is persisted until the vantage is saved.
+- **TOFU is interactive only**: `probe.Client.Observe` accepts an unverified certificate so its fingerprint can be shown to a person, and is set *only* by the test endpoint. The poll loop never sets it — there a certificate either chains to a public CA or matches the pin the operator approved. `Observe` with `PinSHA256` set is an error, not a precedence rule.
+- **`hzbin` serves two tools**: `hz` and `hz-probe` share `bin/`, and `"hz-"` is a prefix of `"hz-probe-"` — `Available` must not list one as the other. Guarded by `embed_on_test.go` (runs only under the tag).
 - **iptables rule model**: every live rule classified as `expected` / `stale` / `blessed` / `unknown`. Autoheal removes stale, adds missing expected, never touches blessed/unknown. See `plan/plan.md` for the full model.
 
 ## ANTI-PATTERNS (THIS PROJECT)
@@ -76,7 +89,7 @@ homelab-horizon/
 - **Never edit `ui/src/api/generated-types.ts` or `ui/src/routeTree.gen.ts`** — both regenerated.
 - **No `pkg/`**: everything is `internal/`, no public API surface.
 - **`handlers_haproxy.go` deprecated UI bits**: HAProxy/Route53 are auto-derived from services; legacy direct-management handlers remain only for compatibility.
-- **Test coverage skewed**: `dns/`, `acme/`, `monitor/`, `autoheal/`, `apitypes/` have no unit tests; most of `server/` handlers are untested. Add tests when you touch them.
+- **Test coverage skewed**: `dns/`, `acme/`, `autoheal/`, `apitypes/` have no unit tests; most of `server/` handlers are untested. Add tests when you touch them.
 - **No CI yet** — `.github/workflows/` is empty. Run `make test-all` locally before commit.
 
 ## COMMANDS
@@ -86,6 +99,8 @@ make                    # Build for current platform (ui + go)
 make ui                 # npm ci + npm run build (tygo runs first via `generate`)
 make generate           # tygo: Go apitypes → TS generated-types.ts
 make build-go           # Go-only build with stub ui/dist (no npm required)
+make build-probe        # Build hz-probe for this platform
+make build-probe-all    # Cross-compile hz-probe (amd64, arm64, armv7) into dist/
 make build-all          # Cross-compile: amd64, arm64, armv7
 make run                # Backend + Vite dev server concurrently
 make run-backend        # Go only (serves built SPA at /app/)

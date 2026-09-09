@@ -257,11 +257,94 @@ Phase 3 replaces this with: restart horizon, done.
 
 ## Active work
 
-Nothing is in flight and the backlog is empty. What remains is yours, not mine:
-
-| | Item | Blocked? |
+| | Item | Status |
 |---|---|---|
-| 1 | [Operator follow-ups](#operator-follow-ups-not-code) — yours, not mine | — |
+| 1 | [Outside-in checks (`hz-probe`)](#outside-in-checks-hz-probe) | ✅ code done, ⏸ not yet deployed |
+| 2 | [Operator follow-ups](#operator-follow-ups-not-code) — yours, not mine | — |
+
+### Outside-in checks (`hz-probe`)
+
+Every existing check runs on hz, so all of them answer "can this box reach the
+service". Nothing answered "can the internet reach it" — which is the question
+a DNS record pointing at a stale IP, or an expired edge certificate, actually
+breaks. `hz-probe` is a small agent for a host outside the homelab that probes
+the public names for DNS, HTTPS and latency, and reports when hz asks.
+
+**Direction is the design decision.** hz dials the agent; the agent never
+dials hz, holds no hz address and no hz credential — only a token hz must
+present. So hz needs no inbound reachability, no port forward, and no stable
+public address, and the only host that has to be accessible is the agent. Only
+public facts cross the wire: served hostnames and the public IP they should
+resolve to. No backends, no LAN CIDRs, no VPN ranges.
+
+**Protocol** — hz names a target-set version, the agent says whether it holds
+it, hz sends the set only when it does not. One round trip in the steady
+state, two when the set changes. The version is a hash of the set, so a new
+domain in hz means the agent asks for it on its next poll and there is nothing
+to redeploy. The agent probes on its own timer and buffers, so the poll after
+an hz outage returns the outage rather than a gap.
+
+**Shipped**: `internal/probe/` (types, probes, agent, hz client),
+`cmd/hz-probe/` (`serve` / `install` / `show-systemd` / `gen-cert` /
+`fingerprint`), `config.RemoteProbes` (local-only, excluded from peer sync),
+`internal/monitor/remote.go` folding results into `ext:`-prefixed check rows,
+`Vantage` on `CheckStatus`/`CheckStatusResp`, vantage chip on the Checks page,
+`make build-probe{,-all}`, README section, config-template entry.
+
+Plus the vantage management surface: `/api/v1/checks/remotes` and
+`{add,update,delete,test}` in `handlers_api_remotes.go`, per-vantage live
+state on the `Monitor` (`RemoteStates`), and
+`ui/src/components/RemoteVantages.tsx` — a panel above the check table with
+add/edit/delete and a **Test connection** button that polls the agent before
+anything is saved.
+
+Tests cover the handshake, the watermark, the ring buffer, token gating, the
+two-phase Sync, target derivation, the fold, CRUD validation, rename
+collisions, token write-only-ness, and one end-to-end test that runs the real
+poll loop against a live agent and asserts hz's targets arrive without anyone
+pushing them.
+
+Two decisions worth keeping:
+
+- **The vantage token is write-only across the API.** `hasToken` says one is
+  set; the value never comes back. An update with an empty token keeps the
+  stored one, so editing a URL does not require re-typing a credential the UI
+  cannot show. A returned token would live in every browser cache, screenshot
+  and bug report that ever touched the Checks page.
+- **`hz-probe show-systemd` is the only copy of the unit.** The hand-written
+  `examples/hz-probe/hz-probe.service` was deleted rather than kept alongside
+  it: two copies of a systemd unit drift, and the stale one is the one an
+  operator finds first.
+
+- **next**: run the curl|bash installer once on a real outside host. That is
+  now the single untested path, and it covers the systemd install too.
+- **risks**:
+  - The systemd unit passes `systemd-analyze verify` in both shapes (with and
+    without a certificate) but has never started a real service. `DynamicUser`
+    + `LoadCredential` + `SystemCallFilter` is the part most likely to need
+    adjustment on first boot, and `hz-probe install` has only been run
+    `--dry-run` — the root path (writing the unit, `systemctl enable`,
+    `restart`) is untested.
+  - Probe latency is measured on a rented VPS with noisy neighbours. Treat the
+    HTTPS number as "did the edge answer and how badly", not as a benchmark.
+  - `ext:` rows are not toggleable from the UI by design (the agent probes on
+    its own schedule regardless). Silencing one means disabling the whole
+    vantage, removing the domain, or removing the vantage.
+  - ~~Saving a vantage clears all history~~ — fixed, see
+    [Narrow reload](#-narrow-reload-and-the-history-shape) below.
+- **blocking decisions** (yours):
+  - Which host is the vantage, and does it get a domain (real certificate) or
+    stay a bare IP (self-signed + `pin_sha256`)?
+  - One vantage or several? The design carries many; the check list grows by
+    two rows per domain per vantage, which gets loud past two or three.
+- **optional extensions** (explicitly out of scope now): an agent-reported
+  `ext:` summary in the HA fleet payload, the way `iptables_summary` works;
+  probing over IPv6 as a separate kind.
+- **assumptions made**: targets are derived from proxied services' domains
+  (the same set `tlsChecks` uses), wildcards excluded; `ExpectIPs` is
+  `cfg.PublicIP` alone. Extra answers pass, so HA round-robin at two public
+  IPs is fine — but a record that resolves to *only* the peer's IP reads as a
+  failure, which is arguably correct and worth knowing before it pages you.
 
 Everything decided between 2026-08-15 and 2026-08-18 shipped and is archived in
 [done.md](done.md): the VPN reconnect delay (DNS staleness, not roaming — and
@@ -329,6 +412,112 @@ finished 2026-08-17. Score at capture: ✅14 · ⚠️4 · ❌11.
 - ✅ **EDGE-4** — coarse edge rate limiting, proven against real HAProxy. The
   MFA portal is exempt: these rules run before the jail rules, so limiting it
   would lock a jailed peer out of un-jailing themselves.
+
+### ✅ Narrow reload, and the history shape
+
+Two things, one of which turned out to be a real defect rather than a
+nice-to-have.
+
+**Narrow reload.** `ReloadRemotes(cfg)` diffs the configured vantages and
+restarts only the ones whose settings actually changed. An untouched vantage
+keeps polling on the same watermark; local checks keep their history. The
+blunt `Reload` remains for a whole-config change. `Monitor.config` became an
+`atomic.Pointer` so the narrow reload can swap it without stopping the local
+check goroutines first — which also closed a latent race the old `Reload` had,
+between cancelling the context and the goroutines actually returning.
+
+**The history chart was quadratic in fleet size.** Not "the dots are
+expensive" — the x-axis was the *union of every check's timestamps*, and every
+check got a cell in every column, with each latency cell wrapped in its own
+MUI `<Tooltip>`. Measured before touching it:
+
+| checks | payload / 30s | SVG nodes |
+|---|---|---|
+| 8 | 62 KB | 12,800 |
+| 32 | 249 KB | 204,800 |
+| 64 | 498 KB | 819,200 |
+
+Two vantages over five domains lands around 32. The fix is in two halves:
+
+- **Server** (`internal/monitor/history.go`): time is bucketed to a fixed
+  column count and consecutive same-status buckets collapse into runs. A check
+  that was up the whole window is one run, whatever the sample count. A bucket
+  takes the *worst* status and the *slowest* latency in it — a mean would hide
+  the spike, and an outage that fits inside one column must not be averaged
+  out of existence. Status forward-fills across a check's intervals so the
+  ribbon is continuous; latency deliberately does not, because a repeated
+  number is a measurement nobody took.
+- **UI** (`ui/src/components/ChecksHistory.tsx`, replacing
+  `ChecksStackedCharts.tsx`): rows group by vantage, each group gets one strip
+  of its worst status, only checks that changed state get their own row, and
+  steady rows collapse behind a count. Native `<title>` instead of a React
+  tooltip per element. Latency is a log-scale line per group with decade
+  gridlines — the stacked-area version summed latency across unrelated
+  services, which was never a physical quantity, and mixing a 2 ms local ping
+  with a 300 ms transatlantic request on a linear axis flattened everything
+  worth reading.
+
+Measured after, on a 25-check / 3-vantage fixture rendered in a browser:
+**28 SVG nodes, 127 DOM nodes, 17 KB**. Against roughly 125,000 SVG nodes for
+the same data before.
+
+Verified by building the component standalone against a fixture generated by
+the real Go encoder (`HZ_FIXTURE=<path> go test ./internal/monitor/ -run
+TestDumpFixture`) and looking at it in a browser — the grouping, the collapse
+toggle, the log axis and the time axis all read correctly. That fixture dumper
+is kept, skipped by default, because the next change to this component wants
+the same check.
+
+- **risk**: the display was verified against a fixture, not against a running
+  hz. hz will not start unprivileged on this box — it blocks bringing up the
+  WireGuard interface — so the page has never been seen with live data.
+
+### ✅ Vantage install helper (curl|bash + TOFU pinning)
+
+The panel told you to run `hz-probe install` and gave you no way to get the
+binary onto the box. hz already had the machinery for its own CLI — a
+curl|bash installer with the instance URL baked in, binaries embedded under
+`-tags hzembed`, a copy-paste one-liner in the UI — so this mirrors it.
+
+- `hzbin` now serves two tools. `hz-` is a prefix of `hz-probe-`, so
+  `Available` had to learn the difference or an operator installing the CLI
+  would be handed the agent. Guarded by a test that runs only under the tag.
+- `/admin/hz-probe/install` renders per request with both this instance's base
+  URL *and the caller's own address* (via `getClientIP`, so it survives the
+  HAProxy hop) — which lets the script print the exact URL to paste back.
+- `POST /api/v1/checks/remotes/token` mints the token. hz generating it is what
+  removes the copy-back step: by the time the agent runs, hz already holds the
+  credential it will present. Nothing is stored until the vantage is saved, so
+  an abandoned dialog leaves no credential behind.
+
+**Trust on first use, with the "first use" part visible.** The agent's
+certificate is self-signed, so nothing vouches for it. `probe.Client.Observe`
+accepts the handshake to *report* the fingerprint, and records separately
+whether it would have verified. The test endpoint sets it; the poll loop never
+does — TOFU that happens silently in the background is not TOFU, it is no
+verification at all. `Observe` together with `PinSHA256` is a hard error
+rather than a precedence rule, because both install a `VerifyPeerCertificate`
+and the second would win silently.
+
+The flow is now: click Add → copy one line → run it on the VPS → paste the URL
+it prints → Test connection → **Pin it** → Add.
+
+**Direction note.** The installer is the one time anything talks *to* hz. It
+is a bootstrap an operator is sitting in front of, not the steady state: what
+it installs holds no address for hz, and the agent it starts never dials
+anything. Worth keeping straight, since the rest of this design exists to
+avoid exactly that dependency.
+
+Verified by building the panel standalone against a stubbed API and driving it
+in a browser: the three vantage states, the install command with the minted
+token, the green test result and the amber pin prompt with its fingerprint all
+render correctly. `-tags hzembed` build and tests pass, and the two-tool split
+was checked against real cross-compiled binaries.
+
+- **risk**: the installer script itself has never been run. It is shell, so
+  nothing type-checks it, and the `sudo -E` / `install -d` / gen-cert / unit
+  path is exactly where a shell script goes wrong. Run it once on a real VPS
+  before trusting the one-liner.
 
 ### Operator follow-ups (not code)
 

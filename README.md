@@ -113,6 +113,7 @@ second factor is accepted. See [VPN MFA](#vpn-mfa).
 - **Reverse Proxy**: HAProxy with automatic Let's Encrypt wildcard SSL certificates
 - **Static Sites**: Serve a folder of files as a service — hz hosts it directly, HAProxy routes to it with the same auto SSL/DNS
 - **Service Monitoring**: Health checks with ntfy push notifications
+- **Outside-In Checks (`hz-probe`)**: A small agent on a host outside the homelab probes your public DNS, HTTPS and latency. hz polls it, so hz stays unreachable from the internet and nothing about the private network leaves the box
 - **Prometheus Discovery**: Declare hosts and exporter jobs; hz serves a generated scrape config and probes every target
 - **Port Allocation**: Server-authoritative reservations and denylist, so `hz ports next` never hands out a port something already uses
 - **Operator CLI (`hz`)**: Service CRUD, HTTPS per domain, hosts, exporters, sync — with a preview of what a mutation actually changes
@@ -968,6 +969,141 @@ Services with HAProxy backends automatically get health checks. Configure ntfy U
 Check types:
 - **ping**: TCP connect to common ports (80, 443, 22)
 - **http**: HTTP GET expecting 200 response
+- **tls**: full handshake per served domain, hourly — catches a certificate that stopped covering a name, and one about to expire
+
+All of these run on hz, and answer "can this box reach the service". That is
+not the question your users ask.
+
+### Outside-in checks (`hz-probe`)
+
+`hz-probe` answers the other question: can the internet reach it. It runs on a
+host outside the homelab — a cheap VPS — and probes your public names for DNS,
+HTTPS and latency from there. Results land on the Checks page beside the local
+ones, tagged with the vantage they came from.
+
+**hz dials out; the agent never dials in.** The agent holds no address for hz
+and no credential of hz's — only a token hz must present. So hz needs no
+inbound reachability, no port forward, and no stable public address, and the
+only host that has to be accessible is the agent. The only facts that cross
+the wire are ones the public internet already holds: the hostnames hz serves,
+and the public IP they should resolve to. No backends, no LAN CIDRs, no VPN
+ranges.
+
+The agent probes on its own schedule and buffers what it saw, so the poll
+after an hz outage returns the outage rather than a gap in the history.
+
+**Protocol** — one round trip in the steady state, two when targets change:
+
+```
+hz -> agent   what have you got? I want target set 4f2a...
+agent -> hz   I do not hold 4f2a. Send it. (here are my results anyway)
+hz -> agent   target set 4f2a = [api.example.com, docs.example.com] -> 203.0.113.10
+agent -> hz   holding 4f2a. Here is everything since your last poll.
+```
+
+The version is a hash of the target set, so a new domain in hz means a new
+version, means the agent asks for it on its next poll. Nothing to redeploy.
+
+**Add one from the UI.** Checks → *Outside vantages* → *Add vantage* mints a
+token and hands you a one-liner for the outside host:
+
+```bash
+curl -fsSL https://hz.example.com/admin/hz-probe/install \
+  | HZ_PROBE_TOKEN=<minted> sudo -E bash
+```
+
+That downloads the agent from this hz instance, writes the token, generates a
+self-signed certificate, installs a hardened systemd unit and starts it — then
+prints the URL to paste back. hz minted the token, so the only thing you carry
+back is the address, which hz cannot know. **Test connection** polls the agent
+and shows you the certificate it presented; press **Pin it** and hz will
+refuse any other certificate from that address afterwards. Nothing is trusted
+because a test reported it — trust on first use is only trust if somebody says
+yes.
+
+Serving the binary needs a server built with `-tags hzembed` (`make hz-embed`
+cross-compiles both clients first); without it the installer reports that the
+build has no embedded clients.
+
+**Or do it by hand**, which is the same steps without hz in the loop:
+
+```bash
+make build-probe-all                       # dist/hz-probe-linux-{amd64,arm64,armv7}
+scp dist/hz-probe-linux-amd64 vps:/usr/local/bin/hz-probe
+
+# On the VPS:
+hz-probe gen-cert --host 198.51.100.7   # skip if the host has a real certificate
+sudo hz-probe install                   # mints a token, writes + starts the unit
+sudo hz-probe fingerprint               # the pin_sha256 value
+```
+
+`install` writes an unprivileged, hardened systemd unit (`DynamicUser`, the
+token and key reaching it through systemd credentials rather than loosened
+file modes), validates it with `systemd-analyze verify`, enables it, and
+prints the ready-made `remote_probes` entry. `hz-probe show-systemd` prints
+the unit without installing anything.
+
+Serve TLS. The token crosses the public internet on every poll. With a domain,
+use a real certificate; on a bare IP, `gen-cert` writes a self-signed one and
+hz pins it by fingerprint — a stronger guarantee than a public CA gives for
+this one connection.
+
+The installer is the one time anything talks *to* hz. It is a bootstrap an
+operator is sitting in front of, not the steady state: what it installs holds
+no address for hz, and the agent it starts never dials anything.
+
+**Or configure it directly** in `config.json`:
+
+```jsonc
+"remote_probes": [
+  {
+    "name": "vps-nyc",
+    "url": "https://198.51.100.7:8443",
+    "token": "SHARED_TOKEN",
+    "enabled": true,
+    "poll": 60,                            // how often hz asks
+    "probe": 60,                           // how often the agent probes
+    "resolvers": ["1.1.1.1:53", "8.8.8.8:53"],
+    "pin_sha256": "…"                      // for a self-signed agent cert
+  }
+]
+```
+
+This block is local to the host, never synced to HA peers: the token is a
+credential for an agent this peer chose. Name resolvers explicitly if you care
+which ones agree — a VPS's system resolver is usually a caching forwarder with
+a view of its own.
+
+The Checks page lists each vantage with its own state, which the check rows
+cannot carry: a vantage hz has never reached produces no rows at all, and that
+reads identically to one nobody configured.
+
+### Reading the history
+
+The history panel groups rows by where the check ran — hz first, then each
+vantage — because inside and outside do not have to agree, and when they
+disagree, which one is wrong is the whole diagnosis. Each group gets one strip
+showing the worst status across it; only checks that actually changed state
+get their own row, and everything steady collapses behind a count. Latency is
+plotted on a log scale with decade gridlines, since a local TCP connect is
+single-digit milliseconds and an HTTPS request from another continent is
+hundreds.
+
+The server sends this bucketed and run-length encoded (`?buckets=N`, default
+120), so a check that was up the whole window is one run rather than one
+sample per column. Twenty-five checks across three vantages is 28 SVG nodes
+and about 17 KB.
+
+**Rows it produces**, all prefixed `ext:`:
+
+| Row | Means |
+|---|---|
+| `ext:vps-nyc:agent` | whether hz can reach the agent at all |
+| `ext:vps-nyc:dns:api.example.com` | what the name resolves to from outside, against what hz expects |
+| `ext:vps-nyc:https:api.example.com` | status code, latency, and days left on the certificate |
+
+The `agent` row is the one that keeps the rest honest — without it, a dead
+agent reads as every target frozen on its last known status.
 
 ## SSL Certificates
 
