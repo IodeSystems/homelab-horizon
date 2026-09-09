@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
@@ -59,6 +60,12 @@ type CheckStatus struct {
 	Interval  int       `json:"interval"`
 	Enabled   bool      `json:"enabled"`
 	AutoGen   bool      `json:"auto_gen"` // True if auto-generated from HAProxy service
+
+	// Vantage names the remote hz-probe agent a result came from. Empty means
+	// the check ran here. It is the difference between "this host can reach
+	// the service" and "the internet can", which are not the same question
+	// and have never had the same answer.
+	Vantage string `json:"vantage,omitempty"`
 }
 
 // CheckResult records a single check execution for history tracking
@@ -80,28 +87,46 @@ const defaultCertWarningDays = 7
 // certWarningWindow is the configured lead time, or the default.
 func (m *Monitor) certWarningWindow() time.Duration {
 	days := defaultCertWarningDays
-	if m.config != nil && m.config.CertWarningDays > 0 {
-		days = m.config.CertWarningDays
+	if cfg := m.cfg(); cfg != nil && cfg.CertWarningDays > 0 {
+		days = cfg.CertWarningDays
 	}
 	return time.Duration(days) * 24 * time.Hour
 }
 
 // Monitor manages service health checks and notifications
 type Monitor struct {
-	mu       sync.RWMutex
-	config   *config.Config
+	mu sync.RWMutex
+
+	// config is swapped, never mutated in place by a reader. It is atomic
+	// because the remote-vantage reload replaces it while the local check
+	// goroutines are still running — the whole point of that reload being
+	// narrow is that it does not stop them first.
+	config   atomic.Pointer[config.Config]
 	statuses map[string]*CheckStatus  // keyed by check name
 	history  map[string][]CheckResult // keyed by check name, ring buffer of last 100 results
 	ctx      context.Context
 	cancel   context.CancelFunc
 	client   *http.Client
+
+	// externalNames keeps remote-vantage check names in discovery order.
+	// Their statuses live in the same map as everything else, but they are
+	// not derived from config the way getAllChecks' entries are — hz learns
+	// they exist when an agent reports them.
+	externalNames []string
+
+	// remoteStates is per-vantage poll state, keyed by probe name.
+	remoteStates map[string]*RemoteState
+
+	// remoteCancel stops one vantage's poll loop, keyed by probe name. Each
+	// loop gets its own context so a vantage can be added, edited or removed
+	// without disturbing the others or the local checks.
+	remoteCancel map[string]context.CancelFunc
 }
 
 // New creates a new Monitor
 func New(cfg *config.Config) *Monitor {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Monitor{
-		config:   cfg,
+	m := &Monitor{
 		statuses: make(map[string]*CheckStatus),
 		history:  make(map[string][]CheckResult),
 		ctx:      ctx,
@@ -110,24 +135,31 @@ func New(cfg *config.Config) *Monitor {
 			Timeout: 10 * time.Second,
 		},
 	}
+	m.config.Store(cfg)
+	return m
 }
+
+// cfg is the live config. Every read goes through it, so a reload can swap
+// the pointer without stopping the goroutines that read it.
+func (m *Monitor) cfg() *config.Config { return m.config.Load() }
 
 // getAllChecks returns all checks: manual ServiceChecks + auto-generated from HAProxy services
 func (m *Monitor) getAllChecks() []config.ServiceCheck {
-	checks := make([]config.ServiceCheck, 0, len(m.config.ServiceChecks))
+	cfg := m.cfg()
+	checks := make([]config.ServiceCheck, 0, len(cfg.ServiceChecks))
 
 	// Add manual checks
-	checks = append(checks, m.config.ServiceChecks...)
+	checks = append(checks, cfg.ServiceChecks...)
 
 	// Auto-generate checks from HAProxy-proxied services
-	for _, svc := range m.config.Services {
+	for _, svc := range cfg.Services {
 		if svc.Proxy == nil {
 			continue
 		}
 
 		// Check if this service already has a manual check
 		hasManualCheck := false
-		for _, c := range m.config.ServiceChecks {
+		for _, c := range cfg.ServiceChecks {
 			if c.Name == svc.Name || c.Name == "svc:"+svc.Name {
 				hasManualCheck = true
 				break
@@ -147,7 +179,7 @@ func (m *Monitor) getAllChecks() []config.ServiceCheck {
 		var target string
 		switch {
 		case svc.Proxy.StaticRoot != "":
-			target = m.config.StaticServeAddr()
+			target = cfg.StaticServeAddr()
 		case svc.Proxy.Backend != "":
 			target = svc.Proxy.Backend
 			if svc.Proxy.HealthCheck != nil && svc.Proxy.HealthCheck.Path != "" {
@@ -161,7 +193,7 @@ func (m *Monitor) getAllChecks() []config.ServiceCheck {
 		// Check if this auto-generated check was disabled
 		checkName := "svc:" + svc.Name
 		enabled := true
-		for _, disabled := range m.config.DisabledAutoChecks {
+		for _, disabled := range cfg.DisabledAutoChecks {
 			if disabled == checkName {
 				enabled = false
 				break
@@ -194,14 +226,15 @@ func (m *Monitor) getAllChecks() []config.ServiceCheck {
 // that stops covering a name, and one running out of time — move on the scale
 // of days, and the check costs a full handshake per domain.
 func (m *Monitor) tlsChecks() []config.ServiceCheck {
-	if !m.config.SSLEnabled {
+	cfg := m.cfg()
+	if !cfg.SSLEnabled {
 		return nil
 	}
 
 	seen := make(map[string]bool)
 	var out []config.ServiceCheck
 
-	for _, svc := range m.config.Services {
+	for _, svc := range cfg.Services {
 		if svc.Proxy == nil {
 			continue
 		}
@@ -216,7 +249,7 @@ func (m *Monitor) tlsChecks() []config.ServiceCheck {
 
 			name := "tls:" + domain
 			enabled := true
-			for _, disabled := range m.config.DisabledAutoChecks {
+			for _, disabled := range cfg.DisabledAutoChecks {
 				if disabled == name {
 					enabled = false
 					break
@@ -269,13 +302,17 @@ func (m *Monitor) Start() {
 			go m.runCheck(check)
 		}
 	}
+
+	m.startRemoteProbes()
 }
 
 // isAutoGen reports whether a check was generated rather than declared. Both
 // prefixes are reserved: a manual check may not claim one, or it would collide
 // with the generated check it shadows.
 func isAutoGen(name string) bool {
-	return strings.HasPrefix(name, "svc:") || strings.HasPrefix(name, "tls:")
+	return strings.HasPrefix(name, "svc:") ||
+		strings.HasPrefix(name, "tls:") ||
+		strings.HasPrefix(name, externalPrefix)
 }
 
 // Stop halts all health checks
@@ -294,6 +331,13 @@ func (m *Monitor) GetStatuses() []CheckStatus {
 
 	for _, check := range allChecks {
 		if s, ok := m.statuses[check.Name]; ok {
+			result = append(result, *s)
+		}
+	}
+
+	// Remote-vantage rows last, in the order the agents first reported them.
+	for _, name := range m.externalNames {
+		if s, ok := m.statuses[name]; ok {
 			result = append(result, *s)
 		}
 	}
@@ -344,11 +388,14 @@ func (m *Monitor) GetAllHistory() map[string][]CheckResult {
 // Reload updates the monitor with new configuration
 func (m *Monitor) Reload(cfg *config.Config) {
 	m.Stop()
-	m.config = cfg
+	m.config.Store(cfg)
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	m.mu.Lock()
 	m.statuses = make(map[string]*CheckStatus)
 	m.history = make(map[string][]CheckResult)
+	m.externalNames = nil
+	m.remoteStates = nil
+	m.remoteCancel = nil
 	m.mu.Unlock()
 	m.Start()
 }
@@ -379,9 +426,10 @@ func (m *Monitor) UpdateConfig() {
 	defer m.mu.RUnlock()
 
 	// Update enabled state in config for non-auto-generated checks
-	for i := range m.config.ServiceChecks {
-		if status, ok := m.statuses[m.config.ServiceChecks[i].Name]; ok {
-			m.config.ServiceChecks[i].Enabled = status.Enabled
+	cfg := m.cfg()
+	for i := range cfg.ServiceChecks {
+		if status, ok := m.statuses[cfg.ServiceChecks[i].Name]; ok {
+			cfg.ServiceChecks[i].Enabled = status.Enabled
 		}
 	}
 
@@ -392,7 +440,7 @@ func (m *Monitor) UpdateConfig() {
 			disabledAutoChecks = append(disabledAutoChecks, name)
 		}
 	}
-	m.config.DisabledAutoChecks = disabledAutoChecks
+	cfg.DisabledAutoChecks = disabledAutoChecks
 }
 
 // runCheck runs a single check on its interval
@@ -620,7 +668,8 @@ func (m *Monitor) doTLS(target string) error {
 // name and verification is still against the public hostname.
 func (m *Monitor) dialAddrFor(host, port string) string {
 	direct := net.JoinHostPort(host, port)
-	if m.config == nil || m.config.PublicIP == "" {
+	cfg := m.cfg()
+	if cfg == nil || cfg.PublicIP == "" {
 		return direct
 	}
 	ips, err := net.LookupIP(host)
@@ -628,7 +677,7 @@ func (m *Monitor) dialAddrFor(host, port string) string {
 		return direct
 	}
 	for _, ip := range ips {
-		if ip.String() == m.config.PublicIP {
+		if ip.String() == cfg.PublicIP {
 			return net.JoinHostPort("127.0.0.1", port)
 		}
 	}
@@ -661,7 +710,8 @@ func tlsHostPort(target string) (host, port string) {
 
 // sendNotification sends an ntfy notification for a check entering a bad state
 func (m *Monitor) sendNotification(check config.ServiceCheck, checkErr error, status string) {
-	if m.config.NtfyURL == "" {
+	cfg := m.cfg()
+	if cfg.NtfyURL == "" {
 		return
 	}
 
@@ -678,7 +728,7 @@ func (m *Monitor) sendNotification(check config.ServiceCheck, checkErr error, st
 	}
 
 	body := bytes.NewBufferString(message)
-	req, err := http.NewRequest("POST", m.config.NtfyURL, body)
+	req, err := http.NewRequest("POST", cfg.NtfyURL, body)
 	if err != nil {
 		return
 	}
@@ -715,4 +765,17 @@ func (m *Monitor) RunCheck(name string) *CheckStatus {
 
 	m.executeCheck(*check)
 	return m.GetStatus(name)
+}
+
+// SeedForTest records one synthetic result for a check, so a test can assert
+// that a reload preserved (or cleared) history without waiting for a real
+// check to run.
+func (m *Monitor) SeedForTest(name, checkType, target string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.statuses[name] = &CheckStatus{
+		Name: name, Type: checkType, Target: target,
+		Status: StatusOK, LastCheck: time.Now(), Interval: 300, Enabled: true,
+	}
+	m.history[name] = []CheckResult{{Timestamp: time.Now(), Status: StatusOK, Latency: 3}}
 }

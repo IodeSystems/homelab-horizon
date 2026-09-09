@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
-	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
@@ -72,6 +72,7 @@ func (s *Server) handleAPISettings(w http.ResponseWriter, r *http.Request) {
 			Interval:  c.Interval,
 			Enabled:   c.Enabled,
 			AutoGen:   c.AutoGen,
+			Vantage:   c.Vantage,
 		})
 	}
 
@@ -395,6 +396,7 @@ func (s *Server) handleAPIChecks(w http.ResponseWriter, r *http.Request) {
 			Interval:  c.Interval,
 			Enabled:   c.Enabled,
 			AutoGen:   c.AutoGen,
+			Vantage:   c.Vantage,
 		})
 	}
 
@@ -402,44 +404,56 @@ func (s *Server) handleAPIChecks(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(checks)
 }
 
-// handleAPIAllCheckHistory returns the ring-buffer history for every
-// configured check in a single response. Used by the main /checks page's
-// stacked charts so we don't fan out one /checks/history call per row
-// when the dashboard opens.
+// handleAPIAllCheckHistory returns every check's history in one response,
+// bucketed into a fixed number of columns and run-length encoded.
+//
+// It used to return the raw ring buffers, which was N checks × 100 samples on
+// the wire and a chart whose x-axis was the union of every check's
+// timestamps — quadratic in fleet size, and a quarter of a megabyte every
+// thirty seconds at two vantages. The shape here is flat in the sample count
+// and near-flat for checks that did not change state.
+//
+// ?buckets=N sets the column count (default 120, capped at 480).
 func (s *Server) handleAPIAllCheckHistory(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {
 		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	all := s.monitor.GetAllHistory()
-	// Sort keys so the response is deterministic — charts depend on a
-	// stable service ordering for legend color assignment.
-	names := make([]string, 0, len(all))
-	for n := range all {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-
-	series := make([]apitypes.AllCheckHistoryEntry, 0, len(names))
-	for _, n := range names {
-		hist := all[n]
-		results := make([]apitypes.CheckResult, 0, len(hist))
-		for _, h := range hist {
-			results = append(results, apitypes.CheckResult{
-				Timestamp: h.Timestamp,
-				Status:    h.Status,
-				Latency:   h.Latency,
-				Error:     h.Error,
-			})
+	buckets := 0
+	if v := r.URL.Query().Get("buckets"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			buckets = n
 		}
-		series = append(series, apitypes.AllCheckHistoryEntry{
-			Name:    n,
-			Results: results,
+	}
+
+	h := s.monitor.BucketedHistory(buckets)
+
+	series := make([]apitypes.HistorySeriesResp, 0, len(h.Series))
+	for _, ser := range h.Series {
+		runs := make([]apitypes.HistoryRunResp, 0, len(ser.Runs))
+		for _, run := range ser.Runs {
+			runs = append(runs, apitypes.HistoryRunResp{Status: run.Status, From: run.From, Len: run.Len})
+		}
+		series = append(series, apitypes.HistorySeriesResp{
+			Name:    ser.Name,
+			Type:    ser.Type,
+			Target:  ser.Target,
+			Vantage: ser.Vantage,
+			Runs:    runs,
+			Latency: ser.Latency,
+			Samples: ser.Samples,
+			Worst:   ser.Worst,
+			Steady:  ser.Steady,
 		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(apitypes.AllCheckHistoryResponse{Series: series})
+	_ = json.NewEncoder(w).Encode(apitypes.BucketedHistoryResponse{
+		From:     h.From,
+		BucketMs: h.BucketMs,
+		Buckets:  h.Buckets,
+		Series:   series,
+	})
 }
 
 func (s *Server) handleAPICheckHistory(w http.ResponseWriter, r *http.Request) {

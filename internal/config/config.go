@@ -323,6 +323,12 @@ type Config struct {
 	ServiceChecks      []ServiceCheck `json:"service_checks,omitempty"`       // Health checks for services
 	DisabledAutoChecks []string       `json:"disabled_auto_checks,omitempty"` // Names of disabled auto-generated checks
 
+	// RemoteProbes are outside-in vantage points running hz-probe. hz polls
+	// them; they never dial hz. Local-only, like BlessedIPTablesRules: the
+	// token is a credential for a host this peer chose, and a peer with its
+	// own vantage points should not inherit somebody else's.
+	RemoteProbes []RemoteProbe `json:"remote_probes,omitempty"`
+
 	// VPN-based admin authentication
 	VPNAdmins []string `json:"vpn_admins,omitempty"` // Client names with admin access via VPN IP
 
@@ -947,6 +953,31 @@ type ServiceCheck struct {
 	Target   string `json:"target"`             // IP/hostname for ping, URL for http
 	Interval int    `json:"interval,omitempty"` // Check interval in seconds (default 300)
 	Enabled  bool   `json:"enabled"`            // Whether check is active (false = ignored)
+}
+
+// RemoteProbe is an hz-probe agent hz polls for an outside-in view.
+//
+// hz opens every connection, so this holds the agent's address and nothing
+// about hz. The agent learns only what hz sends it: public hostnames and the
+// public IP they should resolve to.
+type RemoteProbe struct {
+	Name    string `json:"name"`              // vantage label, used in check names
+	URL     string `json:"url"`               // agent base URL, e.g. https://1.2.3.4:8443
+	Token   string `json:"token"`             // shared token, sent as Authorization: Bearer
+	Enabled bool   `json:"enabled"`           // false = ignored entirely
+	Poll    int    `json:"poll,omitempty"`    // hz poll interval in seconds; 0 = 60
+	Probe   int    `json:"probe,omitempty"`   // agent probe round in seconds; 0 = 60
+	Timeout int    `json:"timeout,omitempty"` // per-probe timeout in seconds; 0 = 10
+
+	// Resolvers the agent asks instead of its own. Named resolvers are what
+	// make the answer mean something: a VPS's system resolver is usually a
+	// caching forwarder with a view of its own.
+	Resolvers []string `json:"resolvers,omitempty"`
+
+	// PinSHA256 pins the agent's certificate by SHA-256 of its DER, for the
+	// usual case of a VPS with an IP and no domain. Empty means ordinary
+	// public-CA verification. `hz-probe --print-fingerprint` prints it.
+	PinSHA256 string `json:"pin_sha256,omitempty"`
 }
 
 // CurrentServer returns the host:port for the active slot.
@@ -2234,7 +2265,25 @@ func Template() string {
   // SSL/Let's Encrypt
   "ssl_enabled": true,
   "ssl_cert_dir": "/etc/letsencrypt",
-  "ssl_haproxy_cert_dir": "/etc/haproxy/certs"
+  "ssl_haproxy_cert_dir": "/etc/haproxy/certs",
+
+  // Outside-in vantage points running hz-probe (see: make build-probe).
+  // hz polls these; they never dial hz, so hz needs no inbound reachability.
+  // The agent is sent the served hostnames and the public IP, nothing else.
+  // "pin_sha256" is for an agent on a bare IP with a self-signed cert:
+  // hz-probe --print-fingerprint --tls-cert cert.pem prints the value.
+  "remote_probes": [
+    // {
+    //   "name": "vps-nyc",
+    //   "url": "https://198.51.100.7:8443",
+    //   "token": "SHARED_TOKEN",
+    //   "enabled": true,
+    //   "poll": 60,
+    //   "probe": 60,
+    //   "resolvers": ["1.1.1.1:53", "8.8.8.8:53"],
+    //   "pin_sha256": ""
+    // }
+  ]
 }
 `) + "\n"
 }

@@ -596,3 +596,18 @@ func TestPrimaryPeer(t *testing.T) {
 		t.Error("expected no primary peer entry on a primary instance")
 	}
 }
+
+// The printed template is what an operator starts from, and nothing else
+// parses it — a stray comma or an unclosed block ships silently.
+func TestTemplateIsValidConfig(t *testing.T) {
+	cfg, err := LoadFromJSON([]byte(Template()))
+	if err != nil {
+		t.Fatalf("config-template does not parse: %v", err)
+	}
+	// The commented-out remote probe must stay commented: a template that
+	// arrives with a live vantage point would have hz polling a host the
+	// operator never set up.
+	if len(cfg.RemoteProbes) != 0 {
+		t.Fatalf("template shipped %d active remote probes", len(cfg.RemoteProbes))
+	}
+}

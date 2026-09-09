@@ -495,6 +495,89 @@ type CheckStatusResp struct {
 	Interval  int       `json:"interval"`
 	Enabled   bool      `json:"enabled"`
 	AutoGen   bool      `json:"auto_gen"`
+	// Vantage names the remote hz-probe agent this result came from. Empty
+	// means the check ran on hz itself.
+	Vantage string `json:"vantage,omitempty"`
+}
+
+// RemoteProbeResp is one configured outside-in vantage, plus what hz has
+// learned by polling it.
+//
+// The token is never returned. HasToken says one is set; that is everything
+// the UI needs to render, and returning the credential would put it in every
+// browser cache and screenshot that ever touches this page.
+type RemoteProbeResp struct {
+	Name      string   `json:"name"`
+	URL       string   `json:"url"`
+	Enabled   bool     `json:"enabled"`
+	Poll      int      `json:"poll"`
+	Probe     int      `json:"probe"`
+	Timeout   int      `json:"timeout"`
+	Resolvers []string `json:"resolvers,omitempty"`
+	PinSHA256 string   `json:"pinSha256,omitempty"`
+	HasToken  bool     `json:"hasToken"`
+
+	// Live state from the poll loop.
+	Reachable      bool      `json:"reachable"`
+	Polled         bool      `json:"polled"` // false = configured but never polled yet
+	LastPoll       time.Time `json:"lastPoll"`
+	LastGood       time.Time `json:"lastGood"`
+	LastError      string    `json:"lastError,omitempty"`
+	AgentVantage   string    `json:"agentVantage,omitempty"`
+	AgentVersion   string    `json:"agentVersion,omitempty"`
+	TargetsVersion string    `json:"targetsVersion,omitempty"`
+	TargetCount    int       `json:"targetCount"`
+	CheckCount     int       `json:"checkCount"` // check rows this vantage contributes
+}
+
+// RemoteProbeRequest adds or edits a vantage.
+//
+// On edit, an empty Token keeps the stored one — so an operator can change a
+// URL or a poll interval without re-typing a credential the UI never showed
+// them.
+type RemoteProbeRequest struct {
+	Name      string   `json:"name"`
+	URL       string   `json:"url"`
+	Token     string   `json:"token,omitempty"`
+	Enabled   bool     `json:"enabled"`
+	Poll      int      `json:"poll,omitempty"`
+	Probe     int      `json:"probe,omitempty"`
+	Timeout   int      `json:"timeout,omitempty"`
+	Resolvers []string `json:"resolvers,omitempty"`
+	PinSHA256 string   `json:"pinSha256,omitempty"`
+
+	// Rename targets an existing entry by its old name, so editing the name
+	// is an edit rather than a delete plus an add.
+	OldName string `json:"oldName,omitempty"`
+}
+
+// RemoteProbeTestResp is one trial poll, run before saving.
+type RemoteProbeTestResp struct {
+	OK             bool   `json:"ok"`
+	Error          string `json:"error,omitempty"`
+	LatencyMS      int64  `json:"latencyMs"`
+	AgentVantage   string `json:"agentVantage,omitempty"`
+	AgentVersion   string `json:"agentVersion,omitempty"`
+	TargetsVersion string `json:"targetsVersion,omitempty"`
+	TargetCount    int    `json:"targetCount"`
+	WantTargets    bool   `json:"wantTargets"`
+
+	// The certificate the agent presented, when the test ran without a pin.
+	// CertTrusted false means it did not chain to a public CA — the normal
+	// case for a self-signed agent, and exactly when pinning is the answer.
+	// Nothing is pinned until the operator saves the fingerprint.
+	CertSHA256   string `json:"certSha256,omitempty"`
+	CertTrusted  bool   `json:"certTrusted"`
+	CertSubject  string `json:"certSubject,omitempty"`
+	CertNotAfter string `json:"certNotAfter,omitempty"`
+}
+
+// RemoteProbeTokenResp is a freshly minted vantage token.
+//
+// hz generates it rather than the agent, so the install command can carry it
+// and the operator never copies a credential back by hand.
+type RemoteProbeTokenResp struct {
+	Token string `json:"token"`
 }
 
 type ConfigResp struct {
@@ -990,15 +1073,48 @@ type CheckHistoryResponse struct {
 	Results []CheckResult `json:"results"`
 }
 
-// AllCheckHistoryEntry is one series (check + its history) in the aggregate
-// history response used by the main /checks page's stacked charts.
-type AllCheckHistoryEntry struct {
-	Name    string        `json:"name"`
-	Results []CheckResult `json:"results"`
+// Bucketed check history — what the /checks page charts read.
+//
+// The raw form (every sample of every check) was quadratic to render: the
+// chart's x-axis was the union of all checks' timestamps, so every check got
+// a cell in every other check's columns. The server now buckets time into a
+// fixed column count and run-length encodes each check's statuses, so a check
+// that was up the whole window is one run regardless of fleet size.
+//
+// Field names are short because they repeat once per run per series.
+
+// HistoryRunResp is a stretch of consecutive buckets holding one status.
+// An empty status means no sample had landed yet.
+type HistoryRunResp struct {
+	Status string `json:"s"`
+	From   int    `json:"f"`
+	Len    int    `json:"n"`
 }
 
-type AllCheckHistoryResponse struct {
-	Series []AllCheckHistoryEntry `json:"series"`
+// HistorySeriesResp is one check over the window.
+type HistorySeriesResp struct {
+	Name    string `json:"name"`
+	Type    string `json:"type,omitempty"`
+	Target  string `json:"target,omitempty"`
+	Vantage string `json:"vantage,omitempty"`
+
+	Runs []HistoryRunResp `json:"runs"`
+
+	// Latency is one value per bucket, -1 where nothing was measured. The
+	// slowest sample in the bucket, not the mean — a mean at this resolution
+	// hides the spike worth seeing.
+	Latency []int32 `json:"lat"`
+
+	Samples int    `json:"samples"`
+	Worst   string `json:"worst"`
+	Steady  bool   `json:"steady"`
+}
+
+type BucketedHistoryResponse struct {
+	From     int64               `json:"from"`     // unix ms at the start of bucket 0
+	BucketMs int64               `json:"bucketMs"` // width of one bucket
+	Buckets  int                 `json:"buckets"`
+	Series   []HistorySeriesResp `json:"series"`
 }
 
 type ChecksOverview struct {
