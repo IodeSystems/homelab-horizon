@@ -979,6 +979,8 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/admin/haproxy/deploy-script", s.handleHZClientScript) // services download this
 	mux.HandleFunc("/admin/haproxy/hz-client", s.handleHZClientScript)     // new canonical path
 	mux.HandleFunc("/admin/hz/install", s.handleHZInstallScript)           // curl|bash installer for the hz operator CLI
+	mux.HandleFunc("/admin/hz-probe/install", s.handleProbeInstallScript)  // curl|bash installer for the outside-in vantage agent
+	mux.HandleFunc("/admin/hz-probe/bin/", s.handleProbeBinary)            // hz-probe binaries for the installer above
 	mux.HandleFunc("/admin/hz/bin/", s.handleHZBinary)                     // per-arch hz binaries (needs -tags hzembed)
 
 	// Backup/restore API (Bearer token auth)
@@ -1162,6 +1164,12 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/checks/delete", s.handleAPIDeleteCheck)
 	mux.HandleFunc("/api/v1/checks/toggle", s.handleAPIToggleCheck)
 	mux.HandleFunc("/api/v1/checks/run", s.handleAPIRunCheck)
+	mux.HandleFunc("/api/v1/checks/remotes", s.handleAPIRemotes)
+	mux.HandleFunc("/api/v1/checks/remotes/add", s.handleAPIRemoteAdd)
+	mux.HandleFunc("/api/v1/checks/remotes/update", s.handleAPIRemoteUpdate)
+	mux.HandleFunc("/api/v1/checks/remotes/delete", s.handleAPIRemoteDelete)
+	mux.HandleFunc("/api/v1/checks/remotes/test", s.handleAPIRemoteTest)
+	mux.HandleFunc("/api/v1/checks/remotes/token", s.handleAPIRemoteToken)
 
 	// Integration discovery endpoints (network-restricted: local/VPN/admin).
 	// Pull-style integrations: a central consumer scrapes hz for the config.

@@ -246,6 +246,11 @@ func mergeRemoteIntoLocal(remote, local *config.Config) *config.Config {
 	// doesn't apply to this host's adjacent tooling.
 	out.BlessedIPTablesRules = local.BlessedIPTablesRules
 
+	// Remote probes are local-only. Each peer polls its own vantage points,
+	// and the entry carries that agent's token — a credential this peer was
+	// given, not one to hand out across the fleet.
+	out.RemoteProbes = local.RemoteProbes
+
 	// DNS publish memory + drift block are local-only: each peer publishes its
 	// own records and detects drift against its own baseline, so the primary's
 	// snapshot/block must not be inherited (would falsely block or mislead).

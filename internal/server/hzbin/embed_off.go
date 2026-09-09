@@ -7,4 +7,4 @@ package hzbin
 
 func get(string) ([]byte, bool) { return nil, false }
 
-func available() []string { return nil }
+func available(string) []string { return nil }
