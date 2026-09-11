@@ -143,18 +143,21 @@ func TestReportIsIdentifiedByTokenNotName(t *testing.T) {
 	report(t, s, token, probe.PushRequest{Vantage: "GCP", Version: "v"})
 
 	// Same token, different claimed name: still the vantage the token owns.
+	// A host hz actually serves, so the row survives pruning and the test is
+	// about identity rather than target membership.
+	const host = "api.example.invalid"
 	w, _ := report(t, s, token, probe.PushRequest{
 		Vantage: "somebody-else", Version: "v",
-		Results: []probe.Result{{Target: "h", Host: "h", Kind: probe.KindDNS,
+		Results: []probe.Result{{Target: host, Host: host, Kind: probe.KindDNS,
 			At: time.Now().UTC(), Status: probe.StatusOK}},
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("report returned %d", w.Code)
 	}
-	if s.monitor.GetStatus("ext:somebody-else:dns:h") != nil {
+	if s.monitor.GetStatus("ext:somebody-else:dns:"+host) != nil {
 		t.Fatal("results were filed under the name the agent claimed rather than the token's vantage")
 	}
-	if s.monitor.GetStatus("ext:GCP:dns:h") == nil {
+	if s.monitor.GetStatus("ext:GCP:dns:"+host) == nil {
 		t.Fatal("results were not filed under the token's vantage")
 	}
 }
