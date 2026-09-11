@@ -605,6 +605,57 @@ Two defects the live run caught:
   so a new vantage showed an agent row and no data for minutes. It now
   reports 10s after new targets arrive.
 
+### ✅ First light: a vantage is running, and it found four things (2026-09-11)
+
+`gcp-usw1` — a GCP e2-micro in us-west1, push mode, self-registered. The
+hardened systemd unit works on real systemd (`Service hz-probe is active`),
+which was the last unverified thing in the feature.
+
+**39 rows, 33 ok, 6 failed, and every failure is real:**
+
+| finding | evidence |
+|---|---|
+| `bringit.iodesystems.com` public DNS is stale | resolves `97.113.67.44`, hz expects `97.113.72.46`; HTTPS to it then times out |
+| `vay.iodesystems.com` public DNS is stale | resolves `97.113.94.143`, same shape |
+| `beta.veliode.com` down from outside | HTTP 503 |
+| `mckinnon.iodesystems.com` down from outside | HTTP 503 |
+
+Two records pointing at old public IPs and two services where the edge is up
+and the backend is not. None of it visible from inside, which is the point.
+
+**Four defects the deploy found, all fixed:**
+
+- **Internal-only services were being probed.** 42 of the first 75 rows were
+  red for names never published publicly. Target derivation now skips
+  `internal_only`. A monitoring page that is mostly false alarms is one people
+  stop reading.
+- **Rows outlived their targets.** Narrowing the set from 37 to 19 left the
+  check list at 75 — 56 rows nothing would update again, all red, all reading
+  as current. Same defect removing a vantage already handled, missed one level
+  down.
+- **The first report was timed by guesswork.** A fixed 10s delay after
+  receiving targets assumed a probe round finishes faster than that; with 37
+  targets it does not, so the results missed the report and sat unsent for a
+  full interval. A round now signals when it has results.
+- **Re-running the installer bricked the agent.** The script overwrote
+  `/etc/hz-probe/token` with the fresh grant used for the download, orphaning
+  the agent from its registered vantage — while printing "Using the existing
+  token", because that message comes from `hz-probe install`, which runs
+  after the shell already replaced the file. Every later report failed as a
+  name collision, pointing at the name and saying nothing about the credential
+  that moved. An existing token is now kept, with
+  `HZ_PROBE_REPLACE_TOKEN=1` for the case where hz genuinely no longer
+  recognises the agent.
+
+**Known sharp edge:** install grants are in memory and last an hour, so an hz
+restart invalidates any that have not been redeemed. An agent that has not yet
+reported is then stranded holding a token hz has never heard of. The refusal
+now names the escape hatch rather than repeating "unknown token" forever.
+
+- **next**: the two stale DNS records and the two 503s are yours. Also worth
+  a second vantage on a different continent, now that standing one up is one
+  command and needs nothing inbound.
+
 ### Operator follow-ups (not code)
 
 - **Point the LAN's DHCP DNS at hz (192.168.1.160)** — optional, still

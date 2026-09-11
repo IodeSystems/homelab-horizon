@@ -62,7 +62,13 @@ func (s *Server) handleProbeReport(w http.ResponseWriter, r *http.Request) {
 		// holding an install grant, so convert it: the grant becomes a
 		// registered vantage and the operator pastes nothing back.
 		if !s.installGrants.valid(token) {
-			writeJSONError(w, http.StatusUnauthorized, "unknown token")
+			// Grants live in memory and last an hour, so this is usually an
+			// agent whose grant expired — or was wiped by an hz restart —
+			// before it ever reported. Say what to do, because the agent
+			// will otherwise retry this forever.
+			writeJSONError(w, http.StatusUnauthorized,
+				"unknown token: hz does not recognise this agent. Re-run the install "+
+					"command with a fresh token from hz and HZ_PROBE_REPLACE_TOKEN=1.")
 			return
 		}
 		var err error

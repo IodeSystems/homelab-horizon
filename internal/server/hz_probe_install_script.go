@@ -24,6 +24,11 @@ set -euo pipefail
 #   HZ_PROBE_TOKEN   the token hz issued for this install (required)
 #   HZ_PROBE_NAME    vantage name (default: this host's name)
 #   HZ_PROBE_DIR     config directory (default /etc/hz-probe)
+#   HZ_PROBE_REPLACE_TOKEN=1
+#                    replace an existing token rather than keeping it. Needed
+#                    only when hz no longer recognises this agent — a grant
+#                    that expired before the first report, or a vantage
+#                    deleted in hz. Re-provisioning, not upgrading.
 #   HZ_PROBE_PULL    set to 1 to have hz dial the agent instead of the agent
 #                    reporting. Needs a public address, an open port and a
 #                    certificate this host serves; see HZ_PROBE_LISTEN and
@@ -94,8 +99,10 @@ echo "hz-probe: installed /usr/local/bin/hz-probe"
 # underneath it.
 install -d -m 0700 "$DIR"
 umask 077
-if [ -s "$DIR/token" ]; then
+if [ -s "$DIR/token" ] && [ "${HZ_PROBE_REPLACE_TOKEN:-}" != "1" ]; then
   echo "hz-probe: keeping the existing token at $DIR/token"
+  echo "hz-probe: (set HZ_PROBE_REPLACE_TOKEN=1 to replace it — needed only if hz"
+  echo "hz-probe:  no longer recognises this agent, e.g. its grant expired unused)"
 else
   printf '%s\n' "$HZ_PROBE_TOKEN" > "$DIR/token"
   chmod 0600 "$DIR/token"
