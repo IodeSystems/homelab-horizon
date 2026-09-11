@@ -402,3 +402,27 @@ func TestAcceptedCountMatchesWhatWasFolded(t *testing.T) {
 		t.Fatalf("history has %d entries, want 1", got)
 	}
 }
+
+// An outside vantage cannot resolve an internal-only name, so asking it to
+// try produces a failure that means nothing. Found in production: 42 of 75
+// rows were red for names working exactly as configured.
+func TestPublicTargetsSkipInternalOnlyServices(t *testing.T) {
+	cfg := &config.Config{
+		SSLEnabled: true,
+		PublicIP:   "203.0.113.10",
+		Services: []config.Service{
+			{Name: "public", Domains: []string{"www.example.com"},
+				Proxy: &config.ProxyConfig{Backend: "10.0.0.1:80"}},
+			{Name: "internal", Domains: []string{"admin.example.com"},
+				Proxy: &config.ProxyConfig{Backend: "10.0.0.2:80", InternalOnly: true}},
+		},
+	}
+	got := New(cfg).publicTargets()
+
+	if len(got) != 1 {
+		t.Fatalf("expected only the public service, got %+v", got)
+	}
+	if got[0].Host != "www.example.com" {
+		t.Fatalf("kept the wrong target: %+v", got)
+	}
+}

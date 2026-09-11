@@ -333,6 +333,14 @@ func (m *Monitor) publicTargets() []probe.Target {
 		if svc.Proxy == nil {
 			continue
 		}
+		// An internal-only service is not published to the public internet,
+		// so an outside vantage cannot resolve it and should not be asked to
+		// try. Probing them anyway produced a wall of red rows for names that
+		// were working exactly as configured — which is how a monitoring page
+		// teaches people to stop reading it.
+		if svc.Proxy.InternalOnly {
+			continue
+		}
 		for _, domain := range svc.Domains {
 			domain = strings.ToLower(strings.TrimSpace(domain))
 			// A wildcard is not a name a client can connect to; the concrete

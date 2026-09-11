@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -218,5 +219,44 @@ func TestHealthzIsOpenAndSaysNothing(t *testing.T) {
 	// vantage name, not the targets, not the version.
 	if len(body) != 1 || body["ok"] != true {
 		t.Fatalf("healthz leaked detail to an unauthenticated caller: %+v", body)
+	}
+}
+
+// A probe round has to notify the push loop, or a report can only ever be
+// sent on a timer — which either races the round or leaves fresh results
+// unsent for a whole interval.
+func TestProbeRoundSignalsWhenResultsExist(t *testing.T) {
+	agent := NewAgent("vps", "test", "tok", "")
+
+	// Nothing configured: no results, so no signal.
+	agent.RunOnce(context.Background())
+	select {
+	case <-agent.Probed():
+		t.Fatal("an empty round must not claim it produced results")
+	default:
+	}
+
+	// A target that resolves to nothing still produces a result — a failed
+	// probe is a result, which is the whole point of running it.
+	agent.SetTargets(TargetSet{
+		Version: "v1", Timeout: 1,
+		Targets: []Target{{Name: "x", Host: "127.0.0.1", Port: 1, Kinds: []string{KindTCP}}},
+	})
+	agent.RunOnce(context.Background())
+
+	select {
+	case <-agent.Probed():
+	case <-time.After(time.Second):
+		t.Fatal("a round that produced results did not signal")
+	}
+
+	// The signal does not accumulate: one waiting reader, not a queue.
+	agent.RunOnce(context.Background())
+	agent.RunOnce(context.Background())
+	<-agent.Probed()
+	select {
+	case <-agent.Probed():
+		t.Fatal("signals should collapse rather than queue up")
+	default:
 	}
 }

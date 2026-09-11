@@ -17,11 +17,6 @@ import (
 // come straight back for the rest.
 const pushBatchLimit = 500
 
-// firstReportDelay is how soon the agent comes back after being handed a new
-// target set — long enough for the probe round to finish, short enough that a
-// new vantage shows real data while somebody is still looking at the page.
-const firstReportDelay = 10 * time.Second
-
 // Pusher reports an agent's results to hz.
 //
 // It holds hz's URL and a token, which is the one asymmetry worth noting
@@ -122,8 +117,7 @@ func (a *Agent) PushLoop(ctx context.Context, p *Pusher, interval time.Duration)
 			slog.Warn("probe: could not report to hz",
 				"error", err, "buffered", len(results))
 		default:
-			gotTargets := resp.Targets != nil
-			if gotTargets {
+			if resp.Targets != nil {
 				a.SetTargets(*resp.Targets)
 				slog.Info("probe: hz sent a new target set",
 					"version", resp.Targets.Version, "targets", len(resp.Targets.Targets))
@@ -141,13 +135,6 @@ func (a *Agent) PushLoop(ctx context.Context, p *Pusher, interval time.Duration)
 				next = time.Second
 			}
 
-			// A new target set means a probe round is about to produce the
-			// first results for it. Waiting a full interval to send them
-			// leaves a freshly installed vantage showing an agent row and no
-			// data for minutes, which reads like a broken install.
-			if gotTargets && next > firstReportDelay {
-				next = firstReportDelay
-			}
 		}
 
 		timer := time.NewTimer(next)
@@ -155,6 +142,12 @@ func (a *Agent) PushLoop(ctx context.Context, p *Pusher, interval time.Duration)
 		case <-ctx.Done():
 			timer.Stop()
 			return
+		case <-a.Probed():
+			// A round just finished, so there is something to send. This is
+			// what makes a freshly installed vantage show real data in
+			// seconds: the first round takes as long as its slowest target's
+			// timeout, and any fixed delay would either race it or idle.
+			timer.Stop()
 		case <-timer.C:
 		}
 	}
