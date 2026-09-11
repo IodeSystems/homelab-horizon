@@ -426,3 +426,38 @@ func TestPublicTargetsSkipInternalOnlyServices(t *testing.T) {
 		t.Fatalf("kept the wrong target: %+v", got)
 	}
 }
+
+// Narrowing what a vantage probes must take its old rows with it. A row
+// nothing updates keeps its last status and reads as current — found in
+// production, where excluding internal-only services left 56 rows frozen red.
+func TestRowsArePrunedWhenTargetsGoAway(t *testing.T) {
+	cfg := probeCfg()
+	m := New(cfg)
+	defer m.Stop()
+	rp := config.RemoteProbe{Name: "v", Mode: config.ProbeModePush, Token: "t", Enabled: true}
+
+	now := time.Now().UTC()
+	// Two hosts: one hz still serves, one it does not.
+	m.AcceptPushedResults(rp, "v", "x", []probe.Result{
+		{Target: "api.example.com", Host: "api.example.com", Kind: probe.KindDNS, At: now, Status: StatusOK},
+		{Target: "gone.example.com", Host: "gone.example.com", Kind: probe.KindDNS, At: now, Status: StatusFailed, Error: "nope"},
+		{Target: "gone.example.com", Host: "gone.example.com", Kind: probe.KindHTTPS, At: now, Status: StatusFailed, Error: "nope"},
+	})
+
+	// probeCfg serves api.example.com and docs.example.com, never gone.
+	if m.GetStatus("ext:v:dns:api.example.com") == nil {
+		t.Fatal("a row for a served host was pruned")
+	}
+	for _, gone := range []string{"ext:v:dns:gone.example.com", "ext:v:https:gone.example.com"} {
+		if m.GetStatus(gone) != nil {
+			t.Fatalf("%s survived; it would sit red forever", gone)
+		}
+		if len(m.GetHistory(gone)) != 0 {
+			t.Fatalf("%s kept its history", gone)
+		}
+	}
+	// The agent row belongs to the vantage, not a target.
+	if m.GetStatus("ext:v:agent") == nil {
+		t.Fatal("the agent row was pruned")
+	}
+}

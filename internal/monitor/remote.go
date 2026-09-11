@@ -230,6 +230,7 @@ func (m *Monitor) pollRemote(parent context.Context, client *probe.Client, rp co
 				since = r.At
 			}
 		}
+		m.pruneVantageRows(rp, m.remoteTargetSet(rp))
 
 		if !resp.Truncated {
 			// An agent that reports no targets has been asked for them and
@@ -560,7 +561,48 @@ func (m *Monitor) AcceptPushedResults(rp config.RemoteProbe, agentVantage, agent
 	// The agent row reports that hz heard from it, which in push mode is the
 	// only reachability fact there is.
 	m.recordAgentStatus(rp, nil)
+	m.pruneVantageRows(rp, m.remoteTargetSet(rp))
 	return len(results)
+}
+
+// pruneVantageRows drops a vantage's check rows for targets it is no longer
+// asked to probe.
+//
+// A row nothing updates any more is worse than no row: it keeps its last
+// status and reads as current. Removing a target — or narrowing what gets
+// probed, as excluding internal-only services did — otherwise leaves its rows
+// frozen red forever.
+//
+// The agent row is never pruned; it belongs to the vantage, not to a target.
+func (m *Monitor) pruneVantageRows(rp config.RemoteProbe, ts probe.TargetSet) {
+	wanted := make(map[string]bool, len(ts.Targets))
+	for _, t := range ts.Targets {
+		wanted[t.Host] = true
+	}
+
+	prefix := externalPrefix + rp.Name + ":"
+	agentRow := agentCheckName(rp)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	kept := m.externalNames[:0]
+	for _, name := range m.externalNames {
+		if !strings.HasPrefix(name, prefix) || name == agentRow {
+			kept = append(kept, name)
+			continue
+		}
+		// ext:<vantage>:<kind>:<host> — neither a vantage name nor a host may
+		// contain a colon, both validated on the way in.
+		parts := strings.SplitN(name, ":", 4)
+		if len(parts) != 4 || wanted[parts[3]] {
+			kept = append(kept, name)
+			continue
+		}
+		delete(m.statuses, name)
+		delete(m.history, name)
+	}
+	m.externalNames = kept
 }
 
 // TargetSetFor is what hz wants a vantage probing.
