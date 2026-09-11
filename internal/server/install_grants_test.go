@@ -10,6 +10,7 @@ import (
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/probe"
 )
 
 func TestInstallGrantLifecycle(t *testing.T) {
@@ -270,5 +271,27 @@ func TestInstallScriptKeepsAnExistingToken(t *testing.T) {
 	write := strings.Index(body, `printf '%s\n' "$HZ_PROBE_TOKEN"`)
 	if write < guard {
 		t.Fatal("the token is written before the guard, so the guard does nothing")
+	}
+}
+
+// Keeping an existing token protects an upgrade, but a token hz no longer
+// recognises has to be replaceable or the agent is stranded forever.
+func TestInstallScriptCanReplaceADeadToken(t *testing.T) {
+	s := newTestServer(t, kioskCfg())
+	mux := s.setupRoutes()
+	req := httptest.NewRequest(http.MethodGet, "/admin/hz-probe/install", nil)
+	req.Host = "vpn.example.com"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	body := w.Body.String()
+
+	if !strings.Contains(body, "HZ_PROBE_REPLACE_TOKEN") {
+		t.Fatal("no way to replace a token hz no longer recognises")
+	}
+	// And the refusal must name the escape, since the agent retries forever.
+	s2 := newTestServer(t, pushCfg())
+	wr, _ := report(t, s2, "0123456789abcdef0123456789abcdef", probe.PushRequest{Vantage: "x"})
+	if !strings.Contains(wr.Body.String(), "HZ_PROBE_REPLACE_TOKEN") {
+		t.Fatalf("the refusal does not say how to recover: %s", wr.Body.String())
 	}
 }
