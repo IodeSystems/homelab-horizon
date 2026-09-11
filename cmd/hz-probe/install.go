@@ -68,11 +68,20 @@ func generateUnit(f *serveFlags, execPath string) string {
 	creds := []string{"LoadCredential=token:" + f.tokenFile}
 	args := []string{
 		execPath, "serve",
-		"--listen", f.listen,
 		"--vantage", f.vantageName(),
 		"--token-file", "%d/token",
 		"--state", f.statePath,
 	}
+
+	// Push mode needs no listener, no certificate and no open port — it only
+	// dials out. Emitting the listen and TLS flags anyway would suggest the
+	// agent is reachable, which is the confusion this mode exists to remove.
+	if f.pushMode() {
+		args = append(args, "--push-to", f.pushTo)
+		return render(args, creds, execPath)
+	}
+
+	args = append(args, "--listen", f.listen)
 	if fileExists(f.tlsCert) && fileExists(f.tlsKey) {
 		creds = append(creds,
 			"LoadCredential=cert.pem:"+f.tlsCert,
@@ -84,6 +93,11 @@ func generateUnit(f *serveFlags, execPath string) string {
 		// its value. serve then takes the plain-HTTP branch and says so.
 		args = append(args, "--tls-cert=", "--tls-key=")
 	}
+	return render(args, creds, execPath)
+}
+
+// render fills the unit template.
+func render(args, creds []string, _ string) string {
 
 	return strings.NewReplacer(
 		"__EXEC__", strings.Join(args, " "),
@@ -198,6 +212,14 @@ func runInstall(args []string) error {
 	}
 
 	if *brief {
+		return nil
+	}
+
+	if f.pushMode() {
+		fmt.Printf("\nReporting to %s as %q.\n", f.pushTo, f.vantageName())
+		fmt.Println("Nothing to paste back — it registers itself on the first report.")
+		fmt.Println("If it does not appear in hz within a minute or two:")
+		fmt.Println("  journalctl -u hz-probe -n 50 --no-pager")
 		return nil
 	}
 

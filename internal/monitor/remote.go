@@ -46,12 +46,15 @@ func (m *Monitor) startRemoteProbes() {
 	for _, rp := range m.cfg().RemoteProbes {
 		m.startRemoteProbe(rp)
 	}
+	m.StartPushWatchdog()
 }
 
 // startRemoteProbe launches one vantage's poll loop under its own context,
 // so it can be stopped without touching anything else.
 func (m *Monitor) startRemoteProbe(rp config.RemoteProbe) {
-	if !rp.Enabled || rp.URL == "" {
+	// A pushing vantage has no loop: it dials hz, not the reverse. The
+	// watchdog is what watches it.
+	if !rp.Enabled || rp.IsPush() || rp.URL == "" {
 		return
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
@@ -128,11 +131,23 @@ func (m *Monitor) ReloadRemotes(cfg *config.Config) {
 
 	for name, next := range after {
 		old, existed := before[name]
-		if existed && sameRemoteProbe(old, next) {
-			continue // untouched: leave it polling
+		// Unchanged is only a reason to do nothing if it is actually
+		// running. Assuming otherwise means a reload before Start leaves
+		// every vantage silently unpolled — the config says it is there and
+		// nothing is watching it.
+		if existed && sameRemoteProbe(old, next) && m.remoteRunning(name) {
+			continue
 		}
 		m.startRemoteProbe(next)
 	}
+}
+
+// remoteRunning reports whether a vantage currently has a poll loop.
+func (m *Monitor) remoteRunning(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.remoteCancel[name]
+	return ok
 }
 
 // sameRemoteProbe reports whether two entries describe the same running loop.
@@ -141,7 +156,8 @@ func (m *Monitor) ReloadRemotes(cfg *config.Config) {
 func sameRemoteProbe(a, b config.RemoteProbe) bool {
 	if a.Name != b.Name || a.URL != b.URL || a.Token != b.Token ||
 		a.Enabled != b.Enabled || a.Poll != b.Poll || a.Probe != b.Probe ||
-		a.Timeout != b.Timeout || a.PinSHA256 != b.PinSHA256 {
+		a.Timeout != b.Timeout || a.PinSHA256 != b.PinSHA256 ||
+		a.ProbeMode() != b.ProbeMode() {
 		return false
 	}
 	if len(a.Resolvers) != len(b.Resolvers) {
@@ -493,4 +509,128 @@ func (m *Monitor) upsertExternal(row externalRow) {
 			Target: row.target,
 		}, notifyErr, row.status)
 	}
+}
+
+// Push-mode vantages.
+//
+// A pushing agent has no poll loop: hz does not dial it, so there is no
+// watermark to advance and no reachability to test. What replaces that is a
+// staleness watchdog — a vantage that stops reporting must go red, or a dead
+// agent reads as every one of its targets frozen on its last good result,
+// which is the failure mode the agent row exists to prevent in either mode.
+
+// AcceptPushedResults folds one report into the check rows and returns how
+// many results were taken.
+//
+// The count matters: the agent drops exactly what hz acknowledges and
+// retries the rest, so an over-count silently loses results and an
+// under-count duplicates them.
+func (m *Monitor) AcceptPushedResults(rp config.RemoteProbe, agentVantage, agentVersion string, results []probe.Result) int {
+	for _, r := range results {
+		m.foldRemoteResult(rp, r)
+	}
+
+	m.mu.Lock()
+	if m.remoteStates == nil {
+		m.remoteStates = make(map[string]*RemoteState)
+	}
+	st := m.remoteStates[rp.Name]
+	if st == nil {
+		st = &RemoteState{Name: rp.Name}
+		m.remoteStates[rp.Name] = st
+	}
+	now := time.Now()
+	st.Reachable = true
+	st.LastPoll = now
+	st.LastGood = now
+	st.LastError = ""
+	st.AgentVantage = agentVantage
+	st.AgentVersion = agentVersion
+	st.TargetCount = len(m.publicTargets())
+	m.mu.Unlock()
+
+	// The agent row reports that hz heard from it, which in push mode is the
+	// only reachability fact there is.
+	m.recordAgentStatus(rp, nil)
+	return len(results)
+}
+
+// TargetSetFor is what hz wants a vantage probing.
+func (m *Monitor) TargetSetFor(rp config.RemoteProbe) probe.TargetSet {
+	return m.remoteTargetSet(rp)
+}
+
+// pushStaleAfter is how long hz waits past a vantage's expected interval
+// before calling it stale. Three intervals: one missed report is a blip, a
+// retry is normal, three in a row is an agent that is not coming back on its
+// own.
+const pushStaleMultiple = 3
+
+// sweepPushVantages marks push vantages that have gone quiet.
+//
+// Called from the same cadence that polls the pull ones, so both kinds of
+// vantage are judged on one clock.
+func (m *Monitor) sweepPushVantages() {
+	cfg := m.cfg()
+	for _, rp := range cfg.RemoteProbes {
+		if !rp.Enabled || !rp.IsPush() {
+			continue
+		}
+		interval := time.Duration(probeSeconds(rp)) * time.Second
+		deadline := interval * pushStaleMultiple
+
+		m.mu.RLock()
+		st := m.remoteStates[rp.Name]
+		var last time.Time
+		if st != nil {
+			last = st.LastPoll
+		}
+		m.mu.RUnlock()
+
+		// Never heard from: that is "not reported yet", which the UI shows
+		// distinctly from "reported and then stopped". Not an error.
+		if last.IsZero() {
+			continue
+		}
+		if quiet := time.Since(last); quiet > deadline {
+			m.recordAgentStatus(rp, fmt.Errorf(
+				"no report for %s (expected every %s)",
+				quiet.Round(time.Second), interval))
+
+			m.mu.Lock()
+			if st := m.remoteStates[rp.Name]; st != nil {
+				st.Reachable = false
+				st.LastError = "stopped reporting"
+			}
+			m.mu.Unlock()
+		}
+	}
+}
+
+// StartPushWatchdog runs the staleness sweep until the monitor stops.
+func (m *Monitor) StartPushWatchdog() {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.ctx.Done():
+				return
+			case <-ticker.C:
+				m.sweepPushVantages()
+			}
+		}
+	}()
+}
+
+// RunningRemotesForTest is the set of vantages with a live poll loop. Used by
+// the server tests, which cannot see unexported helpers here.
+func (m *Monitor) RunningRemotesForTest() map[string]bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]bool, len(m.remoteCancel))
+	for name := range m.remoteCancel {
+		out[name] = true
+	}
+	return out
 }

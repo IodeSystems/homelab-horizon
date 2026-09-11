@@ -102,6 +102,53 @@ type PollRequest struct {
 	Limit          int        `json:"limit,omitempty"` // max results to return; 0 means the agent's cap
 }
 
+// Push mode inverts who dials.
+//
+// Pull needs the agent to accept inbound, which means a public address, a
+// firewall rule, a certificate it serves itself, and an operator who
+// re-pins it every time that address changes. Push needs hz to accept
+// inbound — which it already does, since the public endpoints this agent
+// exists to check are served by the same edge. So push adds no exposure and
+// removes every one of those requirements, and the agent can sit behind NAT.
+//
+// What made pull attractive was surviving an hz outage, and that property
+// comes from the buffer rather than the direction: the agent keeps probing
+// and flushes the backlog when hz answers again. Identical either way.
+
+// PushRequest is the agent reporting in.
+//
+// It carries the target-set version rather than asking for targets, so the
+// steady-state request is results plus a hash, and hz answers with a set
+// only when the agent holds the wrong one.
+type PushRequest struct {
+	Vantage        string   `json:"vantage"`
+	Version        string   `json:"version"` // agent build version
+	TargetsVersion string   `json:"targets_version"`
+	Results        []Result `json:"results"`
+
+	// Buffered says more results are waiting past this batch, so hz knows to
+	// expect another report immediately rather than on the next interval.
+	Buffered bool `json:"buffered,omitempty"`
+}
+
+// PushResponse is hz acknowledging a report.
+type PushResponse struct {
+	// Accepted is how many results hz took. The agent drops exactly these
+	// from its buffer — anything it did not acknowledge is retried, so a
+	// half-processed report does not lose data.
+	Accepted int `json:"accepted"`
+
+	// Targets is sent when the agent's version does not match what hz wants
+	// it probing. Same mechanism as pull, same hash.
+	Targets        *TargetSet `json:"targets,omitempty"`
+	TargetsVersion string     `json:"targets_version"`
+
+	// Interval is how long hz wants the agent to wait before reporting
+	// again, in seconds. Lets hz slow a chatty agent down without anyone
+	// editing the agent's own configuration.
+	Interval int `json:"interval,omitempty"`
+}
+
 // PollResponse is the agent's answer: what it holds, and what it saw.
 type PollResponse struct {
 	Vantage        string    `json:"vantage"`

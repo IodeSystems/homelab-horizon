@@ -544,6 +544,67 @@ first and puts `HZ_PROBE_NAME` in the command.
   e2-micro, and set `poll`/`probe` to 300 there, because its 1 GB/month egress
   cap is reachable at the 60s default once there are a dozen domains.
 
+### ✅ Push mode, and it is the default now (2026-09-10)
+
+Deploying the first real vantage found the flaw in pull. A GCP e2-micro has
+no inbound address unless you pay for one, its ephemeral IP changes on every
+stop, and each change invalidates the certificate and the pin. Three separate
+failures in one evening — no external IP, a terminated instance, a stale
+address — all of them consequences of requiring the agent to accept inbound.
+
+**The premise behind pull did not survive inspection.** Pull was chosen so hz
+would hold no outbound dependency: "the remote should be accessible, hz might
+not be." Sound, except the feature cannot escape that dependency anyway — if
+hz is unreachable the agent has nothing to report to, whichever way the
+connection runs. What actually preserves that case is the buffer, which is
+direction-agnostic: the agent keeps probing and flushes the backlog when hz
+answers again.
+
+And hz already accepts inbound. That is the premise of the whole feature —
+these checks exist to verify hz's public edge works. An authenticated POST to
+that same edge adds no exposure.
+
+What push retires, every one of which bit us during the deploy:
+
+| | pull | push |
+|---|---|---|
+| agent address changes | cert regen + re-pin + URL edit | irrelevant |
+| inbound firewall rule | required, plus an instance tag | none |
+| static IP | wanted, billable | not needed |
+| certificate | self-signed, TOFU, pinned | hz's ordinary CA cert |
+| behind NAT | impossible | fine |
+
+**The agent registers itself.** Its first report carries the install grant,
+and hz turns that into a config entry named by the agent — so there is
+nothing to paste back at all. The token is the identity; the name in the body
+is only a label, and results are filed under the token's vantage so a
+misnamed agent cannot report as another. A name collision is refused rather
+than merged, because two agents in one set of check rows interleave into
+nonsense.
+
+**A watchdog replaces reachability testing.** With no poll loop nothing would
+notice an agent going quiet, so `sweepPushVantages` marks one failed after
+three missed intervals — and keeps "never reported" distinct from "stopped
+reporting", because a fresh install is not a fault. Self-registered vantages
+default to 300s, matching the free-tier egress advice rather than the 60s
+that gets close to a 1 GB cap.
+
+Pull is kept behind `HZ_PROBE_PULL=1` for anyone who wants hz to hold no
+outbound dependency, with its costs stated at the point of choice in the UI.
+
+**Verified end to end**, not just unit-tested: hz's real routes on a real
+port, the real installer in a container, the real agent reporting. Install →
+self-register → target handshake → live results (`ext:GCP:https:example.com
+= ok`, and `dns = failed` because the fixture expects a different IP, which
+is the check working) inside 30 seconds.
+
+Two defects the live run caught:
+- `ReloadRemotes` treated "config unchanged" as "already running", so a
+  reload before `Start` left every vantage silently unpolled.
+- The agent waited a full interval after being handed its first target set,
+  so a new vantage showed an agent row and no data for minutes. It now
+  reports 10s after new targets arrive.
+
 ### Operator follow-ups (not code)
 
 - **Point the LAN's DHCP DNS at hz (192.168.1.160)** — optional, still

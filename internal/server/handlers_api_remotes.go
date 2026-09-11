@@ -52,6 +52,7 @@ func (s *Server) handleAPIRemotes(w http.ResponseWriter, r *http.Request) {
 	for _, rp := range cfg.RemoteProbes {
 		item := apitypes.RemoteProbeResp{
 			Name:       rp.Name,
+			Mode:       rp.ProbeMode(),
 			URL:        rp.URL,
 			Enabled:    rp.Enabled,
 			Poll:       rp.Poll,
@@ -103,12 +104,16 @@ func decodeRemote(r *http.Request) (apitypes.RemoteProbeRequest, string) {
 	if strings.ContainsAny(req.Name, ": \t") {
 		return req, "Name cannot contain a colon or whitespace"
 	}
-	if req.URL == "" {
-		return req, "URL required"
-	}
-	u, err := url.Parse(req.URL)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return req, "URL must be http:// or https:// with a host"
+	// A pushing agent dials hz, so there is no address for hz to hold. A
+	// pulled one is nothing without it.
+	if req.Mode == config.ProbeModePull {
+		if req.URL == "" {
+			return req, "URL required when hz dials the agent"
+		}
+		u, err := url.Parse(req.URL)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return req, "URL must be http:// or https:// with a host"
+		}
 	}
 	return req, ""
 }
@@ -120,8 +125,13 @@ func toConfig(req apitypes.RemoteProbeRequest, existingToken string) config.Remo
 	if token == "" {
 		token = existingToken
 	}
+	mode := config.ProbeModePush
+	if req.Mode == config.ProbeModePull {
+		mode = config.ProbeModePull
+	}
 	return config.RemoteProbe{
 		Name:      req.Name,
+		Mode:      mode,
 		URL:       req.URL,
 		Token:     token,
 		Enabled:   req.Enabled,

@@ -507,7 +507,12 @@ type CheckStatusResp struct {
 // the UI needs to render, and returning the credential would put it in every
 // browser cache and screenshot that ever touches this page.
 type RemoteProbeResp struct {
-	Name      string   `json:"name"`
+	Name string `json:"name"`
+
+	// Mode is "push" (the agent reports in) or "pull" (hz dials it). Push
+	// vantages have no URL and no pin, because nothing dials them.
+	Mode string `json:"mode"`
+
 	URL       string   `json:"url"`
 	Enabled   bool     `json:"enabled"`
 	Poll      int      `json:"poll"`
@@ -537,6 +542,7 @@ type RemoteProbeResp struct {
 // them.
 type RemoteProbeRequest struct {
 	Name      string   `json:"name"`
+	Mode      string   `json:"mode,omitempty"`
 	URL       string   `json:"url"`
 	Token     string   `json:"token,omitempty"`
 	Enabled   bool     `json:"enabled"`

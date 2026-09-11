@@ -21,11 +21,15 @@ set -euo pipefail
 #   curl -fsSL <HZ_URL>/admin/hz-probe/install | HZ_PROBE_TOKEN=<token> sudo -E bash
 #
 # Env:
-#   HZ_PROBE_TOKEN   the token hz will present (required; hz generates it)
-#   HZ_PROBE_LISTEN  listen address (default :8443)
+#   HZ_PROBE_TOKEN   the token hz issued for this install (required)
 #   HZ_PROBE_NAME    vantage name (default: this host's name)
-#   HZ_PROBE_HOST    address hz will connect to (default: detected below)
 #   HZ_PROBE_DIR     config directory (default /etc/hz-probe)
+#   HZ_PROBE_PULL    set to 1 to have hz dial the agent instead of the agent
+#                    reporting. Needs a public address, an open port and a
+#                    certificate this host serves; see HZ_PROBE_LISTEN and
+#                    HZ_PROBE_HOST below.
+#   HZ_PROBE_LISTEN  pull mode only: listen address (default :8443)
+#   HZ_PROBE_HOST    pull mode only: address hz will connect to
 
 BASE="${HZ_BASE:-@@HZ_BASE@@}"
 BASE="${BASE%/}"
@@ -87,10 +91,33 @@ umask 077
 printf '%s\n' "$HZ_PROBE_TOKEN" > "$DIR/token"
 chmod 0600 "$DIR/token"
 
-# A certificate, so the token is not crossing the public internet in the
-# clear. Self-signed is fine: hz pins this exact certificate rather than
-# trusting whoever issued it. An existing one is left alone, because
-# replacing it would silently break the pin hz already holds.
+# Push is the default, and it is why this needs nothing inbound: the agent
+# dials hz, so there is no port to open, no address to keep stable, and no
+# certificate for this host to serve. hz's endpoint has an ordinary
+# certificate that verifies normally, so there is nothing to pin either.
+if [ "${HZ_PROBE_PULL:-}" != "1" ]; then
+  # Not redirected. The first time this ran on real hardware the output was
+  # swallowed, so the operator could not tell whether systemd had started
+  # anything — the one thing this step exists to do.
+  /usr/local/bin/hz-probe install \
+    --brief \
+    --vantage "$NAME" \
+    --token-file "$DIR/token" \
+    --push-to "$BASE"
+
+  echo
+  echo "hz-probe: reporting to $BASE as '$NAME'"
+  echo
+  echo "  Nothing to paste back. It registers itself on the first report,"
+  echo "  and should appear in hz within a minute."
+  echo
+  echo "  If it does not:  journalctl -u hz-probe -n 50 --no-pager"
+  exit 0
+fi
+
+# Pull mode, for the case where hz must dial the agent. Everything below is
+# the cost of that choice.
+echo "hz-probe: HZ_PROBE_PULL=1, so hz will dial this host."
 if [ ! -f "$DIR/cert.pem" ]; then
   echo "hz-probe: generating a self-signed certificate for $HOST ..."
   /usr/local/bin/hz-probe gen-cert --host "$HOST" \
@@ -99,10 +126,6 @@ else
   echo "hz-probe: keeping the existing certificate at $DIR/cert.pem"
 fi
 
-# Not redirected. The first time this ran on real hardware the output was
-# swallowed, so the operator had no way to tell whether systemd had started
-# anything — which is the one thing this step exists to do. --brief drops the
-# trailing config block because the summary below replaces it.
 /usr/local/bin/hz-probe install \
   --brief \
   --listen "$LISTEN" \
@@ -113,12 +136,14 @@ fi
 
 port="${LISTEN##*:}"
 echo
-echo "hz-probe: running as '$NAME' on $LISTEN"
+echo "hz-probe: listening as '$NAME' on $LISTEN"
 echo
 echo "  Back in hz, the agent URL is:"
 echo
 echo "      https://${HOST}:${port}"
 echo
-echo "  Paste that into the Add vantage dialog and press Test connection."
-echo "  hz already has the token, and picks up the certificate from there."
+echo "  That address is a guess: it is where hz saw this request come from,"
+echo "  which is wrong if this host is behind NAT. Check it before pasting."
+echo
+echo "  Paste it into the Add vantage dialog and press Test connection."
 `
