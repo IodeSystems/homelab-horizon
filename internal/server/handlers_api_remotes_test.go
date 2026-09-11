@@ -511,6 +511,15 @@ func TestProbeBinaryRoute(t *testing.T) {
 	s := newTestServer(t, &config.Config{})
 	mux := s.setupRoutes()
 
+	// Authorised, so this exercises key validation rather than the grant.
+	authed := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+s.adminToken)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		return w
+	}
+
 	for _, tc := range []struct {
 		path string
 		want int
@@ -520,10 +529,16 @@ func TestProbeBinaryRoute(t *testing.T) {
 		{"/admin/hz-probe/bin/nonsense", http.StatusBadRequest},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
-			w := httptest.NewRecorder()
-			mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			w := authed(tc.path)
 			if w.Code != tc.want {
 				t.Fatalf("got %d, want %d (%s)", w.Code, tc.want, w.Body.String())
+			}
+			// Unauthorised, a malformed key must not be distinguishable from
+			// a well-formed one — the grant check comes first on purpose.
+			anon := httptest.NewRecorder()
+			mux.ServeHTTP(anon, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if anon.Code != http.StatusUnauthorized {
+				t.Fatalf("anonymous got %d, want 401", anon.Code)
 			}
 		})
 	}
@@ -531,8 +546,7 @@ func TestProbeBinaryRoute(t *testing.T) {
 	// A well-formed key resolves to a binary when one is embedded, and to a
 	// 404 that says why when the build has none. Both are correct; which one
 	// depends on the build tag, so assert against what this build holds.
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/admin/hz-probe/bin/linux-amd64", nil))
+	w := authed("/admin/hz-probe/bin/linux-amd64")
 	if len(hzbin.Available(hzbin.ToolProbe)) == 0 {
 		if w.Code != http.StatusNotFound {
 			t.Fatalf("got %d with no embedded binaries, want 404", w.Code)

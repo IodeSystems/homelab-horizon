@@ -578,6 +578,12 @@ type RemoteProbeTestResp struct {
 // and the operator never copies a credential back by hand.
 type RemoteProbeTokenResp struct {
 	Token string `json:"token"`
+
+	// InstallBase is the origin the install command must point at. The
+	// install routes are served on the public-facing (kiosk) hostname, not
+	// the admin one the operator is looking at — so the UI cannot build this
+	// URL from its own location without sending people to a 404.
+	InstallBase string `json:"installBase"`
 }
 
 type ConfigResp struct {

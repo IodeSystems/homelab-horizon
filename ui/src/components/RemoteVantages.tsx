@@ -268,6 +268,11 @@ export function RemoteVantages() {
   // The certificate the last test saw, when it did not verify. Held until the
   // operator pins it — nothing is trusted because a test reported it.
   const [seenCert, setSeenCert] = useState<{ sha: string; subject: string } | null>(null);
+  // Where the install command points. Comes from the server because the
+  // install routes are served on the public-facing vhost, not the admin
+  // origin this page is loaded from — building the URL from window.location
+  // would send people to a 404.
+  const [installBase, setInstallBase] = useState("");
   const mintToken = useMintRemoteToken();
 
   if (isLoading) return null;
@@ -288,7 +293,10 @@ export function RemoteVantages() {
     // stored until the vantage is saved, so an abandoned dialog leaves no
     // credential behind.
     mintToken.mutate(undefined, {
-      onSuccess: (res) => setForm((f) => ({ ...f, token: res.token })),
+      onSuccess: (res) => {
+        setForm((f) => ({ ...f, token: res.token }));
+        setInstallBase(res.installBase);
+      },
       onError: () => setSaveError("Could not mint a token — enter one by hand."),
     });
   }
@@ -433,9 +441,9 @@ export function RemoteVantages() {
                   Somewhere outside this network — a small VPS. It installs the
                   agent, generates a certificate, and starts it under systemd.
                 </Typography>
-                {form.name.trim() && form.token ? (
+                {form.name.trim() && form.token && installBase ? (
                   <CopyBox
-                    text={`curl -fsSL ${window.location.origin}/admin/hz-probe/install | HZ_PROBE_TOKEN=${form.token} HZ_PROBE_NAME=${form.name.trim()} sudo -E bash`}
+                    text={`curl -fsSL ${installBase}/admin/hz-probe/install | HZ_PROBE_TOKEN=${form.token} HZ_PROBE_NAME=${form.name.trim()} sudo -E bash`}
                   />
                 ) : (
                   <Alert severity="info" sx={{ py: 0 }}>

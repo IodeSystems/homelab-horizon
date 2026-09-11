@@ -64,9 +64,15 @@ fi
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 echo "hz-probe: downloading agent (${os}-${arch}) from $BASE ..."
-if ! curl -fSL "$BASE/admin/hz-probe/bin/${os}-${arch}" -o "$tmp"; then
+# The token doubles as the download grant: hz minted it for this install and
+# remembers it for an hour, which is what keeps the binary from being a free
+# 7MB download for the whole internet.
+if ! curl -fSL -H "Authorization: Bearer $HZ_PROBE_TOKEN" \
+     "$BASE/admin/hz-probe/bin/${os}-${arch}" -o "$tmp"; then
   echo "hz-probe: download failed ($BASE/admin/hz-probe/bin/${os}-${arch})" >&2
-  echo "hz-probe: the server may have been built without embedded clients." >&2
+  echo "hz-probe: either the grant expired — they last an hour, so copy a fresh" >&2
+  echo "hz-probe: command from hz — or the server was built without embedded" >&2
+  echo "hz-probe: clients (-tags hzembed)." >&2
   exit 1
 fi
 chmod 0755 "$tmp"

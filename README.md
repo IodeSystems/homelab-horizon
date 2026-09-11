@@ -1025,6 +1025,20 @@ Serving the binary needs a server built with `-tags hzembed` (`make hz-embed`
 cross-compiles both clients first); without it the installer reports that the
 build has no embedded clients.
 
+**Where the installer lives.** It is served on the public-facing hostname
+(`kiosk_url`), not the admin one — a host outside the network is exactly who
+fetches it, so it belongs on the vhost whose threat model already assumes
+anonymous access, and the admin name stays narrow. On the admin hostname
+these routes 404. With no `kiosk_url` configured there is no second vhost and
+any host serves them.
+
+The script is anonymous; the binary is not. A 7MB download reachable by
+anyone is a free bandwidth tap and tells a stranger the exact build you are
+running, so the binary requires an **install grant** — the token hz minted
+into the command, good for an hour, or the admin token for the `hz` CLI. The
+host fetching it still needs no account and no prior relationship with hz:
+the credential is the one already in the command somebody pasted.
+
 **Or do it by hand**, which is the same steps without hz in the loop:
 
 ```bash

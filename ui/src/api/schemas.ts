@@ -350,7 +350,12 @@ export const RemoteProbeTestSchema = z.object({
   certNotAfter: z.string().optional(),
 });
 
-export const RemoteProbeTokenSchema = z.object({ token: z.string() });
+export const RemoteProbeTokenSchema = z.object({
+  token: z.string(),
+  // Where the install routes are actually served — the public/kiosk vhost,
+  // which is not the admin origin the operator is looking at.
+  installBase: z.string(),
+});
 
 export const SystemConfigSchema = z.object({
   publicIP: z.string(),

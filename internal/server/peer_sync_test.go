@@ -157,13 +157,14 @@ func newTestServer(t *testing.T, cfg *config.Config) *Server {
 	}
 
 	s := &Server{
-		configPath:   cfgPath,
-		adminToken:   "test-admin",
-		csrfSecret:   "test-csrf",
-		monitor:      monitor.New(cfg),
-		sync:         NewSyncBroadcaster(),
-		health:       &HealthStatus{healthy: true},
-		configShares: make(map[string]*configShare),
+		configPath:    cfgPath,
+		adminToken:    "test-admin",
+		csrfSecret:    "test-csrf",
+		monitor:       monitor.New(cfg),
+		sync:          NewSyncBroadcaster(),
+		health:        &HealthStatus{healthy: true},
+		configShares:  make(map[string]*configShare),
+		installGrants: newInstallGrants(),
 	}
 	s.config.Store(cfg)
 	return s
