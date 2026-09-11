@@ -1145,8 +1145,22 @@ export interface ComponentHealth {
   extras?: { [key: string]: any}; // component-specific facts
   errors?: string[];
 }
+/**
+ * CIDRAdviceResp warns that one of hz's ranges is a popular one, and is
+ * therefore likely to be the range a remote worker is already sitting on.
+ * Advice rather than a check with a fix: the remedy is renumbering a network,
+ * which no button can do.
+ */
+export interface CIDRAdviceResp {
+  range: string;
+  risk: string; // "high", "medium", "none"
+  reason?: string;
+  suggest?: string;
+}
 export interface SystemHealthResponse {
   components: ComponentHealth[];
+  lan_advice?: CIDRAdviceResp;
+  vpn_advice?: CIDRAdviceResp;
   publicIP?: string;
   ip_forwarding: boolean;
   ip_forwarding_error?: string;

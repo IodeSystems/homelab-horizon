@@ -1217,8 +1217,21 @@ type ComponentHealth struct {
 	Errors       []string       `json:"errors,omitempty"`
 }
 
+// CIDRAdviceResp warns that one of hz's ranges is a popular one, and is
+// therefore likely to be the range a remote worker is already sitting on.
+// Advice rather than a check with a fix: the remedy is renumbering a network,
+// which no button can do.
+type CIDRAdviceResp struct {
+	Range   string `json:"range"`
+	Risk    string `json:"risk"` // "high", "medium", "none"
+	Reason  string `json:"reason,omitempty"`
+	Suggest string `json:"suggest,omitempty"`
+}
+
 type SystemHealthResponse struct {
 	Components           []ComponentHealth `json:"components"`
+	LANAdvice            *CIDRAdviceResp   `json:"lan_advice,omitempty"`
+	VPNAdvice            *CIDRAdviceResp   `json:"vpn_advice,omitempty"`
 	PublicIP             string            `json:"publicIP,omitempty"`
 	IPForwarding         bool              `json:"ip_forwarding"`
 	IPForwardingError    string            `json:"ip_forwarding_error,omitempty"`

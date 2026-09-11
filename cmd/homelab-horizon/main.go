@@ -293,6 +293,7 @@ func runCheck(dryRun bool) error {
 	c.checkSystemdService()
 	c.checkFileAccess()
 	c.checkNetwork()
+	c.checkRanges()
 	c.printSummary()
 
 	return nil
@@ -496,6 +497,35 @@ func (c *checker) checkNetwork() {
 		}
 	} else {
 		fmt.Println("OK")
+	}
+}
+
+// checkRanges warns when hz's LAN or VPN range is a popular one.
+//
+// Not counted against allGood: nothing here is broken, and it may never
+// break. It becomes a problem the first time somebody works remotely from a
+// network that happens to use the same range — at which point the symptom
+// (the VPN silently not reaching anything, while DNS keeps answering) points
+// nowhere near the cause.
+func (c *checker) checkRanges() {
+	if c.cfg == nil {
+		return
+	}
+	lan, vpn := c.cfg.AdviseNetworks()
+	for _, a := range []struct {
+		what   string
+		advice config.CIDRAdvice
+	}{{"LAN", lan}, {"VPN", vpn}} {
+		if a.advice.Risk == config.RiskNone {
+			continue
+		}
+		fmt.Printf("Checking %s range (%s)... COMMON\n", a.what, a.advice.Range)
+		fmt.Printf("  It is %s.\n", a.advice.Reason)
+		fmt.Println("  A remote client on the same range cannot reach this one: its own")
+		fmt.Println("  route wins, and hz keeps resolving names to the far side of it.")
+		if a.advice.Suggest != "" {
+			fmt.Printf("  Consider renumbering to something unfashionable, e.g. %s\n", a.advice.Suggest)
+		}
 	}
 }
 

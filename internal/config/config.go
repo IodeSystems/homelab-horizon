@@ -2189,7 +2189,14 @@ func Template() string {
   // Server's WireGuard public key (auto-detected if empty)
   "server_public_key": "",
 
-  // VPN IP address range (CIDR notation)
+  // VPN IP address range (CIDR notation).
+  //
+  // Pick something unfashionable. This range, and the LAN this host sits on,
+  // both have to differ from whatever network a remote client is on — and
+  // 192.168.0.x, 192.168.1.x, 10.0.0.x and the phone-hotspot ranges are what
+  // that client is most likely to already be using. A collision does not
+  // fail loudly: the client's own route wins, hz keeps resolving names, and
+  // the connections land on the wrong side of it.
   "vpn_range": "10.100.0.0/24",
 
   // DNS server for VPN clients
