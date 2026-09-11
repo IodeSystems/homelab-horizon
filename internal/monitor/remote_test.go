@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -200,7 +201,7 @@ func TestReloadRemotesKeepsLocalHistory(t *testing.T) {
 
 	next := *cfg
 	next.RemoteProbes = []config.RemoteProbe{
-		{Name: "vps", URL: "http://127.0.0.1:1", Token: "t", Enabled: true, Poll: 3600},
+		{Name: "vps", Mode: config.ProbeModePull, URL: "http://127.0.0.1:1", Token: "t", Enabled: true, Poll: 3600},
 	}
 	m.ReloadRemotes(&next)
 
@@ -225,8 +226,8 @@ func TestReloadRemotesLifecycle(t *testing.T) {
 
 	// A poll interval long enough that no loop actually fires during the
 	// test; this is about lifecycle, not polling.
-	a := config.RemoteProbe{Name: "a", URL: "http://127.0.0.1:1", Token: "t", Enabled: true, Poll: 3600}
-	b := config.RemoteProbe{Name: "b", URL: "http://127.0.0.1:2", Token: "t", Enabled: true, Poll: 3600}
+	a := config.RemoteProbe{Name: "a", Mode: config.ProbeModePull, URL: "http://127.0.0.1:1", Token: "t", Enabled: true, Poll: 3600}
+	b := config.RemoteProbe{Name: "b", Mode: config.ProbeModePull, URL: "http://127.0.0.1:2", Token: "t", Enabled: true, Poll: 3600}
 
 	m.ReloadRemotes(withProbes(a, b))
 	if got := m.runningRemotes(); len(got) != 2 {
@@ -265,7 +266,7 @@ func TestReloadRemotesLifecycle(t *testing.T) {
 
 func TestSameRemoteProbe(t *testing.T) {
 	base := config.RemoteProbe{
-		Name: "a", URL: "u", Token: "t", Enabled: true,
+		Name: "a", Mode: config.ProbeModePull, URL: "u", Token: "t", Enabled: true,
 		Poll: 60, Probe: 60, Timeout: 10, PinSHA256: "p", Resolvers: []string{"1.1.1.1:53"},
 	}
 	if !sameRemoteProbe(base, base) {
@@ -305,4 +306,99 @@ func (m *Monitor) runningRemotes() map[string]bool {
 		out[name] = true
 	}
 	return out
+}
+
+// A reload before Start must still bring vantages up. Treating "config
+// unchanged" as "already running" left them silently unpolled.
+func TestReloadRemotesStartsLoopsThatAreNotRunning(t *testing.T) {
+	cfg := probeCfg()
+	cfg.RemoteProbes = []config.RemoteProbe{
+		{Name: "a", Mode: config.ProbeModePull, URL: "http://127.0.0.1:1", Token: "t", Enabled: true, Poll: 3600},
+	}
+	m := New(cfg)
+	defer m.Stop()
+
+	// Note: no Start(). The config already lists the vantage, so before and
+	// after are identical — the case that used to start nothing.
+	m.ReloadRemotes(cfg)
+
+	if got := m.runningRemotes(); !got["a"] {
+		t.Fatalf("expected a poll loop for an unchanged-but-unstarted vantage, got %v", got)
+	}
+}
+
+// A mode change has to restart: the two modes are different code paths, and
+// leaving the old loop running would have hz dialling an agent that is now
+// pushing to it.
+func TestModeChangeRestarts(t *testing.T) {
+	pull := config.RemoteProbe{Name: "a", Mode: config.ProbeModePull, URL: "u", Token: "t", Enabled: true}
+	push := pull
+	push.Mode = config.ProbeModePush
+	if sameRemoteProbe(pull, push) {
+		t.Fatal("a mode change must force a restart")
+	}
+}
+
+// Push vantages have no poll loop, so nothing would notice one going quiet.
+// The watchdog is what replaces reachability testing in that mode.
+func TestPushWatchdogMarksSilentVantages(t *testing.T) {
+	cfg := probeCfg()
+	cfg.RemoteProbes = []config.RemoteProbe{
+		{Name: "quiet", Mode: config.ProbeModePush, Token: "t", Enabled: true, Probe: 1},
+	}
+	m := New(cfg)
+	defer m.Stop()
+
+	rp := cfg.RemoteProbes[0]
+
+	// Never reported is its own state — "not yet" is not "broken".
+	m.sweepPushVantages()
+	if got := m.GetStatus("ext:quiet:agent"); got != nil {
+		t.Fatalf("a vantage that has never reported must not be marked failed: %+v", got)
+	}
+
+	// One report, then silence past three intervals.
+	m.AcceptPushedResults(rp, "quiet", "v-test", []probe.Result{
+		{Target: "h", Host: "h", Kind: probe.KindDNS, At: time.Now().UTC(), Status: StatusOK},
+	})
+	if got := m.GetStatus("ext:quiet:agent"); got == nil || got.Status != StatusOK {
+		t.Fatalf("agent row after a report = %+v, want ok", got)
+	}
+
+	m.mu.Lock()
+	m.remoteStates["quiet"].LastPoll = time.Now().Add(-time.Hour)
+	m.mu.Unlock()
+
+	m.sweepPushVantages()
+	got := m.GetStatus("ext:quiet:agent")
+	if got == nil || got.Status != StatusFailed {
+		t.Fatalf("a vantage silent for an hour should be failed, got %+v", got)
+	}
+	if !strings.Contains(got.LastError, "no report") {
+		t.Fatalf("the error should say it stopped reporting: %q", got.LastError)
+	}
+}
+
+// The accepted count is the agent's watermark: over-count loses results,
+// under-count duplicates them.
+func TestAcceptedCountMatchesWhatWasFolded(t *testing.T) {
+	cfg := probeCfg()
+	m := New(cfg)
+	defer m.Stop()
+	rp := config.RemoteProbe{Name: "v", Mode: config.ProbeModePush, Token: "t", Enabled: true}
+
+	base := time.Now().UTC()
+	results := []probe.Result{
+		{Target: "a", Host: "a", Kind: probe.KindDNS, At: base, Status: StatusOK},
+		{Target: "a", Host: "a", Kind: probe.KindHTTPS, At: base.Add(time.Second), Status: StatusFailed, Error: "boom"},
+	}
+	if n := m.AcceptPushedResults(rp, "v", "v-test", results); n != len(results) {
+		t.Fatalf("accepted %d of %d", n, len(results))
+	}
+	if m.GetStatus("ext:v:dns:a") == nil || m.GetStatus("ext:v:https:a") == nil {
+		t.Fatal("both results should have become check rows")
+	}
+	if got := len(m.GetHistory("ext:v:https:a")); got != 1 {
+		t.Fatalf("history has %d entries, want 1", got)
+	}
 }

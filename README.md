@@ -981,28 +981,40 @@ host outside the homelab — a cheap VPS — and probes your public names for DN
 HTTPS and latency from there. Results land on the Checks page beside the local
 ones, tagged with the vantage they came from.
 
-**hz dials out; the agent never dials in.** The agent holds no address for hz
-and no credential of hz's — only a token hz must present. So hz needs no
-inbound reachability, no port forward, and no stable public address, and the
-only host that has to be accessible is the agent. The only facts that cross
-the wire are ones the public internet already holds: the hostnames hz serves,
-and the public IP they should resolve to. No backends, no LAN CIDRs, no VPN
-ranges.
+**The agent reports in; nothing dials it.** It needs no public address, no
+open port and no certificate of its own, so it works behind NAT or on a VM
+whose IP changes. hz accepting an authenticated POST adds no exposure — it
+arrives on the same public edge these checks exist to verify. The only facts
+that cross the wire are ones the public internet already holds: the hostnames
+hz serves, and the public IP they should resolve to. No backends, no LAN
+CIDRs, no VPN ranges.
+
+The other direction is still available (`HZ_PROBE_PULL=1`), where hz dials the
+agent. It costs a public address, an inbound firewall rule, a self-signed
+certificate the agent serves, and a re-pin every time that address changes.
+Worth it only if you specifically want hz to hold no outbound dependency.
 
 The agent probes on its own schedule and buffers what it saw, so the poll
 after an hz outage returns the outage rather than a gap in the history.
 
-**Protocol** — one round trip in the steady state, two when targets change:
+**Protocol** — the agent reports, hz answers with a target set only when the
+agent is holding the wrong one:
 
 ```
-hz -> agent   what have you got? I want target set 4f2a...
-agent -> hz   I do not hold 4f2a. Send it. (here are my results anyway)
-hz -> agent   target set 4f2a = [api.example.com, docs.example.com] -> 203.0.113.10
-agent -> hz   holding 4f2a. Here is everything since your last poll.
+agent -> hz   I am GCP, holding target set (none). Here are 0 results.
+hz -> agent   took 0. Here is set 4f2a = [api.example.com] -> 203.0.113.10.
+              Report every 300s.
+agent -> hz   holding 4f2a. Here are 2 results.
+hz -> agent   took 2.
 ```
 
-The version is a hash of the target set, so a new domain in hz means a new
-version, means the agent asks for it on its next poll. Nothing to redeploy.
+The version is a hash of the set, so a new domain in hz means a new version,
+means the agent is handed it on its next report. Nothing to redeploy.
+
+hz acknowledges a count, and the agent drops exactly that many — so a failed
+or half-processed report is retried rather than lost. That is what makes an hz
+outage a delay instead of a hole: the agent keeps probing and flushes the
+backlog when hz answers again.
 
 **Add one from the UI.** Checks → *Outside vantages* → *Add vantage* mints a
 token and hands you a one-liner for the outside host:
@@ -1012,14 +1024,16 @@ curl -fsSL https://hz.example.com/admin/hz-probe/install \
   | HZ_PROBE_TOKEN=<minted> sudo -E bash
 ```
 
-That downloads the agent from this hz instance, writes the token, generates a
-self-signed certificate, installs a hardened systemd unit and starts it — then
-prints the URL to paste back. hz minted the token, so the only thing you carry
-back is the address, which hz cannot know. **Test connection** polls the agent
-and shows you the certificate it presented; press **Pin it** and hz will
-refuse any other certificate from that address afterwards. Nothing is trusted
-because a test reported it — trust on first use is only trust if somebody says
-yes.
+That downloads the agent from this hz instance, writes the token, installs a
+hardened systemd unit and starts it. **There is nothing to paste back** — the
+agent's first report carries the install grant, and hz turns that into a
+registered vantage named by the agent. It appears in the list within a minute.
+
+In pull mode there is more to do: the installer also generates a self-signed
+certificate and prints a URL to paste, and **Test connection** shows you the
+certificate the agent presented so you can press **Pin it**. Nothing is
+trusted because a test reported it — trust on first use is only trust if
+somebody says yes.
 
 Serving the binary needs a server built with `-tags hzembed` (`make hz-embed`
 cross-compiles both clients first); without it the installer reports that the

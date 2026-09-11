@@ -495,6 +495,11 @@ export interface CheckStatusResp {
  */
 export interface RemoteProbeResp {
   name: string;
+  /**
+   * Mode is "push" (the agent reports in) or "pull" (hz dials it). Push
+   * vantages have no URL and no pin, because nothing dials them.
+   */
+  mode: string;
   url: string;
   enabled: boolean;
   poll: number /* int */;
@@ -525,6 +530,7 @@ export interface RemoteProbeResp {
  */
 export interface RemoteProbeRequest {
   name: string;
+  mode?: string;
   url: string;
   token?: string;
   enabled: boolean;

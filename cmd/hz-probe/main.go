@@ -40,12 +40,22 @@ COMMANDS
   version           Print version
 
 FIRST RUN, on the outside host
-  hz-probe gen-cert --host 198.51.100.7        # skip if you have a real cert
-  sudo hz-probe install --listen :8443
-  sudo hz-probe fingerprint                    # paste into hz's pin_sha256
+  Copy the command from hz (Checks -> Outside vantages -> Add vantage). It
+  installs this agent in push mode, which needs nothing inbound.
+
+  Only if hz must dial the agent instead (it needs a public address and an
+  open port):
+    hz-probe gen-cert --host 198.51.100.7
+    sudo hz-probe install --listen :8443
+    sudo hz-probe fingerprint                  # paste into hz's pin_sha256
 
 SERVE FLAGS
-  --listen ADDR         address to listen on (default :8443)
+  --push-to URL         hz base URL to report to. When set the agent reports
+                        and does not listen: nothing has to reach this host,
+                        so there is no port to open, no certificate to serve
+                        and no address to keep stable. This is the default the
+                        installer configures.
+  --listen ADDR         address to listen on when NOT pushing (default :8443)
   --vantage NAME        name for this vantage point (default: hostname)
   --token-file PATH     file holding the shared token (default /etc/hz-probe/token)
   --token TOK           the token inline; prefer --token-file or HZ_PROBE_TOKEN

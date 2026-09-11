@@ -36,6 +36,7 @@ type serveFlags struct {
 	statePath string
 	tlsCert   string
 	tlsKey    string
+	pushTo    string
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
@@ -46,7 +47,13 @@ func (f *serveFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.statePath, "state", defaultStatePath, "target cache; keeps probing across a restart while hz is down")
 	fs.StringVar(&f.tlsCert, "tls-cert", defaultCertPath, "TLS certificate file")
 	fs.StringVar(&f.tlsKey, "tls-key", defaultKeyPath, "TLS key file")
+	fs.StringVar(&f.pushTo, "push-to", "", "hz base URL to report results to; when set, the agent reports rather than listening")
 }
+
+// pushMode reports whether the agent reports to hz instead of waiting to be
+// asked. It is the default the installer configures, because it needs no
+// public address, no inbound rule and no certificate of its own.
+func (f *serveFlags) pushMode() bool { return strings.TrimSpace(f.pushTo) != "" }
 
 // vantageName is the configured name, or this host's.
 func (f *serveFlags) vantageName() string {
@@ -79,6 +86,19 @@ func runServe(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go agent.Loop(ctx)
+
+	// Push mode: report to hz and do not listen at all. Nothing has to reach
+	// this host, so there is no port to open, no certificate to serve and no
+	// address to keep stable.
+	if f.pushMode() {
+		pusher := &probe.Pusher{URL: f.pushTo, Token: tok}
+		held := agent.Targets()
+		slog.Info("hz-probe reporting to hz",
+			"hz", f.pushTo, "vantage", f.vantageName(), "version", Version,
+			"targets", len(held.Targets), "targets_version", held.Version)
+		agent.PushLoop(ctx, pusher, 0)
+		return nil
+	}
 
 	srv := &http.Server{
 		Addr:              f.listen,

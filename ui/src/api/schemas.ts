@@ -312,6 +312,8 @@ export const CheckStatusSchema = z.object({
 // One outside-in vantage: its configuration, and what hz learned by polling.
 export const RemoteProbeSchema = z.object({
   name: z.string(),
+  // "push" (agent reports in) or "pull" (hz dials it).
+  mode: z.string(),
   url: z.string(),
   enabled: z.boolean(),
   poll: z.number(),

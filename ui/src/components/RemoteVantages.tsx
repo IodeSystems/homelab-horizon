@@ -57,6 +57,7 @@ function relativeTime(isoStr: string): string {
 
 type FormState = {
   name: string;
+  mode: "push" | "pull";
   url: string;
   token: string;
   enabled: boolean;
@@ -66,13 +67,16 @@ type FormState = {
   pinSha256: string;
 };
 
+// Push by default: it needs nothing inbound, so there is no address to keep
+// stable, no port to open and no certificate for the agent to serve.
 const emptyForm: FormState = {
   name: "",
+  mode: "push",
   url: "",
   token: "",
   enabled: true,
-  poll: 60,
-  probe: 60,
+  poll: 300,
+  probe: 300,
   resolvers: "",
   pinSha256: "",
 };
@@ -80,6 +84,7 @@ const emptyForm: FormState = {
 function formToRequest(form: FormState, oldName?: string): RemoteProbeRequest {
   return {
     name: form.name.trim(),
+    mode: form.mode,
     url: form.url.trim(),
     token: form.token.trim(),
     enabled: form.enabled,
@@ -146,10 +151,22 @@ function StateChip({ probe }: { probe: RemoteProbe }) {
     return <Chip size="small" label="disabled" variant="outlined" />;
   }
   if (!probe.polled) {
-    return <Chip size="small" label="never polled" color="default" variant="outlined" />;
+    return (
+      <Chip
+        size="small"
+        label={probe.mode === "pull" ? "never polled" : "no report yet"}
+        variant="outlined"
+      />
+    );
   }
   if (!probe.reachable) {
-    return <Chip size="small" label="unreachable" color="error" />;
+    return (
+      <Chip
+        size="small"
+        label={probe.mode === "pull" ? "unreachable" : "stopped reporting"}
+        color="error"
+      />
+    );
   }
   return <Chip size="small" label="ok" color="success" />;
 }
@@ -181,6 +198,12 @@ function VantageRow({
             {probe.name}
           </Typography>
           <StateChip probe={probe} />
+          <Chip
+            size="small"
+            variant="outlined"
+            label={probe.mode === "pull" ? "hz dials it" : "reports in"}
+            sx={{ height: 20, fontSize: "0.7rem" }}
+          />
           {probe.pinSha256 && (
             <Tooltip title="The agent's certificate is pinned by fingerprint">
               <Chip size="small" label="pinned" variant="outlined" sx={{ height: 20, fontSize: "0.7rem" }} />
@@ -202,17 +225,20 @@ function VantageRow({
           )}
         </Box>
 
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ fontFamily: "monospace", display: "block", mt: 0.25, wordBreak: "break-all" }}
-        >
-          {probe.url}
-        </Typography>
+        {probe.url && (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ fontFamily: "monospace", display: "block", mt: 0.25, wordBreak: "break-all" }}
+          >
+            {probe.url}
+          </Typography>
+        )}
 
         {probe.reachable && (
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.25 }}>
-            polled {relativeTime(probe.lastPoll)} · {probe.targetCount} target
+            {probe.mode === "pull" ? "polled" : "reported"} {relativeTime(probe.lastPoll)} ·{" "}
+            {probe.targetCount} target
             {probe.targetCount === 1 ? "" : "s"} · {probe.checkCount} row
             {probe.checkCount === 1 ? "" : "s"}
             {probe.agentVersion ? ` · hz-probe ${probe.agentVersion}` : ""}
@@ -230,7 +256,9 @@ function VantageRow({
 
         {probe.enabled && !probe.polled && (
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.25 }}>
-            hz has not polled it yet — first poll is within {probe.poll || 60}s of a restart.
+            {probe.mode === "pull"
+              ? `hz has not polled it yet — first poll is within ${probe.poll || 60}s of a restart.`
+              : "Waiting for its first report. If the install has run, it should appear within a minute."}
           </Typography>
         )}
       </Box>
@@ -305,6 +333,7 @@ export function RemoteVantages() {
     setEditing(p.name);
     setForm({
       name: p.name,
+      mode: p.mode === "pull" ? "pull" : "push",
       url: p.url,
       token: "",
       enabled: p.enabled,
@@ -363,7 +392,7 @@ export function RemoteVantages() {
   const saving = addRemote.isPending || updateRemote.isPending;
   const canSave =
     form.name.trim() !== "" &&
-    form.url.trim() !== "" &&
+    (form.mode === "push" || form.url.trim() !== "") &&
     (editing !== null || form.token.trim() !== "");
 
   return (
@@ -380,8 +409,8 @@ export function RemoteVantages() {
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 640 }}>
               Every other check on this page runs on hz, and answers "can this box
               reach the service". These run <code>hz-probe</code> on a host outside
-              the network and answer whether the internet can. hz dials them; they
-              never dial hz, so nothing has to be opened inward.
+              the network and answer whether the internet can. The agent reports
+              in, so nothing has to be opened inward and it can sit behind NAT.
             </Typography>
           </Box>
           <Button size="small" variant="outlined" startIcon={<AddIcon />} onClick={openAdd}>
@@ -443,7 +472,12 @@ export function RemoteVantages() {
                 </Typography>
                 {form.name.trim() && form.token && installBase ? (
                   <CopyBox
-                    text={`curl -fsSL ${installBase}/admin/hz-probe/install | HZ_PROBE_TOKEN=${form.token} HZ_PROBE_NAME=${form.name.trim()} sudo -E bash`}
+                    text={
+                      `curl -fsSL ${installBase}/admin/hz-probe/install | ` +
+                      `HZ_PROBE_TOKEN=${form.token} HZ_PROBE_NAME=${form.name.trim()} ` +
+                      (form.mode === "pull" ? "HZ_PROBE_PULL=1 " : "") +
+                      `sudo -E bash`
+                    }
                   />
                 ) : (
                   <Alert severity="info" sx={{ py: 0 }}>
@@ -452,18 +486,45 @@ export function RemoteVantages() {
                   </Alert>
                 )}
                 <Typography variant="body2" sx={{ fontWeight: 600, mt: 2, mb: 0.5 }}>
-                  3. Paste the URL it prints
+                  {form.mode === "push"
+                    ? "3. That's it — it registers itself"
+                    : "3. Paste the URL it prints"}
                 </Typography>
+                {form.mode === "push" && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                    The agent reports to hz, so there is nothing to copy back and
+                    nothing to open inbound. It appears in the list above within a
+                    minute of the install finishing — close this dialog and watch
+                    for it.
+                  </Typography>
+                )}
+
+                {/* The escape hatch, phrased as the cost it carries rather
+                    than as a neutral choice. */}
+                <Button
+                  size="small"
+                  variant="text"
+                  onClick={() =>
+                    setForm({ ...form, mode: form.mode === "push" ? "pull" : "push" })
+                  }
+                  sx={{ mt: 1, fontSize: "0.7rem", textTransform: "none", p: 0, minWidth: 0 }}
+                >
+                  {form.mode === "push"
+                    ? "hz should dial the agent instead (needs a public address, an open port and a pinned certificate)"
+                    : "have the agent report to hz instead (needs nothing inbound)"}
+                </Button>
               </Box>
             )}
-            <TextField
-              label="Agent URL"
-              size="small"
-              placeholder="https://198.51.100.7:8443"
-              helperText="Where hz dials the agent. Use https — the token crosses the public internet."
-              value={form.url}
-              onChange={(e) => setForm({ ...form, url: e.target.value })}
-            />
+            {form.mode === "pull" && (
+              <TextField
+                label="Agent URL"
+                size="small"
+                placeholder="https://198.51.100.7:8443"
+                helperText="Where hz dials the agent. Needs a public address and an open port."
+                value={form.url}
+                onChange={(e) => setForm({ ...form, url: e.target.value })}
+              />
+            )}
             <TextField
               label="Token"
               size="small"
@@ -477,14 +538,16 @@ export function RemoteVantages() {
               value={form.token}
               onChange={(e) => setForm({ ...form, token: e.target.value })}
             />
-            <TextField
-              label="Certificate pin (SHA-256)"
-              size="small"
-              placeholder="optional"
-              helperText="For a self-signed agent certificate: hz-probe fingerprint. Empty means normal CA verification."
-              value={form.pinSha256}
-              onChange={(e) => setForm({ ...form, pinSha256: e.target.value })}
-            />
+            {form.mode === "pull" && (
+              <TextField
+                label="Certificate pin (SHA-256)"
+                size="small"
+                placeholder="optional"
+                helperText="For a self-signed agent certificate: hz-probe fingerprint. Empty means normal CA verification."
+                value={form.pinSha256}
+                onChange={(e) => setForm({ ...form, pinSha256: e.target.value })}
+              />
+            )}
             <TextField
               label="Resolvers"
               size="small"
@@ -562,18 +625,27 @@ export function RemoteVantages() {
           </Stack>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button
-            onClick={runTest}
-            disabled={testRemote.isPending || !form.url.trim()}
-            startIcon={testRemote.isPending ? <CircularProgress size={14} /> : undefined}
-          >
-            Test connection
-          </Button>
+          {form.mode === "pull" && (
+            <Button
+              onClick={runTest}
+              disabled={testRemote.isPending || !form.url.trim()}
+              startIcon={testRemote.isPending ? <CircularProgress size={14} /> : undefined}
+            >
+              Test connection
+            </Button>
+          )}
           <Box sx={{ flex: 1 }} />
-          <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
-          <Button variant="contained" disabled={!canSave || saving} onClick={save}>
-            {editing ? "Save" : "Add"}
+          <Button onClick={() => setDialogOpen(false)}>
+            {!editing && form.mode === "push" ? "Done" : "Cancel"}
           </Button>
+          {/* A new push vantage has nothing to save: it registers itself on
+              its first report. Offering Add would create an entry the agent
+              then collides with by name. */}
+          {(editing || form.mode === "pull") && (
+            <Button variant="contained" disabled={!canSave || saving} onClick={save}>
+              {editing ? "Save" : "Add"}
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
 

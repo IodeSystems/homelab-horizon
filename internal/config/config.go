@@ -961,8 +961,20 @@ type ServiceCheck struct {
 // about hz. The agent learns only what hz sends it: public hostnames and the
 // public IP they should resolve to.
 type RemoteProbe struct {
-	Name    string `json:"name"`              // vantage label, used in check names
-	URL     string `json:"url"`               // agent base URL, e.g. https://1.2.3.4:8443
+	Name string `json:"name"` // vantage label, used in check names
+
+	// Mode is "push" (the agent reports to hz) or "pull" (hz dials the
+	// agent). Empty means push, because that is what needs nothing inbound
+	// and is what the installer configures.
+	//
+	// Pull needs the agent to have a public address, an open port and a
+	// certificate it serves itself, plus an operator who re-pins it whenever
+	// that address changes. Push needs hz to accept an authenticated POST on
+	// an edge that is already public — which is the premise of the whole
+	// feature, since these checks exist to verify that edge works.
+	Mode string `json:"mode,omitempty"`
+
+	URL     string `json:"url,omitempty"`     // pull only: agent base URL
 	Token   string `json:"token"`             // shared token, sent as Authorization: Bearer
 	Enabled bool   `json:"enabled"`           // false = ignored entirely
 	Poll    int    `json:"poll,omitempty"`    // hz poll interval in seconds; 0 = 60
@@ -976,9 +988,27 @@ type RemoteProbe struct {
 
 	// PinSHA256 pins the agent's certificate by SHA-256 of its DER, for the
 	// usual case of a VPS with an IP and no domain. Empty means ordinary
-	// public-CA verification. `hz-probe --print-fingerprint` prints it.
+	// public-CA verification. Pull only — a pushing agent is a client, and
+	// verifies hz's certificate rather than presenting one.
 	PinSHA256 string `json:"pin_sha256,omitempty"`
 }
+
+// Probe modes.
+const (
+	ProbeModePush = "push"
+	ProbeModePull = "pull"
+)
+
+// ProbeMode is the entry's mode, defaulting to push.
+func (r RemoteProbe) ProbeMode() string {
+	if r.Mode == ProbeModePull {
+		return ProbeModePull
+	}
+	return ProbeModePush
+}
+
+// IsPush reports whether the agent reports to hz rather than being dialled.
+func (r RemoteProbe) IsPush() bool { return r.ProbeMode() == ProbeModePush }
 
 // CurrentServer returns the host:port for the active slot.
 // backend is ProxyConfig.Backend (slot A's address).
@@ -2274,21 +2304,24 @@ func Template() string {
   "ssl_cert_dir": "/etc/letsencrypt",
   "ssl_haproxy_cert_dir": "/etc/haproxy/certs",
 
-  // Outside-in vantage points running hz-probe (see: make build-probe).
-  // hz polls these; they never dial hz, so hz needs no inbound reachability.
-  // The agent is sent the served hostnames and the public IP, nothing else.
-  // "pin_sha256" is for an agent on a bare IP with a self-signed cert:
-  // hz-probe --print-fingerprint --tls-cert cert.pem prints the value.
+  // Outside-in vantage points running hz-probe.
+  //
+  // Normally you do not write these by hand: add one from the Checks page and
+  // it registers itself on its first report. The agent is sent the served
+  // hostnames and the public IP, nothing else.
+  //
+  // mode "push" (the default) means the agent reports to hz and needs nothing
+  // inbound — no address, no open port, no certificate of its own. mode
+  // "pull" means hz dials it, which needs all three plus a pinned
+  // certificate; "url" and "pin_sha256" apply only then.
   "remote_probes": [
     // {
     //   "name": "vps-nyc",
-    //   "url": "https://198.51.100.7:8443",
+    //   "mode": "push",
     //   "token": "SHARED_TOKEN",
     //   "enabled": true,
-    //   "poll": 60,
-    //   "probe": 60,
-    //   "resolvers": ["1.1.1.1:53", "8.8.8.8:53"],
-    //   "pin_sha256": ""
+    //   "probe": 300,
+    //   "resolvers": ["1.1.1.1:53", "8.8.8.8:53"]
     // }
   ]
 }

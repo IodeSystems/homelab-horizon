@@ -1176,6 +1176,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/checks/remotes/delete", s.handleAPIRemoteDelete)
 	mux.HandleFunc("/api/v1/checks/remotes/test", s.handleAPIRemoteTest)
 	mux.HandleFunc("/api/v1/checks/remotes/token", s.handleAPIRemoteToken)
+	mux.HandleFunc("/api/v1/probe/report", s.handleProbeReport) // push ingest, public vhost
 
 	// Integration discovery endpoints (network-restricted: local/VPN/admin).
 	// Pull-style integrations: a central consumer scrapes hz for the config.

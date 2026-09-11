@@ -99,10 +99,11 @@ func TestRemoteAddValidation(t *testing.T) {
 
 	cases := []struct{ name, body string }{
 		{"no name", `{"url":"https://h:8443","token":"t"}`},
-		{"no url", `{"name":"a","token":"t"}`},
+		// Only pull needs an address; a pushing agent dials hz.
+		{"pull with no url", `{"name":"a","token":"t","mode":"pull"}`},
+		{"bad scheme for pull", `{"name":"a","url":"ftp://h","token":"t","mode":"pull"}`},
 		{"no token", `{"name":"a","url":"https://h:8443"}`},
-		{"bad scheme", `{"name":"a","url":"ftp://h","token":"t"}`},
-		{"url with no host", `{"name":"a","url":"https://","token":"t"}`},
+		{"url with no host", `{"name":"a","url":"https://","token":"t","mode":"pull"}`},
 		// The name becomes a check-row prefix, so a colon would make the row
 		// ambiguous against another vantage's.
 		{"colon in name", `{"name":"a:b","url":"https://h:8443","token":"t"}`},
@@ -300,7 +301,7 @@ func TestRemoteLiveStateReachesTheAPI(t *testing.T) {
 			{Name: "api", Domains: []string{"api.example.invalid"}, Proxy: &config.ProxyConfig{Backend: "10.0.0.1:80"}},
 		},
 		RemoteProbes: []config.RemoteProbe{
-			{Name: "vps-nyc", URL: srv.URL, Token: "tok", Enabled: true, Poll: 1, Probe: 1},
+			{Name: "vps-nyc", Mode: config.ProbeModePull, URL: srv.URL, Token: "tok", Enabled: true, Poll: 1, Probe: 1},
 		},
 	})
 	// Reload starts the poll loop for the configured vantage.
@@ -558,5 +559,26 @@ func TestProbeBinaryRoute(t *testing.T) {
 	}
 	if w.Code != http.StatusOK || w.Body.Len() < 1000 {
 		t.Fatalf("embedded build served %d, %d bytes", w.Code, w.Body.Len())
+	}
+}
+
+// A push vantage is valid with no URL at all — nothing dials it.
+func TestRemoteAddPushNeedsNoURL(t *testing.T) {
+	s := newTestServer(t, &config.Config{})
+	w := postRemote(t, s, s.handleAPIRemoteAdd, "/api/v1/checks/remotes/add",
+		`{"name":"pushed","token":"t","enabled":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200: %s", w.Code, w.Body.String())
+	}
+	stored := s.cfg().RemoteProbes
+	if len(stored) != 1 || !stored[0].IsPush() {
+		t.Fatalf("expected a push entry, got %+v", stored)
+	}
+
+	// And the listing says which mode it is, so the UI can render the right
+	// fields rather than an empty URL row.
+	got := listRemotes(t, s)
+	if got[0].Mode != "push" {
+		t.Fatalf("mode = %q, want push", got[0].Mode)
 	}
 }
