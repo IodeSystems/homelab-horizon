@@ -320,8 +320,8 @@ Two decisions worth keeping:
   it: two copies of a systemd unit drift, and the stale one is the one an
   operator finds first.
 
-- **next**: run the curl|bash installer once on a real outside host. That is
-  now the single untested path, and it covers the systemd install too.
+- **next**: stand up one vantage on a real outside host. The installer itself
+  is verified (below); what remains is real systemd and live data.
 - **risks**:
   - The systemd unit passes `systemd-analyze verify` in both shapes (with and
     without a certificate) but has never started a real service. `DynamicUser`
@@ -518,10 +518,31 @@ token, the green test result and the amber pin prompt with its fingerprint all
 render correctly. `-tags hzembed` build and tests pass, and the two-tool split
 was checked against real cross-compiled binaries.
 
-- **risk**: the installer script itself has never been run. It is shell, so
-  nothing type-checks it, and the `sudo -E` / `install -d` / gen-cert / unit
-  path is exactly where a shell script goes wrong. Run it once on a real VPS
-  before trusting the one-liner.
+**✅ The installer has now been run** (2026-09-10), end to end in a throwaway
+Debian container against the real rendered script and the real cross-compiled
+binary, with `systemctl`/`systemd-analyze` stubbed because containers have no
+systemd. Verified: arch detection and download, `/etc/hz-probe` at `0700`,
+`token` and `key.pem` at `0600`, a certificate generated for the address hz
+saw the request come from, the systemd calls in the right order, a unit whose
+ExecStart uses the `%d` credential paths, and then the agent actually serving
+over that certificate — open `healthz`, authenticated poll, `401` on a wrong
+token, `want_targets: true` for a fresh agent.
+
+It found one real defect, fixed in `9401d4e`: `--vantage` defaulted to the
+host's own hostname, so a cloud instance would name itself
+`instance-20260911-1234` while hz called it `vps-nyc`, tripping the
+name-mismatch warning on every fresh install. The dialog now asks for the name
+first and puts `HZ_PROBE_NAME` in the command.
+
+- **risk**: still untested under real systemd. `DynamicUser` +
+  `LoadCredential` + `SystemCallFilter` is the part a stub cannot exercise,
+  and it is the part most likely to need adjustment on first boot.
+- **risk**: no vantage has run on a real outside host, so the Checks page has
+  never been seen with live data.
+- **host note**: Oracle's Always Free tier stops instances under 5% CPU for
+  24h as of 2026, which is exactly what this agent looks like — prefer GCP
+  e2-micro, and set `poll`/`probe` to 300 there, because its 1 GB/month egress
+  cap is reachable at the 60s default once there are a dozen domains.
 
 ### Operator follow-ups (not code)
 
