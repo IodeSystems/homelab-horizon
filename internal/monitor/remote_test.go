@@ -388,17 +388,19 @@ func TestAcceptedCountMatchesWhatWasFolded(t *testing.T) {
 	rp := config.RemoteProbe{Name: "v", Mode: config.ProbeModePush, Token: "t", Enabled: true}
 
 	base := time.Now().UTC()
+	// A host hz actually serves, so the rows are not pruned as stale targets.
+	const host = "api.example.com"
 	results := []probe.Result{
-		{Target: "a", Host: "a", Kind: probe.KindDNS, At: base, Status: StatusOK},
-		{Target: "a", Host: "a", Kind: probe.KindHTTPS, At: base.Add(time.Second), Status: StatusFailed, Error: "boom"},
+		{Target: host, Host: host, Kind: probe.KindDNS, At: base, Status: StatusOK},
+		{Target: host, Host: host, Kind: probe.KindHTTPS, At: base.Add(time.Second), Status: StatusFailed, Error: "boom"},
 	}
 	if n := m.AcceptPushedResults(rp, "v", "v-test", results); n != len(results) {
 		t.Fatalf("accepted %d of %d", n, len(results))
 	}
-	if m.GetStatus("ext:v:dns:a") == nil || m.GetStatus("ext:v:https:a") == nil {
+	if m.GetStatus("ext:v:dns:"+host) == nil || m.GetStatus("ext:v:https:"+host) == nil {
 		t.Fatal("both results should have become check rows")
 	}
-	if got := len(m.GetHistory("ext:v:https:a")); got != 1 {
+	if got := len(m.GetHistory("ext:v:https:" + host)); got != 1 {
 		t.Fatalf("history has %d entries, want 1", got)
 	}
 }
