@@ -86,10 +86,20 @@ echo "hz-probe: installed /usr/local/bin/hz-probe"
 
 # The token comes from hz, so hz already holds it — there is nothing to copy
 # back. Written before anything reads it, at 0600, root-owned.
+#
+# An existing token is never replaced. It is this agent's identity: hz stores
+# it against the registered vantage, so overwriting it on a re-run — which is
+# how you upgrade — orphans the agent from its own vantage, and the next
+# report fails as a name collision with no hint that a credential changed
+# underneath it.
 install -d -m 0700 "$DIR"
 umask 077
-printf '%s\n' "$HZ_PROBE_TOKEN" > "$DIR/token"
-chmod 0600 "$DIR/token"
+if [ -s "$DIR/token" ]; then
+  echo "hz-probe: keeping the existing token at $DIR/token"
+else
+  printf '%s\n' "$HZ_PROBE_TOKEN" > "$DIR/token"
+  chmod 0600 "$DIR/token"
+fi
 
 # Push is the default, and it is why this needs nothing inbound: the agent
 # dials hz, so there is no port to open, no address to keep stable, and no

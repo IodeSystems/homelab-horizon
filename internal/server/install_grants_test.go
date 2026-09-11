@@ -247,3 +247,28 @@ func TestInstallBaseIsTheKioskOrigin(t *testing.T) {
 		t.Fatalf("installBase %q is not a host the install routes serve", minted.InstallBase)
 	}
 }
+
+// The token is the agent's identity: hz stores it against the registered
+// vantage. Overwriting it on a re-run — which is how you upgrade — orphans
+// the agent, and the next report fails as a name collision with no sign that
+// a credential moved.
+func TestInstallScriptKeepsAnExistingToken(t *testing.T) {
+	s := newTestServer(t, kioskCfg())
+	mux := s.setupRoutes()
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/hz-probe/install", nil)
+	req.Host = "vpn.example.com"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	body := w.Body.String()
+
+	if !strings.Contains(body, `if [ -s "$DIR/token" ]`) {
+		t.Fatal("the installer does not guard the token file; a re-run would replace it")
+	}
+	// The write must be inside the guard, not before it.
+	guard := strings.Index(body, `if [ -s "$DIR/token" ]`)
+	write := strings.Index(body, `printf '%s\n' "$HZ_PROBE_TOKEN"`)
+	if write < guard {
+		t.Fatal("the token is written before the guard, so the guard does nothing")
+	}
+}

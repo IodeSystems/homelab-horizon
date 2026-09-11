@@ -158,7 +158,10 @@ func (s *Server) registerPushVantage(req probe.PushRequest, token string) (confi
 var (
 	errNamelessVantage = &probeRegisterError{"the agent did not send a vantage name"}
 	errBadVantageName  = &probeRegisterError{"vantage name cannot contain a colon or whitespace"}
-	errVantageExists   = &probeRegisterError{"a vantage with this name already exists; give the agent a different HZ_PROBE_NAME"}
+	errVantageExists   = &probeRegisterError{
+		"a vantage with this name already exists, and this agent is not holding its token. " +
+			"Either the agent's token file was replaced — delete the vantage in hz and let it " +
+			"register again — or this is a second agent, which needs a different HZ_PROBE_NAME."}
 )
 
 type probeRegisterError struct{ msg string }
