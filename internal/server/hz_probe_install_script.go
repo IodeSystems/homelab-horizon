@@ -99,12 +99,17 @@ else
   echo "hz-probe: keeping the existing certificate at $DIR/cert.pem"
 fi
 
+# Not redirected. The first time this ran on real hardware the output was
+# swallowed, so the operator had no way to tell whether systemd had started
+# anything — which is the one thing this step exists to do. --brief drops the
+# trailing config block because the summary below replaces it.
 /usr/local/bin/hz-probe install \
+  --brief \
   --listen "$LISTEN" \
   --vantage "$NAME" \
   --token-file "$DIR/token" \
   --tls-cert "$DIR/cert.pem" \
-  --tls-key "$DIR/key.pem" >/dev/null
+  --tls-key "$DIR/key.pem"
 
 port="${LISTEN##*:}"
 echo

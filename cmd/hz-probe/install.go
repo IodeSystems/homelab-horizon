@@ -122,6 +122,7 @@ func runInstall(args []string) error {
 	f.register(fs)
 	dryRun := fs.Bool("dry-run", false, "print what install would do, change nothing")
 	noStart := fs.Bool("no-start", false, "write and enable the unit, but do not start it")
+	brief := fs.Bool("brief", false, "skip the trailing remote_probes block (the installer prints its own)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -172,7 +173,32 @@ func runInstall(args []string) error {
 		if err := run("systemctl", "restart", "hz-probe"); err != nil {
 			return err
 		}
-		fmt.Println("Started. Follow it with: journalctl -u hz-probe -f")
+		// A zero exit from restart is not the same as a service that stayed
+		// up: a unit that starts and immediately dies satisfies restart and
+		// then fails. Ask what state it is actually in, and say so — the
+		// alternative is an operator who has to guess, which is exactly what
+		// happened the first time this ran for real.
+		switch state := serviceState(); {
+		case state == "active":
+			fmt.Println("Service hz-probe is active.")
+			fmt.Println("Follow it with: journalctl -u hz-probe -f")
+		case strings.HasPrefix(state, "unknown"):
+			// systemctl could not be asked. Odd, but not evidence of
+			// failure, and refusing to finish over it would strand an
+			// install that is otherwise complete.
+			fmt.Printf("Could not read the service state (%s).\n", state)
+			fmt.Println("Check it with: systemctl status hz-probe --no-pager")
+		default:
+			fmt.Printf("Service hz-probe is %s, which is not what it should be.\n", state)
+			fmt.Println("Look at:")
+			fmt.Println("  systemctl status hz-probe --no-pager")
+			fmt.Println("  journalctl -u hz-probe -n 50 --no-pager")
+			return fmt.Errorf("hz-probe did not stay running (state: %s)", state)
+		}
+	}
+
+	if *brief {
+		return nil
 	}
 
 	tok, err := os.ReadFile(f.tokenFile)
@@ -216,6 +242,20 @@ func ensureToken(path string) (bool, error) {
 		return false, fmt.Errorf("writing the token: %w", err)
 	}
 	return true, nil
+}
+
+// serviceState is systemd's own word for what the unit is doing. Unknown
+// rather than a guess when systemctl cannot be asked.
+func serviceState() string {
+	out, err := exec.Command("systemctl", "is-active", "hz-probe").Output()
+	state := strings.TrimSpace(string(out))
+	if state == "" {
+		if err != nil {
+			return "unknown (" + err.Error() + ")"
+		}
+		return "unknown"
+	}
+	return state
 }
 
 // run executes a command, surfacing its output when it fails.
