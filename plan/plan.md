@@ -262,6 +262,10 @@ Phase 3 replaces this with: restart horizon, done.
 | 1 | [Outside-in checks (`hz-probe`)](#outside-in-checks-hz-probe) | ✅ code done, ⏸ not yet deployed |
 | 2 | [Operator follow-ups](#operator-follow-ups-not-code) — yours, not mine | — |
 
+Two opt-in next-steps were added to [icebox.md](icebox.md) on 2026-09-10:
+HAProxy TCP frontends on the VPN address, and moving the range-collision
+warning onto the peer-config download path.
+
 ### Outside-in checks (`hz-probe`)
 
 Every existing check runs on hz, so all of them answer "can this box reach the
@@ -521,12 +525,24 @@ was checked against real cross-compiled binaries.
 
 ### Operator follow-ups (not code)
 
-- **Point the LAN's DHCP DNS at hz (192.168.1.160)** — optional now, still
-  worth it. The router forwards *dotted* names to hz (proved by asking it for
-  `veliode.com` and getting hz's answer), so `desktop.lan` resolves everywhere
-  today. What it will not forward is a single-label name, because there is no
-  domain to forward it for. Pointing DHCP at hz directly makes bare names work
-  too; until then, use the qualified form.
+- **Point the LAN's DHCP DNS at hz (192.168.1.160)** — optional, still
+  unchanged, and re-measured 2026-09-10 because it was briefly believed done.
+  What is actually configured is the router's *upstream* DNS, which is pointed
+  at hz; the DHCP DNS option still hands out the router. Both are true and
+  they are different settings.
+
+  Measured from a wired client on a fresh lease (`domain_name_servers =
+  192.168.1.1`, obtained 2h before):
+
+  | query | via router `.1` | direct to hz `.160` |
+  |---|---|---|
+  | `desktop.lan` | `192.168.1.76` ✅ | `192.168.1.76` ✅ |
+  | `desktop` (bare) | **no answer** | `192.168.1.76` ✅ |
+
+  So hz answers bare names and the router will not forward them — there is no
+  domain to forward them for. Qualified names work everywhere today. Changing
+  the DHCP *DNS server* option to `.160` is what makes bare names work; the
+  upstream-DNS setting already in place does not.
 
 - **Anything pinned to `http://192.168.1.160:8080` must move** to
   `https://hz.office.iodesystems.com` — bookmarks, scripts, `hz` CLI config. The
@@ -547,6 +563,46 @@ because they were done. Recorded so the same claims are not re-derived:
 - ~~Click "Keep 12 months" to close 10.5.1~~ — closed in code instead
   (`ReadWritePaths` for the journald drop-in). `log_persistence` reads 1 on
   prod.
+
+### Decision: remote access uses host routes, not a renumber (2026-09-10)
+
+The office LAN and a remote network were both `192.168.1.0/24`, so a
+`lan-access` peer got two routes for one prefix and its own won — the office
+unreachable, while hz's DNS kept resolving names to addresses on the remote
+side of the collision. Names worked, connections landed on whatever device
+held that address there.
+
+**Resolved by host-routing the specific office hosts** in the peer config,
+which wins on longest-prefix match over the client's own `/24`:
+
+```ini
+AllowedIPs = 10.100.0.0/24, 192.168.1.160/32, 192.168.1.76/32, 192.168.1.58/32
+```
+
+**Carl, 2026-09-10: this is fine, not a stopgap.** hz's DNS works and the
+local network is shadowed at those addresses deliberately.
+
+What it costs, recorded so nobody "fixes" it later without knowing: any local
+device at a shadowed address is unreachable while the tunnel is up, and every
+host you want needs its own `/32`. `vpn-only` is not an alternative here —
+this deployment's internal DNS answers with real LAN hosts rather than the WG
+gateway, so routing only the VPN range reaches nothing.
+
+Two durable alternatives, both deferred rather than rejected:
+
+- **Renumber the office off `192.168.1.0/24`.** The only fix that scales to
+  every remote network, since that range is every consumer router's default.
+  Not doable remotely, and touches hz's address, `local_interface`, service
+  backends, DHCP reservations and `LastLanCIDR`.
+- **HAProxy `mode tcp` frontends on the VPN address** (see
+  [icebox](icebox.md)). Would collapse raw-IP LAN access into the gateway the
+  way HTTP services already are, removing the need for host routes *and* for
+  renumbering, with no NAT and no third DNS view.
+
+NETMAP was considered and dropped: it needs a VPN-specific DNS view on top of
+the two hz has, because `LocalDNSRecords` is one shared answer set for LAN and
+VPN both. Generating NAT rules under a DNS layer that keeps answering with
+unmapped addresses is drift you cannot see.
 
 ### PCI switches still off (2026-08-18, read from prod `hz_control_state`)
 

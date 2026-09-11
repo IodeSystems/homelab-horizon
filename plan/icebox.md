@@ -27,3 +27,50 @@ the next person does not mistake it for a permission bit:
   by the upgrade.
 - Nobody has asked for it. It came from a schema-future-proofing instinct, and
   the instinct was wrong: the schema was never the hard part.
+
+## ◻ HAProxy `mode tcp` frontends on the VPN address
+
+Surfaced 2026-09-10 by the overlapping-subnet problem: the only traffic a
+LAN-range collision breaks is traffic that needs a LAN *route*. Proxied HTTP
+services are already immune — their internal DNS answers with the WG gateway,
+so a VPN client reaches them through HAProxy and never routes the LAN at all.
+Everything raw-IP (SSH, printers, anything not HTTP) is the exception, and it
+is the whole reason host routes or renumbering are on the table.
+
+HAProxy's generator is `mode http` only. TCP frontends bound to the VPN
+address would collapse the exception into the rule: one listener per host:port
+you need, names resolving to the gateway like every other service.
+
+**next:** extend `internal/haproxy` generation with a TCP frontend per
+declared forward, sourced from service config so the reconciler and the port
+model pick them up rather than it being hand-managed. `hz ports next` already
+hands out non-conflicting listener ports.
+
+**Why it beats the alternatives.** No NAT, no third DNS view, and unlike
+renumbering it does not need physical access or a maintenance window. It also
+removes the need for the `/32` host routes recorded in
+[plan.md](plan.md#decision-remote-access-uses-host-routes-not-a-renumber-2026-09-10).
+
+**risks:** a TCP frontend is a hole with no Host header to route on, so each
+one is a port that reaches exactly one backend and needs `internal_only`
+treatment deciding. Rate limiting and the ban path are HTTP-aware and would
+not cover it.
+
+**Not scheduled** — the host routes work today and Carl called them fine, so
+this is opt-in rather than pending.
+
+## ◻ Warn at peer-config download, not only on the health page
+
+The range-collision advisory (`86c50fe`) warns on the System Health tab, in
+`check`, and in the config template. The moment it would matter most is the
+one it does not cover: generating a `lan-access` peer config while the LAN is
+on a common range is exactly when the collision gets baked into somebody's
+laptop, and the person doing it is looking at the VPN page, not System Health.
+
+**next:** surface the same `config.AdviseCIDR` result on the peer-config
+download path (`handlers_api_vpn.go` `generateClientConfig` callers) and in
+the VPN page's add-peer flow.
+
+**risks:** warning on every peer download becomes wallpaper. It should fire
+only for the profile that installs the LAN route, which is `lan-access` —
+`vpn-only` and `full-tunnel` are unaffected.
