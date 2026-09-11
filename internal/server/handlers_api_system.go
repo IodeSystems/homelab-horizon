@@ -29,6 +29,25 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfg()
 	resp := apitypes.SystemHealthResponse{}
 
+	// Range collision advice. Not a component and not fixable from here —
+	// the remedy is renumbering a network — but it belongs on this page
+	// because the symptom shows up somewhere else entirely: a remote worker
+	// whose own network shares hz's LAN range loses the VPN, and hz's DNS
+	// keeps answering with addresses that resolve to their side of it.
+	lanAdvice, vpnAdvice := cfg.AdviseNetworks()
+	if lanAdvice.Risk != config.RiskNone {
+		resp.LANAdvice = &apitypes.CIDRAdviceResp{
+			Range: lanAdvice.Range, Risk: lanAdvice.Risk,
+			Reason: lanAdvice.Reason, Suggest: lanAdvice.Suggest,
+		}
+	}
+	if vpnAdvice.Risk != config.RiskNone {
+		resp.VPNAdvice = &apitypes.CIDRAdviceResp{
+			Range: vpnAdvice.Range, Risk: vpnAdvice.Risk,
+			Reason: vpnAdvice.Reason, Suggest: vpnAdvice.Suggest,
+		}
+	}
+
 	// IP forwarding — a system-wide prereq for WG to route. Read sysctl
 	// directly rather than relying on the wg package so this shows up even
 	// if WireGuard isn't installed yet.

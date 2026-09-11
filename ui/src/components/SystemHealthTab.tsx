@@ -149,6 +149,64 @@ function byName(health: SystemHealth | undefined, name: string): ComponentHealth
   return health?.components.find((c) => c.name === name);
 }
 
+// RangeAdvice warns that one of hz's ranges is a popular one.
+//
+// This is advice, not a check — there is no button, because the remedy is
+// renumbering a network. It earns a place on this page because the symptom
+// appears nowhere near the cause: a remote worker whose own network shares
+// hz's LAN range loses the VPN entirely, and hz's DNS keeps answering with
+// addresses that quietly resolve to their side of the collision.
+function RangeAdvice({ health }: { health: SystemHealth }) {
+  const items = [
+    { what: "LAN", advice: health.lan_advice },
+    { what: "VPN", advice: health.vpn_advice },
+  ].filter((i) => i.advice);
+
+  if (items.length === 0) return null;
+
+  return (
+    <Card variant="outlined" sx={{ mb: 2 }}>
+      <CardHeader
+        title={<Typography variant="h6">Address ranges</Typography>}
+        sx={{ pb: 0 }}
+      />
+      <CardContent>
+        {items.map(({ what, advice }) => (
+          <Alert
+            key={what}
+            severity={advice!.risk === "high" ? "warning" : "info"}
+            sx={{ mb: 1 }}
+          >
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              {what} is on{" "}
+              <Box component="code" sx={{ fontFamily: "monospace" }}>
+                {advice!.range}
+              </Box>
+              , which is {advice!.risk === "high" ? "a very common" : "a fairly common"}{" "}
+              range
+            </Typography>
+            <Typography variant="body2" sx={{ mt: 0.5 }}>
+              It is {advice!.reason}. A VPN client whose own network uses the same
+              range cannot reach this one — its local route wins — and hz's DNS
+              keeps resolving names to addresses on their side of the collision,
+              so connections land on whatever device holds that address there.
+            </Typography>
+            {advice!.suggest && (
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                Renumbering to something unfashionable avoids it — for example{" "}
+                <Box component="code" sx={{ fontFamily: "monospace" }}>
+                  {advice!.suggest}
+                </Box>
+                .
+              </Typography>
+            )}
+          </Alert>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
 // SystemLevelCard — host-wide bits that don't fit a single component: IP
 // forwarding, horizon's own systemd unit.
 function SystemLevelCard({ health }: { health: SystemHealth }) {
@@ -1105,6 +1163,7 @@ export function SystemHealthTab({
           is running on.
         </Typography>
       </Paper>
+      <RangeAdvice health={health} />
       <SystemLevelCard health={health} />
       <WireGuardCard health={health} />
       <HAProxyCard health={health} />
