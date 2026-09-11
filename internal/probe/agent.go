@@ -38,6 +38,12 @@ type Agent struct {
 	// agent produces its first results immediately rather than one interval
 	// after hz finished configuring it.
 	wake chan struct{}
+
+	// probed fires when a probe round finishes. The push loop waits on it
+	// rather than guessing how long a round takes: a round is bounded by the
+	// slowest target's timeout, so any fixed delay either races it or wastes
+	// time, and racing it means fresh results sit unsent for a full interval.
+	probed chan struct{}
 }
 
 // persisted is the agent's on-disk state: the target set, and nothing about
@@ -57,6 +63,7 @@ func NewAgent(vantage, version, token, statePath string) *Agent {
 		token:     token,
 		statePath: statePath,
 		wake:      make(chan struct{}, 1),
+		probed:    make(chan struct{}, 1),
 	}
 	a.loadState()
 	return a
@@ -190,8 +197,21 @@ func (a *Agent) RunOnce(ctx context.Context) []Result {
 	}
 	wg.Wait()
 	a.Record(out)
+
+	// Tell anyone waiting that there is something to send.
+	if len(out) > 0 {
+		select {
+		case a.probed <- struct{}{}:
+		default:
+		}
+	}
 	return out
 }
+
+// Probed is closed-over notification that a probe round produced results.
+// The push loop selects on it so a report follows a round rather than a
+// clock.
+func (a *Agent) Probed() <-chan struct{} { return a.probed }
 
 // Loop probes on the target set's interval until ctx is done. It keeps
 // running whether or not hz ever polls; the buffer is what makes an hz
