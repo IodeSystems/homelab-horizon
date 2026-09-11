@@ -406,28 +406,11 @@ export function RemoteVantages() {
           <Stack spacing={2}>
             {saveError && <Alert severity="error">{saveError}</Alert>}
 
-            {/* Step one, only when adding: get the agent onto the outside
-                host. The command carries the token hz just minted, so there
-                is no credential to copy back — only the address, which hz
-                cannot know. */}
-            {!editing && form.token && (
-              <Box>
-                <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
-                  1. Run this on the host you want to watch from
-                </Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
-                  Somewhere outside this network — a small VPS. It installs the
-                  agent, generates a certificate, and starts it under systemd.
-                </Typography>
-                <CopyBox
-                  text={`curl -fsSL ${window.location.origin}/admin/hz-probe/install | HZ_PROBE_TOKEN=${form.token} sudo -E bash`}
-                />
-                <Typography variant="body2" sx={{ fontWeight: 600, mt: 2, mb: 0.5 }}>
-                  2. Paste the URL it prints
-                </Typography>
-              </Box>
+            {!editing && (
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                1. Name this vantage
+              </Typography>
             )}
-
             <TextField
               label="Name"
               size="small"
@@ -435,6 +418,36 @@ export function RemoteVantages() {
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
             />
+
+            {/* The install command carries the name as well as the token, so
+                the agent calls itself what hz calls it. Without that it
+                defaults to the host's own hostname — which on a cloud
+                instance is something like instance-20260911-1234, and every
+                fresh install would report a name mismatch. */}
+            {!editing && (
+              <Box>
+                <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
+                  2. Run this on the host you want to watch from
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+                  Somewhere outside this network — a small VPS. It installs the
+                  agent, generates a certificate, and starts it under systemd.
+                </Typography>
+                {form.name.trim() && form.token ? (
+                  <CopyBox
+                    text={`curl -fsSL ${window.location.origin}/admin/hz-probe/install | HZ_PROBE_TOKEN=${form.token} HZ_PROBE_NAME=${form.name.trim()} sudo -E bash`}
+                  />
+                ) : (
+                  <Alert severity="info" sx={{ py: 0 }}>
+                    Name it first — the command includes the name so the agent
+                    and hz agree on it.
+                  </Alert>
+                )}
+                <Typography variant="body2" sx={{ fontWeight: 600, mt: 2, mb: 0.5 }}>
+                  3. Paste the URL it prints
+                </Typography>
+              </Box>
+            )}
             <TextField
               label="Agent URL"
               size="small"
