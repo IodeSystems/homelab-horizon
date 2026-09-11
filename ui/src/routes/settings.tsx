@@ -952,7 +952,10 @@ function HzCliTab() {
   const [snack, setSnack] = useState("");
   const base = window.location.origin;
   const install = `curl -fsSL ${base}/admin/hz/install | HZ_HOST=${base} HZ_TOKEN=<admin-token> bash`;
-  const installBinOnly = `curl -fsSL ${base}/admin/hz/install | bash`;
+  // The binary download needs a grant, so even the "binary only" form
+  // carries the token now — it authorises the download, not just the config
+  // file it would otherwise write.
+  const installBinOnly = `curl -fsSL ${base}/admin/hz/install | HZ_TOKEN=<admin-token> bash`;
 
   return (
     <Box>
@@ -984,7 +987,8 @@ function HzCliTab() {
         </Alert>
 
         <Typography variant="subtitle2" sx={{ mb: 1 }}>
-          Binary only (configure ~/.hz_config yourself):
+          Binary only (configure ~/.hz_config yourself) — the token still
+          authorises the download:
         </Typography>
         <CodeBlock
           text={installBinOnly}

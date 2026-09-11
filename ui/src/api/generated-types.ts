@@ -569,6 +569,13 @@ export interface RemoteProbeTestResp {
  */
 export interface RemoteProbeTokenResp {
   token: string;
+  /**
+   * InstallBase is the origin the install command must point at. The
+   * install routes are served on the public-facing (kiosk) hostname, not
+   * the admin one the operator is looking at — so the UI cannot build this
+   * URL from its own location without sending people to a 404.
+   */
+  installBase: string;
 }
 export interface ConfigResp {
   publicIP: string;

@@ -290,10 +290,21 @@ func (s *Server) handleAPIRemoteToken(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
-	// Nothing is stored here. The token becomes real only when the vantage is
-	// saved, so a dialog opened and abandoned leaves no credential behind.
+	// No vantage is created here — the token becomes a stored credential only
+	// when one is saved, so a dialog opened and abandoned leaves nothing
+	// behind but an install grant that expires on its own.
+	token := generateToken(48)
+
+	// The same token is what the install command presents to download the
+	// agent binary, so record it as redeemable. Without this the download
+	// would have to stay anonymous to work at all.
+	s.installGrants.issue(token)
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(apitypes.RemoteProbeTokenResp{Token: generateToken(48)})
+	_ = json.NewEncoder(w).Encode(apitypes.RemoteProbeTokenResp{
+		Token:       token,
+		InstallBase: s.installBaseURL(r),
+	})
 }
 
 // POST /api/v1/checks/remotes/test

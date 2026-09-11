@@ -245,7 +245,12 @@ type Server struct {
 
 	configSharesMu sync.Mutex
 	configShares   map[string]*configShare // token -> share
-	joinTokens     *joinTokenStore         // HA join tokens
+
+	// installGrants makes the client-binary downloads redeemable rather than
+	// anonymous: a token hz minted for an install command stays valid for an
+	// hour. See install_grants.go.
+	installGrants *installGrants
+	joinTokens    *joinTokenStore // HA join tokens
 
 	// peerInstancePaths and peerInstancePrefixes track routes that are
 	// per-instance ops (not shared-config mutations) and therefore exempt
@@ -444,6 +449,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		exporterStatus: map[string]exporterProbe{},
 		static:         newStaticSupervisor(cfg.StaticServeAddr(), dryRun),
 		configShares:   make(map[string]*configShare),
+		installGrants:  newInstallGrants(),
 		joinTokens:     newJoinTokenStore(),
 		activity:       newActivityTracker(),
 		ceremonies:     newCeremonyStore(),

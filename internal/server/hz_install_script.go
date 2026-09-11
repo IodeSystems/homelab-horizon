@@ -9,8 +9,11 @@ set -euo pipefail
 # hz installer — downloads the hz operator CLI matching this system from a
 # homelab-horizon instance, installs it, and (optionally) writes ~/.hz_config.
 #
-#   curl -fsSL <HZ_URL>/admin/hz/install | bash
+#   curl -fsSL <HZ_URL>/admin/hz/install | HZ_TOKEN=<admin-token> bash
 #   curl -fsSL <HZ_URL>/admin/hz/install | HZ_HOST=<url> HZ_TOKEN=<admin-token> bash
+#
+# HZ_TOKEN is required: it authorises the binary download as well as writing
+# ~/.hz_config. The script itself is public; the 6MB binary is not.
 #
 # Env:
 #   HZ_HOST      base URL of the instance (default: where this script came from)
@@ -38,9 +41,14 @@ asset="${os}-${arch}"
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 echo "hz-install: downloading hz ($asset) from $BASE ..."
-if ! curl -fSL "$BASE/admin/hz/bin/$asset" -o "$tmp"; then
+# HZ_TOKEN doubles as the download grant. Without it the server has no reason
+# to believe this request came from someone hz handed a command to, and the
+# binary would be a free download for the whole internet.
+if ! curl -fSL -H "Authorization: Bearer ${HZ_TOKEN:-}" "$BASE/admin/hz/bin/$asset" -o "$tmp"; then
   echo "hz-install: download failed ($BASE/admin/hz/bin/$asset)" >&2
-  echo "hz-install: the server may have been built without embedded clients." >&2
+  echo "hz-install: set HZ_TOKEN to your admin token — copy the whole command" >&2
+  echo "hz-install: from the hz Settings page. If it is set, the server may have" >&2
+  echo "hz-install: been built without embedded clients (-tags hzembed)." >&2
   exit 1
 fi
 chmod 0755 "$tmp"
