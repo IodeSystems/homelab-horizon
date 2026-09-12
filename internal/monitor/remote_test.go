@@ -463,3 +463,67 @@ func TestRowsArePrunedWhenTargetsGoAway(t *testing.T) {
 		t.Fatal("the agent row was pruned")
 	}
 }
+
+// A record with no proxy behind it still matters — the WireGuard endpoint is
+// one, and VPN clients cannot connect if it resolves wrongly. It gets a
+// DNS-only target: an HTTPS probe against it would fail forever and mean
+// nothing.
+func TestProxylessServicesGetDNSOnlyTargets(t *testing.T) {
+	cfg := &config.Config{
+		SSLEnabled: true,
+		PublicIP:   "203.0.113.10",
+		Services: []config.Service{
+			{Name: "web", Domains: []string{"www.example.com"},
+				Proxy:       &config.ProxyConfig{Backend: "10.0.0.1:80"},
+				ExternalDNS: &config.ExternalDNS{}},
+			// The VPN endpoint: a published record, nothing serving HTTP.
+			{Name: "vpn", Domains: []string{"vpn.example.com"},
+				ExternalDNS: &config.ExternalDNS{}},
+			// Neither served nor published: nothing to check.
+			{Name: "ghost", Domains: []string{"ghost.example.com"}},
+		},
+	}
+	got := map[string][]string{}
+	for _, tgt := range New(cfg).publicTargets() {
+		got[tgt.Host] = tgt.Kinds
+	}
+
+	if k := got["www.example.com"]; len(k) != 2 {
+		t.Fatalf("a proxied service should get dns+https, got %v", k)
+	}
+	if k := got["vpn.example.com"]; len(k) != 1 || k[0] != probe.KindDNS {
+		t.Fatalf("a proxyless published record should be DNS-only, got %v", k)
+	}
+	if _, ok := got["ghost.example.com"]; ok {
+		t.Fatal("a service that is neither served nor published should not be probed")
+	}
+}
+
+// A pinned IP is a deliberate statement that a name points elsewhere.
+// Comparing it against this host's address reports a correctly-published
+// record as broken — which is exactly what happened in production.
+func TestExpectationsFollowPinnedIPs(t *testing.T) {
+	cfg := &config.Config{
+		SSLEnabled: true,
+		PublicIP:   "203.0.113.10",
+		Services: []config.Service{
+			{Name: "here", Domains: []string{"here.example.com"},
+				Proxy:       &config.ProxyConfig{Backend: "10.0.0.1:80"},
+				ExternalDNS: &config.ExternalDNS{}},
+			{Name: "elsewhere", Domains: []string{"elsewhere.example.com"},
+				Proxy:       &config.ProxyConfig{Backend: "10.0.0.2:80"},
+				ExternalDNS: &config.ExternalDNS{IPs: []string{"198.51.100.9"}}},
+		},
+	}
+	got := map[string][]string{}
+	for _, tgt := range New(cfg).publicTargets() {
+		got[tgt.Host] = tgt.ExpectIPs
+	}
+
+	if e := got["here.example.com"]; len(e) != 1 || e[0] != "203.0.113.10" {
+		t.Fatalf("an unpinned service should expect this host's public IP, got %v", e)
+	}
+	if e := got["elsewhere.example.com"]; len(e) != 1 || e[0] != "198.51.100.9" {
+		t.Fatalf("a pinned service should expect its pin, got %v", e)
+	}
+}

@@ -1240,10 +1240,23 @@ type CIDRAdviceResp struct {
 	Suggest string `json:"suggest,omitempty"`
 }
 
+// PinnedIPResp is one service publishing a DNS record at an address this
+// host does not hold. Legitimate when the name really does point elsewhere;
+// silently wrong when it is a former address of this connection, which keeps
+// publishing after every renumber.
+type PinnedIPResp struct {
+	Service   string   `json:"service"`
+	Domains   []string `json:"domains"`
+	Pinned    []string `json:"pinned"`
+	HostIP    string   `json:"hostIp"`
+	Redundant bool     `json:"redundant"`
+}
+
 type SystemHealthResponse struct {
 	Components           []ComponentHealth `json:"components"`
 	LANAdvice            *CIDRAdviceResp   `json:"lan_advice,omitempty"`
 	VPNAdvice            *CIDRAdviceResp   `json:"vpn_advice,omitempty"`
+	PinnedIPs            []PinnedIPResp    `json:"pinned_ips,omitempty"`
 	PublicIP             string            `json:"publicIP,omitempty"`
 	IPForwarding         bool              `json:"ip_forwarding"`
 	IPForwardingError    string            `json:"ip_forwarding_error,omitempty"`

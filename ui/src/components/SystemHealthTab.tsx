@@ -156,6 +156,58 @@ function byName(health: SystemHealth | undefined, name: string): ComponentHealth
 // appears nowhere near the cause: a remote worker whose own network shares
 // hz's LAN range loses the VPN entirely, and hz's DNS keeps answering with
 // addresses that quietly resolve to their side of the collision.
+// PinnedDNS warns about services publishing at an address this host does not
+// hold.
+//
+// Sits beside the range advice for the same reason: hz is doing exactly what
+// it was configured to do, so nothing else in hz disagrees. The record
+// matches the config and the config is what went stale — which is why this
+// went unnoticed until something looked from outside the network.
+function PinnedDNS({ health }: { health: SystemHealth }) {
+  const pins = health.pinned_ips ?? [];
+  if (pins.length === 0) return null;
+
+  return (
+    <Card variant="outlined" sx={{ mb: 2 }}>
+      <CardHeader
+        title={<Typography variant="h6">Pinned DNS records</Typography>}
+        sx={{ pb: 0 }}
+      />
+      <CardContent>
+        {pins.map((p) => (
+          <Alert key={p.service} severity={p.redundant ? "info" : "warning"} sx={{ mb: 1 }}>
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              {p.service} publishes {(p.domains ?? []).join(", ")} at{" "}
+              <Box component="code" sx={{ fontFamily: "monospace" }}>
+                {(p.pinned ?? []).join(", ")}
+              </Box>
+            </Typography>
+            {p.redundant ? (
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                That is this host's current public IP, so it works — but a pin does
+                not follow the host. The next time the address changes, this name
+                keeps publishing the old one while every unpinned name moves.
+                Clearing the pinned IP lets it track automatically.
+              </Typography>
+            ) : (
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                This host is{" "}
+                <Box component="code" sx={{ fontFamily: "monospace" }}>
+                  {p.hostIp}
+                </Box>
+                . Deliberate if that name really points at another host — but if it
+                is a former address of this connection, the name has been
+                unreachable from outside since the address changed, and nothing in
+                hz would have said so.
+              </Typography>
+            )}
+          </Alert>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
 function RangeAdvice({ health }: { health: SystemHealth }) {
   const items = [
     { what: "LAN", advice: health.lan_advice },
@@ -1164,6 +1216,7 @@ export function SystemHealthTab({
         </Typography>
       </Paper>
       <RangeAdvice health={health} />
+      <PinnedDNS health={health} />
       <SystemLevelCard health={health} />
       <WireGuardCard health={health} />
       <HAProxyCard health={health} />
