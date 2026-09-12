@@ -294,6 +294,7 @@ func runCheck(dryRun bool) error {
 	c.checkFileAccess()
 	c.checkNetwork()
 	c.checkRanges()
+	c.checkPinnedDNS()
 	c.printSummary()
 
 	return nil
@@ -526,6 +527,34 @@ func (c *checker) checkRanges() {
 		if a.advice.Suggest != "" {
 			fmt.Printf("  Consider renumbering to something unfashionable, e.g. %s\n", a.advice.Suggest)
 		}
+	}
+}
+
+// checkPinnedDNS warns about services publishing at an address this host
+// does not hold.
+//
+// Not counted against allGood: a pin may be deliberate. It is reported
+// because the failure mode is silent — the record matches the config, so
+// every check inside hz agrees it is fine, while the name resolves to an
+// address that stopped being this host at some point nobody recorded.
+func (c *checker) checkPinnedDNS() {
+	if c.cfg == nil {
+		return
+	}
+	for _, w := range c.cfg.PinnedIPWarnings() {
+		if w.Redundant {
+			fmt.Printf("Checking DNS pin for %s... REDUNDANT\n", w.Service)
+			fmt.Printf("  Pinned to %s, which is this host's current public IP.\n", w.HostIP)
+			fmt.Println("  It works today and stops working the next time the address changes,")
+			fmt.Println("  because a pin does not follow the host. Clear external_dns.ips to")
+			fmt.Println("  let it track automatically.")
+			continue
+		}
+		fmt.Printf("Checking DNS pin for %s... ELSEWHERE\n", w.Service)
+		fmt.Printf("  Publishing %v at %v, but this host is %s.\n", w.Domains, w.Pinned, w.HostIP)
+		fmt.Println("  Deliberate if that name really does point at another host. If it is a")
+		fmt.Println("  former address of this connection, the name has been unreachable since")
+		fmt.Println("  the address changed — clear external_dns.ips to track this host.")
 	}
 }
 

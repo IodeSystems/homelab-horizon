@@ -322,51 +322,87 @@ func (m *Monitor) remoteTargetSet(rp config.RemoteProbe) probe.TargetSet {
 
 // publicTargets lists the served hostnames, deduplicated and ordered so the
 // set's version is stable across restarts.
+//
+// Two things decide whether a name belongs here, and they are different
+// questions. Whether an outside client is *meant* to reach it — internal-only
+// services are not, and probing them produced a wall of red rows for names
+// working exactly as configured. And whether there is HTTP behind it: a
+// service with no proxy has no web endpoint to fetch, but it may still have a
+// DNS record whose correctness matters, which is why those get a DNS-only
+// target rather than being skipped.
 func (m *Monitor) publicTargets() []probe.Target {
-	expect := []string{}
-	if ip := strings.TrimSpace(m.cfg().PublicIP); ip != "" {
-		expect = append(expect, ip)
-	}
+	cfg := m.cfg()
 
-	seen := make(map[string]bool)
+	type want struct {
+		kinds  []string
+		expect []string
+	}
+	byHost := make(map[string]want)
 	var hosts []string
-	for _, svc := range m.cfg().Services {
-		if svc.Proxy == nil {
+
+	for i := range cfg.Services {
+		svc := cfg.Services[i]
+
+		proxied := svc.Proxy != nil
+		if proxied && svc.Proxy.InternalOnly {
 			continue
 		}
-		// An internal-only service is not published to the public internet,
-		// so an outside vantage cannot resolve it and should not be asked to
-		// try. Probing them anyway produced a wall of red rows for names that
-		// were working exactly as configured — which is how a monitoring page
-		// teaches people to stop reading it.
-		if svc.Proxy.InternalOnly {
+		// No proxy and no external record: nothing hz serves and nothing it
+		// publishes, so there is nothing an outside vantage can check.
+		if !proxied && svc.ExternalDNS == nil {
 			continue
 		}
+
+		kinds := []string{probe.KindDNS}
+		// HTTPS only where something actually answers it. A record with no
+		// proxy behind it — the WireGuard endpoint, say — would fail an HTTPS
+		// probe forever, and that failure would mean nothing.
+		if proxied && cfg.SSLEnabled {
+			kinds = append(kinds, probe.KindHTTPS)
+		}
+
+		// What the record is *supposed* to say, which is not always this
+		// host's address: a service may pin an IP deliberately to point a
+		// name somewhere else. Comparing against the host's public IP
+		// regardless reports a correctly-published pin as a failure.
+		expect := cfg.GetPublicIPsForService(&svc)
+		if len(expect) == 0 {
+			if ip := strings.TrimSpace(cfg.PublicIP); ip != "" {
+				expect = []string{ip}
+			}
+		}
+
 		for _, domain := range svc.Domains {
 			domain = strings.ToLower(strings.TrimSpace(domain))
 			// A wildcard is not a name a client can connect to; the concrete
 			// names it covers are probed on their own.
-			if domain == "" || seen[domain] || strings.HasPrefix(domain, "*.") {
+			if domain == "" || strings.HasPrefix(domain, "*.") {
 				continue
 			}
-			seen[domain] = true
-			hosts = append(hosts, domain)
+			prev, seen := byHost[domain]
+			if !seen {
+				hosts = append(hosts, domain)
+				byHost[domain] = want{kinds: kinds, expect: expect}
+				continue
+			}
+			// Two services claiming one name: keep the wider probe set, so a
+			// name that is proxied anywhere still gets its HTTPS check.
+			if len(kinds) > len(prev.kinds) {
+				prev.kinds = kinds
+			}
+			byHost[domain] = prev
 		}
 	}
 	sort.Strings(hosts)
 
-	kinds := []string{probe.KindDNS}
-	if m.cfg().SSLEnabled {
-		kinds = append(kinds, probe.KindHTTPS)
-	}
-
 	targets := make([]probe.Target, 0, len(hosts))
 	for _, h := range hosts {
+		w := byHost[h]
 		targets = append(targets, probe.Target{
 			Name:      h,
 			Host:      h,
-			Kinds:     kinds,
-			ExpectIPs: expect,
+			Kinds:     w.kinds,
+			ExpectIPs: w.expect,
 		})
 	}
 	return targets

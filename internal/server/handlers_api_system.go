@@ -48,6 +48,17 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Services publishing at an address this host does not hold. Belongs
+	// beside the range advice for the same reason: hz is doing exactly what
+	// it was configured to do, the configuration is what went stale, and
+	// nothing else in hz would ever say so.
+	for _, w := range cfg.PinnedIPWarnings() {
+		resp.PinnedIPs = append(resp.PinnedIPs, apitypes.PinnedIPResp{
+			Service: w.Service, Domains: w.Domains, Pinned: w.Pinned,
+			HostIP: w.HostIP, Redundant: w.Redundant,
+		})
+	}
+
 	// IP forwarding — a system-wide prereq for WG to route. Read sysctl
 	// directly rather than relying on the wg package so this shows up even
 	// if WireGuard isn't installed yet.

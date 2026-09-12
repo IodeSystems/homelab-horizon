@@ -1170,10 +1170,24 @@ export interface CIDRAdviceResp {
   reason?: string;
   suggest?: string;
 }
+/**
+ * PinnedIPResp is one service publishing a DNS record at an address this
+ * host does not hold. Legitimate when the name really does point elsewhere;
+ * silently wrong when it is a former address of this connection, which keeps
+ * publishing after every renumber.
+ */
+export interface PinnedIPResp {
+  service: string;
+  domains: string[];
+  pinned: string[];
+  hostIp: string;
+  redundant: boolean;
+}
 export interface SystemHealthResponse {
   components: ComponentHealth[];
   lan_advice?: CIDRAdviceResp;
   vpn_advice?: CIDRAdviceResp;
+  pinned_ips?: PinnedIPResp[];
   publicIP?: string;
   ip_forwarding: boolean;
   ip_forwarding_error?: string;
