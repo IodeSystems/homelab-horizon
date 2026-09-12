@@ -329,6 +329,8 @@ export const RemoteProbeSchema = z.object({
   lastError: z.string().optional(),
   agentVantage: z.string().optional(),
   agentVersion: z.string().optional(),
+  expectedAgentVersion: z.string().optional(),
+  agentOutdated: z.boolean(),
   targetsVersion: z.string().optional(),
   targetCount: z.number(),
   checkCount: z.number(),

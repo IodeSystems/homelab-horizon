@@ -518,6 +518,13 @@ export interface RemoteProbeResp {
   lastError?: string;
   agentVantage?: string;
   agentVersion?: string;
+  /**
+   * ExpectedAgentVersion is the build hz holds; Outdated says the agent is
+   * not running it. A vantage quietly on an old build is the kind of thing
+   * nobody finds until they are debugging something else.
+   */
+  expectedAgentVersion?: string;
+  agentOutdated: boolean;
   targetsVersion?: string;
   targetCount: number /* int */;
   checkCount: number /* int */; // check rows this vantage contributes

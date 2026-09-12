@@ -72,6 +72,10 @@ func (s *Server) handleAPIRemotes(w http.ResponseWriter, r *http.Request) {
 			item.LastError = st.LastError
 			item.AgentVantage = st.AgentVantage
 			item.AgentVersion = st.AgentVersion
+			item.ExpectedAgentVersion = s.version
+			// Only meaningful once an agent has said what it is running.
+			item.AgentOutdated = st.AgentVersion != "" && s.version != "" &&
+				st.AgentVersion != s.version
 			item.TargetsVersion = st.TargetsVersion
 			item.TargetCount = st.TargetCount
 		}
