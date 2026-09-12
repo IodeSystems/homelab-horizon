@@ -212,6 +212,22 @@ function VantageRow({
           {/* A vantage whose agent reports a different name than hz calls it
               is usually two hz instances pointed at one agent, or a copied
               config. Worth surfacing rather than quietly reconciling. */}
+          {/* Loud on purpose. A vantage running an old build still reports,
+              so nothing else about the row looks wrong — and it is exactly
+              the thing nobody notices until they are debugging something
+              else. */}
+          {probe.agentOutdated && (
+            <Tooltip
+              title={`Running ${probe.agentVersion}; hz holds ${probe.expectedAgentVersion}. The daily update timer picks this up, or re-run the install command.`}
+            >
+              <Chip
+                size="small"
+                color="warning"
+                label="needs update"
+                sx={{ height: 20, fontSize: "0.7rem" }}
+              />
+            </Tooltip>
+          )}
           {probe.agentVantage && probe.agentVantage !== probe.name && (
             <Tooltip title="The agent calls itself something else">
               <Chip
@@ -417,6 +433,17 @@ export function RemoteVantages() {
             Add vantage
           </Button>
         </Box>
+
+        {/* One line for the whole panel: a vantage needing attention should
+            not require reading every row to find. */}
+        {probes.some((p) => p.agentOutdated) && (
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            {probes.filter((p) => p.agentOutdated).length} vantage
+            {probes.filter((p) => p.agentOutdated).length === 1 ? " is" : "s are"} running
+            an older agent than hz holds. The daily update timer on each host picks
+            this up; re-run the install command to do it now.
+          </Alert>
+        )}
 
         {probes.length === 0 ? (
           <Typography variant="body2" color="text.secondary" sx={{ mt: 2, fontStyle: "italic" }}>

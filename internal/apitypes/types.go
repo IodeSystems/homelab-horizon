@@ -523,16 +523,21 @@ type RemoteProbeResp struct {
 	HasToken  bool     `json:"hasToken"`
 
 	// Live state from the poll loop.
-	Reachable      bool      `json:"reachable"`
-	Polled         bool      `json:"polled"` // false = configured but never polled yet
-	LastPoll       time.Time `json:"lastPoll"`
-	LastGood       time.Time `json:"lastGood"`
-	LastError      string    `json:"lastError,omitempty"`
-	AgentVantage   string    `json:"agentVantage,omitempty"`
-	AgentVersion   string    `json:"agentVersion,omitempty"`
-	TargetsVersion string    `json:"targetsVersion,omitempty"`
-	TargetCount    int       `json:"targetCount"`
-	CheckCount     int       `json:"checkCount"` // check rows this vantage contributes
+	Reachable    bool      `json:"reachable"`
+	Polled       bool      `json:"polled"` // false = configured but never polled yet
+	LastPoll     time.Time `json:"lastPoll"`
+	LastGood     time.Time `json:"lastGood"`
+	LastError    string    `json:"lastError,omitempty"`
+	AgentVantage string    `json:"agentVantage,omitempty"`
+	AgentVersion string    `json:"agentVersion,omitempty"`
+	// ExpectedAgentVersion is the build hz holds; Outdated says the agent is
+	// not running it. A vantage quietly on an old build is the kind of thing
+	// nobody finds until they are debugging something else.
+	ExpectedAgentVersion string `json:"expectedAgentVersion,omitempty"`
+	AgentOutdated        bool   `json:"agentOutdated"`
+	TargetsVersion       string `json:"targetsVersion,omitempty"`
+	TargetCount          int    `json:"targetCount"`
+	CheckCount           int    `json:"checkCount"` // check rows this vantage contributes
 }
 
 // RemoteProbeRequest adds or edits a vantage.

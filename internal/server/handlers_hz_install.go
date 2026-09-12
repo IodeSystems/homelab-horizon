@@ -72,6 +72,14 @@ func (s *Server) requireInstallGrant(w http.ResponseWriter, r *http.Request) boo
 	if s.installGrants.valid(tok) || s.isAdmin(r) {
 		return true
 	}
+
+	// A registered vantage's own token counts. Grants last an hour, which is
+	// right for a human pasting a command and useless for a machine updating
+	// itself at 3am — and this token is one hz already issued to exactly
+	// this agent for exactly this purpose.
+	if _, ok := s.probeByToken(tok); ok {
+		return true
+	}
 	http.Error(w,
 		"this download needs an install grant — copy the whole command from hz "+
 			"(Checks -> Outside vantages -> Add vantage, or Settings for the hz CLI). "+

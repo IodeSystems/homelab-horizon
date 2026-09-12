@@ -122,6 +122,17 @@ func (a *Agent) PushLoop(ctx context.Context, p *Pusher, interval time.Duration)
 				slog.Info("probe: hz sent a new target set",
 					"version", resp.Targets.Version, "targets", len(resp.Targets.Targets))
 			}
+
+			// Say it loudly and keep saying it. A vantage quietly running an
+			// old build is the kind of thing nobody discovers until they are
+			// debugging something else.
+			if resp.AgentVersion != "" && resp.AgentVersion != a.version {
+				slog.Warn("probe: this agent is not the build hz holds — update it",
+					"running", a.version, "available", resp.AgentVersion)
+			}
+			if resp.Notice != "" {
+				slog.Warn("probe: notice from hz", "notice", resp.Notice)
+			}
 			// Advance only over what hz acknowledged.
 			if resp.Accepted > 0 && resp.Accepted <= len(results) {
 				sent = results[resp.Accepted-1].At

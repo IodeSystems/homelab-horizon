@@ -1102,6 +1102,23 @@ credential for an agent this peer chose. Name resolvers explicitly if you care
 which ones agree — a VPS's system resolver is usually a caching forwarder with
 a view of its own.
 
+**Keeping agents current.** hz tells each agent which build it holds on every
+report. An agent on an older one logs a warning and shows a **needs update**
+chip on its row — a vantage running an old binary still reports, so nothing
+else about it looks wrong, which is exactly why it needs saying.
+
+The update itself is a daily root timer (`hz-probe-update.timer`) running
+`hz-probe update`: it asks hz for the version, downloads it if that differs,
+checks the new binary runs, swaps it in and restarts. The agent does none of
+this — it runs as a `DynamicUser` and cannot write its own binary or restart
+its unit, deliberately. An agent that fetched and executed what hz sent it
+would turn a compromised hz into code execution on a host outside your
+network. hz is a source of bytes over a verified connection, never an
+instruction.
+
+Re-running the install command does the same thing immediately, and
+`--no-auto-update` skips the timer.
+
 The Checks page lists each vantage with its own state, which the check rows
 cannot carry: a vantage hz has never reached produces no rows at all, and that
 reads identically to one nobody configured.

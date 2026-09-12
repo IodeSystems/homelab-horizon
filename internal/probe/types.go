@@ -147,6 +147,21 @@ type PushResponse struct {
 	// again, in seconds. Lets hz slow a chatty agent down without anyone
 	// editing the agent's own configuration.
 	Interval int `json:"interval,omitempty"`
+
+	// AgentVersion is the build hz holds for this agent's platform. The
+	// agent compares it to its own and says so when they differ.
+	//
+	// Telling rather than doing: hz says what it has, and something with
+	// privilege decides whether to act. The agent runs unprivileged and
+	// cannot replace its own binary, which is the property worth keeping —
+	// an agent that executes what hz sends it would turn a compromised hz
+	// into code execution on a host outside the network.
+	AgentVersion string `json:"agent_version,omitempty"`
+
+	// Notice is a message for the agent's operator, logged verbatim. For
+	// the things hz needs a human to know about a vantage that is otherwise
+	// working.
+	Notice string `json:"notice,omitempty"`
 }
 
 // PollResponse is the agent's answer: what it holds, and what it saw.

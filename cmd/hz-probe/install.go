@@ -13,6 +13,45 @@ import (
 
 const unitPath = "/etc/systemd/system/hz-probe.service"
 
+const (
+	updateUnitPath  = "/etc/systemd/system/hz-probe-update.service"
+	updateTimerPath = "/etc/systemd/system/hz-probe-update.timer"
+)
+
+// updateUnitTemplate runs the update as root.
+//
+// Deliberately not hardened the way the agent is: this one has to write
+// /usr/local/bin and restart a service, which is the whole reason it is a
+// separate unit instead of something the agent does. It runs for a few
+// seconds a day and does nothing if the versions match.
+const updateUnitTemplate = `[Unit]
+Description=hz-probe - pull the build hz holds and restart if it differs
+Documentation=https://github.com/iodesystems/homelab-horizon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=__EXEC__
+`
+
+// updateTimerTemplate schedules it.
+//
+// Daily with a randomised delay: a fleet of vantages installed from the same
+// command would otherwise all ask at the same second, and the only thing
+// that achieves is a spike against the one host they all report to.
+const updateTimerTemplate = `[Unit]
+Description=hz-probe daily update check
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=2h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+`
+
 // unitTemplate is the systemd unit install writes.
 //
 // It runs unprivileged. The agent makes outbound DNS and HTTPS requests and
@@ -137,6 +176,7 @@ func runInstall(args []string) error {
 	dryRun := fs.Bool("dry-run", false, "print what install would do, change nothing")
 	noStart := fs.Bool("no-start", false, "write and enable the unit, but do not start it")
 	brief := fs.Bool("brief", false, "skip the trailing remote_probes block (the installer prints its own)")
+	noAutoUpdate := fs.Bool("no-auto-update", false, "do not install the daily update timer")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -175,12 +215,32 @@ func runInstall(args []string) error {
 		fmt.Printf("Warning: systemd-analyze verify reported:\n%s\n", strings.TrimSpace(string(out)))
 	}
 
+	// The update timer, for push installs. In pull mode hz does not hold the
+	// agent's token, so the unattended download has nothing to authenticate
+	// with — those are updated by re-running the install command.
+	if !*noAutoUpdate && f.pushMode() {
+		if err := writeUpdateUnits(&f); err != nil {
+			return err
+		}
+		fmt.Printf("Created %s and %s\n", updateUnitPath, updateTimerPath)
+	}
+
 	if err := run("systemctl", "daemon-reload"); err != nil {
 		return err
 	}
 	if err := run("systemctl", "enable", "hz-probe"); err != nil {
 		return err
 	}
+	if !*noAutoUpdate && f.pushMode() {
+		if err := run("systemctl", "enable", "--now", "hz-probe-update.timer"); err != nil {
+			// Not fatal: the agent works, it just will not update itself.
+			// Failing the whole install over the timer would be worse.
+			fmt.Printf("Warning: could not enable the update timer: %v\n", err)
+		} else {
+			fmt.Println("Daily update check enabled (hz-probe-update.timer).")
+		}
+	}
+
 	if *noStart {
 		fmt.Println("Enabled. Start it with: systemctl start hz-probe")
 	} else {
@@ -243,6 +303,23 @@ func runInstall(args []string) error {
 		return nil
 	}
 	fmt.Printf("\n  }\n")
+	return nil
+}
+
+// writeUpdateUnits writes the root-side updater and its timer.
+func writeUpdateUnits(f *serveFlags) error {
+	args := []string{
+		execPath(), "update",
+		"--token-file", f.tokenFile,
+		"--push-to", f.pushTo,
+	}
+	unit := strings.NewReplacer("__EXEC__", strings.Join(args, " ")).Replace(updateUnitTemplate)
+	if err := os.WriteFile(updateUnitPath, []byte(unit), 0o644); err != nil {
+		return fmt.Errorf("writing the update unit: %w", err)
+	}
+	if err := os.WriteFile(updateTimerPath, []byte(updateTimerTemplate), 0o644); err != nil {
+		return fmt.Errorf("writing the update timer: %w", err)
+	}
 	return nil
 }
 

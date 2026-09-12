@@ -32,7 +32,8 @@ USAGE
   With no command, hz-probe serves. Every other command is setup you run once.
 
 COMMANDS
-  serve             Probe on a timer and answer hz's polls (default)
+  serve             Probe on a timer and report to hz (default)
+  update            Pull the build hz holds and restart, if it differs
   install           Write and enable the systemd unit, minting what it needs
   show-systemd      Print the systemd unit that install would write
   gen-cert          Write a self-signed certificate and key for --tls-cert/--tls-key
@@ -67,6 +68,17 @@ INSTALL FLAGS
   the serve flags, plus:
   --dry-run             print what install would do, change nothing
   --no-start            write and enable the unit, but do not start it
+  --no-auto-update      do not install the daily update timer
+
+UPDATE
+  'update' asks hz which build it holds, and if it differs from the installed
+  one: downloads it, checks it runs, swaps it in and restarts the service.
+  Needs root. The agent itself runs unprivileged and cannot do any of this —
+  which is the point, since an agent that executed what hz sent it would turn
+  a compromised hz into code execution out here.
+
+  install writes a daily timer that runs it. --no-auto-update skips that, and
+  you update by re-running the install command instead.
 
 GEN-CERT FLAGS
   --host IP-OR-NAME     what hz will connect to; repeatable (default: this host)
@@ -111,6 +123,8 @@ func main() {
 		err = runInstall(args)
 	case "show-systemd":
 		err = runShowSystemd(args)
+	case "update":
+		err = runUpdate(args)
 	case "gen-cert":
 		err = runGenCert(args)
 	case "fingerprint":

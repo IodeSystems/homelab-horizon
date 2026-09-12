@@ -96,6 +96,10 @@ func (s *Server) handleProbeReport(w http.ResponseWriter, r *http.Request) {
 		Accepted:       accepted,
 		TargetsVersion: want.Version,
 		Interval:       rp.Probe,
+		// The embedded agent binaries are cross-compiled in the same build as
+		// this server and carry the same version string, so what hz is
+		// running is exactly what it would hand out.
+		AgentVersion: s.version,
 	}
 	if req.TargetsVersion != want.Version {
 		set := want

@@ -300,3 +300,61 @@ func TestPushEndToEndWithARealAgent(t *testing.T) {
 		t.Fatal("the set was resent to an agent already holding it")
 	}
 }
+
+// hz tells the agent which build it holds, so a vantage on an old binary
+// says so in its own log and shows as outdated in the UI.
+func TestReportCarriesTheAgentVersionHzHolds(t *testing.T) {
+	s := newTestServer(t, pushCfg())
+	s.version = "v9.9.9"
+	token := mint(t, s)
+
+	_, resp := report(t, s, token, probe.PushRequest{Vantage: "GCP", Version: "v1.0.0"})
+	if resp.AgentVersion != "v9.9.9" {
+		t.Fatalf("agent_version = %q, want hz's own build", resp.AgentVersion)
+	}
+
+	list := listRemotes(t, s)
+	if len(list) != 1 {
+		t.Fatalf("expected one vantage, got %d", len(list))
+	}
+	if !list[0].AgentOutdated {
+		t.Fatal("an agent on a different build should be reported as outdated")
+	}
+	if list[0].ExpectedAgentVersion != "v9.9.9" {
+		t.Fatalf("expectedAgentVersion = %q", list[0].ExpectedAgentVersion)
+	}
+
+	// Matching build: not outdated.
+	_, _ = report(t, s, token, probe.PushRequest{Vantage: "GCP", Version: "v9.9.9"})
+	if listRemotes(t, s)[0].AgentOutdated {
+		t.Fatal("an agent on the same build must not be flagged")
+	}
+}
+
+// The unattended updater runs long after any grant expired, so a registered
+// vantage's own token has to authorise the download.
+func TestVantageTokenAuthorisesTheBinaryDownload(t *testing.T) {
+	cfg := pushCfg()
+	cfg.RemoteProbes = []config.RemoteProbe{
+		{Name: "v", Mode: config.ProbeModePush, Token: "vantage-token", Enabled: true},
+	}
+	s := newTestServer(t, cfg)
+	mux := s.setupRoutes()
+
+	get := func(bearer string) int {
+		r := httptest.NewRequest(http.MethodGet, "/admin/hz-probe/bin/linux-amd64", nil)
+		r.Host = "vpn.example.com"
+		if bearer != "" {
+			r.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w.Code
+	}
+	if got := get("vantage-token"); got == http.StatusUnauthorized {
+		t.Fatal("a registered vantage's token should authorise its own update")
+	}
+	if got := get("some-other-token"); got != http.StatusUnauthorized {
+		t.Fatalf("an unknown token returned %d, want 401", got)
+	}
+}
