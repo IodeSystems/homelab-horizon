@@ -776,6 +776,22 @@ type Service struct {
 	//
 	// hz cannot infer this. It sees traffic, not what an application does
 	// with a card number.
+	// Dormant marks a service as a reserved slot: the name, the certificate
+	// and the proxy entry all stay, and nothing is expected to answer behind
+	// them.
+	//
+	// Not the same as deleting it, and not the same as a fault. Hardware is
+	// finite and not everything runs at once; a slot held open deliberately
+	// should not spend that time red. What stays checked is what the
+	// reservation actually consists of — the record still resolving and the
+	// certificate still valid — because those are what you need intact on
+	// the day you bring it back up, and they fail silently otherwise.
+	Dormant bool `json:"dormant,omitempty"`
+
+	// DormantReason is why, which is the thing nobody can reconstruct in six
+	// months. Optional, and shown wherever the dormant state is.
+	DormantReason string `json:"dormant_reason,omitempty"`
+
 	PCIScope     string        `json:"pci_scope,omitempty"`
 	Integrations *Integrations `json:"integrations,omitempty"` // Observability integrations (metrics, ...)
 }

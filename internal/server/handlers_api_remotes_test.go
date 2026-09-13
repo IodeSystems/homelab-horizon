@@ -582,3 +582,41 @@ func TestRemoteAddPushNeedsNoURL(t *testing.T) {
 		t.Fatalf("mode = %q, want push", got[0].Mode)
 	}
 }
+
+// The edit path assigns Dormant from the request, so a client that omits it
+// un-parks the service. Both shipped clients round-trip it; this pins the
+// server behaviour they depend on.
+func TestEditRoundTripsDormant(t *testing.T) {
+	s := newTestServer(t, &config.Config{
+		Services: []config.Service{{
+			Name: "parked", Domains: []string{"parked.example.com"},
+			Dormant: true, DormantReason: "no spare RAM",
+			Proxy: &config.ProxyConfig{Backend: "10.0.0.1:80"},
+		}},
+	})
+
+	edit := func(body string) int {
+		w := httptest.NewRecorder()
+		s.handleAPIEditService(w, asAdmin(s, http.MethodPost, "/api/v1/services/edit", body))
+		return w.Code
+	}
+
+	// An edit that carries the flag keeps it.
+	if code := edit(`{"originalName":"parked","name":"parked","domains":["parked.example.com"],
+		"dormant":true,"dormantReason":"no spare RAM",
+		"proxy":{"backend":"10.0.0.1:80","internalOnly":false}}`); code != http.StatusOK {
+		t.Fatalf("edit returned %d", code)
+	}
+	if !s.cfg().Services[0].Dormant {
+		t.Fatal("an edit carrying dormant:true cleared it")
+	}
+
+	// And one that clears it un-parks, which is how you bring a slot back.
+	if code := edit(`{"originalName":"parked","name":"parked","domains":["parked.example.com"],
+		"proxy":{"backend":"10.0.0.1:80","internalOnly":false}}`); code != http.StatusOK {
+		t.Fatalf("edit returned %d", code)
+	}
+	if s.cfg().Services[0].Dormant {
+		t.Fatal("an edit omitting dormant should un-park, which is the documented full-replace semantics")
+	}
+}

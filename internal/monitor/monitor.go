@@ -24,11 +24,20 @@ import (
 // serves perfectly today, so calling it "failed" is a lie the operator learns
 // to ignore — and calling it "ok" is the silence this state exists to break.
 const (
-	StatusOK       = "ok"
-	StatusWarning  = "warning"
-	StatusFailed   = "failed"
-	StatusPending  = "pending"
+	StatusOK      = "ok"
+	StatusWarning = "warning"
+	StatusFailed  = "failed"
+	StatusPending = "pending"
+
+	// StatusDisabled is a check somebody switched off.
 	StatusDisabled = "disabled"
+
+	// StatusDormant is a check that is not run because the service is a
+	// reserved slot — nothing is expected to answer. Distinct from disabled
+	// on purpose: one says "stop telling me about this check", the other
+	// says "this service is deliberately not running", and only the second
+	// is a fact about the service worth showing next to it.
+	StatusDormant = "dormant"
 )
 
 // WarningError marks a check result as degraded rather than broken. A check
@@ -199,6 +208,11 @@ func (m *Monitor) getAllChecks() []config.ServiceCheck {
 				break
 			}
 		}
+		// A reserved slot has nothing behind it on purpose. Pinging it would
+		// report a fault that is the intended state.
+		if svc.Dormant {
+			enabled = false
+		}
 
 		checks = append(checks, config.ServiceCheck{
 			Name:     checkName,
@@ -283,6 +297,9 @@ func (m *Monitor) Start() {
 		status := StatusPending
 		if !check.Enabled {
 			status = StatusDisabled
+			if m.dormantCheck(check.Name) {
+				status = StatusDormant
+			}
 		}
 		m.statuses[check.Name] = &CheckStatus{
 			Name:     check.Name,
@@ -304,6 +321,21 @@ func (m *Monitor) Start() {
 	}
 
 	m.startRemoteProbes()
+}
+
+// dormantCheck reports whether a check belongs to a service marked as a
+// reserved slot.
+func (m *Monitor) dormantCheck(name string) bool {
+	svcName, ok := strings.CutPrefix(name, "svc:")
+	if !ok {
+		return false
+	}
+	for _, svc := range m.cfg().Services {
+		if svc.Name == svcName {
+			return svc.Dormant
+		}
+	}
+	return false
 }
 
 // isAutoGen reports whether a check was generated rather than declared. Both

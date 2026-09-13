@@ -974,6 +974,32 @@ Check types:
 All of these run on hz, and answer "can this box reach the service". That is
 not the question your users ask.
 
+### Reserved slots
+
+Hardware is finite and not everything runs at once. A service marked
+**dormant** is a slot held open on purpose: the DNS record, the certificate
+coverage and the HAProxy entry all stay, and nothing is expected to answer
+behind them.
+
+What goes quiet is backend reachability — the `svc:` check and the outside
+vantage's HTTPS probe, both of which would otherwise report a 503 that is the
+intended state. What stays checked is DNS and TLS, because those *are* the
+reservation: the name still resolving to the right place and the certificate
+still valid are exactly what has to be intact on the day you bring the slot
+back, and both fail silently otherwise.
+
+It is not the same as deleting the service, and not the same as disabling a
+check. Deleting gives the name up; disabling a check says "stop telling me
+about this"; dormant says "this is deliberately not running", which is a fact
+about the service worth showing next to it.
+
+```bash
+hz service edit vay --dormant --dormant-reason "waiting on the new box"
+hz service edit vay --dormant=false        # bring it back
+```
+
+Or the **Reserved slot** switch in the service editor.
+
 ### Outside-in checks (`hz-probe`)
 
 `hz-probe` answers the other question: can the internet reach it. It runs on a

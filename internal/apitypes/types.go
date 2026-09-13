@@ -115,6 +115,13 @@ type ServiceResp struct {
 	Proxy        *ProxyResp        `json:"proxy,omitempty"`
 	Integrations *IntegrationsResp `json:"integrations,omitempty"`
 	Status       ServiceStatus     `json:"status"`
+
+	// Dormant marks a reserved slot: the name, certificate and proxy entry
+	// stay and nothing is expected to answer behind them. Its
+	// backend-reachability checks go quiet; DNS and TLS stay live, being
+	// what the reservation actually consists of.
+	Dormant       bool   `json:"dormant,omitempty"`
+	DormantReason string `json:"dormantReason,omitempty"`
 }
 
 // IntegrationsResp mirrors config.Integrations for read/round-trip.
@@ -844,6 +851,9 @@ type ServiceRequest struct {
 	ExternalDNS  *ServiceRequestExternalDNS  `json:"externalDNS,omitempty"`
 	Proxy        *ServiceRequestProxy        `json:"proxy,omitempty"`
 	Integrations *ServiceRequestIntegrations `json:"integrations,omitempty"`
+
+	Dormant       bool   `json:"dormant,omitempty"`
+	DormantReason string `json:"dormantReason,omitempty"`
 }
 
 // ServiceRequestIntegrations carries per-service observability integrations from

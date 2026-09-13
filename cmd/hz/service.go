@@ -139,6 +139,15 @@ func serviceShow(c *client, args []string) error {
 	if svc.InternalDNS != nil {
 		fmt.Printf("InternalDNS: %s\n", svc.InternalDNS.IP)
 	}
+	if svc.Dormant {
+		reason := svc.DormantReason
+		if reason == "" {
+			reason = "no reason recorded"
+		}
+		fmt.Printf("Dormant:     yes — %s\n", reason)
+		fmt.Println("             (reserved slot: name, certificate and proxy kept;")
+		fmt.Println("              backend checks quiet, DNS and TLS still checked)")
+	}
 	if svc.ExternalDNS != nil {
 		ips := svc.ExternalDNS.ConfiguredIPs
 		src := "explicit"
@@ -200,6 +209,8 @@ type serviceFlags struct {
 	set map[string]bool
 
 	name          string
+	dormant       bool
+	dormantReason string
 	domains       multiFlag
 	domainsCSV    string
 	https         bool
@@ -258,6 +269,8 @@ func newServiceFlags(name string) *serviceFlags {
 	f.StringVar(&sf.balance, "balance", "", "first | roundrobin")
 	f.StringVar(&sf.intDNSIP, "internal-dns-ip", "", "internal (dnsmasq) A record IP")
 	f.Var(&sf.extDNSIP, "external-dns-ip", "external A record IP (repeatable)")
+	f.BoolVar(&sf.dormant, "dormant", false, "reserved slot: keep the name, certificate and proxy entry, expect nothing behind them")
+	f.StringVar(&sf.dormantReason, "dormant-reason", "", "why this slot is parked")
 	f.IntVar(&sf.ttl, "ttl", 300, "external DNS TTL seconds")
 	f.IntVar(&sf.tConnect, "timeout-connect", 0, "HAProxy connect timeout override (s)")
 	f.IntVar(&sf.tServer, "timeout-server", 0, "HAProxy server timeout override (s)")
@@ -459,6 +472,10 @@ func respToRequest(s *apitypes.ServiceResp) apitypes.ServiceRequest {
 		OriginalName: s.Name,
 		Name:         s.Name,
 		Domains:      append([]string(nil), s.Domains...),
+		// Round-tripped, or any edit would quietly un-park a reserved slot:
+		// the edit path assigns this from the request.
+		Dormant:       s.Dormant,
+		DormantReason: s.DormantReason,
 	}
 	if s.InternalDNS != nil {
 		req.InternalDNS = &apitypes.ServiceRequestInternalDNS{IP: s.InternalDNS.IP}
@@ -542,6 +559,12 @@ func serviceEdit(c *client, args []string) error {
 		} else {
 			req.InternalDNS = &apitypes.ServiceRequestInternalDNS{IP: sf.intDNSIP}
 		}
+	}
+	if set["dormant"] {
+		req.Dormant = sf.dormant
+	}
+	if set["dormant-reason"] {
+		req.DormantReason = sf.dormantReason
 	}
 	if set["external-dns-ip"] || set["ttl"] {
 		if req.ExternalDNS == nil {

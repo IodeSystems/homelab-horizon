@@ -132,6 +132,10 @@ export interface ServiceMutationInput {
   originalName?: string;
   name: string;
   domains: string[];
+  // Round-tripped on every edit: the server assigns this from the request,
+  // so omitting it would quietly un-park a reserved slot.
+  dormant?: boolean;
+  dormantReason?: string;
   internalDNS?: { ip: string } | null;
   externalDNS?: { ip: string; ips?: string[]; ttl: number } | null;
   proxy?: {

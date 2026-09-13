@@ -356,8 +356,14 @@ func (m *Monitor) publicTargets() []probe.Target {
 		kinds := []string{probe.KindDNS}
 		// HTTPS only where something actually answers it. A record with no
 		// proxy behind it — the WireGuard endpoint, say — would fail an HTTPS
-		// probe forever, and that failure would mean nothing.
-		if proxied && cfg.SSLEnabled {
+		// probe forever, and that failure would mean nothing. A reserved slot
+		// is the same shape for a different reason: the proxy is there and
+		// deliberately has nothing behind it, so it would answer 503 forever.
+		//
+		// DNS stays either way. The record still resolving is what the
+		// reservation consists of, and it is what has to be intact on the day
+		// the slot comes back.
+		if proxied && cfg.SSLEnabled && !svc.Dormant {
 			kinds = append(kinds, probe.KindHTTPS)
 		}
 
@@ -386,7 +392,8 @@ func (m *Monitor) publicTargets() []probe.Target {
 				continue
 			}
 			// Two services claiming one name: keep the wider probe set, so a
-			// name that is proxied anywhere still gets its HTTPS check.
+			// name that is live anywhere still gets its HTTPS check even if
+			// another service claiming it is dormant.
 			if len(kinds) > len(prev.kinds) {
 				prev.kinds = kinds
 			}
@@ -611,9 +618,18 @@ func (m *Monitor) AcceptPushedResults(rp config.RemoteProbe, agentVantage, agent
 //
 // The agent row is never pruned; it belongs to the vantage, not to a target.
 func (m *Monitor) pruneVantageRows(rp config.RemoteProbe, ts probe.TargetSet) {
-	wanted := make(map[string]bool, len(ts.Targets))
+	// Keyed by host *and* kind: a service going dormant keeps its DNS target
+	// and loses its HTTPS one, so matching on host alone would leave the
+	// https row behind, frozen red on the 503 it last saw.
+	wanted := make(map[string]bool, len(ts.Targets)*2)
 	for _, t := range ts.Targets {
-		wanted[t.Host] = true
+		kinds := t.Kinds
+		if len(kinds) == 0 {
+			kinds = []string{KindDNSDefault, KindHTTPSDefault}
+		}
+		for _, k := range kinds {
+			wanted[k+":"+t.Host] = true
+		}
 	}
 
 	prefix := externalPrefix + rp.Name + ":"
@@ -631,7 +647,7 @@ func (m *Monitor) pruneVantageRows(rp config.RemoteProbe, ts probe.TargetSet) {
 		// ext:<vantage>:<kind>:<host> — neither a vantage name nor a host may
 		// contain a colon, both validated on the way in.
 		parts := strings.SplitN(name, ":", 4)
-		if len(parts) != 4 || wanted[parts[3]] {
+		if len(parts) != 4 || wanted[parts[2]+":"+parts[3]] {
 			kept = append(kept, name)
 			continue
 		}
@@ -640,6 +656,12 @@ func (m *Monitor) pruneVantageRows(rp config.RemoteProbe, ts probe.TargetSet) {
 	}
 	m.externalNames = kept
 }
+
+// Default kinds, mirroring probe.Run when a target names none.
+const (
+	KindDNSDefault   = probe.KindDNS
+	KindHTTPSDefault = probe.KindHTTPS
+)
 
 // TargetSetFor is what hz wants a vantage probing.
 func (m *Monitor) TargetSetFor(rp config.RemoteProbe) probe.TargetSet {
