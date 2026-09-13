@@ -64,3 +64,72 @@ func TestGetAllChecks_HTTPWhenPathSet(t *testing.T) {
 		t.Fatal("expected svc:api check")
 	}
 }
+
+// Parking a service has to reach the monitor without restarting everything:
+// the blunt Reload would cost the history of every unrelated check.
+func TestRefreshChecksParksWithoutLosingHistory(t *testing.T) {
+	cfg := &config.Config{
+		Services: []config.Service{
+			{Name: "live", Domains: []string{"live.example.com"},
+				Proxy: &config.ProxyConfig{Backend: "10.0.0.1:9000"}},
+			{Name: "parked", Domains: []string{"parked.example.com"},
+				Proxy: &config.ProxyConfig{Backend: "10.0.0.2:9000"}},
+		},
+	}
+	m := New(cfg)
+	defer m.Stop()
+	m.SeedForTest("svc:live", "ping", "10.0.0.1:9000")
+	m.SeedForTest("svc:parked", "ping", "10.0.0.2:9000")
+
+	next := *cfg
+	next.Services = []config.Service{
+		cfg.Services[0],
+		{Name: "parked", Domains: []string{"parked.example.com"}, Dormant: true,
+			Proxy: &config.ProxyConfig{Backend: "10.0.0.2:9000"}},
+	}
+	m.RefreshChecks(&next)
+
+	parked := m.GetStatus("svc:parked")
+	if parked == nil || parked.Status != StatusDormant {
+		t.Fatalf("parked check = %+v, want dormant", parked)
+	}
+	if parked.Enabled {
+		t.Error("a dormant check should not be enabled")
+	}
+	// Its past is worth keeping — it ran until it was parked.
+	if len(m.GetHistory("svc:parked")) != 1 {
+		t.Error("parking a service discarded its history")
+	}
+	// And nothing unrelated was disturbed.
+	if live := m.GetStatus("svc:live"); live == nil || live.Status != StatusOK {
+		t.Errorf("unrelated check = %+v, want untouched", live)
+	}
+	if len(m.GetHistory("svc:live")) != 1 {
+		t.Error("parking one service cleared another's history")
+	}
+}
+
+// Deleting a service takes its rows with it; a row nothing updates reads as
+// current forever.
+func TestRefreshChecksDropsDeletedServices(t *testing.T) {
+	cfg := &config.Config{
+		Services: []config.Service{
+			{Name: "doomed", Domains: []string{"doomed.example.com"},
+				Proxy: &config.ProxyConfig{Backend: "10.0.0.3:9000"}},
+		},
+	}
+	m := New(cfg)
+	defer m.Stop()
+	m.SeedForTest("svc:doomed", "ping", "10.0.0.3:9000")
+
+	next := *cfg
+	next.Services = nil
+	m.RefreshChecks(&next)
+
+	if m.GetStatus("svc:doomed") != nil {
+		t.Fatal("a deleted service left its check row behind")
+	}
+	if len(m.GetHistory("svc:doomed")) != 0 {
+		t.Fatal("a deleted service left its history behind")
+	}
+}

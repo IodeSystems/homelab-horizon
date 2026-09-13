@@ -22,6 +22,15 @@ func (s *Server) syncServices() {
 	// Non-blocking — mutation handlers should not stall on external HTTP.
 	go s.refreshPublicIPIfStale()
 
+	// Re-derive the checks. Services appear, get parked and get deleted here,
+	// and until this existed none of that reached the monitor until hz
+	// restarted — so a freshly parked service went on failing and a deleted
+	// one went on being checked. Narrow on purpose: checks that did not
+	// change keep running and keep their history.
+	if s.monitor != nil {
+		s.monitor.RefreshChecks(s.cfg())
+	}
+
 	// Update DNSMasq
 	if s.cfg().DNSMasqEnabled {
 		if err := s.dns.SetRecords(s.cfg().DeriveDNSRecords()); err != nil {
