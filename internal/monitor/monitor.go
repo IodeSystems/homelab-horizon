@@ -130,6 +130,12 @@ type Monitor struct {
 	// loop gets its own context so a vantage can be added, edited or removed
 	// without disturbing the others or the local checks.
 	remoteCancel map[string]context.CancelFunc
+
+	// checkCancel stops one local check's loop, keyed by check name. Same
+	// reason as remoteCancel: a service being added, parked or deleted has to
+	// take effect without restarting every check and discarding the history
+	// of services that did not change.
+	checkCancel map[string]context.CancelFunc
 }
 
 // New creates a new Monitor
@@ -315,12 +321,156 @@ func (m *Monitor) Start() {
 
 	// Start a goroutine for each enabled check
 	for _, check := range allChecks {
-		if check.Enabled {
-			go m.runCheck(check)
-		}
+		m.startCheck(check)
 	}
 
 	m.startRemoteProbes()
+}
+
+// startCheck launches one check's loop under its own context.
+func (m *Monitor) startCheck(check config.ServiceCheck) {
+	if !check.Enabled {
+		return
+	}
+	ctx, cancel := context.WithCancel(m.ctx)
+
+	m.mu.Lock()
+	if m.checkCancel == nil {
+		m.checkCancel = make(map[string]context.CancelFunc)
+	}
+	if old, ok := m.checkCancel[check.Name]; ok {
+		old()
+	}
+	m.checkCancel[check.Name] = cancel
+	m.mu.Unlock()
+
+	go m.runCheck(ctx, check)
+}
+
+// stopCheck halts one check's loop, leaving its history alone — a check that
+// stops running has a past worth keeping.
+func (m *Monitor) stopCheck(name string) {
+	m.mu.Lock()
+	if cancel, ok := m.checkCancel[name]; ok {
+		cancel()
+		delete(m.checkCancel, name)
+	}
+	m.mu.Unlock()
+}
+
+// RefreshChecks re-derives the local check set from the current config.
+//
+// The blunt alternative is Reload, which stops everything and clears all
+// history — so adding one service, or parking one, would cost the history of
+// every unrelated check. Here a check that did not change keeps running and
+// keeps its past.
+func (m *Monitor) RefreshChecks(cfg *config.Config) {
+	m.config.Store(cfg)
+
+	want := map[string]config.ServiceCheck{}
+	for _, c := range m.getAllChecks() {
+		want[c.Name] = c
+	}
+
+	// Every local check hz currently knows about — running or not. Looking
+	// only at running ones would strand a check that was already parked or
+	// disabled when its service was deleted: no goroutine to find, so its row
+	// would sit there forever reading as current.
+	m.mu.RLock()
+	known := make([]string, 0, len(m.statuses))
+	seen := make(map[string]bool, len(m.statuses))
+	for name := range m.statuses {
+		if strings.HasPrefix(name, externalPrefix) {
+			continue // remote rows are ReloadRemotes' business
+		}
+		known = append(known, name)
+		seen[name] = true
+	}
+	for name := range m.checkCancel {
+		if !seen[name] {
+			known = append(known, name)
+		}
+	}
+	m.mu.RUnlock()
+
+	// Gone or newly disabled: stop, and say why it stopped.
+	for _, name := range known {
+		c, still := want[name]
+		if still && c.Enabled {
+			continue
+		}
+		m.stopCheck(name)
+
+		m.mu.Lock()
+		if st, ok := m.statuses[name]; ok {
+			if !still {
+				delete(m.statuses, name)
+				delete(m.history, name)
+			} else {
+				st.Enabled = false
+				st.Status = StatusDisabled
+				st.LastError = ""
+			}
+		}
+		m.mu.Unlock()
+
+		if still {
+			// Re-read outside the lock: dormantCheck takes it.
+			if m.dormantCheck(name) {
+				m.mu.Lock()
+				if st, ok := m.statuses[name]; ok {
+					st.Status = StatusDormant
+				}
+				m.mu.Unlock()
+			}
+		}
+	}
+
+	// New or newly enabled.
+	for name, c := range want {
+		if !c.Enabled {
+			// Make sure a check that was never started still shows its state.
+			m.mu.Lock()
+			if st, ok := m.statuses[name]; ok && st.Status != StatusDormant && st.Status != StatusDisabled {
+				st.Enabled = false
+				st.Status = StatusDisabled
+			}
+			m.mu.Unlock()
+			if m.dormantCheck(name) {
+				m.mu.Lock()
+				if st, ok := m.statuses[name]; ok {
+					st.Status = StatusDormant
+				}
+				m.mu.Unlock()
+			}
+			continue
+		}
+		m.mu.RLock()
+		_, alreadyRunning := m.checkCancel[name]
+		m.mu.RUnlock()
+		if alreadyRunning {
+			continue
+		}
+		m.mu.Lock()
+		if st, ok := m.statuses[name]; ok {
+			st.Enabled = true
+			if st.Status == StatusDisabled || st.Status == StatusDormant {
+				st.Status = StatusPending
+			}
+		} else {
+			interval := c.Interval
+			if interval <= 0 {
+				interval = 300
+			}
+			m.statuses[name] = &CheckStatus{
+				Name: c.Name, Type: c.Type, Target: c.Target,
+				Status: StatusPending, Interval: interval, Enabled: true,
+				AutoGen: isAutoGen(c.Name),
+			}
+		}
+		m.mu.Unlock()
+		m.startCheck(c)
+	}
 }
 
 // dormantCheck reports whether a check belongs to a service marked as a
@@ -428,6 +578,7 @@ func (m *Monitor) Reload(cfg *config.Config) {
 	m.externalNames = nil
 	m.remoteStates = nil
 	m.remoteCancel = nil
+	m.checkCancel = nil
 	m.mu.Unlock()
 	m.Start()
 }
@@ -476,7 +627,7 @@ func (m *Monitor) UpdateConfig() {
 }
 
 // runCheck runs a single check on its interval
-func (m *Monitor) runCheck(check config.ServiceCheck) {
+func (m *Monitor) runCheck(ctx context.Context, check config.ServiceCheck) {
 	interval := check.Interval
 	if interval <= 0 {
 		interval = 300
@@ -485,7 +636,7 @@ func (m *Monitor) runCheck(check config.ServiceCheck) {
 	// Wait before first check to let services finish starting
 	select {
 	case <-time.After(10 * time.Second):
-	case <-m.ctx.Done():
+	case <-ctx.Done():
 		return
 	}
 	m.executeCheck(check)
@@ -495,7 +646,7 @@ func (m *Monitor) runCheck(check config.ServiceCheck) {
 
 	for {
 		select {
-		case <-m.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			m.executeCheck(check)
