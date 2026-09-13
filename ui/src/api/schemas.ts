@@ -75,6 +75,10 @@ const ServiceStatusSchema = z.object({
 });
 
 export const ServiceSchema = z.object({
+  // Reserved slot. Must be listed or zod strips it, and every edit would
+  // silently un-park the service — the server assigns this from the request.
+  dormant: z.boolean().optional(),
+  dormantReason: z.string().optional(),
   name: z.string(),
   domains: z.array(z.string()),
   internalDNS: z.object({ ip: z.string() }).optional(),

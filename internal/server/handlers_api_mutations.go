@@ -60,9 +60,11 @@ func requestIntegrations(in *apitypes.ServiceRequestIntegrations) *config.Integr
 
 func serviceRequestToService(req *apitypes.ServiceRequest) config.Service {
 	svc := config.Service{
-		Name:         req.Name,
-		Domains:      req.Domains,
-		Integrations: requestIntegrations(req.Integrations),
+		Name:          req.Name,
+		Domains:       req.Domains,
+		Integrations:  requestIntegrations(req.Integrations),
+		Dormant:       req.Dormant,
+		DormantReason: req.DormantReason,
 	}
 	if req.InternalDNS != nil && req.InternalDNS.IP != "" {
 		svc.InternalDNS = &config.InternalDNS{IP: req.InternalDNS.IP}
@@ -215,6 +217,9 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 			} else {
 				cfg.Services[i].InternalDNS = nil
 			}
+
+			cfg.Services[i].Dormant = req.Dormant
+			cfg.Services[i].DormantReason = req.DormantReason
 
 			// External DNS
 			if req.ExternalDNS != nil {

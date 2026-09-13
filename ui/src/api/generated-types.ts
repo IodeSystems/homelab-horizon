@@ -111,6 +111,14 @@ export interface ServiceResp {
   proxy?: ProxyResp;
   integrations?: IntegrationsResp;
   status: ServiceStatus;
+  /**
+   * Dormant marks a reserved slot: the name, certificate and proxy entry
+   * stay and nothing is expected to answer behind them. Its
+   * backend-reachability checks go quiet; DNS and TLS stay live, being
+   * what the reservation actually consists of.
+   */
+  dormant?: boolean;
+  dormantReason?: string;
 }
 /**
  * IntegrationsResp mirrors config.Integrations for read/round-trip.
@@ -828,6 +836,8 @@ export interface ServiceRequest {
   externalDNS?: ServiceRequestExternalDNS;
   proxy?: ServiceRequestProxy;
   integrations?: ServiceRequestIntegrations;
+  dormant?: boolean;
+  dormantReason?: string;
 }
 /**
  * ServiceRequestIntegrations carries per-service observability integrations from

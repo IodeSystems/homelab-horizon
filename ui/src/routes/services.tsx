@@ -134,6 +134,8 @@ function DetailCard({
 interface ServiceFormState {
   name: string;
   domains: string;
+  dormant: boolean;
+  dormantReason: string;
   internalIP: string;
   externalEnabled: boolean;
   externalIPs: string;
@@ -159,6 +161,8 @@ interface ServiceFormState {
 
 const emptyForm: ServiceFormState = {
   name: "",
+  dormant: false,
+  dormantReason: "",
   domains: "",
   internalIP: "",
   externalEnabled: false,
@@ -184,6 +188,10 @@ const emptyForm: ServiceFormState = {
 
 function serviceToForm(svc: Service): ServiceFormState {
   return {
+    // Carried through the form so an unrelated edit does not un-park a
+    // reserved slot.
+    dormant: svc.dormant ?? false,
+    dormantReason: svc.dormantReason ?? "",
     name: svc.name,
     domains: svc.domains.join(", "),
     internalIP: svc.internalDNS?.ip ?? "",
@@ -228,6 +236,8 @@ function formToInput(form: ServiceFormState, originalName?: string): ServiceMuta
   const input: ServiceMutationInput = {
     name: form.name,
     domains,
+    dormant: form.dormant,
+    dormantReason: form.dormantReason,
   };
 
   if (originalName) {
@@ -998,6 +1008,28 @@ function ServiceFormDialog({
               />
               <Typography variant="body2">Internal only</Typography>
             </Box>
+
+            {/* A reserved slot. Distinct from deleting the service and from
+                the service being broken: the name, certificate and proxy
+                entry stay, and nothing is expected behind them. */}
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <Switch
+                checked={form.dormant}
+                onChange={(e) => update("dormant", e.target.checked)}
+                size="small"
+              />
+              <Typography variant="body2">Reserved slot (nothing running)</Typography>
+            </Box>
+            {form.dormant && (
+              <TextField
+                label="Why it's parked"
+                value={form.dormantReason}
+                onChange={(e) => update("dormantReason", e.target.value)}
+                size="small"
+                fullWidth
+                helperText="Backend checks go quiet. DNS and TLS stay checked — they are what the reservation consists of, and what has to be intact when you bring it back."
+              />
+            )}
 
             {form.proxyMode === "proxy" && (
               <>
@@ -1917,7 +1949,11 @@ function ServiceRow({
                     </Typography>
                   )}
                   <Typography variant="body2" color="text.secondary">
-                    {service.proxy!.internalOnly ? "Internal only" : "Public"}
+                    {service.dormant
+                      ? "Reserved slot"
+                      : service.proxy!.internalOnly
+                        ? "Internal only"
+                        : "Public"}
                   </Typography>
                   {service.proxy!.timeouts && (
                     <Typography variant="body2" color="text.secondary">

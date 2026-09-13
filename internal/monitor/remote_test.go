@@ -527,3 +527,80 @@ func TestExpectationsFollowPinnedIPs(t *testing.T) {
 		t.Fatalf("a pinned service should expect its pin, got %v", e)
 	}
 }
+
+// A reserved slot keeps its name and its certificate and has nothing behind
+// it on purpose. Probing it over HTTPS would report 503 forever, which is the
+// intended state rather than a fault — but the record still resolving is what
+// the reservation consists of, so DNS stays.
+func TestDormantServicesKeepDNSAndLoseHTTPS(t *testing.T) {
+	cfg := &config.Config{
+		SSLEnabled: true,
+		PublicIP:   "203.0.113.10",
+		Services: []config.Service{
+			{Name: "live", Domains: []string{"live.example.com"},
+				Proxy: &config.ProxyConfig{Backend: "10.0.0.1:80"}},
+			{Name: "parked", Domains: []string{"parked.example.com"}, Dormant: true,
+				DormantReason: "no spare RAM until the new box lands",
+				Proxy:         &config.ProxyConfig{Backend: "10.0.0.2:80"}},
+		},
+	}
+	got := map[string][]string{}
+	for _, tgt := range New(cfg).publicTargets() {
+		got[tgt.Host] = tgt.Kinds
+	}
+
+	if k := got["live.example.com"]; len(k) != 2 {
+		t.Fatalf("a live service should get dns+https, got %v", k)
+	}
+	k, ok := got["parked.example.com"]
+	if !ok {
+		t.Fatal("a dormant service must still have its DNS checked — that is the reservation")
+	}
+	if len(k) != 1 || k[0] != probe.KindDNS {
+		t.Fatalf("a dormant service should be DNS-only, got %v", k)
+	}
+}
+
+// Marking a service dormant drops its HTTPS target while keeping its DNS
+// one, so the prune has to match on kind — on host alone the https row would
+// survive, frozen on the 503 it last saw.
+func TestPruneDropsAKindWithoutDroppingTheHost(t *testing.T) {
+	cfg := &config.Config{
+		SSLEnabled: true, PublicIP: "203.0.113.10",
+		Services: []config.Service{
+			{Name: "parked", Domains: []string{"parked.example.com"},
+				Proxy: &config.ProxyConfig{Backend: "10.0.0.2:80"}},
+		},
+	}
+	m := New(cfg)
+	defer m.Stop()
+	rp := config.RemoteProbe{Name: "v", Mode: config.ProbeModePush, Token: "t", Enabled: true}
+
+	now := time.Now().UTC()
+	m.AcceptPushedResults(rp, "v", "x", []probe.Result{
+		{Target: "parked.example.com", Host: "parked.example.com", Kind: probe.KindDNS, At: now, Status: StatusOK},
+		{Target: "parked.example.com", Host: "parked.example.com", Kind: probe.KindHTTPS, At: now, Status: StatusFailed, Error: "503"},
+	})
+	if m.GetStatus("ext:v:https:parked.example.com") == nil {
+		t.Fatal("setup: the https row should exist while the service is live")
+	}
+
+	// Park it: DNS target stays, HTTPS target goes.
+	next := *cfg
+	next.Services = []config.Service{{
+		Name: "parked", Domains: []string{"parked.example.com"}, Dormant: true,
+		Proxy: &config.ProxyConfig{Backend: "10.0.0.2:80"},
+	}}
+	m.config.Store(&next)
+
+	m.AcceptPushedResults(rp, "v", "x", []probe.Result{
+		{Target: "parked.example.com", Host: "parked.example.com", Kind: probe.KindDNS, At: now, Status: StatusOK},
+	})
+
+	if m.GetStatus("ext:v:https:parked.example.com") != nil {
+		t.Fatal("the https row survived and would sit red forever")
+	}
+	if m.GetStatus("ext:v:dns:parked.example.com") == nil {
+		t.Fatal("the dns row was pruned; that is the reservation")
+	}
+}

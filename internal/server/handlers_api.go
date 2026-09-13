@@ -161,8 +161,10 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 	sorted := make([]apitypes.ServiceResp, 0, len(s.cfg().Services))
 	for _, svc := range s.cfg().Services {
 		sr := apitypes.ServiceResp{
-			Name:    svc.Name,
-			Domains: svc.Domains,
+			Dormant:       svc.Dormant,
+			DormantReason: svc.DormantReason,
+			Name:          svc.Name,
+			Domains:       svc.Domains,
 		}
 		if svc.InternalDNS != nil {
 			sr.InternalDNS = &apitypes.InternalDNSResp{IP: svc.InternalDNS.IP}
