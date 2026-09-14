@@ -598,6 +598,27 @@ export interface RemoteProbeTokenResp {
    */
   installBase: string;
 }
+/**
+ * ObservedPortsResp is what is actually listening on a host, as opposed to
+ * what hz has been configured to believe.
+ * The two differ, and the gap is not cosmetic: the allocator suggested a port
+ * a neighbouring daemon already held, and the service that took the advice
+ * failed to bind. Open is what answered a connection; Unreserved is the
+ * subset hz had no record of, which is the interesting part.
+ */
+export interface ObservedPortsResp {
+  host: string;
+  from: number /* int */;
+  to: number /* int */;
+  open: number /* int */[];
+  unreserved: number /* int */[];
+  /**
+   * Scanned is false when hz could not probe — the answer is then "hz does
+   * not know", which must not be read as "nothing is listening".
+   */
+  scanned: boolean;
+  note?: string;
+}
 export interface ConfigResp {
   publicIP: string;
   publicIPOverride?: string;

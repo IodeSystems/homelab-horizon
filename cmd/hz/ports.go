@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -111,16 +113,66 @@ func runPortsNext(c *client, args []string) error {
 	}
 	used := usedTCP(pm, *host)
 
-	base := findFreeRange(used, *from, *count, excludedFunc(pm))
-	if base == 0 {
-		return fmt.Errorf("no free %d-port range >= %d below 65536 on %s (used + common ports excluded)", *count, *from, *host)
+	excluded := excludedFunc(pm)
+
+	// hz's map is what hz was told about. A host also runs things nobody
+	// registered, so the candidate is checked against the host itself before
+	// it is offered — this used to hand out a port a neighbouring daemon
+	// already held, and the service that took the advice could not bind.
+	//
+	// Each rejected candidate is remembered as used, so the search moves past
+	// it rather than proposing it again.
+	for attempt := 0; attempt < 20; attempt++ {
+		base := findFreeRange(used, *from, *count, excluded)
+		if base == 0 {
+			return fmt.Errorf("no free %d-port range >= %d below 65536 on %s (used + common ports excluded)", *count, *from, *host)
+		}
+
+		busy, err := observedInRange(c, *host, base, base+*count-1)
+		if err != nil {
+			// hz could not look. Say so rather than presenting an unchecked
+			// answer as a checked one.
+			fmt.Fprintf(os.Stderr, "hz: could not verify against %s (%v); this range is unchecked\n", *host, err)
+			busy = nil
+		}
+		if len(busy) == 0 {
+			if *count == 1 {
+				fmt.Println(base)
+			} else {
+				fmt.Printf("%d-%d\n", base, base+*count-1)
+			}
+			return nil
+		}
+
+		fmt.Fprintf(os.Stderr, "hz: %d-%d has %v listening but unregistered in hz; looking further\n",
+			base, base+*count-1, busy)
+		for _, p := range busy {
+			used[p] = true
+		}
+		// Everything below the first conflict is settled; resume past it.
+		*from = busy[0] + 1
 	}
-	if *count == 1 {
-		fmt.Println(base)
-	} else {
-		fmt.Printf("%d-%d\n", base, base+*count-1)
+	return fmt.Errorf("gave up after 20 candidates on %s: hz's records and the host disagree too much to allocate; run 'hz ports list --host %s' to see what is actually listening", *host, *host)
+}
+
+// observedUnreserved is what is listening that hz has no record of.
+func observedUnreserved(c *client, host string, from, to int) ([]int, error) {
+	var out apitypes.ObservedPortsResp
+	path := fmt.Sprintf("/api/v1/ports/observed?host=%s&from=%d&to=%d", url.QueryEscape(host), from, to)
+	if err := c.do("GET", path, nil, &out); err != nil {
+		return nil, err
 	}
-	return nil
+	return out.Unreserved, nil
+}
+
+// observedInRange asks hz what is actually listening between from and to.
+func observedInRange(c *client, host string, from, to int) ([]int, error) {
+	var out apitypes.ObservedPortsResp
+	path := fmt.Sprintf("/api/v1/ports/observed?host=%s&from=%d&to=%d", url.QueryEscape(host), from, to)
+	if err := c.do("GET", path, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Open, nil
 }
 
 func runPortsList(c *client, args []string) error {
@@ -171,6 +223,19 @@ func runPortsList(c *client, args []string) error {
 			}
 			fmt.Printf("  %s%s\n", span, note)
 		}
+	}
+
+	// What the host is running that hz has no record of. This is the gap that
+	// made the allocator wrong: hz knew 14 ports on this host and the host was
+	// listening on more, so "free" meant "free as far as hz knows".
+	if obs, err := observedUnreserved(c, *host, *from, *from+255); err != nil {
+		fmt.Printf("\nLISTENING BUT UNREGISTERED: could not check (%v)\n", err)
+	} else if len(obs) > 0 {
+		fmt.Printf("\nLISTENING BUT UNREGISTERED in %d–%d (%d)\n", *from, *from+255, len(obs))
+		for _, p := range obs {
+			fmt.Printf("  %-6d tcp  (something is on this port; hz has no record of it)\n", p)
+		}
+		fmt.Println("  These are skipped when suggesting ports, but hz cannot say what they are.")
 	}
 
 	free := suggestFree(usedTCP(pm, *host), *from, *count, excludedFunc(pm))
