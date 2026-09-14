@@ -197,7 +197,7 @@ func (h *HAProxy) GetBackendStatuses() []BackendStatus {
 			LastCheck: time.Now(),
 		}
 
-		backendName := sanitizeName(b.Name) + "_backend"
+		backendName := BackendName(b.Name)
 
 		if b.Deploy {
 			// Deploy backends: get per-server state from HAProxy
@@ -919,6 +919,12 @@ func WriteJailACL(path string, ips []string) (changed bool, err error) {
 
 func SanitizeName(name string) string {
 	return sanitizeName(name)
+}
+
+// BackendName is the HAProxy backend a service's traffic lands in — the name
+// HAProxy's own stats and exporter report as `proxy`.
+func BackendName(serviceName string) string {
+	return sanitizeName(serviceName) + "_backend"
 }
 
 func sanitizeName(name string) string {

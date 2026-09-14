@@ -15,6 +15,7 @@ import (
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
+	"github.com/iodesystems/homelab-horizon/internal/haproxy"
 )
 
 // hz's own Prometheus surface.
@@ -42,6 +43,8 @@ type hzCollector struct {
 	mfaEnrolled      *prometheus.Desc
 	mfaExceptions    *prometheus.Desc
 	backendUp        *prometheus.Desc
+	svcDormant       *prometheus.Desc
+	svcMaintenance   *prometheus.Desc
 	bans             *prometheus.Desc
 	iptablesRules    *prometheus.Desc
 	controlState     *prometheus.Desc
@@ -85,6 +88,10 @@ func newHZCollector(s *Server) *hzCollector {
 			"Live time-limited MFA bypasses. Non-zero is expected during an incident and suspicious otherwise.", nil, nil),
 		backendUp: prometheus.NewDesc("hz_haproxy_backend_up",
 			"1 when hz sees a HAProxy backend as healthy.", []string{"backend"}, nil),
+		svcDormant: prometheus.NewDesc("hz_service_dormant",
+			"1 when a proxied service is a dormant reserved slot: nothing is expected behind it, so its backend being down is not a fault. haproxy_backend is HAProxy's own backend name, for joining onto haproxy_* series.", []string{"service", "haproxy_backend"}, nil),
+		svcMaintenance: prometheus.NewDesc("hz_service_maintenance",
+			"1 when a proxied service has a maintenance page set, so its 503 is deliberate. haproxy_backend is HAProxy's own backend name, for joining onto haproxy_* series.", []string{"service", "haproxy_backend"}, nil),
 		bans: prometheus.NewDesc("hz_banned_ips",
 			"IP addresses currently banned at the edge.", nil, nil),
 		iptablesRules: prometheus.NewDesc("hz_iptables_rules",
@@ -132,7 +139,7 @@ func (c *hzCollector) Describe(ch chan<- *prometheus.Desc) {
 	for _, d := range []*prometheus.Desc{
 		c.up, c.buildInfo, c.peers, c.peersHandshaking,
 		c.mfaEnabled, c.mfaJailed, c.mfaSessions, c.mfaEnrolled, c.mfaExceptions,
-		c.backendUp, c.bans, c.iptablesRules, c.controlState,
+		c.backendUp, c.svcDormant, c.svcMaintenance, c.bans, c.iptablesRules, c.controlState,
 		c.dnsmasqUp, c.dnsmasqCacheSize, c.dnsmasqInsertions, c.dnsmasqEvictions,
 		c.dnsmasqHits, c.dnsmasqMisses, c.dnsmasqSrvQueries, c.dnsmasqSrvFailed,
 		c.serviceControl, c.servicesInScope,
@@ -223,6 +230,15 @@ func (c *hzCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 	}
 	gauge(c.bans, float64(len(cfg.IPBans)))
+
+	// Deliberate states, read from config rather than HAProxy: whether a down
+	// backend is a fault is the operator's call, and only hz holds it. An alert
+	// on HAProxy's own exporter joins these on haproxy_backend instead of
+	// re-deriving the name mapping.
+	for _, st := range serviceStates(cfg) {
+		gauge(c.svcDormant, b2f(st.dormant), st.service, st.backend)
+		gauge(c.svcMaintenance, b2f(st.maintenance), st.service, st.backend)
+	}
 
 	// ---- dnsmasq ----
 	//
@@ -393,6 +409,31 @@ func hzControls(cfg *config.Config, facts hostFactsSnapshot) []control {
 		// moment it binds a LAN address.
 		{"admin_access_encrypted", "2.2.7", cfg.AdminBoundToLoopback()},
 	}
+}
+
+// serviceState is what hz knows about a proxied service that HAProxy cannot:
+// whether it is meant to be answering.
+type serviceState struct {
+	service, backend     string
+	dormant, maintenance bool
+}
+
+// serviceStates lists every proxied service with its deliberate states.
+// A service without a proxy has no backend to join against, so it is omitted.
+func serviceStates(cfg *config.Config) []serviceState {
+	var out []serviceState
+	for _, svc := range cfg.Services {
+		if svc.Proxy == nil {
+			continue
+		}
+		out = append(out, serviceState{
+			service:     svc.Name,
+			backend:     haproxy.BackendName(svc.Name),
+			dormant:     svc.Dormant,
+			maintenance: svc.Proxy.MaintenancePage != "",
+		})
+	}
+	return out
 }
 
 // recentHandshake reports whether a `wg show` handshake string is recent
