@@ -1,6 +1,7 @@
 package server
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -125,6 +126,24 @@ func TestControlNamesAreNotComplianceClaims(t *testing.T) {
 		if c.requirement == "" {
 			t.Errorf("control %q has no requirement label to correlate against", c.name)
 		}
+	}
+}
+
+// The service-state gauges exist to be joined onto HAProxy's own exporter, so
+// the backend label must be the name HAProxy uses — spaces and dots included —
+// and a service with no proxy has nothing to join and must not be reported.
+func TestServiceStatesJoinHAProxyNames(t *testing.T) {
+	cfg := &config.Config{Services: []config.Service{
+		{Name: "veliode beta", Dormant: true, Proxy: &config.ProxyConfig{Backend: "192.168.1.76:6201"}},
+		{Name: "kc.iodesystems.com", Proxy: &config.ProxyConfig{Backend: "192.168.1.160:6302", MaintenancePage: "<h1>down</h1>"}},
+		{Name: "vpn"},
+	}}
+	want := []serviceState{
+		{service: "veliode beta", backend: "veliode_beta_backend", dormant: true},
+		{service: "kc.iodesystems.com", backend: "kc_iodesystems_com_backend", maintenance: true},
+	}
+	if got := serviceStates(cfg); !reflect.DeepEqual(got, want) {
+		t.Errorf("serviceStates = %+v, want %+v", got, want)
 	}
 }
 

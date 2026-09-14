@@ -65,7 +65,7 @@ func (s *Server) handleDeployAPI(w http.ResponseWriter, r *http.Request) {
 
 	svc := &s.cfg().Services[idx]
 	deploy := svc.Proxy.Deploy
-	backendName := haproxy.SanitizeName(svc.Name) + "_backend"
+	backendName := haproxy.BackendName(svc.Name)
 	action := parts[0]
 
 	switch action {
