@@ -1056,6 +1056,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/dns/sync-all", s.handleAPISyncAllDNS)
 	mux.HandleFunc("/api/v1/ports", s.handleAPIPorts)
 	mux.HandleFunc("/api/v1/ports/exclusions", s.handleAPIPortExclusions)
+	mux.HandleFunc("/api/v1/ports/observed", s.handleAPIPortsObserved) // what is actually listening
 	mux.HandleFunc("/api/v1/dns/drift", s.handleAPIDNSDriftStatus)
 	mux.HandleFunc("/api/v1/dns/drift/clear", s.handleAPIClearDNSDrift)
 	mux.HandleFunc("/api/v1/zones/records", s.handleAPIZoneRecords)
