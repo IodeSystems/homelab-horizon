@@ -133,3 +133,37 @@ func TestRefreshChecksDropsDeletedServices(t *testing.T) {
 		t.Fatal("a deleted service left its history behind")
 	}
 }
+
+// Editing a service's backend has to move its check with it. The loop holds
+// the target in a local, so a check that keeps running after an edit goes on
+// probing an address nobody asked about — which is how a working service
+// reads as failed.
+func TestRefreshChecksFollowsAChangedBackend(t *testing.T) {
+	cfg := &config.Config{
+		Services: []config.Service{
+			{Name: "moved", Domains: []string{"moved.example.com"},
+				Proxy: &config.ProxyConfig{Backend: "10.0.0.1:7441"}},
+		},
+	}
+	m := New(cfg)
+	defer m.Stop()
+	m.SeedForTest("svc:moved", "ping", "10.0.0.1:7441")
+
+	next := *cfg
+	next.Services = []config.Service{
+		{Name: "moved", Domains: []string{"moved.example.com"},
+			Proxy: &config.ProxyConfig{Backend: "10.0.0.1:20300"}},
+	}
+	m.RefreshChecks(&next)
+
+	got := m.GetStatus("svc:moved")
+	if got == nil {
+		t.Fatal("the check disappeared")
+	}
+	if got.Target != "10.0.0.1:20300" {
+		t.Fatalf("target = %q, still the old backend", got.Target)
+	}
+	if got.Status != StatusPending {
+		t.Fatalf("status = %q; a re-pointed check should be pending its first run, not carrying the old verdict", got.Status)
+	}
+}
