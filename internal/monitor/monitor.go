@@ -447,9 +447,27 @@ func (m *Monitor) RefreshChecks(cfg *config.Config) {
 		}
 		m.mu.RLock()
 		_, alreadyRunning := m.checkCancel[name]
+		st := m.statuses[name]
+		stale := st != nil && (st.Target != c.Target || st.Type != c.Type)
 		m.mu.RUnlock()
-		if alreadyRunning {
+
+		if alreadyRunning && !stale {
 			continue
+		}
+		if stale {
+			// The check still exists under the same name but now points
+			// somewhere else — a service's backend was edited. Its loop holds
+			// the old target in a local, so it has to be replaced or it goes
+			// on probing an address nobody asked about.
+			m.stopCheck(name)
+			m.mu.Lock()
+			if st := m.statuses[name]; st != nil {
+				st.Target = c.Target
+				st.Type = c.Type
+				st.Status = StatusPending
+				st.LastError = ""
+			}
+			m.mu.Unlock()
 		}
 		m.mu.Lock()
 		if st, ok := m.statuses[name]; ok {
