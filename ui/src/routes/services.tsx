@@ -56,6 +56,7 @@ import {
 import SyncButton from "../components/SyncButton";
 import type {
   Service,
+  ServiceForward,
   Zone,
   ServiceScanMetricsResp,
   ServiceDeleteOrphan,
@@ -157,6 +158,43 @@ interface ServiceFormState {
   metricsEnabled: boolean;
   metricsPath: string;
   metricsBearer: string;
+  // Layer-4 port forwards, one "proto:port:backend-ip:backend-port" per line.
+  // forwardsOriginal keeps the loaded entries so names and descriptions, which
+  // the text form cannot show, survive an edit.
+  forwards: string;
+  forwardsOriginal: ServiceForward[];
+}
+
+// parseForwards turns the form's forward lines into API entries. Returns an
+// error naming the first bad line rather than dropping it: a silently skipped
+// line would delete that forward on save.
+function parseForwards(
+  text: string,
+  original: ServiceForward[],
+): { forwards: ServiceForward[]; error?: string } {
+  const forwards: ServiceForward[] = [];
+  const lines = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  for (const line of lines) {
+    const m = /^(udp|tcp):(\d{1,5}):(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})$/i.exec(line);
+    const [, rawProto, rawPort, ip, rawBackendPort] = m ?? [];
+    if (!rawProto || !rawPort || !ip || !rawBackendPort) {
+      return { forwards: [], error: `"${line}" is not proto:port:backend-ip:backend-port` };
+    }
+    const proto = rawProto.toLowerCase();
+    const port = parseInt(rawPort, 10);
+    const prev = original.find((o) => o.proto === proto && o.port === port);
+    forwards.push({
+      proto,
+      port,
+      backend: `${ip}:${parseInt(rawBackendPort, 10)}`,
+      name: prev?.name,
+      description: prev?.description,
+    });
+  }
+  return { forwards };
 }
 
 const emptyForm: ServiceFormState = {
@@ -184,6 +222,8 @@ const emptyForm: ServiceFormState = {
   metricsEnabled: false,
   metricsPath: "",
   metricsBearer: "",
+  forwards: "",
+  forwardsOriginal: [],
 };
 
 function serviceToForm(svc: Service): ServiceFormState {
@@ -224,6 +264,15 @@ function serviceToForm(svc: Service): ServiceFormState {
     metricsEnabled: !!svc.integrations?.metrics?.enabled,
     metricsPath: svc.integrations?.metrics?.path ?? "",
     metricsBearer: svc.integrations?.metrics?.bearer ?? "",
+    // Round-tripped like dormant: the edit path replaces forwards from the
+    // request, so a form that dropped them would delete them.
+    forwards: (svc.forwards ?? [])
+      .map((f) => {
+        const i = f.backend.lastIndexOf(":");
+        return `${f.proto}:${f.port}:${f.backend.slice(0, i)}:${f.backend.slice(i + 1)}`;
+      })
+      .join("\n"),
+    forwardsOriginal: svc.forwards ?? [],
   };
 }
 
@@ -238,6 +287,9 @@ function formToInput(form: ServiceFormState, originalName?: string): ServiceMuta
     domains,
     dormant: form.dormant,
     dormantReason: form.dormantReason,
+    // Unparseable lines block the save in the dialog, so what reaches here
+    // parses; the error branch only guards against a caller skipping that.
+    forwards: parseForwards(form.forwards, form.forwardsOriginal).forwards,
   };
 
   if (originalName) {
@@ -829,6 +881,7 @@ function ServiceFormDialog({
     // handled by key prop on caller
   }
 
+  const forwardsError = parseForwards(form.forwards, form.forwardsOriginal).error;
   const update = useCallback(
     <K extends keyof ServiceFormState>(key: K, val: ServiceFormState[K]) =>
       setForm((f) => ({ ...f, [key]: val })),
@@ -1154,6 +1207,21 @@ function ServiceFormDialog({
             }
           />
         )}
+        <TextField
+          label="Port forwards"
+          value={form.forwards}
+          onChange={(e) => update("forwards", e.target.value)}
+          size="small"
+          fullWidth
+          multiline
+          minRows={1}
+          placeholder="udp:4433:192.168.1.76:4433"
+          error={!!forwardsError}
+          helperText={
+            forwardsError ??
+            "Layer-4 forwards on the gateway for traffic HAProxy cannot carry (UDP, QUIC). One proto:port:backend-ip:backend-port per line. Ports 22, 53, 80, 443 and horizon's own are refused; the backend must be on the gateway's LAN."
+          }
+        />
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={isSubmitting}>
@@ -1162,7 +1230,7 @@ function ServiceFormDialog({
         <Button
           variant="contained"
           onClick={() => onSubmit(form)}
-          disabled={isSubmitting || !form.name || !form.domains}
+          disabled={isSubmitting || !form.name || !form.domains || !!forwardsError}
         >
           {isSubmitting ? <CircularProgress size={20} /> : "Save"}
         </Button>
@@ -1972,7 +2040,30 @@ function ServiceRow({
                   )}
                 </DetailCard>
               )}
-              {!hasIntDNS && !hasExtDNS && !hasProxy && (
+              {(service.forwards?.length ?? 0) > 0 && (
+                <DetailCard title="Port forwards">
+                  {service.forwards!.map((f) => (
+                    <Box
+                      key={`${f.proto}-${f.port}`}
+                      sx={{ display: "flex", gap: 1, alignItems: "center", mb: 0.5, flexWrap: "wrap" }}
+                    >
+                      <Chip label={f.proto} size="small" variant="outlined" />
+                      <Typography variant="body2">
+                        <code>:{f.port}</code> → <code>{f.backend}</code>
+                      </Typography>
+                      {(f.name || f.description) && (
+                        <Typography variant="body2" color="text.secondary">
+                          {[f.name, f.description].filter(Boolean).join(" — ")}
+                        </Typography>
+                      )}
+                    </Box>
+                  ))}
+                  <Typography variant="body2" color="text.secondary">
+                    Gateway DNAT, applied by the iptables reconciler
+                  </Typography>
+                </DetailCard>
+              )}
+              {!hasIntDNS && !hasExtDNS && !hasProxy && !(service.forwards?.length) && (
                 <Typography variant="body2" color="text.secondary">
                   No configuration details available.
                 </Typography>

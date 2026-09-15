@@ -79,6 +79,19 @@ export const ServiceSchema = z.object({
   // silently un-park the service — the server assigns this from the request.
   dormant: z.boolean().optional(),
   dormantReason: z.string().optional(),
+  // Layer-4 port forwards. Listed for the same reason as dormant: the edit
+  // path replaces them from the request, so a stripped field deletes them.
+  forwards: z
+    .array(
+      z.object({
+        proto: z.string(),
+        port: z.number(),
+        backend: z.string(),
+        name: z.string().optional(),
+        description: z.string().optional(),
+      }),
+    )
+    .optional(),
   name: z.string(),
   domains: z.array(z.string()),
   internalDNS: z.object({ ip: z.string() }).optional(),

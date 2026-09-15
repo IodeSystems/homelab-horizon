@@ -10,6 +10,10 @@
 //   - filter WG-FORWARD (per-peer profile rules + default drop)
 //   - filter INPUT     (jump to WG-INPUT, for wg-incoming traffic only)
 //   - filter WG-INPUT  (MFA jail rules for traffic to the gateway itself)
+//   - layer-4 port forwards (forwards.go): nat HZ-PREROUTING, nat
+//     HZ-POSTROUTING and filter HZ-FORWARD, plus one jump into each from nat
+//     PREROUTING (narrowed to that jump on readback), nat POSTROUTING and
+//     filter FORWARD — only while a forward is configured
 //
 // Other iptables state on the host is none of horizon's business — the
 // classifier treats it as "unknown" and leaves it alone unless the admin
@@ -135,6 +139,13 @@ type Inputs struct {
 	// HAProxy is disabled, in which case the jail stays purely L3.
 	HAProxyPorts []string
 	Profiles     map[string]string // peer name → profile
+
+	// Forwards are the layer-4 port forwards to emit (see forwards.go).
+	// ReservedPorts are gateway ports no forward may claim
+	// (config.ForwardReservedPorts); the generator enforces them on top of its
+	// fixed set, so a forward skipped here is never installed.
+	Forwards      []ForwardInput
+	ReservedPorts map[int]string
 }
 
 // PeerInput is the subset of a WG peer we need to emit forward rules. Keeping
@@ -285,6 +296,10 @@ func ExpectedRules(in Inputs) []Rule {
 		Args:  []string{"-j", "DROP"},
 	})
 
+	// Layer-4 port forwards: jumps plus the HZ-* chain bodies. Nothing when
+	// no forward is configured. Never touches INPUT.
+	rules = append(rules, forwardRules(in)...)
+
 	return rules
 }
 
@@ -296,10 +311,21 @@ func ExpectedRules(in Inputs) []Rule {
 // server WG IP come from the current config because they're unchanged by an
 // interface swap. The only thing an iface/CIDR change rewrites is MASQUERADE's
 // `-o` and lan-access's `-d <LanCIDR>`.
+//
+// The forward jumps (ForwardJumpRules) are always included. Classify ranks
+// expected above stale, so they stay while any forward exists and are deleted
+// once the last one is removed — without that, the jumps would outlive every
+// forward as "unknown" rules in built-in chains.
 func StaleRules(cfg *config.Config, peers []PeerInput, serverWGIP, listenPort string) []Rule {
+	jumps := ForwardJumpRules()
 	if cfg.LastLocalIface == "" && cfg.LastLanCIDR == "" {
-		return nil
+		return jumps
 	}
+	return append(staleIfaceRules(cfg, peers, serverWGIP, listenPort), jumps...)
+}
+
+// staleIfaceRules is the previous-iface/CIDR half of StaleRules.
+func staleIfaceRules(cfg *config.Config, peers []PeerInput, serverWGIP, listenPort string) []Rule {
 	in := Inputs{
 		WGInterface:  cfg.WGInterface,
 		OutIface:     cfg.LastLocalIface,

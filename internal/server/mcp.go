@@ -304,6 +304,9 @@ func (m *MCPServer) handleUpdateService(_ context.Context, req mcp.CallToolReque
 				svc.Proxy = existing.Proxy
 			}
 		}
+		// The MCP tool has no forward arguments; an edit through it must not
+		// silently remove the service's port forwards.
+		svc.Forwards = existing.Forwards
 
 		if err := m.srv.cfg().AddService(svc); err != nil {
 			if err2 := m.srv.cfg().AddService(*existing); err2 != nil {

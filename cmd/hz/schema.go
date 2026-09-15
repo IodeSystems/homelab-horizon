@@ -18,7 +18,10 @@ func runSchema(args []string) error {
 	switch target {
 	case "service", "service-create", "service-edit":
 		fmt.Printf("ServiceRequest (POST /api/v1/services/add and /edit)\n")
-		fmt.Printf("  edit additionally requires \"originalName\" and only differs by that field.\n\n")
+		fmt.Printf("  edit additionally requires \"originalName\" and only differs by that field.\n")
+		fmt.Printf("  forwards: layer-4 port forwards on the gateway. proto \"udp\"|\"tcp\", port = public\n")
+		fmt.Printf("  port on the gateway, backend = \"ip:port\" on the gateway's LAN. Full-replace on edit.\n")
+		fmt.Printf("  CLI: --forward udp:4433:192.168.1.76:4433, --remove-forward udp:4433.\n\n")
 		printSchema(reflect.TypeOf(apitypes.ServiceRequest{}), 0, map[reflect.Type]bool{})
 		return nil
 	default:

@@ -132,26 +132,42 @@ func hasKey(m map[string]struct{}, k string) bool {
 // Returns an empty slice (not error) when iptables-save isn't available, so
 // the classifier can still run on hosts without iptables installed yet.
 func LiveRules() ([]Rule, error) {
-	var all []Rule
-
-	natRules, err := runIptablesSave("nat", []string{"POSTROUTING"})
+	natRules, err := runIptablesSave("nat", liveNatChains)
 	if err != nil {
 		return nil, fmt.Errorf("iptables-save nat: %w", err)
 	}
-	all = append(all, natRules...)
-
-	filterRules, err := runIptablesSave("filter", []string{"FORWARD", ForwardChainName, InputChainName, "INPUT"})
+	filterRules, err := runIptablesSave("filter", liveFilterChains)
 	if err != nil {
 		return nil, fmt.Errorf("iptables-save filter: %w", err)
 	}
-	for _, r := range filterRules {
-		if r.Chain == "INPUT" && !jumpsTo(r.Args, InputChainName) {
+	return scopeLiveRules(append(natRules, filterRules...)), nil
+}
+
+// The chains LiveRules reads. PREROUTING and INPUT are narrowed further by
+// scopeLiveRules.
+var (
+	liveNatChains    = []string{"PREROUTING", "POSTROUTING", PreroutingChainName, PostroutingChainName}
+	liveFilterChains = []string{"FORWARD", ForwardChainName, InputChainName, "INPUT", ForwardsChainName}
+)
+
+// scopeLiveRules drops the rules in shared built-in chains that horizon has no
+// claim on. INPUT keeps only the jump to WG-INPUT; nat PREROUTING keeps only
+// the jump to HZ-PREROUTING. Both chains are routinely full of other tools'
+// rules — Docker puts `-m addrtype --dst-type LOCAL -j DOCKER` in PREROUTING —
+// and classifying those as "unknown" would bury the IPTables tab in rules the
+// admin cannot act on.
+func scopeLiveRules(rules []Rule) []Rule {
+	out := make([]Rule, 0, len(rules))
+	for _, r := range rules {
+		if r.Table == "filter" && r.Chain == "INPUT" && !jumpsTo(r.Args, InputChainName) {
 			continue
 		}
-		all = append(all, r)
+		if r.Table == "nat" && r.Chain == "PREROUTING" && !jumpsTo(r.Args, PreroutingChainName) {
+			continue
+		}
+		out = append(out, r)
 	}
-
-	return all, nil
+	return out
 }
 
 // jumpsTo reports whether a rule body ends in a jump to the named target.

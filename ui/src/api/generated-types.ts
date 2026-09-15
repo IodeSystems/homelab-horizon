@@ -119,6 +119,23 @@ export interface ServiceResp {
    */
   dormant?: boolean;
   dormantReason?: string;
+  /**
+   * Forwards are the service's layer-4 port forwards on the gateway.
+   */
+  forwards?: ServiceForward[];
+}
+/**
+ * ServiceForward is a layer-4 port forward on the gateway: traffic to the
+ * gateway on proto/port is DNATed to backend ("ip:port", on the gateway's
+ * LAN). Used for traffic HAProxy cannot carry, such as UDP and QUIC. Shared by
+ * the read and write paths; an edit that omits forwards clears them.
+ */
+export interface ServiceForward {
+  proto: string; // "udp" or "tcp"
+  port: number /* int */; // public port on the gateway
+  backend: string; // "ip:port" on the LAN
+  name?: string;
+  description?: string;
 }
 /**
  * IntegrationsResp mirrors config.Integrations for read/round-trip.
@@ -859,6 +876,11 @@ export interface ServiceRequest {
   integrations?: ServiceRequestIntegrations;
   dormant?: boolean;
   dormantReason?: string;
+  /**
+   * Forwards: full-replace like the other fields, so every edit client must
+   * round-trip them or the edit removes the service's port forwards.
+   */
+  forwards?: ServiceForward[];
 }
 /**
  * ServiceRequestIntegrations carries per-service observability integrations from
@@ -995,6 +1017,11 @@ export interface HostPortEntry {
   proto: string;
   service: string;
   domain?: string;
+  /**
+   * Forward marks a layer-4 port forward's reservation. hz ports next treats
+   * these as taken for every protocol, not just their own.
+   */
+  forward?: boolean;
 }
 export interface HostPortMapResponse {
   hosts: { [key: string]: HostPortEntry[]};

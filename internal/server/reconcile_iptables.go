@@ -151,6 +151,9 @@ func (s *Server) reconcileIPTables() {
 		JailedPeers:  cfg.GetJailedPeers(),
 		HAProxyPorts: cfg.HAProxyJailPorts(),
 		Profiles:     cfg.VPNProfiles,
+
+		Forwards:      iptables.ForwardsFromConfig(cfg),
+		ReservedPorts: cfg.ForwardReservedPorts(),
 	})
 	stale := iptables.StaleRules(cfg, peers, serverWGIP, listenPort)
 

@@ -323,10 +323,19 @@ func TestExpectedRulesMFAJailFailsOpenWithoutPortal(t *testing.T) {
 	}
 }
 
-func TestStaleRulesEmptyWhenNoPriorState(t *testing.T) {
+// With no persisted iface/CIDR there is nothing iface-derived to call stale;
+// only the forward jumps are, which are always in the set (see StaleRules).
+func TestStaleRulesOnlyForwardJumpsWhenNoPriorState(t *testing.T) {
 	cfg := &config.Config{WGInterface: "wg0"}
-	if got := StaleRules(cfg, nil, "", ""); got != nil {
-		t.Errorf("StaleRules with no LastLocalIface/LastLanCIDR should be nil, got %v", got)
+	got := StaleRules(cfg, nil, "", "")
+	jumps := ForwardJumpRules()
+	if len(got) != len(jumps) {
+		t.Fatalf("StaleRules with no LastLocalIface/LastLanCIDR should be only the forward jumps, got %v", got)
+	}
+	for i := range jumps {
+		if got[i].Canonical() != jumps[i].Canonical() {
+			t.Errorf("rule[%d] = %s, want %s", i, got[i], jumps[i])
+		}
 	}
 }
 

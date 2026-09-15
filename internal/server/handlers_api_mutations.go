@@ -58,6 +58,40 @@ func requestIntegrations(in *apitypes.ServiceRequestIntegrations) *config.Integr
 	}
 }
 
+// requestForwards converts API forwards to config form. Validation is
+// config.ValidateForwards, run by AddService and by the edit handler.
+func requestForwards(in []apitypes.ServiceForward) []config.Forward {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]config.Forward, len(in))
+	for i, f := range in {
+		out[i] = config.Forward{
+			Proto:       strings.ToLower(strings.TrimSpace(f.Proto)),
+			Port:        f.Port,
+			Backend:     strings.TrimSpace(f.Backend),
+			Name:        f.Name,
+			Description: f.Description,
+		}
+	}
+	return out
+}
+
+// forwardsResp converts config forwards to the API shape.
+func forwardsResp(in []config.Forward) []apitypes.ServiceForward {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]apitypes.ServiceForward, len(in))
+	for i, f := range in {
+		out[i] = apitypes.ServiceForward{
+			Proto: f.Proto, Port: f.Port, Backend: f.Backend,
+			Name: f.Name, Description: f.Description,
+		}
+	}
+	return out
+}
+
 func serviceRequestToService(req *apitypes.ServiceRequest) config.Service {
 	svc := config.Service{
 		Name:          req.Name,
@@ -65,6 +99,7 @@ func serviceRequestToService(req *apitypes.ServiceRequest) config.Service {
 		Integrations:  requestIntegrations(req.Integrations),
 		Dormant:       req.Dormant,
 		DormantReason: req.DormantReason,
+		Forwards:      requestForwards(req.Forwards),
 	}
 	if req.InternalDNS != nil && req.InternalDNS.IP != "" {
 		svc.InternalDNS = &config.InternalDNS{IP: req.InternalDNS.IP}
@@ -202,14 +237,25 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	forwards := requestForwards(req.Forwards)
+
 	var found bool
+	var editErr error
 	if err := s.updateConfig(func(cfg *config.Config) {
 		for i := range cfg.Services {
 			if cfg.Services[i].Name != req.OriginalName {
 				continue
 			}
+			found = true
+			// Checked before anything is assigned, so a rejected forward
+			// leaves the service exactly as it was.
+			if err := cfg.ValidateForwards(forwards, req.OriginalName); err != nil {
+				editErr = err
+				return
+			}
 			cfg.Services[i].Name = req.Name
 			cfg.Services[i].Domains = domains
+			cfg.Services[i].Forwards = forwards
 
 			// Internal DNS
 			if req.InternalDNS != nil && req.InternalDNS.IP != "" {
@@ -296,6 +342,10 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 
 	if !found {
 		writeJSONError(w, http.StatusNotFound, "Service not found")
+		return
+	}
+	if editErr != nil {
+		writeJSONError(w, http.StatusBadRequest, editErr.Error())
 		return
 	}
 

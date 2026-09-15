@@ -129,7 +129,7 @@ func TestFilterChainExtractsOnlyMatchingChain(t *testing.T) {
 		{Table: "filter", Chain: ForwardChainName, Args: []string{"-s", "10.100.0.2/32", "-j", "DROP"}},
 		{Table: "filter", Chain: ForwardChainName, Args: []string{"-j", "DROP"}},
 	}
-	got := filterChain(rules, ForwardChainName)
+	got := filterChain(rules, "filter", ForwardChainName)
 	if len(got) != 2 {
 		t.Fatalf("want 2 WG-FORWARD rules, got %d: %v", len(got), got)
 	}

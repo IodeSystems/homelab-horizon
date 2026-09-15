@@ -31,6 +31,7 @@ import {
   useIPTablesRules,
   useReconcileIPTables,
   useRemoveIPTablesRule,
+  useServices,
   useUnblessIPTablesRule,
 } from "../api/hooks";
 import type {
@@ -244,6 +245,53 @@ function ConfirmDialog({
   );
 }
 
+// ForwardsPanel lists the configured layer-4 port forwards, which is what the
+// HZ-PREROUTING / HZ-POSTROUTING / HZ-FORWARD rules below are generated from.
+// Read-only: forwards are edited on the service.
+function ForwardsPanel() {
+  const { data: services } = useServices();
+  const rows = (services ?? []).flatMap((svc) =>
+    (svc.forwards ?? []).map((f) => ({ service: svc.name, ...f })),
+  );
+  if (rows.length === 0) return null;
+  return (
+    <Paper variant="outlined" sx={{ p: 2 }}>
+      <Typography variant="subtitle2" sx={{ mb: 1 }}>
+        Port forwards ({rows.length})
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+        Traffic addressed to this gateway on the port is DNATed to the backend
+        (HZ-PREROUTING), masqueraded (HZ-POSTROUTING) and accepted (HZ-FORWARD).
+        Edit them on the service.
+      </Typography>
+      <TableContainer>
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Service</TableCell>
+              <TableCell>Proto</TableCell>
+              <TableCell>Gateway port</TableCell>
+              <TableCell>Backend</TableCell>
+              <TableCell>Name</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {rows.map((r) => (
+              <TableRow key={`${r.proto}-${r.port}`}>
+                <TableCell>{r.service}</TableCell>
+                <TableCell sx={{ fontFamily: "monospace" }}>{r.proto}</TableCell>
+                <TableCell sx={{ fontFamily: "monospace" }}>{r.port}</TableCell>
+                <TableCell sx={{ fontFamily: "monospace" }}>{r.backend}</TableCell>
+                <TableCell>{r.name || r.description || "—"}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+    </Paper>
+  );
+}
+
 export function IPTablesTab() {
   const { data, isLoading, error } = useIPTablesRules();
   const bless = useBlessIPTablesRule();
@@ -273,13 +321,17 @@ export function IPTablesTab() {
     <Stack spacing={2}>
       <Paper sx={{ p: 2, bgcolor: "background.default" }} variant="outlined">
         <Typography variant="body2" color="text.secondary">
-          Horizon-managed iptables rules on this host — nat POSTROUTING, filter FORWARD, and
-          the WG-FORWARD chain. Rules in other chains are not shown here. Auto-heal deletes
+          Horizon-managed iptables rules on this host — nat POSTROUTING, filter FORWARD, the
+          WG-FORWARD and WG-INPUT chains, the jumps into WG-INPUT and HZ-PREROUTING, and the
+          port-forward chains HZ-PREROUTING, HZ-POSTROUTING and HZ-FORWARD. Rules in other
+          chains are not shown here. Auto-heal deletes
           <strong> stale </strong> rules and adds missing <strong>expected</strong> rules on every
           60s health-check tick. <strong>Unknown</strong> rules are surfaced for you to bless
           (keep) or remove; nothing outside horizon's managed chains is ever auto-touched.
         </Typography>
       </Paper>
+
+      <ForwardsPanel />
 
       <Paper variant="outlined" sx={{ p: 2 }}>
         <Stack direction="row" spacing={2} sx={{ alignItems: "center", mb: 2 }}>

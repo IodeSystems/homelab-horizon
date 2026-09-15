@@ -545,6 +545,9 @@ type HostPortEntry struct {
 	Proto   string `json:"proto"` // "tcp" or "udp"
 	Service string `json:"service"`
 	Domain  string `json:"domain,omitempty"`
+	// Forward marks a reservation made by a layer-4 port forward (the public
+	// port on the gateway, or the backend it points at).
+	Forward bool `json:"forward,omitempty"`
 }
 
 // HostPortMap represents all port reservations grouped by host IP
@@ -602,6 +605,35 @@ func (c *Config) DeriveHostPortMap() HostPortMap {
 					Proto:   "tcp",
 					Service: svc.Name + " (deploy-next)",
 					Domain:  svc.PrimaryDomain(),
+				})
+			}
+		}
+	}
+
+	// Layer-4 forwards reserve two ports: the public one on the gateway and the
+	// one they point at on the backend. Keyed like a localhost backend, by the
+	// gateway's LAN address, because that is the address the router forwards
+	// to and the one an operator asks `hz ports list --host` about.
+	for _, svc := range c.Services {
+		for _, f := range svc.Forwards {
+			gw := c.LocalInterface
+			if gw == "" {
+				gw = gateway
+			}
+			m[gw] = append(m[gw], HostPortEntry{
+				Port:    strconv.Itoa(f.Port),
+				Proto:   f.Proto,
+				Service: svc.Name + " (forward)",
+				Domain:  svc.PrimaryDomain(),
+				Forward: true,
+			})
+			if bh, bp, err := net.SplitHostPort(f.Backend); err == nil {
+				m[bh] = append(m[bh], HostPortEntry{
+					Port:    bp,
+					Proto:   f.Proto,
+					Service: svc.Name + " (forward target)",
+					Domain:  svc.PrimaryDomain(),
+					Forward: true,
 				})
 			}
 		}
@@ -1054,6 +1086,10 @@ func (c *Config) ValidateService(svc *Service) error {
 	// SPA fallback only applies to static-folder services.
 	if svc.Proxy != nil && svc.Proxy.SPA && svc.Proxy.StaticRoot == "" {
 		return &ValidationError{Field: "proxy.spa", Message: "spa requires static_root"}
+	}
+
+	if err := c.ValidateForwards(svc.Forwards, svc.Name); err != nil {
+		return err
 	}
 
 	return nil

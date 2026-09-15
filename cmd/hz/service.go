@@ -184,6 +184,22 @@ func serviceShow(c *client, args []string) error {
 		}
 		fmt.Printf("  status:       %s%s\n", state, errSuffix(svc.Status.ProxyError))
 	}
+	if len(svc.Forwards) > 0 {
+		fmt.Println("Forwards:")
+		for _, f := range svc.Forwards {
+			label := f.Name
+			if f.Description != "" {
+				if label != "" {
+					label += " — "
+				}
+				label += f.Description
+			}
+			if label != "" {
+				label = "  (" + label + ")"
+			}
+			fmt.Printf("  %s/%d -> %s%s\n", f.Proto, f.Port, f.Backend, label)
+		}
+	}
 	if svc.Integrations != nil && svc.Integrations.Metrics != nil && svc.Integrations.Metrics.Enabled {
 		m := svc.Integrations.Metrics
 		bearer := ""
@@ -236,6 +252,8 @@ type serviceFlags struct {
 	metrics       bool
 	metricsPath   string
 	metricsBearer string
+	forwards      multiFlag
+	unforwards    multiFlag
 	sync          bool
 }
 
@@ -278,6 +296,8 @@ func newServiceFlags(name string) *serviceFlags {
 	f.BoolVar(&sf.metrics, "metrics", false, "enable Prometheus metrics discovery for this service")
 	f.StringVar(&sf.metricsPath, "metrics-path", "", "metrics path to scrape (default /metrics)")
 	f.StringVar(&sf.metricsBearer, "metrics-bearer", "", "optional bearer token for probing/scraping metrics")
+	f.Var(&sf.forwards, "forward", "L4 port forward proto:port:backend-ip:backend-port, e.g. udp:4433:192.168.1.76:4433 (repeatable; edit replaces one with the same proto:port)")
+	f.Var(&sf.unforwards, "remove-forward", "edit: remove the forward for proto:port, e.g. udp:4433 (repeatable)")
 	f.BoolVar(&sf.sync, "sync", false, "trigger a global sync after the mutation")
 	f.Usage = func() {
 		_, _ = fmt.Fprintf(f.Output(), "Flags for 'hz service %s':\n", name)
@@ -366,6 +386,14 @@ func (sf *serviceFlags) buildRequest() (apitypes.ServiceRequest, error) {
 	if len(req.Domains) == 0 {
 		return req, fmt.Errorf("at least one --domain is required")
 	}
+	if len(sf.unforwards) > 0 {
+		return req, fmt.Errorf("--remove-forward only applies to 'hz service edit'")
+	}
+	forwards, err := applyForwardFlags(nil, sf.forwards, nil)
+	if err != nil {
+		return req, err
+	}
+	req.Forwards = forwards
 	if sf.intDNSIP != "" {
 		req.InternalDNS = &apitypes.ServiceRequestInternalDNS{IP: sf.intDNSIP}
 	}
@@ -476,6 +504,9 @@ func respToRequest(s *apitypes.ServiceResp) apitypes.ServiceRequest {
 		// the edit path assigns this from the request.
 		Dormant:       s.Dormant,
 		DormantReason: s.DormantReason,
+		// Round-tripped for the same reason: the edit path replaces forwards
+		// from the request, so dropping them here would delete them.
+		Forwards: append([]apitypes.ServiceForward(nil), s.Forwards...),
 	}
 	if s.InternalDNS != nil {
 		req.InternalDNS = &apitypes.ServiceRequestInternalDNS{IP: s.InternalDNS.IP}
@@ -655,6 +686,14 @@ func serviceEdit(c *client, args []string) error {
 			}
 			req.Integrations = &apitypes.ServiceRequestIntegrations{Metrics: m}
 		}
+	}
+
+	if set["forward"] || set["remove-forward"] {
+		forwards, err := applyForwardFlags(req.Forwards, sf.forwards, sf.unforwards)
+		if err != nil {
+			return err
+		}
+		req.Forwards = forwards
 	}
 
 	want, err := sf.checkHTTPSPlan(c, req.Domains, existingDomains)

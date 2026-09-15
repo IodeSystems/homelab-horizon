@@ -794,6 +794,10 @@ type Service struct {
 
 	PCIScope     string        `json:"pci_scope,omitempty"`
 	Integrations *Integrations `json:"integrations,omitempty"` // Observability integrations (metrics, ...)
+
+	// Forwards are layer-4 port forwards on the gateway for traffic HAProxy
+	// cannot carry (UDP, QUIC/WebTransport). See Forward.
+	Forwards []Forward `json:"forwards,omitempty"`
 }
 
 // Integrations holds optional per-service observability integrations that hz
