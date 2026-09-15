@@ -418,6 +418,89 @@ hz ports list --host 192.0.2.50              # what's reserved, and what's free
 list. The Ports page shows both tabs — reservations per host, and the exclusions
 that allocation skips.
 
+## Port forwards (UDP / TCP)
+
+HAProxy carries HTTP and TLS. It cannot carry UDP, so QUIC, WebTransport, game
+and voice traffic needs a plain layer-4 forward on the gateway. A service's
+`forwards` list is that forward, managed by hz like everything else — no hand
+rules to drift or to lose on a reboot.
+
+```bash
+hz service edit sprink --forward udp:4433:192.168.1.76:4433   # add, or replace udp/4433
+hz service edit sprink --remove-forward udp:4433
+hz service show sprink                                        # lists Forwards:
+```
+
+```json
+"forwards": [
+  {"proto": "udp", "port": 4433, "backend": "192.168.1.76:4433", "name": "webtransport"}
+]
+```
+
+`port` is the public port on the gateway; `backend` is `ip:port` on the
+gateway's LAN. The router still has to forward that port to the gateway — hz
+does not configure the router.
+
+### What gets installed
+
+For the example above, with `eth0` as the default-route interface:
+
+```
+-t nat    -A PREROUTING     -m addrtype --dst-type LOCAL -j HZ-PREROUTING
+-t nat    -A POSTROUTING    -j HZ-POSTROUTING
+-t filter -A FORWARD        -j HZ-FORWARD
+-t nat    -A HZ-PREROUTING  -p udp --dport 4433 -j DNAT --to-destination 192.168.1.76:4433
+-t nat    -A HZ-POSTROUTING -d 192.168.1.76/32 -o eth0 -p udp --dport 4433 -m conntrack --ctstate DNAT -j MASQUERADE
+-t filter -A HZ-FORWARD     -d 192.168.1.76/32 -i eth0 -p udp --dport 4433 -m conntrack --ctstate DNAT -j ACCEPT
+-t filter -A HZ-FORWARD     -s 192.168.1.76/32 -o eth0 -p udp --sport 4433 -m conntrack --ctstate DNAT -j ACCEPT
+```
+
+| Rule | Why |
+|---|---|
+| `PREROUTING --dst-type LOCAL` jump | Only packets addressed to the gateway itself are rewritten, never transit traffic. That covers the internet (via the router), LAN clients, and VPN peers, which resolve the service name to the gateway through split-horizon DNS. |
+| `DNAT` | Sends the flow to the backend. |
+| `MASQUERADE` | The backend shares a LAN with the router. Without it the backend replies straight to the router, which drops the reply. The backend therefore sees the gateway as the client address. |
+| `HZ-FORWARD` accept, `-i eth0` | Accepts the forwarded flow in both directions before `FORWARD`'s `DROP` policy. Traffic from VPN peers arrives on `wg0` and is left to `WG-FORWARD`, so VPN profiles and the MFA jail still decide what a peer can reach. |
+| `--ctstate DNAT` | Only flows that `HZ-PREROUTING` DNATed match. A LAN host that routes through the gateway gets nothing extra. |
+
+The jumps sit in `FORWARD`, not Docker's `DOCKER-USER`. Horizon inserts them at
+position 1. Docker's chains (`DOCKER-USER`, `DOCKER-FORWARD`) match only
+Docker bridge interfaces and return everything else to `FORWARD`. That is why
+`WG-FORWARD`, whose jump sits below Docker's, works on a Docker host today.
+`DOCKER-USER` exists only while Docker is installed and running. Putting the
+rules there would make forwards depend on Docker.
+
+The three `HZ-*` chains belong to horizon and are rebuilt atomically when they
+drift. When a forward changes, those chains are rebuilt. When the last forward
+is removed, the three jumps are deleted and the chains are removed. A host
+with no forwards never gets the chains or the jumps.
+
+### What is refused
+
+- Ports 22, 53, 80 and 443, horizon's own port, HAProxy's ports (including
+  metrics), and the WireGuard port. Refused on either protocol: the DNAT
+  matches everything addressed to the gateway on that port, so forwarding 22
+  would take the gateway's SSH.
+- A backend that is not an IPv4 address inside the gateway's LAN CIDR, and a
+  backend that is the gateway itself. The return path (MASQUERADE out of, and
+  accept in from, the default-route interface) only works for LAN hosts.
+- The same `proto`/`port` on two services.
+
+The generator checks the reserved ports and the LAN containment itself, not
+only the API. A hand-edited config, or one synced from an HA peer on a
+different subnet, cannot install an unsafe forward. The forward is skipped.
+No rule is ever added to `INPUT`, no chain horizon does not own is flushed,
+and no policy is changed.
+
+### When it applies
+
+The iptables reconciler installs forwards on its 60-second tick, or
+immediately with **Settings → IPTables → Reconcile now**. `hz sync` does not
+install them. The pending-changes view lists forward edits with the rest of a
+service's changes. Forwards are IPv4 only. `hz ports list` and `hz ports next`
+treat both the gateway port and the backend port as reserved, for every
+protocol.
+
 ## Metrics
 
 hz serves its own Prometheus exposition at `/metrics`, guarded by the same

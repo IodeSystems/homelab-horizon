@@ -43,7 +43,7 @@ func (s *Server) handleAPIPorts(w http.ResponseWriter, r *http.Request) {
 	for host, entries := range pm.Hosts {
 		out := make([]apitypes.HostPortEntry, len(entries))
 		for i, e := range entries {
-			out[i] = apitypes.HostPortEntry{Port: e.Port, Proto: e.Proto, Service: e.Service, Domain: e.Domain}
+			out[i] = apitypes.HostPortEntry{Port: e.Port, Proto: e.Proto, Service: e.Service, Domain: e.Domain, Forward: e.Forward}
 		}
 		resp.Hosts[host] = out
 	}

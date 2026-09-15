@@ -17,6 +17,31 @@ type Report struct {
 	Errors      []string         `json:"errors,omitempty"`
 }
 
+// runIptables executes one iptables command as the horizon process (root).
+// Every mutation Reconcile makes goes through here, which is what lets the
+// tests record the exact command set and prove it stays inside horizon's
+// chains.
+var runIptables = func(args ...string) ([]byte, error) {
+	return exec.Command("iptables", args...).CombinedOutput()
+}
+
+// chainRef names a chain in a table.
+type chainRef struct {
+	Table string
+	Chain string
+}
+
+// ownedChains are the chains horizon owns outright and rebuilds atomically.
+// Nothing else on the host writes to them, which is why flushing them is safe
+// and flushing anything else never happens.
+var ownedChains = []chainRef{
+	{"filter", ForwardChainName},
+	{"filter", InputChainName},
+	{"nat", PreroutingChainName},
+	{"nat", PostroutingChainName},
+	{"filter", ForwardsChainName},
+}
+
 // Reconcile classifies live rules and auto-heals: removes stale, adds any
 // missing expected rules. Unknown and blessed rules are left alone — those
 // are the admin's decision via the IPTables UI tab.
@@ -28,12 +53,17 @@ type Report struct {
 // Report.InferredOld so the caller can persist it as LastLocalIface for the
 // next pass.
 //
-// WG-FORWARD and WG-INPUT are special-cased: they're wholly horizon-owned and
-// order-sensitive (per-peer ACCEPTs must precede the per-peer DROP, catch-all
-// DROP must come last). Incremental `-I 1` patching reverses the rules' order
-// when many are added at once (e.g. after a wg-quick down/up wiped the chain),
-// which silently breaks all VPN forwarding. So both are rebuilt atomically
-// (`-F` + `-A` in expected order) whenever their content or order diverges.
+// The owned chains (WG-FORWARD, WG-INPUT, and the HZ-* forward chains) are
+// special-cased: they're wholly horizon-owned and order-sensitive (per-peer
+// ACCEPTs must precede the per-peer DROP, catch-all DROP must come last).
+// Incremental `-I 1` patching reverses the rules' order when many are added at
+// once (e.g. after a wg-quick down/up wiped the chain), which silently breaks
+// all VPN forwarding. So they are rebuilt atomically (`-F` + `-A` in expected
+// order) whenever their content or order diverges.
+//
+// Built-in chains are only ever edited one rule at a time (`-I <chain> 1` for
+// a missing expected rule, `-D` for a stale one). Reconcile never flushes a
+// chain it does not own and never changes a policy.
 //
 // Callers are expected to be holding whatever lock protects concurrent config
 // mutation — Reconcile itself only shells out to iptables.
@@ -64,15 +94,14 @@ func Reconcile(
 	classified := Classify(live, expected, stale, blessed)
 	report.Summary = SummarizeClassified(classified)
 
-	// Both horizon-owned chains must exist before the add loop below, because
-	// the FORWARD/INPUT jump rules that target them fail to install against a
-	// missing chain. Idempotent; `-N` on an existing chain just errors.
+	// Owned chains must exist before the add loop below, because the jump
+	// rules that target them fail to install against a missing chain.
 	if len(expected) > 0 {
-		ensureChains()
+		ensureChains(expected)
 	}
 
 	// Delete stale rules first so we don't collide when adding back an
-	// expected rule with the same shape but different iface. WG-FORWARD
+	// expected rule with the same shape but different iface. Owned-chain
 	// stale rules are skipped here — the atomic rebuild below replaces the
 	// whole chain in one shot.
 	for _, c := range classified {
@@ -89,7 +118,7 @@ func Reconcile(
 		report.Deleted = append(report.Deleted, c.Rule)
 	}
 
-	// Add any expected rule that isn't currently live. WG-FORWARD rules are
+	// Add any expected rule that isn't currently live. Owned-chain rules are
 	// skipped — the atomic rebuild below installs them in the correct order.
 	liveSet := make(map[string]struct{}, len(live))
 	for _, r := range live {
@@ -123,20 +152,21 @@ func Reconcile(
 	// WG-INPUT is then rebuilt even when its expected set is *empty*, because
 	// empty is a meaningful state: it's what un-jailing everyone looks like,
 	// and leaving a stale DROP behind would strand a peer that just authed.
-	if len(filterChain(expected, ForwardChainName)) > 0 {
+	if len(filterChain(expected, "filter", ForwardChainName)) > 0 {
 		for _, chain := range []string{ForwardChainName, InputChainName} {
-			chainExpected := filterChain(expected, chain)
-			chainLive := filterChain(live, chain)
-			if !chainDrifted(chainLive, chainExpected) {
-				continue
+			rebuildIfDrifted(&report, live, expected, chainRef{"filter", chain})
+		}
+
+		// HZ-* forward chains, same gate. Rebuilt to empty when the last
+		// forward is removed (its jumps are stale and were deleted above), and
+		// then dropped, so a host that stops using forwards is left without
+		// the chains. A host that never had forwards has no live rules in them,
+		// so nothing is created, flushed or deleted there.
+		for _, ref := range ownedChains[2:] {
+			chainExpected := filterChain(expected, ref.Table, ref.Chain)
+			if rebuildIfDrifted(&report, live, expected, ref) && len(chainExpected) == 0 {
+				_, _ = runIptables("-t", ref.Table, "-X", ref.Chain)
 			}
-			if err := rebuildChain(chain, chainExpected); err != nil {
-				report.Errors = append(report.Errors, fmt.Sprintf("rebuild %s: %v", chain, err))
-				continue
-			}
-			// Net effect mirrored into Report so callers/UI see what changed.
-			report.Deleted = append(report.Deleted, chainLive...)
-			report.Added = append(report.Added, chainExpected...)
 		}
 	}
 
@@ -151,29 +181,67 @@ func Reconcile(
 	return report
 }
 
+// rebuildIfDrifted rebuilds one owned chain when its live content or order
+// differs from expected, mirroring the net effect into the report. Reports
+// whether it rebuilt successfully.
+func rebuildIfDrifted(report *Report, live, expected []Rule, ref chainRef) bool {
+	chainExpected := filterChain(expected, ref.Table, ref.Chain)
+	chainLive := filterChain(live, ref.Table, ref.Chain)
+	if !chainDrifted(chainLive, chainExpected) {
+		return false
+	}
+	if err := rebuildChain(ref.Table, ref.Chain, chainExpected); err != nil {
+		report.Errors = append(report.Errors, fmt.Sprintf("rebuild %s: %v", ref.Chain, err))
+		return false
+	}
+	// Net effect mirrored into Report so callers/UI see what changed.
+	report.Deleted = append(report.Deleted, chainLive...)
+	report.Added = append(report.Added, chainExpected...)
+	return true
+}
+
 // isOwnedChain reports whether a rule lives in one of the chains horizon owns
 // outright and rebuilds atomically. Pulled out so the skip predicate stays
 // consistent across the stale-delete and missing-add loops — those two must
 // leave these chains alone or they'd fight the rebuild below.
 func isOwnedChain(r Rule) bool {
-	return r.Table == "filter" && (r.Chain == ForwardChainName || r.Chain == InputChainName)
+	for _, ref := range ownedChains {
+		if r.Table == ref.Table && r.Chain == ref.Chain {
+			return true
+		}
+	}
+	return false
 }
 
-// ensureChains creates the horizon-owned chains if they're missing. `-N` exits
-// non-zero when the chain already exists; that's the common case, ignore it.
-func ensureChains() {
-	for _, chain := range []string{ForwardChainName, InputChainName} {
-		_ = exec.Command("iptables", "-N", chain).Run()
+// ensureChains creates the owned chains the expected set needs. The WG chains
+// are always created (horizon manages WireGuard on every host it runs on); the
+// forward chains only when some expected rule lives in or jumps to them, so a
+// host with no forwards never gets them. `-N` exits non-zero when the chain
+// already exists; that's the common case, ignore it.
+func ensureChains(expected []Rule) {
+	for _, ref := range ownedChains {
+		needed := ref.Chain == ForwardChainName || ref.Chain == InputChainName
+		for _, r := range expected {
+			if needed {
+				break
+			}
+			if (r.Table == ref.Table && r.Chain == ref.Chain) || (r.Table == ref.Table && jumpsTo(r.Args, ref.Chain)) {
+				needed = true
+			}
+		}
+		if needed {
+			_, _ = runIptables("-t", ref.Table, "-N", ref.Chain)
+		}
 	}
 }
 
-// filterChain returns the subset of rules belonging to the given filter chain.
-// Used to slice WG-FORWARD out of the live and expected sets for the atomic
-// rebuild path.
-func filterChain(rules []Rule, chain string) []Rule {
+// filterChain returns the subset of rules belonging to the given table and
+// chain. Used to slice an owned chain out of the live and expected sets for
+// the atomic rebuild path.
+func filterChain(rules []Rule, table, chain string) []Rule {
 	out := make([]Rule, 0, len(rules))
 	for _, r := range rules {
-		if r.Table == "filter" && r.Chain == chain {
+		if r.Table == table && r.Chain == chain {
 			out = append(out, r)
 		}
 	}
@@ -201,27 +269,35 @@ func chainDrifted(live, expected []Rule) bool {
 	return false
 }
 
-// rebuildChain atomically replaces a chain's contents with the supplied rules,
-// in order. Ensures the chain exists (no-op if already there) before flushing,
-// so this is safe to call after a wg-quick PostDown wipe.
+// rebuildChain atomically replaces an owned chain's contents with the supplied
+// rules, in order. Ensures the chain exists (no-op if already there) before
+// flushing, so this is safe to call after a wg-quick PostDown wipe.
+//
+// Refuses any chain not in ownedChains: flushing a built-in or another tool's
+// chain on a remotely administered gateway is how a reconcile turns into a
+// lockout, so it is excluded here rather than trusted to every caller.
 //
 // Failure mode: if `-A` fails partway through, the chain is left partially
 // populated. The next reconcile tick re-detects drift and retries. We don't
 // attempt rollback because the previous live state was already wrong (that's
 // why we're rebuilding) and the partial state is at worst no-worse.
-func rebuildChain(chain string, rules []Rule) error {
-	// -N exits non-zero when the chain already exists; that's expected, ignore.
-	_ = exec.Command("iptables", "-N", chain).Run()
+func rebuildChain(table, chain string, rules []Rule) error {
+	if !isOwnedChain(Rule{Table: table, Chain: chain}) {
+		return fmt.Errorf("refusing to rebuild %s %s: not a horizon-owned chain", table, chain)
+	}
 
-	if out, err := exec.Command("iptables", "-F", chain).CombinedOutput(); err != nil {
+	// -N exits non-zero when the chain already exists; that's expected, ignore.
+	_, _ = runIptables("-t", table, "-N", chain)
+
+	if out, err := runIptables("-t", table, "-F", chain); err != nil {
 		return fmt.Errorf("flush: %v: %s", err, strings.TrimSpace(string(out)))
 	}
 	for _, r := range rules {
-		if r.Chain != chain {
+		if r.Table != table || r.Chain != chain {
 			continue
 		}
 		args := append([]string{"-t", r.Table, "-A", r.Chain}, r.Args...)
-		if out, err := exec.Command("iptables", args...).CombinedOutput(); err != nil {
+		if out, err := runIptables(args...); err != nil {
 			return fmt.Errorf("append %s: %v: %s", r, err, strings.TrimSpace(string(out)))
 		}
 	}
@@ -270,7 +346,7 @@ func isHorizonMasqShape(args []string) bool {
 // MASQUERADE rules land before any UFW drop rules that might be below).
 func addRule(r Rule) error {
 	args := append([]string{"-t", r.Table, "-I", r.Chain, "1"}, r.Args...)
-	out, err := exec.Command("iptables", args...).CombinedOutput()
+	out, err := runIptables(args...)
 	if err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -281,7 +357,7 @@ func addRule(r Rule) error {
 // not line number — idempotent if the rule was already removed elsewhere).
 func deleteRule(r Rule) error {
 	args := append([]string{"-t", r.Table, "-D", r.Chain}, r.Args...)
-	out, err := exec.Command("iptables", args...).CombinedOutput()
+	out, err := runIptables(args...)
 	if err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}

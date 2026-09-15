@@ -59,6 +59,9 @@ func (s *Server) buildClassifierInputs() (
 		JailedPeers:  cfg.GetJailedPeers(),
 		HAProxyPorts: cfg.HAProxyJailPorts(),
 		Profiles:     cfg.VPNProfiles,
+
+		Forwards:      iptables.ForwardsFromConfig(cfg),
+		ReservedPorts: cfg.ForwardReservedPorts(),
 	})
 	stale = iptables.StaleRules(cfg, peers, serverWGIP, listenPort)
 	blessed = cfg.BlessedIPTablesRules
@@ -214,6 +217,13 @@ func (s *Server) handleAPIIPTablesReconcile(w http.ResponseWriter, r *http.Reque
 	live, expected, stale, blessed, currentIface, err := s.buildClassifierInputs()
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Same stand-down as the periodic path: with no default route the
+	// generator cannot name the out interface, so port forwards drop out of
+	// the expected set and a reconcile now would remove them.
+	if currentIface == "" {
+		writeJSONError(w, http.StatusServiceUnavailable, "no default route; not reconciling until the link is back")
 		return
 	}
 	report := iptables.Reconcile(live, expected, stale, blessed,

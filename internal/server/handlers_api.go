@@ -165,6 +165,7 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 			DormantReason: svc.DormantReason,
 			Name:          svc.Name,
 			Domains:       svc.Domains,
+			Forwards:      forwardsResp(svc.Forwards),
 		}
 		if svc.InternalDNS != nil {
 			sr.InternalDNS = &apitypes.InternalDNSResp{IP: svc.InternalDNS.IP}

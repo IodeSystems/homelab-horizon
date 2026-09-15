@@ -261,10 +261,55 @@ Phase 3 replaces this with: restart horizon, done.
 |---|---|---|
 | 1 | [Outside-in checks (`hz-probe`)](#outside-in-checks-hz-probe) | ✅ code done, ⏸ not yet deployed |
 | 2 | [Operator follow-ups](#operator-follow-ups-not-code) — yours, not mine | — |
+| 3 | [L4 port forwards](#-l4-port-forwards) | ◐ code done, not committed, not deployed |
 
 Two opt-in next-steps were added to [icebox.md](icebox.md) on 2026-09-10:
 HAProxy TCP frontends on the VPN address, and moving the range-collision
 warning onto the peer-config download path.
+
+### ◐ L4 port forwards
+
+Per-service `forwards` (`{proto, port, backend, name?, description?}`) for
+traffic HAProxy cannot carry. Driven by sprink: WebTransport (QUIC/UDP) at
+`sprink.iodesystems.com`, gateway `udp/4433` → `192.168.1.76:4433`. The design
+and the rule set are in the README, [Port forwards](../README.md#port-forwards-udp--tcp).
+
+Decisions:
+- Owned chains `HZ-PREROUTING` (nat), `HZ-POSTROUTING` (nat) and `HZ-FORWARD`
+  (filter), rebuilt atomically. Only three jumps go into built-in chains.
+- PREROUTING jumps on `--dst-type LOCAL` with no `-i`. sprink's internal DNS
+  answers `192.168.1.160`, so VPN and LAN clients hit the gateway too, not
+  only the router.
+- The accept rules sit in FORWARD with `-i <out>`, not in DOCKER-USER.
+  Evidence: the live gateway's FORWARD is `DOCKER-USER, DOCKER-FORWARD,
+  -i wg0 -j WG-FORWARD, …` and VPN LAN access works, so Docker's chains
+  return non-bridge traffic (read via `GET /api/v1/iptables/rules`,
+  2026-09-15).
+- `--ctstate DNAT` on the MASQUERADE and both accepts.
+- The readback forms were checked in a throwaway `ubuntu:24.04` container with
+  NET_ADMIN, under iptables-nft and iptables-legacy 1.8.10. Output was
+  identical under both, and equal to the emitted form once `-m udp` is dropped.
+
+- **next**: commit, deploy, add the sprink forward (`hz service edit sprink
+  --forward udp:4433:192.168.1.76:4433`), confirm with a QUIC client from
+  outside and from the VPN.
+- **risks**:
+  - Never run against a real kernel with live traffic. Rule readback,
+    delete-by-spec and flush/delete were verified; the packet path was not.
+  - The backend sees the gateway as every client's address (MASQUERADE).
+    Per-client rate limits or logs on sprink will see one IP.
+  - Forwards apply on the 60s reconcile tick, not on edit or `hz sync`.
+  - A forward whose backend is outside the *current* LAN CIDR is skipped
+    silently by the generator (by design, fail-closed). Validation reports it
+    at edit time, but not if the LAN renumbers later.
+- **blocking decisions** (yours): none open.
+- **optional extensions**: trigger a reconcile on service mutation (needs a
+  lock around `reconcileIPTables`); per-forward source CIDR allowlist;
+  IPv6 (ip6tables); structured forward editor in the UI (today it is one
+  `proto:port:ip:port` per line).
+- **assumptions made**: gateway is single-NIC (in and out on the default-route
+  interface, as the rest of horizon assumes); forwards stay active on dormant
+  services, like the proxy entry.
 
 ### Outside-in checks (`hz-probe`)
 

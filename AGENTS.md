@@ -57,6 +57,7 @@ homelab-horizon/
 | Add config field | `internal/config/config.go` | JSON tag, then update `derive.go` if it affects DNS/HAProxy/SSL |
 | DNS provider | `internal/dns/` | Implement `Provider` interface |
 | iptables rule | `internal/iptables/rules.go` | Add to `ExpectedRules(cfg)`; classifier + reconciler pick it up automatically |
+| L4 port forward | `internal/config/forwards.go` (shape, `ValidateForwards`, reserved ports), `internal/iptables/forwards.go` (rules) | Per-service `forwards`. Rules live in owned chains `HZ-PREROUTING`/`HZ-POSTROUTING`/`HZ-FORWARD`, rebuilt atomically; the three jumps are in `StaleRules` so they go when the last forward does. The generator re-checks reserved ports and LAN containment itself. Commands go through `runIptables`, which tests record (`reconcile_forwards_test.go`) |
 | System fixer | `internal/server/handlers_api_system_fix.go` | Paired with a check in `handlers_api_system.go` |
 | Outside-in probe | `internal/probe/` | `run.go` adds a probe kind; `agent.go` is the remote side, `client.go` is hz's. Folded into checks by `internal/monitor/remote.go` |
 | Vantage CRUD | `internal/server/handlers_api_remotes.go` | `/api/v1/checks/remotes{,/add,/update,/delete,/test}`; UI in `ui/src/components/RemoteVantages.tsx` |
@@ -94,6 +95,7 @@ homelab-horizon/
 - **TOFU is interactive only**: `probe.Client.Observe` accepts an unverified certificate so its fingerprint can be shown to a person, and is set *only* by the test endpoint. The poll loop never sets it — there a certificate either chains to a public CA or matches the pin the operator approved. `Observe` with `PinSHA256` set is an error, not a precedence rule.
 - **`hzbin` serves two tools**: `hz` and `hz-probe` share `bin/`, and `"hz-"` is a prefix of `"hz-probe-"` — `Available` must not list one as the other. Guarded by `embed_on_test.go` (runs only under the tag).
 - **iptables rule model**: every live rule classified as `expected` / `stale` / `blessed` / `unknown`. Autoheal removes stale, adds missing expected, never touches blessed/unknown. See `plan/plan.md` for the full model.
+- **Port forwards never touch INPUT, never flush a chain horizon does not own, never change a policy.** `rebuildChain` refuses any chain outside `ownedChains`, and built-in chains are only edited one rule at a time (`-I 1` / `-D`). `reconcile_forwards_test.go` records every command and fails on anything else. **Every edit client must round-trip `forwards`** (hz `respToRequest`, the UI form, MCP edit): the edit path replaces them from the request, like `dormant`.
 
 ## ANTI-PATTERNS (THIS PROJECT)
 

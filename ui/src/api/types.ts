@@ -10,6 +10,7 @@
 export type {
   DashboardResponse as DashboardData,
   ServiceResp as Service,
+  ServiceForward,
   InternalDNSResp,
   ExternalDNSResp,
   ProxyResp,

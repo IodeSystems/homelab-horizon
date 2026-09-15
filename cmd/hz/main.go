@@ -96,6 +96,12 @@ SERVICE FLAGS (create/edit)
   --metrics                 enable Prometheus metrics discovery (probed + served in scrape config)
   --metrics-path PATH       metrics path to scrape (default /metrics)
   --metrics-bearer TOK      optional bearer token for probing/scraping metrics
+  --forward P:PORT:IP:PORT  layer-4 port forward on the gateway (repeatable), e.g.
+                            udp:4433:192.168.1.76:4433. For UDP/QUIC that HAProxy
+                            cannot carry. Backend must be on the gateway's LAN; ports
+                            22, 53, 80, 443 and horizon's own ports are refused.
+                            edit: a forward with the same proto:port is replaced
+  --remove-forward P:PORT   edit: remove the forward for proto:port (repeatable)
   --sync                    trigger a global sync after the mutation
 
 SERVICE FLAGS (delete)

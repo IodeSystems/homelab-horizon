@@ -122,6 +122,21 @@ type ServiceResp struct {
 	// what the reservation actually consists of.
 	Dormant       bool   `json:"dormant,omitempty"`
 	DormantReason string `json:"dormantReason,omitempty"`
+
+	// Forwards are the service's layer-4 port forwards on the gateway.
+	Forwards []ServiceForward `json:"forwards,omitempty"`
+}
+
+// ServiceForward is a layer-4 port forward on the gateway: traffic to the
+// gateway on proto/port is DNATed to backend ("ip:port", on the gateway's
+// LAN). Used for traffic HAProxy cannot carry, such as UDP and QUIC. Shared by
+// the read and write paths; an edit that omits forwards clears them.
+type ServiceForward struct {
+	Proto       string `json:"proto"`   // "udp" or "tcp"
+	Port        int    `json:"port"`    // public port on the gateway
+	Backend     string `json:"backend"` // "ip:port" on the LAN
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // IntegrationsResp mirrors config.Integrations for read/round-trip.
@@ -874,6 +889,10 @@ type ServiceRequest struct {
 
 	Dormant       bool   `json:"dormant,omitempty"`
 	DormantReason string `json:"dormantReason,omitempty"`
+
+	// Forwards: full-replace like the other fields, so every edit client must
+	// round-trip them or the edit removes the service's port forwards.
+	Forwards []ServiceForward `json:"forwards,omitempty"`
 }
 
 // ServiceRequestIntegrations carries per-service observability integrations from
@@ -1025,6 +1044,9 @@ type HostPortEntry struct {
 	Proto   string `json:"proto"`
 	Service string `json:"service"`
 	Domain  string `json:"domain,omitempty"`
+	// Forward marks a layer-4 port forward's reservation. hz ports next treats
+	// these as taken for every protocol, not just their own.
+	Forward bool `json:"forward,omitempty"`
 }
 
 type HostPortMapResponse struct {

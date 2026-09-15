@@ -136,6 +136,15 @@ export interface ServiceMutationInput {
   // so omitting it would quietly un-park a reserved slot.
   dormant?: boolean;
   dormantReason?: string;
+  // Full-replace on edit, like dormant: omitting them removes the service's
+  // port forwards.
+  forwards?: {
+    proto: string;
+    port: number;
+    backend: string;
+    name?: string;
+    description?: string;
+  }[];
   internalDNS?: { ip: string } | null;
   externalDNS?: { ip: string; ips?: string[]; ttl: number } | null;
   proxy?: {

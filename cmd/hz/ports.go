@@ -111,7 +111,7 @@ func runPortsNext(c *client, args []string) error {
 	if err != nil {
 		return err
 	}
-	used := usedTCP(pm, *host)
+	used := usedPorts(pm, *host)
 
 	excluded := excludedFunc(pm)
 
@@ -238,7 +238,7 @@ func runPortsList(c *client, args []string) error {
 		fmt.Println("  These are skipped when suggesting ports, but hz cannot say what they are.")
 	}
 
-	free := suggestFree(usedTCP(pm, *host), *from, *count, excludedFunc(pm))
+	free := suggestFree(usedPorts(pm, *host), *from, *count, excludedFunc(pm))
 	fmt.Printf("\nSUGGESTED FREE (safe band %d–%d, common + excluded ports skipped)\n", safeBandLow, safeBandHigh)
 	if len(free) == 0 {
 		fmt.Println("  (none available)")
@@ -266,12 +266,17 @@ func portNum(s string) int {
 	return p
 }
 
-// usedTCP is the set of TCP ports reserved on the host. UDP reservations
-// (WireGuard, dnsmasq) don't block a TCP backend, so they're excluded here.
-func usedTCP(pm apitypes.HostPortMapResponse, host string) map[int]bool {
+// usedPorts is the set of ports allocation must skip on the host: every TCP
+// reservation, plus every port-forward reservation whatever its protocol.
+//
+// Other UDP reservations (WireGuard, dnsmasq) don't block a TCP backend. A
+// forward's port does: allocation does not know which protocol the new service
+// will speak, and the services forwards exist for (QUIC, WebTransport) commonly
+// pair a UDP and a TCP listener on one number.
+func usedPorts(pm apitypes.HostPortMapResponse, host string) map[int]bool {
 	used := map[int]bool{}
 	for _, e := range pm.Hosts[host] {
-		if e.Proto != "" && e.Proto != "tcp" {
+		if e.Proto != "" && e.Proto != "tcp" && !e.Forward {
 			continue
 		}
 		if p, err := strconv.Atoi(e.Port); err == nil {

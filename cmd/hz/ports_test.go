@@ -69,7 +69,7 @@ func TestUsedTCPExcludesUDP(t *testing.T) {
 			{Port: "9000", Proto: "", Service: "legacy-empty-proto"}, // treated as tcp
 		},
 	}}
-	used := usedTCP(pm, "h")
+	used := usedPorts(pm, "h")
 	if !used[8080] || !used[9000] {
 		t.Errorf("expected tcp/empty-proto ports marked used: %v", used)
 	}
