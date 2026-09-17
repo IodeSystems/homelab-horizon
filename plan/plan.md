@@ -262,7 +262,6 @@ Phase 3 replaces this with: restart horizon, done.
 | 1 | [Outside-in checks (`hz-probe`)](#outside-in-checks-hz-probe) | ✅ code done, ⏸ not yet deployed |
 | 2 | [Operator follow-ups](#operator-follow-ups-not-code) — yours, not mine | — |
 | 3 | [L4 port forwards](#-l4-port-forwards) | ◐ code done, not committed, not deployed |
-| 4 | [Per-peer secrets](#-per-peer-secrets-set-by-an-admin-picked-up-once-by-the-peer) | ◻ not started |
 | 5 | [OIDC: Google Workspace + docs](#-oidc-google-workspace-domain-gating-and-the-missing-docs) | ✅ deployed, one login left to prove |
 | 6 | [Backend protocol (h2c)](#-backend-protocol-h2c-for-grpc-backends) | ✅ deployed + in use (Zitadel) |
 | 7 | [Invites that can require a sign-in](#-invites-that-can-require-a-sign-in) | ◻ not started |
@@ -271,92 +270,6 @@ Phase 3 replaces this with: restart horizon, done.
 Two opt-in next-steps were added to [icebox.md](icebox.md) on 2026-09-10:
 HAProxy TCP frontends on the VPN address, and moving the range-collision
 warning onto the peer-config download path.
-
-### ◻ Per-peer secrets, set by an admin, picked up once by the peer
-
-**Driver:** `iodesystems-intern` (the company package index at
-`intern.iodesystems.com`, `~/local/src/iodesystems/iodesystems-intern/plan/plan.md`,
-slice S4). A new laptop needs a registry token before it can configure npm,
-maven, docker, go, apt and brew. hz already knows which device is calling —
-that is the whole feature. **hz stays generic: no Gitea code, no Gitea
-credential, no knowledge of what the value means.**
-
-Reuses what exists: `getPeerFromRequest` (`internal/server/handlers_mfa.go:19`)
-resolves the caller to a peer by source IP, `getClientIP` trusts
-`X-Forwarded-For` only from the proxy, and every HAProxy frontend deletes a
-client-supplied one (`internal/haproxy/haproxy.go`). `peer_owners`
-(`internal/db/peer_owners.go`) is the precedent for per-peer rows in sqlite.
-
-**Shape**
-| | |
-|---|---|
-| Store | new sqlite table `peer_secrets(peer_name, key, value, created_at, created_by)`. **Not config.json** — `VPNMFASecrets` (`internal/config/config.go:341`) is the wrong precedent here: these rows are short-lived and are deleted on read. |
-| Admin API | `PUT /api/v1/vpn/peers/{name}/secrets/{key}` (value in the body), `DELETE` the same, `GET /api/v1/vpn/peers/{name}/secrets` returns key names and timestamps, **never values**. |
-| Peer API | `GET /api/v1/account/peer/secrets/{key}` — authenticated only as the calling peer, returns the value once, deletes the row, logs peer + key + source IP. |
-| CLI | a new `vpn` command in `cmd/hz` (there is none today): `hz vpn peer secret set <peer> <key>` reads the value from **stdin**, plus `rm` and `list`. |
-
-- **next:** decide the MFA rule below, then migration → db methods → handlers →
-  CLI → README.
-- **risks:**
-  - The value sits in sqlite in plaintext until pickup. That is the cost of
-    delivery. Keep the window short: `list` shows age, and `audit` on the
-    intern side reports anything old.
-  - **A jailed peer must not be able to pick up.** With VPN MFA on, an
-    unverified peer still reaches the portal, so the pickup handler has to
-    check the MFA session itself, the way the portal handlers do. Otherwise a
-    stolen WireGuard key collects secrets without the second factor.
-  - Deleting a peer leaves rows behind, like `peer_owners`. Delete on peer
-    removal, and have `list` mark orphans.
-  - One-shot read means a lost response is a lost secret. The admin re-sets it;
-    `setup` on the device must say exactly that.
-- **blocking decisions:** does pickup require a verified MFA session when VPN
-  MFA is on (yes, unless you say otherwise), and does the peer API live on the
-  admin vhost or the portal vhost?
-
-### ✅ Backend protocol (h2c), for gRPC backends — deployed 2026-09-17
-
-**Driver:** Zitadel at `id.iodesystems.com` (iodesystems-intern plan, S4).
-Zitadel's docs require a reverse proxy that speaks **HTTP/2 upstream (h2c or
-h2)**, and their reference compose sets the backend scheme to `h2c`. Without
-it the console and the gRPC/Connect APIs are at risk; plain OIDC endpoints
-would probably survive on HTTP/1.1, but "probably" is not a proxy config.
-
-**Today** hz emits `server <name> <host:port> check`
-(`internal/haproxy/haproxy.go:749`), always HTTP/1.1 upstream. HAProxy on .160
-is **2.8.16**, which supports `proto h2` on a server line, so this is a config
-flag, not an upgrade.
-
-**Shape**
-- `Proxy.BackendProto` on a service: empty (today's behaviour) or `h2`.
-- Generator appends ` proto h2` to that service's server line, for the single
-  backend and both blue-green servers.
-- `hz service create|edit --backend-proto h2`, and the field in the UI's
-  service form.
-- Health checks: an h2c backend still answers `option httpchk`, but the check
-  connection also becomes h2 — verify against Zitadel rather than assume.
-
-**Done:** `proxy.backend_proto` (`""` or `"h2"`), validated (rejects a typo,
-and rejects the combination with static/self, whose backend is hz's own
-HTTP/1.1 server); `Backend.Proto` → ` proto h2` on the plain, health-checked
-and both blue-green server lines; `hz service create|edit --backend-proto`;
-`backendProto` through apitypes → `make generate` → the service editor, as a
-select under Timeouts; README section "Backend protocol (h2c)". Tests: four in
-`internal/haproxy/backend_proto_test.go`, three cases in `TestValidateService`.
-**Verified on .160**: `haproxy -c` accepts `server id 127.0.0.1:20005 check
-proto h2` on HAProxy 2.8.16.
-
-**Deployed and in use 2026-09-17.** `hz service edit id --backend-proto h2`
-generated `server id 127.0.0.1:20005 check proto h2`, and Zitadel at
-`id.iodesystems.com` answers over it: console 200, OIDC discovery 200, backend
-health check up. The other services were re-checked after the reload and were
-unaffected. **Note for the next person:** `bin/deploy` updates the server, not
-the local operator CLI — `make build-hz` and copy it, or `--backend-proto` is
-"flag provided but not defined".
-- **risks:**
-  - A backend that is *not* h2c, marked h2, fails in a way that looks like the
-    app being down. Keep the default empty and make it explicit per service.
-  - Prometheus/probe paths that assume HTTP/1.1 upstream.
-- **blocking decisions:** none.
 
 ### ✅ OIDC: domain gating + docs — deployed 2026-09-17
 
