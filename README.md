@@ -1111,9 +1111,11 @@ host, so either disable that feature at instance creation
 router in front of it. And its API needs `proto h2` upstream, which is what
 `--backend-proto h2` is for.
 
-**GitHub is not supported**, and cannot be without new code: GitHub is OAuth2
-without OIDC discovery, so there is no issuer, no ID token and no standard
-claims. The usual answer is to let your IdP federate GitHub and keep hz
+**GitHub is not supported for signing in**, and cannot be without new code:
+GitHub has no OIDC provider for *users* — no issuer to redirect a person to, no
+ID token, no standard claims. (It does run one for CI job identity at
+`token.actions.githubusercontent.com`, which is machine identity for workflows
+and cannot back a login page.) The usual answer is to let your IdP federate GitHub and keep hz
 pointed at the IdP — the same way this deployment federates Google Workspace
 through Zitadel rather than teaching hz about Google.
 

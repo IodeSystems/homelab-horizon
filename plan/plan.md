@@ -329,9 +329,8 @@ claim that will never arrive. Tests: `internal/server/oidc_gate_test.go`,
 including the subdomain and lookalike-suffix cases and a consumer Google
 account with no `hd`. README gained a "Single sign-on (OIDC)" section.
 
-**Live on .160:** issuer `https://id.iodesystems.com`, client
-`391216560234102786`, `allowed_email_domains: ["iodesystems.com"]`,
-`auto_provision: false`. `/api/v1/auth/oidc/status` reports enabled and
+**Live on the gateway:** issuer `https://id.<our-domain>`, its client id,
+`allowed_email_domains: ["<our-domain>"]`, `auto_provision: false`. `/api/v1/auth/oidc/status` reports enabled and
 `/start` redirects to Zitadel with PKCE. An hz account `carl@iodesystems.com`
 exists for the identity to attach to.
 
@@ -344,9 +343,10 @@ to them.
 consumes it when it federates Google and issues its own token, so hz's gate is
 the verified email domain. Requiring `hd` here would refuse everyone.
 
-**PROVEN 2026-09-17.** `carl@iodesystems.com` signed in from 192.168.1.58:
+**PROVEN 2026-09-17.** A Workspace account signed in from a LAN machine, and
+hz logged the shape that matters:
 
-    login user=carl@iodesystems.com factor=oidc subject=391206940614590466 role=admin
+    login user=<user> factor=oidc subject=<idp subject> role=admin
 
 Google Workspace → Zitadel → hz, attached to the pre-created account, with
 auto-provision off. The local `nthalk` account and the admin token still work,
