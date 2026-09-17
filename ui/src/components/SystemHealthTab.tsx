@@ -453,6 +453,21 @@ function DNSMasqCard({ health }: { health: SystemHealth }) {
   // undefined when hz did not probe (dnsmasq off, or no local_interface), which
   // is different from "probed and got nothing".
   const answersProbe = dns.extras?.answers_on_local_interface as boolean | undefined;
+  // One row per address dnsmasq should answer on, and whether that address can
+  // resolve a name dnsmasq does NOT serve itself. "Answers" and "forwards" are
+  // separate failures: a resolver with dead upstreams still answers for every
+  // internal name, which is why this used to look healthy while the internet
+  // did not resolve.
+  const listeners = (dns.extras?.listeners ?? []) as {
+    addr: string;
+    role: string;
+    answers: boolean;
+    forwards: boolean;
+    ips?: string[];
+    err?: string;
+  }[];
+  const probeName = (dns.extras?.probe_name as string | undefined) ?? "";
+  const probeConflict = dns.extras?.probe_conflict as string | undefined;
   const owningIface = localBind?.owning_iface ?? "";
   return (
     <ComponentCard title="dnsmasq" component={dns}>
@@ -503,6 +518,32 @@ function DNSMasqCard({ health }: { health: SystemHealth }) {
         fixRunning={fixIfaces.isPending}
         fixLabel={owningIface ? `Add ${owningIface}` : "Fix"}
       />
+      {listeners.map((l) => (
+        <CheckRow
+          key={`${l.addr}-forward`}
+          label={
+            l.answers
+              ? `Resolves ${probeName} via ${l.addr}${
+                  l.role === "vpn" ? " (VPN clients)" : ""
+                }`
+              : `Answering DNS on ${l.addr}${l.role === "vpn" ? " (VPN clients)" : ""}`
+          }
+          ok={l.answers && l.forwards}
+          okLabel={l.ips?.length ? l.ips[0] : "OK"}
+          failingLabel={l.answers ? (l.err ?? "No answer") : "Not listening"}
+          fix={() => reload.mutate()}
+          fixDisabled={!dns.running}
+          fixRunning={reload.isPending}
+          fixLabel="Reload"
+        />
+      ))}
+      {probeConflict && (
+        <CheckRow
+          label={`Forwarding check disabled: ${probeConflict}`}
+          ok={false}
+          failingLabel="Misconfigured"
+        />
+      )}
       {answersProbe !== undefined && (
         <CheckRow
           // Distinct from the row above: that one says the config is coherent,
