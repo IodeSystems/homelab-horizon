@@ -74,3 +74,27 @@ the VPN page's add-peer flow.
 **risks:** warning on every peer download becomes wallpaper. It should fire
 only for the profile that installs the LAN route, which is `lan-access` —
 `vpn-only` and `full-tunnel` are unaffected.
+
+## ◻ Path routing for a service (one hostname, two backends)
+
+**Resume condition:** something needs two backends under one name. The first
+candidate is real: Zitadel's **Login v2** is a separate container that upstream
+serves at `https://<host>/ui/v2/login/` while the API serves everything else on
+that same host (their compose splits it with Traefik). We turned Login v2 off
+and used the deprecated classic login instead (iodesystems-intern, S4), which
+buys time, not a solution.
+
+**Today** a service maps one Host ACL to one backend
+(`internal/haproxy/haproxy.go`), and `use_backend … if host_<name>`. HAProxy
+itself is perfectly capable of `path_beg` ACLs; hz has no model for them.
+
+**Shape, if it is ever wanted:** a service gains optional `routes`:
+`[{path_prefix, backend}]`, each becoming an extra ACL + `use_backend` that is
+evaluated before the host default. Health checks, timeouts and the internal-only
+rule are per backend, so each route needs its own backend block.
+
+**Why it is not obviously worth it:** it is a real widening of the service
+model — every feature that says "the backend" now has to ask "which one" — and
+the alternative is a small path-splitting proxy in front of the two containers,
+owned by whoever runs those containers rather than by hz. Decide which of those
+two you want before writing either.
