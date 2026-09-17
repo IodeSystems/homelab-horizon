@@ -263,7 +263,7 @@ Phase 3 replaces this with: restart horizon, done.
 | 2 | [Operator follow-ups](#operator-follow-ups-not-code) — yours, not mine | — |
 | 3 | [L4 port forwards](#-l4-port-forwards) | ◐ code done, not committed, not deployed |
 | 4 | [Per-peer secrets](#-per-peer-secrets-set-by-an-admin-picked-up-once-by-the-peer) | ◻ not started |
-| 5 | [OIDC: Google Workspace + docs](#-oidc-google-workspace-domain-gating-and-the-missing-docs) | ◻ not started |
+| 5 | [OIDC: Google Workspace + docs](#-oidc-google-workspace-domain-gating-and-the-missing-docs) | ✅ deployed, one login left to prove |
 | 6 | [Backend protocol (h2c)](#-backend-protocol-h2c-for-grpc-backends) | ✅ deployed + in use (Zitadel) |
 | 7 | [Invites that can require a sign-in](#-invites-that-can-require-a-sign-in) | ◻ not started |
 | 8 | [DNS checks that would catch a broken forwarder](#-dns-checks-that-would-catch-a-broken-forwarder) | ✅ deployed |
@@ -358,7 +358,7 @@ the local operator CLI — `make build-hz` and copy it, or `--backend-proto` is
   - Prometheus/probe paths that assume HTTP/1.1 upstream.
 - **blocking decisions:** none.
 
-### ◻ OIDC: Google Workspace domain gating, and the missing docs
+### ✅ OIDC: domain gating + docs — deployed 2026-09-17
 
 **Driver:** the same project wants people to sign in with Google Workspace and
 nobody to manage passwords. hz already speaks OIDC
@@ -386,7 +386,29 @@ things are missing for this to be safe with Google.
    gate is configured, and what happens on first login. The sibling
    instructions for Gitea live in the intern repo, not here.
 
-- **next:** answer the blocking decision, then claim gating → docs.
+**Done 2026-09-17.** `allowed_email_domains` (refuses an unverified email
+outright) and `required_claims` (any value, every claim), both gating before
+the group checks so a refusal names the real reason instead of blaming a groups
+claim that will never arrive. Tests: `internal/server/oidc_gate_test.go`,
+including the subdomain and lookalike-suffix cases and a consumer Google
+account with no `hd`. README gained a "Single sign-on (OIDC)" section.
+
+**Live on .160:** issuer `https://id.iodesystems.com`, client
+`391216560234102786`, `allowed_email_domains: ["iodesystems.com"]`,
+`auto_provision: false`. `/api/v1/auth/oidc/status` reports enabled and
+`/start` redirects to Zitadel with PKCE. An hz account `carl@iodesystems.com`
+exists for the identity to attach to.
+
+**The decision, made:** auto-provision stays **off**. hz has one role — admin —
+so a domain gate plus auto-provision would make every Workspace account an
+administrator of the gateway. Accounts are created deliberately; SSO attaches
+to them.
+
+**Note for the next person:** the Google `hd` claim does NOT reach hz. Zitadel
+consumes it when it federates Google and issues its own token, so hz's gate is
+the verified email domain. Requiring `hd` here would refuse everyone.
+
+- **next:** one browser sign-in to prove it end to end.
 - **risks:**
   - An email-domain check alone is forgeable: a consumer Google account can
     carry a company address, and multi-tenant Microsoft logins have allowed

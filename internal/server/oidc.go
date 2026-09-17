@@ -239,3 +239,50 @@ func anyGroupMatches(have, want []string) bool {
 	}
 	return false
 }
+
+// emailDomainAllowed reports whether a verified email is in one of the allowed
+// domains, and why not when it is refused.
+//
+// An unverified email is refused outright rather than matched: a provider that
+// will hand out an address it never checked is exactly the case this gate
+// exists to stop.
+func emailDomainAllowed(email string, verified bool, allowed []string) (bool, string) {
+	if len(allowed) == 0 {
+		return true, ""
+	}
+	if !verified {
+		return false, "the provider did not verify that address"
+	}
+	at := strings.LastIndex(email, "@")
+	if at <= 0 || at == len(email)-1 {
+		return false, "no email address in the token"
+	}
+	domain := strings.ToLower(email[at+1:])
+	for _, d := range allowed {
+		if strings.ToLower(strings.TrimSpace(d)) == domain {
+			return true, ""
+		}
+	}
+	return false, "domain " + domain + " is not allowed"
+}
+
+// requiredClaimsSatisfied checks every configured claim carries one of its
+// allowed values. All claims must match; within a claim, any value does.
+//
+// Reuses groupsFrom for extraction because providers disagree about shape in
+// exactly the same way here: a string, a list, or nothing.
+func requiredClaimsSatisfied(raw map[string]any, required map[string][]string) (bool, string) {
+	for name, want := range required {
+		if len(want) == 0 {
+			continue
+		}
+		have := groupsFrom(raw, name)
+		if len(have) == 0 {
+			return false, "the token carries no " + name + " claim"
+		}
+		if !anyGroupMatches(have, want) {
+			return false, name + " is " + strings.Join(have, ",") + ", which is not allowed"
+		}
+	}
+	return true, ""
+}

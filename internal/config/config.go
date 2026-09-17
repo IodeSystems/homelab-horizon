@@ -1834,6 +1834,24 @@ type OIDCConfig struct {
 	// off, someone must already have an account for SSO to attach to, which
 	// is how an operator keeps the account list a deliberate thing.
 	AutoProvision bool `json:"auto_provision,omitempty"`
+
+	// AllowedEmailDomains gates on the domain of a VERIFIED email claim.
+	// Empty means no domain gate.
+	//
+	// This exists because group claims are not universal: Google Workspace
+	// sends no groups by default, so AllowedGroups cannot gate it at all. A
+	// domain is what that provider does assert.
+	//
+	// On its own a domain is weak — a consumer account can carry a company
+	// address, and a multi-tenant provider may pass an email nobody verified
+	// — so pair it with RequiredClaims (Workspace: hd) on any provider that
+	// is not exclusively yours.
+	AllowedEmailDomains []string `json:"allowed_email_domains,omitempty"`
+
+	// RequiredClaims demands a claim carry one of the listed values, for
+	// providers that assert tenancy outside the groups claim: Google
+	// Workspace's `hd`, or a tenant id. Every entry must match.
+	RequiredClaims map[string][]string `json:"required_claims,omitempty"`
 }
 
 // OIDCReady reports whether single sign-on can be offered, and why not.

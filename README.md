@@ -1045,6 +1045,64 @@ Configure your provider in the zone's `dns_provider` block:
 | Google Cloud DNS | `googlecloud` | `gcp_project` (+ optional `gcp_service_account_json`) |
 | DuckDNS | `duckdns` | `api_token` |
 
+## Single sign-on (OIDC)
+
+hz can hand authentication to an OpenID Connect provider. Local accounts and
+the admin token keep working alongside it — deliberately, because hz is the
+edge: the outage that takes the provider down is the one where an operator most
+needs to sign in.
+
+```json
+"oidc": {
+  "enabled": true,
+  "issuer": "https://id.example.com",
+  "client_id": "…",
+  "client_secret": "…",
+  "name": "Company SSO",
+  "allowed_email_domains": ["example.com"],
+  "required_claims": {"hd": ["example.com"]},
+  "auto_provision": false
+}
+```
+
+`admin_url` must be https: the redirect URI is derived from it, and is
+`<admin_url>/api/v1/auth/oidc/callback`. Register exactly that with the
+provider. Everything else — endpoints, JWKS — comes from discovery.
+
+### Who gets in
+
+Four gates, each optional, evaluated in this order:
+
+| Setting | Refuses when |
+|---|---|
+| `allowed_email_domains` | the email claim is unverified, or its domain is not listed |
+| `required_claims` | a named claim is missing, or carries none of the listed values |
+| `allowed_groups` | `groups_claim` carries none of these |
+| `admin_groups` | `groups_claim` carries none of these (hz has one role, so a non-admin is refused rather than given a session that authenticates nothing) |
+
+**Groups alone cannot gate every provider.** Google Workspace sends no group
+claims by default, so `allowed_groups` would never match; the domain gate is
+what that provider does assert. Conversely a domain alone is weak — a consumer
+account can carry a company address, and a multi-tenant provider may pass an
+email nobody verified — so on any provider that is not exclusively yours, pair
+it with `required_claims` (Workspace: `hd`).
+
+An unverified email is refused outright rather than matched, which is the
+entire point of the gate.
+
+### Accounts
+
+**`auto_provision` is off by default, and that is a real decision.** hz has one
+privilege level: admin. With a domain gate and auto-provision on, *every*
+account in that domain becomes an administrator of your gateway. With it off,
+someone must already have an account for SSO to attach to, and the account list
+stays deliberate.
+
+Identity is the **subject**, never the username or email — those are what a
+provider lets people change. On first sign-in hz matches the derived username
+(`preferred_username`, else the local part of a verified email, else the
+subject), then stores the subject so the link survives a rename on either side.
+
 ## DNS checks: answering vs forwarding
 
 The System Health tab reports these separately, because they fail separately

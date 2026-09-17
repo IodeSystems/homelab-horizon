@@ -154,6 +154,22 @@ func (s *Server) handleAPIOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	_ = idToken.Claims(&raw)
 	groups := groupsFrom(raw, cfg.OIDC.GroupsClaim)
 
+	// Domain and claim gates run before groups: they are what a provider like
+	// Google Workspace actually asserts, and a refusal here should say so
+	// rather than blaming a groups claim that will never arrive.
+	if ok, why := emailDomainAllowed(claims.Email, claims.EmailVerified, cfg.OIDC.AllowedEmailDomains); !ok {
+		slog.Warn("oidc sign-in refused: email domain",
+			"subject", claims.Subject, "reason", why, "allowed", cfg.OIDC.AllowedEmailDomains)
+		s.oidcFail(w, r, "That account is not permitted to administer this gateway.")
+		return
+	}
+	if ok, why := requiredClaimsSatisfied(raw, cfg.OIDC.RequiredClaims); !ok {
+		slog.Warn("oidc sign-in refused: required claim",
+			"subject", claims.Subject, "reason", why)
+		s.oidcFail(w, r, "That account is not permitted to administer this gateway.")
+		return
+	}
+
 	if len(cfg.OIDC.AllowedGroups) > 0 && !anyGroupMatches(groups, cfg.OIDC.AllowedGroups) {
 		slog.Warn("oidc sign-in refused: not in an allowed group",
 			"subject", claims.Subject, "groups", groups)
