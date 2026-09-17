@@ -262,7 +262,7 @@ Phase 3 replaces this with: restart horizon, done.
 | 1 | [Outside-in checks (`hz-probe`)](#outside-in-checks-hz-probe) | ✅ code done, ⏸ not yet deployed |
 | 2 | [Operator follow-ups](#operator-follow-ups-not-code) — yours, not mine | — |
 | 3 | [L4 port forwards](#-l4-port-forwards) | ◐ code done, not committed, not deployed |
-| 5 | [OIDC: Google Workspace + docs](#-oidc-google-workspace-domain-gating-and-the-missing-docs) | ✅ deployed, one login left to prove |
+| 5 | [OIDC: domain gating + docs](#-oidc-domain-gating--docs--deployed-2026-09-17) | ✅ proven in production |
 | 6 | [Backend protocol (h2c)](#-backend-protocol-h2c-for-grpc-backends) | ✅ deployed + in use (Zitadel) |
 | 7 | [Invites that can require a sign-in](#-invites-that-can-require-a-sign-in) | ◻ not started |
 | 8 | [DNS checks that would catch a broken forwarder](#-dns-checks-that-would-catch-a-broken-forwarder) | ✅ deployed |
@@ -321,7 +321,14 @@ to them.
 consumes it when it federates Google and issues its own token, so hz's gate is
 the verified email domain. Requiring `hd` here would refuse everyone.
 
-- **next:** one browser sign-in to prove it end to end.
+**PROVEN 2026-09-17.** `carl@iodesystems.com` signed in from 192.168.1.58:
+
+    login user=carl@iodesystems.com factor=oidc subject=391206940614590466 role=admin
+
+Google Workspace → Zitadel → hz, attached to the pre-created account, with
+auto-provision off. The local `nthalk` account and the admin token still work,
+which is the point: hz is the edge, and the outage that takes the IdP down is
+when an operator most needs in.
 - **risks:**
   - An email-domain check alone is forgeable: a consumer Google account can
     carry a company address, and multi-tenant Microsoft logins have allowed
