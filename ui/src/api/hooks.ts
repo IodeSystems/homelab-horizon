@@ -1,3 +1,8 @@
+import type {
+  OIDCSettingsResp,
+  OIDCSettingsReq,
+  OIDCDiscoverResp,
+} from "./generated-types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { apiFetch, apiFetchText } from "./client";
@@ -1694,5 +1699,40 @@ export function useSetLocalDNSDomain() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["dns", "local"] });
     },
+  });
+}
+
+// --- single sign-on settings -------------------------------------------------
+//
+// The GET never returns the client secret — only whether one is stored — so a
+// blank secret field on save means "keep it", not "clear it".
+
+export function useOIDCSettings() {
+  return useQuery({
+    queryKey: ["oidc-settings"],
+    queryFn: () => apiFetch<OIDCSettingsResp>("/settings/oidc"),
+  });
+}
+
+export function useSaveOIDCSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: OIDCSettingsReq) =>
+      apiFetch("/settings/oidc", { method: "PUT", body: JSON.stringify(body) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["oidc-settings"] });
+      // The login page offers SSO based on this, so its status is stale now.
+      qc.invalidateQueries({ queryKey: ["oidc-status"] });
+    },
+  });
+}
+
+export function useDiscoverOIDC() {
+  return useMutation({
+    mutationFn: (body: { issuer: string }) =>
+      apiFetch<OIDCDiscoverResp>("/settings/oidc/discover", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
   });
 }

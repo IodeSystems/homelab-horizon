@@ -1052,6 +1052,10 @@ the admin token keep working alongside it — deliberately, because hz is the
 edge: the outage that takes the provider down is the one where an operator most
 needs to sign in.
 
+Configure it in **Settings → Users → Single sign-on**, which also shows the
+redirect URI to give the provider and has a **Test discovery** button. The
+equivalent config, for anyone who prefers the file:
+
 ```json
 "oidc": {
   "enabled": true,
@@ -1089,6 +1093,29 @@ it with `required_claims` (Workspace: `hd`).
 
 An unverified email is refused outright rather than matched, which is the
 entire point of the gate.
+
+### Providers
+
+hz speaks **OpenID Connect** and nothing else: give it an issuer, and discovery
+supplies the endpoints and keys. Anything with a `.well-known` works —
+**Authentik, Keycloak, Authelia, Pocket ID, Zitadel**.
+
+**If you do not already run one, Zitadel is a good choice** and is what this
+project's authors run. It self-hosts from one container against Postgres, and
+it federates Google, Microsoft and the rest, so hz keeps a single issuer while
+people sign in with whatever their company uses. Two things to know before you
+start: v4 defaults to a **separate login container** served under
+`/ui/v2/login/`, which needs a proxy that can route by path — hz routes by
+host, so either disable that feature at instance creation
+(`ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED=false`) or put a path
+router in front of it. And its API needs `proto h2` upstream, which is what
+`--backend-proto h2` is for.
+
+**GitHub is not supported**, and cannot be without new code: GitHub is OAuth2
+without OIDC discovery, so there is no issuer, no ID token and no standard
+claims. The usual answer is to let your IdP federate GitHub and keep hz
+pointed at the IdP — the same way this deployment federates Google Workspace
+through Zitadel rather than teaching hz about Google.
 
 ### Accounts
 

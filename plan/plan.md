@@ -271,6 +271,29 @@ Two opt-in next-steps were added to [icebox.md](icebox.md) on 2026-09-10:
 HAProxy TCP frontends on the VPN address, and moving the range-collision
 warning onto the peer-config download path.
 
+### ✅ SSO settings card — deployed 2026-09-17
+
+Until this, the only way to configure SSO was hand-editing `config.json` on the
+server and restarting — for the feature whose failures are hardest to read.
+**Settings → Users → Single sign-on** now holds it.
+
+- `GET/PUT /api/v1/settings/oidc`. The **client secret is write-only**: the
+  response says `secretStored`, never the value, so a blank field on save means
+  keep it (`clearSecret` removes it).
+- The **redirect URI is reported, not accepted** — hz derives it from
+  `admin_url`, so letting anyone type it would let hz and the provider disagree
+  about a value hz owns. Read-only and copyable in the card.
+- `POST /api/v1/settings/oidc/discover` fetches the provider's discovery
+  document and reports what came back. A wrong issuer, a provider that is down
+  and an untrusted certificate otherwise fail identically and opaquely at
+  sign-in. Verified live: the real issuer returns its token endpoint, and
+  `…/nope` returns `404 Not Found` instead of silence.
+- The card warns, next to the toggle, that auto-provision plus a gate makes
+  every admitted account an administrator — hz has one role.
+- README gained a **Providers** section: OIDC only, Zitadel recommended with
+  its two gotchas (Login v2 needs path routing; the API needs `proto h2`), and
+  a plain statement that GitHub cannot work without new code.
+
 ### ✅ OIDC: domain gating + docs — deployed 2026-09-17
 
 **Driver:** the same project wants people to sign in with Google Workspace and
