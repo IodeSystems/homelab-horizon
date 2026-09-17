@@ -916,7 +916,20 @@ type ProxyConfig struct {
 	Deploy            *DeployConfig  `json:"deploy,omitempty"`           // Blue-green deploy with current/next slots
 	MaintenancePage   string         `json:"maintenance_page,omitempty"` // HTML body served as 503 during maintenance
 	Timeouts          *ProxyTimeouts `json:"timeouts,omitempty"`         // Optional per-backend HAProxy timeout overrides
+
+	// BackendProto is the protocol HAProxy speaks TO this backend. Empty is
+	// HTTP/1.1, which is right for nearly everything. "h2" is cleartext
+	// HTTP/2 (h2c) by prior knowledge — HAProxy does not negotiate and does
+	// not fall back, so a backend that is not h2c fails outright. Set it only
+	// for a backend that requires HTTP/2, such as a gRPC service.
+	BackendProto string `json:"backend_proto,omitempty"`
 }
+
+// BackendProtoH2 is the only non-default value BackendProto accepts.
+const BackendProtoH2 = "h2"
+
+// ValidBackendProto reports whether a backend_proto value is one hz knows.
+func ValidBackendProto(v string) bool { return v == "" || v == BackendProtoH2 }
 
 // SelfBackendAddr returns the loopback address of this hz instance's own admin
 // UI, derived from ListenAddr. Used by services with proxy.self so HAProxy

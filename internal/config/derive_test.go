@@ -554,6 +554,27 @@ func TestValidateService(t *testing.T) {
 			wantErr: "",
 		},
 		{
+			name: "backend_proto h2 on a real backend",
+			svc: Service{Name: "id", Domains: []string{"id.example.com"},
+				Proxy: &ProxyConfig{Backend: "127.0.0.1:20005", BackendProto: "h2"}},
+			wantErr: "",
+		},
+		{
+			// A typo must not quietly mean HTTP/1.1: h2c has no negotiation,
+			// so the failure would show up as the service being down.
+			name: "backend_proto typo",
+			svc: Service{Name: "id", Domains: []string{"id.example.com"},
+				Proxy: &ProxyConfig{Backend: "127.0.0.1:20005", BackendProto: "http2"}},
+			wantErr: "proxy.backend_proto",
+		},
+		{
+			// static and self point at hz's own HTTP/1.1 servers.
+			name: "backend_proto on a self service",
+			svc: Service{Name: "id", Domains: []string{"id.example.com"},
+				Proxy: &ProxyConfig{Self: true, BackendProto: "h2"}},
+			wantErr: "proxy.backend_proto",
+		},
+		{
 			name:    "missing name",
 			svc:     Service{Name: "", Domains: []string{"app.example.com"}},
 			wantErr: "name",

@@ -1045,6 +1045,32 @@ Configure your provider in the zone's `dns_provider` block:
 | Google Cloud DNS | `googlecloud` | `gcp_project` (+ optional `gcp_service_account_json`) |
 | DuckDNS | `duckdns` | `api_token` |
 
+## Backend protocol (h2c)
+
+By default HAProxy talks **HTTP/1.1** to every backend, which is what nearly
+every service wants. A backend that requires HTTP/2 — a gRPC service, or
+anything built on Connect-RPC — needs `proto h2` on its server line:
+
+```bash
+hz service create --name id --domain id.example.com \
+    --backend 127.0.0.1:20005 --backend-proto h2 --internal-only --sync
+hz service edit id --backend-proto ""      # back to HTTP/1.1
+```
+
+In the UI it is a select under **Timeouts** in the service editor.
+
+**Why this is per service and not the default:** cleartext HTTP/2 is used *by
+prior knowledge*. HAProxy sends an HTTP/2 preface immediately, with no
+negotiation and no fallback, so pointing it at an HTTP/1.1 backend does not
+degrade — it fails, and it looks like the service is down. The health check
+travels the same way. WebSocket backends are another reason to leave it off
+unless asked for: WebSockets over an HTTP/2 upstream need extended CONNECT
+(RFC 8441) support on both sides.
+
+Only `h2` is accepted; anything else is rejected at validation
+(`proxy.backend_proto`), and it cannot be combined with a static-folder or
+`self` service, whose backend is hz's own HTTP/1.1 server.
+
 ## Health Checks
 
 Services with HAProxy backends automatically get health checks. Configure ntfy URL to receive push notifications when services go down.

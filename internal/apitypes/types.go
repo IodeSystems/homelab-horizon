@@ -68,6 +68,7 @@ type ProxyResp struct {
 	Deploy             *DeployResp        `json:"deploy,omitempty"`
 	MaintenancePageMD5 string             `json:"maintenancePageMD5,omitempty"`
 	Timeouts           *ProxyTimeoutsResp `json:"timeouts,omitempty"`
+	BackendProto       string             `json:"backendProto,omitempty"` // "" = HTTP/1.1, "h2" = cleartext HTTP/2 to the backend
 }
 
 // ProxyTimeoutsResp surfaces per-backend HAProxy timeout overrides (seconds).
@@ -931,6 +932,7 @@ type ServiceRequestProxy struct {
 	InternalOnly bool                       `json:"internalOnly"`
 	Deploy       *ServiceRequestDeploy      `json:"deploy,omitempty"`
 	Timeouts     *ServiceRequestTimeouts    `json:"timeouts,omitempty"`
+	BackendProto string                     `json:"backendProto,omitempty"` // "" = HTTP/1.1, "h2" = cleartext HTTP/2 to the backend
 }
 
 // ServiceRequestTimeouts carries per-backend HAProxy timeout overrides

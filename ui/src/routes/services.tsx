@@ -152,6 +152,7 @@ interface ServiceFormState {
   deployNextBackend: string;
   deployBalance: string;
   // Per-backend HAProxy timeout overrides, in seconds. Blank = inherit defaults.
+  backendProto: string;
   timeoutServer: string;
   timeoutConnect: string;
   timeoutTunnel: string;
@@ -216,6 +217,7 @@ const emptyForm: ServiceFormState = {
   deployEnabled: false,
   deployNextBackend: "",
   deployBalance: "first",
+  backendProto: "",
   timeoutServer: "",
   timeoutConnect: "",
   timeoutTunnel: "",
@@ -252,6 +254,7 @@ function serviceToForm(svc: Service): ServiceFormState {
     deployEnabled: !!svc.proxy?.deploy,
     deployNextBackend: svc.proxy?.deploy?.nextBackend ?? "",
     deployBalance: svc.proxy?.deploy?.balance || "first",
+    backendProto: svc.proxy?.backendProto ?? "",
     timeoutServer: svc.proxy?.timeouts?.serverSeconds
       ? String(svc.proxy.timeouts.serverSeconds)
       : "",
@@ -353,6 +356,9 @@ function formToInput(form: ServiceFormState, originalName?: string): ServiceMuta
         nextBackend: form.deployNextBackend,
         balance: form.deployBalance || "first",
       };
+    }
+    if (form.backendProto) {
+      input.proxy.backendProto = form.backendProto;
     }
     const timeouts: Record<string, number> = {};
     const server = parseInt(form.timeoutServer, 10);
@@ -1180,6 +1186,19 @@ function ServiceFormDialog({
                   Seconds. Leave blank to inherit HAProxy defaults. Raise Server for
                   long-running backend requests.
                 </Typography>
+                <TextField
+                  select
+                  label="Backend protocol"
+                  value={form.backendProto}
+                  onChange={(e) => update("backendProto", e.target.value)}
+                  size="small"
+                  fullWidth
+                  sx={{ mt: 2 }}
+                  helperText="HTTP/2 has no fallback: a backend that is not h2c will fail outright. Only set it for gRPC backends that require it."
+                >
+                  <MenuItem value="">HTTP/1.1 (default)</MenuItem>
+                  <MenuItem value="h2">HTTP/2 cleartext (h2c)</MenuItem>
+                </TextField>
               </Collapse>
             </Box>
               </>
