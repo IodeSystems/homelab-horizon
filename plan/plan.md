@@ -265,6 +265,7 @@ Phase 3 replaces this with: restart horizon, done.
 | 4 | [Per-peer secrets](#-per-peer-secrets-set-by-an-admin-picked-up-once-by-the-peer) | ◻ not started |
 | 5 | [OIDC: Google Workspace + docs](#-oidc-google-workspace-domain-gating-and-the-missing-docs) | ◻ not started |
 | 6 | [Backend protocol (h2c)](#-backend-protocol-h2c-for-grpc-backends) | ✅ code done, not deployed |
+| 7 | [Invites that can require a sign-in](#-invites-that-can-require-a-sign-in) | ◻ not started |
 
 Two opt-in next-steps were added to [icebox.md](icebox.md) on 2026-09-10:
 HAProxy TCP frontends on the VPN address, and moving the range-collision
