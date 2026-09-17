@@ -191,6 +191,66 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Every address dnsmasq should answer on, and whether it forwards.
+	//
+	// Two failures hid behind the checks above. dnsmasq binds the WireGuard
+	// address separately (bind-dynamic), so it can stop answering there while
+	// the LAN address stays perfect — and VPN clients are then the only ones
+	// with no DNS at all. And every name hz resolves elsewhere is one dnsmasq
+	// serves from its own `address=` lines, which answer exactly as well with
+	// every upstream unreachable.
+	if cfg.DNSMasqEnabled && dnsStatus.Running {
+		probe := cfg.DNSProbeName
+		if strings.TrimSpace(probe) == "" {
+			probe = dnsmasq.DefaultProbeName
+		}
+		if dns.Extras == nil {
+			dns.Extras = map[string]any{}
+		}
+		dns.Extras["probe_name"] = probe
+
+		if why := dnsmasq.ProbeConflict(probe, servedDomains(cfg)); why != "" {
+			dns.Extras["probe_conflict"] = why
+			dns.Errors = append(dns.Errors, "forwarding check cannot run: "+why)
+		} else {
+			type listener struct {
+				Addr     string   `json:"addr"`
+				Role     string   `json:"role"`
+				Answers  bool     `json:"answers"`
+				Forwards bool     `json:"forwards"`
+				IPs      []string `json:"ips,omitempty"`
+				Err      string   `json:"err,omitempty"`
+			}
+			var listeners []listener
+			for _, l := range []struct{ ip, role string }{
+				{cfg.LocalInterface, "local_interface"},
+				{cfg.GetWGGatewayIP(), "vpn"},
+			} {
+				if strings.TrimSpace(l.ip) == "" {
+					continue
+				}
+				addr := net.JoinHostPort(l.ip, "53")
+				answers := dnsmasq.Answers(addr)
+				fwd := dnsmasq.Forwards(addr, probe)
+				listeners = append(listeners, listener{
+					Addr: addr, Role: l.role, Answers: answers,
+					Forwards: fwd.OK, IPs: fwd.IPs, Err: fwd.Err,
+				})
+				switch {
+				case !answers && l.role == "vpn":
+					dns.Errors = append(dns.Errors,
+						"dnsmasq is not answering on the VPN address "+addr+
+							" — VPN clients have no DNS at all")
+				case answers && !fwd.OK:
+					dns.Errors = append(dns.Errors,
+						"dnsmasq answers on "+addr+" but cannot resolve "+probe+
+							" ("+fwd.Err+") — internal names still work, everything else fails")
+				}
+			}
+			dns.Extras["listeners"] = listeners
+		}
+	}
+
 	resp.Components = append(resp.Components, dns)
 
 	// Let's Encrypt. "Installed" here means acme account configured, not a
@@ -363,4 +423,17 @@ func checkHAProxyApparmor() (bool, string) {
 		return true, ""
 	}
 	return false, "rsyslogd apparmor profile is missing attach_disconnected flag — HAProxy logs are silently dropped"
+}
+
+// servedDomains is every name dnsmasq answers from hz's own config. The
+// forwarding probe must not be one of them.
+func servedDomains(cfg *config.Config) []string {
+	var out []string
+	for _, svc := range cfg.Services {
+		out = append(out, svc.Domains...)
+	}
+	for _, z := range cfg.Zones {
+		out = append(out, z.Name)
+	}
+	return out
 }

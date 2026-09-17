@@ -1045,6 +1045,32 @@ Configure your provider in the zone's `dns_provider` block:
 | Google Cloud DNS | `googlecloud` | `gcp_project` (+ optional `gcp_service_account_json`) |
 | DuckDNS | `duckdns` | `api_token` |
 
+## DNS checks: answering vs forwarding
+
+The System Health tab reports these separately, because they fail separately
+and the fixes differ:
+
+| Row | Question | Fails when |
+|---|---|---|
+| Answering DNS on `<addr>` | is a socket replying there | dnsmasq is down, or `bind-dynamic` never picked that address up |
+| Resolves `<probe>` via `<addr>` | can it answer a name it does **not** serve itself | upstreams unreachable, `no-resolv` with no `server=`, or no route out |
+
+Both are checked on **every address dnsmasq should answer on** — the LAN
+address *and* the WireGuard gateway address. dnsmasq binds those separately, so
+it can stop answering on the VPN address while the LAN address stays perfect;
+VPN clients are then the only ones with no DNS, and nothing else notices.
+
+The forwarding probe resolves `example.com` by default (IANA-reserved, stable
+A records). Override with `dns_probe_name` in `config.json`. **The probe must
+be a name hz does not serve**: a name with an `address=` line is answered from
+the config and never touches an upstream, so the check would pass on a box with
+no internet at all. hz compares the probe against every service domain and zone
+and refuses to run the check rather than report a meaningless green row.
+
+Upstreams themselves are `upstream_dns` (default `1.1.1.1`, `8.8.8.8`,
+`8.8.4.4`). dnsmasq is not given `strict-order`, so it picks whichever upstream
+has been answering fastest rather than always preferring the first.
+
 ## Backend protocol (h2c)
 
 By default HAProxy talks **HTTP/1.1** to every backend, which is what nearly
