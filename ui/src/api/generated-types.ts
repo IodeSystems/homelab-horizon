@@ -1387,3 +1387,62 @@ export interface TombstoneCancelRequest {
   type: string;
   value: string;
 }
+/**
+ * OIDCSettingsResp is the single-sign-on configuration as the settings page
+ * sees it. The client secret is never included — only whether one is stored.
+ */
+export interface OIDCSettingsResp {
+  enabled: boolean;
+  issuer?: string;
+  clientId?: string;
+  secretStored: boolean;
+  name?: string;
+  scopes?: string[];
+  groupsClaim?: string;
+  allowedGroups?: string[];
+  adminGroups?: string[];
+  allowedEmailDomains?: string[];
+  requiredClaims?: { [key: string]: string[]};
+  autoProvision: boolean;
+  /**
+   * RedirectURI is derived from admin_url and must be registered with the
+   * provider verbatim. Read-only: hz owns it.
+   */
+  redirectUri: string;
+  /**
+   * NotReady explains why SSO cannot be offered even though it is enabled.
+   */
+  notReady?: string;
+}
+/**
+ * OIDCSettingsReq is what the settings page sends back.
+ */
+export interface OIDCSettingsReq {
+  enabled: boolean;
+  issuer: string;
+  clientId: string;
+  clientSecret?: string; // empty means "keep the stored one"
+  clearSecret?: boolean;
+  name?: string;
+  scopes?: string[];
+  groupsClaim?: string;
+  allowedGroups?: string[];
+  adminGroups?: string[];
+  allowedEmailDomains?: string[];
+  requiredClaims?: { [key: string]: string[]};
+  autoProvision: boolean;
+}
+/**
+ * OIDCDiscoverResp reports what a provider's discovery document says, so a
+ * misconfigured issuer fails here with a reason instead of at sign-in time
+ * with none.
+ */
+export interface OIDCDiscoverResp {
+  ok: boolean;
+  error?: string;
+  issuer?: string;
+  authorizationEndpoint?: string;
+  tokenEndpoint?: string;
+  userinfoEndpoint?: string;
+  jwksUri?: string;
+}

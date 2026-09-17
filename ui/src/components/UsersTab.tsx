@@ -21,6 +21,7 @@ import {
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import AccountPolicyCard from "./AccountPolicyCard";
+import SSOCard from "./SSOCard";
 import {
   useUsers,
   useCreateUser,
@@ -168,6 +169,8 @@ export default function UsersTab() {
       )}
 
       <AccountPolicyCard />
+
+      <SSOCard />
 
       <AddUserDialog open={addOpen} onClose={() => setAddOpen(false)} />
       <SetPasswordDialog user={pwUser} onClose={() => setPwUser(null)} />

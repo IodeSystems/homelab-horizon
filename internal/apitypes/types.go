@@ -1435,3 +1435,56 @@ type TombstoneCancelRequest struct {
 	Type  string `json:"type"`
 	Value string `json:"value"`
 }
+
+// OIDCSettingsResp is the single-sign-on configuration as the settings page
+// sees it. The client secret is never included — only whether one is stored.
+type OIDCSettingsResp struct {
+	Enabled             bool                `json:"enabled"`
+	Issuer              string              `json:"issuer,omitempty"`
+	ClientID            string              `json:"clientId,omitempty"`
+	SecretStored        bool                `json:"secretStored"`
+	Name                string              `json:"name,omitempty"`
+	Scopes              []string            `json:"scopes,omitempty"`
+	GroupsClaim         string              `json:"groupsClaim,omitempty"`
+	AllowedGroups       []string            `json:"allowedGroups,omitempty"`
+	AdminGroups         []string            `json:"adminGroups,omitempty"`
+	AllowedEmailDomains []string            `json:"allowedEmailDomains,omitempty"`
+	RequiredClaims      map[string][]string `json:"requiredClaims,omitempty"`
+	AutoProvision       bool                `json:"autoProvision"`
+
+	// RedirectURI is derived from admin_url and must be registered with the
+	// provider verbatim. Read-only: hz owns it.
+	RedirectURI string `json:"redirectUri"`
+	// NotReady explains why SSO cannot be offered even though it is enabled.
+	NotReady string `json:"notReady,omitempty"`
+}
+
+// OIDCSettingsReq is what the settings page sends back.
+type OIDCSettingsReq struct {
+	Enabled             bool                `json:"enabled"`
+	Issuer              string              `json:"issuer"`
+	ClientID            string              `json:"clientId"`
+	ClientSecret        string              `json:"clientSecret,omitempty"` // empty means "keep the stored one"
+	ClearSecret         bool                `json:"clearSecret,omitempty"`
+	Name                string              `json:"name,omitempty"`
+	Scopes              []string            `json:"scopes,omitempty"`
+	GroupsClaim         string              `json:"groupsClaim,omitempty"`
+	AllowedGroups       []string            `json:"allowedGroups,omitempty"`
+	AdminGroups         []string            `json:"adminGroups,omitempty"`
+	AllowedEmailDomains []string            `json:"allowedEmailDomains,omitempty"`
+	RequiredClaims      map[string][]string `json:"requiredClaims,omitempty"`
+	AutoProvision       bool                `json:"autoProvision"`
+}
+
+// OIDCDiscoverResp reports what a provider's discovery document says, so a
+// misconfigured issuer fails here with a reason instead of at sign-in time
+// with none.
+type OIDCDiscoverResp struct {
+	OK                   bool   `json:"ok"`
+	Error                string `json:"error,omitempty"`
+	Issuer               string `json:"issuer,omitempty"`
+	AuthorizationEndoint string `json:"authorizationEndpoint,omitempty"`
+	TokenEndpoint        string `json:"tokenEndpoint,omitempty"`
+	UserInfoEndpoint     string `json:"userinfoEndpoint,omitempty"`
+	JWKSURI              string `json:"jwksUri,omitempty"`
+}
