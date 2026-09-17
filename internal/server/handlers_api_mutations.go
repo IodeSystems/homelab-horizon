@@ -124,6 +124,7 @@ func serviceRequestToService(req *apitypes.ServiceRequest) config.Service {
 			Self:         req.Proxy.Self,
 			SPA:          req.Proxy.SPA,
 			InternalOnly: req.Proxy.InternalOnly,
+			BackendProto: req.Proxy.BackendProto,
 		}
 		if req.Proxy.HealthCheck != nil && req.Proxy.HealthCheck.Path != "" {
 			svc.Proxy.HealthCheck = &config.HealthCheck{Path: req.Proxy.HealthCheck.Path}
@@ -302,6 +303,7 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 					InternalOnly:    req.Proxy.InternalOnly,
 					MaintenancePage: existingMaintenancePage,
 					Timeouts:        requestProxyTimeouts(req.Proxy.Timeouts),
+					BackendProto:    req.Proxy.BackendProto,
 				}
 				applyManagedStaticRoot(cfg, cfg.Services[i].Proxy, req.Name, req.Proxy)
 				if req.Proxy.HealthCheck != nil && req.Proxy.HealthCheck.Path != "" {

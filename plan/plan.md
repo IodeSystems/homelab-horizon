@@ -262,10 +262,136 @@ Phase 3 replaces this with: restart horizon, done.
 | 1 | [Outside-in checks (`hz-probe`)](#outside-in-checks-hz-probe) | ✅ code done, ⏸ not yet deployed |
 | 2 | [Operator follow-ups](#operator-follow-ups-not-code) — yours, not mine | — |
 | 3 | [L4 port forwards](#-l4-port-forwards) | ◐ code done, not committed, not deployed |
+| 4 | [Per-peer secrets](#-per-peer-secrets-set-by-an-admin-picked-up-once-by-the-peer) | ◻ not started |
+| 5 | [OIDC: Google Workspace + docs](#-oidc-google-workspace-domain-gating-and-the-missing-docs) | ◻ not started |
+| 6 | [Backend protocol (h2c)](#-backend-protocol-h2c-for-grpc-backends) | ✅ code done, not deployed |
 
 Two opt-in next-steps were added to [icebox.md](icebox.md) on 2026-09-10:
 HAProxy TCP frontends on the VPN address, and moving the range-collision
 warning onto the peer-config download path.
+
+### ◻ Per-peer secrets, set by an admin, picked up once by the peer
+
+**Driver:** `iodesystems-intern` (the company package index at
+`intern.iodesystems.com`, `~/local/src/iodesystems/iodesystems-intern/plan/plan.md`,
+slice S4). A new laptop needs a registry token before it can configure npm,
+maven, docker, go, apt and brew. hz already knows which device is calling —
+that is the whole feature. **hz stays generic: no Gitea code, no Gitea
+credential, no knowledge of what the value means.**
+
+Reuses what exists: `getPeerFromRequest` (`internal/server/handlers_mfa.go:19`)
+resolves the caller to a peer by source IP, `getClientIP` trusts
+`X-Forwarded-For` only from the proxy, and every HAProxy frontend deletes a
+client-supplied one (`internal/haproxy/haproxy.go`). `peer_owners`
+(`internal/db/peer_owners.go`) is the precedent for per-peer rows in sqlite.
+
+**Shape**
+| | |
+|---|---|
+| Store | new sqlite table `peer_secrets(peer_name, key, value, created_at, created_by)`. **Not config.json** — `VPNMFASecrets` (`internal/config/config.go:341`) is the wrong precedent here: these rows are short-lived and are deleted on read. |
+| Admin API | `PUT /api/v1/vpn/peers/{name}/secrets/{key}` (value in the body), `DELETE` the same, `GET /api/v1/vpn/peers/{name}/secrets` returns key names and timestamps, **never values**. |
+| Peer API | `GET /api/v1/account/peer/secrets/{key}` — authenticated only as the calling peer, returns the value once, deletes the row, logs peer + key + source IP. |
+| CLI | a new `vpn` command in `cmd/hz` (there is none today): `hz vpn peer secret set <peer> <key>` reads the value from **stdin**, plus `rm` and `list`. |
+
+- **next:** decide the MFA rule below, then migration → db methods → handlers →
+  CLI → README.
+- **risks:**
+  - The value sits in sqlite in plaintext until pickup. That is the cost of
+    delivery. Keep the window short: `list` shows age, and `audit` on the
+    intern side reports anything old.
+  - **A jailed peer must not be able to pick up.** With VPN MFA on, an
+    unverified peer still reaches the portal, so the pickup handler has to
+    check the MFA session itself, the way the portal handlers do. Otherwise a
+    stolen WireGuard key collects secrets without the second factor.
+  - Deleting a peer leaves rows behind, like `peer_owners`. Delete on peer
+    removal, and have `list` mark orphans.
+  - One-shot read means a lost response is a lost secret. The admin re-sets it;
+    `setup` on the device must say exactly that.
+- **blocking decisions:** does pickup require a verified MFA session when VPN
+  MFA is on (yes, unless you say otherwise), and does the peer API live on the
+  admin vhost or the portal vhost?
+
+### ✅ Backend protocol (h2c), for gRPC backends — code done 2026-09-17, not deployed
+
+**Driver:** Zitadel at `id.iodesystems.com` (iodesystems-intern plan, S4).
+Zitadel's docs require a reverse proxy that speaks **HTTP/2 upstream (h2c or
+h2)**, and their reference compose sets the backend scheme to `h2c`. Without
+it the console and the gRPC/Connect APIs are at risk; plain OIDC endpoints
+would probably survive on HTTP/1.1, but "probably" is not a proxy config.
+
+**Today** hz emits `server <name> <host:port> check`
+(`internal/haproxy/haproxy.go:749`), always HTTP/1.1 upstream. HAProxy on .160
+is **2.8.16**, which supports `proto h2` on a server line, so this is a config
+flag, not an upgrade.
+
+**Shape**
+- `Proxy.BackendProto` on a service: empty (today's behaviour) or `h2`.
+- Generator appends ` proto h2` to that service's server line, for the single
+  backend and both blue-green servers.
+- `hz service create|edit --backend-proto h2`, and the field in the UI's
+  service form.
+- Health checks: an h2c backend still answers `option httpchk`, but the check
+  connection also becomes h2 — verify against Zitadel rather than assume.
+
+**Done:** `proxy.backend_proto` (`""` or `"h2"`), validated (rejects a typo,
+and rejects the combination with static/self, whose backend is hz's own
+HTTP/1.1 server); `Backend.Proto` → ` proto h2` on the plain, health-checked
+and both blue-green server lines; `hz service create|edit --backend-proto`;
+`backendProto` through apitypes → `make generate` → the service editor, as a
+select under Timeouts; README section "Backend protocol (h2c)". Tests: four in
+`internal/haproxy/backend_proto_test.go`, three cases in `TestValidateService`.
+**Verified on .160**: `haproxy -c` accepts `server id 127.0.0.1:20005 check
+proto h2` on HAProxy 2.8.16.
+
+- **next:** deploy hz, then point it at a real h2c backend (Zitadel, S4 in the
+  intern repo) — nothing has spoken HTTP/2 through this yet.
+- **risks:**
+  - A backend that is *not* h2c, marked h2, fails in a way that looks like the
+    app being down. Keep the default empty and make it explicit per service.
+  - Prometheus/probe paths that assume HTTP/1.1 upstream.
+- **blocking decisions:** none.
+
+### ◻ OIDC: Google Workspace domain gating, and the missing docs
+
+**Driver:** the same project wants people to sign in with Google Workspace and
+nobody to manage passwords. hz already speaks OIDC
+(`internal/config/config.go:1785`, `internal/server/handlers_oidc.go`), but two
+things are missing for this to be safe with Google.
+
+1. **Gating is group-claim only today.** `AllowedGroups` / `AdminGroups`
+   (`handlers_oidc.go`, checked before `resolveOIDCUser`) match a groups claim.
+   **Google Workspace does not send group claims by default**, so today the
+   only workable setting would be no gating at all. Needs a domain gate:
+   accept the `hd` claim (Workspace's own domain claim), or a required-claim
+   pair plus an email-domain allowlist, and require `email_verified`. Generic
+   `RequiredClaims map[string][]string` covers Microsoft tenants too.
+   For comparison, Gitea does this with `RequiredClaimName`/`RequiredClaimValue`
+   per auth source, plus `EMAIL_DOMAIN_ALLOWLIST`.
+2. **Auto-provisioning makes admins.** `role := db.RoleAdmin` is hardcoded
+   (`handlers_oidc.go:187`) because admin is the only role
+   (`internal/db/users.go:29`; the viewer role was dropped, see
+   [icebox.md](icebox.md) "Read-only access"). So `AutoProvision` + a domain
+   gate = **everyone in the Workspace domain becomes an hz admin**. That is the
+   decision below, and it is the reason this slice is not just a claim check.
+3. **No documentation.** README has no SSO section at all. Write one: creating
+   the OAuth client in Google Cloud, the redirect URI hz expects
+   (`OIDCRedirectURI()`, needs an https `admin_url`), the config keys, how the
+   gate is configured, and what happens on first login. The sibling
+   instructions for Gitea live in the intern repo, not here.
+
+- **next:** answer the blocking decision, then claim gating → docs.
+- **risks:**
+  - An email-domain check alone is forgeable: a consumer Google account can
+    carry a company address, and multi-tenant Microsoft logins have allowed
+    unverified email attributes. The `hd` claim (or a tenant-pinned issuer) is
+    the real gate.
+  - Locking yourself out: hz is the edge, and the IdP is usually reached
+    through it. Local accounts and the admin token must keep working, which is
+    what `oidc.go`'s own comment already promises.
+- **blocking decisions:** with a domain gate, is auto-provisioning acceptable
+  (every Workspace user becomes an hz admin), or does auto-provision stay off
+  so an admin creates the account first? A third option is reviving a
+  non-admin role, which is the iceboxed item and much larger.
 
 ### ◐ L4 port forwards
 

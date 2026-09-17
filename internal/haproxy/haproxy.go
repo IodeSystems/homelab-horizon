@@ -26,6 +26,11 @@ type Backend struct {
 	MetricsPath   string   `json:"metrics_path,omitempty"` // if set, deny this path from non-local sources (Prometheus scrapes the backend directly)
 	MFAPortal     bool     `json:"mfa_portal,omitempty"`   // this backend is the MFA portal — the one thing an MFA-jailed VPN peer may reach
 
+	// Proto is the protocol to the backend: empty for HTTP/1.1, "h2" for
+	// cleartext HTTP/2. It becomes ` proto h2` on the server line, health
+	// checks included — HAProxy speaks h2 immediately, with no negotiation.
+	Proto string `json:"proto,omitempty"`
+
 	// RateLimitRequests is the per-source threshold for this backend within
 	// the gateway's rate window. Zero means use the global default; negative
 	// means never limit this one.
@@ -736,8 +741,8 @@ listen stats
 			}
 			fmt.Fprintf(&sb, "    option httpchk GET %s\n", checkPath)
 			sb.WriteString("    http-check expect status 200\n")
-			fmt.Fprintf(&sb, "    server next %s check inter 3s fall 2 rise 2\n", b.NextServer)
-			fmt.Fprintf(&sb, "    server current %s check inter 3s fall 2 rise 2\n", b.CurrentServer)
+			fmt.Fprintf(&sb, "    server next %s check inter 3s fall 2 rise 2%s\n", b.NextServer, serverProto(b.Proto))
+			fmt.Fprintf(&sb, "    server current %s check inter 3s fall 2 rise 2%s\n", b.CurrentServer, serverProto(b.Proto))
 		} else {
 			sb.WriteString("    balance roundrobin\n")
 			if b.HTTPCheck {
@@ -746,15 +751,26 @@ listen stats
 					checkPath = "/"
 				}
 				fmt.Fprintf(&sb, "    option httpchk GET %s\n", checkPath)
-				fmt.Fprintf(&sb, "    server %s %s check\n", aclName, b.Server)
+				fmt.Fprintf(&sb, "    server %s %s check%s\n", aclName, b.Server, serverProto(b.Proto))
 			} else {
-				fmt.Fprintf(&sb, "    server %s %s\n", aclName, b.Server)
+				fmt.Fprintf(&sb, "    server %s %s%s\n", aclName, b.Server, serverProto(b.Proto))
 			}
 		}
 		sb.WriteString("\n")
 	}
 
 	return sb.String()
+}
+
+// serverProto renders the protocol suffix for a server line. Only "h2" is
+// emitted; anything else is HTTP/1.1, which is the default and needs no
+// keyword. Validation upstream (config.ValidBackendProto) is what keeps a typo
+// from silently meaning "HTTP/1.1".
+func serverProto(proto string) string {
+	if proto == "h2" {
+		return " proto h2"
+	}
+	return ""
 }
 
 // SanitizeName converts a service name to a safe HAProxy identifier

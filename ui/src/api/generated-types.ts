@@ -63,6 +63,7 @@ export interface ProxyResp {
   deploy?: DeployResp;
   maintenancePageMD5?: string;
   timeouts?: ProxyTimeoutsResp;
+  backendProto?: string; // "" = HTTP/1.1, "h2" = cleartext HTTP/2 to the backend
 }
 /**
  * ProxyTimeoutsResp surfaces per-backend HAProxy timeout overrides (seconds).
@@ -918,6 +919,7 @@ export interface ServiceRequestProxy {
   internalOnly: boolean;
   deploy?: ServiceRequestDeploy;
   timeouts?: ServiceRequestTimeouts;
+  backendProto?: string; // "" = HTTP/1.1, "h2" = cleartext HTTP/2 to the backend
 }
 /**
  * ServiceRequestTimeouts carries per-backend HAProxy timeout overrides

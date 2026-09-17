@@ -156,6 +156,7 @@ export interface ServiceMutationInput {
     healthCheck?: { path: string } | null;
     internalOnly: boolean;
     deploy?: { nextBackend: string; balance?: string } | null;
+    backendProto?: string;
     timeouts?: {
       connectSeconds?: number;
       serverSeconds?: number;
