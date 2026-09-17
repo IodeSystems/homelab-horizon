@@ -264,9 +264,9 @@ Phase 3 replaces this with: restart horizon, done.
 | 3 | [L4 port forwards](#-l4-port-forwards) | ◐ code done, not committed, not deployed |
 | 4 | [Per-peer secrets](#-per-peer-secrets-set-by-an-admin-picked-up-once-by-the-peer) | ◻ not started |
 | 5 | [OIDC: Google Workspace + docs](#-oidc-google-workspace-domain-gating-and-the-missing-docs) | ◻ not started |
-| 6 | [Backend protocol (h2c)](#-backend-protocol-h2c-for-grpc-backends) | ✅ code done, not deployed |
+| 6 | [Backend protocol (h2c)](#-backend-protocol-h2c-for-grpc-backends) | ✅ deployed + in use (Zitadel) |
 | 7 | [Invites that can require a sign-in](#-invites-that-can-require-a-sign-in) | ◻ not started |
-| 8 | [DNS checks that would catch a broken forwarder](#-dns-checks-that-would-catch-a-broken-forwarder) | ✅ code done, not deployed |
+| 8 | [DNS checks that would catch a broken forwarder](#-dns-checks-that-would-catch-a-broken-forwarder) | ✅ deployed |
 
 Two opt-in next-steps were added to [icebox.md](icebox.md) on 2026-09-10:
 HAProxy TCP frontends on the VPN address, and moving the range-collision
@@ -313,7 +313,7 @@ client-supplied one (`internal/haproxy/haproxy.go`). `peer_owners`
   MFA is on (yes, unless you say otherwise), and does the peer API live on the
   admin vhost or the portal vhost?
 
-### ✅ Backend protocol (h2c), for gRPC backends — code done 2026-09-17, not deployed
+### ✅ Backend protocol (h2c), for gRPC backends — deployed 2026-09-17
 
 **Driver:** Zitadel at `id.iodesystems.com` (iodesystems-intern plan, S4).
 Zitadel's docs require a reverse proxy that speaks **HTTP/2 upstream (h2c or
@@ -345,8 +345,13 @@ select under Timeouts; README section "Backend protocol (h2c)". Tests: four in
 **Verified on .160**: `haproxy -c` accepts `server id 127.0.0.1:20005 check
 proto h2` on HAProxy 2.8.16.
 
-- **next:** deploy hz, then point it at a real h2c backend (Zitadel, S4 in the
-  intern repo) — nothing has spoken HTTP/2 through this yet.
+**Deployed and in use 2026-09-17.** `hz service edit id --backend-proto h2`
+generated `server id 127.0.0.1:20005 check proto h2`, and Zitadel at
+`id.iodesystems.com` answers over it: console 200, OIDC discovery 200, backend
+health check up. The other services were re-checked after the reload and were
+unaffected. **Note for the next person:** `bin/deploy` updates the server, not
+the local operator CLI — `make build-hz` and copy it, or `--backend-proto` is
+"flag provided but not defined".
 - **risks:**
   - A backend that is *not* h2c, marked h2, fails in a way that looks like the
     app being down. Keep the default empty and make it explicit per service.
