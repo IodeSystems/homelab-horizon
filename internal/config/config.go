@@ -184,8 +184,8 @@ type Config struct {
 	// DNSProbeName is the name the forwarding check resolves. It must be a
 	// name dnsmasq does NOT serve itself, or the check passes on a box with no
 	// route to the internet. Empty means dnsmasq.DefaultProbeName.
-	DNSProbeName string `json:"dns_probe_name,omitempty"`
-	LocalInterface    string   `json:"local_interface"` // Local interface IP for DNS resolution of localhost-bound services
+	DNSProbeName   string `json:"dns_probe_name,omitempty"`
+	LocalInterface string `json:"local_interface"` // Local interface IP for DNS resolution of localhost-bound services
 
 	// LastLocalIface and LastLanCIDR persist what the interface sync last
 	// reconciled against. On startup the watcher seeds from these (not from
