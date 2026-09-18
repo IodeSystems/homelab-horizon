@@ -56,11 +56,20 @@ it:
 |---|---|---|
 | **invariant** | yes, verbatim | retention days, cutoffs, business rules, timeouts |
 | **environment-bound** | no — must already be bound in the target | database URL, public URL, payment origin, bucket + prefix |
-| **secret** | no — environment-bound AND write-only; names and timestamps readable, values never; reads audited | gateway keys, DB passwords, API tokens |
+| **secret, environment-bound** | no | gateway keys, DB passwords — the value legitimately differs per environment |
+| **secret, invariant** | **yes**, by client-side re-seal | a vendor API key they will only issue once, a signing key artifacts must verify against, a licence key |
 
-A secret is not a separate system. It is an environment-bound key with the
-write-only flag, so there is one store, one approval flow, one audit trail
-rather than two to keep consistent.
+A secret is not a separate system. It is a key with the write-only flag — names
+and timestamps readable, values never, reads audited — so there is one store,
+one approval flow, one audit trail rather than two to keep consistent.
+
+**Corrected 2026-09-18.** This table previously had three rows and treated
+"secret" and "environment-bound" as the same property. They are independent:
+secrecy says who may read a value, promotion scope says whether it is the same
+value in every environment. Collapsing them left no cell for a value that is
+both secret and genuinely identical everywhere, and then wrongly concluded such
+values cannot promote. **Secret promotion is required** (Carl, 2026-09-18); see
+[Promoting a secret](#promoting-a-secret).
 
 ## Registration
 
@@ -129,6 +138,77 @@ catches it is a hand-written boot check, firing after a deploy has shipped.
 Per-edge authority also buys **separation of duties on production changes**
 structurally rather than by policy, which is what change-management control
 actually asks for.
+
+### Promoting a secret
+
+**Decided (Carl, 2026-09-18): secret promotion is required, and the re-seal
+happens on a client — never in hz.**
+
+A secret cannot promote the way an invariant does, because prod's copy has to be
+readable by prod's key and staging's ciphertext is not. So the value is opened
+under the source environment's key and re-sealed under the target's, and the
+address bound into the AEAD changes with it (`staging,app,role,KEY` becomes
+`prod,app,role,KEY`), which the committed primitives already handle.
+
+**The whole ceremony is client-side, so hz needs nothing new.** It sees a read of
+one ciphertext and a write of another — both endpoints it has anyway. There is
+no "temporary key" concept in the server, no new table, no new route. The claim
+that hz never sees secret plaintext survives intact, and survives for a better
+reason than the old one: not because secrets never move, but because the only
+place they are ever plaintext is a client.
+
+**Two clients can do it**, which is the point of hz exposing a library rather
+than shipping an agent:
+
+- the **approval/promotion UI**, for an operator promoting by hand;
+- **`hz` / the client library**, for a promotion step that runs unattended.
+
+Both must produce identical bytes, so the re-seal belongs in `configmgr` with
+the browser recipe in `doc.go` and an interop test that reimplements it from the
+doc alone — the pattern already established for the envelope format.
+
+**A promotion needs a KEYSET, not a key** (Carl, 2026-09-18): the source
+environment's key to open and the target's to seal. So the client is handed a
+set of environment keys addressed by environment name, each carrying its key id
+so the client knows which one opens an existing ciphertext.
+
+- **Never in argv** — `ps` is world-readable. A `0600` file or stdin, matching
+  what `hz-probe` already does with `--token-file` over a bare flag.
+- **The keyset file is the highest-value artifact in the system.** It is every
+  environment's key in one place, which makes finding 6 (possession is total)
+  strictly worse — possession becomes total *across environments* rather than
+  within one. Prefer assembling the two keys a given promotion needs over
+  keeping a whole-fleet keyset on disk, and say so wherever the format is
+  documented.
+- An unattended promotion means those keys live wherever that automation's
+  secrets live. That is a real downgrade from "an operator pastes one into a
+  browser and it is gone on navigate", and it should be a deliberate choice per
+  pipeline rather than the default.
+
+**What this costs, and the cheap fix.** Re-sealing means staging and prod hold
+different bytes for the same value, so hz cannot tell *same value, different
+key* from *someone edited prod's copy*. The divergence check promised below dies
+for exactly the values being promoted.
+
+Recoverable without changing the crypto architecture: have the client compute a
+**commitment** to the plaintext at seal time and store it beside the ciphertext.
+Equal values give equal commitments, so hz reports divergence while holding no
+plaintext. One column, one function, computed identically in both clients.
+Caveat — a commitment over a low-entropy value is brute-forceable by whoever
+holds it, so gate it on entropy or make it opt-in per key. **Proposed, not
+decided.**
+
+**Still open:** whether `secret, invariant` is a declared binding an operator
+opts a key into — auditable, and refusable — or whether promotion is simply an
+action available on any secret, in which case "this value crosses the
+staging/prod boundary" is only ever whatever someone did in the UI that day.
+
+**Deferred by this decision:** envelope encryption with per-secret data keys, and
+making environment keys asymmetric. Together they would make promotion pure
+metadata with no two-key moment and keep ciphertext byte-identical across
+environments. They are no longer on the critical path — they now earn their keep
+against revocation and rotation (findings 3 and 4) instead, and belong in that
+phase.
 
 ### Provenance and divergence
 
@@ -210,7 +290,7 @@ right seam:
 |---|---|---|
 | invariant | yes | promotion has to diff these, and by definition they are not credentials |
 | environment-bound, non-secret | yes | hostnames, prefixes — the promotion gate needs them |
-| **secret** | **no** | environment-bound, never promotes, so hz never needs to read it |
+| **secret** | **no** | re-sealing happens on a client, so no flow ever needs hz to read one |
 
 Nothing in the promotion flow ever requires hz to see secret plaintext. No
 special cases.
@@ -231,9 +311,11 @@ Consequences, all load-bearing:
   WebCrypto in the page, key in memory only — never `localStorage`, cleared on
   navigate, with an explicit lock. hz may log THAT a decrypt session was opened
   and by whom, never the key.
-- **One key per environment.** Prod's key is not staging's. Falls out of secrets
-  being environment-bound and never promoting, and means a staging box
-  compromise cannot read prod.
+- **One key per environment.** Prod's key is not staging's, so a staging box
+  compromise cannot read prod. Note this no longer "falls out of secrets never
+  promoting" — since 2026-09-18 some secrets do promote, by being re-sealed on a
+  client that holds both keys. The isolation now rests on who holds which key,
+  not on values being unable to cross.
 - **Every ciphertext carries a key id**, so rotation can be gradual. Without it,
   rotating means re-encrypting every secret and re-enrolling every box
   atomically — which means it never happens.
