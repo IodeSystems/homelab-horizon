@@ -43,6 +43,15 @@ type RegisterRequest struct {
 	PublicKey   string `json:"publicKey"` // MarshalMachinePublicKey form
 }
 
+// EnvKeyAddr is the address the wrapped environment key in the matching
+// RegisterResponse must be authenticated against. It comes from the agent's own
+// launch arguments, which is what makes authenticating it worth anything: hz
+// files a relayed blob under whichever registration it likes, and a box may
+// hold several.
+func (r RegisterRequest) EnvKeyAddr() EnvKeyAddr {
+	return EnvKeyAddr{Environment: r.Environment, App: r.App, Role: r.Role}
+}
+
 // RegisterResponse is hz's answer, polled until the state settles.
 //
 // WrappedEnvKey is present only once approved, and hz only ever relays it: it
@@ -62,6 +71,9 @@ type RegisterResponse struct {
 	// nothing.
 	MachineID string `json:"machineId,omitempty"`
 
+	// WrappedEnvKey opens with UnwrapEnvKey at RegisterRequest.EnvKeyAddr() —
+	// the address the agent asked for, never one read back out of this
+	// response. A grant relayed into the wrong registration fails there.
 	WrappedEnvKey string `json:"wrappedEnvKey,omitempty"` // base64 KindWrappedEnvKey envelope
 }
 
