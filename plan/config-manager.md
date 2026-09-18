@@ -339,15 +339,35 @@ binding it into the AAD mean anything:
   and needs the `failover` key. The unprefixed default maps to a **named**
   default role — an empty role breaks the keystore path even though the AAD
   encodes an empty field happily.
-- **environment** is **not** a launch flag. It is pinned at approval and
-  persisted locally beside the private key, the same treatment `MachineID` gets
-  and for the same reason. As a flag, one bad deploy points a prod box at
-  staging's config; as a property of the approved identity, it cannot.
+- **environment** is a launch flag too (`--env`). An earlier draft of this
+  section said it must not be, on the grounds that a bad deploy could point a
+  prod box at staging. It cannot: see below — the key grant is the enforcement,
+  not the flag.
 
-**The role flag cannot self-authorize.** A new `serviceName` is a new
-`(machine, app, role)` tuple, so it re-enters pending and an admin must bless it
-— and only that approval delivers that role's key. Renaming your way into
-another role's secrets yields a pending registration nobody approved.
+**No launch flag can self-authorize.** A new `serviceName` or a new `--env` is a
+new `(machine, environment, app, role)` tuple, so it re-enters pending and an
+admin must bless it — and only that approval delivers that address's key. A prod
+box mistyping `--env=staging` gets a pending registration nobody approved, never
+receives the staging key, and therefore **cannot decrypt staging's config even
+if hz serves it**. It fails closed and visibly, rather than silently running the
+wrong environment.
+
+This also satisfies the rule that governs the AAD: bind only fields the opener
+knows independently of the party serving the blob. A launch flag is the
+process's own argv, which qualifies.
+
+**Last-known-good must be keyed by ADDRESS.** A box that ran `--env=prod`
+yesterday holds prod's config on disk. Restart it as `--env=staging` and it is
+pending — but the agent is also told to boot from last-applied when hz is
+unreachable, so an address-blind cache lets it "recover" by booting prod's
+config while calling itself staging. So the agent must separate two states it
+would otherwise conflate:
+
+- **hz unreachable** → boot last-known-good, loudly. The existing rule.
+- **hz reachable, and it says this address is not approved** → refuse. Never
+  fall back.
+
+and a cached config is only ever valid for the address that wrote it.
 
 **A box running two roles shares one keypair.** The machine enrols once and
 processes fetch per role, so `--serviceName=app` and `--serviceName=ops` on one
@@ -356,10 +376,13 @@ machine. Key scoping is per-role in hz; on that box it is whatever the OS gives
 you. Separate users with separate key files, or it is advisory — decide rather
 than discover.
 
-**Schema consequence:** one keypair per machine, but one wrapped key per
-`(app, role)` it runs. `cm_machines.wrapped_env_key` is singular and therefore
-wrong; the wrapped key moves to the registration. Migration 0009, alongside
-lineage.
+**Schema consequence:** the registration tuple becomes
+`(machine, environment, app, role)` — the config address plus the machine — so
+`cm_machines.environment` stops being meaningful. One keypair per machine, but
+one wrapped key per registration, which then sits at exactly the key address
+`(environment, app, role)`. `cm_machines.wrapped_env_key` is singular and
+therefore wrong on two counts; it moves to the registration. Migration 0009,
+alongside lineage.
 
 ### The developer side — an app that publishes its own config
 
