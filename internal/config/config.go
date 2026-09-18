@@ -914,6 +914,15 @@ type ProxyConfig struct {
 	HealthCheck  *HealthCheck `json:"health_check,omitempty"`  // Optional health check
 	InternalOnly bool         `json:"internal_only,omitempty"` // Restrict to local network access only
 
+	// PublicPaths are path prefixes reachable from anywhere even when
+	// InternalOnly is set — "internal, except this". A package repository that
+	// a cloud box must reach, or a webhook a provider must post to, without
+	// publishing the admin UI beside it.
+	//
+	// Prefixes, matched with path_beg. Meaningless without InternalOnly, and
+	// validation says so rather than silently doing nothing.
+	PublicPaths []string `json:"public_paths,omitempty"`
+
 	// RateLimitRequests overrides the global threshold for this service.
 	// Negative disables limiting for it entirely, which is what an endpoint
 	// that legitimately takes sustained traffic needs.

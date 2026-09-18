@@ -1158,6 +1158,37 @@ Upstreams themselves are `upstream_dns` (default `1.1.1.1`, `8.8.8.8`,
 `8.8.4.4`). dnsmasq is not given `strict-order`, so it picks whichever upstream
 has been answering fastest rather than always preferring the first.
 
+## Publishing one path of an internal service
+
+`internal_only` is all or nothing: the service is reachable from the local
+networks and the VPN, and nowhere else. `public_paths` carves exceptions:
+
+```bash
+hz service edit index \
+    --internal-only \
+    --public-path /api/packages/iodesystems/debian/ --sync
+```
+
+emits one rule:
+
+```
+http-request deny deny_status 403 if host_index !local_access !{ path_beg /api/packages/iodesystems/debian/ }
+```
+
+Denied unless the source is local **or** the path matches. Several prefixes AND
+as negated terms, so any one of them is enough to let a request through.
+
+Use it for the endpoint a machine outside the network must reach while the rest
+of the service stays inside — a package repository a cloud host installs from, a
+webhook a provider posts to. The service keeps one backend and one hostname;
+this is not path *routing* (two backends under one name), which hz does not do.
+
+**Two things this does not give you.** It is not authentication — if the
+backend does not demand credentials on those paths, neither does hz. And a
+prefix is a tree: `/api/packages/` exposes everything beneath it, so name the
+narrowest prefix that works, with the trailing slash, or
+`/api/packages/x-debian-secret` rides along with `/api/packages/x-debian`.
+
 ## Backend protocol (h2c)
 
 By default HAProxy talks **HTTP/1.1** to every backend, which is what nearly

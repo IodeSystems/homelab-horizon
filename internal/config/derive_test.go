@@ -560,6 +560,29 @@ func TestValidateService(t *testing.T) {
 			wantErr: "",
 		},
 		{
+			name: "public_paths on an internal-only service",
+			svc: Service{Name: "index", Domains: []string{"index.example.com"},
+				Proxy: &ProxyConfig{Backend: "127.0.0.1:3000", InternalOnly: true,
+					PublicPaths: []string{"/api/packages/iodesystems/debian/"}}},
+			wantErr: "",
+		},
+		{
+			// On a public service every path is already reachable, so an
+			// exemption would silently mean nothing.
+			name: "public_paths without internal_only",
+			svc: Service{Name: "index", Domains: []string{"index.example.com"},
+				Proxy: &ProxyConfig{Backend: "127.0.0.1:3000",
+					PublicPaths: []string{"/api/packages/"}}},
+			wantErr: "proxy.public_paths",
+		},
+		{
+			name: "public_paths must be paths",
+			svc: Service{Name: "index", Domains: []string{"index.example.com"},
+				Proxy: &ProxyConfig{Backend: "127.0.0.1:3000", InternalOnly: true,
+					PublicPaths: []string{"api/packages"}}},
+			wantErr: "proxy.public_paths",
+		},
+		{
 			// A typo must not quietly mean HTTP/1.1: h2c has no negotiation,
 			// so the failure would show up as the service being down.
 			name: "backend_proto typo",
