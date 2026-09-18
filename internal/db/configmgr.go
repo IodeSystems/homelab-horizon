@@ -37,10 +37,6 @@ var (
 	// ErrInvalidVersionRange means min_ver is above max_ver: a range that
 	// contains nothing, blessed by someone who meant the opposite.
 	ErrInvalidVersionRange = errors.New("min_ver is above max_ver")
-	// ErrOpenRangeExists means the address already has an open-ended config.
-	// A second one would leave two candidates matching every future version
-	// with only seq to separate them — the highest silently winning.
-	ErrOpenRangeExists = errors.New("the address already has an open-ended config")
 	// ErrNoOpenRange means a closed max_ver was blessed at an address with no
 	// open-ended config to cover the versions past it. Every box above that
 	// max_ver then fails at its NEXT restart, which for an unattended box may
@@ -701,8 +697,22 @@ func (d *DB) CreateConfig(ctx context.Context, environment, app, role, minVer, m
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Inside the transaction so the count cannot go stale between the check
-	// and the insert.
+	// An address must always have at least one open-ended config, or a release
+	// newer than every max_ver resolves to nothing and the box fails at its next
+	// restart — possibly years later, for a service left alone.
+	//
+	// SEVERAL open-ended configs are normal and are how supersession works: each
+	// new one is blessed open-ended, a box takes the highest seq that contains
+	// its version, and older ones keep serving older binaries. An earlier draft
+	// of the plan also refused a second open-ended config at an address; that
+	// rule deadlocked against "ranges are immutable after blessing", because
+	// replacing the incumbent would have required editing its max_ver. It was
+	// removed rather than worked around — the concern behind it, that the
+	// highest seq wins silently, is answered by resolution returning the
+	// candidates it shadowed.
+	//
+	// Inside the transaction so the count cannot go stale between the check and
+	// the insert.
 	var openEnded int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM cm_configs
@@ -710,10 +720,7 @@ func (d *DB) CreateConfig(ctx context.Context, environment, app, role, minVer, m
 		env, a, r).Scan(&openEnded); err != nil {
 		return nil, fmt.Errorf("count open-ended configs: %w", err)
 	}
-	switch {
-	case maxVer == "" && openEnded > 0:
-		return nil, fmt.Errorf("%w: %s/%s/%s", ErrOpenRangeExists, env, a, r)
-	case maxVer != "" && openEnded == 0:
+	if maxVer != "" && openEnded == 0 {
 		return nil, fmt.Errorf("%w: %s/%s/%s", ErrNoOpenRange, env, a, r)
 	}
 
