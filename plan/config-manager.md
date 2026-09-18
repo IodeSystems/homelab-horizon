@@ -523,6 +523,34 @@ a value landed in.
 of the rotation and escrow problem — every key is a separate thing to store,
 rotate, re-wrap and lose.
 
+### Validation belongs to the client, because nowhere else can do it
+
+**Owner, 2026-09-18.** hz cannot validate a config: every value is sealed and it
+holds no key. That is not a gap to work around — validation belongs with the
+app's own types, and sealing everything simply forces the issue.
+
+It matters because the binding check does not catch the founding bug. An empty
+bucket variable selecting the production bucket is a *valid string*; a
+`{key → binding}` map sails past it. A validator does not.
+
+Two places, and they are necessarily different mechanisms:
+
+| where | expressed in | catches | fails |
+|---|---|---|---|
+| **push**, in `hz` CLI | the `--schema` JSON — required, non-empty, pattern, enum, bounds | less | **while the developer is standing there** |
+| **pull**, in the library | the app's own Go — cross-key invariants, parsed URLs and durations, "set X only when Y" | everything | on the box, at boot |
+
+The second is where the power is and it is nearly free: the app already imports
+the library and already declares a schema, so `Schema` grows from
+`map[key]binding` to carry a validator per key. Nothing has shipped against that
+type yet.
+
+**A config that fails validation falls back to cache, loudly** — the same as a
+schema mismatch or a decrypt failure already do, and for the same reason. A bad
+config blessed into prod must not brick the fleet; it keeps running the last
+good one and makes noise. Refusing to boot would turn one bad blessing into an
+outage, which is the failure mode this whole design is built to avoid.
+
 ## Why this lives in hz
 
 **There is no extension seam.** hz has no plugin registry and no module
