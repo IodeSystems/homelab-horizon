@@ -59,8 +59,11 @@
 //
 // Every ciphertext is a self-describing byte string: version, kind, routing,
 // nonce, ciphertext with its tag appended. It is a BLOB in sqlite and base64 on
-// the wire (see EncodeEnvelope). One rule covers both layouts: the AEAD's
-// additional data is every byte of the envelope before the nonce.
+// the wire (see EncodeEnvelope).
+//
+// The AEAD's additional data is the envelope header — every byte before the
+// nonce — followed by the canonical encoding of the value's ADDRESS, which is
+// not stored anywhere. See "Binding a ciphertext to its address" below.
 //
 // Kind 0x01, a value sealed under an environment key. 38 bytes plus plaintext:
 //
@@ -70,7 +73,7 @@
 //	2       8     key id
 //	10      12    nonce
 //	22      ..    AES-256-GCM ciphertext || 16-byte tag
-//	              AAD = bytes 0..9
+//	              AAD = bytes 0..9 || context(Addr)
 //
 // Kinds 0x02 and 0x03, ephemeral-ECDH to a machine's public key — 0x02 carries
 // a wrapped environment key, 0x03 a machine-scoped secret. 107 bytes plus
@@ -83,7 +86,8 @@
 //	14      65    ephemeral public key, SEC1 uncompressed
 //	79      12    nonce
 //	91      ..    AES-256-GCM ciphertext || 16-byte tag
-//	              AAD = bytes 0..78
+//	              AAD = bytes 0..78, then context(MachineAddr) for kind 0x03
+//	              and nothing further for kind 0x02
 //
 // The environment key is used as the AES key directly. It is already 32
 // uniformly random bytes, so a KDF on that path would only add a step the
@@ -98,6 +102,60 @@
 //
 // where purpose is "hz-config/v1 wrap-env-key" for kind 0x02 and
 // "hz-config/v1 machine-secret" for kind 0x03.
+//
+// # Binding a ciphertext to its address
+//
+// hz cannot read a blob, but it chooses which blob to hand a machine. Without
+// this binding, a value sealed for prod/redline/app#DB_PASSWORD authenticates
+// exactly as well when served as staging's, as a different key in the same
+// config, or as an older blessed value — every substitution decrypts cleanly
+// and the agent applies the wrong secret. So the address is authenticated
+// additional data, supplied by the OPENER from its own request and stored
+// nowhere. An address carried inside the envelope could only ever agree with
+// itself.
+//
+// Kind 0x01 is addressed by (environment, app, role, key name); kind 0x03 by
+// (machine id, key name). Kind 0x02 carries no address: a wrapped environment
+// key is not one config's value, and the recipient fingerprint plus the ECDH
+// already bind it to one machine.
+//
+// The encoding is length-prefixed, not delimited. Each field is a 4-byte
+// big-endian length followed by its UTF-8 bytes, and a label goes first:
+//
+//	field(s)  = uint32be(byteLength(s)) || utf8(s)
+//	context   = field("hz-config/v1 addr") || field(environment) ||
+//	            field(app) || field(role) || field(keyName)
+//	context   = field("hz-config/v1 machine-addr") || field(machineID) ||
+//	            field(keyName)                              // kind 0x03
+//
+// Joining with a separator instead would let environment "a" with app "b/c"
+// collide with environment "a/b" and app "c" — a collision here IS the
+// substitution the additional data exists to refuse, so the encoding has to be
+// one no field content can make ambiguous.
+//
+// # Why the blessing sequence is NOT in the additional data
+//
+// Binding seq would make a rollback to an older blessed config fail to open,
+// which sounds like the same win. It was rejected, for two reasons.
+//
+// The first is decisive on its own: a value is sealed in the approver's browser
+// BEFORE it is blessed, and seq is assigned at blessing. There is nothing to
+// bind at the moment of sealing, and sealing again afterwards would need the
+// environment key a second time, turning every bless into a key-holder
+// ceremony.
+//
+// The second is that binding only means something for fields the opener knows
+// INDEPENDENTLY of the party serving the blob. Environment, app, role and key
+// name come from the agent's own request, and the machine id is learned once at
+// approval and persisted beside the private key. seq arrives inside hz's
+// answer, so an agent could only ever feed back the number hz just sent it —
+// authenticating that binds nothing at all. The same test is why MachineID must
+// be persisted rather than re-read from each response.
+//
+// Rollback of a blessed config is therefore not an AEAD problem. It is caught
+// by the plan's own rule that the agent reports which sequence it applied:
+// resolution is computed and never stored, so that report is the only place the
+// fact exists, and a config that goes backwards shows up there.
 //
 // # Deriving the identifiers
 //
@@ -137,10 +195,17 @@
 //     the concatenation above, and the length is in BITS.
 //   - AES: importKey("raw", key32, {name: "AES-GCM"}, false, ["encrypt",
 //     "decrypt"]), then encrypt({name: "AES-GCM", iv: nonce12,
-//     additionalData: headerBytes, tagLength: 128}, aesKey, plaintext).
+//     additionalData: aadBytes, tagLength: 128}, aesKey, plaintext).
 //     WebCrypto appends the 16-byte tag to the ciphertext, which is the same
 //     layout Go's cipher.AEAD produces, so no splicing is needed on either
 //     side.
+//   - additionalData is the envelope header concatenated with the context
+//     bytes from "Binding a ciphertext to its address": header only for kind
+//     0x02, header || context for kinds 0x01 and 0x03. Build the length
+//     prefixes with DataView.setUint32(offset, n) — big-endian is the default
+//     — and the field bytes with TextEncoder().encode(s), whose length is the
+//     BYTE length, which is what the prefix must carry for any non-ASCII
+//     field.
 //
 // The nonce is 12 fresh random bytes for every seal — crypto.getRandomValues —
 // and never a counter. A repeated nonce under one AES-GCM key leaks the XOR of

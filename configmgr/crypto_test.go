@@ -10,10 +10,17 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
+)
+
+// The addresses every test seals against unless it is testing addressing.
+var (
+	testAddr = Addr{Environment: "prod", App: "redline", Role: "app", Key: "DB_PASSWORD"}
+	testMach = MachineAddr{Machine: "mch_01k9v2w3x4y5z6a7b8c9d0e1f2", Key: "NPM_TOKEN"}
 )
 
 func mustMachineKey(t *testing.T) *ecdh.PrivateKey {
@@ -42,11 +49,11 @@ func TestSealOpenRoundTrip(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			env := Seal(k, tc.plaintext)
+			env := Seal(k, testAddr, tc.plaintext)
 			if want := envMinLen + len(tc.plaintext); len(env) != want {
 				t.Fatalf("envelope is %d bytes, want %d", len(env), want)
 			}
-			got, err := Open(k, env)
+			got, err := Open(k, testAddr, env)
 			if err != nil {
 				t.Fatalf("Open: %v", err)
 			}
@@ -63,7 +70,7 @@ func TestSealOpenRoundTrip(t *testing.T) {
 
 func TestSealHeaderIsSelfDescribing(t *testing.T) {
 	k := NewEnvKey()
-	env := Seal(k, []byte("value"))
+	env := Seal(k, testAddr, []byte("value"))
 
 	h, err := ParseEnvelopeHeader(env)
 	if err != nil {
@@ -82,9 +89,9 @@ func TestSealHeaderIsSelfDescribing(t *testing.T) {
 
 func TestOpenWithWrongKey(t *testing.T) {
 	right, wrong := NewEnvKey(), NewEnvKey()
-	env := Seal(right, []byte("prod gateway key"))
+	env := Seal(right, testAddr, []byte("prod gateway key"))
 
-	pt, err := Open(wrong, env)
+	pt, err := Open(wrong, testAddr, env)
 	if err == nil {
 		t.Fatal("Open with the wrong key succeeded")
 	}
@@ -102,13 +109,13 @@ func TestOpenWithWrongKey(t *testing.T) {
 func TestOpenWithWrongKeyClaimingTheRightID(t *testing.T) {
 	right, wrong := NewEnvKey(), NewEnvKey()
 	plaintext := []byte("prod gateway key")
-	env := Seal(right, plaintext)
+	env := Seal(right, testAddr, plaintext)
 
 	// Restamp the header so the key-id check passes and the AEAD has to catch it.
 	id := wrong.ID()
 	copy(env[2:2+KeyIDSize], id[:])
 
-	pt, err := Open(wrong, env)
+	pt, err := Open(wrong, testAddr, env)
 	if !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("err = %v, want ErrAuthentication", err)
 	}
@@ -170,9 +177,9 @@ func TestOpenRejectsTampering(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			env := Seal(k, plaintext)
+			env := Seal(k, testAddr, plaintext)
 			tc.corrupt(env)
-			pt, err := Open(k, env)
+			pt, err := Open(k, testAddr, env)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v, want %v", err, tc.want)
 			}
@@ -187,13 +194,13 @@ func TestOpenRejectsTampering(t *testing.T) {
 // without Open refusing it.
 func TestOpenRejectsEverySingleBitFlip(t *testing.T) {
 	k := NewEnvKey()
-	env := Seal(k, []byte("covered"))
+	env := Seal(k, testAddr, []byte("covered"))
 
 	for i := range env {
 		for _, mask := range []byte{0x01, 0x80} {
 			corrupt := bytes.Clone(env)
 			corrupt[i] ^= mask
-			if _, err := Open(k, corrupt); err == nil {
+			if _, err := Open(k, testAddr, corrupt); err == nil {
 				t.Fatalf("flipping byte %d with mask %#x was accepted", i, mask)
 			}
 		}
@@ -202,10 +209,10 @@ func TestOpenRejectsEverySingleBitFlip(t *testing.T) {
 
 func TestOpenRejectsTruncation(t *testing.T) {
 	k := NewEnvKey()
-	env := Seal(k, []byte("value"))
+	env := Seal(k, testAddr, []byte("value"))
 
 	for n := 0; n < len(env); n++ {
-		if _, err := Open(k, env[:n]); err == nil {
+		if _, err := Open(k, testAddr, env[:n]); err == nil {
 			t.Fatalf("a %d-byte prefix of a %d-byte envelope was accepted", n, len(env))
 		}
 	}
@@ -219,7 +226,7 @@ func TestNoncesAreUniqueAcrossSeals(t *testing.T) {
 	nonces := make(map[string]struct{}, n)
 	ciphertexts := make(map[string]struct{}, n)
 	for i := 0; i < n; i++ {
-		env := Seal(k, plaintext)
+		env := Seal(k, testAddr, plaintext)
 		nonce := string(env[envHeaderLen : envHeaderLen+NonceSize])
 		if _, dup := nonces[nonce]; dup {
 			t.Fatalf("nonce repeated after %d seals", i)
@@ -428,8 +435,8 @@ func TestWrapUnwrapEnvKey(t *testing.T) {
 
 	// And the recovered key opens what the original sealed, which is the whole
 	// point of the grant.
-	sealed := Seal(k, []byte("db password"))
-	pt, err := Open(got, sealed)
+	sealed := Seal(k, testAddr, []byte("db password"))
+	pt, err := Open(got, testAddr, sealed)
 	if err != nil {
 		t.Fatalf("Open with the unwrapped key: %v", err)
 	}
@@ -481,11 +488,11 @@ func TestSealToMachineRoundTrip(t *testing.T) {
 	}
 
 	for _, plaintext := range cases {
-		env, err := SealToMachine(machine.PublicKey(), plaintext)
+		env, err := SealToMachine(machine.PublicKey(), testMach, plaintext)
 		if err != nil {
 			t.Fatalf("SealToMachine: %v", err)
 		}
-		got, err := OpenFromMachine(machine, env)
+		got, err := OpenFromMachine(machine, testMach, env)
 		if err != nil {
 			t.Fatalf("OpenFromMachine: %v", err)
 		}
@@ -498,19 +505,19 @@ func TestSealToMachineRoundTrip(t *testing.T) {
 func TestMachineSealedIsBoundToOneMachine(t *testing.T) {
 	a, b := mustMachineKey(t), mustMachineKey(t)
 
-	env, err := SealToMachine(a.PublicKey(), []byte("registry token"))
+	env, err := SealToMachine(a.PublicKey(), testMach, []byte("registry token"))
 	if err != nil {
 		t.Fatalf("SealToMachine: %v", err)
 	}
 
-	if _, err := OpenFromMachine(b, env); !errors.Is(err, ErrKeyMismatch) {
+	if _, err := OpenFromMachine(b, testMach, env); !errors.Is(err, ErrKeyMismatch) {
 		t.Fatalf("err = %v, want ErrKeyMismatch", err)
 	}
 
 	relabelled := bytes.Clone(env)
 	fp := FingerprintOf(b.PublicKey())
 	copy(relabelled[2:2+FingerprintSize], fp[:])
-	if _, err := OpenFromMachine(b, relabelled); !errors.Is(err, ErrAuthentication) {
+	if _, err := OpenFromMachine(b, testMach, relabelled); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("relabelled: err = %v, want ErrAuthentication", err)
 	}
 }
@@ -525,18 +532,18 @@ func TestWrappedKeyAndMachineSecretDoNotInterchange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WrapEnvKey: %v", err)
 	}
-	if _, err := OpenFromMachine(machine, wrapped); !errors.Is(err, ErrMalformedEnvelope) {
+	if _, err := OpenFromMachine(machine, testMach, wrapped); !errors.Is(err, ErrMalformedEnvelope) {
 		t.Fatalf("err = %v, want ErrMalformedEnvelope", err)
 	}
 
 	// Restamp the kind so only the derived key differs.
 	relabelled := bytes.Clone(wrapped)
 	relabelled[1] = byte(KindMachineSealed)
-	if _, err := OpenFromMachine(machine, relabelled); !errors.Is(err, ErrAuthentication) {
+	if _, err := OpenFromMachine(machine, testMach, relabelled); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("relabelled kind: err = %v, want ErrAuthentication", err)
 	}
 
-	sealed, err := SealToMachine(machine.PublicKey(), k[:])
+	sealed, err := SealToMachine(machine.PublicKey(), testMach, k[:])
 	if err != nil {
 		t.Fatalf("SealToMachine: %v", err)
 	}
@@ -547,7 +554,7 @@ func TestWrappedKeyAndMachineSecretDoNotInterchange(t *testing.T) {
 
 func TestMachineEnvelopeRejectsEverySingleBitFlip(t *testing.T) {
 	machine := mustMachineKey(t)
-	env, err := SealToMachine(machine.PublicKey(), []byte("covered"))
+	env, err := SealToMachine(machine.PublicKey(), testMach, []byte("covered"))
 	if err != nil {
 		t.Fatalf("SealToMachine: %v", err)
 	}
@@ -556,7 +563,7 @@ func TestMachineEnvelopeRejectsEverySingleBitFlip(t *testing.T) {
 		for _, mask := range []byte{0x01, 0x80} {
 			corrupt := bytes.Clone(env)
 			corrupt[i] ^= mask
-			if _, err := OpenFromMachine(machine, corrupt); err == nil {
+			if _, err := OpenFromMachine(machine, testMach, corrupt); err == nil {
 				t.Fatalf("flipping byte %d with mask %#x was accepted", i, mask)
 			}
 		}
@@ -700,7 +707,7 @@ func TestFingerprint(t *testing.T) {
 
 func TestParseEnvelopeHeaderRejects(t *testing.T) {
 	k := NewEnvKey()
-	env := Seal(k, []byte("value"))
+	env := Seal(k, testAddr, []byte("value"))
 
 	cases := []struct {
 		name  string
@@ -723,7 +730,7 @@ func TestParseEnvelopeHeaderRejects(t *testing.T) {
 
 func TestEnvelopeBase64RoundTrip(t *testing.T) {
 	k := NewEnvKey()
-	env := Seal(k, []byte("value"))
+	env := Seal(k, testAddr, []byte("value"))
 
 	got, err := DecodeEnvelope(EncodeEnvelope(env))
 	if err != nil {
@@ -745,7 +752,7 @@ func TestApprovalGrantsExactlyOneCapability(t *testing.T) {
 	unapproved := mustMachineKey(t)
 
 	envKey := NewEnvKey()
-	secret := Seal(envKey, []byte("prod database password"))
+	secret := Seal(envKey, testAddr, []byte("prod database password"))
 
 	// hz holds the sealed secret and the wrapped key and can read neither.
 	wrapped, err := WrapEnvKey(approved.PublicKey(), envKey)
@@ -757,7 +764,7 @@ func TestApprovalGrantsExactlyOneCapability(t *testing.T) {
 	if _, err := UnwrapEnvKey(unapproved, wrapped); err == nil {
 		t.Fatal("an unapproved machine unwrapped the environment key")
 	}
-	if _, err := OpenFromMachine(unapproved, secret); err == nil {
+	if _, err := OpenFromMachine(unapproved, testMach, secret); err == nil {
 		t.Fatal("an unapproved machine opened a sealed secret")
 	}
 
@@ -765,13 +772,29 @@ func TestApprovalGrantsExactlyOneCapability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnwrapEnvKey: %v", err)
 	}
-	pt, err := Open(recovered, secret)
+	pt, err := Open(recovered, testAddr, secret)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	if string(pt) != "prod database password" {
 		t.Fatalf("got %q", pt)
 	}
+}
+
+// browserContext is the address encoding rewritten from doc.go alone: a label
+// and then each field as a 4-byte big-endian byte length followed by its UTF-8
+// bytes. It stands in for what the approval page has to build with a DataView
+// and a TextEncoder.
+func browserContext(label string, fields ...string) []byte {
+	var out []byte
+	for _, f := range append([]string{label}, fields...) {
+		b := []byte(f) // TextEncoder().encode(f)
+		var n [4]byte
+		binary.BigEndian.PutUint32(n[:], uint32(len(b)))
+		out = append(out, n[:]...)
+		out = append(out, b...)
+	}
+	return out
 }
 
 func base64Of(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
@@ -912,9 +935,11 @@ func TestDocumentedEnvSealRecipeInteroperates(t *testing.T) {
 	}
 	env := append([]byte{}, header...)
 	env = append(env, nonce...)
-	env = gcm.Seal(env, nonce, plaintext, header)
+	env = gcm.Seal(env, nonce, plaintext, append(append([]byte{}, header...),
+		browserContext("hz-config/v1 addr",
+			testAddr.Environment, testAddr.App, testAddr.Role, testAddr.Key)...))
 
-	got, err := Open(k, env)
+	got, err := Open(k, testAddr, env)
 	if err != nil {
 		t.Fatalf("Open on a browser-built envelope: %v", err)
 	}
@@ -968,5 +993,257 @@ func TestUnwrapRejectsWrongSizedPayload(t *testing.T) {
 	env := browserWrapEnvKey(t, machine.PublicKey().Bytes(), []byte("only sixteen byt"))
 	if _, err := UnwrapEnvKey(machine, env); !errors.Is(err, ErrMalformedEnvelope) {
 		t.Fatalf("err = %v, want ErrMalformedEnvelope", err)
+	}
+}
+
+// The substitution the address binding exists to refuse: hz serving a blob that
+// authenticates perfectly but belongs to a different environment, app, role or
+// key name.
+func TestOpenRejectsEveryAlteredAddressField(t *testing.T) {
+	k := NewEnvKey()
+	env := Seal(k, testAddr, []byte("prod database password"))
+
+	cases := []struct {
+		name string
+		addr Addr
+	}{
+		{"environment", Addr{"staging", testAddr.App, testAddr.Role, testAddr.Key}},
+		{"app", Addr{testAddr.Environment, "billing", testAddr.Role, testAddr.Key}},
+		{"role", Addr{testAddr.Environment, testAddr.App, "ops", testAddr.Key}},
+		{"key name", Addr{testAddr.Environment, testAddr.App, testAddr.Role, "API_TOKEN"}},
+		{"environment emptied", Addr{"", testAddr.App, testAddr.Role, testAddr.Key}},
+		{"key name emptied", Addr{testAddr.Environment, testAddr.App, testAddr.Role, ""}},
+		{"everything empty", Addr{}},
+		{"key name with a trailing space", Addr{testAddr.Environment, testAddr.App, testAddr.Role, testAddr.Key + " "}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pt, err := Open(k, tc.addr, env)
+			if !errors.Is(err, ErrAuthentication) {
+				t.Fatalf("Open at %s: err = %v, want ErrAuthentication", tc.addr, err)
+			}
+			if pt != nil {
+				t.Fatal("a blob served under the wrong address yielded plaintext")
+			}
+		})
+	}
+
+	// The right address still opens it.
+	if _, err := Open(k, testAddr, env); err != nil {
+		t.Fatalf("Open at the sealed address: %v", err)
+	}
+}
+
+func TestOpenFromMachineRejectsEveryAlteredAddressField(t *testing.T) {
+	machine := mustMachineKey(t)
+	env, err := SealToMachine(machine.PublicKey(), testMach, []byte("registry token"))
+	if err != nil {
+		t.Fatalf("SealToMachine: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		addr MachineAddr
+	}{
+		{"machine id", MachineAddr{"mch_01k9v2w3x4y5z6a7b8c9d0e1ff", testMach.Key}},
+		{"key name", MachineAddr{testMach.Machine, "DOCKER_TOKEN"}},
+		{"machine emptied", MachineAddr{"", testMach.Key}},
+		{"key emptied", MachineAddr{testMach.Machine, ""}},
+		{"both empty", MachineAddr{}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := OpenFromMachine(machine, tc.addr, env); !errors.Is(err, ErrAuthentication) {
+				t.Fatalf("OpenFromMachine at %s: err = %v, want ErrAuthentication", tc.addr, err)
+			}
+		})
+	}
+
+	if _, err := OpenFromMachine(machine, testMach, env); err != nil {
+		t.Fatalf("OpenFromMachine at the sealed address: %v", err)
+	}
+}
+
+// Tuples that a delimiter-joined encoding would collapse into the same string
+// must produce different contexts, and must not open each other's blobs.
+func TestAddressEncodingIsUnambiguous(t *testing.T) {
+	envCases := [][2]Addr{
+		{
+			{Environment: "a", App: "b/c", Role: "r", Key: "k"},
+			{Environment: "a/b", App: "c", Role: "r", Key: "k"},
+		},
+		{
+			{Environment: "", App: "ab", Role: "r", Key: "k"},
+			{Environment: "a", App: "b", Role: "r", Key: "k"},
+		},
+		{
+			{Environment: "prod", App: "redline", Role: "app", Key: "A#B"},
+			{Environment: "prod", App: "redline", Role: "app#A", Key: "B"},
+		},
+		{
+			{Environment: "x", App: "", Role: "", Key: "y"},
+			{Environment: "x", App: "y", Role: "", Key: ""},
+		},
+	}
+
+	k := NewEnvKey()
+	for _, pair := range envCases {
+		a, b := pair[0], pair[1]
+		if bytes.Equal(a.context(), b.context()) {
+			t.Fatalf("%s and %s encode identically", a, b)
+		}
+		env := Seal(k, a, []byte("value"))
+		if _, err := Open(k, b, env); !errors.Is(err, ErrAuthentication) {
+			t.Fatalf("a blob for %s opened at %s: err = %v", a, b, err)
+		}
+	}
+
+	machineCases := [][2]MachineAddr{
+		{{Machine: "mch_1", Key: "2TOKEN"}, {Machine: "mch_12", Key: "TOKEN"}},
+		{{Machine: "", Key: "ab"}, {Machine: "a", Key: "b"}},
+		{{Machine: "mch_1#X", Key: "Y"}, {Machine: "mch_1", Key: "X#Y"}},
+	}
+
+	machine := mustMachineKey(t)
+	for _, pair := range machineCases {
+		a, b := pair[0], pair[1]
+		if bytes.Equal(a.context(), b.context()) {
+			t.Fatalf("%s and %s encode identically", a, b)
+		}
+		env, err := SealToMachine(machine.PublicKey(), a, []byte("value"))
+		if err != nil {
+			t.Fatalf("SealToMachine: %v", err)
+		}
+		if _, err := OpenFromMachine(machine, b, env); !errors.Is(err, ErrAuthentication) {
+			t.Fatalf("a blob for %s opened at %s: err = %v", a, b, err)
+		}
+	}
+
+	// An environment-scoped and a machine-scoped address never collide either,
+	// even given field contents chosen to try.
+	env := Addr{Environment: "mch_1", App: "TOKEN", Role: "", Key: ""}
+	mach := MachineAddr{Machine: "mch_1", Key: "TOKEN"}
+	if bytes.Equal(env.context(), mach.context()) {
+		t.Fatal("an Addr and a MachineAddr encode identically")
+	}
+}
+
+// Non-ASCII fields must be prefixed with their BYTE length, not their character
+// count, or the encoding stops being unambiguous the moment anyone names a key
+// in something other than ASCII.
+func TestAddressEncodingCountsBytesNotRunes(t *testing.T) {
+	a := Addr{Environment: "pröd", App: "x", Role: "r", Key: "k"}
+	ctx := a.context()
+
+	want := browserContext("hz-config/v1 addr", a.Environment, a.App, a.Role, a.Key)
+	if !bytes.Equal(ctx, want) {
+		t.Fatal("context does not match the documented encoding for a non-ASCII field")
+	}
+	// "pröd" is 4 runes, 5 bytes.
+	if !bytes.Contains(ctx, []byte{0, 0, 0, 5}) {
+		t.Fatal("the length prefix is not the byte length")
+	}
+}
+
+// The context bytes, reimplemented from doc.go alone, must be what the package
+// authenticates — the same guarantee the other browser-recipe tests give.
+func TestDocumentedAddressRecipeInteroperates(t *testing.T) {
+	if got, want := testAddr.context(), browserContext("hz-config/v1 addr",
+		testAddr.Environment, testAddr.App, testAddr.Role, testAddr.Key); !bytes.Equal(got, want) {
+		t.Fatalf("Addr context = %x, recipe produced %x", got, want)
+	}
+	if got, want := testMach.context(), browserContext("hz-config/v1 machine-addr",
+		testMach.Machine, testMach.Key); !bytes.Equal(got, want) {
+		t.Fatalf("MachineAddr context = %x, recipe produced %x", got, want)
+	}
+
+	// And a machine-scoped secret built entirely from the recipe opens.
+	machine := mustMachineKey(t)
+	env := browserSealToMachine(t, machine.PublicKey().Bytes(), testMach, []byte("registry token"))
+	got, err := OpenFromMachine(machine, testMach, env)
+	if err != nil {
+		t.Fatalf("OpenFromMachine on a browser-built envelope: %v", err)
+	}
+	if string(got) != "registry token" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// browserSealToMachine is the kind 0x03 construction written from doc.go alone,
+// including the address in the additional data.
+func browserSealToMachine(t *testing.T, recipientSEC1 []byte, addr MachineAddr, plaintext []byte) []byte {
+	t.Helper()
+
+	recipient, err := ecdh.P256().NewPublicKey(recipientSEC1)
+	if err != nil {
+		t.Fatalf("import recipient: %v", err)
+	}
+	eph, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ephemeral: %v", err)
+	}
+	ephSEC1 := eph.PublicKey().Bytes()
+	shared, err := eph.ECDH(recipient)
+	if err != nil {
+		t.Fatalf("deriveBits: %v", err)
+	}
+
+	info := []byte("hz-config/v1 machine-secret")
+	info = append(info, 0x00)
+	info = append(info, ephSEC1...)
+	info = append(info, recipientSEC1...)
+
+	extract := hmac.New(sha256.New, []byte("hz-config/v1"))
+	extract.Write(shared)
+	expand := hmac.New(sha256.New, extract.Sum(nil))
+	expand.Write(info)
+	expand.Write([]byte{0x01})
+	aesKey := expand.Sum(nil)
+
+	fpSum := sha256.Sum256(append([]byte("hz-config/v1 machine-fingerprint"), recipientSEC1...))
+	header := []byte{0x01, 0x03}
+	header = append(header, fpSum[:12]...)
+	header = append(header, ephSEC1...)
+
+	additional := append(append([]byte{}, header...),
+		browserContext("hz-config/v1 machine-addr", addr.Machine, addr.Key)...)
+
+	nonce := make([]byte, 12)
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatalf("getRandomValues: %v", err)
+	}
+	block, err := aes.NewCipher(aesKey)
+	if err != nil {
+		t.Fatalf("aes: %v", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("gcm: %v", err)
+	}
+	out := append([]byte{}, header...)
+	out = append(out, nonce...)
+	return gcm.Seal(out, nonce, plaintext, additional)
+}
+
+// The address the agent passes to Open comes from the request it made, not from
+// hz's answer. That is the property that makes authenticating it worth
+// anything.
+func TestConfigRequestAddr(t *testing.T) {
+	req := ConfigRequest{Environment: "prod", App: "redline", Role: "app", Version: "1.2.5"}
+	got := req.Addr("DB_PASSWORD")
+	want := Addr{Environment: "prod", App: "redline", Role: "app", Key: "DB_PASSWORD"}
+	if got != want {
+		t.Fatalf("Addr = %s, want %s", got, want)
+	}
+
+	k := NewEnvKey()
+	env := Seal(k, want, []byte("value"))
+	if _, err := Open(k, req.Addr("DB_PASSWORD"), env); err != nil {
+		t.Fatalf("Open at the request's own address: %v", err)
+	}
+	if _, err := Open(k, req.Addr("OTHER"), env); !errors.Is(err, ErrAuthentication) {
+		t.Fatal("a different key name opened the blob")
 	}
 }
