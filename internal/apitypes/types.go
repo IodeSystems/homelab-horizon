@@ -1490,3 +1490,179 @@ type OIDCDiscoverResp struct {
 	UserInfoEndpoint     string `json:"userinfoEndpoint,omitempty"`
 	JWKSURI              string `json:"jwksUri,omitempty"`
 }
+
+// --- Config manager -------------------------------------------------------
+//
+// Admin-facing DTOs only. The machine protocol — what an agent on a box posts
+// and receives — lives in the top-level configmgr package, because a client has
+// to import it and internal/ forbids that. The split is deliberate: hz can
+// reshape these without breaking a fleet.
+//
+// NOTHING here carries a config value. Every value is sealed and hz holds no
+// key, so the admin UI shows key names, bindings, ranges, sequences, lineage
+// and state — never content. A UI that wants to show a value has to be given a
+// key, and the decision on 2026-09-18 was that it never is: the ceremony lives
+// in the hz CLI, because a browser served by hz cannot defend against hz.
+
+// CMRegistrationResp is one row of the approval queue.
+//
+// WrappedEnvKey is deliberately absent. It is ciphertext and unopenable, but an
+// approval queue has no business carrying key material, and a projection that
+// never selects it cannot leak it into a log, a screenshot or a bug report.
+type CMRegistrationResp struct {
+	ID          string `json:"id"`
+	MachineID   string `json:"machineId"`
+	MachineName string `json:"machineName"`
+	Environment string `json:"environment"`
+	App         string `json:"app"`
+	Role        string `json:"role"`
+	Version     string `json:"version"`
+	State       string `json:"state"`
+
+	// Fingerprint of the machine's public key, for the approver to compare
+	// against what the box printed. This is the ONLY defence against hz
+	// substituting its own key at approval, so the UI must make comparing it a
+	// blocking step rather than a displayed convenience — and should require
+	// typing it rather than eyeballing, because a human reliably compares the
+	// first group and the last.
+	Fingerprint string `json:"fingerprint"`
+
+	// EnrolledEnvironment is what the box claimed when it first enrolled. It is
+	// not authoritative and nothing resolves against it; it is here so a
+	// mismatch with Environment surfaces in the queue, which is one of the few
+	// signals against a machine-name squat.
+	EnrolledEnvironment string `json:"enrolledEnvironment,omitempty"`
+
+	// WrapKeyID is which environment key this registration was granted, so the
+	// UI can show which boxes still hold an old one after a rotation. Without
+	// this there is nothing to compare a current-key pointer against.
+	WrapKeyID string `json:"wrapKeyId,omitempty"`
+
+	ApprovedBy   string `json:"approvedBy,omitempty"`
+	ApprovedAt   string `json:"approvedAt,omitempty"`
+	DeniedReason string `json:"deniedReason,omitempty"`
+	CreatedAt    string `json:"createdAt"`
+	LastSeenAt   string `json:"lastSeenAt,omitempty"`
+}
+
+// CMApproveReq carries the wrapped environment key minted on a client.
+//
+// hz relays this and cannot open it. hz MUST still parse the envelope header
+// and refuse a blob whose recipient fingerprint does not match the
+// registration's stored public key — it can do that for free, and without it
+// approval degrades from a cryptographic grant to an unvalidated flag, and a
+// blob wrapped to the wrong key stores cleanly and bricks the box at boot.
+type CMApproveReq struct {
+	WrappedEnvKey string `json:"wrappedEnvKey"` // base64 KindWrappedEnvKey envelope
+	WrapKeyID     string `json:"wrapKeyId"`
+}
+
+// CMDenyReq refuses a registration. The reason is required: a denial with no
+// stated cause is indistinguishable from a mistake six months later.
+//
+// Denying clears hz's copy of the wrapped key. That is NOT a revocation — a box
+// that was ever approved already holds the key unwrapped on its own disk — and
+// the UI must not describe it as one.
+type CMDenyReq struct {
+	Reason string `json:"reason"`
+}
+
+// CMConfigValueReq is one key of a config being blessed. Sealed only; there is
+// no plaintext field because there is no plaintext path.
+type CMConfigValueReq struct {
+	Key     string `json:"key"`
+	Binding string `json:"binding"` // invariant | env
+	Sealed  string `json:"sealed"`  // base64 envelope, sealed on the client
+	KeyID   string `json:"keyId"`
+
+	// SourceConfigID is set when this value was promoted rather than authored
+	// here, and it is what makes drift readable off the graph instead of
+	// inferred by comparison. hz cannot verify the claim — it cannot read
+	// either value — so lineage records what the promoting client asserted.
+	SourceConfigID string `json:"sourceConfigId,omitempty"`
+}
+
+// CMCreateConfigReq blesses a config. Ranges are immutable afterwards, so this
+// is the only moment the operator is present to be told no.
+type CMCreateConfigReq struct {
+	Environment string             `json:"environment"`
+	App         string             `json:"app"`
+	Role        string             `json:"role"`
+	MinVer      string             `json:"minVer"`
+	MaxVer      string             `json:"maxVer,omitempty"` // empty means open-ended
+	Values      []CMConfigValueReq `json:"values"`
+}
+
+// CMConfigValueResp describes a value without disclosing it. Sealed is included
+// so a CLI holding the key can decrypt locally; a UI simply ignores it.
+type CMConfigValueResp struct {
+	Key            string `json:"key"`
+	Binding        string `json:"binding"`
+	KeyID          string `json:"keyId"`
+	Origin         string `json:"origin"` // direct | promoted
+	SourceConfigID string `json:"sourceConfigId,omitempty"`
+	Sealed         string `json:"sealed,omitempty"` // absent once tombstoned
+	TombstonedAt   string `json:"tombstonedAt,omitempty"`
+	TombstonedBy   string `json:"tombstonedBy,omitempty"`
+}
+
+// CMConfigResp is one blessed config.
+type CMConfigResp struct {
+	ID          string              `json:"id"`
+	Environment string              `json:"environment"`
+	App         string              `json:"app"`
+	Role        string              `json:"role"`
+	MinVer      string              `json:"minVer"`
+	MaxVer      string              `json:"maxVer,omitempty"`
+	Sequence    int64               `json:"sequence"`
+	CreatedAt   string              `json:"createdAt"`
+	CreatedBy   string              `json:"createdBy"`
+	Values      []CMConfigValueResp `json:"values,omitempty"`
+}
+
+// CMResolveResp answers "what would a box at this version get" — and, equally,
+// what it would NOT get.
+//
+// Shadowed is not decoration. Several open-ended configs at one address is the
+// normal shape of supersession, so resolution always has candidates it passed
+// over; silent resolution is fine only when you can ask what it resolved to.
+type CMResolveResp struct {
+	Winner   *CMConfigResp  `json:"winner,omitempty"`
+	Shadowed []CMConfigResp `json:"shadowed,omitempty"`
+	Error    string         `json:"error,omitempty"` // set when nothing matches
+}
+
+// CMPromotionGateResp is the diff-and-gate, run before a promotion is offered.
+//
+// Blocked names the environment-bound keys the target has no value for. That is
+// the whole reason promotion is a gate rather than a copy, and hz can compute it
+// without reading a single value: it asks whether a key is bound, never what it
+// holds.
+type CMPromotionGateResp struct {
+	SourceConfigID string   `json:"sourceConfigId"`
+	TargetEnv      string   `json:"targetEnv"`
+	Promotes       []string `json:"promotes"`          // invariant keys that would carry
+	Blocked        []string `json:"blocked,omitempty"` // env-bound keys unbound in the target
+	OK             bool     `json:"ok"`
+}
+
+// CMCurrentKeyReq / CMCurrentKeyResp carry the advisory current-key pointer.
+//
+// hz stores an id, never a key. The pointer exists so every client learns a
+// rotation happened instead of each laptop drifting alone — and so the boxes
+// still holding an old key are a query rather than a guess. Clients must treat
+// it as a cross-check: refuse to SEAL on disagreement, only warn on OPEN. A
+// client that obeyed it would let a compromised hz pin everyone to a key it had
+// already stolen.
+type CMCurrentKeyReq struct {
+	KeyID string `json:"keyId"`
+}
+
+type CMCurrentKeyResp struct {
+	Environment string `json:"environment"`
+	App         string `json:"app"`
+	Role        string `json:"role"`
+	KeyID       string `json:"keyId,omitempty"` // absent means no pointer is set
+	SetBy       string `json:"setBy,omitempty"`
+	SetAt       string `json:"setAt,omitempty"`
+}
