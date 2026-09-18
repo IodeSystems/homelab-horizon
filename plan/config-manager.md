@@ -947,15 +947,53 @@ append-only only grows. Both irrelevant at homelab volume.
 Register → approve → store → resolve → pull → decrypt. The promotion graph is
 deliberately **out**, which also defers the two open questions riding on it.
 
+Built on `feat/config-manager`, in three waves. The wave boundaries are
+dependency boundaries, not scheduling preference — within a wave the file sets
+are disjoint, so the work parallelises in separate worktrees.
+
+**Wave 1 — no dependencies, disjoint files.** In flight.
+
 | | | |
 |---|---|---|
-| ✅ | Persistence — six tables, migration `0008`, resolution with shadowed candidates, semver range comparison | `internal/db/configmgr.go` |
-| ✅ | Crypto — ECDH P-256 + HKDF + AES-256-GCM, envelope format, browser recipe with doc-derived interop tests | `configmgr/` |
-| ◻ | `internal/apitypes` DTOs + route registration | shared files, owner keeps them |
+| ✅ | Persistence — six tables, migration `0008`, resolution with shadowed candidates, semver ranges | `internal/db/configmgr.go` |
+| ✅ | Crypto — ECDH P-256 + HKDF + AES-256-GCM, envelope format, doc-derived interop tests | `configmgr/` |
+| ◐ | **Bind the address into the kind `0x02` AAD.** First, because it is a flag day: free now, expensive once boxes hold blobs | `configmgr/crypto.go` |
+| ◐ | **Migration `0009`** — environment into the registration tuple, wrapped key to the registration, drop the plaintext column, lineage, tombstonable ciphertext; plus bless-time validation and address canonicalisation | `internal/db/`, `0009_*` |
+| ◐ | **Keystore** — `keyFor(addr, keyID)`, current-key selection, the six hardening requirements, refuse-to-seal on pointer disagreement | `configmgr/keystore.go` |
+
+**Wave 2 — needs wave 1's shapes settled.**
+
+| | | |
+|---|---|---|
+| ◻ | `internal/apitypes` DTOs + route registration — **chokepoint files, owner keeps them** | `apitypes/`, `server.go` |
 | ◻ | Handlers — register, approve, deny, config CRUD, resolve, pull | `internal/server/handlers_configmgr.go` |
-| ◻ | Client library — register, poll, pull, decrypt, cache | `configmgr/` |
-| ◻ | `hz` CLI — the key ceremony (see Phase 2.1), config push | `cmd/hz/` |
-| ◻ | Approval UI | `ui/src/components/` |
+| ◻ | Client library — register, poll, pull, decrypt, cache, seq floor | `configmgr/` |
+| ◻ | `hz` CLI — **the key ceremony** (Phase 2.1), config push, promote | `cmd/hz/` |
+
+**Wave 3 — needs the CLI and the library.**
+
+| | | |
+|---|---|---|
+| ◻ | UI — approval queue, inventory, lineage, promotion gate | `ui/src/` |
+
+**The UI is a smaller and different thing than it was this morning**, and whoever
+builds it should know why before they start:
+
+- **It holds no keys and does no crypto.** Phase 2.1 moved the paste/wrap/decrypt
+  ceremony to the `hz` CLI, because a browser served by hz cannot defend against
+  hz ([hole 9](#9-hz-serves-the-javascript-that-does-the-decryption)). **Do not
+  build a WebCrypto surface.**
+- **It cannot display any value.** Nothing is plaintext, and the UI has no key.
+  Config views show key names, bindings, ranges, sequences and lineage —
+  never content.
+- So what remains is genuinely useful and entirely metadata: the **approval
+  queue** (with fingerprints to check, and hole 5's name-squatting risk to
+  surface), what each machine holds versus the current key id — which is the
+  rotation affordance hole 2 is missing — the **promotion gate** with its blocked
+  keys, resolution inspection showing the winner and what it shadowed, and the
+  lineage graph.
+- The one ceremony it keeps is **approval**, and it must hand the wrap step to
+  the CLI rather than performing it.
 
 **Phase 1 must not ship to anything real before 2.1–2.5 land.** Several holes
 above are not theoretical once a box is genuinely approved through this.
