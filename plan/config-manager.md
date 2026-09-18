@@ -523,7 +523,7 @@ a value landed in.
 of the rotation and escrow problem — every key is a separate thing to store,
 rotate, re-wrap and lose.
 
-### Validation belongs to the client, and so does PUSH
+### The library validates NOTHING, and push belongs to the app
 
 **Owner, 2026-09-18.** hz cannot validate a config: every value is sealed and it
 holds no key. That was never in doubt. The mistake was routing push through the
@@ -533,10 +533,16 @@ drifts. JSON also expresses less than Go, so push-time validation was
 permanently the weaker half for no reason but the plumbing.
 
 **Decided: `push` moves to the implementing application's own CLI.**
-`redline config push`, not `hz cm push`. The schema is then **compiled in** —
-one declaration serving both the push path and the pull path, with the app's
-real validators on both sides. The weak mechanism disappears rather than being
-maintained beside the strong one.
+`redline config push`, not `hz cm push`.
+
+**And the library validates nothing at all** (owner, 2026-09-18). No value
+validators — a library shipping `NonEmpty` is guessing at semantics it cannot
+know. **And no key-presence checks either:** the library hands over whatever hz
+served, decrypted, and the application decides everything, including whether a
+key it needs is missing.
+
+So the pull path is now: fetch → sequence floor → decrypt (any failure fails the
+whole config and falls back to cache) → hand over. Nothing about keys.
 
 **And a linked library cannot be missing.** The
 [client-library icebox entry](icebox.md) already recorded this failing for real:
@@ -561,12 +567,36 @@ bless — so an app wires it into its own CLI in a few lines. `hz cm push` and t
 `--schema` JSON format go away. Cheaper now than after anything ships against
 that format.
 
-**Why it matters beyond tidiness:** the binding check alone does not catch the
-founding bug. An empty bucket variable selecting the production bucket is a
-*valid string*; a `{key → binding}` map sails straight past it. A validator does
-not — so `Schema` grows from `map[key]binding` to carry a validator per key,
-and the same declaration then catches it at push, while the developer is
-standing there, and again at pull.
+`Schema` survives **only for push**, because bless must tell hz each value's
+binding — the promotion gate runs on bindings. It is a declaration of what to
+send, not a contract the library enforces on pull.
+
+#### Where the layer actually ends
+
+**This system stores and retrieves configs securely. That is the whole job**
+(owner, 2026-09-18). Validation, structure and access patterns are a separate
+layer and belong to the implementor — putting any of them in the library was the
+mistake, not a protection being given up.
+
+What the config manager guarantees is about **what it delivers**, and none of it
+changes:
+
+- the value was sealed by a holder of the address's key, and has not been
+  altered;
+- it was not served at a different address or under a different key name (the
+  AAD);
+- it was not rolled back to an older blessed config (the sequence floor);
+- it was not read by hz, which holds no key.
+
+What it does **not** guarantee is completeness relative to one application's
+expectations, because it cannot: only the app knows which keys it requires and
+which legitimately have defaults. `Config.Lookup` returns `(value, ok)` so an app
+can decide.
+
+And an app that requires a key should fail when it is absent **regardless of
+why** — hz omitted it, an operator never set it, or the config genuinely predates
+it. That is one ordinary code path in the application, not a security special
+case, which is exactly the argument for it not living here.
 
 **A config that fails validation falls back to cache, loudly** — the same as a
 schema mismatch or a decrypt failure already do, and for the same reason. A bad
@@ -803,14 +833,18 @@ is the strongest single argument for the no-plaintext decision.
 Two attacks survive it:
 
 - **Omission.** hz not sending `DB_PASSWORD` makes the app fall back to its
-  compiled default — verbatim the founding bug. Closed by **2.2**, the declared
-  schema enforced on pull: a missing declared key is a hard failure.
+  compiled default. **Not this layer's problem** (owner, 2026-09-18): an app that
+  requires a key should fail when it is absent regardless of why, which is an
+  ordinary code path in the application rather than a security special case. The
+  library returns `(value, ok)` and the app decides. See
+  [where the layer ends](#where-the-layer-actually-ends).
 - **Staleness.** hz serving an older sealed blob still authenticates. Closed by
   **2.3**, the client-side seq floor, and tracked as
   [hole 8](#8-seq-rollback-at-one-address-still-works).
 
-So 2.2 keeps its place in Phase 2, narrowed: it no longer has to police
-plaintext-for-a-secret, only unknown and missing keys.
+So what remains of this hole is staleness alone, and 2.3 closes it. The
+injection half died with plaintext; the omission half was never this layer's to
+hold.
 
 #### 8. `seq` rollback at one address still works
 
@@ -1093,9 +1127,11 @@ missing CSP stop being load-bearing. The browser shows what the CLI decrypted,
 never touching a key. Cheapest high-value change here: both primitives already
 exist in Go.
 
-**2.2 — Enforce the app's declared schema on PULL.** ✅ Landed in wave 2. Closes the omission half of
-hole 7 — the injection half died with plaintext. The agent refuses an unknown key
-and a missing declared key. The `--push` allowlist rule, pointed the other way.
+**2.2 — ~~Enforce the app's declared schema on PULL~~. WITHDRAWN 2026-09-18.**
+Built in wave 2 and then removed: config validation, structure and access
+patterns are the implementor's layer, not this one's. The library now hands over
+what hz served, decrypted and authenticated, and the application decides what a
+missing key means.
 
 **2.3 — Client-side monotonic seq floor.** ✅ Landed in wave 2. Closes hole 8. Cache
 `version → highest seq applied`, refuse anything lower. No clock.
