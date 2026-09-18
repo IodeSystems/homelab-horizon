@@ -2,6 +2,21 @@ module github.com/iodesystems/homelab-horizon
 
 go 1.26.0
 
+// Pinned to a PATCHED stdlib, not merely a recent one. Without a toolchain line
+// this module builds with whatever happens to be installed on the build host,
+// which for a PCI-scoped appliance that ships a binary is not a decision anyone
+// made — govulncheck flagged nine reachable stdlib vulnerabilities on go1.26.2,
+// and a release box sitting on that would have shipped every one of them.
+//
+// A toolchain directive is a FLOOR, not a ceiling: a newer local toolchain is
+// used as-is, and an older one causes this version to be fetched. So raising it
+// costs nothing to anyone already ahead of it.
+//
+// 1.26.8 is what this tree has actually been built and tested against. Raise it
+// when govulncheck reports a newer stdlib fix; the sibling redline module pins
+// its own floor at 1.26.5 for the same reason and by the same method.
+toolchain go1.26.8
+
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.5
@@ -98,7 +113,7 @@ require (
 	golang.org/x/tools v0.49.0 // indirect
 	google.golang.org/api v0.288.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
-	google.golang.org/grpc v1.82.1 // indirect
+	google.golang.org/grpc v1.83.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	modernc.org/libc v1.75.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
