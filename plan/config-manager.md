@@ -279,8 +279,8 @@ Keys live with the client, never with hz — hz stores blobs it cannot open, so 
 has no key to keep. `keyFor(addr, keyID)` resolves against a tree rooted outside
 the working directory:
 
-    ~/.hz/secrets/keys/<environment>/<app>/<label>.<keyid>.key
-    ~/.hz/secrets/keys/prod/redline/2026-09.a3f1c02b9d4e5f60.key
+    ~/.hz/secrets/keys/<environment>/<app>/<role>/<label>.<keyid>.key
+    ~/.hz/secrets/keys/prod/redline/app/2026-09.a3f1c02b9d4e5f60.key
 
 **`keyID`, not just `addr`, because of rotation.** Every envelope carries the id
 of the key that sealed it at bytes 2–9, so old ciphertext keeps opening after a
@@ -291,10 +291,10 @@ therefore breaks every prior blob the moment a second one exists.
 the *config key* (`DB_PASSWORD`) is bound into the AAD; the *encryption key* is
 what this tree stores.
 
-**The keystore is addressed by `(environment, app, keyid)`.** That third
-component is not optional: the envelope identifies its key by id, so a tree
-addressed only by `(environment, app)` cannot answer "which key opens this" once
-a second key exists.
+**The keystore is addressed by `(environment, app, role, keyid)`** — the full
+config address plus the key id. The key id is not optional: the envelope
+identifies its key by id, so a tree addressed only by the address cannot answer
+"which key opens this" once a second key exists.
 
 The filename carries **both** the id and a human label, which is what avoids an
 index without forcing a scan:
@@ -327,6 +327,86 @@ Five requirements, each because the obvious implementation is wrong:
 A promotion needs two lookups from this tree — `keyFor(src, id)` to open and the
 current key for the target to seal — which is what "the client holds a keyset"
 means concretely.
+
+#### How a client knows its own address
+
+The app supplies its own address rather than being told it, which is what makes
+binding it into the AAD mean anything:
+
+- **app** is compiled in.
+- **role** is the process's own launch flag. For redline that is `serviceName`,
+  so `redline --serviceName=failover web start` resolves the `failover` config
+  and needs the `failover` key. The unprefixed default maps to a **named**
+  default role — an empty role breaks the keystore path even though the AAD
+  encodes an empty field happily.
+- **environment** is **not** a launch flag. It is pinned at approval and
+  persisted locally beside the private key, the same treatment `MachineID` gets
+  and for the same reason. As a flag, one bad deploy points a prod box at
+  staging's config; as a property of the approved identity, it cannot.
+
+**The role flag cannot self-authorize.** A new `serviceName` is a new
+`(machine, app, role)` tuple, so it re-enters pending and an admin must bless it
+— and only that approval delivers that role's key. Renaming your way into
+another role's secrets yields a pending registration nobody approved.
+
+**A box running two roles shares one keypair.** The machine enrols once and
+processes fetch per role, so `--serviceName=app` and `--serviceName=ops` on one
+box read the same private key and either can unwrap anything granted to that
+machine. Key scoping is per-role in hz; on that box it is whatever the OS gives
+you. Separate users with separate key files, or it is advisory — decide rather
+than discover.
+
+**Schema consequence:** one keypair per machine, but one wrapped key per
+`(app, role)` it runs. `cm_machines.wrapped_env_key` is singular and therefore
+wrong; the wrapped key moves to the registration. Migration 0009, alongside
+lineage.
+
+### The developer side — an app that publishes its own config
+
+The app imports `configmgr` and **declares which keys hz manages**. A dev pushes
+with something like `redline config --push --env=staging`, and the push simply
+fails without the keys for what it is pushing — authority is possession, not a
+permission check.
+
+redline's file layout maps onto the taxonomy along two orthogonal axes, which is
+what finally answers whether `secret, invariant` is a declared property:
+
+| file | axis it decides | schema decides |
+|---|---|---|
+| `home/config.properties` | not secret — hz stores plaintext and can diff it | invariant **or** environment-bound |
+| `home/secret.properties` | secret — sealed client-side before it leaves the disk | **secret-invariant** or secret, environment-bound |
+| `home/local.properties` | never registered, never pushed | — |
+
+Non-default roles prefix the file: `home/failover.config.properties`,
+`home/processor.secret.properties`.
+
+**File placement decides secrecy** — really "must this be sealed before leaving
+my machine". **The app's schema decides promotion scope.** So the fourth binding
+is declared in code and reviewed in code review, rather than chosen per-push by
+whoever is pushing. ✅ That closes the open question.
+
+Four requirements the layout creates:
+
+1. **`local.properties` is structurally unpushable** — push does not read it, and
+   a key appearing in both `local` and `config`/`secret` is a hard error rather
+   than a precedence rule. Ambiguity about which value shipped is the exact bug
+   class this project exists to kill. It wants gitignoring, and the tool should
+   say so rather than assume.
+2. **Fail closed on the schema.** A key in the file but absent from the app's
+   declared set is never pushed. "Defines its config locations" means an
+   allowlist, not a discovery pass.
+3. **Role names need a charset restriction**, which serves two problems at once:
+   `failover.config.properties` stops parsing when a role is called `config`,
+   `secret` or `local`, and roles are keystore path segments so they need
+   traversal validation anyway. Reserve those three names, forbid separators.
+4. **`--push` is atomic per role and loud about what it skipped.** A dev holding
+   `staging/redline/app` but not `…/processor` pushes the first and must be told
+   plainly the second was skipped for want of a key — never silently, never
+   partially.
+
+**The cost of this granularity**, stated so it is chosen: a dev working across
+`app`, `failover` and `processor` holds three keys per environment. That puts
+real weight on the keystore layout and on `--push`'s error messages.
 
 #### Which key is CURRENT — the part nothing was storing
 
@@ -458,12 +538,11 @@ Consequences, all load-bearing:
   WebCrypto in the page, key in memory only — never `localStorage`, cleared on
   navigate, with an explicit lock. hz may log THAT a decrypt session was opened
   and by whom, never the key.
-- **One key per (environment, app)** — narrowed from per-environment on
+- **One key per (environment, app, role)** — narrowed from per-environment on
   2026-09-18, and it is what resolves finding 5. Prod's key is not staging's, so
-  a staging box compromise cannot read prod; and app A's key is not app B's, so
-  a box running a low-value `ops` role can no longer decrypt an unrelated app's
-  production database password. Roles share their app's key: `{app, ops}` on one
-  box are the same app.
+  a staging box compromise cannot read prod; app A's key is not app B's; and a
+  `processor` role cannot read what `app` holds. The key address is exactly the
+  config address.
 
   Note the isolation no longer "falls out of secrets never promoting" — since
   2026-09-18 some secrets do promote, by being re-sealed on a client holding both
@@ -671,10 +750,9 @@ of what "first registration" means.
 ### Decisions the owner owns
 
 **5. Key granularity is coarser than the addressing.** ✅ **Resolved
-2026-09-18** — keys are now per `(environment, app)`, which falls out of the
-client keystore layout (`<env>/<app>/`). A box running a low-value `ops` role can
-no longer decrypt an unrelated app's production database password. Roles share
-their app's key.
+2026-09-18** — the key address is now exactly the config address,
+`(environment, app, role)`. Nothing is coarser than anything. A `processor`
+cannot read what `app` holds, and neither can read another app's.
 
 **6. Read implies write implies approve.** Symmetric keys mean any operator who
 can paste the prod key to inspect a delta can also mint valid prod secrets and
