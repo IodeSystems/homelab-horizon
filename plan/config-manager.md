@@ -95,25 +95,51 @@ deploy stops needing a config step at all.
 **One narrowing:** a secret may be bound to a single MACHINE instead of an
 address — see [Machine-scoped secrets](#machine-scoped-secrets).
 
-### Bindings
+### Bindings — and nothing is plaintext
 
-Secrecy and promotion scope are **independent axes**. An earlier draft collapsed
-them into three rows, which left no cell for a value that is both secret and
-genuinely identical everywhere, and then wrongly concluded such values cannot
-promote. Secret promotion is required (owner, 2026-09-18).
+**Owner, 2026-09-18: NO config value is stored in plaintext.** Every value is
+sealed client-side, not only the ones anyone would call a secret.
 
-| binding | promotes? | hz can read? | examples |
-|---|---|---|---|
-| **invariant** | yes, verbatim | yes — promotion must diff it | retention days, cutoffs, timeouts |
-| **environment-bound** | no — must already be bound in the target | yes — the gate needs it | database URL, public URL, bucket + prefix |
-| **secret, environment-bound** | no | no | gateway keys, DB passwords |
-| **secret, invariant** | **yes**, by client-side re-seal | no | a vendor key issued once, a signing key artifacts verify against |
+That collapses the taxonomy. Secrecy stops being an axis, because everything is
+secret; what remains is promotion scope alone:
 
-A secret is not a separate system — it is a key with the write-only flag, so
-there is one store, one approval flow, one audit trail.
+| binding | promotes? | examples |
+|---|---|---|
+| **invariant** | yes, by client-side re-seal | retention days, cutoffs, timeouts, a vendor key issued once |
+| **environment-bound** | no — must already be bound in the target | database URL, public URL, bucket + prefix, DB passwords |
+
+**Why this is a security change and not just a policy one:** a plaintext value
+carried **no integrity protection at all**. Only sealed values have their address
+and key name bound into the AEAD. Sealing everything means hz can no longer
+substitute, swap or invent *any* value — see
+[hole 7](#7-hz-has-unrestricted-write-authority-over-every-box), which this
+largely closes.
+
+It also makes promotion **uniform**: every value re-seals on a client. There is
+no longer one path for invariants and another for secrets.
+
+**What hz keeps is key NAMES and BINDINGS, never values.** That is enough for
+the promotion gate, which only ever asks whether a key is bound, never what it
+holds. It is also the limit of the property: **key names leak.** hz sees
+`DB_PASSWORD`, `STRIPE_KEY`, `AUTH_DISABLED` — the shape of the config, if not
+its content. Encrypting names too would kill both the gate and resolution, so
+that is the line, drawn deliberately.
 
 **Which binding a key has is declared by the app, not chosen per push.** See
 [the developer side](#the-developer-side).
+
+**The costs, accepted (owner, 2026-09-18):**
+
+- **The config UI is unreadable without a key.** Every inspection is a decrypt —
+  checking a timeout, not just a password. Confirmed as acceptable.
+- **That broadens key usage**, which makes
+  [hole 4](#4-read-implies-write-implies-approve) worse rather than better: more
+  people need keys, more often. It is also the pressure most likely to push
+  someone into keeping a whole-fleet keyset on disk.
+- **Debugging needs a key.** "Why is this box misconfigured" is no longer
+  answerable from hz alone.
+- **Audit at config granularity, not per value**, or it is a row per value per
+  boot per box.
 
 ### Resolution rules
 
@@ -198,9 +224,12 @@ Promotion is **a diff and a gate, not a copy**:
 
 ```
 promote (staging, redline, app, 1.2.0–∞) → prod
-  ├─ invariant keys carried over, with provenance
+  ├─ invariant keys re-sealed under prod's key, with provenance
   └─ BLOCKED: prod has no value bound for PUBLIC_URL, PAY_ORIGIN
 ```
+
+The gate asks only whether a key is **bound**, never what it holds, which is why
+it survives hz reading nothing.
 
 That example is redline's live state, not a hypothetical. Today the only thing
 that catches it is a hand-written boot check, firing after a deploy has shipped.
@@ -210,17 +239,22 @@ structurally rather than by policy.
 
 A promoted config records where it ran, for how long, on which release, and who
 approved — which is what makes the approval prompt a decision rather than a
-dialog to click through. **Divergence reporting covers non-secret invariants
-only**: hz holds their plaintext and can diff them. Secret invariants lose it,
-deliberately, for the reason in [the shape of promote](#the-shape-and-what-it-does-not-promise).
+dialog to click through.
 
-### Promoting a secret
+**hz cannot report value divergence at all**, since it reads no values. That was
+already true for secrets once the checksum was dropped; sealing everything
+extends it uniformly. Lineage answers the better question anyway — not "do these
+differ" but "where did prod's current value come from" — and it needs no
+plaintext.
 
-**Owner, 2026-09-18: secret promotion is required, and the re-seal happens on a
-client — never in hz.**
+### Promoting a value
 
-A secret cannot promote the way an invariant does, because prod's copy must be
-readable by prod's key and staging's ciphertext is not. So the value is opened
+**Owner, 2026-09-18: promotion is required for secrets too, and the re-seal
+happens on a client — never in hz.** Since nothing is plaintext, this is now the
+*only* promotion path rather than the secret-specific one.
+
+A value cannot be copied across environments, because the target's copy must be
+readable by the target's key and the source's ciphertext is not. So it is opened
 under the source key and re-sealed under the target's, and the address bound into
 the AEAD changes with it.
 
@@ -388,24 +422,28 @@ opener knows independently of the party serving the blob.**
 `serviceName` is a new `(machine, environment, app, role)` tuple, so it re-enters
 pending, and only an approval delivers that address's key.
 
-> **Correction, 2026-09-18.** An earlier version of this section claimed a prod
-> box mistyping `--env=staging` "cannot decrypt staging's config even if hz
-> serves it. It fails closed and visibly." **That is false today, twice over.**
-> First, invariant and environment-bound values are plaintext by design, so the
-> box applies staging's URLs, buckets, retention and timeouts and fails only on
-> the secrets — half-applied wrong-environment config, worse than either clean
-> outcome. Second, `0008` has `UNIQUE (machine_id, app, role)` with no
-> environment column, so `UpsertRegistration` hits the existing row and bumps
-> `last_seen_at`: **the mistyped environment does not re-enter pending at all.**
-> The schema change was noted as bookkeeping; it is the thing that makes the
-> claim true or false. Both halves are Phase 2.
+> **Correction, 2026-09-18.** An earlier version claimed a prod box mistyping
+> `--env=staging` "cannot decrypt staging's config even if hz serves it. It fails
+> closed and visibly." That was false **twice over**; the no-plaintext decision
+> later the same day fixed one half and left the other.
 >
-> There is also an undecided fork: `ResolveConfig` takes environment from the
-> *caller*, while `cm_machines.environment` is fixed at registration. Resolving
-> on the request lets the mistype succeed; resolving on the machine gives the box
-> prod's plaintext while it believes it is staging. **The correct behaviour —
+> **Fixed:** invariant and environment-bound values used to be plaintext by
+> design, so the box applied staging's URLs, buckets, retention and timeouts and
+> failed only on the secrets — half-applied wrong-environment config, worse than
+> either clean outcome. With every value sealed there is nothing it can apply
+> without the key, so the fail-closed half is now true.
+>
+> **Still broken:** `0008` has `UNIQUE (machine_id, app, role)` with no
+> environment column, so `UpsertRegistration` hits the existing row and bumps
+> `last_seen_at` — **the mistyped environment does not re-enter pending at all.**
+> The schema change was noted as bookkeeping; it is the thing that makes the
+> *visibly* half true. Phase 2.5.
+>
+> Also undecided: `ResolveConfig` takes environment from the *caller*, while
+> `cm_machines.environment` is fixed at registration. **The correct behaviour —
 > refuse a request whose environment differs from the registration — is written
-> nowhere.**
+> nowhere**, and the box would otherwise sit failing to decrypt without anything
+> saying why.
 
 **Last-known-good is keyed by ADDRESS**, structurally, because the address is the
 path:
@@ -449,18 +487,20 @@ for what it is pushing — authority is possession, not a permission check.
 
 redline's file layout maps onto the taxonomy along two orthogonal axes:
 
-| file | decides | app schema decides |
+| file | pushed? | sealed? |
 |---|---|---|
-| `home/config.properties` | not secret — hz stores plaintext and can diff it | invariant **or** environment-bound |
-| `home/secret.properties` | secret — sealed client-side before it leaves the disk | secret-invariant **or** secret, environment-bound |
-| `home/local.properties` | never registered, never pushed | — |
+| `home/config.properties` | yes | yes — everything is |
+| `home/secret.properties` | yes | yes — everything is |
+| `home/local.properties` | **never** | n/a |
 
 Non-default roles prefix the file: `home/failover.config.properties`.
 
-**File placement decides secrecy** — really "must this be sealed before leaving
-my machine". **The app's schema decides promotion scope.** So the fourth binding
-is declared in code and reviewed in code review, rather than chosen per-push by
-whoever is pushing.
+**Since nothing is plaintext, the config/secret split no longer carries binding
+information.** It survives only as local hygiene — one file gitignored and
+`0600`, one not — and a deployment could collapse to a single file without
+changing anything hz sees. **The app's schema decides the binding**, so it is
+declared in code and reviewed in code review rather than inferred from which file
+a value landed in.
 
 1. **`local.properties` is structurally unpushable** — push does not read it, and
    a key in both `local` and `config`/`secret` is a hard error, not a precedence
@@ -524,17 +564,18 @@ yields ciphertext and a fleet map, not credentials.* **Two adversarial reviews o
 Both gaps have fixes in Phase 2. Until they land, do not restate the original
 claim.
 
-| binding | hz can read? | why |
-|---|---|---|
-| invariant | yes | promotion must diff it, and it is not a credential |
-| environment-bound, non-secret | yes | the promotion gate needs it |
-| **secret** | **no** | re-sealing happens on a client, so no flow needs hz to read one |
+**Since 2026-09-18 hz reads no value at all.** What it holds per value is the
+address, the key name, the binding, the range, the sequence, the lineage and a
+sealed blob. The promotion gate runs on names and bindings; nothing in any flow
+needs a value.
 
-Confidentiality of the secret subset is a real property. **Integrity of config is
-not a property this design has anywhere** — no signature on a config, no bless
-signature, no agent-side schema check on pull. For a project whose driver is
-admission control, that is the wrong gap to have; it is
+That also means **every value now carries integrity protection**, because the
+AEAD binds each one to its address and key name. Previously only secrets did, and
+plaintext values had none — hz could substitute them freely. See
 [hole 7](#7-hz-has-unrestricted-write-authority-over-every-box).
+
+Two residual leaks, both deliberate: **key names** (the shape of the config) and
+**the fleet map** (which machines run which addresses).
 
 ### Keys are symmetric, per (environment, app, role)
 
@@ -596,11 +637,14 @@ environment key during every enrollment."
 4. The agent unwraps and holds the key at `0600`, so later boots need no human.
 
 **This makes approval a cryptographic capability grant rather than an
-authorization flag** — for the secret subset. It is *not* that for everything
-else: per [hole 7](#7-hz-has-unrestricted-write-authority-over-every-box) the
-approved state also unlocks plaintext config, which no key protects. And hz does
-not currently check that a submitted blob is even addressed to the machine being
-approved ([hole 3](#3-approval-accepts-any-bytes)).
+authorization flag** — and since 2026-09-18 that holds for *every* value, not
+just a secret subset, because nothing is readable without the key the approval
+delivers. An unapproved box that obtained every blob can open none of them.
+
+The one gap left in that story: hz does not check that a submitted blob is even
+addressed to the machine being approved
+([hole 3](#3-approval-accepts-any-bytes)), so the *approved state* can still be
+set by anyone who can call approve — it just no longer unlocks anything.
 
 Costs, named:
 
@@ -612,7 +656,7 @@ Costs, named:
 
   > **Correction:** an earlier version called that "the one plaintext secret at
   > rest on a box." It is not. Last-known-good is *applied* config, so every box
-  > also holds plaintext of **every secret at its address**, indefinitely,
+  > also holds plaintext of **every value at its address**, indefinitely,
   > unreached by tombstones or rotation. And because the key is symmetric and
   > held unwrapped, rooting any single box yields that address's key permanently
   > — for every box at that address, past and future ciphertext alike. There is
@@ -691,21 +735,31 @@ decrypted, or nothing.
 
 #### 7. hz has unrestricted write authority over every box
 
-`ConfigEntry` carries either `Value` (plaintext) or `Sealed`, and **hz decides
-which**. So a compromised hz serves `{key: "DB_PASSWORD", binding: "invariant",
-value: "hunter2"}` — no envelope, so the AAD never runs. Or
-`DB_URL = postgres://attacker/…`, which makes the app *send* prod's real
-credentials outward. Or `AUTH_DISABLED=true`. hz never read a secret; it got one
-anyway.
+**Mostly closed by the 2026-09-18 no-plaintext decision; the remainder is Phase
+2.2 and 2.3.**
 
-Omission is unconstrained too: hz simply not sending `DB_PASSWORD` makes the app
-fall back to its default or empty — verbatim the founding bug.
+As designed originally, `ConfigEntry` carried either `Value` (plaintext) or
+`Sealed` and **hz decided which**. A compromised hz could serve
+`{key: "DB_PASSWORD", binding: "invariant", value: "hunter2"}` — no envelope, so
+the AAD never ran. Or `DB_URL = postgres://attacker/…`, making the app *send*
+prod's real credentials outward. Or `AUTH_DISABLED=true`. hz never read a secret;
+it got one anyway.
 
-**Fix (Phase 2): the app's declared schema, enforced on PULL.** This document
-already requires a fail-closed allowlist for `--push`; point the identical rule
-the other way. The agent refuses a plaintext value for a key declared secret,
-refuses an unknown key, and refuses a missing declared key. That converts both
-attacks from hz's choice into a mismatch the box reports.
+**Sealing every value kills the injection half outright** — there is no plaintext
+path to serve, and every value's AEAD binds it to its address and key name. That
+is the strongest single argument for the no-plaintext decision.
+
+Two attacks survive it:
+
+- **Omission.** hz not sending `DB_PASSWORD` makes the app fall back to its
+  compiled default — verbatim the founding bug. Closed by **2.2**, the declared
+  schema enforced on pull: a missing declared key is a hard failure.
+- **Staleness.** hz serving an older sealed blob still authenticates. Closed by
+  **2.3**, the client-side seq floor, and tracked as
+  [hole 8](#8-seq-rollback-at-one-address-still-works).
+
+So 2.2 keeps its place in Phase 2, narrowed: it no longer has to police
+plaintext-for-a-secret, only unknown and missing keys.
 
 #### 8. `seq` rollback at one address still works
 
@@ -792,11 +846,10 @@ carries the recipient fingerprint in cleartext and hz holds the machine's public
 key. One parse and compare refuses an approval wrapped to the wrong machine.
 
 Without it: anyone who can call approve sets `state='approved'` with 32 bytes of
-garbage. They cannot grant decryption — but per hole 7 the approved state also
-unlocks plaintext config, so approval is a capability grant for the secret subset
-and a **plain authorization flag with no validation** for everything else. It is
-also a lockout: a blob wrapped to a stale key stores cleanly and the box bricks at
-boot. `ApproveMachine` additionally has no state predicate, so a denied machine is
+garbage. Since the no-plaintext decision that grants nothing readable — the box
+is approved and can still open nothing — so this is now a **lockout** rather than
+a disclosure: a blob wrapped to a stale or wrong key stores cleanly and the box
+bricks at boot, discovered only on the box. `ApproveMachine` additionally has no state predicate, so a denied machine is
 silently re-approved with no audit row.
 
 #### 5. Machine-name squatting
@@ -870,8 +923,8 @@ homelab; less obviously so given hz is PCI-scoped.
   says admission is per machine so it does not. The schema is what ships and
   cannot express it. Pick one.
 - **The audit trail records the wrong event.** `cm_secret_reads` logs relays of
-  ciphertext, not decrypts — a row per secret per boot per box, enormous and
-  meaningless — while the event this document wants logged, that a decrypt
+  ciphertext, not decrypts — and now that every value is sealed it would be a row
+  per *value* per boot per box, enormous and meaningless — while the event this document wants logged, that a decrypt
   session opened and by whom, has no table. `ON DELETE SET NULL` also guts the
   identifying field exactly when a machine is deleted, which is what someone
   covering tracks would do. **Under PCI this is the one item not to file as
@@ -907,6 +960,10 @@ deliberately **out**, which also defers the two open questions riding on it.
 **Phase 1 must not ship to anything real before 2.1–2.5 land.** Several holes
 above are not theoretical once a box is genuinely approved through this.
 
+**The no-plaintext decision (2026-09-18) lands in Phase 1, not Phase 2** — it
+changes what handlers and the client expose, so building either against the old
+two-path model would be wasted. The schema half rides in `0009` (2.5).
+
 ## Phase 2 — hardening
 
 Ordered. Each item names the hole it closes.
@@ -916,10 +973,9 @@ missing CSP stop being load-bearing. The browser shows what the CLI decrypted,
 never touching a key. Cheapest high-value change here: both primitives already
 exist in Go.
 
-**2.2 — Enforce the app's declared schema on PULL.** Closes hole 7 and the
-omission variant. The agent refuses a plaintext value for a key declared secret,
-an unknown key, or a missing declared key. The `--push` allowlist rule, pointed
-the other way.
+**2.2 — Enforce the app's declared schema on PULL.** Closes the omission half of
+hole 7 — the injection half died with plaintext. The agent refuses an unknown key
+and a missing declared key. The `--push` allowlist rule, pointed the other way.
 
 **2.3 — Client-side monotonic seq floor.** Closes hole 8. Cache
 `version → highest seq applied`, refuse anything lower. No clock.
@@ -938,6 +994,9 @@ them are flag days:
 - **Lineage on the value** — origin discriminator plus a nullable source config
   id — and **relax the `binding='secret' ⇒ ciphertext NOT NULL` CHECK** so a
   tombstone can null the bytes and keep the row.
+- **Drop `cm_config_values.value` entirely**, and invert the CHECK: every value
+  has ciphertext, none has plaintext. Follows from the no-plaintext decision.
+  `binding` narrows to `invariant | env`, since the secret axis is gone.
 
 **Before `0009`: bind the address into the kind `0x02` AAD.** Once a box holds
 several wrapped keys, hz chooses which slot each lands in. Changing an envelope's
