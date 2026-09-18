@@ -495,15 +495,21 @@ func (s *Server) handleAPICMRegistrationAction(w http.ResponseWriter, r *http.Re
 	if !s.cmAdminGate(w, r) {
 		return
 	}
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-
 	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/cm/registrations/")
 	id, action, found := strings.Cut(rest, "/")
 	if !found || id == "" || strings.Contains(action, "/") {
-		writeJSONError(w, http.StatusNotFound, "expected /api/v1/cm/registrations/{id}/approve or /deny")
+		writeJSONError(w, http.StatusNotFound,
+			"expected /api/v1/cm/registrations/{id}/public-key, /approve or /deny")
+		return
+	}
+	// public-key reads; approve and deny write.
+	if action == "public-key" {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "GET required")
+			return
+		}
+	} else if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 
@@ -522,13 +528,43 @@ func (s *Server) handleAPICMRegistrationAction(w http.ResponseWriter, r *http.Re
 	}
 
 	switch action {
+	case "public-key":
+		s.cmPublicKey(w, machine)
 	case "approve":
 		s.cmApprove(w, r, machine, reg)
 	case "deny":
 		s.cmDeny(w, r, machine, reg)
 	default:
-		writeJSONError(w, http.StatusNotFound, "expected approve or deny")
+		writeJSONError(w, http.StatusNotFound, "expected public-key, approve or deny")
 	}
+}
+
+// cmPublicKey hands out the machine's public key so an approver can wrap to it.
+//
+// It is a separate read rather than a field on the queue listing on purpose.
+// The approver must wrap to the KEY, and must compute the fingerprint it shows
+// an operator FROM THAT KEY — a fingerprint hz reports alongside a key hz chose
+// proves nothing, because a compromised hz would simply report the fingerprint
+// of the key it substituted. Keeping the two apart makes the queue a display
+// surface and this the one place key bytes enter the ceremony, so a client that
+// verifies the fingerprint it derived here is verifying the thing it is about
+// to encrypt to.
+//
+// The key is public and safe to serve; the defence is not secrecy, it is that
+// the operator compares a fingerprint derived from these exact bytes against
+// what the box itself printed.
+func (s *Server) cmPublicKey(w http.ResponseWriter, machine *db.Machine) {
+	pub, err := ecdh.P256().NewPublicKey(machine.PublicKey)
+	if err != nil {
+		// Stored bytes that are not a point on the curve mean the row is
+		// corrupt, and wrapping to it would produce a blob nothing can open.
+		writeJSONError(w, http.StatusInternalServerError,
+			"stored public key for this machine is not a valid P-256 point")
+		return
+	}
+	writeJSON(w, struct {
+		PublicKey string `json:"publicKey"`
+	}{PublicKey: configmgr.MarshalMachinePublicKey(pub)})
 }
 
 // cmApprove grants one address's wrapped environment key to one machine.

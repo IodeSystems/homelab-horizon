@@ -974,10 +974,16 @@ are disjoint, so the work parallelises in separate worktrees.
 
 | | | |
 |---|---|---|
-| ◻ | `internal/apitypes` DTOs + route registration — **chokepoint files, owner keeps them** | `apitypes/`, `server.go` |
-| ◻ | Handlers — register, approve, deny, config CRUD, resolve, pull | `internal/server/handlers_configmgr.go` |
-| ◻ | Client library — register, poll, pull, decrypt, cache, seq floor | `configmgr/` |
-| ◻ | `hz` CLI — **the key ceremony** (Phase 2.1), config push, promote | `cmd/hz/` |
+| ✅ | `internal/apitypes` DTOs + route registration | `apitypes/`, `server.go` |
+| ✅ | Handlers — machine protocol and admin surface; approval verifies the blob's recipient against the stored key | `internal/server/handlers_configmgr.go` |
+| ✅ | Client library — enrol, resolve, decrypt, cache; the three-state fallback, the sequence floor, the compiled schema | `configmgr/client.go` |
+| ✅ | `hz` CLI — the key ceremony, push, promote, resolve | `cmd/hz/cm*.go` |
+| ✅ | Migration `0010` — the current-key pointer, and the stale-key query rotation needed | `internal/db/` |
+
+**Phase 2.1 through 2.4 landed with wave 2**, not later: the ceremony is in the
+CLI, the schema is enforced on pull, the sequence floor is in the client, and
+unknown-means-unreachable is how the client behaves. They were never really
+Phase 2 — building the client without them would have meant building it twice.
 
 **Wave 3 — needs the CLI and the library.**
 
@@ -1015,19 +1021,19 @@ two-path model would be wasted. The schema half rides in `0009` (2.5).
 
 Ordered. Each item names the hole it closes.
 
-**2.1 — Move the key ceremony to the `hz` CLI.** Closes hole 9, and makes the
+**2.1 — Move the key ceremony to the `hz` CLI.** ✅ Landed in wave 2. Closes hole 9, and makes the
 missing CSP stop being load-bearing. The browser shows what the CLI decrypted,
 never touching a key. Cheapest high-value change here: both primitives already
 exist in Go.
 
-**2.2 — Enforce the app's declared schema on PULL.** Closes the omission half of
+**2.2 — Enforce the app's declared schema on PULL.** ✅ Landed in wave 2. Closes the omission half of
 hole 7 — the injection half died with plaintext. The agent refuses an unknown key
 and a missing declared key. The `--push` allowlist rule, pointed the other way.
 
-**2.3 — Client-side monotonic seq floor.** Closes hole 8. Cache
+**2.3 — Client-side monotonic seq floor.** ✅ Landed in wave 2. Closes hole 8. Cache
 `version → highest seq applied`, refuse anything lower. No clock.
 
-**2.4 — Fail-open on ambiguity, fail-closed on denial.** Closes hole 6. Anything
+**2.4 — Fail-open on ambiguity, fail-closed on denial.** ✅ Landed in wave 2. Closes hole 6. Anything
 that is not a positive `denied` takes the cached-boot path.
 
 **2.5 — Migration `0009`.** Three changes that must land together, because two of
@@ -1053,7 +1059,7 @@ AAD after boxes hold blobs is a flag day, so it has to go first.
 `max_ver` with no open successor and an inverted range. The third rule once
 specified here — no second open-ended config — was withdrawn; see hole 13.
 
-**2.7 — hz verifies the approval blob.** Closes hole 3. Parse the envelope header,
+**2.7 — hz verifies the approval blob.** ✅ Landed in wave 2. Closes hole 3. Parse the envelope header,
 compare the recipient fingerprint against `cm_machines.public_key`, refuse a
 mismatch. Add a state predicate so a denied machine is not silently re-approved,
 and an audit row either way. Roughly three lines plus a test.
