@@ -279,7 +279,7 @@ Keys live with the client, never with hz — hz stores blobs it cannot open, so 
 has no key to keep. `keyFor(addr, keyID)` resolves against a tree rooted outside
 the working directory:
 
-    $HZ_HOME (default ~/.hz)/secrets/keys/<environment>/<app>/<name>.key
+    ~/.hz/secrets/keys/<environment>/<app>/<name>.key
 
 **`keyID`, not just `addr`, because of rotation.** Every envelope carries the id
 of the key that sealed it at bytes 2–9, so old ciphertext keeps opening after a
@@ -311,9 +311,38 @@ Five requirements, each because the obvious implementation is wrong:
    and a repository carrying a hostile `.hz/` gets consulted by anyone who runs
    `hz` inside it.
 
-A promotion needs two lookups from this tree — `keyFor(src)` to open and
-`keyFor(dst)` to seal — which is what "the client holds a keyset" means
-concretely.
+A promotion needs two lookups from this tree — `keyFor(src, id)` to open and the
+current key for the target to seal — which is what "the client holds a keyset"
+means concretely.
+
+#### Which key is CURRENT — the part nothing was storing
+
+Opening is self-describing: the envelope names its key id, so the client scans
+the tree, computes each candidate's id, and matches. Sealing is not — it has to
+pick *the current key for (environment, app)*, and nothing said which that was.
+Filename ordering is a convention an operator can typo; mtime lies after any
+copy.
+
+1. **"Newest" becomes a property of the file's CONTENTS, not its name.** A key
+   file holds `{key material, created_at, label}`, and the id is derived from the
+   material. Current = max `created_at`. Filenames stay cosmetic and cannot cause
+   a wrong choice.
+2. **hz stores a per-(environment, app) current key id, as advisory metadata.**
+   It already handles key ids — every ciphertext carries one and
+   `cm_machines.wrap_key_id` records what each machine was given — so this leaks
+   nothing new. hz is the shared coordination point, which is what makes every
+   client learn a rotation happened instead of each laptop drifting alone.
+3. **The client seals with the newest key it actually holds and treats hz's
+   pointer as a cross-check.** On disagreement, warn — do not obey. A compromised
+   hz could otherwise pin everyone to an older key it had already stolen, and the
+   client is in a position to refuse that.
+
+**What this buys, beyond correctness:** a machine holding key `X` cannot open
+anything sealed under `Y`, so a rotation not followed by re-wrapping every
+approved machine breaks config pulls fleet-wide. With a current-key pointer that
+state is *observable* — compare each machine's `wrap_key_id` against current and
+the list of boxes still needing a re-wrap falls out. That is finding 4's missing
+affordance. Without the pointer there is nothing to compare against.
 
 ### Provenance and divergence
 
