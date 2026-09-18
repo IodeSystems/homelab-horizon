@@ -197,3 +197,56 @@ configured — a new hire, a contractor, a second laptop for someone who is not
 an admin. Below that, this feature buys one less paste and costs a new hz
 feature, a plaintext token at rest in hz's database, and an interaction with
 the MFA jail.
+
+## ◻ A client LIBRARY, so consumers stop shelling out to a downloaded script
+
+**Driver:** the config-manager agent (a consumer project's design, 2026-09-18). That agent has to
+generate a keypair, present a public key at registration, poll for approval, unwrap an
+X25519-wrapped environment key, resolve a version range, cache last-known-good and report what it
+resolved. **None of that can be a bash script**, and attempting the unwrap in `bash` would be its
+own finding. So the config manager cannot be bolted onto `hz-client` as it exists — it forces this
+question rather than merely benefiting from it.
+
+**Where we are.** hz has NO importable surface, and Go enforces that rather than merely encouraging
+it: every package is under `internal/`, and the only things outside it are `cmd/homelab-horizon`,
+`cmd/hz` and `cmd/hz-probe`, which are `main`. What consumers actually get is `bin/hz-client` — a
+632-line **bash script**, copied verbatim into a Go raw string literal in
+`internal/server/hz_client_script.go`, kept in agreement by a test whose entire job is noticing when
+the two copies drift. Consumers `curl` it from the server, `chmod +x`, and `fork/exec` it, then
+parse exit codes and text. It carries ~20 verbs (`promote`, `status`, `rolling`, `releases`,
+`rollback`, `push`, `site`, `ban`, `maint-page`, `swap`, …) — a real API expressed as a shell
+script.
+
+**What that costs, observed rather than theorised.** A consumer whose provisioning skipped the
+download (its proxy URL was unset, so the fetch was guarded) still needed the client at deploy time,
+and failed with `fork/exec …/bin/hz-client: no such file or directory (output: )` — after the
+migrations had run. Two failures in one: the bootstrap guard and the consumer disagree about whether
+the client is optional, and the error names neither the cause nor the fix. That is the same shape as
+any missing-binary dependency; a linked library cannot be missing.
+
+**Shape**
+| | |
+|---|---|
+| Module | a NESTED `client/go.mod` in this repo, so consumers do not inherit the server's dependency tree — no sqlite driver, no WireGuard, no ACME, no DNS provider. |
+| Wire contract | `internal/apitypes` already exists; promote it (or a subset) into the client module. The hard part is half done. |
+| CLI + script | both become thin wrappers over the library. One implementation, two callers — and the sync test disappears because there stops being a second copy. |
+| Errors | typed, so a caller can distinguish "not enrolled", "not approved", "no such release" and "hz unreachable". Today they are all exit 1 plus text. |
+
+- **next:** decide the module boundary (below), then lift `apitypes`, then port `promote`/`status`/
+  `rolling` first since those are what a deploy actually calls.
+- **risks:**
+  - **A downloaded script always matches the server; a linked library is pinned at build time.** An
+    hz upgrade can then break older consumers, which the current model cannot. This needs API
+    versioning and a negotiated minimum — it is the real cost of the change, and it is not small.
+  - Lifting packages out of `internal/` makes them public API in a public repo. Lift the minimum,
+    and only what is already stable.
+- **blocking decisions:**
+  - Nested module vs a separate repo. Nested keeps them versioned together and is the usual Go
+    answer; separate lets the client move on its own cadence.
+  - Whether the shell script survives at all for non-Go consumers. If it does, it should be
+    GENERATED from the library's command surface rather than maintained beside it, or the two copies
+    come straight back.
+- **optional extensions:** signing. Today the client is fetched over HTTP with no checksum and no
+  version — unsigned remote code delivered into whatever host is being provisioned. A module with a
+  `go.sum` entry answers "what code is running here, and how do you know" in a way a `curl` cannot;
+  that matters more for hosts under a compliance regime than for a homelab.
