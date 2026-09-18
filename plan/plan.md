@@ -397,16 +397,21 @@ Blocks on real persistence: **services are not rows** in hz today
 (`findServiceByToken` returns an index into `config.json`), so this needs new
 tables with no precedent except `peer_owners`.
 
+It also absorbs the iceboxed per-peer secrets entry, **retired 2026-09-18**, as
+*machine-scoped secrets* — encrypted to the keypair a machine generates at
+registration, so hz holds ciphertext, revocation is per-device, and no
+environment key is in the path. That entry was small and unblocked; this is
+neither, so intern onboarding now has no path in hz until this lands.
+
 - **next:** the migration and db package for configs, registrations and
   approvals. Everything else depends on it.
 - **risks:** largest feature ever proposed for hz, landing in the box the whole
   network depends on; the browser crypto is the load-bearing security claim and
   needs a real review; hz becomes a dependency of every box's startup path, so
   the last-applied-on-disk fallback is not optional.
-- **blocking decisions (yours):** three open questions in the doc; whether the
-  iceboxed [per-peer secrets](icebox.md) entry folds into this or stays a
-  separate plaintext one-shot table; and whether this goes ahead of the two
-  unblocked items above.
+- **blocking decisions (yours):** the three open questions in the doc, and
+  whether this goes ahead of the two unblocked items above — noting it now
+  carries the intern onboarding use-case too.
 - **optional extensions:** none scoped yet.
 
 ### ◐ L4 port forwards

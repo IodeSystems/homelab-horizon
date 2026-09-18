@@ -34,6 +34,12 @@ the common case has exactly one candidate and ranges only do work on rollback.
 That is the whole selection rule. There is no per-version config entity and no
 mapping table.
 
+**One narrowing: a secret may be bound to a single MACHINE** instead of an
+`(environment, app, role)`. Same store, same approval state, different
+addressing and a different key — see [Machine-scoped
+secrets](#machine-scoped-secrets). It exists because per-device revocation is a
+real requirement that environment-wide addressing cannot express.
+
 **Why ranges rather than a contract number:** config follows the app
 BACKWARDS. Roll a slot from 1.3.0 to 1.1.0 and it picks up the config whose
 range still covers 1.1.0. Rolling code back while config stays forward is a
@@ -182,8 +188,8 @@ wins:
 **What does not exist yet:** hz's sqlite holds `users`, `sessions`,
 `api_tokens`, `credentials`, `peer_owners`, `password_history` — but **services
 are not rows**. `findServiceByToken` returns an index into `config.json`. So
-this needs real persistence, with no precedent except `peer_owners` and the
-proposed `peer_secrets` table. There is a migrations system to hang it on.
+this needs real persistence, with no precedent except `peer_owners`. There is a
+migrations system to hang it on.
 
 ## The escalation this creates, and the shape that contains it
 
@@ -242,10 +248,10 @@ Consequences, all load-bearing:
 
 The obvious delivery — hand the environment key to hz and let it pass the key on
 at enrollment — would put the key in sqlite in plaintext until pickup. That is
-exactly the cost the iceboxed [per-peer secrets](icebox.md) entry concedes:
-*"the value sits in sqlite in plaintext until pickup. That is the cost of
-delivery."* Paying it here would downgrade the claim to "hz cannot read secrets
-AT REST, but sees every environment key during every enrollment".
+exactly the cost the [per-peer secrets](icebox.md) entry conceded before it was
+retired: *"the value sits in sqlite in plaintext until pickup. That is the cost
+of delivery."* Paying it here would downgrade the claim to "hz cannot read
+secrets AT REST, but sees every environment key during every enrollment".
 
 **Decided (owner, 2026-09-18): the approver holds the key and distributes it
 through the act of approving. hz never stores it.**
@@ -280,21 +286,60 @@ Costs, named:
   needs a human. That is the one plaintext secret at rest on a box, and it is
   the thing to protect and rotate.
 
-### Relationship to the iceboxed per-peer secrets entry
+### Machine-scoped secrets
 
-[icebox.md](icebox.md) "Per-peer secrets, set by an admin, picked up once by the
-peer" is the cheap version of the same delivery problem, driven by
-`iodesystems-intern` rather than redline: an admin sets a value, the peer reads
-it once, the row is deleted. It accepts plaintext-at-rest for a short window.
+**Decided (owner, 2026-09-18): the iceboxed per-peer secrets entry is retired.
+This covers it.** hz gets one secret store, one approval flow, one audit trail —
+not two with different security properties.
 
-The two overlap on identity (`getPeerFromRequest`, `peer_owners`) and on the
-peer-authenticated pickup handler, and **not** on storage — one is deliberately
-plaintext and short-lived, the other is ciphertext hz cannot read. Decide before
-building either whether the intern use-case rides the config manager's
-environment-key path (no plaintext, but the laptop must hold a key) or stays a
-separate one-shot table. Building both without that call gives hz two secret
-stores with different security properties, which is the outcome this design
-avoids everywhere else.
+That entry (`iodesystems-intern`, not redline) wanted a registry token on a new
+laptop before it could configure npm, maven, docker, go, apt and brew: an admin
+sets a value for one peer, the peer reads it once, the row is deleted. It
+accepted plaintext in sqlite for the window between set and pickup, and said so.
+
+Folding it naively would have made it worse, not better. Its whole point is
+**per-device scope** — revoke a token for one laptop without rotating it for
+every laptop — and an environment key cannot express that. Handing every
+workstation the workstation environment key would let each one decrypt every
+other one's secrets. An over-grant in exchange for removing plaintext is not a
+trade worth making.
+
+The design already carries the answer, with no new concept: **the agent
+generates an X25519 keypair at registration and hz holds its public key.** So a
+machine-scoped secret is encrypted directly to that machine's public key. The
+environment key is not in the path at all.
+
+| | iceboxed entry | machine-scoped secret |
+|---|---|---|
+| at rest in hz | plaintext until pickup | ciphertext hz cannot read |
+| scope | one peer | one machine |
+| revocation | delete the row | delete the blob — it decrypts nowhere else |
+| who can set one | any admin | any admin: needs only the machine's public key, which hz publishes |
+| durability | one read, then gone | durable; re-fetched on every boot |
+
+Four things follow, each worth stating:
+
+- **Setting a machine-scoped secret does not require the environment key.** hz
+  hands out the target machine's public key, the browser wraps to it. So the
+  separation-of-duties property on environment secrets (only a key-holder can
+  approve) does not leak into a routine onboarding act.
+- **One-shot pickup is dropped, not lost.** Delete-on-read was compensating for
+  plaintext at rest — it bounded how long a readable value sat in sqlite. With
+  ciphertext the compensation has nothing to compensate for, and durability
+  fixes the entry's own stated failure: *"a lost response is a lost secret. The
+  admin re-sets it."*
+- **The VPN-MFA question the entry raised is defused.** It worried that a stolen
+  WireGuard key collects secrets without the second factor. Now a stolen key
+  collects blobs that open only with the machine's private key — root-only,
+  `0600`, on that box. Still gate pickup on a verified MFA session when VPN MFA
+  is on, but it is no longer the only thing standing there.
+- **The CLI moves.** The entry proposed `hz vpn peer secret set|rm|list`. Under
+  the fold these are config-manager commands addressed by machine, not VPN
+  commands. Values still come from **stdin**, never argv.
+
+What is genuinely lost: the entry was small and could have shipped in a week.
+This cannot. Until the config manager exists, the intern onboarding problem has
+no solution in hz, and that is the cost of the decision.
 
 ## Status
 
@@ -313,12 +358,15 @@ avoids everywhere else.
     key and no new box can be approved and no delta can be read.
   - hz becomes a dependency of every box's startup path. The
     last-applied-on-disk fallback is not optional.
+  - **Retiring per-peer secrets moved a small unblocked feature behind a large
+    blocked one.** If the intern onboarding need becomes urgent before the
+    config manager lands, the decision is worth re-opening rather than working
+    around.
 - **blocking decisions (yours):**
   1. The three open questions below.
-  2. Whether the iceboxed per-peer secrets entry folds into this or stays
-     separate (see above).
-  3. Whether this is the next thing built, ahead of the two unblocked items in
-     [plan.md](plan.md) (hz-probe vantage, L4 forwards deploy).
+  2. Whether this is the next thing built, ahead of the two unblocked items in
+     [plan.md](plan.md) (hz-probe vantage, L4 forwards deploy). Note this now
+     carries the intern onboarding use-case too, which has no other path.
 - **assumptions made:** hz's existing migrations system is the right place to
   hang new tables; redline supplies its own agent and hz ships none; the
   operator-held key never transits hz in any form.

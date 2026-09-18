@@ -99,46 +99,23 @@ the alternative is a small path-splitting proxy in front of the two containers,
 owned by whoever runs those containers rather than by hz. Decide which of those
 two you want before writing either.
 
-## ⏸ Per-peer secrets, set by an admin, picked up once by the peer
+## ✅ Retired 2026-09-18 — per-peer secrets, folded into the config manager
 
-**Driver:** `iodesystems-intern` (the company package index at
-`intern.<our-domain>`, the index project's plan,
-slice S4). A new laptop needs a registry token before it can configure npm,
-maven, docker, go, apt and brew. hz already knows which device is calling —
-that is the whole feature. **hz stays generic: no Gitea code, no Gitea
-credential, no knowledge of what the value means.**
+Was: a `peer_secrets` table, an admin sets a value for one peer, the peer reads
+it once by source-IP identity, the row is deleted. Driver was
+`iodesystems-intern` — a new laptop needs a registry token before it can
+configure npm, maven, docker, go, apt and brew.
 
-Reuses what exists: `getPeerFromRequest` (`internal/server/handlers_mfa.go:19`)
-resolves the caller to a peer by source IP, `getClientIP` trusts
-`X-Forwarded-For` only from the proxy, and every HAProxy frontend deletes a
-client-supplied one (`internal/haproxy/haproxy.go`). `peer_owners`
-(`internal/db/peer_owners.go`) is the precedent for per-peer rows in sqlite.
+**Retired, not shipped and not rejected.** The
+[config manager](config-manager.md) covers the need with better properties, as
+*machine-scoped secrets*: encrypted to the keypair the machine generates at
+registration, so hz holds ciphertext it cannot read, revocation is per-device,
+and the value survives a lost response instead of being gone. The reasoning,
+and what it costs, is in that doc under "Machine-scoped secrets".
 
-**Shape**
-| | |
-|---|---|
-| Store | new sqlite table `peer_secrets(peer_name, key, value, created_at, created_by)`. **Not config.json** — `VPNMFASecrets` (`internal/config/config.go:341`) is the wrong precedent here: these rows are short-lived and are deleted on read. |
-| Admin API | `PUT /api/v1/vpn/peers/{name}/secrets/{key}` (value in the body), `DELETE` the same, `GET /api/v1/vpn/peers/{name}/secrets` returns key names and timestamps, **never values**. |
-| Peer API | `GET /api/v1/account/peer/secrets/{key}` — authenticated only as the calling peer, returns the value once, deletes the row, logs peer + key + source IP. |
-| CLI | a new `vpn` command in `cmd/hz` (there is none today): `hz vpn peer secret set <peer> <key>` reads the value from **stdin**, plus `rm` and `list`. |
-
-- **next:** decide the MFA rule below, then migration → db methods → handlers →
-  CLI → README.
-- **risks:**
-  - The value sits in sqlite in plaintext until pickup. That is the cost of
-    delivery. Keep the window short: `list` shows age, and `audit` on the
-    intern side reports anything old.
-  - **A jailed peer must not be able to pick up.** With VPN MFA on, an
-    unverified peer still reaches the portal, so the pickup handler has to
-    check the MFA session itself, the way the portal handlers do. Otherwise a
-    stolen WireGuard key collects secrets without the second factor.
-  - Deleting a peer leaves rows behind, like `peer_owners`. Delete on peer
-    removal, and have `list` mark orphans.
-  - One-shot read means a lost response is a lost secret. The admin re-sets it;
-    `setup` on the device must say exactly that.
-- **blocking decisions:** does pickup require a verified MFA session when VPN
-  MFA is on (yes, unless you say otherwise), and does the peer API live on the
-  admin vhost or the portal vhost?
+The cost is real and recorded there: this was small and could have shipped
+quickly; the config manager cannot. Until it lands, intern onboarding has no
+path in hz. Re-open this if that becomes urgent first.
 
 ### ✅ Backend protocol (h2c), for gRPC backends — deployed 2026-09-17
 
