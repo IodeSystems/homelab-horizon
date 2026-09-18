@@ -64,6 +64,7 @@ export interface ProxyResp {
   maintenancePageMD5?: string;
   timeouts?: ProxyTimeoutsResp;
   backendProto?: string; // "" = HTTP/1.1, "h2" = cleartext HTTP/2 to the backend
+  publicPaths?: string[]; // path prefixes exempt from internalOnly
 }
 /**
  * ProxyTimeoutsResp surfaces per-backend HAProxy timeout overrides (seconds).
@@ -920,6 +921,7 @@ export interface ServiceRequestProxy {
   deploy?: ServiceRequestDeploy;
   timeouts?: ServiceRequestTimeouts;
   backendProto?: string; // "" = HTTP/1.1, "h2" = cleartext HTTP/2 to the backend
+  publicPaths?: string[]; // path prefixes exempt from internalOnly
 }
 /**
  * ServiceRequestTimeouts carries per-backend HAProxy timeout overrides

@@ -21,10 +21,16 @@ type Backend struct {
 	DomainMatches []string `json:"domain_matches,omitempty"` // e.g., [".example.com", "app.other.com"]
 	Server        string   `json:"server"`                   // e.g., "192.168.1.10:8080"
 	HTTPCheck     bool     `json:"http_check"`
-	CheckPath     string   `json:"check_path"`             // e.g., "/health"
-	InternalOnly  bool     `json:"internal_only"`          // Restrict to local network access only
-	MetricsPath   string   `json:"metrics_path,omitempty"` // if set, deny this path from non-local sources (Prometheus scrapes the backend directly)
-	MFAPortal     bool     `json:"mfa_portal,omitempty"`   // this backend is the MFA portal — the one thing an MFA-jailed VPN peer may reach
+	CheckPath     string   `json:"check_path"`    // e.g., "/health"
+	InternalOnly  bool     `json:"internal_only"` // Restrict to local network access only
+
+	// PublicPaths are path prefixes exempt from InternalOnly: reachable from
+	// anywhere while the rest of the service stays local-only. One endpoint
+	// published without publishing the service — a package repository, a
+	// webhook receiver.
+	PublicPaths []string `json:"public_paths,omitempty"`
+	MetricsPath string   `json:"metrics_path,omitempty"` // if set, deny this path from non-local sources (Prometheus scrapes the backend directly)
+	MFAPortal   bool     `json:"mfa_portal,omitempty"`   // this backend is the MFA portal — the one thing an MFA-jailed VPN peer may reach
 
 	// Proto is the protocol to the backend: empty for HTTP/1.1, "h2" for
 	// cleartext HTTP/2. It becomes ` proto h2` on the server line, health
@@ -549,7 +555,7 @@ listen stats
 		for _, b := range backends {
 			if b.InternalOnly {
 				aclName := sanitizeName(b.Name)
-				fmt.Fprintf(&sb, "    http-request deny deny_status 403 if host_%s !local_access\n", aclName)
+				fmt.Fprintf(&sb, "    http-request deny deny_status 403 if host_%s !local_access%s\n", aclName, publicPathExemptions(b.PublicPaths))
 			}
 		}
 		// Deny external access to metrics endpoints. Prometheus scrapes backends
@@ -620,7 +626,7 @@ listen stats
 		for _, b := range backends {
 			if b.InternalOnly {
 				aclName := sanitizeName(b.Name)
-				fmt.Fprintf(&sb, "    http-request deny deny_status 403 if host_%s !local_access\n", aclName)
+				fmt.Fprintf(&sb, "    http-request deny deny_status 403 if host_%s !local_access%s\n", aclName, publicPathExemptions(b.PublicPaths))
 			}
 		}
 		// Deny external access to metrics endpoints. Prometheus scrapes backends
@@ -686,7 +692,7 @@ listen stats
 		for _, b := range backends {
 			if b.InternalOnly {
 				aclName := sanitizeName(b.Name)
-				fmt.Fprintf(&sb, "    http-request deny deny_status 403 if host_%s !local_access\n", aclName)
+				fmt.Fprintf(&sb, "    http-request deny deny_status 403 if host_%s !local_access%s\n", aclName, publicPathExemptions(b.PublicPaths))
 			}
 		}
 		// Deny external access to metrics endpoints. Prometheus scrapes backends
@@ -759,6 +765,26 @@ listen stats
 		sb.WriteString("\n")
 	}
 
+	return sb.String()
+}
+
+// publicPathExemptions renders the negated path conditions that carve holes in
+// an internal-only deny rule.
+//
+// Each is a separate negated term, so they AND together: the request is denied
+// unless it is local OR matches one of the prefixes. path_beg rather than path
+// because a repository is a tree, not a single URL — and the trailing slash in
+// the configured prefix is what stops /api/packages/iodesystems/debian-secret
+// from matching /api/packages/iodesystems/debian.
+func publicPathExemptions(paths []string) string {
+	var sb strings.Builder
+	for _, p := range paths {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		fmt.Fprintf(&sb, " !{ path_beg %s }", p)
+	}
 	return sb.String()
 }
 

@@ -313,6 +313,7 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 
 		// Protocol to the backend (h2c for gRPC services).
 		b.Proto = svc.Proxy.BackendProto
+		b.PublicPaths = svc.Proxy.PublicPaths
 
 		// Per-backend timeout overrides
 		if svc.Proxy.Timeouts != nil {
@@ -1083,6 +1084,20 @@ func (c *Config) ValidateService(svc *Service) error {
 		}
 		if svc.Proxy.Deploy != nil {
 			return &ValidationError{Field: "proxy.self", Message: "self cannot be combined with blue-green deploy"}
+		}
+	}
+
+	// Public path exemptions only mean something against an internal-only
+	// service; on a public one they would silently do nothing, which is worse
+	// than refusing.
+	if svc.Proxy != nil && len(svc.Proxy.PublicPaths) > 0 {
+		if !svc.Proxy.InternalOnly {
+			return &ValidationError{Field: "proxy.public_paths", Message: "public_paths needs internal_only — on a public service every path is already reachable"}
+		}
+		for _, p := range svc.Proxy.PublicPaths {
+			if !strings.HasPrefix(strings.TrimSpace(p), "/") {
+				return &ValidationError{Field: "proxy.public_paths", Message: "each path must start with /"}
+			}
 		}
 	}
 

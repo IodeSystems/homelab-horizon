@@ -181,6 +181,9 @@ func serviceShow(c *client, args []string) error {
 		if p.BackendProto != "" {
 			fmt.Printf("  backendProto: %s\n", p.BackendProto)
 		}
+		if len(p.PublicPaths) > 0 {
+			fmt.Printf("  publicPaths:  %s\n", strings.Join(p.PublicPaths, " "))
+		}
 		state := svc.Status.ProxyState
 		if state == "" {
 			state = boolWord(svc.Status.ProxyUp, "up", "down")
@@ -253,6 +256,7 @@ type serviceFlags struct {
 	tServer       int
 	tTunnel       int
 	backendProto  string
+	publicPaths   multiFlag
 	metrics       bool
 	metricsPath   string
 	metricsBearer string
@@ -297,6 +301,7 @@ func newServiceFlags(name string) *serviceFlags {
 	f.IntVar(&sf.tConnect, "timeout-connect", 0, "HAProxy connect timeout override (s)")
 	f.IntVar(&sf.tServer, "timeout-server", 0, "HAProxy server timeout override (s)")
 	f.IntVar(&sf.tTunnel, "timeout-tunnel", 0, "HAProxy tunnel timeout override (s)")
+	f.Var(&sf.publicPaths, "public-path", "path prefix reachable from anywhere despite --internal-only (repeatable)")
 	f.StringVar(&sf.backendProto, "backend-proto", "", `protocol to the backend: "" (HTTP/1.1) or "h2" (cleartext HTTP/2, for gRPC backends)`)
 	f.BoolVar(&sf.metrics, "metrics", false, "enable Prometheus metrics discovery for this service")
 	f.StringVar(&sf.metricsPath, "metrics-path", "", "metrics path to scrape (default /metrics)")
@@ -433,6 +438,7 @@ func (sf *serviceFlags) buildProxy() *apitypes.ServiceRequestProxy {
 		SPA:          sf.spa,
 		InternalOnly: sf.internal,
 		BackendProto: sf.backendProto,
+		PublicPaths:  sf.publicPaths,
 	}
 	if sf.healthCheck != "" {
 		p.HealthCheck = &apitypes.ServiceRequestHealthCheck{Path: sf.healthCheck}
@@ -531,6 +537,7 @@ func respToRequest(s *apitypes.ServiceResp) apitypes.ServiceRequest {
 			SPA:          p.SPA,
 			InternalOnly: p.InternalOnly,
 			BackendProto: p.BackendProto,
+			PublicPaths:  p.PublicPaths,
 		}
 		if p.HealthCheck != nil {
 			rp.HealthCheck = &apitypes.ServiceRequestHealthCheck{Path: p.HealthCheck.Path}
@@ -662,6 +669,9 @@ func serviceEdit(c *client, args []string) error {
 		if set["backend-proto"] {
 			p.BackendProto = sf.backendProto
 		}
+		if set["public-path"] {
+			p.PublicPaths = sf.publicPaths
+		}
 		if set["timeout-connect"] || set["timeout-server"] || set["timeout-tunnel"] {
 			if p.Timeouts == nil {
 				p.Timeouts = &apitypes.ServiceRequestTimeouts{}
@@ -726,7 +736,7 @@ func serviceEdit(c *client, args []string) error {
 func proxyFlagSet(set map[string]bool) bool {
 	for _, k := range []string{"backend", "static-root", "static", "self", "spa", "internal-only",
 		"public", "health-check", "deploy-next-backend", "balance",
-		"timeout-connect", "timeout-server", "timeout-tunnel", "backend-proto"} {
+		"timeout-connect", "timeout-server", "timeout-tunnel", "backend-proto", "public-path"} {
 		if set[k] {
 			return true
 		}
