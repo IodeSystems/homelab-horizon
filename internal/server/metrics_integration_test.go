@@ -62,7 +62,7 @@ func TestRequestIntegrations(t *testing.T) {
 	t.Run("serviceRequestToService carries integrations", func(t *testing.T) {
 		req := apitypes.ServiceRequest{
 			Name:    "grafana",
-			Domains: []string{"grafana.iodesystems.com"},
+			Domains: []string{"grafana.example.net"},
 			Proxy:   &apitypes.ServiceRequestProxy{Backend: "192.168.1.76:3000"},
 			Integrations: &apitypes.ServiceRequestIntegrations{
 				Metrics: &apitypes.ServiceRequestMetrics{Enabled: true},

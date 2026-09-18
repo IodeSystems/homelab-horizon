@@ -143,17 +143,17 @@ The generated Prometheus scrape config is served at
 EXAMPLES
   hz service list
   hz setup
-  hz service delete rt.iodesystems.com --delete-orphans --sync
-  hz service create --name ebb --domain ebb.iodesystems.com \
+  hz service delete rt.example.net --delete-orphans --sync
+  hz service create --name ebb --domain ebb.example.net \
     --backend 192.168.1.76:8300 --internal-only --health-check /healthz --sync
-  hz service create --name ebb --domains-https ebb.iodesystems.com \
+  hz service create --name ebb --domains-https ebb.example.net \
     --backend 192.168.1.76:8300 --sync                            # HTTPS from the start
   hz service create --name mix --domain lan.example.com --domains-https www.example.com \
     --backend 192.168.1.76:8080                                   # lan.* stays HTTP, www.* gets HTTPS
   hz service edit ebb --https --confirm --sync                    # turn on HTTPS for existing domains
-  hz service edit grafana.iodesystems.com --metrics --sync   # opt into /metrics scraping
+  hz service edit grafana.example.net --metrics --sync   # opt into /metrics scraping
   hz domain list
-  hz domain ssl add ebb.iodesystems.com --sync
+  hz domain ssl add ebb.example.net --sync
   hz sync --wait
   hz schema service
   hz host add --name nas --ip 192.168.1.50 --label role=storage

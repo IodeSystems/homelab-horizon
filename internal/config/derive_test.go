@@ -1098,13 +1098,13 @@ func TestFilterRedundantDomains(t *testing.T) {
 		},
 		{
 			name:   "wildcard removes single-level subdomain",
-			input:  []string{"*.iodesystems.com", "dev.iodesystems.com", "kc.iodesystems.com"},
-			expect: []string{"*.iodesystems.com"},
+			input:  []string{"*.example.net", "dev.example.net", "kc.example.net"},
+			expect: []string{"*.example.net"},
 		},
 		{
 			name:   "wildcard does not remove multi-level subdomain",
-			input:  []string{"*.iodesystems.com", "app.vpn.iodesystems.com"},
-			expect: []string{"*.iodesystems.com", "app.vpn.iodesystems.com"},
+			input:  []string{"*.example.net", "app.vpn.example.net"},
+			expect: []string{"*.example.net", "app.vpn.example.net"},
 		},
 		{
 			name:   "wildcard does not remove root domain",
@@ -1118,8 +1118,8 @@ func TestFilterRedundantDomains(t *testing.T) {
 		},
 		{
 			name:   "mixed wildcards and non-redundant",
-			input:  []string{"*.iodesystems.com", "vpn.iodesystems.com", "*.vpn.iodesystems.com", "kiosk.vpn.iodesystems.com"},
-			expect: []string{"*.iodesystems.com", "*.vpn.iodesystems.com"},
+			input:  []string{"*.example.net", "vpn.example.net", "*.vpn.example.net", "kiosk.vpn.example.net"},
+			expect: []string{"*.example.net", "*.vpn.example.net"},
 		},
 	}
 

@@ -33,10 +33,10 @@ func TestSelfScrapeFollowsTheBindToTheVhost(t *testing.T) {
 	jobs := selfJobsFor(&config.Config{
 		ListenAddr:     "127.0.0.1:8080",
 		LocalInterface: "192.168.1.160",
-		AdminURL:       "https://hz.office.iodesystems.com",
+		AdminURL:       "https://hz.office.example.net",
 		ScrapeToken:    "tok",
 	})
-	if got := jobs[0].Targets[0].Address; got != "hz.office.iodesystems.com:443" {
+	if got := jobs[0].Targets[0].Address; got != "hz.office.example.net:443" {
 		t.Fatalf("target = %q, want the vhost", got)
 	}
 	if jobs[0].Scheme != "https" {
@@ -52,7 +52,7 @@ func TestSelfScrapeFollowsTheBindToTheVhost(t *testing.T) {
 func TestSelfScrapeIgnoresAnHTTPAdminURL(t *testing.T) {
 	jobs := selfJobsFor(&config.Config{
 		ListenAddr: "127.0.0.1:8080", LocalInterface: "192.168.1.160",
-		AdminURL: "http://hz.office.iodesystems.com",
+		AdminURL: "http://hz.office.example.net",
 	})
 	if got := jobs[0].Targets[0].Address; got != "127.0.0.1:8080" {
 		t.Fatalf("target = %q, want loopback rather than a cleartext vhost", got)

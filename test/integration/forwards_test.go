@@ -18,14 +18,14 @@ const sprinkConfigJSON = `{
   "listen_addr": ":8080",
   "wg_interface": "wg0",
   "vpn_range": "10.100.0.0/24",
-  "server_endpoint": "vpn.iodesystems.com:51820",
+  "server_endpoint": "vpn.example.net:51820",
   "local_interface": "192.168.1.160",
   "last_local_iface": "enx00051b94b7cc",
   "last_lan_cidr": "192.168.1.0/24",
   "haproxy_enabled": true,
   "haproxy_http_port": 80,
   "haproxy_https_port": 443,
-  "zones": [{"name": "iodesystems.com", "zone_id": "Z1"}],
+  "zones": [{"name": "example.net", "zone_id": "Z1"}],
   "services": []
 }`
 
@@ -39,7 +39,7 @@ func TestDryRunSprinkForward(t *testing.T) {
 
 	sprink := config.Service{
 		Name:        "sprink",
-		Domains:     []string{"sprink.iodesystems.com"},
+		Domains:     []string{"sprink.example.net"},
 		InternalDNS: &config.InternalDNS{IP: "192.168.1.160"},
 		Proxy:       &config.ProxyConfig{Backend: "192.168.1.76:20200"},
 		Forwards: []config.Forward{

@@ -58,7 +58,7 @@ func TestForwardsFailsWhileLocalNamesStillResolve(t *testing.T) {
 		_ = w.WriteMsg(m)
 	})
 
-	if local := Forwards(addr, "intern.iodesystems.com"); !local.OK {
+	if local := Forwards(addr, "intern.example.net"); !local.OK {
 		t.Fatalf("local name should still resolve: %+v", local)
 	}
 	res := Forwards(addr, "example.com")
@@ -101,11 +101,11 @@ func TestForwardsDefaultsThePort(t *testing.T) {
 }
 
 func TestProbeConflictCatchesALocallyServedName(t *testing.T) {
-	served := []string{"iodesystems.com", "veliode.com"}
-	if why := ProbeConflict("intern.iodesystems.com", served); why == "" {
+	served := []string{"example.net", "example.org"}
+	if why := ProbeConflict("intern.example.net", served); why == "" {
 		t.Error("a served subdomain must be rejected as a probe")
 	}
-	if why := ProbeConflict("iodesystems.com", served); why == "" {
+	if why := ProbeConflict("example.net", served); why == "" {
 		t.Error("the served domain itself must be rejected as a probe")
 	}
 	if why := ProbeConflict("example.com", served); why != "" {

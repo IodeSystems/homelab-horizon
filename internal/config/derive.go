@@ -490,8 +490,8 @@ func (c *Config) DeriveSSLDomains() []letsencrypt.DomainConfig {
 		}
 
 		// Filter out non-wildcard domains that are redundant with a wildcard
-		// in the same request. E.g., if *.iodesystems.com is present, remove
-		// dev.iodesystems.com — Let's Encrypt rejects this as malformed.
+		// in the same request. E.g., if *.example.net is present, remove
+		// dev.example.net — Let's Encrypt rejects this as malformed.
 		allDomains = filterRedundantDomains(allDomains)
 
 		if len(allDomains) == 0 {

@@ -16,7 +16,7 @@ func TestApplyManagedStaticRoot(t *testing.T) {
 	t.Run("static intent with no path gets a managed default", func(t *testing.T) {
 		req := apitypes.ServiceRequest{
 			Name:    "life",
-			Domains: []string{"life.iodesystems.com"},
+			Domains: []string{"life.example.net"},
 			Proxy:   &apitypes.ServiceRequestProxy{Static: true},
 		}
 		svc := serviceRequestToService(&req)

@@ -236,13 +236,13 @@ func TestGenerateConfig_SSLRedirectCoversExactHost(t *testing.T) {
 	h.SetBackends([]Backend{
 		{
 			Name:        "hz",
-			DomainMatch: "hz.office.iodesystems.com",
+			DomainMatch: "hz.office.example.net",
 			Server:      "192.168.1.10:8080",
 		},
 	})
 
 	tempDir := t.TempDir()
-	pemFile := filepath.Join(tempDir, "hz.office.iodesystems.com.pem")
+	pemFile := filepath.Join(tempDir, "hz.office.example.net.pem")
 	if err := os.WriteFile(pemFile, []byte("dummy cert"), 0644); err != nil {
 		t.Fatalf("failed to create test pem file: %v", err)
 	}
@@ -254,8 +254,8 @@ func TestGenerateConfig_SSLRedirectCoversExactHost(t *testing.T) {
 	// to the filename — matched both exactly (the host itself) and as a suffix
 	// (deeper subdomains).
 	expectedStrings := []string{
-		"acl ssl_host hdr(host) -i hz.office.iodesystems.com",
-		"acl ssl_host hdr_end(host) -i .hz.office.iodesystems.com",
+		"acl ssl_host hdr(host) -i hz.office.example.net",
+		"acl ssl_host hdr_end(host) -i .hz.office.example.net",
 		"redirect scheme https code 301 if ssl_host !is_router_check",
 	}
 	for _, expected := range expectedStrings {
@@ -271,22 +271,22 @@ func TestGenerateConfig_SSLRedirectFromSANs(t *testing.T) {
 	// SANs: non-wildcard SANs -> exact host match; wildcard SANs -> suffix match.
 	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
 	h.SetBackends([]Backend{
-		{Name: "hz", DomainMatch: "hz.office.iodesystems.com", Server: "192.168.1.10:8080"},
+		{Name: "hz", DomainMatch: "hz.office.example.net", Server: "192.168.1.10:8080"},
 	})
 
 	tempDir := t.TempDir()
 	// The cert filename is the primary subzone (*.vpn), but its SANs span the
 	// whole zone — the case that exposed the filename-only bug.
-	writeTestCert(t, filepath.Join(tempDir, "vpn.iodesystems.com.pem"),
-		[]string{"*.vpn.iodesystems.com", "*.office.iodesystems.com", "iodesystems.com", "dev.iodesystems.com"})
+	writeTestCert(t, filepath.Join(tempDir, "vpn.example.net.pem"),
+		[]string{"*.vpn.example.net", "*.office.example.net", "example.net", "dev.example.net"})
 
 	config := h.GenerateConfig(80, 443, &SSLConfig{Enabled: true, CertDir: tempDir})
 
 	expected := []string{
-		// exact matches (sorted): dev.iodesystems.com, iodesystems.com
-		"acl ssl_host hdr(host) -i dev.iodesystems.com iodesystems.com",
+		// exact matches (sorted): dev.example.net, example.net
+		"acl ssl_host hdr(host) -i dev.example.net example.net",
 		// suffix matches (sorted): .office..., .vpn...
-		"acl ssl_host hdr_end(host) -i .office.iodesystems.com .vpn.iodesystems.com",
+		"acl ssl_host hdr_end(host) -i .office.example.net .vpn.example.net",
 		"redirect scheme https code 301 if ssl_host !is_router_check",
 	}
 	for _, e := range expected {
@@ -294,10 +294,10 @@ func TestGenerateConfig_SSLRedirectFromSANs(t *testing.T) {
 			t.Errorf("SSL config missing: %s\n--- config ---\n%s", e, config)
 		}
 	}
-	// hz.office.iodesystems.com must be covered (via the *.office suffix) — the
+	// hz.office.example.net must be covered (via the *.office suffix) — the
 	// exact host it was previously missing.
-	if !strings.Contains(config, ".office.iodesystems.com") {
-		t.Error("hz.office.iodesystems.com not covered by redirect ACLs")
+	if !strings.Contains(config, ".office.example.net") {
+		t.Error("hz.office.example.net not covered by redirect ACLs")
 	}
 }
 
@@ -521,14 +521,14 @@ func TestGenerateConfig_Caching(t *testing.T) {
 }
 
 func TestGenerateConfig_OverlappingDomainsOrderedBySpecificity(t *testing.T) {
-	// hdr_end(host) is a greedy suffix match: a host like ha.iodesystems.com
-	// matches both `iodesystems.com` and `ha.iodesystems.com`. Whichever
+	// hdr_end(host) is a greedy suffix match: a host like ha.example.net
+	// matches both `example.net` and `ha.example.net`. Whichever
 	// use_backend comes first wins. Ensure the more-specific backend is emitted
 	// first regardless of input order.
 	h := New("/etc/haproxy/haproxy.cfg", "/run/haproxy/admin.sock")
 	h.SetBackends([]Backend{
-		{Name: "root", DomainMatch: "iodesystems.com", Server: "10.0.0.1:80"},
-		{Name: "ha", DomainMatch: "ha.iodesystems.com", Server: "10.0.0.2:80"},
+		{Name: "root", DomainMatch: "example.net", Server: "10.0.0.1:80"},
+		{Name: "ha", DomainMatch: "ha.example.net", Server: "10.0.0.2:80"},
 	})
 
 	config := h.GenerateConfig(80, 443, nil)
@@ -539,17 +539,17 @@ func TestGenerateConfig_OverlappingDomainsOrderedBySpecificity(t *testing.T) {
 		t.Fatalf("expected both use_backend lines, got:\n%s", config)
 	}
 	if haIdx > rootIdx {
-		t.Errorf("ha.iodesystems.com use_backend (idx %d) must precede iodesystems.com (idx %d) so the suffix-match doesn't swallow ha.* requests", haIdx, rootIdx)
+		t.Errorf("ha.example.net use_backend (idx %d) must precede example.net (idx %d) so the suffix-match doesn't swallow ha.* requests", haIdx, rootIdx)
 	}
 }
 
 func TestSortBackendsBySpecificity(t *testing.T) {
 	in := []Backend{
-		{Name: "a", DomainMatch: "iodesystems.com"},
-		{Name: "b", DomainMatch: "ha.iodesystems.com"},
-		{Name: "c", DomainMatch: "deep.app.iodesystems.com"},
-		{Name: "d", DomainMatches: []string{"iodesystems.com", "x.foo.com"}}, // least specific = iodesystems.com
-		{Name: "e", DomainMatch: "*.iodesystems.com"},                        // pattern .iodesystems.com (2 dots)
+		{Name: "a", DomainMatch: "example.net"},
+		{Name: "b", DomainMatch: "ha.example.net"},
+		{Name: "c", DomainMatch: "deep.app.example.net"},
+		{Name: "d", DomainMatches: []string{"example.net", "x.foo.com"}}, // least specific = example.net
+		{Name: "e", DomainMatch: "*.example.net"},                        // pattern .example.net (2 dots)
 	}
 	got := sortBackendsBySpecificity(in)
 	gotNames := make([]string, len(got))

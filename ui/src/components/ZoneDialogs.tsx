@@ -264,8 +264,8 @@ export function EditZoneDialog({
 // certForZone finds the LE cert entry (from /system/health) whose domains
 // belong to the given zone. Matches if the primary domain equals the zone
 // name or ends with ".<zoneName>" — covers both the bare-apex case
-// (veliode.com cert for veliode.com zone) and the wildcard-primary case
-// (*.vpn.iodesystems.com cert for iodesystems.com zone).
+// (example.org cert for example.org zone) and the wildcard-primary case
+// (*.vpn.example.net cert for example.net zone).
 function certForZone(
   zoneName: string,
   domains: Array<{ domain: string; cert_exists: boolean; expiry_info?: string; needs_renewal?: boolean; sans?: string[] }>,

@@ -57,8 +57,8 @@ func TestPruneOrphanedHAProxyCerts(t *testing.T) {
 	m := New(Config{
 		HAProxyCertDir: certDir,
 		Domains: []DomainConfig{
-			{Domain: "veliode.com"},           // base veliode.com.pem
-			{Domain: "*.vpn.iodesystems.com"}, // base vpn.iodesystems.com.pem
+			{Domain: "example.org"},       // base example.org.pem
+			{Domain: "*.vpn.example.net"}, // base vpn.example.net.pem
 		},
 	})
 
@@ -67,10 +67,10 @@ func TestPruneOrphanedHAProxyCerts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("veliode.com.pem")         // configured — keep
-	write("vpn.iodesystems.com.pem") // configured — keep
-	write("dev.veliode.com.pem")     // orphan — remove
-	write("notacert.txt")            // non-pem — keep
+	write("example.org.pem")     // configured — keep
+	write("vpn.example.net.pem") // configured — keep
+	write("dev.example.org.pem") // orphan — remove
+	write("notacert.txt")        // non-pem — keep
 
 	if removed := m.PruneHAProxyCerts(); removed != 1 {
 		t.Errorf("expected 1 orphan removed, got %d", removed)
@@ -80,10 +80,10 @@ func TestPruneOrphanedHAProxyCerts(t *testing.T) {
 		_, err := os.Stat(filepath.Join(certDir, name))
 		return err == nil
 	}
-	if !exists("veliode.com.pem") || !exists("vpn.iodesystems.com.pem") {
+	if !exists("example.org.pem") || !exists("vpn.example.net.pem") {
 		t.Error("configured certs must be kept")
 	}
-	if exists("dev.veliode.com.pem") {
+	if exists("dev.example.org.pem") {
 		t.Error("orphaned cert should have been removed")
 	}
 	if !exists("notacert.txt") {

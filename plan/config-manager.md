@@ -3,7 +3,7 @@
 > Design, not built. Written 2026-09-18 from the owner's model; moved into this
 > repo 2026-09-18 because **hz is where it gets built**. redline is the first
 > client, not the owner — its side of the work is in
-> `~/local/src/iodesystems/redline/plan/config-manager.md`.
+> the consumer project's plan.
 
 ## Driver
 

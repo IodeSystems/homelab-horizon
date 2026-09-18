@@ -135,12 +135,12 @@ func TestControlNamesAreNotComplianceClaims(t *testing.T) {
 func TestServiceStatesJoinHAProxyNames(t *testing.T) {
 	cfg := &config.Config{Services: []config.Service{
 		{Name: "veliode beta", Dormant: true, Proxy: &config.ProxyConfig{Backend: "192.168.1.76:6201"}},
-		{Name: "kc.iodesystems.com", Proxy: &config.ProxyConfig{Backend: "192.168.1.160:6302", MaintenancePage: "<h1>down</h1>"}},
+		{Name: "kc.example.net", Proxy: &config.ProxyConfig{Backend: "192.168.1.160:6302", MaintenancePage: "<h1>down</h1>"}},
 		{Name: "vpn"},
 	}}
 	want := []serviceState{
 		{service: "veliode beta", backend: "veliode_beta_backend", dormant: true},
-		{service: "kc.iodesystems.com", backend: "kc_iodesystems_com_backend", maintenance: true},
+		{service: "kc.example.net", backend: "kc_example_net_backend", maintenance: true},
 	}
 	if got := serviceStates(cfg); !reflect.DeepEqual(got, want) {
 		t.Errorf("serviceStates = %+v, want %+v", got, want)
