@@ -989,29 +989,87 @@ func (s *Server) cmBoundKeys(r *http.Request, environment, app, role string) (ma
 
 // handleAPICMCurrentKey is GET/PUT /api/v1/cm/current-key?env=&app=&role=.
 //
-// NOT IMPLEMENTED, deliberately and visibly. The advisory current-key pointer
-// needs a per-address row hz can write — key id, who set it, when — and
-// internal/db has no table and no accessor for one: 0009 does not add
-// cm_current_keys, and nothing else in the schema can hold it.
+// hz stores an ID here, never a key. The id is derived from key material the
+// client holds and is safe to publish, the way a fingerprint is.
 //
-// The alternatives were worse than a named refusal. Answering GET with "no
-// pointer set" would be a silent lie: a client that consults hz and is told
-// nothing seals under whichever key file sorts newest, which is exactly the
-// drop-a-file attack Keystore.SealingKey refuses to be exposed to. Deriving the
-// pointer from the newest blessed config deadlocks a rotation — the first seal
-// under a new key cannot happen until a config already uses it.
+// The pointer is ADVISORY and clients must not obey it. They refuse to SEAL
+// when their local key disagrees, and only warn when OPENING. Obeying it would
+// let a compromised hz pin every client to a key it had already stolen; merely
+// warning in both directions would let anyone who can drop a file into a
+// keystore become the sealing key. hz's job is only to carry one shared answer
+// so a rotation reaches every client instead of each laptop drifting alone.
 //
-// So the route exists and says what is missing, which is what a caller can act
-// on, rather than 404ing like a typo.
+// A GET with no pointer set answers 404 rather than an empty pointer: "nobody
+// has announced one" and "the current key is X" are different facts, and a
+// client told the wrong one seals under whatever its filesystem offers.
 func (s *Server) handleAPICMCurrentKey(w http.ResponseWriter, r *http.Request) {
 	if !s.cmAdminGate(w, r) {
 		return
 	}
-	if r.Method != http.MethodGet && r.Method != http.MethodPut {
-		writeJSONError(w, http.StatusMethodNotAllowed, "GET or PUT required")
+	if s.users == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "identity store unavailable")
 		return
 	}
-	writeJSONError(w, http.StatusNotImplemented,
-		"the current-key pointer has no store yet: internal/db needs a cm_current_keys "+
-			"table and accessors before hz can answer or set it")
+	env := strings.TrimSpace(r.URL.Query().Get("env"))
+	app := strings.TrimSpace(r.URL.Query().Get("app"))
+	role := strings.TrimSpace(r.URL.Query().Get("role"))
+	if env == "" || app == "" || role == "" {
+		writeJSONError(w, http.StatusBadRequest, "env, app and role are required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		cur, err := s.users.CurrentKeyFor(r.Context(), env, app, role)
+		if errors.Is(err, db.ErrNotFound) {
+			writeJSONError(w, http.StatusNotFound, "no current key announced for this address")
+			return
+		}
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, cmCurrentKeyResp(cur))
+
+	case http.MethodPut:
+		// Announcing requires a real account, not the shared admin token: this
+		// is the same FK-backed attribution approve and bless need, and "who
+		// told the fleet to rotate" is exactly the kind of fact that must not
+		// resolve to "somebody with the token".
+		actor, ok := s.cmActor(w, r)
+		if !ok {
+			return
+		}
+		var req apitypes.CMCurrentKeyReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
+			return
+		}
+		cur, err := s.users.SetCurrentKey(r.Context(), env, app, role, req.KeyID, actor)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		slog.Info("config manager current key announced",
+			"env", cur.Environment, "app", cur.App, "role", cur.Role,
+			"keyId", cur.KeyID, "by", s.adminActor(r))
+		writeJSON(w, cmCurrentKeyResp(cur))
+
+	default:
+		writeJSONError(w, http.StatusMethodNotAllowed, "GET or PUT required")
+	}
+}
+
+func cmCurrentKeyResp(c *db.CurrentKey) apitypes.CMCurrentKeyResp {
+	out := apitypes.CMCurrentKeyResp{
+		Environment: c.Environment,
+		App:         c.App,
+		Role:        c.Role,
+		KeyID:       c.KeyID,
+		SetBy:       c.SetBy,
+	}
+	if !c.SetAt.IsZero() {
+		out.SetAt = c.SetAt.UTC().Format(time.RFC3339)
+	}
+	return out
 }

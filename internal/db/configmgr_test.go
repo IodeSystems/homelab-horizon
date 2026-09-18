@@ -1475,3 +1475,105 @@ func TestMigrate0009DownAndUpAgain(t *testing.T) {
 		t.Fatalf("machine secret after the round trip: %v", err)
 	}
 }
+
+func TestCurrentKeyPointer(t *testing.T) {
+	d := open(t)
+	ctx := context.Background()
+	admin := newUser(t, d, "carl")
+
+	// Never announced is a distinct fact from "announced as X". A client told
+	// the wrong one seals under whatever its filesystem offers.
+	if _, err := d.CurrentKeyFor(ctx, "prod", "redline", "app"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unannounced address = %v, want ErrNotFound", err)
+	}
+
+	const k1 = "a3f1c02b9d4e5f60"
+	cur, err := d.SetCurrentKey(ctx, "PROD", "Redline", "App", "A3F1C02B9D4E5F60", admin.ID)
+	if err != nil {
+		t.Fatalf("SetCurrentKey: %v", err)
+	}
+	// The address folds and so does the id: one spelling, one pointer.
+	if cur.Environment != "prod" || cur.App != "redline" || cur.Role != "app" {
+		t.Fatalf("address not folded: %+v", cur)
+	}
+	if cur.KeyID != k1 {
+		t.Fatalf("key id = %q, want folded %q", cur.KeyID, k1)
+	}
+
+	// Announcing again is a rotation, not a conflict.
+	const k2 = "b70dd91e4c2a8f53"
+	if _, err := d.SetCurrentKey(ctx, "prod", "redline", "app", k2, admin.ID); err != nil {
+		t.Fatalf("re-announce: %v", err)
+	}
+	cur, err = d.CurrentKeyFor(ctx, "prod", "redline", "app")
+	if err != nil {
+		t.Fatalf("CurrentKeyFor: %v", err)
+	}
+	if cur.KeyID != k2 {
+		t.Fatalf("key id = %q, want the newly announced %q", cur.KeyID, k2)
+	}
+
+	// hz holds no key, so it cannot check an id against material — but a value
+	// that is not an id at all is a typo worth refusing at the one write path.
+	for _, bad := range []string{"", "short", "a3f1c02b9d4e5f6z", "a3f1c02b9d4e5f600"} {
+		if _, err := d.SetCurrentKey(ctx, "prod", "redline", "app", bad, admin.ID); err == nil {
+			t.Fatalf("key id %q was accepted", bad)
+		}
+	}
+}
+
+func TestRegistrationsHoldingStaleKeyIsTheRotationAffordance(t *testing.T) {
+	d := open(t)
+	ctx := context.Background()
+	admin := newUser(t, d, "carl")
+
+	const oldKey, newKey = "a3f1c02b9d4e5f60", "b70dd91e4c2a8f53"
+
+	approveWith := func(name, keyID string) *Registration {
+		t.Helper()
+		m, err := d.RegisterMachine(ctx, name, "prod", testPublicKey(byte(len(name))))
+		if err != nil {
+			t.Fatalf("RegisterMachine %s: %v", name, err)
+		}
+		reg, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "app", "1.0.0")
+		if err != nil {
+			t.Fatalf("UpsertRegistration %s: %v", name, err)
+		}
+		got, err := d.ApproveRegistration(ctx, reg.ID, []byte("wrapped-"+name), keyID, admin.ID)
+		if err != nil {
+			t.Fatalf("ApproveRegistration %s: %v", name, err)
+		}
+		return got
+	}
+	stale := approveWith("box-old", oldKey)
+	fresh := approveWith("box-new", newKey)
+
+	// With no pointer announced nothing is stale — there is nothing to be stale
+	// against, and reporting the whole fleet would be noise.
+	got, err := d.RegistrationsHoldingStaleKey(ctx, "prod", "redline", "app")
+	if err != nil {
+		t.Fatalf("stale with no pointer: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("stale with no pointer = %d rows, want 0", len(got))
+	}
+
+	if _, err := d.SetCurrentKey(ctx, "prod", "redline", "app", newKey, admin.ID); err != nil {
+		t.Fatalf("SetCurrentKey: %v", err)
+	}
+
+	// A box holding the old key cannot open anything sealed under the new one,
+	// so this list is exactly the re-wrap queue a rotation needs.
+	got, err = d.RegistrationsHoldingStaleKey(ctx, "prod", "redline", "app")
+	if err != nil {
+		t.Fatalf("stale after announce: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != stale.ID {
+		t.Fatalf("stale = %+v, want exactly the old-key registration %s", got, stale.ID)
+	}
+	for _, r := range got {
+		if r.ID == fresh.ID {
+			t.Fatal("a registration already holding the current key was reported stale")
+		}
+	}
+}
