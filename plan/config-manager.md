@@ -279,7 +279,8 @@ Keys live with the client, never with hz — hz stores blobs it cannot open, so 
 has no key to keep. `keyFor(addr, keyID)` resolves against a tree rooted outside
 the working directory:
 
-    ~/.hz/secrets/keys/<environment>/<app>/<name>.key
+    ~/.hz/secrets/keys/<environment>/<app>/<label>.<keyid>.key
+    ~/.hz/secrets/keys/prod/redline/2026-09.a3f1c02b9d4e5f60.key
 
 **`keyID`, not just `addr`, because of rotation.** Every envelope carries the id
 of the key that sealed it at bytes 2–9, so old ciphertext keeps opening after a
@@ -288,10 +289,22 @@ therefore breaks every prior blob the moment a second one exists.
 
 **Two different things are called "key name" and they must not be conflated:**
 the *config key* (`DB_PASSWORD`) is bound into the AAD; the *encryption key* is
-what this tree stores. Files may be named for humans (`2026-09.key`); resolution
-is **by computing each candidate's key id from the file itself** rather than
-consulting an index — an index is a second source of truth that can disagree
-with the keys it describes, and with a handful of keys per app the scan is free.
+what this tree stores.
+
+**The keystore is addressed by `(environment, app, keyid)`.** That third
+component is not optional: the envelope identifies its key by id, so a tree
+addressed only by `(environment, app)` cannot answer "which key opens this" once
+a second key exists.
+
+The filename carries **both** the id and a human label, which is what avoids an
+index without forcing a scan:
+
+- opening globs `*.<keyid>.key` — one path, no reading every file, and no second
+  source of truth able to disagree with the keys it describes;
+- the label stays legible so an operator can see what they hold;
+- **the id is verified on load** — derive it from the key material and compare
+  against the filename, so a renamed file fails loudly rather than quietly
+  resolving to the wrong key.
 
 Five requirements, each because the obvious implementation is wrong:
 
