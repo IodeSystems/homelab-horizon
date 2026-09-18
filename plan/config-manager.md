@@ -523,27 +523,50 @@ a value landed in.
 of the rotation and escrow problem — every key is a separate thing to store,
 rotate, re-wrap and lose.
 
-### Validation belongs to the client, because nowhere else can do it
+### Validation belongs to the client, and so does PUSH
 
 **Owner, 2026-09-18.** hz cannot validate a config: every value is sealed and it
-holds no key. That is not a gap to work around — validation belongs with the
-app's own types, and sealing everything simply forces the issue.
+holds no key. That was never in doubt. The mistake was routing push through the
+**generic `hz` CLI**, which forced the schema to be a `--schema` JSON file —
+and a schema that exists twice, once as JSON for push and once as Go for pull,
+drifts. JSON also expresses less than Go, so push-time validation was
+permanently the weaker half for no reason but the plumbing.
 
-It matters because the binding check does not catch the founding bug. An empty
-bucket variable selecting the production bucket is a *valid string*; a
-`{key → binding}` map sails past it. A validator does not.
+**Decided: `push` moves to the implementing application's own CLI.**
+`redline config push`, not `hz cm push`. The schema is then **compiled in** —
+one declaration serving both the push path and the pull path, with the app's
+real validators on both sides. The weak mechanism disappears rather than being
+maintained beside the strong one.
 
-Two places, and they are necessarily different mechanisms:
+**And a linked library cannot be missing.** The
+[client-library icebox entry](icebox.md) already recorded this failing for real:
+a consumer whose provisioning skipped the client download died with
+`fork/exec …/bin/hz-client: no such file or directory`, after migrations had
+run. An app that pushes its own config needs no separate binary on a developer's
+laptop, in CI, or on a build box, and nothing to keep in step with hz.
 
-| where | expressed in | catches | fails |
-|---|---|---|---|
-| **push**, in `hz` CLI | the `--schema` JSON — required, non-empty, pattern, enum, bounds | less | **while the developer is standing there** |
-| **pull**, in the library | the app's own Go — cross-key invariants, parsed URLs and durations, "set X only when Y" | everything | on the box, at boot |
+The split falls along "does this need to know the app":
 
-The second is where the power is and it is nearly free: the app already imports
-the library and already declares a schema, so `Schema` grows from
-`map[key]binding` to carry a validator per key. Nothing has shipped against that
-type yet.
+| stays in `hz` — operator, generic | moves to the app's CLI — developer |
+|---|---|
+| `key new / ls / export / import / current` | `push` — needs the schema and the app's own config files |
+| `approve` / `deny` — the ceremony | |
+| `resolve`, `show`, `promote` — generic operations on blobs | |
+
+The ceremony stays in `hz` deliberately: it is identical for every app, and the
+operator performing it is not the app's developer.
+
+**What this costs:** `configmgr` must export the push *logic* — schema, seal,
+bless — so an app wires it into its own CLI in a few lines. `hz cm push` and the
+`--schema` JSON format go away. Cheaper now than after anything ships against
+that format.
+
+**Why it matters beyond tidiness:** the binding check alone does not catch the
+founding bug. An empty bucket variable selecting the production bucket is a
+*valid string*; a `{key → binding}` map sails straight past it. A validator does
+not — so `Schema` grows from `map[key]binding` to carry a validator per key,
+and the same declaration then catches it at push, while the developer is
+standing there, and again at pull.
 
 **A config that fails validation falls back to cache, loudly** — the same as a
 schema mismatch or a decrypt failure already do, and for the same reason. A bad
