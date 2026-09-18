@@ -185,18 +185,44 @@ so the client knows which one opens an existing ciphertext.
   browser and it is gone on navigate", and it should be a deliberate choice per
   pipeline rather than the default.
 
-**What this costs, and the cheap fix.** Re-sealing means staging and prod hold
-different bytes for the same value, so hz cannot tell *same value, different
-key* from *someone edited prod's copy*. The divergence check promised below dies
-for exactly the values being promoted.
+### The shape, and what it does not promise
 
-Recoverable without changing the crypto architecture: have the client compute a
-**commitment** to the plaintext at seal time and store it beside the ciphertext.
-Equal values give equal commitments, so hz reports divergence while holding no
-plaintext. One column, one function, computed identically in both clients.
-Caveat — a commitment over a low-entropy value is brute-forceable by whoever
-holds it, so gate it on entropy or make it opt-in per key. **Proposed, not
-decided.**
+**Decided (Carl, 2026-09-18):**
+
+    promote(addr, ciphertext) -> (addr, ciphertext)
+
+a method on a client already holding the keyset, so keys are not a per-call
+argument. `addr` is `(environment, app, role)`; the key name is not a parameter
+because promote iterates a config, but it **is** bound into each value's AAD by
+the re-seal underneath — without it hz could serve `ANALYTICS_KEY`'s blob in the
+`DB_PASSWORD` slot of the same config and it would authenticate.
+
+**A stored plaintext checksum was considered and dropped.** It would have let hz
+compare across environments while holding no plaintext, which is the only way to
+detect that prod's copy drifted after promotion. It was dropped because storing a
+hash of a secret next to its ciphertext makes hz's own store a **brute-force
+oracle** — against exactly the party whose compromise this design assumes. A
+128-bit vendor key survives that; a short or reused one does not.
+
+Instead the guarantee is **structural**: promote performs a decrypt/re-encrypt
+cycle the caller cannot interpose on, so the target ciphertext holds the source
+plaintext by construction rather than by a witness stored beside it.
+
+Two limits of that, recorded so they are not later mistaken for more:
+
+- **It holds at promotion time, not afterward.** A direct set path must exist —
+  an environment-bound secret like prod's database password is born in prod and
+  never promoted — so anyone holding the target key can overwrite a promoted
+  value later. Promote proves the value was right when it crossed. Nothing
+  proves prod still holds it a month on. **Non-secret invariants keep their
+  divergence check**, since hz has their plaintext; secret invariants lose it,
+  and that is the price of not publishing an oracle.
+- **"The caller cannot change it" is a guardrail, not integrity.** The cycle runs
+  on a client, and `Seal` is exported because the UI and the library both need
+  it, so calling the primitive directly writes whatever you like into a target
+  slot. That is proportionate — this document describes divergence as catching
+  *bugs*, not attackers — but it must not get restated later as an integrity
+  property.
 
 **Still open:** whether `secret, invariant` is a declared binding an operator
 opts a key into — auditable, and refusable — or whether promotion is simply an
