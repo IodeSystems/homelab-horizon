@@ -20,6 +20,55 @@ said otherwise. A repo can version a config. Only something sitting between the
 config and the process can refuse one. The full evidence stays in redline's
 plan; it is that repo's pain and that repo's to keep current.
 
+## Constraint: nothing in the boot path may depend on freshness
+
+**Stated by the owner 2026-09-18, and it rules out more than it looks like.**
+Services here are expected to run **unattended for years**. A box must not break
+because something expired while nobody was watching.
+
+No TTL, no expiry, no "must have checked in within N days" anywhere a boot
+depends on it. Consequences, each of which has already been proposed and
+rejected once or would have been:
+
+- **Leases are dead.** A renewable, short-lived key grant was proposed as the
+  answer to revocation (finding 3) and is wrong twice over. First, a lease
+  revokes *authentication*, not *decryption* — SPIRE's model works because an
+  SVID is presented to a live server, whereas a decryption key works offline
+  forever, so a copied one ignores every renewal deadline. It is theatre against
+  the compromise case that motivates revocation at all. Second, it adds a boot
+  dependency on a clock and a renewal loop, which is the failure this constraint
+  exists to forbid. In practice the TTL becomes ten years or someone writes the
+  auto-renewer, because the alternative is being paged to re-approve a box that
+  is fine.
+- **A TUF-style expiring "current" pointer is dead for the same reason**, and was
+  briefly recommended here before this constraint was stated. TUF detects a
+  frozen response by making the pointer expire; a three-year-old box would refuse
+  to trust anything.
+
+  **The half that survives has no clock in it: monotonicity.** The agent caches
+  `version → highest seq ever applied at that version` and refuses anything
+  lower. That is enforceable offline and forever, it is the fix for the seq
+  rollback the AAD does not cover, and legitimate rollback to an older binary
+  still works because each version carries its own floor. What it gives up is
+  detecting *freeze* — hz serving the same stale-but-highest answer indefinitely
+  — which is a liveness failure, not a safety one. The box keeps running what it
+  had. Correct trade for a service left alone deliberately.
+- **Last-known-good never goes stale.** No age check that begins failing. A
+  three-year-old cache is valid config.
+- **Unknown-means-unreachable is required, not merely safer.** A box returning
+  after two years to an hz restored from backup must boot, not refuse.
+- **Rotation must never orphan an absent box.** Every ciphertext names its key
+  id, so old blobs keep opening. A box that missed three rotations boots from
+  cache and fails only if it *fetches* — so a fetch failure must be non-fatal and
+  never a boot blocker.
+- **No expiring material in the machine identity.** The keypair gets no validity
+  window.
+
+The one remaining time-shaped hazard is not time at all: a closed `max_ver` with
+no open successor detonates at the next restart, which for an unattended box may
+be years after the mistake, when nobody will connect the two. That is the
+argument for validating it at **bless time**, with the operator present.
+
 ## The model
 
 Config is addressed by **environment / app / role**, where **role is a
