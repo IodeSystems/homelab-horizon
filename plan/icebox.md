@@ -59,6 +59,156 @@ not cover it.
 **Not scheduled** — the host routes work today and Carl called them fine, so
 this is opt-in rather than pending.
 
+## ◻ Replicated state for HA, instead of a JSON pull and a per-instance sqlite
+
+Surfaced 2026-09-18 while scoping the [config manager](config-manager.md), which
+needs registration and approval state to survive a failover and found nothing to
+put it in.
+
+**What HA actually is today**, read from the code rather than assumed:
+
+- `config.json` replicates by a 30s pull (`internal/server/peer_sync.go:31`).
+  Non-primaries fetch the primary's whole config and merge. Which fields stay
+  local is a **hand-maintained allowlist** inside `mergeRemoteIntoLocal`
+  (`peer_sync.go:220`) — a new field is synced by default unless someone
+  remembers to add a line. Opt-out by omission.
+- IP bans get their own bespoke last-write-wins merge (`banSyncOnce`).
+- **sqlite replicates not at all.** `users`, `credentials`, `sessions`,
+  `api_tokens`, `peer_owners`, `password_history` are per-instance and always
+  have been. `config.go:251` states the policy deliberately: replicating
+  credentials as a side effect of editing a service would be indefensible.
+- `updateConfig` (`server.go:495`) is a read-modify-write with no mutex, so two
+  concurrent writers silently lose one of the two changes.
+
+So hz has two ad-hoc replication mechanisms and one store with none, and the
+identity data is in the store with none. That is survivable while the fleet is
+one box. It stops being survivable the moment a second one matters.
+
+**The idea (Carl, 2026-09-18): NATS, possibly embedded.** JetStream offers a
+replicated KV and stream with real consensus, and `nats-server` can be embedded
+as a Go library rather than run as a second process — so hz would keep shipping
+as one binary. That would give one replication mechanism with defined semantics
+instead of three with three, and would let new state be replicated by
+declaration rather than by remembering to edit an allowlist.
+
+**Consistency over write availability (Carl, 2026-09-18).** When a node is
+lost, writes stop. That is chosen, not tolerated — for a store holding approvals
+and wrapped keys, a split-brain that accepts two divergent approvals is worse
+than an outage that accepts none.
+
+That choice has a consequence worth staring at before reaching for NATS. **Raft
+majority of 2 is 2**, so a two-node JetStream group halts writes when either
+node dies and cannot even elect a leader, since the survivor is not a majority
+alone. Which is the stated preference — but it means that at exactly two nodes,
+consensus buys **durability and defined semantics, not availability**. There is
+no automatic failover to be had; that needs three.
+
+So the cheaper CP design has to be ruled out on purpose rather than skipped:
+hz already has `ConfigPrimary`. Primary owns sqlite, secondary follows
+read-only, writes stop on primary loss, a human promotes. Same availability
+characteristics as R=2, no consensus runtime inside a PCI-scoped appliance, no
+new CVE surface. **The honest argument for NATS anyway is that it is the path to
+three** — add a box and R=3 gives real automatic failover with nothing
+rewritten. If the fleet is permanently two, that option value is never exercised.
+
+**next:** nothing yet — this is exploration, not a plan. Two open strands:
+1. Whether embedded NATS is a real option or a research artifact — binary size,
+   memory, and what happens to a single-instance deployment that never wanted a
+   cluster.
+2. Whether NATS beats `ConfigPrimary` + a follower at two nodes at all, given
+   the above. Answer this one first; it may close the whole entry.
+
+**risks / open questions, none answered:**
+- **Raft wants an odd quorum.** Two hz instances is the likely fleet, and two is
+  worse than one for quorum — a split leaves neither side writable. Accepted
+  deliberately (above), but it removes the usual reason to adopt consensus.
+- See **Verified 2026-09-18** below — the three NATS questions were checked
+  against primary sources and the answers are worse than assumed.
+- It puts a clustering runtime inside the box the whole network depends on. The
+  argument that consolidation adds no failure domain (which holds for the config
+  manager, since every box must reach hz anyway) does **not** hold here: a
+  consensus layer can fail in ways a JSON pull cannot, and it can fail closed.
+- Migrating existing sqlite identity data into a replicated store re-opens the
+  question `config.go:251` deliberately closed. Replicating credentials needs a
+  better answer than "the new store made it easy".
+- Embedded NATS is a real dependency with its own CVE surface, in a PCI-scoped
+  appliance.
+
+### Verified 2026-09-18 against primary sources (nats-server 2.15.0)
+
+Checked rather than recalled. Three answers, all against R=2:
+
+**1. R=2 is permitted and silently accepted — and it is a documented pitfall.**
+`server/stream.go` validates only `0 < replicas <= 5`; there is no odd/even check
+and no warning at creation. The quorum math is confirmed in `server/raft.go`:
+`qn := n.csz/2 + 1`, so `csz=2` needs 2. Lose either node and writes halt **and
+no leader can be elected**, because the survivor is not a majority alone. The
+docs' own "surviving node loss" page lists an even replica count under
+*Pitfalls*: *"R=2 still has a single point of failure … writes block."* Their
+production floor is R=3.
+
+No witness, no arbiter, no auto-downgrade to R=1 exists. The one quorum-lowering
+mechanism in source (`RescueQuorum`) is manual, time-limited, gated on the group
+having no leader, and not documented publicly — break-glass, not an operating
+mode. KV buckets are streams, so all of this applies to them identically.
+
+**2. There is no durable preferred leader.** `placement.preferred` is rejected
+outright by the server (`server/stream.go`: *"preferred server not permitted in
+placement"* — the comment says "for now"). `step-down --preferred` landed in
+2.11.0 and does take a target, but it is a one-shot request evaluated fresh,
+never persisted: it does not survive a restart and does not bind any future
+election. **So there is no NATS equivalent of hz's `ConfigPrimary`** — every
+election after a restart is a genuine open vote.
+
+**3. Mirrors do not solve this.** They replicate through a hidden internal
+consumer using **`AckNone`** — best-effort, explicitly eventually consistent,
+with `Lag` as the only signal. Promotion is a manual five-step runbook, and
+promoting before `Lag: 0` *"locks in the gap as permanent loss"*. Worse for our
+purposes: promotion still requires meta-layer raft quorum, so a mirror sits
+beside the two-node quorum problem rather than relieving it. Ruled in as DR,
+ruled out as a replacement for replication.
+
+### The finding that actually matters
+
+**Jepsen tested NATS 2.12.1 (Kingsbury, 2025-12-08) and found loss of
+acknowledged messages and persistent split-brain.** Three issues were confirmed
+**still open** on 2026-09-18: #7567 (crash + pause → lost acks and split-brain),
+#7549 (single-bit corruption on a *minority* of nodes losing up to 78% of acked
+messages), #7556 (snapshot corruption deleting a stream's data).
+
+Root cause worth knowing regardless of whether we adopt NATS: the default
+`sync_interval` is **2 minutes** (`server/filestore.go`), and a PubAck returns
+once a raft majority holds the message **in memory, not on disk**. A coordinated
+power loss can therefore erase already-acknowledged writes on every replica at
+once. Synadia acknowledged the report, fixed some of it in 2.10.23 / 2.12.3, and
+their mitigation for the rest is `sync_interval: always` — a setting the operator
+must know to change.
+
+**Caveats, so this is not overread:** Jepsen tested 3- and 5-node clusters, not
+R=2. An open issue is not proof it still reproduces on 2.15. This is third-party
+analysis, not a vendor admission of current breakage.
+
+### What this does to the entry
+
+We chose consistency over write availability. At two nodes NATS was only ever
+buying **durability and defined semantics** — and durability is precisely what
+has open findings against it, under a default that acks before fsync. The thing
+we were paying for is the thing in question.
+
+So `ConfigPrimary` + a read-only follower + manual promotion now looks *stronger*
+than when this entry was written, not weaker: same availability characteristics,
+no consensus runtime in a PCI-scoped appliance, no Jepsen surface, and hz already
+has the primary concept that NATS turns out not to have.
+
+**If NATS is ever adopted anyway**, two things are non-negotiable from the above:
+**R=3 minimum** (R=2 is not a supported tier in their own docs) and
+`sync_interval: always`.
+
+**blocking decisions:** none — there is nothing to decide until the fleet is
+larger than one. **Explicitly not scheduled.** There are no HA instances today
+(Carl, 2026-09-18), which is exactly why the config manager is shipping
+primary-only rather than waiting for this.
+
 ## ◻ Warn at peer-config download, not only on the health page
 
 The range-collision advisory (`86c50fe`) warns on the System Health tab, in
@@ -177,12 +327,27 @@ the MFA jail.
 
 ## ◻ A client LIBRARY, so consumers stop shelling out to a downloaded script
 
-**Driver:** the config-manager agent (a consumer project's design, 2026-09-18). That agent has to
-generate a keypair, present a public key at registration, poll for approval, unwrap an
-X25519-wrapped environment key, resolve a version range, cache last-known-good and report what it
-resolved. **None of that can be a bash script**, and attempting the unwrap in `bash` would be its
-own finding. So the config manager cannot be bolted onto `hz-client` as it exists — it forces this
-question rather than merely benefiting from it.
+**Driver:** the [config manager](config-manager.md), whose client has to generate a keypair, present
+a public key at registration, poll for approval, unwrap a wrapped environment key, resolve a version
+range, cache last-known-good and report what it resolved. **None of that can be a bash script**, and
+attempting the unwrap in `bash` would be its own finding. So the config manager cannot be bolted
+onto `hz-client` as it exists — it forces this question rather than merely benefiting from it.
+
+**PARTLY IN FLIGHT 2026-09-18.** The config manager's first slice is building a top-level
+`configmgr/` package (wire types + crypto), which is the first non-`internal` package this repo has
+ever had. **Carl chose a top-level package over the nested module recommended below**, for lower
+overhead. Two things make that reversible rather than a fork in the road, and they are the reason it
+was an acceptable call:
+
+- `configmgr/` imports **stdlib only** — no sqlite driver, no WireGuard, no ACME, no DNS providers.
+  So the dependency-tree objection below does not bite in practice today: module-graph pruning means
+  a consumer builds none of hz's tree, though its `go.sum` still carries the entries.
+- A stdlib-only package becomes a nested module by adding a `go.mod` beside it. If the objection
+  below ever bites, the migration is cheap. **It gets more expensive with every package added** —
+  revisit before the second one lands.
+
+The rest of this entry — lifting `apitypes`, collapsing the bash script, typed errors, versioning —
+is untouched and still deferred.
 
 **Where we are.** hz has NO importable surface, and Go enforces that rather than merely encouraging
 it: every package is under `internal/`, and the only things outside it are `cmd/homelab-horizon`,

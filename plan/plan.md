@@ -387,7 +387,7 @@ Two decisions carry the whole thing:
   deltas, not only write values — so decryption happens in the browser and hz
   never sees a key.
 - **The approver distributes the key by approving.** The agent presents a fresh
-  X25519 public key at registration; the approver pastes the environment key in
+  ECDH public key at registration; the approver pastes the environment key in
   the browser, wrapped to that public key; hz relays a blob it cannot open. This
   makes approval a cryptographic capability grant rather than an authorization
   flag — a bug in an authorization check cannot bypass it, because a missing

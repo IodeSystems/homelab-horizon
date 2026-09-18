@@ -244,6 +244,31 @@ Consequences, all load-bearing:
   ability to see that prod's gateway key differs from staging's — which hz alone
   can never show.
 
+### Primitives — chosen by what the browser can run
+
+**Changed 2026-09-18 from the original sketch, which said X25519 and did not
+name a symmetric cipher.** The browser is not an optional participant here: the
+approver wraps the environment key in-page, and an operator decrypts secrets
+in-page to inspect deltas. So every primitive has to exist in **both** WebCrypto
+and Go, or the design does not run.
+
+| layer | chosen | why not the obvious alternative |
+|---|---|---|
+| key agreement | **ECDH P-256** | X25519 reached WebCrypto only recently and support is uneven across browsers. P-256 has been universal for years. An operator's browser is not a dependency we get to pin. |
+| key derivation | **HKDF-SHA256** | native both sides |
+| authenticated encryption | **AES-256-GCM** | WebCrypto has neither NaCl secretbox nor XChaCha20-Poly1305. AES-GCM it can do natively. |
+
+Everything above is Go **stdlib** (`crypto/ecdh`, `crypto/hkdf`, `crypto/aes`),
+so this adds no dependency. Nothing in the security model changes — the property
+is still that hz holds ciphertext it cannot open. Only the algorithm names moved,
+and they moved toward what the operator's browser can actually execute.
+
+One consequence worth stating: **P-256 is the weaker-looking choice on paper**
+and it is chosen anyway, because a primitive the browser cannot run is not a
+security property, it is a design that does not ship. If WebCrypto X25519
+support becomes universal, the envelope format carries a version byte precisely
+so this can move.
+
 ### The approver distributes the key; hz never stores it
 
 The obvious delivery — hand the environment key to hz and let it pass the key on
@@ -257,9 +282,10 @@ secrets AT REST, but sees every environment key during every enrollment".
 through the act of approving. hz never stores it.**
 
 1. The agent generates a keypair at registration and presents the **public** key
-   in the request. Its private key never leaves the box. (A fresh X25519 pair,
-   not the WireGuard key — reusing key material across protocols is a cheap way
-   to be wrong later.)
+   in the request. Its private key never leaves the box. (A fresh pair, not the
+   WireGuard key — reusing key material across protocols is a cheap way to be
+   wrong later. See [Primitives](#primitives--chosen-by-what-the-browser-can-run)
+   for which curve and why.)
 2. The approver opens the pending registration and pastes the environment key.
    In the browser, that key is encrypted TO the requesting peer's public key.
    Only the wrapped blob is submitted.
@@ -305,7 +331,7 @@ other one's secrets. An over-grant in exchange for removing plaintext is not a
 trade worth making.
 
 The design already carries the answer, with no new concept: **the agent
-generates an X25519 keypair at registration and hz holds its public key.** So a
+generates an ECDH keypair at registration and hz holds its public key.** So a
 machine-scoped secret is encrypted directly to that machine's public key. The
 environment key is not in the path at all.
 
@@ -341,6 +367,115 @@ What is genuinely lost: the entry was small and could have shipped in a week.
 This cannot. Until the config manager exists, the intern onboarding problem has
 no solution in hz, and that is the cost of the decision.
 
+## Security findings from building the crypto (2026-09-18)
+
+Surfaced while implementing `configmgr/`. Recorded because several are holes in
+the design above, not in the code below it, and two of them falsify claims this
+document makes.
+
+### Being fixed now
+
+**1. The envelope bound nothing about WHICH secret it is.** hz cannot read a
+blob, but it chooses which blob to hand a machine — and a sealed value
+authenticated identically no matter which key name or which
+`(environment, app, role)` it was served as. So a compromised or buggy hz could
+serve a rolled-back secret, or app A's ciphertext where app B's was expected,
+and the agent would accept it. Fixed by binding the address and key name into
+the AEAD's additional data: the opener supplies them from what it *asked for*,
+so a misrouted blob fails authentication instead of decrypting into the wrong
+value.
+
+### Falsifies a claim in this document
+
+**2. Nothing authenticates the public key the approver wraps to.** The approval
+flow above says the browser wraps the environment key "to the requesting peer's
+public key" — but **the browser gets that public key from hz.** A compromised hz
+substitutes its own key and harvests every environment key at the next approval.
+
+That is the one hz-compromise path that yields plaintext, and it defeats the
+headline claim that an hz compromise leaks only ciphertext. The fingerprint is
+the entire defense, so:
+
+- **Comparing the fingerprint against what the machine printed is a MANDATORY
+  BLOCKING STEP in the approval UI.** Not a displayed convenience, not an
+  advisory chip. The approver types or confirms it; the wrap does not proceed
+  otherwise.
+- **The machine-scoped-secret flow is worse** — it is described above as a
+  routine act with no approval step, so there is currently no place for the
+  check to hang at all. That flow needs a verified-fingerprint precondition
+  before it can be called routine.
+
+Until that UI exists, the security claim in "The escalation this creates" is
+aspirational rather than true.
+
+### Design gaps to close before this is finished
+
+**3. De-approval is not revocation.** "Approval is a cryptographic capability
+grant, not an authorization flag" is true in reverse too: once a box holds the
+environment key it can read every secret in that environment **forever**,
+including ones created after it was revoked, if it can still reach the blobs.
+The machine-scoped table has a real revocation story (delete the blob, it
+decrypts nowhere else). Environment secrets have none. The only true revocation
+is rotating the environment key — which costs what (4) says it costs, and that
+needs saying plainly wherever revocation is offered.
+
+**4. Rotation is asserted, not designed.** Key ids let old ciphertext still
+*open*. They do not deliver a new key to an already-approved box: hz holds no
+key, so every re-wrap needs the approver's browser and each machine's public
+key. "Re-wrap this environment's key to these N machines" is a first-class act
+distinct from approval and it does not exist above. Without it the key id buys
+nothing, and the "it never happens" failure this document cites as the *reason*
+for key ids applies to rotation anyway. The agent also needs a way to report
+which key ids it currently holds.
+
+**7. Losing the machine private key must re-enter pending.** Registration says a
+role change re-enters pending; it does not say a keypair change does. After a
+reinstall or disk wipe the stored wrapped blob is undecryptable and the box
+**looks approved while being unable to boot**. Keypair identity has to be part
+of what "first registration" means.
+
+### Decisions the owner owns
+
+**5. Key granularity is coarser than the addressing.** Secrets are addressed by
+`(environment, app, role)` but the key is per *environment*, so a box running a
+low-value `ops` role can decrypt an unrelated app's production database
+password. Either that is intended and should be stated, or the granularity
+becomes `(environment, app)`, or high-value secrets default to the
+machine-scoped path. **Not decided.**
+
+**6. Read implies write implies approve.** Symmetric keys mean any operator who
+can paste the prod key to inspect a delta can also mint valid prod secrets and
+approve any prod registration. There is no read-only holder, and there cannot be
+one while the key is symmetric. This document names the laptop-exposure trade;
+this is the sharper half and it is unnamed — separation of duties is enforced by
+possession, which means possession is total. **Not decided.** Accepting it is
+reasonable for a homelab; it is not obviously reasonable under a compliance
+regime, and hz is PCI-scoped.
+
+## TODO — HA, deliberately deferred
+
+**Decided (Carl, 2026-09-18): this ships primary-only. There are no HA instances,
+so it costs nothing today.** Written down because it will not stay free.
+
+hz's sqlite is **not replicated and never has been** — `users`, `credentials`,
+`sessions`, `api_tokens`, `peer_owners` are all per-instance
+(`internal/config/config.go:251` states the policy on purpose: replicating
+credentials as a side effect of editing a service would be indefensible). Only
+`config.json` replicates, by a 30s pull with a hand-maintained local-only field
+allowlist (`internal/server/peer_sync.go:220`), plus a bespoke last-write-wins
+merge for IP bans.
+
+So config-manager state — registrations, approvals, wrapped keys, config blobs —
+lives on one instance. **A failover loses every registration and approval**, and
+a box that enrolled against one instance is unknown to the other. Do not put this
+state in `config.json` to get it replicated: `updateConfig`
+(`internal/server/server.go:495`) is a read-modify-write with no mutex, so two
+concurrent approvals silently lose one.
+
+The durable answer is a replication mechanism hz does not have. That exploration
+is [iceboxed](icebox.md) — "Replicated state for HA" — and is not a prerequisite
+here. Revisit when a second instance exists.
+
 ## Status
 
 - **next:** nothing is started. First unit of work is persistence — the
@@ -363,6 +498,10 @@ no solution in hz, and that is the cost of the decision.
     config manager lands, the decision is worth re-opening rather than working
     around.
 - **blocking decisions (yours):**
+  0. Findings **5** (key granularity — an `ops` box can read another app's prod
+     secrets) and **6** (anyone who can read a delta can also mint secrets and
+     approve registrations) from the security findings above. Neither blocks the
+     first slice; both should be answered before this is called finished.
   1. The three open questions below.
   2. Whether this is the next thing built, ahead of the two unblocked items in
      [plan.md](plan.md) (hz-probe vantage, L4 forwards deploy). Note this now
