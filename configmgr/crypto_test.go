@@ -21,6 +21,9 @@ import (
 var (
 	testAddr = Addr{Environment: "prod", App: "redline", Role: "app", Key: "DB_PASSWORD"}
 	testMach = MachineAddr{Machine: "mch_01k9v2w3x4y5z6a7b8c9d0e1f2", Key: "NPM_TOKEN"}
+	// The registration a wrapped environment key is granted at: the same
+	// address testAddr's value lives under, without the key name.
+	testKeyAddr = testAddr.EnvKeyAddr()
 )
 
 func mustMachineKey(t *testing.T) *ecdh.PrivateKey {
@@ -403,7 +406,7 @@ func TestWrapUnwrapEnvKey(t *testing.T) {
 	machine := mustMachineKey(t)
 	k := NewEnvKey()
 
-	env, err := WrapEnvKey(machine.PublicKey(), k)
+	env, err := WrapEnvKey(machine.PublicKey(), testKeyAddr, k)
 	if err != nil {
 		t.Fatalf("WrapEnvKey: %v", err)
 	}
@@ -425,7 +428,7 @@ func TestWrapUnwrapEnvKey(t *testing.T) {
 		t.Error("recipient fingerprint does not name the machine")
 	}
 
-	got, err := UnwrapEnvKey(machine, env)
+	got, err := UnwrapEnvKey(machine, testKeyAddr, env)
 	if err != nil {
 		t.Fatalf("UnwrapEnvKey: %v", err)
 	}
@@ -449,12 +452,12 @@ func TestWrapIsBoundToOneMachine(t *testing.T) {
 	a, b := mustMachineKey(t), mustMachineKey(t)
 	k := NewEnvKey()
 
-	env, err := WrapEnvKey(a.PublicKey(), k)
+	env, err := WrapEnvKey(a.PublicKey(), testKeyAddr, k)
 	if err != nil {
 		t.Fatalf("WrapEnvKey: %v", err)
 	}
 
-	if _, err := UnwrapEnvKey(b, env); !errors.Is(err, ErrKeyMismatch) {
+	if _, err := UnwrapEnvKey(b, testKeyAddr, env); !errors.Is(err, ErrKeyMismatch) {
 		t.Fatalf("machine B unwrapping A's envelope: err = %v, want ErrKeyMismatch", err)
 	}
 
@@ -464,7 +467,7 @@ func TestWrapIsBoundToOneMachine(t *testing.T) {
 	fp := FingerprintOf(b.PublicKey())
 	copy(relabelled[2:2+FingerprintSize], fp[:])
 
-	got, err := UnwrapEnvKey(b, relabelled)
+	got, err := UnwrapEnvKey(b, testKeyAddr, relabelled)
 	if !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("relabelled envelope: err = %v, want ErrAuthentication", err)
 	}
@@ -473,8 +476,94 @@ func TestWrapIsBoundToOneMachine(t *testing.T) {
 	}
 
 	// A is unaffected by the relabelling attempt.
-	if _, err := UnwrapEnvKey(a, relabelled); !errors.Is(err, ErrKeyMismatch) {
+	if _, err := UnwrapEnvKey(a, testKeyAddr, relabelled); !errors.Is(err, ErrKeyMismatch) {
 		t.Fatalf("A on a relabelled envelope: err = %v, want ErrKeyMismatch", err)
+	}
+}
+
+// A wrapped key is bound to a registration, not only to a machine. Every field
+// of the address is covered.
+func TestUnwrapRejectsEveryAlteredAddressField(t *testing.T) {
+	machine := mustMachineKey(t)
+	k := NewEnvKey()
+
+	env, err := WrapEnvKey(machine.PublicKey(), testKeyAddr, k)
+	if err != nil {
+		t.Fatalf("WrapEnvKey: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		addr EnvKeyAddr
+	}{
+		{"environment", EnvKeyAddr{"staging", testKeyAddr.App, testKeyAddr.Role}},
+		{"app", EnvKeyAddr{testKeyAddr.Environment, "billing", testKeyAddr.Role}},
+		{"role", EnvKeyAddr{testKeyAddr.Environment, testKeyAddr.App, "ops"}},
+		{"environment emptied", EnvKeyAddr{"", testKeyAddr.App, testKeyAddr.Role}},
+		{"role emptied", EnvKeyAddr{testKeyAddr.Environment, testKeyAddr.App, ""}},
+		{"everything empty", EnvKeyAddr{}},
+		{"role with a trailing space", EnvKeyAddr{testKeyAddr.Environment, testKeyAddr.App, testKeyAddr.Role + " "}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := UnwrapEnvKey(machine, tc.addr, env)
+			if !errors.Is(err, ErrAuthentication) {
+				t.Fatalf("UnwrapEnvKey at %s: err = %v, want ErrAuthentication", tc.addr, err)
+			}
+			if got != (EnvKey{}) {
+				t.Fatal("a failed unwrap returned key material")
+			}
+		})
+	}
+
+	if _, err := UnwrapEnvKey(machine, testKeyAddr, env); err != nil {
+		t.Fatalf("UnwrapEnvKey at the wrapped address: %v", err)
+	}
+}
+
+// THE attack the kind 0x02 address binding exists to refuse.
+//
+// One box runs two registrations, so it holds one keypair and two slots. An
+// approver grants staging's environment key to staging/redline/ops. hz, which
+// decides which registration a relayed blob is filed under, puts that blob in
+// the prod/redline/app slot instead. Every check below the address passes —
+// same recipient fingerprint, same ECDH, same kind byte — so without the
+// address in the AAD the agent unwraps it and only finds out much later, as a
+// key-id mismatch the first time it tries to open a prod value. Detection after
+// the fact, not refusal.
+func TestWrappedKeyCannotBeRelayedIntoAnotherRegistration(t *testing.T) {
+	box := mustMachineKey(t) // one machine, one keypair, two registrations
+
+	granted := EnvKeyAddr{Environment: "staging", App: "redline", Role: "ops"}
+	target := EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+
+	stagingKey := NewEnvKey()
+	env, err := WrapEnvKey(box.PublicKey(), granted, stagingKey)
+	if err != nil {
+		t.Fatalf("WrapEnvKey: %v", err)
+	}
+
+	// The recipient really is this box: the fingerprint check cannot catch it.
+	h, err := ParseEnvelopeHeader(env)
+	if err != nil {
+		t.Fatalf("ParseEnvelopeHeader: %v", err)
+	}
+	if h.Recipient != FingerprintOf(box.PublicKey()) {
+		t.Fatal("the test is not exercising the attack: the blob is for another machine")
+	}
+
+	got, err := UnwrapEnvKey(box, target, env)
+	if !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("a staging/redline/ops grant unwrapped in the prod/redline/app slot: err = %v", err)
+	}
+	if got != (EnvKey{}) {
+		t.Fatal("the relayed grant yielded key material")
+	}
+
+	// And the grant still works where it was actually made.
+	if got, err := UnwrapEnvKey(box, granted, env); err != nil || got != stagingKey {
+		t.Fatalf("the grant does not open at its own address: %v", err)
 	}
 }
 
@@ -528,7 +617,7 @@ func TestWrappedKeyAndMachineSecretDoNotInterchange(t *testing.T) {
 	machine := mustMachineKey(t)
 	k := NewEnvKey()
 
-	wrapped, err := WrapEnvKey(machine.PublicKey(), k)
+	wrapped, err := WrapEnvKey(machine.PublicKey(), testKeyAddr, k)
 	if err != nil {
 		t.Fatalf("WrapEnvKey: %v", err)
 	}
@@ -547,7 +636,7 @@ func TestWrappedKeyAndMachineSecretDoNotInterchange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SealToMachine: %v", err)
 	}
-	if _, err := UnwrapEnvKey(machine, sealed); !errors.Is(err, ErrMalformedEnvelope) {
+	if _, err := UnwrapEnvKey(machine, testKeyAddr, sealed); !errors.Is(err, ErrMalformedEnvelope) {
 		t.Fatalf("err = %v, want ErrMalformedEnvelope", err)
 	}
 }
@@ -577,7 +666,7 @@ func TestMachineEnvelopesAreUniquePerSeal(t *testing.T) {
 	const n = 200
 	seen := make(map[string]struct{}, n)
 	for i := 0; i < n; i++ {
-		env, err := WrapEnvKey(machine.PublicKey(), k)
+		env, err := WrapEnvKey(machine.PublicKey(), testKeyAddr, k)
 		if err != nil {
 			t.Fatalf("WrapEnvKey: %v", err)
 		}
@@ -755,20 +844,20 @@ func TestApprovalGrantsExactlyOneCapability(t *testing.T) {
 	secret := Seal(envKey, testAddr, []byte("prod database password"))
 
 	// hz holds the sealed secret and the wrapped key and can read neither.
-	wrapped, err := WrapEnvKey(approved.PublicKey(), envKey)
+	wrapped, err := WrapEnvKey(approved.PublicKey(), testKeyAddr, envKey)
 	if err != nil {
 		t.Fatalf("WrapEnvKey: %v", err)
 	}
 
 	// The unapproved box has every blob and no key.
-	if _, err := UnwrapEnvKey(unapproved, wrapped); err == nil {
+	if _, err := UnwrapEnvKey(unapproved, testKeyAddr, wrapped); err == nil {
 		t.Fatal("an unapproved machine unwrapped the environment key")
 	}
 	if _, err := OpenFromMachine(unapproved, testMach, secret); err == nil {
 		t.Fatal("an unapproved machine opened a sealed secret")
 	}
 
-	recovered, err := UnwrapEnvKey(approved, wrapped)
+	recovered, err := UnwrapEnvKey(approved, testKeyAddr, wrapped)
 	if err != nil {
 		t.Fatalf("UnwrapEnvKey: %v", err)
 	}
@@ -821,7 +910,7 @@ func swap(s string, i, j int) string {
 // for the WebCrypto implementation in the approval page. If the documented
 // recipe ever stops describing what this package does, this test fails rather
 // than the browser silently minting envelopes no machine can open.
-func browserWrapEnvKey(t *testing.T, recipientSEC1 []byte, envKey []byte) []byte {
+func browserWrapEnvKey(t *testing.T, recipientSEC1 []byte, addr EnvKeyAddr, envKey []byte) []byte {
 	t.Helper()
 
 	recipient, err := ecdh.P256().NewPublicKey(recipientSEC1)
@@ -869,6 +958,11 @@ func browserWrapEnvKey(t *testing.T, recipientSEC1 []byte, envKey []byte) []byte
 		t.Fatalf("header is %d bytes, the recipe says the nonce starts at 79", len(header))
 	}
 
+	// The approval page reads the registration's address off the pending
+	// registration and encodes it exactly as doc.go's kind 0x02 row says.
+	additional := append(append([]byte{}, header...),
+		browserContext("hz-config/v1 env-key-addr", addr.Environment, addr.App, addr.Role)...)
+
 	nonce := make([]byte, 12)
 	if _, err := rand.Read(nonce); err != nil {
 		t.Fatalf("getRandomValues: %v", err)
@@ -887,24 +981,36 @@ func browserWrapEnvKey(t *testing.T, recipientSEC1 []byte, envKey []byte) []byte
 
 	out := append([]byte{}, header...)
 	out = append(out, nonce...)
-	return gcm.Seal(out, nonce, envKey, header)
+	return gcm.Seal(out, nonce, envKey, additional)
 }
 
 func TestDocumentedBrowserRecipeInteroperates(t *testing.T) {
 	machine := mustMachineKey(t)
 	k := NewEnvKey()
 
-	env := browserWrapEnvKey(t, machine.PublicKey().Bytes(), k[:])
+	env := browserWrapEnvKey(t, machine.PublicKey().Bytes(), testKeyAddr, k[:])
 	if len(env) != 139 {
 		t.Fatalf("wrapped key is %d bytes, doc.go promises 139", len(env))
 	}
 
-	got, err := UnwrapEnvKey(machine, env)
+	got, err := UnwrapEnvKey(machine, testKeyAddr, env)
 	if err != nil {
 		t.Fatalf("UnwrapEnvKey on a browser-built envelope: %v", err)
 	}
 	if got != k {
 		t.Fatal("the browser recipe produced a different key")
+	}
+
+	// The address binding survives the reimplementation too: an approval page
+	// that wraps to one registration produces a blob no other registration on
+	// the same box can open.
+	elsewhere := EnvKeyAddr{Environment: "staging", App: testKeyAddr.App, Role: "ops"}
+	if _, err := UnwrapEnvKey(machine, elsewhere, env); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("a browser-built grant for %s unwrapped at %s: err = %v", testKeyAddr, elsewhere, err)
+	}
+	if _, err := UnwrapEnvKey(machine, testKeyAddr,
+		browserWrapEnvKey(t, machine.PublicKey().Bytes(), elsewhere, k[:])); !errors.Is(err, ErrAuthentication) {
+		t.Fatal("a browser-built grant for another registration unwrapped here")
 	}
 }
 
@@ -990,8 +1096,8 @@ func TestParseKeyID(t *testing.T) {
 func TestUnwrapRejectsWrongSizedPayload(t *testing.T) {
 	machine := mustMachineKey(t)
 
-	env := browserWrapEnvKey(t, machine.PublicKey().Bytes(), []byte("only sixteen byt"))
-	if _, err := UnwrapEnvKey(machine, env); !errors.Is(err, ErrMalformedEnvelope) {
+	env := browserWrapEnvKey(t, machine.PublicKey().Bytes(), testKeyAddr, []byte("only sixteen byt"))
+	if _, err := UnwrapEnvKey(machine, testKeyAddr, env); !errors.Is(err, ErrMalformedEnvelope) {
 		t.Fatalf("err = %v, want ErrMalformedEnvelope", err)
 	}
 }
@@ -1121,12 +1227,54 @@ func TestAddressEncodingIsUnambiguous(t *testing.T) {
 		}
 	}
 
-	// An environment-scoped and a machine-scoped address never collide either,
-	// even given field contents chosen to try.
+	keyAddrCases := [][2]EnvKeyAddr{
+		{{Environment: "a", App: "b/c", Role: "r"}, {Environment: "a/b", App: "c", Role: "r"}},
+		{{Environment: "", App: "ab", Role: "r"}, {Environment: "a", App: "b", Role: "r"}},
+		{{Environment: "prod", App: "redline", Role: ""}, {Environment: "prod", App: "redline", Role: "app"}},
+		{{Environment: "prod", App: "red", Role: "line/app"}, {Environment: "prod", App: "red/line", Role: "app"}},
+	}
+
+	for _, pair := range keyAddrCases {
+		a, b := pair[0], pair[1]
+		if bytes.Equal(a.context(), b.context()) {
+			t.Fatalf("%s and %s encode identically", a, b)
+		}
+		env, err := WrapEnvKey(machine.PublicKey(), a, NewEnvKey())
+		if err != nil {
+			t.Fatalf("WrapEnvKey: %v", err)
+		}
+		if _, err := UnwrapEnvKey(machine, b, env); !errors.Is(err, ErrAuthentication) {
+			t.Fatalf("a grant at %s unwrapped at %s: err = %v", a, b, err)
+		}
+	}
+
+	// The three contexts live in three disjoint encodings: no field contents,
+	// however chosen, make one read as another. The label is what separates
+	// them, and it is length-prefixed like every other field.
 	env := Addr{Environment: "mch_1", App: "TOKEN", Role: "", Key: ""}
 	mach := MachineAddr{Machine: "mch_1", Key: "TOKEN"}
 	if bytes.Equal(env.context(), mach.context()) {
 		t.Fatal("an Addr and a MachineAddr encode identically")
+	}
+
+	// An EnvKeyAddr's fields are a strict prefix of the Addr's at the same
+	// address — the key name is the only difference — which is exactly the
+	// shape a delimiter-joined encoding would collapse.
+	grant := EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	value := Addr{Environment: "prod", App: "redline", Role: "app", Key: ""}
+	if bytes.Equal(grant.context(), value.context()) {
+		t.Fatal("an EnvKeyAddr and an Addr with an empty key name encode identically")
+	}
+	if bytes.HasPrefix(value.context(), grant.context()) {
+		t.Fatal("an EnvKeyAddr context is a prefix of an Addr context")
+	}
+	if bytes.Equal(grant.context(), MachineAddr{Machine: "prod", Key: "redline"}.context()) {
+		t.Fatal("an EnvKeyAddr and a MachineAddr encode identically")
+	}
+	for _, other := range [][]byte{value.context(), mach.context()} {
+		if bytes.Contains(other, grant.context()) {
+			t.Fatal("an EnvKeyAddr context appears inside another context")
+		}
 	}
 }
 
@@ -1153,6 +1301,10 @@ func TestDocumentedAddressRecipeInteroperates(t *testing.T) {
 	if got, want := testAddr.context(), browserContext("hz-config/v1 addr",
 		testAddr.Environment, testAddr.App, testAddr.Role, testAddr.Key); !bytes.Equal(got, want) {
 		t.Fatalf("Addr context = %x, recipe produced %x", got, want)
+	}
+	if got, want := testKeyAddr.context(), browserContext("hz-config/v1 env-key-addr",
+		testKeyAddr.Environment, testKeyAddr.App, testKeyAddr.Role); !bytes.Equal(got, want) {
+		t.Fatalf("EnvKeyAddr context = %x, recipe produced %x", got, want)
 	}
 	if got, want := testMach.context(), browserContext("hz-config/v1 machine-addr",
 		testMach.Machine, testMach.Key); !bytes.Equal(got, want) {
@@ -1230,6 +1382,34 @@ func browserSealToMachine(t *testing.T, recipientSEC1 []byte, addr MachineAddr, 
 // The address the agent passes to Open comes from the request it made, not from
 // hz's answer. That is the property that makes authenticating it worth
 // anything.
+// The agent authenticates the address it asked to be registered at, which it
+// knows from its own launch arguments — never one read back out of hz's answer.
+func TestRegisterRequestEnvKeyAddr(t *testing.T) {
+	req := RegisterRequest{
+		Machine: "box-7", Environment: "prod", App: "redline", Role: "app", Version: "1.2.5",
+	}
+	if got, want := req.EnvKeyAddr(), testKeyAddr; got != want {
+		t.Fatalf("EnvKeyAddr = %s, want %s", got, want)
+	}
+
+	machine := mustMachineKey(t)
+	k := NewEnvKey()
+	env, err := WrapEnvKey(machine.PublicKey(), req.EnvKeyAddr(), k)
+	if err != nil {
+		t.Fatalf("WrapEnvKey: %v", err)
+	}
+	if got, err := UnwrapEnvKey(machine, req.EnvKeyAddr(), env); err != nil || got != k {
+		t.Fatalf("UnwrapEnvKey at the request's own address: %v", err)
+	}
+
+	// The same box registered for another role does not open it.
+	other := req
+	other.Role = "ops"
+	if _, err := UnwrapEnvKey(machine, other.EnvKeyAddr(), env); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("another role's registration opened the grant: err = %v", err)
+	}
+}
+
 func TestConfigRequestAddr(t *testing.T) {
 	req := ConfigRequest{Environment: "prod", App: "redline", Role: "app", Version: "1.2.5"}
 	got := req.Addr("DB_PASSWORD")

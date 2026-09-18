@@ -5,8 +5,10 @@ package configmgr
 // them; the admin UI's DTOs stay in internal/apitypes, where hz can change them
 // without breaking a fleet.
 //
-// Nothing here carries a secret value in the clear. Secrets travel as the
-// base64 of an envelope hz cannot open — see EncodeEnvelope.
+// NO value travels in the clear, secret or not. Since 2026-09-18 every config
+// value is sealed client-side, so hz relays base64 envelopes it cannot open and
+// holds no plaintext at all — see EncodeEnvelope. Key names and bindings are the
+// only content hz reads, and they are what the promotion gate runs on.
 
 // Registration states. A registration is pending the first time a
 // (machine, app, environment, role) is seen and whenever its role changes,
@@ -19,13 +21,13 @@ const (
 	StateDenied   = "denied"
 )
 
-// Bindings. See the per-key metadata table in plan/config-manager.md: a secret
-// is not a separate system, it is an environment-bound key that hz may not
-// read.
+// Bindings are promotion scope, and since 2026-09-18 that is all they are.
+// Secrecy stopped being an axis when every value became sealed, so the four
+// cells collapsed to two. These values must match internal/db's Binding
+// constants exactly; they are the same vocabulary crossing a wire.
 const (
-	BindingInvariant   = "invariant"
-	BindingEnvironment = "environment"
-	BindingSecret      = "secret"
+	BindingInvariant = "invariant" // promotes, by client-side re-seal
+	BindingEnv       = "env"       // environment-bound; must already be bound in the target
 )
 
 // RegisterRequest is what an agent posts at startup.
@@ -41,6 +43,15 @@ type RegisterRequest struct {
 	Role        string `json:"role"`
 	Version     string `json:"version"`
 	PublicKey   string `json:"publicKey"` // MarshalMachinePublicKey form
+}
+
+// EnvKeyAddr is the address the wrapped environment key in the matching
+// RegisterResponse must be authenticated against. It comes from the agent's own
+// launch arguments, which is what makes authenticating it worth anything: hz
+// files a relayed blob under whichever registration it likes, and a box may
+// hold several.
+func (r RegisterRequest) EnvKeyAddr() EnvKeyAddr {
+	return EnvKeyAddr{Environment: r.Environment, App: r.App, Role: r.Role}
 }
 
 // RegisterResponse is hz's answer, polled until the state settles.
@@ -62,6 +73,9 @@ type RegisterResponse struct {
 	// nothing.
 	MachineID string `json:"machineId,omitempty"`
 
+	// WrappedEnvKey opens with UnwrapEnvKey at RegisterRequest.EnvKeyAddr() —
+	// the address the agent asked for, never one read back out of this
+	// response. A grant relayed into the wrong registration fails there.
 	WrappedEnvKey string `json:"wrappedEnvKey,omitempty"` // base64 KindWrappedEnvKey envelope
 }
 
@@ -86,19 +100,25 @@ func (r ConfigRequest) Addr(key string) Addr {
 	return Addr{Environment: r.Environment, App: r.App, Role: r.Role, Key: key}
 }
 
-// ConfigEntry is one resolved key.
+// ConfigEntry is one resolved key. Sealed is never empty: there is no plaintext
+// path, which is what stops a compromised hz choosing a value rather than
+// merely relaying one.
 //
-// Value and Sealed are mutually exclusive: a secret arrives sealed, everything
-// else arrives in the clear because promotion has to diff it. There is no field
-// saying which key opens Sealed — the envelope's kind byte says so, it is
-// covered by the AEAD, and a second copy on the wire could only ever disagree
-// with it. Kind 0x01 opens with ConfigRequest.Addr(entry.Key); kind 0x03 opens
-// with MachineAddr{Machine: the id learned at approval, Key: entry.Key}.
+// There is no field saying which key opens Sealed — the envelope's kind byte
+// says so, it is covered by the AEAD, and a second copy on the wire could only
+// ever disagree with it. Kind 0x01 opens with ConfigRequest.Addr(entry.Key);
+// kind 0x03 opens with MachineAddr{Machine: the id learned at approval,
+// Key: entry.Key}.
+//
+// An agent must still refuse an entry whose Key is absent from its own compiled
+// schema, and refuse a schema key absent from Entries. Sealing every value
+// stops hz inventing one; it does not stop hz omitting one, and an omitted key
+// falls back to a compiled default — which is the founding bug this exists to
+// prevent.
 type ConfigEntry struct {
 	Key     string `json:"key"`
 	Binding string `json:"binding"`
-	Value   string `json:"value,omitempty"`
-	Sealed  string `json:"sealed,omitempty"` // base64 envelope
+	Sealed  string `json:"sealed"` // base64 envelope; never empty
 }
 
 // ConfigResponse is the winner of the resolution, and only the winner.
@@ -107,10 +127,94 @@ type ConfigEntry struct {
 // agent that reports the sequence it applied names exactly one config; that
 // report is the only place the fact "v1.2.5 ran config 42" exists, because
 // resolution is computed and never stored.
+//
+// Sequence is also what an agent enforces monotonicity against: cache the
+// highest sequence ever applied AT THIS VERSION and refuse a lower one. hz
+// serving an older blessed config authenticates perfectly — same address, same
+// key name, same key id, so the AEAD cannot tell — and the agent's own cache is
+// the only thing that knows better. Keyed by version so rolling a binary back
+// still legitimately selects a lower sequence.
 type ConfigResponse struct {
 	ConfigID string        `json:"configId"`
 	Sequence int64         `json:"sequence"`
 	MinVer   string        `json:"minVer"`
 	MaxVer   string        `json:"maxVer,omitempty"` // empty means open-ended
 	Entries  []ConfigEntry `json:"entries"`
+}
+
+// --- The bless protocol ---------------------------------------------------
+//
+// These mirror internal/apitypes.CM{ConfigValueReq,CreateConfigReq,ConfigResp,
+// CurrentKeyResp} rather than importing them, and the duplication is deliberate.
+//
+// This package is outside internal/ so that an application can import it. If it
+// imported internal/apitypes it would still compile — the internal rule is about
+// where an import statement sits, not about transitive dependencies — but it
+// would foreclose ever giving this package its own go.mod, because a nested
+// module cannot import its parent's internal tree. That option is worth keeping
+// while this package is dependency-light; it is what would stop a consumer
+// inheriting hz's whole graph (sqlite, WireGuard, ACME, seven DNS providers) in
+// its module graph.
+//
+// The cost is two definitions of one JSON shape, and TestBlessShapesMatchAPITypes
+// in the server package pins them together so a drift is a failed test rather
+// than a push that silently stops working.
+
+// BlessValue is one sealed value in a bless request.
+type BlessValue struct {
+	Key            string `json:"key"`
+	Binding        string `json:"binding"`
+	Sealed         string `json:"sealed"`
+	KeyID          string `json:"keyId"`
+	SourceConfigID string `json:"sourceConfigId,omitempty"`
+}
+
+// BlessRequest creates a config. Ranges are immutable once blessed, so this is
+// the only moment an operator is present to be told no.
+type BlessRequest struct {
+	Environment string       `json:"environment"`
+	App         string       `json:"app"`
+	Role        string       `json:"role"`
+	MinVer      string       `json:"minVer"`
+	MaxVer      string       `json:"maxVer,omitempty"`
+	Values      []BlessValue `json:"values"`
+}
+
+// BlessedValue describes a stored value without disclosing it.
+type BlessedValue struct {
+	Key            string `json:"key"`
+	Binding        string `json:"binding"`
+	KeyID          string `json:"keyId"`
+	Origin         string `json:"origin"`
+	SourceConfigID string `json:"sourceConfigId,omitempty"`
+	Sealed         string `json:"sealed,omitempty"`
+	TombstonedAt   string `json:"tombstonedAt,omitempty"`
+	TombstonedBy   string `json:"tombstonedBy,omitempty"`
+}
+
+// BlessResponse is hz's answer to a bless.
+type BlessResponse struct {
+	ID          string         `json:"id"`
+	Environment string         `json:"environment"`
+	App         string         `json:"app"`
+	Role        string         `json:"role"`
+	MinVer      string         `json:"minVer"`
+	MaxVer      string         `json:"maxVer,omitempty"`
+	Sequence    int64          `json:"sequence"`
+	CreatedAt   string         `json:"createdAt"`
+	CreatedBy   string         `json:"createdBy"`
+	Values      []BlessedValue `json:"values,omitempty"`
+}
+
+// CurrentKeyPointer is hz's advisory answer for which key an address should be
+// sealed under. An absent KeyID, or a 404, both mean nobody has announced one —
+// a different fact from "the current key is X", and the client must treat it as
+// such rather than sealing under whatever its filesystem offers.
+type CurrentKeyPointer struct {
+	Environment string `json:"environment"`
+	App         string `json:"app"`
+	Role        string `json:"role"`
+	KeyID       string `json:"keyId,omitempty"`
+	SetBy       string `json:"setBy,omitempty"`
+	SetAt       string `json:"setAt,omitempty"`
 }

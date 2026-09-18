@@ -70,6 +70,28 @@ COMMANDS
   exporter add --job J --mode port|service|static [mode flags] [--path P] [--bearer T] [--label k=v ...]
                                      Add a Prometheus exporter job (error if job exists)
   exporter rm <job>                  Remove an exporter job
+  cm key new <env>/<app>/<role> [--label L] [--set-current]
+                                     Mint an environment key into the local keystore
+  cm key ls [<env>/<app>/<role>] [--json]
+                                     List what this machine holds (ids and labels, never material)
+  cm key export <env>/<app>/<role> [--id KEYID]
+                                     Print the key text for a password manager (terminal only)
+  cm key import <env>/<app>/<role> [--label L] [--created-at T]
+                                     Read key text from STDIN into the keystore
+  cm key current <env>/<app>/<role> [--set KEYID]
+                                     Read or move hz's advisory current-key pointer
+  cm pending [--all]                 Show the approval queue
+  cm approve <registration-id>       Wrap this machine's environment key to the box's
+                                     public key. You will be asked to TYPE the
+                                     fingerprint the BOX printed; it is compared against
+                                     the key hz served and a mismatch sends nothing
+  cm deny <registration-id> --reason=...
+                                     Refuse a registration (not a revocation)
+  cm promote <config-id> --to=<env> [--dry-run]
+                                     Open under the source key, re-seal under the target's
+  cm show <config-id>                Decrypt a config locally and print it
+  cm resolve <env>/<app>/<role> --version=V [--json]
+                                     What a box would get, and what it shadowed
   schema [service]                   Dump the JSON request schema
   version                            Print version
 
@@ -139,6 +161,22 @@ EXPORTER FLAGS (add)
 The generated Prometheus scrape config is served at
   GET /integration/prometheus/scrape.yaml
   GET /integration/prometheus/targets.json
+
+CONFIG MANAGER ('hz cm')
+  Environment keys live in a keystore on THIS machine, under $HZ_HOME or ~/.hz.
+  hz never holds one: it stores blobs it cannot open. Every value is sealed and
+  unsealed here, and the approval ceremony runs here rather than in the browser
+  because a page served by hz cannot defend against hz.
+
+  No command takes key material in argv — argv is world-readable through /proc.
+  Keys come from the keystore, or from stdin ('hz cm key import').
+
+  Blessing a config is NOT here. An application pushes its own config by linking
+  configmgr and calling configmgr.Push: the key-to-binding declaration is then
+  compiled into the app rather than kept as a JSON file beside it, and there is
+  no separate binary for a laptop or a build box to be missing. hz keeps only
+  what is generic — the keys, the ceremony, and operations on blobs it cannot
+  read.
 
 EXAMPLES
   hz service list
@@ -237,6 +275,8 @@ func main() {
 		err = runHost(c, rest)
 	case "exporter":
 		err = runExporter(c, rest)
+	case "cm":
+		err = runCM(c, rest)
 	default:
 		err = fmt.Errorf("unknown command: %s\nRun 'hz --help'", cmd)
 	}
