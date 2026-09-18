@@ -276,7 +276,7 @@ type DomainResp struct {
 	NeededSubZoneDisplay string           `json:"neededSubZoneDisplay"`
 	CanRequestCert       bool             `json:"canRequestCert"`
 	CanSyncDNS           bool             `json:"canSyncDNS"`
-	CoveredBy            string           `json:"coveredBy,omitempty"`       // wildcard that covers this domain (e.g., "*.iodesystems.com")
+	CoveredBy            string           `json:"coveredBy,omitempty"`       // wildcard that covers this domain (e.g., "*.example.net")
 	IsRedundant          bool             `json:"isRedundant"`               // SubZone is redundant with a wildcard on the same zone
 	AbsorbedDomains      []AbsorbedDomain `json:"absorbedDomains,omitempty"` // for wildcards: service domains this covers
 }

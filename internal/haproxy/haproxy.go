@@ -379,8 +379,8 @@ func (h *HAProxy) generateConfig(httpPort, httpsPort int, ssl *SSLConfig) string
 	var sb strings.Builder
 
 	// Sort backends so more-specific domains evaluate before less-specific ones.
-	// hdr_end(host) is a greedy suffix match, so without this `iodesystems.com`
-	// would swallow requests intended for `ha.iodesystems.com`.
+	// hdr_end(host) is a greedy suffix match, so without this `example.net`
+	// would swallow requests intended for `ha.example.net`.
 	backends := sortBackendsBySpecificity(h.backends)
 
 	// Global section

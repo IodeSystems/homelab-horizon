@@ -22,7 +22,7 @@ func runSetup(c *client, _ []string) error {
 	if name == "" {
 		return fmt.Errorf("name is required")
 	}
-	domain := ask(in, "Primary domain (e.g. ebb.iodesystems.com)", "")
+	domain := ask(in, "Primary domain (e.g. ebb.example.net)", "")
 	if domain == "" {
 		return fmt.Errorf("domain is required")
 	}

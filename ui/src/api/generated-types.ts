@@ -277,7 +277,7 @@ export interface DomainResp {
   neededSubZoneDisplay: string;
   canRequestCert: boolean;
   canSyncDNS: boolean;
-  coveredBy?: string; // wildcard that covers this domain (e.g., "*.iodesystems.com")
+  coveredBy?: string; // wildcard that covers this domain (e.g., "*.example.net")
   isRedundant: boolean; // SubZone is redundant with a wildcard on the same zone
   absorbedDomains?: AbsorbedDomain[]; // for wildcards: service domains this covers
 }

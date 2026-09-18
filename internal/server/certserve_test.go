@@ -16,10 +16,10 @@ import (
 
 func TestProbeHost(t *testing.T) {
 	cases := map[string]string{
-		"veliode.com":           "veliode.com",
-		"staging.veliode.com":   "staging.veliode.com",
-		"*.staging.veliode.com": "hz-serve-probe.staging.veliode.com",
-		"*.veliode.com":         "hz-serve-probe.veliode.com",
+		"example.org":           "example.org",
+		"staging.example.org":   "staging.example.org",
+		"*.staging.example.org": "hz-serve-probe.staging.example.org",
+		"*.example.org":         "hz-serve-probe.example.org",
 	}
 	for in, want := range cases {
 		if got := probeHost(in); got != want {
@@ -76,25 +76,25 @@ func TestProbeServedCert(t *testing.T) {
 	past := time.Now().Add(-1 * time.Hour)
 
 	t.Run("valid apex", func(t *testing.T) {
-		addr, stop := startTLSServer(t, makeCert(t, future, "veliode.com", "*.staging.veliode.com"))
+		addr, stop := startTLSServer(t, makeCert(t, future, "example.org", "*.staging.example.org"))
 		defer stop()
-		if p := probeServedCert(addr, "veliode.com", "veliode.com"); p != nil {
+		if p := probeServedCert(addr, "example.org", "example.org"); p != nil {
 			t.Errorf("expected no problem, got %v", p)
 		}
 	})
 
 	t.Run("wildcard covered via probe label", func(t *testing.T) {
-		addr, stop := startTLSServer(t, makeCert(t, future, "veliode.com", "*.staging.veliode.com"))
+		addr, stop := startTLSServer(t, makeCert(t, future, "example.org", "*.staging.example.org"))
 		defer stop()
-		if p := probeServedCert(addr, probeHost("*.staging.veliode.com"), "veliode.com"); p != nil {
+		if p := probeServedCert(addr, probeHost("*.staging.example.org"), "example.org"); p != nil {
 			t.Errorf("expected no problem, got %v", p)
 		}
 	})
 
 	t.Run("expired cert flagged", func(t *testing.T) {
-		addr, stop := startTLSServer(t, makeCert(t, past, "veliode.com"))
+		addr, stop := startTLSServer(t, makeCert(t, past, "example.org"))
 		defer stop()
-		p := probeServedCert(addr, "veliode.com", "veliode.com")
+		p := probeServedCert(addr, "example.org", "example.org")
 		if p == nil || !strings.Contains(p.Reason, "expired") {
 			t.Errorf("expected expired problem, got %v", p)
 		}
@@ -102,9 +102,9 @@ func TestProbeServedCert(t *testing.T) {
 
 	t.Run("uncovered host flagged", func(t *testing.T) {
 		// Cert covers only the wildcard subdomain, not the apex.
-		addr, stop := startTLSServer(t, makeCert(t, future, "*.staging.veliode.com"))
+		addr, stop := startTLSServer(t, makeCert(t, future, "*.staging.example.org"))
 		defer stop()
-		p := probeServedCert(addr, "veliode.com", "veliode.com")
+		p := probeServedCert(addr, "example.org", "example.org")
 		if p == nil || !strings.Contains(p.Reason, "does not cover") {
 			t.Errorf("expected coverage problem, got %v", p)
 		}
@@ -113,7 +113,7 @@ func TestProbeServedCert(t *testing.T) {
 	t.Run("dial failure flagged", func(t *testing.T) {
 		// Nothing listening on this port.
 		addr := net.JoinHostPort("127.0.0.1", "1") // port 1: connection refused
-		p := probeServedCert(addr, "veliode.com", "veliode.com")
+		p := probeServedCert(addr, "example.org", "example.org")
 		if p == nil || !strings.Contains(p.Reason, "TLS dial failed") {
 			t.Errorf("expected dial failure, got %v", p)
 		}
