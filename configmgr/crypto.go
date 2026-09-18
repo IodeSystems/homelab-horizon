@@ -56,6 +56,7 @@ const (
 	purposeMachineSeal = "hz-config/v1 machine-secret"
 
 	labelAddr        = "hz-config/v1 addr"
+	labelEnvKeyAddr  = "hz-config/v1 env-key-addr"
 	labelMachineAddr = "hz-config/v1 machine-addr"
 	labelKeyID       = "hz-config/v1 env-key-id"
 	labelEnvKeySum   = "hz-config/v1 env-key-checksum"
@@ -355,6 +356,43 @@ func (a Addr) context() []byte {
 	return canonicalContext(labelAddr, a.Environment, a.App, a.Role, a.Key)
 }
 
+// EnvKeyAddr is the grant address this value lives under: the same
+// (environment, app, role), without the key name.
+func (a Addr) EnvKeyAddr() EnvKeyAddr {
+	return EnvKeyAddr{Environment: a.Environment, App: a.App, Role: a.Role}
+}
+
+// EnvKeyAddr names the address an environment key is granted AT: the
+// (environment, app, role) a registration is made for. There is no key name,
+// because a wrapped environment key is not one config's value — it opens every
+// value at that address.
+//
+// It is authenticated additional data on a kind 0x02 envelope for the same
+// reason Addr is on a kind 0x01 one, and it stops being optional the moment a
+// box holds more than one registration. hz chooses which registration a wrapped
+// key is filed under, so without this an approver's grant of staging's key to
+// staging/redline/ops can be relayed into the prod/redline/app slot: the agent
+// unwraps it perfectly — right recipient, right ECDH, right kind — and notices
+// only later, as a key-id mismatch the first time it tries to open a prod
+// value. That is detection after the fact, not refusal.
+//
+// It passes the binding test the whole scheme rests on: the agent knows its own
+// (environment, app, role) from its own argv, so the address it authenticates
+// is not one hz could have chosen for it.
+type EnvKeyAddr struct {
+	Environment string
+	App         string
+	Role        string
+}
+
+func (a EnvKeyAddr) String() string {
+	return a.Environment + "/" + a.App + "/" + a.Role
+}
+
+func (a EnvKeyAddr) context() []byte {
+	return canonicalContext(labelEnvKeyAddr, a.Environment, a.App, a.Role)
+}
+
 // MachineAddr names one machine-scoped secret. Machine is hz's machine id, not
 // the hostname: the agent learns it once at approval and persists it beside its
 // private key, so it is something the opener knows independently rather than
@@ -507,17 +545,24 @@ func Open(k EnvKey, addr Addr, envelope []byte) ([]byte, error) {
 // the public key in a pending registration; hz relays the result and can never
 // open it. An unapproved machine cannot decrypt anything even holding every
 // blob in the database, because nobody ever handed it the key.
-// A wrapped environment key carries no address: it is not one config's value,
-// and the recipient fingerprint plus the ECDH itself already bind it to exactly
-// one machine.
-func WrapEnvKey(recipient *ecdh.PublicKey, k EnvKey) ([]byte, error) {
-	return sealTo(recipient, KindWrappedEnvKey, purposeWrapEnvKey, nil, k[:])
+//
+// addr is the registration's (environment, app, role) — authenticated, stored
+// nowhere. The recipient fingerprint and the ECDH bind the grant to one
+// machine; addr binds it to one of that machine's registrations, which is a
+// different thing as soon as a box runs more than one. See EnvKeyAddr.
+func WrapEnvKey(recipient *ecdh.PublicKey, addr EnvKeyAddr, k EnvKey) ([]byte, error) {
+	return sealTo(recipient, KindWrappedEnvKey, purposeWrapEnvKey, addr.context(), k[:])
 }
 
 // UnwrapEnvKey is the agent's side of the grant, run once at approval. The
 // recovered key is persisted at 0600 so later boots need no human.
-func UnwrapEnvKey(priv *ecdh.PrivateKey, envelope []byte) (EnvKey, error) {
-	pt, err := openFrom(priv, KindWrappedEnvKey, purposeWrapEnvKey, nil, envelope)
+//
+// addr must be the agent's own (environment, app, role), taken from its own
+// launch arguments rather than from hz's answer; a grant relayed into a
+// different registration fails authentication instead of unwrapping and going
+// wrong later.
+func UnwrapEnvKey(priv *ecdh.PrivateKey, addr EnvKeyAddr, envelope []byte) (EnvKey, error) {
+	pt, err := openFrom(priv, KindWrappedEnvKey, purposeWrapEnvKey, addr.context(), envelope)
 	if err != nil {
 		return EnvKey{}, err
 	}

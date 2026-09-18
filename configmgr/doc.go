@@ -62,8 +62,9 @@
 // the wire (see EncodeEnvelope).
 //
 // The AEAD's additional data is the envelope header — every byte before the
-// nonce — followed by the canonical encoding of the value's ADDRESS, which is
-// not stored anywhere. See "Binding a ciphertext to its address" below.
+// nonce — followed by the canonical encoding of the ADDRESS the envelope
+// belongs to, which is not stored anywhere. Every kind has one. See "Binding a
+// ciphertext to its address" below.
 //
 // Kind 0x01, a value sealed under an environment key. 38 bytes plus plaintext:
 //
@@ -86,8 +87,8 @@
 //	14      65    ephemeral public key, SEC1 uncompressed
 //	79      12    nonce
 //	91      ..    AES-256-GCM ciphertext || 16-byte tag
-//	              AAD = bytes 0..78, then context(MachineAddr) for kind 0x03
-//	              and nothing further for kind 0x02
+//	              AAD = bytes 0..78 || context(EnvKeyAddr)  for kind 0x02
+//	              AAD = bytes 0..78 || context(MachineAddr) for kind 0x03
 //
 // The environment key is used as the AES key directly. It is already 32
 // uniformly random bytes, so a KDF on that path would only add a step the
@@ -114,24 +115,52 @@
 // nowhere. An address carried inside the envelope could only ever agree with
 // itself.
 //
-// Kind 0x01 is addressed by (environment, app, role, key name); kind 0x03 by
-// (machine id, key name). Kind 0x02 carries no address: a wrapped environment
-// key is not one config's value, and the recipient fingerprint plus the ECDH
-// already bind it to one machine.
+// Kind 0x01 is addressed by (environment, app, role, key name); kind 0x02 by
+// (environment, app, role); kind 0x03 by (machine id, key name).
 //
 // The encoding is length-prefixed, not delimited. Each field is a 4-byte
-// big-endian length followed by its UTF-8 bytes, and a label goes first:
+// big-endian length followed by its UTF-8 bytes, and a label goes first. The
+// three labels differ, so the three contexts are three disjoint encodings and
+// no field content can make one read as another:
 //
 //	field(s)  = uint32be(byteLength(s)) || utf8(s)
 //	context   = field("hz-config/v1 addr") || field(environment) ||
-//	            field(app) || field(role) || field(keyName)
+//	            field(app) || field(role) || field(keyName)  // kind 0x01
+//	context   = field("hz-config/v1 env-key-addr") || field(environment) ||
+//	            field(app) || field(role)                    // kind 0x02
 //	context   = field("hz-config/v1 machine-addr") || field(machineID) ||
-//	            field(keyName)                              // kind 0x03
+//	            field(keyName)                               // kind 0x03
 //
 // Joining with a separator instead would let environment "a" with app "b/c"
 // collide with environment "a/b" and app "c" — a collision here IS the
 // substitution the additional data exists to refuse, so the encoding has to be
 // one no field content can make ambiguous.
+//
+// # Why a wrapped environment key is addressed by (environment, app, role)
+//
+// A key name would be wrong: a wrapped environment key is not one config's
+// value, it is the capability that opens every value at an address. There is no
+// single key it belongs to, so there is nothing to put in that field.
+//
+// The (environment, app, role) triple is right, and binding it is not optional.
+// While a machine holds exactly one wrapped key, the recipient fingerprint and
+// the ECDH already pin the grant to one box and an address would add nothing.
+// The moment the wrapped key moves to the REGISTRATION — one box may run
+// several, at several addresses — hz is the party that decides which slot a
+// relayed blob lands in. An approver who grants staging's key to
+// staging/redline/ops hands hz a blob that, filed under prod/redline/app,
+// unwraps perfectly on that same box: right recipient, right ECDH, right kind.
+// The agent finds out only later, as a key-id mismatch the first time it opens
+// a prod value. Binding the address turns that into a refusal at unwrap.
+//
+// It passes the binding test the rest of this section applies: the agent knows
+// its own environment, app and role from its own launch arguments, so it is not
+// feeding back a field hz chose for it — the same reason seq is NOT bound and
+// the machine id must be persisted.
+//
+// Changing an envelope's additional data is a flag day: every blob minted under
+// the old rule stops opening under the new one. This binding therefore has to
+// land before any box holds a wrapped key, not after.
 //
 // # Why the blessing sequence is NOT in the additional data
 //
@@ -200,12 +229,15 @@
 //     layout Go's cipher.AEAD produces, so no splicing is needed on either
 //     side.
 //   - additionalData is the envelope header concatenated with the context
-//     bytes from "Binding a ciphertext to its address": header only for kind
-//     0x02, header || context for kinds 0x01 and 0x03. Build the length
-//     prefixes with DataView.setUint32(offset, n) — big-endian is the default
-//     — and the field bytes with TextEncoder().encode(s), whose length is the
-//     BYTE length, which is what the prefix must carry for any non-ASCII
-//     field.
+//     bytes from "Binding a ciphertext to its address" — header || context for
+//     all three kinds, with the label and the fields that kind's row names.
+//     The approval page wraps a key for a pending registration, so its kind
+//     0x02 context is field("hz-config/v1 env-key-addr") || field(environment)
+//     || field(app) || field(role), read off the registration it is approving
+//     and matching what the agent sends. Build the length prefixes with
+//     DataView.setUint32(offset, n) — big-endian is the default — and the
+//     field bytes with TextEncoder().encode(s), whose length is the BYTE
+//     length, which is what the prefix must carry for any non-ASCII field.
 //
 // The nonce is 12 fresh random bytes for every seal — crypto.getRandomValues —
 // and never a counter. A repeated nonce under one AES-GCM key leaks the XOR of
