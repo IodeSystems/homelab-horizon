@@ -571,6 +571,55 @@ that format.
 binding — the promotion gate runs on bindings. It is a declaration of what to
 send, not a contract the library enforces on pull.
 
+#### Names are opaque and values are bytes
+
+**Owner, 2026-09-18: `configmgr` operates on names and bytes, with no regard to
+extensions.**
+
+A name is an opaque identifier. It may be one setting (`DB_PASSWORD`) or a whole
+file (`config.properties`) — the application's choice, and the library cannot
+tell the difference and must not try. Nothing strips, infers or special-cases
+anything from a name's shape. The name is what gets bound into the AEAD, so
+whatever an app asks for is what it must ask for again to open.
+
+Values are `[]byte`, not `string`, because a config value is not necessarily
+text: a certificate, a keystore and a DER blob are all valid contents, and
+typing them as `string` invites a conversion that corrupts them.
+
+This is what lets one app store whole files and another store individual
+settings without the library growing a mode switch, and it is the same boundary
+as refusing to know a file format — stated once more at the level below it.
+
+#### The nested-module option, and why it is being kept open
+
+`configmgr` mirrors the bless shapes rather than importing
+`internal/apitypes`. Importing them would compile — Go's internal rule is about
+where an import statement sits, not about transitive dependencies — but it would
+**foreclose ever giving this package its own `go.mod`**, since a nested module
+cannot import its parent's internal tree.
+
+What a nested module would buy, if it is ever wanted:
+
+- **Consumers stop inheriting hz's dependency graph.** Today an app importing
+  `configmgr` pulls hz's `go.mod` into its module graph — sqlite, WireGuard,
+  ACME, aws-sdk, seven libdns providers, prometheus, webauthn, cobra. Graph
+  pruning means it never *builds* them, but its `go.sum` carries the entries.
+- **Independent versioning** — `configmgr` can commit to a stable v1 while hz
+  churns internally.
+- **An explicit public-API boundary** in a public MIT repo, rather than
+  "everything outside `internal/`".
+
+**Not worth doing now**, with one consumer: pruning already does the real work
+and the rest is cosmetic. But the option costs nothing while this package is
+dependency-light, and it is proven live — `configmgr` builds standalone with
+nothing but a `go.mod` (verified 2026-09-18).
+
+The cost of mirroring is two definitions of one JSON shape.
+`TestBlessShapesMatchAPITypes` and `TestBlessRequestRoundTripsThroughAPITypes`
+in `internal/server` pin them, comparing the **wire** shape rather than the Go
+types, so a field added to one side and not the other fails a test instead of
+silently breaking a push against a server that no longer understands it.
+
 #### Where the layer actually ends
 
 **This system stores and retrieves configs securely. That is the whole job**

@@ -141,3 +141,80 @@ type ConfigResponse struct {
 	MaxVer   string        `json:"maxVer,omitempty"` // empty means open-ended
 	Entries  []ConfigEntry `json:"entries"`
 }
+
+// --- The bless protocol ---------------------------------------------------
+//
+// These mirror internal/apitypes.CM{ConfigValueReq,CreateConfigReq,ConfigResp,
+// CurrentKeyResp} rather than importing them, and the duplication is deliberate.
+//
+// This package is outside internal/ so that an application can import it. If it
+// imported internal/apitypes it would still compile — the internal rule is about
+// where an import statement sits, not about transitive dependencies — but it
+// would foreclose ever giving this package its own go.mod, because a nested
+// module cannot import its parent's internal tree. That option is worth keeping
+// while this package is dependency-light; it is what would stop a consumer
+// inheriting hz's whole graph (sqlite, WireGuard, ACME, seven DNS providers) in
+// its module graph.
+//
+// The cost is two definitions of one JSON shape, and TestBlessShapesMatchAPITypes
+// in the server package pins them together so a drift is a failed test rather
+// than a push that silently stops working.
+
+// BlessValue is one sealed value in a bless request.
+type BlessValue struct {
+	Key            string `json:"key"`
+	Binding        string `json:"binding"`
+	Sealed         string `json:"sealed"`
+	KeyID          string `json:"keyId"`
+	SourceConfigID string `json:"sourceConfigId,omitempty"`
+}
+
+// BlessRequest creates a config. Ranges are immutable once blessed, so this is
+// the only moment an operator is present to be told no.
+type BlessRequest struct {
+	Environment string       `json:"environment"`
+	App         string       `json:"app"`
+	Role        string       `json:"role"`
+	MinVer      string       `json:"minVer"`
+	MaxVer      string       `json:"maxVer,omitempty"`
+	Values      []BlessValue `json:"values"`
+}
+
+// BlessedValue describes a stored value without disclosing it.
+type BlessedValue struct {
+	Key            string `json:"key"`
+	Binding        string `json:"binding"`
+	KeyID          string `json:"keyId"`
+	Origin         string `json:"origin"`
+	SourceConfigID string `json:"sourceConfigId,omitempty"`
+	Sealed         string `json:"sealed,omitempty"`
+	TombstonedAt   string `json:"tombstonedAt,omitempty"`
+	TombstonedBy   string `json:"tombstonedBy,omitempty"`
+}
+
+// BlessResponse is hz's answer to a bless.
+type BlessResponse struct {
+	ID          string         `json:"id"`
+	Environment string         `json:"environment"`
+	App         string         `json:"app"`
+	Role        string         `json:"role"`
+	MinVer      string         `json:"minVer"`
+	MaxVer      string         `json:"maxVer,omitempty"`
+	Sequence    int64          `json:"sequence"`
+	CreatedAt   string         `json:"createdAt"`
+	CreatedBy   string         `json:"createdBy"`
+	Values      []BlessedValue `json:"values,omitempty"`
+}
+
+// CurrentKeyPointer is hz's advisory answer for which key an address should be
+// sealed under. An absent KeyID, or a 404, both mean nobody has announced one —
+// a different fact from "the current key is X", and the client must treat it as
+// such rather than sealing under whatever its filesystem offers.
+type CurrentKeyPointer struct {
+	Environment string `json:"environment"`
+	App         string `json:"app"`
+	Role        string `json:"role"`
+	KeyID       string `json:"keyId,omitempty"`
+	SetBy       string `json:"setBy,omitempty"`
+	SetAt       string `json:"setAt,omitempty"`
+}
