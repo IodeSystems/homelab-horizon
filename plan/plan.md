@@ -261,11 +261,12 @@ Phase 3 replaces this with: restart horizon, done.
 |---|---|---|
 | 1 | [Outside-in checks (`hz-probe`)](#outside-in-checks-hz-probe) | ✅ code done, ⏸ not yet deployed |
 | 2 | [Operator follow-ups](#operator-follow-ups-not-code) — yours, not mine | — |
-| 3 | [L4 port forwards](#-l4-port-forwards) | ◐ code done, not committed, not deployed |
+| 3 | [L4 port forwards](#-l4-port-forwards) | ◐ committed (`0548300`), not deployed |
 | 5 | [OIDC: domain gating + docs](#-oidc-domain-gating--docs--deployed-2026-09-17) | ✅ proven in production |
-| 6 | [Backend protocol (h2c)](#-backend-protocol-h2c-for-grpc-backends) | ✅ deployed + in use (Zitadel) |
-| 7 | [Invites that can require a sign-in](#-invites-that-can-require-a-sign-in) | ◻ not started |
+| 6 | [Backend protocol (h2c)](icebox.md#-backend-protocol-h2c-for-grpc-backends--deployed-2026-09-17) | ✅ deployed + in use (Zitadel) |
+| 7 | Invites that can require a sign-in | ◻ not started, **and unwritten** — no section exists |
 | 8 | [DNS checks that would catch a broken forwarder](#-dns-checks-that-would-catch-a-broken-forwarder) | ✅ deployed |
+| 9 | [Config manager](#-config-manager--registration-blessing-promotion) → [config-manager.md](config-manager.md) | ◻ designed, not started |
 
 Two opt-in next-steps were added to [icebox.md](icebox.md) on 2026-09-10:
 HAProxy TCP frontends on the VPN address, and moving the range-collision
@@ -364,6 +365,49 @@ when an operator most needs in.
   (every Workspace user becomes an hz admin), or does auto-provision stay off
   so an admin creates the account first? A third option is reviving a
   non-admin role, which is the iceboxed item and much larger.
+
+### ◻ Config manager — registration, blessing, promotion
+
+Design in [config-manager.md](config-manager.md). Moved here from redline's plan
+on 2026-09-18: **hz is where it gets built**, redline is the first client.
+
+A store of config blobs keyed by `(environment, app, role)` with a `minVer` /
+`maxVer` range and an approval state. A box registers, an admin approves the
+**registration** (not every boot), and the box pulls what resolves for its
+running version. Promotion `dev → staging → prod` is a diff and a gate, not a
+copy — an edit resets the evidence to the environment where the edit happened.
+
+Two decisions carry the whole thing:
+
+- **hz stores secret values as ciphertext it cannot read.** Making the network
+  appliance the config store would otherwise mean an hz compromise yields every
+  credential on every box. It holds the blob, the metadata, the range and the
+  approval state; only a holder of the environment key can decrypt. Keys are
+  symmetric and per-environment because an operator must be able to *read*
+  deltas, not only write values — so decryption happens in the browser and hz
+  never sees a key.
+- **The approver distributes the key by approving.** The agent presents a fresh
+  X25519 public key at registration; the approver pastes the environment key in
+  the browser, wrapped to that public key; hz relays a blob it cannot open. This
+  makes approval a cryptographic capability grant rather than an authorization
+  flag — a bug in an authorization check cannot bypass it, because a missing
+  approval is a missing key.
+
+Blocks on real persistence: **services are not rows** in hz today
+(`findServiceByToken` returns an index into `config.json`), so this needs new
+tables with no precedent except `peer_owners`.
+
+- **next:** the migration and db package for configs, registrations and
+  approvals. Everything else depends on it.
+- **risks:** largest feature ever proposed for hz, landing in the box the whole
+  network depends on; the browser crypto is the load-bearing security claim and
+  needs a real review; hz becomes a dependency of every box's startup path, so
+  the last-applied-on-disk fallback is not optional.
+- **blocking decisions (yours):** three open questions in the doc; whether the
+  iceboxed [per-peer secrets](icebox.md) entry folds into this or stays a
+  separate plaintext one-shot table; and whether this goes ahead of the two
+  unblocked items above.
+- **optional extensions:** none scoped yet.
 
 ### ◐ L4 port forwards
 
