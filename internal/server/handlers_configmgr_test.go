@@ -563,3 +563,52 @@ func TestCMRegisterRefusesAKeySwapOnAnEnrolledName(t *testing.T) {
 		t.Fatalf("status %d, want 409: %s", w.Code, w.Body.String())
 	}
 }
+
+// The CLI's approval ceremony wraps to the key it fetches here and derives the
+// fingerprint it shows an operator from those same bytes. If this route is
+// missing or returns something ParseMachinePublicKey rejects, the ceremony has
+// no key to wrap to and approval cannot happen at all.
+func TestCMPublicKeyRouteServesAWrappableKey(t *testing.T) {
+	s, admin := cmServer(t)
+	box := cmRegister(t, s, "box-1", "prod", "redline", "app")
+
+	w := cmAdminCall(t, admin, s.handleAPICMRegistrationAction, http.MethodGet,
+		"/api/v1/cm/registrations/"+box.resp.ID+"/public-key", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	var got struct {
+		PublicKey string `json:"publicKey"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	pub, err := configmgr.ParseMachinePublicKey(got.PublicKey)
+	if err != nil {
+		t.Fatalf("served key does not parse: %v", err)
+	}
+
+	// The whole point: a key wrapped to what this route served opens on the
+	// box's private half, at the address the box asked for.
+	addr := box.req.EnvKeyAddr()
+	k := configmgr.NewEnvKey()
+	blob, err := configmgr.WrapEnvKey(pub, addr, k)
+	if err != nil {
+		t.Fatalf("WrapEnvKey: %v", err)
+	}
+	back, err := configmgr.UnwrapEnvKey(box.priv, addr, blob)
+	if err != nil {
+		t.Fatalf("the box could not unwrap what was wrapped to the served key: %v", err)
+	}
+	if back.ID() != k.ID() {
+		t.Fatalf("unwrapped a different key: %s want %s", back.ID(), k.ID())
+	}
+
+	// POST is refused: this route reads.
+	w = cmAdminCall(t, admin, s.handleAPICMRegistrationAction, http.MethodPost,
+		"/api/v1/cm/registrations/"+box.resp.ID+"/public-key", nil)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST status = %d, want 405", w.Code)
+	}
+}
