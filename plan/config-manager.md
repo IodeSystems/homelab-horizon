@@ -1,9 +1,14 @@
 # Config manager — registration, blessing, promotion
 
-> Design, not built. Written 2026-09-18 from the owner's model; moved into this
-> repo 2026-09-18 because **hz is where it gets built**. redline is the first
-> client, not the owner — its side of the work is in
-> the consumer project's plan.
+> **Status: Phase 1 in flight.** Persistence and crypto are built and committed
+> (`internal/db/configmgr.go`, migration `0008`, `configmgr/`). No handlers, no
+> UI, no client — nothing is reachable from outside the process. Phase 2 below
+> is the hardening pass, and several of its items must land before anything real
+> is approved through this.
+>
+> Written 2026-09-18 from the owner's model; moved into this repo the same day
+> because **hz is where it gets built**. redline is the first client, not the
+> owner.
 
 ## Driver
 
@@ -22,37 +27,37 @@ plan; it is that repo's pain and that repo's to keep current.
 
 ## Constraint: nothing in the boot path may depend on freshness
 
-**Stated by the owner 2026-09-18, and it rules out more than it looks like.**
-Services here are expected to run **unattended for years**. A box must not break
-because something expired while nobody was watching.
+**Owner, 2026-09-18.** Services here run **unattended for years**. A box must not
+break because something expired while nobody was watching. No TTL, no expiry, no
+"must have checked in within N days" anywhere a boot depends on it.
 
-No TTL, no expiry, no "must have checked in within N days" anywhere a boot
-depends on it. Consequences, each of which has already been proposed and
-rejected once or would have been:
+This rules out more than it looks like, and it has already killed two proposals:
 
-- **Leases are dead.** A renewable, short-lived key grant was proposed as the
-  answer to revocation (finding 3) and is wrong twice over. First, a lease
-  revokes *authentication*, not *decryption* — SPIRE's model works because an
-  SVID is presented to a live server, whereas a decryption key works offline
-  forever, so a copied one ignores every renewal deadline. It is theatre against
-  the compromise case that motivates revocation at all. Second, it adds a boot
-  dependency on a clock and a renewal loop, which is the failure this constraint
-  exists to forbid. In practice the TTL becomes ten years or someone writes the
+- **Leases are dead.** A renewable short-lived key grant was proposed as the
+  answer to revocation ([hole 10](#10-de-approval-is-not-revocation)) and is wrong
+  twice over. A lease revokes *authentication*, not *decryption* — SPIRE's model
+  works because an SVID is presented to a live server, whereas a decryption key
+  works offline forever, so a copied one ignores every renewal deadline. It is
+  theatre against the compromise case that motivates revocation at all. And it
+  puts a clock and a renewal loop in the boot path, which is the failure this
+  constraint forbids. In practice the TTL becomes ten years or someone writes the
   auto-renewer, because the alternative is being paged to re-approve a box that
   is fine.
-- **A TUF-style expiring "current" pointer is dead for the same reason**, and was
-  briefly recommended here before this constraint was stated. TUF detects a
-  frozen response by making the pointer expire; a three-year-old box would refuse
-  to trust anything.
+- **A TUF-style expiring "current" pointer is dead for the same reason.** TUF
+  detects a frozen response by expiring the pointer; a three-year-old box would
+  refuse to trust anything.
 
   **The half that survives has no clock in it: monotonicity.** The agent caches
   `version → highest seq ever applied at that version` and refuses anything
-  lower. That is enforceable offline and forever, it is the fix for the seq
-  rollback the AAD does not cover, and legitimate rollback to an older binary
-  still works because each version carries its own floor. What it gives up is
-  detecting *freeze* — hz serving the same stale-but-highest answer indefinitely
-  — which is a liveness failure, not a safety one. The box keeps running what it
-  had. Correct trade for a service left alone deliberately.
+  lower — enforceable offline and forever, and the fix for the seq rollback the
+  AAD does not cover ([hole 8](#8-seq-rollback-at-one-address-still-works)).
+  Legitimate rollback to an older binary still works, because each version
+  carries its own floor. What it gives up is detecting *freeze* — hz serving the
+  same stale-but-highest answer indefinitely — which is a liveness failure, not
+  a safety one. The box keeps running what it had.
+
+The rest follows:
+
 - **Last-known-good never goes stale.** No age check that begins failing. A
   three-year-old cache is valid config.
 - **Unknown-means-unreachable is required, not merely safer.** A box returning
@@ -66,113 +71,130 @@ rejected once or would have been:
 
 The one remaining time-shaped hazard is not time at all: a closed `max_ver` with
 no open successor detonates at the next restart, which for an unattended box may
-be years after the mistake, when nobody will connect the two. That is the
-argument for validating it at **bless time**, with the operator present.
+be years after the mistake, when nobody will connect the two. Hence validating it
+at **bless time**, with the operator present.
 
 ## The model
 
-Config is addressed by **environment / app / role**, where **role is a
-FUNCTION** and one app may hold several (`{app, ops}` on a single-box
-deployment). Schema naming and similar per-function concerns live at the role.
+Config is addressed by **environment / app / role**, where **role is a FUNCTION**
+and one app may hold several (`{app, ops}` on one box). The **key address is
+exactly the config address** — see [Keys](#keys-are-symmetric-per-environment-app-role).
 
-Each config carries **`minVer` / `maxVer`**. Resolution is: take every config
-for the `(environment, app, role)`, keep those whose range contains the running
-version, **take the last**. The newest config always has an open `maxVer`, so
-the common case has exactly one candidate and ranges only do work on rollback.
+Each config carries **`minVer` / `maxVer`**. Resolution: take every config for
+the `(environment, app, role)`, keep those whose range contains the running
+version, **take the last**. The newest config always has an open `maxVer`, so the
+common case has exactly one candidate and ranges only do work on rollback.
 
-That is the whole selection rule. There is no per-version config entity and no
-mapping table.
+**Why ranges rather than a contract number:** config follows the app BACKWARDS.
+Roll a slot from 1.3.0 to 1.1.0 and it picks up the config whose range still
+covers 1.1.0. Rolling code back while config stays forward is a classic outage,
+and this removes it. It also lets a config for `minVer 1.4.0` be blessed and
+promoted before 1.4.0 exists, sitting inert until the release arrives — so a
+deploy stops needing a config step at all.
 
-**One narrowing: a secret may be bound to a single MACHINE** instead of an
-`(environment, app, role)`. Same store, same approval state, different
-addressing and a different key — see [Machine-scoped
-secrets](#machine-scoped-secrets). It exists because per-device revocation is a
-real requirement that environment-wide addressing cannot express.
+**One narrowing:** a secret may be bound to a single MACHINE instead of an
+address — see [Machine-scoped secrets](#machine-scoped-secrets).
 
-**Why ranges rather than a contract number:** config follows the app
-BACKWARDS. Roll a slot from 1.3.0 to 1.1.0 and it picks up the config whose
-range still covers 1.1.0. Rolling code back while config stays forward is a
-classic outage, and this removes it. It also lets a config for `minVer 1.4.0`
-be blessed and promoted before 1.4.0 exists, sitting inert until the release
-arrives — so a deploy stops needing a config step at all.
+### Bindings
 
-### Per-key metadata
+Secrecy and promotion scope are **independent axes**. An earlier draft collapsed
+them into three rows, which left no cell for a value that is both secret and
+genuinely identical everywhere, and then wrongly concluded such values cannot
+promote. Secret promotion is required (owner, 2026-09-18).
 
-The only thing a config declares beyond its values, and promotion needs all of
-it:
+| binding | promotes? | hz can read? | examples |
+|---|---|---|---|
+| **invariant** | yes, verbatim | yes — promotion must diff it | retention days, cutoffs, timeouts |
+| **environment-bound** | no — must already be bound in the target | yes — the gate needs it | database URL, public URL, bucket + prefix |
+| **secret, environment-bound** | no | no | gateway keys, DB passwords |
+| **secret, invariant** | **yes**, by client-side re-seal | no | a vendor key issued once, a signing key artifacts verify against |
 
-| binding | promotes? | examples |
-|---|---|---|
-| **invariant** | yes, verbatim | retention days, cutoffs, business rules, timeouts |
-| **environment-bound** | no — must already be bound in the target | database URL, public URL, payment origin, bucket + prefix |
-| **secret, environment-bound** | no | gateway keys, DB passwords — the value legitimately differs per environment |
-| **secret, invariant** | **yes**, by client-side re-seal | a vendor API key they will only issue once, a signing key artifacts must verify against, a licence key |
+A secret is not a separate system — it is a key with the write-only flag, so
+there is one store, one approval flow, one audit trail.
 
-A secret is not a separate system. It is a key with the write-only flag — names
-and timestamps readable, values never, reads audited — so there is one store,
-one approval flow, one audit trail rather than two to keep consistent.
+**Which binding a key has is declared by the app, not chosen per push.** See
+[the developer side](#the-developer-side).
 
-**Corrected 2026-09-18.** This table previously had three rows and treated
-"secret" and "environment-bound" as the same property. They are independent:
-secrecy says who may read a value, promotion scope says whether it is the same
-value in every environment. Collapsing them left no cell for a value that is
-both secret and genuinely identical everywhere, and then wrongly concluded such
-values cannot promote. **Secret promotion is required** (Carl, 2026-09-18); see
-[Promoting a secret](#promoting-a-secret).
+### Resolution rules
 
-## Registration
+Three, because "last wins" is the exact shape of every bug found on 2026-09-17:
 
-A service starts, registers as `(machine, app, environment, role…, version)`,
-and **waits**. An admin approves or denies. On approval it pulls, applies, and
-continues startup.
+1. **"Last" is immutable.** Ordered by a sequence assigned at blessing, never
+   recomputed. If it were "most recently modified", re-blessing an old config
+   would silently promote it over a newer one without anyone touching the winner.
+2. **Overlap is inspectable.** `resolve(env, app, role, version)` returns the
+   winner AND the candidates it shadowed. Silent resolution is fine when you can
+   ask what it resolved to; it is how config goes mysteriously wrong when you
+   cannot.
+3. **Zero matches is a named failure, not a hang.** Fail with "no config
+   satisfies v1.4.0 for prod/redline/app" — never block on registration looking
+   like a pending approval.
+
+**Ranges are immutable after blessing.** Editing one retroactively changes what a
+running box gets on its next start, with no diff anywhere. Supersede instead.
+
+**The agent reports what it resolved.** Resolution is computed, not recorded, so
+the box is the only place "v1.2.5 ran config #42" exists. That report is the
+audit trail and it is what promotion gates on. **Not built, and there is no
+table for it** — see [hole 8](#8-seq-rollback-at-one-address-still-works), where
+its absence also matters.
+
+## Registration and approval
+
+A service starts, registers as `(machine, environment, app, role, version)` with
+a fresh public key, and **waits**. An admin approves or denies. On approval it
+pulls, applies, and continues startup.
 
 **Approve the REGISTRATION, not the BOOT.** Read literally, "waits for approval
-on startup" means a 3am OOM-restart on prod blocks until a human wakes up —
-likewise `systemctl restart`, a kernel upgrade, an autoscale event. So:
+on startup" means a 3am OOM-restart on prod blocks until a human wakes up. So:
 
-- FIRST registration of a `(machine, app, environment, role)` is held pending.
-  Rare, and the review that is missing today.
+- The FIRST registration of a tuple is held pending. Rare, and the review that is
+  missing today.
 - Later boots pull with the identity already approved. No human in the path.
-- A **role change** re-enters pending. It is a genuinely new thing to bless.
-- The agent keeps the **last applied config on disk** and boots from it when hz
-  is unreachable, reporting loudly that it did. Otherwise the config manager is
-  a single point of failure for the whole fleet and the first network blip is a
-  total outage.
+- A change to **any** component of the tuple — role, environment — is a new tuple
+  and re-enters pending. It is a genuinely new thing to bless.
+- The agent keeps the **last applied config on disk**, keyed by address, and
+  boots from it when hz is unreachable, reporting loudly that it did. Otherwise
+  the config manager is a single point of failure for the whole fleet and the
+  first network blip is a total outage.
 
-**The machine enrolls once; processes fetch per role.** A box runs `current`,
-`next` and `ops` — one machine identity, several role fetches, one thing to
-revoke.
+**The machine enrols once; processes fetch per role.** One machine identity, one
+keypair — but **one wrapped key per registration**, because the key address is
+`(environment, app, role)` and a box may run several. `cm_machines` currently
+holds a single `wrapped_env_key`, which is wrong on both counts; it moves to the
+registration in `0009`.
 
-**Enrollment already exists.** A box joins hz by becoming a WireGuard peer —
-already an admin-mediated approved act, with `getPeerFromRequest`
-(`internal/server/handlers_mfa.go:19`) resolving a caller to a peer by source
-IP, `getClientIP` trusting `X-Forwarded-For` only from the proxy, and
-`peer_owners` (`internal/db/peer_owners.go`) as the precedent for per-peer rows.
+**What the WireGuard peer model does and does not give.** A box joins hz by
+becoming a WireGuard peer, which is already an admin-mediated act. But
+`getPeerFromRequest` (`internal/server/handlers_mfa.go:19`) resolves a caller by
+**source IP only** — identity is topological, not cryptographic, and anyone who
+can source traffic from a peer's VPN address is that peer. That is why this
+design adds a keypair and an enrollment token rather than resting on peer
+identity. Peer identity is still worth binding *to* a registration as a second
+check ([hole 5](#5-machine-name-squatting)), but it is not the foundation.
 
-**The client agent already exists too** — on redline's side. `redline-ops` runs
-as root on every box, is already a daemon, already reads layered config, already
-has a health endpoint. It gains a verb. A second agent alongside it would be the
-mistake. hz ships no agent for this.
+**The client is the app itself**, importing `configmgr` — not a separate daemon.
+`redline --serviceName=failover web start` registers and resolves for its own
+address. An earlier draft said redline-ops "gains a verb"; that is superseded.
+hz ships no agent.
 
 ## Promotion
 
 A graph with per-edge authority — `dev → staging → prod` — and origination
-allowed at any node the caller holds keys for ("supply staging with a new
-config" is a first-class act, not a workaround).
+allowed at any node the caller holds keys for.
 
-**The rule that makes promotion mean anything: an edit resets the evidence to
-the environment where the edit happened.** If a config can be edited on the way
-into prod, the thing that ran in staging is not the thing that shipped and the
+**The rule that makes promotion mean anything: an edit resets the evidence to the
+environment where the edit happened.** If a config can be edited on the way into
+prod, the thing that ran in staging is not the thing that shipped and the
 blessing is decoration. So the edges are asymmetric:
 
-- **dev → staging: editable.** Staging is where evidence is generated, after
-  the edit.
+- **dev → staging: editable.** Staging is where evidence is generated.
 - **staging → prod: no edits to values that promote.** Only *binding* of
   environment-bound keys, which staging never exercised anyway. Touching an
-  invariant value voids the evidence and kicks back to staging to be re-earned.
+  invariant voids the evidence and kicks back to staging.
 - **direct supply:** allowed, carries no evidence, earns it by running.
 
-Promotion is therefore **a diff and a gate, not a copy**:
+Promotion is **a diff and a gate, not a copy**:
 
 ```
 promote (staging, redline, app, 1.2.0–∞) → prod
@@ -180,63 +202,47 @@ promote (staging, redline, app, 1.2.0–∞) → prod
   └─ BLOCKED: prod has no value bound for PUBLIC_URL, PAY_ORIGIN
 ```
 
-That example is redline's live state, not a hypothetical — staging sets both,
-prod sets neither, and the base file has one empty. Today the only thing that
-catches it is a hand-written boot check, firing after a deploy has shipped.
+That example is redline's live state, not a hypothetical. Today the only thing
+that catches it is a hand-written boot check, firing after a deploy has shipped.
 
 Per-edge authority also buys **separation of duties on production changes**
-structurally rather than by policy, which is what change-management control
-actually asks for.
+structurally rather than by policy.
+
+A promoted config records where it ran, for how long, on which release, and who
+approved — which is what makes the approval prompt a decision rather than a
+dialog to click through. **Divergence reporting covers non-secret invariants
+only**: hz holds their plaintext and can diff them. Secret invariants lose it,
+deliberately, for the reason in [the shape of promote](#the-shape-and-what-it-does-not-promise).
 
 ### Promoting a secret
 
-**Decided (Carl, 2026-09-18): secret promotion is required, and the re-seal
-happens on a client — never in hz.**
+**Owner, 2026-09-18: secret promotion is required, and the re-seal happens on a
+client — never in hz.**
 
-A secret cannot promote the way an invariant does, because prod's copy has to be
+A secret cannot promote the way an invariant does, because prod's copy must be
 readable by prod's key and staging's ciphertext is not. So the value is opened
-under the source environment's key and re-sealed under the target's, and the
-address bound into the AEAD changes with it (`staging,app,role,KEY` becomes
-`prod,app,role,KEY`), which the committed primitives already handle.
+under the source key and re-sealed under the target's, and the address bound into
+the AEAD changes with it.
 
 **The whole ceremony is client-side, so hz needs nothing new.** It sees a read of
-one ciphertext and a write of another — both endpoints it has anyway. There is
-no "temporary key" concept in the server, no new table, no new route. The claim
-that hz never sees secret plaintext survives intact, and survives for a better
-reason than the old one: not because secrets never move, but because the only
-place they are ever plaintext is a client.
+one ciphertext and a write of another — both endpoints it has anyway. No
+temporary-key concept in the server, no new table, no new route. The claim that
+hz never sees secret plaintext survives, and for a better reason than the old
+one: not because secrets cannot move, but because the only place they are ever
+plaintext is a client.
 
-**Two clients can do it**, which is the point of hz exposing a library rather
-than shipping an agent:
-
-- the **approval/promotion UI**, for an operator promoting by hand;
-- **`hz` / the client library**, for a promotion step that runs unattended.
-
-Both must produce identical bytes, so the re-seal belongs in `configmgr` with
-the browser recipe in `doc.go` and an interop test that reimplements it from the
-doc alone — the pattern already established for the envelope format.
-
-**A promotion needs a KEYSET, not a key** (Carl, 2026-09-18): the source
-environment's key to open and the target's to seal. So the client is handed a
-set of environment keys addressed by environment name, each carrying its key id
-so the client knows which one opens an existing ciphertext.
+**A promotion needs a KEYSET**: the source key to open, the target key to seal.
 
 - **Never in argv** — `ps` is world-readable. A `0600` file or stdin, matching
   what `hz-probe` already does with `--token-file` over a bare flag.
-- **The keyset file is the highest-value artifact in the system.** It is every
-  environment's key in one place, which makes finding 6 (possession is total)
-  strictly worse — possession becomes total *across environments* rather than
-  within one. Prefer assembling the two keys a given promotion needs over
-  keeping a whole-fleet keyset on disk, and say so wherever the format is
-  documented.
-- An unattended promotion means those keys live wherever that automation's
-  secrets live. That is a real downgrade from "an operator pastes one into a
-  browser and it is gone on navigate", and it should be a deliberate choice per
-  pipeline rather than the default.
+- **A whole-fleet keyset file is the highest-value artifact in the system** and
+  makes [hole 4](#4-read-implies-write-implies-approve) worse by widening
+  possession across environments. Prefer assembling the two keys a promotion
+  needs over keeping the set on disk.
+- An unattended promotion puts those keys wherever that automation's secrets
+  live. A deliberate choice per pipeline, not the default.
 
 ### The shape, and what it does not promise
-
-**Decided (Carl, 2026-09-18):**
 
     promote(addr, ciphertext) -> (addr, ciphertext)
 
@@ -247,669 +253,763 @@ the re-seal underneath — without it hz could serve `ANALYTICS_KEY`'s blob in t
 `DB_PASSWORD` slot of the same config and it would authenticate.
 
 **A stored plaintext checksum was considered and dropped.** It would have let hz
-compare across environments while holding no plaintext, which is the only way to
-detect that prod's copy drifted after promotion. It was dropped because storing a
-hash of a secret next to its ciphertext makes hz's own store a **brute-force
-oracle** — against exactly the party whose compromise this design assumes. A
-128-bit vendor key survives that; a short or reused one does not.
+compare across environments while holding no plaintext — the only way to detect
+that prod's copy drifted after promotion. Dropped because storing a hash of a
+secret next to its ciphertext makes hz's own store a **brute-force oracle**,
+against exactly the party whose compromise this design assumes. A 128-bit vendor
+key survives that; a short or reused one does not.
 
 Instead the guarantee is **structural**: promote performs a decrypt/re-encrypt
 cycle the caller cannot interpose on, so the target ciphertext holds the source
-plaintext by construction rather than by a witness stored beside it.
+plaintext by construction.
 
-Two limits of that, recorded so they are not later mistaken for more:
+Two limits, recorded so they are not mistaken for more:
 
 - **It holds at promotion time, not afterward.** A direct set path must exist —
-  an environment-bound secret like prod's database password is born in prod and
-  never promoted — so anyone holding the target key can overwrite a promoted
-  value later. Promote proves the value was right when it crossed. Nothing
-  proves prod still holds it a month on. **Non-secret invariants keep their
-  divergence check**, since hz has their plaintext; secret invariants lose it,
-  and that is the price of not publishing an oracle.
+  an environment-bound secret like prod's database password is born in prod — so
+  anyone holding the target key can write a later value. Append-only makes that
+  *visible* rather than silent (see below), but it does not prevent it.
 - **"The caller cannot change it" is a guardrail, not integrity.** The cycle runs
-  on a client, and `Seal` is exported because the UI and the library both need
-  it, so calling the primitive directly writes whatever you like into a target
-  slot. That is proportionate — this document describes divergence as catching
-  *bugs*, not attackers — but it must not get restated later as an integrity
-  property.
-
-**Still open:** whether `secret, invariant` is a declared binding an operator
-opts a key into — auditable, and refusable — or whether promotion is simply an
-action available on any secret, in which case "this value crosses the
-staging/prod boundary" is only ever whatever someone did in the UI that day.
-
-**Deferred by this decision:** envelope encryption with per-secret data keys, and
-making environment keys asymmetric. Together they would make promotion pure
-metadata with no two-key moment and keep ciphertext byte-identical across
-environments. They are no longer on the critical path — they now earn their keep
-against revocation and rotation (findings 3 and 4) instead, and belong in that
-phase.
+  on a client and `Seal` is exported, so calling the primitive directly writes
+  whatever you like into a target slot. Proportionate — this document describes
+  divergence as catching *bugs*, not attackers — but it must not get restated
+  later as an integrity property.
 
 ### Values are append-only; lineage answers "where did this come from"
 
-**Decided (Carl, 2026-09-18): a value is written, never overwritten.**
+**Owner, 2026-09-18: a value is written, never overwritten.**
 
-This is what makes the promotion guarantee survive past the moment of
-promotion. A direct set after a promotion is not a silent difference — it is a
-**new value with `direct` provenance**, superseding by seq, carrying an actor and
-a timestamp. Drift stops being something you detect by comparison and becomes
-something you read off the graph, which answers the sharper question: not "do
-these differ" but "where did prod's current value come from."
+A direct set after a promotion is not a silent difference — it is a **new value
+with `direct` provenance**, superseding by seq, carrying an actor and a
+timestamp. Drift becomes something you read off the graph rather than infer by
+comparison, and it answers the sharper question: where prod's current value came
+from, not merely whether it differs.
 
-It extends a rule the design already has rather than adding one — `seq` is
-immutable, ranges are immutable, and "supersede instead of editing" was already
-the stated move.
+This extends rules the design already has — `seq` immutable, ranges immutable,
+supersede instead of edit.
 
 **Lineage lives on the VALUE, not the config.** A prod config is a mix by design:
 invariants arrive by promotion while environment-bound keys are bound fresh in
-prod. A single link on the config cannot describe one key that came from
-staging's `#38` sitting beside one that was born in prod. So `cm_config_values`
-gains an origin discriminator and a nullable link to the source config — **the
-source config id alone, not a denormalised seq**, which would be a second source
-of truth able to disagree. The key name is implied; it is the same on both ends
-by definition.
+prod. So `cm_config_values` gains an origin discriminator and a nullable link to
+the source config — **the source config id alone, not a denormalised seq**, which
+would be a second source of truth able to disagree.
 
-Schema note: this is a **new migration 0009**. `0008` is committed, and
-migrations here are checksum-verified and hard-fail startup if an applied one
-changes.
+**Append-only fights revocation**, so: **lineage is append-only, payloads are
+destructible.** Tombstone a value's ciphertext and the row and its provenance
+survive while the bytes do not. Two things this needs that do not exist:
+tombstoning must **sweep every config at the address** (superseded configs hold
+openable ciphertext at the identical address), and `0008`'s CHECK requires
+`binding='secret' ⇒ ciphertext IS NOT NULL`, so `0009` must relax it.
 
-**The tension it creates, and the split that resolves it.** Append-only fights
-revocation: a leaked secret's ciphertext would otherwise sit in the store
-forever, still openable by anyone who ever held that key — making finding 3
-worse rather than better. So **lineage is append-only, payloads are
-destructible**. Tombstone a value's ciphertext and the row and its provenance
-survive while the bytes do not, which keeps "where did this come from"
-answerable for a value nobody can read any more. That is the state you actually
-want after a rotation.
+## The client
 
-### The client keystore
+### Keystore
 
 Keys live with the client, never with hz — hz stores blobs it cannot open, so it
-has no key to keep. `keyFor(addr, keyID)` resolves against a tree rooted outside
-the working directory:
+has no key to keep.
 
     ~/.hz/secrets/keys/<environment>/<app>/<role>/<label>.<keyid>.key
     ~/.hz/secrets/keys/prod/redline/app/2026-09.a3f1c02b9d4e5f60.key
 
-**`keyID`, not just `addr`, because of rotation.** Every envelope carries the id
-of the key that sealed it at bytes 2–9, so old ciphertext keeps opening after a
-rotation. A lookup keyed only on the address can return exactly one key and
-therefore breaks every prior blob the moment a second one exists.
+**Addressed by `(environment, app, role, keyid)`.** The key id is not optional:
+every envelope names its key by id, so a tree addressed only by the config
+address cannot answer "which key opens this" once a second key exists — which is
+every moment after the first rotation.
 
-**Two different things are called "key name" and they must not be conflated:**
-the *config key* (`DB_PASSWORD`) is bound into the AAD; the *encryption key* is
-what this tree stores.
+The filename carries **both** id and human label, which avoids an index without
+forcing a scan: opening globs `*.<keyid>.key`, the label stays legible, and **the
+id is verified against the key material on load** so a renamed file fails loudly
+rather than resolving to the wrong key.
 
-**The keystore is addressed by `(environment, app, role, keyid)`** — the full
-config address plus the key id. The key id is not optional: the envelope
-identifies its key by id, so a tree addressed only by the address cannot answer
-"which key opens this" once a second key exists.
+*Two different things are called "key name": the config key (`DB_PASSWORD`) is
+bound into the AAD; the encryption key is what this tree stores.*
 
-The filename carries **both** the id and a human label, which is what avoids an
-index without forcing a scan:
+Requirements, each because the obvious implementation is wrong:
 
-- opening globs `*.<keyid>.key` — one path, no reading every file, and no second
-  source of truth able to disagree with the keys it describes;
-- the label stays legible so an operator can see what they hold;
-- **the id is verified on load** — derive it from the key material and compare
-  against the filename, so a renamed file fails loudly rather than quietly
-  resolving to the wrong key.
+1. **Every path segment is free text** — address fields *and the label*. An
+   environment named `../../..` or a label of `2026-09/../..` walks out of the
+   tree. Validate against a strict charset; never interpolate into a path.
+2. **Validate the key id before it becomes a glob.** It comes from the envelope,
+   i.e. from hz. Require exactly 16 hex characters, or hz supplies `*` and the
+   client matches an arbitrary key file.
+3. **Verify permissions on READ, by `fstat` on the opened descriptor** — not
+   `stat`-then-`open`, because on a shared box the gap between them is the whole
+   attack. Refuse a world-readable key the way ssh does, and check parent
+   directories: a `0777` dir means the file can be swapped whatever its own mode
+   says.
+4. **Check ownership, not just mode.** `0600` owned by somebody else is wrong.
+5. **Follow no symlinks** (`O_NOFOLLOW`, or verify after open).
+6. **Anchor the root outside the working directory.** A cwd-relative `.hz/` means
+   a repository carrying a hostile one gets consulted by anyone who runs `hz`
+   inside it.
 
-Five requirements, each because the obvious implementation is wrong:
+#### Which key is current
 
-1. **Address fields are free text and become path segments.** An environment
-   named `../../..` walks out of the tree. Validate against a strict charset and
-   reject separators, or encode the segments. Never interpolate a config string
-   into a path.
-2. **Verify permissions on READ, not only set them on write** — refuse a
-   world-readable key the way ssh does, and check the parent directories, since
-   a `0777` dir means the file can be swapped whatever its own mode says.
-3. **Check ownership, not just mode.** `0600` owned by somebody else is still
-   wrong.
-4. **Follow no symlinks** (`O_NOFOLLOW`, or verify after open), or the tree
-   silently redirects which key is loaded.
-5. **Anchor the root outside the working directory.** A cwd-relative `.hz/`
-   means running the CLI in a different directory picks up a different keystore,
-   and a repository carrying a hostile `.hz/` gets consulted by anyone who runs
-   `hz` inside it.
+Opening is self-describing. Sealing is not — it must pick the current key for an
+address, and filename order is a convention an operator can typo while mtime lies
+after any copy.
 
-A promotion needs two lookups from this tree — `keyFor(src, id)` to open and the
-current key for the target to seal — which is what "the client holds a keyset"
-means concretely.
+1. **"Newest" is a property of the file's CONTENTS.** A key file holds
+   `{key material, created_at, label}`; current = max `created_at`. Filenames stay
+   cosmetic and cannot cause a wrong choice.
+2. **hz stores a current key id per `(environment, app, role)`** as advisory
+   metadata. It already handles key ids, so this leaks nothing new, and it is what
+   makes every client learn a rotation happened instead of each laptop drifting
+   alone.
+3. **The client refuses to SEAL on disagreement, and only warns on OPEN.** The
+   asymmetry matters in both directions. Obeying hz's pointer would let a
+   compromised hz pin everyone to a key it had already stolen. But treating
+   disagreement as a mere warning lets anyone who can drop a file into the
+   keystore — a shared dev box, a malicious postinstall, an emailed key file —
+   set `created_at` to next year and become the sealing key for everything that
+   developer pushes thereafter. Refusing to seal with a key hz has never heard of
+   closes that, while opening stays lenient because it is the recoverable
+   direction.
 
-#### How a client knows its own address
+**What the pointer buys beyond correctness:** a machine holding key `X` cannot
+open anything sealed under `Y`, so a rotation not followed by re-wrapping every
+approved machine breaks pulls fleet-wide. Comparing each machine's `wrap_key_id`
+against the pointer makes that state observable — the affordance
+[hole 2](#2-rotation-is-asserted-not-designed) is missing.
+
+### How a client knows its own address
 
 The app supplies its own address rather than being told it, which is what makes
-binding it into the AAD mean anything:
+binding it into the AAD mean anything — the rule being: **bind only fields the
+opener knows independently of the party serving the blob.**
 
 - **app** is compiled in.
-- **role** is the process's own launch flag. For redline that is `serviceName`,
-  so `redline --serviceName=failover web start` resolves the `failover` config
-  and needs the `failover` key. The unprefixed default maps to a **named**
-  default role — an empty role breaks the keystore path even though the AAD
-  encodes an empty field happily.
-- **environment** is a launch flag too (`--env`). An earlier draft of this
-  section said it must not be, on the grounds that a bad deploy could point a
-  prod box at staging. It cannot: see below — the key grant is the enforcement,
-  not the flag.
+- **role** is the process's own launch flag — redline's `serviceName`. The
+  unprefixed default maps to a **named** default role; an empty role breaks the
+  keystore path even though the AAD encodes an empty field happily.
+- **environment** is a launch flag too (`--env`).
 
-**No launch flag can self-authorize.** A new `serviceName` or a new `--env` is a
-new `(machine, environment, app, role)` tuple, so it re-enters pending and an
-admin must bless it — and only that approval delivers that address's key. A prod
-box mistyping `--env=staging` gets a pending registration nobody approved, never
-receives the staging key, and therefore **cannot decrypt staging's config even
-if hz serves it**. It fails closed and visibly, rather than silently running the
-wrong environment.
+**No launch flag can self-authorize** — provided `0009` lands. A new `--env` or
+`serviceName` is a new `(machine, environment, app, role)` tuple, so it re-enters
+pending, and only an approval delivers that address's key.
 
-This also satisfies the rule that governs the AAD: bind only fields the opener
-knows independently of the party serving the blob. A launch flag is the
-process's own argv, which qualifies.
+> **Correction, 2026-09-18.** An earlier version of this section claimed a prod
+> box mistyping `--env=staging` "cannot decrypt staging's config even if hz
+> serves it. It fails closed and visibly." **That is false today, twice over.**
+> First, invariant and environment-bound values are plaintext by design, so the
+> box applies staging's URLs, buckets, retention and timeouts and fails only on
+> the secrets — half-applied wrong-environment config, worse than either clean
+> outcome. Second, `0008` has `UNIQUE (machine_id, app, role)` with no
+> environment column, so `UpsertRegistration` hits the existing row and bumps
+> `last_seen_at`: **the mistyped environment does not re-enter pending at all.**
+> The schema change was noted as bookkeeping; it is the thing that makes the
+> claim true or false. Both halves are Phase 2.
+>
+> There is also an undecided fork: `ResolveConfig` takes environment from the
+> *caller*, while `cm_machines.environment` is fixed at registration. Resolving
+> on the request lets the mistype succeed; resolving on the machine gives the box
+> prod's plaintext while it believes it is staging. **The correct behaviour —
+> refuse a request whose environment differs from the registration — is written
+> nowhere.**
 
-**Last-known-good must be keyed by ADDRESS.** A box that ran `--env=prod`
-yesterday holds prod's config on disk. Restart it as `--env=staging` and it is
-pending — but the agent is also told to boot from last-applied when hz is
-unreachable, so an address-blind cache lets it "recover" by booting prod's
-config while calling itself staging. So the agent must separate two states it
-would otherwise conflate:
+**Last-known-good is keyed by ADDRESS**, structurally, because the address is the
+path:
 
-- **hz unreachable** → boot last-known-good, loudly. The existing rule.
-- **hz reachable, and it says this address is not approved** → refuse. Never
-  fall back.
+    <state>/machine.key                            ← one keypair per machine
+    <state>/<env>/<app>/<role>/config.key          ← unwrapped, per registration
+    <state>/<env>/<app>/<role>/last-known-good     ← cache, scoped by layout
 
-and a cached config is only ever valid for the address that wrote it.
+A box restarted with a different `--env` looks in a directory that does not
+exist, so it cannot boot the other environment's cache. If state exists for a
+different address on that machine, say so loudly at startup — fail-closed is
+still a bad ten minutes if nobody knows why.
 
-**A box running two roles shares one keypair.** The machine enrols once and
-processes fetch per role, so `--serviceName=app` and `--serviceName=ops` on one
-box read the same private key and either can unwrap anything granted to that
-machine. Key scoping is per-role in hz; on that box it is whatever the OS gives
-you. Separate users with separate key files, or it is advisory — decide rather
-than discover.
+**`--env` is bootstrap state, so it must be local**: the systemd unit or an
+`EnvironmentFile` in production, `local.properties` for dev. Nothing hz serves may
+influence it, or hz could retarget a box into an environment it was never
+approved for.
 
-**Schema consequence:** the registration tuple becomes
-`(machine, environment, app, role)` — the config address plus the machine — so
-`cm_machines.environment` stops being meaningful. One keypair per machine, but
-one wrapped key per registration, which then sits at exactly the key address
-`(environment, app, role)`. `cm_machines.wrapped_env_key` is singular and
-therefore wrong on two counts; it moves to the registration. Migration 0009,
-alongside lineage.
+**Three states, not two.** The agent must distinguish:
 
-### The developer side — an app that publishes its own config
+| hz says | agent does |
+|---|---|
+| unreachable | boot last-known-good, loudly |
+| **anything that is not a positive denial** (unknown, pending, error) | **boot last-known-good, loudly** |
+| `state = 'denied'` explicitly | refuse |
+
+The middle row is [hole 6](#6-an-hz-restore-or-failover-bricks-the-fleet) and it
+is the worst failure mode currently in the design.
+
+**A box running two roles shares one keypair**, so `--serviceName=app` and
+`--serviceName=ops` on one box both read the same private key and either can
+unwrap anything granted to that machine. Key scoping is per-role in hz; on that
+box it is whatever the OS gives you. Separate users with separate key files, or
+it is advisory.
+
+### The developer side
 
 The app imports `configmgr` and **declares which keys hz manages**. A dev pushes
-with something like `redline config --push --env=staging`, and the push simply
-fails without the keys for what it is pushing — authority is possession, not a
-permission check.
+with `redline config --push --env=staging`, and the push fails without the keys
+for what it is pushing — authority is possession, not a permission check.
 
-redline's file layout maps onto the taxonomy along two orthogonal axes, which is
-what finally answers whether `secret, invariant` is a declared property:
+redline's file layout maps onto the taxonomy along two orthogonal axes:
 
-| file | axis it decides | schema decides |
+| file | decides | app schema decides |
 |---|---|---|
 | `home/config.properties` | not secret — hz stores plaintext and can diff it | invariant **or** environment-bound |
-| `home/secret.properties` | secret — sealed client-side before it leaves the disk | **secret-invariant** or secret, environment-bound |
+| `home/secret.properties` | secret — sealed client-side before it leaves the disk | secret-invariant **or** secret, environment-bound |
 | `home/local.properties` | never registered, never pushed | — |
 
-Non-default roles prefix the file: `home/failover.config.properties`,
-`home/processor.secret.properties`.
+Non-default roles prefix the file: `home/failover.config.properties`.
 
 **File placement decides secrecy** — really "must this be sealed before leaving
 my machine". **The app's schema decides promotion scope.** So the fourth binding
 is declared in code and reviewed in code review, rather than chosen per-push by
-whoever is pushing. ✅ That closes the open question.
-
-Four requirements the layout creates:
+whoever is pushing.
 
 1. **`local.properties` is structurally unpushable** — push does not read it, and
-   a key appearing in both `local` and `config`/`secret` is a hard error rather
-   than a precedence rule. Ambiguity about which value shipped is the exact bug
-   class this project exists to kill. It wants gitignoring, and the tool should
-   say so rather than assume.
-2. **Fail closed on the schema.** A key in the file but absent from the app's
-   declared set is never pushed. "Defines its config locations" means an
-   allowlist, not a discovery pass.
-3. **Role names need a charset restriction**, which serves two problems at once:
-   `failover.config.properties` stops parsing when a role is called `config`,
-   `secret` or `local`, and roles are keystore path segments so they need
-   traversal validation anyway. Reserve those three names, forbid separators.
+   a key in both `local` and `config`/`secret` is a hard error, not a precedence
+   rule. Ambiguity about which value shipped is the bug class this project exists
+   to kill.
+2. **Fail closed on the schema, in BOTH directions.** A key absent from the app's
+   declared set is never pushed — and, critically, never *accepted on pull*
+   either. See [hole 7](#7-hz-has-unrestricted-write-authority-over-every-box):
+   the pull half is what stops a compromised hz injecting config.
+3. **Role names need a charset restriction.** `failover.config.properties` stops
+   parsing when a role is called `config`, `secret` or `local`, and roles are
+   keystore path segments needing traversal validation anyway. Reserve those
+   three, forbid separators.
 4. **`--push` is atomic per role and loud about what it skipped.** A dev holding
-   `staging/redline/app` but not `…/processor` pushes the first and must be told
-   plainly the second was skipped for want of a key — never silently, never
-   partially.
+   `staging/redline/app` but not `…/processor` must be told plainly — never
+   silently, never partially.
 
-**The cost of this granularity**, stated so it is chosen: a dev working across
-`app`, `failover` and `processor` holds three keys per environment. That puts
-real weight on the keystore layout and on `--push`'s error messages.
+**The cost, stated so it is chosen:** a dev working across `app`, `failover` and
+`processor` holds three keys per environment. Key *count* is also the denominator
+of the rotation and escrow problem — every key is a separate thing to store,
+rotate, re-wrap and lose.
 
-#### Which key is CURRENT — the part nothing was storing
-
-Opening is self-describing: the envelope names its key id, so the client scans
-the tree, computes each candidate's id, and matches. Sealing is not — it has to
-pick *the current key for (environment, app)*, and nothing said which that was.
-Filename ordering is a convention an operator can typo; mtime lies after any
-copy.
-
-1. **"Newest" becomes a property of the file's CONTENTS, not its name.** A key
-   file holds `{key material, created_at, label}`, and the id is derived from the
-   material. Current = max `created_at`. Filenames stay cosmetic and cannot cause
-   a wrong choice.
-2. **hz stores a per-(environment, app) current key id, as advisory metadata.**
-   It already handles key ids — every ciphertext carries one and
-   `cm_machines.wrap_key_id` records what each machine was given — so this leaks
-   nothing new. hz is the shared coordination point, which is what makes every
-   client learn a rotation happened instead of each laptop drifting alone.
-3. **The client seals with the newest key it actually holds and treats hz's
-   pointer as a cross-check.** On disagreement, warn — do not obey. A compromised
-   hz could otherwise pin everyone to an older key it had already stolen, and the
-   client is in a position to refuse that.
-
-**What this buys, beyond correctness:** a machine holding key `X` cannot open
-anything sealed under `Y`, so a rotation not followed by re-wrapping every
-approved machine breaks config pulls fleet-wide. With a current-key pointer that
-state is *observable* — compare each machine's `wrap_key_id` against current and
-the list of boxes still needing a re-wrap falls out. That is finding 4's missing
-affordance. Without the pointer there is nothing to compare against.
-
-### Provenance and divergence
-
-A promoted config records where it ran, for how long, on which release, and who
-approved. That is what makes the approval prompt a decision instead of a dialog
-to click through.
-
-Invariant values are by definition the ones that should never differ between
-environments, so if prod's stop matching what was promoted, that is always a
-bug and should be reported as divergence.
-
-## Resolution rules
-
-Three, because "last wins" is the exact shape of every bug found on 2026-09-17:
-
-1. **"Last" is immutable.** Ordered by a sequence assigned at blessing time,
-   never recomputed. If it were "most recently modified", re-blessing an old
-   config would silently promote it over a newer one without anyone touching
-   the winner.
-2. **Overlap is inspectable.** `resolve(env, app, role, version)` returns the
-   winner AND the candidates it shadowed. Silent resolution is fine when you
-   can ask what it resolved to; it is how config goes mysteriously wrong when
-   you cannot.
-3. **Zero matches is a named failure, not a hang.** A closed `maxVer` with no
-   open successor leaves a newer release matching nothing. Fail with "no config
-   satisfies v1.4.0 for prod/redline/app" — never block on registration looking
-   like a pending approval. hz should also refuse to leave an `(env, app, role)`
-   with no open-ended config, so the state is unreachable.
-
-**Ranges are immutable after blessing.** Editing one retroactively changes what
-a running box gets on its next start, with no diff anywhere. Supersede instead
-— which the open `maxVer` plus last-wins already makes the natural move.
-
-**The agent reports what it resolved.** Resolution is computed, not recorded, so
-the only place the fact "v1.2.5 ran config #42" exists is the box. That report
-IS the audit trail; without it you can bless carefully and still not know what
-production ran. It also makes config drift a checkable fact.
-
-## Why in hz, not beside it, and not as an extension
+## Why this lives in hz
 
 **There is no extension seam.** hz has no plugin registry and no module
 interface, so the only real options are in-tree or a separate service. In-tree
 wins:
 
-- Every box must reach hz anyway. If hz is down the network is down, so this
-  adds no new failure domain — the usual argument against consolidating does not
-  apply here.
-- A separate service duplicates identity, auth, UI, storage, backup, and enters
-  PCI scope on its own.
-- **Horizon's canon survives:** *hz stays generic — no client code, no client
-  credential, no knowledge of what the value means.* A store of blobs keyed by
-  `(environment, app, role)` with an approval state and a version range knows
-  nothing about what is inside them, as generic as storing peers. What is NOT
-  generic (which keys redline needs, what a staging run proves) stays in
-  redline.
+- Every box must reach hz anyway. If hz is down the network is down, so this adds
+  no new failure domain.
+- A separate service duplicates identity, auth, UI, storage and backup, and
+  enters PCI scope on its own. **This argument defeats Vault and SPIRE equally**,
+  and a 2026-09-18 prior-art review confirmed it holds against both.
+- **Horizon's canon survives:** hz stays generic — no client code, no client
+  credential, no knowledge of what a value means.
 
-**What does not exist yet:** hz's sqlite holds `users`, `sessions`,
-`api_tokens`, `credentials`, `peer_owners`, `password_history` — but **services
-are not rows**. `findServiceByToken` returns an index into `config.json`. So
-this needs real persistence, with no precedent except `peer_owners`. There is a
-migrations system to hang it on.
+**Confirmed against the alternatives** (2026-09-18): Vault, Infisical, Doppler,
+AWS Secrets Manager and 1Password Secrets Automation all decrypt **server-side**
+— the server is trusted with plaintext by design. None of them offer the property
+this design is built around. SOPS's data key is per *file*, not per secret, and
+it has no promotion concept; the staging→prod re-seal here is what SOPS users
+hand-roll in CI. Nothing found combines a promotion gate with provenance.
 
-## The escalation this creates, and the shape that contains it
+**What does not exist yet:** hz's sqlite holds `users`, `sessions`, `api_tokens`,
+`credentials`, `peer_owners`, `password_history` — but **services are not rows**;
+`findServiceByToken` returns an index into `config.json`. `peer_owners` is the
+only precedent.
 
-hz today is a network appliance: compromising it yields DNS, VPN and proxy
-control. Making it the config store means compromising it would also yield every
-credential for every service on every box. That is a material escalation and the
-strongest argument for keeping secrets out of it.
+## The security model
 
-**So hz stores secret values as ciphertext it cannot read.** It holds the blob,
-the metadata, the range and the approval state; only a holder of the environment
-key can decrypt. An hz compromise leaks ciphertext and a fleet map, not
-credentials.
+### What hz can and cannot do — stated honestly
 
-The binding taxonomy maps onto this exactly, which is a good sign it is the
-right seam:
+The original claim was: *hz stores ciphertext it cannot read, so compromising hz
+yields ciphertext and a fleet map, not credentials.* **Two adversarial reviews on
+2026-09-18 established that this is too strong.** The accurate version:
+
+> **hz AT REST holds ciphertext it cannot read.**
+> **hz AT RUNTIME can steal any environment key an operator uses the browser UI
+> with, and can write arbitrary non-secret config to every box.**
+
+Both gaps have fixes in Phase 2. Until they land, do not restate the original
+claim.
 
 | binding | hz can read? | why |
 |---|---|---|
-| invariant | yes | promotion has to diff these, and by definition they are not credentials |
-| environment-bound, non-secret | yes | hostnames, prefixes — the promotion gate needs them |
-| **secret** | **no** | re-sealing happens on a client, so no flow ever needs hz to read one |
+| invariant | yes | promotion must diff it, and it is not a credential |
+| environment-bound, non-secret | yes | the promotion gate needs it |
+| **secret** | **no** | re-sealing happens on a client, so no flow needs hz to read one |
 
-Nothing in the promotion flow ever requires hz to see secret plaintext. No
-special cases.
+Confidentiality of the secret subset is a real property. **Integrity of config is
+not a property this design has anywhere** — no signature on a config, no bless
+signature, no agent-side schema check on pull. For a project whose driver is
+admission control, that is the wrong gap to have; it is
+[hole 7](#7-hz-has-unrestricted-write-authority-over-every-box).
 
-### Keys are SYMMETRIC, per environment, and operators hold them
+### Keys are symmetric, per (environment, app, role)
 
-Requirement (owner, 2026-09-18): an operator must be able to paste a key into
-the UI to **see and debug deltas** as well as submit new values, and
-**enrollment supplies the key that is passed to the service**. That forces
-symmetric keys — with encrypt-to-peer-pubkey an admin could write new values
-without the private key but could never read existing ones, which kills the
-debugging case that motivates the feature.
+**Requirement (owner):** an operator must be able to paste a key to **see and
+debug deltas** as well as submit new values. That forces symmetric keys — every
+asymmetric-recipient scheme (age, Sealed Secrets, encrypt-to-pubkey) lets an
+admin write without reading but never read, which kills the debugging case. A
+2026-09-18 prior-art review confirmed this rules out the whole class, not just
+those two.
 
-Consequences, all load-bearing:
+- **The key address is exactly the config address.** Prod's key is not staging's,
+  app A's is not app B's, and `processor` cannot read what `app` holds. This is
+  what resolved the old key-granularity hole. The isolation no longer "falls out
+  of secrets never promoting" — some secrets do promote now — so it rests
+  entirely on who holds which key.
+- **Every ciphertext carries a key id**, so rotation can be gradual. Bitnami
+  Sealed Secrets ships the same active/old key-id bookkeeping, so this is a
+  re-derived known-good pattern rather than an invention.
+- **Decryption happens on a client.** hz may log THAT a decrypt session opened
+  and by whom, never the key. **Phase 2 moves the ceremony out of the browser
+  entirely** — see [hole 9](#9-hz-serves-the-javascript-that-does-the-decryption).
+- **The trade:** the key now lives with humans, not only machines. An hz
+  compromise is capped at ciphertext, but the exposure surface includes every
+  laptop that has held a prod key.
 
-- **Decryption happens IN THE BROWSER.** If the key is POSTed so hz can decrypt
-  server-side, hz sees the key and the plaintext and the property above is gone.
-  WebCrypto in the page, key in memory only — never `localStorage`, cleared on
-  navigate, with an explicit lock. hz may log THAT a decrypt session was opened
-  and by whom, never the key.
-- **One key per (environment, app, role)** — narrowed from per-environment on
-  2026-09-18, and it is what resolves finding 5. Prod's key is not staging's, so
-  a staging box compromise cannot read prod; app A's key is not app B's; and a
-  `processor` role cannot read what `app` holds. The key address is exactly the
-  config address.
+### Primitives
 
-  Note the isolation no longer "falls out of secrets never promoting" — since
-  2026-09-18 some secrets do promote, by being re-sealed on a client holding both
-  keys. It now rests entirely on who holds which key.
-- **Every ciphertext carries a key id**, so rotation can be gradual. Without it,
-  rotating means re-encrypting every secret and re-enrolling every box
-  atomically — which means it never happens.
-- **The trade, stated so it is chosen rather than discovered:** the key now
-  lives with humans and browsers, not only machines. The value of an hz
-  compromise is capped at ciphertext, but the exposure surface now includes
-  every laptop that has pasted the prod key. Bought deliberately, for the
-  ability to see that prod's gateway key differs from staging's — which hz alone
-  can never show.
+Every primitive must exist in **both** WebCrypto and Go, or the design does not
+run: ECDH **P-256**, **HKDF-SHA256**, **AES-256-GCM**. All Go stdlib
+(`crypto/ecdh`, `crypto/hkdf`, `crypto/aes`), no new dependency. The byte-level
+envelope format and a browser recipe are in `configmgr/doc.go`, with tests that
+reimplement the recipe from the doc alone so the two cannot drift.
 
-### Primitives — chosen by what the browser can run
+> **The stated rationale for P-256 over X25519 is stale.** This document said
+> WebCrypto's X25519 support was uneven. As of 2026-09-18 it is Safari 17+,
+> Firefox 130+, Chrome 133+ — roughly 88% coverage, and this document's own
+> trigger for reconsidering ("if support becomes universal, the version byte
+> exists so this can move") has largely been met. AES-GCM remains right
+> regardless of curve. Revisit the curve on evidence, not on the closed gap.
 
-**Changed 2026-09-18 from the original sketch, which said X25519 and did not
-name a symmetric cipher.** The browser is not an optional participant here: the
-approver wraps the environment key in-page, and an operator decrypts secrets
-in-page to inspect deltas. So every primitive has to exist in **both** WebCrypto
-and Go, or the design does not run.
-
-| layer | chosen | why not the obvious alternative |
-|---|---|---|
-| key agreement | **ECDH P-256** | X25519 reached WebCrypto only recently and support is uneven across browsers. P-256 has been universal for years. An operator's browser is not a dependency we get to pin. |
-| key derivation | **HKDF-SHA256** | native both sides |
-| authenticated encryption | **AES-256-GCM** | WebCrypto has neither NaCl secretbox nor XChaCha20-Poly1305. AES-GCM it can do natively. |
-
-Everything above is Go **stdlib** (`crypto/ecdh`, `crypto/hkdf`, `crypto/aes`),
-so this adds no dependency. Nothing in the security model changes — the property
-is still that hz holds ciphertext it cannot open. Only the algorithm names moved,
-and they moved toward what the operator's browser can actually execute.
-
-One consequence worth stating: **P-256 is the weaker-looking choice on paper**
-and it is chosen anyway, because a primitive the browser cannot run is not a
-security property, it is a design that does not ship. If WebCrypto X25519
-support becomes universal, the envelope format carries a version byte precisely
-so this can move.
+A 2026-09-18 prior-art review noted that **JWE (`ECDH-ES` + `A256GCM`, P-256)**
+would have prevented the two worst crypto holes by construction, since a JWE
+protected header *is* the AAD by specification. That is a Phase 2+ option with a
+real trade — two new dependencies against deleting hand-rolled serialization.
 
 ### The approver distributes the key; hz never stores it
 
-The obvious delivery — hand the environment key to hz and let it pass the key on
-at enrollment — would put the key in sqlite in plaintext until pickup. That is
-exactly the cost the [per-peer secrets](icebox.md) entry conceded before it was
-retired: *"the value sits in sqlite in plaintext until pickup. That is the cost
-of delivery."* Paying it here would downgrade the claim to "hz cannot read
-secrets AT REST, but sees every environment key during every enrollment".
+Handing the key to hz for delivery would put it in sqlite in plaintext until
+pickup — exactly the cost the retired per-peer secrets entry conceded, and it
+would downgrade the claim to "hz cannot read secrets at rest, but sees every
+environment key during every enrollment."
 
-**Decided (owner, 2026-09-18): the approver holds the key and distributes it
-through the act of approving. hz never stores it.**
-
-1. The agent generates a keypair at registration and presents the **public** key
-   in the request. Its private key never leaves the box. (A fresh pair, not the
-   WireGuard key — reusing key material across protocols is a cheap way to be
-   wrong later. See [Primitives](#primitives--chosen-by-what-the-browser-can-run)
-   for which curve and why.)
-2. The approver opens the pending registration and pastes the environment key.
-   In the browser, that key is encrypted TO the requesting peer's public key.
-   Only the wrapped blob is submitted.
-3. hz relays and stores the wrapped blob. It cannot open it, at rest or in
-   flight.
-4. The agent unwraps with its private key and holds the environment key at
-   `0600`, root-only, so later boots need no human — approval is per
-   registration, not per boot.
+1. The agent generates a keypair at registration and presents the **public** key.
+   Its private key never leaves the box. A fresh pair, not the WireGuard key —
+   reusing key material across protocols is a cheap way to be wrong later.
+2. The approver pastes the environment key; it is wrapped to the machine's public
+   key on the client. Only the wrapped blob is submitted.
+3. hz relays and stores a blob it cannot open.
+4. The agent unwraps and holds the key at `0600`, so later boots need no human.
 
 **This makes approval a cryptographic capability grant rather than an
-authorization flag**, and that is the real prize. An unapproved box cannot
-decrypt anything even if it obtained every blob, because it was never handed the
-key. A bug in an authorization check cannot bypass that; a missing approval is a
-missing key. It also means only someone trusted with an environment's key can
-approve that environment's registrations — separation of duties enforced by
-possession rather than by role table.
+authorization flag** — for the secret subset. It is *not* that for everything
+else: per [hole 7](#7-hz-has-unrestricted-write-authority-over-every-box) the
+approved state also unlocks plaintext config, which no key protects. And hz does
+not currently check that a submitted blob is even addressed to the machine being
+approved ([hole 3](#3-approval-accepts-any-bytes)).
 
 Costs, named:
 
-- **The key must live somewhere durable and human-held** (password manager).
-  Lose it and you can neither approve new boxes nor read deltas. It is the one
-  credential the whole system reduces to.
+- **The key must live somewhere durable and human-held.** Lose it and you can
+  neither approve new boxes nor read deltas. There is **no escrow, no threshold
+  and no recovery path** — the failure most likely to actually happen.
 - **The box persists the environment key on disk.** It must, or every restart
-  needs a human. That is the one plaintext secret at rest on a box, and it is
-  the thing to protect and rotate.
+  needs a human.
+
+  > **Correction:** an earlier version called that "the one plaintext secret at
+  > rest on a box." It is not. Last-known-good is *applied* config, so every box
+  > also holds plaintext of **every secret at its address**, indefinitely,
+  > unreached by tombstones or rotation. And because the key is symmetric and
+  > held unwrapped, rooting any single box yields that address's key permanently
+  > — for every box at that address, past and future ciphertext alike. There is
+  > no escrow design, yet "ssh to a prod box and read the key file" is the de
+  > facto disaster recovery, and it works. Decide that deliberately or make it
+  > impossible.
 
 ### Machine-scoped secrets
 
-**Decided (owner, 2026-09-18): the iceboxed per-peer secrets entry is retired.
-This covers it.** hz gets one secret store, one approval flow, one audit trail —
-not two with different security properties.
+**Owner, 2026-09-18: the iceboxed per-peer secrets entry is retired. This covers
+it.** One secret store, one approval flow, one audit trail.
 
-That entry (`iodesystems-intern`, not redline) wanted a registry token on a new
-laptop before it could configure npm, maven, docker, go, apt and brew: an admin
-sets a value for one peer, the peer reads it once, the row is deleted. It
-accepted plaintext in sqlite for the window between set and pickup, and said so.
+That entry wanted a registry token on a new laptop: an admin sets a value for one
+peer, the peer reads it once, the row is deleted, accepting plaintext in sqlite
+between set and pickup. Folding it naively would have been worse — its whole
+point is **per-device scope**, and an environment key cannot express that.
 
-Folding it naively would have made it worse, not better. Its whole point is
-**per-device scope** — revoke a token for one laptop without rotating it for
-every laptop — and an environment key cannot express that. Handing every
-workstation the workstation environment key would let each one decrypt every
-other one's secrets. An over-grant in exchange for removing plaintext is not a
-trade worth making.
-
-The design already carries the answer, with no new concept: **the agent
-generates an ECDH keypair at registration and hz holds its public key.** So a
-machine-scoped secret is encrypted directly to that machine's public key. The
-environment key is not in the path at all.
+The answer needs no new concept: the agent already generates a keypair at
+registration, so a machine-scoped secret is **encrypted directly to that
+machine's public key**, with no environment key in the path.
 
 | | iceboxed entry | machine-scoped secret |
 |---|---|---|
 | at rest in hz | plaintext until pickup | ciphertext hz cannot read |
 | scope | one peer | one machine |
 | revocation | delete the row | delete the blob — it decrypts nowhere else |
-| who can set one | any admin | any admin: needs only the machine's public key, which hz publishes |
+| who can set one | any admin | any admin: needs only the machine's public key |
 | durability | one read, then gone | durable; re-fetched on every boot |
 
-Four things follow, each worth stating:
+- **Setting one does not require the environment key** — hz publishes the target
+  machine's public key. So the separation-of-duties property on environment
+  secrets does not leak into routine onboarding. **But** that also means there is
+  currently no approval step on which to hang the fingerprint check
+  ([hole 1](#1-nothing-authenticates-the-public-key-an-approver-wraps-to)).
+- **One-shot pickup is dropped, not lost.** Delete-on-read compensated for
+  plaintext at rest; with ciphertext there is nothing to compensate for, and
+  durability fixes the entry's own complaint that a lost response is a lost
+  secret.
+- **The VPN-MFA worry is defused** — a stolen WireGuard key now collects blobs
+  that open only with the machine's private key. Still gate pickup on a verified
+  MFA session when VPN MFA is on.
+- **The CLI moves** to config-manager commands addressed by machine. Values from
+  **stdin**, never argv.
 
-- **Setting a machine-scoped secret does not require the environment key.** hz
-  hands out the target machine's public key, the browser wraps to it. So the
-  separation-of-duties property on environment secrets (only a key-holder can
-  approve) does not leak into a routine onboarding act.
-- **One-shot pickup is dropped, not lost.** Delete-on-read was compensating for
-  plaintext at rest — it bounded how long a readable value sat in sqlite. With
-  ciphertext the compensation has nothing to compensate for, and durability
-  fixes the entry's own stated failure: *"a lost response is a lost secret. The
-  admin re-sets it."*
-- **The VPN-MFA question the entry raised is defused.** It worried that a stolen
-  WireGuard key collects secrets without the second factor. Now a stolen key
-  collects blobs that open only with the machine's private key — root-only,
-  `0600`, on that box. Still gate pickup on a verified MFA session when VPN MFA
-  is on, but it is no longer the only thing standing there.
-- **The CLI moves.** The entry proposed `hz vpn peer secret set|rm|list`. Under
-  the fold these are config-manager commands addressed by machine, not VPN
-  commands. Values still come from **stdin**, never argv.
+What is genuinely lost: that entry was small and unblocked; this is neither. Until
+the config manager exists, intern onboarding has no path in hz.
 
-What is genuinely lost: the entry was small and could have shipped in a week.
-This cannot. Until the config manager exists, the intern onboarding problem has
-no solution in hz, and that is the cost of the decision.
+## Known holes
 
-## Security findings from building the crypto (2026-09-18)
+Consolidated 2026-09-18 from implementing `configmgr/` and from two adversarial
+reviews. Numbered for reference; **not** in severity order within a group.
+Anything marked ✅ is closed.
 
-Surfaced while implementing `configmgr/`. Recorded because several are holes in
-the design above, not in the code below it, and two of them falsify claims this
-document makes.
+### Break the security claim
 
-### Being fixed now
+#### 9. hz serves the JavaScript that does the decryption
 
-**1. The envelope bound nothing about WHICH secret it is.** hz cannot read a
-blob, but it chooses which blob to hand a machine — and a sealed value
-authenticated identically no matter which key name or which
-`(environment, app, role)` it was served as. So a compromised or buggy hz could
-serve a rolled-back secret, or app A's ciphertext where app B's was expected,
-and the agent would accept it. Fixed by binding the address and key name into
-the AEAD's additional data: the opener supplies them from what it *asked for*,
-so a misrouted blob fails authentication instead of decrypting into the wrong
-value.
+The most serious one, and it **subsumes hole 1 whenever the ceremony runs in a
+browser**: substituting a public key is unnecessary when you can substitute the
+wrap function. Compromise hz, edit one line of the bundle it serves, and the
+approval page POSTs the pasted key before wrapping it. Every mitigation this
+document specifies — mandatory fingerprint compare, explicit lock, no
+`localStorage`, cleared on navigate — **runs in the attacker's own code**. There
+is no CSP either; `internal/server/server.go:1212` records its absence
+deliberately.
 
-### Falsifies a claim in this document
+Also: "cleared on navigate" is near a no-op in an SPA, since client-side routing
+never leaves the JS realm. An explicit lock plus an idle timer is the real
+control.
 
-**2. Nothing authenticates the public key the approver wraps to.** The approval
-flow above says the browser wraps the environment key "to the requesting peer's
-public key" — but **the browser gets that public key from hz.** A compromised hz
-substitutes its own key and harvests every environment key at the next approval.
+**Fix (Phase 2): move the paste/wrap/decrypt ceremony to the `hz` CLI** — a
+locally installed binary, updated deliberately, outside hz's control at the
+moment of use. This costs nothing new: both primitives already exist in Go
+precisely so two clients can do it. The browser then displays what the CLI
+decrypted, or nothing.
 
-That is the one hz-compromise path that yields plaintext, and it defeats the
-headline claim that an hz compromise leaks only ciphertext. The fingerprint is
-the entire defense, so:
+#### 7. hz has unrestricted write authority over every box
 
-- **Comparing the fingerprint against what the machine printed is a MANDATORY
-  BLOCKING STEP in the approval UI.** Not a displayed convenience, not an
-  advisory chip. The approver types or confirms it; the wrap does not proceed
-  otherwise.
-- **The machine-scoped-secret flow is worse** — it is described above as a
-  routine act with no approval step, so there is currently no place for the
-  check to hang at all. That flow needs a verified-fingerprint precondition
-  before it can be called routine.
+`ConfigEntry` carries either `Value` (plaintext) or `Sealed`, and **hz decides
+which**. So a compromised hz serves `{key: "DB_PASSWORD", binding: "invariant",
+value: "hunter2"}` — no envelope, so the AAD never runs. Or
+`DB_URL = postgres://attacker/…`, which makes the app *send* prod's real
+credentials outward. Or `AUTH_DISABLED=true`. hz never read a secret; it got one
+anyway.
 
-Until that UI exists, the security claim in "The escalation this creates" is
-aspirational rather than true.
+Omission is unconstrained too: hz simply not sending `DB_PASSWORD` makes the app
+fall back to its default or empty — verbatim the founding bug.
 
-### Design gaps to close before this is finished
+**Fix (Phase 2): the app's declared schema, enforced on PULL.** This document
+already requires a fail-closed allowlist for `--push`; point the identical rule
+the other way. The agent refuses a plaintext value for a key declared secret,
+refuses an unknown key, and refuses a missing declared key. That converts both
+attacks from hz's choice into a mismatch the box reports.
 
-**3. De-approval is not revocation.** "Approval is a cryptographic capability
-grant, not an authorization flag" is true in reverse too: once a box holds the
-environment key it can read every secret in that environment **forever**,
-including ones created after it was revoked, if it can still reach the blobs.
-The machine-scoped table has a real revocation story (delete the blob, it
-decrypts nowhere else). Environment secrets have none. The only true revocation
-is rotating the environment key — which costs what (4) says it costs, and that
-needs saying plainly wherever revocation is offered.
+#### 8. `seq` rollback at one address still works
 
-**4. Rotation is asserted, not designed.** Key ids let old ciphertext still
-*open*. They do not deliver a new key to an already-approved box: hz holds no
-key, so every re-wrap needs the approver's browser and each machine's public
-key. "Re-wrap this environment's key to these N machines" is a first-class act
-distinct from approval and it does not exist above. Without it the key id buys
-nothing, and the "it never happens" failure this document cites as the *reason*
-for key ids applies to rotation anyway. The agent also needs a way to report
-which key ids it currently holds.
+Config `#10` (`v1.0–1.3`) holds a leaked `DB_PASSWORD`; `#11` (`v1.4–∞`) holds
+the rotated one. A box on v1.4 asks; hz serves `#10`'s ciphertext. Address, key
+name and key id are identical, so **the AAD is identical and the tag verifies**.
 
-**7. Losing the machine private key must re-enter pending.** Registration says a
-role change re-enters pending; it does not say a keypair change does. After a
-reinstall or disk wipe the stored wrapped blob is undecryptable and the box
-**looks approved while being unable to boot**. Keypair identity has to be part
-of what "first registration" means.
+> An earlier version of this document claimed binding the address fixed
+> "a rolled-back secret". It does not, and `configmgr/doc.go` says so correctly.
+> The two disagreed; `doc.go` was right.
 
-### Decisions the owner owns
+The claimed defence — the agent reports which seq it applied — fails under this
+document's own threat model, because **the report goes to hz**, which drops it.
+There is also no table for it in `0008`.
 
-**5. Key granularity is coarser than the addressing.** ✅ **Resolved
-2026-09-18** — the key address is now exactly the config address,
-`(environment, app, role)`. Nothing is coarser than anything. A `processor`
-cannot read what `app` holds, and neither can read another app's.
+**Fix (Phase 2): a client-side monotonic floor**, which passes the binding test
+because the agent knows it independently — it is in its own cache. Cache
+`version → highest seq ever applied at that version`, refuse anything lower.
+Legitimate rollback to an older binary still works, because each version has its
+own floor. No clock, so it survives the freshness constraint.
 
-**6. Read implies write implies approve.** Symmetric keys mean any operator who
-can paste the prod key to inspect a delta can also mint valid prod secrets and
-approve any prod registration. There is no read-only holder, and there cannot be
-one while the key is symmetric. This document names the laptop-exposure trade;
-this is the sharper half and it is unnamed — separation of duties is enforced by
-possession, which means possession is total. **Not decided.** Accepting it is
-reasonable for a homelab; it is not obviously reasonable under a compliance
-regime, and hz is PCI-scoped.
+#### 1. Nothing authenticates the public key an approver wraps to
 
-## TODO — HA, deliberately deferred
+The approver's client gets the machine's public key **from hz**, so a compromised
+hz substitutes its own and harvests every environment key at the next approval.
+Independent of hole 9 — it survives moving the ceremony to the CLI.
 
-**Decided (Carl, 2026-09-18): this ships primary-only. There are no HA instances,
-so it costs nothing today.** Written down because it will not stay free.
+**Fix (Phase 2): an HMAC of the public key under the enrollment token**, which
+the design already places on the box at provisioning. The approver's client
+verifies it; hz cannot forge it because it never holds the token. That removes
+the dependence on a human comparing hex. Until then the fingerprint compare is
+the only defence, and it should require **typing** the fingerprint rather than
+visually confirming one shown alongside — a human reliably compares the first
+group and the last.
 
-hz's sqlite is **not replicated and never has been** — `users`, `credentials`,
-`sessions`, `api_tokens`, `peer_owners` are all per-instance
-(`internal/config/config.go:251` states the policy on purpose: replicating
-credentials as a side effect of editing a service would be indefensible). Only
-`config.json` replicates, by a 30s pull with a hand-maintained local-only field
-allowlist (`internal/server/peer_sync.go:220`), plus a bespoke last-write-wins
-merge for IP bans.
+### Cause lockout or data loss
 
-So config-manager state — registrations, approvals, wrapped keys, config blobs —
-lives on one instance. **A failover loses every registration and approval**, and
-a box that enrolled against one instance is unknown to the other. Do not put this
-state in `config.json` to get it replicated: `updateConfig`
-(`internal/server/server.go:495`) is a read-modify-write with no mutex, so two
-concurrent approvals silently lose one.
+#### 6. An hz restore or failover bricks the fleet
 
-The durable answer is a replication mechanism hz does not have. That exploration
-is [iceboxed](icebox.md) — "Replicated state for HA" — and is not a prerequisite
-here. Revisit when a second instance exists.
+The rule "hz reachable and says not approved → refuse, never fall back" conflates
+*denied* with *never heard of you*. The latter is not an attack signature — it is
+the signature of a failover (which this design says loses every registration) or
+a restore from backup. Under the refuse rule, every box refuses at its next
+restart while holding a valid key, a valid cache, and an approval someone
+genuinely granted.
 
-## Status
+**Fix (Phase 2): treat anything that is not a positive denial as unreachable.**
+Boot cached, loudly; reserve refusal for an explicit `state = 'denied'`. A box
+never approved holds no key, so its cache is empty and the leniency costs
+nothing.
 
-- **next:** nothing is started. First unit of work is persistence — the
-  migration and db package for configs, registrations and approvals, since
-  every other slice depends on it and hz has no precedent for service rows.
-- **risks:**
-  - **Scope.** This is the largest feature ever proposed for hz and it lands in
-    the box the whole network depends on. Every phase must leave hz working; a
-    half-built config manager must not be able to block a boot.
-  - **Browser crypto is the load-bearing security claim** and the easiest thing
-    to get subtly wrong (key in memory only, no `localStorage`, cleared on
-    navigate, correct AEAD, key id on every ciphertext). It needs a real review,
-    not a code review.
-  - **The key-wrapping step is the one with no fallback.** Lose the environment
-    key and no new box can be approved and no delta can be read.
-  - hz becomes a dependency of every box's startup path. The
-    last-applied-on-disk fallback is not optional.
-  - **Retiring per-peer secrets moved a small unblocked feature behind a large
-    blocked one.** If the intern onboarding need becomes urgent before the
-    config manager lands, the decision is worth re-opening rather than working
-    around.
-- **blocking decisions (yours):**
-  0. Findings **5** (key granularity — an `ops` box can read another app's prod
-     secrets) and **6** (anyone who can read a delta can also mint secrets and
-     approve registrations) from the security findings above. Neither blocks the
-     first slice; both should be answered before this is called finished.
-  1. The three open questions below.
-  2. Whether this is the next thing built, ahead of the two unblocked items in
-     [plan.md](plan.md) (hz-probe vantage, L4 forwards deploy). Note this now
-     carries the intern onboarding use-case too, which has no other path.
-- **assumptions made:** hz's existing migrations system is the right place to
-  hang new tables; redline supplies its own agent and hz ships none; the
-  operator-held key never transits hz in any form.
+#### 13. A closed `max_ver` is a fleet-wide time bomb
+
+This document already asks hz to refuse leaving an address with no open-ended
+config. Nothing implements it: `CreateConfig` validates semver syntax and nothing
+else. Bless `max_ver = 1.3.0` with no successor and every box on 1.4.0 fails at
+its **next restart** — which for an unattended box may be years later, when
+nobody connects the two. Adjacent and equally unchecked: `min_ver > max_ver` is
+accepted, and two open-ended configs at one address silently let the highest seq
+win.
+
+**Fix (Phase 2): validate all three at bless time**, where the operator is
+present to see it.
+
+#### 11. Losing a machine private key has no recovery path
+
+After a reinstall the stored wrapped blob is undecryptable and the box looks
+approved while being unable to boot. Worse than undesigned: `RegisterMachine`
+returns `ErrMachineNameTaken` and **there is no UPDATE path for `public_key`
+anywhere in the package**. Deleting the machine row works, but `ON DELETE
+CASCADE` silently takes every `cm_machine_secrets` row with it — the entire
+intern-onboarding content.
+
+**Fix: keypair identity is part of what "first registration" means**, plus an
+explicit re-enrol path that does not destroy machine secrets.
+
+### Real, and open
+
+#### 3. Approval accepts any bytes
+
+`ApproveMachine` checks only that the blob is non-empty and an approver is named;
+it never parses it. hz **can** check this for free — a wrapped-key envelope
+carries the recipient fingerprint in cleartext and hz holds the machine's public
+key. One parse and compare refuses an approval wrapped to the wrong machine.
+
+Without it: anyone who can call approve sets `state='approved'` with 32 bytes of
+garbage. They cannot grant decryption — but per hole 7 the approved state also
+unlocks plaintext config, so approval is a capability grant for the secret subset
+and a **plain authorization flag with no validation** for everything else. It is
+also a lockout: a blob wrapped to a stale key stores cleanly and the box bricks at
+boot. `ApproveMachine` additionally has no state predicate, so a denied machine is
+silently re-approved with no audit row.
+
+#### 5. Machine-name squatting
+
+Names are agent-supplied, globally unique, first-come. Anything on the WireGuard
+network registers as `redline-prod-01` **before the real box boots**; the operator
+sees the expected name in the expected environment and approves, because there is
+no out-of-band fingerprint to compare against yet. hz is honest in this attack —
+hole 1's defence has no reference value.
+
+**Fix:** pre-declare name *and* fingerprint before the box boots, and refuse a
+registration for a pre-declared name whose fingerprint differs. At minimum, bind
+registration to the resolved WireGuard peer and surface a peer↔name mismatch in
+the queue.
+
+#### 2. Rotation is asserted, not designed
+
+Key ids let old ciphertext still *open*. They do not deliver a new key to an
+already-approved box: hz holds no key, so every re-wrap needs an approver and
+each machine's public key. "Re-wrap this environment's key to these N machines"
+is a first-class act that does not exist. The agent also needs a way to report
+which key ids it holds.
+
+Related and unspecified: **partial decrypt during rotation.** Mid-rotation some
+entries open and some do not. `CreateConfig`'s doctrine is that a config with
+half its keys is not a config; say the same about a half-*opened* one — any
+decrypt failure fails the whole config and falls back to cache.
+
+#### 10. De-approval is not revocation
+
+Once a box holds an environment key it reads every secret at that address
+**forever**, including ones created after it was revoked. Machine-scoped secrets
+have real revocation; environment secrets have none. The only true revocation is
+rotating the key.
+
+> `internal/db/configmgr.go` currently comments that `DenyMachine` "clears any
+> previously granted key material: a denial is a revocation, not only a label."
+> **That is false** — the box already holds the unwrapped key. Corrected in code.
+
+Note also that a prior-art review confirmed **every compared system has this
+property for static secrets** — Vault included. Revocation of a static secret is
+always rotation. What varies is blast radius, which is why per-machine wrapping
+(deferred) is the real lever rather than a lease.
+
+#### 4. Read implies write implies approve
+
+Symmetric keys mean anyone who can paste the prod key to inspect a delta can also
+mint prod secrets and approve prod registrations. There is no read-only holder
+and cannot be while the key is symmetric. Separation of duties is enforced by
+possession, which means possession is total. **Not decided.** Reasonable for a
+homelab; less obviously so given hz is PCI-scoped.
+
+#### 12. Smaller, but cheap to fix
+
+- **An intentionally-empty value is unrepresentable.** A non-secret value with
+  `Value == ""` is rejected, so an operator who needs an empty value must omit the
+  key — at which point the app falls back to its compiled default, reproducing
+  the founding bug inside the system built to prevent it. Represent empty
+  explicitly and make *omission* the error.
+- **Addresses have no charset or case canonicalisation.** `Prod/redline/app` and
+  `prod/redline/app` are different addresses, different AADs, different keystore
+  paths. Enforce at the database write, the choke point all clients share.
+- **A wrapped environment key (kind `0x02`) binds a machine but not an address.**
+  Harmless while there is one wrapped key per machine; **the moment `0009` moves
+  it to the registration**, hz picks which slot a blob lands in and can relay the
+  `staging/ops` grant into the `prod/app` slot. Bind the address into that AAD
+  **before `0009` ships** — changing an envelope's AAD after boxes hold blobs is a
+  flag day.
+- **The role-change rule contradicts itself across three files.** This document
+  and `configmgr/types.go` say a role change re-enters pending; `0008`'s comment
+  says admission is per machine so it does not. The schema is what ships and
+  cannot express it. Pick one.
+- **The audit trail records the wrong event.** `cm_secret_reads` logs relays of
+  ciphertext, not decrypts — a row per secret per boot per box, enormous and
+  meaningless — while the event this document wants logged, that a decrypt
+  session opened and by whom, has no table. `ON DELETE SET NULL` also guts the
+  identifying field exactly when a machine is deleted, which is what someone
+  covering tracks would do. **Under PCI this is the one item not to file as
+  proportionate**: 10.x wants audit logs protected from modification by the
+  audited system, and hz logging to its own unreplicated sqlite does not meet
+  that. Denormalise machine name and fingerprint into the row, and ship rows
+  off-box.
+- **`ListMachinesByState` returns `wrapped_env_key` into the approval queue.**
+  Ciphertext only, unopenable — hygiene, not exposure. Drop it from the
+  projection.
+
+#### Scale-only — flagged, not inflated
+
+96-bit random GCM nonces (birthday bound ~2³² messages per key); `ResolveConfig`
+re-parsing every config ever blessed at an address on every boot, which
+append-only only grows. Both irrelevant at homelab volume.
+
+## Phase 1 — the slice in flight
+
+Register → approve → store → resolve → pull → decrypt. The promotion graph is
+deliberately **out**, which also defers the two open questions riding on it.
+
+| | | |
+|---|---|---|
+| ✅ | Persistence — six tables, migration `0008`, resolution with shadowed candidates, semver range comparison | `internal/db/configmgr.go` |
+| ✅ | Crypto — ECDH P-256 + HKDF + AES-256-GCM, envelope format, browser recipe with doc-derived interop tests | `configmgr/` |
+| ◻ | `internal/apitypes` DTOs + route registration | shared files, owner keeps them |
+| ◻ | Handlers — register, approve, deny, config CRUD, resolve, pull | `internal/server/handlers_configmgr.go` |
+| ◻ | Client library — register, poll, pull, decrypt, cache | `configmgr/` |
+| ◻ | `hz` CLI — the key ceremony (see Phase 2.1), config push | `cmd/hz/` |
+| ◻ | Approval UI | `ui/src/components/` |
+
+**Phase 1 must not ship to anything real before 2.1–2.5 land.** Several holes
+above are not theoretical once a box is genuinely approved through this.
+
+## Phase 2 — hardening
+
+Ordered. Each item names the hole it closes.
+
+**2.1 — Move the key ceremony to the `hz` CLI.** Closes hole 9, and makes the
+missing CSP stop being load-bearing. The browser shows what the CLI decrypted,
+never touching a key. Cheapest high-value change here: both primitives already
+exist in Go.
+
+**2.2 — Enforce the app's declared schema on PULL.** Closes hole 7 and the
+omission variant. The agent refuses a plaintext value for a key declared secret,
+an unknown key, or a missing declared key. The `--push` allowlist rule, pointed
+the other way.
+
+**2.3 — Client-side monotonic seq floor.** Closes hole 8. Cache
+`version → highest seq applied`, refuse anything lower. No clock.
+
+**2.4 — Fail-open on ambiguity, fail-closed on denial.** Closes hole 6. Anything
+that is not a positive `denied` takes the cached-boot path.
+
+**2.5 — Migration `0009`.** Three changes that must land together, because two of
+them are flag days:
+
+- **Environment into the registration tuple**, `(machine, environment, app,
+  role)`. This is what makes the `--env` fail-closed claim true; today it is
+  false. `cm_machines.environment` stops being meaningful.
+- **Wrapped key moves to the registration**, since the key address is
+  `(environment, app, role)` and a box may run several.
+- **Lineage on the value** — origin discriminator plus a nullable source config
+  id — and **relax the `binding='secret' ⇒ ciphertext NOT NULL` CHECK** so a
+  tombstone can null the bytes and keep the row.
+
+**Before `0009`: bind the address into the kind `0x02` AAD.** Once a box holds
+several wrapped keys, hz chooses which slot each lands in. Changing an envelope's
+AAD after boxes hold blobs is a flag day, so it has to go first.
+
+**2.6 — Bless-time validation.** Closes hole 13. Refuse a closed `max_ver` with
+no open successor, refuse `min_ver > max_ver`, refuse a second open-ended config
+at one address. Cheap checks where the operator is standing there.
+
+**2.7 — hz verifies the approval blob.** Closes hole 3. Parse the envelope header,
+compare the recipient fingerprint against `cm_machines.public_key`, refuse a
+mismatch. Add a state predicate so a denied machine is not silently re-approved,
+and an audit row either way. Roughly three lines plus a test.
+
+**2.8 — Keystore hardening.** All six requirements, plus refuse-to-seal on
+pointer disagreement, label path validation, and key-id validation before it
+becomes a glob.
+
+**2.9 — Enrollment-token HMAC over the public key.** Closes hole 1 without
+depending on a human comparing hex.
+
+**2.10 — Pre-declared machine name and fingerprint.** Closes hole 5.
+
+**2.11 — Audit, properly.** Log decrypt sessions rather than ciphertext relays,
+denormalise machine name and fingerprint, ship rows off-box. The PCI item.
+
+**2.12 — The cheap correctness set.** Representable empty values, address charset
+and case canonicalisation at the database write, resolve the role-change
+contradiction, drop `wrapped_env_key` from the queue projection, and specify that
+a partial decrypt fails the whole config.
+
+## Deferred, with the reason
+
+- **Envelope encryption with per-secret data keys, and asymmetric environment
+  keys.** Would make promotion pure metadata with no two-key moment and keep
+  ciphertext byte-identical across environments. Off the critical path since the
+  client-side re-seal landed; they now earn their keep against **revocation and
+  rotation** (holes 10 and 2). Per-machine wrapping is the real lever on blast
+  radius — a lease is not.
+- **JWE instead of the hand-rolled envelope.** Would have prevented holes 7 and 8
+  by construction. Two new dependencies against deleting hand-rolled
+  serialization; revisit if the format needs another change.
+- **CUE for the completeness gate.** `BLOCKED: prod has no value bound for X` is
+  precisely a CUE incomplete-value error. Would delete the ad-hoc checking for
+  non-secret keys. Orthogonal to crypto, registration and lineage.
+- **HA.** Ships primary-only; there are no HA instances. hz's sqlite is not
+  replicated and never has been, so a failover loses every registration — which
+  is *why* hole 6's fix matters. Do not put this state in `config.json` to get it
+  replicated: `updateConfig` is a read-modify-write with no mutex. The
+  replication exploration is [iceboxed](icebox.md).
+- **Intern onboarding** has no path in hz until this lands, which is the cost of
+  retiring per-peer secrets.
 
 ## Open questions
 
 1. **Version string for range matching.** `git describe` yields
-   `v1.0.0-rc.1-1377-g406804d5`, which is not well-ordered without mapping (the
-   `.deb` work on 2026-09-17 had to map `-`→`~` to make it sort). Proposal: the
+   `v1.0.0-rc.1-1377-g406804d5`, not well-ordered without mapping. Proposal: the
    app presents the clean semver tag for range containment and carries the full
-   describe string as build metadata for provenance only — the same split the
-   `.deb` uses.
+   describe string as build metadata for provenance only — the split the `.deb`
+   already uses. redline owns this answer.
 2. **Break-glass on prod.** Can prod be supplied directly, bypassing staging? No
-   hatch means someone edits the box by hand at 3am and the manager is now lying
-   about what runs, which is worse than not having one. A painless hatch becomes
-   the normal path within a month. Proposal: allow it, require the prod-edge
-   key, mark the config `unproven` and the environment `diverged` until the same
-   config is promoted through staging normally, and surface that everywhere
-   fleet state shows.
+   hatch means someone edits a box by hand at 3am and the manager is now lying
+   about what runs. A painless hatch becomes the normal path within a month.
+   Proposal: allow it, require the prod key, mark the config `unproven` and the
+   environment `diverged` until the same config is promoted through staging
+   normally, and surface that wherever fleet state shows.
 3. **Whether promotion carries invariant VALUES or only their shape.** Carrying
-   them gives real drift control; not carrying them lets shared values wander
-   independently, which is roughly the status quo. Recommended: carry them, and
-   treat a prod-side override of an invariant key as a recorded exception rather
-   than a normal edit.
+   them gives real drift control; not carrying them lets shared values wander,
+   which is the status quo. Recommended: carry them, and treat a prod-side
+   override of an invariant as a recorded exception.
+4. **Hole 4** — is total possession acceptable, or does prod need a read-only
+   holder? The latter is not reachable with symmetric keys.
+5. **Does re-registration update the recorded version?** Today a tuple's version
+   freezes at first-seen, so nothing records what a box is currently running
+   until the resolve-report path exists.

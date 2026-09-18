@@ -146,8 +146,17 @@ func (d *DB) ApproveMachine(ctx context.Context, id string, wrappedEnvKey []byte
 	return d.MachineByID(ctx, id)
 }
 
-// DenyMachine refuses a machine, recording why. Any previously granted key
-// material is cleared: a denial is a revocation, not only a label.
+// DenyMachine refuses a machine, recording why, and clears hz's copy of any
+// wrapped key material.
+//
+// That is NOT a revocation, and this comment used to claim it was. A box that
+// was ever approved already holds the environment key unwrapped on its own disk
+// at 0600; clearing hz's copy of the wrapped blob reaches none of that, and the
+// box keeps reading every secret at its address. The only true revocation of an
+// environment secret is rotating the key — see "de-approval is not revocation"
+// in plan/config-manager.md. Stated plainly here because a false security
+// property asserted next to the function that appears to implement it is the
+// kind of thing that gets repeated.
 func (d *DB) DenyMachine(ctx context.Context, id, reason string) (*Machine, error) {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {

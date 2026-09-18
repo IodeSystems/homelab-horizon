@@ -266,7 +266,7 @@ Phase 3 replaces this with: restart horizon, done.
 | 6 | [Backend protocol (h2c)](icebox.md#-backend-protocol-h2c-for-grpc-backends--deployed-2026-09-17) | ✅ deployed + in use (Zitadel) |
 | 7 | Invites that can require a sign-in | ◻ not started, **and unwritten** — no section exists |
 | 8 | [DNS checks that would catch a broken forwarder](#-dns-checks-that-would-catch-a-broken-forwarder) | ✅ deployed |
-| 9 | [Config manager](#-config-manager--registration-blessing-promotion) → [config-manager.md](config-manager.md) | ◻ designed, not started |
+| 9 | [Config manager](#-config-manager--registration-blessing-promotion) → [config-manager.md](config-manager.md) | ◐ **highest priority** — Phase 1 part-built |
 
 Two opt-in next-steps were added to [icebox.md](icebox.md) on 2026-09-10:
 HAProxy TCP frontends on the VPN address, and moving the range-collision
@@ -366,53 +366,39 @@ when an operator most needs in.
   so an admin creates the account first? A third option is reviving a
   non-admin role, which is the iceboxed item and much larger.
 
-### ◻ Config manager — registration, blessing, promotion
+### ◐ Config manager — registration, blessing, promotion
 
-Design in [config-manager.md](config-manager.md). Moved here from redline's plan
-on 2026-09-18: **hz is where it gets built**, redline is the first client.
+**Highest priority (Carl, 2026-09-18).** Design and work plan in
+[config-manager.md](config-manager.md); that doc is the authority and carries
+the phases, the known holes and the open questions. This entry is the pointer.
 
-A store of config blobs keyed by `(environment, app, role)` with a `minVer` /
-`maxVer` range and an approval state. A box registers, an admin approves the
+A store of config blobs addressed by `(environment, app, role)` with a version
+range and an approval state. A box registers, an admin approves the
 **registration** (not every boot), and the box pulls what resolves for its
 running version. Promotion `dev → staging → prod` is a diff and a gate, not a
-copy — an edit resets the evidence to the environment where the edit happened.
+copy. hz holds ciphertext it cannot read; the approver distributes the key by
+wrapping it to a keypair the machine generated, so approval is a cryptographic
+capability grant rather than an authorization flag.
 
-Two decisions carry the whole thing:
+**Built and committed:** persistence (migration `0008`, resolution with shadowed
+candidates, semver ranges) and crypto (`configmgr/` — the repo's first
+non-`internal` package, ECDH P-256 + HKDF + AES-256-GCM, all stdlib). Inert:
+nothing is reachable from outside the process.
 
-- **hz stores secret values as ciphertext it cannot read.** Making the network
-  appliance the config store would otherwise mean an hz compromise yields every
-  credential on every box. It holds the blob, the metadata, the range and the
-  approval state; only a holder of the environment key can decrypt. Keys are
-  symmetric and per-environment because an operator must be able to *read*
-  deltas, not only write values — so decryption happens in the browser and hz
-  never sees a key.
-- **The approver distributes the key by approving.** The agent presents a fresh
-  ECDH public key at registration; the approver pastes the environment key in
-  the browser, wrapped to that public key; hz relays a blob it cannot open. This
-  makes approval a cryptographic capability grant rather than an authorization
-  flag — a bug in an authorization check cannot bypass it, because a missing
-  approval is a missing key.
+**Not built:** handlers, client library, CLI, UI, and the whole promotion graph.
 
-Blocks on real persistence: **services are not rows** in hz today
-(`findServiceByToken` returns an index into `config.json`), so this needs new
-tables with no precedent except `peer_owners`.
-
-It also absorbs the iceboxed per-peer secrets entry, **retired 2026-09-18**, as
-*machine-scoped secrets* — encrypted to the keypair a machine generates at
-registration, so hz holds ciphertext, revocation is per-device, and no
-environment key is in the path. That entry was small and unblocked; this is
-neither, so intern onboarding now has no path in hz until this lands.
-
-- **next:** the migration and db package for configs, registrations and
-  approvals. Everything else depends on it.
+- **next:** `apitypes` + route registration, then handlers. But **Phase 2.1–2.5
+  in the design doc must land before anything real is approved through this** —
+  two adversarial reviews found that the headline security claim is currently
+  too strong in two specific ways.
 - **risks:** largest feature ever proposed for hz, landing in the box the whole
-  network depends on; the browser crypto is the load-bearing security claim and
-  needs a real review; hz becomes a dependency of every box's startup path, so
-  the last-applied-on-disk fallback is not optional.
-- **blocking decisions (yours):** the three open questions in the doc, and
-  whether this goes ahead of the two unblocked items above — noting it now
-  carries the intern onboarding use-case too.
-- **optional extensions:** none scoped yet.
+  network depends on; hz becomes a dependency of every box's startup path, so
+  the cached-boot fallback is not optional; the key has no escrow and no
+  recovery path, which is the failure most likely to actually happen.
+- **blocking decisions (yours):** the five open questions in the design doc.
+  None block Phase 1.
+- **constraint:** nothing in the boot path may depend on freshness — services
+  run unattended for years. This has already killed two proposals.
 
 ### ◐ L4 port forwards
 
