@@ -21,6 +21,24 @@ import (
 // plaintext, which is also why the admin UI cannot show a value: it would have
 // to be given a key, and the decision was that it never is.
 
+// verRange renders a config's version range for a human. An empty max is
+// open-ended rather than unbounded-by-omission.
+func verRange(minVer, maxVer string) string {
+	if maxVer == "" {
+		return minVer + "–∞"
+	}
+	return minVer + "–" + maxVer
+}
+
+// zero wipes a decrypted value. Everything read here is plaintext that exists
+// in this process and nowhere else, and it stops existing as soon as it has
+// been printed.
+func zero(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
+
 func cmFetchConfig(c *client, id string) (apitypes.CMConfigResp, error) {
 	var cfg apitypes.CMConfigResp
 	err := c.do(http.MethodGet, cmAPI+"/configs/"+url.PathEscape(id), nil, &cfg)

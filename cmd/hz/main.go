@@ -87,10 +87,6 @@ COMMANDS
                                      the key hz served and a mismatch sends nothing
   cm deny <registration-id> --reason=...
                                      Refuse a registration (not a revocation)
-  cm push --env E --app A --role R [--role R2 ...] --schema F --min-ver V
-          [--max-ver V] [--dir D] [--dry-run] [files...]
-                                     Seal a role's values locally and bless a config.
-                                     Atomic per role, loud about what it skipped
   cm promote <config-id> --to=<env> [--dry-run]
                                      Open under the source key, re-seal under the target's
   cm show <config-id>                Decrypt a config locally and print it
@@ -175,12 +171,12 @@ CONFIG MANAGER ('hz cm')
   No command takes key material in argv — argv is world-readable through /proc.
   Keys come from the keystore, or from stdin ('hz cm key import').
 
-  --schema names the app's declared key set, JSON, and it is an ALLOWLIST: a key
-  in a properties file but absent from it is never pushed.
-    {"app":"redline","keys":{"DB_PASSWORD":"env","RETENTION_DAYS":"invariant"}}
-
-  local.properties is structurally unpushable, and a key set in both it and a
-  pushed file is a hard error rather than a precedence rule.
+  Blessing a config is NOT here. An application pushes its own config by linking
+  configmgr and calling configmgr.Push: the key-to-binding declaration is then
+  compiled into the app rather than kept as a JSON file beside it, and there is
+  no separate binary for a laptop or a build box to be missing. hz keeps only
+  what is generic — the keys, the ceremony, and operations on blobs it cannot
+  read.
 
 EXAMPLES
   hz service list

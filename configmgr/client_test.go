@@ -26,11 +26,6 @@ const (
 	testVersion   = "1.2.3"
 )
 
-var testSchema = Schema{
-	"DB_PASSWORD": BindingEnv,
-	"LOG_LEVEL":   BindingInvariant,
-}
-
 type hz struct {
 	t  *testing.T
 	mu sync.Mutex
@@ -227,7 +222,6 @@ func newClient(t *testing.T, h *hz, mutate func(*Options)) *Client {
 	opts := Options{
 		BaseURL:      h.srv.URL,
 		StateDir:     t.TempDir(),
-		Schema:       testSchema,
 		Machine:      "box-1",
 		Environment:  "prod",
 		App:          "redline",
@@ -566,84 +560,6 @@ func TestSequenceFloor(t *testing.T) {
 	}
 }
 
-// TestSchemaEnforcedOnPull is rule 4, in both directions.
-func TestSchemaEnforcedOnPull(t *testing.T) {
-	cases := []struct {
-		name    string
-		entries func(*testing.T, ConfigRequest, EnvKey) []ConfigEntry
-		want    string
-	}{
-		{
-			name: "an undeclared key is refused",
-			entries: func(t *testing.T, req ConfigRequest, k EnvKey) []ConfigEntry {
-				return []ConfigEntry{
-					sealEntry(t, k, req.Addr("DB_PASSWORD"), BindingEnv, "hunter2"),
-					sealEntry(t, k, req.Addr("LOG_LEVEL"), BindingInvariant, "debug"),
-					sealEntry(t, k, req.Addr("SURPRISE"), BindingInvariant, "yes"),
-				}
-			},
-			want: "does not declare",
-		},
-		{
-			// The founding bug: an omitted key falls back to a compiled
-			// default, which is a value nobody set and nobody reviewed.
-			name: "an omitted declared key is refused",
-			entries: func(t *testing.T, req ConfigRequest, k EnvKey) []ConfigEntry {
-				return []ConfigEntry{sealEntry(t, k, req.Addr("DB_PASSWORD"), BindingEnv, "hunter2")}
-			},
-			want: "omitted declared key LOG_LEVEL",
-		},
-		{
-			name: "a duplicated key is refused",
-			entries: func(t *testing.T, req ConfigRequest, k EnvKey) []ConfigEntry {
-				return []ConfigEntry{
-					sealEntry(t, k, req.Addr("DB_PASSWORD"), BindingEnv, "hunter2"),
-					sealEntry(t, k, req.Addr("DB_PASSWORD"), BindingEnv, "hunter3"),
-					sealEntry(t, k, req.Addr("LOG_LEVEL"), BindingInvariant, "debug"),
-				}
-			},
-			want: "twice",
-		},
-		{
-			name: "a binding that is not the declared one is refused",
-			entries: func(t *testing.T, req ConfigRequest, k EnvKey) []ConfigEntry {
-				return []ConfigEntry{
-					sealEntry(t, k, req.Addr("DB_PASSWORD"), BindingInvariant, "hunter2"),
-					sealEntry(t, k, req.Addr("LOG_LEVEL"), BindingInvariant, "debug"),
-				}
-			},
-			want: "declared env",
-		},
-		{
-			name: "an entry with no sealed value is refused",
-			entries: func(t *testing.T, req ConfigRequest, k EnvKey) []ConfigEntry {
-				return []ConfigEntry{
-					{Key: "DB_PASSWORD", Binding: BindingEnv},
-					sealEntry(t, k, req.Addr("LOG_LEVEL"), BindingInvariant, "debug"),
-				}
-			},
-			want: "no sealed value",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			h := newHZ(t)
-			h.config = func(req ConfigRequest, k EnvKey) (ConfigResponse, error) {
-				return ConfigResponse{ConfigID: "cfg", Sequence: 1, MinVer: "1.0.0", Entries: tc.entries(t, req, k)}, nil
-			}
-			c := newClient(t, h, nil)
-
-			_, err := c.Load(ctx(t))
-			if !errors.Is(err, ErrSchema) {
-				t.Fatalf("Load err = %v, want ErrSchema", err)
-			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("error %q should mention %q", err, tc.want)
-			}
-		})
-	}
-}
-
 // TestPartialDecryptFailsWhole: mid-rotation some entries open and some do not.
 // A config with half its keys is not a config.
 func TestPartialDecryptFailsWhole(t *testing.T) {
@@ -749,27 +665,6 @@ func TestCacheIsNotReadableAtAnotherAddress(t *testing.T) {
 	}
 	if _, err := staging.State().EnvKey(staging.Addr()); !errors.Is(err, ErrNotEnrolled) {
 		t.Errorf("EnvKey at staging = %v, want ErrNotEnrolled", err)
-	}
-}
-
-// TestSchemaFailureOnCacheIsFatal: a binary that declares a new key cannot boot
-// from a cache that predates it. Booting anyway would use that key's compiled
-// default, which is the bug the schema exists to prevent.
-func TestSchemaFailureOnCacheIsFatal(t *testing.T) {
-	h := newHZ(t)
-	c := newClient(t, h, nil)
-	if _, err := c.Load(ctx(t)); err != nil {
-		t.Fatal(err)
-	}
-	h.srv.Close()
-
-	upgraded := newClient(t, h, func(o *Options) {
-		o.StateDir = c.State().Root()
-		o.Schema = Schema{"DB_PASSWORD": BindingEnv, "LOG_LEVEL": BindingInvariant, "NEW_KEY": BindingInvariant}
-	})
-	_, err := upgraded.Load(ctx(t))
-	if !errors.Is(err, ErrSchema) {
-		t.Fatalf("Load err = %v, want ErrSchema", err)
 	}
 }
 
@@ -908,32 +803,47 @@ func TestWrappedEnvKeyIsNotAConfigValue(t *testing.T) {
 	}
 }
 
-func TestConfigReadsRefuseAnUndeclaredKey(t *testing.T) {
+// TestAMissingKeyIsTheApplicationsToNotice: the library enforces no schema, so
+// a key hz did not serve arrives as Lookup's false and nothing else. An app that
+// ignores that boolean reintroduces the compiled default this project exists to
+// prevent — which is now its bug to avoid, not the library's to refuse.
+func TestAMissingKeyIsTheApplicationsToNotice(t *testing.T) {
 	h := newHZ(t)
+	h.config = func(req ConfigRequest, k EnvKey) (ConfigResponse, error) {
+		return ConfigResponse{
+			ConfigID: "cfg", Sequence: 1, MinVer: "1.0.0",
+			Entries: []ConfigEntry{sealEntry(t, k, req.Addr("DB_PASSWORD"), BindingEnv, "hunter2")},
+		}, nil
+	}
 	c := newClient(t, h, nil)
 	cfg, err := c.Load(ctx(t))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("a config hz served short is still a config: %v", err)
 	}
-	defer func() {
-		if recover() == nil {
-			t.Error("Get on an undeclared key must panic, not return a default")
-		}
-	}()
-	_ = cfg.Get("NEVER_DECLARED")
+	if v, ok := cfg.Lookup("DB_PASSWORD"); !ok || v != "hunter2" {
+		t.Errorf("Lookup(DB_PASSWORD) = %q, %v", v, ok)
+	}
+	if v, ok := cfg.Lookup("LOG_LEVEL"); ok {
+		t.Errorf("Lookup on a key hz did not serve = %q, %v; want \"\", false", v, ok)
+	}
+	// And no panic: there is no declaration for a read to be undeclared against.
+	if got := cfg.Get("NEVER_SERVED"); got != "" {
+		t.Errorf("Get on an absent key = %q, want the empty string", got)
+	}
+	if got := cfg.Bytes("NEVER_SERVED"); got != nil {
+		t.Errorf("Bytes on an absent key = %v, want nil", got)
+	}
 }
 
 func TestNewValidatesOptions(t *testing.T) {
 	dir := t.TempDir()
-	base := Options{BaseURL: "http://hz", StateDir: dir, Schema: testSchema, Machine: "b", Environment: "prod", App: "redline", Role: "app", Version: testVersion}
+	base := Options{BaseURL: "http://hz", StateDir: dir, Machine: "b", Environment: "prod", App: "redline", Role: "app", Version: testVersion}
 
 	cases := []struct {
 		name   string
 		mutate func(*Options)
 	}{
 		{"no base url", func(o *Options) { o.BaseURL = "" }},
-		{"no schema", func(o *Options) { o.Schema = nil }},
-		{"a binding that is not declarable", func(o *Options) { o.Schema = Schema{"K": "secret"} }},
 		{"no version", func(o *Options) { o.Version = "" }},
 		{"no role", func(o *Options) { o.Role = "" }},
 		{"an environment that walks out of the tree", func(o *Options) { o.Environment = ".." }},

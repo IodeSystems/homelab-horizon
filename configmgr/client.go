@@ -24,7 +24,7 @@ import (
 // The whole surface is two calls. Enrol gets the box a key, once, with a human
 // in the path exactly once. Load is the boot path.
 //
-// # Four rules, and each one is a refusal to do the obvious thing
+// # Three rules, and each one is a refusal to do the obvious thing
 //
 //  1. NOTHING IN THE BOOT PATH DEPENDS ON FRESHNESS. There is no TTL here, no
 //     expiry, no staleness check and no "last successful fetch" anywhere a boot
@@ -50,11 +50,17 @@ import (
 //     selects a lower sequence. There is no clock in it, which is why it
 //     survives rule 1.
 //
-//  4. A COMPILED-IN SCHEMA, ENFORCED ON PULL. The app declares {key → binding}.
-//     An entry whose key is not declared is refused, and so is a declared key
-//     the response omits. Sealing every value stops hz INVENTING one; it does
-//     not stop hz OMITTING one, and an omitted key falls back to a compiled
-//     default — which is the founding bug this project exists to prevent.
+// # The library declares nothing about keys
+//
+// It hands over what hz served, decrypted, and says nothing about which keys
+// that is. There is no compiled schema on this path and no presence check: an
+// application knows its own config in a way a library cannot, so deciding
+// whether a key it needs is missing is ITS job, through Config.Lookup.
+//
+// An app that ignores Lookup's boolean falls back to its own compiled default —
+// a value nobody set, nobody reviewed and nobody can see in the config manager.
+// That is the founding bug this project exists to prevent, and it is now the
+// implementor's to avoid rather than the library's to refuse.
 //
 // # Partial decrypt fails the whole config
 //
@@ -91,11 +97,6 @@ var (
 	// say or fail to say takes the cached-boot path. See rule 2.
 	ErrDenied = errors.New("registration denied")
 
-	// ErrSchema means the response and the app's compiled schema disagree: an
-	// undeclared key, a declared key omitted, a duplicate, or a binding that is
-	// not the one declared.
-	ErrSchema = errors.New("config does not match the compiled schema")
-
 	// ErrSequenceRollback means hz served a config older than one already
 	// applied at this version. It authenticates perfectly; only the floor
 	// knows better.
@@ -110,59 +111,6 @@ var (
 	// A caller holding a cache boots it; a caller holding none has nothing.
 	ErrUnsettled = errors.New("hz gave no settled answer")
 )
-
-// Binding values an app may declare. They are the promotion scope, and since
-// the no-plaintext decision that is all they are.
-var declarableBindings = map[string]bool{
-	BindingInvariant: true,
-	BindingEnv:       true,
-}
-
-// Schema is what the application compiles in: every config key it will ever
-// read, and the binding it expects that key to carry.
-//
-// It is the answer to the omission half of an untrusted hz. Every value on the
-// wire is sealed, so hz cannot invent one — but it can leave one out, and a
-// missing key falls back to whatever default is compiled beside the read. That
-// default is the founding bug: a value nobody set, nobody reviewed and nobody
-// can see in the config. So the schema is enforced in BOTH directions. A key
-// the response carries and the schema does not declare is refused, and a key
-// the schema declares and the response omits is refused.
-//
-// Declare it as a package-level var beside the code that reads it:
-//
-//	var schema = configmgr.Schema{
-//		"DB_PASSWORD": configmgr.BindingEnv,
-//		"LOG_LEVEL":   configmgr.BindingInvariant,
-//	}
-type Schema map[string]string
-
-// Validate reports whether a schema is one an app can be held to.
-func (s Schema) Validate() error {
-	if len(s) == 0 {
-		return fmt.Errorf("%w: the schema is empty; an app that declares nothing cannot be held to anything", ErrSchema)
-	}
-	for k, b := range s {
-		if k == "" {
-			return fmt.Errorf("%w: a schema key is empty", ErrSchema)
-		}
-		if !declarableBindings[b] {
-			return fmt.Errorf("%w: key %q declares binding %q, which is not %s or %s", ErrSchema, k, b, BindingInvariant, BindingEnv)
-		}
-	}
-	return nil
-}
-
-// Keys lists the declared keys, sorted, so a message about them reads the same
-// way twice.
-func (s Schema) Keys() []string {
-	out := make([]string, 0, len(s))
-	for k := range s {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
 
 // Source says where a Config's bytes came from.
 type Source string
@@ -185,10 +133,6 @@ type Options struct {
 
 	// StateDir is the root of the client state tree. Absolute. Required.
 	StateDir string
-
-	// Schema is the app's compiled declaration of every key it reads.
-	// Required: there is no "unchecked" mode.
-	Schema Schema
 
 	// Machine is the box's name. Defaults to os.Hostname.
 	Machine string
@@ -242,9 +186,6 @@ func New(opts Options) (*Client, error) {
 	}
 	if _, err := url.Parse(opts.BaseURL); err != nil {
 		return nil, fmt.Errorf("configmgr: base URL: %w", err)
-	}
-	if err := opts.Schema.Validate(); err != nil {
-		return nil, err
 	}
 	if opts.Version == "" {
 		return nil, errors.New("configmgr: no version; the sequence floor is keyed by it")
@@ -446,12 +387,6 @@ func (c *Client) Load(ctx context.Context) (*Config, error) {
 // is authenticated against this client's own address on every boot. A cache
 // file copied into another address's directory fails here, not silently.
 //
-// The schema is enforced on the cache too, and a schema failure here IS fatal.
-// A binary upgrade that declares a new key cannot boot from a cache that
-// predates it — because the alternative is booting with that key's compiled
-// default, which is the exact bug the schema exists to prevent. There is no
-// third answer.
-//
 // No age check. The cached version is compared against the running one only to
 // say so out loud: refusing a cache written by another version would brick a
 // legitimate binary rollback on a box that cannot reach hz.
@@ -471,13 +406,14 @@ func (c *Client) loadCache(key EnvKey) (*Config, error) {
 	return cfg, nil
 }
 
-// build enforces the schema, opens every entry, and only then produces a
-// Config. Nothing is applied until all of it opens: a partial decrypt fails the
-// whole config, because a config with half its keys is not a config.
+// build opens every entry and only then produces a Config. Nothing is applied
+// until all of it opens: a partial decrypt fails the whole config, because a
+// config with half its keys is not a config.
+//
+// Nothing here inspects WHICH keys arrived. Two entries for one key is the only
+// shape the map cannot represent, and the later one wins — an application that
+// cares reads Config.Keys and says so itself.
 func (c *Client) build(key EnvKey, resp *ConfigResponse, src Source) (*Config, error) {
-	if err := c.checkSchema(resp); err != nil {
-		return nil, err
-	}
 	values := make(map[string][]byte, len(resp.Entries))
 	for _, e := range resp.Entries {
 		pt, err := c.open(key, e)
@@ -494,46 +430,6 @@ func (c *Client) build(key EnvKey, resp *ConfigResponse, src Source) (*Config, e
 		Source:   src,
 		values:   values,
 	}, nil
-}
-
-// checkSchema is rule 4, in both directions plus the two ways a response can
-// be self-inconsistent.
-func (c *Client) checkSchema(resp *ConfigResponse) error {
-	seen := make(map[string]bool, len(resp.Entries))
-	for _, e := range resp.Entries {
-		want, declared := c.opts.Schema[e.Key]
-		if !declared {
-			// hz cannot invent a VALUE — everything is sealed — but it can
-			// serve a key this binary never asked for, and an app that reads
-			// whatever arrives has no compiled statement of what it needs.
-			return fmt.Errorf("%w: hz served %q, which this binary does not declare", ErrSchema, e.Key)
-		}
-		if seen[e.Key] {
-			// Two entries for one key means one of them is silently discarded,
-			// and which one depends on iteration order.
-			return fmt.Errorf("%w: hz served %q twice", ErrSchema, e.Key)
-		}
-		if e.Binding != want {
-			return fmt.Errorf("%w: %q is declared %s and hz served it as %s", ErrSchema, e.Key, want, e.Binding)
-		}
-		if e.Sealed == "" {
-			return fmt.Errorf("%w: %q has no sealed value; there is no plaintext path", ErrSchema, e.Key)
-		}
-		seen[e.Key] = true
-	}
-	var missing []string
-	for _, k := range c.opts.Schema.Keys() {
-		if !seen[k] {
-			missing = append(missing, k)
-		}
-	}
-	if len(missing) > 0 {
-		// The founding bug. An omitted key falls back to a compiled default:
-		// a value nobody set, nobody reviewed, and nobody can see in the
-		// config that is supposedly managing it.
-		return fmt.Errorf("%w: hz omitted declared %s %s", ErrSchema, plural(len(missing), "key", "keys"), strings.Join(missing, ", "))
-	}
-	return nil
 }
 
 // checkFloor is rule 3. hz serving an older blessed config authenticates
@@ -648,54 +544,87 @@ func (c *Client) fetch(ctx context.Context) (*ConfigResponse, error) {
 }
 
 func (c *Client) post(ctx context.Context, path string, in, out any) error {
-	body, err := json.Marshal(in)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url(path), bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	return c.do(req, out)
+	// strict: the machine protocol is fixed and this box is the party that
+	// cannot afford a surprise field. A response carrying one is hz saying
+	// something this binary does not understand, which rule 2 turns into a
+	// cached boot rather than a guess.
+	return jsonRPC(ctx, c.http, http.MethodPost, joinURL(c.opts.BaseURL, path), in, out, true)
 }
 
 func (c *Client) get(ctx context.Context, path string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url(path), nil)
+	return jsonRPC(ctx, c.http, http.MethodGet, joinURL(c.opts.BaseURL, path), nil, out, true)
+}
+
+// statusError is a non-2xx answer, carrying the code so a caller can branch on
+// it. Push needs that: a 404 from the current-key endpoint means "no pointer is
+// set", which is the ordinary state of a brand-new address and not a failure.
+type statusError struct {
+	Method string
+	Path   string
+	Code   int
+	Status string
+	Body   string
+}
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf("%s %s: %s: %s", e.Method, e.Path, e.Status, e.Body)
+}
+
+// jsonRPC is the one HTTP round trip in this package: the machine protocol uses
+// it and so does Push. in may be nil for a body-less request; out may be nil to
+// discard the answer.
+//
+// strict rejects a response field the caller's type does not name. The machine
+// protocol wants that; the admin API Push talks to does not, because hz gaining
+// a field there must not break a push.
+func jsonRPC(ctx context.Context, hc *http.Client, method, u string, in, out any, strict bool) error {
+	var body io.Reader
+	if in != nil {
+		b, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, body)
 	if err != nil {
 		return err
 	}
-	return c.do(req, out)
-}
-
-func (c *Client) do(req *http.Request, out any) error {
+	if in != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("Accept", "application/json")
-	resp, err := c.http.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize+1))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize+1))
 	if err != nil {
 		return fmt.Errorf("%s %s: reading the body: %w", req.Method, req.URL.Path, err)
 	}
-	if len(body) > maxBodySize {
+	if len(raw) > maxBodySize {
 		return fmt.Errorf("%s %s: body is larger than %d bytes", req.Method, req.URL.Path, maxBodySize)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s %s: %s: %s", req.Method, req.URL.Path, resp.Status, snippet(body))
+		return &statusError{Method: req.Method, Path: req.URL.Path, Code: resp.StatusCode, Status: resp.Status, Body: snippet(raw)}
 	}
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
+	if out == nil {
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if strict {
+		dec.DisallowUnknownFields()
+	}
 	if err := dec.Decode(out); err != nil {
 		return fmt.Errorf("%s %s: %w", req.Method, req.URL.Path, err)
 	}
 	return nil
 }
 
-func (c *Client) url(path string) string {
-	return strings.TrimSuffix(c.opts.BaseURL, "/") + path
+func joinURL(base, path string) string {
+	return strings.TrimSuffix(base, "/") + path
 }
 
 // snippet bounds an error body so a misrouted request that returns a whole HTML
@@ -712,23 +641,12 @@ func snippet(b []byte) string {
 	return s
 }
 
-func plural(n int, one, many string) string {
-	if n == 1 {
-		return one
-	}
-	return many
-}
-
 // Config is one resolved, decrypted config — the whole of it, or nothing.
 //
-// There is no Get-with-default on this type, and that absence is the point. A
-// default beside a read is a value nobody set, nobody reviewed and nobody can
-// see in the config manager, and it is what this project exists to prevent.
-// Every key an app reads is declared in its Schema, the schema is enforced
-// against the response before a Config exists at all, and so Get on a declared
-// key always has a value. Get on an UNDECLARED key is a programming error and
-// panics, because returning "" would quietly reintroduce exactly the default
-// this design refuses.
+// It carries exactly what hz served for this address and no opinion about it.
+// Which keys an app needs is the app's own statement to make, so the presence
+// test lives on this type rather than in a schema the library enforces: see
+// Lookup.
 type Config struct {
 	// ConfigID and Sequence name the config that was applied. Report them:
 	// resolution is computed and never stored, so this is the only place the
@@ -752,34 +670,38 @@ type Config struct {
 	values map[string][]byte
 }
 
-// Get returns a declared key's value as a string. It panics on a key the
-// schema does not declare — see Config.
+// Get returns a key's value, or "" when the config does not carry it.
+//
+// "" is indistinguishable from a value that IS empty, so Get is for reads that
+// genuinely do not care. Use Lookup for everything else.
 func (c *Config) Get(key string) string {
-	v, ok := c.values[key]
-	if !ok {
-		panic("configmgr: read of undeclared config key " + key + "; declare it in the Schema")
-	}
-	return string(v)
+	return string(c.values[key])
 }
 
-// Bytes is Get for a value that is not text. It panics on an undeclared key
-// for the same reason.
+// Lookup returns a key's value and whether the config carried it.
+//
+// FALSE MEANS HZ SERVED NO SUCH KEY, and this boolean is how an application
+// detects it. There is nothing else: the library enforces no schema and refuses
+// nothing on the app's behalf, so a missing key arrives here and nowhere else.
+//
+// An app that ignores the boolean falls back to whatever default is compiled
+// beside the read — a value nobody set, nobody reviewed and nobody can see in
+// the config manager. That is the founding bug this whole project exists to
+// prevent; since the library no longer decides which keys matter, avoiding it
+// is the implementor's job. Branch on this boolean and fail loudly.
+func (c *Config) Lookup(key string) (string, bool) {
+	v, ok := c.values[key]
+	if !ok {
+		return "", false
+	}
+	return string(v), true
+}
+
+// Bytes is Lookup's value half for config that is not text. It returns nil for
+// a key the config does not carry, which an empty value is indistinguishable
+// from; Lookup is the presence test.
 func (c *Config) Bytes(key string) []byte {
-	v, ok := c.values[key]
-	if !ok {
-		panic("configmgr: read of undeclared config key " + key + "; declare it in the Schema")
-	}
-	return bytes.Clone(v)
-}
-
-// Lookup is the non-panicking read, for code that genuinely does not know the
-// key at compile time. Application config is not that case.
-func (c *Config) Lookup(key string) ([]byte, bool) {
-	v, ok := c.values[key]
-	if !ok {
-		return nil, false
-	}
-	return bytes.Clone(v), true
+	return bytes.Clone(c.values[key])
 }
 
 // Keys lists what the config holds, sorted. Values are never logged; names are

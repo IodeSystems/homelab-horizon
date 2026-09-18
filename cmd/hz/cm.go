@@ -48,7 +48,7 @@ const cmAPI = "/api/v1/cm"
 
 func runCM(c *client, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("cm subcommand required: key | pending | approve | deny | push | promote | show | resolve")
+		return fmt.Errorf("cm subcommand required: key | pending | approve | deny | promote | show | resolve")
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
@@ -60,8 +60,6 @@ func runCM(c *client, args []string) error {
 		return cmApprove(c, rest)
 	case "deny":
 		return cmDeny(c, rest)
-	case "push":
-		return cmPush(c, rest)
 	case "promote":
 		return cmPromote(c, rest)
 	case "show":
@@ -138,7 +136,7 @@ func addrOfConfig(cfg apitypes.CMConfigResp) configmgr.EnvKeyAddr {
 // the fleet to a key it had already stolen.
 //
 // A 404 and an empty KeyID both mean "no pointer set", which is the ordinary
-// state of a brand-new address. Any other failure propagates: a push that
+// state of a brand-new address. Any other failure propagates: a promotion that
 // cannot reach hz cannot post a config either, so swallowing the error would
 // only move the failure later and make it less legible.
 func cmCurrentKey(c *client, addr configmgr.EnvKeyAddr) (configmgr.CurrentKey, error) {
