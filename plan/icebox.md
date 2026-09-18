@@ -324,71 +324,114 @@ configured — a new hire, a contractor, a second laptop for someone who is not
 an admin. Below that, this feature buys one less paste and costs a new hz
 feature, a plaintext token at rest in hz's database, and an interaction with
 the MFA jail.
+## ◻ hz-client becomes a library — scoped 2026-09-18
 
-## ◻ A client LIBRARY, so consumers stop shelling out to a downloaded script
+**Driver:** redline-ops manages its own config by `curl`-ing `bin/hz-client`,
+`chmod +x`, and `fork/exec`. Now that [the config manager](config-manager.md)
+has shipped a working importable package, the same shape should cover the rest.
 
-**Driver:** the [config manager](config-manager.md), whose client has to generate a keypair, present
-a public key at registration, poll for approval, unwrap a wrapped environment key, resolve a version
-range, cache last-known-good and report what it resolved. **None of that can be a bash script**, and
-attempting the unwrap in `bash` would be its own finding. So the config manager cannot be bolted
-onto `hz-client` as it exists — it forces this question rather than merely benefiting from it.
+### What it is today
 
-**PARTLY IN FLIGHT 2026-09-18.** The config manager's first slice is building a top-level
-`configmgr/` package (wire types + crypto), which is the first non-`internal` package this repo has
-ever had. **Carl chose a top-level package over the nested module recommended below**, for lower
-overhead. Two things make that reversible rather than a fork in the road, and they are the reason it
-was an acceptable call:
+632 lines of bash, copied **verbatim** into a Go raw string literal
+(`internal/server/hz_client_script.go`) with a test whose only job is noticing
+when the two copies drift. Served unauthenticated from `/admin/haproxy/hz-client`
+— fine, it holds no secret, though the handler's comment claiming
+`backupAuthMiddleware` guards it is stale and should not be believed.
 
-- `configmgr/` imports **stdlib only** — no sqlite driver, no WireGuard, no ACME, no DNS providers.
-  So the dependency-tree objection below does not bite in practice today: module-graph pruning means
-  a consumer builds none of hz's tree, though its `go.sum` still carries the entries.
-- A stdlib-only package becomes a nested module by adding a `go.mod` beside it. If the objection
-  below ever bites, the migration is cheap. **It gets more expensive with every package added** —
-  revisit before the second one lands.
+**There are no consumers in this repo.** It appears only as copy-paste text in
+`README.md` and the Service Integration dialog. The real consumer is redline-ops,
+in another repo — which means **this can be migrated incrementally**: redline
+adopts the library while the script keeps working, and the drift test keeps the
+script honest meanwhile. No big bang.
 
-The rest of this entry — lifting `apitypes`, collapsing the bash script, typed errors, versioning —
-is untouched and still deferred.
+**The business logic is already in Go, server-side.** `internal/sitedeploy` does
+tar extraction, path-traversal defence, size caps, atomic symlink swap and
+release pruning; `internal/haproxy` does the socket commands. The script is a
+thin HTTP-plus-orchestration wrapper. Porting is mostly wire calls, not logic.
 
-**Where we are.** hz has NO importable surface, and Go enforces that rather than merely encouraging
-it: every package is under `internal/`, and the only things outside it are `cmd/homelab-horizon`,
-`cmd/hz` and `cmd/hz-probe`, which are `main`. What consumers actually get is `bin/hz-client` — a
-632-line **bash script**, copied verbatim into a Go raw string literal in
-`internal/server/hz_client_script.go`, kept in agreement by a test whose entire job is noticing when
-the two copies drift. Consumers `curl` it from the server, `chmod +x`, and `fork/exec` it, then
-parse exit codes and text. It carries ~20 verbs (`promote`, `status`, `rolling`, `releases`,
-`rollback`, `push`, `site`, `ban`, `maint-page`, `swap`, …) — a real API expressed as a shell
-script.
+### The evidence that this is not cosmetic
 
-**What that costs, observed rather than theorised.** A consumer whose provisioning skipped the
-download (its proxy URL was unset, so the fetch was guarded) still needed the client at deploy time,
-and failed with `fork/exec …/bin/hz-client: no such file or directory (output: )` — after the
-migrations had run. Two failures in one: the bootstrap guard and the consumer disagree about whether
-the client is optional, and the error names neither the cause nor the fix. That is the same shape as
-any missing-binary dependency; a linked library cannot be missing.
+`hz-client bans` has **never** printed a timestamp. The server marshals
+`createdAt`/`expiresAt` (`internal/apitypes/types.go:969-976`); the script reads
+`created_at`/`expires_at` (`bin/hz-client:529-530`). Every ban prints
+`created=-  expires=never`.
 
-**Shape**
-| | |
-|---|---|
-| Module | a NESTED `client/go.mod` in this repo, so consumers do not inherit the server's dependency tree — no sqlite driver, no WireGuard, no ACME, no DNS provider. |
-| Wire contract | `internal/apitypes` already exists; promote it (or a subset) into the client module. The hard part is half done. |
-| CLI + script | both become thin wrappers over the library. One implementation, two callers — and the sync test disappears because there stops being a second copy. |
-| Errors | typed, so a caller can distinguish "not enrolled", "not approved", "no such release" and "hz unreachable". Today they are all exit 1 plus text. |
+That is a JSON contract drifting silently **inside one repository**, past a
+review, past a drift test that only compares the script to its own copy. It is
+the whole argument in one bug: a typed client would not have compiled.
 
-- **next:** decide the module boundary (below), then lift `apitypes`, then port `promote`/`status`/
-  `rolling` first since those are what a deploy actually calls.
-- **risks:**
-  - **A downloaded script always matches the server; a linked library is pinned at build time.** An
-    hz upgrade can then break older consumers, which the current model cannot. This needs API
-    versioning and a negotiated minimum — it is the real cost of the change, and it is not small.
-  - Lifting packages out of `internal/` makes them public API in a public repo. Lift the minimum,
-    and only what is already stable.
-- **blocking decisions:**
-  - Nested module vs a separate repo. Nested keeps them versioned together and is the usual Go
-    answer; separate lets the client move on its own cadence.
-  - Whether the shell script survives at all for non-Go consumers. If it does, it should be
-    GENERATED from the library's command surface rather than maintained beside it, or the two copies
-    come straight back.
-- **optional extensions:** signing. Today the client is fetched over HTTP with no checksum and no
-  version — unsigned remote code delivered into whatever host is being provisioned. A module with a
-  `go.sum` entry answers "what code is running here, and how do you know" in a way a `curl` cannot;
-  that matters more for hosts under a compliance regime than for a homelab.
+### The blocking problem: there is no version surface at all
+
+Grepped the script and every relevant wire struct. **Zero version fields, zero
+`X-*-Version` headers, nothing negotiated.** A downloaded script always matches
+the server; a linked library is pinned at build time, and today it would have no
+signal that it had skewed.
+
+**This is the first slice, and it is worth landing whether or not the library
+happens** — the bans bug is what unnoticed drift looks like with the *current*
+model, and pinning consumers makes it worse rather than better. Shape: the
+server declares an API version and a minimum it still serves; the client sends
+what it was built against; a mismatch is a named error naming both numbers, not
+a 400 with a guess.
+
+### Verb inventory
+
+**Trivial — a typed HTTP call, logic already server-side:** `status`,
+`current|next up|drain|down`, `swap`, `ban`, `unban`, `bans` (fix the casing bug
+while there), `maint-page set|clear`, `site rollback`, `site releases`.
+
+**Substantial — design, not translation:**
+
+- **`promote` and `rolling status|start|continue|finalize`.** The rolling *phase*
+  is inferred client-side from two polled state strings; **the server holds no
+  phase state at all**, so a library must reproduce that state machine exactly
+  rather than call something. And both poll for up to `--timeout` seconds while
+  printing lines a human watches — a library needs a progress callback, not
+  `fmt.Println`, which is an API decision.
+- **`site push`.** Needs in-process tar streaming (`archive/tar` +
+  `compress/gzip`, replacing a shell-out to `tar`) and a decision about the
+  can't-rewind-a-pipe behaviour the script deliberately relies on.
+
+**Do NOT port as-is:**
+
+- **The OTP preflight** is a no-op for the token type this tool actually uses. It
+  inspects `/api/v1/auth/status` for `otpRequired`, but that route only examines
+  a bearer token with the `hz_pat_` prefix — a service/deploy token never
+  matches, so it fires only when an operator misuses a personal token as
+  `HZ_TOKEN`. A real 401 from the real endpoint says the same thing.
+- **The http→https redirect trap** defends against curl dropping `Authorization`
+  across a scheme change. Go's client strips sensitive headers on a **host**
+  change, not a scheme change, so this must be **re-derived from Go's actual
+  redirect semantics**, not copied. Getting this wrong silently leaks a token or
+  silently 401s.
+
+### What porting deletes
+
+The `python3` dependency (JSON build, parse and pretty-print in every verb), the
+shell-out to `tar`, the `HZ_TOP_PID`/`trap` workaround for `set -e` not crossing
+command substitution, and the drift test — because there stops being a second
+copy.
+
+### The honest cost
+
+A downloaded script always matches the server. A linked library is pinned at
+build time, so an hz upgrade can break a consumer in a way the current model
+cannot. That is bought, not avoided, and the version surface above is what makes
+it survivable.
+
+**If the script survives for non-Go consumers it must be GENERATED** from the
+library's command surface, or the two copies come straight back — which is the
+failure this entry exists to end.
+
+### Suggested cut
+
+1. **The version surface.** Standalone value, and everything else depends on it.
+2. **The trivial verbs**, as a `deploy`/`site`/`ban` client package beside
+   `configmgr`. Lifting `internal/apitypes` is mechanical — nothing in it depends
+   on `internal`-only packages — but mirror rather than import, for the reason
+   `configmgr/types.go` records.
+3. **`site push`**, which is self-contained and removes the `tar` shell-out.
+4. **`promote` and `rolling` last**, because they are the only genuinely new
+   design and the ones most likely to want a second opinion on the progress API.
+
+**Not scheduled.** Scoped so the size is known, not because it is next.
