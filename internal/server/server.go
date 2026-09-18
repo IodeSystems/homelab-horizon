@@ -1125,6 +1125,22 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/mfa/exception", s.handleAPIMFAException)
 	mux.HandleFunc("/api/v1/mfa/exception/revoke", s.handleAPIMFAExceptionRevoke)
 
+	// Config manager. The first three are the machine protocol, authenticated
+	// as a VPN peer rather than as an admin — register is the one endpoint an
+	// unapproved box may reach. The rest are admin. See
+	// handlers_configmgr.go, whose header documents the status codes an agent
+	// depends on to tell a denial from an unknown.
+	mux.HandleFunc("/api/v1/cm/register", s.handleAPICMRegister)
+	mux.HandleFunc("/api/v1/cm/register/", s.handleAPICMRegisterPoll)
+	mux.HandleFunc("/api/v1/cm/config", s.handleAPICMConfig)
+	mux.HandleFunc("/api/v1/cm/registrations", s.handleAPICMRegistrations)
+	mux.HandleFunc("/api/v1/cm/registrations/", s.handleAPICMRegistrationAction)
+	mux.HandleFunc("/api/v1/cm/configs", s.handleAPICMConfigs)
+	mux.HandleFunc("/api/v1/cm/configs/", s.handleAPICMConfigByID)
+	mux.HandleFunc("/api/v1/cm/resolve", s.handleAPICMResolve)
+	mux.HandleFunc("/api/v1/cm/promote/gate", s.handleAPICMPromotionGate)
+	mux.HandleFunc("/api/v1/cm/current-key", s.handleAPICMCurrentKey)
+
 	// System health (on-host software stack). Per-instance — each peer reports
 	// its own view; downstream/network checks live at /api/v1/checks.
 	s.handlePeerInstance(mux, "/api/v1/system/health", s.handleAPISystemHealth)

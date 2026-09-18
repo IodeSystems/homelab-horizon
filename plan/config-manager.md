@@ -523,6 +523,136 @@ a value landed in.
 of the rotation and escrow problem — every key is a separate thing to store,
 rotate, re-wrap and lose.
 
+### The library validates NOTHING, and push belongs to the app
+
+**Owner, 2026-09-18.** hz cannot validate a config: every value is sealed and it
+holds no key. That was never in doubt. The mistake was routing push through the
+**generic `hz` CLI**, which forced the schema to be a `--schema` JSON file —
+and a schema that exists twice, once as JSON for push and once as Go for pull,
+drifts. JSON also expresses less than Go, so push-time validation was
+permanently the weaker half for no reason but the plumbing.
+
+**Decided: `push` moves to the implementing application's own CLI.**
+`redline config push`, not `hz cm push`.
+
+**And the library validates nothing at all** (owner, 2026-09-18). No value
+validators — a library shipping `NonEmpty` is guessing at semantics it cannot
+know. **And no key-presence checks either:** the library hands over whatever hz
+served, decrypted, and the application decides everything, including whether a
+key it needs is missing.
+
+So the pull path is now: fetch → sequence floor → decrypt (any failure fails the
+whole config and falls back to cache) → hand over. Nothing about keys.
+
+**And a linked library cannot be missing.** The
+[client-library icebox entry](icebox.md) already recorded this failing for real:
+a consumer whose provisioning skipped the client download died with
+`fork/exec …/bin/hz-client: no such file or directory`, after migrations had
+run. An app that pushes its own config needs no separate binary on a developer's
+laptop, in CI, or on a build box, and nothing to keep in step with hz.
+
+The split falls along "does this need to know the app":
+
+| stays in `hz` — operator, generic | moves to the app's CLI — developer |
+|---|---|
+| `key new / ls / export / import / current` | `push` — needs the schema and the app's own config files |
+| `approve` / `deny` — the ceremony | |
+| `resolve`, `show`, `promote` — generic operations on blobs | |
+
+The ceremony stays in `hz` deliberately: it is identical for every app, and the
+operator performing it is not the app's developer.
+
+**What this costs:** `configmgr` must export the push *logic* — schema, seal,
+bless — so an app wires it into its own CLI in a few lines. `hz cm push` and the
+`--schema` JSON format go away. Cheaper now than after anything ships against
+that format.
+
+`Schema` survives **only for push**, because bless must tell hz each value's
+binding — the promotion gate runs on bindings. It is a declaration of what to
+send, not a contract the library enforces on pull.
+
+#### Names are opaque and values are bytes
+
+**Owner, 2026-09-18: `configmgr` operates on names and bytes, with no regard to
+extensions.**
+
+A name is an opaque identifier. It may be one setting (`DB_PASSWORD`) or a whole
+file (`config.properties`) — the application's choice, and the library cannot
+tell the difference and must not try. Nothing strips, infers or special-cases
+anything from a name's shape. The name is what gets bound into the AEAD, so
+whatever an app asks for is what it must ask for again to open.
+
+Values are `[]byte`, not `string`, because a config value is not necessarily
+text: a certificate, a keystore and a DER blob are all valid contents, and
+typing them as `string` invites a conversion that corrupts them.
+
+This is what lets one app store whole files and another store individual
+settings without the library growing a mode switch, and it is the same boundary
+as refusing to know a file format — stated once more at the level below it.
+
+#### The nested-module option, and why it is being kept open
+
+`configmgr` mirrors the bless shapes rather than importing
+`internal/apitypes`. Importing them would compile — Go's internal rule is about
+where an import statement sits, not about transitive dependencies — but it would
+**foreclose ever giving this package its own `go.mod`**, since a nested module
+cannot import its parent's internal tree.
+
+What a nested module would buy, if it is ever wanted:
+
+- **Consumers stop inheriting hz's dependency graph.** Today an app importing
+  `configmgr` pulls hz's `go.mod` into its module graph — sqlite, WireGuard,
+  ACME, aws-sdk, seven libdns providers, prometheus, webauthn, cobra. Graph
+  pruning means it never *builds* them, but its `go.sum` carries the entries.
+- **Independent versioning** — `configmgr` can commit to a stable v1 while hz
+  churns internally.
+- **An explicit public-API boundary** in a public MIT repo, rather than
+  "everything outside `internal/`".
+
+**Not worth doing now**, with one consumer: pruning already does the real work
+and the rest is cosmetic. But the option costs nothing while this package is
+dependency-light, and it is proven live — `configmgr` builds standalone with
+nothing but a `go.mod` (verified 2026-09-18).
+
+The cost of mirroring is two definitions of one JSON shape.
+`TestBlessShapesMatchAPITypes` and `TestBlessRequestRoundTripsThroughAPITypes`
+in `internal/server` pin them, comparing the **wire** shape rather than the Go
+types, so a field added to one side and not the other fails a test instead of
+silently breaking a push against a server that no longer understands it.
+
+#### Where the layer actually ends
+
+**This system stores and retrieves configs securely. That is the whole job**
+(owner, 2026-09-18). Validation, structure and access patterns are a separate
+layer and belong to the implementor — putting any of them in the library was the
+mistake, not a protection being given up.
+
+What the config manager guarantees is about **what it delivers**, and none of it
+changes:
+
+- the value was sealed by a holder of the address's key, and has not been
+  altered;
+- it was not served at a different address or under a different key name (the
+  AAD);
+- it was not rolled back to an older blessed config (the sequence floor);
+- it was not read by hz, which holds no key.
+
+What it does **not** guarantee is completeness relative to one application's
+expectations, because it cannot: only the app knows which keys it requires and
+which legitimately have defaults. `Config.Lookup` returns `(value, ok)` so an app
+can decide.
+
+And an app that requires a key should fail when it is absent **regardless of
+why** — hz omitted it, an operator never set it, or the config genuinely predates
+it. That is one ordinary code path in the application, not a security special
+case, which is exactly the argument for it not living here.
+
+**A config that fails validation falls back to cache, loudly** — the same as a
+schema mismatch or a decrypt failure already do, and for the same reason. A bad
+config blessed into prod must not brick the fleet; it keeps running the last
+good one and makes noise. Refusing to boot would turn one bad blessing into an
+outage, which is the failure mode this whole design is built to avoid.
+
 ## Why this lives in hz
 
 **There is no extension seam.** hz has no plugin registry and no module
@@ -752,14 +882,18 @@ is the strongest single argument for the no-plaintext decision.
 Two attacks survive it:
 
 - **Omission.** hz not sending `DB_PASSWORD` makes the app fall back to its
-  compiled default — verbatim the founding bug. Closed by **2.2**, the declared
-  schema enforced on pull: a missing declared key is a hard failure.
+  compiled default. **Not this layer's problem** (owner, 2026-09-18): an app that
+  requires a key should fail when it is absent regardless of why, which is an
+  ordinary code path in the application rather than a security special case. The
+  library returns `(value, ok)` and the app decides. See
+  [where the layer ends](#where-the-layer-actually-ends).
 - **Staleness.** hz serving an older sealed blob still authenticates. Closed by
   **2.3**, the client-side seq floor, and tracked as
   [hole 8](#8-seq-rollback-at-one-address-still-works).
 
-So 2.2 keeps its place in Phase 2, narrowed: it no longer has to police
-plaintext-for-a-secret, only unknown and missing keys.
+So what remains of this hole is staleness alone, and 2.3 closes it. The
+injection half died with plaintext; the omission half was never this layer's to
+hold.
 
 #### 8. `seq` rollback at one address still works
 
@@ -811,18 +945,27 @@ Boot cached, loudly; reserve refusal for an explicit `state = 'denied'`. A box
 never approved holds no key, so its cache is empty and the leniency costs
 nothing.
 
-#### 13. A closed `max_ver` is a fleet-wide time bomb
+#### 13. A closed `max_ver` is a fleet-wide time bomb ✅
 
-This document already asks hz to refuse leaving an address with no open-ended
-config. Nothing implements it: `CreateConfig` validates semver syntax and nothing
-else. Bless `max_ver = 1.3.0` with no successor and every box on 1.4.0 fails at
-its **next restart** — which for an unattended box may be years later, when
-nobody connects the two. Adjacent and equally unchecked: `min_ver > max_ver` is
-accepted, and two open-ended configs at one address silently let the highest seq
-win.
+**Closed 2026-09-18.** Bless `max_ver = 1.3.0` with no open successor and every
+box on 1.4.0 fails at its **next restart** — which for an unattended box may be
+years later, when nobody connects the two. `CreateConfig` now refuses that, and
+refuses `min_ver > max_ver`, at bless time with the operator present.
 
-**Fix (Phase 2): validate all three at bless time**, where the operator is
-present to see it.
+> **A third rule was specified here and had to be withdrawn.** This document also
+> asked hz to refuse *a second open-ended config at one address*, on the grounds
+> that the highest seq would win silently. That rule **deadlocks against "ranges
+> are immutable after blessing"**: replacing the incumbent open-ended config
+> would require editing its `max_ver`, and there is deliberately no path to do
+> that — so an address could never be superseded after its first blessing.
+>
+> It was withdrawn rather than worked around, because it also contradicted the
+> model: *several* open-ended configs are exactly how supersession works. Each
+> new one is blessed open-ended, a box takes the highest seq containing its
+> version, and older ones keep serving older binaries — which is what makes
+> rolling a binary back pick up the config that still covers it. The concern
+> behind the rule is answered by **resolution rule 2**: the winner comes back
+> with the candidates it shadowed, so nothing wins silently.
 
 #### 11. Losing a machine private key has no recovery path
 
@@ -947,15 +1090,75 @@ append-only only grows. Both irrelevant at homelab volume.
 Register → approve → store → resolve → pull → decrypt. The promotion graph is
 deliberately **out**, which also defers the two open questions riding on it.
 
+Built on `feat/config-manager`, in three waves. The wave boundaries are
+dependency boundaries, not scheduling preference — within a wave the file sets
+are disjoint, so the work parallelises in separate worktrees.
+
+**Wave 1 — no dependencies, disjoint files.** In flight.
+
 | | | |
 |---|---|---|
-| ✅ | Persistence — six tables, migration `0008`, resolution with shadowed candidates, semver range comparison | `internal/db/configmgr.go` |
-| ✅ | Crypto — ECDH P-256 + HKDF + AES-256-GCM, envelope format, browser recipe with doc-derived interop tests | `configmgr/` |
-| ◻ | `internal/apitypes` DTOs + route registration | shared files, owner keeps them |
-| ◻ | Handlers — register, approve, deny, config CRUD, resolve, pull | `internal/server/handlers_configmgr.go` |
-| ◻ | Client library — register, poll, pull, decrypt, cache | `configmgr/` |
-| ◻ | `hz` CLI — the key ceremony (see Phase 2.1), config push | `cmd/hz/` |
-| ◻ | Approval UI | `ui/src/components/` |
+| ✅ | Persistence — six tables, migration `0008`, resolution with shadowed candidates, semver ranges | `internal/db/configmgr.go` |
+| ✅ | Crypto — ECDH P-256 + HKDF + AES-256-GCM, envelope format, doc-derived interop tests | `configmgr/` |
+| ◐ | **Bind the address into the kind `0x02` AAD.** First, because it is a flag day: free now, expensive once boxes hold blobs | `configmgr/crypto.go` |
+| ◐ | **Migration `0009`** — environment into the registration tuple, wrapped key to the registration, drop the plaintext column, lineage, tombstonable ciphertext; plus bless-time validation and address canonicalisation | `internal/db/`, `0009_*` |
+| ◐ | **Keystore** — `keyFor(addr, keyID)`, current-key selection, the six hardening requirements, refuse-to-seal on pointer disagreement | `configmgr/keystore.go` |
+
+**Wave 2 — needs wave 1's shapes settled.**
+
+| | | |
+|---|---|---|
+| ✅ | `internal/apitypes` DTOs + route registration | `apitypes/`, `server.go` |
+| ✅ | Handlers — machine protocol and admin surface; approval verifies the blob's recipient against the stored key | `internal/server/handlers_configmgr.go` |
+| ✅ | Client library — enrol, resolve, decrypt, cache; the three-state fallback, the sequence floor, the compiled schema | `configmgr/client.go` |
+| ✅ | `hz` CLI — the key ceremony, push, promote, resolve | `cmd/hz/cm*.go` |
+| ✅ | Migration `0010` — the current-key pointer, and the stale-key query rotation needed | `internal/db/` |
+
+**Phase 2.1 through 2.4 landed with wave 2**, not later: the ceremony is in the
+CLI, the schema is enforced on pull, the sequence floor is in the client, and
+unknown-means-unreachable is how the client behaves. They were never really
+Phase 2 — building the client without them would have meant building it twice.
+
+**Wave 3 — needs the CLI and the library.**
+
+| | | |
+|---|---|---|
+| ✅ | UI — approvals, fleet key state, config inventory with lineage, resolution, promotion gate | `ui/src/components/CM*.tsx`, `routes/config.tsx` |
+
+**Wave 3 landed 2026-09-18.** Five components behind a `/config` route, all
+metadata: no key input, no WebCrypto, no rendered value anywhere. Two details
+worth keeping:
+
+- The approvals page labels the fingerprint **"as hz reports it"** and says
+  outright that it is *not* the value to compare against — because if hz
+  substituted the public key it substituted that line too. The CLI deliberately
+  refuses to print hz's fingerprint before prompting, so typing is verification
+  rather than transcription; a page showing the same string unlabelled would
+  have quietly undone that.
+- The fleet view detects boxes holding a superseded key, **and says there is no
+  remedy**, because there is not one: `ApproveRegistration` only acts on a
+  pending row and nothing moves a row back to pending. Hole 2 is now visible
+  rather than invisible, which is the useful half; the re-wrap path is still
+  owed.
+
+**The UI is a smaller and different thing than it was this morning**, and whoever
+builds it should know why before they start:
+
+- **It holds no keys and does no crypto.** Phase 2.1 moved the paste/wrap/decrypt
+  ceremony to the `hz` CLI, because a browser served by hz cannot defend against
+  hz ([hole 9](#9-hz-serves-the-javascript-that-does-the-decryption)). **Do not
+  build a WebCrypto surface.**
+- **It cannot display any value.** Nothing is plaintext, and the UI has no key.
+  Config views show key names, bindings, ranges, sequences and lineage —
+  never content.
+- So what remains is genuinely useful and entirely metadata: the **approval
+  queue** (with fingerprints to check, and hole 5's name-squatting risk to
+  surface), what each machine holds versus the current key id — which is the
+  rotation affordance hole 2 is missing — the **promotion gate** with its blocked
+  keys, resolution inspection showing the winner and what it shadowed, and the
+  lineage graph.
+- The one ceremony it keeps is **approval**, and it must hand the wrap step to
+  the CLI rather than performing it.
 
 **Phase 1 must not ship to anything real before 2.1–2.5 land.** Several holes
 above are not theoretical once a box is genuinely approved through this.
@@ -968,19 +1171,21 @@ two-path model would be wasted. The schema half rides in `0009` (2.5).
 
 Ordered. Each item names the hole it closes.
 
-**2.1 — Move the key ceremony to the `hz` CLI.** Closes hole 9, and makes the
+**2.1 — Move the key ceremony to the `hz` CLI.** ✅ Landed in wave 2. Closes hole 9, and makes the
 missing CSP stop being load-bearing. The browser shows what the CLI decrypted,
 never touching a key. Cheapest high-value change here: both primitives already
 exist in Go.
 
-**2.2 — Enforce the app's declared schema on PULL.** Closes the omission half of
-hole 7 — the injection half died with plaintext. The agent refuses an unknown key
-and a missing declared key. The `--push` allowlist rule, pointed the other way.
+**2.2 — ~~Enforce the app's declared schema on PULL~~. WITHDRAWN 2026-09-18.**
+Built in wave 2 and then removed: config validation, structure and access
+patterns are the implementor's layer, not this one's. The library now hands over
+what hz served, decrypted and authenticated, and the application decides what a
+missing key means.
 
-**2.3 — Client-side monotonic seq floor.** Closes hole 8. Cache
+**2.3 — Client-side monotonic seq floor.** ✅ Landed in wave 2. Closes hole 8. Cache
 `version → highest seq applied`, refuse anything lower. No clock.
 
-**2.4 — Fail-open on ambiguity, fail-closed on denial.** Closes hole 6. Anything
+**2.4 — Fail-open on ambiguity, fail-closed on denial.** ✅ Landed in wave 2. Closes hole 6. Anything
 that is not a positive `denied` takes the cached-boot path.
 
 **2.5 — Migration `0009`.** Three changes that must land together, because two of
@@ -1002,11 +1207,11 @@ them are flag days:
 several wrapped keys, hz chooses which slot each lands in. Changing an envelope's
 AAD after boxes hold blobs is a flag day, so it has to go first.
 
-**2.6 — Bless-time validation.** Closes hole 13. Refuse a closed `max_ver` with
-no open successor, refuse `min_ver > max_ver`, refuse a second open-ended config
-at one address. Cheap checks where the operator is standing there.
+**2.6 — Bless-time validation.** ✅ Landed early, in wave 1. Refuses a closed
+`max_ver` with no open successor and an inverted range. The third rule once
+specified here — no second open-ended config — was withdrawn; see hole 13.
 
-**2.7 — hz verifies the approval blob.** Closes hole 3. Parse the envelope header,
+**2.7 — hz verifies the approval blob.** ✅ Landed in wave 2. Closes hole 3. Parse the envelope header,
 compare the recipient fingerprint against `cm_machines.public_key`, refuse a
 mismatch. Add a state predicate so a denied machine is not silently re-approved,
 and an audit row either way. Roughly three lines plus a test.

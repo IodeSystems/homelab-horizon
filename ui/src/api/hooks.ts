@@ -2,10 +2,17 @@ import type {
   OIDCSettingsResp,
   OIDCSettingsReq,
   OIDCDiscoverResp,
+  CMRegistrationResp,
+  CMApproveReq,
+  CMDenyReq,
+  CMConfigResp,
+  CMResolveResp,
+  CMPromotionGateResp,
+  CMCurrentKeyResp,
 } from "./generated-types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
-import { apiFetch, apiFetchText } from "./client";
+import { apiFetch, apiFetchText, ApiError } from "./client";
 import type {
   AddPeerResponse,
   BucketedHistoryResponse,
@@ -1734,5 +1741,146 @@ export function useDiscoverOIDC() {
         method: "POST",
         body: JSON.stringify(body),
       }),
+  });
+}
+
+// --- Config manager -------------------------------------------------------
+//
+// Every one of these returns metadata. None returns a config value, because
+// there are none to return: every value is sealed and hz holds no key. The UI
+// shows key names, bindings, ranges, sequences, lineage and state.
+//
+// Decrypting happens in the `hz` CLI, never here. A browser served by hz cannot
+// defend against hz — edit one line of this bundle and a pasted key is
+// exfiltrated before it is ever used — so the ceremony lives in a locally
+// installed binary the server does not control at the moment of use. Do not add
+// a hook that accepts an environment key.
+
+export function useCMRegistrations(state?: string) {
+  return useQuery({
+    queryKey: ["cm-registrations", state ?? "all"],
+    queryFn: () =>
+      apiFetch<CMRegistrationResp[]>(
+        "/cm/registrations" + (state ? `?state=${encodeURIComponent(state)}` : ""),
+      ),
+    refetchInterval: 15000,
+  });
+}
+
+// The public key an approver wraps to. Served separately from the queue on
+// purpose: the fingerprint shown to an operator must be derived from these
+// bytes, not reported alongside them by the same party that chose them.
+export function useCMMachinePublicKey(registrationID: string | null) {
+  return useQuery({
+    queryKey: ["cm-public-key", registrationID],
+    queryFn: () =>
+      apiFetch<{ publicKey: string }>(
+        `/cm/registrations/${encodeURIComponent(registrationID!)}/public-key`,
+      ),
+    enabled: !!registrationID,
+  });
+}
+
+function invalidateCM(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ["cm-registrations"] });
+  qc.invalidateQueries({ queryKey: ["cm-current-key"] });
+}
+
+// Approval requires a wrapped blob minted by the CLI. This hook relays it; it
+// cannot produce one, which is the point.
+export function useCMApprove() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: CMApproveReq }) =>
+      apiFetch<CMRegistrationResp>(
+        `/cm/registrations/${encodeURIComponent(id)}/approve`,
+        { method: "POST", body: JSON.stringify(body) },
+      ),
+    onSuccess: () => invalidateCM(qc),
+  });
+}
+
+export function useCMDeny() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: CMDenyReq }) =>
+      apiFetch<CMRegistrationResp>(
+        `/cm/registrations/${encodeURIComponent(id)}/deny`,
+        { method: "POST", body: JSON.stringify(body) },
+      ),
+    onSuccess: () => invalidateCM(qc),
+  });
+}
+
+export function useCMConfigs(env: string, app: string, role: string) {
+  return useQuery({
+    queryKey: ["cm-configs", env, app, role],
+    queryFn: () =>
+      apiFetch<CMConfigResp[]>(
+        `/cm/configs?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}&role=${encodeURIComponent(role)}`,
+      ),
+    enabled: !!env && !!app && !!role,
+  });
+}
+
+export function useCMConfig(id: string | null) {
+  return useQuery({
+    queryKey: ["cm-config", id],
+    queryFn: () => apiFetch<CMConfigResp>(`/cm/configs/${encodeURIComponent(id!)}`),
+    enabled: !!id,
+  });
+}
+
+// Resolution inspection. Shadowed is the whole reason this exists: several
+// open-ended configs at one address is the normal shape of supersession, so
+// there are always candidates the winner passed over, and silent resolution is
+// only acceptable when you can ask what it resolved to.
+export function useCMResolve(
+  env: string,
+  app: string,
+  role: string,
+  version: string,
+) {
+  return useQuery({
+    queryKey: ["cm-resolve", env, app, role, version],
+    queryFn: () =>
+      apiFetch<CMResolveResp>(
+        `/cm/resolve?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}` +
+          `&role=${encodeURIComponent(role)}&version=${encodeURIComponent(version)}`,
+      ),
+    enabled: !!env && !!app && !!role && !!version,
+  });
+}
+
+// The gate reads no values — it asks whether a key is bound in the target,
+// never what it holds, which is why it still works when hz can read nothing.
+export function useCMPromotionGate(configID: string | null, targetEnv: string) {
+  return useQuery({
+    queryKey: ["cm-gate", configID, targetEnv],
+    queryFn: () =>
+      apiFetch<CMPromotionGateResp>(
+        `/cm/promote/gate?config=${encodeURIComponent(configID!)}&target=${encodeURIComponent(targetEnv)}`,
+      ),
+    enabled: !!configID && !!targetEnv,
+  });
+}
+
+// The advisory current-key pointer. A 404 means nobody has announced one, which
+// is a different fact from "the current key is X" and must be shown as such —
+// a client told the wrong one seals under whatever its filesystem offers.
+export function useCMCurrentKey(env: string, app: string, role: string) {
+  return useQuery({
+    queryKey: ["cm-current-key", env, app, role],
+    queryFn: async () => {
+      try {
+        return await apiFetch<CMCurrentKeyResp>(
+          `/cm/current-key?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}&role=${encodeURIComponent(role)}`,
+        );
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+      }
+    },
+    enabled: !!env && !!app && !!role,
   });
 }

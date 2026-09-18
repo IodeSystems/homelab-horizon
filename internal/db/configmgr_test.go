@@ -3,74 +3,93 @@ package db
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 )
 
-// testPublicKey stands in for an agent-generated X25519 public key; its
-// content is never inspected, only stored and round-tripped.
+// testPublicKey stands in for an agent-generated public key; its content is
+// never inspected, only stored and round-tripped.
 func testPublicKey(b byte) []byte {
 	return []byte{b, b, b, b, b, b, b, b}
 }
 
-// registerAndApprove is the setup most tests need: a machine approved with
-// some plausible wrapped key material.
-func registerAndApprove(t *testing.T, ctx context.Context, d *DB, name, environment, approver string) *Machine {
+// sealed stands in for an envelope. What matters everywhere below is that it
+// is opaque bytes hz never interprets — including for the empty value, where
+// sealing "" still yields an ordinary non-empty envelope.
+func sealed(plaintext string) []byte {
+	return append([]byte("env:"), plaintext...)
+}
+
+// oneValue is the smallest legal value list.
+func oneValue(key string) []ConfigValue {
+	return []ConfigValue{{Key: key, Binding: BindingInvariant, Ciphertext: sealed(key), KeyID: "envkey-v1"}}
+}
+
+// blessOpen creates the open-ended config every address needs before any
+// closed-range config can be blessed there.
+func blessOpen(t *testing.T, ctx context.Context, d *DB, env, app, role, minVer, by string) *Config {
 	t.Helper()
-	m, err := d.RegisterMachine(ctx, name, environment, testPublicKey(1))
+	c, err := d.CreateConfig(ctx, env, app, role, minVer, "", by, oneValue("A"))
 	if err != nil {
-		t.Fatalf("register %s: %v", name, err)
+		t.Fatalf("bless open %s/%s/%s: %v", env, app, role, err)
 	}
-	if m.State != MachineStatePending {
-		t.Fatalf("new machine state = %q, want pending", m.State)
-	}
-	approved, err := d.ApproveMachine(ctx, m.ID, []byte("wrapped-env-key"), "envkey-v1", approver)
+	return c
+}
+
+// registerAt is the setup most tests need: a machine, one registration at an
+// address, approved with some plausible wrapped key material.
+func registerAt(t *testing.T, ctx context.Context, d *DB, m *Machine, env, app, role, approver string) *Registration {
+	t.Helper()
+	reg, err := d.UpsertRegistration(ctx, m.ID, env, app, role, "1.0.0")
 	if err != nil {
-		t.Fatalf("approve %s: %v", name, err)
+		t.Fatalf("register %s/%s/%s: %v", env, app, role, err)
 	}
-	if approved.State != MachineStateApproved {
-		t.Fatalf("approved state = %q, want approved", approved.State)
+	if reg.State != RegistrationPending {
+		t.Fatalf("new registration state = %q, want pending", reg.State)
+	}
+	approved, err := d.ApproveRegistration(ctx, reg.ID, []byte("wrapped-"+env), "envkey-v1", approver)
+	if err != nil {
+		t.Fatalf("approve %s/%s/%s: %v", env, app, role, err)
 	}
 	return approved
 }
 
 // TestRegisterApproveResolve exercises the whole path the config manager
-// exists for: a machine registers, an admin approves it, it registers a
-// (app, role, version) tuple, and resolution finds the config an admin
-// blessed for that address.
+// exists for: a box enrols, registers an address, an admin approves that
+// address, and resolution finds the config blessed for it.
 func TestRegisterApproveResolve(t *testing.T) {
 	ctx := context.Background()
 	d := open(t)
 	admin := newUser(t, d, "carl")
 
-	m := registerAndApprove(t, ctx, d, "box-1", "prod", admin.ID)
-	if m.WrapKeyID != "envkey-v1" {
-		t.Fatalf("wrap key id = %q", m.WrapKeyID)
+	m, err := d.RegisterMachine(ctx, "box-1", "prod", testPublicKey(1))
+	if err != nil {
+		t.Fatalf("register machine: %v", err)
 	}
-	if m.ApprovedBy != admin.ID {
-		t.Fatalf("approved_by = %q, want %q", m.ApprovedBy, admin.ID)
-	}
-	if m.ApprovedAt == nil {
-		t.Fatal("approved_at not stamped")
+	if m.EnrolledEnvironment != "prod" {
+		t.Fatalf("enrolled environment = %q", m.EnrolledEnvironment)
 	}
 
-	reg, err := d.UpsertRegistration(ctx, m.ID, "redline", "current", "1.2.0")
-	if err != nil {
-		t.Fatalf("upsert registration: %v", err)
+	reg := registerAt(t, ctx, d, m, "prod", "redline", "current", admin.ID)
+	if reg.State != RegistrationApproved {
+		t.Fatalf("state = %q, want approved", reg.State)
 	}
-	if reg.Version != "1.2.0" {
+	if reg.WrapKeyID != "envkey-v1" || reg.ApprovedBy != admin.ID || reg.ApprovedAt == nil {
+		t.Fatalf("grant not recorded: %+v", reg)
+	}
+	if reg.Version != "1.0.0" {
 		t.Fatalf("registration version = %q", reg.Version)
 	}
 
 	cfg, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "", admin.ID, []ConfigValue{
-		{Key: "RETENTION_DAYS", Binding: BindingInvariant, Value: "30"},
-		{Key: "PUBLIC_URL", Binding: BindingEnv, Value: "https://prod.example"},
-		{Key: "GATEWAY_KEY", Binding: BindingSecret, Ciphertext: []byte("sealed"), KeyID: "envkey-v1"},
+		{Key: "RETENTION_DAYS", Binding: BindingInvariant, Ciphertext: sealed("30"), KeyID: "envkey-v1"},
+		{Key: "PUBLIC_URL", Binding: BindingEnv, Ciphertext: sealed("https://prod.example"), KeyID: "envkey-v1"},
 	})
 	if err != nil {
 		t.Fatalf("create config: %v", err)
 	}
-	if len(cfg.Values) != 3 {
-		t.Fatalf("values = %d, want 3", len(cfg.Values))
+	if len(cfg.Values) != 2 {
+		t.Fatalf("values = %d, want 2", len(cfg.Values))
 	}
 
 	res, err := d.ResolveConfig(ctx, "prod", "redline", "current", "1.2.0")
@@ -83,45 +102,570 @@ func TestRegisterApproveResolve(t *testing.T) {
 	if len(res.Shadowed) != 0 {
 		t.Fatalf("shadowed = %d, want 0", len(res.Shadowed))
 	}
-	if len(res.Config.Values) != 3 {
-		t.Fatalf("resolved values = %d, want 3", len(res.Config.Values))
-	}
 }
 
-// A denied machine's registration touch is unaffected by admission — the
-// machine still exists and can be looked up, seen, etc.; only ever reads it
-// carried the environment key for (none) are refused, which is a caller-side
-// concern this layer does not enforce. What this layer must guarantee is
-// deny/approve mutate exactly the fields the CHECK constraints require.
-func TestDenyMachineClearsGrant(t *testing.T) {
+// The correction 0009 exists for. A box restarted with a different --env is a
+// different tuple, so it lands in pending holding no key for the environment
+// it has wandered into. Under 0008's UNIQUE (machine_id, app, role) the second
+// call hit the approved row and bumped last_seen_at instead, which made the
+// design's fail-closed claim false.
+func TestEnvironmentChangeReEntersPending(t *testing.T) {
 	ctx := context.Background()
 	d := open(t)
 	admin := newUser(t, d, "carl")
 
-	m, err := d.RegisterMachine(ctx, "box-2", "prod", testPublicKey(2))
+	m, err := d.RegisterMachine(ctx, "box-env", "prod", testPublicKey(2))
 	if err != nil {
-		t.Fatalf("register: %v", err)
+		t.Fatalf("register machine: %v", err)
 	}
-	if _, err := d.ApproveMachine(ctx, m.ID, []byte("wrapped"), "envkey-v1", admin.ID); err != nil {
-		t.Fatalf("approve: %v", err)
+	prod := registerAt(t, ctx, d, m, "prod", "redline", "app", admin.ID)
+
+	staging, err := d.UpsertRegistration(ctx, m.ID, "staging", "redline", "app", "1.0.0")
+	if err != nil {
+		t.Fatalf("register with a different env: %v", err)
+	}
+	if staging.ID == prod.ID {
+		t.Fatal("a different environment reused the approved registration row")
+	}
+	if staging.State != RegistrationPending {
+		t.Fatalf("state after env change = %q, want pending", staging.State)
+	}
+	if _, err := d.RegistrationWrappedKey(ctx, staging.ID); !errors.Is(err, ErrNoGrant) {
+		t.Fatalf("pending registration wrapped key = %v, want ErrNoGrant", err)
 	}
 
-	denied, err := d.DenyMachine(ctx, m.ID, "compromised box")
+	// The registration it wandered away from is untouched.
+	back, err := d.RegistrationByID(ctx, prod.ID)
+	if err != nil {
+		t.Fatalf("re-read prod registration: %v", err)
+	}
+	if back.State != RegistrationApproved {
+		t.Fatalf("prod registration state = %q, want it left alone", back.State)
+	}
+
+	// A role change is a new tuple for the same reason.
+	ops, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "ops", "1.0.0")
+	if err != nil {
+		t.Fatalf("register a second role: %v", err)
+	}
+	if ops.State != RegistrationPending {
+		t.Fatalf("role change state = %q, want pending", ops.State)
+	}
+}
+
+// One keypair per machine, but one wrapped key per address it runs, because
+// the key address IS the config address.
+func TestWrappedKeysArePerRegistration(t *testing.T) {
+	ctx := context.Background()
+	d := open(t)
+	admin := newUser(t, d, "carl")
+
+	m, err := d.RegisterMachine(ctx, "box-multi", "prod", testPublicKey(3))
+	if err != nil {
+		t.Fatalf("register machine: %v", err)
+	}
+	app := registerAt(t, ctx, d, m, "prod", "redline", "app", admin.ID)
+	ops := registerAt(t, ctx, d, m, "prod", "redline", "ops", admin.ID)
+
+	appKey, err := d.RegistrationWrappedKey(ctx, app.ID)
+	if err != nil {
+		t.Fatalf("app wrapped key: %v", err)
+	}
+	opsKey, err := d.RegistrationWrappedKey(ctx, ops.ID)
+	if err != nil {
+		t.Fatalf("ops wrapped key: %v", err)
+	}
+	if string(appKey) != "wrapped-prod" || string(opsKey) != "wrapped-prod" {
+		t.Fatalf("wrapped keys = %q, %q", appKey, opsKey)
+	}
+
+	// Re-wrapping one address must not touch the other — that is the whole
+	// point of the key living on the registration.
+	if _, err := d.ApproveRegistration(ctx, app.ID, []byte("rotated"), "envkey-v2", admin.ID); err != nil {
+		t.Fatalf("re-approve after rotation: %v", err)
+	}
+	appKey, _ = d.RegistrationWrappedKey(ctx, app.ID)
+	opsKey, _ = d.RegistrationWrappedKey(ctx, ops.ID)
+	if string(appKey) != "rotated" {
+		t.Fatalf("app key after rotation = %q", appKey)
+	}
+	if string(opsKey) != "wrapped-prod" {
+		t.Fatalf("ops key changed with app's rotation: %q", opsKey)
+	}
+
+	// Nothing that lists registrations may carry key material; Registration
+	// has no field for it at all.
+	list, err := d.ListRegistrationsByState(ctx, RegistrationApproved)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("approved registrations = %d, want 2", len(list))
+	}
+	for _, r := range list {
+		if r.WrapKeyID == "" {
+			t.Fatalf("queue projection lost the key NAME, which it needs: %+v", r)
+		}
+	}
+}
+
+// Approval must not silently undo a denial, and the state predicate is what
+// stops it. 0008 had none.
+func TestApproveRefusesDeniedRegistration(t *testing.T) {
+	ctx := context.Background()
+	d := open(t)
+	admin := newUser(t, d, "carl")
+
+	m, err := d.RegisterMachine(ctx, "box-denied", "prod", testPublicKey(4))
+	if err != nil {
+		t.Fatalf("register machine: %v", err)
+	}
+	reg := registerAt(t, ctx, d, m, "prod", "redline", "app", admin.ID)
+
+	denied, err := d.DenyRegistration(ctx, reg.ID, "compromised box")
 	if err != nil {
 		t.Fatalf("deny: %v", err)
 	}
-	if denied.State != MachineStateDenied {
-		t.Fatalf("state = %q, want denied", denied.State)
+	if denied.State != RegistrationDenied || denied.DeniedReason != "compromised box" {
+		t.Fatalf("denied row = %+v", denied)
 	}
-	if denied.DeniedReason != "compromised box" {
-		t.Fatalf("reason = %q", denied.DeniedReason)
+	if denied.WrapKeyID != "" || denied.ApprovedBy != "" || denied.ApprovedAt != nil {
+		t.Fatal("denying must clear hz's copy of the grant")
 	}
-	if denied.WrappedEnvKey != nil || denied.WrapKeyID != "" || denied.ApprovedBy != "" || denied.ApprovedAt != nil {
-		t.Fatal("denying an approved machine must clear its grant")
+	if _, err := d.RegistrationWrappedKey(ctx, reg.ID); !errors.Is(err, ErrNoGrant) {
+		t.Fatalf("wrapped key after denial = %v, want ErrNoGrant", err)
 	}
 
-	if _, err := d.DenyMachine(ctx, m.ID, ""); err == nil {
+	if _, err := d.ApproveRegistration(ctx, reg.ID, []byte("sneaky"), "envkey-v1", admin.ID); !errors.Is(err, ErrRegistrationDenied) {
+		t.Fatalf("approving a denied registration = %v, want ErrRegistrationDenied", err)
+	}
+	after, err := d.RegistrationByID(ctx, reg.ID)
+	if err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if after.State != RegistrationDenied {
+		t.Fatalf("state after refused approval = %q, want denied", after.State)
+	}
+
+	if _, err := d.DenyRegistration(ctx, reg.ID, ""); err == nil {
 		t.Fatal("denial with no reason was accepted")
+	}
+	if _, err := d.ApproveRegistration(ctx, "reg_nope", []byte("x"), "envkey-v1", admin.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("approving an unknown registration = %v, want ErrNotFound", err)
+	}
+}
+
+// No value is plaintext, and the schema is what makes that true rather than a
+// Go-side convention. ConfigValue has no plaintext field to set, so everything
+// below goes at the table directly.
+func TestPlaintextValueIsUnrepresentable(t *testing.T) {
+	ctx := context.Background()
+	d := open(t)
+	admin := newUser(t, d, "carl")
+	cfg := blessOpen(t, ctx, d, "prod", "redline", "app", "1.0.0", admin.ID)
+
+	rows, err := d.QueryContext(ctx, `SELECT name FROM pragma_table_info('cm_config_values')`)
+	if err != nil {
+		t.Fatalf("table info: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if name == "value" {
+			t.Fatal("cm_config_values still has a plaintext column")
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		sql  string
+		args []any
+	}{
+		{
+			name: "plaintext column",
+			sql: `INSERT INTO cm_config_values (config_id, key, binding, value, key_id, origin)
+			      VALUES (?, 'B', 'invariant', 'plain', 'envkey-v1', 'direct')`,
+			args: []any{cfg.ID},
+		},
+		{
+			name: "the secret binding is gone",
+			sql: `INSERT INTO cm_config_values (config_id, key, binding, ciphertext, key_id, origin)
+			      VALUES (?, 'C', 'secret', ?, 'envkey-v1', 'direct')`,
+			args: []any{cfg.ID, sealed("x")},
+		},
+		{
+			name: "no ciphertext and no tombstone",
+			sql: `INSERT INTO cm_config_values (config_id, key, binding, ciphertext, key_id, origin)
+			      VALUES (?, 'D', 'env', NULL, 'envkey-v1', 'direct')`,
+			args: []any{cfg.ID},
+		},
+		{
+			name: "zero-length ciphertext is not an envelope",
+			sql: `INSERT INTO cm_config_values (config_id, key, binding, ciphertext, key_id, origin)
+			      VALUES (?, 'E', 'env', ?, 'envkey-v1', 'direct')`,
+			args: []any{cfg.ID, []byte{}},
+		},
+		{
+			name: "promoted with no source config",
+			sql: `INSERT INTO cm_config_values (config_id, key, binding, ciphertext, key_id, origin)
+			      VALUES (?, 'F', 'env', ?, 'envkey-v1', 'promoted')`,
+			args: []any{cfg.ID, sealed("x")},
+		},
+		{
+			name: "direct with a source config",
+			sql: `INSERT INTO cm_config_values (config_id, key, binding, ciphertext, key_id, origin, source_config_id)
+			      VALUES (?, 'G', 'env', ?, 'envkey-v1', 'direct', ?)`,
+			args: []any{cfg.ID, sealed("x"), cfg.ID},
+		},
+		{
+			name: "unknown origin",
+			sql: `INSERT INTO cm_config_values (config_id, key, binding, ciphertext, key_id, origin)
+			      VALUES (?, 'H', 'env', ?, 'envkey-v1', 'guessed')`,
+			args: []any{cfg.ID, sealed("x")},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := d.ExecContext(ctx, tc.sql, tc.args...); err == nil {
+				t.Fatal("malformed row was accepted")
+			}
+		})
+	}
+}
+
+// An intentionally empty value must be representable, because the alternative
+// is omitting the key — at which point the app falls back to its compiled
+// default, which is the founding bug. Omission is the error; emptiness is not.
+func TestEmptyValueRoundTripsAndOmissionFails(t *testing.T) {
+	ctx := context.Background()
+	d := open(t)
+	admin := newUser(t, d, "carl")
+
+	cfg, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
+		{Key: "BUCKET_PREFIX", Binding: BindingEnv, Ciphertext: sealed(""), KeyID: "envkey-v1"},
+	})
+	if err != nil {
+		t.Fatalf("empty value refused: %v", err)
+	}
+	got, err := d.GetConfig(ctx, cfg.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got.Values) != 1 || string(got.Values[0].Ciphertext) != string(sealed("")) {
+		t.Fatalf("empty value did not round-trip: %+v", got.Values)
+	}
+
+	// Omission — a key with nothing sealed under it — is what gets refused.
+	_, err = d.CreateConfig(ctx, "prod", "redline", "ops", "1.0.0", "", admin.ID, []ConfigValue{
+		{Key: "BUCKET_PREFIX", Binding: BindingEnv, KeyID: "envkey-v1"},
+	})
+	if !errors.Is(err, ErrValueOmitted) {
+		t.Fatalf("omitted value = %v, want ErrValueOmitted", err)
+	}
+	if _, err := d.CreateConfig(ctx, "prod", "redline", "ops", "1.0.0", "", admin.ID, nil); err == nil {
+		t.Fatal("a config with no values at all was accepted")
+	}
+}
+
+// Lineage lives on the value, survives supersession, and links the SOURCE
+// CONFIG ID alone — never a copied seq.
+func TestLineageSurvivesSupersession(t *testing.T) {
+	ctx := context.Background()
+	d := open(t)
+	admin := newUser(t, d, "carl")
+
+	source := blessOpen(t, ctx, d, "staging", "redline", "app", "1.0.0", admin.ID)
+
+	promoted, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
+		{Key: "RETENTION_DAYS", Binding: BindingInvariant, Ciphertext: sealed("30"),
+			KeyID: "prodkey-v1", Origin: OriginPromoted, SourceConfigID: source.ID},
+		{Key: "DB_PASSWORD", Binding: BindingEnv, Ciphertext: sealed("born-in-prod"), KeyID: "prodkey-v1"},
+	})
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	byKey := map[string]ConfigValue{}
+	for _, v := range promoted.Values {
+		byKey[v.Key] = v
+	}
+	if byKey["RETENTION_DAYS"].Origin != OriginPromoted || byKey["RETENTION_DAYS"].SourceConfigID != source.ID {
+		t.Fatalf("promoted lineage = %+v", byKey["RETENTION_DAYS"])
+	}
+	// Origin is inferred, not demanded, and inference cannot mislabel: a
+	// value naming no source was set here.
+	if byKey["DB_PASSWORD"].Origin != OriginDirect || byKey["DB_PASSWORD"].SourceConfigID != "" {
+		t.Fatalf("direct lineage = %+v", byKey["DB_PASSWORD"])
+	}
+
+	// A direct set after a promotion is a NEW value in a NEW config,
+	// superseding by seq. Nothing is overwritten.
+	superseding, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.0.0", "2.0.0", admin.ID, []ConfigValue{
+		{Key: "RETENTION_DAYS", Binding: BindingInvariant, Ciphertext: sealed("7"), KeyID: "prodkey-v1"},
+	})
+	if err != nil {
+		t.Fatalf("supersede: %v", err)
+	}
+	if superseding.Seq <= promoted.Seq {
+		t.Fatalf("seq did not advance: %d then %d", promoted.Seq, superseding.Seq)
+	}
+
+	res, err := d.ResolveConfig(ctx, "prod", "redline", "app", "1.5.0")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if res.Config.ID != superseding.ID {
+		t.Fatalf("winner = %s, want the superseding config", res.Config.ID)
+	}
+	if res.Config.Values[0].Origin != OriginDirect {
+		t.Fatalf("superseding value origin = %q, want direct", res.Config.Values[0].Origin)
+	}
+	if len(res.Shadowed) != 1 || res.Shadowed[0].ID != promoted.ID {
+		t.Fatalf("shadowed = %+v", res.Shadowed)
+	}
+
+	// The promoted value's provenance is still there, untouched, in the
+	// config it was written to.
+	old, err := d.GetConfig(ctx, promoted.ID)
+	if err != nil {
+		t.Fatalf("re-read promoted config: %v", err)
+	}
+	for _, v := range old.Values {
+		if v.Key == "RETENTION_DAYS" && (v.Origin != OriginPromoted || v.SourceConfigID != source.ID) {
+			t.Fatalf("supersession damaged lineage: %+v", v)
+		}
+	}
+
+	// The source config is somebody's provenance and cannot be quietly
+	// deleted out from under the value that names it.
+	if _, err := d.ExecContext(ctx, `DELETE FROM cm_configs WHERE id = ?`, source.ID); err == nil {
+		t.Fatal("deleting a lineage source was accepted")
+	}
+}
+
+// A tombstone keeps the row and its provenance and loses the bytes — and one
+// config is not a revocation, because every superseded config at the address
+// holds ciphertext that opens under the same key.
+func TestTombstoneKeepsRowAndDropsBytes(t *testing.T) {
+	ctx := context.Background()
+	d := open(t)
+	admin := newUser(t, d, "carl")
+
+	source := blessOpen(t, ctx, d, "staging", "redline", "app", "1.0.0", admin.ID)
+	first, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
+		{Key: "LEAKED", Binding: BindingInvariant, Ciphertext: sealed("old"),
+			KeyID: "prodkey-v1", Origin: OriginPromoted, SourceConfigID: source.ID},
+	})
+	if err != nil {
+		t.Fatalf("first config: %v", err)
+	}
+	second, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.0.0", "2.0.0", admin.ID, []ConfigValue{
+		{Key: "LEAKED", Binding: BindingInvariant, Ciphertext: sealed("new"), KeyID: "prodkey-v1"},
+	})
+	if err != nil {
+		t.Fatalf("second config: %v", err)
+	}
+
+	if err := d.TombstoneConfigValue(ctx, second.ID, "LEAKED", admin.ID); err != nil {
+		t.Fatalf("tombstone: %v", err)
+	}
+	got, err := d.GetConfig(ctx, second.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got.Values) != 1 {
+		t.Fatalf("the tombstoned row did not survive: %+v", got.Values)
+	}
+	v := got.Values[0]
+	if !v.Tombstoned() || v.Ciphertext != nil {
+		t.Fatalf("tombstone kept the bytes: %+v", v)
+	}
+	if v.Key != "LEAKED" || v.Binding != BindingInvariant || v.KeyID != "prodkey-v1" || v.TombstonedBy != admin.ID {
+		t.Fatalf("tombstone lost provenance: %+v", v)
+	}
+
+	// Tombstoning one config left the identical secret openable at the same
+	// address, one config behind.
+	behind, err := d.GetConfig(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("get first: %v", err)
+	}
+	if behind.Values[0].Tombstoned() {
+		t.Fatal("tombstoning one config should not have reached another")
+	}
+
+	// A second tombstone is a no-op that preserves the first destruction's
+	// record.
+	if err := d.TombstoneConfigValue(ctx, second.ID, "LEAKED", admin.ID); err != nil {
+		t.Fatalf("re-tombstone: %v", err)
+	}
+	if err := d.TombstoneConfigValue(ctx, second.ID, "NOPE", admin.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("tombstoning an unknown key = %v, want ErrNotFound", err)
+	}
+
+	// Sweeping the address is what revocation means.
+	n, err := d.TombstoneValueAtAddress(ctx, "PROD", "redline", "app", "LEAKED", admin.ID)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("sweep reached %d values, want the 1 still holding bytes", n)
+	}
+	behind, err = d.GetConfig(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("get first after sweep: %v", err)
+	}
+	if !behind.Values[0].Tombstoned() || behind.Values[0].Ciphertext != nil {
+		t.Fatalf("sweep missed a config at the address: %+v", behind.Values[0])
+	}
+	if behind.Values[0].Origin != OriginPromoted || behind.Values[0].SourceConfigID != source.ID {
+		t.Fatalf("sweep destroyed lineage: %+v", behind.Values[0])
+	}
+}
+
+// All three bless-time validations. Each one detonates at some box's next
+// restart, which for an unattended box may be years after the mistake.
+func TestCreateConfigBlessTimeValidation(t *testing.T) {
+	ctx := context.Background()
+	d := open(t)
+	admin := newUser(t, d, "carl")
+
+	// A closed range at a fresh address leaves every box above max_ver with
+	// nothing to resolve to.
+	_, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.0.0", "1.3.0", admin.ID, oneValue("A"))
+	if !errors.Is(err, ErrNoOpenRange) {
+		t.Fatalf("closed range with no open config = %v, want ErrNoOpenRange", err)
+	}
+
+	open1 := blessOpen(t, ctx, d, "prod", "redline", "app", "1.0.0", admin.ID)
+
+	// A second open-ended config is LEGAL, and is how supersession works: the
+	// newer one wins on seq for versions both contain, while the older keeps
+	// serving binaries below the newer one's min_ver. Refusing it would deadlock
+	// against ranges being immutable, since replacing the incumbent would mean
+	// editing its max_ver.
+	open2 := blessOpen(t, ctx, d, "prod", "redline", "app", "1.4.0", admin.ID)
+
+	got, err := d.ResolveConfig(ctx, "prod", "redline", "app", "1.5.0")
+	if err != nil {
+		t.Fatalf("resolve above both min_vers: %v", err)
+	}
+	if got.Config.ID != open2.ID {
+		t.Fatalf("winner = %s, want the higher seq %s", got.Config.ID, open2.ID)
+	}
+	if len(got.Shadowed) != 1 || got.Shadowed[0].ID != open1.ID {
+		t.Fatalf("shadowed = %v, want exactly the older open config", got.Shadowed)
+	}
+
+	// Below the newer one's min_ver only the older still contains the version,
+	// which is the rollback case ranges exist for.
+	got, err = d.ResolveConfig(ctx, "prod", "redline", "app", "1.2.0")
+	if err != nil {
+		t.Fatalf("resolve below the newer min_ver: %v", err)
+	}
+	if got.Config.ID != open1.ID {
+		t.Fatalf("winner = %s, want the older %s", got.Config.ID, open1.ID)
+	}
+
+	// A range that contains nothing.
+	if _, err := d.CreateConfig(ctx, "prod", "redline", "app", "2.0.0", "1.0.0", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidVersionRange) {
+		t.Fatalf("inverted range = %v, want ErrInvalidVersionRange", err)
+	}
+
+	// A closed range alongside the open one is the legal shape, and nothing
+	// above was written.
+	closed, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.0.0", "1.3.0", admin.ID, oneValue("A"))
+	if err != nil {
+		t.Fatalf("closed range beside an open one: %v", err)
+	}
+	list, err := d.ListConfigsForAddress(ctx, "prod", "redline", "app")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	// Exactly the three that were accepted — two open-ended plus the closed one
+	// — and nothing from the four that were refused.
+	if len(list) != 3 || list[0].ID != open1.ID || list[1].ID != open2.ID || list[2].ID != closed.ID {
+		t.Fatalf("refused blessings left rows behind: %+v", list)
+	}
+}
+
+// Addresses are canonical or they do not exist: one spelling, one AAD, one
+// keystore path.
+func TestAddressCanonicalisation(t *testing.T) {
+	ctx := context.Background()
+	d := open(t)
+	admin := newUser(t, d, "carl")
+
+	cfg, err := d.CreateConfig(ctx, "  PROD ", "Redline", "App", "1.0.0", "", admin.ID, oneValue("A"))
+	if err != nil {
+		t.Fatalf("create with a shouted address: %v", err)
+	}
+	if cfg.Environment != "prod" || cfg.App != "redline" || cfg.Role != "app" {
+		t.Fatalf("address not folded: %s/%s/%s", cfg.Environment, cfg.App, cfg.Role)
+	}
+
+	// The folded spelling and the shouted one are the same address, which is
+	// the whole point: today they resolve to two.
+	res, err := d.ResolveConfig(ctx, "Prod", "redline", "APP", "1.1.0")
+	if err != nil {
+		t.Fatalf("resolve a shouted address: %v", err)
+	}
+	if res.Config.ID != cfg.ID {
+		t.Fatalf("resolved %s, want %s", res.Config.ID, cfg.ID)
+	}
+
+	// The reserved role names break the client's own file naming.
+	for _, role := range []string{"config", "secret", "local", "CONFIG"} {
+		if _, err := d.CreateConfig(ctx, "prod", "redline", role, "1.0.0", "", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidAddress) {
+			t.Errorf("reserved role %q = %v, want ErrInvalidAddress", role, err)
+		}
+	}
+
+	bad := []string{"", "  ", "a/b", "../..", "a.b", "_leading", "-leading", "pröd", "a b", "a*"}
+	for _, s := range bad {
+		if _, err := d.CreateConfig(ctx, s, "redline", "app", "1.0.0", "", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidAddress) {
+			t.Errorf("environment %q = %v, want ErrInvalidAddress", s, err)
+		}
+	}
+
+	m, err := d.RegisterMachine(ctx, "box-canon", "PROD", testPublicKey(5))
+	if err != nil {
+		t.Fatalf("register machine: %v", err)
+	}
+	if m.EnrolledEnvironment != "prod" {
+		t.Fatalf("enrolled environment = %q, want folded", m.EnrolledEnvironment)
+	}
+	reg, err := d.UpsertRegistration(ctx, m.ID, "Prod", "Redline", "App", "1.0.0")
+	if err != nil {
+		t.Fatalf("register address: %v", err)
+	}
+	if reg.Environment != "prod" || reg.App != "redline" || reg.Role != "app" {
+		t.Fatalf("registration address not folded: %+v", reg)
+	}
+	again, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "app", "1.0.0")
+	if err != nil {
+		t.Fatalf("re-register: %v", err)
+	}
+	if again.ID != reg.ID {
+		t.Fatal("two spellings of one address made two registrations")
+	}
+
+	// The CHECK constraints are the enforcement for anything reaching the
+	// tables by another route.
+	if _, err := d.ExecContext(ctx,
+		`INSERT INTO cm_configs (id, environment, app, role, min_ver, created_by) VALUES (?, 'Prod', 'redline', 'app', '1.0.0', ?)`,
+		"cfg_shouted", admin.ID); err == nil {
+		t.Fatal("an unfolded address was accepted by the table")
+	}
+	if _, err := d.ExecContext(ctx,
+		`INSERT INTO cm_configs (id, environment, app, role, min_ver, created_by) VALUES (?, 'prod', 'redline', 'local', '1.0.0', ?)`,
+		"cfg_reserved", admin.ID); err == nil {
+		t.Fatal("a reserved role name was accepted by the table")
 	}
 }
 
@@ -145,30 +689,13 @@ func TestMachineByNameAndUnknown(t *testing.T) {
 	if _, err := d.MachineByName(ctx, "nope"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown name = %v, want ErrNotFound", err)
 	}
-}
-
-func TestListMachinesByState(t *testing.T) {
-	ctx := context.Background()
-	d := open(t)
-	admin := newUser(t, d, "carl")
-
-	pending, _ := d.RegisterMachine(ctx, "pending-box", "prod", testPublicKey(4))
-	_ = registerAndApprove(t, ctx, d, "approved-box", "prod", admin.ID)
-
-	list, err := d.ListMachinesByState(ctx, MachineStatePending)
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(list) != 1 || list[0].ID != pending.ID {
-		t.Fatalf("pending list = %+v", list)
+	if _, err := d.RegistrationByID(ctx, "reg_nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown registration = %v, want ErrNotFound", err)
 	}
 
-	list, err = d.ListMachinesByState(ctx, MachineStateApproved)
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(list) != 1 || list[0].Name != "approved-box" {
-		t.Fatalf("approved list = %+v", list)
+	list, err := d.ListMachines(ctx)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list machines = %v, %v", list, err)
 	}
 }
 
@@ -185,7 +712,7 @@ func TestDuplicateMachineNameIsUniqueViolation(t *testing.T) {
 	}
 }
 
-// The UNIQUE(machine_id, app, role) constraint is what makes UpsertRegistration
+// UNIQUE (machine_id, environment, app, role) is what makes UpsertRegistration
 // safe to call from every boot; prove it exists independent of the Go upsert
 // path by inserting the row twice directly.
 func TestDuplicateRegistrationTupleIsUniqueViolation(t *testing.T) {
@@ -196,35 +723,33 @@ func TestDuplicateRegistrationTupleIsUniqueViolation(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	if _, err := d.ExecContext(ctx,
-		`INSERT INTO cm_registrations (id, machine_id, app, role, version) VALUES (?, ?, ?, ?, ?)`,
-		"reg_one", m.ID, "redline", "current", "1.0.0"); err != nil {
+	insert := `INSERT INTO cm_registrations (id, machine_id, environment, app, role, version) VALUES (?, ?, ?, ?, ?, ?)`
+	if _, err := d.ExecContext(ctx, insert, "reg_one", m.ID, "prod", "redline", "current", "1.0.0"); err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
-	_, err = d.ExecContext(ctx,
-		`INSERT INTO cm_registrations (id, machine_id, app, role, version) VALUES (?, ?, ?, ?, ?)`,
-		"reg_two", m.ID, "redline", "current", "1.1.0")
-	if !isUniqueViolation(err) {
+	if _, err := d.ExecContext(ctx, insert, "reg_two", m.ID, "prod", "redline", "current", "1.1.0"); !isUniqueViolation(err) {
 		t.Fatalf("duplicate tuple insert = %v, want a unique violation", err)
+	}
+	// A different environment is a different tuple, and must be accepted.
+	if _, err := d.ExecContext(ctx, insert, "reg_three", m.ID, "staging", "redline", "current", "1.1.0"); err != nil {
+		t.Fatalf("same app and role in another environment: %v", err)
 	}
 }
 
-// UpsertRegistration itself must survive being called twice for the same
-// tuple — that is the whole point, "later boots just touch last_seen" — and
-// must not touch the originally recorded version.
+// UpsertRegistration must survive being called twice for the same tuple — that
+// is the whole point, "later boots just touch last_seen" — and must not touch
+// the originally recorded version or the approval.
 func TestUpsertRegistrationIsIdempotentOnVersion(t *testing.T) {
 	ctx := context.Background()
 	d := open(t)
+	admin := newUser(t, d, "carl")
 	m, err := d.RegisterMachine(ctx, "box-8", "prod", testPublicKey(8))
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
-	first, err := d.UpsertRegistration(ctx, m.ID, "redline", "current", "1.0.0")
-	if err != nil {
-		t.Fatalf("first upsert: %v", err)
-	}
-	second, err := d.UpsertRegistration(ctx, m.ID, "redline", "current", "1.1.0")
+	first := registerAt(t, ctx, d, m, "prod", "redline", "current", admin.ID)
+	second, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "current", "1.1.0")
 	if err != nil {
 		t.Fatalf("second upsert: %v", err)
 	}
@@ -233,6 +758,9 @@ func TestUpsertRegistrationIsIdempotentOnVersion(t *testing.T) {
 	}
 	if second.Version != "1.0.0" {
 		t.Fatalf("version = %q, want the first-registered version 1.0.0", second.Version)
+	}
+	if second.State != RegistrationApproved {
+		t.Fatalf("a routine restart re-litigated approval: state = %q", second.State)
 	}
 	if second.LastSeenAt == nil {
 		t.Fatal("last_seen_at not stamped on the later boot")
@@ -249,7 +777,7 @@ func TestForeignKeyCascadeDeletesDependents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	if _, err := d.UpsertRegistration(ctx, m.ID, "redline", "current", "1.0.0"); err != nil {
+	if _, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "current", "1.0.0"); err != nil {
 		t.Fatalf("registration: %v", err)
 	}
 	if err := d.SetMachineSecret(ctx, m.ID, "TOKEN", []byte("sealed"), admin.ID); err != nil {
@@ -276,12 +804,7 @@ func TestForeignKeyCascadeDeletesConfigValues(t *testing.T) {
 	ctx := context.Background()
 	d := open(t)
 	admin := newUser(t, d, "carl")
-	cfg, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "", admin.ID, []ConfigValue{
-		{Key: "A", Binding: BindingInvariant, Value: "1"},
-	})
-	if err != nil {
-		t.Fatalf("create config: %v", err)
-	}
+	cfg := blessOpen(t, ctx, d, "prod", "redline", "current", "1.0.0", admin.ID)
 
 	if _, err := d.ExecContext(ctx, `DELETE FROM cm_configs WHERE id = ?`, cfg.ID); err != nil {
 		t.Fatalf("delete config: %v", err)
@@ -293,86 +816,52 @@ func TestForeignKeyCascadeDeletesConfigValues(t *testing.T) {
 	}
 }
 
-// The CHECK constraint on cm_config_values is the real enforcement of the
-// binding invariant — prove it refuses a malformed row even when Go's own
-// validation is bypassed via a raw statement.
-func TestConfigValueCheckConstraintRefusesMalformedRow(t *testing.T) {
+// The CHECK constraints on cm_registrations are the real enforcement that an
+// approved registration always carries its grant.
+func TestRegistrationCheckConstraintRefusesInconsistentState(t *testing.T) {
 	ctx := context.Background()
 	d := open(t)
-	admin := newUser(t, d, "carl")
-	cfg, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "", admin.ID, []ConfigValue{
-		{Key: "A", Binding: BindingInvariant, Value: "1"},
-	})
+	m, err := d.RegisterMachine(ctx, "box-check", "prod", testPublicKey(1))
 	if err != nil {
-		t.Fatalf("create config: %v", err)
+		t.Fatalf("register: %v", err)
 	}
 
 	cases := []struct {
 		name string
-		key  string
 		sql  string
 		args []any
 	}{
 		{
-			name: "secret with plaintext value",
-			key:  "B",
-			sql: `INSERT INTO cm_config_values (config_id, key, binding, value, ciphertext, key_id)
-			      VALUES (?, ?, 'secret', 'plain', ?, ?)`,
-			args: []any{cfg.ID, "B", []byte("sealed"), "envkey-v1"},
+			name: "approved with no grant",
+			sql: `INSERT INTO cm_registrations (id, machine_id, environment, app, role, version, state)
+			      VALUES (?, ?, 'prod', 'redline', 'app', '1.0.0', 'approved')`,
+			args: []any{"reg_bad1", m.ID},
 		},
 		{
-			name: "secret with no ciphertext",
-			key:  "C",
-			sql: `INSERT INTO cm_config_values (config_id, key, binding, value, ciphertext, key_id)
-			      VALUES (?, ?, 'secret', NULL, NULL, ?)`,
-			args: []any{cfg.ID, "C", "envkey-v1"},
+			name: "denied with no reason",
+			sql: `INSERT INTO cm_registrations (id, machine_id, environment, app, role, version, state)
+			      VALUES (?, ?, 'prod', 'redline', 'app', '1.0.0', 'denied')`,
+			args: []any{"reg_bad2", m.ID},
 		},
 		{
-			name: "invariant with ciphertext",
-			key:  "D",
-			sql: `INSERT INTO cm_config_values (config_id, key, binding, value, ciphertext, key_id)
-			      VALUES (?, ?, 'invariant', 'x', ?, NULL)`,
-			args: []any{cfg.ID, "D", []byte("sealed")},
+			name: "pending holding a grant",
+			sql: `INSERT INTO cm_registrations (id, machine_id, environment, app, role, version, state, wrapped_env_key, wrap_key_id)
+			      VALUES (?, ?, 'prod', 'redline', 'app', '1.0.0', 'pending', ?, 'envkey-v1')`,
+			args: []any{"reg_bad3", m.ID, []byte("wrapped")},
 		},
 		{
-			name: "invariant with no plaintext",
-			key:  "E",
-			sql: `INSERT INTO cm_config_values (config_id, key, binding, value, ciphertext, key_id)
-			      VALUES (?, ?, 'invariant', NULL, NULL, NULL)`,
-			args: []any{cfg.ID, "E"},
-		},
-		{
-			name: "unknown binding",
-			key:  "F",
-			sql: `INSERT INTO cm_config_values (config_id, key, binding, value, ciphertext, key_id)
-			      VALUES (?, ?, 'weird', 'x', NULL, NULL)`,
-			args: []any{cfg.ID, "F"},
+			name: "unknown state",
+			sql: `INSERT INTO cm_registrations (id, machine_id, environment, app, role, version, state)
+			      VALUES (?, ?, 'prod', 'redline', 'app', '1.0.0', 'maybe')`,
+			args: []any{"reg_bad4", m.ID},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := d.ExecContext(ctx, tc.sql, tc.args...); err == nil {
-				t.Fatal("malformed row was accepted")
+				t.Fatal("inconsistent registration was accepted")
 			}
 		})
-	}
-}
-
-// The CHECK constraint on cm_machines is the real enforcement that an
-// approved machine always carries its grant.
-func TestMachineCheckConstraintRefusesInconsistentState(t *testing.T) {
-	ctx := context.Background()
-	d := open(t)
-
-	if _, err := d.ExecContext(ctx,
-		`INSERT INTO cm_machines (id, name, environment, public_key, state) VALUES (?, ?, ?, ?, 'approved')`,
-		"mch_bad", "bad-box", "prod", testPublicKey(1)); err == nil {
-		t.Fatal("approved machine with no grant was accepted")
-	}
-	if _, err := d.ExecContext(ctx,
-		`INSERT INTO cm_machines (id, name, environment, public_key, state, denied_reason) VALUES (?, ?, ?, ?, 'denied', NULL)`,
-		"mch_bad2", "bad-box-2", "prod", testPublicKey(1)); err == nil {
-		t.Fatal("denied machine with no reason was accepted")
 	}
 }
 
@@ -383,15 +872,8 @@ func TestResolvePicksHighestSeqAmongOverlapping(t *testing.T) {
 	d := open(t)
 	admin := newUser(t, d, "carl")
 
-	older, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "", admin.ID, []ConfigValue{
-		{Key: "A", Binding: BindingInvariant, Value: "old"},
-	})
-	if err != nil {
-		t.Fatalf("older: %v", err)
-	}
-	newer, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "", admin.ID, []ConfigValue{
-		{Key: "A", Binding: BindingInvariant, Value: "new"},
-	})
+	older := blessOpen(t, ctx, d, "prod", "redline", "current", "1.0.0", admin.ID)
+	newer, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "9.0.0", admin.ID, oneValue("A"))
 	if err != nil {
 		t.Fatalf("newer: %v", err)
 	}
@@ -406,36 +888,17 @@ func TestResolvePicksHighestSeqAmongOverlapping(t *testing.T) {
 	if res.Config.ID != newer.ID {
 		t.Fatalf("resolved %s, want the newer config %s", res.Config.ID, newer.ID)
 	}
-}
-
-// The candidate the winner shadowed must be reported, not silently dropped.
-func TestResolveReturnsShadowedCandidates(t *testing.T) {
-	ctx := context.Background()
-	d := open(t)
-	admin := newUser(t, d, "carl")
-
-	shadowed, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "", admin.ID, []ConfigValue{
-		{Key: "A", Binding: BindingInvariant, Value: "old"},
-	})
-	if err != nil {
-		t.Fatalf("shadowed config: %v", err)
-	}
-	winner, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "", admin.ID, []ConfigValue{
-		{Key: "A", Binding: BindingInvariant, Value: "new"},
-	})
-	if err != nil {
-		t.Fatalf("winner config: %v", err)
+	if len(res.Shadowed) != 1 || res.Shadowed[0].ID != older.ID {
+		t.Fatalf("shadowed = %+v, want [%s]", res.Shadowed, older.ID)
 	}
 
-	res, err := d.ResolveConfig(ctx, "prod", "redline", "current", "2.0.0")
+	// Past the newer config's range, the open-ended one is all that matches.
+	res, err = d.ResolveConfig(ctx, "prod", "redline", "current", "9.5.0")
 	if err != nil {
-		t.Fatalf("resolve: %v", err)
+		t.Fatalf("resolve above the closed range: %v", err)
 	}
-	if res.Config.ID != winner.ID {
-		t.Fatalf("winner = %s, want %s", res.Config.ID, winner.ID)
-	}
-	if len(res.Shadowed) != 1 || res.Shadowed[0].ID != shadowed.ID {
-		t.Fatalf("shadowed = %+v, want [%s]", res.Shadowed, shadowed.ID)
+	if res.Config.ID != older.ID || len(res.Shadowed) != 0 {
+		t.Fatalf("resolve above the closed range = %s, shadowed %d", res.Config.ID, len(res.Shadowed))
 	}
 }
 
@@ -445,15 +908,8 @@ func TestResolveZeroMatchesReturnsNamedError(t *testing.T) {
 	d := open(t)
 	admin := newUser(t, d, "carl")
 
-	if _, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "1.3.0", admin.ID, []ConfigValue{
-		{Key: "A", Binding: BindingInvariant, Value: "x"},
-	}); err != nil {
-		t.Fatalf("create config: %v", err)
-	}
+	blessOpen(t, ctx, d, "prod", "redline", "current", "1.0.0", admin.ID)
 
-	if _, err := d.ResolveConfig(ctx, "prod", "redline", "current", "1.4.0"); !errors.Is(err, ErrNoConfigMatches) {
-		t.Fatalf("resolve past a closed range = %v, want ErrNoConfigMatches", err)
-	}
 	if _, err := d.ResolveConfig(ctx, "prod", "redline", "current", "0.9.0"); !errors.Is(err, ErrNoConfigMatches) {
 		t.Fatalf("resolve below min_ver = %v, want ErrNoConfigMatches", err)
 	}
@@ -462,29 +918,25 @@ func TestResolveZeroMatchesReturnsNamedError(t *testing.T) {
 	}
 }
 
-// A closed range only covers the version it was blessed for; an open-ended
-// one covers everything from min_ver on. A rollback past a closed range must
-// pick up an older config whose range still reaches, exactly the scenario
+// A closed range only covers what it was blessed for. A rollback past it must
+// pick up whatever else still reaches, which is exactly the scenario
 // plan/config-manager.md calls out.
 func TestResolveOpenEndedVsClosedMaxVer(t *testing.T) {
 	ctx := context.Background()
 	d := open(t)
 	admin := newUser(t, d, "carl")
 
-	rollbackTarget, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "1.1.0", admin.ID, []ConfigValue{
-		{Key: "A", Binding: BindingInvariant, Value: "v1"},
-	})
-	if err != nil {
-		t.Fatalf("v1 config: %v", err)
-	}
-	latest, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.2.0", "", admin.ID, []ConfigValue{
-		{Key: "A", Binding: BindingInvariant, Value: "v2"},
-	})
+	// The forward config, open-ended from 1.2.0 on.
+	latest, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.2.0", "", admin.ID, oneValue("A"))
 	if err != nil {
 		t.Fatalf("v2 config: %v", err)
 	}
+	// The rollback target, closed at 1.1.0.
+	rollbackTarget, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "1.1.0", admin.ID, oneValue("A"))
+	if err != nil {
+		t.Fatalf("v1 config: %v", err)
+	}
 
-	// Rolled forward: the open-ended config, however far forward.
 	res, err := d.ResolveConfig(ctx, "prod", "redline", "current", "9.9.9")
 	if err != nil {
 		t.Fatalf("resolve forward: %v", err)
@@ -493,7 +945,6 @@ func TestResolveOpenEndedVsClosedMaxVer(t *testing.T) {
 		t.Fatalf("forward resolve = %s, want %s", res.Config.ID, latest.ID)
 	}
 
-	// Rolled back into the closed range: the old config, not the new one.
 	res, err = d.ResolveConfig(ctx, "prod", "redline", "current", "1.0.5")
 	if err != nil {
 		t.Fatalf("resolve rollback: %v", err)
@@ -502,8 +953,8 @@ func TestResolveOpenEndedVsClosedMaxVer(t *testing.T) {
 		t.Fatalf("rollback resolve = %s, want %s", res.Config.ID, rollbackTarget.ID)
 	}
 
-	// Between the two: nothing covers 1.1.5 (v1's range ends at 1.1.0, v2
-	// starts at 1.2.0) — must be the named error, not a silent pick.
+	// Between the two: nothing covers 1.1.5 — the named error, not a silent
+	// pick.
 	if _, err := d.ResolveConfig(ctx, "prod", "redline", "current", "1.1.5"); !errors.Is(err, ErrNoConfigMatches) {
 		t.Fatalf("gap resolve = %v, want ErrNoConfigMatches", err)
 	}
@@ -513,16 +964,18 @@ func TestCreateConfigRejectsMalformedVersionRange(t *testing.T) {
 	ctx := context.Background()
 	d := open(t)
 	admin := newUser(t, d, "carl")
-	values := []ConfigValue{{Key: "A", Binding: BindingInvariant, Value: "1"}}
 
-	if _, err := d.CreateConfig(ctx, "prod", "redline", "current", "not-a-version", "", admin.ID, values); !errors.Is(err, ErrInvalidVersion) {
+	if _, err := d.CreateConfig(ctx, "prod", "redline", "current", "not-a-version", "", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidVersion) {
 		t.Fatalf("bad min_ver = %v, want ErrInvalidVersion", err)
 	}
-	if _, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "1.x.0", admin.ID, values); !errors.Is(err, ErrInvalidVersion) {
+	if _, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "1.x.0", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidVersion) {
 		t.Fatalf("bad max_ver = %v, want ErrInvalidVersion", err)
 	}
-	if _, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0", "", admin.ID, values); !errors.Is(err, ErrInvalidVersion) {
+	if _, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0", "", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidVersion) {
 		t.Fatalf("two-part min_ver = %v, want ErrInvalidVersion", err)
+	}
+	if _, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "", "", oneValue("A")); err == nil {
+		t.Fatal("a config with no creator was accepted")
 	}
 }
 
@@ -531,22 +984,23 @@ func TestCreateConfigRejectsInconsistentValues(t *testing.T) {
 	d := open(t)
 	admin := newUser(t, d, "carl")
 
-	_, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "", admin.ID, []ConfigValue{
-		{Key: "A", Binding: BindingSecret, Value: "plaintext-leak"},
-	})
-	if err == nil {
-		t.Fatal("secret with plaintext value and no ciphertext was accepted")
+	cases := []struct {
+		name  string
+		value ConfigValue
+	}{
+		{"no key", ConfigValue{Ciphertext: sealed("x"), KeyID: "k", Binding: BindingEnv}},
+		{"unknown binding", ConfigValue{Key: "A", Binding: "secret", Ciphertext: sealed("x"), KeyID: "k"}},
+		{"no key id", ConfigValue{Key: "A", Binding: BindingEnv, Ciphertext: sealed("x")}},
+		{"promoted with no source", ConfigValue{Key: "A", Binding: BindingEnv, Ciphertext: sealed("x"), KeyID: "k", Origin: OriginPromoted}},
+		{"direct with a source", ConfigValue{Key: "A", Binding: BindingEnv, Ciphertext: sealed("x"), KeyID: "k", Origin: OriginDirect, SourceConfigID: "cfg_x"}},
+		{"unknown origin", ConfigValue{Key: "A", Binding: BindingEnv, Ciphertext: sealed("x"), KeyID: "k", Origin: "guessed"}},
 	}
-
-	_, err = d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "", admin.ID, []ConfigValue{
-		{Key: "A", Binding: BindingInvariant, Ciphertext: []byte("x")},
-	})
-	if err == nil {
-		t.Fatal("non-secret with ciphertext was accepted")
-	}
-
-	if _, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "", admin.ID, nil); err == nil {
-		t.Fatal("empty config was accepted")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "", admin.ID, []ConfigValue{tc.value}); err == nil {
+				t.Fatal("malformed value was accepted")
+			}
+		})
 	}
 }
 
@@ -554,12 +1008,14 @@ func TestListConfigsForAddress(t *testing.T) {
 	ctx := context.Background()
 	d := open(t)
 	admin := newUser(t, d, "carl")
-	values := []ConfigValue{{Key: "A", Binding: BindingInvariant, Value: "1"}}
 
-	first, _ := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "1.1.0", admin.ID, values)
-	second, _ := d.CreateConfig(ctx, "prod", "redline", "current", "1.2.0", "", admin.ID, values)
+	first := blessOpen(t, ctx, d, "prod", "redline", "current", "1.2.0", admin.ID)
+	second, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "1.1.0", admin.ID, oneValue("A"))
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
 	// Different address: must not show up.
-	_, _ = d.CreateConfig(ctx, "staging", "redline", "current", "1.0.0", "", admin.ID, values)
+	blessOpen(t, ctx, d, "staging", "redline", "current", "1.0.0", admin.ID)
 
 	list, err := d.ListConfigsForAddress(ctx, "prod", "redline", "current")
 	if err != nil {
@@ -773,14 +1229,6 @@ func TestListMachineSecretKeysNeverReturnsValues(t *testing.T) {
 			t.Fatalf("incomplete metadata: %+v", k)
 		}
 	}
-	// MachineSecretMeta has no field to hold a value at all, but confirm the
-	// query driving it selects only key/created_at/created_by (belt against a
-	// future edit widening the SELECT without widening the struct visibly).
-	rows, err := d.QueryContext(ctx, `SELECT key, created_at, created_by FROM cm_machine_secrets WHERE machine_id = ?`, m.ID)
-	if err != nil {
-		t.Fatalf("raw query: %v", err)
-	}
-	_ = rows.Close()
 }
 
 func TestSecretReadAudit(t *testing.T) {
@@ -830,5 +1278,302 @@ func TestSecretReadAudit(t *testing.T) {
 	}
 	if reads[0].MachineID != "" {
 		t.Fatalf("machine_id = %q after delete, want cleared by ON DELETE SET NULL", reads[0].MachineID)
+	}
+}
+
+// The upgrade path, which is the only path that matters: 0009 applied to a
+// database that already holds 0008 WITH DATA IN IT. A migration that passes
+// only against a database the migrations built themselves has proved that it
+// agrees with itself.
+func TestMigrate0009OverPopulated0008(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "hz.db")
+
+	old, err := OpenAt(path, 8)
+	if err != nil {
+		t.Fatalf("open at 0008: %v", err)
+	}
+	admin, err := old.CreateUser(ctx, "carl", "", RoleAdmin)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := old.ExecContext(ctx, query, args...); err != nil {
+			t.Fatalf("0008 seed (%s): %v", query, err)
+		}
+	}
+	exec(`INSERT INTO cm_machines (id, name, environment, public_key, state, wrapped_env_key,
+	                               wrap_key_id, approved_by, approved_at)
+	      VALUES ('mch_a', 'box-a', 'prod', ?, 'approved', ?, 'envkey-v1', ?, CURRENT_TIMESTAMP)`,
+		testPublicKey(1), []byte("wrapped-prod"), admin.ID)
+	exec(`INSERT INTO cm_machines (id, name, environment, public_key) VALUES ('mch_b', 'box-b', 'staging', ?)`,
+		testPublicKey(2))
+	exec(`INSERT INTO cm_registrations (id, machine_id, app, role, version) VALUES ('reg_app', 'mch_a', 'redline', 'app', '1.0.0')`)
+	exec(`INSERT INTO cm_registrations (id, machine_id, app, role, version) VALUES ('reg_ops', 'mch_a', 'redline', 'ops', '1.0.0')`)
+	exec(`INSERT INTO cm_configs (id, environment, app, role, min_ver, created_by)
+	      VALUES ('cfg_1', 'prod', 'redline', 'app', '1.0.0', ?)`, admin.ID)
+	// An address 0008 let through unfolded; 0009 folds it.
+	exec(`INSERT INTO cm_configs (id, environment, app, role, min_ver, created_by)
+	      VALUES ('cfg_2', 'Prod', 'Ops', 'App', '1.0.0', ?)`, admin.ID)
+	exec(`INSERT INTO cm_config_values (config_id, key, binding, ciphertext, key_id)
+	      VALUES ('cfg_1', 'DB_PASSWORD', 'secret', ?, 'envkey-v1')`, sealed("hunter2"))
+	exec(`INSERT INTO cm_config_values (config_id, key, binding, value)
+	      VALUES ('cfg_1', 'RETENTION_DAYS', 'invariant', '30')`)
+	exec(`INSERT INTO cm_machine_secrets (id, machine_id, key, ciphertext, created_by)
+	      VALUES ('sec_1', 'mch_a', 'NPM_TOKEN', ?, ?)`, []byte("sealed-npm"), admin.ID)
+	exec(`INSERT INTO cm_secret_reads (id, actor, machine_id, config_id, secret_key)
+	      VALUES ('srd_1', ?, 'mch_a', 'cfg_1', 'DB_PASSWORD')`, admin.ID)
+	if err := old.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("migrate 0008 -> 0009 with data: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	// The machine keeps its identity and its enrolment record; state and key
+	// material are gone from the row.
+	m, err := d.MachineByName(ctx, "box-a")
+	if err != nil {
+		t.Fatalf("machine after migrate: %v", err)
+	}
+	if m.EnrolledEnvironment != "prod" || string(m.PublicKey) != string(testPublicKey(1)) {
+		t.Fatalf("machine = %+v", m)
+	}
+
+	// The grant lands on every registration the machine owned, each now
+	// carrying the environment the box enrolled with.
+	regs, err := d.ListRegistrationsForMachine(ctx, "mch_a")
+	if err != nil {
+		t.Fatalf("registrations after migrate: %v", err)
+	}
+	if len(regs) != 2 {
+		t.Fatalf("registrations = %d, want 2", len(regs))
+	}
+	for _, r := range regs {
+		if r.Environment != "prod" || r.State != RegistrationApproved || r.WrapKeyID != "envkey-v1" {
+			t.Fatalf("registration not carried forward: %+v", r)
+		}
+		key, err := d.RegistrationWrappedKey(ctx, r.ID)
+		if err != nil || string(key) != "wrapped-prod" {
+			t.Fatalf("wrapped key for %s = %q, %v", r.ID, key, err)
+		}
+	}
+
+	// Sealed values survive as environment-bound; plaintext ones cannot be
+	// carried and are gone.
+	cfg, err := d.GetConfig(ctx, "cfg_1")
+	if err != nil {
+		t.Fatalf("config after migrate: %v", err)
+	}
+	if len(cfg.Values) != 1 {
+		t.Fatalf("values = %+v, want only the sealed one", cfg.Values)
+	}
+	v := cfg.Values[0]
+	if v.Key != "DB_PASSWORD" || v.Binding != BindingEnv || v.Origin != OriginDirect ||
+		string(v.Ciphertext) != string(sealed("hunter2")) {
+		t.Fatalf("carried value = %+v", v)
+	}
+
+	// The unfolded address was folded.
+	folded, err := d.GetConfig(ctx, "cfg_2")
+	if err != nil {
+		t.Fatalf("folded config: %v", err)
+	}
+	if folded.Environment != "prod" || folded.App != "ops" || folded.Role != "app" {
+		t.Fatalf("address not folded by the migration: %s/%s/%s", folded.Environment, folded.App, folded.Role)
+	}
+
+	// Bystanders survive untouched.
+	if _, err := d.MachineSecret(ctx, "mch_a", "NPM_TOKEN"); err != nil {
+		t.Fatalf("machine secret lost: %v", err)
+	}
+	reads, err := d.ListRecentSecretReads(ctx, 10)
+	if err != nil || len(reads) != 1 || reads[0].MachineID != "mch_a" || reads[0].ConfigID != "cfg_1" {
+		t.Fatalf("audit rows after migrate = %+v, %v", reads, err)
+	}
+
+	// The whole thing is usable afterwards, not merely present.
+	if _, err := d.UpsertRegistration(ctx, "mch_a", "staging", "redline", "app", "1.1.0"); err != nil {
+		t.Fatalf("register a new address after migrate: %v", err)
+	}
+}
+
+// Down and back up again, against data, so the pair is reversible rather than
+// merely written.
+func TestMigrate0009DownAndUpAgain(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "hz.db")
+
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	admin := newUser(t, d, "carl")
+	m, err := d.RegisterMachine(ctx, "box-down", "prod", testPublicKey(1))
+	if err != nil {
+		t.Fatalf("register machine: %v", err)
+	}
+	reg := registerAt(t, ctx, d, m, "prod", "redline", "app", admin.ID)
+	// A second environment on the same (app, role): 0008 cannot hold both.
+	if _, err := d.UpsertRegistration(ctx, m.ID, "staging", "redline", "app", "1.0.0"); err != nil {
+		t.Fatalf("second environment: %v", err)
+	}
+	cfg := blessOpen(t, ctx, d, "prod", "redline", "app", "1.0.0", admin.ID)
+	if err := d.SetMachineSecret(ctx, m.ID, "TOKEN", []byte("sealed"), admin.ID); err != nil {
+		t.Fatalf("machine secret: %v", err)
+	}
+
+	if err := d.migrateTo(ctx, 8); err != nil {
+		t.Fatalf("migrate down to 0008: %v", err)
+	}
+
+	var state, wrapKeyID, environment string
+	if err := d.QueryRowContext(ctx,
+		`SELECT state, COALESCE(wrap_key_id, ''), environment FROM cm_machines WHERE id = ?`, m.ID,
+	).Scan(&state, &wrapKeyID, &environment); err != nil {
+		t.Fatalf("read 0008 machine: %v", err)
+	}
+	if state != "approved" || wrapKeyID != "envkey-v1" || environment != "prod" {
+		t.Fatalf("grant did not move back up to the machine: %s/%s/%s", state, wrapKeyID, environment)
+	}
+	var regCount int
+	if err := d.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM cm_registrations WHERE machine_id = ?`, m.ID).Scan(&regCount); err != nil {
+		t.Fatalf("count 0008 registrations: %v", err)
+	}
+	if regCount != 1 {
+		t.Fatalf("0008 registrations = %d, want the 1 tuple it can hold", regCount)
+	}
+	var binding string
+	if err := d.QueryRowContext(ctx,
+		`SELECT binding FROM cm_config_values WHERE config_id = ?`, cfg.ID).Scan(&binding); err != nil {
+		t.Fatalf("read 0008 value: %v", err)
+	}
+	if binding != "secret" {
+		t.Fatalf("value binding on the way down = %q, want secret (the only one 0008 lets hold ciphertext)", binding)
+	}
+
+	if err := d.migrateTo(ctx, 9); err != nil {
+		t.Fatalf("migrate back up to 0009: %v", err)
+	}
+	back, err := d.RegistrationAt(ctx, m.ID, "prod", "redline", "app")
+	if err != nil {
+		t.Fatalf("registration after the round trip: %v", err)
+	}
+	if back.State != RegistrationApproved {
+		t.Fatalf("state after the round trip = %q", back.State)
+	}
+	if back.ID != reg.ID {
+		t.Logf("registration id changed across the round trip: %s -> %s", reg.ID, back.ID)
+	}
+	if _, err := d.MachineSecret(ctx, m.ID, "TOKEN"); err != nil {
+		t.Fatalf("machine secret after the round trip: %v", err)
+	}
+}
+
+func TestCurrentKeyPointer(t *testing.T) {
+	d := open(t)
+	ctx := context.Background()
+	admin := newUser(t, d, "carl")
+
+	// Never announced is a distinct fact from "announced as X". A client told
+	// the wrong one seals under whatever its filesystem offers.
+	if _, err := d.CurrentKeyFor(ctx, "prod", "redline", "app"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unannounced address = %v, want ErrNotFound", err)
+	}
+
+	const k1 = "a3f1c02b9d4e5f60"
+	cur, err := d.SetCurrentKey(ctx, "PROD", "Redline", "App", "A3F1C02B9D4E5F60", admin.ID)
+	if err != nil {
+		t.Fatalf("SetCurrentKey: %v", err)
+	}
+	// The address folds and so does the id: one spelling, one pointer.
+	if cur.Environment != "prod" || cur.App != "redline" || cur.Role != "app" {
+		t.Fatalf("address not folded: %+v", cur)
+	}
+	if cur.KeyID != k1 {
+		t.Fatalf("key id = %q, want folded %q", cur.KeyID, k1)
+	}
+
+	// Announcing again is a rotation, not a conflict.
+	const k2 = "b70dd91e4c2a8f53"
+	if _, err := d.SetCurrentKey(ctx, "prod", "redline", "app", k2, admin.ID); err != nil {
+		t.Fatalf("re-announce: %v", err)
+	}
+	cur, err = d.CurrentKeyFor(ctx, "prod", "redline", "app")
+	if err != nil {
+		t.Fatalf("CurrentKeyFor: %v", err)
+	}
+	if cur.KeyID != k2 {
+		t.Fatalf("key id = %q, want the newly announced %q", cur.KeyID, k2)
+	}
+
+	// hz holds no key, so it cannot check an id against material — but a value
+	// that is not an id at all is a typo worth refusing at the one write path.
+	for _, bad := range []string{"", "short", "a3f1c02b9d4e5f6z", "a3f1c02b9d4e5f600"} {
+		if _, err := d.SetCurrentKey(ctx, "prod", "redline", "app", bad, admin.ID); err == nil {
+			t.Fatalf("key id %q was accepted", bad)
+		}
+	}
+}
+
+func TestRegistrationsHoldingStaleKeyIsTheRotationAffordance(t *testing.T) {
+	d := open(t)
+	ctx := context.Background()
+	admin := newUser(t, d, "carl")
+
+	const oldKey, newKey = "a3f1c02b9d4e5f60", "b70dd91e4c2a8f53"
+
+	approveWith := func(name, keyID string) *Registration {
+		t.Helper()
+		m, err := d.RegisterMachine(ctx, name, "prod", testPublicKey(byte(len(name))))
+		if err != nil {
+			t.Fatalf("RegisterMachine %s: %v", name, err)
+		}
+		reg, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "app", "1.0.0")
+		if err != nil {
+			t.Fatalf("UpsertRegistration %s: %v", name, err)
+		}
+		got, err := d.ApproveRegistration(ctx, reg.ID, []byte("wrapped-"+name), keyID, admin.ID)
+		if err != nil {
+			t.Fatalf("ApproveRegistration %s: %v", name, err)
+		}
+		return got
+	}
+	stale := approveWith("box-old", oldKey)
+	fresh := approveWith("box-new", newKey)
+
+	// With no pointer announced nothing is stale — there is nothing to be stale
+	// against, and reporting the whole fleet would be noise.
+	got, err := d.RegistrationsHoldingStaleKey(ctx, "prod", "redline", "app")
+	if err != nil {
+		t.Fatalf("stale with no pointer: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("stale with no pointer = %d rows, want 0", len(got))
+	}
+
+	if _, err := d.SetCurrentKey(ctx, "prod", "redline", "app", newKey, admin.ID); err != nil {
+		t.Fatalf("SetCurrentKey: %v", err)
+	}
+
+	// A box holding the old key cannot open anything sealed under the new one,
+	// so this list is exactly the re-wrap queue a rotation needs.
+	got, err = d.RegistrationsHoldingStaleKey(ctx, "prod", "redline", "app")
+	if err != nil {
+		t.Fatalf("stale after announce: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != stale.ID {
+		t.Fatalf("stale = %+v, want exactly the old-key registration %s", got, stale.ID)
+	}
+	for _, r := range got {
+		if r.ID == fresh.ID {
+			t.Fatal("a registration already holding the current key was reported stale")
+		}
 	}
 }

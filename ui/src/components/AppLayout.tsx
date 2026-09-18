@@ -30,6 +30,7 @@ import BlockIcon from "@mui/icons-material/Block";
 import MonitorHeartIcon from "@mui/icons-material/MonitorHeart";
 import HubIcon from "@mui/icons-material/Hub";
 import RouterIcon from "@mui/icons-material/Router";
+import TuneIcon from "@mui/icons-material/Tune";
 import SettingsIcon from "@mui/icons-material/Settings";
 import LogoutIcon from "@mui/icons-material/Logout";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
@@ -54,6 +55,7 @@ const navItems: NavItem[] = [
   { icon: <MonitorHeartIcon />, label: "Checks", path: "/checks" },
   { icon: <HubIcon />, label: "Observability", path: "/observability" },
   { icon: <RouterIcon />, label: "Ports", path: "/ports" },
+  { icon: <TuneIcon />, label: "Config", path: "/config" },
   { icon: <SettingsIcon />, label: "Settings", path: "/settings" },
 ];
 
