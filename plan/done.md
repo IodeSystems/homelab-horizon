@@ -49,8 +49,8 @@ Certificates are now verified by handshake against the public hostname rather
 than read out of config, and checks gained a third state so "expires Friday"
 stops having to be either a lie or a silence.
 
-The bug it closes: three surfaces reported `dev.pb.iodesystems.com` as covered
-and green while HAProxy served the `veliode.com` default certificate, which
+The bug it closes: three surfaces reported `dev.pb.<our-domain>` as covered
+and green while HAProxy served the `<second-domain>` default certificate, which
 carried no such SAN and failed every verifying client. All three read intended
 coverage; none completed a handshake.
 
@@ -221,7 +221,7 @@ over mDNS and nothing else could resolve it at all.
 - `local_dns_domain` makes one record answer bare AND qualified. This is the
   part that mattered: a resolver upstream of hz will not forward a single-label
   name, because there is no domain to forward it for. Proven on the live LAN —
-  through the router, `veliode.com` returned hz's answer and `desktop` returned
+  through the router, `<second-domain>` returned hz's answer and `desktop` returned
   nothing.
 - `expand-hosts` was the obvious mechanism and the wrong one: it applies to
   hosts-file and DHCP names and leaves `host-record` alone, so the config looked
@@ -251,7 +251,7 @@ keep doing that. So it is a flag that reverts on restart, to be proven before it
 is written into `config.json`.
 
 Applied to prod as a systemd drop-in on 2026-08-17. **2.2.7 now reads MET**:
-bound to `127.0.0.1:8080`, cleartext LAN port closed, `hz.office.iodesystems.com`
+bound to `127.0.0.1:8080`, cleartext LAN port closed, `hz.office.<our-domain>`
 serving app and API over TLS, `config.json` still `:8080` so removing the
 drop-in reverts it.
 
@@ -281,7 +281,7 @@ WAN IP changes
   → up to 300s of cached DNS everywhere (record TTL = 300)
 ```
 
-Peer configs use `Endpoint = vpn.iodesystems.com:51820`, a hostname, so the
+Peer configs use `Endpoint = vpn.<our-domain>:51820`, a hostname, so the
 endpoint is re-resolved on reconnect. A stale record costs nothing while the
 tunnel stays up — which is why the delay only ever showed itself at a network
 switch, and looked like roaming rather than DNS. `PersistentKeepalive = 25` was
@@ -313,7 +313,7 @@ the default changed nothing on the zone, twice, and each time the zone said so:
    every address change.
 
 Verified against the authoritative nameserver rather than a resolver: all 19
-published records at `ttl=60`, wildcard `*.beta.veliode.com` included, which
+published records at `ttl=60`, wildcard `*.beta.<second-domain>` included, which
 also proves the `\052` escaping survived the JSON change.
 
 **The lesson is the one this plan keeps relearning, inverted.** The previous

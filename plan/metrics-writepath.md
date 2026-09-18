@@ -29,7 +29,7 @@ semantics, mirrors Proxy/DNS). Same shape mirrored on `ServiceResp` for CLI/UI r
 - ✅ **UI** — metrics toggle+path/bearer on services form; schemas.ts + hooks.ts `ServiceMutationInput` round-trip integrations.
 - ✅ **`make generate` + `make check`** — 0 lint issues, go tests + `ui tsc --noEmit` clean.
 - ✅ **Docs** — `~/doc` deployment.md metrics section + standards.md METRICS-3/4 + EDGE-5 reframed to served endpoints; "prefix vs tag" naming note added.
-- ✅ **Deployed** `v0.0.6-4-g517eda9` to ubuntu@192.168.1.160 (`bin/deploy`). Local `hz` CLI updated to match.
+- ✅ **Deployed** `v0.0.6-4-g517eda9` to ubuntu@<gateway-lan-ip> (`bin/deploy`). Local `hz` CLI updated to match.
 - ✅ **Enabled grafana + prometheus** (`hz service edit … --metrics`). Both discovered; `targets.json`/`scrape.yaml` serve them with `service` labels. Backends probe 200.
 - ✅ **Superseded** — the write path plus the whole topology/hardening line shipped; see `prometheus-topology.md` for the exporter model, token auth, multi-path, probe hardening, re-probe button, and served `setup.sh`. All merged to `origin/main` (through `aa1445c`); docs on `~/doc` main (local).
 

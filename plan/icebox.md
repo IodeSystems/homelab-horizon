@@ -102,7 +102,7 @@ two you want before writing either.
 ## ⏸ Per-peer secrets, set by an admin, picked up once by the peer
 
 **Driver:** `iodesystems-intern` (the company package index at
-`intern.iodesystems.com`, `~/local/src/iodesystems/iodesystems-intern/plan/plan.md`,
+`intern.<our-domain>`, the index project's plan,
 slice S4). A new laptop needs a registry token before it can configure npm,
 maven, docker, go, apt and brew. hz already knows which device is calling —
 that is the whole feature. **hz stays generic: no Gitea code, no Gitea
@@ -142,7 +142,7 @@ client-supplied one (`internal/haproxy/haproxy.go`). `peer_owners`
 
 ### ✅ Backend protocol (h2c), for gRPC backends — deployed 2026-09-17
 
-**Driver:** Zitadel at `id.iodesystems.com` (iodesystems-intern plan, S4).
+**Driver:** Zitadel at `id.<our-domain>` (iodesystems-intern plan, S4).
 Zitadel's docs require a reverse proxy that speaks **HTTP/2 upstream (h2c or
 h2)**, and their reference compose sets the backend scheme to `h2c`. Without
 it the console and the gRPC/Connect APIs are at risk; plain OIDC endpoints
@@ -174,7 +174,7 @@ proto h2` on HAProxy 2.8.16.
 
 **Deployed and in use 2026-09-17.** `hz service edit id --backend-proto h2`
 generated `server id 127.0.0.1:20005 check proto h2`, and Zitadel at
-`id.iodesystems.com` answers over it: console 200, OIDC discovery 200, backend
+`id.<our-domain>` answers over it: console 200, OIDC discovery 200, backend
 health check up. The other services were re-checked after the reload and were
 unaffected. **Note for the next person:** `bin/deploy` updates the server, not
 the local operator CLI — `make build-hz` and copy it, or `--backend-proto` is

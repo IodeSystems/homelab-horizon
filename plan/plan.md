@@ -331,7 +331,7 @@ account with no `hd`. README gained a "Single sign-on (OIDC)" section.
 
 **Live on the gateway:** issuer `https://id.<our-domain>`, its client id,
 `allowed_email_domains: ["<our-domain>"]`, `auto_provision: false`. `/api/v1/auth/oidc/status` reports enabled and
-`/start` redirects to Zitadel with PKCE. An hz account `carl@iodesystems.com`
+`/start` redirects to Zitadel with PKCE. An hz account `<admin>@<our-domain>`
 exists for the identity to attach to.
 
 **The decision, made:** auto-provision stays **off**. hz has one role — admin —
@@ -369,14 +369,14 @@ when an operator most needs in.
 
 Per-service `forwards` (`{proto, port, backend, name?, description?}`) for
 traffic HAProxy cannot carry. Driven by sprink: WebTransport (QUIC/UDP) at
-`sprink.iodesystems.com`, gateway `udp/4433` → `192.168.1.76:4433`. The design
+`sprink.<our-domain>`, gateway `udp/4433` → `<desktop-lan-ip>:4433`. The design
 and the rule set are in the README, [Port forwards](../README.md#port-forwards-udp--tcp).
 
 Decisions:
 - Owned chains `HZ-PREROUTING` (nat), `HZ-POSTROUTING` (nat) and `HZ-FORWARD`
   (filter), rebuilt atomically. Only three jumps go into built-in chains.
 - PREROUTING jumps on `--dst-type LOCAL` with no `-i`. sprink's internal DNS
-  answers `192.168.1.160`, so VPN and LAN clients hit the gateway too, not
+  answers `<gateway-lan-ip>`, so VPN and LAN clients hit the gateway too, not
   only the router.
 - The accept rules sit in FORWARD with `-i <out>`, not in DOCKER-USER.
   Evidence: the live gateway's FORWARD is `DOCKER-USER, DOCKER-FORWARD,
@@ -389,7 +389,7 @@ Decisions:
   identical under both, and equal to the emitted form once `-m udp` is dropped.
 
 - **next**: commit, deploy, add the sprink forward (`hz service edit sprink
-  --forward udp:4433:192.168.1.76:4433`), confirm with a QUIC client from
+  --forward udp:4433:<desktop-lan-ip>:4433`), confirm with a QUIC client from
   outside and from the VPN.
 - **risks**:
   - Never run against a real kernel with live traffic. Rule readback,
@@ -758,10 +758,10 @@ which was the last unverified thing in the feature.
 
 | finding | evidence |
 |---|---|
-| `bringit.iodesystems.com` public DNS is stale | resolves `97.113.67.44`, hz expects `97.113.72.46`; HTTPS to it then times out |
-| `vay.iodesystems.com` public DNS is stale | resolves `97.113.94.143`, same shape |
-| `beta.veliode.com` down from outside | HTTP 503 |
-| `mckinnon.iodesystems.com` down from outside | HTTP 503 |
+| `bringit.<our-domain>` public DNS is stale | resolves `<stale-public-ip>`, hz expects `<our-public-ip>`; HTTPS to it then times out |
+| `vay.<our-domain>` public DNS is stale | resolves `<stale-public-ip-2>`, same shape |
+| `beta.<second-domain>` down from outside | HTTP 503 |
+| `mckinnon.<our-domain>` down from outside | HTTP 503 |
 
 Two records pointing at old public IPs and two services where the edge is up
 and the backend is not. None of it visible from inside, which is the point.
@@ -801,7 +801,7 @@ now names the escape hatch rather than repeating "unknown token" forever.
 
 ### Operator follow-ups (not code)
 
-- **Point the LAN's DHCP DNS at hz (192.168.1.160)** — optional, still
+- **Point the LAN's DHCP DNS at hz (<gateway-lan-ip>)** — optional, still
   unchanged, and re-measured 2026-09-10 because it was briefly believed done.
   What is actually configured is the router's *upstream* DNS, which is pointed
   at hz; the DHCP DNS option still hands out the router. Both are true and
@@ -812,16 +812,16 @@ now names the escape hatch rather than repeating "unknown token" forever.
 
   | query | via router `.1` | direct to hz `.160` |
   |---|---|---|
-  | `desktop.lan` | `192.168.1.76` ✅ | `192.168.1.76` ✅ |
-  | `desktop` (bare) | **no answer** | `192.168.1.76` ✅ |
+  | `desktop.lan` | `<desktop-lan-ip>` ✅ | `<desktop-lan-ip>` ✅ |
+  | `desktop` (bare) | **no answer** | `<desktop-lan-ip>` ✅ |
 
   So hz answers bare names and the router will not forward them — there is no
   domain to forward them for. Qualified names work everywhere today. Changing
   the DHCP *DNS server* option to `.160` is what makes bare names work; the
   upstream-DNS setting already in place does not.
 
-- **Anything pinned to `http://192.168.1.160:8080` must move** to
-  `https://hz.office.iodesystems.com` — bookmarks, scripts, `hz` CLI config. The
+- **Anything pinned to `http://<gateway-lan-ip>:8080` must move** to
+  `https://hz.office.<our-domain>` — bookmarks, scripts, `hz` CLI config. The
   cleartext admin port is closed as of the 2.2.7 drop-in. `bin/deploy` is
   unaffected; it works over SSH.
 
@@ -852,7 +852,7 @@ held that address there.
 which wins on longest-prefix match over the client's own `/24`:
 
 ```ini
-AllowedIPs = 10.100.0.0/24, 192.168.1.160/32, 192.168.1.76/32, 192.168.1.58/32
+AllowedIPs = 10.100.0.0/24, <gateway-lan-ip>/32, <desktop-lan-ip>/32, <laptop-lan-ip>/32
 ```
 
 **Carl, 2026-09-10: this is fine, not a stopgap.** hz's DNS works and the
