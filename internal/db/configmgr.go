@@ -1298,3 +1298,119 @@ func (d *DB) ListRecentSecretReads(ctx context.Context, limit int) ([]SecretRead
 	}
 	return out, rows.Err()
 }
+
+// CurrentKey is the advisory pointer saying which environment key an address
+// should be sealed under. SetAt/SetBy are here so an operator can see when a
+// rotation was announced and by whom.
+type CurrentKey struct {
+	Environment string
+	App         string
+	Role        string
+	KeyID       string
+	SetBy       string
+	SetAt       time.Time
+}
+
+// CurrentKeyFor reads the pointer for an address. ErrNotFound means no pointer
+// has ever been set, which is a real and normal state — a brand-new address has
+// none, and a client must be able to tell that apart from a pointer naming some
+// other key. Answering "no pointer" as if it were "this key" would be a silent
+// lie, and a client told that seals under whatever its filesystem offers.
+func (d *DB) CurrentKeyFor(ctx context.Context, environment, app, role string) (*CurrentKey, error) {
+	env, a, r, err := canonAddress(environment, app, role)
+	if err != nil {
+		return nil, err
+	}
+	var c CurrentKey
+	var setBy sql.NullString
+	err = d.QueryRowContext(ctx, `
+		SELECT environment, app, role, key_id, set_by, set_at
+		FROM cm_current_keys
+		WHERE environment = ? AND app = ? AND role = ?`, env, a, r,
+	).Scan(&c.Environment, &c.App, &c.Role, &c.KeyID, &setBy, &c.SetAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read current key: %w", err)
+	}
+	c.SetBy = setBy.String
+	return &c, nil
+}
+
+// SetCurrentKey announces that an address should now be sealed under keyID.
+//
+// It records an id, never key material — hz holds no key and this changes
+// nothing about that. Announcing a key hz has never seen is legitimate and
+// expected: the operator mints it locally and tells the fleet, and the first
+// seal under it necessarily precedes any config that uses it.
+func (d *DB) SetCurrentKey(ctx context.Context, environment, app, role, keyID, setBy string) (*CurrentKey, error) {
+	env, a, r, err := canonAddress(environment, app, role)
+	if err != nil {
+		return nil, err
+	}
+	keyID = strings.ToLower(strings.TrimSpace(keyID))
+	if len(keyID) != 16 {
+		return nil, fmt.Errorf("%w: key id must be 16 hex characters", ErrInvalidAddress)
+	}
+	for _, c := range keyID {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return nil, fmt.Errorf("%w: key id must be hex", ErrInvalidAddress)
+		}
+	}
+	if _, err := d.ExecContext(ctx, `
+		INSERT INTO cm_current_keys (environment, app, role, key_id, set_by)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (environment, app, role) DO UPDATE SET
+			key_id = excluded.key_id,
+			set_by = excluded.set_by,
+			set_at = CURRENT_TIMESTAMP`,
+		env, a, r, keyID, nullString(setBy),
+	); err != nil {
+		return nil, fmt.Errorf("set current key: %w", err)
+	}
+	return d.CurrentKeyFor(ctx, env, a, r)
+}
+
+// RegistrationsHoldingStaleKey lists approved registrations at an address whose
+// wrapped key is not the current one.
+//
+// This is the affordance rotation was missing. A machine holding key X cannot
+// open anything sealed under Y, so a rotation not followed by re-wrapping every
+// approved registration breaks config pulls fleet-wide — and before this the
+// only way to find out was a box failing at its next restart.
+func (d *DB) RegistrationsHoldingStaleKey(ctx context.Context, environment, app, role string) ([]Registration, error) {
+	env, a, r, err := canonAddress(environment, app, role)
+	if err != nil {
+		return nil, err
+	}
+	// COALESCE to wrap_key_id when no pointer is set, so the comparison is
+	// false and nothing is reported stale: an address with no announced current
+	// key has nothing to be stale against, and reporting the whole fleet would
+	// be noise the first time anyone opened the page.
+	rows, err := d.QueryContext(ctx, selectRegistration+`
+		WHERE environment = ? AND app = ? AND role = ?
+		  AND state = 'approved'
+		  AND wrap_key_id IS NOT NULL
+		  AND wrap_key_id <> COALESCE(
+		        (SELECT key_id FROM cm_current_keys c
+		          WHERE c.environment = cm_registrations.environment
+		            AND c.app = cm_registrations.app
+		            AND c.role = cm_registrations.role),
+		        wrap_key_id)
+		ORDER BY created_at`, env, a, r)
+	if err != nil {
+		return nil, fmt.Errorf("list stale registrations: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Registration
+	for rows.Next() {
+		reg, err := scanRegistrationRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *reg)
+	}
+	return out, rows.Err()
+}
