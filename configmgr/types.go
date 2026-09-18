@@ -54,6 +54,14 @@ type RegisterResponse struct {
 	State       string `json:"state"`
 	Fingerprint string `json:"fingerprint,omitempty"`
 
+	// MachineID is hz's identity for the box, and it is not decoration: it is
+	// half of the authenticated address of every machine-scoped secret, so an
+	// agent that does not know it cannot open one. Persist it beside the
+	// private key at approval rather than re-reading it from each response —
+	// authenticating an address a later answer could change would authenticate
+	// nothing.
+	MachineID string `json:"machineId,omitempty"`
+
 	WrappedEnvKey string `json:"wrappedEnvKey,omitempty"` // base64 KindWrappedEnvKey envelope
 }
 
@@ -71,13 +79,21 @@ type ConfigRequest struct {
 	Build       string `json:"build,omitempty"`
 }
 
+// Addr is the address the agent must pass to Open for one key of this response.
+// It comes from the request the agent made, never from hz's answer: that is
+// what makes it worth authenticating.
+func (r ConfigRequest) Addr(key string) Addr {
+	return Addr{Environment: r.Environment, App: r.App, Role: r.Role, Key: key}
+}
+
 // ConfigEntry is one resolved key.
 //
 // Value and Sealed are mutually exclusive: a secret arrives sealed, everything
 // else arrives in the clear because promotion has to diff it. There is no field
 // saying which key opens Sealed — the envelope's kind byte says so, it is
 // covered by the AEAD, and a second copy on the wire could only ever disagree
-// with it.
+// with it. Kind 0x01 opens with ConfigRequest.Addr(entry.Key); kind 0x03 opens
+// with MachineAddr{Machine: the id learned at approval, Key: entry.Key}.
 type ConfigEntry struct {
 	Key     string `json:"key"`
 	Binding string `json:"binding"`

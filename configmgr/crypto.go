@@ -10,9 +10,11 @@ import (
 	"crypto/subtle"
 	"encoding/base32"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -53,6 +55,8 @@ const (
 	purposeWrapEnvKey  = "hz-config/v1 wrap-env-key"
 	purposeMachineSeal = "hz-config/v1 machine-secret"
 
+	labelAddr        = "hz-config/v1 addr"
+	labelMachineAddr = "hz-config/v1 machine-addr"
 	labelKeyID       = "hz-config/v1 env-key-id"
 	labelEnvKeySum   = "hz-config/v1 env-key-checksum"
 	labelFingerprint = "hz-config/v1 machine-fingerprint"
@@ -71,8 +75,10 @@ var (
 	ErrAuthentication    = errors.New("envelope failed authentication")
 )
 
-// Envelope offsets. Both layouts are header || nonce || ciphertext||tag, and
-// the AAD rule is the same for both: every byte before the nonce.
+// Envelope offsets. Both layouts are header || nonce || ciphertext||tag, where
+// the header is every byte before the nonce. The AEAD authenticates the header
+// as stored, followed by the address the caller supplies — which is not stored
+// anywhere, so serving a blob under the wrong address fails the tag.
 const (
 	envHeaderLen = 2 + KeyIDSize // version, kind, key id
 	envMinLen    = envHeaderLen + NonceSize + TagSize
@@ -323,6 +329,84 @@ func ParseMachinePrivateKey(s string) (*ecdh.PrivateKey, error) {
 	return priv, nil
 }
 
+// Addr names one value inside one config: the (environment, app, role) the
+// config is addressed by, plus the key name within it.
+//
+// It is NOT stored in the envelope. It is authenticated additional data, which
+// means the opener has to supply it from its own context and a mismatch is an
+// authentication failure rather than a wrong value quietly applied. That is the
+// whole point: hz holds the blobs and decides which one to serve, so without
+// this an agent asking for prod/redline/app#DB_PASSWORD would accept the
+// ciphertext of staging's, or of a different key in the same config, or an
+// older blessed value, and every one of those authenticates perfectly. An
+// address carried INSIDE the envelope could only ever agree with itself.
+type Addr struct {
+	Environment string
+	App         string
+	Role        string
+	Key         string
+}
+
+func (a Addr) String() string {
+	return a.Environment + "/" + a.App + "/" + a.Role + "#" + a.Key
+}
+
+func (a Addr) context() []byte {
+	return canonicalContext(labelAddr, a.Environment, a.App, a.Role, a.Key)
+}
+
+// MachineAddr names one machine-scoped secret. Machine is hz's machine id, not
+// the hostname: the agent learns it once at approval and persists it beside its
+// private key, so it is something the opener knows independently rather than
+// something a later response can change.
+type MachineAddr struct {
+	Machine string
+	Key     string
+}
+
+func (a MachineAddr) String() string { return a.Machine + "#" + a.Key }
+
+func (a MachineAddr) context() []byte {
+	return canonicalContext(labelMachineAddr, a.Machine, a.Key)
+}
+
+// canonicalContext encodes an address so no two different tuples can produce
+// the same bytes. Every field is preceded by its length as a 4-byte big-endian
+// count, so a separator appearing inside a field changes nothing. Joining with
+// a delimiter instead would let environment "a" with app "b/c" collide with
+// environment "a/b" and app "c", and a collision here is exactly the
+// substitution the additional data exists to refuse.
+func canonicalContext(label string, fields ...string) []byte {
+	n := 4 + len(label)
+	for _, f := range fields {
+		n += 4 + len(f)
+	}
+	out := make([]byte, 0, n)
+	out = appendField(out, label)
+	for _, f := range fields {
+		out = appendField(out, f)
+	}
+	return out
+}
+
+func appendField(dst []byte, s string) []byte {
+	if uint64(len(s)) > math.MaxUint32 {
+		// Unreachable for any real address, and a truncated length would be an
+		// ambiguity in the one encoding that must not have one.
+		panic("configmgr: address field is too long to encode")
+	}
+	dst = binary.BigEndian.AppendUint32(dst, uint32(len(s)))
+	return append(dst, s...)
+}
+
+// aad assembles what the AEAD authenticates: the envelope header as stored,
+// then the address the caller supplied.
+func aad(header, context []byte) []byte {
+	out := make([]byte, 0, len(header)+len(context))
+	out = append(out, header...)
+	return append(out, context...)
+}
+
 // EnvelopeHeader is the part of an envelope anybody may read, including hz,
 // which holds these blobs and can open none of them.
 type EnvelopeHeader struct {
@@ -366,9 +450,11 @@ func ParseEnvelopeHeader(envelope []byte) (EnvelopeHeader, error) {
 // already 32 uniformly random bytes, so a KDF would add nothing except a step
 // the browser has to replicate exactly to interoperate.
 //
+// addr is authenticated but not stored. See Addr.
+//
 // It returns no error: with a 32-byte key neither aes.NewCipher nor
 // cipher.NewGCM has a reachable failure, and crypto/rand does not fail.
-func Seal(k EnvKey, plaintext []byte) []byte {
+func Seal(k EnvKey, addr Addr, plaintext []byte) []byte {
 	id := k.ID()
 	hdr := make([]byte, 0, envHeaderLen)
 	hdr = append(hdr, EnvelopeVersion, byte(KindEnvSealed))
@@ -387,11 +473,13 @@ func Seal(k EnvKey, plaintext []byte) []byte {
 	out := make([]byte, 0, envMinLen+len(plaintext))
 	out = append(out, hdr...)
 	out = append(out, nonce...)
-	return mustGCM(k[:]).Seal(out, nonce, plaintext, hdr)
+	return mustGCM(k[:]).Seal(out, nonce, plaintext, aad(hdr, addr.context()))
 }
 
-// Open decrypts what Seal produced.
-func Open(k EnvKey, envelope []byte) ([]byte, error) {
+// Open decrypts what Seal produced. addr must be the address the caller asked
+// for, taken from its own request rather than from hz's answer; a blob served
+// under any other address fails authentication.
+func Open(k EnvKey, addr Addr, envelope []byte) ([]byte, error) {
 	h, err := ParseEnvelopeHeader(envelope)
 	if err != nil {
 		return nil, err
@@ -403,12 +491,13 @@ func Open(k EnvKey, envelope []byte) ([]byte, error) {
 		return nil, fmt.Errorf("%w: envelope names key %s, holding %s", ErrKeyMismatch, h.KeyID, id)
 	}
 	nonce := envelope[envHeaderLen : envHeaderLen+NonceSize]
-	pt, err := mustGCM(k[:]).Open(nil, nonce, envelope[envHeaderLen+NonceSize:], envelope[:envHeaderLen])
+	pt, err := mustGCM(k[:]).Open(nil, nonce, envelope[envHeaderLen+NonceSize:], aad(envelope[:envHeaderLen], addr.context()))
 	if err != nil {
 		// Flattened on purpose. GCM reports one failure for a wrong key, a
-		// flipped ciphertext bit, a flipped nonce bit and a rewritten header
-		// alike, and that is the correct amount of information to pass on: the
-		// only fact a caller may act on is that this plaintext does not exist.
+		// flipped ciphertext bit, a flipped nonce bit, a rewritten header and a
+		// blob served under the wrong address alike, and that is the correct
+		// amount of information to pass on: the only fact a caller may act on
+		// is that this plaintext does not exist.
 		return nil, ErrAuthentication
 	}
 	return pt, nil
@@ -418,14 +507,17 @@ func Open(k EnvKey, envelope []byte) ([]byte, error) {
 // the public key in a pending registration; hz relays the result and can never
 // open it. An unapproved machine cannot decrypt anything even holding every
 // blob in the database, because nobody ever handed it the key.
+// A wrapped environment key carries no address: it is not one config's value,
+// and the recipient fingerprint plus the ECDH itself already bind it to exactly
+// one machine.
 func WrapEnvKey(recipient *ecdh.PublicKey, k EnvKey) ([]byte, error) {
-	return sealTo(recipient, KindWrappedEnvKey, purposeWrapEnvKey, k[:])
+	return sealTo(recipient, KindWrappedEnvKey, purposeWrapEnvKey, nil, k[:])
 }
 
 // UnwrapEnvKey is the agent's side of the grant, run once at approval. The
 // recovered key is persisted at 0600 so later boots need no human.
 func UnwrapEnvKey(priv *ecdh.PrivateKey, envelope []byte) (EnvKey, error) {
-	pt, err := openFrom(priv, KindWrappedEnvKey, purposeWrapEnvKey, envelope)
+	pt, err := openFrom(priv, KindWrappedEnvKey, purposeWrapEnvKey, nil, envelope)
 	if err != nil {
 		return EnvKey{}, err
 	}
@@ -441,13 +533,14 @@ func UnwrapEnvKey(priv *ecdh.PrivateKey, envelope []byte) (EnvKey, error) {
 // involved. This is what makes per-device revocation expressible: the blob
 // decrypts on exactly one box, so deleting it revokes there and nowhere else,
 // and setting one needs only the machine's public key, which hz publishes.
-func SealToMachine(recipient *ecdh.PublicKey, plaintext []byte) ([]byte, error) {
-	return sealTo(recipient, KindMachineSealed, purposeMachineSeal, plaintext)
+func SealToMachine(recipient *ecdh.PublicKey, addr MachineAddr, plaintext []byte) ([]byte, error) {
+	return sealTo(recipient, KindMachineSealed, purposeMachineSeal, addr.context(), plaintext)
 }
 
-// OpenFromMachine decrypts a machine-scoped secret.
-func OpenFromMachine(priv *ecdh.PrivateKey, envelope []byte) ([]byte, error) {
-	return openFrom(priv, KindMachineSealed, purposeMachineSeal, envelope)
+// OpenFromMachine decrypts a machine-scoped secret. As with Open, addr is
+// authenticated and must come from what the agent knows about itself.
+func OpenFromMachine(priv *ecdh.PrivateKey, addr MachineAddr, envelope []byte) ([]byte, error) {
+	return openFrom(priv, KindMachineSealed, purposeMachineSeal, addr.context(), envelope)
 }
 
 // EncodeEnvelope renders an envelope for a JSON field. Standard base64, because
@@ -469,7 +562,7 @@ func DecodeEnvelope(s string) ([]byte, error) {
 // machine-scoped secrets. The two differ only in the kind byte and the HKDF
 // purpose label, which is what keeps a blob minted for one from ever being
 // accepted as the other.
-func sealTo(recipient *ecdh.PublicKey, kind EnvelopeKind, purpose string, plaintext []byte) ([]byte, error) {
+func sealTo(recipient *ecdh.PublicKey, kind EnvelopeKind, purpose string, context, plaintext []byte) ([]byte, error) {
 	eph, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("ephemeral key: %w", err)
@@ -494,10 +587,10 @@ func sealTo(recipient *ecdh.PublicKey, kind EnvelopeKind, purpose string, plaint
 	out := make([]byte, 0, ecMinLen+len(plaintext))
 	out = append(out, hdr...)
 	out = append(out, nonce...)
-	return mustGCM(key).Seal(out, nonce, plaintext, hdr), nil
+	return mustGCM(key).Seal(out, nonce, plaintext, aad(hdr, context)), nil
 }
 
-func openFrom(priv *ecdh.PrivateKey, kind EnvelopeKind, purpose string, envelope []byte) ([]byte, error) {
+func openFrom(priv *ecdh.PrivateKey, kind EnvelopeKind, purpose string, context, envelope []byte) ([]byte, error) {
 	h, err := ParseEnvelopeHeader(envelope)
 	if err != nil {
 		return nil, err
@@ -524,7 +617,7 @@ func openFrom(priv *ecdh.PrivateKey, kind EnvelopeKind, purpose string, envelope
 		return nil, err
 	}
 	nonce := envelope[ecHeaderLen : ecHeaderLen+NonceSize]
-	pt, err := mustGCM(key).Open(nil, nonce, envelope[ecHeaderLen+NonceSize:], envelope[:ecHeaderLen])
+	pt, err := mustGCM(key).Open(nil, nonce, envelope[ecHeaderLen+NonceSize:], aad(envelope[:ecHeaderLen], context))
 	if err != nil {
 		return nil, ErrAuthentication
 	}
