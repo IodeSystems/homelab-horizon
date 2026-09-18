@@ -1448,3 +1448,172 @@ export interface OIDCDiscoverResp {
   userinfoEndpoint?: string;
   jwksUri?: string;
 }
+/**
+ * CMRegistrationResp is one row of the approval queue.
+ * WrappedEnvKey is deliberately absent. It is ciphertext and unopenable, but an
+ * approval queue has no business carrying key material, and a projection that
+ * never selects it cannot leak it into a log, a screenshot or a bug report.
+ */
+export interface CMRegistrationResp {
+  id: string;
+  machineId: string;
+  machineName: string;
+  environment: string;
+  app: string;
+  role: string;
+  version: string;
+  state: string;
+  /**
+   * Fingerprint of the machine's public key, for the approver to compare
+   * against what the box printed. This is the ONLY defence against hz
+   * substituting its own key at approval, so the UI must make comparing it a
+   * blocking step rather than a displayed convenience — and should require
+   * typing it rather than eyeballing, because a human reliably compares the
+   * first group and the last.
+   */
+  fingerprint: string;
+  /**
+   * EnrolledEnvironment is what the box claimed when it first enrolled. It is
+   * not authoritative and nothing resolves against it; it is here so a
+   * mismatch with Environment surfaces in the queue, which is one of the few
+   * signals against a machine-name squat.
+   */
+  enrolledEnvironment?: string;
+  /**
+   * WrapKeyID is which environment key this registration was granted, so the
+   * UI can show which boxes still hold an old one after a rotation. Without
+   * this there is nothing to compare a current-key pointer against.
+   */
+  wrapKeyId?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  deniedReason?: string;
+  createdAt: string;
+  lastSeenAt?: string;
+}
+/**
+ * CMApproveReq carries the wrapped environment key minted on a client.
+ * hz relays this and cannot open it. hz MUST still parse the envelope header
+ * and refuse a blob whose recipient fingerprint does not match the
+ * registration's stored public key — it can do that for free, and without it
+ * approval degrades from a cryptographic grant to an unvalidated flag, and a
+ * blob wrapped to the wrong key stores cleanly and bricks the box at boot.
+ */
+export interface CMApproveReq {
+  wrappedEnvKey: string; // base64 KindWrappedEnvKey envelope
+  wrapKeyId: string;
+}
+/**
+ * CMDenyReq refuses a registration. The reason is required: a denial with no
+ * stated cause is indistinguishable from a mistake six months later.
+ * Denying clears hz's copy of the wrapped key. That is NOT a revocation — a box
+ * that was ever approved already holds the key unwrapped on its own disk — and
+ * the UI must not describe it as one.
+ */
+export interface CMDenyReq {
+  reason: string;
+}
+/**
+ * CMConfigValueReq is one key of a config being blessed. Sealed only; there is
+ * no plaintext field because there is no plaintext path.
+ */
+export interface CMConfigValueReq {
+  key: string;
+  binding: string; // invariant | env
+  sealed: string; // base64 envelope, sealed on the client
+  keyId: string;
+  /**
+   * SourceConfigID is set when this value was promoted rather than authored
+   * here, and it is what makes drift readable off the graph instead of
+   * inferred by comparison. hz cannot verify the claim — it cannot read
+   * either value — so lineage records what the promoting client asserted.
+   */
+  sourceConfigId?: string;
+}
+/**
+ * CMCreateConfigReq blesses a config. Ranges are immutable afterwards, so this
+ * is the only moment the operator is present to be told no.
+ */
+export interface CMCreateConfigReq {
+  environment: string;
+  app: string;
+  role: string;
+  minVer: string;
+  maxVer?: string; // empty means open-ended
+  values: CMConfigValueReq[];
+}
+/**
+ * CMConfigValueResp describes a value without disclosing it. Sealed is included
+ * so a CLI holding the key can decrypt locally; a UI simply ignores it.
+ */
+export interface CMConfigValueResp {
+  key: string;
+  binding: string;
+  keyId: string;
+  origin: string; // direct | promoted
+  sourceConfigId?: string;
+  sealed?: string; // absent once tombstoned
+  tombstonedAt?: string;
+  tombstonedBy?: string;
+}
+/**
+ * CMConfigResp is one blessed config.
+ */
+export interface CMConfigResp {
+  id: string;
+  environment: string;
+  app: string;
+  role: string;
+  minVer: string;
+  maxVer?: string;
+  sequence: number /* int64 */;
+  createdAt: string;
+  createdBy: string;
+  values?: CMConfigValueResp[];
+}
+/**
+ * CMResolveResp answers "what would a box at this version get" — and, equally,
+ * what it would NOT get.
+ * Shadowed is not decoration. Several open-ended configs at one address is the
+ * normal shape of supersession, so resolution always has candidates it passed
+ * over; silent resolution is fine only when you can ask what it resolved to.
+ */
+export interface CMResolveResp {
+  winner?: CMConfigResp;
+  shadowed?: CMConfigResp[];
+  error?: string; // set when nothing matches
+}
+/**
+ * CMPromotionGateResp is the diff-and-gate, run before a promotion is offered.
+ * Blocked names the environment-bound keys the target has no value for. That is
+ * the whole reason promotion is a gate rather than a copy, and hz can compute it
+ * without reading a single value: it asks whether a key is bound, never what it
+ * holds.
+ */
+export interface CMPromotionGateResp {
+  sourceConfigId: string;
+  targetEnv: string;
+  promotes: string[]; // invariant keys that would carry
+  blocked?: string[]; // env-bound keys unbound in the target
+  ok: boolean;
+}
+/**
+ * CMCurrentKeyReq / CMCurrentKeyResp carry the advisory current-key pointer.
+ * hz stores an id, never a key. The pointer exists so every client learns a
+ * rotation happened instead of each laptop drifting alone — and so the boxes
+ * still holding an old key are a query rather than a guess. Clients must treat
+ * it as a cross-check: refuse to SEAL on disagreement, only warn on OPEN. A
+ * client that obeyed it would let a compromised hz pin everyone to a key it had
+ * already stolen.
+ */
+export interface CMCurrentKeyReq {
+  keyId: string;
+}
+export interface CMCurrentKeyResp {
+  environment: string;
+  app: string;
+  role: string;
+  keyId?: string; // absent means no pointer is set
+  setBy?: string;
+  setAt?: string;
+}
