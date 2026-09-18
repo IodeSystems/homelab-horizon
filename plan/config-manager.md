@@ -236,6 +236,85 @@ environments. They are no longer on the critical path — they now earn their ke
 against revocation and rotation (findings 3 and 4) instead, and belong in that
 phase.
 
+### Values are append-only; lineage answers "where did this come from"
+
+**Decided (Carl, 2026-09-18): a value is written, never overwritten.**
+
+This is what makes the promotion guarantee survive past the moment of
+promotion. A direct set after a promotion is not a silent difference — it is a
+**new value with `direct` provenance**, superseding by seq, carrying an actor and
+a timestamp. Drift stops being something you detect by comparison and becomes
+something you read off the graph, which answers the sharper question: not "do
+these differ" but "where did prod's current value come from."
+
+It extends a rule the design already has rather than adding one — `seq` is
+immutable, ranges are immutable, and "supersede instead of editing" was already
+the stated move.
+
+**Lineage lives on the VALUE, not the config.** A prod config is a mix by design:
+invariants arrive by promotion while environment-bound keys are bound fresh in
+prod. A single link on the config cannot describe one key that came from
+staging's `#38` sitting beside one that was born in prod. So `cm_config_values`
+gains an origin discriminator and a nullable link to the source config — **the
+source config id alone, not a denormalised seq**, which would be a second source
+of truth able to disagree. The key name is implied; it is the same on both ends
+by definition.
+
+Schema note: this is a **new migration 0009**. `0008` is committed, and
+migrations here are checksum-verified and hard-fail startup if an applied one
+changes.
+
+**The tension it creates, and the split that resolves it.** Append-only fights
+revocation: a leaked secret's ciphertext would otherwise sit in the store
+forever, still openable by anyone who ever held that key — making finding 3
+worse rather than better. So **lineage is append-only, payloads are
+destructible**. Tombstone a value's ciphertext and the row and its provenance
+survive while the bytes do not, which keeps "where did this come from"
+answerable for a value nobody can read any more. That is the state you actually
+want after a rotation.
+
+### The client keystore
+
+Keys live with the client, never with hz — hz stores blobs it cannot open, so it
+has no key to keep. `keyFor(addr, keyID)` resolves against a tree rooted outside
+the working directory:
+
+    $HZ_HOME (default ~/.hz)/secrets/keys/<environment>/<app>/<name>.key
+
+**`keyID`, not just `addr`, because of rotation.** Every envelope carries the id
+of the key that sealed it at bytes 2–9, so old ciphertext keeps opening after a
+rotation. A lookup keyed only on the address can return exactly one key and
+therefore breaks every prior blob the moment a second one exists.
+
+**Two different things are called "key name" and they must not be conflated:**
+the *config key* (`DB_PASSWORD`) is bound into the AAD; the *encryption key* is
+what this tree stores. Files may be named for humans (`2026-09.key`); resolution
+is **by computing each candidate's key id from the file itself** rather than
+consulting an index — an index is a second source of truth that can disagree
+with the keys it describes, and with a handful of keys per app the scan is free.
+
+Five requirements, each because the obvious implementation is wrong:
+
+1. **Address fields are free text and become path segments.** An environment
+   named `../../..` walks out of the tree. Validate against a strict charset and
+   reject separators, or encode the segments. Never interpolate a config string
+   into a path.
+2. **Verify permissions on READ, not only set them on write** — refuse a
+   world-readable key the way ssh does, and check the parent directories, since
+   a `0777` dir means the file can be swapped whatever its own mode says.
+3. **Check ownership, not just mode.** `0600` owned by somebody else is still
+   wrong.
+4. **Follow no symlinks** (`O_NOFOLLOW`, or verify after open), or the tree
+   silently redirects which key is loaded.
+5. **Anchor the root outside the working directory.** A cwd-relative `.hz/`
+   means running the CLI in a different directory picks up a different keystore,
+   and a repository carrying a hostile `.hz/` gets consulted by anyone who runs
+   `hz` inside it.
+
+A promotion needs two lookups from this tree — `keyFor(src)` to open and
+`keyFor(dst)` to seal — which is what "the client holds a keyset" means
+concretely.
+
 ### Provenance and divergence
 
 A promoted config records where it ran, for how long, on which release, and who
@@ -337,11 +416,16 @@ Consequences, all load-bearing:
   WebCrypto in the page, key in memory only — never `localStorage`, cleared on
   navigate, with an explicit lock. hz may log THAT a decrypt session was opened
   and by whom, never the key.
-- **One key per environment.** Prod's key is not staging's, so a staging box
-  compromise cannot read prod. Note this no longer "falls out of secrets never
-  promoting" — since 2026-09-18 some secrets do promote, by being re-sealed on a
-  client that holds both keys. The isolation now rests on who holds which key,
-  not on values being unable to cross.
+- **One key per (environment, app)** — narrowed from per-environment on
+  2026-09-18, and it is what resolves finding 5. Prod's key is not staging's, so
+  a staging box compromise cannot read prod; and app A's key is not app B's, so
+  a box running a low-value `ops` role can no longer decrypt an unrelated app's
+  production database password. Roles share their app's key: `{app, ops}` on one
+  box are the same app.
+
+  Note the isolation no longer "falls out of secrets never promoting" — since
+  2026-09-18 some secrets do promote, by being re-sealed on a client holding both
+  keys. It now rests entirely on who holds which key.
 - **Every ciphertext carries a key id**, so rotation can be gradual. Without it,
   rotating means re-encrypting every secret and re-enrolling every box
   atomically — which means it never happens.
@@ -544,12 +628,11 @@ of what "first registration" means.
 
 ### Decisions the owner owns
 
-**5. Key granularity is coarser than the addressing.** Secrets are addressed by
-`(environment, app, role)` but the key is per *environment*, so a box running a
-low-value `ops` role can decrypt an unrelated app's production database
-password. Either that is intended and should be stated, or the granularity
-becomes `(environment, app)`, or high-value secrets default to the
-machine-scoped path. **Not decided.**
+**5. Key granularity is coarser than the addressing.** ✅ **Resolved
+2026-09-18** — keys are now per `(environment, app)`, which falls out of the
+client keystore layout (`<env>/<app>/`). A box running a low-value `ops` role can
+no longer decrypt an unrelated app's production database password. Roles share
+their app's key.
 
 **6. Read implies write implies approve.** Symmetric keys mean any operator who
 can paste the prod key to inspect a delta can also mint valid prod secrets and
