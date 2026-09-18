@@ -9,8 +9,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 )
 
 // Push: sealing a role's values on this machine and blessing a config from them.
@@ -25,11 +23,20 @@ import (
 //
 // # What this package refuses to know
 //
-// Push takes values ALREADY ASSEMBLED, as map[string]string. It does not read
-// files, does not layer them, does not know that `.properties` is a format, and
-// has never heard of local.properties. Where an app's values come from is the
-// app's own business and its own format; teaching a generic library one app's
-// file convention is how a generic library stops being one.
+// Push takes values ALREADY ASSEMBLED, as names mapped to bytes. It does not
+// read files, does not layer them, does not know that `.properties` is a
+// format, and has never heard of local.properties. Where an app's values come
+// from is the app's own business and its own format; teaching a generic library
+// one app's file convention is how a generic library stops being one.
+//
+// A name is opaque. It may be one setting or a whole file, and **an extension
+// means nothing** — nothing here strips, infers or special-cases anything from a
+// name's shape. An app that stores `config.properties` as a single blob and one
+// that stores `DB_PASSWORD` as a value are both using this correctly, and this
+// package cannot tell them apart.
+//
+// Values are bytes, not strings, because a config value is not necessarily
+// text: a certificate, a keystore and a DER blob are all valid contents.
 //
 // # What it still refuses to do
 //
@@ -137,10 +144,25 @@ type PushOptions struct {
 	MinVer string
 	MaxVer string
 
-	// Values are the plaintexts to seal, already assembled by the application.
-	// Reading and layering the files they came from is the app's job — see the
+	// Values are the plaintexts to seal, keyed by NAME, already assembled by
+	// the application.
+	//
+	// A name is an OPAQUE IDENTIFIER and nothing here interprets it. It may be
+	// a single setting (`DB_PASSWORD`) or a whole file (`config.properties`) —
+	// that is the application's choice, and this package cannot tell the
+	// difference and must not try. In particular **extensions mean nothing
+	// here**: nothing is stripped, inferred or special-cased from a name's
+	// shape. The name is what gets bound into the AEAD, so whatever an
+	// application asks for is what it must ask for again to open.
+	//
+	// []byte rather than string because a value is not necessarily text: a
+	// certificate, a keystore, a DER blob and a UTF-8 properties file are all
+	// just bytes, and typing them as string would invite a conversion that
+	// corrupts the first three.
+	//
+	// Reading and layering whatever these came from is the app's job — see the
 	// note at the top of this file.
-	Values map[string]string
+	Values map[string][]byte
 
 	// DryRun seals and reports, and posts nothing. The keystore is still
 	// consulted and the pointer check still runs, so a dry run that succeeds
@@ -230,12 +252,12 @@ func Push(ctx context.Context, opts PushOptions) (*PushResult, error) {
 
 	// Seal. The plaintext exists in this process and nowhere else.
 	names := opts.Schema.Keys()
-	values := make([]apitypes.CMConfigValueReq, 0, len(names))
+	values := make([]BlessValue, 0, len(names))
 	for _, k := range names {
-		values = append(values, apitypes.CMConfigValueReq{
+		values = append(values, BlessValue{
 			Key:     k,
 			Binding: opts.Schema[k],
-			Sealed:  EncodeEnvelope(Seal(key, Addr{Environment: addr.Environment, App: addr.App, Role: addr.Role, Key: k}, []byte(opts.Values[k]))),
+			Sealed:  EncodeEnvelope(Seal(key, Addr{Environment: addr.Environment, App: addr.App, Role: addr.Role, Key: k}, opts.Values[k])),
 			KeyID:   info.ID.String(),
 		})
 	}
@@ -253,7 +275,7 @@ func Push(ctx context.Context, opts PushOptions) (*PushResult, error) {
 		return res, nil
 	}
 
-	req := apitypes.CMCreateConfigReq{
+	req := BlessRequest{
 		Environment: addr.Environment,
 		App:         addr.App,
 		Role:        addr.Role,
@@ -261,7 +283,7 @@ func Push(ctx context.Context, opts PushOptions) (*PushResult, error) {
 		MaxVer:      opts.MaxVer,
 		Values:      values,
 	}
-	var resp apitypes.CMConfigResp
+	var resp BlessResponse
 	if err := jsonRPC(ctx, hc, http.MethodPost, joinURL(opts.BaseURL, adminConfigsPath), req, &resp, false); err != nil {
 		return nil, fmt.Errorf("blessing a config at %s: %w", addr, err)
 	}
@@ -308,7 +330,7 @@ func currentKey(ctx context.Context, hc *http.Client, baseURL string, addr EnvKe
 		"app":         {addr.App},
 		"role":        {addr.Role},
 	}
-	var resp apitypes.CMCurrentKeyResp
+	var resp CurrentKeyPointer
 	if err := jsonRPC(ctx, hc, http.MethodGet, joinURL(baseURL, adminCurrentKeyPath)+"?"+q.Encode(), nil, &resp, false); err != nil {
 		var se *statusError
 		if errors.As(err, &se) && se.Code == http.StatusNotFound {

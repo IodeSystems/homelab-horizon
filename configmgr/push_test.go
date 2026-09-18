@@ -11,8 +11,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 )
 
 // The push tests run against a fake hz and a real keystore on a real directory
@@ -47,7 +45,7 @@ type blessHZ struct {
 	// same thing.
 	pointer404 bool
 
-	posted []apitypes.CMCreateConfigReq
+	posted []BlessRequest
 	raw    []string // every request body, verbatim
 }
 
@@ -71,7 +69,7 @@ func (h *blessHZ) handleCurrentKey(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	addr := q.Get("environment") + "/" + q.Get("app") + "/" + q.Get("role")
-	writeJSON(h.t, w, apitypes.CMCurrentKeyResp{
+	writeJSON(h.t, w, CurrentKeyPointer{
 		Environment: q.Get("environment"), App: q.Get("app"), Role: q.Get("role"),
 		KeyID: h.pointers[addr],
 	})
@@ -86,13 +84,13 @@ func (h *blessHZ) handleBless(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.raw = append(h.raw, string(body))
-	var req apitypes.CMCreateConfigReq
+	var req BlessRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	h.posted = append(h.posted, req)
-	writeJSON(h.t, w, apitypes.CMConfigResp{
+	writeJSON(h.t, w, BlessResponse{
 		ID: "cfg-1", Environment: req.Environment, App: req.App, Role: req.Role,
 		MinVer: req.MinVer, MaxVer: req.MaxVer, Sequence: 7,
 	})
@@ -115,9 +113,9 @@ func (h *blessHZ) sentAnywhere(needle string) bool {
 func pushOpts(h *blessHZ, ks *Keystore, mutate func(*PushOptions)) PushOptions {
 	// Copies: a mutate func adds and deletes, and a shared map would carry that
 	// into the next test.
-	values := make(map[string]string, len(pushValues))
+	values := make(map[string][]byte, len(pushValues))
 	for k, v := range pushValues {
-		values[k] = v
+		values[k] = []byte(v)
 	}
 	schema := make(Schema, len(pushSchema))
 	for k, v := range pushSchema {
@@ -227,7 +225,7 @@ func TestPushSealsUnderTheCurrentKey(t *testing.T) {
 // invariant or env, and a value with no binding is not one hz can store.
 func TestPushRefusesAValueWithNoDeclaredBinding(t *testing.T) {
 	h, ks, _ := pushFixture(t)
-	opts := pushOpts(h, ks, func(o *PushOptions) { o.Values["SURPRISE"] = "yes" })
+	opts := pushOpts(h, ks, func(o *PushOptions) { o.Values["SURPRISE"] = []byte("yes") })
 
 	_, err := Push(pushCtx(t), opts)
 	if !errors.Is(err, ErrSchema) {
@@ -358,7 +356,7 @@ func TestPushDryRunStillRefuses(t *testing.T) {
 	h, ks, _ := pushFixture(t)
 	opts := pushOpts(h, ks, func(o *PushOptions) {
 		o.DryRun = true
-		o.Values["SURPRISE"] = "yes"
+		o.Values["SURPRISE"] = []byte("yes")
 	})
 	if _, err := Push(pushCtx(t), opts); !errors.Is(err, ErrSchema) {
 		t.Fatalf("Push err = %v, want ErrSchema", err)
@@ -411,6 +409,77 @@ func TestPushReportsWhatHzCalledIt(t *testing.T) {
 	for _, plain := range []string{"hunter2", "30-days-retained"} {
 		if strings.Contains(s, plain) {
 			t.Errorf("String() disclosed a value: %q", s)
+		}
+	}
+}
+
+// A name is opaque and an extension means nothing. An app that stores one
+// setting and an app that stores a whole file are both using this correctly,
+// and this package must not be able to tell them apart — no stripping, no
+// inference, no special case for a shape that looks like a filename.
+func TestPushTreatsNamesAsOpaque(t *testing.T) {
+	names := []string{
+		"DB_PASSWORD",
+		"config.properties",
+		"secret.properties",
+		"application.yaml",
+		"truststore.jks",
+		"weird.name.with.many.dots",
+		"no-extension",
+		".hidden",
+		"UPPER.PROPERTIES",
+	}
+
+	h, ks, key := pushFixture(t)
+	opts := pushOpts(h, ks, func(o *PushOptions) {
+		o.Values = make(map[string][]byte, len(names))
+		o.Schema = make(Schema, len(names))
+		for i, n := range names {
+			o.Values[n] = []byte{byte(i), 0x00, 0xff, byte(i)} // not text
+			o.Schema[n] = BindingEnv
+		}
+	})
+
+	res, err := Push(pushCtx(t), opts)
+	if err != nil {
+		t.Fatalf("Push with file-shaped names: %v", err)
+	}
+	if len(res.Keys) != len(names) {
+		t.Fatalf("pushed %d names, want %d", len(res.Keys), len(names))
+	}
+
+	// Every name must survive verbatim into what hz was asked to store: an
+	// extension quietly stripped would bind a different name into the AEAD and
+	// the value would open nowhere.
+	h.mu.Lock()
+	sent := h.posted[len(h.posted)-1]
+	h.mu.Unlock()
+	got := make(map[string]bool, len(sent.Values))
+	for _, v := range sent.Values {
+		got[v.Key] = true
+	}
+	for _, n := range names {
+		if !got[n] {
+			t.Fatalf("name %q did not reach hz verbatim; sent %v", n, got)
+		}
+	}
+
+	// And the bytes must round-trip unchanged, including the non-UTF-8 ones —
+	// which is why Values is []byte and not string.
+	for _, v := range sent.Values {
+		env, err := DecodeEnvelope(v.Sealed)
+		if err != nil {
+			t.Fatalf("decode %q: %v", v.Key, err)
+		}
+		pt, err := Open(key, Addr{
+			Environment: pushAddr.Environment, App: pushAddr.App,
+			Role: pushAddr.Role, Key: v.Key,
+		}, env)
+		if err != nil {
+			t.Fatalf("open %q at its own name: %v", v.Key, err)
+		}
+		if len(pt) != 4 || pt[1] != 0x00 || pt[2] != 0xff {
+			t.Fatalf("%q round-tripped to %v, want the raw bytes", v.Key, pt)
 		}
 	}
 }
