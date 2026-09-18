@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+
+	"github.com/iodesystems/homelab-horizon/hzapi"
 )
 
 var (
@@ -440,6 +442,10 @@ func (c *client) do(method, path string, body, out interface{}) error {
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	// The contract this build compiled against. hz embeds and serves this
+	// binary, so it usually matches — but an operator with an older hz on their
+	// PATH is exactly the skew this catches.
+	hzapi.SetRequest(req.Header)
 	if c.isPersonalToken() {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 		// OTP= in the environment rather than a flag: it changes every thirty
@@ -513,6 +519,7 @@ func (c *client) tokenWantsOTP() bool {
 		return false
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
+	hzapi.SetRequest(req.Header)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return false
