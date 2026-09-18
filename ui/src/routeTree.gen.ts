@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AccountRouteImport } from './routes/account'
 import { Route as BansRouteImport } from './routes/bans'
 import { Route as ChecksRouteImport } from './routes/checks'
+import { Route as ConfigRouteImport } from './routes/config'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as DomainsRouteImport } from './routes/domains'
 import { Route as MfaRouteImport } from './routes/mfa'
@@ -42,6 +43,11 @@ const BansRoute = BansRouteImport.update({
 const ChecksRoute = ChecksRouteImport.update({
   id: '/checks',
   path: '/checks',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConfigRoute = ConfigRouteImport.update({
+  id: '/config',
+  path: '/config',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DashboardRoute = DashboardRouteImport.update({
@@ -100,6 +106,7 @@ export interface FileRoutesByFullPath {
   '/account': typeof AccountRoute
   '/bans': typeof BansRoute
   '/checks': typeof ChecksRoute
+  '/config': typeof ConfigRoute
   '/dashboard': typeof DashboardRoute
   '/domains': typeof DomainsRoute
   '/mfa': typeof MfaRoute
@@ -116,6 +123,7 @@ export interface FileRoutesByTo {
   '/account': typeof AccountRoute
   '/bans': typeof BansRoute
   '/checks': typeof ChecksRoute
+  '/config': typeof ConfigRoute
   '/dashboard': typeof DashboardRoute
   '/domains': typeof DomainsRoute
   '/mfa': typeof MfaRoute
@@ -133,6 +141,7 @@ export interface FileRoutesById {
   '/account': typeof AccountRoute
   '/bans': typeof BansRoute
   '/checks': typeof ChecksRoute
+  '/config': typeof ConfigRoute
   '/dashboard': typeof DashboardRoute
   '/domains': typeof DomainsRoute
   '/mfa': typeof MfaRoute
@@ -151,6 +160,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/bans'
     | '/checks'
+    | '/config'
     | '/dashboard'
     | '/domains'
     | '/mfa'
@@ -167,6 +177,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/bans'
     | '/checks'
+    | '/config'
     | '/dashboard'
     | '/domains'
     | '/mfa'
@@ -183,6 +194,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/bans'
     | '/checks'
+    | '/config'
     | '/dashboard'
     | '/domains'
     | '/mfa'
@@ -200,6 +212,7 @@ export interface RootRouteChildren {
   AccountRoute: typeof AccountRoute
   BansRoute: typeof BansRoute
   ChecksRoute: typeof ChecksRoute
+  ConfigRoute: typeof ConfigRoute
   DashboardRoute: typeof DashboardRoute
   DomainsRoute: typeof DomainsRoute
   MfaRoute: typeof MfaRoute
@@ -240,6 +253,13 @@ declare module '@tanstack/react-router' {
       path: '/checks'
       fullPath: '/checks'
       preLoaderRoute: typeof ChecksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/config': {
+      id: '/config'
+      path: '/config'
+      fullPath: '/config'
+      preLoaderRoute: typeof ConfigRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/dashboard': {
@@ -320,6 +340,7 @@ const rootRouteChildren: RootRouteChildren = {
   AccountRoute: AccountRoute,
   BansRoute: BansRoute,
   ChecksRoute: ChecksRoute,
+  ConfigRoute: ConfigRoute,
   DashboardRoute: DashboardRoute,
   DomainsRoute: DomainsRoute,
   MfaRoute: MfaRoute,

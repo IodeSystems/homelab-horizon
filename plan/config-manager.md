@@ -1040,7 +1040,23 @@ Phase 2 — building the client without them would have meant building it twice.
 
 | | | |
 |---|---|---|
-| ◻ | UI — approval queue, inventory, lineage, promotion gate | `ui/src/` |
+| ✅ | UI — approvals, fleet key state, config inventory with lineage, resolution, promotion gate | `ui/src/components/CM*.tsx`, `routes/config.tsx` |
+
+**Wave 3 landed 2026-09-18.** Five components behind a `/config` route, all
+metadata: no key input, no WebCrypto, no rendered value anywhere. Two details
+worth keeping:
+
+- The approvals page labels the fingerprint **"as hz reports it"** and says
+  outright that it is *not* the value to compare against — because if hz
+  substituted the public key it substituted that line too. The CLI deliberately
+  refuses to print hz's fingerprint before prompting, so typing is verification
+  rather than transcription; a page showing the same string unlabelled would
+  have quietly undone that.
+- The fleet view detects boxes holding a superseded key, **and says there is no
+  remedy**, because there is not one: `ApproveRegistration` only acts on a
+  pending row and nothing moves a row back to pending. Hole 2 is now visible
+  rather than invisible, which is the useful half; the re-wrap path is still
+  owed.
 
 **The UI is a smaller and different thing than it was this morning**, and whoever
 builds it should know why before they start:
