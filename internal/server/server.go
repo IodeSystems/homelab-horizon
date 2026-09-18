@@ -1222,7 +1222,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 // handler returns the fully-wrapped HTTP handler (mux + middlewares).
 func (s *Server) handler() http.Handler {
-	return securityHeadersMiddleware(s.nonPrimaryGuardMiddleware(s.setupRoutes()))
+	return securityHeadersMiddleware(s.apiVersionMiddleware(s.nonPrimaryGuardMiddleware(s.setupRoutes())))
 }
 
 // securityHeadersMiddleware sets baseline security response headers on the

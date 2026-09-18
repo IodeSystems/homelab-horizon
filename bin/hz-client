@@ -135,6 +135,20 @@ if [ -n "${OTP:-}" ]; then
   AUTH_ARGS+=(-H "X-HZ-OTP: $OTP")
 fi
 
+# The wire contract this script was written against. It travels on every request
+# so a server can refuse a script that is too old to understand its answers,
+# instead of the mismatch surfacing as a field that silently reads empty.
+#
+# That is not hypothetical: the bans verb printed "created=- expires=never" for
+# every ban for as long as this file has existed, because the server sends
+# createdAt and this script read created_at. Nothing caught it. This header is
+# what makes the next one of those a refusal naming both version numbers.
+#
+# Bump it in lockstep with hzapi.Version when this script is updated for a
+# breaking change.
+HZ_API_VERSION=1
+AUTH_ARGS+=(-H "X-HZ-API-Version: $HZ_API_VERSION")
+
 # Every HZ call goes through here.
 #
 # -L is load-bearing. The control plane answers http:// with a 301 to https://,
@@ -526,8 +540,8 @@ if not bans:
 print(f'{len(bans)} active ban(s):')
 print()
 for b in bans:
-    created = datetime.fromtimestamp(b['created_at']).strftime('%Y-%m-%d %H:%M:%S') if b.get('created_at') else '-'
-    expires = datetime.fromtimestamp(b['expires_at']).strftime('%Y-%m-%d %H:%M:%S') if b.get('expires_at') else 'never'
+    created = datetime.fromtimestamp(b['createdAt']).strftime('%Y-%m-%d %H:%M:%S') if b.get('createdAt') else '-'
+    expires = datetime.fromtimestamp(b['expiresAt']).strftime('%Y-%m-%d %H:%M:%S') if b.get('expiresAt') else 'never'
     reason = b.get('reason', '-') or '-'
     service = b.get('service', '-') or '-'
     print(f\"  {b['ip']:20s}  created={created}  expires={expires}  reason={reason}  by={service}\")

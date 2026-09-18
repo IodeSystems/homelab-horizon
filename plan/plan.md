@@ -266,7 +266,8 @@ Phase 3 replaces this with: restart horizon, done.
 | 6 | [Backend protocol (h2c)](icebox.md#-backend-protocol-h2c-for-grpc-backends--deployed-2026-09-17) | ✅ deployed + in use (Zitadel) |
 | 7 | Invites that can require a sign-in | ◻ not started, **and unwritten** — no section exists |
 | 8 | [DNS checks that would catch a broken forwarder](#-dns-checks-that-would-catch-a-broken-forwarder) | ✅ deployed |
-| 9 | [Config manager](#-config-manager--registration-blessing-promotion) → [config-manager.md](config-manager.md) | ◐ **highest priority** — Phase 1 part-built |
+| 9 | [Config manager](#-config-manager--registration-blessing-promotion) → [config-manager.md](config-manager.md) | ✅ merged to main 2026-09-18, not deployed |
+| 10 | [hz-client becomes a library](#-hz-client-becomes-a-library) | ◐ version surface in progress |
 
 Two opt-in next-steps were added to [icebox.md](icebox.md) on 2026-09-10:
 HAProxy TCP frontends on the VPN address, and moving the range-collision
@@ -399,6 +400,138 @@ nothing is reachable from outside the process.
   None block Phase 1.
 - **constraint:** nothing in the boot path may depend on freshness — services
   run unattended for years. This has already killed two proposals.
+
+### ◐ hz-client becomes a library
+
+**Driver:** redline-ops manages its own config by `curl`-ing `bin/hz-client`,
+`chmod +x`, and `fork/exec`. Now that [the config manager](config-manager.md)
+has shipped a working importable package, the same shape should cover the rest.
+
+### What it is today
+
+632 lines of bash, copied **verbatim** into a Go raw string literal
+(`internal/server/hz_client_script.go`) with a test whose only job is noticing
+when the two copies drift. Served unauthenticated from `/admin/haproxy/hz-client`
+— fine, it holds no secret, though the handler's comment claiming
+`backupAuthMiddleware` guards it is stale and should not be believed.
+
+**There are no consumers in this repo.** It appears only as copy-paste text in
+`README.md` and the Service Integration dialog. The real consumer is redline-ops,
+in another repo — which means **this can be migrated incrementally**: redline
+adopts the library while the script keeps working, and the drift test keeps the
+script honest meanwhile. No big bang.
+
+**The business logic is already in Go, server-side.** `internal/sitedeploy` does
+tar extraction, path-traversal defence, size caps, atomic symlink swap and
+release pruning; `internal/haproxy` does the socket commands. The script is a
+thin HTTP-plus-orchestration wrapper. Porting is mostly wire calls, not logic.
+
+### The evidence that this is not cosmetic
+
+`hz-client bans` has **never** printed a timestamp. The server marshals
+`createdAt`/`expiresAt` (`internal/apitypes/types.go:969-976`); the script reads
+`created_at`/`expires_at` (`bin/hz-client:529-530`). Every ban prints
+`created=-  expires=never`.
+
+That is a JSON contract drifting silently **inside one repository**, past a
+review, past a drift test that only compares the script to its own copy. It is
+the whole argument in one bug: a typed client would not have compiled.
+
+### The blocking problem: there is no version surface at all
+
+Grepped the script and every relevant wire struct. **Zero version fields, zero
+`X-*-Version` headers, nothing negotiated.** A downloaded script always matches
+the server; a linked library is pinned at build time, and today it would have no
+signal that it had skewed.
+
+**This is the first slice, and it is worth landing whether or not the library
+happens** — the bans bug is what unnoticed drift looks like with the *current*
+model, and pinning consumers makes it worse rather than better. Shape: the
+server declares an API version and a minimum it still serves; the client sends
+what it was built against; a mismatch is a named error naming both numbers, not
+a 400 with a guess.
+
+### Verb inventory
+
+**Trivial — a typed HTTP call, logic already server-side:** `status`,
+`current|next up|drain|down`, `swap`, `ban`, `unban`, `bans` (fix the casing bug
+while there), `maint-page set|clear`, `site rollback`, `site releases`.
+
+**Substantial — design, not translation:**
+
+- **`promote` and `rolling status|start|continue|finalize`.** The rolling *phase*
+  is inferred client-side from two polled state strings; **the server holds no
+  phase state at all**, so a library must reproduce that state machine exactly
+  rather than call something. And both poll for up to `--timeout` seconds while
+  printing lines a human watches — a library needs a progress callback, not
+  `fmt.Println`, which is an API decision.
+- **`site push`.** Needs in-process tar streaming (`archive/tar` +
+  `compress/gzip`, replacing a shell-out to `tar`) and a decision about the
+  can't-rewind-a-pipe behaviour the script deliberately relies on.
+
+**Do NOT port as-is:**
+
+- **The OTP preflight** is a no-op for the token type this tool actually uses. It
+  inspects `/api/v1/auth/status` for `otpRequired`, but that route only examines
+  a bearer token with the `hz_pat_` prefix — a service/deploy token never
+  matches, so it fires only when an operator misuses a personal token as
+  `HZ_TOKEN`. A real 401 from the real endpoint says the same thing.
+- **The http→https redirect trap** defends against curl dropping `Authorization`
+  across a scheme change. Go's client strips sensitive headers on a **host**
+  change, not a scheme change, so this must be **re-derived from Go's actual
+  redirect semantics**, not copied. Getting this wrong silently leaks a token or
+  silently 401s.
+
+### What porting deletes
+
+The `python3` dependency (JSON build, parse and pretty-print in every verb), the
+shell-out to `tar`, the `HZ_TOP_PID`/`trap` workaround for `set -e` not crossing
+command substitution, and the drift test — because there stops being a second
+copy.
+
+### The honest cost
+
+A downloaded script always matches the server. A linked library is pinned at
+build time, so an hz upgrade can break a consumer in a way the current model
+cannot. That is bought, not avoided, and the version surface above is what makes
+it survivable.
+
+**If the script survives for non-Go consumers it must be GENERATED** from the
+library's command surface, or the two copies come straight back — which is the
+failure this entry exists to end.
+
+### Suggested cut
+
+1. **The version surface.** ✅ **Landed 2026-09-18** — `hzapi/`, a middleware on
+   `/api/`, and every client declaring itself: `configmgr`, `cmd/hz` and the bash
+   script. One integer, not semver, because the only question is "can these
+   talk" and semver invites an argument about whether a change is breaking —
+   decided optimistically, under deadline, by whoever wants to ship. One version
+   for the whole API, because the families ship from one binary.
+
+   A missing header is served and logged, because hz-client sent none and
+   refusing would have broken every consumer on the day this shipped; the log is
+   the evidence for eventually flipping `UnversionedOK`, so that becomes a
+   decision someone makes holding proof rather than a default that drifts into
+   place. A header present but unparseable is refused — that is a client bug,
+   not a legacy client.
+
+   A client NEWER than the server is refused too. Serving it and hoping is how a
+   consumer meets a missing field as a nil dereference in production instead of
+   a refusal on its first call.
+
+   **And the `bans` bug is fixed** — the thing that justified the work. It had
+   printed `created=- expires=never` for every ban for as long as the script has
+   existed.
+2. **The trivial verbs**, as a `deploy`/`site`/`ban` client package beside
+   `configmgr`. Lifting `internal/apitypes` is mechanical — nothing in it depends
+   on `internal`-only packages — but mirror rather than import, for the reason
+   `configmgr/types.go` records.
+3. **`site push`**, which is self-contained and removes the `tar` shell-out.
+4. **`promote` and `rolling` last**, because they are the only genuinely new
+   design and the ones most likely to want a second opinion on the progress API.
+
+**Not scheduled.** Scoped so the size is known, not because it is next.
 
 ### ◐ L4 port forwards
 

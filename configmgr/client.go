@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/iodesystems/homelab-horizon/hzapi"
 )
 
 // The client library: the half of the config manager that runs on a managed
@@ -594,6 +596,10 @@ func jsonRPC(ctx context.Context, hc *http.Client, method, u string, in, out any
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
+	// Declare the wire contract this build compiled against. A library is
+	// pinned at build time, so this is the only thing that can tell a server
+	// it is talking to something months old.
+	hzapi.SetRequest(req.Header)
 	resp, err := hc.Do(req)
 	if err != nil {
 		return err
