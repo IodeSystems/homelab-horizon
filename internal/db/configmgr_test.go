@@ -544,10 +544,32 @@ func TestCreateConfigBlessTimeValidation(t *testing.T) {
 
 	open1 := blessOpen(t, ctx, d, "prod", "redline", "app", "1.0.0", admin.ID)
 
-	// A second open-ended config makes every future version match two
-	// candidates with only seq separating them.
-	if _, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.4.0", "", admin.ID, oneValue("A")); !errors.Is(err, ErrOpenRangeExists) {
-		t.Fatalf("second open-ended config = %v, want ErrOpenRangeExists", err)
+	// A second open-ended config is LEGAL, and is how supersession works: the
+	// newer one wins on seq for versions both contain, while the older keeps
+	// serving binaries below the newer one's min_ver. Refusing it would deadlock
+	// against ranges being immutable, since replacing the incumbent would mean
+	// editing its max_ver.
+	open2 := blessOpen(t, ctx, d, "prod", "redline", "app", "1.4.0", admin.ID)
+
+	got, err := d.ResolveConfig(ctx, "prod", "redline", "app", "1.5.0")
+	if err != nil {
+		t.Fatalf("resolve above both min_vers: %v", err)
+	}
+	if got.Config.ID != open2.ID {
+		t.Fatalf("winner = %s, want the higher seq %s", got.Config.ID, open2.ID)
+	}
+	if len(got.Shadowed) != 1 || got.Shadowed[0].ID != open1.ID {
+		t.Fatalf("shadowed = %v, want exactly the older open config", got.Shadowed)
+	}
+
+	// Below the newer one's min_ver only the older still contains the version,
+	// which is the rollback case ranges exist for.
+	got, err = d.ResolveConfig(ctx, "prod", "redline", "app", "1.2.0")
+	if err != nil {
+		t.Fatalf("resolve below the newer min_ver: %v", err)
+	}
+	if got.Config.ID != open1.ID {
+		t.Fatalf("winner = %s, want the older %s", got.Config.ID, open1.ID)
 	}
 
 	// A range that contains nothing.
@@ -565,7 +587,9 @@ func TestCreateConfigBlessTimeValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(list) != 2 || list[0].ID != open1.ID || list[1].ID != closed.ID {
+	// Exactly the three that were accepted — two open-ended plus the closed one
+	// — and nothing from the four that were refused.
+	if len(list) != 3 || list[0].ID != open1.ID || list[1].ID != open2.ID || list[2].ID != closed.ID {
 		t.Fatalf("refused blessings left rows behind: %+v", list)
 	}
 }

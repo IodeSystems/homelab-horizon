@@ -811,18 +811,27 @@ Boot cached, loudly; reserve refusal for an explicit `state = 'denied'`. A box
 never approved holds no key, so its cache is empty and the leniency costs
 nothing.
 
-#### 13. A closed `max_ver` is a fleet-wide time bomb
+#### 13. A closed `max_ver` is a fleet-wide time bomb ✅
 
-This document already asks hz to refuse leaving an address with no open-ended
-config. Nothing implements it: `CreateConfig` validates semver syntax and nothing
-else. Bless `max_ver = 1.3.0` with no successor and every box on 1.4.0 fails at
-its **next restart** — which for an unattended box may be years later, when
-nobody connects the two. Adjacent and equally unchecked: `min_ver > max_ver` is
-accepted, and two open-ended configs at one address silently let the highest seq
-win.
+**Closed 2026-09-18.** Bless `max_ver = 1.3.0` with no open successor and every
+box on 1.4.0 fails at its **next restart** — which for an unattended box may be
+years later, when nobody connects the two. `CreateConfig` now refuses that, and
+refuses `min_ver > max_ver`, at bless time with the operator present.
 
-**Fix (Phase 2): validate all three at bless time**, where the operator is
-present to see it.
+> **A third rule was specified here and had to be withdrawn.** This document also
+> asked hz to refuse *a second open-ended config at one address*, on the grounds
+> that the highest seq would win silently. That rule **deadlocks against "ranges
+> are immutable after blessing"**: replacing the incumbent open-ended config
+> would require editing its `max_ver`, and there is deliberately no path to do
+> that — so an address could never be superseded after its first blessing.
+>
+> It was withdrawn rather than worked around, because it also contradicted the
+> model: *several* open-ended configs are exactly how supersession works. Each
+> new one is blessed open-ended, a box takes the highest seq containing its
+> version, and older ones keep serving older binaries — which is what makes
+> rolling a binary back pick up the config that still covers it. The concern
+> behind the rule is answered by **resolution rule 2**: the winner comes back
+> with the candidates it shadowed, so nothing wins silently.
 
 #### 11. Losing a machine private key has no recovery path
 
@@ -1040,9 +1049,9 @@ them are flag days:
 several wrapped keys, hz chooses which slot each lands in. Changing an envelope's
 AAD after boxes hold blobs is a flag day, so it has to go first.
 
-**2.6 — Bless-time validation.** Closes hole 13. Refuse a closed `max_ver` with
-no open successor, refuse `min_ver > max_ver`, refuse a second open-ended config
-at one address. Cheap checks where the operator is standing there.
+**2.6 — Bless-time validation.** ✅ Landed early, in wave 1. Refuses a closed
+`max_ver` with no open successor and an inverted range. The third rule once
+specified here — no second open-ended config — was withdrawn; see hole 13.
 
 **2.7 — hz verifies the approval blob.** Closes hole 3. Parse the envelope header,
 compare the recipient fingerprint against `cm_machines.public_key`, refuse a
