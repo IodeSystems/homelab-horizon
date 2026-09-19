@@ -11,9 +11,9 @@
 > the case where an empty value fell through to the production default and a
 > rollback dump was aimed at the production bucket.
 >
-> **The fingerprint check is a real check**, not a ritual: the box printed
-> `DBB8-B48F-D75D-6BFD-8859-5F15`, the queue showed the same, and a deliberately
-> wrong value was refused with both numbers shown and nothing sent. What makes
+> **The fingerprint check is a real check**, not a ritual: the box printed a
+> 24-hex fingerprint, the queue showed the same one, and a deliberately wrong
+> value was refused with both numbers shown and nothing sent. What makes
 > it work is the prompt's own line — *do not copy it from hz, hz substituting
 > its public key is the attack this catches and it would have substituted the
 > fingerprint too*. Without that sentence the step is a CAPTCHA.
