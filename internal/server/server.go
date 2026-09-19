@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/db"
 	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
@@ -1153,6 +1154,12 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/cm/config", s.handleAPICMConfig)
 	mux.HandleFunc("/api/v1/cm/registrations", s.handleAPICMRegistrations)
 	mux.HandleFunc("/api/v1/cm/registrations/", s.handleAPICMRegistrationAction)
+	// Enrolled boxes. Registered from the shared constant rather than a
+	// literal: the CLI reads the same one, so a rename is one edit instead of
+	// two places that agree until they do not. cm_routes_test.go drives the
+	// real mux with these constants for the same reason.
+	mux.HandleFunc(apitypes.CMPathMachines, s.handleAPICMMachines)
+	mux.HandleFunc(apitypes.CMPathMachines+"/", s.handleAPICMMachine)
 	mux.HandleFunc("/api/v1/cm/configs", s.handleAPICMConfigs)
 	mux.HandleFunc("/api/v1/cm/configs/", s.handleAPICMConfigByID)
 	mux.HandleFunc("/api/v1/cm/resolve", s.handleAPICMResolve)

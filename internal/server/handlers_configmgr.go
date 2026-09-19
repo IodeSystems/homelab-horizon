@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -207,15 +208,28 @@ func (s *Server) handleAPICMRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	default:
 		// A name already enrolled with a DIFFERENT key is refused rather than
-		// re-keyed. There is no re-enrol path in internal/db, and silently
-		// accepting a new key here would be one: anything that can reach this
-		// endpoint could take over an existing machine's identity and have the
-		// next approval wrapped to a key it holds. A genuine reinstall needs an
-		// operator to remove the machine.
+		// re-keyed. Silently accepting a new key here would mean anything that
+		// can reach this endpoint takes over an existing machine's identity and
+		// has the next approval wrapped to a key it holds — so there is no
+		// re-key path in internal/db and there must not be one.
+		//
+		// A genuine reinstall needs an operator to REMOVE the machine, which
+		// frees the name: handleAPICMMachine's DELETE, or `hz cm remove
+		// <machine>`. The refusal names it, because an instruction to perform
+		// an action the reader cannot find is where this used to end — the
+		// route and the command did not exist, so a rebuilt box could never
+		// come back under its own name.
+		//
+		// The enrolled key's fingerprint is deliberately NOT in this answer.
+		// The caller of a conflicting register is by definition not the machine
+		// that holds that key, and the fingerprint is the value an operator
+		// compares against a box's console — so it goes to admins, who have
+		// `hz cm machines`, and not to whoever reached this endpoint.
 		if !bytes.Equal(pub.Bytes(), machine.PublicKey) {
 			writeJSONError(w, http.StatusConflict,
 				"machine "+req.Machine+" is enrolled with a different public key; "+
-					"an operator must remove it before it can re-enrol")
+					"an operator must remove it before it can re-enrol: "+
+					"`hz cm remove "+req.Machine+"`")
 			return
 		}
 	}
@@ -736,6 +750,242 @@ func (s *Server) cmDeny(w http.ResponseWriter, r *http.Request, machine *db.Mach
 		"address", updated.Environment+"/"+updated.App+"/"+updated.Role,
 		"reason", req.Reason, "by", s.adminActor(r), "ip", s.getClientIP(r))
 	writeJSON(w, cmRegistrationResp(machine, updated))
+}
+
+// --- Admin: enrolled machines ----------------------------------------------
+
+// handleAPICMMachines is GET /api/v1/cm/machines.
+//
+// The listing exists because removal needs somewhere to start. Until now the
+// only view of an enrolled box was the approval queue, which is indexed by
+// registration and shows nothing about a machine that has no pending row — so
+// an operator told "an operator must remove it" could not even find the thing
+// they were told to remove.
+func (s *Server) handleAPICMMachines(w http.ResponseWriter, r *http.Request) {
+	if !s.cmAdminGate(w, r) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+
+	machines, err := s.users.ListMachines(r.Context())
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not list machines: "+err.Error())
+		return
+	}
+
+	out := make([]apitypes.CMMachineResp, 0, len(machines))
+	for i := range machines {
+		resp, err := s.cmMachineResp(r, &machines[i])
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		out = append(out, resp)
+	}
+	writeJSON(w, out)
+}
+
+// handleAPICMMachine is GET and DELETE /api/v1/cm/machines/{name-or-id}.
+//
+// GET is the removal PREVIEW and DELETE is the removal; they answer the same
+// path on purpose, so the thing an operator read and the thing they destroyed
+// cannot be two different boxes resolved by two different rules.
+//
+// The reference is a name OR an id, resolved name-first, because the name is
+// what an operator has: the re-enrol refusal says "machine <name> is enrolled
+// with a different public key", and making them translate that into an id
+// before they can act on it is the gap this route exists to close. A machine
+// whose name cannot survive a path segment is reachable by id, which the
+// listing carries for every row.
+func (s *Server) handleAPICMMachine(w http.ResponseWriter, r *http.Request) {
+	if !s.cmAdminGate(w, r) {
+		return
+	}
+	ref := strings.TrimPrefix(r.URL.Path, apitypes.CMPathMachines+"/")
+	ref, err := url.PathUnescape(ref)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "machine name or id is not valid path escaping")
+		return
+	}
+	ref = strings.TrimSpace(ref)
+	if ref == "" || strings.Contains(ref, "/") {
+		writeJSONError(w, http.StatusNotFound,
+			"expected /api/v1/cm/machines/{name-or-id}")
+		return
+	}
+
+	machine, err := s.cmResolveMachine(r, ref)
+	if errors.Is(err, db.ErrNotFound) {
+		// A JSON 404, which is the handler saying "no such box" — distinct from
+		// the mux's plain-text 404 for a path that is not routed at all. An
+		// operator removing a machine twice lands here, and "it is already
+		// gone" is the answer, not an error to debug.
+		writeJSONError(w, http.StatusNotFound, "no machine named or identified by "+ref)
+		return
+	} else if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not look up machine: "+err.Error())
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		resp, err := s.cmMachineResp(r, machine)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, resp)
+	case http.MethodDelete:
+		s.cmRemoveMachine(w, r, machine)
+	default:
+		writeJSONError(w, http.StatusMethodNotAllowed, "GET or DELETE required")
+	}
+}
+
+// cmResolveMachine resolves a name first, then an id.
+//
+// Name-first rather than id-first because a name is what an operator types and
+// an id is what a script holds, and only one of the two can be mistyped into
+// something that exists. A machine deliberately named after another's id
+// therefore wins for its own name, which is the caller's evident intent.
+func (s *Server) cmResolveMachine(r *http.Request, ref string) (*db.Machine, error) {
+	machine, err := s.users.MachineByName(r.Context(), ref)
+	if err == nil {
+		return machine, nil
+	}
+	if !errors.Is(err, db.ErrNotFound) {
+		return nil, err
+	}
+	return s.users.MachineByID(r.Context(), ref)
+}
+
+// cmMachineResp projects one machine together with everything a removal would
+// take with it. No key material, by the same construction as the queue: the
+// registration projection has no field for a wrapped key, and secrets are
+// listed by name only.
+func (s *Server) cmMachineResp(r *http.Request, m *db.Machine) (apitypes.CMMachineResp, error) {
+	out := apitypes.CMMachineResp{
+		ID:                  m.ID,
+		Name:                m.Name,
+		EnrolledEnvironment: m.EnrolledEnvironment,
+		Fingerprint:         cmFingerprint(m.PublicKey),
+		CreatedAt:           cmTime(m.CreatedAt),
+		LastSeenAt:          cmTimePtr(m.LastSeenAt),
+	}
+
+	regs, err := s.users.ListRegistrationsForMachine(r.Context(), m.ID)
+	if err != nil {
+		return out, errors.New("could not list registrations for " + m.Name + ": " + err.Error())
+	}
+	for i := range regs {
+		out.Registrations = append(out.Registrations, cmRegistrationResp(m, &regs[i]))
+	}
+
+	secrets, err := s.users.ListMachineSecretKeys(r.Context(), m.ID)
+	if err != nil {
+		return out, errors.New("could not list secrets for " + m.Name + ": " + err.Error())
+	}
+	for _, sec := range secrets {
+		out.SecretKeys = append(out.SecretKeys, sec.Key)
+	}
+	return out, nil
+}
+
+// cmRemoveMachine deletes an enrolled box so its name can be enrolled again.
+//
+// This is the missing half of the re-enrol refusal in handleAPICMRegister. That
+// refusal is correct — silently re-keying a name would let anything that can
+// reach /register take over a machine's identity — but it told an operator to
+// perform an action nothing implemented, so a box that lost its state directory
+// could never come back under its own name. A rebuilt VM is the NORMAL case for
+// a config manager, not an edge one.
+//
+// THREE THINGS THIS DELIBERATELY DOES NOT DO:
+//
+//  1. It does not refuse a machine with live grants. Refusing would break the
+//     exact case it exists for: a rebuilt box's old registrations are approved,
+//     and they are what has to go. The guard is the confirm token below, not a
+//     precondition that would only ever fire on the intended use.
+//  2. It does not revoke anything, and no message here may imply it does. The
+//     box already holds the unwrapped environment key on its own disk. Removal
+//     stops hz serving that box; rotating the key is the only revocation. See
+//     db.DeleteMachine.
+//  3. It does not require an account the way approve and bless do. Those need
+//     one because cm_configs.created_by and cm_registrations.approved_by are
+//     foreign keys with nowhere else to record a name — a removal has no row
+//     left to attribute against, so its record is the audit log line below,
+//     which the shared admin token can populate just as well.
+func (s *Server) cmRemoveMachine(w http.ResponseWriter, r *http.Request, machine *db.Machine) {
+	// The operator has to name the box back. A DELETE that arrives without it
+	// is refused rather than obeyed, so a mis-aimed client or a half-remembered
+	// curl cannot destroy a fleet member in one call — and the CLI's typed-name
+	// prompt becomes load-bearing rather than decorative.
+	confirm := strings.TrimSpace(r.URL.Query().Get(apitypes.CMQueryConfirm))
+	if confirm == "" {
+		writeJSONError(w, http.StatusBadRequest,
+			"removing "+machine.Name+" needs "+apitypes.CMQueryConfirm+"="+machine.Name+
+				"; read GET "+apitypes.CMPathMachines+"/"+machine.Name+" first to see what it would destroy")
+		return
+	}
+	if confirm != machine.Name {
+		writeJSONError(w, http.StatusBadRequest,
+			"refusing: "+apitypes.CMQueryConfirm+"="+confirm+" does not name the machine at this path ("+
+				machine.Name+"). Nothing was removed")
+		return
+	}
+
+	// Counted BEFORE the delete, because after it the rows are gone and there
+	// is nothing left to count. The numbers are what the operator checks their
+	// preview against.
+	regs, err := s.users.ListRegistrationsForMachine(r.Context(), machine.ID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not list registrations: "+err.Error())
+		return
+	}
+	secrets, err := s.users.ListMachineSecretKeys(r.Context(), machine.ID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not list secrets: "+err.Error())
+		return
+	}
+	resp := apitypes.CMMachineRemovedResp{
+		ID:                   machine.ID,
+		Name:                 machine.Name,
+		RegistrationsRemoved: len(regs),
+		SecretsRemoved:       len(secrets),
+	}
+	addresses := make([]string, 0, len(regs))
+	for _, reg := range regs {
+		addresses = append(addresses, reg.Environment+"/"+reg.App+"/"+reg.Role)
+		if reg.State == db.RegistrationApproved {
+			resp.GrantsRemoved++
+		}
+	}
+	secretKeys := make([]string, 0, len(secrets))
+	for _, sec := range secrets {
+		secretKeys = append(secretKeys, sec.Key)
+	}
+
+	if err := s.users.DeleteMachine(r.Context(), machine.ID); errors.Is(err, db.ErrNotFound) {
+		writeJSONError(w, http.StatusNotFound, "machine "+machine.Name+" is already gone")
+		return
+	} else if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not remove machine: "+err.Error())
+		return
+	}
+
+	// The addresses and secret key NAMES go in the log, because this is the one
+	// destructive act here whose scope cannot be reconstructed afterwards: the
+	// rows that would have answered "what did that take with it" are the rows
+	// it deleted. Names only — a secret's value has never been readable by hz.
+	slog.Warn("cm machine removed", "machine", machine.Name, "id", machine.ID,
+		"fingerprint", cmFingerprint(machine.PublicKey),
+		"registrations", strings.Join(addresses, ","), "grants", resp.GrantsRemoved,
+		"secret_keys", strings.Join(secretKeys, ","),
+		"by", s.adminActor(r), "ip", s.getClientIP(r))
+	writeJSON(w, resp)
 }
 
 // --- Admin: configs ---------------------------------------------------------

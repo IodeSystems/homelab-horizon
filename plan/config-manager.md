@@ -967,17 +967,46 @@ refuses `min_ver > max_ver`, at bless time with the operator present.
 > behind the rule is answered by **resolution rule 2**: the winner comes back
 > with the candidates it shadowed, so nothing wins silently.
 
-#### 11. Losing a machine private key has no recovery path
+#### 11. Losing a machine private key has no recovery path ✅
 
-After a reinstall the stored wrapped blob is undecryptable and the box looks
-approved while being unable to boot. Worse than undesigned: `RegisterMachine`
-returns `ErrMachineNameTaken` and **there is no UPDATE path for `public_key`
-anywhere in the package**. Deleting the machine row works, but `ON DELETE
-CASCADE` silently takes every `cm_machine_secrets` row with it — the entire
-intern-onboarding content.
+**Closed 2026-09-19.** After a reinstall the stored wrapped blob was
+undecryptable and the box looked approved while being unable to boot. Worse
+than undesigned: `RegisterMachine` returns `ErrMachineNameTaken`, there is **no
+UPDATE path for `public_key` anywhere in the package**, and re-registering
+under the name with a new key was refused with *"an operator must remove it
+before it can re-enrol"* — **an instruction to perform an act nothing
+implemented**. No `/api/v1/cm/machines` route, no `hz cm` subcommand. The
+config manager was one-shot per machine name, and reprovisioning is its normal
+case.
 
-**Fix: keypair identity is part of what "first registration" means**, plus an
-explicit re-enrol path that does not destroy machine secrets.
+Closed by **removal, not re-keying**: `GET/DELETE /api/v1/cm/machines/{ref}`
+(+ `GET /api/v1/cm/machines`), driven by `hz cm machines` and `hz cm remove`.
+Re-keying in place was rejected deliberately — it is exactly the machine-identity
+takeover the register refusal exists to prevent, and it would still have had to
+clear every grant and secret, so it buys nothing but a surviving row id.
+
+> **The fix stated here — "a re-enrol path that does not destroy machine
+> secrets" — is WITHDRAWN.** Both `cm_machine_secrets` and an approved
+> registration's `wrapped_env_key` are sealed to the keypair that is gone, so
+> preserving them preserves nothing a new keypair can open; it preserves an
+> illusion of live rows. What was actually owed is that the destruction be
+> **loud**: `hz cm remove` prints every address and every secret key by name
+> before asking, hz refuses a `DELETE` whose `confirm=` does not repeat the
+> machine name, and the answer reports what it destroyed. `cm_secret_reads`
+> stays `ON DELETE SET NULL` — evidence outlives the thing it is evidence
+> about.
+
+**Removal is NOT revocation**, and nothing in the UI or the CLI may say it is —
+the same property `cmDeny` already carries. A box that was ever approved holds
+the environment key unwrapped on its own disk; deleting hz's copy of the
+wrapped blob reaches none of it. Removal buys exactly two things: hz serves
+that box nothing further, and the name is free for a fresh keypair. Rotating
+the environment key remains the only revocation.
+
+Still open from this hole: **keypair identity is part of what "first
+registration" means** — pre-declaring name *and* fingerprint (hole 5) is what
+would make a removal-plus-re-enrol window safe against a squat, since the name
+is briefly unclaimed between the two.
 
 ### Real, and open
 

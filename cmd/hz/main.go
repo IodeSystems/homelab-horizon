@@ -82,6 +82,7 @@ COMMANDS
                                      Read key text from STDIN into the keystore
   cm key current <env>/<app>/<role> [--set KEYID]
                                      Read or move hz's advisory current-key pointer
+  cm machines [--json]               List enrolled boxes: addresses, secrets, fingerprint
   cm pending [--all]                 Show the approval queue
   cm approve <registration-id>       Wrap this machine's environment key to the box's
                                      public key. You will be asked to TYPE the
@@ -89,6 +90,10 @@ COMMANDS
                                      the key hz served and a mismatch sends nothing
   cm deny <registration-id> --reason=...
                                      Refuse a registration (not a revocation)
+  cm remove <machine> [--yes]        Remove an enrolled box so its name can be enrolled
+                                     again — the fix for "enrolled with a different public
+                                     key" after a rebuild. Destroys its registrations and
+                                     machine secrets; NOT a revocation
   cm promote <config-id> --to=<env> [--dry-run]
                                      Open under the source key, re-seal under the target's
   cm show <config-id>                Decrypt a config locally and print it
