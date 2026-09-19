@@ -218,3 +218,37 @@ type CurrentKeyPointer struct {
 	SetBy       string `json:"setBy,omitempty"`
 	SetAt       string `json:"setAt,omitempty"`
 }
+
+// --- Wire names for hz's admin endpoints ----------------------------------
+//
+// These live HERE, in the public package, and internal/apitypes references
+// them — the dependency points this way on purpose. This package is the
+// contract a consumer compiles against, so it is the thing the server should
+// conform to, not the other way round.
+//
+// They exist because the names were spelled out as literals in three places and
+// three of them disagreed. `hz cm resolve` and `hz cm key current` sent
+// "environment=" where the handler read "env="; `hz cm promote` sent
+// "configId"/"to" to /promote where the handler read "config"/"target" at
+// /promote/gate. All four were fixed by giving the CLI and the server shared
+// constants in internal/apitypes — and the fix could not reach THIS package,
+// because it deliberately imports nothing from internal/. So Push kept sending
+// "environment=" and stayed broken for every consumer while the CLI worked.
+//
+// That is the lesson worth keeping: a constant in the wrong package is not a
+// shared constant. The definition has to live where the outermost caller can
+// see it.
+const (
+	QueryEnv      = "env"
+	QueryApp      = "app"
+	QueryRole     = "role"
+	QueryVersion  = "version"
+	QueryConfigID = "config"
+	QueryTarget   = "target"
+	QueryState    = "state"
+
+	PathResolve     = "/api/v1/cm/resolve"
+	PathPromoteGate = "/api/v1/cm/promote/gate"
+	PathCurrentKey  = "/api/v1/cm/current-key"
+	PathConfigs     = "/api/v1/cm/configs"
+)

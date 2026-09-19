@@ -3,6 +3,8 @@ package apitypes
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/iodesystems/homelab-horizon/configmgr"
 )
 
 // Error response
@@ -1669,29 +1671,28 @@ type CMCurrentKeyResp struct {
 
 // Query parameter and path names for the config manager's admin endpoints.
 //
-// These exist because the CLI and the handlers each spelled them out as string
-// literals, and three of the four disagreed. `hz cm resolve` sent
-// "environment=" while the handler read "env="; `hz cm key current` did the
-// same; and `hz cm promote` sent "configId"/"to" to /promote while the handler
-// read "config"/"target" at /promote/gate. Every one returned 400 to a user and
-// none of them failed a test, because both sides were only ever tested against
-// themselves — the CLI against an httptest stub that answered whatever it sent,
-// the handler against a request the handler's own test constructed.
+// ALIASES. The definitions live in the public configmgr package and this
+// references them, because that package is what a consumer compiles against and
+// so it is the contract the server conforms to — not the reverse.
 //
-// A name agreed in two places and enforced in neither will drift again. Use
-// these on both sides so a rename is a compile error rather than a 400 nobody
-// sees until someone runs the command against a real server.
+// The first version of these constants lived here, and it did not work. The CLI
+// and the server both read them and agreed; configmgr could not, because it
+// imports nothing from internal/ by design — so Push went on sending
+// "environment=" to a handler reading "env=" and stayed broken for every
+// consumer while the CLI was fixed. A constant in the wrong package is not a
+// shared constant: the definition has to live where the outermost caller can
+// see it.
 const (
-	CMQueryEnv      = "env"
-	CMQueryApp      = "app"
-	CMQueryRole     = "role"
-	CMQueryVersion  = "version"
-	CMQueryConfigID = "config"
-	CMQueryTarget   = "target"
-	CMQueryState    = "state"
+	CMQueryEnv      = configmgr.QueryEnv
+	CMQueryApp      = configmgr.QueryApp
+	CMQueryRole     = configmgr.QueryRole
+	CMQueryVersion  = configmgr.QueryVersion
+	CMQueryConfigID = configmgr.QueryConfigID
+	CMQueryTarget   = configmgr.QueryTarget
+	CMQueryState    = configmgr.QueryState
 
-	CMPathResolve     = "/api/v1/cm/resolve"
-	CMPathPromoteGate = "/api/v1/cm/promote/gate"
-	CMPathCurrentKey  = "/api/v1/cm/current-key"
-	CMPathConfigs     = "/api/v1/cm/configs"
+	CMPathResolve     = configmgr.PathResolve
+	CMPathPromoteGate = configmgr.PathPromoteGate
+	CMPathCurrentKey  = configmgr.PathCurrentKey
+	CMPathConfigs     = configmgr.PathConfigs
 )
