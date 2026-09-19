@@ -41,7 +41,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/wildeagency/ashid/go v0.0.0-20260627205826-4c70d22c1032
 	golang.org/x/crypto v0.57.0
-	golang.org/x/oauth2 v0.36.0
+	golang.org/x/oauth2 v0.37.0
 	modernc.org/sqlite v1.58.0
 )
 
