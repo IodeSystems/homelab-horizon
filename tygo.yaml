@@ -1,3 +1,10 @@
 packages:
   - path: "github.com/iodesystems/homelab-horizon/internal/apitypes"
     output_path: "ui/src/api/generated-types.ts"
+    # cm_wire.go holds ALIASES of configmgr constants. tygo parses only this package, so it
+    # cannot resolve an identifier from another one and emits `export const X = any /* … */`
+    # — `any` is a type, not a value, so the generated file stops being valid TypeScript.
+    # The UI references none of those names; they are Go-side wire constants for the server
+    # and the CLI. See internal/apitypes/cm_wire.go for why excluding beats duplicating.
+    exclude_files:
+      - "cm_wire.go"

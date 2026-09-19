@@ -3,8 +3,6 @@ package apitypes
 import (
 	"encoding/json"
 	"time"
-
-	"github.com/iodesystems/homelab-horizon/configmgr"
 )
 
 // Error response
@@ -1668,31 +1666,3 @@ type CMCurrentKeyResp struct {
 	SetBy       string `json:"setBy,omitempty"`
 	SetAt       string `json:"setAt,omitempty"`
 }
-
-// Query parameter and path names for the config manager's admin endpoints.
-//
-// ALIASES. The definitions live in the public configmgr package and this
-// references them, because that package is what a consumer compiles against and
-// so it is the contract the server conforms to — not the reverse.
-//
-// The first version of these constants lived here, and it did not work. The CLI
-// and the server both read them and agreed; configmgr could not, because it
-// imports nothing from internal/ by design — so Push went on sending
-// "environment=" to a handler reading "env=" and stayed broken for every
-// consumer while the CLI was fixed. A constant in the wrong package is not a
-// shared constant: the definition has to live where the outermost caller can
-// see it.
-const (
-	CMQueryEnv      = configmgr.QueryEnv
-	CMQueryApp      = configmgr.QueryApp
-	CMQueryRole     = configmgr.QueryRole
-	CMQueryVersion  = configmgr.QueryVersion
-	CMQueryConfigID = configmgr.QueryConfigID
-	CMQueryTarget   = configmgr.QueryTarget
-	CMQueryState    = configmgr.QueryState
-
-	CMPathResolve     = configmgr.PathResolve
-	CMPathPromoteGate = configmgr.PathPromoteGate
-	CMPathCurrentKey  = configmgr.PathCurrentKey
-	CMPathConfigs     = configmgr.PathConfigs
-)
