@@ -629,6 +629,12 @@ func TestServiceFileCreatesItsStateDirectory(t *testing.T) {
 	if !strings.Contains(unit, "ProtectSystem=strict") {
 		t.Error("unit lost ProtectSystem=strict")
 	}
+	// systemd's default is 0755. db.Open creates this directory 0750 itself, so
+	// an unqualified StateDirectory would have WIDENED it on every install —
+	// a regression introduced by the fix, not by the bug.
+	if !strings.Contains(unit, "StateDirectoryMode=0750") {
+		t.Error("StateDirectory without an explicit 0750 mode widens the identity store directory to 0755")
+	}
 	// The ExecStartPre mkdir that used to paper over this is gone from the state
 	// directory specifically. It still creates other paths, so check the line
 	// rather than the file.
