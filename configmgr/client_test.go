@@ -264,10 +264,10 @@ func TestEnrolApproveResolve(t *testing.T) {
 	if cfg.Degraded != nil {
 		t.Errorf("Degraded = %v, want nil", cfg.Degraded)
 	}
-	if got := cfg.Get("DB_PASSWORD"); got != "hunter2" {
+	if got := cfg.GetOr("DB_PASSWORD", ""); got != "hunter2" {
 		t.Errorf("DB_PASSWORD = %q", got)
 	}
-	if got := cfg.Get("LOG_LEVEL"); got != "debug" {
+	if got := cfg.GetOr("LOG_LEVEL", ""); got != "debug" {
 		t.Errorf("LOG_LEVEL = %q", got)
 	}
 	if cfg.ConfigID != "cfg-1" || cfg.Sequence != 10 {
@@ -430,7 +430,7 @@ func TestThreeStates(t *testing.T) {
 			if cfg.Degraded == nil {
 				t.Error("a cached boot must say why")
 			}
-			if got := cfg.Get("DB_PASSWORD"); got != "hunter2" {
+			if got := cfg.GetOr("DB_PASSWORD", ""); got != "hunter2" {
 				t.Errorf("cached DB_PASSWORD = %q", got)
 			}
 		})
@@ -693,8 +693,8 @@ func TestCacheNeverGoesStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a three-year-old cache is valid config: %v", err)
 	}
-	if cfg.Get("DB_PASSWORD") != "hunter2" {
-		t.Errorf("DB_PASSWORD = %q", cfg.Get("DB_PASSWORD"))
+	if cfg.GetOr("DB_PASSWORD", "") != "hunter2" {
+		t.Errorf("DB_PASSWORD = %q", cfg.GetOr("DB_PASSWORD", ""))
 	}
 }
 
@@ -732,7 +732,7 @@ func TestMachineScopedSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := cfg.Get("DB_PASSWORD"); got != "device-only" {
+	if got := cfg.GetOr("DB_PASSWORD", ""); got != "device-only" {
 		t.Errorf("DB_PASSWORD = %q", got)
 	}
 
@@ -827,11 +827,68 @@ func TestAMissingKeyIsTheApplicationsToNotice(t *testing.T) {
 		t.Errorf("Lookup on a key hz did not serve = %q, %v; want \"\", false", v, ok)
 	}
 	// And no panic: there is no declaration for a read to be undeclared against.
-	if got := cfg.Get("NEVER_SERVED"); got != "" {
-		t.Errorf("Get on an absent key = %q, want the empty string", got)
+	if got := cfg.GetOr("NEVER_SERVED", ""); got != "" {
+		t.Errorf("GetOr on an absent key with an empty default = %q, want \"\"", got)
 	}
-	if got := cfg.Bytes("NEVER_SERVED"); got != nil {
-		t.Errorf("Bytes on an absent key = %v, want nil", got)
+}
+
+// An absent key and a key set to empty are DIFFERENT FACTS, and the accessors
+// must not conflate them.
+//
+// This is the founding bug of the whole project, reproduced once already in a
+// consumer's own accessor: an explicitly-empty BACKUP_BUCKET, set to disable
+// off-box copies, read as unset, so a default was substituted — and the default
+// was the production bucket. A rollback dump was aimed at it, and the only
+// reason nothing landed there was that the box had no AWS region and the SDK
+// failed at endpoint resolution.
+//
+// An earlier version of this package shipped Get and Bytes, which returned ""
+// and nil for both cases. They were deleted rather than documented.
+func TestAbsentAndEmptyAreDistinguishable(t *testing.T) {
+	h := newHZ(t)
+	h.config = func(req ConfigRequest, k EnvKey) (ConfigResponse, error) {
+		return ConfigResponse{
+			ConfigID: "cfg", Sequence: 1, MinVer: "1.0.0",
+			Entries: []ConfigEntry{
+				// Set, deliberately, to empty. The operator meant this.
+				sealEntry(t, k, req.Addr("BACKUP_BUCKET"), BindingEnv, ""),
+			},
+		}, nil
+	}
+	cfg, err := newClient(t, h, nil).Load(ctx(t))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// The whole point: a default must NOT be substituted for a value that was
+	// deliberately set to empty.
+	if got := cfg.GetOr("BACKUP_BUCKET", "redline-backups"); got != "" {
+		t.Fatalf("GetOr on a deliberately-empty key = %q, want \"\" — "+
+			"substituting the default here is the production-bucket bug", got)
+	}
+	// A key that genuinely is not there DOES get the default.
+	if got := cfg.GetOr("NOT_SERVED", "redline-backups"); got != "redline-backups" {
+		t.Fatalf("GetOr on an absent key = %q, want the default", got)
+	}
+	// Lookup tells them apart, which is what makes the above implementable.
+	if v, ok := cfg.Lookup("BACKUP_BUCKET"); !ok || v != "" {
+		t.Fatalf("Lookup on a deliberately-empty key = %q, %v; want \"\", true", v, ok)
+	}
+	if _, ok := cfg.Lookup("NOT_SERVED"); ok {
+		t.Fatal("Lookup on an absent key reported present")
+	}
+
+	// Same for the byte form, which had the identical flaw.
+	def := []byte("fallback")
+	if got := cfg.BytesOr("BACKUP_BUCKET", def); len(got) != 0 {
+		t.Fatalf("BytesOr on a deliberately-empty key = %q, want empty", got)
+	}
+	if got := cfg.BytesOr("NOT_SERVED", def); string(got) != "fallback" {
+		t.Fatalf("BytesOr on an absent key = %q, want the default", got)
+	}
+	// The default must not be aliased into the caller's slice either.
+	if got := cfg.BytesOr("NOT_SERVED", def); &got[0] != &def[0] {
+		t.Log("BytesOr returns the default itself; callers must not mutate it")
 	}
 }
 
