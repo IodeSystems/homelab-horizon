@@ -266,7 +266,7 @@ Phase 3 replaces this with: restart horizon, done.
 | 6 | [Backend protocol (h2c)](icebox.md#-backend-protocol-h2c-for-grpc-backends--deployed-2026-09-17) | ✅ deployed + in use (Zitadel) |
 | 7 | Invites that can require a sign-in | ◻ not started, **and unwritten** — no section exists |
 | 8 | [DNS checks that would catch a broken forwarder](#-dns-checks-that-would-catch-a-broken-forwarder) | ✅ deployed |
-| 9 | [Config manager](#-config-manager--registration-blessing-promotion) → [config-manager.md](config-manager.md) | ✅ merged to main 2026-09-18, not deployed |
+| 9 | [Config manager](#-config-manager--registration-blessing-promotion) → [config-manager.md](config-manager.md) | ✅ **ceremony proven on a box 2026-09-19** |
 | 10 | [hz-client becomes a library](#-hz-client-becomes-a-library) | ◐ version surface in progress |
 
 Two opt-in next-steps were added to [icebox.md](icebox.md) on 2026-09-10:

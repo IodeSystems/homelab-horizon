@@ -1,10 +1,28 @@
 # Config manager — registration, blessing, promotion
 
-> **Status: Phase 1 in flight.** Persistence and crypto are built and committed
-> (`internal/db/configmgr.go`, migration `0008`, `configmgr/`). No handlers, no
-> UI, no client — nothing is reachable from outside the process. Phase 2 below
-> is the hardening pass, and several of its items must land before anything real
-> is approved through this.
+> **Status: the ceremony completed on a real box, 2026-09-19.**
+>
+> Push → register → typed-fingerprint approval → key wrap → config decrypted on
+> the box, on a single-box VM with hz and the app over loopback. Until that run
+> every line of this was tests agreeing with themselves.
+>
+> **The founding bug is dead, observed rather than argued:** `BACKUP_BUCKET`
+> came back **present and empty**, distinguishable from absent, on a real box —
+> the case where an empty value fell through to the production default and a
+> rollback dump was aimed at the production bucket.
+>
+> **The fingerprint check is a real check**, not a ritual: the box printed
+> `DBB8-B48F-D75D-6BFD-8859-5F15`, the queue showed the same, and a deliberately
+> wrong value was refused with both numbers shown and nothing sent. What makes
+> it work is the prompt's own line — *do not copy it from hz, hz substituting
+> its public key is the attack this catches and it would have substituted the
+> fingerprint too*. Without that sentence the step is a CAPTCHA.
+>
+> **Still unproven, and the list is short and specific:** promotion across
+> environments has never been exercised (two keys exist for it); rotation has no
+> re-wrap path at all; **there is no way to remove a machine**, so a box whose
+> state directory is wiped cannot re-enrol under its own name; and nobody has
+> opened the UI.
 >
 > Written 2026-09-18 from the owner's model; moved into this repo the same day
 > because **hz is where it gets built**. redline is the first client, not the
@@ -966,6 +984,27 @@ refuses `min_ver > max_ver`, at bless time with the operator present.
 > rolling a binary back pick up the config that still covers it. The concern
 > behind the rule is answered by **resolution rule 2**: the winner comes back
 > with the candidates it shadowed, so nothing wins silently.
+
+#### 14. A machine cannot be removed
+
+**Found by the first real run, 2026-09-19.** Wipe a box's state directory and it
+generates a new keypair; hz correctly refuses the re-enrolment —
+
+    machine <name> is enrolled with a different public key; an operator must
+    remove it
+
+— and **there is no removal command and no route to build one on**. `hz cm`
+offers `key|pending|approve|deny|promote|show|resolve`; there is no
+`/api/v1/cm/machines`. The error names an operator action that does not exist.
+
+The workaround is to enrol under a different machine name, which leaves a dead
+record and a stale pending registration behind and quietly makes machine names
+disposable — the opposite of what the squatting defence assumes.
+
+This is the concrete form of [hole 11](#11-losing-a-machine-private-key-has-no-recovery-path):
+that entry predicted the state, this is what it looks like when a reinstall
+happens. **Being built separately** (owner-assigned, isolated worktree) — so the
+fix is not this document's to design, but the gap belongs in the list.
 
 #### 11. Losing a machine private key has no recovery path
 
