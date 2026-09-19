@@ -2485,6 +2485,11 @@ Group=root
 # serving. Declaring it here is systemd's own answer and removes the mkdir that
 # was papering over it.
 StateDirectory=homelab-horizon
+# 0750, not systemd's 0755 default: db.Open creates this directory 0750 itself,
+# and letting the unit widen it would have made the identity store's directory
+# world-listable on every install. The database file is 0600 regardless, but the
+# directory listing is not nothing.
+StateDirectoryMode=0750
 
 # File system isolation. /var/lib/homelab-horizon holds static-site releases
 # (the only writable, non-sensitive place for served files under the sandbox).
