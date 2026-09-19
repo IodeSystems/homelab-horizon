@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -52,14 +53,57 @@ import (
 func (s *Server) cmPeerGate(w http.ResponseWriter, r *http.Request) (string, bool) {
 	peer, err := s.getPeerFromRequest(r)
 	if err != nil {
-		writeJSONError(w, http.StatusForbidden, err.Error())
-		return "", false
+		// A LOCAL caller is admitted, because the deployed topology is hz and
+		// the app on ONE box talking over loopback — and without this the
+		// config manager cannot serve that shape at all.
+		//
+		// Deliberately scoped HERE and not in isInVPNRange, which has five
+		// callers including the VPN MFA jail: widening that to fix a
+		// config-manager problem would loosen an unrelated security surface.
+		// This gate is the single chokepoint for the whole machine protocol.
+		//
+		// Why it is safe: registration only ever creates a PENDING row. The
+		// capability is granted by a human approving and wrapping a key to the
+		// machine's own keypair, never by registering — so a local caller gains
+		// nothing but a place in a queue. A root local caller could read hz's
+		// sqlite off the same disk regardless; a non-root one gets an entry an
+		// operator must still bless.
+		//
+		// The peer name it replaces is advisory: its only use is the log line
+		// below noting a mismatch with the claimed machine name. Real identity
+		// is the keypair, and the real control is the typed fingerprint compare.
+		if ip := s.getClientIP(r); isLoopback(ip) {
+			slog.Info("cm request admitted from loopback",
+				"ip", ip, "path", r.URL.Path, "peer", cmLocalPeer)
+			peer = cmLocalPeer
+		} else {
+			writeJSONError(w, http.StatusForbidden, err.Error())
+			return "", false
+		}
 	}
 	if s.users == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, errNoIdentityStore.Error())
 		return "", false
 	}
 	return peer, true
+}
+
+// cmLocalPeer is the name a loopback caller registers under. It is not an
+// identity — it is a placeholder where a WireGuard peer name would be, chosen
+// so a reader of the log or the queue can see at once that no peer vouched for
+// this and the operator is the only check.
+const cmLocalPeer = "local"
+
+// isLoopback covers 127.0.0.0/8, not just 127.0.0.1.
+//
+// /8 matters and /24 would have been a near-miss that works everywhere until it
+// does not: Ubuntu maps the machine's own HOSTNAME to 127.0.1.1 in /etc/hosts,
+// so an app configured with its own name rather than the literal "localhost" —
+// HZ_URL=http://$(hostname):8080 — sources from 127.0.1.1 and would be refused
+// by a narrower check, on that distro only.
+func isLoopback(ip string) bool {
+	addr := net.ParseIP(ip)
+	return addr != nil && addr.IsLoopback()
 }
 
 // cmAdminGate is the admin half of the same guard.

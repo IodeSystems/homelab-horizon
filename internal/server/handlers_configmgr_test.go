@@ -612,3 +612,58 @@ func TestCMPublicKeyRouteServesAWrappableKey(t *testing.T) {
 		t.Fatalf("POST status = %d, want 405", w.Code)
 	}
 }
+
+// A loopback caller may register: hz and the app on ONE box, talking over
+// 127.0.0.1, is the deployed topology and without this the config manager
+// cannot serve it at all.
+func TestCMRegisterAdmitsLoopback(t *testing.T) {
+	s, _ := cmServer(t)
+
+	// 127.0.1.1, not 127.0.0.1 — Ubuntu maps the machine's own hostname there,
+	// so an app dialling its own name sources from it. A /24 check would refuse
+	// this on that distro and nowhere else, which is the worst kind of bug.
+	for _, ip := range []string{"127.0.0.1:9000", "127.0.1.1:9000", "[::1]:9000"} {
+		t.Run(ip, func(t *testing.T) {
+			priv, err := configmgr.NewMachineKey()
+			if err != nil {
+				t.Fatalf("NewMachineKey: %v", err)
+			}
+			body := configmgr.RegisterRequest{
+				Machine: "box-" + ip, Environment: "prod", App: "redline", Role: "app",
+				Version: "1.2.0", PublicKey: configmgr.MarshalMachinePublicKey(priv.PublicKey()),
+			}
+			raw, _ := json.Marshal(body)
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/cm/register", bytes.NewReader(raw))
+			r.RemoteAddr = ip
+			w := httptest.NewRecorder()
+			s.handleAPICMRegister(w, r)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("loopback %s refused: %d %s", ip, w.Code, w.Body.String())
+			}
+			var resp configmgr.RegisterResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			// PENDING, not approved. That is the whole safety argument: a local
+			// caller gains a place in a queue, never a key.
+			if resp.State != configmgr.StatePending {
+				t.Fatalf("loopback registration state = %q, want pending — "+
+					"admitting loopback must not grant anything", resp.State)
+			}
+		})
+	}
+}
+
+// A caller that is neither a VPN peer nor loopback is still refused. The
+// relaxation is scoped to loopback and must not have become "anyone".
+func TestCMRegisterStillRefusesAStranger(t *testing.T) {
+	s, _ := cmServer(t)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/cm/register", strings.NewReader("{}"))
+	r.RemoteAddr = "203.0.113.7:9000"
+	w := httptest.NewRecorder()
+	s.handleAPICMRegister(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("an off-VPN, non-loopback caller got %d, want 403", w.Code)
+	}
+}

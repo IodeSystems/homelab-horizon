@@ -312,6 +312,24 @@ export function CMApprovals() {
           registration to approve and what the CLI is going to ask you to check.
         </Typography>
 
+        {pending.length > 0 && (
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            <AlertTitle sx={{ fontWeight: 600 }}>
+              Nothing here has been vouched for
+            </AlertTitle>
+            A registration is a <strong>request</strong>, not a credential. Anything
+            that can reach hz can enqueue one — including an unprivileged local
+            process, which may claim any environment it likes, <code>prod</code>{" "}
+            included. The queue shows what was <em>claimed</em>.
+            <br />
+            <br />
+            You are the check. Approving is what grants the key, and the CLI will
+            ask you to type the fingerprint the box itself printed — compare it
+            against the box, not against the value shown here, which hz would
+            also control if hz were the thing lying to you.
+          </Alert>
+        )}
+
         {pending.length === 0 ? (
           <Typography variant="body2" color="text.secondary" sx={{ mt: 2, fontStyle: "italic" }}>
             Nothing waiting. A box appears here shortly after it enrols.
