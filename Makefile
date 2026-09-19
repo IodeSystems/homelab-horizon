@@ -23,7 +23,7 @@ all: build
 # Generate TypeScript types from Go structs (requires tygo)
 .PHONY: generate
 generate:
-	~/go/bin/tygo generate
+	go run github.com/iodesystems/tygo@v0.2.21-iode.1 generate
 
 # Build frontend (React SPA)
 .PHONY: ui
@@ -178,7 +178,7 @@ check-generated:
 	 tmp=$$(mktemp); \
 	 trap 'rm -f "$$tmp"' EXIT; \
 	 cp ui/src/api/generated-types.ts "$$tmp"; \
-	 ~/go/bin/tygo generate >/dev/null; \
+	 go run github.com/iodesystems/tygo@v0.2.21-iode.1 generate >/dev/null; \
 	 if ! diff -q "$$tmp" ui/src/api/generated-types.ts >/dev/null; then \
 	   cp "$$tmp" ui/src/api/generated-types.ts; \
 	   echo "generated-types.ts is STALE — run 'make generate' and commit the result"; exit 1; \

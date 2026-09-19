@@ -4,33 +4,21 @@ import "github.com/iodesystems/homelab-horizon/configmgr"
 
 // Wire-name constants for the config manager's admin endpoints.
 //
-// ⚠ THIS FILE IS EXCLUDED FROM tygo (tygo.yaml exclude_files), and the exclusion is
-// load-bearing rather than tidiness. These are ALIASES of constants in configmgr, and tygo
-// parses only this package — it cannot resolve an identifier from another one, so it emits
+// ⚠ THIS FILE IS EXCLUDED FROM tygo (tygo.yaml exclude_files).
 //
-//     export const CMQueryEnv = any /* configmgr.QueryEnv */;
+// These are ALIASES of constants in configmgr, and stock tygo cannot follow an alias into
+// another package: it parses one package and emits its fallback TYPE where the value goes,
 //
-// and `any` is a TYPE, not a value. That is 11 TypeScript errors in a generated file, which
-// nothing catches: `make check` does not type-check the generated output, so the committed
-// .ts simply went stale instead and the breakage waited for whoever next ran `make generate`.
+//	export const CMQueryEnv = any /* configmgr.QueryEnv */;
 //
-// Excluding rather than duplicating the literals here is deliberate. Duplicating would
-// reintroduce the second definition whose drift caused five broken endpoints, and the UI has
-// no use for these — verified: it imports generated-types but references none of these
-// eleven names. They are Go-side wire constants shared by the server and the CLI; the browser
-// is not a party to them.
-
-// ALIASES. The definitions live in the public configmgr package and this
-// references them, because that package is what a consumer compiles against and
-// so it is the contract the server conforms to — not the reverse.
+// which is not valid TypeScript. hz now pins a fork that resolves constants through
+// go/types (gzuidhof/tygo#100), so these WOULD generate correctly today. The exclusion
+// stays for a different reason: the UI references none of these eleven names — they are
+// Go-side wire constants shared by the server and the CLI, and the browser is not a party
+// to them. Generating them would ship dead weight and invite someone to use them.
 //
-// The first version of these constants lived here, and it did not work. The CLI
-// and the server both read them and agreed; configmgr could not, because it
-// imports nothing from internal/ by design — so Push went on sending
-// "environment=" to a handler reading "env=" and stayed broken for every
-// consumer while the CLI was fixed. A constant in the wrong package is not a
-// shared constant: the definition has to live where the outermost caller can
-// see it.
+// Duplicating the literals here instead was rejected: that reintroduces the second
+// definition whose drift broke five endpoints.
 const (
 	CMQueryEnv      = configmgr.QueryEnv
 	CMQueryApp      = configmgr.QueryApp

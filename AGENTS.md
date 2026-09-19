@@ -71,7 +71,7 @@ homelab-horizon/
 
 ## CONVENTIONS
 
-- **API types are the source of truth.** Add to `internal/apitypes/`, run `make generate` (or `~/go/bin/tygo generate`). Never hand-edit `ui/src/api/generated-types.ts` — it has a generated header.
+- **API types are the source of truth.** Add to `internal/apitypes/`, run `make generate`, which pins a fork (`go run github.com/iodesystems/tygo@v0.2.21-iode.1`). Never hand-edit `ui/src/api/generated-types.ts` — it has a generated header.
 - **UI is React, not templates.** Old `templates_*.go` are gone (React migration, see `memory/project_react_migration.md`).
 - **Config derivation**: Services/zones derive DNS mappings, HAProxy backends, SSL domains via `internal/config/derive.go`. Add a service → DNS + HAProxy + cert all flow from it.
 - **JSON tags**: All config fields use `json:"snake_case"` with `omitempty`.
