@@ -15,7 +15,7 @@ go 1.26.0
 // 1.26.8 is what this tree has actually been built and tested against. Raise it
 // when govulncheck reports a newer stdlib fix; the sibling redline module pins
 // its own floor at 1.26.5 for the same reason and by the same method.
-toolchain go1.26.8
+toolchain go1.27.1
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.0
