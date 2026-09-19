@@ -527,7 +527,26 @@ func (c *Client) registerAndWait(ctx context.Context, req RegisterRequest) (*Reg
 		if resp.ID == "" {
 			return nil, fmt.Errorf("%w: hz answered %q with no registration id to poll", ErrUnsettled, resp.State)
 		}
-		c.logf("registration %s at %s is %q; waiting for an operator", resp.ID, c.Addr(), resp.State)
+		// The fingerprint goes in EVERY waiting line, not once at the start.
+		//
+		// It is the only defence against hz substituting its own public key at
+		// approval, and it only works if an operator compares it against a
+		// value THE BOX produced. Before this, the library printed no such
+		// value: an implementor would have had to open the private key file and
+		// derive it, which nobody does — so `hz cm pending` said "you will need
+		// the fingerprint the box printed" and the box had printed nothing.
+		//
+		// An operator with no source for the number reaches for the one on
+		// screen, which is hz's, which makes the check hz verifying itself. The
+		// control was correct and unusable, which is worse than absent because
+		// it looks like it is working.
+		//
+		// Repeated on every poll because enrolment can wait hours and the line
+		// must still be on screen, or in the journal, when someone finally
+		// looks.
+		c.logf("registration %s at %s is %q; waiting for an operator.\n"+
+			"    FINGERPRINT (compare this against hz before approving): %s",
+			resp.ID, c.Addr(), resp.State, c.Fingerprint())
 
 		select {
 		case <-ctx.Done():
@@ -757,4 +776,25 @@ func (c *Config) Keys() []string {
 // String names the config without disclosing a byte of it.
 func (c *Config) String() string {
 	return fmt.Sprintf("config %s seq %d from %s (%d keys)", c.ConfigID, c.Sequence, c.Source, len(c.values))
+}
+
+// Fingerprint is this box's own public-key fingerprint, for an operator to
+// compare against what hz shows before approving.
+//
+// It exists because the approval ceremony is worthless without it. hz reports a
+// fingerprint too, and an approver who compares hz's number against hz's number
+// has checked nothing — a compromised hz substituting its own public key would
+// report the fingerprint of the key it substituted, and the comparison would
+// pass. The value has to come from the box, which means the box has to be able
+// to say it, which means this accessor has to exist.
+//
+// Render it in a startup banner or a status command. An empty string means this
+// box has no keypair yet, which is itself worth showing rather than hiding: it
+// means nothing has enrolled.
+func (c *Client) Fingerprint() string {
+	priv, err := c.state.MachineKey()
+	if err != nil || priv == nil {
+		return ""
+	}
+	return FingerprintOf(priv.PublicKey()).String()
 }
