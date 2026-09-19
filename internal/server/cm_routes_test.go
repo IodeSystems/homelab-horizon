@@ -54,6 +54,7 @@ func TestCMAdminRoutesAreReachableAsBuilt(t *testing.T) {
 			apitypes.CMQueryApp:  {"redline"},
 			apitypes.CMQueryRole: {"app"},
 		}},
+		{"machines", apitypes.CMPathMachines, nil},
 	}
 
 	for _, tc := range cases {
@@ -126,4 +127,78 @@ func TestCMRegistrationBareReadIsRouted(t *testing.T) {
 	if got.ID != box.resp.ID {
 		t.Errorf("read returned registration %q, want %q", got.ID, box.resp.ID)
 	}
+}
+
+// The machine routes are the pair the re-enrol refusal points at, and the pair
+// most able to repeat the bug above: DELETE on a subtree the mux would answer
+// for even when no handler reads it, plus a query parameter (confirm) that two
+// sides have to spell the same way.
+//
+// Driven through the real mux with the real constants, so a DELETE that lands
+// on the collection handler, a subtree pattern that was never registered, or a
+// renamed confirm parameter all fail HERE rather than on a box an operator is
+// trying to rebuild.
+func TestCMMachineRoutesAreReachableAsBuilt(t *testing.T) {
+	s, admin := cmServer(t)
+	mux := s.setupRoutes()
+	cmRegister(t, s, "box-1", "prod", "redline", "app")
+
+	call := func(t *testing.T, method, path string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(method, path, nil)
+		r.AddCookie(admin)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		if w.Code == http.StatusNotFound && !strings.Contains(w.Body.String(), `"error"`) {
+			t.Fatalf("%s %s is not registered: %s", method, path, strings.TrimSpace(w.Body.String()))
+		}
+		return w
+	}
+
+	t.Run("list", func(t *testing.T) {
+		w := call(t, http.MethodGet, apitypes.CMPathMachines)
+		var rows []apitypes.CMMachineResp
+		if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+			t.Fatalf("decode: %v (%s)", err, w.Body.String())
+		}
+		if len(rows) != 1 || rows[0].Name != "box-1" {
+			t.Fatalf("want one machine box-1, got %+v", rows)
+		}
+		// The preview an operator acts on has to carry the registration, or
+		// `hz cm remove` cannot say what it is about to destroy.
+		if len(rows[0].Registrations) != 1 {
+			t.Errorf("machine listing carries no registrations: %+v", rows[0])
+		}
+	})
+
+	t.Run("read by name", func(t *testing.T) {
+		w := call(t, http.MethodGet, apitypes.CMPathMachines+"/box-1")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET by name = %d: %s", w.Code, strings.TrimSpace(w.Body.String()))
+		}
+	})
+
+	// The DELETE must reach the per-machine handler, not the collection one.
+	// Without its own subtree pattern the mux would hand this to the listing
+	// handler, which answers 405 — indistinguishable at a glance from a removal
+	// that is simply not allowed.
+	t.Run("delete reaches the machine handler", func(t *testing.T) {
+		w := call(t, http.MethodDelete, apitypes.CMPathMachines+"/box-1")
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("DELETE with no confirm = %d, want 400: %s", w.Code, strings.TrimSpace(w.Body.String()))
+		}
+		// And the refusal must name the parameter by the constant both sides
+		// read, so a rename cannot leave the CLI sending a word hz ignores.
+		if !strings.Contains(w.Body.String(), apitypes.CMQueryConfirm+"=") {
+			t.Errorf("the refusal does not name %q: %s", apitypes.CMQueryConfirm, w.Body.String())
+		}
+	})
+
+	t.Run("delete with confirm", func(t *testing.T) {
+		q := url.Values{apitypes.CMQueryConfirm: {"box-1"}}
+		w := call(t, http.MethodDelete, apitypes.CMPathMachines+"/box-1?"+q.Encode())
+		if w.Code != http.StatusOK {
+			t.Fatalf("DELETE = %d: %s", w.Code, strings.TrimSpace(w.Body.String()))
+		}
+	})
 }

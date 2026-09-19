@@ -247,8 +247,14 @@ const (
 	QueryTarget   = "target"
 	QueryState    = "state"
 
+	// QueryConfirm carries the name of the machine a removal is aimed at. The
+	// caller has to repeat the name back, so a DELETE that arrives without the
+	// operator having read what it would destroy is refused rather than obeyed.
+	QueryConfirm = "confirm"
+
 	PathResolve     = "/api/v1/cm/resolve"
 	PathPromoteGate = "/api/v1/cm/promote/gate"
 	PathCurrentKey  = "/api/v1/cm/current-key"
 	PathConfigs     = "/api/v1/cm/configs"
+	PathMachines    = "/api/v1/cm/machines"
 )

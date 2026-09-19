@@ -699,6 +699,57 @@ func TestMachineByNameAndUnknown(t *testing.T) {
 	}
 }
 
+// Removing a machine frees its NAME, which is the only reason removal exists:
+// RegisterMachine refuses a taken name and there is deliberately no re-key
+// path, so without this a box that lost its private key could never come back.
+//
+// The second half is the assertion with teeth. ON DELETE CASCADE only runs when
+// PRAGMA foreign_keys is on — it is per-connection and OFF by default in
+// SQLite, so a DSN that dropped the pragma would leave the registrations and
+// secrets as orphans pointing at a machine id that no longer exists, and every
+// happy path would still pass.
+func TestDeleteMachineFreesTheNameAndCascades(t *testing.T) {
+	ctx := context.Background()
+	d := open(t)
+
+	m, err := d.RegisterMachine(ctx, "box-gone", "prod", testPublicKey(20))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	reg, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "app", "1.2.0")
+	if err != nil {
+		t.Fatalf("upsert registration: %v", err)
+	}
+	admin := newUser(t, d, "carl")
+	if err := d.SetMachineSecret(ctx, m.ID, "NPM_TOKEN", []byte("sealed"), admin.ID); err != nil {
+		t.Fatalf("set secret: %v", err)
+	}
+
+	if err := d.DeleteMachine(ctx, m.ID); err != nil {
+		t.Fatalf("delete machine: %v", err)
+	}
+	if _, err := d.MachineByName(ctx, "box-gone"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("machine = %v, want ErrNotFound", err)
+	}
+	if _, err := d.RegistrationByID(ctx, reg.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("registration survived the cascade: %v", err)
+	}
+	if _, err := d.MachineSecret(ctx, m.ID, "NPM_TOKEN"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("machine secret survived the cascade: %v", err)
+	}
+
+	// The name is reusable with a DIFFERENT key, which is the whole point.
+	if _, err := d.RegisterMachine(ctx, "box-gone", "prod", testPublicKey(21)); err != nil {
+		t.Fatalf("re-enrol after removal: %v", err)
+	}
+
+	// And removing something already gone is ErrNotFound rather than a silent
+	// success, so a handler can tell "removed" from "was never there".
+	if err := d.DeleteMachine(ctx, "mch_nope"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("delete unknown = %v, want ErrNotFound", err)
+	}
+}
+
 // Duplicate machine names must be refused by the schema, not merely by
 // convention.
 func TestDuplicateMachineNameIsUniqueViolation(t *testing.T) {

@@ -31,10 +31,14 @@ type cmStub struct {
 	resolve      map[string]apitypes.CMResolveResp // "env/app/role" -> answer
 	gate         apitypes.CMPromotionGateResp
 	currentKeys  map[string]string // "env/app/role" -> key id
+	// machines is keyed by BOTH name and id, so a test can drive the CLI's
+	// reference either way.
+	machines map[string]apitypes.CMMachineResp
 
 	approved   []apitypes.CMApproveReq
 	denied     []apitypes.CMDenyReq
 	posted     []apitypes.CMCreateConfigReq
+	removed    []string // machine names the stub actually deleted
 	rawBodies  []string
 	approveErr int
 }
@@ -44,6 +48,17 @@ func newCMStub() *cmStub {
 		configs:     map[string]apitypes.CMConfigResp{},
 		resolve:     map[string]apitypes.CMResolveResp{},
 		currentKeys: map[string]string{},
+		machines:    map[string]apitypes.CMMachineResp{},
+	}
+}
+
+// addMachine registers a machine under its name and its id.
+func (s *cmStub) addMachine(m apitypes.CMMachineResp) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.machines[m.Name] = m
+	if m.ID != "" {
+		s.machines[m.ID] = m
 	}
 }
 
@@ -143,6 +158,54 @@ func (s *cmStub) start(t *testing.T) *client {
 
 		case p == apitypes.CMPathPromoteGate:
 			_ = json.NewEncoder(w).Encode(s.gate)
+
+		case p == apitypes.CMPathMachines:
+			s.mu.Lock()
+			seen := map[string]bool{}
+			rows := []apitypes.CMMachineResp{}
+			for _, m := range s.machines {
+				if !seen[m.Name] {
+					seen[m.Name] = true
+					rows = append(rows, m)
+				}
+			}
+			s.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(rows)
+
+		// The removal guard is enforced HERE, the way hz enforces it, rather
+		// than accepting whatever the CLI sends. A stub that took any confirm
+		// value would pass against a CLI that echoed back the reference the
+		// operator typed — which breaks the moment someone removes by id, and
+		// is the exact shape of bug cm_routes_test.go exists for.
+		case strings.HasPrefix(p, apitypes.CMPathMachines+"/"):
+			ref := strings.TrimPrefix(p, apitypes.CMPathMachines+"/")
+			s.mu.Lock()
+			m, ok := s.machines[ref]
+			s.mu.Unlock()
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error":"no such machine"}`))
+				return
+			}
+			if r.Method != http.MethodDelete {
+				_ = json.NewEncoder(w).Encode(m)
+				return
+			}
+			if r.URL.Query().Get(apitypes.CMQueryConfirm) != m.Name {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"confirm does not name the machine"}`))
+				return
+			}
+			s.mu.Lock()
+			s.removed = append(s.removed, m.Name)
+			delete(s.machines, m.Name)
+			delete(s.machines, m.ID)
+			s.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(apitypes.CMMachineRemovedResp{
+				ID: m.ID, Name: m.Name,
+				RegistrationsRemoved: len(m.Registrations),
+				SecretsRemoved:       len(m.SecretKeys),
+			})
 
 		default:
 			w.WriteHeader(http.StatusNotFound)

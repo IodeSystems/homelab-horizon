@@ -205,6 +205,46 @@ func (d *DB) ListMachines(ctx context.Context) ([]Machine, error) {
 	return out, rows.Err()
 }
 
+// DeleteMachine removes a box's identity, and with it everything the schema
+// hangs off that identity. It is the only way a machine NAME becomes free
+// again, which is what makes re-enrolment possible at all: RegisterMachine
+// refuses a taken name, and there is deliberately no UPDATE path for
+// public_key.
+//
+// THE CASCADE IS THE POINT, not a side effect. Every row that goes is sealed
+// or wrapped to the keypair that is going away, so keeping it would leave rows
+// that look live and open nowhere:
+//
+//   - cm_registrations CASCADE. An approved row holds this address's
+//     environment key wrapped to this machine's public key. With the box's
+//     private half gone, the blob is bytes.
+//   - cm_machine_secrets CASCADE. Sealed directly to the same public key, so
+//     identically unopenable. plan/config-manager.md hole 11 asked for a
+//     re-enrol path that does NOT destroy these; that requirement is withdrawn
+//     here, because preserving a secret nothing can decrypt preserves an
+//     illusion. What is owed instead is that the destruction is LOUD — the
+//     caller names each key it is about to drop — and the handler above does
+//     that rather than deleting quietly.
+//   - cm_secret_reads SET NULL. Evidence outlives the thing it is evidence
+//     about; the audit rows survive with a blanked machine_id.
+//
+// WHAT THIS IS NOT: a revocation. A box that was ever approved unwrapped that
+// environment key onto its own disk at 0600, and deleting hz's copy of the
+// wrapped blob reaches none of it — the same property DenyRegistration
+// documents, for the same reason. The only revocation of an environment key is
+// rotating it. What removal buys is bounded and worth stating exactly: hz will
+// serve this box nothing further, and the name is free for a fresh keypair.
+func (d *DB) DeleteMachine(ctx context.Context, id string) error {
+	res, err := d.ExecContext(ctx, `DELETE FROM cm_machines WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete machine: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // RecordMachineSeen stamps a machine's last_seen_at. Called on every boot,
 // approved or not — a box still shows up as "trying", which is useful in the
 // queue.
