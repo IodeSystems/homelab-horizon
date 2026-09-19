@@ -161,10 +161,31 @@ lint:
 
 # Check/lint — gofmt-clean check (no mutation) + vet + golangci-lint
 .PHONY: check
-check:
+check: check-generated
 	@test -z "$$(gofmt -l . )" || { echo "gofmt needed:"; gofmt -l .; exit 1; }
 	go vet ./...
 	golangci-lint run ./...
+
+# The generated TypeScript must be BOTH current and valid, and nothing checked either.
+#
+# tygo emitted `export const X = any /* configmgr.Y */` for eleven cross-package constant
+# aliases — `any` is a type, not a value — and the committed .ts simply went stale instead,
+# so the breakage sat waiting for whoever next ran `make generate`. Regenerating and
+# diffing catches staleness; tsc catches output that parses as Go but not as TypeScript.
+.PHONY: check-generated
+check-generated:
+	@set -e; \
+	 tmp=$$(mktemp); \
+	 trap 'rm -f "$$tmp"' EXIT; \
+	 cp ui/src/api/generated-types.ts "$$tmp"; \
+	 ~/go/bin/tygo generate >/dev/null; \
+	 if ! diff -q "$$tmp" ui/src/api/generated-types.ts >/dev/null; then \
+	   cp "$$tmp" ui/src/api/generated-types.ts; \
+	   echo "generated-types.ts is STALE — run 'make generate' and commit the result"; exit 1; \
+	 fi; \
+	 cd ui && npx --no-install tsc --noEmit --skipLibCheck --ignoreConfig src/api/generated-types.ts \
+	   || { echo "generated-types.ts is not valid TypeScript — see the errors above"; exit 1; }; \
+	 echo "generated types: current and valid"
 
 # Run all checks
 .PHONY: test-all
