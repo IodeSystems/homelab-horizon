@@ -611,3 +611,33 @@ func TestTemplateIsValidConfig(t *testing.T) {
 		t.Fatalf("template shipped %d active remote probes", len(cfg.RemoteProbes))
 	}
 }
+
+// The shipped unit must CREATE its state directory, not merely be permitted to
+// write one that already exists.
+//
+// A dash-prefixed ReadWritePaths entry is skipped when the path is absent, so
+// on a fresh box /var stayed read-only, the database could not be created, and
+// hz logged one error and carried on serving. It did not reproduce anywhere the
+// directory already existed — which is every box that had ever run an older
+// build, i.e. every box anyone tested on.
+func TestServiceFileCreatesItsStateDirectory(t *testing.T) {
+	unit := GenerateServiceFile("/usr/local/bin/homelab-horizon", "/etc/homelab-horizon/config.json")
+
+	if !strings.Contains(unit, "StateDirectory=homelab-horizon") {
+		t.Error("unit has no StateDirectory: a fresh install cannot create its own database")
+	}
+	if !strings.Contains(unit, "ProtectSystem=strict") {
+		t.Error("unit lost ProtectSystem=strict")
+	}
+	// The ExecStartPre mkdir that used to paper over this is gone from the state
+	// directory specifically. It still creates other paths, so check the line
+	// rather than the file.
+	for _, line := range strings.Split(unit, "\n") {
+		if strings.HasPrefix(line, "ExecStartPre=") && strings.Contains(line, "/var/lib/homelab-horizon") {
+			t.Errorf("the state directory is created twice, by StateDirectory and by: %s", line)
+		}
+	}
+	// ReadWritePaths may still name it; that is harmless and survives someone
+	// removing StateDirectory without noticing. What it cannot do alone is
+	// CREATE it, which is the bug this test exists for.
+}
