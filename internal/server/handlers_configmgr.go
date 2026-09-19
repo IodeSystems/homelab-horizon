@@ -417,7 +417,7 @@ func (s *Server) handleAPICMRegistrations(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	state := strings.TrimSpace(r.URL.Query().Get(apitypes.CMQueryState))
 	if state == "" {
 		state = configmgr.StatePending
 	}
@@ -699,9 +699,9 @@ func (s *Server) handleAPICMConfigs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) cmListConfigs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	env := strings.TrimSpace(q.Get("env"))
-	app := strings.TrimSpace(q.Get("app"))
-	role := strings.TrimSpace(q.Get("role"))
+	env := strings.TrimSpace(q.Get(apitypes.CMQueryEnv))
+	app := strings.TrimSpace(q.Get(apitypes.CMQueryApp))
+	role := strings.TrimSpace(q.Get(apitypes.CMQueryRole))
 	if env == "" || app == "" || role == "" {
 		writeJSONError(w, http.StatusBadRequest, "env, app and role are required")
 		return
@@ -907,10 +907,10 @@ func (s *Server) handleAPICMResolve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := r.URL.Query()
-	env := strings.TrimSpace(q.Get("env"))
-	app := strings.TrimSpace(q.Get("app"))
-	role := strings.TrimSpace(q.Get("role"))
-	version := strings.TrimSpace(q.Get("version"))
+	env := strings.TrimSpace(q.Get(apitypes.CMQueryEnv))
+	app := strings.TrimSpace(q.Get(apitypes.CMQueryApp))
+	role := strings.TrimSpace(q.Get(apitypes.CMQueryRole))
+	version := strings.TrimSpace(q.Get(apitypes.CMQueryVersion))
 	if env == "" || app == "" || role == "" || version == "" {
 		writeJSONError(w, http.StatusBadRequest, "env, app, role and version are required")
 		return
@@ -958,8 +958,8 @@ func (s *Server) handleAPICMPromotionGate(w http.ResponseWriter, r *http.Request
 	}
 
 	q := r.URL.Query()
-	configID := strings.TrimSpace(q.Get("config"))
-	target := strings.TrimSpace(q.Get("target"))
+	configID := strings.TrimSpace(q.Get(apitypes.CMQueryConfigID))
+	target := strings.TrimSpace(q.Get(apitypes.CMQueryTarget))
 	if configID == "" || target == "" {
 		writeJSONError(w, http.StatusBadRequest, "config and target are required")
 		return
@@ -1046,9 +1046,9 @@ func (s *Server) handleAPICMCurrentKey(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusServiceUnavailable, "identity store unavailable")
 		return
 	}
-	env := strings.TrimSpace(r.URL.Query().Get("env"))
-	app := strings.TrimSpace(r.URL.Query().Get("app"))
-	role := strings.TrimSpace(r.URL.Query().Get("role"))
+	env := strings.TrimSpace(r.URL.Query().Get(apitypes.CMQueryEnv))
+	app := strings.TrimSpace(r.URL.Query().Get(apitypes.CMQueryApp))
+	role := strings.TrimSpace(r.URL.Query().Get(apitypes.CMQueryRole))
 	if env == "" || app == "" || role == "" {
 		writeJSONError(w, http.StatusBadRequest, "env, app and role are required")
 		return

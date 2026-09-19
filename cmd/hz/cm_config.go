@@ -186,10 +186,10 @@ func cmResolve(c *client, args []string) error {
 		return err
 	}
 	q := url.Values{
-		"environment": {addr.Environment},
-		"app":         {addr.App},
-		"role":        {addr.Role},
-		"version":     {*version},
+		apitypes.CMQueryEnv:     {addr.Environment},
+		apitypes.CMQueryApp:     {addr.App},
+		apitypes.CMQueryRole:    {addr.Role},
+		apitypes.CMQueryVersion: {*version},
 	}
 	var resp apitypes.CMResolveResp
 	if err := c.do(http.MethodGet, cmAPI+"/resolve?"+q.Encode(), nil, &resp); err != nil {
@@ -272,9 +272,9 @@ func cmPromote(c *client, args []string) error {
 	// The gate, first and separately. It asks only whether a key is BOUND in
 	// the target, never what it holds, which is why it survives hz reading
 	// nothing.
-	gq := url.Values{"configId": {src.ID}, "to": {*to}}
+	gq := url.Values{apitypes.CMQueryConfigID: {src.ID}, apitypes.CMQueryTarget: {*to}}
 	var gate apitypes.CMPromotionGateResp
-	if err := c.do(http.MethodGet, cmAPI+"/promote?"+gq.Encode(), nil, &gate); err != nil {
+	if err := c.do(http.MethodGet, cmAPI+"/promote/gate?"+gq.Encode(), nil, &gate); err != nil {
 		return err
 	}
 	if !gate.OK {
@@ -392,10 +392,10 @@ func cmPromote(c *client, args []string) error {
 // minimum version — the config a box there is running now.
 func cmBoundEnvValues(c *client, addr configmgr.EnvKeyAddr, version string) ([]apitypes.CMConfigValueResp, error) {
 	q := url.Values{
-		"environment": {addr.Environment},
-		"app":         {addr.App},
-		"role":        {addr.Role},
-		"version":     {version},
+		apitypes.CMQueryEnv:  {addr.Environment},
+		apitypes.CMQueryApp:  {addr.App},
+		apitypes.CMQueryRole: {addr.Role},
+		"version":            {version},
 	}
 	var resp apitypes.CMResolveResp
 	if err := c.do(http.MethodGet, cmAPI+"/resolve?"+q.Encode(), nil, &resp); err != nil {

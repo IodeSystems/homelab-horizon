@@ -141,9 +141,9 @@ func addrOfConfig(cfg apitypes.CMConfigResp) configmgr.EnvKeyAddr {
 // only move the failure later and make it less legible.
 func cmCurrentKey(c *client, addr configmgr.EnvKeyAddr) (configmgr.CurrentKey, error) {
 	q := url.Values{
-		"environment": {addr.Environment},
-		"app":         {addr.App},
-		"role":        {addr.Role},
+		apitypes.CMQueryEnv:  {addr.Environment},
+		apitypes.CMQueryApp:  {addr.App},
+		apitypes.CMQueryRole: {addr.Role},
 	}
 	var resp apitypes.CMCurrentKeyResp
 	if err := c.do(http.MethodGet, cmAPI+"/current-key?"+q.Encode(), nil, &resp); err != nil {
