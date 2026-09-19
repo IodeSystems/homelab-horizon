@@ -441,9 +441,9 @@ func cmKeyCurrent(c *client, args []string) error {
 
 func cmSetCurrentKey(c *client, addr configmgr.EnvKeyAddr, id string) error {
 	q := url.Values{
-		"environment": {addr.Environment},
-		"app":         {addr.App},
-		"role":        {addr.Role},
+		apitypes.CMQueryEnv:  {addr.Environment},
+		apitypes.CMQueryApp:  {addr.App},
+		apitypes.CMQueryRole: {addr.Role},
 	}
 	return c.do(http.MethodPut, cmAPI+"/current-key?"+q.Encode(), apitypes.CMCurrentKeyReq{KeyID: id}, nil)
 }

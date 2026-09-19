@@ -1666,3 +1666,32 @@ type CMCurrentKeyResp struct {
 	SetBy       string `json:"setBy,omitempty"`
 	SetAt       string `json:"setAt,omitempty"`
 }
+
+// Query parameter and path names for the config manager's admin endpoints.
+//
+// These exist because the CLI and the handlers each spelled them out as string
+// literals, and three of the four disagreed. `hz cm resolve` sent
+// "environment=" while the handler read "env="; `hz cm key current` did the
+// same; and `hz cm promote` sent "configId"/"to" to /promote while the handler
+// read "config"/"target" at /promote/gate. Every one returned 400 to a user and
+// none of them failed a test, because both sides were only ever tested against
+// themselves — the CLI against an httptest stub that answered whatever it sent,
+// the handler against a request the handler's own test constructed.
+//
+// A name agreed in two places and enforced in neither will drift again. Use
+// these on both sides so a rename is a compile error rather than a 400 nobody
+// sees until someone runs the command against a real server.
+const (
+	CMQueryEnv      = "env"
+	CMQueryApp      = "app"
+	CMQueryRole     = "role"
+	CMQueryVersion  = "version"
+	CMQueryConfigID = "config"
+	CMQueryTarget   = "target"
+	CMQueryState    = "state"
+
+	CMPathResolve     = "/api/v1/cm/resolve"
+	CMPathPromoteGate = "/api/v1/cm/promote/gate"
+	CMPathCurrentKey  = "/api/v1/cm/current-key"
+	CMPathConfigs     = "/api/v1/cm/configs"
+)

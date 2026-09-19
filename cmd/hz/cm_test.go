@@ -95,7 +95,7 @@ func (s *cmStub) start(t *testing.T) *client {
 
 		case p == "/api/v1/cm/current-key":
 			q := r.URL.Query()
-			k := q.Get("environment") + "/" + q.Get("app") + "/" + q.Get("role")
+			k := q.Get(apitypes.CMQueryEnv) + "/" + q.Get(apitypes.CMQueryApp) + "/" + q.Get(apitypes.CMQueryRole)
 			if r.Method == http.MethodPut {
 				var req apitypes.CMCurrentKeyReq
 				_ = json.Unmarshal(raw, &req)
@@ -109,7 +109,7 @@ func (s *cmStub) start(t *testing.T) *client {
 			id := s.currentKeys[k]
 			s.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(apitypes.CMCurrentKeyResp{
-				Environment: q.Get("environment"), App: q.Get("app"), Role: q.Get("role"), KeyID: id,
+				Environment: q.Get(apitypes.CMQueryEnv), App: q.Get(apitypes.CMQueryApp), Role: q.Get(apitypes.CMQueryRole), KeyID: id,
 			})
 
 		case p == "/api/v1/cm/configs" && r.Method == http.MethodPost:
@@ -131,12 +131,17 @@ func (s *cmStub) start(t *testing.T) *client {
 			}
 			_ = json.NewEncoder(w).Encode(cfg)
 
-		case p == "/api/v1/cm/resolve":
+		// These stubs read the SAME constants the real handlers read. An
+		// earlier version spelled them out, and spelled them the way the CLI
+		// happened to send rather than the way hz reads — so the CLI's tests
+		// passed against its own mistake for as long as it existed. A stub that
+		// agrees with the code under test proves only that they agree.
+		case p == apitypes.CMPathResolve:
 			q := r.URL.Query()
-			k := q.Get("environment") + "/" + q.Get("app") + "/" + q.Get("role")
+			k := q.Get(apitypes.CMQueryEnv) + "/" + q.Get(apitypes.CMQueryApp) + "/" + q.Get(apitypes.CMQueryRole)
 			_ = json.NewEncoder(w).Encode(s.resolve[k])
 
-		case p == "/api/v1/cm/promote":
+		case p == apitypes.CMPathPromoteGate:
 			_ = json.NewEncoder(w).Encode(s.gate)
 
 		default:
