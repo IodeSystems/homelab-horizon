@@ -1257,6 +1257,24 @@ a partial decrypt fails the whole config.
 
 ## Open questions
 
+> **Prod does not exist yet, and that changes what these are worth.** Verified
+> 2026-09-18 in redline: the prod posture profile exists, but prod is **not a
+> deploy target** — there is no `DEPLOY_HOSTS_prod` and no
+> `home/prod.secret.properties`, so `bin/deploy prod` cannot run today.
+>
+> So prod's secret set has never been created. **Whatever this design settles is
+> what prod is BORN with, not migrated to.** There is no legacy set to carry
+> forward, no rotation-on-day-one, and no compatibility shim owed to values that
+> already exist somewhere.
+>
+> That cuts both ways and both are worth saying. Answering these questions costs
+> nothing extra — there is nothing to migrate. And answering them badly is
+> permanent in a way it would not be if prod were already running, because the
+> wrong answer becomes the shape prod is created in and every later secret
+> inherits it. **This is an argument for not rushing them**, not for deferring
+> them indefinitely.
+
+
 1. **Version string for range matching.** `git describe` yields
    `v1.0.0-rc.1-1377-g406804d5`, not well-ordered without mapping. Proposal: the
    app presents the clean semver tag for range containment and carries the full
