@@ -541,13 +541,26 @@ func (s *Server) handleAPICMRegistrationAction(w http.ResponseWriter, r *http.Re
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/cm/registrations/")
 	id, action, found := strings.Cut(rest, "/")
-	if !found || id == "" || strings.Contains(action, "/") {
+	if id == "" {
 		writeJSONError(w, http.StatusNotFound,
-			"expected /api/v1/cm/registrations/{id}/public-key, /approve or /deny")
+			"expected /api/v1/cm/registrations/{id}, or {id}/public-key, /approve or /deny")
 		return
 	}
-	// public-key reads; approve and deny write.
-	if action == "public-key" {
+	// A bare {id} reads one registration. It was missing, so `hz cm approve`
+	// 404'd on its very first call — the command is the first line of
+	// `hz cm pending`'s own instructions, so approval was dead for every
+	// operator. Same class as the promote path: a URL agreed in two places and
+	// enforced in neither.
+	if !found {
+		action = "get"
+	}
+	if strings.Contains(action, "/") {
+		writeJSONError(w, http.StatusNotFound,
+			"expected /api/v1/cm/registrations/{id}, or {id}/public-key, /approve or /deny")
+		return
+	}
+	// public-key and the bare read are GETs; approve and deny write.
+	if action == "public-key" || action == "get" {
 		if r.Method != http.MethodGet {
 			writeJSONError(w, http.StatusMethodNotAllowed, "GET required")
 			return
@@ -572,6 +585,8 @@ func (s *Server) handleAPICMRegistrationAction(w http.ResponseWriter, r *http.Re
 	}
 
 	switch action {
+	case "get":
+		writeJSON(w, cmRegistrationResp(machine, reg))
 	case "public-key":
 		s.cmPublicKey(w, machine)
 	case "approve":
@@ -579,7 +594,7 @@ func (s *Server) handleAPICMRegistrationAction(w http.ResponseWriter, r *http.Re
 	case "deny":
 		s.cmDeny(w, r, machine, reg)
 	default:
-		writeJSONError(w, http.StatusNotFound, "expected public-key, approve or deny")
+		writeJSONError(w, http.StatusNotFound, "expected nothing, public-key, approve or deny")
 	}
 }
 

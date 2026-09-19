@@ -943,3 +943,41 @@ func statOrFail(t *testing.T, path string) os.FileInfo {
 	}
 	return fi
 }
+
+// The box must be able to say its own fingerprint.
+//
+// It is the only defence against hz substituting its public key at approval,
+// and it only works if the operator compares against a value THE BOX produced.
+// Before this the library exposed none: an implementor would have had to open
+// the private key file and derive it, which nobody does — so the CLI told
+// operators to compare against "the fingerprint the box printed" and the box
+// printed nothing. An operator with no source reaches for the number on screen,
+// which is hz's, which makes the check hz verifying itself.
+func TestTheBoxCanSayItsOwnFingerprint(t *testing.T) {
+	h := newHZ(t)
+	c := newClient(t, h, nil)
+
+	// Before enrolment there is no keypair, and saying so beats pretending.
+	if fp := c.Fingerprint(); fp != "" {
+		t.Errorf("Fingerprint before enrolment = %q, want empty", fp)
+	}
+
+	if _, err := c.Load(ctx(t)); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	fp := c.Fingerprint()
+	if fp == "" {
+		t.Fatal("the box cannot say its own fingerprint after enrolling; the approval check has no source")
+	}
+
+	// And it must be the fingerprint of the key that actually enrolled — not
+	// merely non-empty, which a hardcoded string would also satisfy.
+	priv, err := c.state.MachineKey()
+	if err != nil {
+		t.Fatalf("MachineKey: %v", err)
+	}
+	if want := FingerprintOf(priv.PublicKey()).String(); fp != want {
+		t.Fatalf("Fingerprint = %q, want %q — it does not describe this box's key", fp, want)
+	}
+}
