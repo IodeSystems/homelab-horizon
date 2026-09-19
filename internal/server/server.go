@@ -901,8 +901,26 @@ func (s *Server) runHealthCheck() {
 	dnsRunning := !s.cfg().DNSMasqEnabled || s.dns.Status().Running
 	haproxyRunning := !s.cfg().HAProxyEnabled || s.haproxy.GetStatus().Running
 
-	healthy := status.Up && dnsRunning && haproxyRunning
+	// A box nobody can authenticate to is NOT healthy, even with every network
+	// service up. Without the identity store there is no admin, no API token, no
+	// way to approve a config-manager registration and no way to fix any of it
+	// from the outside — the network keeps flowing while the box has become
+	// unadministrable, which is a state a human must be told about.
+	//
+	// This was previously omitted, so a fresh install whose database directory
+	// could not be created logged one ERROR at boot, continued, answered /health
+	// with 200, and looked fine to every monitor. Found on a cold-start VM
+	// 2026-09-18; it does not reproduce on a box where that directory already
+	// exists, which is exactly why nothing caught it.
+	//
+	// It does not restart-loop: the unit restarts on process exit, not on this.
+	identityOK := s.users != nil
+
+	healthy := status.Up && dnsRunning && haproxyRunning && identityOK
 	s.health.SetHealthy(healthy)
+	if !identityOK {
+		slog.Warn("unhealthy: identity store unavailable, so this box cannot authenticate anyone")
+	}
 
 	// Self-heal iptables drift. Runs even if other health signals are
 	// degraded — a stale MASQUERADE is itself often the cause of the

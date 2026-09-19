@@ -2469,13 +2469,22 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStartPre=+/bin/mkdir -p %s /etc/letsencrypt /etc/haproxy/certs /var/lib/homelab-horizon /etc/systemd/journald.conf.d
+ExecStartPre=+/bin/mkdir -p %s /etc/letsencrypt /etc/haproxy/certs /etc/systemd/journald.conf.d
 ExecStart=%s
 WorkingDirectory=%s
 Restart=on-failure
 RestartSec=5
 User=root
 Group=root
+
+# StateDirectory creates /var/lib/homelab-horizon, sets its ownership, and adds
+# it to ReadWritePaths implicitly — which the ReadWritePaths entry below cannot
+# do on its own, because a dash-prefixed path that does not exist is skipped
+# rather than created. A fresh install with no such directory therefore had a
+# read-only /var, could not create its database, logged one ERROR and carried on
+# serving. Declaring it here is systemd's own answer and removes the mkdir that
+# was papering over it.
+StateDirectory=homelab-horizon
 
 # File system isolation. /var/lib/homelab-horizon holds static-site releases
 # (the only writable, non-sensitive place for served files under the sandbox).
