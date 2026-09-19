@@ -64,6 +64,16 @@ import (
 // That is the founding bug this project exists to prevent, and it is now the
 // implementor's to avoid rather than the library's to refuse.
 //
+// What the library DOES refuse is to make that mistake easy. v0.3.0 shipped Get
+// and Bytes, which returned "" and nil for an absent key AND for one set to
+// empty. That conflation is the bug itself: a consumer's own accessor made it,
+// read an explicitly-empty BACKUP_BUCKET as unset, substituted the default —
+// the production bucket — and aimed a rollback dump at it. Nothing landed there
+// only because the box had no AWS region and the SDK failed at endpoint
+// resolution. Both methods were deleted in favour of GetOr and BytesOr, whose
+// fallback fires on ABSENCE alone. Not shipping the footgun is a different
+// thing from validating, and it is the one the library can do.
+//
 // # Partial decrypt fails the whole config
 //
 // Mid-rotation some entries open and some do not. A config with half its keys
@@ -676,12 +686,29 @@ type Config struct {
 	values map[string][]byte
 }
 
-// Get returns a key's value, or "" when the config does not carry it.
+// GetOr returns a key's value, falling back to def ONLY when the config does
+// not carry the key at all.
 //
-// "" is indistinguishable from a value that IS empty, so Get is for reads that
-// genuinely do not care. Use Lookup for everything else.
-func (c *Config) Get(key string) string {
-	return string(c.values[key])
+// The distinction is the entire point, and it is not pedantry. A value that is
+// present and empty returns "" — it was set to empty deliberately and that is
+// an answer, not a missing one. An earlier version of this package shipped a
+// Get that returned "" for both, and the consumer's own code made the same
+// mistake in its own accessor: an explicitly-empty BACKUP_BUCKET, set to
+// disable off-box copies, read as unset, so the default was substituted — and
+// the default was the PRODUCTION bucket. A rollback dump was aimed at it. The
+// only reason nothing landed there was that the box had no AWS region
+// configured and the SDK failed at endpoint resolution. A guard nobody designed
+// is what stopped it.
+//
+// The default is written at the call site, where a reviewer reading the line
+// can see what happens when the key is missing, rather than hidden behind an
+// accessor that silently supplies one.
+func (c *Config) GetOr(key, def string) string {
+	v, ok := c.values[key]
+	if !ok {
+		return def
+	}
+	return string(v)
 }
 
 // Lookup returns a key's value and whether the config carried it.
@@ -703,11 +730,17 @@ func (c *Config) Lookup(key string) (string, bool) {
 	return string(v), true
 }
 
-// Bytes is Lookup's value half for config that is not text. It returns nil for
-// a key the config does not carry, which an empty value is indistinguishable
-// from; Lookup is the presence test.
-func (c *Config) Bytes(key string) []byte {
-	return bytes.Clone(c.values[key])
+// BytesOr is GetOr for config that is not text. def is returned ONLY when the
+// key is absent; a present-empty value returns an empty slice, which is a
+// different fact. See GetOr for why the two must not be conflated.
+//
+// The returned slice is a copy, so a caller cannot mutate the cached config.
+func (c *Config) BytesOr(key string, def []byte) []byte {
+	v, ok := c.values[key]
+	if !ok {
+		return def
+	}
+	return bytes.Clone(v)
 }
 
 // Keys lists what the config holds, sorted. Values are never logged; names are
