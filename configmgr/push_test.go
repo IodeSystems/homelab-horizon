@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -68,9 +69,12 @@ func (h *blessHZ) handleCurrentKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	addr := q.Get("environment") + "/" + q.Get("app") + "/" + q.Get("role")
+	// The names hz actually reads. This fixture spelled them the way Push
+	// happened to send — so Push's tests passed against Push's own mistake, and
+	// the one test aimed at this bug could not see it.
+	addr := q.Get(QueryEnv) + "/" + q.Get(QueryApp) + "/" + q.Get(QueryRole)
 	writeJSON(h.t, w, CurrentKeyPointer{
-		Environment: q.Get("environment"), App: q.Get("app"), Role: q.Get("role"),
+		Environment: q.Get(QueryEnv), App: q.Get(QueryApp), Role: q.Get(QueryRole),
 		KeyID: h.pointers[addr],
 	})
 }
@@ -481,5 +485,55 @@ func TestPushTreatsNamesAsOpaque(t *testing.T) {
 		if len(pt) != 4 || pt[1] != 0x00 || pt[2] != 0xff {
 			t.Fatalf("%q round-tripped to %v, want the raw bytes", v.Key, pt)
 		}
+	}
+}
+
+// Push's own request must use the names hz actually reads.
+//
+// It did not, and the fix that repaired the CLI could not reach it: the shared
+// constants lived in internal/apitypes, which this package deliberately cannot
+// import. So the CLI and the server agreed with each other while the library
+// disagreed with both, and every consumer's Push failed on a nested GET with a
+// 400 that named parameters it had not sent.
+//
+// This asserts the wire form, not a Go constant equal to itself — the previous
+// version of this mistake would have passed any test written against the same
+// literal the code used.
+func TestPushQueriesTheCurrentKeyByTheNamesHZReads(t *testing.T) {
+	var got url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == PathCurrentKey {
+			got = r.URL.Query()
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"no current key announced"}`))
+	}))
+	defer srv.Close()
+
+	ks := ksNew(t)
+	ksPut(t, ks, keystoreAddr(pushAddr), "2026-01", ksAt("2026-01-01T00:00:00Z"))
+	_, _ = Push(pushCtx(t), PushOptions{
+		BaseURL: srv.URL, Keystore: ks, Schema: Schema{"K": BindingEnv},
+		Environment: pushAddr.Environment, App: pushAddr.App, Role: pushAddr.Role,
+		MinVer: "1.0.0", Values: map[string][]byte{"K": []byte("v")},
+	})
+
+	if got == nil {
+		t.Fatal("Push never asked for the current key")
+	}
+	// The exact strings hz's handler reads. Spelled out here on purpose: using
+	// the constant on both sides would assert only that it equals itself.
+	for name, want := range map[string]string{
+		"env":  pushAddr.Environment,
+		"app":  pushAddr.App,
+		"role": pushAddr.Role,
+	} {
+		if got.Get(name) != want {
+			t.Errorf("current-key query %q = %q, want %q (sent: %s)",
+				name, got.Get(name), want, got.Encode())
+		}
+	}
+	if got.Has("environment") {
+		t.Errorf("Push still sends the parameter hz does not read: %s", got.Encode())
 	}
 }

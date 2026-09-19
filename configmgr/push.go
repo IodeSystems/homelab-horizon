@@ -326,9 +326,9 @@ func (o PushOptions) check() error {
 // only move the failure later and make it less legible.
 func currentKey(ctx context.Context, hc *http.Client, baseURL string, addr EnvKeyAddr) (CurrentKey, error) {
 	q := url.Values{
-		"environment": {addr.Environment},
-		"app":         {addr.App},
-		"role":        {addr.Role},
+		QueryEnv:  {addr.Environment},
+		QueryApp:  {addr.App},
+		QueryRole: {addr.Role},
 	}
 	var resp CurrentKeyPointer
 	if err := jsonRPC(ctx, hc, http.MethodGet, joinURL(baseURL, adminCurrentKeyPath)+"?"+q.Encode(), nil, &resp, false); err != nil {
