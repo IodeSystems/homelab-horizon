@@ -98,6 +98,21 @@ type ExternalDNSResp struct {
 	TTL           int      `json:"ttl"`
 }
 
+// EnvironmentResp is one declared rung: which project it belongs to, its name, its
+// posture, the environment it promotes from, and the version it declares.
+//
+// Name and Posture are both here and are not redundant — an environment named "prod"
+// may honestly sit at staging's posture, and the read surface has to be able to say so.
+// Version is the *desired* version; what an instance actually reports is a separate
+// axis, and the gap between them is the rollout.
+type EnvironmentResp struct {
+	Project string `json:"project"`
+	Name    string `json:"name"`
+	Posture string `json:"posture"`
+	From    string `json:"from,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
 type ServiceStatus struct {
 	InternalDNSUp       bool   `json:"internalDNSUp"`                 // dnsmasq resolves the primary domain
 	InternalDNSResolved string `json:"internalDNSResolved,omitempty"` // actual IP from dnsmasq

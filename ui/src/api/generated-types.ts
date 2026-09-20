@@ -95,6 +95,21 @@ export interface ExternalDNSResp {
   configuredIPs?: string[];
   ttl: number /* int */;
 }
+/**
+ * EnvironmentResp is one declared rung: which project it belongs to, its name, its
+ * posture, the environment it promotes from, and the version it declares.
+ * Name and Posture are both here and are not redundant — an environment named "prod"
+ * may honestly sit at staging's posture, and the read surface has to be able to say so.
+ * Version is the *desired* version; what an instance actually reports is a separate
+ * axis, and the gap between them is the rollout.
+ */
+export interface EnvironmentResp {
+  project: string;
+  name: string;
+  posture: string;
+  from?: string;
+  version?: string;
+}
 export interface ServiceStatus {
   internalDNSUp: boolean; // dnsmasq resolves the primary domain
   internalDNSResolved?: string; // actual IP from dnsmasq

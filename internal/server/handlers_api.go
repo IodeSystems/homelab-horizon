@@ -713,6 +713,39 @@ func (s *Server) handleAPIZones(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(zones)
 }
 
+// handleAPIEnvironments returns the declared environments, sorted by project then name.
+//
+// It returns the records only, not the services in them: a service already carries its
+// project and environment, and /api/v1/services already returns both, so joining them is
+// the caller's to do. Counting here would make two endpoints that have to agree.
+// GET /api/v1/environments
+func (s *Server) handleAPIEnvironments(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	envs := make([]apitypes.EnvironmentResp, 0, len(s.cfg().Environments))
+	for _, e := range s.cfg().Environments {
+		envs = append(envs, apitypes.EnvironmentResp{
+			Project: e.Project,
+			Name:    e.Name,
+			Posture: e.Posture,
+			From:    e.From,
+			Version: e.Version,
+		})
+	}
+	sort.Slice(envs, func(i, j int) bool {
+		if envs[i].Project != envs[j].Project {
+			return envs[i].Project < envs[j].Project
+		}
+		return envs[i].Name < envs[j].Name
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(envs)
+}
+
 // handleAPIServiceIntegration returns the service token and integration instructions.
 // GET /api/v1/services/integration?name=serviceName
 func (s *Server) handleAPIServiceIntegration(w http.ResponseWriter, r *http.Request) {
