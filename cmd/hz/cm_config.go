@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/iodesystems/homelab-horizon/configmgr"
@@ -37,6 +38,15 @@ func zero(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
+}
+
+// fromConfig renders " (from cfg-xyz)" or nothing, so a provenance clause reads
+// as a sentence whether or not the id is there.
+func fromConfig(id string) string {
+	if id == "" {
+		return ""
+	}
+	return " of " + id
 }
 
 func cmFetchConfig(c *client, id string) (apitypes.CMConfigResp, error) {
@@ -129,6 +139,13 @@ func cmOpenValues(ks *configmgr.Keystore, addr configmgr.EnvKeyAddr, values []ap
 		return nil, err
 	}
 	for _, v := range values {
+		// Two different reasons a key has no bytes, and telling an operator the
+		// wrong one sends them to the wrong fix. Awaiting means nobody has
+		// supplied a value yet; tombstoned means one existed and was destroyed.
+		if v.Origin == configmgr.OriginAwaiting {
+			return fail(fmt.Errorf("%s is declared in %s and awaiting a value; it was blanked by a promotion%s and nobody has answered it",
+				v.Key, addr.Environment, fromConfig(v.SourceConfigID)))
+		}
 		if v.TombstonedAt != "" || v.Sealed == "" {
 			return fail(fmt.Errorf("%s was tombstoned at %s by %s; its bytes are gone and the config cannot be read whole",
 				v.Key, orDash(v.TombstonedAt), orDash(v.TombstonedBy)))
@@ -211,8 +228,22 @@ func cmResolve(c *client, args []string) error {
 	fmt.Printf("WINNER  %s  %s  sequence %d  blessed %s by %s\n",
 		resp.Winner.ID, verRange(resp.Winner.MinVer, resp.Winner.MaxVer), resp.Winner.Sequence,
 		orDash(resp.Winner.CreatedAt), orDash(resp.Winner.CreatedBy))
+	awaiting := 0
 	for _, v := range resp.Winner.Values {
-		fmt.Printf("  %-28s %-10s %s\n", v.Key, v.Binding, v.Origin)
+		note := v.Origin
+		if v.Origin == configmgr.OriginAwaiting {
+			// Said out loud on the line that resolves, because this config is
+			// what a box would GET and it is not servable. "awaiting" as a bare
+			// origin column reads like a state; "AWAITING A VALUE" reads like the
+			// blocker it is.
+			note = "AWAITING A VALUE" + fromConfig(v.SourceConfigID)
+			awaiting++
+		}
+		fmt.Printf("  %-28s %-10s %s\n", v.Key, v.Binding, note)
+	}
+	if awaiting > 0 {
+		fmt.Printf("\n%d key(s) are declared here with no value. A box at this address will be\n", awaiting)
+		fmt.Printf("refused this config by name until each one is answered in %s.\n", addr.Environment)
 	}
 	if len(resp.Shadowed) == 0 {
 		fmt.Println("\nNothing shadowed.")
@@ -237,15 +268,45 @@ func cmResolve(c *client, args []string) error {
 // exists in this process, momentarily, and nowhere else — hz sees a read of one
 // ciphertext and a write of another, both endpoints it has anyway.
 //
-// Only invariant values carry. Environment-bound ones are bound in the target
-// or the promotion is blocked, which is the whole reason promotion is a gate
-// rather than a copy. Where the target already has values for them, they are
-// carried forward BY CIPHERTEXT — same address, same key, so there is nothing
-// to re-seal and nothing to open.
+// Three things happen to a key, and exactly one of them happens to each:
+//
+//	copied   invariant — opened under the source key, re-sealed under the target's
+//	carried  environment-bound and ALREADY answered in the target — ciphertext,
+//	         untouched: same address, same key, nothing to open
+//	blanked  environment-bound and NOT answered in the target — declared with no
+//	         value, so the target's config says "this key exists here and is
+//	         waiting", and the pull refuses to serve it until someone answers
+//
+// Blanked is not absent, and that distinction is the whole reason it is a row
+// rather than an omission. A promoted config that simply left PUBLIC_URL out
+// would leave prod holding a config in which the key had never been heard of —
+// indistinguishable from one nobody declared, and the app falls back to its
+// compiled default. That is the founding bug (plan/architecture.md, goal
+// property 6), and promotion is exactly where it would be reintroduced.
+//
+// DRY RUN IS THE DEFAULT. This is an irreversible, cross-environment operation
+// on production credentials; the default has to be to show, not to do. The full
+// cycle still runs — the gate, the decrypt, the re-seal — because a dry run that
+// skipped them would tell you nothing about whether the real one would work.
+// Only the POST is withheld.
 func cmPromote(c *client, args []string) error {
 	fs := flag.NewFlagSet("cm promote", flag.ContinueOnError)
+	fs.Usage = func() {
+		fmt.Fprint(os.Stderr, "usage: hz cm promote <config-id> --to=<environment> [--execute]\n\n"+
+			"Copies the invariants, carries the environment-bound keys the target has\n"+
+			"already answered, and blanks the ones it has not. Prints the plan and posts\n"+
+			"NOTHING unless --execute is given.\n\n"+
+			"  --to        target environment (required)\n"+
+			"  --project   narrow the target when two projects declare that name\n"+
+			"  --blank     acknowledge that environment-bound keys will be left unanswered\n"+
+			"  --force     promote against the ladder (a lateral or downward rung)\n"+
+			"  --execute   actually post the promoted config\n")
+	}
 	to := fs.String("to", "", "target environment (required)")
-	dryRun := fs.Bool("dry-run", false, "run the gate and the re-seal, but post nothing")
+	project := fs.String("project", "", "project declaring the target environment, when the name is ambiguous")
+	allowBlank := fs.Bool("blank", false, "leave environment-bound keys the target has not answered declared-but-blank")
+	force := fs.Bool("force", false, "promote even though the target is not above the source by posture")
+	execute := fs.Bool("execute", false, "post the promoted config; without it this is a dry run")
 	pos, rest := splitCMPositional(args)
 	if err := fs.Parse(rest); err != nil {
 		return err
@@ -254,7 +315,7 @@ func cmPromote(c *client, args []string) error {
 		pos = fs.Arg(0)
 	}
 	if pos == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz cm promote <config-id> --to=<environment>")
+		return fmt.Errorf("usage: hz cm promote <config-id> --to=<environment> [--execute]")
 	}
 	if *to == "" {
 		return fmt.Errorf("--to is required")
@@ -271,29 +332,29 @@ func cmPromote(c *client, args []string) error {
 
 	// The gate, first and separately. It asks only whether a key is BOUND in
 	// the target, never what it holds, which is why it survives hz reading
-	// nothing.
+	// nothing — and it answers the declared promotion edge, which needs no
+	// values either.
 	gq := url.Values{apitypes.CMQueryConfigID: {src.ID}, apitypes.CMQueryTarget: {*to}}
+	if *project != "" {
+		gq.Set(apitypes.CMQueryProject, *project)
+	}
 	var gate apitypes.CMPromotionGateResp
 	if err := c.do(http.MethodGet, cmAPI+"/promote/gate?"+gq.Encode(), nil, &gate); err != nil {
 		return err
 	}
-	if !gate.OK {
-		return fmt.Errorf("BLOCKED: %s has no value bound for %s\n"+
-			"  promotion is a gate, not a copy: an environment-bound key is born in its own\n"+
-			"  environment and cannot travel. Bind them there first, then promote",
-			*to, strings.Join(gate.Blocked, ", "))
-	}
-
-	ks, err := configmgr.DefaultKeystore()
-	if err != nil {
+	if err := cmCheckEdge(gate.Edge, srcAddr.Environment, *to, *force); err != nil {
 		return err
 	}
 
-	// Source side: open only what promotes.
+	// What the promotion would do, decided entirely from NAMES. None of this
+	// needs a key, so the plan is computed and printed — and can be refused —
+	// before a single value is opened. A promotion that will not happen must not
+	// decrypt anything on the way to saying so.
+	//
 	// The gate names what carries, and nothing outside that list does. hz can
 	// only cause an OMISSION this way, never an injection — every carried value
-	// is opened under the source key here and re-sealed under the target's — and
-	// an omission is visible in the plan printed below and in the posted config.
+	// is opened under the source key below and re-sealed under the target's —
+	// and an omission is visible in this plan and in the posted config.
 	promotes := map[string]bool{}
 	for _, k := range gate.Promotes {
 		promotes[k] = true
@@ -304,8 +365,55 @@ func cmPromote(c *client, args []string) error {
 			carrying = append(carrying, v)
 		}
 	}
+
+	// Blanks: environment-bound in the source, unanswered in the target. They are
+	// declared with no ciphertext and no sealing key — there is nothing to seal,
+	// because nobody has supplied anything to seal. The source config is their
+	// provenance: it is the promotion that declared them.
+	blanks := append([]string(nil), gate.Blocked...)
+	sort.Strings(blanks)
+
+	// The target's already-answered environment values, carried forward
+	// untouched. Same address and same key, so this is a ciphertext copy: no key
+	// is used and no plaintext exists for them at any point here.
+	bound, err := cmBoundEnvValues(c, dstAddr, src.MinVer)
+	if err != nil {
+		return err
+	}
+
+	// The plan. Names only — no value from either environment appears here, and a
+	// dry run is the thing an operator is most likely to paste into a ticket.
+	fmt.Printf("promote %s (%s) -> %s\n", src.ID, srcAddr, dstAddr)
+	fmt.Printf("  versions   %s, carried unchanged from the source\n", verRange(src.MinVer, src.MaxVer))
+	for _, v := range carrying {
+		fmt.Printf("  copied     %-28s invariant, re-sealed under %s's key\n", v.Key, *to)
+	}
+	for _, v := range bound {
+		fmt.Printf("  carried    %-28s env, already answered in %s\n", v.Key, *to)
+	}
+	for _, key := range blanks {
+		fmt.Printf("  BLANKED    %-28s env, declared in %s and awaiting a value\n", key, *to)
+	}
+
+	if len(blanks) > 0 {
+		fmt.Printf("\n%d key(s) must be answered in %s before any box there can boot.\n", len(blanks), *to)
+		fmt.Println("They are DECLARED, not dropped: hz records the name and refuses to serve the")
+		fmt.Println("config until each one has a value, rather than letting the app default it.")
+		if !*allowBlank {
+			return fmt.Errorf("BLOCKED: %s has no value bound for %s\n"+
+				"  promotion is a gate, not a copy: an environment-bound key is born in its own\n"+
+				"  environment and cannot travel. Bind them there first, then promote — or pass\n"+
+				"  --blank to promote now and leave them declared-but-unanswered",
+				*to, strings.Join(blanks, ", "))
+		}
+	}
 	if len(carrying) == 0 {
 		return fmt.Errorf("the gate names nothing to promote out of %s; a promotion that carries no value is a no-op, not a release step", src.ID)
+	}
+
+	ks, err := configmgr.DefaultKeystore()
+	if err != nil {
+		return err
 	}
 	srcCur, err := cmCurrentKey(c, srcAddr)
 	if err != nil {
@@ -326,7 +434,7 @@ func cmPromote(c *client, args []string) error {
 	if err != nil {
 		return fmt.Errorf("sealing for %s: %w", dstAddr, err)
 	}
-	values := make([]apitypes.CMConfigValueReq, 0, len(opened)+len(gate.Blocked))
+	values := make([]apitypes.CMConfigValueReq, 0, len(opened)+len(bound)+len(blanks))
 	for _, v := range opened {
 		values = append(values, apitypes.CMConfigValueReq{
 			Key:     v.value.Key,
@@ -340,14 +448,6 @@ func cmPromote(c *client, args []string) error {
 			SourceConfigID: src.ID,
 		})
 	}
-
-	// Carry the target's already-bound environment values forward untouched.
-	// Same address and same key, so this is a ciphertext copy: no key is used
-	// and no plaintext exists for them at any point here.
-	bound, err := cmBoundEnvValues(c, dstAddr, src.MinVer)
-	if err != nil {
-		return err
-	}
 	for _, v := range bound {
 		values = append(values, apitypes.CMConfigValueReq{
 			Key:            v.Key,
@@ -357,16 +457,19 @@ func cmPromote(c *client, args []string) error {
 			SourceConfigID: v.SourceConfigID,
 		})
 	}
+	for _, key := range blanks {
+		values = append(values, apitypes.CMConfigValueReq{
+			Key:            key,
+			Binding:        configmgr.BindingEnv,
+			Origin:         configmgr.OriginAwaiting,
+			SourceConfigID: src.ID,
+		})
+	}
+	fmt.Printf("\n%d invariant(s) opened under %s's key and re-sealed under %s.\n",
+		len(opened), srcAddr.Environment, dstInfo.ID)
 
-	fmt.Printf("promote %s (%s) -> %s\n", src.ID, srcAddr, dstAddr)
-	for _, v := range opened {
-		fmt.Printf("  re-sealed  %-28s invariant, under %s\n", v.value.Key, dstInfo.ID)
-	}
-	for _, v := range bound {
-		fmt.Printf("  carried    %-28s env, already bound in %s\n", v.Key, *to)
-	}
-	if *dryRun {
-		fmt.Println("--dry-run, nothing posted.")
+	if !*execute {
+		fmt.Println("\nDry run: nothing was posted. Re-run with --execute to promote.")
 		return nil
 	}
 
@@ -375,15 +478,64 @@ func cmPromote(c *client, args []string) error {
 		Environment: dstAddr.Environment,
 		App:         dstAddr.App,
 		Role:        dstAddr.Role,
-		MinVer:      src.MinVer,
-		MaxVer:      src.MaxVer,
-		Values:      values,
+		// The range travels VERBATIM, and that is a decision rather than a
+		// default. A range says which APP VERSIONS a config is valid for, which
+		// is a fact about the app and not about the environment it runs in, so a
+		// promotion has no new information with which to change it. Widening it
+		// (dropping a closed max_ver) would assert coverage nobody blessed;
+		// narrowing it would leave versions at the target resolving to nothing,
+		// which fails at some box's next restart rather than here. Ranges are
+		// immutable after blessing, so a different range is a different bless.
+		MinVer: src.MinVer,
+		MaxVer: src.MaxVer,
+		Values: values,
 	}
 	if err := c.do(http.MethodPost, cmAPI+"/configs", req, &resp); err != nil {
 		return err
 	}
 	fmt.Printf("blessed %s in %s (sequence %d).\n", resp.ID, *to, resp.Sequence)
+	if len(blanks) > 0 {
+		fmt.Printf("%s is NOT usable yet: %s await values.\n", *to, strings.Join(blanks, ", "))
+	}
 	return nil
+}
+
+// cmCheckEdge refuses a promotion the declared environments do not allow.
+//
+// A NIL edge is a refusal, not a pass. hz answering the gate without answering
+// the edge means the check never ran, and treating silence as permission on an
+// irreversible operation against production credentials is the one failure mode
+// worth being rude about. hz can omit things; it must not be able to omit a
+// refusal.
+//
+// --force reaches exactly one refusal, the one hz marks Forcible: a promotion
+// that does not climb the ladder. A missing or mismatched edge is a declaration
+// that does not exist, and no flag invents a declaration.
+func cmCheckEdge(edge *apitypes.CMPromotionEdgeResp, from, to string, force bool) error {
+	if edge == nil {
+		return fmt.Errorf("refusing: hz answered the promotion gate without answering the edge from %s to %s.\n"+
+			"  the edge is what says this promotion is one somebody declared. An answer that\n"+
+			"  omits it is not permission", from, to)
+	}
+	if edge.OK {
+		return nil
+	}
+	if edge.Forcible && force {
+		fmt.Fprintf(os.Stderr, "! forcing a promotion the ladder refuses: %s\n", edge.Error)
+		return nil
+	}
+	msg := edge.Error
+	if msg == "" {
+		msg = fmt.Sprintf("hz refused the edge from %s to %s without saying why", from, to)
+	}
+	if edge.Forcible {
+		return fmt.Errorf("REFUSED: %s\n"+
+			"  a promotion earns its evidence by climbing. Pass --force if this rung is\n"+
+			"  deliberately lateral — a disposable box borrowing a posture", msg)
+	}
+	return fmt.Errorf("REFUSED: %s\n"+
+		"  promotion runs along a declared edge and there is none here. Declare `from` on\n"+
+		"  the target environment; --force cannot invent an edge nobody wrote down", msg)
 }
 
 // cmBoundEnvValues reads the environment-bound values the target already holds,

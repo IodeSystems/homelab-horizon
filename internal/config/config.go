@@ -664,6 +664,109 @@ type Environment struct {
 // because every project gets to have a "prod".
 type envKey struct{ project, name string }
 
+// Promotion errors. They are values rather than strings because the promotion gate
+// answers with one of them and the CLI has to tell "there is no edge" (never forcible —
+// declare the edge) from "the edge runs the other way" (forcible, deliberately).
+var (
+	// ErrNoSuchEnvironment means nothing is declared under that name. Promoting into
+	// an undeclared environment is not a permission question; there is no rung.
+	ErrNoSuchEnvironment = errors.New("no such environment")
+	// ErrAmbiguousEnvironment means several projects declare that name. Every project
+	// gets to have a "prod", so a bare name is not always an identity.
+	ErrAmbiguousEnvironment = errors.New("environment name is ambiguous across projects")
+	// ErrNoPromotionEdge means the target declares no From. The edge is the whole
+	// authority model — per-edge, asymmetric, separation of duties — so a target with
+	// no From is an environment nobody has said may be promoted into, from anywhere.
+	ErrNoPromotionEdge = errors.New("environment declares no promotion source")
+	// ErrWrongPromotionSource means the target's From names a different environment
+	// than the one being promoted from.
+	ErrWrongPromotionSource = errors.New("environment does not promote from that source")
+	// ErrNotUpward means the promotion does not climb the ladder by PostureRank.
+	// Forcible, because `loadtest` and `virgin` borrow a posture laterally and a rung
+	// is not a target — but never silent.
+	ErrNotUpward = errors.New("promotion is not upward by posture")
+)
+
+// EnvironmentsNamed returns every declared environment with this name, across projects.
+// Zero, one or several: every project gets to have a "prod", so the name alone is not an
+// identity and a caller holding only a name has to be told when it is ambiguous.
+func (c *Config) EnvironmentsNamed(name string) []Environment {
+	var out []Environment
+	for _, e := range c.Environments {
+		if e.Name == name {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// LookupEnvironment resolves an environment by name, narrowed by project when one is
+// given. An empty project means "whichever project declares this name", which is an
+// answer only while exactly one does.
+func (c *Config) LookupEnvironment(project, name string) (Environment, error) {
+	candidates := c.EnvironmentsNamed(name)
+	if project != "" {
+		for _, e := range candidates {
+			if e.Project == project {
+				return e, nil
+			}
+		}
+		return Environment{}, fmt.Errorf("%w: %q in project %q", ErrNoSuchEnvironment, name, project)
+	}
+	switch len(candidates) {
+	case 0:
+		return Environment{}, fmt.Errorf("%w: %q", ErrNoSuchEnvironment, name)
+	case 1:
+		return candidates[0], nil
+	default:
+		projects := make([]string, 0, len(candidates))
+		for _, e := range candidates {
+			projects = append(projects, e.Project)
+		}
+		sort.Strings(projects)
+		return Environment{}, fmt.Errorf("%w: %q is declared by %s; name the project",
+			ErrAmbiguousEnvironment, name, strings.Join(projects, ", "))
+	}
+}
+
+// CheckPromotion answers whether `from` may be promoted into `to`, and it is the only
+// place that answer is computed.
+//
+// Two separate refusals, because they have different remedies and only one of them may
+// ever be overridden:
+//
+//   - NO EDGE. The target declares no From, or declares a different one. An edge is a
+//     statement that this promotion is a thing somebody intended; inventing one at the
+//     command line would make per-edge authority decorative. Declare it, then promote.
+//     Not forcible.
+//   - NOT UPWARD. The edge exists but the target sits at or below the source's posture.
+//     Refused by default — a config that ran nowhere stricter has generated no evidence
+//     — but forcible, because a lateral rung (`loadtest`, `virgin`) borrowing a posture
+//     is a real and intended shape, and refusing it outright would be wrong rather than
+//     safe.
+//
+// Postures are compared by PostureRank and never as strings: "prod" < "staging"
+// alphabetically, which would read a promotion to prod as a demotion.
+func CheckPromotion(from, to Environment) error {
+	if from.Project != to.Project {
+		return fmt.Errorf("%w: %q is in project %q and %q is in project %q; promotion is within one project",
+			ErrWrongPromotionSource, from.Name, from.Project, to.Name, to.Project)
+	}
+	if to.From == "" {
+		return fmt.Errorf("%w: %q in project %q has no `from`, so there is no edge into it from %q — declare one",
+			ErrNoPromotionEdge, to.Name, to.Project, from.Name)
+	}
+	if to.From != from.Name {
+		return fmt.Errorf("%w: %q promotes from %q, not from %q",
+			ErrWrongPromotionSource, to.Name, to.From, from.Name)
+	}
+	if PostureRank(to.Posture) <= PostureRank(from.Posture) {
+		return fmt.Errorf("%w: %q is %s and %q is %s",
+			ErrNotUpward, from.Name, from.Posture, to.Name, to.Posture)
+	}
+	return nil
+}
+
 // ValidateEnvironments checks the rungs are usable: names unique within a project,
 // projects real, postures known, promotion sources real and within the same project,
 // and no promotion cycles.

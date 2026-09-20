@@ -40,7 +40,8 @@ func TestPromoteOpensUnderSourceAndResealsUnderTarget(t *testing.T) {
 			{Key: "DB_PASSWORD", Binding: configmgr.BindingEnv, KeyID: srcKey.ID().String(), Origin: "direct", Sealed: "ignored"},
 		},
 	}
-	s.gate = apitypes.CMPromotionGateResp{SourceConfigID: "cfg-1", TargetEnv: "prod", Promotes: []string{"RETENTION_DAYS"}, OK: true}
+	s.gate = apitypes.CMPromotionGateResp{SourceConfigID: "cfg-1", TargetEnv: "prod", Promotes: []string{"RETENTION_DAYS"}, OK: true,
+		Edge: upwardEdge("staging", "prod")}
 	s.resolve["prod/redline/app"] = apitypes.CMResolveResp{Winner: &apitypes.CMConfigResp{
 		ID: "cfg-prod", Environment: "prod", App: "redline", Role: "app",
 		Values: []apitypes.CMConfigValueResp{
@@ -50,7 +51,9 @@ func TestPromoteOpensUnderSourceAndResealsUnderTarget(t *testing.T) {
 	c := s.start(t)
 
 	captureStdout(t, func() {
-		if err := cmPromote(c, []string{"--to", "prod", "cfg-1"}); err != nil {
+		// --execute, because a dry run is the default: this is an irreversible
+		// cross-environment operation on production credentials.
+		if err := cmPromote(c, []string{"--to", "prod", "--execute", "cfg-1"}); err != nil {
 			t.Fatalf("promote: %v", err)
 		}
 	})
@@ -119,7 +122,8 @@ func TestPromoteStopsAtTheGate(t *testing.T) {
 	s := newCMStub()
 	s.currentKeys["staging/redline/app"] = srcKey.ID().String()
 	s.configs["cfg-1"] = apitypes.CMConfigResp{ID: "cfg-1", Environment: "staging", App: "redline", Role: "app", MinVer: "1.2.0"}
-	s.gate = apitypes.CMPromotionGateResp{SourceConfigID: "cfg-1", TargetEnv: "prod", Blocked: []string{"PUBLIC_URL", "PAY_ORIGIN"}, OK: false}
+	s.gate = apitypes.CMPromotionGateResp{SourceConfigID: "cfg-1", TargetEnv: "prod", Blocked: []string{"PUBLIC_URL", "PAY_ORIGIN"}, OK: false,
+		Edge: upwardEdge("staging", "prod")}
 	c := s.start(t)
 
 	err := captureStdoutErr(t, func() error { return cmPromote(c, []string{"--to", "prod", "cfg-1"}) })
@@ -154,7 +158,8 @@ func TestPromoteCarriesOnlyWhatTheGateNames(t *testing.T) {
 			Sealed: configmgr.EncodeEnvelope(configmgr.Seal(srcKey, valueAddr(srcAddr, "RETENTION_DAYS"), []byte("30-days-retained"))),
 		}},
 	}
-	s.gate = apitypes.CMPromotionGateResp{SourceConfigID: "cfg-1", TargetEnv: "prod", OK: true}
+	s.gate = apitypes.CMPromotionGateResp{SourceConfigID: "cfg-1", TargetEnv: "prod", OK: true,
+		Edge: upwardEdge("staging", "prod")}
 	c := s.start(t)
 
 	err := captureStdoutErr(t, func() error { return cmPromote(c, []string{"cfg-1", "--to=prod"}) })

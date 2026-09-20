@@ -14,6 +14,7 @@ import (
 
 	"github.com/iodesystems/homelab-horizon/configmgr"
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/db"
 )
 
@@ -419,6 +420,22 @@ func (s *Server) handleAPICMConfig(w http.ResponseWriter, r *http.Request) {
 
 	entries := make([]configmgr.ConfigEntry, 0, len(res.Config.Values))
 	for _, v := range res.Config.Values {
+		if v.Awaiting() {
+			// A promoted config declares its environment-bound keys and carries
+			// no values for them; they are born in this environment. Until one is
+			// answered the config is DECLARED and not usable, and hz says which
+			// key by name.
+			//
+			// Serving the rest would be the founding bug with extra steps: the
+			// app would see no PUBLIC_URL, fall back to its compiled default and
+			// boot looking healthy. Refusing loudly is the entire point of
+			// recording the blank as a row instead of omitting the key.
+			writeJSONError(w, http.StatusConflict,
+				"config "+res.Config.ID+" declares "+v.Key+" and is awaiting a value for it in "+
+					reg.Environment+"; bind it at "+reg.Environment+"/"+reg.App+"/"+reg.Role+
+					" and bless a config that answers it")
+			return
+		}
 		if v.Tombstoned() {
 			// A config with half its keys is not a config. Serving the rest
 			// would drop a declared key, and an omitted key falls back to the
@@ -1062,6 +1079,7 @@ func (s *Server) cmCreateConfig(w http.ResponseWriter, r *http.Request) {
 		v.KeyID = strings.TrimSpace(v.KeyID)
 		v.Sealed = strings.TrimSpace(v.Sealed)
 		v.SourceConfigID = strings.TrimSpace(v.SourceConfigID)
+		v.Origin = strings.TrimSpace(v.Origin)
 
 		if v.Key == "" {
 			writeJSONError(w, http.StatusBadRequest, "a value needs a key")
@@ -1074,6 +1092,42 @@ func (s *Server) cmCreateConfig(w http.ResponseWriter, r *http.Request) {
 				"key "+v.Key+": binding must be invariant or env")
 			return
 		}
+
+		// An awaiting key is a DECLARATION, not a value: a promotion recording
+		// that this environment owes an answer here. Every check below it is a
+		// check on an envelope, and there is no envelope — so it takes its own
+		// path, with its own refusals, rather than being let through the
+		// envelope checks by exception.
+		//
+		// db.ConfigValue.validate enforces the rest (env-bound only, no
+		// ciphertext, no key id, a source config); this refuses the two things
+		// that would otherwise read as an operator mistake rather than a
+		// schema violation.
+		if v.Origin == configmgr.OriginAwaiting {
+			if v.Sealed != "" || v.KeyID != "" {
+				writeJSONError(w, http.StatusBadRequest,
+					"key "+v.Key+": an awaiting value carries no sealed bytes and no key id")
+				return
+			}
+			if v.SourceConfigID == "" {
+				writeJSONError(w, http.StatusBadRequest,
+					"key "+v.Key+": an awaiting value needs the config whose promotion declared it")
+				return
+			}
+			values = append(values, db.ConfigValue{
+				Key:            v.Key,
+				Binding:        db.Binding(v.Binding),
+				Origin:         db.OriginAwaiting,
+				SourceConfigID: v.SourceConfigID,
+			})
+			continue
+		}
+		if v.Origin != "" && v.Origin != configmgr.OriginDirect && v.Origin != configmgr.OriginPromoted {
+			writeJSONError(w, http.StatusBadRequest,
+				"key "+v.Key+": unknown origin "+v.Origin)
+			return
+		}
+
 		sealed, err := configmgr.DecodeEnvelope(v.Sealed)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "key "+v.Key+": "+err.Error())
@@ -1197,7 +1251,11 @@ func cmConfigRespWithValues(c db.Config) apitypes.CMConfigResp {
 			TombstonedAt:   cmTimePtr(v.TombstonedAt),
 			TombstonedBy:   v.TombstonedBy,
 		}
-		if !v.Tombstoned() {
+		// Neither a tombstone nor an awaiting key has bytes. Encoding a nil
+		// ciphertext would emit an empty Sealed, which reads as "a value that
+		// happens to be empty" — the one confusion this whole model is built to
+		// refuse. Origin is what tells the two apart on the wire.
+		if !v.Tombstoned() && !v.Awaiting() {
 			val.Sealed = configmgr.EncodeEnvelope(v.Ciphertext)
 		}
 		out.Values = append(out.Values, val)
@@ -1305,13 +1363,66 @@ func (s *Server) handleAPICMPromotionGate(w http.ResponseWriter, r *http.Request
 		}
 	}
 	resp.OK = len(resp.Blocked) == 0
+
+	// The ladder gate, answered separately and always answered. A refusal here
+	// travels in a 200 body rather than as an HTTP error because it is a fact
+	// about the declaration, not about the request: the caller asked a legible
+	// question and this is the legible answer.
+	edge := s.cmPromotionEdge(src.Environment, target, strings.TrimSpace(q.Get(apitypes.CMQueryProject)))
+	resp.Edge = &edge
 	writeJSON(w, resp)
+}
+
+// cmPromotionEdge answers whether the declared environments allow this promotion.
+//
+// It reads config.Environments and nothing else — no values, no keys, no database
+// — which is what lets hz run it at all. The rule itself lives in
+// config.CheckPromotion so that the CLI, this handler and the UI cannot each grow
+// their own reading of the ladder.
+//
+// An environment named nowhere is not a permission failure but a missing rung, and
+// it says so: "declare it" is a different instruction from "you may not".
+func (s *Server) cmPromotionEdge(sourceEnv, targetEnv, project string) apitypes.CMPromotionEdgeResp {
+	out := apitypes.CMPromotionEdgeResp{SourceEnv: sourceEnv, TargetEnv: targetEnv, Project: project}
+	cfg := s.cfg()
+
+	to, err := cfg.LookupEnvironment(project, targetEnv)
+	if err != nil {
+		out.Error = err.Error() + " — promotion needs a declared target rung"
+		return out
+	}
+	out.Project = to.Project
+	out.TargetPosture = to.Posture
+	out.DeclaredFrom = to.From
+
+	from, err := cfg.LookupEnvironment(to.Project, sourceEnv)
+	if err != nil {
+		out.Error = err.Error() + " — the config's own environment is not declared as a rung of " + to.Project
+		return out
+	}
+	out.SourcePosture = from.Posture
+	out.Upward = config.PostureRank(to.Posture) > config.PostureRank(from.Posture)
+
+	if err := config.CheckPromotion(from, to); err != nil {
+		out.Error = err.Error()
+		// Only a wrong direction is forcible. A missing or mismatched edge is a
+		// declaration that does not exist, and a flag cannot invent one.
+		out.Forcible = errors.Is(err, config.ErrNotUpward)
+		return out
+	}
+	out.OK = true
+	return out
 }
 
 // cmBoundKeys reports which key NAMES have a live value at an address, across
 // every config ever blessed there — a value bound by an older config is still
 // bound. A tombstoned value is not bound: its bytes are gone, so promoting
 // against it would pass a gate and then fail on the box.
+//
+// Nor is an AWAITING value bound. It is the opposite: a row that exists
+// precisely to say this key has never been answered here. Counting it would let
+// the second promotion into an environment pass a gate the first one failed,
+// purely because the first one recorded the debt.
 func (s *Server) cmBoundKeys(r *http.Request, environment, app, role string) (map[string]bool, error) {
 	configs, err := s.users.ListConfigsForAddress(r.Context(), environment, app, role)
 	if err != nil {
@@ -1324,7 +1435,7 @@ func (s *Server) cmBoundKeys(r *http.Request, environment, app, role string) (ma
 			return nil, err
 		}
 		for _, v := range full.Values {
-			if !v.Tombstoned() {
+			if !v.Tombstoned() && !v.Awaiting() {
 				bound[v.Key] = true
 			}
 		}
