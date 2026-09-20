@@ -268,12 +268,41 @@ Phase 3 replaces this with: restart horizon, done.
 | 8 | [DNS checks that would catch a broken forwarder](#-dns-checks-that-would-catch-a-broken-forwarder) | ✅ deployed |
 | 9 | [Config manager](#-config-manager--registration-blessing-promotion) → [config-manager.md](config-manager.md) | ✅ **ceremony proven on a box 2026-09-19** |
 | 10 | [hz-client becomes a library](#-hz-client-becomes-a-library) | ◐ version surface in progress |
-| 11 | Projects (name + parent, no inheritance) | ◐ branch `wt/projects`, unmerged + unpushed |
+| 11 | Projects · Environments · machine removal | ✅ on **`dev`**, not on main, nothing deployed |
 
 **Where this is all heading:** [architecture.md](architecture.md) — the model
 (project / environment / machine / instance / version / service), the two
 channels, per-project network segments, and the phased path from here. Written
 2026-09-20; it supersedes nothing, it explains what the items above are for.
+[example-projection.md](example-projection.md) populates that model with a
+worked instance, and its §4 is the list of states any UI has to render.
+
+### ⚠ `dev` is the integration branch — read this before deploying anything
+
+The new model lands on **`dev`**, not `main`, because it will break and churn
+before it is release-ready and **the gateway is serving real traffic**. Nothing
+on `dev` has been deployed or pushed.
+
+Landed on `dev` 2026-09-20:
+
+| | |
+|---|---|
+| Projects | `Project{Name, Parent}`, validated on `Save`, `hz project ls\|show` |
+| Environments | `Environment{Project, Name, Posture, From, Version}`, ordered postures, `hz env ls\|show`, `GET /api/v1/environments` |
+| Machine removal | `hz cm machines\|remove`, closing holes 11 and 14 |
+
+**Deploy gate, found while building Environments.** `Save()` now refuses a
+config where a service names both a project *and* an environment that is not
+declared. No deployed hz writes those fields yet, so no live config can hit it
+today — but check before the first deploy, and declare the `Environment`
+records before assigning services to them:
+
+```
+jq '.services[] | select(.project != null and .environment != null)' <config.json>
+```
+
+The order of operations is **declare the environment, then assign the service**,
+not the reverse.
 
 Two opt-in next-steps were added to [icebox.md](icebox.md) on 2026-09-10:
 HAProxy TCP frontends on the VPN address, and moving the range-collision
