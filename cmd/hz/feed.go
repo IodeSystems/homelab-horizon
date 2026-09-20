@@ -9,9 +9,10 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 )
 
-// runFeed reads the package feed a project's machines install from. It is a
-// read-only view: the feed is declared in the config, and what this command
-// exists to answer is not "what does it say" but "which project said it".
+// runFeed reads — and, with `set`, declares — the package feed a project's
+// machines install from. The read half exists to answer not "what does it say"
+// but "which project said it"; the write half exists because until it landed,
+// declaring a feed meant hand-editing the config JSON on the gateway.
 func runFeed(c *client, args []string) error {
 	sub := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -20,10 +21,12 @@ func runFeed(c *client, args []string) error {
 	switch sub {
 	case "show":
 		return feedShow(c, args)
+	case "set":
+		return feedSet(c, args)
 	case "", "ls", "list":
 		return feedList(c, args)
 	default:
-		return fmt.Errorf("unknown feed subcommand: %s (want ls or show)", sub)
+		return fmt.Errorf("unknown feed subcommand: %s (want ls, show or set)", sub)
 	}
 }
 
