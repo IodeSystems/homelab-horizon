@@ -335,8 +335,17 @@ never done is *execute* on a box it is not.
 **Phase 2 — the environment record.** Four strings and a display.
 
 4. `Environment{project, name, posture, from, version}`.
-5. Persist the version each instance already reports (`configmgr.Options`
-   carries `Version`/`Build` today and hz drops it).
+5. ✅ **Done 2026-09-20.** Persist the version each instance already reports.
+   `configmgr.Options` carried `Version`/`Build` and hz kept neither: the
+   register handler passed `Version` straight into `cm_registrations.version`,
+   which is frozen at first-seen on purpose, and the resolve handler used it
+   only for range containment and never read `Build` at all. 0011 adds
+   `observed_version` / `observed_build` / `observed_at` **to the registration,
+   not the machine** — an instance address is `(project, environment, app,
+   role)` and redline's two slots run different versions for the whole length
+   of a rolling deploy, so a per-machine column would report a half-done
+   rollout as done. Written on register and on every resolve; no new endpoint,
+   no heartbeat.
 6. Show desired vs observed. Drift becomes visible; nothing acts on it.
 
 **Phase 3 — climb the rung.** Mostly not software.
@@ -359,7 +368,9 @@ that changes hz's shape.
     and a break is recoverable.
 12. hz web drops to an unprivileged user. `main.go`'s four `Geteuid` gates and
     the `User=root` unit at `internal/config/config.go:2477` go away.
-13. Machine record — identity, segments, observed version.
+13. Machine record — identity and segments. NOT the observed version: that
+    settled onto the registration in 0011, because it belongs to an instance
+    and several instances share a box.
 14. `project(global, machineID) → MachineConfig`, pure, tested offline. The
     gateway is machine #1, not a special case.
 15. `VPNRange` / `WGInterface` / `AllowedIPs` go plural.
@@ -697,9 +708,13 @@ the company level, that every project's machines install from. It is exactly
 the shape that may cascade under the rule already set — shape inherits, secrets
 do not.
 
-Steps 1–2 are config records. Step 3 is phase 4. Steps 4–5 are mostly built;
-what is missing is persisting the version a box already reports. Step 6 is the
-promotion gate, designed and unbuilt.
+Steps 1–2 are config records. Step 3 is phase 4. Step 4 is built. Step 5's
+**observed** half landed 2026-09-20 — every registration now carries the
+version, build string and report time its instance last sent, and `hz cm
+machines` shows it with an age beside it. What step 5 still owes is the
+**desired** half: an environment has no declared version to drift *from*, so
+hz displays one number where the sentence wants two. Step 6 is the promotion
+gate, designed and unbuilt.
 
 ## Blocking decisions
 

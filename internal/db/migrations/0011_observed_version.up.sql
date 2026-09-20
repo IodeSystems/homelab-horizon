@@ -1,0 +1,45 @@
+-- The version a box is actually RUNNING, recorded where it is already reported.
+--
+-- plan/architecture.md "Versions" names two facts that are only the same during
+-- a quiet period:
+--
+--     desired version   declared per environment     prod runs 1.2.3
+--     observed version  reported per instance        this box has 1.2.1
+--
+-- The gap between them IS the rollout, and hz's job is to display it and
+-- nothing more — closing it belongs to apt, or a registry, or a tarball. Until
+-- now hz could not display it at all: a client reports its version on every
+-- register and every resolve, and neither was written down anywhere, so the
+-- acceptance walkthrough's step 5 had no data behind half of its sentence.
+--
+-- WHY THE REGISTRATION AND NOT THE MACHINE. An instance address is
+-- (project, environment, app, role), and several instances share a box —
+-- redline's `current` and `next` slots are two of them, and during a rolling
+-- deploy they are deliberately running DIFFERENT versions. That is not an edge
+-- case, it is the mechanism. A column on cm_machines would have to elect one of
+-- those to be "the machine's version", which reports a half-finished rollout as
+-- finished. cm_registrations is exactly one (machine, environment, app, role),
+-- so it is one row per thing that has a version of its own.
+--
+-- WHY NOT cm_registrations.version. That column is frozen on purpose: it is
+-- what the box was running when the tuple was FIRST seen, which is the version
+-- an admin had in front of them when they approved it. Rolling it forward on
+-- every boot would quietly rewrite the record of what was blessed. So the
+-- reviewed version stays where it is and the rolling counter gets its own
+-- columns beside it.
+--
+-- ALL THREE ARE NULLABLE AND STAY NULLABLE. Every registration that exists
+-- today has never reported into these columns, and a client that reports no
+-- build string must keep working exactly as it does now. Absent is an honest
+-- answer here and NULL is how it is spelled; a DEFAULT '' would make "never
+-- reported" indistinguishable from "reported an empty string".
+--
+-- OBSERVED_BUILD IS NEVER COMPARED. internal/db/configmgr.go's parseVersion
+-- tests semver range containment, and it runs against observed_version's
+-- vocabulary only. A build string is `git describe` output — provenance, not an
+-- ordering — so storing one that is not semver must not error. That is why
+-- there is deliberately no CHECK constraint on any of these three.
+
+ALTER TABLE cm_registrations ADD COLUMN observed_version TEXT;
+ALTER TABLE cm_registrations ADD COLUMN observed_build TEXT;
+ALTER TABLE cm_registrations ADD COLUMN observed_at TIMESTAMP;

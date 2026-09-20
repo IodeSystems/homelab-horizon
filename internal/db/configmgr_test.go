@@ -1509,8 +1509,14 @@ func TestMigrate0009DownAndUpAgain(t *testing.T) {
 		t.Fatalf("value binding on the way down = %q, want secret (the only one 0008 lets hold ciphertext)", binding)
 	}
 
-	if err := d.migrateTo(ctx, 9); err != nil {
-		t.Fatalf("migrate back up to 0009: %v", err)
+	// Back up to the CURRENT schema, not to 9. Everything below this line is a
+	// Go accessor compiled against the newest migration — RegistrationAt now
+	// selects 0011's observed_ columns — so stopping at 9 leaves the database
+	// one schema and the code another, and the test fails on a column that has
+	// simply not been created yet. That is the rot migrateTo's own doc comment
+	// warns about, and hardcoding 11 here would only move it to 0012.
+	if err := d.migrate(ctx); err != nil {
+		t.Fatalf("migrate back up to the current schema: %v", err)
 	}
 	back, err := d.RegistrationAt(ctx, m.ID, "prod", "redline", "app")
 	if err != nil {
