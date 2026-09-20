@@ -107,6 +107,8 @@ export interface ServiceStatus {
 }
 export interface ServiceResp {
   name: string;
+  project?: string;
+  environment?: string;
   domains: string[];
   internalDNS?: InternalDNSResp;
   externalDNS?: ExternalDNSResp;

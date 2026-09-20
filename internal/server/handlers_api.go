@@ -161,6 +161,8 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 	sorted := make([]apitypes.ServiceResp, 0, len(s.cfg().Services))
 	for _, svc := range s.cfg().Services {
 		sr := apitypes.ServiceResp{
+			Project:       svc.Project,
+			Environment:   svc.Environment,
 			Dormant:       svc.Dormant,
 			DormantReason: svc.DormantReason,
 			Name:          svc.Name,
