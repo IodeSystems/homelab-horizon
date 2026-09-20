@@ -392,7 +392,13 @@ candidates, semver ranges) and crypto (`configmgr/` — the repo's first
 non-`internal` package, ECDH P-256 + HKDF + AES-256-GCM, all stdlib). Inert:
 nothing is reachable from outside the process.
 
-**Not built:** handlers, client library, CLI, UI, and the whole promotion graph.
+**Not built:** rotation's re-wrap path, and the UI has never been opened.
+(This line said "handlers, client library, CLI, UI, and the whole promotion
+graph" until 2026-09-20 and was stale on every item —
+[config-manager.md](config-manager.md)'s phase tables are the authority and mark
+them landed. The promotion graph's config half landed 2026-09-20: `hz cm
+promote`, dry-run by default, copying invariants, blanking unanswered
+environment-bound keys as declared rows, and gating on the declared edge.)
 
 - **next:** `apitypes` + route registration, then handlers. But **Phase 2.1–2.5
   in the design doc must land before anything real is approved through this** —

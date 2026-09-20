@@ -1650,10 +1650,21 @@ type CMConfigValueReq struct {
 	Sealed  string `json:"sealed"`  // base64 envelope, sealed on the client
 	KeyID   string `json:"keyId"`
 
+	// Origin is normally inferred — a value naming a source config was
+	// promoted, one naming none was set here — and is sent explicitly for
+	// exactly one case: "awaiting", a key a promotion DECLARED in this
+	// environment and carried no value for. It cannot be inferred, because an
+	// awaiting value looks like an omission and must not be read as one: it
+	// carries no Sealed and no KeyID, which for any other origin is the
+	// refusal ErrValueOmitted.
+	Origin string `json:"origin,omitempty"` // direct | promoted | awaiting
+
 	// SourceConfigID is set when this value was promoted rather than authored
 	// here, and it is what makes drift readable off the graph instead of
 	// inferred by comparison. hz cannot verify the claim — it cannot read
 	// either value — so lineage records what the promoting client asserted.
+	// An awaiting value names the promotion that declared it, which is the
+	// answer to "who left this blank".
 	SourceConfigID string `json:"sourceConfigId,omitempty"`
 }
 
@@ -1674,9 +1685,9 @@ type CMConfigValueResp struct {
 	Key            string `json:"key"`
 	Binding        string `json:"binding"`
 	KeyID          string `json:"keyId"`
-	Origin         string `json:"origin"` // direct | promoted
+	Origin         string `json:"origin"` // direct | promoted | awaiting
 	SourceConfigID string `json:"sourceConfigId,omitempty"`
-	Sealed         string `json:"sealed,omitempty"` // absent once tombstoned
+	Sealed         string `json:"sealed,omitempty"` // absent once tombstoned, and while awaiting
 	TombstonedAt   string `json:"tombstonedAt,omitempty"`
 	TombstonedBy   string `json:"tombstonedBy,omitempty"`
 }
@@ -1713,12 +1724,45 @@ type CMResolveResp struct {
 // the whole reason promotion is a gate rather than a copy, and hz can compute it
 // without reading a single value: it asks whether a key is bound, never what it
 // holds.
+// Edge is the SECOND gate and it is separate from OK on purpose. OK is about
+// VALUES — does the target already hold every environment-bound key. Edge is
+// about the LADDER — is this promotion one the declared environments allow at
+// all. A promotion can be fine on one and refused on the other, and collapsing
+// them into a single boolean would make the refusal unreadable.
 type CMPromotionGateResp struct {
 	SourceConfigID string   `json:"sourceConfigId"`
 	TargetEnv      string   `json:"targetEnv"`
 	Promotes       []string `json:"promotes"`          // invariant keys that would carry
 	Blocked        []string `json:"blocked,omitempty"` // env-bound keys unbound in the target
 	OK             bool     `json:"ok"`
+
+	// Edge is hz's answer about the declared promotion edge. A client must
+	// require it: a gate response that simply omits the edge is a refusal that
+	// never arrived, and this is an irreversible operation on production
+	// credentials. Nil means hz did not answer, which is not the same as
+	// "allowed".
+	Edge *CMPromotionEdgeResp `json:"edge,omitempty"`
+}
+
+// CMPromotionEdgeResp describes the declared edge a promotion would travel.
+//
+// Error is set when the promotion is refused and is a sentence, not a code. Upward
+// says whether it climbs the ladder by PostureRank; Forcible says whether an
+// operator may override the refusal, and only a not-upward refusal ever is — a
+// missing edge is a declaration that does not exist, and no flag can invent it.
+type CMPromotionEdgeResp struct {
+	Project       string `json:"project,omitempty"`
+	SourceEnv     string `json:"sourceEnv"`
+	SourcePosture string `json:"sourcePosture,omitempty"`
+	TargetEnv     string `json:"targetEnv"`
+	TargetPosture string `json:"targetPosture,omitempty"`
+	// DeclaredFrom is the target's `from`. Empty means the target declares none,
+	// which is the missing-edge case and is reported by name in Error.
+	DeclaredFrom string `json:"declaredFrom,omitempty"`
+	Upward       bool   `json:"upward"`
+	OK           bool   `json:"ok"`
+	Forcible     bool   `json:"forcible,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 // CMCurrentKeyReq / CMCurrentKeyResp carry the advisory current-key pointer.

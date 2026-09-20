@@ -698,8 +698,30 @@ the shape that may cascade under the rule already set — shape inherits, secret
 do not.
 
 Steps 1–2 are config records. Step 3 is phase 4. Steps 4–5 are mostly built;
-what is missing is persisting the version a box already reports. Step 6 is the
-promotion gate, designed and unbuilt.
+what is missing is persisting the version a box already reports.
+
+**Step 6 landed 2026-09-20** — the config half of it. `hz cm promote` copies the
+invariants by client-side re-seal, carries the environment-bound keys the target
+has already answered, and BLANKS the ones it has not; refuses a promotion that is
+not upward by `PostureRank` unless forced; and errors by name when the target
+declares no `from`. It is a **dry run by default** and posts nothing without
+`--execute`.
+
+Two things about it are worth carrying forward rather than rediscovering:
+
+- **A blank is a ROW, not an omission** (migration `0011`, origin `awaiting`).
+  Leaving the key out would have rebuilt goal property 6's founding bug one level
+  up: prod would hold a config in which `PUBLIC_URL` had never been heard of, and
+  the app would fall back to its compiled default. The pull refuses the whole
+  config by name until each blank is answered.
+- **hz cannot read a value, so it cannot copy one.** The re-seal runs entirely in
+  the CLI, between two keys from the local keystore; hz sees a read of one
+  ciphertext and a write of another. The gate it *does* run asks only whether a
+  key is bound and which rung promotes into which — names and declarations, never
+  content.
+
+What step 6 still owes is the other half of its sentence: installing the same
+artifact from the same feed into a different segment.
 
 ## Blocking decisions
 
