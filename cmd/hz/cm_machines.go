@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/iodesystems/homelab-horizon/configmgr"
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
@@ -53,7 +54,8 @@ func cmMachines(c *client, args []string) error {
 		return nil
 	}
 
-	fmt.Printf("%-24s  %-12s  %-6s  %-8s  %s\n", "MACHINE", "ENROLLED", "ADDRS", "SECRETS", "FINGERPRINT")
+	fmt.Printf("%-24s  %-12s  %-6s  %-8s  %-14s  %-10s  %s\n",
+		"MACHINE", "ENROLLED", "ADDRS", "SECRETS", "OBSERVED", "REPORTED", "FINGERPRINT")
 	for _, m := range rows {
 		approved := 0
 		for _, reg := range m.Registrations {
@@ -61,13 +63,81 @@ func cmMachines(c *client, args []string) error {
 				approved++
 			}
 		}
-		fmt.Printf("%-24s  %-12s  %-6s  %-8d  %s\n", m.Name, m.EnrolledEnvironment,
+		observed, reported := observedForMachine(m)
+		fmt.Printf("%-24s  %-12s  %-6s  %-8d  %-14s  %-10s  %s\n", m.Name, m.EnrolledEnvironment,
 			fmt.Sprintf("%d/%d", approved, len(m.Registrations)),
-			len(m.SecretKeys), orDash(m.Fingerprint))
+			len(m.SecretKeys), observed, reported, orDash(m.Fingerprint))
 	}
 	fmt.Println("\nADDRS is approved/total registrations.")
+	fmt.Println("OBSERVED is the version the box reported it is RUNNING, and REPORTED is how long")
+	fmt.Println("ago it said so — a box reports on every config resolve, so a stale REPORTED means")
+	fmt.Println("it has stopped asking. 'mixed' means this box's addresses reported DIFFERENT")
+	fmt.Println("versions, which is the normal state mid-rollout; 'hz cm machines --json' shows")
+	fmt.Println("each address on its own. hz only displays this — it never upgrades anything.")
 	fmt.Println("Remove a box so its name can be enrolled again: 'hz cm remove <machine>'.")
 	return nil
+}
+
+// observedForMachine reduces a box's per-instance observations to the one line
+// a machine listing has room for.
+//
+// The reduction is the interesting part. A version belongs to an INSTANCE, not
+// to a box: redline's `current` and `next` slots share a machine and run
+// different versions for the whole length of a rolling deploy. So picking any
+// single registration's version and printing it as the machine's would report a
+// half-done rollout as done. When they disagree this says "mixed" instead and
+// points at --json, which is the honest answer rather than a confident wrong
+// one. The timestamp is the NEWEST report, so REPORTED answers "when did I last
+// hear from this box at all".
+func observedForMachine(m apitypes.CMMachineResp) (version, reported string) {
+	seen := ""
+	mixed := false
+	newest := time.Time{}
+	for _, reg := range m.Registrations {
+		if reg.ObservedVersion == "" {
+			continue
+		}
+		switch {
+		case seen == "":
+			seen = reg.ObservedVersion
+		case seen != reg.ObservedVersion:
+			mixed = true
+		}
+		if at, err := time.Parse(time.RFC3339, reg.ObservedAt); err == nil && at.After(newest) {
+			newest = at
+		}
+	}
+	if seen == "" {
+		// Never reported: every registration predates the box's first report,
+		// or the box has not resolved since it enrolled. A dash, never a blank
+		// column an operator has to interpret.
+		return "-", "-"
+	}
+	if mixed {
+		seen = "mixed"
+	}
+	if newest.IsZero() {
+		return seen, "-"
+	}
+	return seen, since(newest)
+}
+
+// since renders an age the way an operator reads one: coarse, and never a
+// negative number if a box's clock runs ahead of hz's.
+func since(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < 0:
+		return "just now"
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 // cmRemove deletes one enrolled box.

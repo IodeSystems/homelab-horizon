@@ -1481,6 +1481,27 @@ export interface CMRegistrationResp {
   version: string;
   state: string;
   /**
+   * ObservedVersion is what this instance last reported it is RUNNING, and
+   * Version is what it was running when an admin reviewed the tuple. They are
+   * the same on the first boot and diverge on every upgrade afterwards, which
+   * is the point: the desired/observed drift is the rollout.
+   * It is reported per INSTANCE, never per machine — redline's `current` and
+   * `next` slots share a box and run different versions mid-deploy — so it
+   * lives on this shape and not on CMMachineResp.
+   */
+  observedVersion?: string;
+  /**
+   * ObservedBuild is the `git describe` string beside it. Provenance only:
+   * nothing sorts or compares it, and it may not be semver at all.
+   */
+  observedBuild?: string;
+  /**
+   * ObservedAt is when that report arrived. Without it a version string
+   * cannot be told from one a box stopped reporting a month ago, so an
+   * omitted ObservedAt must read as "never reported", never as "now".
+   */
+  observedAt?: string;
+  /**
    * Fingerprint of the machine's public key, for the approver to compare
    * against what the box printed. This is the ONLY defence against hz
    * substituting its own key at approval, so the UI must make comparing it a

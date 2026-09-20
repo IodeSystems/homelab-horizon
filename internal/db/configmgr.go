@@ -314,7 +314,27 @@ type Registration struct {
 	Role        string
 	// Version is what the box was running when the tuple was FIRST seen — the
 	// version an admin reviewed, not a rolling "what runs now" counter.
-	Version      string
+	Version string
+
+	// ObservedVersion is what this instance last reported it is RUNNING, and it
+	// IS the rolling counter Version refuses to be. Empty means the box has not
+	// reported since 0011 added the column, which is an ordinary state and not
+	// a fault: the next register or resolve fills it in.
+	//
+	// It is the "observed" half of plan/architecture.md's desired/observed
+	// split. hz displays the drift and never closes it; there is no upgrade
+	// verb anywhere near this field.
+	ObservedVersion string
+	// ObservedBuild is the full `git describe` string beside it — provenance
+	// only. It is not well ordered and NOTHING compares it, here or anywhere:
+	// parseVersion's semver range test runs on ObservedVersion alone, so a
+	// build string that is not semver is stored without complaint.
+	ObservedBuild string
+	// ObservedAt is when that report arrived, refreshed on every resolve. It is
+	// the whole staleness signal: a version with no time beside it cannot be
+	// told from a version a box stopped reporting a month ago.
+	ObservedAt *time.Time
+
 	State        RegistrationState
 	WrapKeyID    string
 	ApprovedBy   string
@@ -325,7 +345,9 @@ type Registration struct {
 }
 
 const selectRegistration = `
-	SELECT id, machine_id, environment, app, role, version, state,
+	SELECT id, machine_id, environment, app, role, version,
+	       COALESCE(observed_version, ''), COALESCE(observed_build, ''), observed_at,
+	       state,
 	       COALESCE(wrap_key_id, ''), COALESCE(approved_by, ''), approved_at,
 	       COALESCE(denied_reason, ''), created_at, last_seen_at
 	FROM cm_registrations`
@@ -343,6 +365,15 @@ const selectRegistration = `
 // lands in pending holding no key for the address it has wandered into,
 // instead of quietly bumping last_seen_at on the row it used to be. That is
 // what makes the design's fail-closed claim true rather than aspirational.
+//
+// It also records the OBSERVED version, on both halves of the upsert, because
+// a register is a report of what the box is running now. Two different columns
+// take the same argument on the first call and diverge from the second on:
+// version freezes at what an admin reviewed, observed_version rolls forward.
+// observed_build is BLANKED rather than left alone, because a register carries
+// no build string — keeping the previous one would pair a build with a version
+// it may not belong to, and the resolve that follows within the same boot puts
+// the real one back.
 func (d *DB) UpsertRegistration(ctx context.Context, machineID, environment, app, role, version string) (*Registration, error) {
 	machineID = strings.TrimSpace(machineID)
 	version = strings.TrimSpace(version)
@@ -355,14 +386,63 @@ func (d *DB) UpsertRegistration(ctx context.Context, machineID, environment, app
 	}
 
 	_, err = d.ExecContext(ctx, `
-		INSERT INTO cm_registrations (id, machine_id, environment, app, role, version)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT (machine_id, environment, app, role) DO UPDATE SET last_seen_at = CURRENT_TIMESTAMP`,
-		ashid.New("reg"), machineID, env, a, r, version)
+		INSERT INTO cm_registrations
+		    (id, machine_id, environment, app, role, version, observed_version, observed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT (machine_id, environment, app, role) DO UPDATE SET
+		    last_seen_at = CURRENT_TIMESTAMP,
+		    observed_version = excluded.observed_version,
+		    observed_build = NULL,
+		    observed_at = CURRENT_TIMESTAMP`,
+		ashid.New("reg"), machineID, env, a, r, version, version)
 	if err != nil {
 		return nil, fmt.Errorf("upsert registration: %w", err)
 	}
 	return d.RegistrationAt(ctx, machineID, env, a, r)
+}
+
+// RecordObservedVersion stamps what one registration reported it is running.
+//
+// This rides the RESOLVE path, which is the only one a running box repeats: a
+// register happens once per address per rebuild, a resolve happens every boot
+// and every re-read. There is deliberately no heartbeat endpoint and no new
+// route — the report travels on a request the box was making anyway, so a box
+// that never resolves is a box that never needed config, and its silence here
+// is accurate rather than a missing feature.
+//
+// NOTHING IS PARSED. version is stored as sent and build is not looked at at
+// all: parseVersion's semver work is range containment, a different job, and a
+// `git describe` build string that is not semver must round-trip without
+// erroring. Callers that want to know whether a reported version is well formed
+// must ask separately.
+//
+// An empty version is a NO-OP, not an error. A client too old to report one is
+// not a failure — it is the state every registration was in before 0011, and
+// blanking a version a box reported last week to record that a newer boot said
+// nothing would be strictly worse than leaving it.
+func (d *DB) RecordObservedVersion(ctx context.Context, registrationID, version, build string) error {
+	registrationID = strings.TrimSpace(registrationID)
+	if registrationID == "" {
+		return errors.New("recording an observed version needs a registration")
+	}
+	version = strings.TrimSpace(version)
+	build = strings.TrimSpace(build)
+	if version == "" {
+		return nil
+	}
+
+	res, err := d.ExecContext(ctx, `
+		UPDATE cm_registrations
+		SET observed_version = ?, observed_build = NULLIF(?, ''), observed_at = CURRENT_TIMESTAMP
+		WHERE id = ?`,
+		version, build, registrationID)
+	if err != nil {
+		return fmt.Errorf("record observed version: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // RegistrationByID looks a registration up by primary key.
@@ -532,8 +612,9 @@ func scanRegistration(row rowScanner) (*Registration, error) {
 func scanRegistrationRow(row rowScanner) (*Registration, error) {
 	var r Registration
 	var state string
-	var approvedAt, lastSeen sql.NullTime
+	var approvedAt, lastSeen, observedAt sql.NullTime
 	if err := row.Scan(&r.ID, &r.MachineID, &r.Environment, &r.App, &r.Role, &r.Version,
+		&r.ObservedVersion, &r.ObservedBuild, &observedAt,
 		&state, &r.WrapKeyID, &r.ApprovedBy, &approvedAt, &r.DeniedReason,
 		&r.CreatedAt, &lastSeen); err != nil {
 		return nil, err
@@ -544,6 +625,9 @@ func scanRegistrationRow(row rowScanner) (*Registration, error) {
 	}
 	if lastSeen.Valid {
 		r.LastSeenAt = &lastSeen.Time
+	}
+	if observedAt.Valid {
+		r.ObservedAt = &observedAt.Time
 	}
 	return &r, nil
 }

@@ -346,6 +346,7 @@ func (s *Server) handleAPICMConfig(w http.ResponseWriter, r *http.Request) {
 	req.App = strings.TrimSpace(req.App)
 	req.Role = strings.TrimSpace(req.Role)
 	req.Version = strings.TrimSpace(req.Version)
+	req.Build = strings.TrimSpace(req.Build)
 
 	if req.Machine == "" || req.Environment == "" || req.App == "" || req.Role == "" || req.Version == "" {
 		writeJSONError(w, http.StatusBadRequest,
@@ -383,6 +384,23 @@ func (s *Server) handleAPICMConfig(w http.ResponseWriter, r *http.Request) {
 	} else if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	// What the box says it is RUNNING — the observed half of the
+	// desired/observed split (plan/architecture.md "Versions"). It is recorded
+	// HERE, before the admission switch, for two reasons. The report is a fact
+	// about the box independent of whether hz will serve it anything, so a
+	// denied or pending registration that is still booting 1.2.1 is worth
+	// seeing rather than invisible. And this is the request a running box
+	// repeats, which is what makes observed_at a freshness signal without a
+	// heartbeat endpoint existing.
+	//
+	// A failure here NEVER fails the request. Bookkeeping must not stand
+	// between a box and its config; the worst case is a stale timestamp in a
+	// listing, against an outage on every box on the fleet.
+	if err := s.users.RecordObservedVersion(r.Context(), reg.ID, req.Version, req.Build); err != nil {
+		slog.Warn("cm record observed version", "registration", reg.ID,
+			"version", req.Version, "error", err)
 	}
 
 	switch reg.State {
@@ -520,13 +538,18 @@ func (s *Server) handleAPICMRegistrations(w http.ResponseWriter, r *http.Request
 // report.
 func cmRegistrationResp(m *db.Machine, reg *db.Registration) apitypes.CMRegistrationResp {
 	out := apitypes.CMRegistrationResp{
-		ID:           reg.ID,
-		MachineID:    reg.MachineID,
-		Environment:  reg.Environment,
-		App:          reg.App,
-		Role:         reg.Role,
-		Version:      reg.Version,
-		State:        string(reg.State),
+		ID:          reg.ID,
+		MachineID:   reg.MachineID,
+		Environment: reg.Environment,
+		App:         reg.App,
+		Role:        reg.Role,
+		Version:     reg.Version,
+		State:       string(reg.State),
+
+		ObservedVersion: reg.ObservedVersion,
+		ObservedBuild:   reg.ObservedBuild,
+		ObservedAt:      cmTimePtr(reg.ObservedAt),
+
 		WrapKeyID:    reg.WrapKeyID,
 		ApprovedBy:   reg.ApprovedBy,
 		ApprovedAt:   cmTimePtr(reg.ApprovedAt),
