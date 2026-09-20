@@ -143,6 +143,39 @@ type ServiceForward struct {
 	Description string `json:"description,omitempty"`
 }
 
+// FeedResp is a package feed — the apt-style repository a project's machines
+// install from. Mirrors config.Feed one-to-one.
+type FeedResp struct {
+	URL       string `json:"url"`
+	Suite     string `json:"suite"`
+	Component string `json:"component"`
+	KeyID     string `json:"keyId,omitempty"`
+}
+
+// ProjectResp is one node of the project tree and the feed it installs from,
+// already resolved.
+//
+// Feed and ResolvedFeed are separate on purpose. Feed is what THIS project
+// declares — nil for most of them. ResolvedFeed is what its machines actually
+// get after walking up Parent, and FeedFrom names the project that supplied
+// it. A client must never have to re-walk the tree to answer "where did this
+// come from": one resolver, server-side, and the answer travels with the
+// value. FeedFrom equal to Name means declared here; anything else is
+// inherited; empty means there is no feed anywhere up the chain, which is
+// legal.
+type ProjectResp struct {
+	Name         string    `json:"name"`
+	Parent       string    `json:"parent,omitempty"`
+	Feed         *FeedResp `json:"feed,omitempty"`
+	ResolvedFeed *FeedResp `json:"resolvedFeed,omitempty"`
+	FeedFrom     string    `json:"feedFrom,omitempty"`
+
+	// Services are the services assigned to this project, by name. A project
+	// may legitimately have none — it is declared before anything moves into
+	// it, and the root may never hold a service at all.
+	Services []string `json:"services,omitempty"`
+}
+
 // IntegrationsResp mirrors config.Integrations for read/round-trip.
 type IntegrationsResp struct {
 	Metrics *MetricsResp `json:"metrics,omitempty"`

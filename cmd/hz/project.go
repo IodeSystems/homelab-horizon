@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 )
 
 // runProject groups what is already there. It adds no state of its own: every
@@ -33,12 +35,21 @@ type grouped struct {
 // groupServices buckets services by project and environment. Services declaring
 // neither land under "(unassigned)", which on an existing config is all of them —
 // that is the point: the first run shows you the work, not an empty tree.
-func groupServices(c *client) ([]grouped, error) {
+//
+// declared seeds the buckets so a project that exists and holds nothing still
+// appears. That is the state the root is in for the whole of step 1 — it is
+// declared to carry the package feed, and it may never hold a service at all.
+// Listing only what services mention would make it invisible the moment after
+// you create it.
+func groupServices(c *client, declared []string) ([]grouped, error) {
 	list, err := fetchServices(c)
 	if err != nil {
 		return nil, err
 	}
 	byProject := map[string]map[string][]string{}
+	for _, name := range declared {
+		byProject[name] = map[string][]string{}
+	}
 	for _, s := range list {
 		proj := s.Project
 		if proj == "" {
@@ -70,17 +81,31 @@ func groupServices(c *client) ([]grouped, error) {
 	return out, nil
 }
 
+// projectNames is the declared tree, by name. Kept separate from the grouping
+// so a config with no projects at all still behaves exactly as before.
+func projectNames(projects []apitypes.ProjectResp) []string {
+	out := make([]string, 0, len(projects))
+	for _, p := range projects {
+		out = append(out, p.Name)
+	}
+	return out
+}
+
 func projectList(c *client, args []string) error {
 	fs := flag.NewFlagSet("project ls", flag.ContinueOnError)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	groups, err := groupServices(c)
+	projects, err := fetchProjects(c)
+	if err != nil {
+		return err
+	}
+	groups, err := groupServices(c, projectNames(projects))
 	if err != nil {
 		return err
 	}
 	if len(groups) == 0 {
-		fmt.Println("No services.")
+		fmt.Println("No projects and no services.")
 		return nil
 	}
 	for _, g := range groups {
@@ -91,10 +116,18 @@ func projectList(c *client, args []string) error {
 			total += len(names)
 		}
 		sort.Strings(envs)
-		fmt.Printf("%-24s %d service(s) across %d environment(s): %s\n",
-			g.project, total, len(g.envs), strings.Join(envs, ", "))
+		feed := ""
+		if p := findProject(projects, g.project); p != nil && p.ResolvedFeed != nil {
+			feed = "  feed: " + feedProvenance(p)
+		}
+		if total == 0 {
+			fmt.Printf("%-24s no services yet%s\n", g.project, feed)
+			continue
+		}
+		fmt.Printf("%-24s %d service(s) across %d environment(s): %s%s\n",
+			g.project, total, len(g.envs), strings.Join(envs, ", "), feed)
 	}
-	fmt.Println("\nhz project show <name> lists the services.")
+	fmt.Println("\nhz project show <name> lists the services and the feed it installs from.")
 	return nil
 }
 
@@ -107,7 +140,11 @@ func projectShow(c *client, args []string) error {
 		return fmt.Errorf("usage: hz project show <project>")
 	}
 	want := fs.Arg(0)
-	groups, err := groupServices(c)
+	projects, err := fetchProjects(c)
+	if err != nil {
+		return err
+	}
+	groups, err := groupServices(c, projectNames(projects))
 	if err != nil {
 		return err
 	}
@@ -121,6 +158,16 @@ func projectShow(c *client, args []string) error {
 		}
 		sort.Strings(envs)
 		fmt.Printf("%s\n", g.project)
+		if p := findProject(projects, want); p != nil {
+			if p.Parent != "" {
+				fmt.Printf("  Parent: %s\n", p.Parent)
+			}
+			printFeed(p, "  ")
+		}
+		if len(envs) == 0 {
+			fmt.Println("  No services yet.")
+			return nil
+		}
 		for _, e := range envs {
 			fmt.Printf("  %s\n", e)
 			for _, n := range g.envs[e] {
@@ -129,5 +176,5 @@ func projectShow(c *client, args []string) error {
 		}
 		return nil
 	}
-	return fmt.Errorf("no services in project %q — `hz project ls` lists what exists", want)
+	return fmt.Errorf("no project %q and no services in one — `hz project ls` lists what exists", want)
 }
