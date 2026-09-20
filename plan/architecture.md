@@ -541,25 +541,59 @@ This is already the house pattern, twice: `cmd/hz-probe/install.go:193` and
 and configuring hz all become `Units []Unit` in `MachineConfig`. hz is just
 another app the agent manages, on machine #1.
 
-**One install verb, not two.** There is no `homelab-horizon install` under this
-model — the agent owns every unit on the box, so a second installer would be a
-second writer for `/etc/systemd/system/homelab-horizon.service` and the agent
-would overwrite it on the next poll. redline settles this the same way:
-`provision.sh` and `redline-ops` own the units, and `redline` never installs
-itself.
+**Bootstrap places units; the agent owns them thereafter.** These are not in
+conflict, and the distinction is the same one the fetch rule turns on: a
+one-time action with a human present, versus continuous unattended ownership.
 
 ```
-sudo hz-agent install --gateway          places hz-agent + homelab-horizon
-sudo hz-agent install --hz https://...   places hz-agent, enrols, polls for the rest
+box #1   sudo homelab-horizon install --agent    places BOTH, from one artifact
+box #N   sudo hz-agent install --hz https://...  places the agent, enrols
+after    the agent owns every unit on the box, hz's included
 ```
 
-`--gateway` is what answers the first-box problem: on machine #1 there is no hz
-to serve a `MachineConfig` saying "run hz here."
+`homelab-horizon install --agent` is the right shape for box #1 because the
+artifact you downloaded *is* the server — you fetched it because you want a
+gateway. An agent-first bootstrap would have to go and find the server binary
+from somewhere, and on box #1 there is nowhere to find it.
 
-**This is a deletion.** Today's `homelab-horizon install`
-(`cmd/homelab-horizon/root.go:100`, root-gated at `main.go:68`) goes away, and
-it carries a legacy alias — `root.go:163` maps `-install` → `install` — so
-there is a small deprecation surface, not just a removed subcommand.
+**The distribution mechanism already exists, and `hz-agent` is one more entry
+in it.** `internal/server/hzbin` embeds cross-compiled binaries named
+`<tool>-<os>-<arch>`, populated by the Makefile's `hz-embed` target before a
+tagged build, served by `internal/server/handlers_hz_install.go`. `ToolHZ` and
+`ToolProbe` are defined; `ToolAgent` is a third constant. The arch matrix, the
+availability listing and the "not embedded in this build" path
+(`hzbin/embed_off.go`, build tag `hzembed`) come with it.
+
+So the server *carries* the agent rather than fetching it:
+
+- **box #1** — `install --agent` extracts the embedded binary. No network.
+- **box #N** — fetches it from the install handler that already serves `hz`
+  and `hz-probe`. Nothing new to build.
+- **no-apt boxes** — the same fetch, run by a human. Always available, because
+  hz-web is always there.
+
+It also ties the agent's version to the server's by construction, so
+agent/server compatibility is not a matrix anybody has to reason about. A box
+still holds at whatever version its `MachineConfig` names.
+
+**Box #1 has no package manager to install from, and that is not an edge
+case — it is the normal gateway install.** The Debian registry *is* Gitea,
+which runs on the gateway. At gateway-bootstrap time there is definitionally no
+registry, so the gateway always starts from a downloaded artifact and only
+points at its own registry afterwards.
+
+**Machines with no apt at all** (Alpine, RHEL, a Mac) resolve the same way the
+version axis does: the agent updates through **the machine's own package
+manager** where one exists, and where none does, an update is **a human
+re-running the install verb**. The invariant holds in both cases and is the
+only one that matters:
+
+> hz never replaces the agent binary on an enrolled, unattended machine.
+
+So `homelab-horizon install` is **not** deleted after all — it is narrowed to a
+bootstrap verb and gains `--agent`. Its legacy alias (`root.go:163` maps
+`-install` → `install`) stays valid. What goes away is the *daemon* running as
+root, not the install path.
 
 Naming, since there is no `hz-web` binary: the server is `cmd/homelab-horizon`,
 `hz` is the CLI, `hz-probe` is the vantage. The new package is `hz-agent`; the
