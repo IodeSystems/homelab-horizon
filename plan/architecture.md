@@ -30,7 +30,8 @@ Properties this should let us assert:
    and hz answers it for every box at once.
 5. The artifact that ran in staging is the artifact in prod, byte for byte.
 6. A config key cannot be silently absent.
-7. hz holds no inbound credential for any machine. No ssh keys, no push.
+7. hz holds no inbound credential for any machine — no ssh keys, no push — and
+   runs as root on none of them, its own box included.
 
 Property 6 is the founding bug: an empty `BACKUP_BUCKET` selecting the
 production bucket, because absent and empty were indistinguishable.
@@ -272,8 +273,10 @@ version those ranges only describe whatever happened to be installed.
 
 Never zero, so state it:
 
-1. **Versions are ordered.** `minVer`/`maxVer` cannot work otherwise. Cost: your
-   version strings must sort.
+1. **Versions are semver.** Stricter than "must sort", and already implemented
+   that way (`internal/db/configmgr.go:986`). Cost: a project that wants
+   `minVer`/`maxVer` ranges must present a `MAJOR.MINOR.PATCH[-PRERELEASE]`
+   tag. It may carry anything it likes as build metadata beside it.
 2. **An instance has an address.** Cost: you name your things.
 3. **Config is a flat sealed key/value map per environment.** Cost: no
    hierarchy inside a config, no per-key ACL.
@@ -343,32 +346,222 @@ never done is *execute* on a box it is not.
 9. `hz env add prod --from staging` — invariants copied, env-bound keys blanked
    until re-answered.
 
-**Phase 4 — segments.** The largest slice, and the one that changes hz's shape.
+**Phase 4 — the agent, on the gateway first.** The largest slice, and the one
+that changes hz's shape.
 
-10. `VPNRange` / `WGInterface` / `AllowedIPs` go plural. Touches
-    `internal/wireguard`, `internal/iptables/reconcile.go`, `internal/dnsmasq`.
-11. Machine record — identity, segments, observed version.
-12. `project(global, machineID) → MachineConfig`, pure, tested offline.
-13. The agent: poll, diff, apply, commit-confirmed on network changes.
+10. Split render from apply in `internal/haproxy`, `internal/dnsmasq`,
+    `internal/iptables`, `internal/wireguard`, `internal/autoheal`. Pure
+    functions stay in hz; the privileged half becomes the agent's.
+11. `hz-agent` as a package, and the bootstrap order that installs it before hz
+    stops being root. **Do this on the gateway alone, before any remote
+    machine exists** — it is the same code path, it is the box you can walk to,
+    and a break is recoverable.
+12. hz web drops to an unprivileged user. `main.go`'s four `Geteuid` gates and
+    the `User=root` unit at `internal/config/config.go:2477` go away.
+13. Machine record — identity, segments, observed version.
+14. `project(global, machineID) → MachineConfig`, pure, tested offline. The
+    gateway is machine #1, not a special case.
+15. `VPNRange` / `WGInterface` / `AllowedIPs` go plural.
+16. Remote agents: poll, diff, apply, commit-confirmed on network changes.
+
+Order matters here. Items 10–12 are a privilege refactor on one box with no
+new concepts; 13–16 add the model. Doing them the other way round means
+debugging a new distributed system and a privilege migration at once, in the
+box the whole network depends on.
 
 **Phase 5 — only once a second box fronts one service.**
 
-14. Service backend *set* instead of scalar-plus-promote.
-15. Resolution reports — the audit trail a future promotion gates on.
+17. Service backend *set* instead of scalar-plus-promote.
+18. Resolution reports — the audit trail a future promotion gates on.
+
+## Decided
+
+### Key custody — a recovery recipient (2026-09-20)
+
+`configmgr/keystore.go:24` states the problem in its own comment: *"hz never
+holds an environment key, so this tree is the only place one lives."* The tree
+is `~/.hz` on the dev box. So importing `configmgr` and deleting
+`home/*.secret.properties` would not move the single point of failure — it
+would rename it.
+
+**A recovery key is a recipient that is always approved.** No new crypto:
+envelopes already carry a recipient (`handlers_configmgr.go:681`) and
+`ApproveRegistration(id, wrappedEnvKey, wrapKeyID, approvedBy)` already stores
+one wrap per machine.
+
+```
+create environment
+  ├─ env key generated in ~/.hz              as today
+  ├─ wrapped to machine pubkey on approval   as today
+  └─ wrapped to RECOVERY pubkey              new, automatic
+
+restore: recovery privkey → unwrap any environment key
+```
+
+- The recovery **private** key lives in the password manager. It never touches
+  the dev box or the gateway.
+- The recovery **public** key sits in hz config; the wrap rides hz's backups
+  like any other blob.
+- It cannot drift, which is the whole reason to prefer it over a manual export:
+  a new environment is covered without anyone remembering a step.
+- Environment keys still rotate freely — they re-wrap to the same recovery
+  public key.
+
+**Ordering is load-bearing: custody before deletion.** Phase 1 item 2 gates
+item 3. Until the recovery recipient ships, hand-export the existing
+environment keys to the password manager — that is the gate, not the design.
+
+### Succession — a second recovery recipient (2026-09-20)
+
+Every environment key wraps to **a list** of recovery public keys, not one:
+the operator's, and a named successor's. Modelling it as a list rather than
+`primary + successor` means adding a third later is config, not a schema
+change.
+
+Decided now rather than later because **the recipient list is fixed when a key
+is wrapped.** Adding a recipient afterwards means unwrapping and re-wrapping
+every environment key — possible, but it needs a recovery key in hand and a
+pass over everything. Before the first environment is created under this
+scheme, it costs one more public key in a loop.
+
+Scope is deliberately narrow: the successor can open environment keys and
+nothing else. They are not in the password manager.
+
+**Removal is not really removal.** A wrap already written stays readable by
+whoever holds that key. Dropping a recipient from the list stops *future*
+wraps; undoing a past one means rotating the environment key. Say so when the
+UI offers a remove button.
+
+Why it is worth the step at all: redline moves real donations for real
+organisations. If the operator is unavailable, someone has to be able to keep
+it running or wind it down without the secrets being unrecoverable.
+
+Together these two close the risk [plan.md](plan.md) names as *"the key has no
+escrow and no recovery path, which is the failure most likely to actually
+happen."*
+
+### Agent identity — a separate `hz-agent` package (2026-09-20)
+
+Three components, separated by privilege:
+
+```
+configmgr    library, in-process, app user   app config
+hz-client    library, in-process, app user   service ops   (plan.md item 10)
+hz-agent     daemon,  root                   machine config
+```
+
+`hz-client` is already moving toward an in-process library — item 10's driver
+is precisely that `curl` + `chmod +x` + `fork/exec` is the wrong shape. A
+library cannot be the agent: the agent is a privileged daemon that must run
+before the app starts.
+
+**The deciding constraint is the install path.** A root daemon fetched from hz
+and `chmod +x`'d would mean hz owns root on every machine through its own
+update path — and the property that makes a pull-based agent acceptable ("a
+compromised hz can serve bad desired-state, not a bad binary") collapses
+entirely. So `hz-agent` ships as a package from the registry, pinned and held,
+like anything else. Never from `$HZ_URL`.
+
+### `hz-agent` de-roots the hz web surface (2026-09-20)
+
+**`hz-agent` is to hz what `redline-ops` is to redline.** It does not exist
+only for remote machines — it runs on the gateway too, and root moves out of
+the web process into it. hz web drops to an unprivileged user and asks the
+agent for privileged work, exactly as `redline` asks `redline-ops`.
+
+Today (`internal/config/config.go:2477`) the unit hz writes for itself says
+`User=root`, and `cmd/homelab-horizon/main.go` gates on `os.Geteuid() != 0` in
+four places.
+
+**Why this is the highest-value change in the document.** hz's web surface is
+the most exposed thing on the network: reachable through haproxy, an OIDC
+login, an admin UI, an API, a database. It is also the WireGuard server, the
+DNS server and the TLS terminator for everything. Today one web vulnerability
+is root on that box, which is the whole network. After this it is a web app
+that can *ask* for things, and the asking goes through the same approval every
+other machine's does.
+
+**What moves is the apply half, not the render half:**
+
+```
+hz web (unprivileged)    render(global) → desired files/rules        pure
+hz-agent (root)          write, reload, install, bring interfaces up  privileged
+```
+
+So `internal/haproxy`, `internal/dnsmasq`, `internal/iptables`,
+`internal/wireguard`, `internal/autoheal` and letsencrypt's cert writes split
+along a seam most of them already have.
+
+**The uniformity win is the real prize.** The gateway stops being a special
+case: `project(global, machineID)` for the gateway is the same function as for
+any other box, and the gateway's agent polls `localhost` like any other agent
+polls hz. No unix socket, no new IPC, no privileged side-channel — one
+mechanism, exercised locally every day, which is the best possible test of the
+remote path.
+
+There is precedent in-tree: `internal/server/static_supervisor.go` /
+`static_child.go` already run a root supervisor with a dropped child. This
+inverts it, which is the stronger direction — the exposed half is the
+unprivileged one.
+
+**Bootstrapping is the real problem.** An unprivileged hz cannot install its
+own agent, and `homelab-horizon install` currently self-installs behind a root
+check (`main.go:68`). Both need to arrive as packages, agent first. Name this
+before starting; it is where a half-done migration would strand the box the
+whole network depends on.
+
+**Consequences elsewhere in this document:**
+
+- Goal property 7 strengthens: hz holds no root **anywhere, including its own
+  box**, not merely no inbound credential for remote ones.
+- "hz is root on the box it is, and reconciles what it owns there" — the
+  statement this design started from — stops being true, by choice.
+- The availability risk is unchanged: losing the gateway still freezes
+  enrolment. Only the compromise half improves, and it improves a lot.
+
+### Presence — a trip to the box to join a second segment (2026-09-20)
+
+**Joining a machine to a second segment requires someone physically at that
+machine.** Typed-fingerprint approval at the hz end is not sufficient on its
+own for this one operation.
+
+The cost lands where it should. Multi-homing is the thing that turns two
+isolated networks into one; it is rare and deliberate by nature, so making it
+expensive is the point rather than a side effect. A control that is cheap to
+exercise is a control that gets exercised.
+
+**Scope, stated explicitly because it is the part that could go wrong:**
+
+| operation | presence? |
+|---|---|
+| first segment — the machine's own project | no; it happens at provision, you are already there |
+| changes within a machine's existing segment — re-key, range change, peer add | **no**, these stay remote-operable |
+| joining a second segment | **yes** |
+| leaving a segment | no; removing a bridge needs no ceremony |
+
+The middle row is the one to watch. If presence were required for *any*
+segment change, renumbering prod's own subnet would need a flight, and the
+control would be routed around inside a year. Correct this if the intent was
+broader.
+
+### Version strings — already decided, in code
+
+`internal/db/configmgr.go:986` — `parsedVersion` is a clean semver tag,
+compared per semver 2.0.0 precedence; build metadata is stripped and never
+compared. `config-manager.md` still lists this as open question 1 — **stale,
+close it.** What remains is redline work, not a decision: split `git describe`
+into the clean tag and the build string.
+
+Workflow consequence worth knowing: `v1.0.0-rc.1-1377-g406804d5` has clean tag
+`1.0.0-rc.1`, so every commit after that tag reports the same version. Config
+ranges cannot distinguish commits — **moving a range means cutting a tag.**
+That is the intended discipline, not a gap.
 
 ## Blocking decisions
 
-Calls the user owns. Named here rather than guessed.
-
-- **Presence.** Does the agent apply an approved segment change on the next
-  poll, or does adding a machine to a second segment require someone at the box?
-- **Key custody.** Where do environment keys get backed up, and who can restore
-  one? Phase 1 item 2 is blocked on this, and phases 2–5 all depend on it.
-- **Version strings.** `git describe` yields `v1.0.0-rc.1-1377-g406804d5`, not
-  well-ordered without mapping. redline owns this answer —
-  `config-manager.md` open question 1.
-- **Agent identity.** Does the agent replace `hz-client`, extend it, or ship
-  beside it? It needs root; `hz-client` currently runs as the app user.
+None open. All four resolved 2026-09-20: two by decision, one by decision once
+the install path turned out to be the real constraint, and one by finding it
+already implemented in code.
 
 ## Deliberately not building
 
