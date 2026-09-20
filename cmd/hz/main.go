@@ -85,7 +85,9 @@ COMMANDS
   cm machines [--json]               List enrolled boxes: addresses, secrets, fingerprint
   cm pending [--all]                 Show the approval queue
   project ls                         Services grouped by project and environment
-  project show <project>             The services in one project
+  project show <project>             One project: its parent, its feed, its services
+  feed ls                            Every project's package feed and where it came from
+  feed show <project>                The feed a project installs from, and which project declared it
   cm approve <registration-id>       Wrap this machine's environment key to the box's
                                      public key. You will be asked to TYPE the
                                      fingerprint the BOX printed; it is compared against
@@ -286,6 +288,8 @@ func main() {
 		err = runExporter(c, rest)
 	case "project":
 		err = runProject(c, rest)
+	case "feed":
+		err = runFeed(c, rest)
 	case "cm":
 		err = runCM(c, rest)
 	default:
