@@ -13,7 +13,7 @@ import "github.com/iodesystems/homelab-horizon/configmgr"
 //
 // which is not valid TypeScript. hz now pins a fork that resolves constants through
 // go/types (gzuidhof/tygo#100), so these WOULD generate correctly today. The exclusion
-// stays for a different reason: the UI references none of these eleven names — they are
+// stays for a different reason: the UI references none of these thirteen names — they are
 // Go-side wire constants shared by the server and the CLI, and the browser is not a party
 // to them. Generating them would ship dead weight and invite someone to use them.
 //
@@ -27,9 +27,11 @@ const (
 	CMQueryConfigID = configmgr.QueryConfigID
 	CMQueryTarget   = configmgr.QueryTarget
 	CMQueryState    = configmgr.QueryState
+	CMQueryConfirm  = configmgr.QueryConfirm
 
 	CMPathResolve     = configmgr.PathResolve
 	CMPathPromoteGate = configmgr.PathPromoteGate
 	CMPathCurrentKey  = configmgr.PathCurrentKey
 	CMPathConfigs     = configmgr.PathConfigs
+	CMPathMachines    = configmgr.PathMachines
 )
