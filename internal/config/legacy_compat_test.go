@@ -1,8 +1,10 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -13,6 +15,13 @@ import (
 // It is a literal rather than a fixture file so that a future change to the
 // Config struct cannot quietly "fix" it — the whole point is that these bytes
 // do not change when the code does.
+//
+// The first draft of this fixture used "target_host"/"target_port", which do not
+// exist on Service and were therefore dropped on load as unknown JSON. Nothing
+// failed, because nothing asserted on them — a fixture can lie about the shape
+// it claims to represent and still pass. The backend lives on Proxy, and
+// TestLegacyFixtureHasNoUnknownFields below now refuses to let that happen
+// again.
 const legacyConfigJSON = `{
   "listen_addr": ":8080",
   "wg_interface": "wg0",
@@ -23,10 +32,10 @@ const legacyConfigJSON = `{
   "ssl_enabled": true,
   "local_dns_domain": "lan",
   "services": [
-    {"name": "git",     "domains": ["git.<our-domain>"],     "target_host": "127.0.0.1",  "target_port": 3000},
-    {"name": "idp",     "domains": ["idp.<our-domain>"],     "target_host": "127.0.0.1",  "target_port": 8080},
-    {"name": "app",     "domains": ["app.<our-domain>"],     "target_host": "10.10.2.11", "target_port": 6400},
-    {"name": "staging", "domains": ["staging.<our-domain>"], "target_host": "127.0.0.1",  "target_port": 6400}
+    {"name": "git",     "domains": ["git.<our-domain>"],     "proxy": {"backend": "127.0.0.1:3000"}},
+    {"name": "idp",     "domains": ["idp.<our-domain>"],     "proxy": {"backend": "127.0.0.1:8080"}},
+    {"name": "app",     "domains": ["app.<our-domain>"],     "proxy": {"backend": "10.10.2.11:6400"}},
+    {"name": "staging", "domains": ["staging.<our-domain>"], "proxy": {"backend": "127.0.0.1:6400", "internal_only": true}}
   ]
 }`
 
@@ -58,6 +67,14 @@ func TestLegacyConfigLoadsAndSaves(t *testing.T) {
 	}
 	if len(cfg.Services) != 4 {
 		t.Fatalf("want 4 services from the file, got %d", len(cfg.Services))
+	}
+	// Second positive control, on the SERVICE shape rather than the top level.
+	// The first draft of this fixture spelled the backend as a field that does
+	// not exist, so every service loaded with a nil Proxy and nothing noticed.
+	for _, s := range cfg.Services {
+		if s.Proxy == nil || s.Proxy.Backend == "" {
+			t.Fatalf("service %q loaded with no backend — the fixture is not the shape it claims", s.Name)
+		}
 	}
 
 	// The new records are absent, not empty-but-present. Absent is the state the
@@ -125,5 +142,23 @@ func TestLegacyConfigWithOneAssignedServiceIsRefused(t *testing.T) {
 	})
 	if err := Save(path, cfg); err != nil {
 		t.Fatalf("declaring the project and the rung should make the assignment legal: %v", err)
+	}
+}
+
+// TestLegacyFixtureHasNoUnknownFields refuses to let the fixture above drift
+// away from the struct it claims to represent.
+//
+// encoding/json ignores fields it does not recognise, so a fixture can name
+// something that does not exist and still load, still save, and still pass
+// every assertion — it simply loads as a zero value. That is how
+// "target_host"/"target_port" survived in here: no test asserted on them, so
+// nothing failed. A fixture whose whole job is to be "what the live gateway
+// looks like" is worth nothing if the code cannot see half of it.
+func TestLegacyFixtureHasNoUnknownFields(t *testing.T) {
+	dec := json.NewDecoder(strings.NewReader(legacyConfigJSON))
+	dec.DisallowUnknownFields()
+	var probe Config
+	if err := dec.Decode(&probe); err != nil {
+		t.Fatalf("the legacy fixture names a field Config does not have: %v", err)
 	}
 }

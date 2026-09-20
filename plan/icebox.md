@@ -376,3 +376,16 @@ byte-identical output must not also change behaviour.
   `plan(observed) → []Action` / `execute([]Action)`, which needs an explicit
   observation struct that does not exist. A different refactor, not the fifth
   instance of this one.
+
+## Found during the import work (2026-09-20) — deliberately left
+
+- **`updateConfig` stores before it saves** (`internal/server/server.go:496`).
+  A config that fails `Save()` validation is already live in the server's
+  memory by the time the error comes back, so a rejected write still changes
+  what the running process believes. Pre-existing, untouched. Both import
+  handlers work around it by building and validating the whole result before
+  calling `updateConfig` — which is the workaround, not the fix.
+- **There is no `hz project add`.** Projects can only be created by
+  `hz import --execute` or by hand-editing `config.json`, so `hz feed set` is
+  usable only on an imported tree. A real hole in the write surface: the model
+  can be read and inherited from, and only half-written.
