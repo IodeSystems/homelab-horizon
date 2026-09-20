@@ -1547,6 +1547,64 @@ type CMRegistrationResp struct {
 	LastSeenAt   string `json:"lastSeenAt,omitempty"`
 }
 
+// CMMachineResp is one enrolled box, and — because the same shape answers the
+// read a removal is previewed from — everything removing it would destroy.
+//
+// Registrations and SecretKeys are here for exactly that reason. `hz cm remove`
+// has to be able to show an operator what is about to go, and a count alone
+// ("3 registrations") does not let them recognise the box they meant. They
+// carry no key material: CMRegistrationResp has no field for a wrapped key, and
+// SecretKeys is names only, which is the same rule ListMachineSecretKeys
+// enforces one layer down.
+type CMMachineResp struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+
+	// EnrolledEnvironment is what the box claimed when it enrolled. Not
+	// authoritative — see CMRegistrationResp — and shown so an operator can
+	// tell two same-named enrolments apart.
+	EnrolledEnvironment string `json:"enrolledEnvironment"`
+
+	// Fingerprint of the machine's public key. For a removal it is the one
+	// field that distinguishes "the box I rebuilt" from "a box that took this
+	// name": the operator can compare it against what the old box printed.
+	Fingerprint string `json:"fingerprint"`
+
+	CreatedAt  string `json:"createdAt"`
+	LastSeenAt string `json:"lastSeenAt,omitempty"`
+
+	Registrations []CMRegistrationResp `json:"registrations,omitempty"`
+
+	// SecretKeys names the machine-scoped secrets sealed to this box's public
+	// key — names, never values, and there is no field here that could carry
+	// one.
+	SecretKeys []string `json:"secretKeys,omitempty"`
+}
+
+// CMMachineRemovedResp reports what a removal actually destroyed.
+//
+// It is a count of rows and not a success flag, because the counts are the
+// thing an operator has to be able to check against the preview they approved.
+// A removal that reports more grants than the preview showed means the box
+// registered somewhere new between the two calls, and that is worth seeing.
+//
+// REMOVAL IS NOT REVOCATION, and nothing built on this may say it is. A box
+// that was ever approved unwrapped its environment key onto its own disk;
+// deleting hz's copy of the wrapped blob reaches none of it. See
+// db.DeleteMachine.
+type CMMachineRemovedResp struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+
+	RegistrationsRemoved int `json:"registrationsRemoved"`
+	// GrantsRemoved counts the subset that were approved — the ones that held
+	// a wrapped environment key. Separate from the total because a pending row
+	// disappearing costs nothing and an approved one is a box that stops being
+	// served config.
+	GrantsRemoved  int `json:"grantsRemoved"`
+	SecretsRemoved int `json:"secretsRemoved"`
+}
+
 // CMApproveReq carries the wrapped environment key minted on a client.
 //
 // hz relays this and cannot open it. hz MUST still parse the envelope header

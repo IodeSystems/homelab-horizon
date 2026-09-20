@@ -40,26 +40,31 @@ import (
 // cmAPI is the admin route prefix. Every path below is assembled from it.
 //
 // Note on where these shapes come from: internal/apitypes fixes the request and
-// response bodies, and this file treats them as given. The ROUTES are not
-// declared anywhere yet — the handler work is a separate slice — so the paths
-// here are this client's assumption about them, kept in one place so a rename
-// is one edit.
+// response bodies, and this file treats them as given. The paths under this
+// prefix are still spelled out here rather than shared, which is the same shape
+// that made five endpoints unreachable — see cm_routes_test.go. The ones that
+// were fixed moved to configmgr constants (apitypes.CMPath*); anything added
+// under this prefix should be declared there too, not assembled from cmAPI.
 const cmAPI = "/api/v1/cm"
 
 func runCM(c *client, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("cm subcommand required: key | pending | approve | deny | promote | show | resolve")
+		return fmt.Errorf("cm subcommand required: key | machines | pending | approve | deny | remove | promote | show | resolve")
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
 	case "key":
 		return runCMKey(c, rest)
+	case "machines":
+		return cmMachines(c, rest)
 	case "pending":
 		return cmPending(c, rest)
 	case "approve":
 		return cmApprove(c, rest)
 	case "deny":
 		return cmDeny(c, rest)
+	case "remove":
+		return cmRemove(c, rest)
 	case "promote":
 		return cmPromote(c, rest)
 	case "show":
@@ -213,7 +218,7 @@ func cmPending(c *client, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	path := cmAPI + "/registrations?state=" + configmgr.StatePending
+	path := cmAPI + "/registrations?" + apitypes.CMQueryState + "=" + configmgr.StatePending
 	if *all {
 		path = cmAPI + "/registrations"
 	}
