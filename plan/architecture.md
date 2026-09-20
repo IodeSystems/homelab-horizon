@@ -139,7 +139,8 @@ config.
 keys and no inbound credential, it works behind NAT (which prod will be), and
 it is the shape `configmgr` already uses — register, wait for approval,
 resolve. A compromised hz can serve bad desired-state to boxes that ask; it
-cannot reach a box that does not.
+cannot reach a box that does not, and it cannot replace the agent binary on a
+box already enrolled — that comes from apt, held (see *Agent identity*).
 
 ## The projection
 
@@ -455,12 +456,32 @@ is precisely that `curl` + `chmod +x` + `fork/exec` is the wrong shape. A
 library cannot be the agent: the agent is a privileged daemon that must run
 before the app starts.
 
-**The deciding constraint is the install path.** A root daemon fetched from hz
-and `chmod +x`'d would mean hz owns root on every machine through its own
-update path — and the property that makes a pull-based agent acceptable ("a
-compromised hz can serve bad desired-state, not a bad binary") collapses
-entirely. So `hz-agent` ships as a package from the registry, pinned and held,
-like anything else. Never from `$HZ_URL`.
+**The deciding constraint is the install path — but it is the *update* path
+that matters, not the bootstrap.**
+
+```
+bootstrap   hz-web may serve the binary. One fetch, by a human, with sudo.
+update      apt only, pinned and held. The agent never updates itself from hz.
+```
+
+Enrolment-time trust is not ongoing trust. At the moment you enrol a box you
+are already handing hz total authority over it — any segment, any config
+address, any desired version. Serving the binary as well is not a meaningfully
+larger capability *at that instant*, with a human present. What must not happen
+is hz pushing a new root binary to machines that are already enrolled and
+unattended, and that property survives a one-time fetch.
+
+The practical argument points the same way: `provision.sh:150` already fetches
+`hz-client` from `$HZ_URL` exactly like this, and requiring apt first is a
+chicken-and-egg — the apt source, its key and its pin are themselves machine
+config, so you would hand-configure the registry before installing the thing
+that manages machine config.
+
+So: **the agent's install verb configures the apt source and the hold as one of
+its first acts**, and the fetch path is used exactly once per machine.
+
+Box #1 is the exception in the other direction: there is no hz to fetch from
+yet, so the gateway's agent comes from the package or a release artifact.
 
 ### `hz-agent` de-roots the hz web surface (2026-09-20)
 
@@ -519,6 +540,30 @@ This is already the house pattern, twice: `cmd/hz-probe/install.go:193` and
 **hz-agent owns hz's unit file**, which closes the loop: upgrading, restarting
 and configuring hz all become `Units []Unit` in `MachineConfig`. hz is just
 another app the agent manages, on machine #1.
+
+**One install verb, not two.** There is no `homelab-horizon install` under this
+model — the agent owns every unit on the box, so a second installer would be a
+second writer for `/etc/systemd/system/homelab-horizon.service` and the agent
+would overwrite it on the next poll. redline settles this the same way:
+`provision.sh` and `redline-ops` own the units, and `redline` never installs
+itself.
+
+```
+sudo hz-agent install --gateway          places hz-agent + homelab-horizon
+sudo hz-agent install --hz https://...   places hz-agent, enrols, polls for the rest
+```
+
+`--gateway` is what answers the first-box problem: on machine #1 there is no hz
+to serve a `MachineConfig` saying "run hz here."
+
+**This is a deletion.** Today's `homelab-horizon install`
+(`cmd/homelab-horizon/root.go:100`, root-gated at `main.go:68`) goes away, and
+it carries a legacy alias — `root.go:163` maps `-install` → `install` — so
+there is a small deprecation surface, not just a removed subcommand.
+
+Naming, since there is no `hz-web` binary: the server is `cmd/homelab-horizon`,
+`hz` is the CLI, `hz-probe` is the vantage. The new package is `hz-agent`; the
+existing server keeps its name and loses its privileges.
 
 **The migration is smaller than it looks.** `StateDirectory=homelab-horizon`
 makes systemd chown the state directory to whatever `User=` says, so flipping
