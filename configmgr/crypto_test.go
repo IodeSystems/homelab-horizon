@@ -365,7 +365,7 @@ func TestParseEnvKeyRejects(t *testing.T) {
 		{"one character too long", text + "0"},
 		{"body replaced with zeros", EnvKeyPrefix + strings.Repeat("0", len(body))},
 		{"letter outside the alphabet", EnvKeyPrefix + "U" + body[1:]},
-		{"two characters transposed", EnvKeyPrefix + swap(body, 3, 4)},
+		{"two characters transposed", EnvKeyPrefix + transpose(t, body)},
 	}
 
 	for _, tc := range cases {
@@ -902,6 +902,25 @@ func swap(s string, i, j int) string {
 	b := []byte(s)
 	b[i], b[j] = b[j], b[i]
 	return string(b)
+}
+
+// transpose swaps the first adjacent pair of DIFFERENT characters, so the
+// result is always a changed string.
+//
+// The key is random, so a fixed pair of indices is a coin flip: when the two
+// characters happen to be equal the "transposed" key is the original key, it
+// parses, and the test fails — about one run in thirty-two, which is often
+// enough to be seen and rare enough to be dismissed as noise. Same assertion,
+// no dependence on which key was generated.
+func transpose(t *testing.T, s string) string {
+	t.Helper()
+	for i := 0; i+1 < len(s); i++ {
+		if s[i] != s[i+1] {
+			return swap(s, i, i+1)
+		}
+	}
+	t.Fatalf("every character of %q is the same; nothing to transpose", s)
+	return ""
 }
 
 // browserWrapEnvKey is an independent reimplementation of the wrapping

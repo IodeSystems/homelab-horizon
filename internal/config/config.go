@@ -579,6 +579,18 @@ func (c *Config) PrimaryPeer() *Peer {
 type Project struct {
 	Name   string `json:"name"`
 	Parent string `json:"parent,omitempty"`
+
+	// Feed is the package repository this project's machines install from,
+	// and the first — so far only — thing Parent confers on a descendant.
+	// See internal/config/feed.go for why this one may cascade when sealed
+	// config may not, and ResolveFeed for what a child declaring its own does
+	// to an ancestor's.
+	//
+	// A pointer because absent and empty are different answers: nil is "this
+	// project says nothing, ask my parent", and a zero Feed is a declaration
+	// with nothing in it, which ValidateFeeds rejects. Collapsing the two is
+	// goal property 6 in plan/architecture.md — the founding bug.
+	Feed *Feed `json:"feed,omitempty"`
 }
 
 // ValidateProjects checks the project tree is usable: names unique, parents real, no
@@ -1432,6 +1444,12 @@ func Save(path string, cfg *Config) error {
 	// or a service pointing at a rung nobody declared, reads later as an empty
 	// environment rather than a wrong one.
 	if err := cfg.ValidateEnvironments(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Feeds are checked beside the tree, not inside it: the tree has to hold
+	// together before a feed can be resolved through it, and a half-declared
+	// feed reaches a machine as a sources entry that cannot fetch.
+	if err := cfg.ValidateFeeds(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	dir := filepath.Dir(path)

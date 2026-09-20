@@ -295,6 +295,7 @@ func runCheck(dryRun bool) error {
 	c.checkNetwork()
 	c.checkRanges()
 	c.checkPinnedDNS()
+	c.checkFeeds()
 	c.printSummary()
 
 	return nil
@@ -555,6 +556,25 @@ func (c *checker) checkPinnedDNS() {
 		fmt.Println("  Deliberate if that name really does point at another host. If it is a")
 		fmt.Println("  former address of this connection, the name has been unreachable since")
 		fmt.Println("  the address changed — clear external_dns.ips to track this host.")
+	}
+}
+
+// checkFeeds warns about package feeds declared without a signing key.
+//
+// Not counted against allGood, for the same reason checkPinnedDNS is not: an
+// unsigned feed is legal and sometimes deliberate. It is reported because the
+// failure it invites is silent — anyone on the path between a machine and an
+// unsigned repository can serve it different packages, and the install that
+// results looks exactly like a correct one.
+func (c *checker) checkFeeds() {
+	if c.cfg == nil {
+		return
+	}
+	for _, w := range c.cfg.FeedWarnings() {
+		fmt.Printf("Checking package feed for %s... UNSIGNED\n", w.Project)
+		fmt.Printf("  %s is declared with no key_id.\n", w.URL)
+		fmt.Println("  Every project under this one inherits it, so the machines affected are")
+		fmt.Println("  not only this project's. Set key_id to the signing key's fingerprint.")
 	}
 }
 

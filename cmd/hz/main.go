@@ -89,6 +89,9 @@ COMMANDS
   env ls                             Declared environments by project: posture, from,
                                      version, and how many services are in each
   env show <project>/<name>          One environment and the services in it
+  project show <project>             One project: its parent, its feed, its services
+  feed ls                            Every project's package feed and where it came from
+  feed show <project>                The feed a project installs from, and which project declared it
   cm approve <registration-id>       Wrap this machine's environment key to the box's
                                      public key. You will be asked to TYPE the
                                      fingerprint the BOX printed; it is compared against
@@ -291,6 +294,8 @@ func main() {
 		err = runProject(c, rest)
 	case "env", "environment":
 		err = runEnvironment(c, rest)
+	case "feed":
+		err = runFeed(c, rest)
 	case "cm":
 		err = runCM(c, rest)
 	default:
