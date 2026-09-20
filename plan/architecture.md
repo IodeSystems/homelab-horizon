@@ -504,11 +504,42 @@ There is precedent in-tree: `internal/server/static_supervisor.go` /
 inverts it, which is the stronger direction — the exposed half is the
 unprivileged one.
 
-**Bootstrapping is the real problem.** An unprivileged hz cannot install its
-own agent, and `homelab-horizon install` currently self-installs behind a root
-check (`main.go:68`). Both need to arrive as packages, agent first. Name this
-before starting; it is where a half-done migration would strand the box the
-whole network depends on.
+**Bootstrapping: `sudo hz-agent install`.** hz never installs the agent — a
+human does, once. The dependency then runs the other way:
+
+```
+human (sudo) → hz-agent install → hz-agent.service   User=root
+                                → hz.service         User=hz
+```
+
+This is already the house pattern, twice: `cmd/hz-probe/install.go:193` and
+`cmd/homelab-horizon/main.go:68` are both `sudo <binary> install` behind a
+`Geteuid` check. `hz-agent install` is the third instance, not a new idea.
+
+**hz-agent owns hz's unit file**, which closes the loop: upgrading, restarting
+and configuring hz all become `Units []Unit` in `MachineConfig`. hz is just
+another app the agent manages, on machine #1.
+
+**The migration is smaller than it looks.** `StateDirectory=homelab-horizon`
+makes systemd chown the state directory to whatever `User=` says, so flipping
+`User=root` → `User=hz` migrates `/var/lib/homelab-horizon` (0750, db 0600) on
+its own. What is left:
+
+- `/etc/homelab-horizon/config.json` — one chown.
+- `/etc/letsencrypt` and `/etc/haproxy/certs` — these move to the agent, which
+  is the refactor, not the migration.
+
+**Watch `ExecStartPre=+`.** The unit already uses systemd's `+` prefix to run
+its `mkdir` as root regardless of `User=`. A legitimate escape hatch, and also
+exactly the shortcut that would quietly keep root operations inside hz's unit
+and undo the whole change. Every `+` in hz's unit after this should have to
+justify itself.
+
+**One residual.** The gateway's agent polls hz for its own `MachineConfig`, so
+a broken hz means the agent cannot fetch the config that would fix hz. The
+cached-boot rule covers it the same way it covers every other box, and
+`sudo hz-agent install` stays the local escape hatch — which is another reason
+the verb should exist rather than the package postinst doing everything.
 
 **Consequences elsewhere in this document:**
 
