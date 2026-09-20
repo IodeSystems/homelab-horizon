@@ -30,6 +30,24 @@ const (
 	BindingEnv       = "env"       // environment-bound; must already be bound in the target
 )
 
+// Value origins — the lineage discriminator. These must match internal/db's
+// ValueOrigin constants exactly; they are the same vocabulary crossing a wire.
+//
+// OriginAwaiting is the only one a client ever sends. The other two are inferred
+// by hz from whether a source config was named, and are here because they come
+// BACK on a read.
+const (
+	OriginDirect   = "direct"   // set at this address by someone holding its key
+	OriginPromoted = "promoted" // opened under a source key and re-sealed under this one
+	// OriginAwaiting is a key DECLARED by a promotion and not answered. An
+	// environment-bound value is born in its own environment and does not
+	// travel, so a promotion records the name, the binding and the config that
+	// declared it, and carries no bytes. Blanked is not absent: an omitted key
+	// lets the app fall back to its compiled default, which is the bug the whole
+	// config manager exists to prevent.
+	OriginAwaiting = "awaiting"
+)
+
 // RegisterRequest is what an agent posts at startup.
 //
 // PublicKey is generated on the box at first registration and its private half
@@ -161,11 +179,17 @@ type ConfigResponse struct {
 // than a push that silently stops working.
 
 // BlessValue is one sealed value in a bless request.
+//
+// Origin is normally left empty and inferred by hz. It is sent explicitly for
+// one case only: OriginAwaiting, a key a promotion DECLARED here and carried no
+// value for, which has no Sealed and no KeyID and would otherwise be read as an
+// omission.
 type BlessValue struct {
 	Key            string `json:"key"`
 	Binding        string `json:"binding"`
 	Sealed         string `json:"sealed"`
 	KeyID          string `json:"keyId"`
+	Origin         string `json:"origin,omitempty"`
 	SourceConfigID string `json:"sourceConfigId,omitempty"`
 }
 
@@ -246,6 +270,12 @@ const (
 	QueryConfigID = "config"
 	QueryTarget   = "target"
 	QueryState    = "state"
+
+	// QueryProject narrows a target environment to one project. Environment names
+	// are unique per project and not globally — every project gets to have a
+	// "prod" — so a bare name is an identity only while one project declares it.
+	// Optional, and required only when it is ambiguous.
+	QueryProject = "project"
 
 	// QueryConfirm carries the name of the machine a removal is aimed at. The
 	// caller has to repeat the name back, so a DELETE that arrives without the

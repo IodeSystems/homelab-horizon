@@ -28,6 +28,7 @@ const (
 	CMQueryTarget   = configmgr.QueryTarget
 	CMQueryState    = configmgr.QueryState
 	CMQueryConfirm  = configmgr.QueryConfirm
+	CMQueryProject  = configmgr.QueryProject
 
 	CMPathResolve     = configmgr.PathResolve
 	CMPathPromoteGate = configmgr.PathPromoteGate

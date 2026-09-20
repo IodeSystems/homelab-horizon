@@ -18,11 +18,11 @@
 > its public key is the attack this catches and it would have substituted the
 > fingerprint too*. Without that sentence the step is a CAPTCHA.
 >
-> **Still unproven, and the list is short and specific:** promotion across
-> environments has never been exercised (two keys exist for it); rotation has no
-> re-wrap path at all; **there is no way to remove a machine**, so a box whose
-> state directory is wiped cannot re-enrol under its own name; and nobody has
-> opened the UI.
+> **Still unproven, and the list is short and specific:** rotation has no
+> re-wrap path at all, and nobody has opened the UI. (Promotion across
+> environments was on this list; it is built and covered by tests as of
+> 2026-09-20, but has still never been run against a real second environment.
+> Machine removal landed earlier.)
 >
 > Written 2026-09-18 from the owner's model; moved into this repo the same day
 > because **hz is where it gets built**. redline is the first client, not the
@@ -248,6 +248,24 @@ promote (staging, redline, app, 1.2.0–∞) → prod
 
 The gate asks only whether a key is **bound**, never what it holds, which is why
 it survives hz reading nothing.
+
+**Built 2026-09-20, with one correction to the sketch above.** A blocked key is
+no longer only a refusal: with `--blank` the promotion proceeds and DECLARES each
+unanswered key in the target, carrying no value — origin `awaiting`, migration
+`0012`. The refusal stays the default, because leaving production keys unanswered
+is not a side effect of a release step; what changed is that the alternative to
+refusing is now a *legible record* rather than an omission. Omitting the key would
+have rebuilt the founding bug: the target would hold a config in which it had
+never been heard of, and the app would default it. The pull refuses the whole
+config by name until each blank is answered, and an awaiting row never counts as
+bound, so the next promotion reports it exactly as the first one did.
+
+A second gate rides alongside it and needs no values either: the **declared
+edge**. `Environment.From` names the source and `PostureRank` orders the rungs, so
+hz answers whether a promotion runs along an edge somebody declared and whether it
+climbs. Two refusals with two remedies — a missing edge is not forcible (declare
+it), a wrong direction is (`--force`), because a disposable rung borrowing a
+posture is a real shape. `hz cm promote` is a **dry run by default**.
 
 That example is redline's live state, not a hypothetical. Today the only thing
 that catches it is a hand-written boot check, firing after a deploy has shipped.
@@ -1356,10 +1374,11 @@ a partial decrypt fails the whole config.
    Proposal: allow it, require the prod key, mark the config `unproven` and the
    environment `diverged` until the same config is promoted through staging
    normally, and surface that wherever fleet state shows.
-3. **Whether promotion carries invariant VALUES or only their shape.** Carrying
-   them gives real drift control; not carrying them lets shared values wander,
-   which is the status quo. Recommended: carry them, and treat a prod-side
-   override of an invariant as a recorded exception.
+3. ~~**Whether promotion carries invariant VALUES or only their shape.**~~
+   **Closed 2026-09-20 by building it:** promotion carries the VALUES, by
+   client-side re-seal, and the code is `cmPromote` in `cmd/hz/cm_config.go`.
+   A prod-side override remains an ordinary later value with `direct` origin,
+   which is the recorded exception this asked for.
 4. **Hole 4** — is total possession acceptable, or does prod need a read-only
    holder? The latter is not reachable with symmetric keys.
 5. **Does re-registration update the recorded version?** Today a tuple's version

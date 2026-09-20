@@ -659,6 +659,21 @@ const (
 	// OriginPromoted: opened under a source address's key and re-sealed under
 	// this one's, by a client. hz was never in the path.
 	OriginPromoted ValueOrigin = "promoted"
+	// OriginAwaiting: DECLARED by a promotion and not answered. An
+	// environment-bound key does not travel — prod's database password is born
+	// in prod — so a promotion records the key, its binding and the config that
+	// declared it, and carries no bytes.
+	//
+	// This is the difference between blank and absent, and it is goal property 6
+	// (plan/architecture.md): a config key cannot be SILENTLY absent. Omitting
+	// the key would leave the target holding a config in which it had never been
+	// heard of, and the app would fall back to its compiled default — the
+	// founding bug. An awaiting row says "declared here, awaiting a value", and
+	// the pull refuses to serve the config until it has one.
+	//
+	// It is not a tombstone. A tombstone says a value existed and was destroyed;
+	// this says a value is required and was never supplied.
+	OriginAwaiting ValueOrigin = "awaiting"
 )
 
 // ConfigValue is one key within a Config. Always sealed; there is no plaintext
@@ -685,6 +700,11 @@ type ConfigValue struct {
 // its key name, its binding and its lineage survive; the payload does not.
 func (v ConfigValue) Tombstoned() bool { return v.TombstonedAt != nil }
 
+// Awaiting reports whether this key was declared by a promotion and never
+// answered. Distinct from Tombstoned in both directions, and the schema refuses
+// a row that is both.
+func (v ConfigValue) Awaiting() bool { return v.Origin == OriginAwaiting }
+
 // validate checks a value's shape before it is offered to the database.
 //
 // Note what is NOT checked: any rule about the value's length or emptiness.
@@ -701,6 +721,27 @@ func (v ConfigValue) validate() error {
 	case BindingInvariant, BindingEnv:
 	default:
 		return fmt.Errorf("unknown binding %q", v.Binding)
+	}
+	// An awaiting value is checked first and separately, because every rule
+	// below it is a rule about bytes and an awaiting row has none. It is the one
+	// legal row with no ciphertext and no tombstone.
+	if v.Origin == OriginAwaiting {
+		if v.Binding != BindingEnv {
+			return fmt.Errorf("only an environment-bound key can be awaiting; %q is %s", v.Key, v.Binding)
+		}
+		if len(v.Ciphertext) != 0 {
+			return errors.New("an awaiting value carries no ciphertext: it was never answered")
+		}
+		if v.KeyID != "" {
+			return errors.New("an awaiting value names no sealing key: nothing sealed it")
+		}
+		if v.TombstonedAt != nil {
+			return errors.New("an awaiting value is not a tombstone: nothing was destroyed")
+		}
+		if v.SourceConfigID == "" {
+			return errors.New("an awaiting value needs the config whose promotion declared it")
+		}
+		return nil
 	}
 	if len(v.Ciphertext) == 0 {
 		return ErrValueOmitted
@@ -752,6 +793,20 @@ type Config struct {
 	CreatedAt   time.Time
 	CreatedBy   string
 	Values      []ConfigValue
+}
+
+// AwaitingKeys lists the keys this config declares and has no value for, in the
+// order the values were read (by key name). A config with any of them is
+// DECLARED but not usable: the pull refuses to serve it, by name, rather than
+// serving the rest and letting the app default the missing one.
+func (c Config) AwaitingKeys() []string {
+	var out []string
+	for _, v := range c.Values {
+		if v.Awaiting() {
+			out = append(out, v.Key)
+		}
+	}
+	return out
 }
 
 const selectConfig = `
@@ -861,7 +916,10 @@ func (d *DB) CreateConfig(ctx context.Context, environment, app, role, minVer, m
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO cm_config_values (config_id, key, binding, ciphertext, key_id, origin, source_config_id)
 			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			id, v.Key, string(v.Binding), v.Ciphertext, v.KeyID,
+			// key_id is NULL, not '', for an awaiting row: it names no sealing
+			// key because nothing sealed it, and an empty string there would be
+			// absent-vs-empty one level down from the bug this state fixes.
+			id, v.Key, string(v.Binding), v.Ciphertext, nullString(v.KeyID),
 			string(v.Origin), nullString(v.SourceConfigID),
 		); err != nil {
 			if isUniqueViolation(err) {
@@ -934,7 +992,7 @@ func (d *DB) TombstoneConfigValue(ctx context.Context, configID, key, actor stri
 	res, err := d.ExecContext(ctx, `
 		UPDATE cm_config_values
 		SET ciphertext = NULL, tombstoned_at = CURRENT_TIMESTAMP, tombstoned_by = ?
-		WHERE config_id = ? AND key = ? AND tombstoned_at IS NULL`,
+		WHERE config_id = ? AND key = ? AND tombstoned_at IS NULL AND origin != 'awaiting'`,
 		nullString(actor), configID, key)
 	if err != nil {
 		return fmt.Errorf("tombstone value: %w", err)
@@ -979,7 +1037,7 @@ func (d *DB) TombstoneValueAtAddress(ctx context.Context, environment, app, role
 	res, err := d.ExecContext(ctx, `
 		UPDATE cm_config_values
 		SET ciphertext = NULL, tombstoned_at = CURRENT_TIMESTAMP, tombstoned_by = ?
-		WHERE key = ? AND tombstoned_at IS NULL AND config_id IN (
+		WHERE key = ? AND tombstoned_at IS NULL AND origin != 'awaiting' AND config_id IN (
 			SELECT id FROM cm_configs WHERE environment = ? AND app = ? AND role = ?
 		)`,
 		nullString(actor), key, env, a, r)
@@ -992,7 +1050,7 @@ func (d *DB) TombstoneValueAtAddress(ctx context.Context, environment, app, role
 
 func (d *DB) configValues(ctx context.Context, configID string) ([]ConfigValue, error) {
 	rows, err := d.QueryContext(ctx, `
-		SELECT key, binding, ciphertext, key_id, origin, COALESCE(source_config_id, ''),
+		SELECT key, binding, ciphertext, COALESCE(key_id, ''), origin, COALESCE(source_config_id, ''),
 		       tombstoned_at, COALESCE(tombstoned_by, '')
 		FROM cm_config_values WHERE config_id = ? ORDER BY key`, configID)
 	if err != nil {
