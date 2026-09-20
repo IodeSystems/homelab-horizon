@@ -158,6 +158,12 @@ type Config struct {
 	// shares something with another. A parent field costs nothing now and keeps that door
 	// open; inheritance would have to be lived with.
 	Projects []Project `json:"projects,omitempty"`
+	// Environments are the rungs: a project, a name, a posture, the environment it
+	// promotes from, and the version it declares. Additive in exactly the way Projects
+	// is — a record that says what is true, conferring nothing. `From` names the
+	// promotion source and does NOT inherit posture, version or anything else; the
+	// moment it did, changing one environment would silently change another.
+	Environments []Environment `json:"environments,omitempty"`
 
 	// Public IP for external access.
 	// PublicIP is the *cached* result of auto-detection. Treat as
@@ -615,6 +621,115 @@ func (c *Config) ValidateProjects() error {
 		}
 		if _, ok := byName[svc.Project]; !ok {
 			return fmt.Errorf("service %q names project %q, which does not exist", svc.Name, svc.Project)
+		}
+	}
+	return nil
+}
+
+// Postures are the three rungs, in order. The slice IS the ordering: dev < staging <
+// prod. Kept explicit rather than left to string comparison, which would sort
+// dev < prod < staging and quietly make a promotion to prod look like a demotion.
+var Postures = []string{"dev", "staging", "prod"}
+
+// PostureRank returns a posture's position in the ladder, or -1 if it is not one of
+// the three. Compare ranks, never the strings.
+func PostureRank(posture string) int {
+	for i, p := range Postures {
+		if p == posture {
+			return i
+		}
+	}
+	return -1
+}
+
+// Environment is a rung: a posture at a placement. Name and Posture are separate on
+// purpose — several projects here have an environment *called* prod that sits at
+// staging's isolation level, and an honest posture beside an established name is worth
+// more than a relabel nobody would do. Collapsing the two would force the lie.
+//
+// From records that this environment is promoted into from another one in the same
+// project. It confers nothing, exactly as Project.Parent does not: it is the edge, not
+// an inheritance path. Version is the declared desired version and is opaque here — a
+// Debian version, an image tag, a git sha. hz displays the drift against what an
+// instance reports; it does not close it.
+type Environment struct {
+	Project string `json:"project"`
+	Name    string `json:"name"`
+	Posture string `json:"posture"`
+	From    string `json:"from,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
+// envKey is the identity of an environment: names are unique per project, not globally,
+// because every project gets to have a "prod".
+type envKey struct{ project, name string }
+
+// ValidateEnvironments checks the rungs are usable: names unique within a project,
+// projects real, postures known, promotion sources real and within the same project,
+// and no promotion cycles.
+//
+// The service rule is deliberately narrow: a service naming an environment that does
+// not exist is an error ONLY when it also names a project. A service with neither stays
+// legal — that is the state every service was in before the projects slice, and
+// ValidateProjects already refuses to make this a migration. An environment name on a
+// project-less service has nothing to resolve against, so there is nothing to check.
+func (c *Config) ValidateEnvironments() error {
+	projects := make(map[string]struct{}, len(c.Projects))
+	for _, p := range c.Projects {
+		projects[p.Name] = struct{}{}
+	}
+
+	byKey := make(map[envKey]Environment, len(c.Environments))
+	for _, e := range c.Environments {
+		if strings.TrimSpace(e.Name) == "" {
+			return errors.New("an environment has no name")
+		}
+		if strings.TrimSpace(e.Project) == "" {
+			return fmt.Errorf("environment %q has no project", e.Name)
+		}
+		k := envKey{e.Project, e.Name}
+		if _, dup := byKey[k]; dup {
+			return fmt.Errorf("environment %q is declared twice in project %q", e.Name, e.Project)
+		}
+		if _, ok := projects[e.Project]; !ok {
+			return fmt.Errorf("environment %q names project %q, which does not exist", e.Name, e.Project)
+		}
+		if PostureRank(e.Posture) < 0 {
+			return fmt.Errorf("environment %q in project %q has posture %q, which is not one of %s",
+				e.Name, e.Project, e.Posture, strings.Join(Postures, ", "))
+		}
+		byKey[k] = e
+	}
+
+	for _, e := range c.Environments {
+		if e.From == "" {
+			continue
+		}
+		from := envKey{e.Project, e.From}
+		if _, ok := byKey[from]; !ok {
+			return fmt.Errorf("environment %q in project %q promotes from %q, which does not exist in that project",
+				e.Name, e.Project, e.From)
+		}
+		// Walk to a source that promotes from nothing, bounded by the number of
+		// environments: a cycle cannot be longer than that without repeating, so
+		// exceeding it IS the cycle. Same shape as the project parent walk.
+		seen, cur := 0, e
+		for cur.From != "" {
+			if seen > len(c.Environments) {
+				return fmt.Errorf("environment %q in project %q is in a promotion cycle", e.Name, e.Project)
+			}
+			cur = byKey[envKey{cur.Project, cur.From}]
+			seen++
+		}
+	}
+
+	for _, svc := range c.Services {
+		if svc.Project == "" || svc.Environment == "" {
+			continue
+		}
+		if _, ok := byKey[envKey{svc.Project, svc.Environment}]; !ok {
+			return fmt.Errorf("service %q names environment %q in project %q, which does not exist",
+				svc.Name, svc.Environment, svc.Project)
 		}
 	}
 	return nil
@@ -1311,6 +1426,12 @@ func Save(path string, cfg *Config) error {
 	// project that does not exist is caught here rather than surfacing later as an
 	// empty grouping that looks like "nothing is in that project".
 	if err := cfg.ValidateProjects(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Same chokepoint, same reason: an environment naming a project that does not exist,
+	// or a service pointing at a rung nobody declared, reads later as an empty
+	// environment rather than a wrong one.
+	if err := cfg.ValidateEnvironments(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	dir := filepath.Dir(path)
