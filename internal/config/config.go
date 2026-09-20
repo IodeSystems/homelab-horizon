@@ -152,6 +152,12 @@ type Config struct {
 	// Services configuration (Layer 2: Services)
 	Zones    []Zone    `json:"zones"`
 	Services []Service `json:"services"`
+	// Projects is the tree, and deliberately only the tree: a name and a parent. No
+	// inherited settings. Inheritance semantics (what overrides, what merges, what is
+	// transitive) are the expensive half and are not needed until one project actually
+	// shares something with another. A parent field costs nothing now and keeps that door
+	// open; inheritance would have to be lived with.
+	Projects []Project `json:"projects,omitempty"`
 
 	// Public IP for external access.
 	// PublicIP is the *cached* result of auto-detection. Treat as
@@ -563,6 +569,57 @@ func (c *Config) PrimaryPeer() *Peer {
 	return nil
 }
 
+// Project groups services, and later machines and config, under one name.
+type Project struct {
+	Name   string `json:"name"`
+	Parent string `json:"parent,omitempty"`
+}
+
+// ValidateProjects checks the project tree is usable: names unique, parents real, no
+// cycles, and every service naming a project that exists.
+//
+// A service may name no project. That is the state every service is in today, and
+// rejecting it would make this change a migration rather than an addition.
+func (c *Config) ValidateProjects() error {
+	byName := make(map[string]Project, len(c.Projects))
+	for _, p := range c.Projects {
+		if strings.TrimSpace(p.Name) == "" {
+			return errors.New("a project has no name")
+		}
+		if _, dup := byName[p.Name]; dup {
+			return fmt.Errorf("project %q is declared twice", p.Name)
+		}
+		byName[p.Name] = p
+	}
+	for _, p := range c.Projects {
+		if p.Parent == "" {
+			continue
+		}
+		if _, ok := byName[p.Parent]; !ok {
+			return fmt.Errorf("project %q names parent %q, which does not exist", p.Name, p.Parent)
+		}
+		// Walk to a root, bounded by the number of projects: a cycle cannot be longer
+		// than that without repeating, so exceeding it IS the cycle.
+		seen, cur := 0, p
+		for cur.Parent != "" {
+			if seen > len(c.Projects) {
+				return fmt.Errorf("project %q is in a parent cycle", p.Name)
+			}
+			cur = byName[cur.Parent]
+			seen++
+		}
+	}
+	for _, svc := range c.Services {
+		if svc.Project == "" {
+			continue
+		}
+		if _, ok := byName[svc.Project]; !ok {
+			return fmt.Errorf("service %q names project %q, which does not exist", svc.Name, svc.Project)
+		}
+	}
+	return nil
+}
+
 // ValidateFleet checks the multi-instance fields are internally consistent.
 // Returns nil if no fleet is configured (single-instance mode).
 func (c *Config) ValidateFleet() error {
@@ -762,7 +819,16 @@ type ZoneSSL struct {
 
 // Service represents a unified service configuration with clear separation of concerns
 type Service struct {
-	Name        string       `json:"name"`                   // Human-readable, e.g., "grafana"
+	Name string `json:"name"` // Human-readable, e.g., "grafana"
+	// Project and Environment are the two axes a service already had, encoded in its
+	// hostname rather than declared: `beta.veliode.com` is project veliode, environment
+	// beta. Naming them makes "what is in staging" a query instead of a grep, and lets a
+	// service be joined to the config manager, whose addresses are environment/app/role.
+	//
+	// Both optional. A service that declares neither behaves exactly as before and is
+	// reported as unassigned, which is how an existing config keeps working untouched.
+	Project     string       `json:"project,omitempty"`
+	Environment string       `json:"environment,omitempty"`
 	Token       string       `json:"token,omitempty"`        // API token for service integration (ban, status)
 	Domains     []string     `json:"domains"`                // FQDNs, e.g., ["app.example.com", "book.example.com"]
 	InternalDNS *InternalDNS `json:"internal_dns,omitempty"` // dnsmasq config for VPN clients
@@ -1240,6 +1306,13 @@ func LoadAuto() (*Config, string, error) {
 }
 
 func Save(path string, cfg *Config) error {
+	// Refuse to write a config whose project tree does not hold together. Save is the
+	// one chokepoint every writer goes through, so a bad parent or a service naming a
+	// project that does not exist is caught here rather than surfacing later as an
+	// empty grouping that looks like "nothing is in that project".
+	if err := cfg.ValidateProjects(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
 	dir := filepath.Dir(path)
 	if dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0755); err != nil {

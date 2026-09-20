@@ -83,6 +83,8 @@ COMMANDS
   cm key current <env>/<app>/<role> [--set KEYID]
                                      Read or move hz's advisory current-key pointer
   cm pending [--all]                 Show the approval queue
+  project ls                         Services grouped by project and environment
+  project show <project>             The services in one project
   cm approve <registration-id>       Wrap this machine's environment key to the box's
                                      public key. You will be asked to TYPE the
                                      fingerprint the BOX printed; it is compared against
@@ -277,6 +279,8 @@ func main() {
 		err = runHost(c, rest)
 	case "exporter":
 		err = runExporter(c, rest)
+	case "project":
+		err = runProject(c, rest)
 	case "cm":
 		err = runCM(c, rest)
 	default:

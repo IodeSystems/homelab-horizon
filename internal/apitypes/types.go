@@ -111,6 +111,8 @@ type ServiceStatus struct {
 
 type ServiceResp struct {
 	Name         string            `json:"name"`
+	Project      string            `json:"project,omitempty"`
+	Environment  string            `json:"environment,omitempty"`
 	Domains      []string          `json:"domains"`
 	InternalDNS  *InternalDNSResp  `json:"internalDNS,omitempty"`
 	ExternalDNS  *ExternalDNSResp  `json:"externalDNS,omitempty"`
