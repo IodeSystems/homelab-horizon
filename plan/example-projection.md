@@ -22,18 +22,27 @@ acme-co                                    root project — carries the package 
 │         registry    → gw-1:3000       (same backend as git, different domain)
 │
 ├── storefront                              3 environments — the mature one
-│   ├── dev       posture dev      version —          (local only, no machine)
-│   ├── staging   posture staging  version 1.4.2      from: dev
-│   └── prod      posture prod     version 1.4.0      from: staging   ⚠ no machine
+│   ├── dev       posture dev      version —          local only, no machine
+│   ├── staging   posture staging  version 1.4.2      from: dev      → gw-1
+│   └── prod      posture prod     version 1.4.0      from: staging  → app-1, app-2
 │
 ├── analytics                               2 environments
-│   ├── beta      posture staging  version 0.9.1
-│   └── prod      posture prod     version 0.9.0      from: beta
+│   ├── beta      posture staging  version 0.9.1                     → an-1
+│   └── prod      posture prod     version 0.9.0      from: beta     ⚠ NO MACHINE
 │
-├── client-a     posture prod · 1 environment (prod)   version 2.1.0
-├── client-b     posture prod · 1 environment (prod)   version 1.0.7
-└── client-c     posture prod · 1 environment (prod)   version 3.2.2
+├── client-a     env named "prod" · posture staging · version 2.1.0
+├── client-b     env named "prod" · posture staging · version 1.0.7
+└── client-c     env named "prod" · posture staging · version 3.2.2
 ```
+
+**`analytics/prod` is the important row.** A prod-posture rung with a declared
+version and no placement — the state redline's own `prod` is in today. It has a
+posture and no machine, and the UI must render that as a normal stage of growth
+rather than a fault.
+
+**`client-*` name their one environment "prod" while sitting at staging's
+posture.** Name and posture are separate fields for exactly this reason; a
+screen that renders one of them has rendered the wrong one.
 
 **Most projects have exactly one environment.** That is the common case, not a
 degenerate one — the UI must not make a single-environment project look
@@ -49,12 +58,16 @@ One segment per project that owns machines. The hub is `gw-1`, which is hz
 itself.
 
 ```
-seg:intern        10.10.1.0/24    gw-1
-seg:storefront    10.10.2.0/24    gw-1 · app-1 · app-2
+seg:intern        10.10.1.0/24    gw-1 · ci-1
+seg:storefront    10.10.2.0/24    gw-1 · app-1 · app-2 · ci-1
 seg:analytics     10.10.3.0/24    gw-1 · an-1
 seg:people        10.10.9.0/24    gw-1 · laptops, phones  ← the human-access VPN
                                         one segment among many, not "the" VPN
 ```
+
+`ci-1` is in two, deliberately. `analytics` has no CI membership, which is what
+makes the `seg:intern`/`seg:storefront` pair a declared exception rather than
+"the build box is everywhere".
 
 ## 3. Machines
 
@@ -74,17 +87,35 @@ app-2       segments: seg:storefront             agent 0.5.1   reported 6d ago  
             hosts:  storefront/prod/web/app      observed 1.4.0
 
 an-1        segments: seg:analytics              agent 0.5.0   reported 2m ago
-            hosts:  analytics/prod/api/app
+            hosts:  analytics/beta/api/app       observed 0.9.1
+                    (analytics/prod has no machine — see §1)
 
 ci-1        segments: seg:intern · seg:storefront   ⚠ MULTI-HOMED
             forwarding: DENIED between own interfaces
             declared:   "publishes packages, deploys storefront"
             joined seg:storefront 2026-09-18, in person, by <operator>
+            agent 0.5.1   agent polled 30s ago
+            hosts:  NOTHING — no instance, no config address, no service
+                    → it will never report an observed version, and that
+                      is correct, not silence
 
 new-box     ⏳ pending approval
             fingerprint  abcd-efgh-ijkl-mnop     requested 8m ago
             wants:  storefront/staging/web/app
 ```
+
+**`ci-1` is the state most likely to be mis-rendered as an alarm.** It has a
+segment, an agent and a healthy poll, and it hosts no instance — so it has
+nothing to report an *observed version* for, permanently and by design. A
+naive last-seen makes it a standing false alarm on a healthy box. "Nothing to
+report" is a fourth state, distinct from fresh, late and never-reported.
+
+**Two different clocks, and conflating them is the bug.** The agent's poll is a
+heartbeat on a fixed cadence; an instance's `observed_at` refreshes on config
+*resolve*, which happens at boot. A long-running healthy instance has an old
+`observed_at` and a fresh agent poll. Machine liveness comes from the agent;
+instance version age comes from the resolve. A machine column showing "last
+reported" is derived from its instances and must say so.
 
 ## 4. Every state the UI must render
 
@@ -104,8 +135,10 @@ This is the design brief. Each row exists somewhere in §1–3 above.
 | stale report | `app-2`, 6d | silence ≠ healthy ≠ broken; three states |
 | multi-homed machine | `ci-1` | the bridge case; must be visible and explained |
 | pending approval | `new-box` | fingerprint must be readable aloud |
-| service with no project | (any legacy row) | explicitly legal; sorts last |
+| service with no project | `legacy-redirect`, §1 has none — it is a Service, not a project row | explicitly legal; sorts last |
 | agent version skew | `an-1` 0.5.0 | machines lag; not a failure |
+| **nothing to report, correctly** | `ci-1` | segment + agent, no instance. Not silence |
+| prod posture, no placement | `analytics/prod` | the majority state early on, not a fault |
 
 **Three states that look alike and are not:** *healthy*, *reporting nothing*,
 and *reporting a problem*. `app-2` is the trap — it last spoke six days ago, so
@@ -132,9 +165,31 @@ value must show its age beside it or it lies.
 }
 ```
 
-The UI's most valuable single screen is the **diff** of this against what the
-machine last reported — desired minus observed, per machine, before anything
-is applied.
+And what `app-1` last reported, which is the other half of the diff:
+
+```json
+{
+  "machine": "app-1",
+  "serial": 46,
+  "agent_polled": "30s ago",
+  "instances": [
+    { "address": "storefront/prod/web/app",
+      "observed_version": "1.3.8", "observed_at": "4h ago" }
+  ]
+}
+```
+
+The UI's most valuable single screen is the **diff** of these two — desired
+minus observed, per machine, before anything is applied.
+
+**The serial pair carries more than "behind".** `47` vs `46` is behind. Equal
+serials with differing rows is *applied and did not take*, which is a different
+fault and the one worth an alarm. A single badge merges them.
+
+Note `app-1`'s two clocks disagree and both are healthy: the agent polled 30
+seconds ago, the instance resolved four hours ago. The machine is alive; the
+version reading is four hours old. Both facts are true and the screen has to
+say so.
 
 ## 6. Cardinality summary
 

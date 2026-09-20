@@ -255,6 +255,28 @@ They differ during a rollout, and that gap *is* the rollout. **hz declares and
 displays the drift. It does not close it.** Closing it is the project's
 mechanism — apt, `docker compose pull`, a tarball, whatever.
 
+**Two clocks, and conflating them is a bug.** Found while designing the UI
+against `example-projection.md`:
+
+```
+agent poll      fixed cadence, per MACHINE     → machine liveness
+observed_at     refreshes on config resolve,
+                which happens at boot,
+                per INSTANCE                   → age of the version reading
+```
+
+`config-manager.md` is explicit that nothing in the boot path may depend on
+freshness — services here run unattended for years — so an instance that is
+healthy and never restarts has a *deliberately* old `observed_at`. That is not
+staleness. Machine liveness comes from the agent's poll; a machine's "last
+reported" is derived from its instances and must be labelled as derived.
+
+**And a machine can have nothing to report, correctly.** A box with a segment
+and an agent but no instance — a CI runner, a bastion — will never report an
+observed version. Under a naive last-seen it is a permanent false alarm on a
+healthy machine. Fresh, late, never-reported and *nothing-to-report* are four
+states, not three.
+
 This is the same seam `configmgr` already draws one level down: *"configmgr does
 not know what a `.properties` file is — deliberately, and it is the boundary
 that keeps the library reusable."* hz does not know what a `.deb` is. A version

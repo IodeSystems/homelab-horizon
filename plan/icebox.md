@@ -328,3 +328,51 @@ the MFA jail.
 ## ✅ Moved to active 2026-09-18 — hz-client becomes a library
 
 Scoped, then promoted the same day. See [plan.md](plan.md), item 10.
+
+## Found during the render/apply seam refactor (2026-09-20) — deliberately left
+
+Three things surfaced while separating `internal/haproxy`'s pure half from its
+privileged half. None were fixed there: a refactor whose whole claim is
+byte-identical output must not also change behaviour.
+
+- **`GetServerState` misreads the admin-state bitmask.** The comment says
+  `bit0=FMAINT, bit5=FDRAIN`, so FDRAIN is 32, not `6`. The code compares the
+  field as exact strings (`!= "0" && != "6"` → maint, `== "6"` → drain) and
+  `strings.Contains(adminState, "drain")` is dead code against a numeric field.
+  **A genuinely draining server most likely reports `maint`.** Worth checking
+  against a real socket before changing, since the fix depends on what haproxy
+  actually emits.
+- **`WriteConfig` derives its directory by string trim** —
+  `strings.TrimSuffix(h.configPath, "/haproxy.cfg")`. Any other basename yields
+  `dir == configPath`, so `MkdirAll` is skipped and the 503 page lands in
+  `<configPath>/errors/`. Only bites a non-default config path.
+- **The three frontend blocks duplicate their bodies** — `local_access` ACL,
+  XFF strip, host ACLs, jail/rate-limit/deny/`use_backend`, written out three
+  times. A rule added to two of three is a silent hole, which is exactly what
+  `TestMFAJailEmitsRedirectInEveryFrontend` exists to catch. Much safer to
+  deduplicate now that it lives in a pure function and a golden comparator can
+  prove the output unchanged.
+
+### Where the seam pattern transfers, and where it fights
+
+- **`internal/iptables`** — already done in substance. `rules.go`/`forwards.go`/
+  `classify.go` have no `exec`/`os` and take an `Inputs` struct; `reconcile.go`
+  applies. This is where the house style came from. Cost is headers and naming.
+- **`internal/dnsmasq`** — direct transfer, one real fight: the **hosts file is
+  the state of record**. `GetMappings` reads it back and the mutators are
+  read-modify-write over disk, so render cannot be pure until the caller holds
+  the mapping set. Smaller fight: `ensureServiceUnit`/`clearStartLimit` install
+  and poke a systemd unit from the same file — agent work, and a different
+  privilege from "write a config file".
+- **`internal/wireguard`** — the hard one, and where commit-confirmed lands
+  first. Four fights: `WGConfig.Load()` makes `/etc/wireguard/*.conf` the state
+  of record; `GenerateKeyPair` shells to `wg genkey` and is non-deterministic,
+  so render must accept a public key as input and never mint one; `GetNextIP`
+  allocates from live config, so the current set must be passed in; and
+  `detectDefaultInterface()` reads the routing table from inside what looks
+  like render.
+- **`internal/autoheal`** — **does not transfer.** `Run()` *is* apply; there is
+  no desired-state text to render. Its analogous seam is
+  `plan(observed) → []Action` / `execute([]Action)`, which needs an explicit
+  observation struct that does not exist. A different refactor, not the fifth
+  instance of this one.
