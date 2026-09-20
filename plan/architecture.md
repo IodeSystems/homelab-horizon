@@ -667,6 +667,40 @@ Workflow consequence worth knowing: `v1.0.0-rc.1-1377-g406804d5` has clean tag
 ranges cannot distinguish commits — **moving a range means cutting a tag.**
 That is the intended discipline, not a gap.
 
+## Definition of done
+
+The target stated plainly: **a layered project, multi-VPN system that
+replicates the organisational layout** — company root carrying packages, into a
+project with environments and config, versions, and an agent syncing it
+together.
+
+As an acceptance walkthrough, so it is checkable rather than aspirational:
+
+```
+1  iodesystems is a project. It declares the package feed — registry URL,
+   suite, component, signing key. Non-secret, so it cascades.
+2  redline is its child. It inherits the feed and declares its own
+   environments: staging, prod. Each has a posture and a declared version.
+3  a machine enrols into redline's segment. It gets a WireGuard peer config
+   and the inherited apt source, pinned and held.
+4  an app instance on it registers for (redline, staging, app, current),
+   is approved by typed fingerprint, and resolves its sealed config.
+5  hz shows: desired 1.2.3, observed 1.2.1, and which config it resolved.
+6  promoting staging → prod copies invariants, blanks env-bound keys, and
+   installs the same artifact from the same feed into a different segment.
+```
+
+**The root earns its keep at step 1.** Until now `Parent` recorded the tree and
+conferred nothing, and this document said the root would stay a label until
+something was inherited. The package feed is that something: one registry, at
+the company level, that every project's machines install from. It is exactly
+the shape that may cascade under the rule already set — shape inherits, secrets
+do not.
+
+Steps 1–2 are config records. Step 3 is phase 4. Steps 4–5 are mostly built;
+what is missing is persisting the version a box already reports. Step 6 is the
+promotion gate, designed and unbuilt.
+
 ## Blocking decisions
 
 None open. All four resolved 2026-09-20: two by decision, one by decision once
