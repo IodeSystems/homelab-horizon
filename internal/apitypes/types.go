@@ -191,6 +191,103 @@ type ProjectResp struct {
 	Services []string `json:"services,omitempty"`
 }
 
+// FeedSetReq declares the package repository a project's machines install from.
+// Whole-record replacement, never a field-level merge: a feed wins whole when it
+// resolves (see config.ResolveFeed), and a half-updated one would make "where
+// did this value come from" unanswerable.
+type FeedSetReq struct {
+	Project   string `json:"project"`
+	URL       string `json:"url"`
+	Suite     string `json:"suite"`
+	Component string `json:"component"`
+	KeyID     string `json:"keyId,omitempty"`
+}
+
+// The import plan. These mirror the config.Import* records one-to-one; the
+// planner lives in internal/config because it reads a whole config, and the
+// wire shape lives here because every other client contract does.
+//
+// Nothing in a plan is a command. It is a proposal, every row of it carries the
+// evidence it came from, and the services it cannot explain are listed as
+// unassigned rather than guessed at.
+
+// ImportProjectResp is a project the import would declare, and why.
+type ImportProjectResp struct {
+	Name   string `json:"name"`
+	Parent string `json:"parent,omitempty"`
+	Reason string `json:"reason"`
+}
+
+// ImportEnvironmentResp is a rung the import would declare. Name and Posture
+// stay separate for the reason EnvironmentResp gives.
+type ImportEnvironmentResp struct {
+	Project string `json:"project"`
+	Name    string `json:"name"`
+	Posture string `json:"posture"`
+	Reason  string `json:"reason"`
+}
+
+// ImportAssignmentResp moves one service onto one rung. Environment may be
+// empty: project evidence and posture evidence are independent.
+type ImportAssignmentResp struct {
+	Service           string `json:"service"`
+	Project           string `json:"project"`
+	Environment       string `json:"environment,omitempty"`
+	ProjectReason     string `json:"projectReason"`
+	EnvironmentReason string `json:"environmentReason,omitempty"`
+}
+
+// ImportUnassignedResp is a service the import leaves alone, and why. Not a
+// failure: a service with no project is legal and works exactly as before.
+type ImportUnassignedResp struct {
+	Service string `json:"service"`
+	Reason  string `json:"reason"`
+	Note    string `json:"note,omitempty"`
+}
+
+// ImportSignalResp is a signal that was examined and NOT used. Reported because
+// silence about a signal is indistinguishable from not having looked at it.
+type ImportSignalResp struct {
+	Name   string `json:"name"`
+	Detail string `json:"detail"`
+}
+
+// ImportPlanResp is the whole proposal.
+//
+// Fingerprint identifies this plan's content. An execute carries it back, so a
+// config that changed between the dry run and the write is refused instead of
+// silently applying a plan nobody read. ExistingProjects is the other thing a
+// client cannot derive from the plan itself: it is what makes an execute need
+// --merge, and saying it in the DRY RUN means the operator learns it before
+// typing the flag rather than after.
+type ImportPlanResp struct {
+	Fingerprint      string                  `json:"fingerprint"`
+	Projects         []ImportProjectResp     `json:"projects"`
+	Environments     []ImportEnvironmentResp `json:"environments"`
+	Assignments      []ImportAssignmentResp  `json:"assignments"`
+	Unassigned       []ImportUnassignedResp  `json:"unassigned"`
+	Signals          []ImportSignalResp      `json:"signals,omitempty"`
+	ExistingProjects int                     `json:"existingProjects"`
+}
+
+// ImportApplyReq writes a plan. Fingerprint is the one the dry run printed.
+// Merge is the acknowledgement that this config already has a tree and the
+// import is to ADD to it — existing projects, rungs and assignments are kept.
+type ImportApplyReq struct {
+	Fingerprint string `json:"fingerprint"`
+	Merge       bool   `json:"merge"`
+}
+
+// ImportApplyResp is what the write actually did, counted from the config after
+// it rather than from the plan before it — under merge the two differ, because
+// anything already declared is skipped.
+type ImportApplyResp struct {
+	OK                bool `json:"ok"`
+	ProjectsAdded     int  `json:"projectsAdded"`
+	EnvironmentsAdded int  `json:"environmentsAdded"`
+	ServicesAssigned  int  `json:"servicesAssigned"`
+}
+
 // IntegrationsResp mirrors config.Integrations for read/round-trip.
 type IntegrationsResp struct {
 	Metrics *MetricsResp `json:"metrics,omitempty"`
