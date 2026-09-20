@@ -268,6 +268,12 @@ Phase 3 replaces this with: restart horizon, done.
 | 8 | [DNS checks that would catch a broken forwarder](#-dns-checks-that-would-catch-a-broken-forwarder) | ✅ deployed |
 | 9 | [Config manager](#-config-manager--registration-blessing-promotion) → [config-manager.md](config-manager.md) | ✅ **ceremony proven on a box 2026-09-19** |
 | 10 | [hz-client becomes a library](#-hz-client-becomes-a-library) | ◐ version surface in progress |
+| 11 | Projects (name + parent, no inheritance) | ◐ branch `wt/projects`, unmerged + unpushed |
+
+**Where this is all heading:** [architecture.md](architecture.md) — the model
+(project / environment / machine / instance / version / service), the two
+channels, per-project network segments, and the phased path from here. Written
+2026-09-20; it supersedes nothing, it explains what the items above are for.
 
 Two opt-in next-steps were added to [icebox.md](icebox.md) on 2026-09-10:
 HAProxy TCP frontends on the VPN address, and moving the range-collision
