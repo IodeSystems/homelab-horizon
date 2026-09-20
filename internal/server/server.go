@@ -1062,6 +1062,8 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/services", s.handleAPIServices)
 	mux.HandleFunc("/api/v1/environments", s.handleAPIEnvironments)
 	mux.HandleFunc("/api/v1/projects", s.handleAPIProjects)
+	mux.HandleFunc("/api/v1/projects/feed", s.handleAPIProjectFeed)
+	mux.HandleFunc("/api/v1/import", s.handleAPIImport)
 	mux.HandleFunc("/api/v1/domains", s.handleAPIDomains)
 	mux.HandleFunc("/api/v1/vpn/peers", s.handleAPIVPNPeers)
 	mux.HandleFunc("/api/v1/zones", s.handleAPIZones)

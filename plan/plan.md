@@ -290,6 +290,50 @@ Landed on `dev` 2026-09-20:
 | Projects | `Project{Name, Parent}`, validated on `Save`, `hz project ls\|show` |
 | Environments | `Environment{Project, Name, Posture, From, Version}`, ordered postures, `hz env ls\|show`, `GET /api/v1/environments` |
 | Machine removal | `hz cm machines\|remove`, closing holes 11 and 14 |
+| Feed | `Project.Feed`, inherited whole down `Parent`, `hz feed ls\|show`, and now **`hz feed set`** — the writer it lacked |
+| Import | `hz import` proposes a tree for a gateway that has none. Dry run by default, `--execute` to write, `--merge` to add to an existing tree. `GET/POST /api/v1/import` |
+
+#### `hz import` — what it will and will not infer
+
+The rule is **a wrong project assignment is worse than none**: a service on the
+wrong rung resolves the wrong config later and nothing looks wrong at the time.
+So there is no confidence score and no ranking — every proposed row carries the
+evidence it came from, printed beside it, and a service with no evidence is
+proposed as *unassigned*, which `ValidateProjects` already permits.
+
+Four signals were measured against real config shapes. Two are used:
+
+- **domain suffix** — the suffix one label below the one *every* domain shares.
+  A group needs **two** services: a suffix only one service sits under is that
+  service's own hostname. This is the signal that does nearly all the work, and
+  it produces nothing at all on the common single-domain gateway (one company
+  domain, a subdomain per service) — correctly, because there is no tree in
+  that config to find.
+- **identical backend** (`host:port`, byte-for-byte) — the same listening
+  process under two names (`git`/`registry` in example-projection.md §4). It
+  can only *join* a project the suffix already named; a backend address has no
+  project name in it. A cluster straddling two projects unassigns all of it.
+- **posture word** (`dev`/`test`/`stage`/`staging`/`beta`/`prod`) names an
+  ENVIRONMENT, never a project, and is matched as a whole token — `reproduction`
+  contains `prod` and means nothing of the kind. Unusable on a service with no
+  project, because a rung belongs to one.
+
+Two are reported as examined and rejected, with this config's numbers, because
+silence about a signal reads the same as not having looked:
+
+- **backend host** (port ignored) — a host is a machine and one machine hosts
+  several projects (`gw-1`). Co-location is not evidence.
+- **`internal_only`** — exposure is neither a project nor a posture; an
+  internal-only admin tool is production.
+
+`target_host`/`target_port` from the pre-projects JSON are **not fields on
+`config.Service` any more** — they are dropped on load, so nothing can key off
+them. The proxy backend is the surviving analogue.
+
+**Ordering.** Declarations and assignments go in one `Save`, and the order
+*within* the struct does not matter: the validators run over the finished
+config. `TestImportOrderWithinTheSaveDoesNotMatter` pins that from the side
+`legacy_compat_test.go` does not.
 
 **Deploy gate, found while building Environments.** `Save()` now refuses a
 config where a service names both a project *and* an environment that is not

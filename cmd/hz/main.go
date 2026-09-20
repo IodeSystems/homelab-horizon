@@ -92,6 +92,15 @@ COMMANDS
   project show <project>             One project: its parent, its feed, its services
   feed ls                            Every project's package feed and where it came from
   feed show <project>                The feed a project installs from, and which project declared it
+  feed set <project> --url U --suite S --component C [--key-id ID] [--execute]
+                                     Declare the package repository a project's machines
+                                     install from. Dry run without --execute
+  import [--merge] [--execute]       Propose a project tree for a gateway that has none:
+                                     projects, environments and which service is on which
+                                     rung, each with the evidence it came from. Services
+                                     nothing explains are left unassigned, which is legal.
+                                     Dry run without --execute; --merge is required to write
+                                     over a config that already declares projects
   cm approve <registration-id>       Wrap this machine's environment key to the box's
                                      public key. You will be asked to TYPE the
                                      fingerprint the BOX printed; it is compared against
@@ -296,6 +305,8 @@ func main() {
 		err = runEnvironment(c, rest)
 	case "feed":
 		err = runFeed(c, rest)
+	case "import":
+		err = runImport(c, rest)
 	case "cm":
 		err = runCM(c, rest)
 	default:

@@ -192,6 +192,103 @@ export interface ProjectResp {
   services?: string[];
 }
 /**
+ * FeedSetReq declares the package repository a project's machines install from.
+ * Whole-record replacement, never a field-level merge: a feed wins whole when it
+ * resolves (see config.ResolveFeed), and a half-updated one would make "where
+ * did this value come from" unanswerable.
+ */
+export interface FeedSetReq {
+  project: string;
+  url: string;
+  suite: string;
+  component: string;
+  keyId?: string;
+}
+/**
+ * ImportProjectResp is a project the import would declare, and why.
+ */
+export interface ImportProjectResp {
+  name: string;
+  parent?: string;
+  reason: string;
+}
+/**
+ * ImportEnvironmentResp is a rung the import would declare. Name and Posture
+ * stay separate for the reason EnvironmentResp gives.
+ */
+export interface ImportEnvironmentResp {
+  project: string;
+  name: string;
+  posture: string;
+  reason: string;
+}
+/**
+ * ImportAssignmentResp moves one service onto one rung. Environment may be
+ * empty: project evidence and posture evidence are independent.
+ */
+export interface ImportAssignmentResp {
+  service: string;
+  project: string;
+  environment?: string;
+  projectReason: string;
+  environmentReason?: string;
+}
+/**
+ * ImportUnassignedResp is a service the import leaves alone, and why. Not a
+ * failure: a service with no project is legal and works exactly as before.
+ */
+export interface ImportUnassignedResp {
+  service: string;
+  reason: string;
+  note?: string;
+}
+/**
+ * ImportSignalResp is a signal that was examined and NOT used. Reported because
+ * silence about a signal is indistinguishable from not having looked at it.
+ */
+export interface ImportSignalResp {
+  name: string;
+  detail: string;
+}
+/**
+ * ImportPlanResp is the whole proposal.
+ * Fingerprint identifies this plan's content. An execute carries it back, so a
+ * config that changed between the dry run and the write is refused instead of
+ * silently applying a plan nobody read. ExistingProjects is the other thing a
+ * client cannot derive from the plan itself: it is what makes an execute need
+ * --merge, and saying it in the DRY RUN means the operator learns it before
+ * typing the flag rather than after.
+ */
+export interface ImportPlanResp {
+  fingerprint: string;
+  projects: ImportProjectResp[];
+  environments: ImportEnvironmentResp[];
+  assignments: ImportAssignmentResp[];
+  unassigned: ImportUnassignedResp[];
+  signals?: ImportSignalResp[];
+  existingProjects: number /* int */;
+}
+/**
+ * ImportApplyReq writes a plan. Fingerprint is the one the dry run printed.
+ * Merge is the acknowledgement that this config already has a tree and the
+ * import is to ADD to it — existing projects, rungs and assignments are kept.
+ */
+export interface ImportApplyReq {
+  fingerprint: string;
+  merge: boolean;
+}
+/**
+ * ImportApplyResp is what the write actually did, counted from the config after
+ * it rather than from the plan before it — under merge the two differ, because
+ * anything already declared is skipped.
+ */
+export interface ImportApplyResp {
+  ok: boolean;
+  projectsAdded: number /* int */;
+  environmentsAdded: number /* int */;
+  servicesAssigned: number /* int */;
+}
+/**
  * IntegrationsResp mirrors config.Integrations for read/round-trip.
  */
 export interface IntegrationsResp {

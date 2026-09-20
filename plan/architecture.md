@@ -734,6 +734,17 @@ Steps 1–2 landed 2026-09-20: a project declares a `Feed` and descendants
 inherit it, nearest declaration winning whole. Step 3 is phase 4, and the only
 step with nothing built.
 
+**Getting an existing gateway to step 1 landed 2026-09-20 too.** `hz import`
+proposes a tree for a config that has none, and `hz feed set` declares the feed
+on it — until that, declaring one meant hand-editing JSON on the gateway.
+Import is not a migration: `legacy_compat_test.go` already shows a pre-projects
+config loads and saves untouched, so nothing is broken and nothing has to move.
+It is a proposal, dry-run by default, in which **every row names the evidence it
+came from** and a service nothing explains is proposed as *unassigned* — which
+is legal, and which is what every service in such a config already is. A wrong
+project is worse than none: it resolves the wrong config later and looks fine
+now. See plan/plan.md for which signals turned out usable.
+
 **Step 5 has both halves as of 2026-09-20.** Desired lives on
 `Environment.Version`; observed lives on every registration, which now carries
 the version, build string and report time its instance last sent, shown by
