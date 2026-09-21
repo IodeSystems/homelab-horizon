@@ -319,9 +319,16 @@ Ordered, replacing the handover list in `architecture.md`:
      replaces "`hz-agent enroll` writes its own record locally" with "hz mints
      at enrolment"; the store format, the header, the hash, hz's verification
      and the whole agent side are untouched.
-   - The gateway's agent mints locally because hz is on the same box and both
-     halves are root, so it needs no bootstrap credential — and the only one
-     available to bootstrap with would have been the admin token.
+   - ~~The gateway's agent mints locally~~ — **superseded 2026-09-21 by item
+     13.** hz is the issuer now: `hz-agent enroll` asks
+     (`internal/agent/enrolment.go`) and hz refuses a machine it does not
+     declare. The gateway still needs no bootstrap secret carried to it, for
+     the same reason the local mint needed none — hz's own admin token file is
+     on that box and root can read it, which is the default the enrolment
+     command uses. Every other machine has to be given an admin credential by
+     somebody who has one, for the length of one request; the running agent
+     never holds it and it never reaches the unit. The store format, the
+     header, the hash and hz's verification are unchanged, as predicted above.
 2. ✅ **Done 2026-09-21. The test seam is fixed.** Three changes, in order of
    how load-bearing they are:
 

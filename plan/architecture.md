@@ -535,7 +535,10 @@ that changes hz's shape.
        keeps in `<config>.agents`, checked by `Server.agentCaller` on one
        route. `isAdmin` was deliberately NOT widened: a Bearer branch there
        would make the shared admin token an API key for every admin surface.
-       Item 13 changes the ISSUER of that credential, nothing else.
+       Item 13 changed the ISSUER of that credential (done 2026-09-21) and
+       nothing else: hz mints it, for a machine it declares. `isAdmin` still
+       has no Bearer branch for the shared token — the enrolment client
+       exchanges it for a session the way `hz` itself does.
     2. ✅ **Done 2026-09-21.** The WireGuard section is served, and the admin
        path came off `handleAgentDesired` in the same commit — one decision,
        not two. `|| s.isAdmin(r)` is gone; the only way in is a machine's own
@@ -669,21 +672,50 @@ that changes hz's shape.
     report is evidence the agent would write exactly what hz already wrote.
     Run it as root — unprivileged it cannot read `wg0.conf` or the live
     firewall and says so per target rather than guessing.
-13. Machine record — identity and segments. It also becomes the **issuer of the
-    agent credential**: today `hz-agent enroll` mints a secret locally and
-    writes its own record into hz's store, which only works because hz and the
-    agent are the same root on one box. A remote agent must not be able to
-    write itself in. What changes is `cmd/hz-agent/enroll.go` (mint → ask) and
-    who writes `CredentialStore`; the store format, the header, the hashing,
-    hz's verification and the poll all stay, because none of them know where a
-    credential came from. `handleAgentDesired`'s 404 for a credential naming
-    another machine is the seam this fills — it becomes a projection instead.
+13. ✅ **Done 2026-09-21.** Machine record — identity and segments
+    (`internal/config/machine.go`: `Name`, `Segments`, `Note`), validated on
+    `Save` beside the other four validators, with `hz machine add|ls|show|rm`.
+    NO project and NO environment, NO observed version, NO placement — each
+    absence is the model and each is pinned by a test rather than by a comment.
+    Multi-segment is legal, flagged on every row, and **enumerable**
+    (`MultiSegmentMachines`, `hz machine ls --multi-homed`), because blast
+    radius being the union of a machine's segments is only a useful sentence if
+    the segments can be listed. A machine in more than one segment is REFUSED
+    without a `Note`: architecture's own rule is that a crossing is a declared
+    exception *with a reason*, and a reason nobody is obliged to give is a
+    reason nobody gives.
+
+    **Issuance moved to hz, and only issuance.** `hz-agent enroll` asks
+    (`internal/agent/enrolment.go` → `POST /api/v1/agent/enroll`) instead of
+    minting locally and writing hz's store; hz refuses a machine it does not
+    declare, mints, records the HASH and answers with the secret once. The
+    store format, the header, the hashing, `Server.agentCaller`, `HTTPSource`
+    and the poll are untouched, because none of them know where a credential
+    came from. The ask is admin-authorised at the box, used for one request,
+    never stored there and never in the unit; `isAdmin` still has no Bearer
+    branch for the shared token. Re-enrolment sends the hash of what the box
+    holds, never the secret, so `install` stays idempotent.
+
+    **`handleAgentDesired`'s 404 became a projection answer.** It no longer
+    says "not this box" — an identity claim, which was all hz could make when
+    it knew only its hostname. It now says hz has no desired state for that
+    machine, and says whether the machine is declared (waiting on item 14) or
+    not (waiting on a declaration). Still a 404, still total.
+
+    Segment NAMES resolve against nothing yet — that is item 15.
     NOT the observed version: that
     settled onto the registration in 0011, because it belongs to an instance
     and several instances share a box.
 14. `project(global, machineID) → MachineConfig`, pure, tested offline. The
     gateway is machine #1, not a special case.
-15. `VPNRange` / `WGInterface` / `AllowedIPs` go plural.
+15. `VPNRange` / `WGInterface` / `AllowedIPs` go plural. **Item 13 left names
+    waiting on this**: `Machine.Segments` holds segment names that nothing
+    resolves, because there is no Segment record to resolve them against. Item
+    15 has to add one — a name, a CIDR (today's single `VPNRange`), an
+    interface (today's single `WGInterface`) and its peer/`AllowedIPs` set —
+    then extend `ValidateMachines` from checking a segment name's SHAPE to
+    checking its EXISTENCE, and give a machine a per-segment address and key.
+    Until then a membership is a declaration about a label.
 16. Remote agents: poll, diff, apply, commit-confirmed on network changes.
 
 Order matters here. Items 10–12 are a privilege refactor on one box with no

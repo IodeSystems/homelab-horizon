@@ -220,6 +220,60 @@ func (s CredentialStore) Enroll(machine, secret string) error {
 	return s.Save(next)
 }
 
+// Find reports the record hz holds for a machine, if any.
+//
+// The HASH and the issue date, which is all hz has — there is no path from this
+// to a working credential, by construction. What it is for: answering "is this
+// box enrolled, and since when" on a listing, and letting enrolment ask whether
+// the secret a box already holds is still the one hz accepts without that
+// secret going over the wire.
+func (s CredentialStore) Find(machine string) (Credential, bool) {
+	machine = strings.TrimSpace(machine)
+	if machine == "" {
+		return Credential{}, false
+	}
+	creds, err := s.Load()
+	if err != nil {
+		return Credential{}, false
+	}
+	for _, c := range creds {
+		if c.Machine == machine {
+			return c, true
+		}
+	}
+	return Credential{}, false
+}
+
+// Revoke drops a machine's credential. Reports whether there was one.
+//
+// The other half of Enroll, and it exists because removing a Machine record has
+// to be able to take the credential with it: a credential naming a machine hz
+// no longer declares still authenticates, and nothing in the config can explain
+// it.
+func (s CredentialStore) Revoke(machine string) (bool, error) {
+	machine = strings.TrimSpace(machine)
+	if machine == "" {
+		return false, errors.New("revoking needs a machine name")
+	}
+	creds, err := s.Load()
+	if err != nil {
+		return false, err
+	}
+	next := make([]Credential, 0, len(creds))
+	found := false
+	for _, c := range creds {
+		if c.Machine == machine {
+			found = true
+			continue
+		}
+		next = append(next, c)
+	}
+	if !found {
+		return false, nil
+	}
+	return true, s.Save(next)
+}
+
 // Machine reports which machine a secret speaks for.
 //
 // Constant-time against every stored hash, and it does not stop at the first

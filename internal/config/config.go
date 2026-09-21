@@ -164,6 +164,13 @@ type Config struct {
 	// promotion source and does NOT inherit posture, version or anything else; the
 	// moment it did, changing one environment would silently change another.
 	Environments []Environment `json:"environments,omitempty"`
+	// Machines are the boxes: identity and segment membership, and deliberately
+	// neither a project nor an environment — those are coordinates of an
+	// INSTANCE, and one machine hosts instances from several projects
+	// (plan/architecture.md, "Instance, not machine, carries the environment").
+	// Additive in exactly the way Projects and Environments are. See
+	// internal/config/machine.go for what else is absent and why.
+	Machines []Machine `json:"machines,omitempty"`
 
 	// Key custody. Both fields are fleet-shared and both ride the backup zip,
 	// which is the whole reason they are here rather than in the identity
@@ -1563,6 +1570,13 @@ func Save(path string, cfg *Config) error {
 	// together before a feed can be resolved through it, and a half-declared
 	// feed reaches a machine as a sources entry that cannot fetch.
 	if err := cfg.ValidateFeeds(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Machines, same chokepoint. A duplicate name would make two records answer
+	// to one agent credential, and a machine that bridges segments without a
+	// reason is the one thing architecture.md refuses to let pass silently —
+	// both are cheaper to refuse at the write than to explain from a screen.
+	if err := cfg.ValidateMachines(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	// Recovery recipients, same chokepoint. A recipient whose public key does

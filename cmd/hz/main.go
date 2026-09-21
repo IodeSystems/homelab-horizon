@@ -113,6 +113,20 @@ COMMANDS
                                      Remove a rung. Dry run without --confirm; refused
                                      while a service is on it or another rung promotes
                                      from it
+  machine ls [--multi-homed]         Declared machines: segment count, enrolment, membership.
+                                     --multi-homed lists only the boxes that bridge
+                                     segments, with the declared reason for each
+  machine show <name>                One machine: its segments, its note, whether hz has
+                                     issued it an agent credential
+  machine add <name> [--segment S]... [--note "why"]
+                                     Declare a machine — identity and segment membership.
+                                     No project and no environment: those are coordinates
+                                     of an instance, and one box hosts several. --note is
+                                     REQUIRED with more than one --segment. Declaring is
+                                     what lets hz issue that box an agent credential
+  machine rm <name> [--cascade] [--confirm]
+                                     Remove a machine. Dry run without --confirm; refused
+                                     while its agent credential exists (--cascade revokes it)
   feed ls                            Every project's package feed and where it came from
   feed show <project>                The feed a project installs from, and which project declared it
   feed set <project> --url U --suite S --component C [--key-id ID] [--execute]
@@ -257,6 +271,9 @@ EXAMPLES
   hz env add redline/staging --posture staging                    # ... then declare ...
   hz service assign ebb redline/staging                           # ... then assign
   hz service unassign ebb                                         # out of the tree, still serving
+  hz machine add ci-1 --segment seg:intern --segment seg:storefront \
+    --note "publishes packages, deploys storefront"               # multi-homed, and it says why
+  hz machine ls --multi-homed                                     # every box that bridges segments
   hz domain list
   hz domain ssl add ebb.example.net --sync
   hz sync --wait
@@ -346,6 +363,8 @@ func main() {
 		err = runProject(c, rest)
 	case "env", "environment":
 		err = runEnvironment(c, rest)
+	case "machine", "machines":
+		err = runMachine(c, rest)
 	case "feed":
 		err = runFeed(c, rest)
 	case "import":
