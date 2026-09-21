@@ -257,8 +257,9 @@ the agent's own tree.
 
 | site | what it touches |
 |---|---|
-| `internal/letsencrypt/letsencrypt.go` | `/etc/letsencrypt`, `/etc/haproxy/certs` — TLS renewal, fires on a timer |
-| `internal/acme/acme.go` | cert issuance, own `exec` + writes |
+| `internal/letsencrypt/apply.go` | `/etc/letsencrypt`, `/etc/haproxy/certs` — TLS renewal, fires on a timer. **Split render/apply 2026-09-21**; the list of privileged operations is now the file's own header comment, and nothing else in the package performs one. Still not *served* to the agent. |
+| `internal/acme/apply.go` | cert issuance: the CA conversation, the account key, the DNS challenge records, `aws`, `dig`, and the process-global provider env vars. **Split render/apply 2026-09-21.** |
+| `internal/config/derive.go` | `WriteMaintenancePageFiles` writes and `os.Remove`s `<svc>_503.http` under `/etc/haproxy/errors/`. **Row added 2026-09-21** — this table named `internal/haproxy/apply.go` for that directory and missed the second writer. Orphaned by item 12 step 5 exactly like `errors/503.http`, and harder to move: it PRUNES, and `agent.File` has no "delete what is not listed". |
 | ~~`internal/server/handlers_ha.go`~~ | ~~`/etc/dnsmasq.d/wg-*.conf`, `/etc/haproxy/haproxy.cfg`, `/etc/homelab-horizon`~~ — **wrong, corrected 2026-09-21** |
 | `internal/server/peer_sync.go` | certs (`pullCertFromPeer`), `iptables -I INPUT` (ban sync), and `applyNewConfig` → hz's whole reconcile path, on a 30s timer |
 | `internal/server/handlers_integration.go` | `/etc/prometheus`, `/etc/systemd/system` |
@@ -346,8 +347,35 @@ Ordered, replacing the handover list in `architecture.md`:
    re-apply — through whatever items 12.2/12.3 and §3 item 5 below decide. The
    checklist is §7 of that document; it is latent today, so this is a guard, not
    a redesign.
-4. **letsencrypt/acme** need a render/apply split, and `loadTLSAssets` reads the
-   cert store during *render*, so certs must become an input rather than a read.
+4. ◐ **letsencrypt/acme split — DONE 2026-09-21; serving them is what is left.**
+   Both packages are now `render.go` (pure) / `apply.go` (privileged) /
+   `<pkg>.go` (manager), each with a `seam_test.go` guard that is stricter than
+   the other four: the pure half must also be unable to reach a CA, unable to
+   touch the ACME account key, and in `acme` unable to name a provider
+   credential. Proven byte-identical against the pre-refactor packages (6912
+   rendered configs, 1400 letsencrypt observations, 13 ACME logs, zero diffs).
+
+   `loadTLSAssets` no longer reads the cert store during render. The facts are
+   an input — `haproxy.CertStore`, defaulting to `ScanCertDir` in apply.go —
+   so hz web replaces one function instead of losing HTTPS rendering. This
+   mattered more than it looks: an unreadable cert directory and an empty one
+   returned the same answer, so a de-rooted hz web would have re-rendered every
+   HTTPS gateway as plain HTTP with no error anywhere.
+
+   `errors/503.http` is the agent's: a rendered constant with no secret, whose
+   only writer is `WriteConfig`, referenced by a config the agent already
+   carries, and which HAProxy refuses to start without — so it has to land with
+   the config under one reload. Not wired yet; that is a payload change.
+
+   **Certificate material may cross to the agent** under five constraints
+   (served bundle only, never the account key or DNS credentials, `Secret`
+   forced by the payload, admin path off `handleAgentDesired` first, hashed not
+   logged). Reasoned out in `plan/architecture.md`, "Cert material and the two
+   channels", rather than inferred from the WireGuard precedent.
+
+   Six pre-existing defects found and left, in `plan/icebox.md` — the loudest
+   being that a corrupt `fullchain.pem` makes the sweep re-request a
+   certificate every 12 hours for ever.
 5. **Classify the fixer buttons, `handlers_ban`, `handlers_integration`,
    `system/interfaces`** — agent actions, or hz keeps a minimal privileged
    helper. Say which; do not discover it after the flip.

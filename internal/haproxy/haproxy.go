@@ -5,9 +5,16 @@
 //
 //	render.go   pure     desired state in, bytes out. No files, no commands,
 //	                     no clock, no environment. Runs anywhere, as anyone.
-//	apply.go    root     the side effects: write files, reload the service.
-//	haproxy.go  manager  holds the desired state, reads the machine for the
-//	                     inputs render needs, and joins the two halves.
+//	apply.go    root     the side effects: write files, reload the service,
+//	                     and the one READ — the certificate store.
+//	haproxy.go  manager  holds the desired state, gathers the inputs render
+//	                     needs, and joins the two halves.
+//
+// The cert store reaches render through CertStore, a replaceable function,
+// rather than a read inside config generation. That is what lets an
+// unprivileged hz web still render an HTTPS config once /etc/haproxy/certs is
+// out of reach (plan/architecture.md, phase 4 item 12 step 3) — it supplies the
+// facts instead of opening the directory.
 //
 // Anything that computes what the config *should* be belongs in render.go, so
 // that half can later run in an unprivileged hz web process while apply.go's
@@ -16,14 +23,10 @@ package haproxy
 
 import (
 	"bufio"
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
@@ -38,6 +41,19 @@ type BackendStatus struct {
 	NextState    string // "up", "down", "drain", "maint", "unknown" - for deploy backends
 }
 
+// CertStore reports the certificates HAProxy would load from a directory.
+//
+// It exists so the cert facts the renderer needs are an INPUT to the manager
+// rather than a read performed inside it. The default is ScanCertDir, which
+// opens the directory — that is the only reason config generation needs to be
+// able to read /etc/haproxy/certs at all. hz web loses that ability in phase 4
+// item 12 step 3, and this is the one function it replaces to keep rendering
+// HTTPS configs afterwards; nothing else in the render path looks at a disk.
+//
+// A store that cannot read the directory returns nothing, which renders as
+// "no HTTPS frontend" — the same answer the directory read gave on failure.
+type CertStore func(certDir string) []Cert
+
 // HAProxy manages HAProxy configuration
 type HAProxy struct {
 	configPath    string
@@ -47,6 +63,10 @@ type HAProxy struct {
 	metricsPort   int
 	tlsMinVersion string
 	rateLimit     *RateLimit
+
+	// certs is where the cert facts come from. Never nil after New; see
+	// SetCertStore.
+	certs CertStore
 }
 
 // SetRateLimit configures the edge volume tier. Nil disables it.
@@ -54,11 +74,25 @@ func (h *HAProxy) SetRateLimit(rl *RateLimit) {
 	h.rateLimit = rl
 }
 
+// SetCertStore replaces where the manager learns what is in the certificate
+// store. Nil restores the default (ScanCertDir, which reads the directory).
+//
+// The replacement a de-rooted hz web will want is one that reports the certs
+// hz itself asked Let's Encrypt for, rather than opening a directory it can no
+// longer open.
+func (h *HAProxy) SetCertStore(store CertStore) {
+	if store == nil {
+		store = ScanCertDir
+	}
+	h.certs = store
+}
+
 // New creates a new HAProxy manager
 func New(configPath, statsSocket string) *HAProxy {
 	return &HAProxy{
 		configPath:  configPath,
 		statsSocket: statsSocket,
+		certs:       ScanCertDir,
 	}
 }
 
@@ -247,12 +281,6 @@ func (h *HAProxy) getHAProxyStats() map[string]haStatInfo {
 	return result
 }
 
-// SSLConfig holds SSL configuration for HAProxy
-type SSLConfig struct {
-	Enabled bool
-	CertDir string // directory containing combined PEM files
-}
-
 // GenerateConfig returns the HAProxy configuration as a string (for preview)
 func (h *HAProxy) GenerateConfig(httpPort, httpsPort int, ssl *SSLConfig) string {
 	return RenderConfig(h.configInput(httpPort, httpsPort, ssl))
@@ -261,13 +289,14 @@ func (h *HAProxy) GenerateConfig(httpPort, httpsPort int, ssl *SSLConfig) string
 // configInput gathers the manager's desired state into the pure renderer's
 // input. It is the only place config generation reads the machine, and it
 // reads exactly one thing: the certificate store, to learn which hosts the
-// HTTP→HTTPS redirect covers.
+// HTTP→HTTPS redirect covers — and it reads that through h.certs, so the read
+// can be replaced by a caller that already knows the answer.
 func (h *HAProxy) configInput(httpPort, httpsPort int, ssl *SSLConfig) ConfigInput {
 	return ConfigInput{
 		HTTPPort:      httpPort,
 		HTTPSPort:     httpsPort,
 		Backends:      h.backends,
-		TLS:           loadTLSAssets(ssl),
+		TLS:           h.loadTLSAssets(ssl),
 		TLSMinVersion: h.tlsMinVersion,
 		MetricsPort:   h.metricsPort,
 		MFAJail:       h.mfaJail,
@@ -275,93 +304,25 @@ func (h *HAProxy) configInput(httpPort, httpsPort int, ssl *SSLConfig) ConfigInp
 	}
 }
 
-// loadTLSAssets reads the certificate store and returns what the renderer
-// needs from it, or nil when there is nothing to serve HTTPS with: SSL off, no
-// directory configured, or no cert file in the directory.
-func loadTLSAssets(ssl *SSLConfig) *TLSAssets {
-	if ssl == nil || !ssl.Enabled || ssl.CertDir == "" {
+// loadTLSAssets asks the cert store what HTTPS has to work with, and returns
+// what the renderer needs from it — or nil when there is nothing to serve
+// HTTPS with: SSL off, no directory configured, or no cert file found.
+//
+// The manager decides WHETHER to ask (TLSWanted) and the pure half decides what
+// the answer means (TLSAssetsFor). Neither of those is a file read any more;
+// the read is whatever h.certs is.
+func (h *HAProxy) loadTLSAssets(ssl *SSLConfig) *TLSAssets {
+	if !TLSWanted(ssl) {
 		return nil
 	}
-	exact, suffix, found := certRedirectPatterns(ssl.CertDir)
-	if !found {
-		return nil
+	store := h.certs
+	if store == nil {
+		// A zero-value HAProxy still has to render the same config a
+		// constructed one does; New sets this, so this is belt for a struct
+		// literal somebody writes later.
+		store = ScanCertDir
 	}
-	return &TLSAssets{CertDir: ssl.CertDir, Exact: exact, Suffix: suffix}
-}
-
-// certRedirectPatterns reads every .pem cert in certDir and returns the HAProxy
-// host-match patterns used to redirect HTTP->HTTPS, derived from each cert's SANs
-// rather than its filename. Non-wildcard SANs become exact matches; wildcard SANs
-// (*.x) become suffix matches (.x). found reports whether any cert file exists
-// (i.e. whether SSL should be considered enabled). Results are sorted for
-// deterministic config output.
-func certRedirectPatterns(certDir string) (exact, suffix []string, found bool) {
-	entries, err := os.ReadDir(certDir)
-	if err != nil {
-		return nil, nil, false
-	}
-	exactSet := map[string]struct{}{}
-	suffixSet := map[string]struct{}{}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".pem") {
-			continue
-		}
-		found = true
-		names := certDNSNames(filepath.Join(certDir, e.Name()))
-		if len(names) == 0 {
-			// Cert couldn't be parsed (or has no SANs): fall back to the filename
-			// so redirect coverage isn't silently lost. The filename is the primary
-			// domain's base, matched both exactly and as a suffix.
-			base := strings.ToLower(strings.TrimSuffix(e.Name(), ".pem"))
-			exactSet[base] = struct{}{}
-			suffixSet["."+base] = struct{}{}
-			continue
-		}
-		for _, n := range names {
-			n = strings.ToLower(strings.TrimSuffix(n, "."))
-			if n == "" {
-				continue
-			}
-			if strings.HasPrefix(n, "*.") {
-				suffixSet[n[1:]] = struct{}{} // "*.office.x" -> ".office.x"
-			} else {
-				exactSet[n] = struct{}{}
-			}
-		}
-	}
-	for k := range exactSet {
-		exact = append(exact, k)
-	}
-	for k := range suffixSet {
-		suffix = append(suffix, k)
-	}
-	sort.Strings(exact)
-	sort.Strings(suffix)
-	return exact, suffix, found
-}
-
-// certDNSNames parses the leaf certificate from a PEM bundle (fullchain+key) and
-// returns its DNS SANs. Returns nil if the file can't be read or parsed.
-func certDNSNames(path string) []string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	for {
-		var block *pem.Block
-		block, data = pem.Decode(data)
-		if block == nil {
-			return nil
-		}
-		if block.Type != "CERTIFICATE" {
-			continue
-		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			return nil
-		}
-		return cert.DNSNames
-	}
+	return TLSAssetsFor(ssl.CertDir, store(ssl.CertDir))
 }
 
 // GetServerState queries the HAProxy admin socket for server states in a backend.

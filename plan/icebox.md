@@ -475,6 +475,65 @@ byte-identical output must not also change behaviour.
   observation struct that does not exist. A different refactor, not the fifth
   instance of this one.
 
+## Found during the letsencrypt/acme seam split (2026-09-21) — deliberately left
+
+Six things surfaced while separating the certificate packages' pure halves from
+their privileged ones, and while building the comparator that proves the split
+changed nothing. None were fixed there, for the same reason as every pass
+before it: a refactor whose claim is identical behaviour must not also change
+behaviour. Every one is pinned by the comparator as *current* behaviour, so
+fixing one will make that comparison fail — which is the point.
+
+- **A corrupt `fullchain.pem` re-requests a certificate every 12 hours, for
+  ever.** Three defects compound. `GetCertInfo` declares an `error` return and
+  has never returned one: five `openssl x509` reads, each best-effort, so a
+  file openssl cannot parse comes back as a `*CertInfo` with every field empty
+  and `err == nil`. `GetCertInfoForDomain` only *stats* the file before calling
+  it, so "unreadable" and "fine" are indistinguishable. `CheckCertSANs` then
+  diffs an empty SAN set against the configured one and reports **every**
+  configured SAN missing, which `runCertRenewalSweep`
+  (`internal/server/server.go:1729`) reads as "SAN set changed, renewing".
+  `certRenewalInterval` is 12h, so that is two issuances a day against a
+  rate-limited CA, and the new certificate is written over the corrupt one —
+  which would fix it, unless the request is what is failing. The fix is for
+  `GetCertInfo` to fail when it parsed nothing, and for `CheckCertSANs` to
+  distinguish "no certificate" from "unreadable certificate". The comparator's
+  `unparseable cert file` fixture pins today's behaviour on both sides.
+- **`CheckCertSANs`'s fourth return value is dead.** It is `nil` on every path,
+  including the one where `GetCertInfoForDomain` failed and the error is
+  discarded in favour of `(false, nil, nil, nil)`. Both call sites
+  (`server.go:1730`, `handlers_services.go:583`) already write `_` for it, so
+  nothing is checking anything. Either return the error or drop the return.
+- **`PackageAllForHAProxy` always returns nil.** It logs and continues per
+  domain, so a gateway where packaging failed for *every* domain reports
+  success, and `server.go:1762`'s `if err != nil` cannot fire. HAProxy then
+  reloads against a cert directory nothing wrote. It should return a joined
+  error, or at least a count.
+- **`createCloudflareProvider` gates the zone token on the wrong field.**
+  `CF_ZONE_API_TOKEN` is set from `CloudflareAPIToken` but only `if
+  cfg.CloudflareZoneID != ""` — so a config with a zone id and no token sets
+  the variable to the empty string, and a config with a token and no zone id
+  never sets it at all. lego wants the token; the zone id is not a token.
+- **`Config.WriteMaintenancePageFiles` is a second writer into the HAProxy
+  errors directory, and it is not in the privilege audit.**
+  `internal/config/derive.go:337` writes `<svc>_503.http` and `os.Remove`s
+  stale ones under `/etc/haproxy/errors/`. §2 of `plan/privilege-audit.md`
+  lists `internal/haproxy/apply.go` for that directory and not this. Item 12
+  step 5 orphans it exactly the way it orphans `errors/503.http` — and moving
+  it needs something the agent's file model does not have: **delete what is not
+  listed**. `agent.File` describes files that should exist; nothing describes
+  files that should not.
+- **`Status.LegoAvailable` is a hardcoded `true` that lands in an `Installed`
+  field alongside real checks.** `handlers_api_system.go:266` assigns it to
+  `le.Installed`, four lines from `wg.Installed = binaryOnPath("wg")` and
+  `hap.Installed = binaryOnPath("haproxy")`. Same field, same card, same word —
+  but for WireGuard and HAProxy it means "hz looked", and for Let's Encrypt it
+  means "hz compiled". Since lego IS compiled in, the honest status for that
+  card is whether an ACME **account** exists (`<certDir>/accounts/account.key`),
+  which is a question that can actually be answered no. The comment at
+  `handlers_api_system.go:256` already says that is what it was supposed to
+  mean.
+
 ## Found during the import work (2026-09-20) — deliberately left
 
 - **`updateConfig` stores before it saves** (`internal/server/server.go:496`).
