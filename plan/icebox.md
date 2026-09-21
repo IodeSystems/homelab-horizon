@@ -519,3 +519,52 @@ Two things to decide, and they are separable:
 Nothing here is urgent while nothing is deployed. It becomes urgent the moment
 the config manager holds secrets that exist nowhere else — which is the point of
 the recovery-recipient work that found it.
+
+## ◻ Found while classifying privileged operations (2026-09-21)
+
+From `plan/privilege-classification.md`. None fixed there — that investigation
+changed no code. Each names the section with the evidence.
+
+- **IP forwarding is never persisted.** Three places write
+  `/proc/sys/net/ipv4/ip_forward` (`autoheal.go:264`, `wireguard/apply.go:173`,
+  `main.go:479`) and nothing in the hz process writes `/etc/sysctl.d` or
+  `/etc/sysctl.conf`. The only code in-tree that makes it permanent is the join
+  script for a *new peer* (`handlers_ha.go:560`). So on a gateway whose distro
+  default is 0, forwarding is lost on reboot and restored only when a human
+  presses the fixer button again — and nothing says so. Free to fix as part of
+  §3.1 #1 (emit the sysctl.d file alongside the `/proc` write).
+
+- **`buildAgentDesired` has no no-default-route stand-down.**
+  `handleAPIIPTablesReconcile` refuses to reconcile when
+  `DetectDefaultInterface()` is empty, with the reason written down
+  (`handlers_api_iptables.go:225`: the generator cannot name the out interface,
+  so port forwards drop out of the expected set and a reconcile would remove
+  them). `handlers_agent.go:158-167` has no such guard, so the agent would be
+  served an expected set with the forwards missing. Latent only because the
+  agent is inert. §3.3.
+
+- **Backup restore's archive-path handling.** `handleRestore`
+  (`handlers_backup.go`) derives destination paths for cert material from
+  uploaded zip entry names. Recorded as a class of issue — archive extraction
+  deriving a write path from archive-supplied names — deliberately without a
+  recipe, because **this repo is public**. §3.8. It should be looked at in the
+  same pass that routes restore's privileged writes through items 12.2/12.3,
+  since both touch the same loop.
+
+- **`POST /api/v1/wg/create-config` has no confirmation.** It mints a new
+  WireGuard server keypair and rewrites `wg0.conf`, which invalidates every
+  client config ever handed out (`privilege-audit.md` §1.4 already records the
+  consequence). In `SystemHealthTab.tsx` it is a plain button. Whether or not it
+  becomes a CLI verb, a control with that blast radius needs a modal naming the
+  consequence. §3.1 #5.
+
+- **The static supervisor warns "dev mode" on a correct production host.**
+  `static_supervisor.go:135` logs `static file server running in-process (not
+  root; dev mode)` whenever `Geteuid() != 0` — which is exactly the state item
+  12 puts a production gateway into. §3.6.
+
+- **Two stale references in `plan/architecture.md`.** `User=root` is at
+  `internal/config/config.go:2809`, not `:2477`; and item 12's "four `Geteuid`
+  gates" misses two more in `internal/server` (`static_supervisor.go:110`,
+  `handlers_site.go:109`) which change branch at the flip rather than going
+  away. §1.5.
