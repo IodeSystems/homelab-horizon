@@ -34,7 +34,7 @@ func (d *DNSMasq) WriteConfig() error {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	config := RenderConfig(d.configInput())
+	config := d.renderConfigLocked()
 
 	if err := os.WriteFile(d.configPath, []byte(config), 0644); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
@@ -59,7 +59,7 @@ func (d *DNSMasq) SetRecords(records []Record) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	hosts := RenderHosts(d.hostsInput(records))
+	hosts := d.renderRecordsLocked(records)
 
 	if err := os.WriteFile(d.hostsPath, []byte(hosts), 0644); err != nil {
 		return fmt.Errorf("failed to write hosts file: %w", err)

@@ -8,6 +8,7 @@ dist
 /homelab-horizon
 /hz
 /hz-probe
+/hz-agent
 coverage.out
 coverage.html
 deploy.sh
