@@ -564,9 +564,60 @@ that changes hz's shape.
        for THIS machine is answered. Verified on `hz-audit` with a throwaway
        wg0.conf: admin session 401 (200 before), agent 200, section present,
        nothing printed.
-    3. ◐ **Split done 2026-09-21; the wiring is what is left.** Move what the
-       agent cannot yet reach: letsencrypt's cert writes, `/etc/haproxy/certs`,
-       and HAProxy's `errors/503.http`.
+    3. ✅ **Done 2026-09-21.** Split first, then wired. What the agent could
+       not reach — letsencrypt's cert writes, `/etc/haproxy/certs`, and
+       HAProxy's `errors/503.http` — now crosses.
+
+       **The wiring, and the one new concept it needed.** `errors/503.http`,
+       the per-service `<svc>_503.http` maintenance pages and the served
+       certificate bundles are all in the payload. The pages needed something
+       `agent.File` could not say — *delete what is not listed* — which is
+       `agent.Directory`: hz declares "this directory is mine and the names in
+       it matching this claim are exactly what I listed", and the agent removes
+       the rest. **Declarative, not a delete list**: hz does not know what is on
+       the box, so a list of paths to delete would have to come back from a
+       report round trip and the payload would stop being a projection.
+
+       **What bounds the prune** (`internal/agent/ownership.go`, one function
+       both the planner and the applier ask independently): only two sections
+       can carry a claim at all, so a claim on the cert or WireGuard section is
+       unrepresentable rather than unimplemented; a claim is one directory deep
+       and a pattern with a separator claims nothing; an **empty `Match` claims
+       nothing** — fail-closed, because `/etc/haproxy/errors` holds the
+       distribution's own 400/403/…/504 pages beside hz's two names; a file the
+       payload lists is never a candidate; and the applier re-asks the bound
+       immediately before each unlink rather than trusting the plan's `Kind`
+       (a `Change` is a plain struct, and a plan crosses a wire in the other
+       direction). `TestRemovalIsImpossibleOutsideAClaimedDirectory` fails if
+       either the bound or the re-check is widened — verified by doing both.
+
+       **One generic section, not a named one per subsystem** (§4.3's question,
+       answered): `Desired.Files` is `{Files, Dirs, Units}`. The line is APPLY
+       SEMANTICS — haproxy, dnsmasq, wireguard and iptables each need a
+       specific thing done after a write, so they stay named; a journald
+       drop-in or a sysctl file is "write bytes, maybe poke a unit", and those
+       go here. `Unit{Name, Action}` is what keeps `Subsystem` meaningful for a
+       bag of files. It has no producer yet — the maintenance pages went to the
+       HAProxy section because they need HAProxy's reload, and that is the test
+       for which section anything belongs in.
+
+       **The cert section** is `<SSLHAProxyCertDir>/<domain>.pem` and nothing
+       else, `Secret` forced by `Desired.allFiles` like WireGuard's, folded
+       into HAProxy's reload rather than given an apply half of its own. It
+       carries no directory claim on purpose: `pullCertFromPeer` also writes
+       there (`ha-and-the-agent.md` §4), and claiming it would have the agent
+       delete what that just put down. **diff.go's layer 2 had to grow for it**
+       — a PEM has no `key = value` line, so pattern redaction would have had
+       nothing to say about a bundle; it now blanks PEM key banners and bare
+       base64 lines, which is what makes the two layers independently provable
+       for a certificate as they already were for a WireGuard config.
+
+       Verified on `hz-audit` against the live gateway files: `503.http`
+       *unchanged* (same bytes by construction), a maintenance page *create*, a
+       planted stale `ghost_503.http` *remove*, the distribution's six pages not
+       mentioned at all, and a changed bundle reported as "contents differ
+       (238 bytes on disk, 238 desired) — not shown, this file carries key
+       material". Nothing was applied; the agent is still inert.
 
        **`internal/letsencrypt` and `internal/acme` are now render/apply split**
        like the other four, each with a `seam_test.go` guard. These two guards
@@ -587,21 +638,20 @@ that changes hz's shape.
        empty one are the same answer, and every HTTPS gateway would have
        silently re-rendered as plain HTTP.
 
-       **`errors/503.http` belongs to the agent.** It is a rendered artifact
+       **`errors/503.http` belongs to the agent**, and it rides in the HAProxy
+       section rather than anywhere else. It is a rendered artifact
        (`haproxy.RenderError503`, a constant with no secret and no
        machine-specific value), its *only* writer anywhere in hz is
        `WriteConfig`, and the config that references it — `errorfile 503 …`,
-       always emitted — already crosses the wire in the agent's HAProxy
-       section. HAProxy refuses to start on a missing errorfile, so the page
-       and the config have to land together, under one reload. Wiring it is one
-       more `agent.File` in `buildAgentDesired`, `Secret: false`, at
-       `<config dir>/haproxy.Error503Path`. NOT done here, because adding a
-       file to the payload changes what the (inert) agent diffs, and this pass
-       claimed no behaviour change. **Second writer, newly found:**
-       `Config.WriteMaintenancePageFiles` writes and PRUNES `<svc>_503.http` in
-       the same directory and is missing from the privilege audit — and moving
-       it needs something `agent.File` does not model, *delete what is not
-       listed*. See `plan/icebox.md`.
+       always emitted — already crosses the wire in that section. HAProxy
+       refuses to start on a missing errorfile, so page and config land under
+       ONE reload: same section, so `Apply` writes every file in it and then
+       reloads once. `TestTheErrorPageExistsBeforeHAProxyIsReloaded` asserts
+       the guarantee from inside the reload rather than asserting the
+       arrangement. **The second writer in that directory,**
+       `Config.WriteMaintenancePageFiles`, is the one that needed
+       `agent.Directory`; it keeps writing until item 12 step 5, and both it
+       and the payload now render from one function (`Config.MaintenancePages`).
 
        **Certificate material may cross to the agent** — reasoned out rather
        than assumed from the WireGuard precedent; see "Cert material and the

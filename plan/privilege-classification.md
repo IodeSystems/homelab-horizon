@@ -652,7 +652,16 @@ DELETE** — leaving a dormant root self-install path in the boot sequence is
 strictly worse than removing it, because the next person to read `Geteuid()` as
 "a dev-mode check" will restore it.
 
-### 3.10 `Config.WriteMaintenancePageFiles` — AGENT-OWNED, cheapest win, and the audit never listed it
+### 3.10 ✅ SERVED 2026-09-21 — `Config.WriteMaintenancePageFiles`, AGENT-OWNED, and the audit never listed it
+
+The pages and the claim on that directory are in the payload (item 12 step 3).
+The writer stays until hz stops writing files at all (step 5); both it and
+`buildAgentDesired` now render from `Config.MaintenancePages`, so they cannot
+drift. What follows is the verdict as it was argued — and the one line in it
+that was wrong: "fits the agent's model today with no new capability at all"
+understated the prune. `[]File` says what should exist; nothing in it says what
+should NOT, which is §4.5 and is what `agent.Directory` had to add.
+
 
 `internal/config/derive.go:339`. Writes one `<service>_503.http` per service
 that sets `Proxy.MaintenancePage` into the HAProxy errors directory, 0644, and
@@ -777,7 +786,31 @@ There is no way to express "this file changed and the interface must be taken
 (§3.1 #4) and what any `PostUp` change requires. Adding it means either a second
 WireGuard action or a general `Units []Unit{Name, Action}` section (§4.3).
 
-### 4.3 The section set is closed, and every new file needs code on both sides
+### 4.3 ✅ DECIDED 2026-09-21 — one generic section, and the named ones stay
+
+**Both.** `Desired.Files` is a single generic `{Files, Dirs, Units}` section;
+haproxy, dnsmasq, wireguard and iptables stay named. **The line is apply
+semantics, not subject matter**: each named section exists because the agent
+has to call a *different thing* after a write — validate-then-reload, restart a
+unit whose install is a separate privilege, sync a live interface, reconcile a
+rule set through a classifier. A journald drop-in, a sysctl file or a unit
+drop-in is "write bytes, then maybe poke a unit", and three more named types
+for those would buy three more branches on both sides of a version boundary.
+
+The two objections below are answered rather than dismissed. Reload granularity
+is kept by `Unit{Name, Action}` — the named sections know what to poke because
+the type says so, the generic one because the payload says so. Nil-means-
+unmanaged is unchanged: `Files` is a pointer like every other section, and a
+*short* list is now meaningful only where hz also claims the directory
+(`Dirs`), which is the whole point of §4.5's concept.
+
+**The test for where something belongs**: the maintenance pages went to the
+HAProxy section, not this one, because they need HAProxy's reload — and the
+cert bundles got a named section because `Secret` is forced per-section and
+folding them into HAProxy's `Files` would have marked `haproxy.cfg` secret.
+
+The question as it stood:
+
 
 `Desired` has exactly four pointer fields and `Reloader` exactly four methods
 (`agent/desired.go:54-64`, `agent/apply.go:63-68`). A fifth subsystem — journald
@@ -815,7 +848,25 @@ taken, closes this gap by removing its only instance. Worth restating here
 because three of this document's verdicts assume it: with the cert pull gone,
 "opaque content" has no remaining caller.
 
-### 4.5 The agent never deletes
+### 4.5 ✅ CLOSED 2026-09-21 — the agent deletes, inside a claimed directory and nowhere else
+
+The second option below is the one taken: **a section declares "these are all
+the files in this directory", so absence is meaningful.** `agent.Directory{Path,
+Match}` + `KindRemove`; `internal/agent/ownership.go` is the single bound and
+`prunable` is asked twice — once by the planner before it will say a file would
+go, once by the applier immediately before each unlink, because a `Change` is a
+plain struct and a plan crosses a wire in the other direction (§4.1).
+
+The blast radius the paragraph below worried about is bounded by construction:
+only two sections can carry a claim (the other sections have no `Dirs` field),
+a claim is one directory deep, a pattern with a separator claims nothing, an
+**empty `Match` claims nothing**, a file the payload lists is never a
+candidate, and nothing but a regular file is ever unlinked (an `Lstat` check, so
+a symlink in a claimed directory is refused rather than followed). A short
+answer is still not a teardown: a section that vanishes takes its claim with it.
+
+The gap as it stood:
+
 
 `Compute` emits `create`/`update`/`unchanged`/`unknown` and nothing else, and
 `Apply` writes files that are listed. A file hz has **stopped** wanting is never

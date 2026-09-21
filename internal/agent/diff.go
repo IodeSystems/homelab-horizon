@@ -39,16 +39,44 @@ const maxDiffLines = 3
 // its own first pass emits is not a second layer.
 var secretAssignment = regexp.MustCompile(`(?i)^(\s*[-+]?\s*)([a-z0-9_.\-]*(private[_ -]?key|preshared[_ -]?key|secret|password|passphrase|token|credential)[a-z0-9_.\-]*)(\s*[:=]\s*)(.*)$`)
 
+// pemPrivateKey matches a PEM banner for key material, in any of the forms
+// openssl and the ACME clients emit (RSA/EC/ENCRYPTED/plain PKCS#8).
+//
+// A certificate bundle is the payload's second kind of secret and it is shaped
+// nothing like a WireGuard config: there is no `key = value` line to blank,
+// just a banner and base64. secretAssignment cannot see it, so layer 2 would
+// have had exactly nothing to say about a cert — which would make the cert
+// section's Secret flag a single point of failure rather than the first of
+// two.
+var pemPrivateKey = regexp.MustCompile(`(?i)-----(BEGIN|END)[A-Z0-9 ]*PRIVATE KEY-----`)
+
+// secretBlob matches a line that is nothing but a long base64 run: a PEM body
+// line, a bare WireGuard key, a token pasted on a line of its own.
+//
+// Forty characters is past anything hz renders as a whole line on its own (a
+// 32-byte key is 44 base64 characters, a PEM body line is 64) and the match is
+// anchored to the WHOLE line, so haproxy.cfg and dnsmasq.conf directives —
+// which all carry spaces — never touch it. A long unbroken path made only of
+// base64 characters would be blanked; that is the direction to err in, and the
+// line is a sample in a summary, not data anything reads back.
+var secretBlob = regexp.MustCompile(`^(\s*[-+]?\s*)[A-Za-z0-9+/]{40,}={0,2}\s*$`)
+
 // redactLine blanks the value of any assignment whose key names key material,
-// and passes everything else through unchanged.
+// any PEM key banner, and any line that is just a base64 blob — and passes
+// everything else through unchanged.
 //
 // Applied to every line the report emits, not only to files marked secret.
 func redactLine(line string) string {
-	m := secretAssignment.FindStringSubmatch(line)
-	if m == nil {
-		return line
+	if m := secretAssignment.FindStringSubmatch(line); m != nil {
+		return m[1] + m[2] + m[4] + "[redacted]"
 	}
-	return m[1] + m[2] + m[4] + "[redacted]"
+	if loc := pemPrivateKey.FindStringIndex(line); loc != nil {
+		return line[:loc[0]] + "[redacted private key]"
+	}
+	if m := secretBlob.FindStringSubmatch(line); m != nil {
+		return m[1] + "[redacted]"
+	}
+	return line
 }
 
 // describeTextChange summarises a file that exists and differs.

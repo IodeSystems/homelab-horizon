@@ -21,7 +21,12 @@ import (
 // must give a fixture the same answer it gives on a box. A clock or a file
 // read in there would make "every string in a stored report went through
 // redaction" a property nobody could check offline.
-var pureFiles = []string{"plan.go", "diff.go", "observed.go"}
+// ownership.go joined the list with the prune: it is the bound on the one
+// operation that destroys something, and a bound that consulted the machine
+// could answer differently on the box than it does in a test. It decides from
+// the payload alone — which is also why `hz-agent diff` can say what would be
+// removed from a directory it is not looking at.
+var pureFiles = []string{"plan.go", "diff.go", "observed.go", "ownership.go"}
 
 func TestPureHalfStaysPure(t *testing.T) {
 	banned := map[string]string{

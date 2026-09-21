@@ -28,9 +28,39 @@ type FileState struct {
 	ReadErr string
 }
 
+// DirEntry is one entry in a claimed directory.
+//
+// Regular is the only thing about it that matters and it is deliberately not a
+// full FileMode: the prune removes plain files and nothing else, so what the
+// planner needs to know is "is this a plain file", not "what is it". A symlink
+// reports Regular false — os.ReadDir does not follow it — which is what keeps
+// a link planted in a claimed directory from becoming a way to unlink its
+// target.
+type DirEntry struct {
+	Name    string
+	Regular bool
+}
+
+// DirState is what is in one claimed directory.
+//
+// Exists false is "not provisioned yet" and prunes nothing; ReadErr is "I
+// could not look", which is reported as unknown rather than as an empty
+// directory — an unlistable directory read as empty would prune nothing today
+// and would be a lie the moment the reason changed.
+type DirState struct {
+	Exists  bool
+	Entries []DirEntry
+	ReadErr string
+}
+
 // Observed is the whole of what the agent could learn about the machine.
 type Observed struct {
 	Files map[string]FileState
+
+	// Dirs is keyed by the CLEANED claim path, which is what plan.go looks up
+	// with — so a claim written "/etc/haproxy/errors/" and one written
+	// "/etc/haproxy/errors" cannot observe two different directories.
+	Dirs map[string]DirState
 
 	// IPTablesReadable is false when the live rule set could not be read.
 	// iptables.LiveRules swallows its own errors and returns an empty set, so
@@ -70,13 +100,23 @@ func (o *SystemObserver) euid() int {
 // Observe reads every path the payload names, plus the live rule set when the
 // process can actually read it.
 func (o *SystemObserver) Observe(d *Desired) Observed {
-	obs := Observed{Files: map[string]FileState{}}
+	obs := Observed{Files: map[string]FileState{}, Dirs: map[string]DirState{}}
 	if d == nil {
 		return obs
 	}
 
-	for _, of := range d.files() {
+	for _, of := range d.allFiles() {
 		obs.Files[of.File.Path] = readFile(of.File.Path)
+	}
+
+	// Only directories the payload CLAIMS are listed. The agent has no reason
+	// to enumerate anything else and no business doing it: a directory nobody
+	// claimed cannot produce a removal, so reading it would put its contents
+	// into a report for nothing.
+	for _, od := range d.dirs() {
+		if claimed, ok := cleanDir(od.Dir.Path); ok {
+			obs.Dirs[claimed] = readDir(claimed)
+		}
 	}
 
 	if d.IPTables == nil {
@@ -112,6 +152,27 @@ func readFile(path string) FileState {
 		// The path is reported, the error is the OS's own words. Neither can
 		// carry file contents, which is what keeps this safe to log.
 		return FileState{Exists: true, ReadErr: err.Error()}
+	}
+}
+
+// readDir turns one claimed directory into a DirState.
+//
+// Not recursive, and deliberately: a claim is about one directory's contents.
+// Descending would let a claim on /etc/haproxy/errors decide the fate of files
+// in a subdirectory nobody listed.
+func readDir(path string) DirState {
+	entries, err := os.ReadDir(path)
+	switch {
+	case err == nil:
+		st := DirState{Exists: true, Entries: make([]DirEntry, 0, len(entries))}
+		for _, e := range entries {
+			st.Entries = append(st.Entries, DirEntry{Name: e.Name(), Regular: e.Type().IsRegular()})
+		}
+		return st
+	case errors.Is(err, fs.ErrNotExist):
+		return DirState{}
+	default:
+		return DirState{Exists: true, ReadErr: err.Error()}
 	}
 }
 

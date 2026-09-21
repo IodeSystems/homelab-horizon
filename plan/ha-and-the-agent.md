@@ -153,7 +153,7 @@ output once.
 | `cfg.DNSMasqConfigPath` (`dnsmasq.conf`) | **not on this path** — `syncServices` never calls `dns.WriteConfig` | yes (`handlers_agent.go:121`) | n/a. Agent-only here; both would render `renderConfigLocked` anyway. |
 | iptables `WG-FORWARD` / `WG-INPUT` | `applyWGPeersFromConfig` → `rebuildWGChains` → `wireguard.RebuildForwardChain` / `RebuildInputChain` | yes, `iptables.Reconcile`'s owned-chain rebuild (`iptables/reconcile.go:213`) | **yes.** `wireguard.rebuildChain` (`wireguard/apply.go:280`) populates the chain **from `iptables.ExpectedRules`** (:285) — the file's own comment records the drift bug that made them collapse this to one generator. The two input structs differ (`ForwardChainOpts` omits `Forwards`/`ReservedPorts`), but `rebuildChain` filters by chain and those produce `HZ-*` rules only, so the omission cannot change these two chains. |
 | iptables ban rules (`INPUT -s <ip> -j DROP`) | `banSyncOnce` → `reapplyBans` (`peer_sync.go:390`) | **no, and cannot collide.** `iptables.LiveRules` narrows `INPUT` to rules that jump to `WG-INPUT` (`iptables/reconcile.go:24–33`), so a ban rule is never even read; and `Reconcile` deletes only rules classified **stale**, never unknown (:165–177). | n/a |
-| `<SSLCertDir>/live/<d>/*.pem`, `<SSLHAProxyCertDir>/<d>.pem` | `pullCertFromPeer` (`peer_sync.go:466,469,480`) | **no** — the agent still has no cert section, though `internal/letsencrypt` and `internal/acme` were split render/apply on 2026-09-21. | n/a today. Becomes an overlap the moment item 12 step 3 serves certs — and only `<SSLHAProxyCertDir>/<d>.pem` should cross; `live/**` is the issuance record, not the served bundle (`architecture.md`, "Cert material and the two channels"). |
+| `<SSLCertDir>/live/<d>/*.pem`, `<SSLHAProxyCertDir>/<d>.pem` | `pullCertFromPeer` (`peer_sync.go:466,469,480`) | **`<SSLHAProxyCertDir>/<d>.pem` only, since 2026-09-21** (item 12 step 3) — `CertSection`, forced `Secret`. `live/**` does NOT cross: issuance record, not served bundle. | **An overlap now**, and the reason the cert section carries no directory claim: hz would otherwise be telling the agent to delete a bundle peer-sync had just written. The agent writes what hz lists and prunes nothing here; whether this writer survives at all is §10.5, untouched. |
 | `/etc/wireguard/wg0.conf` | `applyWGPeersFromConfig` → `s.wg.*` + `Reload` | **yes, since 2026-09-21** (item 12 step 2) — `WireGuardSection.Files[0]`, contents = the file hz maintains, read back. | **Agreeing by construction, not by luck**: hz serves the same bytes it keeps, so an agent polling a box hz has written finds `unchanged`. It is still the *overlap* row — once the agent applies, two writers touch one file on independent clocks — but content cannot diverge while hz is the only producer. The guard in §7 still applies. |
 | `/etc/homelab-horizon/config.json` | `config.Save` (`handlers_peer.go:346`), `updateConfig` | **no** | n/a. Must stay writable by hz's user after the flip — true of all of hz, not peer-sync's problem. |
 
@@ -282,14 +282,19 @@ The peer-sync half of the checklist. It sits alongside
       so page and config must land together under one reload. Wiring is one
       `agent.File` at `<config dir>/haproxy.Error503Path`, `Secret: false`; not
       done in the split pass because it changes the payload.
-- [ ] **The OTHER writer in that directory has no owner.**
-      `Config.WriteMaintenancePageFiles` (`internal/config/derive.go:337`)
-      writes `<svc>_503.http` beside it and `os.Remove`s stale ones. It is not
-      in `privilege-audit.md` §2's table (added 2026-09-21) and it is harder to
-      move than the default page: it PRUNES, and `agent.File` models files that
-      should exist with nothing that says which should not. Either give the
-      agent a delete-what-is-not-listed concept for one directory, or keep a
-      privileged helper for it. Decide before the flip.
+- [x] **The OTHER writer in that directory has an owner too: the agent.**
+      Done 2026-09-21. `Config.WriteMaintenancePageFiles` PRUNES, and
+      `agent.File` said what should exist with nothing saying what should not —
+      so the agent grew the delete-what-is-not-listed concept
+      (`agent.Directory`, `privilege-classification.md` §4.5) rather than
+      keeping a privileged helper. The claim covers `503.http` and
+      `*_503.http` in that directory **and nothing else**: the distribution's
+      400/403/408/500/502/504 pages live there too, and an empty claim is
+      defined to cover nothing so a claim can never widen by omission. hz keeps
+      writing the pages until step 5; both it and the payload render from
+      `Config.MaintenancePages`. Note the checklist item above it was right
+      that this must read "every file under the haproxy errors directory" — the
+      claim is on the DIRECTORY, listing both name shapes.
 - [ ] **The three bypasses are each assigned** before `peer_id` is ever set
       again: `applyWGPeersFromConfig` (item 12 step 2), `pullCertFromPeer` (item
       12 step 3), `reapplyBans` (`handlers_ban`, `privilege-audit.md` §3 item 5).

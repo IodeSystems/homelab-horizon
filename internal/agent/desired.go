@@ -43,6 +43,8 @@ const (
 	SubsystemDNSMasq   Subsystem = "dnsmasq"
 	SubsystemWireGuard Subsystem = "wireguard"
 	SubsystemIPTables  Subsystem = "iptables"
+	SubsystemCerts     Subsystem = "certs"
+	SubsystemFiles     Subsystem = "files"
 )
 
 // Desired is the whole of what hz says this machine should look like.
@@ -61,6 +63,24 @@ type Desired struct {
 	DNSMasq   *DNSMasqSection   `json:"dnsmasq,omitempty"`
 	WireGuard *WireGuardSection `json:"wireguard,omitempty"`
 	IPTables  *IPTablesSection  `json:"iptables,omitempty"`
+	Certs     *CertSection      `json:"certs,omitempty"`
+
+	// Files is the GENERIC section, and it exists so the section list stops
+	// growing one named type per subsystem.
+	//
+	// The line is APPLY SEMANTICS, not subject matter. haproxy, dnsmasq,
+	// wireguard and iptables each need something specific done after a write —
+	// validate then reload, restart a unit whose install is a separate
+	// privilege, sync a live interface, reconcile a rule set against a
+	// classifier — and each of those is a named section because the agent has
+	// to call a different thing. A journald drop-in, a sysctl file, a unit
+	// drop-in: those are "put these bytes at this path, then maybe poke a
+	// unit", and a fifth, sixth and seventh named type for them would buy
+	// nothing but three more branches on both sides of a version boundary
+	// (plan/privilege-classification.md §4.3).
+	//
+	// nil still means unmanaged, exactly as for the named sections.
+	Files *FilesSection `json:"files,omitempty"`
 }
 
 // File is one file the agent owns: where it goes, what should be in it, and
@@ -76,12 +96,117 @@ type File struct {
 	Secret bool `json:"secret,omitempty"`
 }
 
+// Directory is hz saying "this directory is mine, and the names in it that
+// match this claim are exactly the files this payload lists". Anything else
+// matching the claim is removed.
+//
+// WHY A CLAIM RATHER THAN A DELETE LIST. hz does not know what is on the box —
+// that is the agent's half — so a list of paths to delete would have to come
+// from a report round trip, and the payload would stop being a projection of
+// what hz wants and become a reaction to what a machine last said. A claim is
+// declarative: it states an invariant about a directory, and the agent, which
+// can see the directory, works out what that means today.
+//
+// WHAT BOUNDS IT, because a remove is the one thing here that cannot be undone:
+//
+//   - Only a directory a payload explicitly claims is ever listed for removal,
+//     and only two sections can carry a claim at all (see Desired.dirs) — a
+//     claim on a cert or a WireGuard section is not unimplemented, it is
+//     unrepresentable.
+//   - A claim covers ONE directory, never a subtree: Match patterns are
+//     matched against a bare file name, and a pattern containing a separator
+//     claims nothing.
+//   - An empty Match claims NOTHING. Fail closed, and not a theoretical
+//     preference: /etc/haproxy/errors on a real gateway holds Debian's own
+//     400/403/408/500/502/504 pages beside the two names hz writes, so a
+//     "claim the whole directory" default would have deleted six files the
+//     first time it ran.
+//   - A file the payload also lists is never a removal candidate, so a
+//     directory cannot be claimed into deleting its own contents.
+//
+// ownership.go holds the single function all of that lives in, and both the
+// planner and the applier ask it independently.
+type Directory struct {
+	// Path is the absolute directory hz claims. Not recursive.
+	Path string `json:"path"`
+
+	// Match is the set of file-name globs (path.Match syntax, no separators)
+	// the claim covers. Empty claims nothing.
+	Match []string `json:"match,omitempty"`
+}
+
+// Unit is a systemd unit to poke after the generic section's files move.
+//
+// It is what keeps Subsystem meaningful for a bag of files: the named
+// sections know what to reload because the type says so, and a generic
+// section knows because the payload says so.
+type Unit struct {
+	Name string `json:"name"`
+
+	// Action is "restart" or "reload". Empty pokes nothing, which is the
+	// right answer for a file something else reads on its own schedule.
+	// Anything else is refused rather than guessed at.
+	Action string `json:"action,omitempty"`
+}
+
+// Unit actions. A closed set: an action the agent does not recognise is an
+// error, not a best effort.
+const (
+	UnitRestart = "restart"
+	UnitReload  = "reload"
+)
+
+// FilesSection is the generic section: files at paths, directories hz owns,
+// and the units to poke when one of them moves.
+//
+// Nothing in here is subsystem-specific, which is the whole point — see the
+// Files field on Desired for where the line is drawn.
+type FilesSection struct {
+	Files []File      `json:"files,omitempty"`
+	Dirs  []Directory `json:"dirs,omitempty"`
+	Units []Unit      `json:"units,omitempty"`
+}
+
+// CertSection carries the certificate bundles HAProxy loads, and nothing else
+// about certificates.
+//
+// Five constraints govern this section (plan/architecture.md, "Cert material
+// and the two channels"); the two this type is responsible for:
+//
+//   - Only the SERVED bundle, <cert dir>/<domain>.pem — the leaf plus key the
+//     edge terminates TLS with. Never /etc/letsencrypt/**, which is the record
+//     of issuance; never the ACME account key and never a DNS provider
+//     credential. The agent receives issued material, it does not get the
+//     power to issue.
+//   - Secret is FORCED by Desired.allFiles, like WireGuard's, so a producer
+//     that forgets cannot widen a diff into printing a private key.
+//
+// There is no Dirs claim here deliberately. hz is not the only writer in that
+// directory — pullCertFromPeer writes a peer's bundle into it
+// (plan/ha-and-the-agent.md §4) — so claiming it would have the agent delete
+// files another live path had just put there. Whether that writer survives at
+// all is a separate decision (§10.5), and this section does not pre-empt it.
+type CertSection struct {
+	// Dir is where the bundles live, for the report to name. The files carry
+	// their own absolute paths.
+	Dir   string `json:"dir"`
+	Files []File `json:"files,omitempty"`
+}
+
 // HAProxySection carries the rendered config plus what Reload needs to
 // validate and restart it.
 type HAProxySection struct {
 	ConfigPath  string `json:"config_path"`
 	StatsSocket string `json:"stats_socket,omitempty"`
 	Files       []File `json:"files,omitempty"`
+
+	// Dirs claims the HAProxy errors directory: errors/503.http and the
+	// per-service <svc>_503.http maintenance pages are hz's, everything else
+	// in there is the distribution's. A page that stops being wanted has to be
+	// REMOVED — HAProxy keeps serving a file it can still open — which is why
+	// the Directory concept exists at all
+	// (plan/privilege-classification.md §3.10, §4.5).
+	Dirs []Directory `json:"dirs,omitempty"`
 }
 
 // DNSMasqSection carries dnsmasq.conf and the records file it includes, plus
@@ -148,9 +273,9 @@ func (d *Desired) Fingerprint() string {
 	return hex.EncodeToString(sum[:])
 }
 
-// files lists every file in the payload, tagged with the subsystem that owns
-// it, in a stable order.
-func (d *Desired) files() []ownedFile {
+// allFiles lists every file in the payload, tagged with the subsystem that
+// owns it, in a stable order.
+func (d *Desired) allFiles() []ownedFile {
 	if d == nil {
 		return nil
 	}
@@ -173,6 +298,46 @@ func (d *Desired) files() []ownedFile {
 			out = append(out, ownedFile{SubsystemWireGuard, f})
 		}
 	}
+	if d.Certs != nil {
+		for _, f := range d.Certs.Files {
+			// A served bundle is leaf plus KEY. Same forcing as WireGuard's,
+			// and for the same reason: the producer's flag is a promise, this
+			// is the property.
+			f.Secret = true
+			out = append(out, ownedFile{SubsystemCerts, f})
+		}
+	}
+	if d.Files != nil {
+		for _, f := range d.Files.Files {
+			out = append(out, ownedFile{SubsystemFiles, f})
+		}
+	}
+	return out
+}
+
+// dirs lists every directory claim in the payload, tagged with the subsystem
+// whose reload a removal triggers.
+//
+// ONLY TWO SECTIONS CAN CLAIM ONE, and that is the outermost bound on the
+// prune: HAProxy, whose errors directory is the case this was built for, and
+// the generic section, which is where the next one will land. The other
+// sections have no Dirs field, so "the agent pruned a cert directory" is not a
+// bug that can be written — there is nowhere to say it.
+func (d *Desired) dirs() []ownedDir {
+	if d == nil {
+		return nil
+	}
+	var out []ownedDir
+	if d.HAProxy != nil {
+		for _, dir := range d.HAProxy.Dirs {
+			out = append(out, ownedDir{SubsystemHAProxy, dir})
+		}
+	}
+	if d.Files != nil {
+		for _, dir := range d.Files.Dirs {
+			out = append(out, ownedDir{SubsystemFiles, dir})
+		}
+	}
 	return out
 }
 
@@ -180,4 +345,11 @@ func (d *Desired) files() []ownedFile {
 type ownedFile struct {
 	Subsystem Subsystem
 	File      File
+}
+
+// ownedDir pairs a directory claim with the subsystem whose reload a removal
+// inside it triggers.
+type ownedDir struct {
+	Subsystem Subsystem
+	Dir       Directory
 }

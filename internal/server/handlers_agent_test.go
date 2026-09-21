@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -539,6 +540,285 @@ func TestAnAdminSessionIsRefused(t *testing.T) {
 		t.Fatalf("an hz admin read the agent's desired state (status %d)", w.Code)
 	}
 }
+
+// THE 503 PAGE AND THE CONFIG THAT NAMES IT TRAVEL TOGETHER.
+//
+// `errorfile 503 …` is always emitted and HAProxy refuses to start on a
+// missing errorfile, so these two cannot be in different sections: a section
+// is the reload granularity, and two sections would mean two reloads with a
+// window in between where the config names a file that is not there. They are
+// in one section, so Apply writes both and reloads once.
+func TestThe503PageIsInTheSameSectionAsTheConfigThatNamesIt(t *testing.T) {
+	s, dir := agentTestServer(t)
+	d, _ := servedDesired(t, s)
+
+	if d.HAProxy == nil {
+		t.Fatal("no haproxy section")
+	}
+	// The path WriteConfig writes today, spelled the way apply.go spells it.
+	want := filepath.Join(dir, haproxy.Error503Path)
+	var page *agent.File
+	for i, f := range d.HAProxy.Files {
+		if f.Path == want {
+			page = &d.HAProxy.Files[i]
+		}
+	}
+	if page == nil {
+		t.Fatalf("errors/503.http is not in the haproxy section: %+v", d.HAProxy.Files)
+	}
+	if page.Contents != haproxy.RenderError503() {
+		t.Fatal("the agent would write a different 503 page than hz does")
+	}
+	if page.Secret {
+		t.Fatal("the 503 page is a constant with no secret in it; marking it secret hides a diff for nothing")
+	}
+	if page.Mode != 0o644 {
+		t.Fatalf("the 503 page must land 0644, payload says %04o", page.Mode)
+	}
+	// And the config that names it is in the same section, so one pass writes
+	// both and one reload follows.
+	if d.HAProxy.Files[0].Path != s.cfg().HAProxyConfigPath {
+		t.Fatalf("the config is not in this section: %+v", d.HAProxy.Files)
+	}
+	if !strings.Contains(d.HAProxy.Files[0].Contents, "errorfile 503") {
+		t.Fatal("the config does not name an errorfile, so this test proves nothing")
+	}
+}
+
+// The maintenance pages, and the claim that lets a cleared one be REMOVED.
+//
+// This is the end-to-end of the whole item: hz's payload, the agent's real
+// observer against a real directory, and a plan that says the page an admin
+// cleared would go — while the vanilla error pages the distribution put in
+// that same directory stay.
+func TestMaintenancePagesCrossAndTheStaleOnesAreRemoved(t *testing.T) {
+	s, dir := agentTestServer(t)
+	cfg := *s.cfg()
+	cfg.Services = []config.Service{{
+		Name:    "alpha",
+		Domains: []string{"alpha.example.test"},
+		Proxy:   &config.ProxyConfig{Backend: "127.0.0.1:9001", MaintenancePage: "<h1>back soon</h1>"},
+	}}
+	s.config.Store(&cfg)
+
+	errorsDir := cfg.HAProxyErrorsDir()
+	if errorsDir != filepath.Join(dir, "errors") {
+		t.Fatalf("errors dir is %s, not beside haproxy.cfg", errorsDir)
+	}
+	if err := os.MkdirAll(errorsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// What a real gateway has in there: the distribution's pages, and one
+	// maintenance page left over from a service that no longer wants one.
+	for name, body := range map[string]string{
+		"400.http":      "HTTP/1.0 400\r\n\r\nvanilla\n",
+		"beta_503.http": "HTTP/1.0 503\r\n\r\nstale\n",
+	} {
+		if err := os.WriteFile(filepath.Join(errorsDir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	d, _ := servedDesired(t, s)
+	var listed []string
+	for _, f := range d.HAProxy.Files {
+		listed = append(listed, f.Path)
+	}
+	alpha := filepath.Join(errorsDir, "alpha_503.http")
+	if !slices.Contains(listed, alpha) {
+		t.Fatalf("the live maintenance page is not in the payload: %v", listed)
+	}
+	if len(d.HAProxy.Dirs) != 1 || d.HAProxy.Dirs[0].Path != errorsDir {
+		t.Fatalf("the errors directory is not claimed: %+v", d.HAProxy.Dirs)
+	}
+
+	plan := agent.Compute(&d, agent.NewSystemObserver().Observe(&d))
+	var removed []string
+	for _, c := range plan.Changes {
+		if c.Kind == agent.KindRemove {
+			removed = append(removed, c.Target)
+		}
+	}
+	want := []string{filepath.Join(errorsDir, "beta_503.http")}
+	if !slices.Equal(removed, want) {
+		t.Fatalf("the plan would remove %v, want exactly %v", removed, want)
+	}
+}
+
+// A certificate bundle crosses; the issuance material does not.
+func TestCertSectionCarriesTheServedBundleAndNothingElse(t *testing.T) {
+	s, _ := agentTestServer(t)
+	certDir, bundlePath := withCerts(t, s)
+
+	d, body := servedDesired(t, s)
+	if d.Certs == nil {
+		t.Fatal("no cert section; the agent cannot own an edge it is never told about")
+	}
+	if d.Certs.Dir != certDir {
+		t.Fatalf("section names %s, not the cert store", d.Certs.Dir)
+	}
+	if len(d.Certs.Files) != 1 || d.Certs.Files[0].Path != bundlePath {
+		t.Fatalf("want exactly the served bundle, got %+v", d.Certs.Files)
+	}
+	if !d.Certs.Files[0].Secret {
+		t.Fatal("a bundle carrying a private key crossed without the Secret flag")
+	}
+	if d.Certs.Files[0].Mode != 0o600 {
+		t.Fatalf("a bundle must land 0600, payload says %04o", d.Certs.Files[0].Mode)
+	}
+
+	// NOT the issuance record, NOT the account key, NOT a provider credential.
+	// The whole payload is searched, not just the cert section: a leak through
+	// some other section would be the same leak.
+	for _, forbidden := range []string{
+		s.cfg().SSLCertDir + "/live",
+		s.cfg().SSLCertDir + "/accounts",
+		fakeAccountKeyBody,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("the payload carries %q — the agent gets issued material, not the power to issue", forbidden)
+		}
+	}
+
+	// Off means NO SECTION, not an empty one.
+	off := *s.cfg()
+	off.SSLEnabled = false
+	s.config.Store(&off)
+	if d, _ := servedDesired(t, s); d.Certs != nil {
+		t.Fatalf("SSL is off and a cert section was served anyway: %+v", d.Certs)
+	}
+}
+
+// Layer one, for certificates: the flag is FORCED, not read off the wire.
+// The mirror of TestTheSecretFlagIsForcedNotTrusted, on the other forced
+// section — same tampering, same reconcile, same requirement.
+func TestTheCertSecretFlagIsForcedNotTrusted(t *testing.T) {
+	s, _ := agentTestServer(t)
+	_, bundlePath := withCerts(t, s)
+
+	d, _ := servedDesired(t, s)
+	d.Certs.Files[0].Secret = false // the producer "forgot"
+
+	obs := agent.Observed{Files: map[string]agent.FileState{
+		bundlePath: {Exists: true, Contents: "-----BEGIN CERTIFICATE-----\nb2xk\n-----END CERTIFICATE-----\n"},
+	}}
+	report := agent.Report(agent.Compute(&d, obs))
+
+	if strings.Contains(report, fakeCertKeyBody) {
+		t.Fatalf("a key body reached the report with Secret cleared; the flag is being trusted:\n%s", report)
+	}
+	if !strings.Contains(report, "key material") {
+		t.Fatalf("the cert change was not described as secret, so the flag was not forced:\n%s", report)
+	}
+}
+
+// Layer two, for certificates, proven INDEPENDENT of layer one: the bytes hz
+// actually served, in a section that gets no forcing at all.
+func TestCertRedactionHoldsWithTheSecretFlagOutOfTheWay(t *testing.T) {
+	s, _ := agentTestServer(t)
+	withCerts(t, s)
+
+	d, _ := servedDesired(t, s)
+	served := d.Certs.Files[0].Contents
+	if !strings.Contains(served, fakeCertKeyBody) {
+		t.Fatal("fixture is not carrying the key body, so this test would pass for the wrong reason")
+	}
+
+	unforced := &agent.Desired{
+		Machine: d.Machine,
+		HAProxy: &agent.HAProxySection{
+			ConfigPath: "/etc/haproxy/haproxy.cfg",
+			Files:      []agent.File{{Path: "/etc/haproxy/haproxy.cfg", Contents: served}},
+		},
+	}
+	obs := agent.Observed{Files: map[string]agent.FileState{
+		"/etc/haproxy/haproxy.cfg": {Exists: true, Contents: "global\n"},
+	}}
+	report := agent.Report(agent.Compute(unforced, obs))
+
+	if strings.Contains(report, fakeCertKeyBody) || strings.Contains(report, "BEGIN PRIVATE KEY") {
+		t.Fatalf("the key survived into a report with no Secret flag anywhere:\n%s", report)
+	}
+	if !strings.Contains(report, "[redacted") {
+		t.Fatalf("nothing was redacted, so the line never reached the redactor:\n%s", report)
+	}
+}
+
+// And the endpoint's own answers: a bundle may cross to the machine it belongs
+// to, never into a refusal or another machine's payload.
+func TestNoCertMaterialReachesARefusalOrAnotherMachine(t *testing.T) {
+	s, _ := agentTestServer(t)
+	withCerts(t, s)
+
+	otherSecret, err := agent.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.agentCredentials().Enroll("some-other-box", otherSecret); err != nil {
+		t.Fatal(err)
+	}
+
+	anon := httptest.NewRecorder()
+	s.handleAgentDesired(anon, httptest.NewRequest(http.MethodGet, agent.DesiredPath, nil))
+
+	for name, w := range map[string]*httptest.ResponseRecorder{
+		"an anonymous caller":     anon,
+		"a wrong credential":      agentGETWith(t, s, "not-the-one", ""),
+		"another machine's agent": agentGETWith(t, s, otherSecret, ""),
+	} {
+		if w.Code == http.StatusOK {
+			t.Fatalf("%s was served the payload (status %d)", name, w.Code)
+		}
+		for _, needle := range []string{fakeCertKeyBody, "BEGIN PRIVATE KEY"} {
+			if strings.Contains(w.Body.String(), needle) {
+				t.Fatalf("%s: cert material in a %d body", name, w.Code)
+			}
+		}
+	}
+}
+
+// withCerts gives the test server a certificate store with one served bundle
+// in it, plus an issuance tree beside it that must NOT cross.
+//
+// Shape-correct and not a key: the bodies are base64 alphabets, which is what
+// a PEM body looks like to every parser and every redactor in the path.
+func withCerts(t *testing.T, s *Server) (certDir, bundlePath string) {
+	t.Helper()
+	root := t.TempDir()
+	certDir = filepath.Join(root, "certs")
+	leRoot := filepath.Join(root, "letsencrypt")
+	for _, d := range []string{certDir, filepath.Join(leRoot, "live", "edge.example.test"), filepath.Join(leRoot, "accounts")} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bundlePath = filepath.Join(certDir, "edge.example.test.pem")
+	if err := os.WriteFile(bundlePath, []byte(fakeBundlePEM), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The issuance record and the account key, on disk, in the directory the
+	// config names. Nothing may lift them into the payload.
+	if err := os.WriteFile(filepath.Join(leRoot, "live", "edge.example.test", "privkey.pem"), []byte(fakeBundlePEM), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(leRoot, "accounts", "account.key"), []byte(fakeAccountKeyBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := *s.cfg()
+	cfg.SSLEnabled = true
+	cfg.SSLHAProxyCertDir = certDir
+	cfg.SSLCertDir = leRoot
+	s.config.Store(&cfg)
+	return certDir, bundlePath
+}
+
+const (
+	fakeCertKeyBody    = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2"
+	fakeAccountKeyBody = "YWNjb3VudC1rZXktdGhhdC1tdXN0LW5ldmVyLWNyb3NzLXRvLWFuLWFnZW50Cg"
+	fakeBundlePEM      = "-----BEGIN CERTIFICATE-----\n" + fakeCertKeyBody + "\n-----END CERTIFICATE-----\n" +
+		"-----BEGIN PRIVATE KEY-----\n" + fakeCertKeyBody + "\n-----END PRIVATE KEY-----\n"
+)
 
 // The endpoint is a READ. Serving it must not apply anything — that is what
 // makes installing the agent on the live gateway a no-op.
