@@ -647,3 +647,40 @@ func TestServiceFileCreatesItsStateDirectory(t *testing.T) {
 	// removing StateDirectory without noticing. What it cannot do alone is
 	// CREATE it, which is the bug this test exists for.
 }
+
+// The unit must accept hz's status notifications.
+//
+// The finding: three subsystems down and `systemctl is-active homelab-horizon`
+// still said `active`. Type=simple makes "active" a fact about the process, not
+// about the gateway. NotifyAccess=main is what lets hz send a STATUS= line
+// naming what is down — without it systemd silently discards the notification
+// and the box reports a clean active while nothing works.
+func TestServiceFileAcceptsStatusNotifications(t *testing.T) {
+	unit := GenerateServiceFile("/usr/local/bin/homelab-horizon", "/etc/homelab-horizon/config.json")
+
+	// A LINE, not a substring: the directive is explained by a comment in the
+	// template that contains the same text, and a substring match was
+	// satisfied by the comment alone — deleting the real directive left this
+	// test green. Found by deleting it.
+	if !hasDirective(unit, "NotifyAccess=main") {
+		t.Error("unit has no NotifyAccess directive: systemd discards hz's degraded status and the box reads healthy")
+	}
+	// NOT Type=notify: that makes systemd wait for READY=1 before the unit is
+	// active, and hz's whole posture is that it serves regardless of what
+	// failed — a boot that never reaches the ready call would hang until the
+	// start timeout instead of coming up degraded.
+	if !hasDirective(unit, "Type=simple") {
+		t.Error("unit is no longer Type=simple: a readiness gate would block a boot hz deliberately does not gate on")
+	}
+}
+
+// hasDirective reports whether the unit carries want as an actual directive
+// line, ignoring comments that merely mention it.
+func hasDirective(unit, want string) bool {
+	for _, line := range strings.Split(unit, "\n") {
+		if strings.TrimSpace(line) == want {
+			return true
+		}
+	}
+	return false
+}

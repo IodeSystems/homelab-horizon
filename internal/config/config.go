@@ -2809,6 +2809,16 @@ RestartSec=5
 User=root
 Group=root
 
+# NotifyAccess=main with Type=simple: hz is "active" the moment it is serving
+# (which is what we want — it keeps serving even when every subsystem is down,
+# because it is the tool you fix them with), but it also sends STATUS= so
+# "systemctl status homelab-horizon" says WHICH subsystems are down. Without
+# this line systemd discards the notification and the box reports a clean
+# "active" while WireGuard, dnsmasq and HAProxy have all failed. Not
+# Type=notify: that would block the boot behind a readiness hz deliberately
+# does not gate on. See internal/server/sdnotify.go.
+NotifyAccess=main
+
 # StateDirectory creates /var/lib/homelab-horizon, sets its ownership, and adds
 # it to ReadWritePaths implicitly — which the ReadWritePaths entry below cannot
 # do on its own, because a dash-prefixed path that does not exist is skipped
