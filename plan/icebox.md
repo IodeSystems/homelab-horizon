@@ -410,13 +410,59 @@ byte-identical output must not also change behaviour.
   different privileges — writing `/etc/dnsmasq.d/*` versus installing a unit
   that runs anything as root — and hz-agent should be able to grant one without
   the other.
-- **`internal/wireguard`** — the hard one, and where commit-confirmed lands
-  first. Four fights: `WGConfig.Load()` makes `/etc/wireguard/*.conf` the state
-  of record; `GenerateKeyPair` shells to `wg genkey` and is non-deterministic,
-  so render must accept a public key as input and never mint one; `GetNextIP`
-  allocates from live config, so the current set must be passed in; and
-  `detectDefaultInterface()` reads the routing table from inside what looks
-  like render.
+- **`internal/wireguard`** — **done (2026-09-20)**, `render.go` / `apply.go` /
+  `wireguard.go`. All four predicted fights were real; three resolved, one
+  deliberately only half-resolved:
+  - `GenerateKeyPair` stayed apply-side and `render.go` cannot reach anything
+    that mints a key — `seam_test.go` walks the AST for it, because "the
+    renderer emits config that *contains* an identity" is the failure mode
+    unique to this package.
+  - `GetNextIP` split into a pure `NextIP(vpnRange, used)` plus a
+    gather-and-delegate method. Allocation is a decision, so the set arrives as
+    an argument.
+  - `detectDefaultInterface` moved to `apply.go`. `ExpectedPostUp/Down` already
+    took the interface as a parameter; the function just sat next to them.
+  - **`Load()` was NOT resolved, on purpose.** The file is still the state of
+    record; what changed is that parsing is pure (`ParseConfig`) and the
+    manager holds the peer set. Moving the set into hz's own store is the model
+    change in phase 4 items 13–15 (Segments, `VPNRange` plural), and mixing it
+    into a file split would have made the no-behaviour-change claim
+    unprovable. Until then the line-patch renderers (`renderPeerUpdate`,
+    `renderPeerRemoval`, …) exist and are unexported precisely because they
+    encode "the file is the state of record" and should be deleted, not ported.
+
+## Found during the wireguard seam split (2026-09-20) — deliberately left
+
+- **Removing a peer whose `AllowedIPs` precedes its `PublicKey` leaves an
+  orphan block.** `renderPeerRemoval` identifies the peer by its `PublicKey`
+  line and then walks *backwards* over already-emitted lines, stopping at the
+  first line that is not `[Peer]`, a comment, or blank. A stanza written
+  `[Peer] / # name / AllowedIPs / PublicKey` therefore keeps its `[Peer]`,
+  its comment and its `AllowedIPs`, and loses only the `PublicKey` — which
+  `wg-quick` rejects, so the interface fails to come up on the next reload.
+  hz always writes `PublicKey` first (`RenderPeerBlock`), so this only bites a
+  hand-edited or imported config. Pre-existing on `dev`; verified, untouched.
+- **`GetServerPublicKey` reads `w.privateKey` without the mutex** while
+  `Load()` writes it under one. A real data race, not a theoretical one — a
+  status page refresh during a reload is the way to hit it. Preserved verbatim
+  rather than fixed, so the refactor stayed byte-for-byte.
+- **`skipNextComment` in the peer-update transform is never set true.** Three
+  references, all assignments to `false` plus one read. The "skip the old
+  comment line if we just added a new one" branch has never executed; the
+  comment replacement happens in place in the backwards walk instead. Dead
+  since it was written.
+- **`detectDefaultInterface` exists twice, verbatim.** `internal/wireguard`'s
+  unexported copy and `config.DetectDefaultInterface`, which is what every
+  external caller actually uses (`main.go`, `reconcile_iptables.go`,
+  `handlers_api_system_fix.go`). Same `/proc/net/route` parse, same
+  `00000000` match, two places to fix. Collapsing them means picking a
+  direction for the dependency, which is a decision, not a cleanup.
+- **`listenPort` is parsed and then never read** outside `wireguard_test.go`.
+  It survives a round trip anyway via `RawInterface`. Harmless, but it is state
+  the manager carries for nobody.
+- **`ValidatePublicKey` recompiles its regexp on every call.** One
+  `regexp.MustCompile` at package scope; not worth a behaviour-change risk
+  inside this pass.
 - **`internal/autoheal`** — **does not transfer.** `Run()` *is* apply; there is
   no desired-state text to render. Its analogous seam is
   `plan(observed) → []Action` / `execute([]Action)`, which needs an explicit
