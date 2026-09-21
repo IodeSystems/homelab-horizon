@@ -1,5 +1,9 @@
 package iptables
 
+// This file is part of the PURE half of the package: the layer-4 port-forward
+// rules. `net` appears below for ParseIP/ParseCIDR only — string parsing, no
+// socket, no resolver — which seam_test.go enforces rather than trusting.
+
 import (
 	"net"
 	"strconv"

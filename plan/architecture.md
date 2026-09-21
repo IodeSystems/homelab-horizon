@@ -384,9 +384,17 @@ never done is *execute* on a box it is not.
 **Phase 4 — the agent, on the gateway first.** The largest slice, and the one
 that changes hz's shape.
 
-10. Split render from apply in `internal/haproxy`, `internal/dnsmasq`,
-    `internal/iptables`, `internal/wireguard`, `internal/autoheal`. Pure
+10. Split render from apply in `internal/haproxy` ✅, `internal/dnsmasq` ✅,
+    `internal/iptables` ✅, `internal/wireguard`, `internal/autoheal`. Pure
     functions stay in hz; the privileged half becomes the agent's.
+    Each done package carries a `seam_test.go` that parses the render file's
+    imports and rejects `os`/`exec`/`net`/`time`/rand/`filepath`, so the split
+    does not quietly re-merge. `internal/dnsmasq` adds a second axis the others
+    do not need: installing a systemd unit is a *different* privilege from
+    writing a config file, so `unit.go` is separate from `apply.go` and a guard
+    keeps `os/exec` out of the latter. The agent should be able to grant one
+    without the other. `internal/autoheal` is expected not to transfer — see
+    `plan/icebox.md`, "Where the seam pattern transfers".
 11. `hz-agent` as a package, and the bootstrap order that installs it before hz
     stops being root. **Do this on the gateway alone, before any remote
     machine exists** — it is the same code path, it is the box you can walk to,
