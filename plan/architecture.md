@@ -127,6 +127,57 @@ A compromised agent gets a machine's network shape, not its secrets. That is
 the difference between a bad day and a breach — and it lets the agent run as
 root without root being the thing that reads production credentials.
 
+### Cert material and the two channels (2026-09-21)
+
+"The agent must never hold an environment key" is a rule about ONE key. It is
+tempting to read it as "no secret ever crosses to an agent", and the WireGuard
+section already proves that reading wrong — `wg0.conf` carries the machine's
+private key and `internal/agent` models, redacts and applies it. But arguing
+from that precedent is arguing by analogy, so here is the reasoning for
+certificates on its own terms.
+
+**An environment key and a TLS server key are different classes.** An
+environment key decrypts the config of *every instance in that environment* —
+its blast radius is a whole rung's secrets, and it is held by apps, not
+machines. A TLS server key authenticates *one hostname at one machine's edge*.
+The machine terminates TLS with it; it is on that box by construction, and
+nothing else is reachable through it. Losing one costs a certificate
+revocation. Losing the other is the rung.
+
+**So certificate material may cross, under five constraints:**
+
+1. **Only the machine's own material, and only the SERVED bundle.** What
+   crosses is `/etc/haproxy/certs/<base>.pem` — the leaf plus key HAProxy
+   loads, which is exactly what the edge needs and nothing more. NOT
+   `/etc/letsencrypt/live/**`: that is the record of issuance, not the thing
+   being served, and it belongs with whatever talks to the CA.
+2. **The ACME ACCOUNT key never crosses**, and neither do the DNS provider
+   credentials. Those are the environment-key-shaped things here: a Route53
+   token can rewrite a zone, and the account key is the subscriber identity
+   that can mint more certificates. Issuance stays with hz. The agent receives
+   *issued* material; it does not get the power to issue. That is strictly
+   safer than the alternative of letting each agent renew its own, which would
+   put a DNS-zone credential on every machine.
+3. **`Secret` is forced by the payload, not declared by the producer.**
+   `Desired.files()` already sets `f.Secret = true` on every WireGuard file
+   "whether or not the producer remembered to say so"; a certificate section
+   gets the same treatment, with `diff.go`'s pattern redaction as the second
+   layer. A diff report that is unsafe to print is a diff report nobody runs.
+4. **The admin path comes off `handleAgentDesired` FIRST.** This is item 12
+   step 2's precondition, unchanged: while `|| s.isAdmin(r)` stands, serving a
+   private key turns the shared admin token into a key-fetch. Same objection,
+   same fix, and it has to land before either section is populated.
+5. **Hashed into the fingerprint, never into a log.** Secret contents are
+   hashed like everything else — they must be, or a rotated key would not move
+   the generation — and a hash discloses nothing.
+
+**What this does NOT weaken.** After all five, a compromised agent holds the
+edge key for the hostnames its own box already serves. It still cannot read any
+app's config, cannot issue a new certificate, and cannot touch another
+machine's material. "A compromised agent gets a machine's shape, not its
+secrets" becomes "…not its *environment's* secrets", which is the claim that
+was doing the work.
+
 **Why there is an agent at all**, given that `config-manager.md` decided
 against one: config's consumer is the app, so an in-process library works.
 WireGuard's consumer is the kernel — it needs root and it must exist *before*
@@ -471,11 +522,48 @@ that changes hz's shape.
        `|| s.isAdmin(r)` and populating the section. `internal/agent` already
        models, plans, redacts and applies it, and
        `TestNoKeyMaterialCrossesThisEndpoint` is the test that has to change.
-    3. Move what the agent cannot yet reach: letsencrypt's cert writes and
-       `/etc/haproxy/certs` (they are not split render/apply), and HAProxy's
-       `errors/503.http` — today hz writes it inside `WriteConfig`.
-       `loadTLSAssets` reads the cert store during *render*, so once the certs
-       move it must become an input rather than a read.
+    3. ◐ **Split done 2026-09-21; the wiring is what is left.** Move what the
+       agent cannot yet reach: letsencrypt's cert writes, `/etc/haproxy/certs`,
+       and HAProxy's `errors/503.http`.
+
+       **`internal/letsencrypt` and `internal/acme` are now render/apply split**
+       like the other four, each with a `seam_test.go` guard. These two guards
+       are stricter than the rest and had to be: the pure halves must also be
+       unable to reach a CA, unable to touch the ACME account key, and — in
+       `acme` — unable to name a provider credential, because
+       `ProviderSummary` is the function that decides what a log line says
+       about a provider that has an AWS secret key in the same struct. Verified
+       byte-for-byte against the pre-refactor packages: 6912 rendered configs,
+       1400 letsencrypt observations, 13 ACME logs, zero diffs.
+
+       **`loadTLSAssets` no longer reads during render.** The cert facts are an
+       input: `haproxy.CertStore` is a `func(certDir string) []Cert` on the
+       manager, defaulting to `ScanCertDir` (apply.go, the privileged read).
+       The pure half is `TLSWanted` + `TLSAssetsFor`. So hz web keeps rendering
+       HTTPS configs after it loses the right to open `/etc/haproxy/certs` — it
+       replaces one function. Without that, an unreadable cert directory and an
+       empty one are the same answer, and every HTTPS gateway would have
+       silently re-rendered as plain HTTP.
+
+       **`errors/503.http` belongs to the agent.** It is a rendered artifact
+       (`haproxy.RenderError503`, a constant with no secret and no
+       machine-specific value), its *only* writer anywhere in hz is
+       `WriteConfig`, and the config that references it — `errorfile 503 …`,
+       always emitted — already crosses the wire in the agent's HAProxy
+       section. HAProxy refuses to start on a missing errorfile, so the page
+       and the config have to land together, under one reload. Wiring it is one
+       more `agent.File` in `buildAgentDesired`, `Secret: false`, at
+       `<config dir>/haproxy.Error503Path`. NOT done here, because adding a
+       file to the payload changes what the (inert) agent diffs, and this pass
+       claimed no behaviour change. **Second writer, newly found:**
+       `Config.WriteMaintenancePageFiles` writes and PRUNES `<svc>_503.http` in
+       the same directory and is missing from the privilege audit — and moving
+       it needs something `agent.File` does not model, *delete what is not
+       listed*. See `plan/icebox.md`.
+
+       **Certificate material may cross to the agent** — reasoned out rather
+       than assumed from the WireGuard precedent; see "Cert material and the
+       two channels" below.
     4. Add an `[Install]` section to the agent's unit, drop `--apply` from the
        "never emit this" rule in `generateUnit`, and put it in `ExecStart`.
        Four tests in `cmd/hz-agent` assert today's inertness and are the

@@ -2,6 +2,8 @@ package haproxy
 
 import (
 	"bytes"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"os"
@@ -16,12 +18,19 @@ import (
 //
 //   - write haproxy.cfg and the errors/ directory beside it
 //   - write the MFA jail's source-IP ACL file
+//   - READ the certificate store, to learn which hosts HTTPS covers
 //   - run `haproxy -c` to validate, and `systemctl reload|restart|start haproxy`
 //   - drive the admin socket to change a server's state
 //
 // Nothing here decides what the config should say — that is render.go, which is
 // pure. When this half moves into hz-agent (plan/architecture.md, phase 4, item
 // 10), this list is what moves.
+//
+// The cert-store READ is on that list on purpose. It is not a write and it does
+// not reload anything, but it is the one thing config generation needed root
+// (or at least the certs group) for, and item 12 step 3 takes it away from hz
+// web. It sits behind CertStore so the caller that loses the privilege can
+// supply the facts instead of the file.
 
 // writeFileIfChanged writes data to path only when the file's contents differ,
 // and reports whether it wrote.
@@ -66,7 +75,7 @@ func (h *HAProxy) WriteConfig(httpPort, httpsPort int, ssl *SSLConfig) error {
 	// Write default 503 error page (overrides vanilla HAProxy; per-service pages override this)
 	errorsDir := dir + "/errors"
 	if err := os.MkdirAll(errorsDir, 0755); err == nil {
-		_ = os.WriteFile(errorsDir+"/503.http", []byte(default503Page), 0644)
+		_ = os.WriteFile(dir+"/"+Error503Path, []byte(RenderError503()), 0644)
 	}
 
 	return os.WriteFile(h.configPath, []byte(config), 0644)
@@ -133,4 +142,64 @@ func (h *HAProxy) SetServerState(backend, server, state string) error {
 		return fmt.Errorf("haproxy: %s", resp)
 	}
 	return nil
+}
+
+// ScanCertDir is the default CertStore: it reads every .pem file in certDir and
+// reports each one's DNS SANs.
+//
+// This is the reading half of what used to be certRedirectPatterns. It returns
+// facts, not patterns — turning SANs into HAProxy host matches is
+// TLSAssetsFor's job, and keeping that on the pure side is what lets the
+// HTTP→HTTPS redirect rules be rendered and diffed with no certificates on
+// disk and no privilege to read them.
+//
+// A directory that cannot be read returns nothing, which the renderer reads as
+// "no HTTPS frontend" — the same answer the old code gave. An entry whose leaf
+// certificate cannot be parsed is still returned, with no DNSNames, so the
+// filename fallback still applies.
+//
+// NOTE what this deliberately does NOT return: no key bytes, no certificate
+// bytes, no chain. A combined PEM in this directory holds the private key
+// beside the leaf, and the only thing lifted out of it is the list of
+// hostnames — which is public, and is already written into haproxy.cfg.
+func ScanCertDir(certDir string) []Cert {
+	entries, err := os.ReadDir(certDir)
+	if err != nil {
+		return nil
+	}
+	var certs []Cert
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".pem") {
+			continue
+		}
+		certs = append(certs, Cert{
+			File:     e.Name(),
+			DNSNames: certDNSNames(filepath.Join(certDir, e.Name())),
+		})
+	}
+	return certs
+}
+
+// certDNSNames parses the leaf certificate from a PEM bundle (fullchain+key) and
+// returns its DNS SANs. Returns nil if the file can't be read or parsed.
+func certDNSNames(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	for {
+		var block *pem.Block
+		block, data = pem.Decode(data)
+		if block == nil {
+			return nil
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil
+		}
+		return cert.DNSNames
+	}
 }

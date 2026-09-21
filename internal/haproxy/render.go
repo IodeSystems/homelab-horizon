@@ -29,8 +29,8 @@ type ConfigInput struct {
 	Backends []Backend
 
 	// TLS is nil when no HTTPS frontend should be emitted. Non-nil means the
-	// cert store was read and found usable — see loadTLSAssets, which is the
-	// half that does the reading.
+	// cert store reported at least one certificate — see TLSAssetsFor, and
+	// CertStore in haproxy.go for where those facts come from.
 	TLS *TLSAssets
 
 	// TLSMinVersion is the ssl-min-ver floor applied to every bind. Empty
@@ -48,13 +48,96 @@ type ConfigInput struct {
 // TLSAssets is the rendered config's view of the certificate store: where
 // HAProxy loads certs from, and which hostnames those certs cover.
 //
-// Reading the directory to produce this is apply-side work (loadTLSAssets);
+// Reading the directory to produce this is apply-side work (ScanCertDir);
 // rendering only interpolates the strings, which is what keeps the HTTP→HTTPS
 // redirect rules testable with no certificates on disk.
 type TLSAssets struct {
 	CertDir string   // directory passed to `bind ... ssl crt`
 	Exact   []string // hostnames matched exactly (non-wildcard SANs)
 	Suffix  []string // hostnames matched by suffix (".x" from a "*.x" SAN)
+}
+
+// SSLConfig holds SSL configuration for HAProxy.
+//
+// It lives on the pure side because it is a statement of intent — HTTPS on,
+// certs over there — and says nothing about what is actually on the disk.
+type SSLConfig struct {
+	Enabled bool
+	CertDir string // directory containing combined PEM files
+}
+
+// Cert is one certificate file in the store, as the renderer needs to see it:
+// a name and the hostnames it covers. Nothing else about a certificate reaches
+// the config, and deliberately so — no key, no chain, no bytes.
+//
+// DNSNames is empty when the file could not be parsed, which
+// TLSAssetsFor treats as "fall back to the filename" rather than "covers
+// nothing". Producing these is apply-side (ScanCertDir); rendering consumes
+// them as an argument.
+type Cert struct {
+	File     string   // base name within the cert dir, e.g. "example.com.pem"
+	DNSNames []string // DNS SANs on the leaf certificate
+}
+
+// TLSWanted reports whether an HTTPS frontend is wanted at all: SSL on and a
+// directory named. It is the question that must be answered BEFORE the cert
+// store is consulted, so a disabled or unconfigured gateway never reads a
+// directory it has no business reading.
+func TLSWanted(ssl *SSLConfig) bool {
+	return ssl != nil && ssl.Enabled && ssl.CertDir != ""
+}
+
+// TLSAssetsFor turns the certificate store's facts into the renderer's view of
+// it, or nil when there is nothing to serve HTTPS with (no cert file at all).
+//
+// Non-wildcard SANs become exact host matches; wildcard SANs (*.x) become
+// suffix matches (.x). A cert whose SANs could not be read falls back to its
+// filename, matched both exactly and as a suffix, so redirect coverage is not
+// silently lost by an unparseable bundle. Results are sorted for deterministic
+// config output.
+//
+// This is the half of the old certRedirectPatterns that did not touch a disk.
+// The other half is ScanCertDir, in apply.go: the split is what lets an
+// unprivileged hz render an HTTPS config for a cert store it cannot open
+// (plan/architecture.md, phase 4 item 12 step 3).
+func TLSAssetsFor(certDir string, certs []Cert) *TLSAssets {
+	if len(certs) == 0 {
+		return nil
+	}
+	exactSet := map[string]struct{}{}
+	suffixSet := map[string]struct{}{}
+	for _, c := range certs {
+		if len(c.DNSNames) == 0 {
+			// Cert couldn't be parsed (or has no SANs): fall back to the filename
+			// so redirect coverage isn't silently lost. The filename is the primary
+			// domain's base, matched both exactly and as a suffix.
+			base := strings.ToLower(strings.TrimSuffix(c.File, ".pem"))
+			exactSet[base] = struct{}{}
+			suffixSet["."+base] = struct{}{}
+			continue
+		}
+		for _, n := range c.DNSNames {
+			n = strings.ToLower(strings.TrimSuffix(n, "."))
+			if n == "" {
+				continue
+			}
+			if strings.HasPrefix(n, "*.") {
+				suffixSet[n[1:]] = struct{}{} // "*.office.x" -> ".office.x"
+			} else {
+				exactSet[n] = struct{}{}
+			}
+		}
+	}
+	assets := &TLSAssets{CertDir: certDir}
+	for k := range exactSet {
+		assets.Exact = append(assets.Exact, k)
+	}
+	for k := range suffixSet {
+		assets.Suffix = append(assets.Suffix, k)
+	}
+	sort.Strings(assets.Exact)
+	sort.Strings(assets.Suffix)
+	return assets
 }
 
 // Backend represents a HAProxy backend service
@@ -132,6 +215,23 @@ type MFAJail struct {
 	// service rather than a login prompt.
 	PortalURL string
 }
+
+// Error503Path is where errors/503.http goes, relative to the directory
+// haproxy.cfg lives in. Named here because two halves need to agree on it: the
+// writer (apply.go's WriteConfig today) and whoever computes the desired file
+// set for a machine.
+const Error503Path = "errors/503.http"
+
+// RenderError503 returns the contents of errors/503.http.
+//
+// It is a rendered artifact like haproxy.cfg — a constant string with no
+// secret, no key and no machine-specific value in it — so it belongs in the
+// same desired-state payload the config does, and its writer can be whoever
+// owns the config file. Today that writer is WriteConfig; after phase 4 item
+// 12 step 5 hz stops writing files at all, and this is the function the
+// agent's file list is built from. Stated as a function rather than an
+// exported constant so the call site reads the same as every other render.
+func RenderError503() string { return default503Page }
 
 // default503Page is the HAProxy-format error file written to errors/503.http at each reload.
 // Per-service maintenance pages override this at the backend level.

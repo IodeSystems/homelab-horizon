@@ -146,13 +146,14 @@ output once.
 | path | peer-sync writes it via | agent writes it | same bytes? |
 |---|---|---|---|
 | `cfg.HAProxyConfigPath` (`haproxy.cfg`) | `syncServices` → `haproxy.WriteConfig` (`handlers_services.go:51`) | yes, `HAProxySection.Files[0]` (`handlers_agent.go:98`) | **yes, by construction.** `WriteConfig` calls `h.GenerateConfig(...)` (`haproxy/apply.go:56`) with a comment saying why; `buildAgentDesired` calls the same accessor. One renderer, two callers. |
-| `<haproxy dir>/errors/503.http` | `syncServices` → `WriteConfig` (`haproxy/apply.go:66–69`) | **no** | n/a — hz-only. Already `architecture.md` item 12 step 3. |
+| `<haproxy dir>/errors/503.http` | `syncServices` → `WriteConfig` (`haproxy/apply.go`, via `RenderError503()`) | **no, not yet — but it is the agent's** (decided 2026-09-21, §7) | n/a today. Same-bytes by construction once wired: one constant, one renderer. |
+| `<haproxy dir>/errors/<svc>_503.http` | `Config.WriteMaintenancePageFiles` (`config/derive.go:337`) — and it `os.Remove`s stale ones | **no** | n/a. Second writer in that directory, missed by `privilege-audit.md` §2 until 2026-09-21. Needs an owner AND a prune concept. |
 | `cfg.MFAJailACLPath()` | `applyWGPeersFromConfig` → `rebuildWGChains` → `syncMFAJailACL` → `haproxy.WriteJailACL` (`handlers_api_vpn.go:440`, `mfa_jail.go:113`) | yes, `HAProxySection.Files[1]` (`handlers_agent.go:108`) | **yes.** Both render `haproxy.RenderJailACL(cfg.JailedPeerIPs())`. |
 | `cfg.DNSMasqHostsPath` | `syncServices` → `dns.SetRecords(cfg.DeriveDNSRecords())` (`handlers_services.go:36`) | yes (`handlers_agent.go:122`) | **yes.** `SetRecords` → `renderRecordsLocked` (`dnsmasq/apply.go:62`); the agent gets `GenerateRecords` → the same `renderRecordsLocked` (`dnsmasq/dnsmasq.go:107`). |
 | `cfg.DNSMasqConfigPath` (`dnsmasq.conf`) | **not on this path** — `syncServices` never calls `dns.WriteConfig` | yes (`handlers_agent.go:121`) | n/a. Agent-only here; both would render `renderConfigLocked` anyway. |
 | iptables `WG-FORWARD` / `WG-INPUT` | `applyWGPeersFromConfig` → `rebuildWGChains` → `wireguard.RebuildForwardChain` / `RebuildInputChain` | yes, `iptables.Reconcile`'s owned-chain rebuild (`iptables/reconcile.go:213`) | **yes.** `wireguard.rebuildChain` (`wireguard/apply.go:280`) populates the chain **from `iptables.ExpectedRules`** (:285) — the file's own comment records the drift bug that made them collapse this to one generator. The two input structs differ (`ForwardChainOpts` omits `Forwards`/`ReservedPorts`), but `rebuildChain` filters by chain and those produce `HZ-*` rules only, so the omission cannot change these two chains. |
 | iptables ban rules (`INPUT -s <ip> -j DROP`) | `banSyncOnce` → `reapplyBans` (`peer_sync.go:390`) | **no, and cannot collide.** `iptables.LiveRules` narrows `INPUT` to rules that jump to `WG-INPUT` (`iptables/reconcile.go:24–33`), so a ban rule is never even read; and `Reconcile` deletes only rules classified **stale**, never unknown (:165–177). | n/a |
-| `<SSLCertDir>/live/<d>/*.pem`, `<SSLHAProxyCertDir>/<d>.pem` | `pullCertFromPeer` (`peer_sync.go:466,469,480`) | **no** — certs are not split render/apply and the agent has no cert section. | n/a today. Becomes an overlap the moment item 12 step 3 moves certs. |
+| `<SSLCertDir>/live/<d>/*.pem`, `<SSLHAProxyCertDir>/<d>.pem` | `pullCertFromPeer` (`peer_sync.go:466,469,480`) | **no** — the agent still has no cert section, though `internal/letsencrypt` and `internal/acme` were split render/apply on 2026-09-21. | n/a today. Becomes an overlap the moment item 12 step 3 serves certs — and only `<SSLHAProxyCertDir>/<d>.pem` should cross; `live/**` is the issuance record, not the served bundle (`architecture.md`, "Cert material and the two channels"). |
 | `/etc/wireguard/wg0.conf` | `applyWGPeersFromConfig` → `s.wg.*` + `Reload` | **not served today** — `buildAgentDesired` deliberately omits `WireGuard` (`handlers_agent.go:22–29`). Modelled and applied in `internal/agent`. | Becomes an overlap the moment item 12 step 2 serves it. |
 | `/etc/homelab-horizon/config.json` | `config.Save` (`handlers_peer.go:346`), `updateConfig` | **no** | n/a. Must stay writable by hz's user after the flip — true of all of hz, not peer-sync's problem. |
 
@@ -273,11 +274,22 @@ The peer-sync half of the checklist. It sits alongside
       step; §4 says why it should pass — same renderer, same config — so a
       section reporting *changed* is evidence something in this document is
       stale, not a routine diff to apply.
-- [ ] **`errors/503.http` has an owner.** hz writes it inside
-      `haproxy.WriteConfig` (`haproxy/apply.go:66–69`); the agent never writes it
-      and never deletes it. After the flip nothing writes it. Either add it to
-      `HAProxySection.Files` or accept that it is provisioned once. Decide,
-      don't discover. (Item 12 step 3 already names it.)
+- [x] **`errors/503.http` has an owner: the agent.** Decided 2026-09-21. It is a
+      rendered artifact (`haproxy.RenderError503`, a constant with no secret and
+      no machine-specific value), its only writer anywhere in hz is
+      `WriteConfig`, and `errorfile 503 …` is always emitted into a config the
+      agent already carries — HAProxy refuses to start on a missing errorfile,
+      so page and config must land together under one reload. Wiring is one
+      `agent.File` at `<config dir>/haproxy.Error503Path`, `Secret: false`; not
+      done in the split pass because it changes the payload.
+- [ ] **The OTHER writer in that directory has no owner.**
+      `Config.WriteMaintenancePageFiles` (`internal/config/derive.go:337`)
+      writes `<svc>_503.http` beside it and `os.Remove`s stale ones. It is not
+      in `privilege-audit.md` §2's table (added 2026-09-21) and it is harder to
+      move than the default page: it PRUNES, and `agent.File` models files that
+      should exist with nothing that says which should not. Either give the
+      agent a delete-what-is-not-listed concept for one directory, or keep a
+      privileged helper for it. Decide before the flip.
 - [ ] **The three bypasses are each assigned** before `peer_id` is ever set
       again: `applyWGPeersFromConfig` (item 12 step 2), `pullCertFromPeer` (item
       12 step 3), `reapplyBans` (`handlers_ban`, `privilege-audit.md` §3 item 5).
