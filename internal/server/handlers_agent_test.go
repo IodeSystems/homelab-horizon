@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -311,29 +312,231 @@ func TestNoCredentialReachesTheResponse(t *testing.T) {
 	}
 }
 
-// hz does not serve the WireGuard section yet, and the reason is that wg0.conf
-// carries the machine's private key while this endpoint is still gated on an
-// ADMIN credential rather than a per-machine agent one (item 16). If somebody
-// wires it up, this test is where they have to think about that first.
-func TestNoKeyMaterialCrossesThisEndpoint(t *testing.T) {
-	s, _ := agentTestServer(t)
-	body := agentGET(t, s, "").Body.String()
+// WHAT REPLACED TestNoKeyMaterialCrossesThisEndpoint, AND WHY.
+//
+// That test pinned "no key material crosses this endpoint at all", which was
+// the right constraint while the route was gated on an ADMIN credential: the
+// WireGuard section was withheld precisely because the shared admin token
+// would otherwise have become a key-fetch. Item 12 step 1 gave the agent a
+// credential of its own and step 2 took the admin branch off, so the section
+// is served — and wg0.conf carries the interface private key by construction.
+// The old assertion is therefore false by design, not by accident, and
+// deleting it would leave nothing standing where it stood.
+//
+// What is still true, and what the four tests below pin in its place:
+//
+//	the payload FORCES Secret on WireGuard files, it does not trust a producer
+//	the pattern redaction in diff.go catches a key even if Secret were wrong
+//	no key material reaches a log line, an error, or a diff report
+//	only a credential for THIS machine is answered at all
+//
+// The third and fourth were what the old test was really protecting; the
+// first two are the layers that let a private key cross safely instead of not
+// crossing.
 
-	var d agent.Desired
-	if err := json.Unmarshal([]byte(body), &d); err != nil {
+// Obviously fake: 32 bytes of counting pattern, base64'd the way wg writes a
+// key. It is the right SHAPE so the parser and the redaction regex see what
+// they would see on a real box, and it is not a key anybody has.
+const (
+	fakeWGPrivateKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+	fakeWGPeerKey    = "Hx4dHBsaGRgXFhUUExIREA8ODQwLCgkIBwYFBAMCAQA="
+)
+
+// withWireGuard gives the test server a wg0.conf to serve.
+//
+// In its OWN temp directory, not agentTestServer's: that one is globbed by
+// TestAgentDesiredWritesNothing, which asserts the endpoint creates no files
+// there. A fixture file dropped in it would turn that assertion into noise.
+func withWireGuard(t *testing.T, s *Server) (path, contents string) {
+	t.Helper()
+	path = filepath.Join(t.TempDir(), "wg0.conf")
+	contents = "[Interface]\n" +
+		"PrivateKey = " + fakeWGPrivateKey + "\n" +
+		"Address = 10.99.0.1/24\n" +
+		"ListenPort = 51820\n\n" +
+		"[Peer]\n" +
+		"PublicKey = " + fakeWGPeerKey + "\n" +
+		"AllowedIPs = 10.99.0.2/32\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if d.WireGuard != nil {
-		t.Fatal("hz served a WireGuard section; that file holds a private key and this route is admin-gated, not agent-gated")
+	cfg := *s.cfg()
+	cfg.WGInterface = "wg0"
+	cfg.WGConfigPath = path
+	s.config.Store(&cfg)
+	return path, contents
+}
+
+func servedDesired(t *testing.T, s *Server) (agent.Desired, string) {
+	t.Helper()
+	body := agentGET(t, s, "").Body.String()
+	var d agent.Desired
+	if err := json.Unmarshal([]byte(body), &d); err != nil {
+		t.Fatalf("decode: %v", err)
 	}
-	// Named without the word "PrivateKey" in it, and deliberately: t.TempDir()
-	// puts the TEST NAME in every path in this payload, so the first version of
-	// this check failed on its own name. An assertion that can match itself is
-	// not measuring the thing it claims to.
-	for _, needle := range []string{"PrivateKey", "PresharedKey"} {
-		if i := strings.Index(body, needle); i >= 0 {
-			t.Fatalf("the payload mentions %s at offset %d", needle, i)
+	return d, body
+}
+
+// The section is served, it is the file hz maintains, and it is marked secret.
+func TestWireGuardSectionCrossesAsTheFileHZMaintains(t *testing.T) {
+	s, _ := agentTestServer(t)
+	path, contents := withWireGuard(t, s)
+
+	d, _ := servedDesired(t, s)
+	if d.WireGuard == nil {
+		t.Fatal("no WireGuard section; the agent cannot own an interface it is never told about")
+	}
+	if d.WireGuard.Interface != "wg0" || d.WireGuard.ConfigPath != path {
+		t.Fatalf("section names the wrong interface or path: %+v", d.WireGuard)
+	}
+	if len(d.WireGuard.Files) != 1 {
+		t.Fatalf("want exactly wg0.conf, got %d files", len(d.WireGuard.Files))
+	}
+	f := d.WireGuard.Files[0]
+	if f.Contents != contents {
+		t.Fatal("the agent would write different WireGuard bytes than hz has")
+	}
+	if f.Mode != 0o600 {
+		t.Fatalf("wg0.conf must land 0600, payload says %04o", f.Mode)
+	}
+	if !f.Secret {
+		t.Fatal("the WireGuard file crossed without the Secret flag")
+	}
+
+	// A missing or unreadable wg0.conf is NO SECTION, never an empty one —
+	// the agent reads an empty section as "hz wants this file empty".
+	cfg := *s.cfg()
+	cfg.WGConfigPath = filepath.Join(t.TempDir(), "absent.conf")
+	s.config.Store(&cfg)
+	if d, _ := servedDesired(t, s); d.WireGuard != nil {
+		t.Fatalf("an unreadable wg0.conf produced a section: %+v", d.WireGuard)
+	}
+}
+
+// LAYER ONE, and the thing that makes it a property rather than a habit:
+// Secret is FORCED by Desired.files(), not read off the wire.
+//
+// The check tampers with the decoded payload — sets Secret back to false, the
+// way a producer that forgot or a middlebox that rewrote it would — and then
+// runs the real reconcile and the real report over it. If the flag were
+// trusted, the diff would widen into line-level output and print the key.
+func TestTheSecretFlagIsForcedNotTrusted(t *testing.T) {
+	s, _ := agentTestServer(t)
+	path, _ := withWireGuard(t, s)
+
+	d, _ := servedDesired(t, s)
+	d.WireGuard.Files[0].Secret = false // the producer "forgot"
+
+	// Observed differs from desired, so the differ has something to describe.
+	obs := agent.Observed{Files: map[string]agent.FileState{
+		path: {Exists: true, Contents: "[Interface]\nPrivateKey = " + fakeWGPeerKey + "\nAddress = 10.99.0.1/24\n"},
+	}}
+	report := agent.Report(agent.Compute(&d, obs))
+
+	if strings.Contains(report, fakeWGPrivateKey) || strings.Contains(report, fakeWGPeerKey) {
+		t.Fatalf("a key reached the report with Secret cleared; the flag is being trusted:\n%s", report)
+	}
+	if !strings.Contains(report, "key material") {
+		t.Fatalf("the WireGuard change was not described as secret, so the flag was not forced:\n%s", report)
+	}
+}
+
+// LAYER TWO, proven INDEPENDENT of layer one.
+//
+// The forcing in Desired.files() only knows about WireGuard files. So the
+// bytes hz actually served are put into a section that gets no forcing at all
+// — an HAProxy file, Secret false — and the report must still not carry the
+// key. That is diff.go's pattern redaction working with layer one switched
+// off, which is what "two layers" has to mean to be worth having.
+func TestRedactionCatchesTheKeyWithTheSecretFlagOutOfTheWay(t *testing.T) {
+	s, _ := agentTestServer(t)
+	withWireGuard(t, s)
+
+	d, _ := servedDesired(t, s)
+	served := d.WireGuard.Files[0].Contents
+	if !strings.Contains(served, fakeWGPrivateKey) {
+		t.Fatal("fixture is not carrying the key, so this test would pass for the wrong reason")
+	}
+
+	unforced := &agent.Desired{
+		Machine: d.Machine,
+		HAProxy: &agent.HAProxySection{
+			ConfigPath: "/etc/haproxy/haproxy.cfg",
+			Files:      []agent.File{{Path: "/etc/haproxy/haproxy.cfg", Contents: served}},
+		},
+	}
+	obs := agent.Observed{Files: map[string]agent.FileState{
+		"/etc/haproxy/haproxy.cfg": {Exists: true, Contents: "global\n"},
+	}}
+	report := agent.Report(agent.Compute(unforced, obs))
+
+	if strings.Contains(report, fakeWGPrivateKey) || strings.Contains(report, fakeWGPeerKey) {
+		t.Fatalf("the key survived into a report with no Secret flag anywhere:\n%s", report)
+	}
+	if !strings.Contains(report, "[redacted]") {
+		t.Fatalf("nothing was redacted, so the line never reached the redactor:\n%s", report)
+	}
+}
+
+// The endpoint's own answers. A key may cross to the machine it belongs to; it
+// may not appear in anything hz says to anybody else — a refusal body, an
+// error, or the payload served to another machine's agent.
+func TestNoKeyMaterialReachesARefusalOrAnotherMachine(t *testing.T) {
+	s, _ := agentTestServer(t)
+	withWireGuard(t, s)
+
+	otherSecret, err := agent.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.agentCredentials().Enroll("some-other-box", otherSecret); err != nil {
+		t.Fatal(err)
+	}
+
+	admin := httptest.NewRequest(http.MethodGet, agent.DesiredPath, nil)
+	admin.AddCookie(&http.Cookie{Name: "session", Value: s.signCookie("admin")})
+	adminW := httptest.NewRecorder()
+	s.handleAgentDesired(adminW, admin)
+
+	anon := httptest.NewRecorder()
+	s.handleAgentDesired(anon, httptest.NewRequest(http.MethodGet, agent.DesiredPath, nil))
+
+	for name, w := range map[string]*httptest.ResponseRecorder{
+		"an hz admin session":     adminW,
+		"an anonymous caller":     anon,
+		"a wrong credential":      agentGETWith(t, s, "not-the-one", ""),
+		"another machine's agent": agentGETWith(t, s, otherSecret, ""),
+	} {
+		if w.Code == http.StatusOK {
+			t.Fatalf("%s was served the payload (status %d)", name, w.Code)
 		}
+		body := w.Body.String()
+		for _, needle := range []string{fakeWGPrivateKey, fakeWGPeerKey, "PrivateKey"} {
+			if strings.Contains(body, needle) {
+				t.Fatalf("%s: key material in a %d body: %s", name, w.Code, body)
+			}
+		}
+	}
+}
+
+// The admin path is GONE, stated on its own so a regression names itself.
+// An hz admin session used to read this endpoint; while the payload was
+// haproxy.cfg that was defensible, and it stopped being the moment a private
+// key started crossing (plan/privilege-audit.md §3, constraint 4).
+func TestAnAdminSessionIsRefused(t *testing.T) {
+	s, _ := agentTestServer(t)
+
+	r := httptest.NewRequest(http.MethodGet, agent.DesiredPath, nil)
+	r.AddCookie(&http.Cookie{Name: "session", Value: s.signCookie("admin")})
+	// Prove the credential is a real one, or this test passes on a typo.
+	if !s.isAdmin(r) {
+		t.Fatal("the fixture is not an admin session, so refusing it proves nothing")
+	}
+
+	w := httptest.NewRecorder()
+	s.handleAgentDesired(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("an hz admin read the agent's desired state (status %d)", w.Code)
 	}
 }
 
