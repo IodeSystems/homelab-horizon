@@ -55,6 +55,12 @@ func TestCMAdminRoutesAreReachableAsBuilt(t *testing.T) {
 			apitypes.CMQueryRole: {"app"},
 		}},
 		{"machines", apitypes.CMPathMachines, nil},
+		// Key custody. Registered from the same constants the CLI reads, for
+		// the reason this whole file exists — and reachability matters more
+		// here than anywhere: an unrouted recovery endpoint means `hz cm key
+		// new` cannot wrap, which would be discovered as a missing wrap during
+		// a recovery rather than as a 404 now.
+		{"recovery", apitypes.CMPathRecovery, nil},
 	}
 
 	for _, tc := range cases {

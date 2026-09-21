@@ -96,9 +96,36 @@ func cmKeyNew(c *client, args []string) error {
 	fmt.Printf("Minted %s (%s) for %s.\n", id, *label, addr)
 	fmt.Printf("  %s\n", filepath.Join(ks.Root(), "secrets", "keys", addr.Environment, addr.App, addr.Role, *label+"."+id.String()+".key"))
 	fmt.Println()
-	fmt.Println("This machine is the only copy. hz never holds an environment key, so there is")
-	fmt.Println("nothing to restore from. Back it up now:")
-	fmt.Printf("  hz cm key export %s\n", addr)
+
+	// Custody, automatically, at the one moment an environment key comes into
+	// existence on a client. This is the whole reason the recovery recipient is
+	// a LIST in hz's config rather than a step in a runbook: the recipient set
+	// is fixed when a key is wrapped, so a key minted before somebody remembers
+	// to wrap it is a key that has to be re-wrapped later, by hand, from this
+	// exact machine. Nobody remembers.
+	//
+	// It is an ERROR, not a warning, when it fails. The key is already on disk,
+	// so nothing is lost — but a key with no custody that reported success is
+	// precisely the silent state this feature exists to make impossible, and
+	// the message says what to run.
+	wrapped, wrapErr := cmWrapToRecovery(c, addr, id.String(), key)
+	switch {
+	case wrapErr != nil:
+		fmt.Printf("The key is on disk at the path above and is usable.\n\n")
+		return fmt.Errorf("key %s was minted, but wrapping it to the recovery recipients failed: %w\n"+
+			"  this key currently exists in ONE place: this machine's keystore.\n"+
+			"  close that as soon as hz is reachable:  hz cm recovery backfill", id, wrapErr)
+	case wrapped > 0:
+		fmt.Printf("Wrapped to %d recovery recipient(s); hz now holds a blob only a recovery private\n", wrapped)
+		fmt.Println("key can open. That a wrap exists is not proof it opens — prove it:")
+		fmt.Printf("  hz cm recovery verify %s\n", addr)
+	default:
+		fmt.Println("No recovery recipients are registered, so this key exists in exactly one place:")
+		fmt.Println("this machine's keystore. hz never holds an environment key, so there is nothing")
+		fmt.Println("to restore from. Either set up custody, or back it up by hand:")
+		fmt.Println("  hz cm recovery keygen --name <name>    # then 'add', then 'backfill'")
+		fmt.Printf("  hz cm key export %s\n", addr)
+	}
 
 	if len(held) > 0 {
 		fmt.Println()

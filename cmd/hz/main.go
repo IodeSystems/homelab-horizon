@@ -202,6 +202,22 @@ CONFIG MANAGER ('hz cm')
   what is generic — the keys, the ceremony, and operations on blobs it cannot
   read.
 
+KEY CUSTODY ('hz cm recovery')
+  A keystore on one machine is a single point of failure: lose it and the
+  environment keys are gone, not locked. A recovery recipient is a recipient
+  that is always approved — every environment key is wrapped to its PUBLIC key
+  as it is minted, so the key survives the loss of that machine. The PRIVATE
+  half lives in a password manager, never on a box and never in hz.
+
+    hz cm recovery keygen --name ops     mint a recovery keypair (terminal only)
+    hz cm recovery add ops --public-key K  register the PUBLIC half with hz
+    hz cm recovery backfill              wrap the keys that already exist
+    hz cm recovery ls                    which keys are covered, and by whom
+    hz cm recovery verify prod/app/role  PROVE a recovery key opens one
+
+  Run verify. A backup nobody has restored from is not a backup, and every
+  other command here reports only that a blob was produced.
+
 EXAMPLES
   hz service list
   hz setup
