@@ -389,3 +389,35 @@ byte-identical output must not also change behaviour.
   `hz import --execute` or by hand-editing `config.json`, so `hz feed set` is
   usable only on an imported tree. A real hole in the write surface: the model
   can be read and inherited from, and only half-written.
+
+## The backup does not contain the database (found 2026-09-20)
+
+`internal/server/handlers_backup.go:17` says the export produces *"all state
+needed to clone this server"*. It produces `config.json`, the admin token,
+`wireguard.conf`, `invites.txt` and `certs/`. **It does not contain `hz.db`.**
+
+That database holds the config manager's entire state: enrolled machines,
+registrations and their approvals, every wrapped machine key, and every sealed
+config value. Restoring from a backup today gives you a gateway that serves the
+right domains and has forgotten every box it ever approved.
+
+This surfaced while deciding where recovery wraps live — they went into
+`config.json` precisely *because* the database rides no backup, which is the
+correct call for that feature but leaves the general hole open.
+
+Two things to decide, and they are separable:
+
+- **Does the export gain the database?** It is the obvious fix and it changes
+  what a backup zip is: today the zip is safe-ish to hand around (it already
+  carries the admin token and a WireGuard private key, so "safe" is doing work
+  there); with the DB it carries every wrapped environment key. That is still
+  useless without a machine private key or a recovery key, but the blast radius
+  of a leaked backup changes shape.
+- **Or does the comment stop lying?** If the database is deliberately excluded,
+  the header must say what the zip does *not* restore, and the restore path
+  should say it out loud rather than leaving the operator to find out when a box
+  next tries to resolve.
+
+Nothing here is urgent while nothing is deployed. It becomes urgent the moment
+the config manager holds secrets that exist nowhere else — which is the point of
+the recovery-recipient work that found it.
