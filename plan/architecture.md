@@ -411,12 +411,74 @@ that changes hz's shape.
     keeps `os/exec` out of the latter. The agent should be able to grant one
     without the other. `internal/autoheal` is expected not to transfer — see
     `plan/icebox.md`, "Where the seam pattern transfers".
-11. `hz-agent` as a package, and the bootstrap order that installs it before hz
-    stops being root. **Do this on the gateway alone, before any remote
-    machine exists** — it is the same code path, it is the box you can walk to,
+11. ✅ **done, and it is INERT.** `cmd/hz-agent` + `internal/agent` +
+    `GET /api/v1/agent/desired`. Done on the gateway alone, before any remote
+    machine exists — it is the same code path, it is the box you can walk to,
     and a break is recoverable.
+
+    **Installing it today changes nothing, and three independent things
+    enforce that**: `install` writes the unit and neither enables nor starts
+    it; the unit has no `[Install]` section, so `systemctl enable` refuses;
+    and its `ExecStart` carries no `--apply`, so even a hand-started agent
+    computes a diff and logs it. `run --apply` is the only writing path and it
+    also demands root. Four tests pin each of those.
+
+    **Transport: a conditional GET, polled.** The ETag *is* the payload's
+    content hash (`Desired.Fingerprint`) — no generation counter to keep
+    correct across restarts, a rollback returns to the generation it came
+    from, and an in-sync fleet costs a 304. Rejected: a local unix socket (it
+    makes the gateway the special case this document refuses, and leaves the
+    remote path exercised only by machines you cannot walk to); long-poll (a
+    held connection per machine through haproxy, to save seconds on a change
+    a human is watching); and `hz sync --wait` blocking on an applied-generation
+    report — right eventually, wrong while the agent ships inert, since hz
+    would wait on something deliberately not running. **Cost: a service change
+    is applied within one poll interval (5s default, 2.5s mean) instead of
+    synchronously inside the hz request.** That is the whole behavioural price
+    of item 12.
+
+    **What crosses the wire is rendered output, not a `MachineConfig`** — the
+    projection is item 14. The consumer side does not change shape when it
+    lands; only the producer does.
+
+    Wired: haproxy (config + jail ACL + reload), dnsmasq (conf + records +
+    unit restart), iptables (`Reconcile` over hz's own expected/stale sets).
+    Modelled and tested but **not served**: WireGuard — `wg0.conf` holds the
+    machine's private key and the endpoint is still gated on an hz *admin*
+    credential rather than a per-machine agent one. Not transferred:
+    letsencrypt's cert writes (not split yet) and `autoheal` (does not
+    transfer, see item 10).
 12. hz web drops to an unprivileged user. `main.go`'s four `Geteuid` gates and
     the `User=root` unit at `internal/config/config.go:2477` go away.
+
+    **The handover from item 11, in the order it has to happen.** Ownership
+    flips atomically or the gateway has two processes reconciling one haproxy:
+
+    1. Give the agent a credential of its own. It polls with an hz *admin*
+       token today (`HTTPSource.Token`), which is far more authority than it
+       needs and is why it must not run unattended yet.
+    2. Serve the WireGuard section from `buildAgentDesired` — safe only once
+       (1) is done, because that file carries the private key.
+       `internal/agent` already models, plans, redacts and applies it, and
+       `TestNoKeyMaterialCrossesThisEndpoint` is the test that has to change.
+    3. Move what the agent cannot yet reach: letsencrypt's cert writes and
+       `/etc/haproxy/certs` (they are not split render/apply), and HAProxy's
+       `errors/503.http` — today hz writes it inside `WriteConfig`.
+       `loadTLSAssets` reads the cert store during *render*, so once the certs
+       move it must become an input rather than a read.
+    4. Add an `[Install]` section to the agent's unit, drop `--apply` from the
+       "never emit this" rule in `generateUnit`, and put it in `ExecStart`.
+       Four tests in `cmd/hz-agent` assert today's inertness and are the
+       checklist: `TestInstalledUnitDoesNotApply`, `TestUnitIsNotEnableable`,
+       `TestInstallRefusesToRenderAnApplyingUnit`, `TestReportOnlyPassWritesNothing`.
+    5. Only then stop hz applying: `syncServices` renders and stops, hz's unit
+       drops to `User=hz`, and the four `Geteuid` gates go.
+
+    **Verify before flipping**, which is what the diff is for: `sudo hz-agent
+    diff` on the live gateway must report *in sync* for every section. A clean
+    report is evidence the agent would write exactly what hz already wrote.
+    Run it as root — unprivileged it cannot read `wg0.conf` or the live
+    firewall and says so per target rather than guessing.
 13. Machine record — identity and segments. NOT the observed version: that
     settled onto the registration in 0011, because it belongs to an instance
     and several instances share a box.

@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/iodesystems/homelab-horizon/internal/agent"
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/db"
@@ -1006,6 +1007,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/admin/hz/install", s.handleHZInstallScript)           // curl|bash installer for the hz operator CLI
 	mux.HandleFunc("/admin/hz-probe/install", s.handleProbeInstallScript)  // curl|bash installer for the outside-in vantage agent
 	mux.HandleFunc("/admin/hz-probe/bin/", s.handleProbeBinary)            // hz-probe binaries for the installer above
+	mux.HandleFunc("/admin/hz-agent/bin/", s.handleAgentBinary)            // hz-agent, the root daemon: fetched once, by a human, with sudo
 	mux.HandleFunc("/admin/hz/bin/", s.handleHZBinary)                     // per-arch hz binaries (needs -tags hzembed)
 
 	// Backup/restore API (Bearer token auth)
@@ -1077,6 +1079,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/vpn/peers", s.handleAPIVPNPeers)
 	mux.HandleFunc("/api/v1/zones", s.handleAPIZones)
 	mux.HandleFunc("/api/v1/sync/pending", s.handleAPIPendingChanges)
+
+	// What hz-agent polls for: this machine's desired state, rendered by the
+	// pure halves hz already uses. Per-instance, because it describes the box
+	// answering the request — a spare must serve its own, not the primary's.
+	s.handlePeerInstance(mux, agent.DesiredPath, s.handleAgentDesired)
 
 	// API v1 mutation routes
 	mux.HandleFunc("/api/v1/services/add", s.handleAPIAddService)

@@ -79,6 +79,37 @@ func (d *DNSMasq) hostsInput(records []Record) HostsInput {
 	return HostsInput{Records: records, LocalDomain: d.localDomain}
 }
 
+// GenerateConfig returns the contents WriteConfig would write to dnsmasq.conf.
+//
+// The preview accessor, and the one hz-agent's desired state is built from
+// (internal/server/handlers_agent.go). WriteConfig calls it rather than
+// rendering a second time, so "what the agent is told to write" and "what hz
+// would write itself" cannot become two different answers.
+func (d *DNSMasq) GenerateConfig() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.renderConfigLocked()
+}
+
+// renderConfigLocked is the one render call. Caller must hold d.mu — which
+// WriteConfig already does, so it takes this door and GenerateConfig takes the
+// locking one. Neither renders independently.
+func (d *DNSMasq) renderConfigLocked() string { return RenderConfig(d.configInput()) }
+
+// renderRecordsLocked is the same arrangement for the records file.
+// Caller must hold d.mu.
+func (d *DNSMasq) renderRecordsLocked(records []Record) string {
+	return RenderHosts(d.hostsInput(records))
+}
+
+// GenerateRecords returns the contents SetRecords would write for this record
+// set. Same no-drift reason as GenerateConfig.
+func (d *DNSMasq) GenerateRecords(records []Record) string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.renderRecordsLocked(records)
+}
+
 // SetLocalDomain sets the domain appended to bare host records. Empty disables
 // expansion, which is the previous behaviour.
 func (d *DNSMasq) SetLocalDomain(domain string) {

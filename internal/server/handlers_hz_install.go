@@ -146,6 +146,39 @@ func (s *Server) handleProbeBinary(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(b)
 }
 
+// GET /admin/hz-agent/bin/<os>-<arch> — the matching hz-agent binary.
+//
+// Same grant as the other two. The agent is the ROOT daemon, so this is the
+// one download where "whoever was handed an install command in the last hour"
+// is doing real work: what arrives is a binary a human then runs with sudo.
+// Enrolment-time trust is not ongoing trust — the agent never updates itself
+// from here (plan/architecture.md, "Agent identity"), and hz can never push a
+// replacement to a machine already enrolled.
+func (s *Server) handleAgentBinary(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePublicVhost(w, r) || !s.requireInstallGrant(w, r) {
+		return
+	}
+	key := strings.TrimPrefix(r.URL.Path, "/admin/hz-agent/bin/")
+	if !hzArchKey.MatchString(key) {
+		http.Error(w, "invalid platform key (want <os>-<arch>, e.g. linux-amd64)", http.StatusBadRequest)
+		return
+	}
+	b, ok := hzbin.Get(hzbin.ToolAgent, key)
+	if !ok {
+		msg := "no embedded hz-agent for " + key
+		if avail := hzbin.Available(hzbin.ToolAgent); len(avail) == 0 {
+			msg += " — server built without embedded clients (-tags hzembed)"
+		} else {
+			msg += " — available: " + strings.Join(avail, ", ")
+		}
+		http.Error(w, msg, http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", "attachment; filename=hz-agent")
+	_, _ = w.Write(b)
+}
+
 // GET /admin/hz/bin/<os>-<arch> — the matching hz binary. 404s (with the list
 // of what's available) when the server was built without -tags hzembed.
 func (s *Server) handleHZBinary(w http.ResponseWriter, r *http.Request) {

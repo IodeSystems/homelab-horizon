@@ -50,7 +50,10 @@ func writeFileIfChanged(path string, data []byte, perm os.FileMode) (changed boo
 
 // WriteConfig generates and writes the HAProxy configuration
 func (h *HAProxy) WriteConfig(httpPort, httpsPort int, ssl *SSLConfig) error {
-	config := RenderConfig(h.configInput(httpPort, httpsPort, ssl))
+	// Through GenerateConfig rather than RenderConfig directly: that accessor
+	// is what the preview and hz-agent's desired state are built from, and a
+	// second render call here is a second answer waiting to diverge from it.
+	config := h.GenerateConfig(httpPort, httpsPort, ssl)
 
 	// Ensure directory exists
 	dir := strings.TrimSuffix(h.configPath, "/haproxy.cfg")
