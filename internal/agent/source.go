@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -18,6 +19,13 @@ import (
 // hz. The gateway's agent polls localhost exactly the way a remote agent polls
 // hz, so the local path is the remote path — the gateway is machine #1, not a
 // special case.
+//
+// The REPORT-BACK (observed.go, ReportState below) does not weaken that rule,
+// and it is worth saying rather than assuming: the agent still dials, on its
+// own clock, with its own credential. hz opens nothing, holds no inbound
+// credential and needs no route to the box. What "hz never initiates" rules
+// out is hz reaching a machine; a machine choosing to speak is the same
+// direction the poll already travels.
 //
 // The poll is a CONDITIONAL GET. hz answers with an ETag that is the payload's
 // content hash (Desired.Fingerprint); the agent sends it back as
@@ -135,6 +143,58 @@ func (s *HTTPSource) Fetch(ctx context.Context, etag string) (*Desired, string, 
 	// and there rewrote the body — and then the ETag would pin the agent to a
 	// generation it does not actually hold.
 	return &d, d.Fingerprint(), true, nil
+}
+
+// StateReporter is the other direction: a machine telling hz what it found.
+//
+// An interface rather than a method on Source because only the HTTP source
+// has an hz to report to. `hz-agent diff --from` reads a payload off disk and
+// has nobody to tell, and a FileSource that silently grew a network call
+// would be the opposite of what --from is for. runAgent asks whether its
+// source can report and does not if it cannot.
+type StateReporter interface {
+	ReportState(ctx context.Context, r StateReport) error
+}
+
+// ReportState POSTs this machine's plan to hz.
+//
+// Same base URL and same credential as the poll, through the same Authorize
+// helper — so a machine that can fetch its desired state can report on it,
+// and there is no second credential to keep in step. hz overrides the
+// report's Machine with the one the credential names and refuses a mismatch;
+// see internal/server/handlers_agent_observed.go.
+//
+// Sanitized before it leaves the process. hz sanitizes again on arrival,
+// because hz cannot assume a client did.
+func (s *HTTPSource) ReportState(ctx context.Context, r StateReport) error {
+	body, err := json.Marshal(r.Sanitized())
+	if err != nil {
+		return fmt.Errorf("encoding the report: %w", err)
+	}
+	url := strings.TrimSuffix(s.BaseURL, "/") + ObservedPath
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	Authorize(req, s.Token)
+
+	client := s.Client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	// Bounded read, and no credential in the message: this goes to a log.
+	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	return fmt.Errorf("hz answered %s: %s", resp.Status, strings.TrimSpace(string(msg)))
 }
 
 // FileSource reads the payload from a local JSON file.

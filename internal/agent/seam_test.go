@@ -13,8 +13,16 @@ import (
 // machine, so `hz-agent diff` gives the same answer to anybody, anywhere, at
 // any privilege — and so the plan can be computed for a machine you are not on.
 //
-// plan.go and diff.go are the pure half. observe.go reads, apply.go writes,
-// source.go dials; those are where the machine lives.
+// plan.go, diff.go and observed.go are the pure half. observe.go reads,
+// apply.go writes, source.go dials; those are where the machine lives.
+//
+// observed.go joined the list when the report-back landed: it is the last
+// function between a machine's claim and a file hz serves back, so Sanitized
+// must give a fixture the same answer it gives on a box. A clock or a file
+// read in there would make "every string in a stored report went through
+// redaction" a property nobody could check offline.
+var pureFiles = []string{"plan.go", "diff.go", "observed.go"}
+
 func TestPureHalfStaysPure(t *testing.T) {
 	banned := map[string]string{
 		"os":            "reads or writes the filesystem",
@@ -26,7 +34,7 @@ func TestPureHalfStaysPure(t *testing.T) {
 		"crypto/rand":   "is not deterministic",
 		"path/filepath": "resolves paths against a real filesystem",
 	}
-	for _, name := range []string{"plan.go", "diff.go"} {
+	for _, name := range pureFiles {
 		f, err := parser.ParseFile(token.NewFileSet(), name, nil, parser.ImportsOnly)
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
@@ -50,7 +58,7 @@ func TestPureHalfCannotApply(t *testing.T) {
 		"writeIfChanged": true,
 		"Observe":        true,
 	}
-	for _, name := range []string{"plan.go", "diff.go"} {
+	for _, name := range pureFiles {
 		fset := token.NewFileSet()
 		f, err := parser.ParseFile(fset, name, nil, 0)
 		if err != nil {

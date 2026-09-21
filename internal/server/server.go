@@ -1095,6 +1095,12 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// answering the request — a spare must serve its own, not the primary's.
 	s.handlePeerInstance(mux, agent.DesiredPath, s.handleAgentDesired)
 
+	// The other direction: what the machine found. POST is the agent's own
+	// report, GET is the admin read behind the drift screen. Per-instance for
+	// the same reason the poll is — a report is about the box that sent it,
+	// to the hz it polls, and a peer must not serve another peer's record.
+	s.handlePeerInstance(mux, agent.ObservedPath, s.handleAgentObserved)
+
 	// API v1 mutation routes
 	mux.HandleFunc("/api/v1/services/add", s.handleAPIAddService)
 	mux.HandleFunc("/api/v1/services/edit", s.handleAPIEditService)
