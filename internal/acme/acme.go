@@ -1,23 +1,26 @@
+// Package acme obtains certificates from an ACME certificate authority using
+// DNS-01 challenges.
+//
+// The package is split along one seam, the same seam as internal/haproxy and
+// internal/letsencrypt (plan/architecture.md, phase 4 items 10 and 12):
+//
+//	render.go  pure     text in, text out. No files, no commands, no clock,
+//	                    no network — and above all, no certificate authority.
+//	apply.go   root     the side effects: the CA conversation, the account
+//	                    key, the DNS challenge records, `aws` and `dig`.
+//	acme.go    manager  the client's identity and where its account lives.
+//
+// The rule that makes this package different from the other three: the pure
+// half must not be able to reach a CA or touch a key. A renderer that can do
+// either is not testable offline, and "testable offline" is the entire point —
+// every exercise of the impure half costs a real issuance against a
+// rate-limited service, so the parts an operator actually reads (what went
+// wrong, what a delegation looks like) have to be reachable without one.
 package acme
 
 import (
 	"crypto"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"encoding/json"
-	"encoding/pem"
-	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"time"
 
-	"github.com/go-acme/lego/v4/certcrypto"
-	"github.com/go-acme/lego/v4/certificate"
-	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
 )
 
@@ -25,7 +28,12 @@ import (
 type User struct {
 	Email        string                 `json:"email"`
 	Registration *registration.Resource `json:"registration,omitempty"`
-	key          crypto.PrivateKey
+
+	// key is the ACME ACCOUNT key — the credential that proves to the CA that
+	// this is the same subscriber as last time. It is unexported and has no
+	// json tag on purpose: saveUser marshals this struct to account.json, and
+	// the key lives beside it in account.key at 0600.
+	key crypto.PrivateKey
 }
 
 func (u *User) GetEmail() string                        { return u.Email }
@@ -44,262 +52,4 @@ func NewClient(accountDir string, staging bool) *Client {
 		accountDir: accountDir,
 		staging:    staging,
 	}
-}
-
-// ObtainCertificate requests a certificate for the given domains
-func (c *Client) ObtainCertificate(email string, domains []string, providerCfg *DNSProviderConfig, logFn func(string)) (*certificate.Resource, error) {
-	if logFn == nil {
-		logFn = func(s string) {}
-	}
-
-	logFn(fmt.Sprintf("Using DNS provider: %s", ProviderName(providerCfg)))
-
-	// Log provider config details (without secrets)
-	if providerCfg != nil {
-		switch providerCfg.Type {
-		case DNSProviderRoute53:
-			if providerCfg.AWSProfile != "" {
-				logFn(fmt.Sprintf("  AWS Profile: %s", providerCfg.AWSProfile))
-			}
-			if providerCfg.AWSHostedZoneID != "" {
-				logFn(fmt.Sprintf("  AWS Hosted Zone ID: %s", providerCfg.AWSHostedZoneID))
-				// Verify the zone exists and get its name
-				zoneName, err := verifyRoute53Zone(providerCfg.AWSHostedZoneID, providerCfg.AWSProfile)
-				if err != nil {
-					logFn(fmt.Sprintf("  ⚠ Zone verification failed: %v", err))
-				} else {
-					logFn(fmt.Sprintf("  Zone name: %s", zoneName))
-					// Check if domain has valid SOA record (is resolvable)
-					if err := checkDomainSOA(zoneName, logFn); err != nil {
-						return nil, err
-					}
-				}
-			} else {
-				logFn("  ⚠ No AWS Hosted Zone ID configured - Lego will try to auto-detect")
-			}
-			if providerCfg.AWSRegion != "" {
-				logFn(fmt.Sprintf("  AWS Region: %s", providerCfg.AWSRegion))
-			}
-		case DNSProviderCloudflare:
-			if providerCfg.CloudflareZoneID != "" {
-				logFn(fmt.Sprintf("  Cloudflare Zone ID: %s", providerCfg.CloudflareZoneID))
-			}
-		}
-	}
-
-	// Create DNS challenge provider with logging
-	dnsProvider, err := CreateChallengeProvider(providerCfg, logFn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create DNS provider: %w", err)
-	}
-
-	// Load or create user
-	user, err := c.loadOrCreateUser(email)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load/create ACME user: %w", err)
-	}
-
-	// Configure lego client
-	legoConfig := lego.NewConfig(user)
-	legoConfig.Certificate.KeyType = certcrypto.RSA2048
-
-	if c.staging {
-		legoConfig.CADirURL = lego.LEDirectoryStaging
-		logFn("Using Let's Encrypt STAGING environment")
-	} else {
-		logFn("Using Let's Encrypt PRODUCTION environment")
-	}
-
-	client, err := lego.NewClient(legoConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create ACME client: %w", err)
-	}
-
-	// Set DNS provider (vanilla Lego)
-	if err := client.Challenge.SetDNS01Provider(dnsProvider); err != nil {
-		return nil, fmt.Errorf("failed to set DNS provider: %w", err)
-	}
-
-	// Register if needed
-	if user.Registration == nil {
-		logFn("Registering ACME account...")
-		reg, err := client.Registration.Register(registration.RegisterOptions{
-			TermsOfServiceAgreed: true,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to register: %w", err)
-		}
-		user.Registration = reg
-		if err := c.saveUser(user); err != nil {
-			logFn(fmt.Sprintf("Warning: failed to save user registration: %v", err))
-		}
-	}
-
-	logFn(fmt.Sprintf("Requesting certificate for: %v", domains))
-	logFn("Starting ACME challenge process...")
-	logFn(fmt.Sprintf("Staging all %d DNS challenge record(s), then checking propagation once (30-120s)...", len(domains)))
-
-	// Request certificate
-	request := certificate.ObtainRequest{
-		Domains: domains,
-		Bundle:  true,
-	}
-
-	start := time.Now()
-	certificates, err := client.Certificate.Obtain(request)
-	duration := time.Since(start).Round(time.Second)
-
-	if err != nil {
-		logFn(fmt.Sprintf("Certificate request failed after %v", duration))
-		// Try to extract more useful error info
-		errStr := err.Error()
-		if strings.Contains(errStr, "NXDOMAIN") {
-			logFn("  ✗ DNS record not found - check that the zone ID is correct")
-		} else if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "Timeout") {
-			logFn("  ✗ DNS propagation timeout - the TXT record may not have propagated in time")
-		} else if strings.Contains(errStr, "unauthorized") {
-			logFn("  ✗ Authorization failed - Let's Encrypt could not verify domain ownership")
-		} else if strings.Contains(errStr, "rateLimited") {
-			logFn("  ✗ Rate limited - too many certificate requests, try again later")
-		}
-		return nil, fmt.Errorf("failed to obtain certificate: %w", err)
-	}
-
-	logFn(fmt.Sprintf("✓ Certificate obtained successfully in %v", duration))
-
-	return certificates, nil
-}
-
-func (c *Client) loadOrCreateUser(email string) (*User, error) {
-	if err := os.MkdirAll(c.accountDir, 0700); err != nil {
-		return nil, fmt.Errorf("failed to create account directory: %w", err)
-	}
-
-	accountFile := filepath.Join(c.accountDir, "account.json")
-	keyFile := filepath.Join(c.accountDir, "account.key")
-
-	user := &User{Email: email}
-
-	// Try to load existing user
-	if _, err := os.Stat(accountFile); err == nil {
-		data, err := os.ReadFile(accountFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read account file: %w", err)
-		}
-		if err := json.Unmarshal(data, user); err != nil {
-			return nil, fmt.Errorf("failed to parse account file: %w", err)
-		}
-	}
-
-	// Try to load existing key
-	if _, err := os.Stat(keyFile); err == nil {
-		keyPEM, err := os.ReadFile(keyFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read key file: %w", err)
-		}
-		block, _ := pem.Decode(keyPEM)
-		if block == nil {
-			return nil, fmt.Errorf("failed to decode PEM block from key file")
-		}
-		key, err := x509.ParseECPrivateKey(block.Bytes)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse EC private key: %w", err)
-		}
-		user.key = key
-	} else {
-		// Generate new key
-		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate key: %w", err)
-		}
-		user.key = key
-
-		// Save the key
-		keyBytes, err := x509.MarshalECPrivateKey(key)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal key: %w", err)
-		}
-		keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes})
-		if err := os.WriteFile(keyFile, keyPEM, 0600); err != nil {
-			return nil, fmt.Errorf("failed to save key: %w", err)
-		}
-	}
-
-	return user, nil
-}
-
-// saveUser saves the user registration to disk
-func (c *Client) saveUser(user *User) error {
-	accountFile := filepath.Join(c.accountDir, "account.json")
-	data, err := json.MarshalIndent(user, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal user: %w", err)
-	}
-	return os.WriteFile(accountFile, data, 0600)
-}
-
-// verifyRoute53Zone checks if a Route53 zone exists and returns its name
-func verifyRoute53Zone(zoneID, awsProfile string) (string, error) {
-	// Normalize zone ID - remove /hostedzone/ prefix if present
-	zoneID = strings.TrimPrefix(zoneID, "/hostedzone/")
-
-	args := []string{
-		"route53", "get-hosted-zone",
-		"--id", zoneID,
-		"--query", "HostedZone.Name",
-		"--output", "text",
-	}
-
-	cmd := exec.Command("aws", args...)
-	if awsProfile != "" {
-		cmd.Env = append(os.Environ(), "AWS_PROFILE="+awsProfile)
-	}
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("aws cli error: %s", strings.TrimSpace(string(output)))
-	}
-
-	zoneName := strings.TrimSpace(string(output))
-	zoneName = strings.TrimSuffix(zoneName, ".") // Remove trailing dot
-	return zoneName, nil
-}
-
-// checkDomainSOA checks if a domain has a valid SOA record (is properly configured in DNS)
-// Returns an error if the domain is not properly delegated
-func checkDomainSOA(domain string, logFn func(string)) error {
-	// Use dig to check SOA record
-	cmd := exec.Command("dig", "+short", "SOA", domain, "@8.8.8.8")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		logFn(fmt.Sprintf("  ⚠ Could not check SOA for %s: %v", domain, err))
-		// Don't fail on dig errors, continue with cert request
-		return nil
-	}
-
-	soa := strings.TrimSpace(string(output))
-	if soa == "" {
-		logFn(fmt.Sprintf("  ✗ No SOA record found for %s - domain is not delegated to Route53", domain))
-		// Also check NS records
-		cmd = exec.Command("dig", "+short", "NS", domain, "@8.8.8.8")
-		nsOutput, _ := cmd.CombinedOutput()
-		ns := strings.TrimSpace(string(nsOutput))
-		if ns == "" {
-			logFn("  ✗ No NS records found - domain does not exist in public DNS")
-			logFn("  → Update nameservers at your domain registrar to point to Route53")
-			logFn("  → Run: aws route53 get-hosted-zone --id <zone-id> --query DelegationSet.NameServers")
-			return fmt.Errorf("domain %s is not delegated - no SOA/NS records in public DNS", domain)
-		} else {
-			logFn(fmt.Sprintf("  Current NS records: %s", strings.ReplaceAll(ns, "\n", ", ")))
-			logFn("  → These should be Route53 nameservers (ns-*.awsdns-*.com/net/org/co.uk)")
-			return fmt.Errorf("domain %s has NS records but no SOA - delegation may be incomplete", domain)
-		}
-	}
-
-	// Parse SOA to show primary nameserver
-	parts := strings.Fields(soa)
-	if len(parts) >= 1 {
-		logFn(fmt.Sprintf("  ✓ SOA record found (primary NS: %s)", parts[0]))
-	}
-	return nil
 }
