@@ -152,9 +152,12 @@ export interface AgentChange {
   subsystem: string;
   target: string;
   /**
-   * Kind is "unchanged", "create", "update" or "unknown". "unknown" means
-   * the agent could not read the target and refuses to claim a state for
-   * it — the distinction Plan.Unknown exists to keep out of "unchanged".
+   * Kind is "unchanged", "create", "update", "remove" or "unknown".
+   * "unknown" means the agent could not read the target and refuses to
+   * claim a state for it — the distinction Plan.Unknown exists to keep out
+   * of "unchanged". "remove" is a file inside a directory hz claims that hz
+   * has stopped listing; it is the only kind that destroys something, and
+   * the only one whose target is not named anywhere in the payload.
    */
   kind: string;
   detail?: string;

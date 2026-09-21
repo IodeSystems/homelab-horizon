@@ -222,8 +222,11 @@ func (r StateReport) Sanitized() StateReport {
 // (plan/example-projection.md §3, ci-1).
 func (r StateReport) HasTargets() bool { return len(r.Changes) > 0 || r.IPTables != nil }
 
-// Pending counts the changes that would touch the machine.
-func (r StateReport) Pending() int { return r.countKinds(KindCreate, KindUpdate) }
+// Pending counts the changes that would touch the machine. A removal counts:
+// a file the machine still holds and hz has stopped wanting is drift, and a
+// report calling that in sync would hide the one change that destroys
+// something.
+func (r StateReport) Pending() int { return r.countKinds(KindCreate, KindUpdate, KindRemove) }
 
 // Unknown counts the targets the agent could not read. A report with unknowns
 // is not a clean bill of health, and anything printing "in sync" must say so.
