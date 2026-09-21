@@ -85,11 +85,26 @@ COMMANDS
   cm machines [--json]               List enrolled boxes: addresses, secrets, fingerprint
   cm pending [--all]                 Show the approval queue
   project ls                         Services grouped by project and environment
-  project show <project>             The services in one project
+  project show <project>             One project: its parent, its feed, its services
+  project add <name> [--parent P]    Declare a project (writes immediately — a declared
+                                     project holds nothing until something names it)
+  project rm <name> [--cascade] [--confirm]
+                                     Remove a project. Dry run without --confirm; refused
+                                     while a child project, a rung or a service depends on
+                                     it, naming each. --cascade takes them with it
   env ls                             Declared environments by project: posture, from,
                                      version, and how many services are in each
   env show <project>/<name>          One environment and the services in it
-  project show <project>             One project: its parent, its feed, its services
+  env add <project>/<name> --posture <dev|staging|prod> [--from E] [--version V]
+                                     Declare a rung in a project. The project must exist
+                                     first: declare, THEN assign
+  env set <project>/<name> [--posture P] [--from E] [--version V]
+                                     Change one. Only the flags you pass are touched;
+                                     --from "" clears the promotion edge
+  env rm <project>/<name> [--cascade] [--confirm]
+                                     Remove a rung. Dry run without --confirm; refused
+                                     while a service is on it or another rung promotes
+                                     from it
   feed ls                            Every project's package feed and where it came from
   feed show <project>                The feed a project installs from, and which project declared it
   feed set <project> --url U --suite S --component C [--key-id ID] [--execute]

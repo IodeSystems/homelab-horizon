@@ -287,8 +287,9 @@ Landed on `dev` 2026-09-20:
 
 | | |
 |---|---|
-| Projects | `Project{Name, Parent}`, validated on `Save`, `hz project ls\|show` |
-| Environments | `Environment{Project, Name, Posture, From, Version}`, ordered postures, `hz env ls\|show`, `GET /api/v1/environments` |
+| Projects | `Project{Name, Parent}`, validated on `Save`, `hz project ls\|show`, and now **`hz project add\|rm`** |
+| Environments | `Environment{Project, Name, Posture, From, Version}`, ordered postures, `hz env ls\|show`, `GET /api/v1/environments`, and now **`hz env add\|set\|rm`** |
+| Write surface | The model can now be DECLARED, not only imported into — `internal/config/declare.go` + `POST /api/v1/{projects,environments}/{add,rm}` and `/environments/set`. Step 2 of [architecture.md](architecture.md)'s walkthrough ("redline declares its own environments: staging, prod") had no command before this. `add`/`set` write immediately (reversible, and a declared project changes no rendered artifact); `rm` is a **dry run until `--confirm`** and **refuses while anything depends on the target, naming each dependant** — `--cascade` is the opt-in that takes them, listed first. Gap left open: nothing yet ASSIGNS a service to a project/rung except `hz import --execute` — `ServiceRequest` carries no `project`/`environment`, so the walkthrough's third step is still config-level only |
 | Machine removal | `hz cm machines\|remove`, closing holes 11 and 14 |
 | Feed | `Project.Feed`, inherited whole down `Parent`, `hz feed ls\|show`, and now **`hz feed set`** — the writer it lacked |
 | Import | `hz import` proposes a tree for a gateway that has none. Dry run by default, `--execute` to write, `--merge` to add to an existing tree. `GET/POST /api/v1/import` |
