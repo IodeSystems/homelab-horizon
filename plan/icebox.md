@@ -353,17 +353,63 @@ byte-identical output must not also change behaviour.
   deduplicate now that it lives in a pure function and a golden comparator can
   prove the output unchanged.
 
+## Found during the dnsmasq/iptables seam refactor (2026-09-20) — deliberately left
+
+- **The records read-back misreads every domain-expanded host record.**
+  `ParseMappings` (was the body of `GetMappings`) splits a `host-record=` line on
+  `,` and takes field 1 as the address. But `host-record=` takes a *list of
+  names* followed by the address, and hz writes exactly that whenever a local
+  domain is set — `host-record=desktop,desktop.lan,192.168.x.y` parses as
+  `desktop → desktop.lan`. The address is never read.
+  <br>Harmless today only because nothing on the write path reads it back (see
+  the dnsmasq entry below). It stops being harmless the moment anyone builds a
+  drift check on it, which is the obvious next use. The fix is one line — take
+  the last field, not field 1 — plus a decision about what the *other* names on
+  the line should map to. Left because a refactor claiming byte-identical output
+  must not also change behaviour.
+  `TestParseMappingsMisreadsExpandedHostRecords` pins the current behaviour and
+  says to delete itself when the bug is fixed on purpose.
+- **A doc comment was attached to the wrong function.** `SetMappings`'s
+  paragraph ("treating every entry as a wildcard… New callers should prefer
+  `SetRecords`") sat immediately above `SetLocalDomain`, with `SetLocalDomain`'s
+  own one-liner appended to it — so `go doc SetMappings` showed nothing and
+  `go doc SetLocalDomain` showed both. Reattached during the move. Not a
+  behaviour change; noted because it is the kind of thing a file split silently
+  launders.
+
 ### Where the seam pattern transfers, and where it fights
 
-- **`internal/iptables`** — already done in substance. `rules.go`/`forwards.go`/
-  `classify.go` have no `exec`/`os` and take an `Inputs` struct; `reconcile.go`
-  applies. This is where the house style came from. Cost is headers and naming.
-- **`internal/dnsmasq`** — direct transfer, one real fight: the **hosts file is
-  the state of record**. `GetMappings` reads it back and the mutators are
-  read-modify-write over disk, so render cannot be pure until the caller holds
-  the mapping set. Smaller fight: `ensureServiceUnit`/`clearStartLimit` install
-  and poke a systemd unit from the same file — agent work, and a different
-  privilege from "write a config file".
+- **`internal/iptables`** — ✅ done 2026-09-20. The claim below was *mostly*
+  right and wrong in one place, recorded because the correction is the useful
+  part: `classify.go` did import `os/exec`. `LiveRules` and `runIptablesSave`
+  shelled out to `iptables-save` from inside the file that classifies, which is
+  the exact leak the guard is for. They moved to `reconcile.go`; the parser
+  (`parseIptablesSave`, `scopeLiveRules`) stayed, because parsing text is pure.
+  `forwards.go` also imports `net`, for `ParseIP`/`ParseCIDR` only — so the
+  guard allows the import and checks every *use* by name instead
+  (`TestPureHalfUsesNetForParsingOnly`).
+  <br>Original claim, for the record: *"already done in substance.
+  `rules.go`/`forwards.go`/`classify.go` have no `exec`/`os` and take an
+  `Inputs` struct; `reconcile.go` applies. Cost is headers and naming."*
+- **`internal/dnsmasq`** — ✅ done 2026-09-20. **The named fight did not exist.**
+  The claim was that the hosts file is the state of record. It is not: *no*
+  production caller reads it. Every write path is
+  `SetRecords(cfg.DeriveDNSRecords())` — config is the state of record, the file
+  is an output, and the file says so in its own generated header.
+  `GetMappings`/`SetMappings`/`AddMapping`/`RemoveMapping` had zero non-test
+  callers in the tree.
+  <br>So the resolution was option 1 (pass the record set in, haproxy's
+  `configInput()` shape) with no fight to have. The read-back was **kept and
+  documented** rather than deleted, because the file does live on a box an admin
+  can log into: `ParseMappings` is now pure and separate from the file read, so
+  drift between "what hz would write" and "what is on the box" is computable
+  from two strings, off-box. `TestGetMappingsSeesEditsMadeOutsideHz` pins it.
+  <br>The smaller fight was real: `ensureServiceUnit`/`clearStartLimit`/
+  `systemctlWithJournal`/`Status` moved to `unit.go`, apart from `apply.go`'s
+  file writes, and a guard test keeps `os/exec` out of `apply.go`. The two are
+  different privileges — writing `/etc/dnsmasq.d/*` versus installing a unit
+  that runs anything as root — and hz-agent should be able to grant one without
+  the other.
 - **`internal/wireguard`** — the hard one, and where commit-confirmed lands
   first. Four fights: `WGConfig.Load()` makes `/etc/wireguard/*.conf` the state
   of record; `GenerateKeyPair` shells to `wg genkey` and is non-deterministic,

@@ -1,9 +1,12 @@
 package iptables
 
+// This file is part of the PURE half of the package: it turns a live rule set
+// that someone else read off the host into a verdict per rule, and parses the
+// iptables-save text that reader produces. Running iptables-save is in
+// reconcile.go, with the rest of the privileged surface.
+
 import (
 	"bufio"
-	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -119,37 +122,6 @@ func hasKey(m map[string]struct{}, k string) bool {
 	return ok
 }
 
-// LiveRules reads horizon-managed rules from the host kernel via iptables-save.
-// Scopes the read to the chains horizon cares about; rules in other chains
-// (OUTPUT, PREROUTING, custom admin chains, etc.) are not returned — that's
-// part of the "horizon only manages what it manages" boundary.
-//
-// INPUT is narrowed further, to just the rules that jump to WG-INPUT. Unlike
-// FORWARD, a normal host's INPUT is full of ufw/docker rules that horizon has
-// no opinion about; reading them all would classify every one as "unknown" and
-// bury the IPTables tab in noise the admin can't act on.
-//
-// Returns an empty slice (not error) when iptables-save isn't available, so
-// the classifier can still run on hosts without iptables installed yet.
-func LiveRules() ([]Rule, error) {
-	natRules, err := runIptablesSave("nat", liveNatChains)
-	if err != nil {
-		return nil, fmt.Errorf("iptables-save nat: %w", err)
-	}
-	filterRules, err := runIptablesSave("filter", liveFilterChains)
-	if err != nil {
-		return nil, fmt.Errorf("iptables-save filter: %w", err)
-	}
-	return scopeLiveRules(append(natRules, filterRules...)), nil
-}
-
-// The chains LiveRules reads. PREROUTING and INPUT are narrowed further by
-// scopeLiveRules.
-var (
-	liveNatChains    = []string{"PREROUTING", "POSTROUTING", PreroutingChainName, PostroutingChainName}
-	liveFilterChains = []string{"FORWARD", ForwardChainName, InputChainName, "INPUT", ForwardsChainName}
-)
-
 // scopeLiveRules drops the rules in shared built-in chains that horizon has no
 // claim on. INPUT keeps only the jump to WG-INPUT; nat PREROUTING keeps only
 // the jump to HZ-PREROUTING. Both chains are routinely full of other tools'
@@ -178,19 +150,6 @@ func jumpsTo(args []string, target string) bool {
 		}
 	}
 	return false
-}
-
-// runIptablesSave executes `iptables-save -t <table>` and parses the output,
-// filtering to rules in the given chains.
-func runIptablesSave(table string, chains []string) ([]Rule, error) {
-	cmd := exec.Command("iptables-save", "-t", table)
-	out, err := cmd.Output()
-	if err != nil {
-		// iptables-save not installed, table missing, etc. Return empty so
-		// the classifier treats "no live rules" as the input.
-		return nil, nil
-	}
-	return parseIptablesSave(string(out), table, chains), nil
 }
 
 // parseIptablesSave extracts `-A <chain> <args>` lines from iptables-save
