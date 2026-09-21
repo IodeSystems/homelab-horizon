@@ -2,10 +2,13 @@ package agent
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
 	"github.com/iodesystems/homelab-horizon/internal/haproxy"
@@ -65,6 +68,12 @@ type Reloader interface {
 	DNSMasq(sec *DNSMasqSection) error
 	WireGuard(sec *WireGuardSection) error
 	IPTables(sec *IPTablesSection, live []iptables.Rule) (iptables.Report, error)
+
+	// Units pokes the generic section's units. There is no fifth apply half
+	// behind this one — that is the point of the generic section: its files
+	// have no semantics of their own, so all the agent can do after writing
+	// them is what the payload said to do.
+	Units(sec *FilesSection) error
 }
 
 // SystemReloader is the real one. Each method is a thin call into the apply
@@ -100,13 +109,44 @@ func (SystemReloader) IPTables(sec *IPTablesSection, live []iptables.Rule) (ipta
 	), nil
 }
 
+// Units restarts or reloads each unit the generic section names.
+//
+// An action the agent does not recognise is an error rather than a no-op: a
+// payload asking for something this binary cannot do is a version skew, and
+// silently doing nothing about it is how a file lands and never takes effect.
+func (SystemReloader) Units(sec *FilesSection) error {
+	if sec == nil {
+		return nil
+	}
+	for _, u := range sec.Units {
+		if u.Name == "" || u.Action == "" {
+			continue
+		}
+		switch u.Action {
+		case UnitRestart, UnitReload:
+		default:
+			return fmt.Errorf("unit %s: unknown action %q", u.Name, u.Action)
+		}
+		if out, err := exec.Command("systemctl", u.Action, u.Name).CombinedOutput(); err != nil {
+			return fmt.Errorf("systemctl %s %s: %w: %s", u.Action, u.Name, err, strings.TrimSpace(string(out)))
+		}
+	}
+	return nil
+}
+
 // Result is what one apply pass did.
 type Result struct {
 	Generation string
 	Wrote      []string
-	Reloaded   []Subsystem
-	IPTables   *iptables.Report
-	Errors     []string
+
+	// Removed is what the prune deleted. Separate from Wrote because they are
+	// different in kind: a rewritten file can be rendered again, a removed one
+	// is gone, and an operator reading a result should not have to work out
+	// which of these paths was which.
+	Removed  []string
+	Reloaded []Subsystem
+	IPTables *iptables.Report
+	Errors   []string
 }
 
 // Apply writes what differs and reloads what a write touched.
@@ -135,7 +175,7 @@ func Apply(d *Desired, p Plan, obs Observed, r Reloader) (Result, error) {
 	}
 
 	touched := map[Subsystem]bool{}
-	for _, of := range d.files() {
+	for _, of := range d.allFiles() {
 		if why, stop := blocked[of.File.Path]; stop {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: refusing to write, %s", of.File.Path, why))
 			continue
@@ -155,6 +195,25 @@ func Apply(d *Desired, p Plan, obs Observed, r Reloader) (Result, error) {
 		}
 	}
 
+	// REMOVALS COME AFTER THE WRITES, before any reload.
+	//
+	// Both orderings matter. After the writes, because a file the payload
+	// lists is never a removal candidate and writing first means the
+	// directory is in its final state before anything is asked to read it.
+	// Before the reloads, because the point of a prune is that the subsystem
+	// stops seeing the file — a removal that landed after the reload would
+	// take effect at some unrelated later reload.
+	res.prune(d, p, touched)
+
+	// A certificate is loaded by HAProxy at start and at reload, so a rotated
+	// bundle takes effect the same way a changed config does. There is no
+	// separate cert apply half to call and inventing one would mean a second
+	// implementation of "reload haproxy" — so the cert section folds into
+	// HAProxy's reload instead of carrying its own.
+	if touched[SubsystemCerts] && d.HAProxy != nil {
+		touched[SubsystemHAProxy] = true
+	}
+
 	if d.HAProxy != nil && touched[SubsystemHAProxy] {
 		res.reload(SubsystemHAProxy, r.HAProxy(d.HAProxy))
 	}
@@ -163,6 +222,9 @@ func Apply(d *Desired, p Plan, obs Observed, r Reloader) (Result, error) {
 	}
 	if d.WireGuard != nil && touched[SubsystemWireGuard] {
 		res.reload(SubsystemWireGuard, r.WireGuard(d.WireGuard))
+	}
+	if d.Files != nil && touched[SubsystemFiles] {
+		res.reload(SubsystemFiles, r.Units(d.Files))
 	}
 
 	// iptables has no file to change, so it reconciles on its own terms: the
@@ -186,6 +248,57 @@ func Apply(d *Desired, p Plan, obs Observed, r Reloader) (Result, error) {
 		return res, fmt.Errorf("apply finished with %d error(s)", len(res.Errors))
 	}
 	return res, nil
+}
+
+// prune removes what the plan said a claimed directory no longer holds — and
+// asks the bound itself, again, about every single path before it unlinks it.
+//
+// THE RE-CHECK IS THE WHOLE POINT, and it is not defence in depth for its own
+// sake. Without it the answer to "what can this delete" would be "whatever a
+// Change says", and a Change is a plain struct: Compute builds one, but so
+// does anything that can hand this function a Plan, and a Plan already crosses
+// a wire in the other direction (observed.go). With it, the answer is
+// "whatever Desired.prunable allows", which is a function of the PAYLOAD —
+// the same payload the diff was computed from and the same one whose
+// fingerprint the agent authenticated. A plan that names /etc/passwd removes
+// nothing; it produces a refusal that says so.
+//
+// The subsystem to reload comes from the bound too, not from the Change's own
+// label, so a mislabelled removal cannot reload something else.
+func (res *Result) prune(d *Desired, p Plan, touched map[Subsystem]bool) {
+	for _, c := range p.Changes {
+		if c.Kind != KindRemove {
+			continue
+		}
+		sub, ok := d.prunable(c.Target)
+		if !ok {
+			res.Errors = append(res.Errors, fmt.Sprintf(
+				"%s: refusing to remove it, it is not a file this payload claims", c.Target))
+			continue
+		}
+		// Lstat, not Stat: a symlink must be seen as a symlink. Nothing but a
+		// plain file is ever unlinked, so a link planted in a claimed
+		// directory is refused rather than followed.
+		fi, err := os.Lstat(c.Target)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue // already gone; a prune is a statement about the end state
+		}
+		if err != nil {
+			res.Errors = append(res.Errors, fmt.Sprintf("%s: cannot remove it: %v", c.Target, err))
+			continue
+		}
+		if !fi.Mode().IsRegular() {
+			res.Errors = append(res.Errors, fmt.Sprintf(
+				"%s: refusing to remove it, it is not a regular file", c.Target))
+			continue
+		}
+		if err := os.Remove(c.Target); err != nil {
+			res.Errors = append(res.Errors, fmt.Sprintf("%s: cannot remove it: %v", c.Target, err))
+			continue
+		}
+		res.Removed = append(res.Removed, c.Target)
+		touched[sub] = true
+	}
 }
 
 func (res *Result) reload(s Subsystem, err error) {

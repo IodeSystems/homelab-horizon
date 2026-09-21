@@ -19,6 +19,7 @@ import (
 type recordingReloader struct {
 	calls []Subsystem
 	live  []iptables.Rule
+	units []Unit
 }
 
 func (r *recordingReloader) HAProxy(*HAProxySection) error {
@@ -37,6 +38,13 @@ func (r *recordingReloader) IPTables(_ *IPTablesSection, live []iptables.Rule) (
 	r.calls = append(r.calls, SubsystemIPTables)
 	r.live = live
 	return iptables.Report{}, nil
+}
+func (r *recordingReloader) Units(sec *FilesSection) error {
+	r.calls = append(r.calls, SubsystemFiles)
+	if sec != nil {
+		r.units = append(r.units, sec.Units...)
+	}
+	return nil
 }
 
 func sectionsFor(t *testing.T, dir string) *Desired {
@@ -116,6 +124,65 @@ func TestApplyReloadsOnlyTheSubsystemThatMoved(t *testing.T) {
 	if len(r.calls) != 1 || r.calls[0] != SubsystemDNSMasq {
 		t.Fatalf("a dnsmasq record change reloaded %v", r.calls)
 	}
+}
+
+// THE 503 PAGE IS ON DISK BEFORE HAPROXY IS ASKED TO RELOAD, and both files
+// cost exactly one reload.
+//
+// HAProxy refuses to start on a missing errorfile and the config always names
+// one, so the ordering is not a nicety: a reload between writing the config
+// and writing the page is a gateway that does not come back. Being in the same
+// section is what guarantees it — Apply writes every file in the payload, then
+// reloads the subsystems a write touched — and this asserts the guarantee
+// rather than the arrangement, by looking at the disk from inside the reload.
+func TestTheErrorPageExistsBeforeHAProxyIsReloaded(t *testing.T) {
+	dir := t.TempDir()
+	page := filepath.Join(dir, "errors", "503.http")
+	d := &Desired{
+		Machine: "gateway",
+		HAProxy: &HAProxySection{
+			ConfigPath: filepath.Join(dir, "haproxy.cfg"),
+			Files: []File{
+				{Path: filepath.Join(dir, "haproxy.cfg"), Mode: 0o644,
+					Contents: "global\n  daemon\ndefaults\n  errorfile 503 " + page + "\n"},
+				{Path: page, Mode: 0o644, Contents: "HTTP/1.0 503\r\n\r\ndown\n"},
+			},
+		},
+	}
+
+	var reloads int
+	var pageWasThere bool
+	r := &checkingReloader{onHAProxy: func() {
+		reloads++
+		_, err := os.Stat(page)
+		pageWasThere = err == nil
+	}}
+
+	obs := NewSystemObserver()
+	res, err := Apply(d, Compute(d, obs.Observe(d)), obs.Observe(d), r)
+	if err != nil {
+		t.Fatalf("apply: %v (%v)", err, res.Errors)
+	}
+	if !pageWasThere {
+		t.Fatal("HAProxy was reloaded against a config naming an errorfile that was not written yet")
+	}
+	if reloads != 1 {
+		t.Fatalf("two files in one section cost %d reloads", reloads)
+	}
+}
+
+// checkingReloader runs a hook when HAProxy is reloaded, so a test can look at
+// the machine from the moment the reload happens.
+type checkingReloader struct {
+	recordingReloader
+	onHAProxy func()
+}
+
+func (c *checkingReloader) HAProxy(sec *HAProxySection) error {
+	if c.onHAProxy != nil {
+		c.onHAProxy()
+	}
+	return c.recordingReloader.HAProxy(sec)
 }
 
 // A target the agent could not read is a target it must not overwrite.
