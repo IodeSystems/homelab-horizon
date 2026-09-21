@@ -14,15 +14,22 @@ import (
 // and `show-systemd` cannot disagree about a default — which matters most for
 // the unit: show-systemd has to print the exact text install writes.
 type agentFlags struct {
-	hzURL     string
-	token     string
+	hzURL string
+	token string
+	// tokenFile holds THIS machine's agent credential (internal/agent's
+	// credential.go). Not an hz admin token — hz refuses one presented here.
 	tokenFile string
-	from      string
-	machine   string
-	interval  time.Duration
-	once      bool
-	apply     bool
-	asJSON    bool
+	// hzCredentials is hz's enrolled set, which `enroll` writes this
+	// machine's hash into. Only meaningful when hz is on this box, which is
+	// the only arrangement that exists today; item 13 makes hz the issuer and
+	// this flag goes away with the local mint.
+	hzCredentials string
+	from          string
+	machine       string
+	interval      time.Duration
+	once          bool
+	apply         bool
+	asJSON        bool
 }
 
 const (
@@ -41,6 +48,7 @@ func (f *agentFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.hzURL, "hz", defaultHZURL, "hz base URL to poll")
 	fs.StringVar(&f.token, "token", "", "credential for the poll (prefer --token-file)")
 	fs.StringVar(&f.tokenFile, "token-file", defaultTokenFile, "file holding the credential")
+	fs.StringVar(&f.hzCredentials, "hz-credentials", agent.DefaultCredentialsPath, "hz's enrolled-agent store (enroll/install only)")
 	fs.StringVar(&f.from, "from", "", "read the desired state from a local JSON file instead of polling")
 	fs.StringVar(&f.machine, "machine", "", "refuse a payload addressed to another machine (default: this host)")
 	fs.DurationVar(&f.interval, "interval", defaultInterval, "poll interval")

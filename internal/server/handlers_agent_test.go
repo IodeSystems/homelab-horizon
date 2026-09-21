@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -37,10 +38,37 @@ func agentTestServer(t *testing.T) (*Server, string) {
 	return s, dir
 }
 
+// enrolledAgent gives this hz an agent credential for the machine it renders
+// for, and hands back the secret the agent would hold.
+//
+// THE POINT OF THIS HELPER. These tests used to authenticate with a session
+// cookie — a credential hz-agent has never sent and cannot send. The handler
+// was green for a caller that does not exist while the real one got a 401
+// (plan/privilege-audit.md §1.1). Every test below now presents what the agent
+// presents, through agent.Authorize, which is the same function the client
+// calls. A cookie cannot get in here any more without somebody deliberately
+// writing one.
+func enrolledAgent(t *testing.T, s *Server) string {
+	t.Helper()
+	secret, err := agent.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.agentCredentials().Enroll(s.buildAgentDesired().Machine, secret); err != nil {
+		t.Fatal(err)
+	}
+	return secret
+}
+
 func agentGET(t *testing.T, s *Server, etag string) *httptest.ResponseRecorder {
 	t.Helper()
+	return agentGETWith(t, s, enrolledAgent(t, s), etag)
+}
+
+func agentGETWith(t *testing.T, s *Server, secret, etag string) *httptest.ResponseRecorder {
+	t.Helper()
 	r := httptest.NewRequest(http.MethodGet, agent.DesiredPath, nil)
-	r.AddCookie(&http.Cookie{Name: "session", Value: s.signCookie("admin")})
+	agent.Authorize(r, secret)
 	if etag != "" {
 		r.Header.Set("If-None-Match", etag)
 	}
@@ -132,6 +160,154 @@ func TestAgentDesiredNeedsAdmin(t *testing.T) {
 	s.handleAgentDesired(w, httptest.NewRequest(http.MethodGet, agent.DesiredPath, nil))
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("want 401 for an anonymous caller, got %d", w.Code)
+	}
+}
+
+// THE PAIR TEST. The real client, over a real socket, against the real routing
+// table — not a hand-built request and not a hand-built server.
+//
+// This is the durable half of the fix. Every other test here drives the
+// handler directly, so any of them can be written against a credential the
+// agent does not send; that is exactly how a 401 shipped with 37 green tests
+// (plan/privilege-audit.md §1.1). This one cannot be: the request is built by
+// agent.HTTPSource, which is the code the daemon runs, and the route comes
+// from setupRoutes, which is the table hz serves. Break the credential at
+// either end and this fails.
+func TestTheRealAgentClientAuthenticatesToTheRealHZ(t *testing.T) {
+	s, _ := agentTestServer(t)
+	secret := enrolledAgent(t, s)
+
+	hz := httptest.NewServer(s.setupRoutes())
+	defer hz.Close()
+
+	src := &agent.HTTPSource{BaseURL: hz.URL, Token: secret}
+
+	d, etag, changed, err := src.Fetch(context.Background(), "")
+	if err != nil {
+		t.Fatalf("the agent could not fetch its desired state: %v", err)
+	}
+	if !changed || d == nil {
+		t.Fatalf("first poll: changed=%v desired=%v", changed, d)
+	}
+	if d.HAProxy == nil || len(d.HAProxy.Files) == 0 {
+		t.Fatal("the agent got a payload with no haproxy section")
+	}
+
+	// And the conditional poll the whole transport is built around.
+	if _, _, changed, err = src.Fetch(context.Background(), etag); err != nil || changed {
+		t.Fatalf("second poll: changed=%v err=%v", changed, err)
+	}
+}
+
+// The negative control for the test above: the same real client with no
+// credential must be refused, so a green pair test means the credential was
+// checked rather than that the route is open.
+func TestTheRealAgentClientIsRefusedWithoutACredential(t *testing.T) {
+	s, _ := agentTestServer(t)
+	enrolledAgent(t, s) // hz HAS a credential; this client is not holding it.
+
+	hz := httptest.NewServer(s.setupRoutes())
+	defer hz.Close()
+
+	for name, src := range map[string]*agent.HTTPSource{
+		"no credential":    {BaseURL: hz.URL},
+		"wrong credential": {BaseURL: hz.URL, Token: "not-the-one"},
+		// The admin token is the credential the agent USED to be given. It
+		// must not be a way in, or this fix would have widened hz's surface
+		// rather than narrowed the agent's.
+		"the admin token": {BaseURL: hz.URL, Token: s.adminToken},
+	} {
+		_, _, changed, err := src.Fetch(context.Background(), "")
+		if err == nil || changed {
+			t.Fatalf("%s: hz served the desired state (changed=%v err=%v)", name, changed, err)
+		}
+		if !strings.Contains(err.Error(), "401") {
+			t.Fatalf("%s: want a 401, got %v", name, err)
+		}
+	}
+}
+
+// The credential the agent holds must not be an admin credential. This is the
+// whole reason isAdmin did not grow a Bearer branch: had it, the check below
+// would pass for every admin surface hz serves.
+func TestTheAgentCredentialIsNotAnAdminCredential(t *testing.T) {
+	s, _ := agentTestServer(t)
+	secret := enrolledAgent(t, s)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard", nil)
+	agent.Authorize(r, secret)
+	if s.isAdmin(r) {
+		t.Fatal("an agent credential passed isAdmin; the agent now holds the estate")
+	}
+
+	// And it mints no session either.
+	if _, ok := s.verifyCookie(secret); ok {
+		t.Fatal("the agent credential verified as a session cookie")
+	}
+}
+
+// The other direction, stated on the handler rather than through the client:
+// hz's own admin token, presented the way the agent presents its credential,
+// is not an agent credential.
+func TestTheAdminTokenIsNotAnAgentCredential(t *testing.T) {
+	s, _ := agentTestServer(t)
+	if _, ok := s.agentCaller(requestWithBearer(s.adminToken)); ok {
+		t.Fatal("the admin token authenticated as an agent")
+	}
+	// Even if somebody enrols it, which is the mistake this guards.
+	if err := s.agentCredentials().Enroll("gateway", s.adminToken); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.agentCaller(requestWithBearer(s.adminToken)); ok {
+		t.Fatal("enrolling the admin token made it an agent credential")
+	}
+}
+
+func requestWithBearer(secret string) *http.Request {
+	r := httptest.NewRequest(http.MethodGet, agent.DesiredPath, nil)
+	agent.Authorize(r, secret)
+	return r
+}
+
+// hz renders for the box it runs on. An agent enrolled under a different
+// machine is told so rather than handed this machine's network config — the
+// seam item 13's Machine record fills in.
+func TestACredentialForAnotherMachineGetsNoPayload(t *testing.T) {
+	s, _ := agentTestServer(t)
+	secret, err := agent.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.agentCredentials().Enroll("some-other-box", secret); err != nil {
+		t.Fatal(err)
+	}
+
+	w := agentGETWith(t, s, secret, "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for another machine's agent, got %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "haproxy") {
+		t.Fatal("hz leaked this machine's config to another machine's agent")
+	}
+}
+
+// Nothing hz says about a failed or successful authentication may contain the
+// credential. An error body is the one place a secret gets pasted into a chat.
+func TestNoCredentialReachesTheResponse(t *testing.T) {
+	s, _ := agentTestServer(t)
+	secret := enrolledAgent(t, s)
+
+	for _, w := range []*httptest.ResponseRecorder{
+		agentGETWith(t, s, secret, ""),
+		agentGETWith(t, s, "a-wrong-credential", ""),
+		agentGETWith(t, s, "", ""),
+	} {
+		body := w.Body.String()
+		for _, needle := range []string{secret, "a-wrong-credential", s.adminToken} {
+			if needle != "" && strings.Contains(body, needle) {
+				t.Fatalf("a credential reached the response body (status %d)", w.Code)
+			}
+		}
 	}
 }
 

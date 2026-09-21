@@ -21,12 +21,12 @@ import (
 // What it deliberately does NOT serve:
 //
 //   - The WIREGUARD section. wg0.conf carries the machine's private key, and
-//     this endpoint is gated on an hz ADMIN credential rather than a
-//     per-machine agent one (item 16). Handing a private key to whoever holds
-//     the admin token is a new exposure for no benefit while hz is still the
-//     thing writing that file. internal/agent models, plans, redacts and
-//     applies the section; hz will populate it when the agent has a
-//     credential of its own.
+//     an hz ADMIN credential still opens this route beside the agent's own
+//     one. Handing a private key to whoever holds the admin token is a new
+//     exposure for no benefit while hz is still the thing writing that file.
+//     internal/agent models, plans, redacts and applies the section; hz
+//     populates it in item 12 step 2, which is also where the admin path
+//     comes off this handler.
 //
 //   - Anything derived from a MachineConfig. The projection is item 14. What
 //     crosses the wire is rendered output for THIS box, which is all the
@@ -37,8 +37,21 @@ import (
 // Answers with an ETag that is the payload's own content hash, so a polling
 // agent that sends If-None-Match gets a 304 and a few hundred bytes. See
 // internal/agent/source.go for why the poll is shaped this way.
+//
+// TWO CALLERS, TWO CREDENTIALS. The agent presents its own per-machine
+// credential (internal/server/agent_credential.go); an hz admin may also read
+// it, because everything in the payload is already on hz's own screens and the
+// drift view is an admin read of exactly this. The admin path is the one that
+// has to GO in item 12 step 2, when the WireGuard section starts crossing this
+// wire — a machine's private key is worth strictly more than the admin token
+// should be able to fetch. TestNoKeyMaterialCrossesThisEndpoint is where that
+// gets decided.
+//
+// What did NOT happen here is a Bearer branch in isAdmin. See
+// agent_credential.go for why.
 func (s *Server) handleAgentDesired(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
+	callerMachine, viaAgent := s.agentCaller(r)
+	if !viaAgent && !s.isAdmin(r) {
 		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
@@ -48,6 +61,20 @@ func (s *Server) handleAgentDesired(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d := s.buildAgentDesired()
+
+	// hz renders for the box it is running on and nothing else yet, so an
+	// agent enrolled under another machine's name must be told that rather
+	// than handed this machine's network config. The agent refuses a
+	// misaddressed payload on its side too (agentFlags.checkAddressed); this
+	// is the same refusal from the end that knows what it rendered.
+	//
+	// This 404 is item 13's seam: once a Machine record exists, hz projects
+	// that machine's config instead of answering "not this box".
+	if viaAgent && callerMachine != "" && d.Machine != "" && callerMachine != d.Machine {
+		writeJSONError(w, http.StatusNotFound,
+			"hz has no desired state for this machine; it renders only for the host it runs on")
+		return
+	}
 	etag := d.Fingerprint()
 
 	w.Header().Set("ETag", etag)

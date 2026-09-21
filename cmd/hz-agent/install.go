@@ -112,6 +112,13 @@ func runShowSystemd(args []string) error {
 //
 // So installing this on the live gateway writes one file and changes nothing
 // that runs.
+//
+// It does one more thing than it used to: it ENROLS the machine first, because
+// an agent with no credential cannot poll at all (plan/privilege-audit.md
+// §1.1) and an installer that leaves a unit unable to authenticate is the
+// half-done shape that hid the bug. Enrolment is still inert — a credential
+// buys a READ of the desired state; applying needs the three separate
+// decisions above.
 func runInstall(args []string) error {
 	fs := flag.NewFlagSet("install", flag.ExitOnError)
 	var f agentFlags
@@ -125,6 +132,8 @@ func runInstall(args []string) error {
 
 	if *dryRun {
 		fmt.Println("DRY RUN: no changes made.")
+		fmt.Printf("Would enrol this machine with hz: mint a credential into %s\n", f.tokenFile)
+		fmt.Printf("and record its hash in %s.\n\n", f.hzCredentials)
 		fmt.Printf("Would write %s:\n\n%s", unitPath, unit)
 		return nil
 	}
@@ -132,6 +141,14 @@ func runInstall(args []string) error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("must run as root to install the systemd unit")
 	}
+
+	// The credential first, so a machine is never left with a unit it cannot
+	// authenticate with. Safe to re-run: an enrolment that already matches is
+	// left alone. It prints paths, never the secret.
+	if err := enroll(&f, false, os.Stdout); err != nil {
+		return fmt.Errorf("enrolling this machine: %w", err)
+	}
+	fmt.Println()
 
 	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {
 		return fmt.Errorf("writing the unit: %w", err)
