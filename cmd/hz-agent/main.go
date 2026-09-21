@@ -47,7 +47,9 @@ USAGE
 COMMANDS
   diff              Print what the agent would change. Changes nothing.
   run               Poll hz and reconcile. Reports only, unless --apply.
-  install           Write the systemd unit. Does not enable it, does not start it.
+  enroll            Give this machine a credential of its own. Needs root.
+  install           Enroll, then write the systemd unit. Does not enable it,
+                    does not start it.
   show-systemd      Print the unit that install would write
   version           Print version
 
@@ -72,10 +74,29 @@ PRIVILEGE
   A diff run unprivileged says which targets it could not read rather than
   reporting them as drifted.
 
+CREDENTIAL
+  The agent authenticates with a PER-MACHINE credential of its own, not an hz
+  admin token — hz refuses an admin token presented here. 'enroll' mints one,
+  writes it to --token-file (0600, root only) and records its HASH with hz;
+  the secret is never printed and never reaches a command line. hz re-reads
+  its record per request, so enrolling needs no hz restart.
+
+  'install' enrolls for you. Re-running either is safe: an enrolment that
+  already matches is left alone. 'enroll --rotate' replaces it.
+
+  Today the agent mints locally because hz is on the same box and both halves
+  are root. A remote machine will be issued its credential BY hz, through the
+  Machine record (plan/architecture.md phase 4 item 13) — that changes who
+  issues it, not what it is or how it is presented.
+
 FLAGS
   --hz URL          hz base URL to poll (default http://127.0.0.1:8080)
   --token TOK       credential for the poll; prefer --token-file
   --token-file PATH file holding it (default /etc/hz-agent/token)
+  --hz-credentials PATH
+                    hz's enrolled-agent store, written by 'enroll'
+                    (default /etc/homelab-horizon/config.json.agents)
+  --rotate          'enroll' replaces an existing credential
   --from PATH       read the desired state from a local JSON file instead of
                     polling. For inspecting a payload offline.
   --machine NAME    refuse a payload addressed to another machine
@@ -111,6 +132,8 @@ func main() {
 		err = runDiff(args)
 	case "run":
 		err = runAgent(args)
+	case "enroll":
+		err = runEnroll(args)
 	case "install":
 		err = runInstall(args)
 	case "show-systemd":

@@ -444,8 +444,9 @@ that changes hz's shape.
     Wired: haproxy (config + jail ACL + reload), dnsmasq (conf + records +
     unit restart), iptables (`Reconcile` over hz's own expected/stale sets).
     Modelled and tested but **not served**: WireGuard — `wg0.conf` holds the
-    machine's private key and the endpoint is still gated on an hz *admin*
-    credential rather than a per-machine agent one. Not transferred:
+    machine's private key, and while the agent now has a per-machine credential
+    (item 12 step 1, done), an hz *admin* credential still opens the same route.
+    Not transferred:
     letsencrypt's cert writes (not split yet) and `autoheal` (does not
     transfer, see item 10).
 12. hz web drops to an unprivileged user. `main.go`'s four `Geteuid` gates and
@@ -454,12 +455,21 @@ that changes hz's shape.
     **The handover from item 11, in the order it has to happen.** Ownership
     flips atomically or the gateway has two processes reconciling one haproxy:
 
-    1. Give the agent a credential of its own. It polls with an hz *admin*
-       token today (`HTTPSource.Token`), which is far more authority than it
-       needs and is why it must not run unattended yet.
+    1. ✅ **Done 2026-09-21.** Give the agent a credential of its own. It did
+       not merely hold too much authority — it held *none that worked*:
+       `isAdmin` has no Bearer path, so the poll answered 401 on a real box
+       (`plan/privilege-audit.md` §1.1). Fixed with a per-machine secret
+       (`hz-agent enroll` → `/etc/hz-agent/token`, 0600) whose SHA-256 hash hz
+       keeps in `<config>.agents`, checked by `Server.agentCaller` on one
+       route. `isAdmin` was deliberately NOT widened: a Bearer branch there
+       would make the shared admin token an API key for every admin surface.
+       Item 13 changes the ISSUER of that credential, nothing else.
     2. Serve the WireGuard section from `buildAgentDesired` — safe only once
-       (1) is done, because that file carries the private key.
-       `internal/agent` already models, plans, redacts and applies it, and
+       the ADMIN path comes off `handleAgentDesired`, because that file carries
+       the private key and an admin credential still opens the route beside the
+       agent's own one. (1) is done, so the remaining work here is dropping
+       `|| s.isAdmin(r)` and populating the section. `internal/agent` already
+       models, plans, redacts and applies it, and
        `TestNoKeyMaterialCrossesThisEndpoint` is the test that has to change.
     3. Move what the agent cannot yet reach: letsencrypt's cert writes and
        `/etc/haproxy/certs` (they are not split render/apply), and HAProxy's
@@ -479,7 +489,16 @@ that changes hz's shape.
     report is evidence the agent would write exactly what hz already wrote.
     Run it as root — unprivileged it cannot read `wg0.conf` or the live
     firewall and says so per target rather than guessing.
-13. Machine record — identity and segments. NOT the observed version: that
+13. Machine record — identity and segments. It also becomes the **issuer of the
+    agent credential**: today `hz-agent enroll` mints a secret locally and
+    writes its own record into hz's store, which only works because hz and the
+    agent are the same root on one box. A remote agent must not be able to
+    write itself in. What changes is `cmd/hz-agent/enroll.go` (mint → ask) and
+    who writes `CredentialStore`; the store format, the header, the hashing,
+    hz's verification and the poll all stay, because none of them know where a
+    credential came from. `handleAgentDesired`'s 404 for a credential naming
+    another machine is the seam this fills — it becomes a projection instead.
+    NOT the observed version: that
     settled onto the registration in 0011, because it belongs to an instance
     and several instances share a box.
 14. `project(global, machineID) → MachineConfig`, pure, tested offline. The

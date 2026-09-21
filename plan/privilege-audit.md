@@ -20,7 +20,17 @@ it. Section 4 is the part that still needs a human who knows the estate.
 
 ## 1. Findings that block item 12
 
-### 1.1 `hz-agent` cannot authenticate to hz ⛔ BLOCKER
+### 1.1 `hz-agent` cannot authenticate to hz ✅ FIXED 2026-09-21
+
+> **Fixed** — the agent has a credential of its own (`internal/agent/credential.go`,
+> `internal/server/agent_credential.go`, `hz-agent enroll`). `isAdmin` was NOT
+> widened: a Bearer branch there would have made the shared admin token an API
+> key for every admin surface hz serves, fleet-wide, to fix one endpoint.
+> Measured on `hz-audit`: `sudo hz-agent diff` now returns a plan, the admin
+> token as a Bearer header still gets 401 on both `/api/v1/agent/desired` and
+> `/api/v1/dashboard`, and de-enrolling the machine puts the 401 back.
+> The seam that hid it is fixed too — see the note under item 2 below.
+> What follows is the original finding, kept as the record.
 
 The agent sends `Authorization: Bearer <token>` (`internal/agent/source.go:93`).
 `isAdmin` (`internal/server/server.go:660`) accepts exactly three things: a real
@@ -169,12 +179,53 @@ item-12 checklist: `plan/ha-and-the-agent.md`.
 
 Ordered, replacing the handover list in `architecture.md`:
 
-1. **Give the agent a working credential.** Not hardening — it does not work at
-   all today (§1.1). Either `isAdmin` grows a Bearer path, or better, a
-   per-machine agent credential separate from the admin token.
-2. **Fix the test seam that hid it**: the handler test and the client must
-   exercise the same credential. A test that authenticates differently from the
-   caller proves the handler works for a caller that does not exist.
+1. ✅ **Done 2026-09-21. The agent has a credential of its own.** Not `isAdmin`
+   growing a Bearer path — that was the tempting one-liner and it was the wrong
+   trade: it would have made the shared admin token work as a header on every
+   admin surface hz serves, widening the blast radius of a leaked token to fix
+   one endpoint. Instead:
+
+   - **The credential**: a per-machine secret, 32 bytes, minted by
+     `hz-agent enroll` into `/etc/hz-agent/token` (0600, in a 0700 directory).
+   - **What hz stores**: the SHA-256 HASH ONLY, in
+     `<config>.agents` beside `<config>.token` — a JSON list keyed by machine,
+     0600, written atomically. hz never holds the secret, so a leaked store
+     says *which* machines are enrolled and not *how to be one*.
+   - **Not in `config.Config`**, deliberately: that struct is what peer-sync
+     ships to HA peers (`handlers_ha.go`) and what the backup endpoint zips.
+     A credential there would ride both channels to places nobody chose.
+   - **Not in the user database**: hz tolerates `users == nil`, and a gateway
+     whose network config depends on its identity store booting is a worse
+     failure than the one being fixed.
+   - **Checked by `Server.agentCaller`**, consulted by exactly one route. It
+     is not an admin credential, mints no session, and explicitly refuses hz's
+     own admin token even if somebody enrols it.
+   - **Becoming per-machine later is a change of ISSUER, not a redesign.**
+     Records are keyed by machine from the first line. Item 13's Machine record
+     replaces "`hz-agent enroll` writes its own record locally" with "hz mints
+     at enrolment"; the store format, the header, the hash, hz's verification
+     and the whole agent side are untouched.
+   - The gateway's agent mints locally because hz is on the same box and both
+     halves are root, so it needs no bootstrap credential — and the only one
+     available to bootstrap with would have been the admin token.
+2. ✅ **Done 2026-09-21. The test seam is fixed.** Three changes, in order of
+   how load-bearing they are:
+
+   - **A pair test**: `TestTheRealAgentClientAuthenticatesToTheRealHZ` drives
+     the real `agent.HTTPSource` over a real socket against `setupRoutes()`.
+     Client and server are exercised as a pair, so neither can be green alone.
+   - **The handler tests now present what the agent presents** — `agentGET`
+     goes through `agent.Authorize`, the same function the client calls. The
+     session cookie is gone from that file.
+   - **One place builds the header and one place parses it**, four lines apart
+     in `internal/agent/credential.go`. They cannot drift without somebody
+     editing both.
+
+   Positive control, run: putting the original bug back (handler on `isAdmin`
+   only, test on a session cookie) leaves the pair test red.
+
+   **Other handlers with a test-only credential** are listed in §6. They are
+   not fixed here; fixing them is separate work.
 3. **Decide peer-sync** (not `handlers_ha.go` — see the correction in §2).
    Recommendation in `plan/ha-and-the-agent.md`: guard first (refuse to arm the
    agent while a fleet is configured, and re-check in `applyNewConfig`), then
@@ -213,3 +264,30 @@ worth checking against the real box before item 12:
 `hz-audit`, kept for re-running. Nothing on it came from the office: synthetic
 config, `audit.test` domains, a placeholder admin token, no DNS provider, no
 SSL, no keys. Destroy with `multipass delete --purge hz-audit`.
+
+It now also carries the agent credential fix: `hz-agent` in `/usr/local/bin`,
+enrolled as `hz-audit`, `sudo hz-agent diff` returning a plan. The agent is
+still inert there — the unit exists, `systemctl enable hz-agent` still refuses,
+and `ExecStart` still has no `--apply`.
+
+## 6. Other endpoints authenticated differently from their real caller
+
+Surveyed 2026-09-21 while fixing §1.1, because the failure was a *shape* and a
+shape recurs. Each row is the same question: does the test present what the
+real client presents? **None of these is fixed here** — they are listed so the
+next person picks one deliberately rather than rediscovering it on a VM.
+
+Ordered worst first.
+
+| # | Endpoint | Real caller + credential | What the test does | Verdict |
+|---|---|---|---|---|
+| 1 | `handleDeployAPI` (`handlers_deploy.go:46`) | `hzclient`, `Authorization: Bearer <service/deploy token>` | **nothing.** `hzclient/verbs_test.go` drives a hand-rolled `fakeHZ` that never calls `extractBearerToken`/`findServiceByToken`; no test in `internal/server` touches the handler | **no server-side auth test at all** |
+| 2 | `/mcp` (`mcpAuthMiddleware`, `server.go:648`) | admin token as Bearer | **nothing.** No test file exists for `/mcp` or the middleware | **no test at all** |
+| 3 | `handlePeerPing` / `handlePeerConfig` / `handlePeerCert` / `handlePeerState` | hz's own peer-sync, identity by **source IP** (`peerOnlyMiddleware` → `isAllowedPeer`) | `peer_sync_test.go:177` `startPeerHTTPServer` registers the handlers on a bare mux and **bypasses `peerOnlyMiddleware` on purpose** (its own comment says so), then every pull-loop test uses it. `isAllowedPeer` is unit-tested alone with a synthetic `RemoteAddr` | **middleware bypassed.** The protocol is proven; that an off-VPN caller is refused *on the served route* is not |
+| 4 | `handleProbeReport` | `probe.Pusher`, Bearer vantage/grant token | same Bearer header, **plus** `TestPushEndToEndWithARealAgent` (`handlers_probe_report_test.go:239`) drives the real pusher against `setupRoutes()` | ✅ **the pattern to copy** — the agent pair test is modelled on it |
+| 5 | `handleAPICMRegister` / `…Poll` / `…Config` | `configmgr.Client`, **no header** — identity is the source IP resolved to a VPN peer | sets `r.RemoteAddr` to a peer IP present in a real WireGuard config: the same mechanism | ✅ same credential |
+| 6 | admin `handleAPI*` routes called by `cmd/hz` | shared admin token exchanged at `/api/v1/auth/login` for a `session` cookie | `signCookie("admin")` in 9 test files — which is *literally* what the login handler mints | ✅ same credential (the cookie is not a test-only credential here) |
+
+Rows 1 and 2 are a different and worse problem than §1.1: §1.1 had a test
+measuring the wrong thing, these have no measurement. Row 3 is the exact §1.1
+shape — a green suite that cannot fail for the reason it exists.

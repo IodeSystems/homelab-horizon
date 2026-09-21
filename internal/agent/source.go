@@ -71,12 +71,12 @@ type HTTPSource struct {
 	// BaseURL is hz's address. On the gateway this is loopback.
 	BaseURL string
 
-	// Token authenticates the poll.
+	// Token is this machine's agent credential — see credential.go. It is
+	// worth a read of this machine's rendered network config and nothing
+	// else; it is NOT an hz admin token, and hz refuses one presented here.
 	//
-	// Today this is an hz admin credential, which is far more authority than
-	// an agent should hold and is one of the reasons the agent must not run
-	// unattended yet. A per-machine agent credential is item 16; when it
-	// lands, only this field's provenance changes.
+	// `hz-agent enroll` mints it and records its hash with hz. Item 13 moves
+	// the minting to hz's Machine record; this field does not change.
 	Token string
 
 	Client *http.Client
@@ -89,9 +89,10 @@ func (s *HTTPSource) Fetch(ctx context.Context, etag string) (*Desired, string, 
 	if err != nil {
 		return nil, etag, false, err
 	}
-	if s.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+s.Token)
-	}
+	// Through the shared helper, never a hand-built header: hz reads it back
+	// with PresentedSecret four lines away in credential.go, and the pair
+	// drifting apart is exactly the bug this fixed.
+	Authorize(req, s.Token)
 	if etag != "" {
 		req.Header.Set("If-None-Match", etag)
 	}
@@ -110,6 +111,13 @@ func (s *HTTPSource) Fetch(ctx context.Context, etag string) (*Desired, string, 
 	case http.StatusNotModified:
 		return nil, etag, false, nil
 	case http.StatusOK:
+	case http.StatusUnauthorized:
+		// Named, because the answer is a specific command and the generic
+		// message sent the last person reading it to isAdmin. No credential
+		// in the text: this line goes to a log.
+		return nil, etag, false, fmt.Errorf(
+			"hz answered %s — this machine is not enrolled with hz. Run `sudo hz-agent enroll`",
+			resp.Status)
 	default:
 		// Bounded read: the body of an error page is diagnostic, and an
 		// unbounded one from a proxy that is not hz is a memory problem.
