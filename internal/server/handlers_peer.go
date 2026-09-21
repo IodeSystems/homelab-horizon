@@ -373,6 +373,27 @@ func (s *Server) applyWGPeersFromConfig(cfg *config.Config) {
 // restart the instance.
 func (s *Server) applyNewConfig(newCfg *config.Config) error {
 	old := s.cfg()
+
+	// CHECK 2 OF THE hz-agent / PEER-SYNC GUARD, and the one that matters.
+	//
+	// FIRST, BEFORE THE STORE. Everything below this line either writes the
+	// config to disk or writes /etc, and two of those writes are the bypasses
+	// the guard exists for (applyWGPeersFromConfig, and reapplyBans on the ban
+	// loop that shares this config). A refusal after the swap would be a machine
+	// already converted.
+	//
+	// Fleet topology is per-instance and never comes off the wire: a pulled
+	// config must not join this machine to a fleet, move it between fleets or
+	// take it out of one. That is the runtime path a boot-only check cannot
+	// see, and it happens with no human and no request to fail. It cannot fire
+	// on a correct pull — mergeRemoteIntoLocal pins those three fields, so the
+	// merged config carries the local values by construction. See
+	// agent_fleet_guard.go.
+	if err := refuseFleetChangeFromTheWire(old, newCfg); err != nil {
+		slog.Error("peer-sync: refusing a pulled config that would change this machine's fleet", "err", err)
+		return err
+	}
+
 	// Preserve runtime-only fields that should never come from the primary.
 	newCfg.AdminToken = old.AdminToken
 	// The --listen override belongs to this process, not to the fleet: a
