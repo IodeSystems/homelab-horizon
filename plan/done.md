@@ -4,6 +4,67 @@ Completed trees moved out of [plan.md](plan.md) as they finished. Kept for the
 reasoning, not the status: several of these record *why* a thing is shaped the
 way it is, which the code alone doesn't say.
 
+## Peer-API access control (2026-09-21)
+
+### ✅ An empty peer list now admits nobody
+
+Found 2026-09-21 while investigating HA vs the agent; fixed the same day on
+`fix/peer-api-access`. **Deliberately written as the class of problem, not a
+recipe. This repo is public.**
+
+`internal/server/handlers_peer.go` — the peer API's access check matched
+configured fleet peers by address, and **when no peers were configured it
+widened to the whole VPN CIDR** rather than closing. A standalone gateway is
+the no-peers case, so on every single-gateway deployment the peer API's
+audience was "anything on the VPN" instead of "the other gateways", which is
+what the design intends. The middleware's own doc comment said restricting to
+specific peers rather than the whole CIDR is *"critical ... because it exposes
+private key material"* — and the fallback sat immediately below it.
+
+**Scope, checked rather than assumed:**
+
+- **TLS private keys: were exposed.** The cert route reads and returns key
+  material and nothing migrates it out of reach.
+- **The served config: also a secret channel**, and still is — it serialises
+  the whole config, which carries the zone DNS credentials, the OIDC client
+  secret, the VPN MFA enrolment secrets and the metrics scrape token. Closing
+  the access check is what protects it; it is not a route that can be deleted,
+  because replicating configuration is the feature. `ha-and-the-agent.md` §9.1.
+- **Admin token: NOT exposed on a current gateway.** `server.go:307-316` moves
+  the token to a 0600 file and clears the field before any save. An earlier
+  investigation note said otherwise, reading the struct tag rather than the
+  runtime state. A config that has never booted a version with that migration
+  is a different answer.
+
+**Why it had not bitten:** the routes are unadvertised and nothing in-tree
+calls them without `peer_id` set. That is obscurity, not a control.
+
+**The fix, three parts:**
+
+1. Deny when no peers are configured. Nothing consumes the surface without a
+   fleet — the pull loop, `alivePeers` and ban sync all return early on an
+   empty peer list, and the HA status handler only pings addresses it read out
+   of the peer list — so deny breaks nothing real. Loopback-only was the
+   conservative alternative and was not needed.
+2. **One registration point.** `registerPeerAPI` is now the only place peer
+   routes are registered; it applies the middleware and records each path, so
+   a new route cannot be added without the check.
+3. **The test that hid it.** Every pull-loop test stood the peer API up on a
+   bare mux with the middleware "intentionally bypassed so loopback requests
+   are accepted" — the middleware with the hole was the one middleware no test
+   exercised. Those tests now run the real registration path and admit their
+   caller the way an operator does: by listing its address. Plus a new test
+   that refuses a VPN-range non-peer, and every caller on a standalone
+   gateway, on **every** route enumerated from the registry.
+
+**Remediation, not just the patch:** anyone with VPN access to a gateway that
+ran the old code should be assumed able to have taken its TLS keys and the
+other material on that surface. Rotation is the remediation.
+
+**Follow-on, not done here:** whether the cert-distribution channel should
+exist at all. It is removable — investigation and cost in
+`plan/ha-and-the-agent.md` §10.
+
 ## VPN MFA jail (2026-08-12)
 
 ### ✅ MFA jail covers the INPUT path (WG-INPUT chain)

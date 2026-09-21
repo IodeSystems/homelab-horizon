@@ -269,6 +269,13 @@ type Server struct {
 	// list to keep in sync.
 	peerInstancePaths    map[string]bool
 	peerInstancePrefixes []string
+
+	// peerAPIRoutes records every route registered behind peerOnlyMiddleware
+	// (subtrees keep their trailing slash). Populated only by
+	// registerPeerAPI, then read-only. Its purpose is to let the access
+	// control test enumerate the surface instead of hand-listing it, so a
+	// route added to registerPeerAPI is covered without touching the test.
+	peerAPIRoutes []string
 }
 
 func New(configPath string) (*Server, error) {
@@ -1027,16 +1034,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mcpHandler := mcpSrv.StreamableHTTPHandler()
 	mux.Handle("/mcp", s.mcpAuthMiddleware(mcpHandler))
 
-	// Multi-instance HA peer plumbing — bound to WG only. Per-instance:
-	// each peer must answer pings/config-pull regardless of primary status.
-	s.handlePeerInstance(mux, "/api/peer/ping", s.peerOnlyMiddleware(s.handlePeerPing))
-	s.handlePeerInstance(mux, "/api/peer/config", s.peerOnlyMiddleware(s.handlePeerConfig))
-	// Cert pull endpoint for Phase 2 ACME HA — non-owners fetch cert+key
-	// from the owner peer. Subtree because domain is in the path.
-	s.handlePeerInstanceSubtree(mux, "/api/peer/cert/", s.peerOnlyMiddleware(s.handlePeerCert))
-	// Ban state endpoint for Phase 4 LWW sync — each peer exposes its
-	// ban list so others can merge.
-	s.handlePeerInstance(mux, "/api/peer/state", s.peerOnlyMiddleware(s.handlePeerState))
+	// Multi-instance HA peer plumbing — bound to WG only, and restricted to
+	// configured peers. Registered in one place (registerPeerAPI) so the
+	// middleware cannot be forgotten on a new route and the surface can be
+	// enumerated by its access-control test.
+	s.registerPeerAPI(mux)
 
 	// API v1 auth routes (JSON, SameSite cookie auth). Per-instance: a
 	// non-primary spare must still allow login/logout for read-only access.

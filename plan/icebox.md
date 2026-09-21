@@ -10,50 +10,11 @@ How this plan works: see `/home/nthalk/CLAUDE.md` "Planning". These are queued, 
 - ✅ **Hosts UX clarity** — Observability Hosts section now lists knownHosts (derived ∪ declared) with a
   source badge and a one-click "Declare / add labels" (prefills IP) on derived hosts.
 
-## ⚠ SECURITY — peer-API access control is wider than intended on a standalone gateway
+## ✅ SECURITY — peer-API access control (fixed 2026-09-21)
 
-Found 2026-09-21 while investigating HA vs the agent. Filed, not fixed.
-
-**Deliberately written as the class of problem, not a recipe. This repo is
-public.**
-
-`internal/server/handlers_peer.go` — the peer API's access check matches
-configured fleet peers by address, and **when no peers are configured it widens
-to the whole VPN CIDR** rather than closing. A standalone gateway is the
-no-peers case, so on every single-gateway deployment the peer API's audience is
-"anything on the VPN" instead of "the other gateways", which is what the design
-intends.
-
-That matters because some routes behind that check exist to hand one gateway's
-material to another. The middleware's own doc comment says restricting to
-specific peers rather than the whole CIDR is *"critical … because it exposes
-private key material"* — and the fallback immediately below it opens exactly
-that case.
-
-**Scope, checked rather than assumed:**
-
-- **TLS private keys: exposed.** The cert route reads and returns key material
-  and nothing migrates it out of reach.
-- **Admin token: NOT exposed on a current gateway.** `server.go:307-316` moves
-  the token to a 0600 file and sets `cfg.AdminToken = ""` before any save, so a
-  gateway that has booted this version no longer carries it in the served
-  config. An earlier investigation note said otherwise, reading the struct tag
-  rather than the runtime state — corrected here. A config that has never
-  booted a version with that migration is a different answer.
-
-**Why it has not bitten:** the routes are unadvertised and nothing in-tree calls
-them without `peer_id` set. That is obscurity, not a control.
-
-**next:** close the fallback. The endpoints have no standalone use — the pull
-loop and `alivePeers` never fire without `peer_id` — so deny is the honest
-default; loopback-only is the conservative one. **Before pushing this repo
-anywhere, fix this first**: the fix is small and the finding is now written
-down.
-
-**risks:** a test or dev workflow may lean on the open fallback — check the
-peer and API handler tests before flipping. Anyone with VPN access to a gateway
-running this code should be assumed able to have taken its TLS keys; rotation is
-the remediation, not just the patch.
+Closed on `fix/peer-api-access`: an empty peer list now admits nobody. Full
+write-up, including what else that surface hands out and whether the cert
+channel should exist at all, in `plan/ha-and-the-agent.md` §9-§10.
 
 ## ◻ Read-only access, if it is ever wanted
 

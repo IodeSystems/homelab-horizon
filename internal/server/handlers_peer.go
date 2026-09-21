@@ -120,13 +120,22 @@ func (s *Server) handlePeerState(w http.ResponseWriter, r *http.Request) {
 }
 
 // peerOnlyMiddleware allows only requests from configured peer addresses.
-// When the fleet has configured peers, only those specific wg_addr hosts
-// are allowed — not the entire VPN CIDR. This is critical for Phase 2
-// endpoints like /api/peer/cert/:domain that expose private key material.
+// Only the specific wg_addr hosts of configured peers are allowed — never
+// the entire VPN CIDR. This is critical for Phase 2 endpoints like
+// /api/peer/cert/:domain that expose private key material.
 //
-// Falls back to VPN CIDR check when no peers are configured (standalone
-// mode or primary with no peers listed) so the endpoint still works in
-// development/testing.
+// With no peers configured, nothing is allowed. That is the standalone
+// gateway, and it is the case that matters most: this used to fall back to a
+// VPN CIDR check "so the endpoint still works in development/testing", which
+// meant that on every single-gateway deployment — the overwhelmingly common
+// shape — the fallback was the only branch that ever ran, and the audience
+// for these routes was the whole VPN rather than the other gateways.
+//
+// Denying is safe because nothing consumes this surface without a fleet:
+// pullConfigOnce returns early without a primary peer, alivePeers and
+// banSyncOnce return early on an empty peer list, and handleHAStatus only
+// ever pings addresses it read out of cfg.Peers. An empty peer list means
+// the surface has no legitimate caller, so it has none.
 func (s *Server) peerOnlyMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -141,15 +150,12 @@ func (s *Server) peerOnlyMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// isAllowedPeer reports whether ip is a configured fleet peer. When
-// peers are configured, only their wg_addr hosts (stripped of port) are
-// accepted. When no peers are configured, falls back to VPN CIDR.
+// isAllowedPeer reports whether ip is a configured fleet peer. Only the
+// wg_addr hosts of configured peers (stripped of port) are accepted. With no
+// peers configured there is no peer to admit, so nothing is admitted — see
+// peerOnlyMiddleware for why that is the safe default and not a regression.
 func (s *Server) isAllowedPeer(ip string) bool {
-	peers := s.cfg().Peers
-	if len(peers) == 0 {
-		return s.isInVPNRange(ip)
-	}
-	for _, p := range peers {
+	for _, p := range s.cfg().Peers {
 		peerHost := p.WGAddr
 		if h, _, err := net.SplitHostPort(peerHost); err == nil {
 			peerHost = h
@@ -159,6 +165,38 @@ func (s *Server) isAllowedPeer(ip string) bool {
 		}
 	}
 	return false
+}
+
+// registerPeerAPI registers the whole /api/peer/* surface. It is the ONLY
+// place these routes are registered: every one of them goes through
+// peerOnlyMiddleware here, and its path is recorded in s.peerAPIRoutes so a
+// test can enumerate the surface rather than hand-list it. Add a new peer
+// route here and the access-control test covers it by construction.
+//
+// They are also per-instance routes (handlePeerInstance / ...Subtree): every
+// peer must answer pings and config pulls regardless of primary status.
+func (s *Server) registerPeerAPI(mux *http.ServeMux) {
+	s.peerAPIRoutes = nil
+	s.peerAPIRoute(mux, "/api/peer/ping", s.handlePeerPing)
+	s.peerAPIRoute(mux, "/api/peer/config", s.handlePeerConfig)
+	// Cert pull endpoint for Phase 2 ACME HA — non-owners fetch cert+key
+	// from the owner peer. Subtree because the domain is in the path.
+	s.peerAPISubtree(mux, "/api/peer/cert/", s.handlePeerCert)
+	// Ban state endpoint for Phase 4 LWW sync — each peer exposes its ban
+	// list so others can merge.
+	s.peerAPIRoute(mux, "/api/peer/state", s.handlePeerState)
+}
+
+// peerAPIRoute registers one exact-path peer route behind peerOnlyMiddleware.
+func (s *Server) peerAPIRoute(mux *http.ServeMux, path string, h http.HandlerFunc) {
+	s.peerAPIRoutes = append(s.peerAPIRoutes, path)
+	s.handlePeerInstance(mux, path, s.peerOnlyMiddleware(h))
+}
+
+// peerAPISubtree is the trailing-slash subtree variant of peerAPIRoute.
+func (s *Server) peerAPISubtree(mux *http.ServeMux, prefix string, h http.HandlerFunc) {
+	s.peerAPIRoutes = append(s.peerAPIRoutes, prefix)
+	s.handlePeerInstanceSubtree(mux, prefix, s.peerOnlyMiddleware(h))
 }
 
 // nonPrimaryGuardMiddleware returns 403 with the primary peer ID when this
