@@ -25,10 +25,11 @@ func get(name string) ([]byte, bool) {
 
 // available lists the entries carrying a prefix, with the prefix stripped.
 //
-// The two tools share a directory and "hz-" is a prefix of "hz-probe-", so
-// matching on the prefix alone would list every hz-probe build as an hz one.
-// An entry belongs to the shorter tool only when what follows the prefix is
-// not itself another tool's name.
+// The tools share a directory and "hz-" is a prefix of both "hz-probe-" and
+// "hz-agent-", so matching on the prefix alone would list every probe and
+// agent build as an hz one — and an operator installing the CLI would be
+// handed the root daemon. An entry belongs to the shorter tool only when what
+// follows the prefix is not itself another tool's name.
 func available(prefix string) []string {
 	entries, err := binFS.ReadDir("bin")
 	if err != nil {
@@ -40,7 +41,7 @@ func available(prefix string) []string {
 			continue
 		}
 		key := strings.TrimPrefix(e.Name(), prefix)
-		if prefix == ToolHZ+"-" && strings.HasPrefix(key, "probe-") {
+		if prefix == ToolHZ+"-" && belongsToASubTool(key) {
 			continue
 		}
 		out = append(out, key)
