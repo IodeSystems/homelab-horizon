@@ -480,8 +480,11 @@ environment-bound keys as declared rows, and gating on the declared edge.)
   too strong in two specific ways.
 - **risks:** largest feature ever proposed for hz, landing in the box the whole
   network depends on; hz becomes a dependency of every box's startup path, so
-  the cached-boot fallback is not optional; the key has no escrow and no
-  recovery path, which is the failure most likely to actually happen.
+  the cached-boot fallback is not optional. (The escrow half of that risk closed
+  2026-09-20: `hz cm recovery` wraps every environment key to a list of recovery
+  public keys and `hz cm recovery verify` proves one opens. It is only closed on
+  a box where `verify` has actually been run — see
+  [architecture.md](architecture.md) *Key custody*.)
 - **blocking decisions (yours):** the five open questions in the design doc.
   None block Phase 1.
 - **constraint:** nothing in the boot path may depend on freshness — services

@@ -350,7 +350,10 @@ never done is *execute* on a box it is not.
 
 1. Merge `wt/projects`.
 2. Back up environment keys to the password manager. Before anything depends
-   on them.
+   on them. **The tooling landed 2026-09-20** (`hz cm recovery`, see *Key
+   custody* below); what remains is running it on the real box —
+   `keygen` → `add` → `backfill` → **`verify`**. Not done until `verify` says
+   yes.
 3. redline imports `configmgr`. Deletes plaintext secrets from the dev box, the
    shared `deploy/home/secret.properties`, and the `--confirm-secrets` guard.
 
@@ -435,15 +438,41 @@ restore: recovery privkey → unwrap any environment key
 - The recovery **private** key lives in the password manager. It never touches
   the dev box or the gateway.
 - The recovery **public** key sits in hz config; the wrap rides hz's backups
-  like any other blob.
+  like any other blob. **Which store that is turned out to be load-bearing and
+  this note did not say it:** `handlers_backup.go`'s export zip carries
+  `config.json`, the admin token, `wireguard.conf`, invites and certs — it does
+  **NOT** carry `hz.db`. So a wrap stored beside the machine grants
+  (`cm_registrations.wrapped_env_key`) would ride *nothing*, and the feature
+  whose whole purpose is surviving the loss of one disk would depend on that
+  disk. Both the recipients and the wraps therefore live in `config.json`
+  (`internal/config/recovery.go`), where they are also fleet-shared by
+  `mergeRemoteIntoLocal`.
 - It cannot drift, which is the whole reason to prefer it over a manual export:
   a new environment is covered without anyone remembering a step.
 - Environment keys still rotate freely — they re-wrap to the same recovery
   public key.
 
 **Ordering is load-bearing: custody before deletion.** Phase 1 item 2 gates
-item 3. Until the recovery recipient ships, hand-export the existing
-environment keys to the password manager — that is the gate, not the design.
+item 3.
+
+✅ **Shipped 2026-09-20** as `hz cm recovery` — `keygen` / `add` / `rm` / `ls` /
+`backfill` / `verify`, with `hz cm key new` wrapping to every recipient
+automatically and failing loudly if it cannot. Two things the design above did
+not settle, decided in the build:
+
+- **`verify` is the point of the feature, not a convenience.** A stored wrap is
+  a claim; only the private half proves it. It checks three things — the blob is
+  addressed to this key, this key decrypts it (AEAD, with the address as AAD so
+  another environment's blob cannot pass), and the key inside hashes to the id
+  it is filed under. It deliberately proves nothing about which key hz calls
+  current, and nothing about any sealed config *value*.
+- **Retro-wrap reach is the local keystore, and only that.** hz cannot supply an
+  environment key and a stored wrap opens only with a recovery private key, so
+  `backfill` can reach exactly the keys in this machine's `~/.hz`. Gaps on keys
+  held elsewhere are reported by `ls`, never guessed at.
+
+So item 2 is now a command rather than a hand-export: `hz cm recovery backfill`
+then `verify`. Item 3 stays gated on `verify` having actually been run.
 
 ### Succession — a second recovery recipient (2026-09-20)
 
