@@ -348,9 +348,12 @@ Ordered, replacing the handover list in `architecture.md`:
    a redesign.
 4. **letsencrypt/acme** need a render/apply split, and `loadTLSAssets` reads the
    cert store during *render*, so certs must become an input rather than a read.
-5. **Classify the fixer buttons, `handlers_ban`, `handlers_integration`,
-   `system/interfaces`** — agent actions, or hz keeps a minimal privileged
-   helper. Say which; do not discover it after the flip.
+5. ✅ **Done 2026-09-21 — `plan/privilege-classification.md`.** Every privileged
+   operation classified AGENT-OWNED / HZ-KEEPS / DELETE, with the item-12
+   readiness checklist in its §7. Three of the rows named here perform no
+   privileged operation at all (`handlers_integration`, `system/interfaces`,
+   `probe/agent` — §1 of that document); four operations the table below missed
+   are classified there too, one of which runs on every MFA transition.
 6. `autoheal` needs its own `plan(observed) → []Action` seam.
 
 ## 4. What this audit cannot answer
