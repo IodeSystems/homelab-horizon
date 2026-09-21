@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -170,15 +171,22 @@ func newTestServer(t *testing.T, cfg *config.Config) *Server {
 	return s
 }
 
-// startPeerHTTPServer wires the /api/peer/ping and /api/peer/config endpoints
-// to a test Server and returns its host:port (suitable for use as wg_addr in
-// the non-primary's Peer entry). The peerOnlyMiddleware is intentionally
-// bypassed so loopback (127.0.0.1) requests are accepted.
+// startPeerHTTPServer serves the REAL /api/peer/* surface for a test Server —
+// registered through registerPeerAPI, so every request passes through
+// peerOnlyMiddleware exactly as it does in production — and returns its
+// host:port (suitable for use as wg_addr in the caller's Peer entry).
+//
+// It used to register the handlers on a bare mux with peerOnlyMiddleware
+// "intentionally bypassed so loopback requests are accepted". Every pull-loop
+// test went through that helper, so the peer API's only access control was
+// the one piece of the peer API no test exercised — which is how the CIDR
+// fallback in isAllowedPeer survived. Admitting the caller is now done the
+// way a real gateway does it: by listing the address it calls from.
 func startPeerHTTPServer(t *testing.T, s *Server) string {
 	t.Helper()
+	allowLoopbackPeer(t, s)
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/peer/ping", s.handlePeerPing)
-	mux.HandleFunc("/api/peer/config", s.handlePeerConfig)
+	s.registerPeerAPI(mux)
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	// httptest URLs look like http://127.0.0.1:NNNNN — strip the scheme.
@@ -187,6 +195,34 @@ func startPeerHTTPServer(t *testing.T, s *Server) string {
 		t.Fatalf("split test server URL %q: %v", ts.URL, err)
 	}
 	return net.JoinHostPort(host, port)
+}
+
+// allowLoopbackPeer lists 127.0.0.1 as a configured peer of s, because that
+// is the address httptest's client actually arrives from. This is the test
+// analogue of an operator putting the other gateway's wg_addr in the peer
+// list — it grants exactly the caller, not a range.
+//
+// Peers is a per-instance field (mergeRemoteIntoLocal pins the local value,
+// peer_sync.go:226), so this entry never reaches a config a peer pulls.
+// Idempotent: safe to call again after a test re-Stores the config.
+func allowLoopbackPeer(t *testing.T, s *Server) {
+	t.Helper()
+	cur := s.cfg()
+	for _, p := range cur.Peers {
+		if host, _, err := net.SplitHostPort(p.WGAddr); err == nil {
+			if host == "127.0.0.1" {
+				return
+			}
+		} else if p.WGAddr == "127.0.0.1" {
+			return
+		}
+	}
+	next := *cur
+	next.Peers = append(append([]config.Peer(nil), cur.Peers...), config.Peer{
+		ID:     "loopback-test-caller",
+		WGAddr: "127.0.0.1",
+	})
+	s.config.Store(&next)
 }
 
 // TestPullLoopE2E runs the pull loop end-to-end against a real HTTP server
@@ -553,17 +589,132 @@ func TestIsAllowedPeer(t *testing.T) {
 		}
 	}
 
-	// Without peers configured: falls back to VPN CIDR.
+	// Without peers configured: nobody is a peer. This used to fall back to a
+	// VPN CIDR check, which on a standalone gateway — the no-peers case, and
+	// the common deployment — was the only branch that ever ran, opening
+	// /api/peer/cert/<domain> and its private key material to the whole VPN.
 	s2 := newTestServer(t, &config.Config{
 		PeerID:   "standalone",
 		VPNRange: "10.0.0.0/24",
 	})
-	if !s2.isAllowedPeer("10.0.0.5") {
-		t.Error("no peers configured: VPN CIDR address should be allowed")
+	for _, ip := range []string{"10.0.0.5", "10.0.0.1", "192.168.1.1", "127.0.0.1"} {
+		if s2.isAllowedPeer(ip) {
+			t.Errorf("no peers configured: isAllowedPeer(%q) = true, want false", ip)
+		}
 	}
-	if s2.isAllowedPeer("192.168.1.1") {
-		t.Error("no peers configured: non-VPN address should be rejected")
+}
+
+// peerDeniedBody is the exact text peerOnlyMiddleware writes on a refusal.
+// Asserting on it (not just on 403) pins the refusal to THIS check rather
+// than to some other 403 a handler might produce.
+const peerDeniedBody = "peer api: not a configured peer"
+
+// TestPeerAPIDeniesNonPeerOnEveryRoute is the access-control test for the
+// whole /api/peer/* surface, including /api/peer/cert/<domain>, which hands
+// out a TLS private key.
+//
+// The routes are ENUMERATED from the registry registerPeerAPI populates, not
+// hand-listed, and the requests go through the REAL mux registerPeerAPI built
+// — so a route added there is covered here by construction, and a route added
+// there without the middleware fails here rather than passing unnoticed.
+//
+// Two refusals are asserted: a caller inside the VPN range that is not a
+// configured peer (the audience is the other gateways, not the VPN), and
+// every caller once the peer list is empty (the standalone gateway — the
+// case a VPN-CIDR fallback used to admit wholesale).
+func TestPeerAPIDeniesNonPeerOnEveryRoute(t *testing.T) {
+	// newSurface returns the live peer-API mux plus the route patterns it
+	// registered.
+	newSurface := func(t *testing.T, cfg *config.Config) (*Server, http.Handler, []string) {
+		t.Helper()
+		s := newTestServer(t, cfg)
+		mux := http.NewServeMux()
+		s.registerPeerAPI(mux)
+		routes := append([]string(nil), s.peerAPIRoutes...)
+		if len(routes) == 0 {
+			t.Fatal("registerPeerAPI recorded no routes — the enumeration is broken, so this test proves nothing")
+		}
+		// Cross-check: every per-instance route under /api/peer/ must have
+		// come through peerAPIRoute/peerAPISubtree and so be in the registry.
+		// Catches a peer route registered with handlePeerInstance directly,
+		// which would otherwise skip both the middleware and this test.
+		inRegistry := make(map[string]bool, len(routes))
+		for _, p := range routes {
+			inRegistry[p] = true
+		}
+		for p := range s.peerInstancePaths {
+			if strings.HasPrefix(p, "/api/peer/") && !inRegistry[p] {
+				t.Errorf("%s bypassed registerPeerAPI — register it with peerAPIRoute so it gets peerOnlyMiddleware", p)
+			}
+		}
+		for _, p := range s.peerInstancePrefixes {
+			if strings.HasPrefix(p, "/api/peer/") && !inRegistry[p] {
+				t.Errorf("%s bypassed registerPeerAPI — register it with peerAPISubtree so it gets peerOnlyMiddleware", p)
+			}
+		}
+		return s, mux, routes
 	}
+
+	// requestPath turns a registered pattern into a concrete request path: a
+	// subtree pattern needs something after its trailing slash.
+	requestPath := func(p string) string {
+		if strings.HasSuffix(p, "/") {
+			return p + "example.com"
+		}
+		return p
+	}
+
+	get := func(h http.Handler, path, remoteAddr string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		req.RemoteAddr = remoteAddr
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	t.Run("in-CIDR caller that is not a configured peer", func(t *testing.T) {
+		_, h, routes := newSurface(t, &config.Config{
+			PeerID:        "site-a",
+			ConfigPrimary: true,
+			Peers:         []config.Peer{{ID: "site-b", WGAddr: "10.0.0.2"}},
+			VPNRange:      "10.0.0.0/24",
+		})
+		for _, p := range routes {
+			rec := get(h, requestPath(p), "10.0.0.99:40000") // on the VPN, not a peer
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), peerDeniedBody) {
+				t.Errorf("%s: status=%d body=%q — want 403 %q", p, rec.Code, rec.Body.String(), peerDeniedBody)
+			}
+		}
+
+		// Positive control: the CONFIGURED peer is not refused, so the 403s
+		// above are the access check working rather than the surface being
+		// dead. (Status varies by handler — the cert route 404s with no cert
+		// on disk — so the assertion is "reached the handler", not "200".)
+		for _, p := range routes {
+			rec := get(h, requestPath(p), "10.0.0.2:40000")
+			if rec.Code == http.StatusForbidden || strings.Contains(rec.Body.String(), peerDeniedBody) {
+				t.Errorf("%s: configured peer was refused (status=%d body=%q)", p, rec.Code, rec.Body.String())
+			}
+		}
+	})
+
+	t.Run("standalone gateway admits nobody", func(t *testing.T) {
+		_, h, routes := newSurface(t, &config.Config{
+			PeerID:   "standalone",
+			VPNRange: "10.0.0.0/24",
+		})
+		// Every caller a standalone gateway plausibly sees: elsewhere on the
+		// VPN, the VPN gateway address itself, loopback, off-VPN.
+		for _, caller := range []string{"10.0.0.99:40000", "10.0.0.1:40000", "127.0.0.1:40000", "192.168.1.5:40000"} {
+			for _, p := range routes {
+				rec := get(h, requestPath(p), caller)
+				if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), peerDeniedBody) {
+					t.Errorf("%s from %s: status=%d body=%q — want 403 %q",
+						p, caller, rec.Code, rec.Body.String(), peerDeniedBody)
+				}
+			}
+		}
+	})
 }
 
 // TestPeerOnlyMiddlewareRejectsUnlistedPeer is the integration test for
@@ -723,23 +874,6 @@ func TestHandlePeerCert(t *testing.T) {
 	}
 }
 
-// startPeerHTTPServerWithCerts is like startPeerHTTPServer but also registers
-// the /api/peer/cert/ endpoint so cert-pull tests can fetch certs.
-func startPeerHTTPServerWithCerts(t *testing.T, s *Server) string {
-	t.Helper()
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/peer/ping", s.handlePeerPing)
-	mux.HandleFunc("/api/peer/config", s.handlePeerConfig)
-	mux.HandleFunc("/api/peer/cert/", s.handlePeerCert)
-	ts := httptest.NewServer(mux)
-	t.Cleanup(ts.Close)
-	host, port, err := net.SplitHostPort(ts.URL[len("http://"):])
-	if err != nil {
-		t.Fatalf("split test server URL %q: %v", ts.URL, err)
-	}
-	return net.JoinHostPort(host, port)
-}
-
 // TestCertOwnershipShiftOnPeerDown is the Phase 2 end-to-end test (item 7).
 // It sets up two peers (site-a, site-b), each with a cert dir. We verify:
 //  1. With both alive, certOwner deterministically assigns each domain to one.
@@ -766,7 +900,7 @@ func TestCertOwnershipShiftOnPeerDown(t *testing.T) {
 		VPNRange:      "10.100.0.0/24",
 	}
 	srvA := newTestServer(t, cfgA)
-	addrA := startPeerHTTPServerWithCerts(t, srvA)
+	addrA := startPeerHTTPServer(t, srvA)
 
 	// Configure site-b to know about site-a.
 	cfgB := &config.Config{
@@ -789,6 +923,11 @@ func TestCertOwnershipShiftOnPeerDown(t *testing.T) {
 		{ID: "site-b", WGAddr: "127.0.0.1:1"}, // unreachable is fine for this test
 	}
 	srvA.config.Store(cfgA)
+	// This Store replaces the peer list startPeerHTTPServer set up, so re-state
+	// who may call site-a's peer API; without it site-b's pull below is
+	// (correctly) refused. The entry above already names 127.0.0.1, so this is
+	// a no-op today — it is here so the test does not rest on that coincidence.
+	allowLoopbackPeer(t, srvA)
 
 	// --- Phase 1: Both alive, determine ownership ---
 	aliveFromB := srvB.alivePeers()
@@ -870,14 +1009,10 @@ func TestPullCertFromPeer(t *testing.T) {
 	}
 	owner := newTestServer(t, ownerCfg)
 
-	// Start HTTP server with the cert endpoint (bypass peer auth for test).
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/peer/ping", owner.handlePeerPing)
-	mux.HandleFunc("/api/peer/config", owner.handlePeerConfig)
-	mux.HandleFunc("/api/peer/cert/", owner.handlePeerCert)
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-	ownerAddr := ts.URL[len("http://"):]
+	// Serve the real peer API, peer auth included — this test is the one that
+	// carries key material over the wire, so it must not be the one that opts
+	// out of the check guarding it.
+	ownerAddr := startPeerHTTPServer(t, owner)
 
 	// Set up the pulling peer with empty cert dirs.
 	pullerCertDir := t.TempDir()
@@ -981,15 +1116,7 @@ func TestBanSyncViaPeerState(t *testing.T) {
 		},
 	}
 	primary := newTestServer(t, primaryCfg)
-
-	// Start HTTP server with state endpoint.
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/peer/ping", primary.handlePeerPing)
-	mux.HandleFunc("/api/peer/config", primary.handlePeerConfig)
-	mux.HandleFunc("/api/peer/state", primary.handlePeerState)
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-	primaryAddr := ts.URL[len("http://"):]
+	primaryAddr := startPeerHTTPServer(t, primary)
 
 	// Non-primary has a different ban.
 	nonPrimaryCfg := &config.Config{

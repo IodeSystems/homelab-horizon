@@ -296,20 +296,219 @@ This investigation sharpens it and adds one follow-up; both are recorded there.
 Nothing else here needs a human — the gates, the renderers and the byte
 provenance are all readable from the code, and §2–§5 read them.
 
-## 9. Filed, not fixed
+## 9. Filed, and one of them now fixed
 
-Two things found on the way, written to `plan/icebox.md` rather than changed
-here (this is a docs-only investigation):
+Two things found on the way:
 
-- **The peer API's access check widens to the whole VPN CIDR when no peers are
-  configured**, which is the single-gateway default, and some routes behind it
-  exist to hand one gateway's material to another. Written up as a class of
-  problem rather than a recipe in `plan/icebox.md` — **this repo is public.**
+- ✅ **The peer API's access check widened to the whole VPN CIDR when no peers
+  were configured**, which is the single-gateway default, and some routes
+  behind it exist to hand one gateway's material to another. **Closed** on
+  `fix/peer-api-access`: an empty peer list now admits nobody, the peer routes
+  are registered in one place (`registerPeerAPI`) that cannot forget the
+  middleware, and the access check is tested against every route on the
+  surface, enumerated from that registry. Recorded as a class of problem, not
+  a recipe — **this repo is public.**
   <br>One correction to what this section first said: it claimed the served
   config includes `admin_token`, reading the struct tag. It does not on a
   current gateway — `server.go:307-316` moves the token to a 0600 file and
-  clears the field before any save. **TLS private key exposure stands**; the
-  admin-token half does not.
+  clears the field before any save. **TLS private key exposure stood**; the
+  admin-token half did not.
+  <br>The fix also found that the tests were the reason it lasted: every
+  pull-loop test stood the peer API up on a bare mux with the middleware
+  "intentionally bypassed", so the one piece of the peer API with a hole was
+  the one piece no test exercised. Those tests now run through the real
+  registration path.
 - `mergeRemoteIntoLocal`'s local-only list is opt-out-by-omission
   (`peer_sync.go:220`), already recorded in the icebox's HA entry. Noted again
   because a field added for the agent would replicate by default.
+
+### 9.1 The cert route was not the only thing behind that door
+
+Worth stating plainly, because closing the access check does not change it:
+**`/api/peer/config` serves the whole live `config.Config`, unfiltered**
+(`handlers_peer.go:54-63` — a bare `json.Encode(cfg)`). Beside the TLS key on
+the cert route, that payload carries, by category:
+
+- the **per-zone DNS provider API credentials** (`Zone.DNSProvider`) — the
+  credential that can write any record in the zone, including the ones that
+  prove domain control to a CA;
+- the **OIDC client secret**;
+- the **VPN MFA enrolment secrets** (TOTP seeds and registered passkeys);
+- the **metrics scrape bearer token**.
+
+Not in it, checked rather than assumed: WireGuard private keys (they live in
+the OS-level WG config, never in `config.Config`), password hashes (separate
+users DB), and `admin_token` (migrated to a 0600 file, §9 above). The recovery
+material is wrapped blobs and public keys by design.
+
+Two consequences. First, the peer API is a secret channel whether or not the
+cert route exists, so §10 below should not be read as "delete the last one".
+Second, it sets the floor for §10: a design where each peer issues its own
+certificate needs each peer to hold the zone's DNS credential — and the
+config pull already gives it that.
+
+## 10. Why does hz keep and distribute TLS private keys at all?
+
+The design question behind §9: `pullCertFromPeer` copies a private key from
+one box to another over the tunnel. Deleting a secret-distribution path beats
+guarding it — **if** it is genuinely removable. This section is the
+investigation; it changes no code.
+
+**Answer up front: the channel is removable, and the reason it exists is
+neither key escrow nor a serving requirement. It is issuance de-duplication —
+one peer talks to the CA so that N peers do not race the same DNS challenge
+record and spend the same issuance budget. Both of those are addressable
+without moving a key.**
+
+### 10.1 Why does a follower need the primary's private key?
+
+It does not. Nothing about serving requires the *same* key on two boxes:
+
+- **Each peer terminates its own TLS, locally.** HAProxy does it
+  (`bind ... ssl crt <dir>`, `haproxy/render.go:375`); the Go process never
+  terminates public TLS. Each peer loads certs from its own local directory.
+- **The peers are not a pair behind one address.** `PublicIP` /
+  `PublicIPOverride` are per-instance and deliberately pinned out of
+  replication (`peer_sync.go:234-236`); each peer publishes its own A record.
+  So there is no shared endpoint whose traffic could land on either box
+  mid-connection.
+- **Nothing pins the key.** No HPKP, no `VerifyPeerCertificate`, no key
+  pinning of any kind in-tree.
+- **Session tickets are off.** The rendered bind options include
+  `no-tls-tickets` (`haproxy/render.go:200`), so there is no shared
+  ticket-key or resumption state that a second box would need the same key to
+  honour.
+
+And the CA side permits the alternative outright: a CA will issue as many
+valid certificates for the same name as you ask for, to as many accounts as
+ask. hz is already set up for that — **the ACME account is per box**
+(`accountDir = <CertDir>/accounts`, `letsencrypt.go:99`; written 0700/0600 in
+`acme.go:174-238`) and the directory's contents are never replicated. The
+fleet already does not share an ACME identity. It shares only the *output*.
+
+So the honest statement of the current design is: **each peer could obtain its
+own certificate today with the credentials it already has; the fleet chooses
+not to, and copies one instead.**
+
+### 10.2 Then what is the copy actually buying?
+
+Two things, one weak and one real.
+
+**Weak — issuance budget.** A public CA caps issuance per registered domain
+per week, and caps exact-duplicate certificates (the identical name set) more
+tightly still. N peers each renewing the same names multiply both. Whether
+that matters is arithmetic — peers × domains × renewals per week against the
+CA's current published limits — not a principle, and it is not recorded
+anywhere in-tree (grep found no doc stating this rationale; the reasoning
+lives only in `certOwner`'s doc comment). Do the arithmetic against the CA's
+limits page at the time, not against a number copied into this file, which
+would go stale.
+
+**Real — the challenge record is a shared mutable resource.** hz solves
+**DNS-01 exclusively**: `SetDNS01Provider` is the only solver ever registered
+(`acme.go:119`), and there is no HTTP-01 or TLS-ALPN path anywhere in-tree.
+That is not incidental — wildcards are a first-class case here
+(`derive.go:459`, `*.` names throughout), and a public CA only issues
+wildcards over DNS-01. So every peer that renews a given name writes and then
+deletes the **same** `_acme-challenge` record for that name. Two peers
+renewing the same name at overlapping times is a cleanup deleting a live
+token, or a record-set write clobbering the other's value, depending on the
+provider's update semantics. The repo already reasons about a narrower
+version of this hazard (`provider.go:137-148`, on per-zone state vs. shared
+process env).
+
+**Electing one issuer per name makes that race structurally impossible.** That
+is the genuine engineering content of `certOwner` — not HA, not escrow.
+
+Note what it is *not* buying: it is not failover for serving. Each peer serves
+from its own local files regardless of who issued them, and a peer that cannot
+reach the owner keeps serving the cert it already has.
+
+### 10.3 What else could terminate TLS so that only one box holds a key?
+
+Considered and rejected, in this topology:
+
+- **One box terminates, the others forward TCP.** Reintroduces the single
+  point of failure that the fleet exists to remove, and puts the tunnel on the
+  data path for every public request. Also impossible to reach — clients
+  resolve each site's own A record and connect to that site directly.
+- **Remote/"keyless" signing, where the key stays on one box and others ask it
+  to sign each handshake.** HAProxy has no such mode. It would also be a
+  strictly worse version of the same trust relationship: instead of a
+  once-per-renewal transfer it is a per-handshake dependency on the key
+  holder.
+- **Hardware or OS key isolation on one box.** Solves *where the key rests*,
+  not *who can serve the name*, so it does not remove the need for the other
+  box to have something.
+
+The topology settles this: **N public entry points means N boxes that must
+each hold a usable key.** The only free variable is whether the keys are the
+same key.
+
+### 10.4 What would removing `pullCertFromPeer` cost?
+
+The decisive fact: **the per-peer-issuance path already exists and already
+runs.** With no fleet, `alivePeers()` returns nil, `len(alive) > 0` is false,
+and every domain is self-owned — every standalone gateway in production today
+takes exactly the code path that per-peer issuance needs
+(`server.go:1699-1708`). Removal is deleting a special case, not writing a new
+one.
+
+**Deleted:**
+
+- `pullCertFromPeer` (`peer_sync.go:430-487`) — including its second,
+  independent copy of the cert+key concatenation that `PackageForHAProxyDomain`
+  already implements (`letsencrypt.go:296`);
+- `certOwner` and its hash ring (`peer_sync.go:415-428`);
+- the non-owner branch of `certRenewalSweep` (`server.go:1699-1708`);
+- `handlePeerCert` + `PeerCertResponse` (`handlers_peer.go:65-107`) and the
+  `/api/peer/cert/` route — **the only route on the peer API that serves
+  private key material**;
+- the tests pinning all of the above.
+
+**Added:**
+
+- **Renewal stagger**, to replace what the owner election was really for.
+  Derive a per-peer offset within the sweep window from `peer_id` so two peers
+  do not solve the same challenge record at the same time. Cheap, local, no
+  coordination. It is weaker than an election — it reduces collision
+  probability rather than eliminating it — so it needs a retry that treats a
+  challenge failure as ordinary and waits out the other peer, which the
+  renewal loop's 12-hour cadence and existing retry behaviour already
+  tolerate.
+- **A decision on issuance budget**, with the arithmetic written down (§10.2).
+
+**Risks to weigh before doing it:**
+
+- A CA outage or a DNS-credential problem now affects every peer
+  independently, where today a stale-but-valid cert could still be pulled from
+  a peer that renewed successfully. This is the one genuine capability lost.
+  It is small: certs are renewed well before expiry, so a peer that fails to
+  renew has weeks of validity left and the same weeks to recover.
+- Per-peer issuance means per-peer DNS-credential *use*, so a credential
+  problem shows up on every box rather than one. Arguably better — it fails
+  visibly instead of silently depending on one box.
+- N distinct certificates for one name means N certificate-transparency
+  entries and N expiry timelines to monitor. `validateServedCerts`
+  (`certserve.go:38-104`) already probes what each box actually serves, so the
+  monitoring is in place.
+
+### 10.5 Recommendation
+
+**Remove it, but not as its own errand.** It is small, it deletes a
+secret-distribution path rather than guarding one, and the replacement path is
+the code every standalone gateway already runs. Two things should gate it:
+
+1. Do it when certs next get touched for real — `architecture.md` item 12 step
+   3 already has to decide who owns letsencrypt after the agent flip, and §6's
+   Option A already flags the cert pull as the one item that does not fit the
+   `render(global) → files` shape. Removing it deletes that awkward case
+   instead of inventing "opaque content" support in the agent for it.
+2. Write down the issuance arithmetic first (§10.2). If it does not clear the
+   CA's limits with room for retries, the answer is a longer stagger or fewer
+   distinct names, not keeping the key channel.
+
+And say plainly what it does not achieve: **`/api/peer/config` remains a
+secret channel** (§9.1) and is not removable, because replicating
+configuration *is* the feature. Closing the access check, not deleting a
+route, is what protects that one.
