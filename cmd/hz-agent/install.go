@@ -132,8 +132,8 @@ func runInstall(args []string) error {
 
 	if *dryRun {
 		fmt.Println("DRY RUN: no changes made.")
-		fmt.Printf("Would enrol this machine with hz: mint a credential into %s\n", f.tokenFile)
-		fmt.Printf("and record its hash in %s.\n\n", f.hzCredentials)
+		fmt.Printf("Would ask hz at %s to enrol this machine, and store the credential\n", f.hzURL)
+		fmt.Printf("it issues in %s. hz issues one only for a machine it declares.\n\n", f.tokenFile)
 		fmt.Printf("Would write %s:\n\n%s", unitPath, unit)
 		return nil
 	}
@@ -144,7 +144,13 @@ func runInstall(args []string) error {
 
 	// The credential first, so a machine is never left with a unit it cannot
 	// authenticate with. Safe to re-run: an enrolment that already matches is
-	// left alone. It prints paths, never the secret.
+	// left alone — the agent sends the HASH of what it holds and hz answers
+	// "already enrolled" without minting. It prints paths, never the secret.
+	//
+	// hz issues it (item 13), so this step now needs hz to be reachable and
+	// the machine to be declared. That is the intended cost: an installer that
+	// could enrol a box hz has never heard of would be the local-mint hole
+	// under a different name.
 	if err := enroll(&f, false, os.Stdout); err != nil {
 		return fmt.Errorf("enrolling this machine: %w", err)
 	}

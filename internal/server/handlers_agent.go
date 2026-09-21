@@ -87,17 +87,22 @@ func (s *Server) handleAgentDesired(w http.ResponseWriter, r *http.Request) {
 
 	d := s.buildAgentDesired()
 
-	// hz renders for the box it is running on and nothing else yet, so an
-	// agent enrolled under another machine's name must be told that rather
-	// than handed this machine's network config. The agent refuses a
-	// misaddressed payload on its side too (agentFlags.checkAddressed); this
-	// is the same refusal from the end that knows what it rendered.
+	// A PROJECTION ANSWER, NOT AN IDENTITY ONE. This used to say "not this
+	// box" — hz knew only its own hostname, so the only thing it could tell a
+	// caller was that the caller was somebody else. That was the seam item 13
+	// was named to fill, and with a Machine record the question changes shape:
+	// the caller IS a machine hz knows, and what it does not have is a
+	// projection for it.
 	//
-	// This 404 is item 13's seam: once a Machine record exists, hz projects
-	// that machine's config instead of answering "not this box".
+	// The refusal stays a 404 and stays total — an agent enrolled under
+	// another machine's name is never handed this machine's network config,
+	// and the agent refuses a misaddressed payload on its side too
+	// (agentFlags.checkAddressed). What changed is what hz can say about WHY,
+	// and therefore what the operator does next: a declared machine is waiting
+	// on the projection (item 14), an undeclared one is waiting on a
+	// declaration. Those are different jobs and used to read identically.
 	if callerMachine != "" && d.Machine != "" && callerMachine != d.Machine {
-		writeJSONError(w, http.StatusNotFound,
-			"hz has no desired state for this machine; it renders only for the host it runs on")
+		writeJSONError(w, http.StatusNotFound, s.noProjectionFor(callerMachine))
 		return
 	}
 	etag := d.Fingerprint()
@@ -116,6 +121,27 @@ func (s *Server) handleAgentDesired(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(d)
 }
 
+// noProjectionFor is what hz says to an agent it cannot serve.
+//
+// One sentence of fact and one of what to do about it, differing on the only
+// thing that matters: whether hz declares the machine at all. Neither branch
+// names the host hz runs on — that is this box's identity and the caller has
+// not been given it.
+func (s *Server) noProjectionFor(machine string) string {
+	if m, ok := s.cfg().FindMachine(machine); ok {
+		where := "no segments declared"
+		if len(m.Segments) > 0 {
+			where = "segments " + strings.Join(m.Segments, ", ")
+		}
+		return "hz has no desired state for machine " + jsonSafeName(machine) +
+			". It is declared (" + where + "), but hz projects config only for the machine it runs on;" +
+			" projecting for any declared machine is phase 4 item 14."
+	}
+	return "hz has no desired state for machine " + jsonSafeName(machine) +
+		". No machine record declares it — `hz machine add <name> --segment <segment>` declares one." +
+		" hz has nothing to project for a machine it has not been told about."
+}
+
 // buildAgentDesired assembles the payload from the same renderers hz uses to
 // write these files itself.
 //
@@ -126,10 +152,15 @@ func (s *Server) handleAgentDesired(w http.ResponseWriter, r *http.Request) {
 // empty".
 func (s *Server) buildAgentDesired() *agent.Desired {
 	cfg := s.cfg()
-	// The machine's own hostname, because there is no machine record yet —
-	// that is item 13. Until then the gateway is the only box with an agent
-	// and hz is running on it, so asking the kernel is both correct and
-	// honest about what this does not yet know.
+	// The machine's own hostname, still — and deliberately, now that a Machine
+	// record exists. A Machine record is a DECLARATION about a box; it is not
+	// hz's answer to "which box am I". hz renders for the host it runs on, so
+	// the kernel is the source of that identity, and reading it from the config
+	// would let a declaration rename the box hz is actually configuring.
+	//
+	// The record earns its keep at the other end of this handler
+	// (noProjectionFor) and at enrolment. Item 14's projection is what makes a
+	// machine NAME select a payload; until then hz has exactly one to render.
 	host, err := os.Hostname()
 	if err != nil {
 		host = "unknown"

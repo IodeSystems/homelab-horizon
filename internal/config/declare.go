@@ -33,10 +33,10 @@ import (
 // it is in the way. A removal that said only "3 things depend on this" would
 // leave them to find out which.
 type Dependant struct {
-	// Kind is "project", "environment" or "service".
+	// Kind is "project", "environment", "machine", "service" or "credential".
 	Kind string `json:"kind"`
 	// Name identifies the record: a project name, "<project>/<environment>",
-	// or a service name.
+	// a machine name, a service name, or the machine a credential belongs to.
 	Name string `json:"name"`
 	// How says what the relationship is, in a sentence.
 	How string `json:"how"`
@@ -46,9 +46,10 @@ func (d Dependant) String() string { return d.Kind + " " + d.Name + " — " + d.
 
 // sortDependants orders by kind then name so two identical configs produce an
 // identical list. Kind order is the tree's: projects, then their rungs, then
-// what sits on them.
+// what sits on them — with machines and the credentials keyed to them after
+// the tree, because a machine is not in it (it has no project by design).
 func sortDependants(list []Dependant) {
-	rank := map[string]int{"project": 0, "environment": 1, "service": 2}
+	rank := map[string]int{"project": 0, "environment": 1, "service": 2, "machine": 3, "credential": 4}
 	sort.SliceStable(list, func(i, j int) bool {
 		if rank[list[i].Kind] != rank[list[j].Kind] {
 			return rank[list[i].Kind] < rank[list[j].Kind]
@@ -472,33 +473,38 @@ func (c *Config) normalizeFrom(project, name, from string) (string, error) {
 	return from, nil
 }
 
-// validateModel runs the two validators Save runs over the project tree, so a
-// writer here cannot produce a config that Save would later refuse. ValidateFeeds
-// is not run: nothing in this file touches a feed, and a feed that was already
-// broken is not this command's to report.
+// validateModel runs the validators Save runs over the model these writers
+// touch, so a writer here cannot produce a config that Save would later refuse.
+// ValidateFeeds is not run: nothing in this file touches a feed, and a feed that
+// was already broken is not this command's to report.
 func (c *Config) validateModel() error {
 	if err := c.ValidateProjects(); err != nil {
 		return err
 	}
-	return c.ValidateEnvironments()
+	if err := c.ValidateEnvironments(); err != nil {
+		return err
+	}
+	return c.ValidateMachines()
 }
 
-// copyForWrite returns a config with fresh Projects/Environments/Services
-// slices, for the reason ApplyImport gives: a Config is copied shallowly in
-// several places, so writing through the existing backing array would mutate the
-// config another goroutine is still serving.
+// copyForWrite returns a config with fresh Projects/Environments/Services/
+// Machines slices, for the reason ApplyImport gives: a Config is copied
+// shallowly in several places, so writing through the existing backing array
+// would mutate the config another goroutine is still serving.
 func (c *Config) copyForWrite() *Config {
 	next := *c
 	next.Projects = append([]Project(nil), c.Projects...)
 	next.Environments = append([]Environment(nil), c.Environments...)
 	next.Services = append([]Service(nil), c.Services...)
+	next.Machines = append([]Machine(nil), c.Machines...)
 	return &next
 }
 
-// adopt publishes a validated copy's three slices onto the receiver. Only after
+// adopt publishes a validated copy's slices onto the receiver. Only after
 // validateModel has passed — a config is never left half-written.
 func (c *Config) adopt(next *Config) {
 	c.Projects, c.Environments, c.Services = next.Projects, next.Environments, next.Services
+	c.Machines = next.Machines
 }
 
 func (c *Config) hasProject(name string) bool {

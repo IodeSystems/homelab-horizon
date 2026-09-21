@@ -573,6 +573,55 @@ export interface EnvironmentRmReq {
   confirm?: boolean;
 }
 /**
+ * MachineResp is one declared machine: identity and segment membership.
+ * IT CARRIES NO PROJECT AND NO ENVIRONMENT, and that is the model rather than
+ * an omission — an environment is a coordinate of an INSTANCE, and one machine
+ * hosts instances from several projects (plan/architecture.md, "Instance, not
+ * machine, carries the environment"). It carries no observed version either:
+ * that belongs to an instance and several instances share a box, so a
+ * machine-level version would report a half-finished rollout as finished.
+ * MultiHomed is derived server-side rather than left to a client counting
+ * Segments, for the reason ProjectResp gives about FeedFrom: a client must
+ * never have to re-derive a judgement hz already makes. Blast radius is the
+ * UNION of the segments, and a row that bridges two has to be visible as one.
+ * Enrolled says whether hz holds an agent credential for this machine — the
+ * hash and the issue date, which is all hz ever has. It is the one thing about
+ * a machine that lives beside the config rather than in it.
+ */
+export interface MachineResp {
+  name: string;
+  segments?: string[];
+  note?: string;
+  multiHomed?: boolean;
+  enrolled?: boolean;
+  enrolledAt?: number /* int64 */;
+}
+/**
+ * MachineAddReq declares a machine. Segments are names; there is no Segment
+ * record to resolve them against until phase 4 item 15, so hz checks their
+ * shape and not their existence.
+ * Note is REQUIRED when Segments names more than one: forwarding between a
+ * machine's own segment interfaces is denied by default and a machine that
+ * bridges them is a declared exception with a reason, not a default.
+ */
+export interface MachineAddReq {
+  name: string;
+  segments?: string[];
+  note?: string;
+}
+/**
+ * MachineRmReq removes a machine. Confirm and Cascade mean what they mean on
+ * ProjectRmReq. Cascade here REVOKES the machine's agent credential: without it
+ * a removal is refused while one exists, because a credential naming a machine
+ * hz no longer declares still authenticates and nothing in the config explains
+ * it.
+ */
+export interface MachineRmReq {
+  name: string;
+  cascade?: boolean;
+  confirm?: boolean;
+}
+/**
  * RemovalResp answers both halves of a removal with one shape, because a dry run
  * and a write differ only in whether anything was written.
  * OK is true only when the config actually changed. Blocked is what stands in
