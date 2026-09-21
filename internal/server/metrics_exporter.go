@@ -16,6 +16,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
 	"github.com/iodesystems/homelab-horizon/internal/haproxy"
+	"github.com/iodesystems/homelab-horizon/internal/monitor"
 )
 
 // hz's own Prometheus surface.
@@ -54,6 +55,7 @@ type hzCollector struct {
 	pendingUpdates   *prometheus.Desc
 	aptListAge       *prometheus.Desc
 	servicesInScope  *prometheus.Desc
+	subsystemUp      *prometheus.Desc
 
 	dnsmasqUp         *prometheus.Desc
 	dnsmasqCacheSize  *prometheus.Desc
@@ -70,6 +72,14 @@ func newHZCollector(s *Server) *hzCollector {
 		s: s,
 		up: prometheus.NewDesc("hz_up",
 			"1 when hz is serving.", nil, nil),
+		// hz_up says the process is answering. It said 1 on a box where
+		// WireGuard, dnsmasq and HAProxy had all failed to start, because
+		// that is all it was ever about. This is the gateway's own job:
+		// 1 up, 0 down or not set up, absent when the subsystem is switched
+		// off in the config (a decision, not a fault).
+		subsystemUp: prometheus.NewDesc("hz_subsystem_up",
+			"1 when a subsystem hz manages (wireguard, dnsmasq, haproxy) is running.",
+			[]string{"subsystem"}, nil),
 		buildInfo: prometheus.NewDesc("hz_build_info",
 			"hz build metadata; the value is always 1.", []string{"version"}, nil),
 		peers: prometheus.NewDesc("hz_vpn_peers",
@@ -137,7 +147,7 @@ func newHZCollector(s *Server) *hzCollector {
 // all — registering the collector panicked.
 func (c *hzCollector) Describe(ch chan<- *prometheus.Desc) {
 	for _, d := range []*prometheus.Desc{
-		c.up, c.buildInfo, c.peers, c.peersHandshaking,
+		c.up, c.buildInfo, c.subsystemUp, c.peers, c.peersHandshaking,
 		c.mfaEnabled, c.mfaJailed, c.mfaSessions, c.mfaEnrolled, c.mfaExceptions,
 		c.backendUp, c.svcDormant, c.svcMaintenance, c.bans, c.iptablesRules, c.controlState,
 		c.dnsmasqUp, c.dnsmasqCacheSize, c.dnsmasqInsertions, c.dnsmasqEvictions,
@@ -162,6 +172,15 @@ func (c *hzCollector) Collect(ch chan<- prometheus.Metric) {
 
 	gauge(c.up, 1)
 	gauge(c.buildInfo, 1, c.s.version)
+
+	if c.s.subsystems != nil {
+		for _, st := range c.s.subsystems.all() {
+			if st.Status == monitor.StatusDisabled {
+				continue
+			}
+			gauge(c.subsystemUp, b2f(st.Status == monitor.StatusOK), st.Name)
+		}
+	}
 
 	// Everything below reads live server state. A dry-run instance has no
 	// WireGuard or HAProxy, and a scrape that races startup has no config yet

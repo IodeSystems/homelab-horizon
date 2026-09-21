@@ -177,7 +177,7 @@ func maybeSelfInstall(configPath string) {
 	}
 
 	// 3. Install/Update systemd service
-	if err := installService(false); err != nil {
+	if err := installService("", false, false); err != nil {
 		slog.Warn("self-install: failed to install systemd service", "err", err)
 		return
 	}
@@ -302,10 +302,13 @@ func runCheck(dryRun bool) error {
 }
 
 func (c *checker) checkBinaries() {
-	c.checkBinary("WireGuard", "wg", "apt install wireguard-tools", true)
-	c.checkBinary("dnsmasq", "dnsmasq", "apt install dnsmasq", c.cfg.DNSMasqEnabled)
-	c.checkBinary("qrencode", "qrencode", "apt install qrencode", false)
-	c.checkBinary("haproxy", "haproxy", "apt install haproxy", c.cfg.HAProxyEnabled)
+	// One remedy, named once. `check` used to suggest a bare `apt install`
+	// per binary, which is four commands that bypass the package allow-list
+	// and do not know which of them this box actually needs.
+	c.checkBinary("WireGuard", "wg", dependencyFixHint, true)
+	c.checkBinary("dnsmasq", "dnsmasq", dependencyFixHint, c.cfg.DNSMasqEnabled)
+	c.checkBinary("qrencode", "qrencode", dependencyFixHint, false)
+	c.checkBinary("haproxy", "haproxy", dependencyFixHint, c.cfg.HAProxyEnabled)
 }
 
 func (c *checker) checkBinary(name, binary, installCmd string, required bool) {
@@ -415,7 +418,7 @@ func (c *checker) checkSystemdService() {
 		}
 		fmt.Println("  --------------------------------")
 		if c.canFix() && askYesNo("  Install systemd service?") {
-			if err := installService(c.dryRun); err != nil {
+			if err := installService(c.cfgPath, c.dryRun, false); err != nil {
 				fmt.Printf("  Error: %v\n", err)
 			}
 		}
@@ -665,8 +668,13 @@ PostDown = iptables -D FORWARD -i %%i -j ACCEPT; iptables -t nat -D POSTROUTING 
 	return nil
 }
 
-func installService(dryRun bool) error {
-	_, cfgPath, _ := config.LoadAuto()
+func installService(configPath string, dryRun, withDeps bool) error {
+	cfg, cfgPath, _ := config.LoadAuto()
+	if configPath != "" {
+		if loaded, err := config.Load(configPath); err == nil {
+			cfg, cfgPath = loaded, configPath
+		}
+	}
 	serviceContent := generateSystemdService(cfgPath)
 
 	if dryRun {
@@ -706,7 +714,37 @@ func installService(dryRun bool) error {
 		return fmt.Errorf("systemctl daemon-reload: %w", err)
 	}
 
+	// Post-install validation. The unit is installed; that is not the same as
+	// the gateway being able to do its job, and "Installation complete!" over
+	// a box with no haproxy, dnsmasq or wireguard-tools was the first thing an
+	// operator read before starting a service that could only fail.
 	fmt.Println()
+	missing := reportDependencies(os.Stdout, cfg)
+	if len(missing) > 0 && withDeps {
+		fmt.Println()
+		fmt.Println("Installing (--with-deps)...")
+		if err := autoheal.InstallMissing(cfg); err != nil {
+			return err
+		}
+		missing = reportDependencies(os.Stdout, cfg)
+	}
+
+	fmt.Println()
+	if len(missing) > 0 {
+		fmt.Println("Systemd unit installed, but the gateway is NOT ready to start.")
+		fmt.Println()
+		fmt.Println("Next steps:")
+		fmt.Println("  1. " + dependencyFixHint)
+		fmt.Println("  2. Start service: systemctl start homelab-horizon")
+		fmt.Println("  3. Enable on boot: systemctl enable homelab-horizon")
+		fmt.Println("  4. View logs: journalctl -u homelab-horizon -f")
+		fmt.Println()
+		// Not an error: the unit really was installed, and a provisioning
+		// script that installs dependencies in its own step should not see a
+		// failure. The report is the deliverable.
+		return nil
+	}
+
 	fmt.Println("Installation complete!")
 	fmt.Println()
 	fmt.Println("Next steps:")

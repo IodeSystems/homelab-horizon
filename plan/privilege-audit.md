@@ -58,6 +58,11 @@ credential of its own, it uses an admin token today". The truth is stronger: it
 has no working credential at all, so a per-machine credential is not a hardening
 step to schedule — it is the only way the agent ever works.
 
+> **§1.2–§1.6 status (branch `fix/startup-honesty`).** All five were re-run on a
+> second throwaway VM (`hz-startup`, same synthetic config) and fixed, except
+> §1.6, which the re-run showed was wrong as written — see the note under it.
+> What changed per finding is recorded inline below.
+
 ### 1.2 `autoheal` did not install anything, as root
 
 After `homelab-horizon install` + `systemctl start`, running as root:
@@ -74,6 +79,31 @@ hz logged the resulting failures and carried on serving. Whatever triggers
 `autoheal.Run()`, a fresh boot is not it. A gateway rebuilt from this path
 depends on someone having installed the dependencies by hand.
 
+**What triggers it: the `auto_heal` config key, and nothing else.**
+`cmd/homelab-horizon/main.go` runs `autoheal.Run(cfg)` only under
+`if cfg.AutoHeal`. That key is `json:"auto_heal,omitempty"`, defaults false,
+and nothing sets it — not `install`, not the installer script, not the
+template. There is no UI button for `Run`; the Fix-it button reaches the
+separate `autoheal.InstallPackage` one package at a time through
+`/api/v1/system/install/package`. So on any box whose config does not name
+`auto_heal`, autoheal has never run, and nothing anywhere said the packages
+were absent. **Wiring gap AND a missing entry point.**
+
+**Fixed.** Three parts, none of which install anything implicitly:
+- `autoheal.Missing(cfg)` is a pure observation seam (the `plan(observed)`
+  split §3.6 asks for) — reports what is absent, installs nothing, needs no
+  root. `Run` now derives its list from it, so the two cannot disagree.
+  Each dependency carries a `Purpose` sentence.
+- `homelab-horizon install` validates after installing the unit and prints
+  the missing packages with what each is for. It no longer says
+  "Installation complete!" over a box that cannot work.
+- `homelab-horizon install-deps` is the explicit, scriptable install verb
+  (`--dry-run` reports only); `install --with-deps` does both in one
+  provisioning step. Everything goes through `autoheal.KnownPackages()`.
+  A UI button was rejected: you cannot open the admin UI of a gateway whose
+  dependencies are missing, and a button is not scriptable.
+- Startup reports what is absent whether or not auto-heal is allowed to act.
+
 ### 1.3 hz reports `active` while every subsystem has failed
 
 Same boot as above:
@@ -88,6 +118,32 @@ $ systemctl is-active homelab-horizon → active
 
 Three of three subsystems down, and both systemd and hz's own log report
 success. Nothing a monitor watches would fire.
+
+**Fixed.** hz keeps serving — a gateway that refuses to answer because dnsmasq
+is down cannot be used to fix dnsmasq — and stops claiming health. Serving and
+claiming-healthy are now different things:
+
+- `ensureServicesRunning` returns `[]SubsystemState` instead of logging and
+  dropping. `server ready` becomes `server ready but DEGRADED` at WARN, naming
+  every subsystem that is not doing its job (`internal/server/startup_plan.go`).
+- The unit gains `NotifyAccess=main` and hz sends `STATUS=`, so
+  `systemctl status` carries the degraded line. Deliberately NOT `Type=notify`:
+  that would gate the unit on a readiness hz does not gate on.
+- Each subsystem becomes an ordinary **monitor check** (`sys:wireguard`,
+  `sys:dnsmasq`, `sys:haproxy`, type `subsystem`, 60s) — so it gets history,
+  the three-state warning, notification-on-transition, `/api/v1/checks` and the
+  UI for free, and clears itself when someone fixes the box. No second health
+  concept.
+- `hz_subsystem_up{subsystem=…}` joins the Prometheus exposition. `hz_up` only
+  ever meant "the process is answering".
+
+Observed on `hz-startup`, same broken state, after:
+
+```
+Status: "degraded — dnsmasq: the dnsmasq binary is not installed …;
+         haproxy: … ; wireguard: WireGuard is not configured: …"
+server ready but DEGRADED — hz is serving, subsystems are not
+```
 
 ### 1.4 hz starts WireGuard and dnsmasq *before* writing their configs
 
@@ -104,6 +160,35 @@ After a sync, both configs appear:
 So every cold boot logs a WireGuard failure that is not a failure, which is how
 a real one gets ignored.
 
+**Correction to the diagnosis, and fixed either way.** wg0.conf is not written
+by sync either — nothing writes it automatically. It is created only by the
+explicit `POST /api/v1/wg/create-config` fixer. So "started before its config
+is written" is the wrong description for WireGuard; the file is simply never
+there until an admin asks for it.
+
+- **WireGuard: do not start, and say so.** Rendering it at boot was rejected:
+  wg0.conf carries the server private key, so generating one unprompted would
+  mint a new server identity and invalidate every client config already handed
+  out — a self-inflicted outage on a boot where the real file was merely
+  unreadable. Startup now skips it with a sentence naming the file and how to
+  create it, recorded as a *warning* (not set up) rather than a failure.
+- **dnsmasq: render first.** The claim holds, and is worse than reported.
+  `Status()` only computes `MissingInterfaces` once `ConfigExists`, so a box
+  that had never synced skipped the regenerate branch entirely and went
+  straight to the start. Measured on `hz-startup` with dnsmasq installed and
+  `/etc/dnsmasq.d/` emptied:
+
+  | | `/etc/dnsmasq.d` after boot | `is-active dnsmasq` | hz log |
+  |---|---|---|---|
+  | before | `README` only | `active` | `dnsmasq started` / `server ready` |
+  | after | `README hz.conf hz-hosts.conf` | `active` | `subsystem configuration written` → `subsystem started` |
+
+  Before, dnsmasq came up as a bare caching resolver with **none** of hz's
+  configuration, and both hz and systemd called that success.
+- The ordering rules now live in a pure `planStartup(observation)`
+  (`internal/server/startup_plan.go`), so they are testable without a machine
+  to break.
+
 ### 1.5 The static supervisor retries forever on a permission error
 
 ```
@@ -113,6 +198,12 @@ repeating at 1s, 2s, 4s… It forks a privilege-dropped child which then cannot
 read the binary. Benign here because the binary sat in `/home/ubuntu`, but it
 is the existing privilege-drop pattern in the codebase and it fails silently
 into a retry loop rather than saying it is misconfigured.
+
+**Fixed.** Spawn failures are now wrapped in a `spawnError`, so a child that
+*ran and exited* can never be mistaken for a launch that is impossible.
+`EACCES`/`EPERM`/`ENOENT`/`ENOEXEC` on the launch stop the loop with one ERROR
+naming the binary, the uid, and what to change. Everything else — including
+every way a running child can exit — is retried exactly as before.
 
 ### 1.6 A Route53 sync loop starts with no DNS provider configured
 
@@ -125,6 +216,28 @@ No `dns_provider`, no `external_dns` anywhere in the config. The loop still
 starts and hz still makes an outbound public-IP request. Harmless with no
 credentials, but it means "no provider configured" does not mean "no external
 calls", which is worth knowing before anyone assumes an air-gapped posture.
+
+**Wrong as written; not changed except the log line.** The loop is public-IP
+DETECTION, not Route53 sync. Its cached result is load-bearing without any DNS
+provider: WireGuard client endpoints (`config/pinned_ips.go`), the pinned-IP
+warnings, the settings page, the MCP surface and `monitor` all read
+`cfg.PublicIP`. The Route53 half is already conditional — `syncPublicIPAndRecords`
+returns when `DeriveRoute53Records()` is empty — and the loop's own comment says
+it starts unconditionally on purpose, so adding a provider later needs no
+restart. Stopping it would break VPN enrolment on every box with no DNS
+provider, which is most of them.
+
+The real defect was the *name*: "starting Route53/public IP sync" made a box
+with no provider look like it was talking to AWS. Now:
+
+```
+starting public IP detection  interval_s=300  dns_record_sync=false
+```
+
+The finding's substantive point stands and is unchanged by this: hz makes an
+outbound request at boot (`server.go` `NewWithConfig`) and every interval
+regardless of configuration. Anyone assuming an air-gapped posture must set
+`public_ip_override`, which already suppresses both.
 
 ## 2. Privileged operations, by owner
 
