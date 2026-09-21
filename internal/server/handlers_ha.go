@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -162,6 +163,20 @@ func (s *Server) handleAPIHACreateJoinToken(w http.ResponseWriter, r *http.Reque
 	}
 	if r.Method != http.MethodPost {
 		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+
+	// THE REVERSE GUARD, AT THE FIRST STEP OF THE FLOW RATHER THAN THE LAST.
+	//
+	// updateConfig refuses the join that eventually lands at join-complete, but
+	// by then the operator has generated a token, copied a one-liner and run it
+	// on another box — and the failure would arrive on the OTHER machine's
+	// terminal, about this one. Say it here, before anything is minted and
+	// before the request's details are even read: the answer does not depend on
+	// them. A fleet cannot be configured on a machine whose hz-agent is applying
+	// config. Same predicate, same message, same document.
+	if err := s.refuseNewFleetHere(s.cfg()); err != nil {
+		writeJSONError(w, http.StatusConflict, err.Error())
 		return
 	}
 
@@ -397,6 +412,14 @@ func (s *Server) handleHAJoinComplete(w http.ResponseWriter, r *http.Request) {
 		}
 		cfg.Peers = append(cfg.Peers, newPeer)
 	}); err != nil {
+		// The reverse guard reaches here through updateConfig's funnel. It is a
+		// refusal, not a failure: 409 with the text that names both features and
+		// says how to proceed, so the operator running the join one-liner on the
+		// other box reads an instruction rather than "internal server error".
+		if errors.Is(err, errAgentArmed) {
+			writeJSONError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
