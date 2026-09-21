@@ -4,8 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/iodesystems/homelab-horizon/internal/agent"
+	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/haproxy"
 )
 
@@ -129,6 +133,54 @@ func (s *Server) buildAgentDesired() *agent.Desired {
 				Contents: string(haproxy.RenderJailACL(cfg.JailedPeerIPs())),
 			})
 		}
+
+		// THE ERROR PAGES, AND WHY THEY TRAVEL IN THIS SECTION.
+		//
+		// `errorfile 503 <dir>/errors/503.http` is always emitted into the
+		// config above, and HAPROXY REFUSES TO START ON A MISSING ERRORFILE.
+		// So the page cannot be a section of its own or a separate subsystem
+		// with its own reload: it has to be written in the same pass as the
+		// config that names it, before the one reload at the end of that pass.
+		// Apply's file loop does exactly that — every file in this section is
+		// written, then HAProxy is reloaded once if any of them moved — so
+		// page and config land together whichever of them changed.
+		//
+		// The per-service maintenance pages ride the same reasoning: a backend
+		// with a maintenance page renders `errorfile 503 <svc>_503.http`, and
+		// that file must exist by the time the config referencing it is
+		// validated.
+		errorsDir := cfg.HAProxyErrorsDir()
+		sec.Files = append(sec.Files, agent.File{
+			// Built from Error503Path, the constant apply.go writes through,
+			// so the agent's path and hz's path cannot drift apart.
+			Path:     filepath.Join(filepath.Dir(cfg.HAProxyConfigPath), haproxy.Error503Path),
+			Mode:     0o644,
+			Contents: haproxy.RenderError503(),
+		})
+		for _, page := range cfg.MaintenancePages() {
+			sec.Files = append(sec.Files, agent.File{
+				Path:     filepath.Join(errorsDir, page.Name),
+				Mode:     0o644,
+				Contents: page.Contents,
+			})
+		}
+
+		// AND THE CLAIM. A maintenance page that an admin clears has to be
+		// REMOVED, not merely stopped being written — HAProxy keeps serving a
+		// file it can still open — which is what WriteMaintenancePageFiles
+		// does with os.Remove today and what the agent could not express
+		// before the Directory concept.
+		//
+		// Bounded to the two name shapes hz renders. The rest of that
+		// directory is the distribution's (400.http, 403.http, 500.http and
+		// friends ship with the haproxy package), and hz does not own them.
+		sec.Dirs = []agent.Directory{{
+			Path: errorsDir,
+			Match: []string{
+				filepath.Base(haproxy.Error503Path),
+				config.MaintenancePagePattern,
+			},
+		}}
 		d.HAProxy = sec
 	}
 
@@ -187,6 +239,34 @@ func (s *Server) buildAgentDesired() *agent.Desired {
 		}
 	}
 
+	// The certificate bundles HAProxy loads, and NOTHING ELSE ABOUT
+	// CERTIFICATES. The reasoning is in plan/architecture.md, "Cert material
+	// and the two channels"; what it comes to here:
+	//
+	//   - <SSLHAProxyCertDir>/<domain>.pem only — the leaf plus key this
+	//     machine's edge terminates TLS with. NEVER /etc/letsencrypt/**
+	//     (cfg.SSLCertDir): that is the issuance record, not the served
+	//     bundle. NEVER the ACME account key and never a DNS provider
+	//     credential — those are the environment-key-shaped things, and an
+	//     agent that held them could mint certificates and rewrite a zone.
+	//     The machine receives ISSUED material; issuance stays with hz.
+	//   - Secret is forced by the payload (agent.Desired.allFiles), hashed
+	//     into the fingerprint like every other file so a rotation moves the
+	//     generation, and never logged.
+	//   - The admin path is already off this route (item 12 step 2) and this
+	//     section does not put it back: the only credential that opens it is
+	//     the machine's own.
+	//
+	// Off or unconfigured means NO SECTION, the same answer WireGuard gives:
+	// an empty section would say "hz wants no certificates here", and hz not
+	// being able to read the store is exactly where an unprivileged hz web
+	// lands (item 12 step 5).
+	if cfg.SSLEnabled && cfg.SSLHAProxyCertDir != "" {
+		if files := readCertBundles(cfg.SSLHAProxyCertDir); len(files) > 0 {
+			d.Certs = &agent.CertSection{Dir: cfg.SSLHAProxyCertDir, Files: files}
+		}
+	}
+
 	// The firewall's desired state is rule SETS, not a file: hz's pure half
 	// already emits them and the agent hands them straight to
 	// iptables.Reconcile. buildClassifierInputs also reads the live set, which
@@ -203,6 +283,44 @@ func (s *Server) buildAgentDesired() *agent.Desired {
 	}
 
 	return d
+}
+
+// readCertBundles reads the served bundles out of the HAProxy certificate
+// directory, in a stable order.
+//
+// Only *.pem directly in that directory, only regular files, and only the ones
+// that could be read — an unreadable bundle is left out rather than crossing
+// as an empty file, which the agent would otherwise plan to write over a
+// working certificate. Nothing here parses the PEM: what crosses is the file,
+// and the one thing hz lifts out of a bundle for its own rendering (the SANs,
+// via haproxy.ScanCertDir) is a separate read with a separate purpose.
+func readCertBundles(certDir string) []agent.File {
+	entries, err := os.ReadDir(certDir)
+	if err != nil {
+		return nil
+	}
+	var out []agent.File
+	for _, e := range entries {
+		if !e.Type().IsRegular() || !strings.HasSuffix(e.Name(), ".pem") {
+			continue
+		}
+		path := filepath.Join(certDir, e.Name())
+		b, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		out = append(out, agent.File{
+			Path:     path,
+			Mode:     0o600,
+			Contents: string(b),
+			// Declared here AND forced by agent.Desired.allFiles. The forcing
+			// is the one that counts; a test pins that clearing this line
+			// changes nothing about what a report prints.
+			Secret: true,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
 }
 
 // haproxyStatsSocket is where hz's own HAProxy manager is pointed

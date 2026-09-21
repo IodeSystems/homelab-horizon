@@ -514,15 +514,13 @@ fixing one will make that comparison fail — which is the point.
   cfg.CloudflareZoneID != ""` — so a config with a zone id and no token sets
   the variable to the empty string, and a config with a token and no zone id
   never sets it at all. lego wants the token; the zone id is not a token.
-- **`Config.WriteMaintenancePageFiles` is a second writer into the HAProxy
-  errors directory, and it is not in the privilege audit.**
-  `internal/config/derive.go:337` writes `<svc>_503.http` and `os.Remove`s
-  stale ones under `/etc/haproxy/errors/`. §2 of `plan/privilege-audit.md`
-  lists `internal/haproxy/apply.go` for that directory and not this. Item 12
-  step 5 orphans it exactly the way it orphans `errors/503.http` — and moving
-  it needs something the agent's file model does not have: **delete what is not
-  listed**. `agent.File` describes files that should exist; nothing describes
-  files that should not.
+- ✅ **Done 2026-09-21 (item 12 step 3).** `Config.WriteMaintenancePageFiles`
+  was a second writer into the HAProxy errors directory and was not in the
+  privilege audit. It needed the thing the agent's file model did not have —
+  **delete what is not listed** — which is now `agent.Directory`: hz claims the
+  directory and the names in it, the agent removes what is not listed.
+  `Config.MaintenancePages` is the shared renderer; the writer stays until item
+  12 step 5.
 - **`Status.LegoAvailable` is a hardcoded `true` that lands in an `Installed`
   field alongside real checks.** `handlers_api_system.go:266` assigns it to
   `le.Installed`, four lines from `wg.Installed = binaryOnPath("wg")` and

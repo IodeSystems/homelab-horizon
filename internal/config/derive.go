@@ -191,8 +191,15 @@ func (c *Config) DeriveWildcardDNSNames() map[string]bool {
 	return out
 }
 
-// haproxyErrorsDir returns the directory where per-service HAProxy error files are written.
-func (c *Config) haproxyErrorsDir() string {
+// HAProxyErrorsDir returns the directory where HAProxy's error files live:
+// the default errors/503.http that haproxy.RenderError503 produces, and one
+// <service>_503.http per service with a maintenance page.
+//
+// Exported because the agent's desired state has to name the same directory
+// hz writes into — it is the directory the payload CLAIMS, and a claim
+// computed from a second definition of "where the error pages go" would prune
+// the wrong place.
+func (c *Config) HAProxyErrorsDir() string {
 	if c.HAProxyConfigPath != "" {
 		return filepath.Join(filepath.Dir(c.HAProxyConfigPath), "errors")
 	}
@@ -308,7 +315,7 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 
 		// Custom 503 maintenance page
 		if svc.Proxy.MaintenancePage != "" {
-			b.ErrorFile503 = filepath.Join(c.haproxyErrorsDir(), haproxy.SanitizeName(svc.Name)+"_503.http")
+			b.ErrorFile503 = filepath.Join(c.HAProxyErrorsDir(), MaintenancePageName(svc.Name))
 		}
 
 		// Protocol to the backend (h2c for gRPC services).
@@ -334,25 +341,73 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 	return backends
 }
 
+// MaintenancePageSuffix is what every per-service maintenance page's file name
+// ends in, and MaintenancePagePattern is the same fact as a file-name glob —
+// which is the form the agent's directory claim takes
+// (internal/agent.Directory).
+//
+// One fact, two spellings derived from it, because they have to agree: the
+// writer below prunes by suffix and the agent prunes by claim, and a
+// maintenance page the claim did not cover would simply never be removed on a
+// box hz no longer writes to.
+const (
+	MaintenancePageSuffix  = "_503.http"
+	MaintenancePagePattern = "*" + MaintenancePageSuffix
+)
+
+// MaintenancePageName is the file name for one service's maintenance page.
+func MaintenancePageName(service string) string {
+	return haproxy.SanitizeName(service) + MaintenancePageSuffix
+}
+
+// MaintenancePage is one per-service 503 page: the file name it goes in,
+// inside the HAProxy errors directory, and the bytes that go in it.
+type MaintenancePage struct {
+	Name     string
+	Contents string
+}
+
+// MaintenancePages renders every per-service maintenance page.
+//
+// PURE — it is the render half, split out so hz's writer and the agent's
+// desired state are built from one renderer rather than two that agree today
+// (the same discipline as haproxy.GenerateConfig, and the reason
+// buildAgentDesired goes through accessors).
+func (c *Config) MaintenancePages() []MaintenancePage {
+	var out []MaintenancePage
+	for _, svc := range c.Services {
+		if svc.Proxy == nil || svc.Proxy.MaintenancePage == "" {
+			continue
+		}
+		out = append(out, MaintenancePage{
+			Name: MaintenancePageName(svc.Name),
+			Contents: "HTTP/1.0 503 Service Unavailable\r\nCache-Control: no-cache\r\n" +
+				"Connection: close\r\nContent-Type: text/html\r\n\r\n" + svc.Proxy.MaintenancePage,
+		})
+	}
+	return out
+}
+
 // WriteMaintenancePageFiles writes per-service 503.http error files for any service
 // with MaintenancePage set, and removes stale files for services where it was cleared.
+//
+// THE PRUNE IS WHY THE AGENT NEEDED A DIRECTORY CONCEPT. A list of files that
+// should exist cannot express "and nothing else with this shape", so moving
+// this function to the agent needed something agent.File does not model
+// (plan/privilege-classification.md §4.5). It is served now as a claim on this
+// directory; this writer stays until hz stops writing files at all (item 12
+// step 5), and both work from MaintenancePages above.
 func (c *Config) WriteMaintenancePageFiles() error {
-	errorsDir := c.haproxyErrorsDir()
+	errorsDir := c.HAProxyErrorsDir()
 	if err := os.MkdirAll(errorsDir, 0755); err != nil {
 		return err
 	}
 
 	// Collect active filenames and write them
 	active := make(map[string]bool)
-	for _, svc := range c.Services {
-		if svc.Proxy == nil || svc.Proxy.MaintenancePage == "" {
-			continue
-		}
-		filename := haproxy.SanitizeName(svc.Name) + "_503.http"
-		active[filename] = true
-		path := filepath.Join(errorsDir, filename)
-		content := "HTTP/1.0 503 Service Unavailable\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Type: text/html\r\n\r\n" + svc.Proxy.MaintenancePage
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	for _, page := range c.MaintenancePages() {
+		active[page.Name] = true
+		if err := os.WriteFile(filepath.Join(errorsDir, page.Name), []byte(page.Contents), 0644); err != nil {
 			return err
 		}
 	}
@@ -363,7 +418,7 @@ func (c *Config) WriteMaintenancePageFiles() error {
 		return err
 	}
 	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), "_503.http") && !active[e.Name()] {
+		if strings.HasSuffix(e.Name(), MaintenancePageSuffix) && !active[e.Name()] {
 			_ = os.Remove(filepath.Join(errorsDir, e.Name()))
 		}
 	}

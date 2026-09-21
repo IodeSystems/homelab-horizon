@@ -29,6 +29,14 @@ const (
 	// KindUpdate — it exists and differs.
 	KindUpdate ChangeKind = "update"
 
+	// KindRemove — it is in a directory hz claims, the claim covers its name,
+	// and the payload does not list it.
+	//
+	// The only kind that destroys something, and the only one whose target is
+	// not named anywhere in the payload. Both halves of that are why it goes
+	// through Desired.prunable rather than being decided here.
+	KindRemove ChangeKind = "remove"
+
 	// KindUnknown — the agent could not read the current state, so it will
 	// not claim one. Distinct from "unchanged" on purpose: an unreadable file
 	// reported as in-sync is a lie that survives right up until it matters.
@@ -61,7 +69,7 @@ type Plan struct {
 func (p Plan) Pending() []Change {
 	out := make([]Change, 0, len(p.Changes))
 	for _, c := range p.Changes {
-		if c.Kind == KindCreate || c.Kind == KindUpdate {
+		if c.Kind == KindCreate || c.Kind == KindUpdate || c.Kind == KindRemove {
 			out = append(out, c)
 		}
 	}
@@ -92,11 +100,76 @@ func Compute(d *Desired, obs Observed) Plan {
 	p.Machine = d.Machine
 	p.Generation = d.Fingerprint()
 
-	for _, of := range d.files() {
+	for _, of := range d.allFiles() {
 		p.Changes = append(p.Changes, fileChange(of, obs.Files[of.File.Path]))
 	}
+	p.Changes = append(p.Changes, removals(d, obs)...)
 	p.Changes = append(p.Changes, iptablesChanges(d.IPTables, obs)...)
 	return p
+}
+
+// removals turns the payload's directory claims into report lines.
+//
+// It walks what the agent OBSERVED in each claimed directory and asks
+// Desired.prunable about each entry — it never walks the payload and never
+// composes a path of its own, so a removal line can only ever name something
+// that is really there, inside something hz really claimed.
+//
+// A directory that could not be listed is KindUnknown, the same answer an
+// unreadable file gets: "I would remove nothing here because I cannot see" is
+// honest, and "nothing to remove" would not be.
+func removals(d *Desired, obs Observed) []Change {
+	var out []Change
+	for _, od := range d.dirs() {
+		claimed, ok := cleanDir(od.Dir.Path)
+		if !ok {
+			out = append(out, Change{
+				Subsystem: od.Subsystem,
+				Target:    od.Dir.Path,
+				Kind:      KindUnknown,
+				Detail:    "not an absolute directory path, so nothing here is claimed",
+			})
+			continue
+		}
+		st := obs.Dirs[claimed]
+		if st.ReadErr != "" {
+			out = append(out, Change{
+				Subsystem: od.Subsystem,
+				Target:    claimed,
+				Kind:      KindUnknown,
+				Detail:    "cannot list it: " + st.ReadErr,
+			})
+			continue
+		}
+		if !st.Exists {
+			// Not provisioned yet. The files the payload puts in it are
+			// creates; there is nothing to prune from a directory with
+			// nothing in it.
+			continue
+		}
+		for _, e := range st.Entries {
+			if !e.Regular {
+				// Directories, symlinks, sockets and devices are never
+				// removed. hz renders plain files; anything else in a claimed
+				// directory was put there by something the agent does not
+				// speak for.
+				continue
+			}
+			target := claimed + "/" + e.Name
+			sub, prune := d.prunable(target)
+			if !prune {
+				continue
+			}
+			out = append(out, Change{
+				Subsystem: sub,
+				Target:    target,
+				Kind:      KindRemove,
+				Detail:    "hz owns this directory and no longer lists this file",
+			})
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Target < out[j].Target })
+	return out
 }
 
 // fileChange compares one desired file against what is on disk.
