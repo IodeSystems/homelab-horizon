@@ -119,6 +119,29 @@ func (s *declareStub) start(t *testing.T) *client {
 			}
 			_ = enc.Encode(out)
 
+		case "/api/v1/services":
+			out := []apitypes.ServiceResp{}
+			for _, svc := range s.cfg.Services {
+				out = append(out, apitypes.ServiceResp{
+					Name: svc.Name, Domains: svc.Domains,
+					Project: svc.Project, Environment: svc.Environment,
+				})
+			}
+			_ = enc.Encode(out)
+
+		case "/api/v1/services/assign":
+			var req apitypes.ServiceAssignReq
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			svc, err := s.cfg.AssignService(req.Service, req.Project, req.Environment)
+			if err != nil {
+				fail(err)
+				return
+			}
+			s.save(t)
+			_ = enc.Encode(apitypes.ServiceAssignResp{
+				Service: svc.Name, Project: svc.Project, Environment: svc.Environment,
+			})
+
 		case "/api/v1/environments/add":
 			var req apitypes.EnvironmentAddReq
 			_ = json.NewDecoder(r.Body).Decode(&req)
@@ -204,11 +227,17 @@ func walkthroughFixture(t *testing.T) *declareStub {
 
 // TestWalkthroughStepTwoHasCommands is the gap this change exists to close:
 // step 2 of plan/architecture.md — "redline declares its own environments:
-// staging, prod" — driven entirely from the CLI, with no hand-edited JSON.
+// staging, prod", and then "assign a service to it" — driven entirely from the
+// CLI, with no hand-edited JSON.
 //
 // It runs the commands in the only order that can work. Save refuses a service
 // naming a project or a rung nobody declared, so declaring has to come first;
 // legacy_compat_test.go pins that rule from the other side.
+//
+// The assignment used to be made here by poking the config struct, because
+// there was no command for it. There is one now, so the whole chain — declare,
+// declare, assign, READ IT BACK — is expressible, and this is the test that
+// says the chain works end to end.
 func TestWalkthroughStepTwoHasCommands(t *testing.T) {
 	stub := walkthroughFixture(t)
 	c := stub.start(t)
@@ -228,22 +257,26 @@ func TestWalkthroughStepTwoHasCommands(t *testing.T) {
 		if err := runEnvironment(c, []string{"add", "redline/prod", "--posture", "prod", "--from", "staging", "--version", "1.2.1"}); err != nil {
 			t.Fatalf("env add prod: %v", err)
 		}
+		// 3. only NOW may a service name them, and the command that says so
+		// is the third verb of the walkthrough.
+		if err := runService(c, []string{"assign", "app", "redline/staging"}); err != nil {
+			t.Fatalf("service assign: %v", err)
+		}
+		// 4. read it back through the CLI, off the read endpoint — the whole
+		// chain, not a write talking to itself.
+		if err := runService(c, []string{"show", "app"}); err != nil {
+			t.Fatalf("service show: %v", err)
+		}
 	})
 
-	for _, want := range []string{"Declared project iodesystems", "under iodesystems", "redline/staging", "redline/prod"} {
+	for _, want := range []string{
+		"Declared project iodesystems", "under iodesystems", "redline/staging", "redline/prod",
+		"Service app is now on redline/staging",
+		"Project:  redline/staging", // the read-back
+	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output does not confirm %q:\n%s", want, out)
 		}
-	}
-
-	// 3. only NOW may a service name them. There is no `hz service` flag for
-	// this yet (see the note in the commit): the assignment is made the way
-	// ApplyImport makes it, and the point of the test is that it SAVES, which
-	// it only does because the declarations came first.
-	stub.cfg.Services[0].Project = "redline"
-	stub.cfg.Services[0].Environment = "staging"
-	if err := hzconfig.Save(stub.path, stub.cfg); err != nil {
-		t.Fatalf("declare-then-assign must save — this is the walkthrough: %v", err)
 	}
 
 	// The file on disk is the artifact, not the in-memory struct: a CLI that
@@ -272,6 +305,7 @@ func TestWalkthroughStepTwoHasCommands(t *testing.T) {
 	want := []string{
 		"/api/v1/projects/add", "/api/v1/projects/add",
 		"/api/v1/environments/add", "/api/v1/environments/add",
+		"/api/v1/services/assign",
 	}
 	if strings.Join(stub.posts, ",") != strings.Join(want, ",") {
 		t.Fatalf("the CLI posted %v, want %v", stub.posts, want)

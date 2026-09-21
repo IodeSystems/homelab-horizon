@@ -1128,9 +1128,58 @@ type ServiceRequest struct {
 	Dormant       bool   `json:"dormant,omitempty"`
 	DormantReason string `json:"dormantReason,omitempty"`
 
+	// Project and Environment place the service in the project tree.
+	//
+	// POINTERS, and the only pointers-to-string on this request, because absent
+	// and empty mean different things here and mean them on the path every other
+	// client already uses. nil is "leave the assignment alone"; a non-nil "" is
+	// "take it out of the tree". A plain string could not tell those apart, and
+	// the web UI does not send these at all — so a full-replace field would have
+	// quietly unassigned every service anybody edited from the UI. Clearing is a
+	// real operation (`hz service unassign`), so it has to be sayable.
+	//
+	// Both are checked against the declared tree BEFORE anything is written:
+	// declare, then assign. An environment without a project is refused, and a
+	// project with no environment is fine — plenty of services are not on a
+	// ladder.
+	Project     *string `json:"project,omitempty"`
+	Environment *string `json:"environment,omitempty"`
+
 	// Forwards: full-replace like the other fields, so every edit client must
 	// round-trip them or the edit removes the service's port forwards.
 	Forwards []ServiceForward `json:"forwards,omitempty"`
+}
+
+// ServiceAssignReq moves one service in the project tree, or — with both
+// placement fields empty — takes it out of it.
+//
+// WHOLE-VALUE, not a patch, and deliberately not ServiceRequest. Where a service
+// sits is one fact with two halves: a rung only means anything under a project,
+// so there is no useful "change the environment and leave the project alone".
+// That makes clearing expressible without a pointer, which EnvironmentSetReq
+// needed and this does not.
+//
+// Its own request rather than /services/edit because that path is full-replace
+// across domains, proxy, DNS and forwards: an assign that had to round-trip a
+// whole service could drop a port forward somebody else added between the read
+// and the write. Moving a service between rungs has no business touching any of
+// that.
+type ServiceAssignReq struct {
+	// Service is the name of the service to place.
+	Service string `json:"service"`
+	// Project is the project it joins. Empty (with Environment empty) unassigns.
+	Project string `json:"project,omitempty"`
+	// Environment is the rung within that project. Optional: a service can be in
+	// a project and on no rung. Naming one with no project is refused.
+	Environment string `json:"environment,omitempty"`
+}
+
+// ServiceAssignResp is the placement as hz now holds it, so a write answers with
+// the record rather than an echo of the request.
+type ServiceAssignResp struct {
+	Service     string `json:"service"`
+	Project     string `json:"project,omitempty"`
+	Environment string `json:"environment,omitempty"`
 }
 
 // ServiceRequestIntegrations carries per-service observability integrations from

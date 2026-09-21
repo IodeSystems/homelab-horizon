@@ -1081,6 +1081,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// API v1 mutation routes
 	mux.HandleFunc("/api/v1/services/add", s.handleAPIAddService)
 	mux.HandleFunc("/api/v1/services/edit", s.handleAPIEditService)
+	mux.HandleFunc("/api/v1/services/assign", s.handleAPIServiceAssign)
 	mux.HandleFunc("/api/v1/services/delete", s.handleAPIDeleteService)
 	mux.HandleFunc("/api/v1/services/delete/preview", s.handleAPIDeleteServicePreview)
 	// DNS sync routes are per-instance: each peer manages its own A

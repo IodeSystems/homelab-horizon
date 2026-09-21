@@ -50,6 +50,14 @@ COMMANDS
   service show <name> [--json]       Show one service
   service create [flags]             Create a service (see 'hz schema service')
   service edit <name> [flags]        Edit a service; only flags you pass change
+  service assign <name> <project>[/<environment>]
+                                     Put a service in the project tree. The project
+                                     (and the rung, if named) must be declared first:
+                                     declare, THEN assign. A project with no rung is
+                                     legal — not every service is on a ladder
+  service unassign <name>            Take a service out of the tree. It keeps its
+                                     domains, backend and certificate and goes on
+                                     working; it moves to (unassigned) in 'project ls'
   service delete <name>              Delete a service; reports the SubZone/DNS state
                                      it strands and requires --delete-orphans or
                                      --keep-orphans when there is any
@@ -229,6 +237,10 @@ EXAMPLES
     --backend 192.168.1.76:8080                                   # lan.* stays HTTP, www.* gets HTTPS
   hz service edit ebb --https --confirm --sync                    # turn on HTTPS for existing domains
   hz service edit grafana.example.net --metrics --sync   # opt into /metrics scraping
+  hz project add redline                                          # declare ...
+  hz env add redline/staging --posture staging                    # ... then declare ...
+  hz service assign ebb redline/staging                           # ... then assign
+  hz service unassign ebb                                         # out of the tree, still serving
   hz domain list
   hz domain ssl add ebb.example.net --sync
   hz sync --wait
