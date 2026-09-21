@@ -58,6 +58,33 @@ func (s *Server) handleAgentDesired(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// CHECK 3 OF THE hz-agent / PEER-SYNC GUARD — the enforcement point.
+	//
+	// hz serves the only desired state the agent has, so refusing here disarms
+	// it without needing the agent to cooperate: it is correct for an agent of
+	// any version, armed or inert, and an agent that has never heard of this
+	// guard simply has nothing to apply. That is what makes the guard still
+	// true at item 12 step 4, when --apply goes into the unit.
+	//
+	// RECOMPUTED PER REQUEST, not latched at boot. A latch is one forgotten
+	// update site away from being wrong, and the fleet fields are reachable
+	// from several config paths; recomputing from the live config cannot go
+	// stale, and it re-arms the agent within one poll when the fleet is removed.
+	// Deliberately AFTER the credential check, so this answer says nothing to a
+	// caller who has not proved it is a machine of ours.
+	//
+	// 409 rather than a degraded payload: an empty or partial Desired is a
+	// sentence the agent already understands as "hz does not manage this here"
+	// and would act on. Refusing the whole read is the only answer that cannot
+	// be mistaken for an instruction. agent.HTTPSource surfaces the body
+	// verbatim in the agent's log and in `hz-agent diff`.
+	if reason := agentFleetGuard(s.cfg()); reason != "" {
+		s.announceAgentGuard(reason)
+		writeJSONError(w, http.StatusConflict, reason)
+		return
+	}
+	s.announceAgentGuard("")
+
 	d := s.buildAgentDesired()
 
 	// hz renders for the box it is running on and nothing else yet, so an
