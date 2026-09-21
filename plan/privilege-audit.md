@@ -369,8 +369,9 @@ Ordered, replacing the handover list in `architecture.md`:
 
    **Certificate material may cross to the agent** under five constraints
    (served bundle only, never the account key or DNS credentials, `Secret`
-   forced by the payload, admin path off `handleAgentDesired` first, hashed not
-   logged). Reasoned out in `plan/architecture.md`, "Cert material and the two
+   forced by the payload, admin path off `handleAgentDesired` first — ✅ done
+   2026-09-21 with item 12 step 2, which is also when WireGuard started
+   crossing — hashed not logged). Reasoned out in `plan/architecture.md`, "Cert material and the two
    channels", rather than inferred from the WireGuard precedent.
 
    Six pre-existing defects found and left, in `plan/icebox.md` — the loudest

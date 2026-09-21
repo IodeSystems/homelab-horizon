@@ -163,10 +163,10 @@ revocation. Losing the other is the rung.
    "whether or not the producer remembered to say so"; a certificate section
    gets the same treatment, with `diff.go`'s pattern redaction as the second
    layer. A diff report that is unsafe to print is a diff report nobody runs.
-4. **The admin path comes off `handleAgentDesired` FIRST.** This is item 12
-   step 2's precondition, unchanged: while `|| s.isAdmin(r)` stands, serving a
-   private key turns the shared admin token into a key-fetch. Same objection,
-   same fix, and it has to land before either section is populated.
+4. **The admin path comes off `handleAgentDesired` FIRST.** ✅ Done
+   2026-09-21 with item 12 step 2: `|| s.isAdmin(r)` is gone and an hz admin
+   session gets a 401 there. A cert section inherits that, and must not put it
+   back.
 5. **Hashed into the fingerprint, never into a log.** Secret contents are
    hashed like everything else — they must be, or a rotated key would not move
    the generation — and a hash discloses nothing.
@@ -494,11 +494,10 @@ that changes hz's shape.
 
     Wired: haproxy (config + jail ACL + reload), dnsmasq (conf + records +
     unit restart), iptables (`Reconcile` over hz's own expected/stale sets).
-    Modelled and tested but **not served**: WireGuard — `wg0.conf` holds the
-    machine's private key, and while the agent now has a per-machine credential
-    (item 12 step 1, done), an hz *admin* credential still opens the same route.
-    Not transferred:
-    letsencrypt's cert writes (not split yet) and `autoheal` (does not
+    WireGuard joined them on 2026-09-21 (item 12 step 2): `wg0.conf` crosses as
+    a forced-`Secret` file now that the admin path is off the route, so the only
+    reader is the machine whose key it is. Not transferred:
+    letsencrypt's cert writes (split, not served) and `autoheal` (does not
     transfer, see item 10).
 12. hz web drops to an unprivileged user. `main.go`'s four `Geteuid` gates and
     the `User=root` unit at `internal/config/config.go:2477` go away.
@@ -515,13 +514,34 @@ that changes hz's shape.
        route. `isAdmin` was deliberately NOT widened: a Bearer branch there
        would make the shared admin token an API key for every admin surface.
        Item 13 changes the ISSUER of that credential, nothing else.
-    2. Serve the WireGuard section from `buildAgentDesired` — safe only once
-       the ADMIN path comes off `handleAgentDesired`, because that file carries
-       the private key and an admin credential still opens the route beside the
-       agent's own one. (1) is done, so the remaining work here is dropping
-       `|| s.isAdmin(r)` and populating the section. `internal/agent` already
-       models, plans, redacts and applies it, and
-       `TestNoKeyMaterialCrossesThisEndpoint` is the test that has to change.
+    2. ✅ **Done 2026-09-21.** The WireGuard section is served, and the admin
+       path came off `handleAgentDesired` in the same commit — one decision,
+       not two. `|| s.isAdmin(r)` is gone; the only way in is a machine's own
+       agent credential, so the private key that now crosses goes to the
+       machine it belongs to and nowhere else.
+
+       **What the section carries is wg0.conf read back**, not a render. hz has
+       no whole-file renderer for it because it does not write one: it mutates
+       the file in place (`AddPeer`, `RemovePeer`, `UpdateInterfaceRules`), and
+       `internal/wireguard`'s package doc says the file on disk is still the
+       state of record. So serving the state of record makes the same claim
+       every other section makes — *this is what hz would write*. Item 14's
+       projection replaces the producer; the wire shape does not change. What
+       it buys meanwhile: the file crosses under the forced `Secret` flag, the
+       agent's WireGuard plan/diff/apply path stops being dead code, and a peer
+       change moves the payload fingerprint. Unreadable or absent ⇒ **no
+       section** — which is also the honest answer once hz web is unprivileged.
+
+       `TestNoKeyMaterialCrossesThisEndpoint` was **replaced, not deleted**. Its
+       claim (no key material crosses at all) is false by design now. The four
+       tests that stand where it stood pin what is still true: `Secret` is
+       FORCED by `Desired.files()` and not trusted from the wire; `diff.go`'s
+       pattern redaction catches a key with the flag out of the way (proven on
+       a section that gets no forcing, so the two layers are independent); no
+       key reaches a refusal body, an error or a report; and only a credential
+       for THIS machine is answered. Verified on `hz-audit` with a throwaway
+       wg0.conf: admin session 401 (200 before), agent 200, section present,
+       nothing printed.
     3. ◐ **Split done 2026-09-21; the wiring is what is left.** Move what the
        agent cannot yet reach: letsencrypt's cert writes, `/etc/haproxy/certs`,
        and HAProxy's `errors/503.http`.
