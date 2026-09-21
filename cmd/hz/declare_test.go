@@ -31,11 +31,16 @@ type declareStub struct {
 	// posts records every write path, so a test can prove the CLI went through
 	// the server rather than deciding something locally.
 	posts []string
+	// enrolled stands in for hz's agent credential store, which lives BESIDE
+	// the config rather than in it (internal/agent/credential.go). The machine
+	// writers take it as an input for exactly that reason, so a stub supplies
+	// it the same way the server does.
+	enrolled map[string]bool
 }
 
 func newDeclareStub(t *testing.T, cfg *hzconfig.Config) *declareStub {
 	t.Helper()
-	s := &declareStub{cfg: cfg, path: filepath.Join(t.TempDir(), "config.json")}
+	s := &declareStub{cfg: cfg, path: filepath.Join(t.TempDir(), "config.json"), enrolled: map[string]bool{}}
 	if err := hzconfig.Save(s.path, cfg); err != nil {
 		t.Fatalf("the fixture must be saveable to begin with: %v", err)
 	}
@@ -181,6 +186,52 @@ func (s *declareStub) start(t *testing.T) *client {
 					fail(err)
 					return
 				}
+				s.save(t)
+				out.OK = true
+			}
+			_ = enc.Encode(out)
+
+		case "/api/v1/machines":
+			out := []apitypes.MachineResp{}
+			for _, m := range s.cfg.Machines {
+				out = append(out, apitypes.MachineResp{
+					Name: m.Name, Segments: m.Segments, Note: m.Note,
+					MultiHomed: m.MultiHomed(), Enrolled: s.enrolled[m.Name],
+				})
+			}
+			sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+			_ = enc.Encode(out)
+
+		case "/api/v1/machines/add":
+			var req apitypes.MachineAddReq
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			m := hzconfig.Machine{Name: req.Name, Segments: req.Segments, Note: req.Note}
+			if err := s.cfg.AddMachine(m); err != nil {
+				fail(err)
+				return
+			}
+			s.save(t)
+			added, _ := s.cfg.FindMachine(req.Name)
+			_ = enc.Encode(apitypes.MachineResp{
+				Name: added.Name, Segments: added.Segments, Note: added.Note,
+				MultiHomed: added.MultiHomed(), Enrolled: s.enrolled[added.Name],
+			})
+
+		case "/api/v1/machines/rm":
+			var req apitypes.MachineRmReq
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			removes, blocked, err := s.cfg.MachineRemoval(req.Name, s.enrolled[req.Name], req.Cascade)
+			if err != nil {
+				fail(err)
+				return
+			}
+			out := apitypes.RemovalResp{Removes: wireDeps(removes), Blocked: wireDeps(blocked)}
+			if len(blocked) == 0 && req.Confirm {
+				if _, err := s.cfg.RemoveMachine(req.Name, s.enrolled[req.Name], req.Cascade); err != nil {
+					fail(err)
+					return
+				}
+				delete(s.enrolled, req.Name)
 				s.save(t)
 				out.OK = true
 			}

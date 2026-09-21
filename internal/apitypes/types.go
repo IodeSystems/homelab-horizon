@@ -277,6 +277,56 @@ type EnvironmentRmReq struct {
 	Confirm bool   `json:"confirm,omitempty"`
 }
 
+// MachineResp is one declared machine: identity and segment membership.
+//
+// IT CARRIES NO PROJECT AND NO ENVIRONMENT, and that is the model rather than
+// an omission — an environment is a coordinate of an INSTANCE, and one machine
+// hosts instances from several projects (plan/architecture.md, "Instance, not
+// machine, carries the environment"). It carries no observed version either:
+// that belongs to an instance and several instances share a box, so a
+// machine-level version would report a half-finished rollout as finished.
+//
+// MultiHomed is derived server-side rather than left to a client counting
+// Segments, for the reason ProjectResp gives about FeedFrom: a client must
+// never have to re-derive a judgement hz already makes. Blast radius is the
+// UNION of the segments, and a row that bridges two has to be visible as one.
+//
+// Enrolled says whether hz holds an agent credential for this machine — the
+// hash and the issue date, which is all hz ever has. It is the one thing about
+// a machine that lives beside the config rather than in it.
+type MachineResp struct {
+	Name       string   `json:"name"`
+	Segments   []string `json:"segments,omitempty"`
+	Note       string   `json:"note,omitempty"`
+	MultiHomed bool     `json:"multiHomed,omitempty"`
+	Enrolled   bool     `json:"enrolled,omitempty"`
+	EnrolledAt int64    `json:"enrolledAt,omitempty"`
+}
+
+// MachineAddReq declares a machine. Segments are names; there is no Segment
+// record to resolve them against until phase 4 item 15, so hz checks their
+// shape and not their existence.
+//
+// Note is REQUIRED when Segments names more than one: forwarding between a
+// machine's own segment interfaces is denied by default and a machine that
+// bridges them is a declared exception with a reason, not a default.
+type MachineAddReq struct {
+	Name     string   `json:"name"`
+	Segments []string `json:"segments,omitempty"`
+	Note     string   `json:"note,omitempty"`
+}
+
+// MachineRmReq removes a machine. Confirm and Cascade mean what they mean on
+// ProjectRmReq. Cascade here REVOKES the machine's agent credential: without it
+// a removal is refused while one exists, because a credential naming a machine
+// hz no longer declares still authenticates and nothing in the config explains
+// it.
+type MachineRmReq struct {
+	Name    string `json:"name"`
+	Cascade bool   `json:"cascade,omitempty"`
+	Confirm bool   `json:"confirm,omitempty"`
+}
+
 // RemovalResp answers both halves of a removal with one shape, because a dry run
 // and a write differ only in whether anything was written.
 //

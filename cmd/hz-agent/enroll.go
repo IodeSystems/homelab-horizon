@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,32 +13,35 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/agent"
 )
 
-// `hz-agent enroll` — give this machine a credential of its own.
+// `hz-agent enroll` — ask hz for this machine's credential.
 //
-// It mints a secret, writes it where only root can read it, and records its
-// HASH with hz. hz never holds the secret; the agent never holds an admin
-// token. That is the whole of plan/privilege-audit.md §3 item 1.
+// WHAT CHANGED IN ITEM 13: THE ISSUER, AND ONLY THE ISSUER. This command used
+// to mint a secret locally and write its own record into hz's credential store.
+// That worked because hz and the agent were the same root on one box — the
+// gateway is machine #1 — and it is the WRONG answer for machine #2, because a
+// remote agent that can write hz's store can write itself in under any name.
 //
-// WHY THE AGENT MINTS IT, TODAY. hz and the agent are the same box: the
-// gateway is machine #1 (plan/architecture.md), and both halves run as root on
-// it. A local mint is therefore a root process writing two root-only files,
-// and it needs no bootstrap credential — which matters, because the only
-// credential available to bootstrap with would be the admin token, and handing
-// the agent an admin token is the thing being fixed.
+// So hz mints. This command asks (internal/agent/enrolment.go), hz checks that
+// it declares a Machine by that name, mints, records the HASH and answers with
+// the secret exactly once. Unchanged at both ends: the store format, the
+// Authorization header, the SHA-256 hashing, hz's verification
+// (Server.agentCaller) and the poll (agent.HTTPSource). None of them know where
+// a credential came from, which is why moving the issuer is a change to this
+// file and to one handler rather than a redesign.
 //
-// It is also the WRONG answer for machine #2, and deliberately so. A remote
-// agent must not be able to write itself into hz's store. Item 13's Machine
-// record makes hz the issuer: hz mints the secret at enrolment and hands it
-// down the same approval flow `configmgr` already uses (register → approve →
-// resolve). When that lands, THIS FILE is what changes — `enroll` stops
-// writing a record and starts asking for one. The store format, the header,
-// the hash, hz's verification and the poll are untouched, because none of them
-// know where a credential came from.
+// WHAT AUTHORISES IT: an hz ADMIN credential, given at the box, used for this
+// one request, never written to disk here and never reaching the unit. On the
+// gateway it needs no argument at all — hz's own admin token file is on that
+// box and root can read it. Anywhere else it is a deliberate act by somebody
+// with authority, which is what "a machine hz does not know cannot enrol"
+// means in practice.
 //
 // WHAT IT NEVER DOES: print the secret. A credential on a terminal is a
 // credential in scrollback, in a screen-share and in a support paste. It goes
-// to a 0600 file and is reported by path only. `install` takes the same care
-// with argv (TestUnitPassesTheTokenByFileNotOnTheCommandLine).
+// to a 0600 file and is reported by path only. It is never passed on a command
+// line either, in EITHER direction: the admin credential comes from a file or
+// the environment, and `install` takes the same care with the unit
+// (TestUnitPassesTheTokenByFileNotOnTheCommandLine).
 
 const tokenFileMode = 0o600
 
@@ -53,64 +57,94 @@ func runEnroll(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	// Root, for the same reason `install` is: both files it touches are
-	// root-only, and a half-written enrolment is worse than none. Checked
-	// here rather than inside enroll so the body is exercisable by a test —
-	// runInstall makes the same check before it calls through.
+	// Root, for the same reason `install` is: the file it writes is root-only,
+	// the admin credential it reads on the gateway is root-only, and a
+	// half-written enrolment is worse than none. Checked here rather than
+	// inside enroll so the body is exercisable by a test — runInstall makes
+	// the same check before it calls through.
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("must run as root to write %s and %s", f.tokenFile, f.hzCredentials)
+		return fmt.Errorf("must run as root to read %s and write %s", f.adminTokenFile, f.tokenFile)
 	}
 	return enroll(&f, *rotate, os.Stdout)
 }
 
 // enroll is the body, seamed on its output so a test can prove the secret does
-// not reach it.
+// not reach it, and on --hz so a test can point it at a real hz.
 func enroll(f *agentFlags, rotate bool, out io.Writer) error {
 	machine := f.machineName()
 	if machine == "" {
 		return errors.New("cannot determine this machine's name; pass --machine")
 	}
-	store := agent.CredentialStore{Path: f.hzCredentials}
-	if store.Path == "" {
-		return errors.New("no hz credential store; pass --hz-credentials")
-	}
-
-	// Already enrolled and still matching? Say so and change nothing.
-	// Enrolment has to be safe to re-run — `install` calls it every time.
-	if existing := readTokenFile(f.tokenFile); existing != "" && !rotate {
-		if store.Enrolled(machine, existing) {
-			_, _ = fmt.Fprintf(out, "%s is already enrolled with hz.\n", machine)
-			_, _ = fmt.Fprintf(out, "  credential: %s\n", f.tokenFile)
-			_, _ = fmt.Fprintf(out, "  hz's record: %s\n", store.Path)
-			_, _ = fmt.Fprintln(out, "Pass --rotate to replace it.")
-			return nil
-		}
-	}
-
-	secret, err := agent.NewSecret()
+	adminToken, err := f.resolveAdminToken()
 	if err != nil {
 		return err
 	}
 
-	// The secret lands first. If recording the hash then fails, the agent
-	// holds a credential hz does not accept — a 401, which is where it
-	// already was. The other order would have hz accepting a credential
-	// nobody holds.
-	if err := writeTokenFile(f.tokenFile, secret); err != nil {
-		return err
-	}
-	if err := store.Enroll(machine, secret); err != nil {
-		return fmt.Errorf("recording the credential with hz (%s): %w", store.Path, err)
+	// The hash of what this box already holds, never the secret. It lets hz
+	// answer "you already have the current one" without a working credential
+	// crossing the wire for a question a hash settles.
+	currentHash := ""
+	if existing := readTokenFile(f.tokenFile); existing != "" {
+		currentHash = agent.HashSecret(existing)
 	}
 
-	_, _ = fmt.Fprintf(out, "Enrolled %s with hz.\n", machine)
+	enroller := &agent.Enroller{BaseURL: f.hzURL, AdminToken: adminToken}
+	resp, err := enroller.Enroll(context.Background(), agent.EnrollRequest{
+		Machine: machine, CurrentHash: currentHash, Rotate: rotate,
+	})
+	if err != nil {
+		if errors.Is(err, agent.ErrMachineNotDeclared) {
+			// The one refusal with a next step, so say it as one. hz issuing
+			// only for machines it declares is the point of item 13, not an
+			// obstacle to work around.
+			return fmt.Errorf("hz will not enrol %s: %w.\nDeclare it first, from a machine with hz access:\n  hz machine add %s --segment <segment>",
+				machine, err, machine)
+		}
+		return err
+	}
+
+	if resp.AlreadyEnrolled {
+		_, _ = fmt.Fprintf(out, "%s is already enrolled with hz.\n", resp.Machine)
+		_, _ = fmt.Fprintf(out, "  credential: %s\n", f.tokenFile)
+		printMembership(out, resp)
+		_, _ = fmt.Fprintln(out, "Nothing was written at either end. Pass --rotate to replace the credential.")
+		return nil
+	}
+
+	// hz recorded the hash before answering, so a failure here leaves hz
+	// accepting a credential nobody holds — which the next enrolment replaces.
+	// The other order would leave this box holding one hz never recorded,
+	// which is a 401 somebody has to debug at the box.
+	if err := writeTokenFile(f.tokenFile, resp.Secret); err != nil {
+		return fmt.Errorf("hz issued a credential but it could not be stored at %s: %w", f.tokenFile, err)
+	}
+
+	_, _ = fmt.Fprintf(out, "Enrolled %s with hz — hz issued the credential.\n", resp.Machine)
 	_, _ = fmt.Fprintf(out, "  credential: %s (mode %04o, root only)\n", f.tokenFile, tokenFileMode)
-	_, _ = fmt.Fprintf(out, "  hz's record: %s — the hash, never the secret\n", store.Path)
+	_, _ = fmt.Fprintf(out, "  hz keeps:   the hash, never the secret\n")
+	printMembership(out, resp)
 	_, _ = fmt.Fprintln(out)
 	_, _ = fmt.Fprintln(out, "The secret was not printed and is not on any command line.")
 	_, _ = fmt.Fprintln(out, "hz re-reads its record per request, so no restart is needed. Check with:")
 	_, _ = fmt.Fprintf(out, "  sudo %s diff --hz %s\n", execPath(), f.hzURL)
 	return nil
+}
+
+// printMembership says what hz declares this machine to be part of, because a
+// box that bridges segments should say so out loud at the moment it is
+// enrolled — blast radius is the union of its segments.
+func printMembership(out io.Writer, resp *agent.EnrollResponse) {
+	if len(resp.Segments) == 0 {
+		_, _ = fmt.Fprintln(out, "  segments:   none declared yet (`hz machine add` takes --segment)")
+		return
+	}
+	_, _ = fmt.Fprintf(out, "  segments:   %s\n", strings.Join(resp.Segments, ", "))
+	if len(resp.Segments) > 1 {
+		_, _ = fmt.Fprintf(out, "  MULTI-HOMED: this machine bridges %d segments. Declared reason: %s\n",
+			len(resp.Segments), resp.Note)
+		_, _ = fmt.Fprintln(out, "  Its blast radius is the UNION of those segments. Forwarding between them")
+		_, _ = fmt.Fprintln(out, "  stays denied by default.")
+	}
 }
 
 // readTokenFile returns the stored secret, or "" for anything unreadable.

@@ -1084,6 +1084,12 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/environments/add", s.handleAPIEnvironmentAdd)
 	mux.HandleFunc("/api/v1/environments/set", s.handleAPIEnvironmentSet)
 	mux.HandleFunc("/api/v1/environments/rm", s.handleAPIEnvironmentRm)
+	// The machines: identity and segment membership. No project and no
+	// environment — those are coordinates of an instance, not of a box
+	// (plan/architecture.md, "Instance, not machine, carries the environment").
+	mux.HandleFunc("/api/v1/machines", s.handleAPIMachines)
+	mux.HandleFunc("/api/v1/machines/add", s.handleAPIMachineAdd)
+	mux.HandleFunc("/api/v1/machines/rm", s.handleAPIMachineRm)
 	mux.HandleFunc("/api/v1/import", s.handleAPIImport)
 	mux.HandleFunc("/api/v1/domains", s.handleAPIDomains)
 	mux.HandleFunc("/api/v1/vpn/peers", s.handleAPIVPNPeers)
@@ -1100,6 +1106,16 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// the same reason the poll is — a report is about the box that sent it,
 	// to the hz it polls, and a peer must not serve another peer's record.
 	s.handlePeerInstance(mux, agent.ObservedPath, s.handleAgentObserved)
+
+	// Where a machine's agent credential is ISSUED. hz is the issuer since
+	// item 13 — `hz-agent enroll` asks rather than minting its own and writing
+	// hz's store, which is what a remote agent must never be able to do.
+	// Admin-gated, and refused for a machine hz does not declare.
+	//
+	// Per-instance for the same reason the poll and the report are: a
+	// credential is recorded beside the config of the hz that issued it, and a
+	// spare must write its own store rather than the primary's.
+	s.handlePeerInstance(mux, agent.EnrollPath, s.handleAPIAgentEnroll)
 
 	// API v1 mutation routes
 	mux.HandleFunc("/api/v1/services/add", s.handleAPIAddService)
