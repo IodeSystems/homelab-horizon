@@ -136,7 +136,8 @@ the agent's own tree.
 |---|---|
 | `internal/letsencrypt/letsencrypt.go` | `/etc/letsencrypt`, `/etc/haproxy/certs` — TLS renewal, fires on a timer |
 | `internal/acme/acme.go` | cert issuance, own `exec` + writes |
-| `internal/server/handlers_ha.go` | `/etc/dnsmasq.d/wg-*.conf`, `/etc/haproxy/haproxy.cfg`, `/etc/homelab-horizon` |
+| ~~`internal/server/handlers_ha.go`~~ | ~~`/etc/dnsmasq.d/wg-*.conf`, `/etc/haproxy/haproxy.cfg`, `/etc/homelab-horizon`~~ — **wrong, corrected 2026-09-21** |
+| `internal/server/peer_sync.go` | certs (`pullCertFromPeer`), `iptables -I INPUT` (ban sync), and `applyNewConfig` → hz's whole reconcile path, on a 30s timer |
 | `internal/server/handlers_integration.go` | `/etc/prometheus`, `/etc/systemd/system` |
 | `internal/server/handlers_api_system_fix.go` | `/etc/apparmor.d/…`, `/etc/systemd/journald.conf.d`, `/etc/systemd/system/homelab…` |
 | `internal/server/handlers_ban.go` | shells `ip` and `iptables` directly |
@@ -146,10 +147,23 @@ the agent's own tree.
 | `internal/server/static_supervisor.go` | forks a privilege-dropped child |
 | `internal/probe/agent.go` | writes |
 
-**`handlers_ha.go` is the one to worry about.** It writes *the same files the
-agent writes*, from a different code path. Arm the agent while HA peer-sync is
-live and there are two writers for `haproxy.cfg` — the exact fight items 11 and
-12 were split to avoid, arriving through a door neither split was watching.
+**Corrected 2026-09-21 — see `plan/ha-and-the-agent.md`.** The row above said
+`handlers_ha.go` was the one to worry about, because it writes *the same files
+the agent writes*. It does not. `handlers_ha.go` has no `os.WriteFile`, no
+`os.Create` and no `exec.Command`; those three paths appear in it only as
+literal text inside the **generated bash join script**, which runs on the *new*
+peer being joined. The row was a path-string grep artifact, not a write.
+
+The concern was right and the file was wrong. The second path to those files is
+**`internal/server/peer_sync.go`**, which this table missed entirely: its pull
+loop calls `applyNewConfig` → `syncServices`, hz's ordinary reconcile, on a 30s
+timer. Where it overlaps the agent the **bytes agree by construction** (one
+renderer, two callers), so it is a second *trigger*, not a second opinion. It is
+also **latent**: every loop is gated on `peer_id` being set in `config.json`,
+and there is no fleet today. The live exposure is three paths that bypass
+`syncServices` — cert pull, WG peer application, ban re-apply — which are
+already items 12.2, 12.3 and §3 item 5 below. Full analysis, overlap table and
+item-12 checklist: `plan/ha-and-the-agent.md`.
 
 ## 3. Consequences for item 12
 
@@ -161,8 +175,13 @@ Ordered, replacing the handover list in `architecture.md`:
 2. **Fix the test seam that hid it**: the handler test and the client must
    exercise the same credential. A test that authenticates differently from the
    caller proves the handler works for a caller that does not exist.
-3. **Decide `handlers_ha.go`** — route its writes through the same desired
-   state, or disable peer-sync before arming the agent. Not optional.
+3. **Decide peer-sync** (not `handlers_ha.go` — see the correction in §2).
+   Recommendation in `plan/ha-and-the-agent.md`: guard first (refuse to arm the
+   agent while a fleet is configured, and re-check in `applyNewConfig`), then
+   route the three `syncServices` bypasses — cert pull, WG peer application, ban
+   re-apply — through whatever items 12.2/12.3 and §3 item 5 below decide. The
+   checklist is §7 of that document; it is latent today, so this is a guard, not
+   a redesign.
 4. **letsencrypt/acme** need a render/apply split, and `loadTLSAssets` reads the
    cert store during *render*, so certs must become an input rather than a read.
 5. **Classify the fixer buttons, `handlers_ban`, `handlers_integration`,
@@ -176,7 +195,14 @@ Which of §2's uncovered operations the **office gateway actually exercises**.
 The VM shows they exist; only the estate says whether they run. Specifically
 worth checking against the real box before item 12:
 
-- is HA peer-sync configured? (decides whether §2's worst case is live)
+- **is `peer_id` set in `/etc/homelab-horizon/config.json`?** That one key turns
+  every peer-sync loop on or off (`plan/ha-and-the-agent.md` §3). Empty ⇒ the
+  whole feature is dead code at runtime and item 12 needs only a guard.
+- **if it is set, is this box the primary (`config_primary: true`)?** The
+  primary never pulls — only a non-primary runs the config pull, the WG peer
+  application and the cert pull. Ban sync runs on both. So "which side is the
+  gateway on" decides which of the three bypasses in
+  `plan/ha-and-the-agent.md` §4 actually fire here.
 - are the Prometheus/integration paths in use?
 - how are certs currently renewed, and on what schedule?
 - has anyone hand-edited `/etc/wireguard/*.conf`? (decides whether the

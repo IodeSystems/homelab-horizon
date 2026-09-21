@@ -10,6 +10,45 @@ How this plan works: see `/home/nthalk/CLAUDE.md` "Planning". These are queued, 
 - ✅ **Hosts UX clarity** — Observability Hosts section now lists knownHosts (derived ∪ declared) with a
   source badge and a one-click "Declare / add labels" (prefills IP) on derived hosts.
 
+## ❓ `/api/peer/*` falls back to the whole VPN range, and serves the admin token
+
+Found 2026-09-21 while investigating HA vs the agent (`plan/ha-and-the-agent.md`
+§9). Filed, not fixed — that investigation was docs-only.
+
+`peerOnlyMiddleware` gates the peer API on `isAllowedPeer`
+(`internal/server/handlers_peer.go:147`), which matches the configured peers'
+`wg_addr` — **but when no peers are configured it falls back to
+`isInVPNRange(ip)`** (:150). On a single gateway, which is every deployment
+today, that means any IP inside the VPN range is "a peer".
+
+Two of the four routes behind it hand out secrets:
+
+- `/api/peer/config` (`server.go:1025`) encodes the whole `config.Config`,
+  which includes **`AdminToken`** (`internal/config/config.go:134`,
+  `json:"admin_token,omitempty"`). A VPN client that can reach the gateway's
+  listener can read the admin token and then authenticate as admin.
+- `/api/peer/cert/<domain>` (`server.go:1028`) returns `privkey.pem` verbatim
+  (`handlers_peer.go:95`). `peerOnlyMiddleware`'s own doc-comment (:122–129)
+  says restricting to specific peers rather than the whole CIDR is *"critical
+  for Phase 2 endpoints like /api/peer/cert/:domain that expose private key
+  material"* — and then the next paragraph opens exactly that case.
+
+The fallback's comment says it exists "so the endpoint still works in
+development/testing". It is not obviously reachable in practice *only* because
+these routes are unadvertised.
+
+**next:** decide whether the standalone fallback should be deny (the endpoints
+have no standalone use — nothing calls them without peers) or narrowed to
+loopback. Deny looks right: `alivePeers`/`pullConfigOnce` never fire without
+`peer_id`, so nothing in-tree consumes these routes standalone.
+
+**risks:** flipping to deny could break a test or a dev workflow that leans on
+the fallback — check `handlers_api_test.go` and `peer_sync_test.go` before
+changing it. Narrowing to loopback instead is the conservative move.
+
+**blocking decisions:** none — this is a straightforward tightening, it just
+needs someone to own the behaviour change.
+
 ## ◻ Read-only access, if it is ever wanted
 
 Removed as a role in `0003_drop_viewer_role` because nothing enforced it and a
