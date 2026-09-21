@@ -269,6 +269,7 @@ Phase 3 replaces this with: restart horizon, done.
 | 9 | [Config manager](#-config-manager--registration-blessing-promotion) → [config-manager.md](config-manager.md) | ✅ **ceremony proven on a box 2026-09-19** |
 | 10 | [hz-client becomes a library](#-hz-client-becomes-a-library) | ◐ version surface in progress |
 | 11 | Projects · Environments · machine removal | ✅ on **`dev`**, not on main, nothing deployed |
+| 12 | [Observed-state channel](privilege-classification.md#41--closed-2026-09-21--the-observed-state-channel-exists) — the agent reports back | ✅ store + serve on **`dev`**; ◻ the drift SCREEN is unbuilt ([ui-redesign.md](ui-redesign.md)) |
 
 **Where this is all heading:** [architecture.md](architecture.md) — the model
 (project / environment / machine / instance / version / service), the two

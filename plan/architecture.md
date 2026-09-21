@@ -193,6 +193,17 @@ resolve. A compromised hz can serve bad desired-state to boxes that ask; it
 cannot reach a box that does not, and it cannot replace the agent binary on a
 box already enrolled — that comes from apt, held (see *Agent identity*).
 
+**A REPORT BACK IS THE SAME DIRECTION, and it is worth saying rather than
+assuming.** `POST /api/v1/agent/observed` (2026-09-21) does not weaken this
+rule: the agent dials, on its own clock, with its own credential. hz opens
+nothing, holds no inbound credential and needs no route to the box, so a
+machine behind NAT reports exactly as it polls. What "hz never initiates"
+rules out is hz *reaching* a machine. What crosses is the agent's PLAN — never
+its `Observed`, which is raw file contents — plus the live firewall rule set
+hz can no longer read for itself after item 12. See
+`privilege-classification.md` §4.1 for the redaction, retention and state
+decisions.
+
 ## The projection
 
 ```
@@ -423,6 +434,14 @@ never done is *execute* on a box it is not.
    rollout as done. Written on register and on every resolve; no new endpoint,
    no heartbeat.
 6. Show desired vs observed. Drift becomes visible; nothing acts on it.
+   ◐ **The data half landed 2026-09-21** — machines report their plan back
+   (`GET/POST /api/v1/agent/observed`, `privilege-classification.md` §4.1) and
+   hz stores and serves it. That covers the MACHINE's half of the diff.
+   Instance version drift is 0011's columns, and the two must not be merged in
+   a display: an agent poll is a heartbeat on a fixed cadence, an instance's
+   `observed_at` refreshes at boot, and a healthy long-running instance has a
+   fresh agent and an old version reading (`example-projection.md` §3). The
+   SCREEN is still unbuilt; `ui-redesign.md` designs it.
 
 **Phase 3 — climb the rung.** Mostly not software.
 
@@ -483,7 +502,10 @@ that changes hz's shape.
     held connection per machine through haproxy, to save seconds on a change
     a human is watching); and `hz sync --wait` blocking on an applied-generation
     report — right eventually, wrong while the agent ships inert, since hz
-    would wait on something deliberately not running. **Cost: a service change
+    would wait on something deliberately not running. **The report-back landed
+    2026-09-21 and does not revisit that**: hz stores what a machine says and
+    nothing blocks on it, so a box that never reports costs a screen saying
+    "silent", not a stalled `hz sync`. **Cost: a service change
     is applied within one poll interval (5s default, 2.5s mean) instead of
     synchronously inside the hz request.** That is the whole behavioural price
     of item 12.

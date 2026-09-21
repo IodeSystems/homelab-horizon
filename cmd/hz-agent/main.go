@@ -105,10 +105,27 @@ FLAGS
   --once            'run' does one pass and exits
   --apply           'run' may write. Without it, nothing is written. Needs root.
   --json            'diff' prints the plan as JSON
+  --report          'run' tells hz what it found (default true)
+  --report-interval D
+                    how often to report when nothing has changed (default 60s)
+
+REPORTING IS NOT APPLYING
+  'run' reports what this machine looks like to hz, so hz can show desired
+  minus observed. That writes NOTHING on this box: it is a POST, with the
+  same credential the poll uses, and the agent stays as inert as it was.
+  '--report=false' turns it off, at the cost of hz rendering this machine as
+  silent.
+
+  WHAT CROSSES IS THE PLAN, NEVER THE OBSERVED STATE. Observed holds this
+  machine's raw file contents; the plan is the redacted summary — a secret
+  file is described by its size, and every line is pattern-redacted again
+  before it leaves. The live firewall rule set crosses as well, because after
+  item 12 hz cannot read it itself, and a rule carries nothing to redact.
 
 SECRETS
   Nothing here prints file contents that carry key material, and every line it
-  does print is redacted a second time by pattern. A diff is safe to paste.
+  does print is redacted a second time by pattern. A diff is safe to paste,
+  and so is a report.
 `
 
 func main() {
