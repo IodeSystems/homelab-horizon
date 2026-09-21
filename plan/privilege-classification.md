@@ -681,7 +681,61 @@ of another machine's output … it needs the agent to accept *opaque* content fr
 hz, which is a new capability"). The task asked whether others accumulate. They
 do. Here is the whole list, worst first.
 
-### 4.1 There is no observed-state channel — the agent never reports back
+### 4.1 ✅ CLOSED 2026-09-21 — the observed-state channel exists
+
+`POST /api/v1/agent/observed` (the agent's own credential) plus
+`GET /api/v1/agent/observed` (admin) — `internal/server/handlers_agent_observed.go`,
+`internal/agent/observed.go`, `internal/agent/observed_store.go`. What follows
+is the gap as it stood; the decisions that closed it are below it.
+
+**The decisions, and why.**
+
+- **Push, and it does not weaken "the agent polls, hz never initiates".** The
+  agent still dials, on its own clock, with its own credential. hz opens
+  nothing and needs no route to the box. What that rule rules out is hz
+  reaching a machine, not a machine choosing to speak. `handleProbeReport` is
+  the same direction and the pattern copied.
+- **The PLAN crosses, never the `Observed`.** `Observed` is raw file contents
+  read off the machine, `wg0.conf` included, and there is no safe version of
+  shipping it. The plan is already redacted twice — `File.Secret` collapses a
+  secret file to its size, `redactLine` blanks key-shaped assignments — and
+  `StateReport.Sanitized` runs layer 2 again at BOTH ends, because hz cannot
+  assume a client redacted anything. The one raw thing that crosses is the
+  live iptables rule set: it carries nothing to redact, and hz classifies it
+  with its own `iptables.Classify` so there is still exactly one classifier.
+  **The two layers were proved independent by disabling each**, and doing so
+  found a real hole: `secretAssignment` anchored on whitespace only, so a line
+  arriving as `  + PrivateKey = …` walked through the *second* pass in both
+  `Report` and the ingest. The regex now allows a diff marker.
+- **Retention: one record per machine, replaced**, in `<config>.observed`
+  beside `<config>.agents` — not in `config.json` (peer-sync ships that) and
+  not in SQLite (the credential that authenticates a report is a file so a box
+  with no identity store can still authenticate; an ingest needing the
+  database would be harder to satisfy than its own gate). The precedent is
+  0011's `observed_version`/`observed_at`: a reading plus its timestamp,
+  overwritten. `SameSince` is carried across identical reports, so "pending
+  since 4h ago" is answerable without an audit trail of every poll.
+- **Four states, never collapsed** (`example-projection.md` §4): `silent`
+  (enrolled, never reported — no reading at all), `late` (a reading older than
+  the cadence; a memory, served with its age), `nothing-to-report` (a fresh
+  report from a box hz manages nothing on — the ci-1 case, correct and
+  permanent), `fresh`. "Reported nothing to change" is a fresh row with
+  `inSync: true`, not a fifth state.
+- **A machine may only report as itself.** The credential names one machine;
+  a report addressed to another is refused 403, not re-filed under the caller.
+- **The agent stays inert.** A report is a POST. The four inertness tests pass
+  unchanged, and `TestAReportingPassStillWritesNothing` says it about the wire.
+
+**What the IPTables tab still needs and did not get here**: the rules hz serves
+are classified against **hz's own** expected/stale/blessed sets, which are
+right for the gateway and wrong for any other machine — that needs item 14's
+projection. And nothing rewires `reconcileIPTables`: its 60s loop still calls
+`iptables.LiveRules` in hz's process, so at the flip it must be repointed at
+the reported set. The data is now there for both.
+
+---
+
+**The gap as it stood:**
 
 `Desired` goes hz → agent over a conditional GET (`handlers_agent.go:52`,
 `agent/source.go:88` — `http.MethodGet` and nothing else). `Observed`

@@ -28,7 +28,16 @@ const maxDiffLines = 3
 // that must not be printed. WireGuard's PrivateKey and PresharedKey are the
 // concrete cases on the gateway; the rest are there because the next file the
 // agent is handed will not be a WireGuard config.
-var secretAssignment = regexp.MustCompile(`(?i)^(\s*)([a-z0-9_.\-]*(private[_ -]?key|preshared[_ -]?key|secret|password|passphrase|token|credential)[a-z0-9_.\-]*)(\s*[:=]\s*)(.*)$`)
+//
+// The leading group allows a `+`/`-` DIFF MARKER, and that is not cosmetic.
+// describeTextChange redacts a line and then prefixes it, so its own output
+// was always safe — but this function is also the SECOND pass over text that
+// has already been formatted: Report re-redacts every line it prints, and
+// StateReport.Sanitized re-redacts every Detail a machine sent hz. Without
+// the marker, a line that arrives already reading "  + PrivateKey = …" walks
+// straight through both of those. A second pass that cannot match the shape
+// its own first pass emits is not a second layer.
+var secretAssignment = regexp.MustCompile(`(?i)^(\s*[-+]?\s*)([a-z0-9_.\-]*(private[_ -]?key|preshared[_ -]?key|secret|password|passphrase|token|credential)[a-z0-9_.\-]*)(\s*[:=]\s*)(.*)$`)
 
 // redactLine blanks the value of any assignment whose key names key material,
 // and passes everything else through unchanged.
