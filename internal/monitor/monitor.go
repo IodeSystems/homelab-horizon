@@ -131,6 +131,11 @@ type Monitor struct {
 	// without disturbing the others or the local checks.
 	remoteCancel map[string]context.CancelFunc
 
+	// subsystems is the set of hz's own daemons to watch and the probe that
+	// answers for them. Atomic for the same reason config is: the check
+	// goroutines read it while startup is still registering. See subsystem.go.
+	subsystems subsystemsStore
+
 	// checkCancel stops one local check's loop, keyed by check name. Same
 	// reason as remoteCancel: a service being added, parked or deleted has to
 	// take effect without restarting every check and discarding the history
@@ -230,6 +235,11 @@ func (m *Monitor) getAllChecks() []config.ServiceCheck {
 	}
 
 	checks = append(checks, m.tlsChecks()...)
+
+	// hz's own daemons. Last, so a name collision with a configured check
+	// cannot displace one the admin wrote — the sys: prefix already makes
+	// that impossible, and the ordering keeps the dashboard stable.
+	checks = append(checks, m.subsystemChecks()...)
 
 	return checks
 }
@@ -686,6 +696,8 @@ func (m *Monitor) executeCheck(check config.ServiceCheck) {
 		err = m.doHTTP(check.Target)
 	case "tls":
 		err = m.doTLS(check.Target)
+	case CheckTypeSubsystem:
+		err = m.doSubsystem(check.Target)
 	default:
 		err = fmt.Errorf("unknown check type: %s", check.Type)
 	}

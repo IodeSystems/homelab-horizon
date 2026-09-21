@@ -74,6 +74,7 @@ func newRoot() *cobra.Command {
 	root.AddCommand(
 		newVersionCmd(),
 		newInstallCmd(&opts),
+		newInstallDepsCmd(&opts),
 		newCheckCmd(&opts),
 		newConfigTemplateCmd(),
 		newIAMPolicyCmd(),
@@ -96,12 +97,41 @@ func newVersionCmd() *cobra.Command {
 }
 
 func newInstallCmd(opts *serveOpts) *cobra.Command {
-	return &cobra.Command{
+	var withDeps bool
+	cmd := &cobra.Command{
 		Use:   "install",
-		Short: "Install the systemd service",
-		Args:  cobra.NoArgs,
+		Short: "Install the systemd service and report missing dependencies",
+		Long: "Install the systemd unit, then report which on-host dependencies are\n" +
+			"missing and what each one is needed for.\n\n" +
+			"Installing the unit is not the same as the gateway being able to do its\n" +
+			"job: a box with no haproxy, dnsmasq or wireguard-tools starts cleanly and\n" +
+			"fails at everything. Pass --with-deps to install them in the same step,\n" +
+			"or run `homelab-horizon install-deps` afterwards.",
+		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return installService(opts.dryRun)
+			return installService(opts.configPath, opts.dryRun, withDeps)
+		},
+	}
+	cmd.Flags().BoolVar(&withDeps, "with-deps", false,
+		"also install the missing dependency packages (apt-get); off by default so "+
+			"installing a unit never installs software you did not ask for")
+	return cmd
+}
+
+func newInstallDepsCmd(opts *serveOpts) *cobra.Command {
+	return &cobra.Command{
+		Use:   "install-deps",
+		Short: "Report and install the on-host packages hz needs",
+		Long: "Report which on-host dependencies are missing, what each one is needed\n" +
+			"for, and install them.\n\n" +
+			"This is the ONLY path that installs packages, and it only runs when you\n" +
+			"ask for it by name. hz never installs anything at boot: a surprise\n" +
+			"apt-get on a live gateway can restart a daemon carrying traffic at a\n" +
+			"moment nobody chose. Every package comes from hz's own allow-list.\n\n" +
+			"Use --dry-run to report without installing.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return runInstallDeps(opts.configPath, opts.dryRun)
 		},
 	}
 }
