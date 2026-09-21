@@ -287,4 +287,16 @@ const (
 	PathCurrentKey  = "/api/v1/cm/current-key"
 	PathConfigs     = "/api/v1/cm/configs"
 	PathMachines    = "/api/v1/cm/machines"
+
+	// PathRecovery reads the whole recovery picture: the recipients, and every
+	// wrap hz holds. Read-only, admin, and the only endpoint that serves a
+	// wrapped blob back — which is safe for the same reason storing it is:
+	// nothing but the recovery PRIVATE key opens it, and hz has never held one.
+	PathRecovery = "/api/v1/cm/recovery"
+	// PathRecoveryRecipients adds and removes recovery recipients. A recipient
+	// is a name and a PUBLIC key; there is no field here a private key could
+	// travel in, and there must never be one.
+	PathRecoveryRecipients = "/api/v1/cm/recovery/recipients"
+	// PathRecoveryWraps stores one environment key wrapped to one recipient.
+	PathRecoveryWraps = "/api/v1/cm/recovery/wraps"
 )

@@ -165,6 +165,16 @@ type Config struct {
 	// moment it did, changing one environment would silently change another.
 	Environments []Environment `json:"environments,omitempty"`
 
+	// Key custody. Both fields are fleet-shared and both ride the backup zip,
+	// which is the whole reason they are here rather than in the identity
+	// database — see internal/config/recovery.go for that argument and for why
+	// a stored wrap discloses nothing.
+	//
+	// Opt-in: empty is the default and a config with no recipients behaves
+	// exactly as it did before this existed.
+	RecoveryRecipients []RecoveryRecipient `json:"recovery_recipients,omitempty"`
+	RecoveryWraps      []RecoveryWrap      `json:"recovery_wraps,omitempty"`
+
 	// Public IP for external access.
 	// PublicIP is the *cached* result of auto-detection. Treat as
 	// possibly-stale: callers that publish to DNS should consult
@@ -1553,6 +1563,13 @@ func Save(path string, cfg *Config) error {
 	// together before a feed can be resolved through it, and a half-declared
 	// feed reaches a machine as a sources entry that cannot fetch.
 	if err := cfg.ValidateFeeds(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Recovery recipients, same chokepoint. A recipient whose public key does
+	// not parse is a wrap that cannot be produced, and the moment that is
+	// discovered is the moment somebody is trying to recover — so it is refused
+	// at the write instead.
+	if err := cfg.ValidateRecoveryRecipients(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	dir := filepath.Dir(path)

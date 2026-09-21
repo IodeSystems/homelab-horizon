@@ -1169,6 +1169,13 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/cm/resolve", s.handleAPICMResolve)
 	mux.HandleFunc("/api/v1/cm/promote/gate", s.handleAPICMPromotionGate)
 	mux.HandleFunc("/api/v1/cm/current-key", s.handleAPICMCurrentKey)
+	// Key custody. These read and write the CONFIG, not the identity store, so
+	// they are gated on isAdmin alone and keep working on a box whose database
+	// failed to open — which is exactly the box somebody is recovering.
+	mux.HandleFunc(apitypes.CMPathRecovery, s.handleAPICMRecovery)
+	mux.HandleFunc(apitypes.CMPathRecoveryRecipients, s.handleAPICMRecoveryRecipients)
+	mux.HandleFunc(apitypes.CMPathRecoveryRecipients+"/", s.handleAPICMRecoveryRecipients)
+	mux.HandleFunc(apitypes.CMPathRecoveryWraps, s.handleAPICMRecoveryWraps)
 
 	// System health (on-host software stack). Per-instance — each peer reports
 	// its own view; downstream/network checks live at /api/v1/checks.

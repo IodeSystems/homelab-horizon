@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/ecdh"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -35,12 +37,38 @@ type cmStub struct {
 	// reference either way.
 	machines map[string]apitypes.CMMachineResp
 
+	// recovery is the key-custody state: the recipients hz holds and the wraps
+	// stored against them. It answers every `hz cm key new`, not just the
+	// recovery tests — minting a key now wraps it to every recipient, so a stub
+	// that did not route this would turn "no custody configured" into a
+	// transport error and every key test would fail for the wrong reason.
+	recovery apitypes.CMRecoveryResp
+
 	approved   []apitypes.CMApproveReq
 	denied     []apitypes.CMDenyReq
 	posted     []apitypes.CMCreateConfigReq
+	wraps      []apitypes.CMRecoveryWrapReq
 	removed    []string // machine names the stub actually deleted
 	rawBodies  []string
 	approveErr int
+}
+
+// addRecoveryRecipient registers a recipient with the stub, deriving the
+// fingerprint from the key bytes the way hz does.
+func (s *cmStub) addRecoveryRecipient(t *testing.T, name string) *ecdh.PrivateKey {
+	t.Helper()
+	priv, err := configmgr.NewMachineKey()
+	if err != nil {
+		t.Fatalf("recovery key: %v", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recovery.Recipients = append(s.recovery.Recipients, apitypes.CMRecoveryRecipient{
+		Name:        name,
+		PublicKey:   configmgr.MarshalMachinePublicKey(priv.PublicKey()),
+		Fingerprint: configmgr.FingerprintOf(priv.PublicKey()).String(),
+	})
+	return priv
 }
 
 func newCMStub() *cmStub {
@@ -156,6 +184,54 @@ func (s *cmStub) start(t *testing.T) *client {
 			k := q.Get(apitypes.CMQueryEnv) + "/" + q.Get(apitypes.CMQueryApp) + "/" + q.Get(apitypes.CMQueryRole)
 			_ = json.NewEncoder(w).Encode(s.resolve[k])
 
+		// Key custody. The wrap route enforces what hz enforces — a blob must
+		// be a KindWrappedEnvKey envelope addressed to the named recipient —
+		// rather than accepting whatever the CLI sends, for the reason the
+		// machine-removal stub below gives: a stub that agrees with the code
+		// under test proves only that they agree.
+		case p == apitypes.CMPathRecovery:
+			s.mu.Lock()
+			resp := s.recovery
+			s.mu.Unlock()
+			if resp.Recipients == nil {
+				resp.Recipients = []apitypes.CMRecoveryRecipient{}
+			}
+			if resp.Wraps == nil {
+				resp.Wraps = []apitypes.CMRecoveryWrap{}
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+
+		case p == apitypes.CMPathRecoveryWraps && r.Method == http.MethodPost:
+			var req apitypes.CMRecoveryWrapReq
+			_ = json.Unmarshal(raw, &req)
+			s.mu.Lock()
+			err := s.storeWrapLocked(req)
+			s.mu.Unlock()
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"` + err.Error() + `"}`))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(apitypes.CMRecoveryWrapResp{Stored: true})
+
+		case p == apitypes.CMPathRecoveryRecipients && r.Method == http.MethodPost:
+			var req apitypes.CMRecoveryRecipientReq
+			_ = json.Unmarshal(raw, &req)
+			pub, err := configmgr.ParseMachinePublicKey(req.PublicKey)
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"bad public key"}`))
+				return
+			}
+			s.mu.Lock()
+			s.recovery.Recipients = append(s.recovery.Recipients, apitypes.CMRecoveryRecipient{
+				Name: req.Name, PublicKey: req.PublicKey,
+				Fingerprint: configmgr.FingerprintOf(pub).String(),
+			})
+			resp := s.recovery
+			s.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(resp)
+
 		case p == apitypes.CMPathPromoteGate:
 			_ = json.NewEncoder(w).Encode(s.gate)
 
@@ -214,6 +290,59 @@ func (s *cmStub) start(t *testing.T) *client {
 	}))
 	t.Cleanup(srv.Close)
 	return newClient(srv.URL, "test-token")
+}
+
+// storeWrapLocked runs the checks hz runs before storing a recovery wrap: the
+// blob decodes, it is a wrapped environment key, and it is addressed to the
+// named recipient's public key. Caller holds s.mu.
+func (s *cmStub) storeWrapLocked(req apitypes.CMRecoveryWrapReq) error {
+	var rec *apitypes.CMRecoveryRecipient
+	for i := range s.recovery.Recipients {
+		if s.recovery.Recipients[i].Name == req.Recipient {
+			rec = &s.recovery.Recipients[i]
+			break
+		}
+	}
+	if rec == nil {
+		return errors.New("no such recovery recipient")
+	}
+	pub, err := configmgr.ParseMachinePublicKey(rec.PublicKey)
+	if err != nil {
+		return errors.New("recipient public key does not parse")
+	}
+	blob, err := configmgr.DecodeEnvelope(req.Wrapped)
+	if err != nil {
+		return errors.New("wrapped does not decode")
+	}
+	header, err := configmgr.ParseEnvelopeHeader(blob)
+	if err != nil {
+		return errors.New("wrapped is not an envelope")
+	}
+	if header.Kind != configmgr.KindWrappedEnvKey {
+		return errors.New("wrapped is not a wrapped environment key")
+	}
+	if header.Recipient != configmgr.FingerprintOf(pub) {
+		return errors.New("wrapped is addressed to somebody else")
+	}
+
+	s.wraps = append(s.wraps, req)
+	row := apitypes.CMRecoveryWrap{
+		Environment: req.Environment, App: req.App, Role: req.Role,
+		KeyID: req.KeyID, Recipient: req.Recipient,
+		Fingerprint: header.Recipient.String(), Wrapped: req.Wrapped,
+	}
+	for i, have := range s.recovery.Wraps {
+		if have.Environment == row.Environment && have.App == row.App && have.Role == row.Role &&
+			have.KeyID == row.KeyID && have.Recipient == row.Recipient {
+			if !req.Replace {
+				return nil
+			}
+			s.recovery.Wraps[i] = row
+			return nil
+		}
+	}
+	s.recovery.Wraps = append(s.recovery.Wraps, row)
+	return nil
 }
 
 // sentAnywhere reports whether any request body contained s. Used to assert the
