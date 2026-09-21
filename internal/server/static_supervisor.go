@@ -2,8 +2,10 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -36,6 +38,32 @@ type staticSupervisor struct {
 	stdin   io.WriteCloser // pipe to the running child; nil when none
 	stopped bool
 	inproc  *staticServer // set only in the in-process (dev) fallback
+
+	// spawnFailure records why the supervisor gave up, when it gave up for a
+	// reason retrying cannot fix. Empty otherwise.
+	spawnFailure string
+}
+
+// spawnError marks a failure to LAUNCH the child, as opposed to the child
+// exiting after it ran. Only the launch can be permanently impossible, and
+// cmd.Wait's *ExitError must never be mistaken for one.
+type spawnError struct{ err error }
+
+func (e *spawnError) Error() string { return e.err.Error() }
+func (e *spawnError) Unwrap() error { return e.err }
+
+// permanentSpawnError reports whether a spawn failure can never succeed on a
+// retry: the file is not there, the unprivileged user cannot read or execute
+// it, or it is not a valid executable. Anything else (including every way a
+// running child can exit) is treated as transient and retried as before.
+func permanentSpawnError(err error) bool {
+	var se *spawnError
+	if !errors.As(err, &se) {
+		return false
+	}
+	return errors.Is(err, fs.ErrPermission) ||
+		errors.Is(err, fs.ErrNotExist) ||
+		errors.Is(err, syscall.ENOEXEC)
 }
 
 func newStaticSupervisor(addr string, dryRun bool) *staticSupervisor {
@@ -120,6 +148,12 @@ func (s *staticSupervisor) superviseChild(cred *syscall.Credential) {
 		slog.Error("static: cannot resolve own executable", "err", err)
 		return
 	}
+	s.superviseChildFrom(exe, cred)
+}
+
+// superviseChildFrom is superviseChild with the executable path supplied, so
+// the give-up behaviour can be exercised against a binary a test controls.
+func (s *staticSupervisor) superviseChildFrom(exe string, cred *syscall.Credential) {
 	backoff := time.Second
 	for {
 		s.mu.Lock()
@@ -131,6 +165,22 @@ func (s *staticSupervisor) superviseChild(cred *syscall.Credential) {
 
 		start := time.Now()
 		if err := s.runChildOnce(exe, cred); err != nil {
+			// A spawn that failed because the kernel refused the exec will
+			// fail the same way forever: the binary is not readable or not
+			// executable by the unprivileged user, which no amount of waiting
+			// changes. It used to retry at 1s, 2s, 4s… indefinitely, so a
+			// misconfiguration that can never succeed looked exactly like a
+			// service flapping. Say what is wrong, once, and stop.
+			if permanentSpawnError(err) {
+				slog.Error("static: cannot launch the unprivileged file server and retrying cannot help — static services DISABLED",
+					"err", err, "binary", exe, "uid", cred.Uid,
+					"fix", "make "+exe+" readable and executable by uid "+strconv.FormatUint(uint64(cred.Uid), 10)+
+						" (a binary under /home is the usual cause; /usr/local/bin is the installed location)")
+				s.mu.Lock()
+				s.spawnFailure = err.Error()
+				s.mu.Unlock()
+				return
+			}
 			slog.Warn("static child exited", "err", err)
 		}
 
@@ -157,11 +207,11 @@ func (s *staticSupervisor) runChildOnce(exe string, cred *syscall.Credential) er
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return err
+		return &spawnError{err}
 	}
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
-		return err
+		return &spawnError{err}
 	}
 	slog.Info("static file server child started", "pid", cmd.Process.Pid, "uid", cred.Uid, "addr", s.addr)
 

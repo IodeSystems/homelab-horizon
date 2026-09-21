@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/iodesystems/homelab-horizon/internal/agent"
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/autoheal"
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/db"
 	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
@@ -242,6 +244,11 @@ type Server struct {
 	promHandler   http.Handler          // hz's own /metrics exposition
 	hostFacts     hostFacts             // cached clock + patch state (see hostfacts.go)
 
+	// subsystems is what startup actually achieved for WireGuard, dnsmasq and
+	// HAProxy. hz keeps serving whatever it says; it just stops claiming to be
+	// healthy. See startup_plan.go.
+	subsystems *subsystemReport
+
 	exporterMu     sync.RWMutex             // guards exporterStatus
 	exporterStatus map[string]exporterProbe // job|address -> resolved live path + liveness (status only, not a serving gate)
 
@@ -459,6 +466,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		pendingTOTP:    newPendingTOTPStore(),
 		oidcFlows:      newOIDCFlowStore(),
 		oidcProviders:  &oidcProviderCache{},
+		subsystems:     newSubsystemReport(),
 	}
 
 	// Identity store. A failure here must not stop hz from serving: the admin
@@ -1291,7 +1299,13 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) ensureServicesRunning() {
+// ensureServicesRunning brings up the subsystems hz is responsible for and
+// records honestly what happened. See startup_plan.go for why the result is
+// kept rather than logged and discarded.
+//
+// It returns the per-subsystem state so Run() can decide what to tell systemd
+// and the log. It never stops hz from serving.
+func (s *Server) ensureServicesRunning() []SubsystemState {
 	// Ensure all services have API tokens
 	tokensGenerated := false
 	services := s.cfg().Services
@@ -1312,73 +1326,171 @@ func (s *Server) ensureServicesRunning() {
 	// In Docker, skip service management (no systemd)
 	if _, err := os.Stat("/.dockerenv"); err == nil {
 		slog.Info("running in Docker: skipping service startup (no systemd)")
-		return
+		return nil
 	}
 
-	// Ensure WireGuard interface is up
-	status := s.wg.GetInterfaceStatus()
-	if !status.Up {
-		slog.Info("WireGuard interface is down, bringing up", "interface", s.cfg().WGInterface)
-		if err := s.wg.InterfaceUp(); err != nil {
-			slog.Error("failed to bring up WireGuard interface", "interface", s.cfg().WGInterface, "err", err)
-		} else {
-			slog.Info("WireGuard interface up", "interface", s.cfg().WGInterface)
+	// Say what is missing whether or not auto-heal is allowed to fix it.
+	// autoheal.Run only executes when the `auto_heal` config flag is on, which
+	// it is not by default — so an install with none of the dependencies
+	// present used to produce cryptic start failures and no statement that the
+	// packages simply were not there.
+	if missing := autoheal.Missing(s.cfg()); len(missing) > 0 {
+		pkgs := make([]string, 0, len(missing))
+		for _, d := range missing {
+			pkgs = append(pkgs, d.Package)
 		}
-	} else {
-		slog.Debug("WireGuard interface up", "interface", s.cfg().WGInterface)
+		if s.cfg().AutoHeal {
+			slog.Warn("dependencies missing after auto-heal", "packages", strings.Join(pkgs, " "))
+		} else {
+			slog.Warn("dependencies missing and auto-heal is off; run `homelab-horizon install-deps`",
+				"packages", strings.Join(pkgs, " "))
+		}
 	}
 
-	// Ensure dnsmasq is running if enabled
-	if s.cfg().DNSMasqEnabled {
-		dnsStatus := s.dns.Status()
+	for _, p := range planStartup(s.observeSubsystems()) {
+		s.subsystems.set(s.applySubsystemPlan(p))
+	}
+	return s.subsystems.all()
+}
 
-		// Regenerate config if interfaces are missing
-		if len(dnsStatus.MissingInterfaces) > 0 {
-			slog.Warn("dnsmasq config stale: missing interfaces", "missing", dnsStatus.MissingInterfaces)
-			if err := s.dns.WriteConfig(); err != nil {
-				slog.Error("failed to regenerate dnsmasq config", "err", err)
-			} else {
-				slog.Info("dnsmasq config regenerated")
-				if err := s.dns.SetRecords(s.cfg().DeriveDNSRecords()); err != nil {
-					slog.Warn("dns.SetMappings", "err", err)
-				}
-				if dnsStatus.Running {
-					if err := s.dns.Reload(); err != nil {
-						slog.Error("failed to restart dnsmasq", "err", err)
-					} else {
-						slog.Info("dnsmasq restarted")
-					}
-				}
-				dnsStatus = s.dns.Status() // re-check
+// observeSubsystems reads the machine. The only impure half of the startup
+// decision; everything it returns feeds planStartup, which is pure.
+func (s *Server) observeSubsystems() subsystemObservation {
+	cfg := s.cfg()
+	o := subsystemObservation{
+		WGConfigPath: cfg.WGConfigPath,
+		DNSEnabled:   cfg.DNSMasqEnabled,
+		HAEnabled:    cfg.HAProxyEnabled,
+	}
+
+	if cfg.WGConfigPath != "" {
+		if _, err := os.Stat(cfg.WGConfigPath); err == nil {
+			o.WGConfigExists = true
+		}
+	}
+	o.WGUp = s.wg.GetInterfaceStatus().Up
+
+	if o.DNSEnabled {
+		_, err := exec.LookPath("dnsmasq")
+		o.DNSBinaryOnPath = err == nil
+		st := s.dns.Status()
+		o.DNSConfigPath = cfg.DNSMasqConfigPath
+		o.DNSConfigExists = st.ConfigExists
+		o.DNSRunning = st.Running
+		o.DNSMissingIface = st.MissingInterfaces
+	}
+
+	if o.HAEnabled {
+		_, err := exec.LookPath("haproxy")
+		o.HABinaryOnPath = err == nil
+		o.HARunning = s.haproxy.GetStatus().Running
+	}
+
+	return o
+}
+
+// applySubsystemPlan executes one plan and reports the resulting state.
+func (s *Server) applySubsystemPlan(p subsystemPlan) SubsystemState {
+	if p.Skip != "" {
+		// Not an error: hz was never asked to run this, or cannot yet. Said
+		// once, plainly, with the thing to do about it.
+		slog.Warn("subsystem not started", "subsystem", p.Name, "reason", p.Skip)
+		return SubsystemState{Name: p.Name, Status: skipStatus(p.Skip), Detail: p.Skip}
+	}
+
+	if p.WriteConfig {
+		if err := s.writeSubsystemConfig(p.Name); err != nil {
+			detail := "could not write its configuration: " + err.Error()
+			slog.Error("subsystem config write failed", "subsystem", p.Name, "err", err)
+			return SubsystemState{Name: p.Name, Status: monitor.StatusFailed, Detail: detail}
+		}
+		slog.Info("subsystem configuration written", "subsystem", p.Name)
+	}
+
+	if p.Start {
+		if err := s.startSubsystem(p.Name); err != nil {
+			detail := "failed to start: " + err.Error()
+			slog.Error("subsystem failed to start", "subsystem", p.Name, "err", err)
+			return SubsystemState{Name: p.Name, Status: monitor.StatusFailed, Detail: detail}
+		}
+		slog.Info("subsystem started", "subsystem", p.Name)
+	}
+
+	return SubsystemState{Name: p.Name, Status: monitor.StatusOK, Detail: "running"}
+}
+
+// skipStatus classifies a skip reason. A subsystem switched off in the config
+// is disabled — a decision, not a fault, and nothing should page about it.
+// Anything else (not installed, not configured yet) is a warning: hz is not
+// broken, but it is not doing that job either, and silence there is how a
+// gateway ends up with no DNS and a green dashboard.
+func skipStatus(reason string) string {
+	if strings.Contains(reason, "disabled in the configuration") {
+		return monitor.StatusDisabled
+	}
+	return monitor.StatusWarning
+}
+
+func (s *Server) writeSubsystemConfig(name string) error {
+	if name != SubsystemDNSMasq {
+		return nil
+	}
+	if err := s.dns.WriteConfig(); err != nil {
+		return err
+	}
+	return s.dns.SetRecords(s.cfg().DeriveDNSRecords())
+}
+
+func (s *Server) startSubsystem(name string) error {
+	switch name {
+	case SubsystemWireGuard:
+		return s.wg.InterfaceUp()
+	case SubsystemDNSMasq:
+		return s.dns.Start()
+	case SubsystemHAProxy:
+		return s.haproxy.Start()
+	}
+	return nil
+}
+
+// probeSubsystem is the monitor's live re-read of a subsystem. It is what
+// turns a startup failure into a check row that keeps failing — and clears
+// itself once someone fixes it — rather than a line in the journal.
+func (s *Server) probeSubsystem(name string) error {
+	st, ok := s.subsystems.get(name)
+	if !ok {
+		return fmt.Errorf("unknown subsystem %q", name)
+	}
+	if st.Status == monitor.StatusDisabled {
+		return nil
+	}
+	switch name {
+	case SubsystemWireGuard:
+		cfg := s.cfg()
+		if cfg.WGConfigPath != "" {
+			if _, err := os.Stat(cfg.WGConfigPath); err != nil {
+				return monitor.Warnf("%s", st.Detail)
 			}
 		}
-
-		if !dnsStatus.Running {
-			slog.Info("dnsmasq not running, starting")
-			if err := s.dns.Start(); err != nil {
-				slog.Error("failed to start dnsmasq", "err", err)
-			} else {
-				slog.Info("dnsmasq started")
-			}
-		} else {
-			slog.Debug("dnsmasq running")
+		if !s.wg.GetInterfaceStatus().Up {
+			return fmt.Errorf("WireGuard interface %s is down", cfg.WGInterface)
+		}
+	case SubsystemDNSMasq:
+		if _, err := exec.LookPath("dnsmasq"); err != nil {
+			return monitor.Warnf("the dnsmasq binary is not installed (homelab-horizon install-deps)")
+		}
+		if !s.dns.Status().Running {
+			return errors.New("dnsmasq is not running")
+		}
+	case SubsystemHAProxy:
+		if _, err := exec.LookPath("haproxy"); err != nil {
+			return monitor.Warnf("the haproxy binary is not installed (homelab-horizon install-deps)")
+		}
+		if !s.haproxy.GetStatus().Running {
+			return errors.New("HAProxy is not running")
 		}
 	}
-
-	// Ensure HAProxy is running if enabled
-	if s.cfg().HAProxyEnabled {
-		hapStatus := s.haproxy.GetStatus()
-		if !hapStatus.Running {
-			slog.Info("HAProxy not running, starting")
-			if err := s.haproxy.Start(); err != nil {
-				slog.Error("failed to start HAProxy", "err", err)
-			} else {
-				slog.Info("HAProxy started")
-			}
-		} else {
-			slog.Debug("HAProxy running")
-		}
-	}
+	return nil
 }
 
 // startRoute53Sync runs the background public-IP detector. Unlike the prior
@@ -1395,7 +1507,15 @@ func (s *Server) startRoute53Sync() {
 		return
 	}
 
-	slog.Info("starting Route53/public IP sync", "interval_s", interval)
+	// Named for what it does rather than for one consumer of it. The loop is
+	// public-IP DETECTION — WireGuard client configs, the pinned-IP warnings
+	// and the settings page all read the cached value, so it runs on a box
+	// with no DNS provider at all. Only the record-sync half is conditional,
+	// and it no-ops on its own when nothing derives a record. Logging it as
+	// "Route53 sync" made a box with no provider look like it was talking to
+	// AWS; say which half is live instead.
+	slog.Info("starting public IP detection", "interval_s", interval,
+		"dns_record_sync", len(s.cfg().DeriveRoute53Records()) > 0)
 
 	go func() {
 		ticker := time.NewTicker(time.Duration(interval) * time.Second)
@@ -1676,8 +1796,15 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 		slog.Info("dnsmasq enabled", "config", s.cfg().DNSMasqConfigPath)
 	}
 
-	// Ensure dependent services are running
-	s.ensureServicesRunning()
+	// Ensure dependent services are running. The result is kept, not logged
+	// and dropped: it decides what hz tells systemd and the monitor below.
+	states := s.ensureServicesRunning()
+
+	// Give the monitor a row per subsystem before it starts, so a subsystem
+	// that failed at boot is a failing CHECK — re-run on an interval,
+	// notified on transition, visible at /api/v1/checks and in the UI — and
+	// not three lines in a journal nobody reads.
+	s.monitor.SetSubsystems(s.subsystems.names(), s.probeSubsystem)
 
 	// Start background health check (every 60 seconds)
 	s.startHealthCheck()
@@ -1711,7 +1838,19 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	s.startMFASessionPruner(mfaDone)
 	defer close(mfaDone)
 
-	slog.Info("server ready", "listen", s.cfg().EffectiveListenAddr())
+	// "server ready" is a claim, and it used to be made unconditionally — on a
+	// boot where WireGuard, dnsmasq and HAProxy had all failed, hz logged it
+	// anyway and systemd said `active`. hz still serves in that state on
+	// purpose (a gateway that refuses to answer because dnsmasq is down cannot
+	// be used to fix dnsmasq); it just stops saying it is fine.
+	if summary := degradedSummary(states); summary != "" {
+		slog.Warn("server ready but DEGRADED — hz is serving, subsystems are not",
+			"listen", s.cfg().EffectiveListenAddr(), "degraded", summary)
+		notifySystemd("READY=1\nSTATUS=degraded — " + summary)
+	} else {
+		slog.Info("server ready", "listen", s.cfg().EffectiveListenAddr())
+		notifySystemd("READY=1\nSTATUS=serving; all subsystems up")
+	}
 
 	server := &http.Server{
 		// EffectiveListenAddr, so a --listen override actually binds. It is not
