@@ -12,7 +12,7 @@ import (
 
 func runService(c *client, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("service subcommand required: list | show | create | edit | delete")
+		return fmt.Errorf("service subcommand required: list | show | create | edit | assign | unassign | delete")
 	}
 	sub := args[0]
 	rest := args[1:]
@@ -25,6 +25,10 @@ func runService(c *client, args []string) error {
 		return serviceCreate(c, rest)
 	case "edit", "update":
 		return serviceEdit(c, rest)
+	case "assign":
+		return serviceAssign(c, rest)
+	case "unassign":
+		return serviceUnassign(c, rest)
 	case "delete", "rm", "remove":
 		return serviceDelete(c, rest)
 	default:
@@ -136,6 +140,11 @@ func serviceShow(c *client, args []string) error {
 	}
 	fmt.Printf("Name:     %s\n", svc.Name)
 	fmt.Printf("Domains:  %s\n", strings.Join(svc.Domains, ", "))
+	// Printed always, including when there is none: the read surface has carried
+	// the assignment since projects landed and this screen never showed it, so a
+	// service that WAS assigned looked identical to one that was not. "none" is
+	// an answer; a missing line is a question.
+	fmt.Printf("Project:  %s\n", assignmentLine(svc.Project, svc.Environment))
 	if svc.InternalDNS != nil {
 		fmt.Printf("InternalDNS: %s\n", svc.InternalDNS.IP)
 	}
