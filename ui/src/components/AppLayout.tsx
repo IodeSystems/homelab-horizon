@@ -22,6 +22,7 @@ import MenuIcon from "@mui/icons-material/Menu";
 import AccountCircleIcon from "@mui/icons-material/AccountCircle";
 import PersonIcon from "@mui/icons-material/PersonOutlined";
 import DashboardIcon from "@mui/icons-material/Dashboard";
+import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import DnsIcon from "@mui/icons-material/Dns";
 import StorageIcon from "@mui/icons-material/Storage";
 import LanguageIcon from "@mui/icons-material/Language";
@@ -47,6 +48,11 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { icon: <DashboardIcon />, label: "Dashboard", path: "/dashboard" },
+  // Sits next to Dashboard rather than under Config: the drift screen answers
+  // "what would change on which box", which is a job, not a data type. The
+  // navigation redesign (plan/ui-redesign.md) reshapes this list properly;
+  // this is one entry in the existing shell, not that change.
+  { icon: <CompareArrowsIcon />, label: "Drift", path: "/drift" },
   { icon: <DnsIcon />, label: "Services", path: "/services" },
   { icon: <LanguageIcon />, label: "Domains", path: "/domains" },
   { icon: <StorageIcon />, label: "DNS", path: "/dns" },

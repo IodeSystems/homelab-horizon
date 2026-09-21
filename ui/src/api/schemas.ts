@@ -561,3 +561,68 @@ export const ServiceDeletePreviewResponseSchema = z.object({
   domains: z.array(z.string()),
   orphans: z.array(ServiceDeleteOrphanSchema),
 });
+
+// The agent fleet read (GET /api/v1/agent/observed) — the drift screen's data.
+//
+// `state`, `generationMatch` and a change's `kind` are validated as plain
+// strings rather than z.enum, deliberately. The screen parses each of them
+// into a closed union itself and renders anything it does not recognise as "hz
+// said something this screen does not know", which is the honest answer when
+// the backend grows a fifth state. A z.enum here would log a dev warning and
+// then hand the component the unknown value anyway — the same outcome, plus
+// noise, minus the on-screen admission.
+export const AgentChangeSchema = z.object({
+  subsystem: z.string(),
+  target: z.string(),
+  kind: z.string(),
+  detail: z.string().optional(),
+});
+
+export const AgentIPTablesRuleSchema = z.object({
+  table: z.string(),
+  chain: z.string(),
+  args: z.array(z.string()),
+  canonical: z.string(),
+  display: z.string(),
+  state: z.string(),
+  reason: z.string().optional(),
+});
+
+export const AgentIPTablesSchema = z.object({
+  readable: z.boolean(),
+  why: z.string().optional(),
+  rules: z.array(AgentIPTablesRuleSchema),
+  summary: z.object({
+    expected: z.number(),
+    stale: z.number(),
+    blessed: z.number(),
+    unknown: z.number(),
+  }),
+});
+
+export const AgentObservationSchema = z.object({
+  machine: z.string(),
+  state: z.string(),
+  enrolled: z.boolean(),
+  reportedAt: z.string().optional(),
+  ageSeconds: z.number(),
+  sameSince: z.string().optional(),
+  sameForSeconds: z.number(),
+  staleAfterSeconds: z.number(),
+  generation: z.string().optional(),
+  desiredGeneration: z.string().optional(),
+  generationMatch: z.string(),
+  inSync: z.boolean(),
+  pending: z.number(),
+  unknown: z.number(),
+  applying: z.boolean(),
+  agentVersion: z.string().optional(),
+  truncated: z.boolean(),
+  changes: z.array(AgentChangeSchema),
+  iptables: AgentIPTablesSchema.optional(),
+});
+
+export const AgentObservedResponseSchema = z.object({
+  machines: z.array(AgentObservationSchema),
+  serverTime: z.string(),
+});

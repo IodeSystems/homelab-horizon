@@ -269,7 +269,7 @@ Phase 3 replaces this with: restart horizon, done.
 | 9 | [Config manager](#-config-manager--registration-blessing-promotion) → [config-manager.md](config-manager.md) | ✅ **ceremony proven on a box 2026-09-19** |
 | 10 | [hz-client becomes a library](#-hz-client-becomes-a-library) | ◐ version surface in progress |
 | 11 | Projects · Environments · machine removal | ✅ on **`dev`**, not on main, nothing deployed |
-| 12 | [Observed-state channel](privilege-classification.md#41--closed-2026-09-21--the-observed-state-channel-exists) — the agent reports back | ✅ store + serve on **`dev`**; ◻ the drift SCREEN is unbuilt ([ui-redesign.md](ui-redesign.md)) |
+| 12 | [Observed-state channel](privilege-classification.md#41--closed-2026-09-21--the-observed-state-channel-exists) — the agent reports back | ✅ store + serve on **`dev`**; ✅ the drift SCREEN at `/drift` ([ui-redesign.md](ui-redesign.md)) — one screen in the existing shell, NOT the nav redesign |
 | 13 | [Agent handover](architecture.md#the-path) steps 1–3 — credential, WireGuard, error pages + certs + directory ownership | ✅ on **`dev`**, and the agent is still **INERT**; ◻ steps 4–5 (arm the unit, then de-root hz) |
 
 **Where this is all heading:** [architecture.md](architecture.md) — the model

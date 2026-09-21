@@ -561,12 +561,47 @@ and the *instance* version observation come from different places and can have
 different ages. Both are Observations; neither may borrow the other's
 timestamp.
 
+## Built so far — the drift screen (`/drift`)
+
+✅ The diff screen is live on `dev`: `ui/src/routes/drift.tsx` +
+`ui/src/components/drift/`, fed by `GET /api/v1/agent/observed` and nothing
+else. It is **one screen reachable from the existing eleven-item sidebar**, not
+the navigation redesign — that is still ahead.
+
+What it proved about this document, rather than what it implemented:
+
+- **The freshness rule survives contact with the real payload, with one
+  refinement.** The API's four states (`fresh` / `late` / `silent` /
+  `nothing-to-report`) are *not* this document's four (fresh / late / silent /
+  never). The API's `silent` is this document's `never`, and this document's
+  `silent` band is a sub-band of the API's `late`. The screen derives that band
+  from `staleAfterSeconds × 20/3` rather than from a guessed 60s poll, which is
+  what §6 of [example-projection.md](example-projection.md) asked for. The
+  fourth API state, `nothing-to-report`, is the `ci-1` case this document
+  identified and the API then made explicit; it renders as a healthy machine.
+- **The ranking's tier 1 has no data behind it here.** "Waiting on you" is
+  enrolment approvals, which this endpoint does not serve. The tier renders
+  anyway, with a line saying where approvals live — the same reasoning that
+  keeps an empty "reporting a fault" tier on screen.
+- **`generationMatch` is a fingerprint pair, not the serial pair §5 described.**
+  Same four meanings (settled / did-not-take / behind / first-or-absent), no
+  ordering: `unknown` cannot be read as "behind", because hz only computes
+  desired state for the box it runs on until item 13 lands. Today that means
+  every machine but hz itself reads "hz cannot compare", and the screen says
+  that in those words rather than implying a fault.
+- **Machine-level freshness only.** This document's correction — observation is
+  per *instance*, and a machine's age is derived — is not yet expressible: the
+  endpoint serves one age per machine. No `mixed`, because there is nothing to
+  mix yet.
+
 ## Next
 
 - **next:** land the nav change (`AppLayout.tsx` `navItems`) and the Overview
-  queue first — they are the cheapest way to find out whether the ranking is
-  right, and they need no new backend record. Everything else waits on phase 2
-  (the environment record) and phase 4 item 13 (the machine record).
+  queue — they are the cheapest way to find out whether the ranking is right,
+  and they need no new backend record. The drift screen's `rankFleet` is
+  already the Overview's queue logic and should be reused, not rewritten.
+  Everything else waits on phase 2 (the environment record) and phase 4 item 13
+  (the machine record).
 - **risks:** the Observation component is only as good as the timestamp behind
   it. `135b4ea` supplies a real one (`observed_at`, refreshed on every
   resolve) — but per *instance*, and only for instances that resolve config.
