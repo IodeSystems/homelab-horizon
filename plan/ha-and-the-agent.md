@@ -301,10 +301,15 @@ provenance are all readable from the code, and §2–§5 read them.
 Two things found on the way, written to `plan/icebox.md` rather than changed
 here (this is a docs-only investigation):
 
-- `/api/peer/config` serves the whole config — **including `admin_token`
-  (`config.go:134`)** — and `/api/peer/cert/<domain>` serves private keys, to any
-  IP in the VPN range when no peers are configured (`handlers_peer.go:147–151`,
-  routes at `server.go:1025,1028`). That is the single-gateway default.
+- **The peer API's access check widens to the whole VPN CIDR when no peers are
+  configured**, which is the single-gateway default, and some routes behind it
+  exist to hand one gateway's material to another. Written up as a class of
+  problem rather than a recipe in `plan/icebox.md` — **this repo is public.**
+  <br>One correction to what this section first said: it claimed the served
+  config includes `admin_token`, reading the struct tag. It does not on a
+  current gateway — `server.go:307-316` moves the token to a 0600 file and
+  clears the field before any save. **TLS private key exposure stands**; the
+  admin-token half does not.
 - `mergeRemoteIntoLocal`'s local-only list is opt-out-by-omission
   (`peer_sync.go:220`), already recorded in the icebox's HA entry. Noted again
   because a field added for the agent would replicate by default.

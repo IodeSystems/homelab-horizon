@@ -10,44 +10,50 @@ How this plan works: see `/home/nthalk/CLAUDE.md` "Planning". These are queued, 
 - ✅ **Hosts UX clarity** — Observability Hosts section now lists knownHosts (derived ∪ declared) with a
   source badge and a one-click "Declare / add labels" (prefills IP) on derived hosts.
 
-## ❓ `/api/peer/*` falls back to the whole VPN range, and serves the admin token
+## ⚠ SECURITY — peer-API access control is wider than intended on a standalone gateway
 
-Found 2026-09-21 while investigating HA vs the agent (`plan/ha-and-the-agent.md`
-§9). Filed, not fixed — that investigation was docs-only.
+Found 2026-09-21 while investigating HA vs the agent. Filed, not fixed.
 
-`peerOnlyMiddleware` gates the peer API on `isAllowedPeer`
-(`internal/server/handlers_peer.go:147`), which matches the configured peers'
-`wg_addr` — **but when no peers are configured it falls back to
-`isInVPNRange(ip)`** (:150). On a single gateway, which is every deployment
-today, that means any IP inside the VPN range is "a peer".
+**Deliberately written as the class of problem, not a recipe. This repo is
+public.**
 
-Two of the four routes behind it hand out secrets:
+`internal/server/handlers_peer.go` — the peer API's access check matches
+configured fleet peers by address, and **when no peers are configured it widens
+to the whole VPN CIDR** rather than closing. A standalone gateway is the
+no-peers case, so on every single-gateway deployment the peer API's audience is
+"anything on the VPN" instead of "the other gateways", which is what the design
+intends.
 
-- `/api/peer/config` (`server.go:1025`) encodes the whole `config.Config`,
-  which includes **`AdminToken`** (`internal/config/config.go:134`,
-  `json:"admin_token,omitempty"`). A VPN client that can reach the gateway's
-  listener can read the admin token and then authenticate as admin.
-- `/api/peer/cert/<domain>` (`server.go:1028`) returns `privkey.pem` verbatim
-  (`handlers_peer.go:95`). `peerOnlyMiddleware`'s own doc-comment (:122–129)
-  says restricting to specific peers rather than the whole CIDR is *"critical
-  for Phase 2 endpoints like /api/peer/cert/:domain that expose private key
-  material"* — and then the next paragraph opens exactly that case.
+That matters because some routes behind that check exist to hand one gateway's
+material to another. The middleware's own doc comment says restricting to
+specific peers rather than the whole CIDR is *"critical … because it exposes
+private key material"* — and the fallback immediately below it opens exactly
+that case.
 
-The fallback's comment says it exists "so the endpoint still works in
-development/testing". It is not obviously reachable in practice *only* because
-these routes are unadvertised.
+**Scope, checked rather than assumed:**
 
-**next:** decide whether the standalone fallback should be deny (the endpoints
-have no standalone use — nothing calls them without peers) or narrowed to
-loopback. Deny looks right: `alivePeers`/`pullConfigOnce` never fire without
-`peer_id`, so nothing in-tree consumes these routes standalone.
+- **TLS private keys: exposed.** The cert route reads and returns key material
+  and nothing migrates it out of reach.
+- **Admin token: NOT exposed on a current gateway.** `server.go:307-316` moves
+  the token to a 0600 file and sets `cfg.AdminToken = ""` before any save, so a
+  gateway that has booted this version no longer carries it in the served
+  config. An earlier investigation note said otherwise, reading the struct tag
+  rather than the runtime state — corrected here. A config that has never
+  booted a version with that migration is a different answer.
 
-**risks:** flipping to deny could break a test or a dev workflow that leans on
-the fallback — check `handlers_api_test.go` and `peer_sync_test.go` before
-changing it. Narrowing to loopback instead is the conservative move.
+**Why it has not bitten:** the routes are unadvertised and nothing in-tree calls
+them without `peer_id` set. That is obscurity, not a control.
 
-**blocking decisions:** none — this is a straightforward tightening, it just
-needs someone to own the behaviour change.
+**next:** close the fallback. The endpoints have no standalone use — the pull
+loop and `alivePeers` never fire without `peer_id` — so deny is the honest
+default; loopback-only is the conservative one. **Before pushing this repo
+anywhere, fix this first**: the fix is small and the finding is now written
+down.
+
+**risks:** a test or dev workflow may lean on the open fallback — check the
+peer and API handler tests before flipping. Anyone with VPN access to a gateway
+running this code should be assumed able to have taken its TLS keys; rotation is
+the remediation, not just the patch.
 
 ## ◻ Read-only access, if it is ever wanted
 
