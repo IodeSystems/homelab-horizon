@@ -20,7 +20,24 @@
 // explicitly removes it via the IPTables tab. In particular, INPUT is read
 // back only for rules that jump to WG-INPUT: a typical host has a pile of
 // unrelated INPUT rules (ufw, docker) and horizon must not claim them.
+//
+// The package is split along one seam, and the split is load-bearing for the
+// hz-agent work (plan/architecture.md, "hz-agent de-roots the hz web surface"):
+//
+//	rules.go     pure  inputs in, desired rule set out.
+//	forwards.go  pure  the layer-4 forward half of that rule set.
+//	classify.go  pure  live ∪ expected ∪ stale ∪ blessed → a verdict per rule,
+//	                   plus the iptables-save parser the reader feeds it.
+//	reconcile.go root  the side effects: run iptables-save to read the host,
+//	                   run iptables to add, delete and rebuild.
+//
+// Nothing in the pure half reads a file, runs a command, looks at a clock or
+// consults the environment — everything arrives as an argument, so what a
+// machine *should* have installed can be computed, diffed and tested without
+// being on that machine and without being root. seam_test.go guards that.
 package iptables
+
+// This file is part of the PURE half of the package: config in, rules out.
 
 import (
 	"strings"
