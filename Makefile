@@ -149,6 +149,16 @@ clean:
 test:
 	go test -v ./...
 
+# Run the UI's drift-screen checks. The UI has no test framework and this is
+# not one: it is two plain Node programs. One asserts the pure decisions (the
+# four report states, the generation outcomes, the change kinds, the firewall
+# absences) have not collapsed into fewer; the other renders the components
+# with react-dom/server and asserts an observed value never reaches the page
+# without its age. tsc can see neither. Needs `pnpm install` in ui/ first.
+.PHONY: test-ui
+test-ui:
+	cd ui && pnpm test
+
 # Run unit tests only
 .PHONY: test-unit
 test-unit:

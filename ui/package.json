@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "pnpm run test:logic && pnpm run test:render",
+    "test:logic": "node src/components/drift/observation.selftest.ts",
+    "test:render": "vite build --ssr src/components/drift/render.selftest.tsx --outDir .rendercheck --logLevel warn && node .rendercheck/render.selftest.js"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
