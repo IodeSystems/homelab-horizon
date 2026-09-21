@@ -9,6 +9,7 @@ import type {
   CMResolveResp,
   CMPromotionGateResp,
   CMCurrentKeyResp,
+  AgentObservedResponse,
 } from "./generated-types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
@@ -88,7 +89,25 @@ import {
   RemoteProbeListSchema,
   RemoteProbeTestSchema,
   RemoteProbeTokenSchema,
+  AgentObservedResponseSchema,
 } from "./schemas";
+
+// The fleet as the machines last described it — the drift screen's only read.
+//
+// Polled rather than left to go stale on screen: every value it renders is an
+// observation with an age beside it, and an age that stops advancing while the
+// tab is open is the exact lie the screen exists to prevent. Sixty seconds is
+// the agent's default cadence (handlers_agent_observed.go).
+export function useAgentObserved() {
+  return useQuery({
+    queryKey: ["agent", "observed"],
+    queryFn: () =>
+      apiFetch<AgentObservedResponse>("/agent/observed", {
+        schema: AgentObservedResponseSchema,
+      }),
+    refetchInterval: 60_000,
+  });
+}
 
 export function useDashboard() {
   return useQuery({
