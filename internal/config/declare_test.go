@@ -67,9 +67,11 @@ func TestDeclareThenAssignEndToEnd(t *testing.T) {
 		t.Fatalf("add prod: %v", err)
 	}
 
-	// 3. only NOW may a service name them.
-	cfg.Services[0].Project = "redline"
-	cfg.Services[0].Environment = "staging"
+	// 3. only NOW may a service name them — through the writer, which refuses
+	// the reverse order before Save gets the chance to.
+	if _, err := cfg.AssignService("app", "redline", "staging"); err != nil {
+		t.Fatalf("assign after declaring: %v", err)
+	}
 
 	if err := Save(path, cfg); err != nil {
 		t.Fatalf("declare-then-assign must SAVE — this is the walkthrough: %v", err)

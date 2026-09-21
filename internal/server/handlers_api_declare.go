@@ -211,6 +211,47 @@ func (s *Server) handleAPIEnvironmentRm(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, out)
 }
 
+// handleAPIServiceAssign places one service in the project tree, or — with both
+// placement fields empty — takes it out of it.
+//
+// Narrow on purpose: /services/edit is full-replace across domains, proxy, DNS
+// and forwards, so an assign routed through it would have to round-trip the
+// whole service and could drop whatever changed between the read and the write.
+// Moving a service between rungs touches two fields, so this writes two fields.
+// POST /api/v1/services/assign
+func (s *Server) handleAPIServiceAssign(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	var req apitypes.ServiceAssignReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+
+	next := *s.cfg()
+	svc, err := next.AssignService(req.Service, req.Project, req.Environment)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.updateConfig(func(cfg *config.Config) { *cfg = next }); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
+		return
+	}
+	// Assignment renders nothing — no DNS record, no HAProxy backend — so unlike
+	// the service mutations this does not trigger a sync. `hz pending` will show
+	// the config change; there is nothing on a box to push it to.
+	writeJSON(w, apitypes.ServiceAssignResp{
+		Service: svc.Name, Project: svc.Project, Environment: svc.Environment,
+	})
+}
+
 // projectResp renders one project as the read surface renders it — resolved
 // feed and provenance included — so a write answers with what hz now holds
 // rather than an echo of what was sent.
