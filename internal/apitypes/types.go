@@ -203,6 +203,95 @@ type FeedSetReq struct {
 	KeyID     string `json:"keyId,omitempty"`
 }
 
+// Declaring the model. These are the write half of ProjectResp and
+// EnvironmentResp: until they landed, a project or a rung could only be created
+// by `hz import --execute` or by hand-editing config.json on the gateway, and
+// step 2 of the acceptance walkthrough had no command.
+//
+// The server owns the config and may be serving it to another request, so every
+// one of these is a request to the server — the CLI never writes config.json.
+
+// ProjectAddReq declares a project. Parent is optional; empty makes it a root.
+type ProjectAddReq struct {
+	Name   string `json:"name"`
+	Parent string `json:"parent,omitempty"`
+}
+
+// DependantResp is one record that points at the thing a removal would take,
+// and how. Structured rather than a sentence in an error string so the CLI can
+// render the list as a list — an operator told only "3 things depend on this"
+// has to go and find them.
+type DependantResp struct {
+	Kind string `json:"kind"` // "project", "environment" or "service"
+	Name string `json:"name"` // project name, "<project>/<environment>", or service name
+	How  string `json:"how"`  // the relationship, in a sentence
+}
+
+// ProjectRmReq removes a project. Confirm is what separates a dry run from a
+// write: WITHOUT it the server computes the removal and writes nothing, so
+// `hz project rm` alone always shows what it would take.
+//
+// Cascade takes the descendant subtree, its rungs, and unassigns the services
+// on them. Opt-in, never a fallback for a refusal: a removal that quietly
+// unassigned services would change records the operator never named.
+type ProjectRmReq struct {
+	Name    string `json:"name"`
+	Cascade bool   `json:"cascade,omitempty"`
+	Confirm bool   `json:"confirm,omitempty"`
+}
+
+// EnvironmentAddReq declares a rung. Posture is required and closed to the three
+// config.Postures ranks — a value outside them compares below dev against every
+// other rung, which would make every promotion into it look upward.
+type EnvironmentAddReq struct {
+	Project string `json:"project"`
+	Name    string `json:"name"`
+	Posture string `json:"posture"`
+	From    string `json:"from,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
+// EnvironmentSetReq patches one rung. Every settable field is a POINTER, and
+// that is the contract: nil means "leave this alone", non-nil means "make it
+// this", and a non-nil empty string clears From or Version.
+//
+// Partial rather than whole-record, unlike FeedSetReq. A feed resolves, so a
+// half-updated one makes its provenance unanswerable; a rung's three fields are
+// independent facts, and making an operator restate the posture and the
+// promotion edge to bump a version is how an edge gets dropped by accident.
+type EnvironmentSetReq struct {
+	Project string  `json:"project"`
+	Name    string  `json:"name"`
+	Posture *string `json:"posture,omitempty"`
+	From    *string `json:"from,omitempty"`
+	Version *string `json:"version,omitempty"`
+}
+
+// EnvironmentRmReq removes a rung. Confirm and Cascade mean what they mean on
+// ProjectRmReq; cascade here cuts the promotion edges INTO this rung and takes
+// the services on it off it.
+type EnvironmentRmReq struct {
+	Project string `json:"project"`
+	Name    string `json:"name"`
+	Cascade bool   `json:"cascade,omitempty"`
+	Confirm bool   `json:"confirm,omitempty"`
+}
+
+// RemovalResp answers both halves of a removal with one shape, because a dry run
+// and a write differ only in whether anything was written.
+//
+// OK is true only when the config actually changed. Blocked is what stands in
+// the way — non-empty means nothing was written whatever Confirm said. Removes
+// is the whole set a confirmed run takes, target first. Feed is the feed the
+// target declares and the removal would destroy: it is the one part of a project
+// that `hz project add` cannot put back, so it is named before the fact.
+type RemovalResp struct {
+	OK      bool            `json:"ok"`
+	Blocked []DependantResp `json:"blocked,omitempty"`
+	Removes []DependantResp `json:"removes"`
+	Feed    *FeedResp       `json:"feed,omitempty"`
+}
+
 // The import plan. These mirror the config.Import* records one-to-one; the
 // planner lives in internal/config because it reads a whole config, and the
 // wire shape lives here because every other client contract does.

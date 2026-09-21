@@ -205,6 +205,91 @@ export interface FeedSetReq {
   keyId?: string;
 }
 /**
+ * ProjectAddReq declares a project. Parent is optional; empty makes it a root.
+ */
+export interface ProjectAddReq {
+  name: string;
+  parent?: string;
+}
+/**
+ * DependantResp is one record that points at the thing a removal would take,
+ * and how. Structured rather than a sentence in an error string so the CLI can
+ * render the list as a list — an operator told only "3 things depend on this"
+ * has to go and find them.
+ */
+export interface DependantResp {
+  kind: string; // "project", "environment" or "service"
+  name: string; // project name, "<project>/<environment>", or service name
+  how: string; // the relationship, in a sentence
+}
+/**
+ * ProjectRmReq removes a project. Confirm is what separates a dry run from a
+ * write: WITHOUT it the server computes the removal and writes nothing, so
+ * `hz project rm` alone always shows what it would take.
+ * Cascade takes the descendant subtree, its rungs, and unassigns the services
+ * on them. Opt-in, never a fallback for a refusal: a removal that quietly
+ * unassigned services would change records the operator never named.
+ */
+export interface ProjectRmReq {
+  name: string;
+  cascade?: boolean;
+  confirm?: boolean;
+}
+/**
+ * EnvironmentAddReq declares a rung. Posture is required and closed to the three
+ * config.Postures ranks — a value outside them compares below dev against every
+ * other rung, which would make every promotion into it look upward.
+ */
+export interface EnvironmentAddReq {
+  project: string;
+  name: string;
+  posture: string;
+  from?: string;
+  version?: string;
+}
+/**
+ * EnvironmentSetReq patches one rung. Every settable field is a POINTER, and
+ * that is the contract: nil means "leave this alone", non-nil means "make it
+ * this", and a non-nil empty string clears From or Version.
+ * Partial rather than whole-record, unlike FeedSetReq. A feed resolves, so a
+ * half-updated one makes its provenance unanswerable; a rung's three fields are
+ * independent facts, and making an operator restate the posture and the
+ * promotion edge to bump a version is how an edge gets dropped by accident.
+ */
+export interface EnvironmentSetReq {
+  project: string;
+  name: string;
+  posture?: string;
+  from?: string;
+  version?: string;
+}
+/**
+ * EnvironmentRmReq removes a rung. Confirm and Cascade mean what they mean on
+ * ProjectRmReq; cascade here cuts the promotion edges INTO this rung and takes
+ * the services on it off it.
+ */
+export interface EnvironmentRmReq {
+  project: string;
+  name: string;
+  cascade?: boolean;
+  confirm?: boolean;
+}
+/**
+ * RemovalResp answers both halves of a removal with one shape, because a dry run
+ * and a write differ only in whether anything was written.
+ * OK is true only when the config actually changed. Blocked is what stands in
+ * the way — non-empty means nothing was written whatever Confirm said. Removes
+ * is the whole set a confirmed run takes, target first. Feed is the feed the
+ * target declares and the removal would destroy: it is the one part of a project
+ * that `hz project add` cannot put back, so it is named before the fact.
+ */
+export interface RemovalResp {
+  ok: boolean;
+  blocked?: DependantResp[];
+  removes: DependantResp[];
+  feed?: FeedResp;
+}
+/**
  * ImportProjectResp is a project the import would declare, and why.
  */
 export interface ImportProjectResp {

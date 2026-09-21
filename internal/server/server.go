@@ -1063,6 +1063,15 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/environments", s.handleAPIEnvironments)
 	mux.HandleFunc("/api/v1/projects", s.handleAPIProjects)
 	mux.HandleFunc("/api/v1/projects/feed", s.handleAPIProjectFeed)
+	// The write half of the tree. Separate paths rather than a method switch on
+	// /api/v1/projects, matching /api/v1/services/{add,edit}: a removal needs a
+	// body (cascade, confirm) and a DELETE with a body is a thing every proxy
+	// disagrees about.
+	mux.HandleFunc("/api/v1/projects/add", s.handleAPIProjectAdd)
+	mux.HandleFunc("/api/v1/projects/rm", s.handleAPIProjectRm)
+	mux.HandleFunc("/api/v1/environments/add", s.handleAPIEnvironmentAdd)
+	mux.HandleFunc("/api/v1/environments/set", s.handleAPIEnvironmentSet)
+	mux.HandleFunc("/api/v1/environments/rm", s.handleAPIEnvironmentRm)
 	mux.HandleFunc("/api/v1/import", s.handleAPIImport)
 	mux.HandleFunc("/api/v1/domains", s.handleAPIDomains)
 	mux.HandleFunc("/api/v1/vpn/peers", s.handleAPIVPNPeers)
