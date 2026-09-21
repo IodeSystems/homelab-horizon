@@ -49,12 +49,14 @@ const cmAPI = "/api/v1/cm"
 
 func runCM(c *client, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("cm subcommand required: key | machines | pending | approve | deny | remove | promote | show | resolve")
+		return fmt.Errorf("cm subcommand required: key | recovery | machines | pending | approve | deny | remove | promote | show | resolve")
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
 	case "key":
 		return runCMKey(c, rest)
+	case "recovery":
+		return runCMRecovery(c, rest)
 	case "machines":
 		return cmMachines(c, rest)
 	case "pending":
