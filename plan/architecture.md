@@ -384,12 +384,28 @@ never done is *execute* on a box it is not.
 **Phase 4 — the agent, on the gateway first.** The largest slice, and the one
 that changes hz's shape.
 
-10. Split render from apply in `internal/haproxy` ✅, `internal/dnsmasq` ✅,
-    `internal/iptables` ✅, `internal/wireguard`, `internal/autoheal`. Pure
-    functions stay in hz; the privileged half becomes the agent's.
-    Each done package carries a `seam_test.go` that parses the render file's
-    imports and rejects `os`/`exec`/`net`/`time`/rand/`filepath`, so the split
-    does not quietly re-merge. `internal/dnsmasq` adds a second axis the others
+10. ✅ **done except `autoheal`, which does not transfer.** Split render from
+    apply in `internal/haproxy`, `internal/dnsmasq`, `internal/iptables`,
+    `internal/wireguard`. Pure functions stay in hz; the privileged half
+    becomes the agent's. `internal/autoheal`'s `Run()` *is* apply — there is no
+    desired-state text to render, and its analogous seam is
+    `plan(observed) → []Action` / `execute`, a different refactor.
+    Each package carries a `seam_test.go` that rejects
+    `os`/`exec`/`net`/`time`/rand/`filepath` in the render file, so the split
+    does not quietly re-merge. **`internal/wireguard`'s guard is stricter and
+    had to be**: it walks the AST and checks *selectors*, because that renderer
+    genuinely needs `net.ParseCIDR` and `time.Unix` while `net.LookupHost` and
+    `time.Now` must stay out — an import-only rule would have to allow all of
+    `net` or reject the file. It also rejects anything that can *mint* a key,
+    not anything that handles one: `GenerateClientConfig` is handed a private
+    key, and a client config without one is not a config.
+    **`wireguard`'s state-of-record is deliberately only half-resolved.**
+    Parsing is pure and the manager holds the peer set, but the file is still
+    the record. Moving it into hz's own store is items 13–15, and mixing a
+    model change into the split would have made "no behaviour change"
+    unprovable — there would be no old behaviour left to compare against. The
+    line-patch renderers are unexported on purpose: they encode the old model
+    and should be deleted rather than ported. `internal/dnsmasq` adds a second axis the others
     do not need: installing a systemd unit is a *different* privilege from
     writing a config file, so `unit.go` is separate from `apply.go` and a guard
     keeps `os/exec` out of the latter. The agent should be able to grant one
