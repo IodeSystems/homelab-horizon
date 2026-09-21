@@ -22,8 +22,12 @@ func runProject(c *client, args []string) error {
 		return projectList(c, args)
 	case "show":
 		return projectShow(c, args)
+	case "add", "create":
+		return projectAdd(c, args)
+	case "rm", "remove", "delete":
+		return projectRm(c, args)
 	default:
-		return fmt.Errorf("unknown project subcommand: %s (want ls or show)", sub)
+		return fmt.Errorf("unknown project subcommand: %s (want ls, show, add or rm)", sub)
 	}
 }
 
