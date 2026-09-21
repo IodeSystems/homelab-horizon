@@ -252,6 +252,14 @@ one. Then do A, which is not really separate: two of its three parts are item
 12 steps 2 and 3 with one more caller, and the third (bans) is already on §2's
 uncovered list with or without peer-sync.
 
+**B landed 2026-09-21, ahead of step 4 rather than with it**
+(`internal/server/agent_fleet_guard.go`; what "refuse" means, where it is
+checked and how it was proven, in §7's now-ticked checklist item). Ahead of,
+because a guard has to be in place BEFORE the change that makes its hazard
+reachable, not in the same commit as it — step 4 is then a change that cannot
+introduce this hazard rather than one that introduces and fixes it at once. A is
+still the resolution and is unstarted.
+
 The reason not to do A first is that the honest state of the overlap is
 *agreement*, not conflict — so there is nothing burning. The reason not to skip
 B is that "they agree today" is a property of the current renderers, and nothing
@@ -265,10 +273,52 @@ The peer-sync half of the checklist. It sits alongside
 - [ ] **Confirm `peer_id` is unset** in `/etc/homelab-horizon/config.json` on
       the office gateway. If it is set, stop: §4's three bypass rows are live
       and the flip needs A, not B. (`privilege-audit.md` §4, question 1.)
-- [ ] **Guard exists and is tested**: arming the agent with a fleet configured,
-      or configuring a fleet with the agent armed, is refused with a message
-      naming both features. Checked at boot **and** in `applyNewConfig` — a
-      pulled config can add `Peers` at runtime (`peer_sync.go:159`).
+- [x] **Guard exists and is tested.** Done 2026-09-21,
+      `internal/server/agent_fleet_guard.go`. **"Refuse" means hz refuses to
+      SERVE desired state to a machine in a fleet** — 409 from
+      `handleAgentDesired`, recomputed from the live config on every poll. That
+      is the one refusal that needs no cooperation from the thing being refused:
+      the agent applies only what hz served it, so it is correct for an agent of
+      any version, armed or inert, and it is still correct at step 4. Refusing to
+      start hz was rejected (the network depends on this box); refusing to start
+      peer-sync instead was rejected (a configured fleet is the operator's
+      explicit topology, hz still applies on every member, and the spare that
+      stops converging is the failure being avoided — disarming the agent is the
+      reversible half, no restart to undo); refusing inside the agent was
+      rejected (same check one hop from the fact, and an exited agent needs a
+      human on a box that may be remote). **Reporting is untouched**, so a
+      disarmed machine stays on the drift screen rather than reading as silent.
+
+      Three sites: **boot** (`announceAgentGuardAtBoot`, before the loops, one
+      Error line naming both features and this file — an AST test pins that Run
+      actually calls it and calls it first); **`applyNewConfig`**, before the
+      config swap; **every poll**, the enforcement point.
+
+      The `applyNewConfig` check is stated as the invariant it really is —
+      **fleet topology is per-instance and never comes off the wire** — and
+      refuses any pulled config whose `PeerID`, `ConfigPrimary` or `Peers`
+      differ from the running ones, in both directions (a pull that REMOVED the
+      fleet would arm an agent nobody armed). That is the same intent
+      `mergeRemoteIntoLocal`'s three pinning lines already carry; the check is
+      that intent at the function that installs the result, where losing it is a
+      red test rather than a silent widening. **Proven load-bearing, not
+      assumed**: delete `out.Peers = local.Peers` and a real pull through the
+      real peer API carries the primary's peer list — 1 peer to 3 — past a boot
+      check that had already run and seen one; with the check present the pull
+      is refused, logged and recorded in `peerSyncSnapshot().LastError`; with it
+      removed as well the peer list lands, `lastError` is empty and nothing
+      anywhere says so.
+
+      **Reverse direction**: `refuseFleetWhileAgentArmed` in `updateConfig` (the
+      funnel every config mutation goes through, so no path can forget it),
+      surfaced as a 409 at `create-join-token` — the FIRST step of the join
+      flow, so the refusal lands on the screen of the person doing the joining
+      rather than on the other box's terminal — and at `join-complete`. It fires
+      on a machine whose agent REPORTED `applying: true`, not merely one that is
+      enrolled: every gateway today has an enrolled inert agent, and refusing HA
+      on all of them would guard a conflict that does not exist. That signal
+      lags by one report, which is why the forward direction does not depend on
+      it.
 - [ ] **`sudo hz-agent diff` reports in sync for every served section** on the
       live gateway. This is `architecture.md` item 12's existing verification
       step; §4 says why it should pass — same renderer, same config — so a

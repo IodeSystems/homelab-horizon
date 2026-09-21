@@ -658,6 +658,19 @@ that changes hz's shape.
        two channels" below.
     4. Add an `[Install]` section to the agent's unit, drop `--apply` from the
        "never emit this" rule in `generateUnit`, and put it in `ExecStart`.
+
+       **Its precondition is already done** (2026-09-21, ahead of this step
+       rather than inside it): hz-agent and HA peer-sync are now mutually
+       exclusive on one machine, and hz REFUSES TO SERVE DESIRED STATE to a
+       machine in a fleet — `internal/server/agent_fleet_guard.go`, decided in
+       `plan/ha-and-the-agent.md` §6 option B and §7. Refusing at hz needs no
+       cooperation from the agent, so it is already correct for the agent this
+       step arms. Checked at boot, in `applyNewConfig` before the config swap
+       (fleet topology is per-instance and never comes off the wire), and on
+       every poll; the reverse — configuring a fleet while an agent reports
+       `applying: true` — is a 409 at the join flow's first step. So this step
+       is now a change that cannot introduce that hazard, rather than one that
+       introduces and fixes it in the same commit.
        Four tests in `cmd/hz-agent` assert today's inertness and are the
        checklist: `TestInstalledUnitDoesNotApply`, `TestUnitIsNotEnableable`,
        `TestInstallRefusesToRenderAnApplyingUnit`, `TestReportOnlyPassWritesNothing`.

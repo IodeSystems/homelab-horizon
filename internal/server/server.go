@@ -209,6 +209,11 @@ type Server struct {
 	config         atomic.Pointer[config.Config]
 	peerSyncStatus peerSyncStatus
 
+	// The last thing announceAgentGuard said about hz-agent vs HA peer-sync,
+	// so a refusal recomputed on every five-second poll is logged when it
+	// changes rather than every time. See agent_fleet_guard.go.
+	agentGuardSaid atomic.Pointer[string]
+
 	// Per-peer traffic samples behind the VPN inactivity timeout. Not in the
 	// config: a measurement rather than a setting. See peer_activity.go.
 	activity *activityTracker
@@ -510,8 +515,19 @@ func (s *Server) cfg() *config.Config {
 // mutate config — it avoids the torn-read race that direct s.cfg().X = Y
 // mutations have with concurrent readers.
 func (s *Server) updateConfig(fn func(cfg *config.Config)) error {
-	cfg := *s.cfg()
+	old := s.cfg()
+	cfg := *old
 	fn(&cfg)
+	// THE REVERSE HALF OF THE hz-agent / PEER-SYNC GUARD, at the funnel rather
+	// than at the handlers, because a handler is something somebody can forget.
+	// Every path that can put this machine into a fleet goes through here, and
+	// the check costs one pointer comparison until one of them actually does —
+	// only a mutation that introduces a fleet reads the observed store. The two
+	// HA join handlers map the error to a 409 with this text; anything else
+	// surfaces it as the error it already returns. See agent_fleet_guard.go.
+	if err := s.refuseFleetWhileAgentArmed(old, &cfg); err != nil {
+		return err
+	}
 	s.config.Store(&cfg)
 	return config.Save(s.configPath, &cfg)
 }
@@ -1834,6 +1850,17 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 
 	// Start unattended cert renewal (Phase 2 prereq)
 	s.startCertRenewal()
+
+	// CHECK 1 OF THE hz-agent / PEER-SYNC GUARD (agent_fleet_guard.go).
+	//
+	// Said here, beside the loops it is about, and before they start: a machine
+	// that boots already in a fleet gets one Error line naming both features and
+	// the document, rather than an operator discovering months later that the
+	// agent they installed has been answered 409 since the day they joined a
+	// peer. The enforcement is handleAgentDesired; this is the announcement,
+	// and check 2 in applyNewConfig is the one that stops the config on disk
+	// from changing out from under it.
+	s.announceAgentGuardAtBoot()
 
 	// Start multi-instance config pull loop (no-op on primary / standalone)
 	s.startPeerSync()
