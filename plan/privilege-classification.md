@@ -422,7 +422,14 @@ The agent *does* read it — `Observed.LiveRules` + `IPTablesReadable` +
 `http.MethodGet`, and there is no endpoint anywhere for an agent to report what
 it observed. See §4.1. This is the single largest structural gap found.
 
-**`POST /iptables/remove` (`:177`) — DELETE.** It decodes an `iptables.Rule`
+**`POST /iptables/remove` — ✅ DELETED 2026-09-22.** Handler, route and the
+`useRemoveIPTablesRule` hook are gone. The screen keeps the decision and loses
+only the execution: the delete icon became a terminal icon that shows the exact
+`sudo iptables -t … -D … ` line, and says which rules hz removes on its own
+(stale) versus never will (unknown — it is not hz's rule). What follows is the
+verdict as it was argued.
+
+It decoded an `iptables.Rule`
 from the request body and executes `iptables -t <rule.Table> -D <rule.Chain>
 <rule.Args...>` with `Table`, `Chain` and `Args` **taken from the body
 verbatim**. The only validation is that all three are non-empty (`:191`). It is
@@ -439,6 +446,17 @@ whatever it is handed, to duplicate a control that already exists. Described as
 a class, not a recipe: **a privileged executor whose subcommand and arguments
 come from the request body is not narrowable by adding checks; it is narrowable
 only by not existing.**
+
+> **One line of that was wrong, and the deletion is still right.** "already
+> served by bless/unbless plus reconcile" holds for a **stale** rule — `Reconcile`
+> deletes those (`reconcile.go:165-177`) — and does **not** hold for an
+> **unknown** one. `Reconcile` never touches an unknown rule; that is the
+> documented promise that "nothing outside horizon's managed chains is ever
+> auto-touched". So for an unknown rule the capability really is gone, not
+> relocated, and that is the correct outcome rather than an oversight: the rule
+> is by definition one hz does not own, and hz shelling `iptables -D` at it on
+> request is exactly the primitive being removed. The operator's replacement is
+> the shell, and the screen now hands them the exact line rather than a blank.
 
 **`POST /iptables/bless` and `/unbless` (`:106`, `:141`) — HZ-KEEPS, free.**
 They only call `updateConfig`. hz owns `config.json` before and after the flip.
@@ -1023,7 +1041,8 @@ This sits alongside `ha-and-the-agent.md` §7 (the peer-sync half) and
       one determines the shape of half the moves below.
 - [x] ✅ **Delete `maybeSelfInstall`** (§3.9) — done 2026-09-22. It is in the
       boot path, it is root, and it is dead after the flip anyway.
-- [ ] **Delete `POST /iptables/remove`** (§3.3). Body-supplied table/chain/args.
+- [x] ✅ **Delete `POST /iptables/remove`** (§3.3) — done 2026-09-22.
+      Body-supplied table/chain/args.
 - [ ] **Delete `autoheal.Run` and the `auto_heal` config key** (§3.5); rehome
       its three side effects.
 - [ ] **Delete `POST /system/install/package`** and the `systemdRun` helper's

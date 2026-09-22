@@ -1273,7 +1273,6 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/iptables/rules", s.handleAPIIPTablesRules)
 	s.handlePeerInstance(mux, "/api/v1/iptables/bless", s.handleAPIIPTablesBless)
 	s.handlePeerInstance(mux, "/api/v1/iptables/unbless", s.handleAPIIPTablesUnbless)
-	s.handlePeerInstance(mux, "/api/v1/iptables/remove", s.handleAPIIPTablesRemove)
 	s.handlePeerInstance(mux, "/api/v1/iptables/reconcile", s.handleAPIIPTablesReconcile)
 
 	// API v1 settings routes

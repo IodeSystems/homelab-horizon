@@ -184,7 +184,9 @@ Single `POST /api/v1/system/fix/:id` with `id` switch is an alternative — less
 GET    /api/v1/iptables/rules          # returns []ClassifiedRule + summary counts
 POST   /api/v1/iptables/bless          # body: { canonical: "..." } → appends to BlessedIPTablesRules
 POST   /api/v1/iptables/unbless        # body: { canonical: "..." } → removes
-POST   /api/v1/iptables/remove         # body: { canonical: "..." } → executes iptables -D (admin only)
+# POST /api/v1/iptables/remove — DELETED 2026-09-22 (privilege-classification.md §3.3/§7.A).
+#   Took table/chain/args from the request body verbatim: an authenticated
+#   arbitrary-iptables-delete primitive. The UI shows the shell command instead.
 POST   /api/v1/iptables/reconcile      # triggers Reconcile immediately, returns report
 ```
 
