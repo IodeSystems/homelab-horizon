@@ -660,6 +660,24 @@ func resolveEnvironment(cfg *config.Config, inst Instance) (config.Environment, 
 	}
 }
 
+// ResolveEnvironment is resolveEnvironment, exported for the one other caller
+// that has to answer the same question about the same registration.
+//
+// The version-drift join (internal/server/handlers_version_drift.go) needs an
+// instance's DECLARED version, and that version is `Environment.Version` on the
+// rung the instance names — so it needs the project coordinate a registration
+// address does not carry, by exactly the road resolveEnvironment documents.
+// Re-deriving it there would give hz two answers to "which project is
+// prod/web/app?", and the screen showing drift would then be free to compare
+// against a different rung than the projection installs from.
+//
+// Exported rather than moved: this is the projection's join, the projection is
+// its primary caller, and the error text names the `hz` command that closes
+// each dead end — which the drift row renders verbatim.
+func ResolveEnvironment(cfg *config.Config, inst Instance) (config.Environment, error) {
+	return resolveEnvironment(cfg, inst)
+}
+
 // projectAgent adds hz-agent itself to the package list.
 //
 // example-projection.md §5 carries it beside the application's package, held at

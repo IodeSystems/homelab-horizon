@@ -288,6 +288,14 @@ const (
 	PathConfigs     = "/api/v1/cm/configs"
 	PathMachines    = "/api/v1/cm/machines"
 
+	// PathVersionDrift joins the DECLARED version of every instance's rung to
+	// the version that instance last reported running. Read-only, admin. It
+	// sits in the cm namespace because the observed half is a column on
+	// cm_registrations and the row is a registration; it is NOT the agent
+	// channel (/api/v1/agent/observed), which is the machine heartbeat and runs
+	// on a different clock entirely.
+	PathVersionDrift = "/api/v1/cm/version-drift"
+
 	// PathRecovery reads the whole recovery picture: the recipients, and every
 	// wrap hz holds. Read-only, admin, and the only endpoint that serves a
 	// wrapped blob back — which is safe for the same reason storing it is:

@@ -2380,3 +2380,215 @@ export interface CMCurrentKeyResp {
   setBy?: string;
   setAt?: string;
 }
+
+//////////
+// source: version_drift.go
+
+/**
+ * InstanceStateFresh — this instance resolved its config within the window
+ * hz treats as current, so the version beside it is evidence.
+ */
+export const InstanceStateFresh = "fresh";
+/**
+ * InstanceStateLate — a reading exists and is older than that window. It is
+ * not a fault: an instance that has run without restarting for longer than
+ * the window is exactly this, and so is one that died months ago. The two
+ * are indistinguishable HERE, which is why the age must be rendered beside
+ * the value and why liveness is read off the agent channel instead.
+ */
+export const InstanceStateLate = "late";
+/**
+ * InstanceStateSilent — this registration has never reported a version at
+ * all. Distinct from late: there is no reading, stale or otherwise, so
+ * there is nothing to render but the fact that the address was approved.
+ * Ordinary for an address approved and not yet booted, and for every
+ * registration that predates migration 0011.
+ */
+export const InstanceStateSilent = "silent";
+/**
+ * VersionDriftMatch — the declared version and the reported one are the
+ * same version. Either the strings are identical, or both parse as semver
+ * and compare equal ("v1.4.0" and "1.4.0" are one version).
+ */
+export const VersionDriftMatch = "match";
+/**
+ * VersionDriftBehind — the instance reported a version LOWER than its rung
+ * declares. A rollout in progress, or one that stalled; which of the two is
+ * a question about the age beside it, not about this field.
+ */
+export const VersionDriftBehind = "behind";
+/**
+ * VersionDriftAhead — the instance reported a version HIGHER than its rung
+ * declares. A box running something nobody declared, which is a different
+ * and more alarming fact than being behind: no rollout produces it, and hz
+ * will not install it, so something outside hz put it there — or the rung
+ * was rolled back under a box that was not.
+ */
+export const VersionDriftAhead = "ahead";
+/**
+ * VersionDriftNoDeclaredVersion — the rung this instance names declares no
+ * version. NOT drift and not a fault: plan/example-projection.md §1 has two
+ * rungs deliberately in this state, and the projection's answer is to
+ * install no package at all rather than "whatever the feed holds". There is
+ * nothing to compare against, whatever the box reports.
+ */
+export const VersionDriftNoDeclaredVersion = "no-declared-version";
+/**
+ * VersionDriftNotObserved — a version is declared and this instance has
+ * never reported one. The missing half is the box's, not hz's.
+ */
+export const VersionDriftNotObserved = "not-observed";
+/**
+ * VersionDriftNotComparable — both versions are present and differ as
+ * strings, and at least one of them is not a semver tag. A declared version
+ * is opaque by design (a Debian version, an image tag, a git sha), so this
+ * is an ordinary outcome and never an error: hz can say the two are not the
+ * same and cannot say which is newer.
+ */
+export const VersionDriftNotComparable = "not-comparable";
+/**
+ * VersionDriftUnresolved — hz cannot work out which project's rung this
+ * instance is on, so it has no declared version to compare at all. A
+ * registration's address is environment/app/role with no project
+ * coordinate, and an environment name is unique per project rather than
+ * globally. Why carries the projection's own message, which names the `hz`
+ * command that closes it.
+ */
+export const VersionDriftUnresolved = "unresolved";
+/**
+ * InstanceStaleAfterSeconds is the age at which hz stops calling an instance's
+ * version reading current: 30 days.
+ * WHY A CONSTANT AND NOT THE AGENT CHANNEL'S DERIVED THRESHOLD. That one is
+ * three missed reports of a cadence the agent declared, clamped to 60s–30min
+ * (handlers_agent_observed.go). An instance declares no cadence and misses
+ * nothing, because it is not reporting on one: `observed_at` moves at boot, on
+ * the resolve the box was making anyway. There is no interval to multiply, so
+ * there is nothing to derive and a fixed floor is the only honest threshold.
+ * WHY 30 DAYS. The window has to be longer than any rollout it could be
+ * describing, or a healthy box that resolved at its last release would read as
+ * late for the rest of its uptime — the standing false alarm that trains an
+ * operator to ignore the screen. A month is comfortably past any release cycle
+ * this estate runs, so a reading that has outlived it has outlived every
+ * rollout it could have been evidence of, and leading with its age is then the
+ * correct presentation rather than a scold.
+ * Served on every row rather than assumed by the client, exactly as
+ * AgentObservation.StaleAfterSeconds is, so a screen shows the threshold it is
+ * judging against instead of a constant it had to guess.
+ */
+export const InstanceStaleAfterSeconds = 2592000;
+/**
+ * VersionDriftResponse is every instance hz holds a registration for, sorted by
+ * machine and then by address.
+ */
+export interface VersionDriftResponse {
+  instances: InstanceVersion[];
+  /**
+   * Unadmitted is how many registered addresses were left out because nobody
+   * has approved them yet.
+   * APPROVED ONLY IS THE SAME RULE THE PROJECTION USES
+   * (handlers_agent.go, instancesForProjection): a pending address is one a
+   * machine has ASKED for and no admin has granted, and hz declares no
+   * version for it, so a comparison would be against nothing. The count is
+   * here so that the omission is visible — a screen that silently dropped
+   * rows would let a booted-but-unapproved box disappear rather than appear
+   * in Config → Approvals where it belongs.
+   */
+  unadmitted: number /* int */;
+  /**
+   * ServerTime is hz's clock when it answered, RFC3339. Every age in this
+   * payload is computed against it, so a client can re-derive one without
+   * trusting its own clock to agree.
+   */
+  serverTime: string;
+}
+/**
+ * InstanceVersion is one instance's declared-versus-observed pair.
+ * Both halves may be absent and the two absences are different answers, so
+ * neither is rendered as a version and neither is rendered as drift: Drift says
+ * which, Why says it in a sentence.
+ */
+export interface InstanceVersion {
+  /**
+   * The instance's identity: (machine, environment, app, role), plus the
+   * address hz prints everywhere else and the project the rung belongs to.
+   */
+  machine: string;
+  environment: string;
+  app: string;
+  role: string;
+  /**
+   * Address is environment/app/role, the form the CLI and the approval queue
+   * already print. Carried rather than left to the client to join, so two
+   * screens cannot punctuate it differently.
+   */
+  address: string;
+  /**
+   * Project is the project whose rung this is. Empty when Drift is
+   * "unresolved" — hz could not work it out, which is the whole of that
+   * verdict.
+   */
+  project?: string;
+  /**
+   * DesiredVersion is what the rung DECLARES (config.Environment.Version).
+   * Empty is a real state with two causes, which Drift separates: the rung
+   * declares no version, or hz could not find the rung.
+   */
+  desiredVersion?: string;
+  /**
+   * ObservedVersion is what this instance last reported it is RUNNING
+   * (cm_registrations.observed_version). Empty means it has never reported
+   * one. NEVER render it without AgeSeconds.
+   */
+  observedVersion?: string;
+  /**
+   * ObservedBuild is the `git describe` string that arrived with it —
+   * provenance only, never compared, and frequently not semver at all.
+   */
+  observedBuild?: string;
+  /**
+   * ReviewedVersion is cm_registrations.version: what the box was running
+   * when this address was FIRST seen and an admin reviewed it. Frozen on
+   * purpose and not a rolling counter, which is exactly why it is not the
+   * observed half of this row — it is carried beside it because `CMMachines`
+   * renders this one and an operator comparing the two screens must be able
+   * to see that they are different numbers by design.
+   */
+  reviewedVersion?: string;
+  /**
+   * ObservedAt is when that reading arrived, RFC3339. Empty when silent.
+   */
+  observedAt?: string;
+  /**
+   * AgeSeconds is how old the reading is, against ServerTime. It travels with
+   * the observed value on purpose: plan/example-projection.md §4 —
+   * "anything showing an observed value must show its age beside it or it
+   * lies". Zero when silent, which is why State has to be read before any
+   * number is.
+   */
+  ageSeconds: number /* int64 */;
+  /**
+   * StaleAfterSeconds is the age at which hz calls this reading late, so the
+   * screen can show the threshold rather than guess it. Always
+   * InstanceStaleAfterSeconds today; a field rather than a constant because
+   * the agent channel's equivalent is per-row and a client renders both with
+   * one function.
+   */
+  staleAfterSeconds: number /* int64 */;
+  /**
+   * State is one of the three InstanceState* constants.
+   */
+  state: string;
+  /**
+   * Drift is one of the seven VersionDrift* constants. Computed here, never
+   * by the client, so a screen cannot skip the comparison or the age that
+   * qualifies it.
+   */
+  drift: string;
+  /**
+   * Why is the verdict in one sentence, set on every row. It is what a screen
+   * shows instead of leaving the operator to infer what an empty column
+   * means, and for "unresolved" it carries the projection's own message,
+   * which names the command that fixes it.
+   */
+  why: string;
+}
