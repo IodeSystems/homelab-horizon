@@ -644,7 +644,14 @@ While reading it: the cert loop derives its destination from the zip entry name
 That is the archive-extraction path-handling class of issue, described as a class
 because **this repo is public**. Filed to `plan/icebox.md`.
 
-### 3.9 `maybeSelfInstall` — DELETE, and the audit never listed it
+### 3.9 ✅ DELETED 2026-09-22 — `maybeSelfInstall`, and the audit never listed it
+
+Gone, with `copyFile`, its only other user. `runServer` no longer calls
+anything before `slog.Info("Homelab Horizon", …)`. Nothing lost that a verb
+does not already do: `sudo homelab-horizon install` writes the unit pointing
+at whatever path the binary is at, and copying a binary into `/usr/local/bin`
+is `install -m 0755`, not a daemon's boot path. What follows is the verdict as
+it was argued.
 
 `cmd/homelab-horizon/main.go:135-196`, called unconditionally from `main` when
 not in dry-run (`:62`). When running as root, not in Docker, not already at
@@ -1014,8 +1021,8 @@ This sits alongside `ha-and-the-agent.md` §7 (the peer-sync half) and
 - [ ] **Answer the three blocking decisions in §8** (generic section vs. named
       subsystems; observed-state channel; static-serving separation). The first
       one determines the shape of half the moves below.
-- [ ] **Delete `maybeSelfInstall`** (§3.9). It is in the boot path, it is root,
-      and it is dead after the flip anyway.
+- [x] ✅ **Delete `maybeSelfInstall`** (§3.9) — done 2026-09-22. It is in the
+      boot path, it is root, and it is dead after the flip anyway.
 - [ ] **Delete `POST /iptables/remove`** (§3.3). Body-supplied table/chain/args.
 - [ ] **Delete `autoheal.Run` and the `auto_heal` config key** (§3.5); rehome
       its three side effects.

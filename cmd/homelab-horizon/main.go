@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/autoheal"
 	"github.com/iodesystems/homelab-horizon/internal/config"
@@ -57,10 +56,6 @@ func runServer(configPath string, dryRun bool, mcpEnabled bool, enableAdminToken
 	if mcpEnabled && isMCPClient() {
 		runMCPStdio(configPath, dryRun)
 		return
-	}
-
-	if !dryRun {
-		maybeSelfInstall(configPath)
 	}
 
 	slog.Info("Homelab Horizon", "version", Version, "built", BuildTime)
@@ -130,78 +125,6 @@ func runServer(configPath string, dryRun bool, mcpEnabled bool, enableAdminToken
 		slog.Error("server error", "err", err)
 		os.Exit(1)
 	}
-}
-
-func maybeSelfInstall(configPath string) {
-	// Don't auto-install in Docker (no systemd)
-	if _, err := os.Stat("/.dockerenv"); err == nil {
-		return
-	}
-	// Don't auto-install if we are in MCP mode or not root
-	if isMCPClient() || os.Geteuid() != 0 {
-		return
-	}
-
-	targetPath := "/usr/local/bin/homelab-horizon"
-	currentPath, err := os.Executable()
-	if err != nil {
-		return
-	}
-
-	currentPath, _ = filepath.Abs(currentPath)
-	targetPath, _ = filepath.Abs(targetPath)
-
-	// If we are already running from the target path, we are good
-	if currentPath == targetPath {
-		return
-	}
-
-	// Also don't self-install if we are already running as a systemd service
-	// (this handles cases where someone might have installed it to a different path manually)
-	if os.Getenv("INVOCATION_ID") != "" || os.Getenv("JOURNAL_STREAM") != "" {
-		return
-	}
-
-	slog.Info("self-installing", "from", currentPath, "to", targetPath)
-
-	// 1. Copy binary to target path
-	if err := copyFile(currentPath, targetPath); err != nil {
-		slog.Warn("self-install: failed to copy binary", "target", targetPath, "err", err)
-		return
-	}
-
-	// 2. Ensure executable
-	if err := os.Chmod(targetPath, 0755); err != nil {
-		slog.Warn("self-install: failed to chmod binary", "err", err)
-		return
-	}
-
-	// 3. Install/Update systemd service
-	if err := installService("", false, false); err != nil {
-		slog.Warn("self-install: failed to install systemd service", "err", err)
-		return
-	}
-
-	// 4. Fire a restart and die
-	slog.Info("restarting as systemd service")
-	// Use systemctl restart, but since we are about to exit, we use Start if it's not running
-	// or Restart if it is. Restart is generally safer for "upgrading"
-	cmd := exec.Command("systemctl", "restart", "homelab-horizon")
-	_ = cmd.Start() // We don't wait for it to finish as it will kill us
-
-	// Give systemd a tiny bit of time to receive the command before we exit
-	time.Sleep(500 * time.Millisecond)
-
-	// Die and get replaced by the service
-	os.Exit(0)
-}
-
-func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(dst, data, 0755)
 }
 
 func runMCPStdio(configPath string, dryRun bool) {
