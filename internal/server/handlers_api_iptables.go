@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/iptables"
@@ -62,6 +63,8 @@ func (s *Server) buildClassifierInputs() (
 
 		Forwards:      iptables.ForwardsFromConfig(cfg),
 		ReservedPorts: cfg.ForwardReservedPorts(),
+
+		BannedIPs: activeBanIPs(cfg.IPBans, time.Now().Unix()),
 	})
 	stale = iptables.StaleRules(cfg, peers, serverWGIP, listenPort)
 	blessed = cfg.BlessedIPTablesRules
