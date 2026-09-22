@@ -272,7 +272,7 @@ export function readGeneration(row: AgentObservation): GenerationReading {
       verdict: "incomparable",
       headline: "hz cannot compare",
       meaning:
-        "hz holds no desired state for this machine, so there is nothing to compare its generation against. That is hz's limit, not a fault on the machine — hz renders for the box it runs on until the Machine record lands.",
+        "hz holds no desired state for this machine, so there is nothing to compare its generation against. That is hz's limit, not a fault on the machine — no machine record declares this box, so hz has nothing to project for it. Declaring it with `hz machine add` is what fills this column.",
       tone: "neutral",
       observed,
       desired,

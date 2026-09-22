@@ -424,18 +424,63 @@ func TestMachineRemovalIsADryRunWithoutConfirm(t *testing.T) {
 
 // --- the seam: a projection answer, not an identity one -------------------
 
-// handleAgentDesired used to tell another machine's agent "not this box" —
-// which is a statement about identity, and the only one hz could make when it
-// knew nothing but its own hostname. With a Machine record the honest answer is
-// about the PROJECTION: hz knows who you are and has nothing rendered for you.
+// REPLACED BY ITEM 14, NOT DELETED. This test used to assert a 404 for a
+// DECLARED machine, whose body named item 14 as the thing hz was waiting on.
+// That claim is false by design now — the projection is the thing that arrived
+// — so the half of it that was about waiting is gone and the half that was
+// always true is below, joined by what replaced it
+// (TestADeclaredMachineIsProjectedFor).
 //
-// The two branches lead to different next steps, which is the whole reason for
-// distinguishing them: a declared machine is waiting on item 14, an undeclared
-// one is waiting on a declaration.
-func TestNoDesiredStateNamesTheProjectionAndNotTheBox(t *testing.T) {
+// What is still true and still pinned: an UNDECLARED machine gets the same
+// total 404 it always did, hz never volunteers which box it is running on, and
+// nothing of this machine's config appears in the refusal.
+func TestNoDesiredStateForAMachineNobodyDeclared(t *testing.T) {
 	s, _ := agentTestServer(t)
 
-	// DECLARED, but not the box hz renders for.
+	ghostSecret, err := agent.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.agentCredentials().Enroll("a-box-nobody-declared", ghostSecret); err != nil {
+		t.Fatal(err)
+	}
+	w := agentGETWith(t, s, ghostSecret, "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{"no desired state", "No machine record declares it", "hz machine add"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the answer for an UNDECLARED machine does not mention %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "haproxy") {
+		t.Fatal("hz leaked this machine's config into a refusal")
+	}
+	// The refusal is not hz's chance to say which box it is.
+	if strings.Contains(body, "the host it runs on") || strings.Contains(body, localMachineName()) {
+		t.Fatalf("the refusal answers with hz's own identity: %s", body)
+	}
+
+	// The positive control: the machine hz DOES render for is still served, so
+	// none of the above passes because the route broke.
+	if code := agentGET(t, s, "").Code; code != http.StatusOK {
+		t.Fatalf("hz stopped serving its own machine: %d", code)
+	}
+}
+
+// ITEM 14, AT THE ROUTE. A declared machine that is not the box hz runs on now
+// gets a payload of its own, and the shape of that payload is the whole point:
+// a projection, addressed to it, with every file-shaped section ABSENT and
+// each absence explained.
+//
+// The explanation is what separates this from an empty answer. A nil section
+// means "hz does not manage this here", which an agent acts on; for a machine
+// hz cannot open a filesystem on, that would be a claim hz has no basis for.
+// The gaps are hz saying it has no opinion rather than an opinion of nothing.
+func TestADeclaredMachineIsProjectedFor(t *testing.T) {
+	s, _ := agentTestServer(t)
+
 	declareMachine(t, s, "app-1")
 	appSecret, err := agent.NewSecret()
 	if err != nil {
@@ -444,47 +489,67 @@ func TestNoDesiredStateNamesTheProjectionAndNotTheBox(t *testing.T) {
 	if err := s.agentCredentials().Enroll("app-1", appSecret); err != nil {
 		t.Fatal(err)
 	}
+
 	w := agentGETWith(t, s, appSecret, "")
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200 for a declared machine, got %d: %s", w.Code, w.Body.String())
 	}
-	body := w.Body.String()
-	for _, want := range []string{"no desired state", "app-1", "declared", "seg:lan", "item 14"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("the answer for a DECLARED machine does not mention %q: %s", want, body)
-		}
-	}
-	if strings.Contains(body, "haproxy") {
-		t.Fatal("hz leaked this machine's config to another machine's agent")
-	}
-	// The old answer was about which box hz is. It is not hz's to volunteer.
-	if strings.Contains(body, "the host it runs on") || strings.Contains(body, s.buildAgentDesired().Machine) {
-		t.Fatalf("the refusal still answers with hz's own identity: %s", body)
+	var d agent.Desired
+	if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
+		t.Fatalf("unmarshal: %v — %s", err, w.Body.String())
 	}
 
-	// UNDECLARED: the same 404, a different next step.
-	ghostSecret, err := agent.NewSecret()
-	if err != nil {
-		t.Fatal(err)
+	// ADDRESSED TO THE CALLER. Never to the box hz runs on: that would hand a
+	// remote agent the gateway's network to apply.
+	if d.Machine != "app-1" {
+		t.Fatalf("payload addressed to %q, want app-1", d.Machine)
 	}
-	if err := s.agentCredentials().Enroll("a-box-nobody-declared", ghostSecret); err != nil {
-		t.Fatal(err)
+	if d.Model == nil {
+		t.Fatal("a declared machine got no projection at all; the payload is then indistinguishable from hz having nothing to say")
 	}
-	w = agentGETWith(t, s, ghostSecret, "")
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("want 404, got %d", w.Code)
+	if d.Model.Machine != "app-1" {
+		t.Fatalf("projection is for %q, want app-1", d.Model.Machine)
 	}
-	body = w.Body.String()
-	for _, want := range []string{"no desired state", "No machine record declares it", "hz machine add"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("the answer for an UNDECLARED machine does not mention %q: %s", want, body)
+	if len(d.Model.Segments) != 1 || d.Model.Segments[0].Name != "seg:lan" {
+		t.Fatalf("the declared segment did not reach the projection: %+v", d.Model.Segments)
+	}
+	if d.Model.Segments[0].Resolved {
+		t.Fatal("a segment name reported itself resolved; nothing resolves one until item 15")
+	}
+
+	// NOTHING READ OFF HZ'S DISK CROSSED. These are the gateway's own files
+	// and rule sets; a machine hz cannot look at must not be handed them.
+	if d.HAProxy != nil || d.DNSMasq != nil || d.WireGuard != nil || d.Certs != nil || d.IPTables != nil {
+		t.Fatalf("a remote machine was served a locally-read section: %+v", d)
+	}
+	if strings.Contains(w.Body.String(), "frontend") || strings.Contains(w.Body.String(), s.cfg().HAProxyConfigPath) {
+		t.Fatal("hz's own rendered config reached another machine's payload")
+	}
+
+	// AND EACH ABSENCE IS EXPLAINED. Absent-because-unknown must never read as
+	// absent-because-unwanted.
+	for _, section := range []string{
+		agentSectionHAProxy, agentSectionDNSMasq, agentSectionWireGuard,
+		agentSectionIPTables, agentSectionCerts,
+	} {
+		if !d.Model.Unresolvable(section) {
+			t.Fatalf("section %q is absent with no gap beside it: hz appears to have decided this machine wants none", section)
 		}
 	}
 
-	// The positive control: the machine hz DOES render for is still served, so
-	// none of the above passes because the route broke.
-	if code := agentGET(t, s, "").Code; code != http.StatusOK {
-		t.Fatalf("hz stopped serving its own machine: %d", code)
+	// The positive control: hz's own box still gets the file sections, so the
+	// assertions above are not passing because the renderers broke.
+	local := s.buildAgentDesired()
+	if local.HAProxy == nil || local.DNSMasq == nil {
+		t.Fatal("hz stopped rendering its own sections; the remote assertions prove nothing")
+	}
+	if local.Model == nil {
+		t.Fatal("the local box did not go through the projection — the gateway is machine #1, not a special case")
+	}
+	for _, section := range []string{agentSectionHAProxy, agentSectionDNSMasq} {
+		if local.Model.Unresolvable(section) {
+			t.Fatalf("hz reported %q unresolvable for the box it is running on", section)
+		}
 	}
 }
 
