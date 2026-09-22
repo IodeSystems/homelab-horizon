@@ -2,6 +2,7 @@ package projection
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -157,8 +158,10 @@ func TestAppBoxMatchesTheWorkedExample(t *testing.T) {
 		}
 	}
 
-	if len(mc.Units) != 1 || mc.Units[0] != (Unit{Name: "storefront@app.service", Enabled: true}) {
-		t.Fatalf("units = %+v, want §5's storefront@app.service", mc.Units)
+	// §5's unit name, literally: the project, then systemd-escape of the
+	// instance address prod/web/app.
+	if len(mc.Units) != 1 || mc.Units[0] != (Unit{Name: "storefront@prod-web-app.service", Enabled: true}) {
+		t.Fatalf("units = %+v, want §5's storefront@prod-web-app.service", mc.Units)
 	}
 
 	if len(mc.Feeds) != 1 {
@@ -262,42 +265,256 @@ func TestTheGatewayHostsTwoProjectsAtOnce(t *testing.T) {
 	for _, u := range mc.Units {
 		got[u.Name] = u.Enabled
 	}
-	for _, want := range []string{"storefront@app.service", "storefront@next.service", "storefront@ops.service"} {
+	// The role is IN the name, so three slots of one rung are three units —
+	// and the environment is in it too, which is why these are `staging-…`
+	// while app-1's is `prod-…`.
+	for _, want := range []string{
+		"storefront@staging-web-app.service",
+		"storefront@staging-web-next.service",
+		"storefront@staging-web-ops.service",
+	} {
 		if !got[want] {
 			t.Fatalf("units = %+v, want %s — three slots of one project are three units", mc.Units, want)
 		}
 	}
 }
 
-// THE FINDING, PINNED AS A TEST. example-projection.md §5 names a unit
-// <project>@<role>.service, dropping the app coordinate — and §3's gateway
-// hosts intern/prod/git/app AND intern/prod/idp/app, two apps of one project
-// at one role. Both project to `intern@app.service`.
-//
-// The projection renders the name the spec gives and reports the collision
-// rather than silently running one of the two boxes' worth of services. This
-// test exists so that a future change to the naming is a deliberate change to
-// the spec, not a quiet fix that makes §5 wrong.
-func TestTheUnitNameInTheSpecCollidesOnTheGateway(t *testing.T) {
-	g := Global{Config: exampleEstate(), Instances: exampleInstances()}
-	mc := mustProject(t, g, "gw-1")
+// ---------------------------------------------------------------------------
+// The unit name
+// ---------------------------------------------------------------------------
 
-	count := 0
-	for _, u := range mc.Units {
-		if u.Name == "intern@app.service" {
-			count++
+// THE REPLACEMENT FOR TestTheUnitNameInTheSpecCollidesOnTheGateway.
+//
+// That test pinned a finding: example-projection.md §5 named a unit
+// <project>@<role>.service, dropping the app coordinate, and §3's gateway
+// hosts intern/prod/git/app AND intern/prod/idp/app — two apps of one project
+// at one role, which both became `intern@app.service`. It existed so that
+// changing the naming would have to be a deliberate change to the spec.
+//
+// THE SPEC MOVED (§5, audited 2026-09-22) and the claim that test pinned is
+// now false, so it is replaced rather than deleted: the deliberate act it
+// guarded is this commit. What is pinned here is the new claim — that the
+// scheme CANNOT collide — and it is proved by construction rather than by
+// listing the two names that used to clash:
+//
+//  1. ONE UNIT PER INSTANCE, over every machine §3 declares. The projection
+//     keys units by name, so a scheme that merges two instances emits FEWER
+//     units than the machine has instances. gw-1 is the estate's own witness:
+//     it carries two of the three collisions at once — two apps of one project
+//     at one role, and three roles of one app — so dropping app or role fails
+//     here. The third, dropping the ENVIRONMENT, is not reachable from §3's
+//     instances (no machine there hosts two rungs of one project at one app
+//     and role), so it gets the estate §5 names for it, built below.
+//  2. THE NAME IS REVERSIBLE. Every emitted name unescapes back to the exact
+//     instance address that produced it. A function with a left inverse is
+//     injective, so two different addresses cannot share a name — and that
+//     half holds for every estate, not only for this one.
+func TestTheUnitNameCannotCollideOnTheExampleEstate(t *testing.T) {
+	g := Global{Config: exampleEstate(), Instances: exampleInstances(), AgentVersion: "0.5.1"}
+
+	perMachine := map[string][]Instance{}
+	for _, inst := range exampleInstances() {
+		perMachine[inst.Machine] = append(perMachine[inst.Machine], inst)
+	}
+
+	// Preconditions, asserted rather than assumed: if the estate stops
+	// carrying the collisions, this test stops testing anything.
+	if n := len(perMachine["gw-1"]); n != 5 {
+		t.Fatalf("precondition: gw-1 hosts %d instances; §3 gives it five", n)
+	}
+	sameProjectAndRole, sameApp := 0, 0
+	for _, a := range perMachine["gw-1"] {
+		for _, b := range perMachine["gw-1"] {
+			if a == b {
+				continue
+			}
+			if a.Role == b.Role && a.Environment == b.Environment && a.App != b.App {
+				sameProjectAndRole++
+			}
+			if a.App == b.App && a.Environment == b.Environment && a.Role != b.Role {
+				sameApp++
+			}
 		}
 	}
-	if count != 1 {
-		t.Fatalf("intern@app.service appears %d times; the projection must not emit a duplicate unit", count)
+	if sameProjectAndRole == 0 {
+		t.Fatal("precondition: no two gw-1 instances share a role, so dropping the app coordinate would not collide here")
+	}
+	if sameApp == 0 {
+		t.Fatal("precondition: no two gw-1 instances share an app, so dropping the role coordinate would not collide here")
+	}
+
+	// 1. One unit per instance, everywhere.
+	for _, machine := range []string{"gw-1", "app-1", "app-2", "an-1", "ci-1"} {
+		mc := mustProject(t, g, machine)
+		if len(mc.Units) != len(perMachine[machine]) {
+			t.Fatalf("%s: %d units for %d instances (%+v) — a unit name that drops a coordinate merges two instances into one unit",
+				machine, len(mc.Units), len(perMachine[machine]), mc.Units)
+		}
+		if why := gapFor(mc, SectionUnits); why != "" {
+			t.Fatalf("%s reported a units gap on an estate where no two instances can share a name: %q", machine, why)
+		}
+	}
+
+	// 2. Every name unescapes to the address it came from.
+	for _, machine := range []string{"gw-1", "app-1", "app-2", "an-1"} {
+		want := map[string]bool{}
+		for _, inst := range perMachine[machine] {
+			want[inst.Address()] = true
+		}
+		for _, u := range mustProject(t, g, machine).Units {
+			at := strings.Index(u.Name, "@")
+			if at < 0 || !strings.HasSuffix(u.Name, ".service") {
+				t.Fatalf("%s: %q is not a systemd template instance unit", machine, u.Name)
+			}
+			addr := systemdUnescape(t, strings.TrimSuffix(u.Name[at+1:], ".service"))
+			if !want[addr] {
+				t.Fatalf("%s: unit %q unescapes to %q, which is not an address registered on it", machine, u.Name, addr)
+			}
+			delete(want, addr)
+		}
+		if len(want) > 0 {
+			t.Fatalf("%s: instances with no unit of their own: %v", machine, want)
+		}
+	}
+
+	// 3. The environment coordinate, on the estate §5 names for it: a box
+	// hosting TWO RUNGS of one project at one app and one role. §3 has no such
+	// machine, so the claim would otherwise be untested — and the collision is
+	// real, since prod/web/app and staging/web/app differ in nothing else.
+	//
+	// It also pins something worth keeping straight: this machine DOES get a
+	// packages gap (apt cannot hold storefront at 1.4.0 and 1.4.2 at once), and
+	// that is a different fault from a unit collision. Two units, one package,
+	// one gap — not two units and a units gap.
+	tworung := append(exampleInstances(),
+		Instance{Machine: "app-1", Environment: "staging", App: "web", Role: "app"})
+	mc := mustProject(t, Global{Config: exampleEstate(), Instances: tworung}, "app-1")
+
+	got := map[string]bool{}
+	for _, u := range mc.Units {
+		got[u.Name] = true
+	}
+	for _, want := range []string{"storefront@prod-web-app.service", "storefront@staging-web-app.service"} {
+		if !got[want] {
+			t.Fatalf("units = %+v, want %s — two rungs of one project at one app and role are two units", mc.Units, want)
+		}
+	}
+	if len(mc.Units) != 2 {
+		t.Fatalf("units = %+v, want exactly the two", mc.Units)
+	}
+	if why := gapFor(mc, SectionUnits); why != "" {
+		t.Fatalf("two rungs produced a units gap: %q — they are two distinct addresses and get two distinct units", why)
+	}
+	if why := gapFor(mc, SectionPackages); !strings.Contains(why, "two versions") {
+		t.Fatalf("two rungs of one project produced no version conflict: %q", why)
+	}
+}
+
+// The escaping, against systemd's own `do_escape` rules.
+//
+// The implementation is not shelled out, because the projection is pure — so
+// this table is the contract, and it has to be checkable without systemd being
+// installed. Every row below was ALSO run through the real `systemd-escape`
+// (systemd 255) once, by hand, and agreed; the table is the committed record
+// of that, so a future edit to the escaper is checked against systemd's
+// behaviour rather than against itself.
+func TestSystemdEscapeIsSystemdsOwnEscaping(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"prod/web/app", "prod-web-app"},         // §5's worked example, literally
+		{"staging/web/next", "staging-web-next"}, //
+		{"a:b_c.d", "a:b_c.d"},                   // ':' '_' and a non-leading '.' are legal
+		{"a/.b", "a-.b"},                         // only a LEADING dot escapes
+		{".hidden/x", `\x2ehidden-x`},            // ... and it does
+		{"a-b", `a\x2db`},                        // a literal '-' is not a separator
+		{`a\b`, `a\x5cb`},                        // the escape escapes itself
+		{"a b", `a\x20b`},                        // a space is not legal in a unit name
+		{"a@b", `a\x40b`},                        // nor is '@' — it splits prefix from instance
+		{"a+b", `a\x2bb`},                        //
+		{"", ""},                                 // nothing in, nothing out
+		{"é", `\xc3\xa9`},                        // per BYTE, not per rune
+		{"prod//app", "prod--app"},               // an empty coordinate is still two separators
+		{"prod/web/app/", "prod-web-app-"},       //
+		{"PROD/Web/App0", "PROD-Web-App0"},       // case and digits survive
+		{"a.b-c/d", `a.b\x2dc-d`},                //
+		{"prod/web-x/app", `prod-web\x2dx-app`},  //
+		{"pr%d/we*b/ap!p", `pr\x25d-we\x2ab-ap\x21p`},
+		{"..dots", `\x2e.dots`},                    // only the FIRST dot is leading
+		{"-lead", `\x2dlead`},                      //
+		{"trail-", `trail\x2d`},                    //
+		{"日本/app", `\xe6\x97\xa5\xe6\x9c\xac-app`}, // multi-byte, one escape per byte
+	} {
+		if got := systemdEscape(c.in); got != c.want {
+			t.Errorf("systemdEscape(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+
+	// THE PAIR THAT MAKES THE NAME A KEY. Without escaping the literal '-',
+	// these two different addresses would render the same instance part, and
+	// the whole non-collision claim would be false.
+	a, b := systemdEscape("a-b/c"), systemdEscape("a/b-c")
+	if a == b {
+		t.Fatalf("a-b/c and a/b-c both escape to %q; the name no longer identifies its address", a)
+	}
+	if a != `a\x2db-c` || b != `a-b\x2dc` {
+		t.Fatalf("got %q and %q, want a\\x2db-c and a-b\\x2dc", a, b)
+	}
+}
+
+// systemdUnescape is the left inverse the injectivity proof above needs.
+//
+// It lives in the test and not beside systemdEscape because nothing in hz
+// needs to unescape a unit name. What is being checked is that the address is
+// still IN the name — which is what makes the name a key rather than a label.
+func systemdUnescape(t *testing.T, s string) string {
+	t.Helper()
+	var out []byte
+	for i := 0; i < len(s); {
+		switch s[i] {
+		case '-':
+			out = append(out, '/')
+			i++
+		case '\\':
+			if i+3 >= len(s) || s[i+1] != 'x' {
+				t.Fatalf("unit instance %q carries a malformed escape at byte %d", s, i)
+			}
+			b, err := strconv.ParseUint(s[i+2:i+4], 16, 8)
+			if err != nil {
+				t.Fatalf("unit instance %q carries a malformed escape at byte %d: %v", s, i, err)
+			}
+			out = append(out, byte(b))
+			i += 4
+		default:
+			out = append(out, s[i])
+			i++
+		}
+	}
+	return string(out)
+}
+
+// THE UNITS GAP IS STILL REACHABLE, and this is the input that reaches it.
+//
+// The name can no longer merge two instances, so the gap could have become
+// dead code that looks like a guard — which is worse than no guard. It is not:
+// Global.Instances is an ARGUMENT, and nothing inside a pure projection can
+// know that cm_registrations is unique on (machine, environment, app, role).
+// A caller that joins its tables carelessly and hands the same address twice
+// gets told, rather than quietly receiving one unit for two rows it believes
+// in.
+func TestTwoInstancesAtOneAddressAreNamedNotDeduped(t *testing.T) {
+	inst := append(exampleInstances(),
+		Instance{Machine: "app-1", Environment: "prod", App: "web", Role: "app"})
+
+	mc := mustProject(t, Global{Config: exampleEstate(), Instances: inst}, "app-1")
+	if len(mc.Units) != 1 {
+		t.Fatalf("units = %+v, want one — the same address twice is one unit", mc.Units)
 	}
 	why := gapFor(mc, SectionUnits)
 	if why == "" {
-		t.Fatal("two instances collapsed into one unit with no gap: hz would silently run one service where the estate declares two")
+		t.Fatal("two instances collapsed into one unit with no gap: hz would silently project one unit for input that declares two")
 	}
-	for _, want := range []string{"intern@app.service", "prod/git/app", "prod/idp/app"} {
+	for _, want := range []string{"storefront@prod-web-app.service", "prod/web/app", "one unit is one instance"} {
 		if !strings.Contains(why, want) {
-			t.Fatalf("the collision gap does not name %q: %q", want, why)
+			t.Fatalf("the duplicate-instance gap does not name %q: %q", want, why)
 		}
 	}
 }

@@ -224,8 +224,8 @@ func TestAnApprovedRegistrationBecomesAPackageAndAUnit(t *testing.T) {
 		}
 	}
 
-	if len(mc.Units) != 1 || mc.Units[0].Name != "storefront@app.service" || !mc.Units[0].Enabled {
-		t.Fatalf("units = %+v, want storefront@app.service enabled", mc.Units)
+	if len(mc.Units) != 1 || mc.Units[0].Name != "storefront@prod-web-app.service" || !mc.Units[0].Enabled {
+		t.Fatalf("units = %+v, want storefront@prod-web-app.service enabled", mc.Units)
 	}
 	if len(mc.Feeds) != 1 || mc.Feeds[0].From != "storefront" {
 		t.Fatalf("feeds = %+v, want the project's own declaration", mc.Feeds)
@@ -317,7 +317,7 @@ func TestTheGatewayGoesThroughTheProjectionToo(t *testing.T) {
 	if d.Model.Machine != local {
 		t.Fatalf("the local projection is for %q, want %q", d.Model.Machine, local)
 	}
-	if len(d.Model.Units) != 1 || d.Model.Units[0].Name != "storefront@app.service" {
+	if len(d.Model.Units) != 1 || d.Model.Units[0].Name != "storefront@prod-web-app.service" {
 		t.Fatalf("the local box's instances did not project: %+v", d.Model.Units)
 	}
 

@@ -36,8 +36,9 @@
 > pair the code actually produces. §6's cardinality table was wrong in three
 > rows. §7 is new: what is true and cannot yet be said.
 >
-> **Two corrections oblige a code change** and neither has been made — this
-> pass is docs only. They are listed at the top of §7.
+> **Two corrections obliged a code change** and both have now been made — the
+> audit pass itself was docs only, and a follow-up commit adopted §5's unit
+> name and restated `MachineConfig.Serial`. What moved is at the top of §7.
 
 ## 1. The tree
 
@@ -326,7 +327,7 @@ kept as the target in §2 and removed from the worked output, because a spec
 that shows a value the code must invent is a spec that asks it to lie.
 
 **The unit name carries all four coordinates.** This was the collision item 14
-found and deliberately left open:
+found and deliberately left open; the code adopted it on 2026-09-22 (§7.1):
 
 > **`<project>@<environment>-<app>-<role>.service`**, where the instance part
 > is `systemd-escape` of the instance address `environment/app/role`.
@@ -455,23 +456,40 @@ Nothing here is 1:1. Any screen that assumes it will be wrong at `gw-1`.
 Everything above that the model asserts and no record can hold. Each is a work
 item, not a wrong.
 
-**Two of these are corrections this file made that the code was built to the
-old version of.** Neither has been changed; both are deliberate:
+**Two of these were corrections this file made that the code was built to the
+old version of. Both are now closed** (2026-09-22, the commit that adopted §5's
+unit name), and they are kept here as the record of what moved:
 
-1. **The unit name.** `internal/projection/projection.go` renders
-   `<project>@<role>.service` and records a `units` gap naming the collision,
-   with a comment saying "the spec has to move first". The spec has now moved:
-   §5 above. Adopting it means the renderer becomes
-   `<project>@systemd-escape(<environment>/<app>/<role>).service`, the
-   collision gap becomes unreachable, and three tests change —
-   `TestTheUnitNameInTheSpecCollidesOnTheGateway` (which exists precisely so
-   this is a deliberate change), `TestAppBoxMatchesTheWorkedExample` and
-   `TestTheGatewayHostsTwoProjectsAtOnce`.
-2. **`serial`.** `MachineConfig.Serial` is carried in and always 0, and its doc
-   comment cites §5's serial pair as the reason it is kept. §5 no longer has
-   one. Either delete the field, or keep it and restate the comment as "a
-   monotonic floor for rollback defence, which nothing produces yet" — what it
-   must not keep doing is pointing at a spec that has stopped asking for it.
+1. **The unit name. DONE.** `internal/projection/projection.go` rendered
+   `<project>@<role>.service` and recorded a `units` gap naming the collision,
+   with a comment saying "the spec has to move first". It now renders §5's
+   scheme — `unitName` = `<project>@systemd-escape(<environment>/<app>/<role>)
+   .service`, with `systemd-escape` implemented in-package (the projection is
+   pure; `seam_test.go` bans `os/exec`, and shelling out would make a name for
+   `app-1` a statement about whatever systemd the gateway has).
+   `TestTheUnitNameInTheSpecCollidesOnTheGateway` pinned a claim that is now
+   false, so it was **replaced** by
+   `TestTheUnitNameCannotCollideOnTheExampleEstate`, which proves the opposite
+   by construction: one unit per instance over every machine in §3, and every
+   name unescaped back to the address that produced it (a left inverse ⇒
+   injective). `TestAppBoxMatchesTheWorkedExample` and
+   `TestTheGatewayHostsTwoProjectsAtOnce` moved to the new names, as did the
+   two assertions in `internal/server/handlers_agent_projection_test.go`.
+   **The `units` gap was KEPT, not removed**, because it is still reachable:
+   `Global.Instances` is an argument and nothing in a pure projection can know
+   that `cm_registrations` is unique on (machine, environment, app, role), so a
+   caller handing the same address twice is told rather than quietly given one
+   unit for two rows — `TestTwoInstancesAtOneAddressAreNamedNotDeduped` is the
+   input that fires it.
+2. **`serial`. RESTATED, not deleted.** `MachineConfig.Serial` is still carried
+   in and still always 0, and its doc comment no longer cites this file. It now
+   says what the field is actually for — architecture.md's monotonic **floor**,
+   the rollback defence where hz refuses to serve a generation older than one a
+   machine already applied — states plainly that nothing produces one, and says
+   that if it is still 0 the next time someone reads it the honest options are
+   to build the floor or delete the field, not to re-explain it. The field is
+   kept rather than dropped because `architecture.md`'s `MachineConfig` sketch
+   still lists it and the defence it is for is real.
 
 The rest are missing records:
 
