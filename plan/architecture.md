@@ -719,8 +719,72 @@ that changes hz's shape.
     NOT the observed version: that
     settled onto the registration in 0011, because it belongs to an instance
     and several instances share a box.
-14. `project(global, machineID) → MachineConfig`, pure, tested offline. The
-    gateway is machine #1, not a special case.
+14. ✅ **Done 2026-09-22.** `project(global, machineID) → MachineConfig`, pure,
+    tested offline against `example-projection.md` §3's estate
+    (`internal/projection`, `seam_test.go` guarding purity by imports AND by
+    selector, so `config.Load` and `os.Hostname` are unwritable in there).
+    `Global` is `{Config, Instances, AgentVersion, Serial}` — the registrations
+    arrive as an ARGUMENT because a pure function may not open a database, the
+    same discipline `haproxy.CertStore` already follows.
+
+    **The gateway is machine #1, literally.** There is no branch on the local
+    box inside the projection. What the gateway *also* has is sections hz
+    produces by reading local files, and those are COMPOSED onto the projection
+    at the call site (`server.desiredFor`), never special-cased inside it. The
+    predicate at that seam is "can hz open this machine's filesystem", which is
+    a fact about hz's reach, not about the gateway being privileged.
+
+    **Sections became conditional, and the hard part was honesty.**
+    `buildAgentDesired` emitted haproxy, dnsmasq and iptables unconditionally
+    because it had only ever run for the gateway. They are now attached only
+    for the local machine — and a bare nil would have been a lie, because nil
+    already means "hz does not manage this here", which an agent acts on. So a
+    remote machine's projection carries an **`Unresolved` gap per absent
+    section**, saying which of the two reasons applies: hz READS the file and
+    cannot read another machine's (WireGuard's `wg0.conf`, the served cert
+    bundles) or hz has NO MODEL for it at all (haproxy/dnsmasq/iptables are
+    this process's own subsystem settings; nothing declares which machines run
+    an edge). Empty-because-unwanted and empty-because-unknown are now
+    different states in the payload, which is what the drift screen already
+    assumed.
+
+    **`handleAgentDesired` serves any declared machine.** The 404 branch for a
+    declared machine is gone; an undeclared one still gets the same total 404.
+    The local box is served declared or not — requiring a declaration would
+    404 a live gateway's agent the day this shipped.
+
+    **The join is the one `example-projection.md` §5 shows the output of**, and
+    it needed a coordinate the registration record does not have: an address is
+    `(environment, app, role)` and an environment name is unique PER PROJECT,
+    so `prod/web/app` is ambiguous on its face — §1 has six projects declaring
+    a "prod". THE APP COORDINATE SUPPLIES THE PROJECT: `Service` already
+    carries `Project`, for this exact reason by its own doc comment, so `web`
+    resolves to storefront and the rung is then looked up inside it. A globally
+    unique environment name is the fallback; both roads closed is a gap naming
+    `hz service assign`, never a guess. Only APPROVED registrations count — a
+    pending one is an address a box asked for and nobody granted.
+
+    **Two things `example-projection.md` expresses that the code cannot**, both
+    worth more than the code: (a) §5 names a unit `<project>@<role>.service`,
+    which drops the app coordinate — and §3's own gateway hosts
+    `intern/prod/git/app` AND `intern/prod/idp/app`, two apps of one project at
+    one role, which collide on that name. The projection renders the name the
+    spec gives and reports the collision rather than quietly running one
+    service where the estate declares two; the spec has to move before the code
+    does. (b) §5's `serial: 47` has no producer: item 11 chose a content hash
+    over a counter deliberately, so `Serial` is carried in as an input and hz
+    passes 0 — `Desired.Fingerprint` is the generation every consumer compares.
+
+    **The drift screen's `generationMatch` stops being `unknown` fleet-wide.**
+    `observedFleet` computed desired state once, outside the loop, for hz's own
+    box; it now computes per machine, so a declared remote machine reads
+    `match` or `behind` — two outcomes that were both `unknown`. A machine no
+    record declares stays `unknown`, which is now a statement about that
+    machine rather than about hz's reach.
+
+    NOT done here and deliberately: no `Segment` record (item 15), no remote
+    apply, no commit-confirmed (item 16). `Desired.Model` has no apply half —
+    `plan.go` does not walk it — so the four inertness tests pass unchanged.
 15. `VPNRange` / `WGInterface` / `AllowedIPs` go plural. **Item 13 left names
     waiting on this**: `Machine.Segments` holds segment names that nothing
     resolves, because there is no Segment record to resolve them against. Item
@@ -729,6 +793,37 @@ that changes hz's shape.
     then extend `ValidateMachines` from checking a segment name's SHAPE to
     checking its EXISTENCE, and give a machine a per-segment address and key.
     Until then a membership is a declaration about a label.
+
+    **Item 14 now names, precisely, what item 15 must add for the WireGuard
+    section to be RENDERED rather than read.** hz's WireGuard section is
+    `wg0.conf` read back because hz has no whole-file renderer for it — it
+    mutates the file in place and `internal/wireguard` says the file on disk is
+    the state of record. A remote machine's file is not hz's to read, so the
+    section is omitted with a gap. To render one instead, hz needs, per
+    `(machine, segment)`:
+
+    - the segment's **CIDR** (today's single `VPNRange`) and **interface name**
+      (today's single `WGInterface`), so a machine in two segments has two
+      interfaces rather than one that collides;
+    - this machine's **address on that segment** and its **per-interface
+      key**, which WireGuard forces anyway and which is what keeps a compromise
+      of one segment's key from handing over another's;
+    - the **peer set and each peer's `AllowedIPs`**, which is what the hub
+      needs to emit `[Peer]` blocks at all;
+    - the segment's **hub endpoint**, which is also what fills
+      `MachineConfig.Hosts` — §5's one `/etc/hosts` entry is the gateway's
+      address ON that segment, and that is the same missing record.
+
+    With those, `Segment.Resolved` becomes true, `Hosts` becomes computable,
+    and the WireGuard section becomes a render like the other four. Without
+    them a projection can name a membership and nothing else, which is exactly
+    what it does today and says so.
+
+    **Forwards do NOT wait on this.** A multi-homed machine's projection
+    already answers `forwards: []` — deny between its own interfaces — which is
+    this document's own default. A declared crossing needs a place to be
+    declared, and a `Note` is prose; that is a smaller addition than the
+    Segment record and it is not what blocks WireGuard.
 16. Remote agents: poll, diff, apply, commit-confirmed on network changes.
 
 Order matters here. Items 10–12 are a privilege refactor on one box with no

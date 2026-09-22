@@ -735,10 +735,17 @@ is the gap as it stood; the decisions that closed it are below it.
 - **The agent stays inert.** A report is a POST. The four inertness tests pass
   unchanged, and `TestAReportingPassStillWritesNothing` says it about the wire.
 
-**What the IPTables tab still needs and did not get here**: the rules hz serves
-are classified against **hz's own** expected/stale/blessed sets, which are
-right for the gateway and wrong for any other machine — that needs item 14's
-projection. And nothing rewires `reconcileIPTables`: its 60s loop still calls
+**What the IPTables tab still needs, and what item 14 turned out NOT to give
+it**: the rules hz serves are classified against **hz's own**
+expected/stale/blessed sets, which are right for the gateway and wrong for any
+other machine. This paragraph used to point at item 14's projection as the fix.
+It is not: the projection landed (2026-09-22) and a per-machine expected set
+still has no source, because nothing in the model declares which machines run
+an edge — `HAProxyEnabled` and the classifier's inputs are this hz process's
+own settings, not a per-machine declaration. The projection records exactly
+that as a gap on every remote machine (`server.noteRemoteGaps`), so the hole is
+now visible rather than silent, and closing it needs a record that says a
+machine hosts an edge at all. And nothing rewires `reconcileIPTables`: its 60s loop still calls
 `iptables.LiveRules` in hz's process, so at the flip it must be repointed at
 the reported set. The data is now there for both.
 

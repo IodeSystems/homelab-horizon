@@ -186,14 +186,26 @@ func (s *Server) observedFleet(now time.Time) []apitypes.AgentObservation {
 	}
 	sort.Strings(names)
 
-	// What hz would serve each machine right now. hz renders for the box it
-	// runs on and nothing else until the Machine record lands (item 13), so
-	// every other machine's generation comparison is honestly "unknown".
-	desired := s.buildAgentDesired()
-
 	out := make([]apitypes.AgentObservation, 0, len(names))
 	for _, name := range names {
 		o, reported := reports[name]
+
+		// WHAT HZ WOULD SERVE THIS MACHINE RIGHT NOW — PER MACHINE, since item
+		// 14. This used to be one call, hz's own payload, hoisted out of the
+		// loop, because hz could compute desired state for exactly one box:
+		// every other row's generation comparison was "unknown", fleet-wide
+		// and permanently. The projection is what makes the comparison
+		// possible for a machine hz is not on, so the call moved inside the
+		// loop and takes the machine it is for.
+		//
+		// nil for a machine hz has no projection for at all — one that
+		// reported or enrolled and that no machine record declares. That row
+		// stays "unknown", which is still the truthful answer for it and is
+		// now a statement about THAT machine rather than about hz's reach.
+		var desired *agent.Desired
+		if s.canProjectFor(name) {
+			desired = s.desiredFor(name)
+		}
 		out = append(out, s.observationFor(name, enrolled[name], o, reported, desired, now))
 	}
 	return out
@@ -247,9 +259,14 @@ func (s *Server) observationFor(
 	row.AgentVersion = r.AgentVersion
 	row.Truncated = r.Truncated
 
-	// The generation pair. Only comparable for the machine hz actually
-	// renders for; everyone else stays "unknown" rather than being called
-	// behind on a comparison hz cannot make.
+	// The generation pair. Comparable for every machine hz can project for,
+	// which since item 14 is every machine it declares; a machine hz has no
+	// projection for is passed a nil desired and stays "unknown" rather than
+	// being called behind on a comparison hz cannot make.
+	//
+	// The addressing check stays. It is cheap and it is the one thing that
+	// would turn a caller's bug — passing the wrong machine's payload — into a
+	// row telling an operator a healthy box is behind.
 	if desired != nil && desired.Machine != "" && desired.Machine == machine {
 		row.DesiredGeneration = desired.Fingerprint()
 		if row.DesiredGeneration == r.Generation {
@@ -296,11 +313,15 @@ func (s *Server) observationFor(
 // fed from hz's own read. Building a second opinion agent-side is precisely
 // the drift internal/agent/plan.go refuses for the same reason.
 //
-// The expected/stale/blessed sets are hz's, for the box hz renders for. A
-// remote machine's rules would need that machine's sets, which is item 14's
-// projection; until then a remote report classifies against hz's own and the
-// answer for anything it does not recognise is "unknown", which is the
-// truthful one.
+// The expected/stale/blessed sets are hz's, for the box hz renders for, and
+// item 14 did NOT change that — which is worth saying, because this comment
+// used to point at item 14 as the thing that would. A remote machine's rules
+// need that machine's expected set, and the projection cannot produce one:
+// nothing in the model declares which machines run an edge (see noteRemoteGaps
+// in handlers_agent.go, which records exactly this as a gap on every remote
+// machine's projection). So a remote report still classifies against hz's own
+// sets and anything it does not recognise comes back "unknown", which remains
+// the truthful answer.
 func (s *Server) classifyReportedRules(sec *agent.IPTablesObservation) *apitypes.AgentIPTables {
 	if sec == nil {
 		return nil
