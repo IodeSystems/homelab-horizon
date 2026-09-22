@@ -593,7 +593,6 @@ SERVER_ENDPOINT="$SERVER_ENDPOINT:51820"
 cat > /etc/homelab-horizon/config.json <<CFGEOF
 {
   "listen_addr": ":$LISTEN_PORT",
-  "auto_heal": true,
 
   "wg_interface": "wg0",
   "wg_config_path": "/etc/wireguard/wg0.conf",
@@ -622,8 +621,15 @@ cat > /etc/homelab-horizon/config.json <<CFGEOF
 CFGEOF
 echo "  Config written to /etc/homelab-horizon/config.json"
 
-# 7. Install and start service
-echo "[7/7] Installing and starting service..."
+# 7. Install the remaining dependencies, then the service
+#
+# Step 1 installs only what this script itself needs (wireguard-tools, curl).
+# The config just written enables dnsmasq and HAProxy, and neither is on the
+# box yet. hz does not install packages at boot — the config key that used to
+# make it do so is gone — so the join asks for them by name, here, with output
+# the operator can see and a non-zero exit if apt fails.
+echo "[7/7] Installing dependencies and starting service..."
+/usr/local/bin/homelab-horizon install-deps
 homelab-horizon --install 2>/dev/null || true
 systemctl start homelab-horizon
 systemctl enable homelab-horizon 2>/dev/null || true

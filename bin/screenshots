@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Regenerate README screenshots reproducibly.
 #
-# Boots HZ in a hermetic Docker container (daemons off, auto_heal off, RFC 5737
+# Boots HZ in a hermetic Docker container (daemons off, no apt, RFC 5737
 # documentation IPs, public-IP detection overridden) so nothing touches a real
 # network, drives it with Playwright, captures docs/screenshots/*.png, and tears
 # the container down. Safe to run anywhere with Docker + Node.

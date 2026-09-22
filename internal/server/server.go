@@ -1370,22 +1370,19 @@ func (s *Server) ensureServicesRunning() []SubsystemState {
 		return nil
 	}
 
-	// Say what is missing whether or not auto-heal is allowed to fix it.
-	// autoheal.Run only executes when the `auto_heal` config flag is on, which
-	// it is not by default — so an install with none of the dependencies
-	// present used to produce cryptic start failures and no statement that the
-	// packages simply were not there.
+	// Say what is missing, unconditionally. There is no longer a flag that
+	// could install them instead: hz never installs packages at boot, so the
+	// only thing startup can do about an absent dependency is name it and the
+	// command that fixes it. An install with none of the dependencies present
+	// used to produce cryptic start failures and no statement that the packages
+	// simply were not there.
 	if missing := autoheal.Missing(s.cfg()); len(missing) > 0 {
 		pkgs := make([]string, 0, len(missing))
 		for _, d := range missing {
 			pkgs = append(pkgs, d.Package)
 		}
-		if s.cfg().AutoHeal {
-			slog.Warn("dependencies missing after auto-heal", "packages", strings.Join(pkgs, " "))
-		} else {
-			slog.Warn("dependencies missing and auto-heal is off; run `homelab-horizon install-deps`",
-				"packages", strings.Join(pkgs, " "))
-		}
+		slog.Warn("dependencies missing; run `homelab-horizon install-deps`",
+			"packages", strings.Join(pkgs, " "))
 	}
 
 	for _, p := range planStartup(s.observeSubsystems()) {

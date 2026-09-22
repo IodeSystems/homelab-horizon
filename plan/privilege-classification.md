@@ -145,11 +145,11 @@ plausibly exercises it (§3 says what would tell us; unknowns go to §8).
 | 22 | `rebuildWGChains` + `syncMFAJailACL` — ~18 call sites | `handlers_api_vpn.go:431`, `mfa_jail.go:106` | **yes, on every MFA transition** | **AGENT-OWNED** — missed by the audit (§3.7) |
 | 23 | static supervisor: fork a child as `nobody` | `static_supervisor.go:145-232` | yes, if static sites exist | **DELETE** — its reason to exist is what item 12 removes (§3.6) |
 | 24 | `sitedeploy` chown-to-`nobody` | `handlers_site.go:107`, `sitedeploy.go:326` | yes, if static sites exist | **DELETE** with #23 |
-| 25 | `autoheal.Run` — boot-time apt + mkdirs + sysctl + disable system dnsmasq | `autoheal.go:217` | **no** (`auto_heal` unset — audit §1.2) | **DELETE** (§3.5) |
+| 25 | ~~`autoheal.Run`~~ | — | **yes on some boxes** — audit §1.2's "nothing sets `auto_heal`" was WRONG (§3.5) | ✅ **DELETED 2026-09-22** (§3.5) |
 | 26 | `autoheal.Missing` | `:81` | yes (startup report) | **HZ-KEEPS** — pure, unprivileged, stays |
 | 27 | `autoheal.InstallMissing` / `aptInstall` | `:110`, `:134` | at install | **HZ-KEEPS as a CLI verb**, never in the daemon (§5.1) |
 | 28 | backup **restore** — writes wg0.conf, `<config>.token`, invites, cert PEMs from an uploaded zip | `handlers_backup.go:150-205` | **ask** (§8) | **SPLIT** — missed by the audit (§3.8) |
-| 29 | `maybeSelfInstall` — copy own binary to `/usr/local/bin`, write own unit, `systemctl restart` | `cmd/homelab-horizon/main.go:135-196` | **yes, at boot, today** | **DELETE** — missed by the audit (§3.9) |
+| 29 | ~~`maybeSelfInstall`~~ | — | **yes, at boot, until 2026-09-22** | ✅ **DELETED 2026-09-22** — missed by the audit (§3.9) |
 | 30 | `Config.WriteMaintenancePageFiles` — per-service `*_503.http` | `config/derive.go:339` | yes, if any service sets one | **AGENT-OWNED** — missed by the audit; cheapest win (§3.10) |
 | 31 | `handlers_integration.go` | — | — | **NOT PRIVILEGED** (§1.1) |
 | 32 | `internal/system/interfaces.go` | — | — | **NOT PRIVILEGED** (§1.2) |
@@ -575,6 +575,45 @@ So autoheal after item 12 is: **a pure observation function in hz, an allowlist,
 and a root CLI verb.** No `Run`, no HTTP install, no `auto_heal` key. That is a
 smaller surface than a `plan/execute` seam would have produced, and it removes
 the flag that made the original failure invisible.
+
+> **✅ DONE 2026-09-22 — and the evidence this rested on was wrong.**
+>
+> The verdict holds; the sentence "It has therefore never run on any box" does
+> not. `auto_heal: true` had **five** producers in-tree that §1.2 did not look
+> for, all of them outside `install`/the installer script/the template:
+>
+> | producer | what it provisions |
+> |---|---|
+> | `generateJoinScript` (`handlers_ha.go`) | every HA peer joined via the fleet join script |
+> | `examples/simple/setup.sh` | the single-node docker example |
+> | `examples/ha-same-subnet/setup.sh` (×2) | both peers |
+> | `examples/ha-site-to-site/setup.sh` (×2) | both peers |
+> | `docker/demo-config.json` | the demo image the `Dockerfile` bakes |
+>
+> and `examples/docker-entrypoint.sh` **polled for 120 seconds waiting for
+> auto-heal to install wireguard-tools** before bringing up `wg0`. So `Run` was
+> load-bearing for the fleet-join and example paths, and its deletion was a
+> behaviour change rather than dead-code removal. That is the lesson, restated
+> as a rule: *"nothing sets this key" is a claim about where you looked.* §1.2
+> looked at the three producers it could name and concluded there were none; the
+> join script it did not think to check is the one that mattered most, because a
+> peer joined by it enables dnsmasq and HAProxy in its config while step 1
+> installs only `wireguard-tools` and `curl`.
+>
+> Every one of those producers is now an explicit `homelab-horizon install-deps`
+> call, which is louder (it prints what it installed) and stricter (a non-zero
+> exit aborts the join instead of leaving a peer up with no proxy). The one
+> exception is the `Dockerfile`'s own `CMD`, deliberately left alone: its only
+> in-tree caller is `bin/screenshots`, which runs the image hermetically with
+> every daemon off and no outbound network, so an apt there would be pointless
+> and would contradict the "no outbound traffic" the config promises.
+>
+> The three side effects landed where §3.5 said, with one change:
+> `enableIPForwarding` was **deleted rather than rehomed** — it was the third
+> in-tree copy of `os.WriteFile("/proc/sys/net/ipv4/ip_forward", "1")`, and the
+> other two (`wireguard.EnableIPForwarding`, which §3.1 #1 makes the agent's
+> `File`, and `check --fix`'s interactive prompt) both survive. Rehoming a
+> redundant copy is not a rehome.
 
 ### 3.6 `static_supervisor.go` — DELETE, and one real trade to decide
 
@@ -1061,8 +1100,10 @@ This sits alongside `ha-and-the-agent.md` §7 (the peer-sync half) and
       boot path, it is root, and it is dead after the flip anyway.
 - [x] ✅ **Delete `POST /iptables/remove`** (§3.3) — done 2026-09-22.
       Body-supplied table/chain/args.
-- [ ] **Delete `autoheal.Run` and the `auto_heal` config key** (§3.5); rehome
-      its three side effects.
+- [x] ✅ **Delete `autoheal.Run` and the `auto_heal` config key** (§3.5); rehome
+      its three side effects — done 2026-09-22. `requiredDirs` → `install`,
+      `stopSystemDnsmasq` → `InstallMissing` (the `install-deps` path),
+      `enableIPForwarding` → deleted outright as the third redundant copy.
 - [◐] **Delete `POST /system/install/package`** — ✅ done 2026-09-22 — **and the
       `systemdRun` helper's last shell-string callers** (§3.1 #8, #12). Confirm
       `systemdRun` has no callers left and delete it; §5.2 rule 1.

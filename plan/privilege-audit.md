@@ -167,11 +167,13 @@ step to schedule — it is the only way the agent ever works.
 > verb installs it. `install-deps` is registered at
 > `cmd/homelab-horizon/root.go:77`, `install --with-deps` at `:99`, and the
 > startup report at `internal/server/server.go:1377` is unconditional (the
-> `AutoHeal` flag now only changes the wording).
+> `AutoHeal` flag only changed the wording; as of 2026-09-22 the flag is gone
+> and the report has one form).
 >
 > **Not covered by a test:** `server.go:1377-1386`. `Server.Run()` is never
-> invoked in tests, so a regression that re-gated the report behind `AutoHeal`
-> would be caught only by another VM run.
+> invoked in tests, so a regression that re-gated the report behind a flag
+> would be caught only by another VM run — there is no longer a flag to gate
+> it on, which is one fewer way for that regression to happen.
 
 After `homelab-horizon install` + `systemctl start`, running as root:
 
@@ -196,6 +198,21 @@ separate `autoheal.InstallPackage` one package at a time through
 `/api/v1/system/install/package`. So on any box whose config does not name
 `auto_heal`, autoheal has never run, and nothing anywhere said the packages
 were absent. **Wiring gap AND a missing entry point.**
+
+> **CORRECTION 2026-09-22 — "nothing sets it" was a claim about where this
+> paragraph looked.** Deleting `Run` (classification §3.5) turned up **five**
+> producers of `auto_heal: true` outside the three named here: the HA fleet
+> **join script** (`generateJoinScript`, `handlers_ha.go`), all three
+> `examples/*/setup.sh` (five configs between them) and `docker/demo-config.json`
+> — plus `examples/docker-entrypoint.sh`, which polled 120 seconds waiting for
+> auto-heal to install `wireguard-tools`. So `Run` *had* executed, on every
+> HA-joined peer and every example stack, and its deletion was a behaviour
+> change rather than dead-code removal. The measured conclusion about the
+> *office gateway* stands — that box's config does not name the key. The
+> generalisation to "any box" did not. Each producer now calls
+> `homelab-horizon install-deps` explicitly. Recorded because the reasoning
+> failure is reusable: an inventory of producers is only as good as the search
+> that built it, and grepping the key would have found all eight in one pass.
 
 **Fixed.** Three parts, none of which install anything implicitly:
 - `autoheal.Missing(cfg)` is a pure observation seam (the `plan(observed)`
@@ -524,7 +541,7 @@ the agent's own tree.
 | `internal/server/handlers_ban.go` | shells ~~`ip` and~~ `iptables` directly — **the `ip` half was wrong** (`privilege-classification.md` §1.4); the three exec sites are all `iptables`. **Four triggers, one of them a deploy token, not an admin.** |
 | `internal/server/handlers_api_iptables.go`, `reconcile_iptables.go` | `exec`. Includes `POST /iptables/remove`, whose table, chain and args come **from the request body** — the class §5.2 rule 2 names. |
 | ~~`internal/system/interfaces.go`~~ | ~~interface manipulation, `exec` + writes~~ — **wrong, corrected 2026-09-21** (`privilege-classification.md` §1.2). Those are Go *interface types* (`FileSystem`, `CommandRunner`), the test seam, not a caller. |
-| `internal/autoheal/autoheal.go` | `apt-get install`, `systemctl` — does not transfer (item 10). `Run` is still there and still gated on `auto_heal`, which nothing sets (§1.2). |
+| `internal/autoheal/autoheal.go` | `apt-get install`, `systemctl` — does not transfer (item 10). `Run` and the `auto_heal` key were DELETED 2026-09-22 (classification §3.5); `InstallMissing` behind the `install-deps` verb is all that is left. |
 | `internal/server/static_supervisor.go` | forks a privilege-dropped child — **on every root gateway, not only ones with static sites** (§1.5, measured). |
 | ~~`internal/probe/agent.go`~~ | ~~writes~~ — **wrong, corrected 2026-09-21** (`privilege-classification.md` §1.3). It is constructed only by `cmd/hz-probe`, on a different machine, under a unit that is already `DynamicUser=yes` + `ProtectSystem=strict` + no ambient capabilities. |
 | `cmd/homelab-horizon/main.go:135` | `maybeSelfInstall` — as root, copies its own binary to `/usr/local/bin`, writes its own unit, restarts itself. **Missed by this table**, added by `privilege-classification.md` §3.9, still present. |
@@ -559,6 +576,7 @@ Ordered, replacing the handover list in `architecture.md`.
 > table is incomplete (§7) and its §7 checklist stands at 6 of 34 (§8). Item 6
 > was answered by the classification — the right move is deletion, not a seam —
 > and `autoheal.Run` is still there. **The consolidated answer is §8.**
+> (`autoheal.Run` was deleted 2026-09-22, per §8.4 — see classification §3.5.)
 
 1. ✅ **Done 2026-09-21. The agent has a credential of its own.** Not `isAdmin`
    growing a Bearer path — that was the tempting one-liner and it was the wrong
