@@ -32,13 +32,11 @@ import {
 import {
   useAptAudit,
   useCreateWGConfig,
-  useEnableHorizon,
   useFixHAProxyLogging,
   useFixIPForwarding,
   useFixMasquerade,
   useFixWGForwardChain,
   useFixWGRules,
-  useInstallHorizonUnit,
   useInstallPackage,
   useRequestCert,
   useRefreshPublicIP,
@@ -53,9 +51,15 @@ import {
 import type { ComponentHealth, SystemHealth, Zone } from "../api/types";
 import { SystemMetricsCard } from "./SystemMetricsCard";
 
-// CheckRow renders one line: label + status chip + optional fix button.
+// CheckRow renders one line: label + status chip + either a fix button or,
+// where hz deliberately has no button, the exact command that fixes it.
 // Keep the shape uniform across all component cards so the dashboard reads
 // as a consistent grid.
+//
+// `runToFix` is the second kind of remedy and is never a weaker version of the
+// first. A check whose fix hz will not perform on its own behalf still has to
+// say what to do — a row that only reports a red chip is a dead end, and "the
+// button used to be here" is not something an operator can know.
 function CheckRow({
   label,
   ok,
@@ -65,6 +69,7 @@ function CheckRow({
   fixLabel = "Fix",
   fixDisabled,
   fixRunning,
+  runToFix,
 }: {
   label: string;
   ok: boolean;
@@ -74,32 +79,40 @@ function CheckRow({
   fixLabel?: string;
   fixDisabled?: boolean;
   fixRunning?: boolean;
+  runToFix?: string;
 }) {
   return (
     <Stack
-      direction="row"
-     
-      spacing={2}
-      sx={{ alignItems: "center", py: 0.75, borderBottom: 1, borderColor: "divider" }}
+      sx={{ py: 0.75, borderBottom: 1, borderColor: "divider" }}
     >
-      <Typography variant="body2" sx={{ flex: 1 }}>
-        {label}
-      </Typography>
-      <Chip
-        size="small"
-        label={ok ? okLabel : (failingLabel ?? "Missing")}
-        color={ok ? "success" : "error"}
-        variant={ok ? "outlined" : "filled"}
-      />
-      {!ok && fix && (
-        <Button
+      <Stack direction="row" spacing={2} sx={{ alignItems: "center" }}>
+        <Typography variant="body2" sx={{ flex: 1 }}>
+          {label}
+        </Typography>
+        <Chip
           size="small"
-          variant="contained"
-          onClick={fix}
-          disabled={fixDisabled || fixRunning}
-        >
-          {fixRunning ? <CircularProgress size={16} /> : fixLabel}
-        </Button>
+          label={ok ? okLabel : (failingLabel ?? "Missing")}
+          color={ok ? "success" : "error"}
+          variant={ok ? "outlined" : "filled"}
+        />
+        {!ok && fix && (
+          <Button
+            size="small"
+            variant="contained"
+            onClick={fix}
+            disabled={fixDisabled || fixRunning}
+          >
+            {fixRunning ? <CircularProgress size={16} /> : fixLabel}
+          </Button>
+        )}
+      </Stack>
+      {!ok && runToFix && (
+        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+          Run on this host:{" "}
+          <Box component="code" sx={{ fontFamily: "monospace", userSelect: "all" }}>
+            {runToFix}
+          </Box>
+        </Typography>
       )}
     </Stack>
   );
@@ -261,10 +274,15 @@ function RangeAdvice({ health }: { health: SystemHealth }) {
 
 // SystemLevelCard — host-wide bits that don't fit a single component: IP
 // forwarding, horizon's own systemd unit.
+//
+// The unit rows report and do not act. hz will not write the unit file that
+// says who hz runs as, or enable itself at boot, from an HTTP request: a web
+// process that can rewrite its own unit has a one-request path back to
+// User=root (privilege-classification.md §3.1 #6/#7). Both rows carry the
+// command instead, which is what an operator standing at a box that has no
+// unit can actually use — they cannot open this page on it either way.
 function SystemLevelCard({ health }: { health: SystemHealth }) {
   const fixIPF = useFixIPForwarding();
-  const installUnit = useInstallHorizonUnit();
-  const enableHorizon = useEnableHorizon();
 
   return (
     <Card variant="outlined">
@@ -282,19 +300,14 @@ function SystemLevelCard({ health }: { health: SystemHealth }) {
           ok={health.horizon_unit_installed}
           okLabel="Installed"
           failingLabel="Missing"
-          fix={() => installUnit.mutate()}
-          fixRunning={installUnit.isPending}
-          fixLabel="Install unit"
+          runToFix="sudo homelab-horizon install"
         />
         <CheckRow
           label="horizon enabled at boot"
           ok={health.horizon_enabled}
           okLabel="Enabled"
           failingLabel="Disabled"
-          fix={() => enableHorizon.mutate()}
-          fixDisabled={!health.horizon_unit_installed}
-          fixRunning={enableHorizon.isPending}
-          fixLabel="Enable"
+          runToFix="sudo systemctl enable homelab-horizon"
         />
         <CheckRow
           label="horizon currently running"

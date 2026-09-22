@@ -112,8 +112,10 @@ POST /api/v1/system/install/package        # apt install <allow-listed pkg>     
 GET  /api/v1/system/apt-audit              # JSONL audit log, newest-first             ✅ done
 # /api/v1/system/install/acme dropped: lego is compiled into horizon, no external acme.sh binary to install.
 # Per-domain cert request: /api/v1/ssl/request-cert already exists (pre-Phase-0). ✅ pre-existing
-POST /api/v1/system/install/horizon-unit   # write /etc/systemd/system/homelab-horizon.service  ✅ done
-POST /api/v1/system/enable/horizon         # systemctl enable                         ✅ done
+# POST /api/v1/system/install/horizon-unit — DELETED 2026-09-22 (privilege-classification.md §3.1 #6/#7).
+# POST /api/v1/system/enable/horizon        — DELETED 2026-09-22. A web process that can rewrite the
+#   unit saying who it runs as has a one-request path back to User=root. The System Health card keeps
+#   both checks and shows `sudo homelab-horizon install` / `sudo systemctl enable homelab-horizon`.
 POST /api/v1/wg/create-config              # handleCreateWGConfig                     ✅ done
 POST /api/v1/dnsmasq/write-config          # WriteConfig + SetMappings                ✅ done
 POST /api/v1/dnsmasq/reload                # Reload (writes config first)             ✅ done

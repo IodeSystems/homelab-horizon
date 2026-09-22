@@ -126,8 +126,8 @@ plausibly exercises it (§3 says what would tell us; unknowns go to §8).
 | 3 | `POST /system/fix/wg-forward-chain` → `SetupForwardChain` | `:82`, `wireguard/apply.go:207` | rarely | **DELETE** (duplicate of the owned-chain rebuild) |
 | 4 | `POST /system/fix/wg-rules` → rewrite wg0.conf PostUp/Down + bounce the interface | `:101` | maybe | **AGENT-OWNED**, needs *restart-vs-reload* (§4.2) |
 | 5 | `POST /wg/create-config` → mint a server keypair, write wg0.conf | `:134` | **once, ever** | **DELETE from the web surface** → a CLI verb (§3.1) |
-| 6 | `POST /system/install/horizon-unit` → write `/etc/systemd/system/homelab-horizon.service` | `:190` | no (installed) | **DELETE** (the `install` verb owns it; long-term the agent's Units) |
-| 7 | `POST /system/enable/horizon` → `systemctl enable` | `:228` | no | **DELETE** (same) |
+| 6 | ~~`POST /system/install/horizon-unit`~~ | — | no (installed) | ✅ **DELETED 2026-09-22** (the `install` verb owns it; long-term the agent's Units) |
+| 7 | ~~`POST /system/enable/horizon`~~ | — | no | ✅ **DELETED 2026-09-22** (same) |
 | 8 | `POST /system/install/package` → allowlisted `apt-get install` | `:282`, `autoheal.go:165` | possibly | **DELETE from the web surface** → `install-deps` (§3.5) |
 | 9 | `GET /system/apt-audit` | `:330` | — | **HZ-KEEPS** (unprivileged read; see §5.3 for its fate) |
 | 10 | `POST /dnsmasq/write-config` / `/reload` / `/start` | `:374`, `:398`, `:494` | maybe | **DELETE** (the agent's poll already does exactly this) |
@@ -135,7 +135,7 @@ plausibly exercises it (§3 says what would tell us; unknowns go to §8).
 | 12 | `POST /haproxy/fix-logging` → patch `/etc/apparmor.d/…`, `apparmor_parser -r`, touch+chown `/var/log/haproxy.log`, restart rsyslog | `:528` | likely, once | **DELETE from the web surface** → a provisioning step (§3.1) |
 | 13 | `POST /system/fix/log-retention` → journald drop-in + restart | `:588` | yes (PCI) | **AGENT-OWNED** — the model case (§3.1) |
 | 14 | ban / unban / reapply → `iptables -I\|-D INPUT … DROP` | `handlers_ban.go:22,31,40` | **yes, continuously** | **AGENT-OWNED**, needs the classifier widened (§3.2) |
-| 15 | `POST /iptables/remove` → `iptables -t <table> -D <chain> <args>` **from the request body** | `handlers_api_iptables.go:177` | rarely | **DELETE** (§3.3) |
+| 15 | ~~`POST /iptables/remove`~~ | — | rarely | ✅ **DELETED 2026-09-22** (§3.3) |
 | 16 | `POST /iptables/bless` / `/unbless` | `:106`, `:141` | maybe | **HZ-KEEPS** (already unprivileged — config only) |
 | 17 | `POST /iptables/reconcile` | `:207` | maybe | **AGENT-OWNED** (it *is* the agent's job) |
 | 18 | `GET /iptables/rules` → `iptables-save` **read** | `:76`, `iptables/reconcile.go:34` | yes (the tab) | **AGENT-OWNED**, needs a **report-back channel** (§4.1) |
@@ -294,7 +294,17 @@ run with a human present, refusing outright when `wg0.conf` already exists.
 Startup already prints the sentence that tells the operator to run it
 (`privilege-audit.md` §1.4, the WireGuard fix).
 
-**#6 install/horizon-unit and #7 enable/horizon are DELETE**, and the reason is
+**#6 install/horizon-unit and #7 enable/horizon — ✅ DELETED 2026-09-22.**
+Handlers, routes and the `useInstallHorizonUnit` / `useEnableHorizon` hooks are
+gone. The System card keeps both **observations** — `horizon_unit_installed`
+and `horizon_enabled` are reads and stay — and each failing row now carries the
+command (`sudo homelab-horizon install`, `sudo systemctl enable
+homelab-horizon`) where its button was. Nothing is lost that an operator could
+have used anyway: the only machine these buttons could act on is one whose
+admin UI is already being served by a running hz. What follows is the verdict
+as it was argued.
+
+The reason is
 structural rather than about privilege budget: after the flip, **hz web running
 as `hz` would be writing the unit file that says `User=hz`**. A web process that
 can rewrite its own unit has not been de-rooted; it has a one-request path back
@@ -1048,9 +1058,9 @@ This sits alongside `ha-and-the-agent.md` §7 (the peer-sync half) and
 - [ ] **Delete `POST /system/install/package`** and the `systemdRun` helper's
       last shell-string callers (§3.1 #8, #12). Confirm `systemdRun` has no
       callers left and delete it; §5.2 rule 1.
-- [ ] **Delete `/system/install/horizon-unit` and `/system/enable/horizon`**
-      (§3.1 #6, #7). A web process that can rewrite its own unit is not
-      de-rooted.
+- [x] ✅ **Delete `/system/install/horizon-unit` and `/system/enable/horizon`**
+      (§3.1 #6, #7) — done 2026-09-22. A web process that can rewrite its own
+      unit is not de-rooted.
 - [ ] **Move `/wg/create-config` to a CLI verb** that refuses when `wg0.conf`
       exists (§3.1 #5). Decide which binary owns it (§8).
 - [ ] **Move `/haproxy/fix-logging` to provisioning** (§3.1 #12); keep the

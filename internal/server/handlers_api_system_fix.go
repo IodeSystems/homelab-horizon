@@ -184,63 +184,6 @@ PostDown = %s
 	s.writeFixOK(w)
 }
 
-// POST /api/v1/system/install/horizon-unit — writes the systemd unit that
-// supervises horizon itself into /etc/systemd/system/homelab-horizon.service
-// and runs daemon-reload so the new unit is visible.
-func (s *Server) handleAPISystemInstallHorizonUnit(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-
-	binaryPath := "/usr/local/bin/homelab-horizon"
-	if execPath, err := os.Executable(); err == nil {
-		if abs, err := filepath.Abs(execPath); err == nil {
-			binaryPath = abs
-		}
-	}
-	configPath := s.configPath
-	if abs, err := filepath.Abs(configPath); err == nil {
-		configPath = abs
-	}
-	content := config.GenerateServiceFile(binaryPath, configPath)
-
-	const servicePath = "/etc/systemd/system/homelab-horizon.service"
-	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
-		"bash", "-c", fmt.Sprintf("cat > %s", servicePath))
-	cmd.Stdin = strings.NewReader(content)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "write unit: "+err.Error()+" — "+strings.TrimSpace(string(out)))
-		return
-	}
-	if out, err := systemdRun("systemctl", "daemon-reload"); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "daemon-reload: "+err.Error()+" — "+out)
-		return
-	}
-	s.writeFixOK(w)
-}
-
-// POST /api/v1/system/enable/horizon — systemctl enable homelab-horizon
-func (s *Server) handleAPISystemEnableHorizon(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-	if out, err := systemdRun("systemctl", "enable", "homelab-horizon"); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error()+" — "+out)
-		return
-	}
-	s.writeFixOK(w)
-}
-
 // aptAuditEntry is one line in the apt-audit.log JSONL file. Horizon has a
 // single admin token so there's no per-user attribution — SourceIP is the
 // closest we get to "who asked for this."
