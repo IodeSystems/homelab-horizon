@@ -1417,25 +1417,6 @@ export const useReloadDNSMasq = () => useSystemFix("dnsmasq/reload");
 export const useStartDNSMasq = () => useSystemFix("dnsmasq/start");
 export const useFixDNSMasqInterfaces = () => useSystemFix("dnsmasq/fix-interfaces");
 
-// Package install — distinct from the generic fixer because it takes a body.
-export function useInstallPackage() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (pkg: string) =>
-      apiFetch<{ ok: boolean; package: string; output: string }>(
-        "/system/install/package",
-        {
-          method: "POST",
-          body: JSON.stringify({ package: pkg }),
-        },
-      ),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["system", "health"] });
-      qc.invalidateQueries({ queryKey: ["system", "apt-audit"] });
-    },
-  });
-}
-
 // --- IPTables rule inventory (Phase 5) ---
 
 export function useIPTablesRules() {

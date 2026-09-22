@@ -45,16 +45,18 @@ var dependencies = []dependency{
 		func(c *config.Config) bool { return c.HAProxyEnabled }},
 	// Opt-in: hz does not need node-exporter to work, it just folds it into
 	// the scrape config it serves when present. Listing it here also puts it
-	// on the KnownPackages allowlist, so the install endpoint can fetch it on
-	// request without widening that allowlist to arbitrary packages.
+	// on the KnownPackages allowlist, so `install-deps` will fetch it on a box
+	// whose config enables it, without widening that allowlist.
 	{"Prometheus node exporter", "prometheus-node-exporter", "prometheus-node-exporter",
 		"host metrics for the scrape config hz publishes; optional",
 		func(c *config.Config) bool { return c.NodeExporterEnabled }},
 }
 
 // KnownPackages returns the set of apt package names autoheal knows how to
-// install. The system/install/package API endpoint uses this as a whitelist
-// so an admin can't coerce horizon into running `apt-get install anything`.
+// install. InstallMissing checks every package against it, so no path in hz
+// can run `apt-get install anything`. It used to guard an HTTP endpoint too;
+// that endpoint is gone (privilege-classification.md §3.1 #8) and the
+// allowlist is now the invariant for the CLI verb alone.
 func KnownPackages() []string {
 	pkgs := make([]string, 0, len(dependencies))
 	for _, d := range dependencies {
@@ -104,9 +106,9 @@ func Missing(cfg *config.Config) []Dependency {
 // reports what is absent and stops there, and this is what a human or a script
 // runs when they have decided to change the box.
 //
-// Every package goes through KnownPackages, the same allowlist the HTTP
-// install endpoint uses, so this path cannot install anything hz does not
-// already name.
+// Every package goes through KnownPackages, so this path cannot install
+// anything hz does not already name. It is now the only apt path in the tree:
+// the HTTP install endpoint that shared the allowlist is gone.
 func InstallMissing(cfg *config.Config) error {
 	missing := Missing(cfg)
 	if len(missing) == 0 {
@@ -151,53 +153,6 @@ func aptInstall(pkgs []string) error {
 		return fmt.Errorf("apt-get install failed: %w", err)
 	}
 	return nil
-}
-
-// InstallPackage runs `apt-get update` + `apt-get install -y -qq <pkg>` through
-// systemd-run so it escapes horizon's own ProtectSystem=strict sandbox at
-// runtime. Validates pkg against KnownPackages before executing. Returns the
-// combined stdout/stderr for logging even on success.
-//
-// NOTE: Unlike Run() — which is the startup bootstrap path and assumes it has
-// unsandboxed access — this is the runtime HTTP path. systemd-run is required;
-// on hosts without systemd (e.g. Docker) this will error, and the caller
-// should surface that cleanly rather than retry.
-func InstallPackage(pkg string) (string, error) {
-	allowed := false
-	for _, p := range KnownPackages() {
-		if p == pkg {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
-		return "", fmt.Errorf("package %q not in allow-list", pkg)
-	}
-
-	// apt-get update in its own one-shot so a slow mirror doesn't block the
-	// install step if apt metadata is already fresh enough.
-	upd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
-		"--setenv=DEBIAN_FRONTEND=noninteractive",
-		"apt-get", "update", "-qq")
-	updOut, updErr := upd.CombinedOutput()
-
-	ins := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
-		"--setenv=DEBIAN_FRONTEND=noninteractive",
-		"apt-get", "install", "-y", "-qq", pkg)
-	insOut, insErr := ins.CombinedOutput()
-
-	// Packages may install systemd units; reload so systemctl sees them.
-	_ = exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
-		"systemctl", "daemon-reload").Run()
-
-	combined := strings.TrimSpace(string(updOut)) + "\n" + strings.TrimSpace(string(insOut))
-	if insErr != nil {
-		if updErr != nil {
-			return combined, fmt.Errorf("apt-get update + install failed: %w", insErr)
-		}
-		return combined, fmt.Errorf("apt-get install failed: %w", insErr)
-	}
-	return combined, nil
 }
 
 var requiredDirs = []struct {
