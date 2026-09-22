@@ -8,7 +8,8 @@
 //   - nat POSTROUTING  (a single MASQUERADE rule pinned to the default iface)
 //   - filter FORWARD   (jump to WG-FORWARD + stateful return traffic)
 //   - filter WG-FORWARD (per-peer profile rules + default drop)
-//   - filter INPUT     (jump to WG-INPUT, for wg-incoming traffic only)
+//   - filter INPUT     (jump to WG-INPUT for wg-incoming traffic, plus one
+//     `-s <addr>/32 -j DROP` per banned address)
 //   - filter WG-INPUT  (MFA jail rules for traffic to the gateway itself)
 //   - layer-4 port forwards (forwards.go): nat HZ-PREROUTING, nat
 //     HZ-POSTROUTING and filter HZ-FORWARD, plus one jump into each from nat
@@ -18,8 +19,9 @@
 // Other iptables state on the host is none of horizon's business — the
 // classifier treats it as "unknown" and leaves it alone unless the admin
 // explicitly removes it via the IPTables tab. In particular, INPUT is read
-// back only for rules that jump to WG-INPUT: a typical host has a pile of
-// unrelated INPUT rules (ufw, docker) and horizon must not claim them.
+// back only for horizon's WG-INPUT jump and for source-DROP rules (the shape
+// of a ban): a typical host has a pile of unrelated INPUT rules (ufw, docker)
+// and horizon must not claim them.
 //
 // The package is split along one seam, and the split is load-bearing for the
 // hz-agent work (plan/architecture.md, "hz-agent de-roots the hz web surface"):
@@ -40,6 +42,7 @@ package iptables
 // This file is part of the PURE half of the package: config in, rules out.
 
 import (
+	"net"
 	"strings"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
@@ -163,6 +166,19 @@ type Inputs struct {
 	// fixed set, so a forward skipped here is never installed.
 	Forwards      []ForwardInput
 	ReservedPorts map[int]string
+
+	// BannedIPs are the addresses horizon wants dropped in filter INPUT — the
+	// IPs from cfg.IPBans, minus any whose ExpiresAt has passed. The expiry
+	// filtering is the caller's because it needs a clock and this half has
+	// none; emitting an already-expired ban would have the reconciler reinstall
+	// a rule the 30s expiry loop is on its way to removing.
+	//
+	// Supplying them makes a ban an EXPECTED rule: horizon generates it, so the
+	// classifier calls it horizon's own and the IPTables tab offers no action
+	// on it (a ban is lifted through the Bans API, not by unblessing a rule).
+	// Leave it empty and a live ban rule falls to "unknown", which is what the
+	// reconciler saw before bans were modelled at all.
+	BannedIPs []string
 }
 
 // PeerInput is the subset of a WG peer we need to emit forward rules. Keeping
@@ -218,6 +234,8 @@ func ExpectedRules(in Inputs) []Rule {
 		Chain: "INPUT",
 		Args:  []string{"-i", in.WGInterface, "-j", InputChainName},
 	})
+
+	rules = append(rules, banRules(in.BannedIPs)...)
 
 	// WG-FORWARD / WG-INPUT bodies: per-peer rules + default drop.
 	for _, p := range in.Peers {
@@ -329,6 +347,15 @@ func ExpectedRules(in Inputs) []Rule {
 // interface swap. The only thing an iface/CIDR change rewrites is MASQUERADE's
 // `-o` and lan-access's `-d <LanCIDR>`.
 //
+// BANS ARE DELIBERATELY ABSENT (Inputs.BannedIPs is left empty below). A ban
+// rule does not depend on the interface, so it is not iface drift; and stale is
+// the one classification Reconcile DELETES. Feeding the ban list in here would
+// make "lifted in config" mean "deleted from the kernel by the next reconcile
+// tick" — which is a wider delete scope than horizon had before, and removing
+// the live rule is unbanIP's explicit job while handlers_ban.go is the writer.
+// A ban that leaves the config therefore reads as unknown and is left alone.
+// See TestBanRemovedFromConfigIsUnknownNotStale.
+//
 // The forward jumps (ForwardJumpRules) are always included. Classify ranks
 // expected above stale, so they stay while any forward exists and are deleted
 // once the last one is removed — without that, the jumps would outlive every
@@ -356,6 +383,42 @@ func staleIfaceRules(cfg *config.Config, peers []PeerInput, serverWGIP, listenPo
 		Profiles:     cfg.VPNProfiles,
 	}
 	return ExpectedRules(in)
+}
+
+// banRules emits one `filter INPUT -s <addr>/32 -j DROP` per banned address.
+//
+// EMITTED IN READBACK FORM. handlers_ban.go inserts `-s <addr> -j DROP` and the
+// kernel prints it back as `-s <addr>/32 -j DROP`. Canonical does not normalize
+// a host address to its /32, so emitting the bare form would mean the expected
+// rule never matches the live one: the reconciler would read the ban as
+// missing and insert a second copy on every pass. TestBanRuleReadbackRoundTrip
+// is the guard.
+//
+// IPv4 ONLY. `iptables` is the v4 binary, so a v6 entry in cfg.IPBans has no
+// live rule and cannot get one — handlers_ban.go's own insert fails for it.
+// Generating a rule horizon can never install would show as a permanently
+// missing expected rule and a failed add every pass, so the address is parsed
+// and anything that is not a v4 host address is skipped. (Fixing the v6 ban
+// path itself is handlers_ban.go's problem, not the generator's.)
+//
+// Only reached when there is a WireGuard interface: ExpectedRules returns
+// nothing without one, and that stays true with bans. An empty expected set is
+// how iptablesSectionFor says "horizon manages no firewall on this box"; a
+// lone ban rule must not flip a WG-less machine into managed.
+func banRules(bannedIPs []string) []Rule {
+	out := make([]Rule, 0, len(bannedIPs))
+	for _, b := range bannedIPs {
+		ip := net.ParseIP(strings.TrimSpace(b))
+		if ip == nil || ip.To4() == nil {
+			continue
+		}
+		out = append(out, Rule{
+			Table: "filter",
+			Chain: "INPUT",
+			Args:  []string{"-s", ip.String() + "/32", "-j", "DROP"},
+		})
+	}
+	return out
 }
 
 // jailAllows returns the destination-port matchers a jailed peer is permitted
