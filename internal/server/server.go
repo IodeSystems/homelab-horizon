@@ -1234,6 +1234,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/cm/resolve", s.handleAPICMResolve)
 	mux.HandleFunc("/api/v1/cm/promote/gate", s.handleAPICMPromotionGate)
 	mux.HandleFunc("/api/v1/cm/current-key", s.handleAPICMCurrentKey)
+	// Version drift: the declared version of every instance's rung beside the
+	// version that instance last reported. The join
+	// plan/example-projection.md §7 records as missing — see
+	// handlers_version_drift.go. Not the agent channel: different clock.
+	mux.HandleFunc(apitypes.CMPathVersionDrift, s.handleAPICMVersionDrift)
 	// Key custody. These read and write the CONFIG, not the identity store, so
 	// they are gated on isAdmin alone and keep working on a box whose database
 	// failed to open — which is exactly the box somebody is recovering.

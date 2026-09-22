@@ -36,6 +36,8 @@ const (
 	CMPathConfigs     = configmgr.PathConfigs
 	CMPathMachines    = configmgr.PathMachines
 
+	CMPathVersionDrift = configmgr.PathVersionDrift
+
 	CMPathRecovery           = configmgr.PathRecovery
 	CMPathRecoveryRecipients = configmgr.PathRecoveryRecipients
 	CMPathRecoveryWraps      = configmgr.PathRecoveryWraps

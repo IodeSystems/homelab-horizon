@@ -1211,6 +1211,34 @@ func parseVersion(s string) (parsedVersion, error) {
 	return parsedVersion{major: nums[0], minor: nums[1], patch: nums[2], prerelease: prerelease}, nil
 }
 
+// CompareVersions is parseVersion + compareVersions for a caller outside this
+// package, and it exists so that there is exactly ONE version comparison in hz.
+//
+// The version-drift join (internal/server/handlers_version_drift.go) has to say
+// whether an instance is behind or ahead of the version its rung declares. That
+// is the same semver 2.0.0 precedence `ResolveConfig` already applies to a
+// config's [MinVer, MaxVer] range, and a second implementation of it would be
+// free to disagree — the "1.10.0 sorts before 1.9.0" bug, discovered twice, in
+// two screens, saying different things about the same box.
+//
+// NEITHER SIDE IS MADE TO PARSE. An environment's declared version is opaque by
+// design (config.Environment.Version: "a Debian version, an image tag, a git
+// sha") and an observed one is stored exactly as the box sent it. So a string
+// that is not a clean semver tag is not an error here either — it comes back
+// wrapped in ErrInvalidVersion and the caller renders "not comparable", which
+// is the truthful answer rather than a fault.
+func CompareVersions(a, b string) (int, error) {
+	pa, err := parseVersion(a)
+	if err != nil {
+		return 0, err
+	}
+	pb, err := parseVersion(b)
+	if err != nil {
+		return 0, err
+	}
+	return compareVersions(pa, pb), nil
+}
+
 // compareVersions returns -1, 0, or 1 as a is less than, equal to, or greater
 // than b, per semver 2.0.0 precedence (semver.org/#spec-item-11): the numeric
 // core is compared numerically, never lexically — "1.10.0" sorts after
