@@ -14,15 +14,24 @@
 //
 // seam_test.go guards the pure half, exactly as the subsystem packages do.
 //
-// # What is NOT here
+// # The two halves of a payload
 //
-// The projection `project(global, machineID) -> MachineConfig` is item 14 and
-// does not exist yet. What crosses the wire today is the *rendered output* of
-// hz's existing pure render halves — haproxy.cfg's bytes, not the services
-// that produced them. That is deliberate: it makes the transport, the
-// reconcile and the apply path real on the gateway without also inventing the
-// model. When item 14 lands it replaces the *producer* of Desired; the
-// consumer side in this package does not change shape.
+// A Desired now carries two kinds of thing, and the line between them is which
+// machine hz is able to look at:
+//
+//   - The RENDERED sections (haproxy, dnsmasq, wireguard, iptables, certs,
+//     files) are bytes and rule sets hz produced for a machine whose files it
+//     can open — in practice the box hz runs on. They are what item 11 built
+//     and they have apply halves.
+//   - The MODEL section (Model, a projection.MachineConfig) is item 14's
+//     `project(global, machineID)`: what hz's RECORDS say a machine should
+//     look like. It needs no access to the machine, so hz computes it for
+//     every machine it declares.
+//
+// The consumer side of this package did not change shape when the projection
+// landed, which is what item 11 predicted: Model has no apply half here. It is
+// declarative state hz serves and an operator reads; turning packages and
+// units into installs and unit files on a remote box is item 16.
 package agent
 
 import (
@@ -31,6 +40,7 @@ import (
 	"encoding/json"
 
 	"github.com/iodesystems/homelab-horizon/internal/iptables"
+	"github.com/iodesystems/homelab-horizon/internal/projection"
 )
 
 // Subsystem names an apply half. It is the grouping the diff report uses and
@@ -81,6 +91,30 @@ type Desired struct {
 	//
 	// nil still means unmanaged, exactly as for the named sections.
 	Files *FilesSection `json:"files,omitempty"`
+
+	// Model is the projection: what hz's RECORDS say this machine should look
+	// like — its segment memberships, the packages its instances pin, the
+	// units those instances run, and what hz could not work out about any of
+	// it (plan/architecture.md phase 4 item 14).
+	//
+	// IT IS THE ONLY SECTION HZ CAN COMPUTE FOR A MACHINE IT CANNOT TOUCH, and
+	// that is why it exists. Every other section above is produced by
+	// rendering or reading something on the local filesystem, so for `app-1`
+	// they are all nil — and a payload that was nothing but a machine name
+	// would be indistinguishable from hz having no opinion at all. This
+	// section is the opinion, and its Unresolved list is the honest account of
+	// where the opinion stops.
+	//
+	// NO APPLY HALF. plan.go does not walk it and apply.go does not act on it;
+	// a remote agent that installs packages and enables units is item 16.
+	// Serving it changes nothing an agent does, which is what keeps this
+	// additive to an inert fleet. It IS hashed into Fingerprint like
+	// everything else, so a version bump in an environment moves the
+	// generation of exactly the machines that host it.
+	//
+	// nil means unmanaged, exactly as for the named sections: hz did not
+	// project for this machine at all.
+	Model *projection.MachineConfig `json:"model,omitempty"`
 }
 
 // File is one file the agent owns: where it goes, what should be in it, and
