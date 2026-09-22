@@ -4,9 +4,35 @@
 > **synthetic config**: no DNS provider, no `external_dns`, no SSL, no office
 > keys, no office hostnames. Zero credentials of any kind were copied onto it.
 >
+> **RE-MEASURED 2026-09-22** on the same VM, against a binary built from `dev`
+> at `f6e06bd` — 27 commits after the original run (`443a3ca`), 14 of them
+> non-merge. Every §1 finding was re-run rather than re-read; §2's inventory was
+> re-derived; §7 and §8 are new and are the answer to "can item 12 steps 4–5 be
+> attempted". The VM was restored to the state it was found in afterwards (§5).
+>
 > Purpose: item 12 flips hz web to an unprivileged user. That is only safe if we
 > know every privileged operation and who owns it afterwards. `hz-agent`'s own
 > report listed what *it* had considered; this is what the box does.
+
+**What the re-measurement changed, in one place.** Four rows of this document
+were already known wrong (`handlers_ha.go`, `handlers_integration.go`,
+`system/interfaces.go`, `probe/agent.go` — struck in §2 now, not only argued
+about in prose elsewhere). Eight more claims did not survive this pass:
+
+| claim | where | what is actually true |
+|---|---|---|
+| "`systemctl status` carries the degraded line" | §1.3 | **False on any box provisioned before the fix.** The change is in the unit template and nothing rewrites the unit on upgrade. Measured: `NotifyAccess=none`, empty `StatusText`. |
+| "hz does not serve WireGuard" | §2 | It has since `0fb08ac`. `wg0.conf` — the server private key — is in the payload. |
+| "certs still not *served* to the agent" | §2 | They are, since `758e1fd`, as `agent.CertSection`. |
+| peer-API test "bypasses the middleware" | §6 row 3 | Fixed. The test drives the real mux over enumerated routes. |
+| "`errors/503.http` … not wired yet" | `ha-and-the-agent.md` §7 | Wired. Observed in an `hz-agent diff` as `unchanged`. |
+| "the static supervisor runs if static sites exist" | `privilege-classification.md` §2 row 23 | It forks on **every** root gateway. Measured on a box with no static site. |
+| "`WriteMaintenancePageFiles` … `agent.File` has no delete" | §2 | `agent.Directory` added it; the claim is in the payload. |
+| "answer the three blocking decisions" | `privilege-classification.md` §7.A | Two of them are already answered in code (§4.3 and §4.1) and the checklist does not say so. |
+
+Nothing in §1 turned out to have been wrong *as originally measured*; §1.6's
+correction stands exactly as it was rewritten. **The new wrongness is all of the
+same kind: a fix that landed, and a document that did not move with it.**
 
 ## Method
 
@@ -14,13 +40,66 @@ Install hz as root on a clean VM, bring it to a working baseline, then compare
 against what `hz-agent` covers. Findings below are observed, not inferred —
 each names how it was seen.
 
+The re-measurement swapped the current `homelab-horizon`, `hz-agent` and `hz`
+binaries onto `hz-audit`, re-ran each finding, and put the original binaries,
+unit and config back. Where a finding needed a broken state to show itself, the
+break was made deliberately and reversed — a package removed and reinstalled, a
+`peer_id` added and taken out, hz's dnsmasq files deleted and regenerated
+byte-identically. **Each is stated with its positive control**, because a
+finding that reports "fixed" on a box where the failure could not have occurred
+measures nothing (`~/inflight` canon: validate the instrument before trusting
+silence).
+
 The one thing the VM cannot tell us is whether an operation is *needed* on the
 office gateway specifically; it tells us the operation exists and who performs
 it. Section 4 is the part that still needs a human who knows the estate.
 
 ## 1. Findings that block item 12
 
-### 1.1 `hz-agent` cannot authenticate to hz ✅ FIXED 2026-09-21
+### 1.1 `hz-agent` cannot authenticate to hz ✅ MEASURED FIXED 2026-09-22
+
+> **Re-measured 2026-09-22, current binary on `hz-audit`.** Four probes, all
+> from the box itself:
+>
+> | probe | result |
+> |---|---|
+> | `sudo hz-agent diff` | a plan: 6 targets, 1 change pending, exit 0 |
+> | admin token as `Authorization: Bearer` → `/api/v1/agent/desired` | **401** |
+> | admin token as `Authorization: Bearer` → `/api/v1/dashboard` | **401** |
+> | agent credential → `/api/v1/agent/desired` | 200 |
+> | agent credential → `/api/v1/dashboard` | **401** |
+>
+> The last row is the one that matters and was not measured in September's run:
+> the credential is narrow in *both* directions. `isAdmin`
+> (`internal/server/server.go:691`) still has exactly three branches — account,
+> `session` cookie, VPN-admin IP — and no Bearer path, which is why the admin
+> token gets 401 even on an ordinary admin route. `agentCaller`
+> (`internal/server/agent_credential.go:47`) refuses hz's own admin token by
+> constant-time compare even if somebody enrols it.
+>
+> **The issuer changed and the audit has not said so.** Item 13's Machine record
+> (`92c956a`) made hz the issuer: `hz-agent enroll` asks hz
+> (`internal/agent/enrolment.go:140`, which errors without an admin credential)
+> and **hz refuses a machine it does not declare**. Measured: enrolling
+> `not-a-declared-box` is refused with a message naming `hz machine add`, exit 1,
+> and no token file is written. §3 item 1's last bullet predicted exactly this
+> and it held — the store format, the header, the hash and hz's verification are
+> unchanged, and that was measured in both directions: the credential this VM
+> minted locally under the old scheme authenticated against the **new** binary,
+> and the credential **hz** issued during this run authenticated against the
+> **old** binary after the restore.
+>
+> **One thing the issuer change broke, found here, not previously recorded.**
+> `hz machine ls` on this VM reported **"No machines declared"** while
+> `config.json.agents` held a valid record for `hz-audit`. The credential store
+> and the Machine record are two files and nothing backfills one from the other,
+> so a box enrolled before `92c956a` **cannot rotate or re-issue its credential**
+> until somebody declares it. Measured end to end: `enroll --rotate` refused →
+> `hz machine add hz-audit --segment audit` → `enroll --rotate` succeeded → the
+> previous secret was immediately invalidated (401) and the new one worked.
+> Filed to `plan/icebox.md`; it is an upgrade-path gap, not a flip blocker.
+>
+> What follows is the 2026-09-21 record.
 
 > **Fixed** — the agent has a credential of its own (`internal/agent/credential.go`,
 > `internal/server/agent_credential.go`, `hz-agent enroll`). `isAdmin` was NOT
@@ -63,7 +142,36 @@ step to schedule — it is the only way the agent ever works.
 > §1.6, which the re-run showed was wrong as written — see the note under it.
 > What changed per finding is recorded inline below.
 
-### 1.2 `autoheal` did not install anything, as root
+### 1.2 `autoheal` did not install anything, as root ✅ MEASURED FIXED 2026-09-22
+
+> **Re-measured with a positive control**, because `hz-audit` now has every
+> dependency and "all present" on a complete box proves nothing. `apt-get remove
+> qrencode`, then:
+>
+> ```
+> $ homelab-horizon install-deps --dry-run
+> Dependencies: 1 MISSING
+>   qrencode                   (package qrencode)
+>                              renders the QR code a phone scans to enrol as a VPN peer
+> DRY RUN: nothing was installed.
+>
+> $ systemctl restart homelab-horizon   # auto_heal is NOT set in this config
+> WARN dependencies missing and auto-heal is off; run `homelab-horizon install-deps`  packages=qrencode
+>
+> $ homelab-horizon install-deps        # installs it, then: All dependencies present.
+> ```
+>
+> Three things are measured there, not one: the observation seam detects an
+> absent package, **startup reports it with `auto_heal` unset** — the exact
+> condition under which the original finding was invisible — and the explicit
+> verb installs it. `install-deps` is registered at
+> `cmd/homelab-horizon/root.go:77`, `install --with-deps` at `:99`, and the
+> startup report at `internal/server/server.go:1377` is unconditional (the
+> `AutoHeal` flag now only changes the wording).
+>
+> **Not covered by a test:** `server.go:1377-1386`. `Server.Run()` is never
+> invoked in tests, so a regression that re-gated the report behind `AutoHeal`
+> would be caught only by another VM run.
 
 After `homelab-horizon install` + `systemctl start`, running as root:
 
@@ -104,7 +212,52 @@ were absent. **Wiring gap AND a missing entry point.**
   dependencies are missing, and a button is not scriptable.
 - Startup reports what is absent whether or not auto-heal is allowed to act.
 
-### 1.3 hz reports `active` while every subsystem has failed
+### 1.3 hz reports `active` while every subsystem has failed ◐ FIXED IN THE CODE, BUT NOT ON AN EXISTING BOX
+
+> **Re-measured 2026-09-22. The hz half is fixed and measured; the systemd half
+> silently was not, on this box.** This is the one finding whose September entry
+> overstated what an operator would see.
+>
+> hz's own half, observed on boot with WireGuard unconfigured:
+>
+> ```
+> WARN server ready but DEGRADED — hz is serving, subsystems are not
+>      listen=:8080 degraded="wireguard: WireGuard is not configured: …"
+> ```
+>
+> The systemd half did **not** work on first measurement:
+>
+> ```
+> $ systemctl show homelab-horizon -p StatusText -p NotifyAccess
+> NotifyAccess=none
+> StatusText=
+> ```
+>
+> The reason is not a bug in the fix — it is that the fix lives in the **unit
+> template**, and `hz-audit`'s unit was written by an older binary and is never
+> rewritten. `maybeSelfInstall` skips when running under systemd, `install` is
+> not re-run on upgrade, and nothing else touches the file. After
+> `homelab-horizon show-systemd > /etc/systemd/system/homelab-horizon.service`
+> + `daemon-reload` + restart:
+>
+> ```
+> NotifyAccess=main
+> StatusText=degraded — wireguard: WireGuard is not configured: /etc/wireguard/wg0.conf does not exist
+> ```
+>
+> **So the finding's operational claim — "nothing a monitor watches would fire"
+> — is still true on every box provisioned before `c36b2b4` until somebody
+> reinstalls the unit.** A monitor that scrapes `hz_subsystem_up` or
+> `/api/v1/checks` is unaffected (those are in the process); a monitor that reads
+> `systemctl status` is not. `config_test.go:665` asserts `NotifyAccess=main` is
+> in the *rendered* unit, which is the assertion that made this look done.
+> The missing step — reinstall the unit on upgrade, or at least say the unit is
+> stale — belongs on item 12's flip checklist, which rewrites the unit anyway.
+>
+> Also unmeasured by any test: the wiring at `server.go:1898-1900` that turns a
+> degraded `[]SubsystemState` into that log line and that `notifySystemd` call.
+> The pieces each have tests (`startup_plan_test.go`, `metrics_subsystem_test.go`,
+> `monitor/subsystem_test.go`, `sdnotify_test.go`); the join does not.
 
 Same boot as above:
 
@@ -145,7 +298,34 @@ Status: "degraded — dnsmasq: the dnsmasq binary is not installed …;
 server ready but DEGRADED — hz is serving, subsystems are not
 ```
 
-### 1.4 hz starts WireGuard and dnsmasq *before* writing their configs
+### 1.4 hz starts WireGuard and dnsmasq *before* writing their configs ✅ MEASURED FIXED 2026-09-22
+
+> **Re-measured with the failure recreated.** `/etc/dnsmasq.d/hz.conf` and
+> `hz-hosts.conf` deleted, dnsmasq stopped, hz restarted:
+>
+> ```
+> INFO subsystem configuration written  subsystem=dnsmasq
+> INFO subsystem started                subsystem=dnsmasq
+> ```
+>
+> in that order, and both files were back — byte-identical to the ones removed
+> (md5 compared before and after, so the VM restored itself). Before the fix
+> this box came up as a bare caching resolver with none of hz's configuration
+> and called it success.
+>
+> WireGuard, same boot, with `wg0.conf` still absent:
+>
+> ```
+> WARN subsystem not started  subsystem=wireguard
+>      reason="WireGuard is not configured: /etc/wireguard/wg0.conf does not exist.
+>              Create it from Settings → System (\"Create WireGuard config\"), or
+>              POST /api/v1/wg/create-config. Nothing is generated automatically
+>              because that would replace the server key every client trusts."
+> ```
+>
+> A warning naming the file and the remedy, not a failure, and nothing was
+> minted. `startup_plan_test.go:27/:78/:120` pin the ordering and both skips at
+> the pure-function level.
 
 `wg-quick up wg0` runs at boot against a `wg0.conf` that does not exist yet;
 the file is written by **sync**, not by startup. Same ordering for dnsmasq.
@@ -189,7 +369,44 @@ there until an admin asks for it.
   (`internal/server/startup_plan.go`), so they are testable without a machine
   to break.
 
-### 1.5 The static supervisor retries forever on a permission error
+### 1.5 The static supervisor retries forever on a permission error ✅ MEASURED FIXED 2026-09-22
+
+> **Re-measured, and the before and after are in the same journal** — the
+> cleanest evidence in this document, because `hz-audit` still runs its binary
+> out of `/home/ubuntu` (mode 0750, so `nobody` cannot exec it), which is the
+> exact condition that produced the original finding.
+>
+> Old binary, the four minutes before the swap:
+>
+> ```
+> 11:10:42 WARN static child exited  err="fork/exec /home/ubuntu/homelab-horizon: permission denied"
+> 11:11:14 WARN static child exited  …
+> 11:11:46 WARN static child exited  …
+> 11:12:18 WARN static child exited  …
+> ```
+>
+> New binary, first boot after the swap, once and then silence:
+>
+> ```
+> ERROR static: cannot launch the unprivileged file server and retrying cannot help — static services DISABLED
+>       err="fork/exec /home/ubuntu/homelab-horizon: permission denied"
+>       binary=/home/ubuntu/homelab-horizon  uid=65534
+>       fix="make /home/ubuntu/homelab-horizon readable and executable by uid 65534
+>            (a binary under /home is the usual cause; /usr/local/bin is the installed location)"
+> ```
+>
+> `permanentSpawnError` (`static_supervisor.go:56`) stops on `fs.ErrPermission`,
+> `fs.ErrNotExist` and `ENOEXEC`; an exited child still falls through to
+> `slog.Warn("static child exited", …)` and retries. Four tests pin it
+> (`static_supervisor_retry_test.go`).
+>
+> **A second fact fell out of this run and corrects `privilege-classification.md`
+> §2 row 23.** That row says the office gateway exercises the supervisor "yes,
+> if static sites exist". It does not depend on that: `s.static.Start()`
+> (`server.go:1865`) is unconditional, and `hz-audit`'s config declares **no**
+> `static_root` anywhere — the fork was attempted and failed on a box with zero
+> static sites. So every root gateway forks a `nobody` child at boot regardless.
+> Row 24 (`sitedeploy`'s chown) does depend on static sites; row 23 does not.
 
 ```
 static child exited  fork/exec /home/ubuntu/homelab-horizon: permission denied
@@ -205,7 +422,26 @@ into a retry loop rather than saying it is misconfigured.
 naming the binary, the uid, and what to change. Everything else — including
 every way a running child can exit — is retried exactly as before.
 
-### 1.6 A Route53 sync loop starts with no DNS provider configured
+### 1.6 A Route53 sync loop starts with no DNS provider configured ✅ RE-MEASURED 2026-09-22 — still wrong as originally written, correctly renamed
+
+> **Re-measured.** Same boot, no DNS provider anywhere in the config:
+>
+> ```
+> INFO public IP detected          ip=<redacted>
+> INFO starting public IP detection  interval_s=300  dns_record_sync=false
+> ```
+>
+> The rename landed (`server.go:1557`) and the substantive half of the finding
+> is confirmed unchanged: **hz makes an outbound public-IP request at boot
+> regardless of configuration**, before the loop even starts
+> (`NewWithConfig`, `server.go:361`). `public_ip_override`
+> (`config.go:193`) suppresses both the boot call (`server.go:357`) and the
+> loop (`:1544`) — read, not measured, because setting it would have changed
+> the VM's config for no new information.
+>
+> **No regression test exists for any of this.** Not the log line, not the
+> field, not the override gating. `route53.GetPublicIP` is a plain function with
+> no seam, so the only instrument for this finding is a VM.
 
 ```
 starting Route53/public IP sync  interval_s=300
@@ -244,6 +480,27 @@ regardless of configuration. Anyone assuming an air-gapped posture must set
 From `grep -rnE 'exec\.Command|systemctl|os\.WriteFile' internal/`, excluding
 the agent's own tree.
 
+> **Re-derived 2026-09-22 over the whole tree** (`cmd/` included, and the write
+> and exec verbs widened to `os.Create|OpenFile|MkdirAll|Remove|RemoveAll|Rename
+> |Chown|Lchown|Chmod|Symlink` plus `systemd-run|iptables|apt-get|wg-quick`).
+> Result: **every file this section names still exists and, except for one line
+> number, still does what it says.** The 27 commits since touched none of them —
+> the letsencrypt/acme split is a verbatim relocation (each `exec.Command` and
+> each write moved unchanged), and the Machine record, the projection, the
+> fleet guard, the enrolment path and `handlers_api_machines.go` contain no
+> privileged operation at all.
+>
+> **Three sites are new and appear in NEITHER this table nor
+> `privilege-classification.md` §2's 33 rows.** All three are argued about in
+> that document's §4 prose and marked closed there; none was ever back-filled as
+> a row, which is how an inventory goes stale while every individual decision
+> looks recorded. They are §7 below.
+>
+> One correction: `Config.WriteMaintenancePageFiles` is at
+> `internal/config/derive.go:400`, not `:339` — the function moved down 61 lines.
+> The operations inside it are `:402` (`MkdirAll`), `:410` (`WriteFile`), `:422`
+> (`Remove`).
+
 **Covered by `hz-agent` today**
 
 | package | what |
@@ -251,25 +508,28 @@ the agent's own tree.
 | `internal/haproxy/apply.go` | config + MFA jail ACL + reload |
 | `internal/dnsmasq/apply.go`, `unit.go` | conf + records + reload + unit install |
 | `internal/iptables/reconcile.go` | reconcile over hz's own expected/stale rules |
-| `internal/wireguard/apply.go` | modelled and applied — **hz does not serve it** |
+| `internal/wireguard/apply.go` | modelled and applied. ~~hz does not serve it~~ — **hz serves it since 2026-09-21** (`0fb08ac`, item 12 step 2): `desiredFor` carries `wg0.conf` as the file hz maintains, read back, and the admin path came off `handleAgentDesired` in the same commit because that file is the machine's private key. **Never exercised** — see §8.2. |
 
 **Not covered by anything**
 
 | site | what it touches |
 |---|---|
-| `internal/letsencrypt/apply.go` | `/etc/letsencrypt`, `/etc/haproxy/certs` — TLS renewal, fires on a timer. **Split render/apply 2026-09-21**; the list of privileged operations is now the file's own header comment, and nothing else in the package performs one. Still not *served* to the agent. |
+| `internal/letsencrypt/apply.go` | `/etc/letsencrypt`, `/etc/haproxy/certs` — TLS renewal, fires on a timer. **Split render/apply 2026-09-21**; the list of privileged operations is now the file's own header comment, and nothing else in the package performs one. ~~Still not *served* to the agent.~~ — **the served bundles cross since 2026-09-21** (`758e1fd`, item 12 step 3): `agent.CertSection`, served bundle only, never the account key or the DNS credentials. Issuance and renewal stay here. **Never exercised** — see §8.2. |
 | `internal/acme/apply.go` | cert issuance: the CA conversation, the account key, the DNS challenge records, `aws`, `dig`, and the process-global provider env vars. **Split render/apply 2026-09-21.** |
-| `internal/config/derive.go` | `WriteMaintenancePageFiles` writes and `os.Remove`s `<svc>_503.http` under `/etc/haproxy/errors/`. **Row added 2026-09-21** — this table named `internal/haproxy/apply.go` for that directory and missed the second writer. Orphaned by item 12 step 5 exactly like `errors/503.http`, and harder to move: it PRUNES, and `agent.File` has no "delete what is not listed". |
+| `internal/config/derive.go:400` | `WriteMaintenancePageFiles` writes and `os.Remove`s `<svc>_503.http` under `/etc/haproxy/errors/`. **Row added 2026-09-21** — this table named `internal/haproxy/apply.go` for that directory and missed the second writer. Orphaned by item 12 step 5 exactly like `errors/503.http`. ~~harder to move: it PRUNES, and `agent.File` has no "delete what is not listed"~~ — **no longer true (2026-09-21, `758e1fd`)**: `agent.Directory` added the claim, hz serves both name shapes plus the directory claim (`handlers_agent.go:285-315`), and the agent prunes inside it. hz still writes them too, until step 5. |
 | ~~`internal/server/handlers_ha.go`~~ | ~~`/etc/dnsmasq.d/wg-*.conf`, `/etc/haproxy/haproxy.cfg`, `/etc/homelab-horizon`~~ — **wrong, corrected 2026-09-21** |
 | `internal/server/peer_sync.go` | certs (`pullCertFromPeer`), `iptables -I INPUT` (ban sync), and `applyNewConfig` → hz's whole reconcile path, on a 30s timer |
-| `internal/server/handlers_integration.go` | `/etc/prometheus`, `/etc/systemd/system` |
-| `internal/server/handlers_api_system_fix.go` | `/etc/apparmor.d/…`, `/etc/systemd/journald.conf.d`, `/etc/systemd/system/homelab…` |
-| `internal/server/handlers_ban.go` | shells `ip` and `iptables` directly |
-| `internal/server/handlers_api_iptables.go`, `reconcile_iptables.go` | `exec` |
-| `internal/system/interfaces.go` | interface manipulation, `exec` + writes |
-| `internal/autoheal/autoheal.go` | `apt-get install`, `systemctl` — does not transfer (item 10) |
-| `internal/server/static_supervisor.go` | forks a privilege-dropped child |
-| `internal/probe/agent.go` | writes |
+| ~~`internal/server/handlers_integration.go`~~ | ~~`/etc/prometheus`, `/etc/systemd/system`~~ — **wrong, corrected 2026-09-21** (`privilege-classification.md` §1.1). Same shape as the `handlers_ha.go` row: the paths are inside a bash script hz *serves* for a human to run on the Prometheus box. No write, no exec. |
+| `internal/server/handlers_api_system_fix.go` | `/etc/apparmor.d/…`, `/etc/systemd/journald.conf.d`, `/etc/systemd/system/homelab…`. **13 POSTs + 1 GET, unchanged**; `systemdRun` still has 5 callers, three of them shell strings. |
+| `internal/server/handlers_ban.go` | shells ~~`ip` and~~ `iptables` directly — **the `ip` half was wrong** (`privilege-classification.md` §1.4); the three exec sites are all `iptables`. **Four triggers, one of them a deploy token, not an admin.** |
+| `internal/server/handlers_api_iptables.go`, `reconcile_iptables.go` | `exec`. Includes `POST /iptables/remove`, whose table, chain and args come **from the request body** — the class §5.2 rule 2 names. |
+| ~~`internal/system/interfaces.go`~~ | ~~interface manipulation, `exec` + writes~~ — **wrong, corrected 2026-09-21** (`privilege-classification.md` §1.2). Those are Go *interface types* (`FileSystem`, `CommandRunner`), the test seam, not a caller. |
+| `internal/autoheal/autoheal.go` | `apt-get install`, `systemctl` — does not transfer (item 10). `Run` is still there and still gated on `auto_heal`, which nothing sets (§1.2). |
+| `internal/server/static_supervisor.go` | forks a privilege-dropped child — **on every root gateway, not only ones with static sites** (§1.5, measured). |
+| ~~`internal/probe/agent.go`~~ | ~~writes~~ — **wrong, corrected 2026-09-21** (`privilege-classification.md` §1.3). It is constructed only by `cmd/hz-probe`, on a different machine, under a unit that is already `DynamicUser=yes` + `ProtectSystem=strict` + no ambient capabilities. |
+| `cmd/homelab-horizon/main.go:135` | `maybeSelfInstall` — as root, copies its own binary to `/usr/local/bin`, writes its own unit, restarts itself. **Missed by this table**, added by `privilege-classification.md` §3.9, still present. |
+| `internal/server/handlers_backup.go:172,:201` | restore writes `wg0.conf` (server private key) and cert PEMs **from an uploaded zip**. **Missed by this table**, added by `privilege-classification.md` §3.8. |
+| `handlers_api_vpn.go:431`, `mfa_jail.go:106` | `rebuildWGChains` + `syncMFAJailACL` — flush and repopulate two hz-owned iptables chains and reload HAProxy, from **18 call sites**, on every MFA transition and two timers. **Missed by this table**, added by `privilege-classification.md` §3.7, and by volume the largest privileged surface hz web has. |
 
 **Corrected 2026-09-21 — see `plan/ha-and-the-agent.md`.** The row above said
 `handlers_ha.go` was the one to worry about, because it writes *the same files
@@ -291,7 +551,14 @@ item-12 checklist: `plan/ha-and-the-agent.md`.
 
 ## 3. Consequences for item 12
 
-Ordered, replacing the handover list in `architecture.md`:
+Ordered, replacing the handover list in `architecture.md`.
+
+> **Status re-checked 2026-09-22.** Items 1, 2 and 4 are done (item 1 with its
+> issuer changed — §1.1). Item 3's guard half is done and measured (§7.1); its
+> three named bypasses are not assigned. Item 5's document exists but its §2
+> table is incomplete (§7) and its §7 checklist stands at 6 of 34 (§8). Item 6
+> was answered by the classification — the right move is deletion, not a seam —
+> and `autoheal.Run` is still there. **The consolidated answer is §8.**
 
 1. ✅ **Done 2026-09-21. The agent has a credential of its own.** Not `isAdmin`
    growing a Bearer path — that was the tempting one-liner and it was the wrong
@@ -411,16 +678,52 @@ worth checking against the real box before item 12:
 - has anyone hand-edited `/etc/wireguard/*.conf`? (decides whether the
   `renderPeerRemoval` bug in `icebox.md` is live)
 
+**Still open on 2026-09-22, all of them**, plus the seven in
+`privilege-classification.md` §8 "Facts about the estate". A year of this list
+sitting unanswered is itself a finding: §8 below cannot recommend steps 4–5
+partly because nobody has said whether `peer_id` is set, and that is a one-line
+answer nobody has to be an expert to give. One more was added by the
+re-measurement:
+
+- **is there a machine record for the gateway, and was its agent enrolled before
+  `92c956a`?** If it was, its credential works but cannot be rotated until
+  somebody runs `hz machine add` (§1.1). The flip is the moment that matters —
+  a credential you cannot re-issue is one you cannot recover from.
+
 ## 5. VM
 
 `hz-audit`, kept for re-running. Nothing on it came from the office: synthetic
 config, `audit.test` domains, a placeholder admin token, no DNS provider, no
 SSL, no keys. Destroy with `multipass delete --purge hz-audit`.
 
-It now also carries the agent credential fix: `hz-agent` in `/usr/local/bin`,
-enrolled as `hz-audit`, `sudo hz-agent diff` returning a plan. The agent is
-still inert there — the unit exists, `systemctl enable hz-agent` still refuses,
-and `ExecStart` still has no `--apply`.
+It carries the agent credential fix: `hz-agent` in `/usr/local/bin`, enrolled as
+`hz-audit`, `sudo hz-agent diff` returning a plan. The agent is still inert
+there — the unit exists, `systemctl enable hz-agent` still refuses, and
+`ExecStart` still has no `--apply`. Confirmed again on 2026-09-22: a full
+`hz-agent run --once` with reporting on wrote **nothing** (`/etc/haproxy/
+mfa-jailed.lst`, the one pending change, still does not exist).
+
+**State after the 2026-09-22 re-measurement: restored.** The VM runs the same
+old binary, the same unit and the same `config.json` it did before. What was
+changed and put back: the two binaries and `hz`, the unit file, `config.json`
+(a `peer_id`, then a machine record, both removed), `qrencode` (removed, then
+reinstalled), hz's two dnsmasq files (deleted, regenerated byte-identically),
+and `config.json.observed` (created by the report probe, deleted). Every staged
+file and every backup copy was removed from `/home/ubuntu`.
+
+**One thing could not be restored and should be known before the next run:** the
+agent's secret in `/etc/hz-agent/token` was rotated during the issuer probe and
+hz only ever stores the hash, so the original secret is gone. The VM was
+re-enrolled, so `hz-agent diff` works — against the restored *old* binary too,
+which is independent evidence that the credential store format did not change
+across the issuer move.
+
+**The VM is therefore stale again, by design.** Re-staging is: build
+`homelab-horizon`, `hz-agent` and `hz` for linux/amd64; copy through `$HOME`
+(multipass is a snap and cannot read `/tmp`); replace `/home/ubuntu/
+homelab-horizon` and `/usr/local/bin/hz-agent`; and, if `systemctl status` is
+part of what is being measured, `show-systemd` over the unit — §1.3 is the
+reason that last step is not optional.
 
 ## 6. Other endpoints authenticated differently from their real caller
 
@@ -435,11 +738,294 @@ Ordered worst first.
 |---|---|---|---|---|
 | 1 | `handleDeployAPI` (`handlers_deploy.go:46`) | `hzclient`, `Authorization: Bearer <service/deploy token>` | **nothing.** `hzclient/verbs_test.go` drives a hand-rolled `fakeHZ` that never calls `extractBearerToken`/`findServiceByToken`; no test in `internal/server` touches the handler | **no server-side auth test at all** |
 | 2 | `/mcp` (`mcpAuthMiddleware`, `server.go:648`) | admin token as Bearer | **nothing.** No test file exists for `/mcp` or the middleware | **no test at all** |
-| 3 | `handlePeerPing` / `handlePeerConfig` / `handlePeerCert` / `handlePeerState` | hz's own peer-sync, identity by **source IP** (`peerOnlyMiddleware` → `isAllowedPeer`) | `peer_sync_test.go:177` `startPeerHTTPServer` registers the handlers on a bare mux and **bypasses `peerOnlyMiddleware` on purpose** (its own comment says so), then every pull-loop test uses it. `isAllowedPeer` is unit-tested alone with a synthetic `RemoteAddr` | **middleware bypassed.** The protocol is proven; that an off-VPN caller is refused *on the served route* is not |
+| 3 | `handlePeerPing` / `handlePeerConfig` / `handlePeerCert` / `handlePeerState` | hz's own peer-sync, identity by **source IP** (`peerOnlyMiddleware` → `isAllowedPeer`) | ~~`peer_sync_test.go:177` bypasses `peerOnlyMiddleware` on purpose~~ — **fixed 2026-09-21** (`351d2a9`). `TestPeerAPIDeniesNonPeerOnEveryRoute` (`peer_sync_test.go:626`) drives the **real mux** `registerPeerAPI` built, over routes **enumerated from `s.peerAPIRoutes`** rather than hand-listed, and cross-checks that no `/api/peer/` route was registered around the middleware | ✅ **fixed, and fixed in the shape that cannot rot** — a route added without the middleware fails this test by construction |
 | 4 | `handleProbeReport` | `probe.Pusher`, Bearer vantage/grant token | same Bearer header, **plus** `TestPushEndToEndWithARealAgent` (`handlers_probe_report_test.go:239`) drives the real pusher against `setupRoutes()` | ✅ **the pattern to copy** — the agent pair test is modelled on it |
 | 5 | `handleAPICMRegister` / `…Poll` / `…Config` | `configmgr.Client`, **no header** — identity is the source IP resolved to a VPN peer | sets `r.RemoteAddr` to a peer IP present in a real WireGuard config: the same mechanism | ✅ same credential |
 | 6 | admin `handleAPI*` routes called by `cmd/hz` | shared admin token exchanged at `/api/v1/auth/login` for a `session` cookie | `signCookie("admin")` in 9 test files — which is *literally* what the login handler mints | ✅ same credential (the cookie is not a test-only credential here) |
 
 Rows 1 and 2 are a different and worse problem than §1.1: §1.1 had a test
-measuring the wrong thing, these have no measurement. Row 3 is the exact §1.1
-shape — a green suite that cannot fail for the reason it exists.
+measuring the wrong thing, these have no measurement. ~~Row 3 is the exact §1.1
+shape~~ — row 3 was fixed with the peer-API access work; see its row.
+
+**Re-checked 2026-09-22: rows 1 and 2 are still exactly as written.** No test
+file in `internal/server` or `internal/hzclient` mentions `handleDeployAPI`,
+`findServiceByToken`, `extractBearerToken`, `mcpAuthMiddleware` or `/mcp`. Two
+authenticated surfaces with no server-side authentication test at all, a year
+of commits later. Neither blocks item 12 — neither is a *privileged* path — but
+row 1's caller is the service-deploy token, which is also the credential that
+reaches `handlers_ban.go`'s root `iptables` call (§3.2 of the classification).
+
+Also measured on `hz-audit`, because §1.1's fix rests on it: with **no peers
+configured**, all four peer routes refuse an unauthenticated local caller —
+`/api/peer/ping`, `/config` and `/state` return 403 `peer api: not a configured
+peer`, and `/api/peer/cert` returns a 307 to `/api/peer/cert/` (Go's mux
+trailing-slash redirect) which then 403s the same way. The "empty peer list
+admits the whole VPN" fallback is gone on the wire, not only in the test.
+
+## 7. What the 27 commits added that no inventory lists
+
+Added 2026-09-22. The re-derivation in §2 found that nothing the old tables name
+has moved — but three **new** privileged capabilities exist that neither this
+document's §2 nor `privilege-classification.md` §2's 33 rows contain. Each is
+argued about at length in that document's §4 and marked closed there; none was
+turned into a row. That is how an inventory goes stale while every individual
+decision looks recorded, and it matters here specifically: §4 of the
+classification is prose about *design gaps*, and item 12's readiness list reads
+the *table*.
+
+| # | Operation | File:line | Process | Category |
+|---|---|---|---|---|
+| 34 | `ObservedStore.save` — `MkdirAll` + write-temp + `Rename` of `<config>.observed` (0600) | `internal/agent/observed_store.go:210,218,230` | **hz web** | **HZ-KEEPS** — hz's own state directory, the same place `<config>.agents` already lives; unprivileged after the flip provided the chown in §7.C of the classification covers it. **Add `<config>.observed` to that chown line — it names only `config.json`, its directory, `<config>.token` and `<config>.agents`.** |
+| 35 | `exec.Command("systemctl", u.Action, u.Name)` — the generic section's unit poke | `internal/agent/apply.go:130` | **hz-agent** | **AGENT-OWNED by construction**, and the first payload-named privileged target in the tree. The *action* is a closed set (`restart`/`reload`, anything else refused); the *unit name* is whatever hz serves. |
+| 36 | `os.Remove(c.Target)` — the prune, bounded by `agent.Directory` | `internal/agent/apply.go:295` | **hz-agent** | **AGENT-OWNED.** The bound is `ownership.go`'s `prunable`, asked twice — by the planner before it will say a file would go, and by the applier immediately before each unlink. Only a regular file is unlinked (an `Lstat` check, so a symlink is refused rather than followed). |
+
+**Row 35 is the one to say out loud, as a class rather than a recipe.**
+`privilege-classification.md` §5.2 states three properties that stop a
+privileged verb becoming a general-purpose root helper: never a shell string,
+never a subcommand from a request, never reachable from the web process. Row 35
+satisfies all three as written — and introduces a fourth axis they do not cover:
+**a privileged executor whose *target* comes from the payload**. It is not the
+same risk as `POST /iptables/remove` (the payload is hz's own rendered output,
+not a request body, and it crosses a credentialed channel to a machine that
+verified the payload is addressed to it). It is still the first time the agent
+can be *told* which unit to restart rather than knowing, and §5.2 should gain
+that fourth property before anything produces a `Units` entry.
+
+**Nothing produces one yet.** `Desired.Files` has no producer in hz: `desiredFor`
+(`internal/server/handlers_agent.go:224`) never sets it, and
+`noteRemoteGaps` (`:531`) records that it is "equally absent for the local box"
+rather than gapping it. So rows 35 and 36's capabilities shipped ahead of their
+first caller — deliberate, and the same pattern as the agent shipping inert, but
+it means the first `Units` entry anyone writes lands on an untested-in-anger
+path.
+
+**What else the 27 commits changed, that the old tables get right by luck:**
+
+- **The cert render/apply split** (`69f2346`) is a verbatim relocation. Every
+  `exec.Command`, `os.WriteFile`, `os.MkdirAll` and `os.Remove` in
+  `internal/letsencrypt` and `internal/acme` moved unchanged into `apply.go`;
+  none was added. §2's two rows still describe them correctly.
+- **The Machine record** (`92c956a`), the **projection** (`c444a0a`), the
+  **fleet guard** (`aae20a8`), `internal/agent/enrolment.go`,
+  `internal/agent/ownership.go`, `internal/server/handlers_api_machines.go`,
+  `internal/server/handlers_agent_observed.go` and `internal/server/
+  startup_plan.go` contain **no** privileged operation. Pure computation, HTTP,
+  or hz's own config and SQLite.
+- **The WireGuard section and the certificate section now cross to the agent**
+  (`0fb08ac`, `758e1fd`). That is item 12 steps 2 and 3's payload half, and it
+  means `wg0.conf` — the server private key — and the served cert bundles are
+  now on the wire between hz and an agent credential. The five constraints
+  in `architecture.md`'s "Cert material and the two channels" are what bound it;
+  the audit's §3 item 4 said "admin path off `handleAgentDesired` first", and
+  that happened in the same commit.
+
+### 7.1 Measured on the VM: the guard, the channel, the issuer
+
+Three of the new features were exercised end to end on `hz-audit`, because each
+is load-bearing for the flip and none had been measured outside its own tests.
+
+**The fleet guard refuses, and refuses at the right layer.** With `peer_id` set
+to a synthetic value and **zero peers**:
+
+```
+ERROR hz-agent guard: REFUSING to serve desired state
+      reason="hz-agent is disarmed on this machine because HA peer-sync is
+              configured (peer_id=… , 0 peer(s) in config.json). …"
+$ curl -H 'Authorization: Bearer <agent credential>' …/api/v1/agent/desired
+409
+$ sudo hz-agent diff
+hz-agent: hz answered 409 Conflict: hz-agent is disarmed on this machine …
+```
+
+and 200 again the moment `peer_id` was removed and hz restarted. Three things
+confirmed that the tests alone do not: the boot line fires **before** the
+peer-sync loops (the `auto-promoting to primary` line follows it), the refusal is
+recomputed per poll rather than latched, and `peer_id` **alone** is enough — the
+broader-than-necessary predicate `fleetConfigured` documents is the one running.
+Peer-sync itself still starts; that is the design, and it is the reason §4's
+first question still has to be answered about the office box.
+
+**The observed-state channel works, and the agent stayed inert.**
+`hz-agent run --once` with reporting on produced a `fresh` record hz served back
+over `GET /api/v1/agent/observed`, carrying the plan, the generation match, the
+pending count and the classified live rule set — and wrote nothing:
+`/etc/haproxy/mfa-jailed.lst`, the single pending change, still did not exist
+afterwards. `<config>.observed` appeared beside `<config>.agents`, 0600, exactly
+as §4.1 of the classification describes. So the single largest structural gap
+that document identified is genuinely closed, not reported closed.
+
+**hz is the issuer, and it refuses an undeclared machine.** See §1.1 for the
+probe and for the upgrade-path gap it exposed.
+
+### 7.2 What `hz-agent diff` actually says on a box hz manages
+
+`privilege-classification.md` §7.D's first proof step is "`sudo hz-agent diff`
+reports **in sync for every served section**", and `ha-and-the-agent.md` §7
+repeats it, adding that a section reporting *changed* is evidence a plan
+document is stale rather than a routine diff to apply.
+
+On `hz-audit`, with the current binary and hz having just synced, it does not:
+
+```
+state:      1 change(s) would be applied
+  [unchanged] haproxy /etc/haproxy/haproxy.cfg
+  [create]    haproxy /etc/haproxy/mfa-jailed.lst   would create it, 75 bytes, mode 0644
+  [unchanged] haproxy /etc/haproxy/errors/503.http
+  [unchanged] dnsmasq /etc/dnsmasq.d/hz.conf
+  [unchanged] dnsmasq /etc/dnsmasq.d/hz-hosts.conf
+  [unchanged] iptables live rule set   5 live: 5 expected, 0 stale, 0 blessed, 0 unknown
+```
+
+The MFA jail ACL is in the payload (`handlers_agent.go:131`) but hz only writes
+it through `syncMFAJailACL`, which runs on an MFA transition — and a box with no
+WireGuard config has never had one. So the file legitimately does not exist and
+the agent legitimately wants to create it. **That is a real instance of the
+class the proof step is meant to catch, and it is benign**: it says hz's
+*trigger* for that file is an event rather than a sync, which is exactly what
+item 12 changes. Two consequences worth stating before the flip:
+
+- The proof step needs a stronger wording than "in sync". A file hz writes only
+  on an event will always read as `create` on a box that has not had the event.
+  What the step should require is that every `create`/`update` is explained,
+  in writing, at the moment it is observed.
+- `errors/503.http` is **already in the payload** — `ha-and-the-agent.md` §7
+  still says "not done in the split pass because it changes the payload". That
+  checkbox is stale; it landed in `758e1fd` (`handlers_agent.go:286`), together
+  with the per-service maintenance pages and the `agent.Directory` claim over
+  both name shapes.
+
+## 8. Can item 12 steps 4–5 be attempted? No, and not close.
+
+Added 2026-09-22, because that is the question this re-measurement exists to
+answer. `plan/privilege-classification.md` §7 and `plan/ha-and-the-agent.md` §7
+were both walked item by item against the tree at `f6e06bd`.
+
+**Score: 6 of 34 checklist items are done. Every one of them is in section B
+(hand over). Section A (decide, then delete) is 0 of 10. Section C (the flip
+itself) is 0 of 5 — and steps 4 and 5 ARE C1 and C2.**
+
+### 8.1 What is genuinely done, and measured on a box
+
+Not read — run, on `hz-audit`, this pass:
+
+- The agent has a credential, it authenticates, and it is narrow in both
+  directions (§1.1).
+- hz is the issuer and refuses an undeclared machine (§1.1).
+- The fleet guard refuses to serve desired state, at boot and on every poll,
+  on `peer_id` alone (§7.1).
+- The observed-state channel carries a plan back and stores it (§7.1) — the
+  "single largest structural gap" of `privilege-classification.md` §4.1, closed.
+- The agent is still inert: a full reporting pass wrote nothing (§5).
+- The peer API admits nobody when no peers are configured (§6).
+- Startup honesty, render-before-start, the static give-up, `install-deps`
+  (§1.2–§1.5).
+
+### 8.2 What is claimed done but has never been measured
+
+These are marked done and are done *in the tree*. Nothing has exercised them on
+a machine where they could fail, which is the distinction this document exists
+to keep.
+
+- **Item 12 steps 2 and 3 — the WireGuard section and the certificate
+  section.** `desiredFor` serves both, and `handleAgentDesired`'s admin path is
+  gone. But `hz-audit` has **no `wg0.conf` and SSL disabled**, so neither
+  section has ever been in a payload on any box. The two things that cross are
+  a machine's WireGuard private key and its served TLS bundles. **They must be
+  exercised on a VM that actually has both before anything is armed** — a
+  payload carrying key material that has never been rendered once is not a
+  verified step, it is a plan.
+- **The `agent.Directory` prune.** Measured only in the negative: the claim was
+  in the payload, and nothing was removed because nothing was removable. A
+  maintenance page created and then cleared, with the file observed
+  disappearing, is the test that has not been run.
+- **The generic `Units` poke and the whole `FilesSection`.** No producer exists
+  (§7). First caller lands on an unexercised path.
+- **§1.3's systemd half.** Measured and found **not** working on this box (§1.3).
+  It is the one "fixed" claim the re-run falsified.
+
+### 8.3 What must be true before steps 4–5, in the order it must be true
+
+Steps 4 and 5 are "arm the agent" and "`syncServices` renders and stops". Doing
+them today does three things, none of them good:
+
+**First, they de-root nothing.** The privilege reduction is C3 — `User=hz`,
+drop `AmbientCapabilities`, narrow `ReadWritePaths`. `internal/config/
+config.go` still says `User=root` (`:2823`), `AmbientCapabilities=CAP_NET_ADMIN
+CAP_NET_RAW` (`:2859`), `NoNewPrivileges=false` (`:2862`) and a
+`ReadWritePaths` that still lists every directory the agent is supposed to take
+over (`:2853`). Steps 4–5 alone buy the entire behavioural cost of item 12 and
+none of its benefit.
+
+**Second, they create two writers before removing one.** Step 4 without step 5
+is an armed agent and an hz that still applies — `syncServices`
+(`handlers_services.go:19`) still writes and reloads — which is the state
+`hz-agent`'s own help text calls "a broken gateway".
+
+**Third, and this is the one that strands somebody at the gateway**: step 5
+stops `syncServices`, and the agent does not cover what hz would stop doing.
+Concretely, still unhanded-over and still privileged in hz web:
+
+| what stops working | where |
+|---|---|
+| every ban and unban, including the ones a deployed service triggers | `handlers_ban.go:22-38`, 4 triggers, one of them not an admin |
+| the MFA jail chain rebuild, **18 call sites**, on every MFA transition and on two timers | `rebuildWGChains` ×18, `syncMFAJailACL` ×2 |
+| `reconcileIPTables` axes 2/3 (drift heal) and 4/5 (legacy migrations) | `reconcile_iptables.go:82-140` |
+| backup restore's `wg0.conf` and cert writes | `handlers_backup.go:172,:201` |
+| every fixer button on `SystemHealthTab.tsx` and `PCITab.tsx` | still enabled buttons calling privileged mutations |
+| IP forwarding and log retention | `handlers_api_system_fix.go:44,:588` |
+| peer-sync's three bypasses, if `peer_id` is ever set | `handlers_peer.go:306`, `peer_sync.go:433`, `handlers_ban.go:121` |
+
+**The specific things that must be true first**, ordered, each checkable:
+
+1. **The no-default-route stand-down in `desiredFor`** (§7.B2 of the
+   classification; also in the icebox). This is the sharpest one. `desiredFor`
+   emits an `IPTablesSection` unconditionally; `iptables.ExpectedRules` drops
+   port forwards from the expected set when the out-interface cannot be named
+   (`rules.go:188`). So an armed agent that polls during a moment with no
+   default route **reconciles the gateway's port forwards away**, and nothing
+   in the payload says it was an accident. `handleAPIIPTablesReconcile`'s
+   equivalent guard has been there all along with the reason written down. This
+   must land before `--apply`, not with it.
+2. **`iptables.LiveRules`' INPUT scope widened to admit ban rules**
+   (`classify.go:131`), *before* bans move — otherwise `Reconcile` installs a
+   ban it cannot see and installs it again every pass. The classification says
+   this and it is not done.
+3. **The 18 `rebuildWGChains` sites** decided. Armed-and-hz-still-calling is two
+   writers on one chain; de-rooted-and-still-calling is a permission error on the
+   MFA login path, 18 times over. Either way this is not a thing to discover
+   after the flip.
+4. **`maybeSelfInstall` deleted** (`main.go:63`, `:135`). It is in the daemon's
+   boot path, it runs as root, and it rewrites hz's own unit. Flipping the unit
+   to `User=hz` while leaving in a boot-path function that rewrites that unit is
+   a one-restart path back to root.
+5. **hz's unit actually hardened** (C3), and **the chown** (C5) — including
+   `<config>.observed`, which §7.C does not name (§7 above).
+6. **The three remaining blocking decisions** in `privilege-classification.md`
+   §8. Two of the five are now made and the document does not say so: the
+   generic-section question (§4.3, decided, `FilesSection` shipped) and the
+   observed-state channel (§4.1, closed and measured here). Still open: **static
+   file serving after the flip** (§3.6 — and note §1.5 above: the supervisor
+   forks on every root gateway, not only ones with static sites), **whether the
+   MFA unjail path gets a nudge** (§3.7 — a 2.5s mean delay on a login flow),
+   and **which binary owns `wg create-config`** (no CLI verb exists yet).
+7. **§4's estate questions answered.** All of them are still open, and the first
+   one — is `peer_id` set on the office gateway — decides whether the fleet
+   guard is a formality or the thing keeping the box alive.
+
+### 8.4 What could be attempted now, safely
+
+Steps 4–5 are the wrong next move; that does not make the queue empty. In
+rough order of value per risk:
+
+- **Exercise steps 2 and 3 on a VM that has a `wg0.conf` and a certificate**
+  (§8.2). Cheap, and it is the only way the key-carrying half of the payload
+  gets measured before it is trusted.
+- **Delete, per §7.A.** Every item there removes a privileged path and none of
+  them needs the flip. `maybeSelfInstall`, `POST /iptables/remove`,
+  `autoheal.Run`, the two unit-writing endpoints. A gateway is strictly safer
+  after each, flip or no flip.
+- **The stand-down guard (1) and the LiveRules widening (2).** Both are small,
+  pure, and testable without a machine to break.
+- **Reinstall the unit on upgrade, or warn that it is stale** (§1.3). It is the
+  measured reason a shipped fix was inert, and the flip rewrites the unit
+  anyway — better to find out now that nothing rewrites it.

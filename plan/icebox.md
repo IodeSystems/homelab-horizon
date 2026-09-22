@@ -625,3 +625,71 @@ changed no code. Each names the section with the evidence.
   gates" misses two more in `internal/server` (`static_supervisor.go:110`,
   `handlers_site.go:109`) which change branch at the flip rather than going
   away. §1.5.
+
+## ◻ Found re-measuring the privilege audit on a VM (2026-09-22)
+
+From the re-run recorded in `plan/privilege-audit.md`. Docs-only pass, nothing
+fixed here. Each names the section with the evidence.
+
+- **A box enrolled before the issuer change cannot rotate its credential.**
+  `92c956a` made hz the issuer and made it refuse a machine it does not declare
+  — but the credential store (`<config>.agents`) and the Machine record
+  (`config.json`) are two files and nothing backfills one from the other.
+  Measured on `hz-audit`: `hz machine ls` reported "No machines declared" while
+  a valid credential record for that machine existed, and `hz-agent enroll
+  --rotate` was refused until `hz machine add` was run. The existing credential
+  keeps working, so this is an upgrade-path gap, not an outage — but re-enrolling
+  or rotating a live box needs a declaration step nobody is told about. Either
+  backfill a Machine record from each `<config>.agents` entry on load, or have
+  the refusal message say "this machine is enrolled but not declared" rather
+  than "hz declares no machine named …". `privilege-audit.md` §1.1.
+
+- **hz never reinstalls its own systemd unit, so a unit-template fix does not
+  reach an existing box.** `c36b2b4` added `NotifyAccess=main` and the
+  `STATUS=degraded …` sd_notify so `systemctl status` would stop saying a
+  gateway with dead subsystems is fine. Measured: on a VM whose unit was written
+  by an older binary, `NotifyAccess=none` and `StatusText` was empty — the fix
+  was inert until the unit was rewritten by hand. `maybeSelfInstall` skips under
+  systemd, `install` is not re-run on upgrade, and nothing warns that the unit on
+  disk is older than the binary. A comparison of the running unit against
+  `show-systemd` at boot, logged once, would have caught it.
+  `privilege-audit.md` §1.3.
+
+- **`privilege-classification.md` §2 row 23 is wrong about when the static
+  supervisor runs.** It says the office gateway exercises it "yes, if static
+  sites exist". `s.static.Start()` (`server.go:1865`) is unconditional, and the
+  fork was observed failing on a VM whose config declares no `static_root` at
+  all. Every root gateway forks a `nobody` child at boot whether or not anything
+  is served. Row 24 (`sitedeploy`'s chown) does depend on static sites; row 23
+  does not. `privilege-audit.md` §1.5.
+
+- **Three privileged capabilities are missing from both inventories.**
+  `ObservedStore.save` writing `<config>.observed` in the hz process
+  (`internal/agent/observed_store.go:210`), and in the agent
+  `exec.Command("systemctl", <action>, <unit from the payload>)`
+  (`internal/agent/apply.go:130`) and the `agent.Directory`-bounded
+  `os.Remove` (`:295`). All three are argued about in
+  `privilege-classification.md` §4 and marked closed; none became a row in its
+  §2 table, which is what item 12's readiness list reads.
+  `privilege-audit.md` §7.
+
+- **§5.2's three bounding properties do not cover a payload-named target.**
+  "Never a shell string / never a subcommand from a request / never reachable
+  from the web process" are all satisfied by the agent's new `Units` poke, which
+  nonetheless lets hz name which systemd unit gets restarted. A fourth property
+  belongs there before anything produces a `Units` entry — and nothing does yet,
+  so the first caller will land on a path no production payload has exercised.
+  `privilege-audit.md` §7.
+
+- **`<config>.observed` is missing from item 12's chown line.**
+  `privilege-classification.md` §7.C names `config.json`, its directory,
+  `<config>.token` and `<config>.agents`. The observed store is a fourth file in
+  the same directory, written by the hz process on every agent report, and an
+  unwritable one after the flip is a log flood on a 5-second clock.
+  `privilege-audit.md` §7.
+
+- **Two authenticated surfaces still have no server-side authentication test.**
+  `handleDeployAPI` and `/mcp` (`privilege-audit.md` §6 rows 1 and 2), unchanged
+  since September. Not privileged paths, so not flip blockers — but row 1's
+  caller is the service-deploy token, which is also what reaches
+  `handlers_ban.go`'s root `iptables` call.
