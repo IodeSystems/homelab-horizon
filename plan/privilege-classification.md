@@ -451,11 +451,21 @@ Nothing to do.
 the generator cannot name the out interface, so port forwards drop out of the
 expected set and a reconcile now would remove them"), and persisting
 `LastLocalIface`/`LastLanCIDR` afterwards. The stand-down belongs on the
-**producer** side — hz must not emit an `IPTablesSection` at all when
-`DetectDefaultInterface()` is empty, or the agent will happily reconcile port
-forwards away on the next poll. `buildAgentDesired` (`handlers_agent.go:158-167`)
-**does not have that guard today**. Filed to `plan/icebox.md`; it is latent only
-because the agent is inert.
+**producer** side, or the agent will happily reconcile port forwards away on the
+next poll.
+
+> **DONE, and this paragraph's prescription was half wrong.** It said hz "must
+> not emit an `IPTablesSection` at all". Not emitting one is indistinguishable
+> from hz having no firewall opinion on that box: the agent leaves the firewall
+> alone (correct) *quietly* (not correct), and the resulting plan — having no
+> firewall lines in it — prints **`state: in sync — nothing to apply`**. That is
+> hz claiming it checked and agreed. What shipped instead
+> (`iptablesSectionFor`, `handlers_agent.go`) emits the section **flagged
+> `stood_down` with a `why` and no rule sets**: `Apply` refuses it, the plan
+> carries a `KindUnknown` line, and the projection carries a gap with
+> `reason: "stood-down"` — a third kind beside `unmodelled` and `unreadable`,
+> because a flap clears on its own and those two do not.
+> `privilege-audit.md` §8.3 item 1.
 
 ### 3.4 `reconcile_iptables.go` — the 60s self-heal loop
 
@@ -1029,9 +1039,11 @@ This sits alongside `ha-and-the-agent.md` §7 (the peer-sync half) and
 - [ ] **Widen `iptables.LiveRules`' INPUT scope** to admit ban rules (§3.2),
       with its pure test, **before** bans move. Note this invalidates
       `ha-and-the-agent.md` §4's "cannot collide" row for bans — re-read it.
-- [ ] **Add the no-default-route stand-down to `buildAgentDesired`** (§3.3):
-      emit no `IPTablesSection` when `DetectDefaultInterface()` is empty, or the
-      agent reconciles port forwards away. Latent only because the agent is inert.
+- [x] **Add the no-default-route stand-down to `buildAgentDesired`** (§3.3).
+      Done in `iptablesSectionFor` — but **not the way this line said**: emitting
+      NO section reads as "hz manages no firewall here" and yields a plan with no
+      firewall lines, i.e. one that reports *in sync*. hz emits the section
+      flagged `stood_down`, with no rule sets. See the correction under §3.3.
 - [ ] **Move `WriteMaintenancePageFiles` into `HAProxySection.Files`** (§3.10).
       Cheapest item; fits today's model unchanged; **do it first** as the proof
       that a file-set move works end to end.
@@ -1153,8 +1165,8 @@ Found while verifying, not fixed here (this investigation changes no code):
 
 - IP forwarding is never persisted — three copies write `/proc/sys`, none writes
   `/etc/sysctl.d`; lost on reboot unless the distro default is 1 (§3.1 #1).
-- `buildAgentDesired` has no no-default-route stand-down, unlike
-  `handleAPIIPTablesReconcile` (§3.3).
+- ~~`buildAgentDesired` has no no-default-route stand-down, unlike
+  `handleAPIIPTablesReconcile`~~ (§3.3) — **fixed**; see the note under §3.3.
 - Backup restore's cert-extraction path handling (§3.8) — recorded as a class,
   **this repo is public**.
 - `POST /wg/create-config` has no confirmation in front of an operation that

@@ -13,6 +13,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/db"
 	"github.com/iodesystems/homelab-horizon/internal/haproxy"
+	"github.com/iodesystems/homelab-horizon/internal/iptables"
 	"github.com/iodesystems/homelab-horizon/internal/projection"
 )
 
@@ -406,17 +407,77 @@ func (s *Server) desiredFor(machine string) *agent.Desired {
 	// iptables.Reconcile. buildClassifierInputs also reads the live set, which
 	// the agent does not need and which is discarded here.
 	_, expected, stale, blessed, currentIface, _ := s.buildClassifierInputs()
-	if len(expected) > 0 {
-		d.IPTables = &agent.IPTablesSection{
-			Expected:         expected,
-			Stale:            stale,
-			Blessed:          blessed,
-			DefaultInterface: currentIface,
-			LastLocalIface:   cfg.LastLocalIface,
-		}
+	d.IPTables = iptablesSectionFor(expected, stale, blessed, currentIface, cfg.LastLocalIface)
+	if d.IPTables != nil && d.IPTables.StoodDown {
+		// The stand-down is not silence. The projection carries it as a gap
+		// whose REASON says which kind of not-knowing this is, so a reader
+		// tells it from "hz has no record for this" and from "hz cannot read
+		// that machine's files" without parsing prose.
+		mc.AddGapReason(agentSectionIPTables, projection.ReasonStoodDown, d.IPTables.Why)
 	}
 
 	return d
+}
+
+// iptablesStandDownWhy is what hz says when it will not publish a firewall.
+const iptablesStandDownWhy = "hz could not name this machine's egress interface (no default route just now), so it is not publishing a firewall this pass." +
+	" The rule set it would have published omits the MASQUERADE and every port forward, because those are pinned to that interface name —" +
+	" applying it would delete the live ones. Nothing is added or removed until the default route is back."
+
+// iptablesSectionFor is the firewall half of desiredFor's composition, and the
+// one decision in it that can go badly wrong. Pure, and separate, so the
+// decision is assertable without a routing table (see the stand-down test).
+//
+// Three answers, and they are three different things:
+//
+//   - nil — hz generates no firewall rules on this box at all (no WireGuard
+//     interface, so ExpectedRules returns nothing). Unmanaged: the agent
+//     leaves the box's firewall alone and a screen says hz has no opinion.
+//   - stood down — hz HAS an opinion and refuses to publish it this pass.
+//   - the sets — hz's opinion, publishable.
+//
+// THE STAND-DOWN. Nothing is wrong with the box when this fires; hz just
+// cannot name the egress interface this instant — a route flap, a boot before
+// the default route settles, a link down for a second.
+//
+// iptables.ExpectedRules pins the MASQUERADE and every port-forward rule to
+// that interface name and emits NONE of them without it (forwardRules returns
+// nil on an empty OutIface), while StaleRules carries the forward jumps
+// unconditionally and re-derives the previous interface's rules from
+// LastLocalIface. So the set hz would publish right now is not "the same
+// rules, minus a detail": it is a set that says the gateway's NAT and every
+// port forward are STALE. An agent handed it deletes them. And hz is not on a
+// broken link while it computes this — the agent polls, hz answers — so the
+// forwards would go at the moment a human is least likely to be looking.
+//
+// WHY THE GUARD IS HERE AND NOT IN internal/projection. The projection is pure
+// and never sees a routing table; this section is not its output at all, but
+// composed at the call site from buildClassifierInputs — which is the code
+// that makes the read (config.DetectDefaultInterface). The fact and the
+// decision therefore live in the same place, and no pure package acquires an
+// input it could only ever be handed. It is also the seam hz's other two
+// reconcile paths already stand down at, on exactly this condition:
+// handleAPIIPTablesReconcile refuses with 503, reconcileIPTables returns
+// before axis 2.
+//
+// WITHHELD IS NOT ABSENT, which is why this returns a flagged section rather
+// than nil. A nil reads as "hz manages no firewall here", the agent leaves it
+// alone quietly, and the resulting plan — having no firewall lines in it at
+// all — reports IN SYNC. That would be hz claiming it checked and agreed.
+func iptablesSectionFor(expected, stale []iptables.Rule, blessed []string, currentIface, lastLocalIface string) *agent.IPTablesSection {
+	if len(expected) == 0 {
+		return nil
+	}
+	if currentIface == "" {
+		return &agent.IPTablesSection{StoodDown: true, Why: iptablesStandDownWhy}
+	}
+	return &agent.IPTablesSection{
+		Expected:         expected,
+		Stale:            stale,
+		Blessed:          blessed,
+		DefaultInterface: currentIface,
+		LastLocalIface:   lastLocalIface,
+	}
 }
 
 // projectionGlobal gathers everything the projection reads.
@@ -543,8 +604,13 @@ func noteRemoteGaps(mc *projection.MachineConfig, cfg *config.Config) {
 	if cfg != nil && (cfg.HAProxyEnabled || cfg.DNSMasqEnabled) {
 		edge += " hz runs one itself; that says nothing about this machine."
 	}
+	// Unmodelled rather than unreadable, and the prose above says why: hz is
+	// not failing to open a remote file here, it has no record that would say
+	// whether this machine runs an edge at all. The two absences close by
+	// different means — this one by item 15's records, the two above by the
+	// machine's own agent — so they are not filed as the same thing.
 	for _, section := range []string{agentSectionHAProxy, agentSectionDNSMasq, agentSectionIPTables} {
-		mc.AddGap(section, edge)
+		mc.AddGapReason(section, projection.ReasonUnmodelled, edge)
 	}
 }
 

@@ -591,14 +591,44 @@ changed no code. Each names the section with the evidence.
   presses the fixer button again — and nothing says so. Free to fix as part of
   §3.1 #1 (emit the sysctl.d file alongside the `/proc` write).
 
-- **`buildAgentDesired` has no no-default-route stand-down.**
-  `handleAPIIPTablesReconcile` refuses to reconcile when
-  `DetectDefaultInterface()` is empty, with the reason written down
-  (`handlers_api_iptables.go:225`: the generator cannot name the out interface,
-  so port forwards drop out of the expected set and a reconcile would remove
-  them). `handlers_agent.go:158-167` has no such guard, so the agent would be
-  served an expected set with the forwards missing. Latent only because the
-  agent is inert. §3.3.
+- ~~**`buildAgentDesired` has no no-default-route stand-down.**~~ ✅ **FIXED**
+  in `iptablesSectionFor` (`internal/server/handlers_agent.go`): hz now sends
+  the section flagged `stood_down` with no rule sets, the agent plans a
+  `KindUnknown` (never "in sync", never applied), and the projection carries a
+  `reason: "stood-down"` gap. `privilege-audit.md` §8.3 item 1.
+
+- **`iptables.ExpectedRules` drops the port forwards silently when the
+  out-interface cannot be named.** `forwardRules` returns nil on an empty
+  `OutIface` (`forwards.go:113`) and `ExpectedRules` skips the MASQUERADE
+  (`rules.go:192`), so the function's answer to "what should this box's
+  firewall look like" changes from *the gateway's rules* to *the gateway's
+  rules minus its NAT and every forward* with no signal that anything was
+  omitted. Fail-closed is right for a GENERATOR — emitting `-o ""` would be
+  worse — but the caller cannot tell a degraded set from a complete one, so
+  every caller has to re-derive the condition itself. Three do
+  (`reconcileIPTables`, `handleAPIIPTablesReconcile`, now `iptablesSectionFor`)
+  and each wrote its own check. The honest shape is for `ExpectedRules` to
+  return the omission alongside the rules — a second return value, or an
+  `Inputs`-level precondition — so a caller that forgets cannot silently get a
+  set that deletes things. Deliberately NOT done with the stand-down: changing
+  the generator's signature touches every caller including the reconciler, and
+  the stand-down had to land on its own first. `privilege-audit.md` §8.3
+  item 1.
+
+- **`classifyReportedRules` has the same shape as the stand-down bug and no
+  stand-down.** `handlers_agent_observed.go:340` classifies a machine's
+  REPORTED live rules against `buildClassifierInputs()`' expected/stale sets
+  and discards the `currentIface` it returns. During the same flap, the drift
+  screen therefore labels a reporting machine's MASQUERADE and forward jumps
+  **stale** — "auto-heal will remove", in the UI's own words — when hz has
+  merely lost its own default route. It is a READ, so it removes nothing; it is
+  a false verdict on a screen an operator acts on, which is why it is recorded
+  rather than ignored. Same fix shape — skip the classify and say hz could not
+  compute a verdict this pass — but NOT by reusing `AgentIPTables.readable`,
+  which means "the agent could not look" and would move the blame to the
+  reporting machine. It needs a fourth firewall reading beside `readFirewall`'s
+  unmanaged / unreadable / empty: *the machine looked, hz could not judge*.
+  `privilege-audit.md` §8.3 item 1.
 
 - **Backup restore's archive-path handling.** `handleRestore`
   (`handlers_backup.go`) derives destination paths for cert material from
