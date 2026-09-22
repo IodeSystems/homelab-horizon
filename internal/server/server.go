@@ -1262,7 +1262,6 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/reload", s.handleAPIDNSMasqReload)
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/start", s.handleAPIDNSMasqStart)
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/fix-interfaces", s.handleAPIDNSMasqFixInterfaces)
-	s.handlePeerInstance(mux, "/api/v1/system/install/package", s.handleAPISystemInstallPackage)
 	s.handlePeerInstance(mux, "/api/v1/system/apt-audit", s.handleAPISystemAptAudit)
 	s.handlePeerInstance(mux, "/api/v1/system/metrics", s.handleAPISystemMetrics)
 

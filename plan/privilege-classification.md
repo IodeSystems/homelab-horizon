@@ -128,8 +128,8 @@ plausibly exercises it (§3 says what would tell us; unknowns go to §8).
 | 5 | `POST /wg/create-config` → mint a server keypair, write wg0.conf | `:134` | **once, ever** | **DELETE from the web surface** → a CLI verb (§3.1) |
 | 6 | ~~`POST /system/install/horizon-unit`~~ | — | no (installed) | ✅ **DELETED 2026-09-22** (the `install` verb owns it; long-term the agent's Units) |
 | 7 | ~~`POST /system/enable/horizon`~~ | — | no | ✅ **DELETED 2026-09-22** (same) |
-| 8 | `POST /system/install/package` → allowlisted `apt-get install` | `:282`, `autoheal.go:165` | possibly | **DELETE from the web surface** → `install-deps` (§3.5) |
-| 9 | `GET /system/apt-audit` | `:330` | — | **HZ-KEEPS** (unprivileged read; see §5.3 for its fate) |
+| 8 | ~~`POST /system/install/package`~~ | — | possibly | ✅ **DELETED 2026-09-22** → `install-deps` (§3.5). `autoheal.InstallPackage` went with it. |
+| 9 | `GET /system/apt-audit` | `:330` | — | **HZ-KEEPS** (unprivileged read; see §5.3). Its writer is gone as of 2026-09-22 — closed record, not a live one. |
 | 10 | `POST /dnsmasq/write-config` / `/reload` / `/start` | `:374`, `:398`, `:494` | maybe | **DELETE** (the agent's poll already does exactly this) |
 | 11 | `POST /dnsmasq/fix-interfaces` | `:429` | maybe | **SPLIT** — config edit **HZ-KEEPS** (not privileged), write+reload **AGENT-OWNED** |
 | 12 | `POST /haproxy/fix-logging` → patch `/etc/apparmor.d/…`, `apparmor_parser -r`, touch+chown `/var/log/haproxy.log`, restart rsyslog | `:528` | likely, once | **DELETE from the web surface** → a provisioning step (§3.1) |
@@ -315,7 +315,15 @@ Long-term, `architecture.md` says "hz-agent owns hz's unit file … hz is just
 another app the agent manages" — that is the eventual home, and it is item 13's
 `Units []Unit`, not this handler.
 
-**#8 install/package is DELETE from the web surface.** The allowlist
+**#8 install/package — ✅ DELETED 2026-09-22.** Handler, route,
+`autoheal.InstallPackage` (the systemd-run apt path), the `recordAptAudit`
+writer, the `useInstallPackage` hook and the never-used
+`InstallPackageDialog` are all gone. The three per-component "binary
+installed" rows carry `sudo homelab-horizon install-deps` where their Install
+button was; `GET /apt-audit` stays as a read, relabelled historical. What
+follows is the verdict as it was argued.
+
+The allowlist
 (`autoheal.KnownPackages`) is real and the audit log is real, and neither
 changes the shape: an HTTP request causes `apt-get install` on a live gateway.
 `autoheal.InstallMissing`'s own doc comment already states the rule — "hz NEVER
@@ -1055,9 +1063,14 @@ This sits alongside `ha-and-the-agent.md` §7 (the peer-sync half) and
       Body-supplied table/chain/args.
 - [ ] **Delete `autoheal.Run` and the `auto_heal` config key** (§3.5); rehome
       its three side effects.
-- [ ] **Delete `POST /system/install/package`** and the `systemdRun` helper's
-      last shell-string callers (§3.1 #8, #12). Confirm `systemdRun` has no
-      callers left and delete it; §5.2 rule 1.
+- [◐] **Delete `POST /system/install/package`** — ✅ done 2026-09-22 — **and the
+      `systemdRun` helper's last shell-string callers** (§3.1 #8, #12). Confirm
+      `systemdRun` has no callers left and delete it; §5.2 rule 1.
+      **STILL OPEN:** `systemdRun` survives because #5 (`wg/create-config`) and
+      #12 (`haproxy/fix-logging`) are the two remaining callers, and both are
+      *move* items below rather than deletes — #5 needs §8's "which binary owns
+      the CLI verb", #12 needs a provisioning home. Delete `systemdRun` in the
+      commit that lands the second of those, not before.
 - [x] ✅ **Delete `/system/install/horizon-unit` and `/system/enable/horizon`**
       (§3.1 #6, #7) — done 2026-09-22. A web process that can rewrite its own
       unit is not de-rooted.

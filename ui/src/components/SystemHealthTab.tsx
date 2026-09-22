@@ -8,16 +8,7 @@ import {
   CardHeader,
   Chip,
   CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
-  FormControl,
-  InputLabel,
-  MenuItem,
   Paper,
-  Select,
   Stack,
   Table,
   TableBody,
@@ -37,7 +28,6 @@ import {
   useFixMasquerade,
   useFixWGForwardChain,
   useFixWGRules,
-  useInstallPackage,
   useRequestCert,
   useRefreshPublicIP,
   useReloadDNSMasq,
@@ -50,6 +40,19 @@ import {
 } from "../api/hooks";
 import type { ComponentHealth, SystemHealth, Zone } from "../api/types";
 import { SystemMetricsCard } from "./SystemMetricsCard";
+
+// The one command that installs every missing dependency, named once so the
+// three "binary installed" rows cannot drift apart or from the CLI's own
+// dependencyFixHint (cmd/homelab-horizon/deps.go).
+//
+// There is no install button any more, and that is deliberate rather than an
+// omission: an HTTP request that causes `apt-get install` on a live gateway can
+// pull a dependency that restarts a daemon carrying production traffic, at a
+// moment nobody chose (privilege-classification.md §3.1 #8, §3.5). You also
+// cannot open the admin UI of a gateway whose dependencies are missing badly
+// enough to matter — so the remedy has to be something a human at the box, or
+// a provisioning script, can run.
+const INSTALL_DEPS_HINT = "sudo homelab-horizon install-deps";
 
 // CheckRow renders one line: label + status chip + either a fix button or,
 // where hz deliberately has no button, the exact command that fixes it.
@@ -325,7 +328,6 @@ function SystemLevelCard({ health }: { health: SystemHealth }) {
 // nudges the admin through the right order.
 function WireGuardCard({ health }: { health: SystemHealth }) {
   const wg = byName(health, "wireguard");
-  const install = useInstallPackage();
   const createConfig = useCreateWGConfig();
   const fixMasq = useFixMasquerade();
   const fixChain = useFixWGForwardChain();
@@ -338,9 +340,7 @@ function WireGuardCard({ health }: { health: SystemHealth }) {
       <CheckRow
         label="wg binary installed"
         ok={wg.installed}
-        fix={() => install.mutate("wireguard-tools")}
-        fixRunning={install.isPending}
-        fixLabel="Install"
+        runToFix={INSTALL_DEPS_HINT}
       />
       <CheckRow
         label="wg0.conf exists"
@@ -403,7 +403,6 @@ function WireGuardCard({ health }: { health: SystemHealth }) {
 
 function HAProxyCard({ health }: { health: SystemHealth }) {
   const hap = byName(health, "haproxy");
-  const install = useInstallPackage();
   const fixLogging = useFixHAProxyLogging();
 
   if (!hap) return null;
@@ -415,9 +414,7 @@ function HAProxyCard({ health }: { health: SystemHealth }) {
       <CheckRow
         label="haproxy binary installed"
         ok={hap.installed}
-        fix={() => install.mutate("haproxy")}
-        fixRunning={install.isPending}
-        fixLabel="Install"
+        runToFix={INSTALL_DEPS_HINT}
       />
       <CheckRow label="Config exists" ok={hap.config_exists} />
       <CheckRow label="Enabled at boot" ok={hap.enabled} okLabel="Enabled" failingLabel="Disabled" />
@@ -449,7 +446,6 @@ function HAProxyCard({ health }: { health: SystemHealth }) {
 
 function DNSMasqCard({ health }: { health: SystemHealth }) {
   const dns = byName(health, "dnsmasq");
-  const install = useInstallPackage();
   const writeConfig = useWriteDNSMasqConfig();
   const reload = useReloadDNSMasq();
   const start = useStartDNSMasq();
@@ -487,9 +483,7 @@ function DNSMasqCard({ health }: { health: SystemHealth }) {
       <CheckRow
         label="dnsmasq binary installed"
         ok={dns.installed}
-        fix={() => install.mutate("dnsmasq")}
-        fixRunning={install.isPending}
-        fixLabel="Install"
+        runToFix={INSTALL_DEPS_HINT}
       />
       <CheckRow
         label="Config exists"
@@ -881,20 +875,36 @@ function LetsEncryptCard({
   );
 }
 
-// AptInstallCard lists the apt-audit log so the admin can see what's been
-// installed, when, and whether it succeeded. No install button here —
-// per-component cards each have their own install button for the relevant
-// package. This card is read-only history.
+// AptInstallCard lists the apt-audit log — what the old in-UI install button
+// installed, when, and whether it succeeded.
+//
+// Closed record, not a live one. Horizon no longer installs packages over HTTP
+// at all (the remedy is `sudo homelab-horizon install-deps`), so nothing
+// appends here any more. The card stays because the file is the only answer to
+// "was that button ever pressed on this box", and a box provisioned since will
+// simply have none.
 function AptInstallCard() {
   const { data } = useAptAudit();
   const entries = data?.entries ?? [];
   return (
     <Card variant="outlined">
-      <CardHeader title={<Typography variant="h6">apt Install Audit</Typography>} sx={{ pb: 0 }} />
+      <CardHeader
+        title={<Typography variant="h6">apt Install Audit</Typography>}
+        subheader={
+          <Typography variant="caption" color="text.secondary">
+            Historical. Horizon no longer installs packages over HTTP — run{" "}
+            <Box component="code" sx={{ fontFamily: "monospace", userSelect: "all" }}>
+              {INSTALL_DEPS_HINT}
+            </Box>{" "}
+            on the host instead.
+          </Typography>
+        }
+        sx={{ pb: 0 }}
+      />
       <CardContent>
         {entries.length === 0 && (
           <Typography variant="body2" color="text.secondary">
-            No apt installs run from this UI yet.
+            No apt installs were ever run from this UI on this host.
           </Typography>
         )}
         {entries.length > 0 && (
@@ -1157,52 +1167,6 @@ function ConfigCard({
         </Box>
       </CardContent>
     </Card>
-  );
-}
-
-// InstallPackageDialog is currently unused — install buttons on each
-// component card call /install/package directly with a fixed pkg name.
-// Kept as scaffolding for a future "install arbitrary package" admin tool.
-export function InstallPackageDialog({
-  open,
-  packages,
-  onClose,
-}: {
-  open: boolean;
-  packages: string[];
-  onClose: () => void;
-}) {
-  const install = useInstallPackage();
-  const [pkg, setPkg] = useState(packages[0] || "");
-  return (
-    <Dialog open={open} onClose={onClose}>
-      <DialogTitle>Install package</DialogTitle>
-      <DialogContent>
-        <DialogContentText sx={{ mb: 2 }}>
-          apt-get update and install a whitelisted package. The invocation is logged.
-        </DialogContentText>
-        <FormControl fullWidth size="small">
-          <InputLabel>Package</InputLabel>
-          <Select label="Package" value={pkg} onChange={(e) => setPkg(e.target.value)}>
-            {packages.map((p) => (
-              <MenuItem key={p} value={p}>
-                {p}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
-        <Button
-          variant="contained"
-          onClick={() => install.mutate(pkg)}
-          disabled={install.isPending}
-        >
-          {install.isPending ? <CircularProgress size={16} /> : "Install"}
-        </Button>
-      </DialogActions>
-    </Dialog>
   );
 }
 

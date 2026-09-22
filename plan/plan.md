@@ -108,8 +108,10 @@ POST /api/v1/system/fix/ip-forwarding      # EnableIPForwarding                 
 POST /api/v1/system/fix/masquerade         # AddMasqueradeRule                        ✅ done
 POST /api/v1/system/fix/wg-forward-chain   # SetupForwardChain                        ✅ done
 POST /api/v1/system/fix/wg-rules           # regen PostUp/PostDown + bounce iface     ✅ done
-POST /api/v1/system/install/package        # apt install <allow-listed pkg>           ✅ done (single endpoint, body {"package":"..."})
-GET  /api/v1/system/apt-audit              # JSONL audit log, newest-first             ✅ done
+# POST /api/v1/system/install/package — DELETED 2026-09-22 (privilege-classification.md §3.1 #8,
+#   §3.5). An HTTP request causing apt-get install on a live gateway can restart a daemon carrying
+#   traffic at a moment nobody chose. Replaced by: sudo homelab-horizon install-deps.
+GET  /api/v1/system/apt-audit              # JSONL audit log, newest-first             ✅ done (read-only; its writer was deleted 2026-09-22, so the file is a closed record)
 # /api/v1/system/install/acme dropped: lego is compiled into horizon, no external acme.sh binary to install.
 # Per-domain cert request: /api/v1/ssl/request-cert already exists (pre-Phase-0). ✅ pre-existing
 # POST /api/v1/system/install/horizon-unit — DELETED 2026-09-22 (privilege-classification.md §3.1 #6/#7).
