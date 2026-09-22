@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -10,7 +11,9 @@ import (
 
 	"github.com/iodesystems/homelab-horizon/internal/agent"
 	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/db"
 	"github.com/iodesystems/homelab-horizon/internal/haproxy"
+	"github.com/iodesystems/homelab-horizon/internal/projection"
 )
 
 // The hz side of hz-agent's poll (plan/architecture.md, phase 4 item 11).
@@ -22,11 +25,14 @@ import (
 // and still applies its own config exactly as before. That is what makes
 // installing the agent on the live gateway a no-op.
 //
-// What it deliberately does NOT serve:
-//
-//   - Anything derived from a MachineConfig. The projection is item 14. What
-//     crosses the wire is rendered output for THIS box, which is all the
-//     gateway needs and all item 12 has to verify.
+// ITEM 14 ADDED A SECOND PRODUCER BESIDE THE RENDERERS. `projection.Project`
+// is pure and needs no access to the machine it is about, so hz can now answer
+// for any machine it declares rather than only for the one it is running on.
+// The rendered sections did not move: they are still hz's own render halves,
+// still only for this box, and still the thing item 12 has to verify. What
+// changed is that a payload for `app-1` is no longer impossible — it is a
+// projection with every file-shaped section absent and a Gap saying why.
+// desiredFor is where the two are composed.
 
 // GET /api/v1/agent/desired — what this machine should look like.
 //
@@ -85,26 +91,26 @@ func (s *Server) handleAgentDesired(w http.ResponseWriter, r *http.Request) {
 	}
 	s.announceAgentGuard("")
 
-	d := s.buildAgentDesired()
-
-	// A PROJECTION ANSWER, NOT AN IDENTITY ONE. This used to say "not this
-	// box" — hz knew only its own hostname, so the only thing it could tell a
-	// caller was that the caller was somebody else. That was the seam item 13
-	// was named to fill, and with a Machine record the question changes shape:
-	// the caller IS a machine hz knows, and what it does not have is a
-	// projection for it.
+	// ANY DECLARED MACHINE IS SERVED. Item 14's projection is what changed
+	// here: hz used to render for its own hostname and hand a 404 to everybody
+	// else, because rendering was the only producer it had. It now has a
+	// second — `project(global, machineID)`, which needs no access to the
+	// machine at all — so a declared machine gets its own payload.
 	//
-	// The refusal stays a 404 and stays total — an agent enrolled under
-	// another machine's name is never handed this machine's network config,
-	// and the agent refuses a misaddressed payload on its side too
-	// (agentFlags.checkAddressed). What changed is what hz can say about WHY,
-	// and therefore what the operator does next: a declared machine is waiting
-	// on the projection (item 14), an undeclared one is waiting on a
-	// declaration. Those are different jobs and used to read identically.
-	if callerMachine != "" && d.Machine != "" && callerMachine != d.Machine {
+	// The 404 that remains is narrower and means one thing: hz has never been
+	// told this machine exists. It is not an identity claim and it does not
+	// name the host hz runs on.
+	if !s.canProjectFor(callerMachine) {
 		writeJSONError(w, http.StatusNotFound, s.noProjectionFor(callerMachine))
 		return
 	}
+
+	// ADDRESSED TO THE CALLER, ALWAYS. Every payload is computed for the
+	// machine the credential names, so a credential can no more reach another
+	// machine's config than it could before — what changed is that the other
+	// machine now HAS one. The agent checks the address on its side too
+	// (agentFlags.checkAddressed).
+	d := s.desiredFor(callerMachine)
 	etag := d.Fingerprint()
 
 	w.Header().Set("ETag", etag)
@@ -121,51 +127,121 @@ func (s *Server) handleAgentDesired(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(d)
 }
 
+// canProjectFor reports whether hz has a desired state for a machine at all.
+//
+// TWO WAYS IN, AND THE SECOND IS NOT A SPECIAL CASE FOR THE GATEWAY.
+//
+//   - A DECLARED machine. `hz machine add` is the admin act that says this box
+//     is ours, and it is already the gate on minting an agent credential
+//     (handlers_api_machines.go). A machine that may enrol may be projected
+//     for.
+//   - The box hz is running on, declared or not. Not a privilege: hz has
+//     always rendered its own config and an agent has always been able to poll
+//     for it, so requiring a declaration here would 404 a live gateway's agent
+//     the moment this shipped — a regression dressed as hygiene. Declaring hz
+//     itself is the right end state and `hz machine add` is how it happens;
+//     until an operator does it, hz keeps answering for the box it is on.
+//
+// Note what this is NOT: a branch inside the projection. Both roads lead to
+// the same Project call. What differs is only whether hz will answer at all.
+func (s *Server) canProjectFor(machine string) bool {
+	if machine == "" {
+		return false
+	}
+	if _, declared := s.cfg().FindMachine(machine); declared {
+		return true
+	}
+	return machine == localMachineName()
+}
+
 // noProjectionFor is what hz says to an agent it cannot serve.
 //
-// One sentence of fact and one of what to do about it, differing on the only
-// thing that matters: whether hz declares the machine at all. Neither branch
-// names the host hz runs on — that is this box's identity and the caller has
-// not been given it.
+// ONE BRANCH NOW, not two. Until item 14 there were two reasons hz could
+// refuse — the machine was undeclared, or it was declared and hz could only
+// project for itself — and telling them apart was the whole point of the
+// message. The projection removed the second, so what is left is the one
+// sentence that was always actionable: hz has not been told this machine
+// exists.
+//
+// It does not name the host hz runs on. That is this box's identity and the
+// caller has not been given it.
 func (s *Server) noProjectionFor(machine string) string {
-	if m, ok := s.cfg().FindMachine(machine); ok {
-		where := "no segments declared"
-		if len(m.Segments) > 0 {
-			where = "segments " + strings.Join(m.Segments, ", ")
-		}
-		return "hz has no desired state for machine " + jsonSafeName(machine) +
-			". It is declared (" + where + "), but hz projects config only for the machine it runs on;" +
-			" projecting for any declared machine is phase 4 item 14."
-	}
 	return "hz has no desired state for machine " + jsonSafeName(machine) +
 		". No machine record declares it — `hz machine add <name> --segment <segment>` declares one." +
 		" hz has nothing to project for a machine it has not been told about."
 }
 
-// buildAgentDesired assembles the payload from the same renderers hz uses to
-// write these files itself.
+// localMachineName is hz's answer to "which box am I", and it is the KERNEL's
+// answer, deliberately, now that a Machine record exists.
 //
-// Every section goes through the manager's Generate* accessor rather than
-// calling a renderer a second time, so "what the agent is told to write" is by
-// construction the bytes hz would write. A section is nil when the subsystem
-// is disabled — which the agent reads as "not managed here", not "wanted
-// empty".
-func (s *Server) buildAgentDesired() *agent.Desired {
-	cfg := s.cfg()
-	// The machine's own hostname, still — and deliberately, now that a Machine
-	// record exists. A Machine record is a DECLARATION about a box; it is not
-	// hz's answer to "which box am I". hz renders for the host it runs on, so
-	// the kernel is the source of that identity, and reading it from the config
-	// would let a declaration rename the box hz is actually configuring.
-	//
-	// The record earns its keep at the other end of this handler
-	// (noProjectionFor) and at enrolment. Item 14's projection is what makes a
-	// machine NAME select a payload; until then hz has exactly one to render.
+// A Machine record is a DECLARATION about a box; it is not an identity claim
+// about the process reading it. Taking this from the config would let a
+// declaration rename the box hz is actually configuring — and after item 14
+// that would be worse, not better, because it would make the box hz can open
+// files on and the box hz thinks it is two different machines.
+func localMachineName() string {
 	host, err := os.Hostname()
 	if err != nil {
-		host = "unknown"
+		return "unknown"
 	}
-	d := &agent.Desired{Machine: host}
+	return host
+}
+
+// buildAgentDesired is the local box's payload: `desiredFor` for the machine
+// hz is running on. Kept as a name because it is what hz's own screens, its
+// enrolment helper and its startup checks ask for.
+func (s *Server) buildAgentDesired() *agent.Desired {
+	return s.desiredFor(localMachineName())
+}
+
+// desiredFor assembles one machine's payload, and it is the composition item
+// 14 is about.
+//
+// TWO PRODUCERS, AND THE LINE BETWEEN THEM IS NOT "IS THIS THE GATEWAY":
+//
+//	projection.Project(global, machine)   pure. Every machine, always.
+//	the rendered/read sections            only where hz can open the files.
+//
+// The projection runs FIRST and runs identically for every machine, gateway
+// included — architecture.md's "the gateway is machine #1, not a special case",
+// honoured literally. There is no branch inside internal/projection for the
+// local box and there must never be one.
+//
+// What follows is the composition. hz's HAProxy config, dnsmasq records,
+// firewall rule sets, wg0.conf and certificate bundles are all produced by
+// rendering or READING the local filesystem, and hz cannot read `app-1`'s
+// filesystem. So those sections are attached only for the machine hz is on,
+// and for anybody else they are nil — with a Gap on the projection saying, in
+// each case, that the section is absent because hz could not compute it rather
+// than because nothing is wanted there.
+//
+// THAT DISTINCTION IS THE POINT. A nil section already means "hz does not
+// manage this here", which an agent correctly reads as "leave it alone". For a
+// remote machine that would be a true statement and a misleading one: hz is
+// not declining to manage the machine's edge, it has no way to know whether
+// the machine has one. The gaps are what stop a remote plan implying an
+// opinion hz does not hold.
+func (s *Server) desiredFor(machine string) *agent.Desired {
+	cfg := s.cfg()
+
+	mc, err := projection.Project(s.projectionGlobal(cfg), machine)
+	if err != nil {
+		// Only an empty machine name gets here, and the callers do not pass
+		// one. Answer with the shape rather than a nil section, so a bug never
+		// reads as "hz manages nothing about this box".
+		mc = projection.MachineConfig{Machine: machine, Unresolved: []projection.Gap{
+			{Section: projection.SectionMachine, Why: err.Error()},
+		}}
+	}
+
+	d := &agent.Desired{Machine: machine, Model: &mc}
+
+	if machine != localMachineName() {
+		// Every section below this point comes off the local filesystem. Say
+		// so, once per section, rather than letting five nils speak for hz.
+		noteRemoteGaps(&mc, cfg)
+		return d
+	}
 
 	if cfg.HAProxyEnabled && s.haproxy != nil {
 		var ssl *haproxy.SSLConfig
@@ -342,6 +418,146 @@ func (s *Server) buildAgentDesired() *agent.Desired {
 
 	return d
 }
+
+// projectionGlobal gathers everything the projection reads.
+//
+// The gathering is here, outside internal/projection, because two of the three
+// inputs are things a pure function may not go and get: the registrations live
+// in hz's database and the agent version is the running binary's. Handing them
+// in is the same discipline haproxy.CertStore follows — the privileged read is
+// the caller's and the renderer takes a value.
+//
+// A MISSING DATABASE IS NOT AN EMPTY FLEET, and the difference shows up in the
+// projection rather than being swallowed here: with no instance store hz
+// cannot know what a machine hosts, which is not the same as knowing it hosts
+// nothing. See instancesForProjection.
+func (s *Server) projectionGlobal(cfg *config.Config) projection.Global {
+	return projection.Global{
+		Config:    cfg,
+		Instances: s.instancesForProjection(),
+
+		// hz's own version is what it wants the fleet's agents on: the agent
+		// ships with hz and `hz-agent install` copies the running binary.
+		// Empty means no hz-agent package rather than an unpinned one
+		// (projection.Global.AgentVersion).
+		AgentVersion: s.version,
+
+		// No serial. Item 11 chose a content hash over a counter and nothing
+		// has asked for a monotonic floor since; Desired.Fingerprint is the
+		// generation every consumer already compares. See
+		// projection.MachineConfig.Serial.
+		Serial: 0,
+	}
+}
+
+// instancesForProjection reads every registration hz holds and flattens it to
+// the value the projection joins on.
+//
+// The machine NAME, not the row id: cm_registrations keys a machine by id and
+// the config's Machine record is keyed by name, so the two are joined here,
+// once, rather than leaving a projection to hold a database id it could not
+// resolve.
+//
+// Errors and a missing store both answer nil, and that is a real loss of
+// information which the caller cannot see. It is accepted here and repaired
+// where it matters: the drift screen reads the fleet from the same database,
+// so an hz with no instance store shows no instances anywhere rather than
+// showing a machine as hosting nothing. Inventing a gap per machine for a
+// store that is missing for every machine would be noise on every row.
+func (s *Server) instancesForProjection() []projection.Instance {
+	if s.users == nil {
+		return nil
+	}
+	ctx := context.Background()
+	machines, err := s.users.ListMachines(ctx)
+	if err != nil {
+		return nil
+	}
+	var out []projection.Instance
+	for _, m := range machines {
+		regs, err := s.users.ListRegistrationsForMachine(ctx, m.ID)
+		if err != nil {
+			continue
+		}
+		for _, r := range regs {
+			// APPROVED ONLY. A pending registration is an address a machine
+			// has ASKED for and nobody has granted — example-projection.md
+			// §3's new-box, which "wants storefront/staging/web/app". Counting
+			// it would let a box put itself in another machine's projection by
+			// booting, which is the whole thing admission exists to prevent.
+			if r.State != db.RegistrationApproved {
+				continue
+			}
+			out = append(out, projection.Instance{
+				Machine:     m.Name,
+				Environment: r.Environment,
+				App:         r.App,
+				Role:        r.Role,
+			})
+		}
+	}
+	return out
+}
+
+// noteRemoteGaps records, on a remote machine's projection, that every
+// file-shaped section is absent because hz could not compute it.
+//
+// THIS FUNCTION IS THE HONESTY REQUIREMENT, WRITTEN DOWN. Each of these
+// sections would be nil in a remote payload whether or not anyone thought
+// about it, and nil already has a meaning the agent acts on — "not managed
+// here, leave it alone". For the local box that meaning is earned: hz looked,
+// and the subsystem is off. For a remote box it would be a claim hz is not
+// entitled to make, and it would be indistinguishable from the earned one.
+//
+// WHY EACH ONE CANNOT BE COMPUTED, since they fail for two different reasons:
+//
+//   - wireguard and certs are hz READING ITS OWN FILES. wg0.conf crosses as
+//     the file hz maintains because hz has no whole-file renderer for it — it
+//     mutates the file in place and internal/wireguard's package doc says the
+//     file on disk is the state of record. Certificate bundles are read off
+//     the HAProxy cert directory. hz cannot open either on another machine,
+//     and it cannot RENDER the WireGuard one instead until a Segment record
+//     gives a machine a per-segment interface, address, key and peer set —
+//     item 15.
+//   - haproxy, dnsmasq and iptables are hz's OWN subsystem settings. Nothing
+//     in the model says which machines run an edge: HAProxyEnabled and
+//     friends are this process's configuration, not a per-machine
+//     declaration. So hz has no basis for an opinion about another box's
+//     edge, rather than an opinion it cannot render.
+//
+// Deliberately NOT gapped: Forwards, which is empty because the rule's default
+// is deny (projection.MachineConfig.Forwards), and Files, which has no
+// producer at all yet and is therefore equally absent for the local box.
+func noteRemoteGaps(mc *projection.MachineConfig, cfg *config.Config) {
+	const item15 = " Rendering one instead needs a Segment record — a segment's CIDR, its interface, and this machine's address, key and peers on it — which is phase 4 item 15."
+
+	mc.AddGap(agentSectionWireGuard, "hz's WireGuard section is the wg0.conf on hz's own disk, read back:"+
+		" hz mutates that file in place and has no whole-file renderer for it, so there is nothing to render for another machine and nothing to read."+
+		item15)
+
+	mc.AddGap(agentSectionCerts, "the certificate bundles hz serves are read out of hz's own HAProxy certificate directory."+
+		" hz cannot read another machine's store, and which bundles a remote edge should hold is a placement nothing declares.")
+
+	edge := "hz projects no edge configuration for this machine: HAProxy, dnsmasq and the firewall rule sets are this hz process's own subsystem settings" +
+		" (HAProxyEnabled, DNSMasqEnabled and the classifier's inputs), not a per-machine declaration, so hz has no record saying whether this box runs an edge at all."
+	if cfg != nil && (cfg.HAProxyEnabled || cfg.DNSMasqEnabled) {
+		edge += " hz runs one itself; that says nothing about this machine."
+	}
+	for _, section := range []string{agentSectionHAProxy, agentSectionDNSMasq, agentSectionIPTables} {
+		mc.AddGap(section, edge)
+	}
+}
+
+// The agent payload's section names, as projection Gap keys. They are the
+// agent.Subsystem strings, so a screen keys a gap and a change by the same
+// name — a gap on "haproxy" and a change on "haproxy" are the same section.
+const (
+	agentSectionHAProxy   = string(agent.SubsystemHAProxy)
+	agentSectionDNSMasq   = string(agent.SubsystemDNSMasq)
+	agentSectionWireGuard = string(agent.SubsystemWireGuard)
+	agentSectionIPTables  = string(agent.SubsystemIPTables)
+	agentSectionCerts     = string(agent.SubsystemCerts)
+)
 
 // readCertBundles reads the served bundles out of the HAProxy certificate
 // directory, in a stable order.
