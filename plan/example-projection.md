@@ -280,10 +280,13 @@ screens, so this is the honest state of it:
   versions, the promotion edges, and the multi-homed bridge listing:
   `hz project ls|show`, `hz env ls|show`, `hz machine ls [--multi-homed]`,
   `hz cm machines`.
-- **Nothing renders version drift in the UI.** `CMMachines` shows
-  `reg.version`, which is the frozen reviewed version, not
-  `observed_version`. The desired-vs-observed pair of the row above reaches a
-  human only through `hz cm machines`. See §7.
+- **Version drift is SERVED and not yet rendered.** `GET
+  /api/v1/cm/version-drift` is the join — one row per approved instance,
+  carrying the rung's declared version, the instance's observed one, that
+  reading's age and a verdict (`internal/server/handlers_version_drift.go`,
+  `apitypes.InstanceVersion`). No screen consumes it yet. `CMMachines` still
+  shows `reg.version`, which is the frozen reviewed version, not
+  `observed_version`. See §7.
 
 ## 5. What the projection produces for one machine
 
@@ -512,13 +515,19 @@ The rest are missing records:
   `proxy.backend` string is a coincidence hz can observe, not a declaration it
   holds. Nothing says the second service has no instance *because* it shares
   the first's.
-- **Version drift in the UI.** The desired version
-  (`Environment.Version`) and the observed one
-  (`cm_registrations.observed_version` + `observed_at`) are both stored and
-  both served, by different endpoints, and no screen puts them side by side.
-  The drift screen reads the agent channel only; `CMMachines` renders the
-  frozen reviewed version. Joining them is the missing piece of "the most
-  valuable single screen in the tool".
+- **Version drift in the UI.** *Half closed.* The join now exists and is served:
+  `GET /api/v1/cm/version-drift` puts `Environment.Version` beside
+  `cm_registrations.observed_version` + `observed_at`, one row per approved
+  instance, with the reading's age and a verdict computed server-side —
+  `match` · `behind` · `ahead` · `no-declared-version` · `not-observed` ·
+  `not-comparable` · `unresolved`. It reuses `projection.ResolveEnvironment`
+  for the rung and `db.CompareVersions` for the precedence, so it cannot
+  disagree with what the projection installs. What is still missing is the
+  SCREEN: nothing in `ui/` consumes it. The drift screen (`/drift`) reads the
+  agent channel only, and these are two clocks — the instance's threshold is 30
+  days (`apitypes.InstanceStaleAfterSeconds`), not the heartbeat's minutes,
+  because an instance reports at boot and a healthy long-running one has a
+  deliberately old reading.
 - **Ports for an instance with no service.** `storefront/staging/web/ops` on
   :6404 is loopback-only, so no `proxy.backend` carries it and `Machine` holds
   no placement. hz does not know that port and is not supposed to; the number
