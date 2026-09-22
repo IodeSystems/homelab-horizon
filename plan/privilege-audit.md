@@ -977,15 +977,33 @@ Concretely, still unhanded-over and still privileged in hz web:
 
 **The specific things that must be true first**, ordered, each checkable:
 
-1. **The no-default-route stand-down in `desiredFor`** (§7.B2 of the
-   classification; also in the icebox). This is the sharpest one. `desiredFor`
-   emits an `IPTablesSection` unconditionally; `iptables.ExpectedRules` drops
-   port forwards from the expected set when the out-interface cannot be named
-   (`rules.go:188`). So an armed agent that polls during a moment with no
-   default route **reconciles the gateway's port forwards away**, and nothing
-   in the payload says it was an accident. `handleAPIIPTablesReconcile`'s
-   equivalent guard has been there all along with the reason written down. This
-   must land before `--apply`, not with it.
+1. ~~**The no-default-route stand-down in `desiredFor`**~~ ✅ **LANDED**
+   (`iptablesSectionFor`, `internal/server/handlers_agent.go`). The finding, as
+   recorded: `desiredFor` emitted an `IPTablesSection` unconditionally;
+   `iptables.ExpectedRules` drops port forwards from the expected set when the
+   out-interface cannot be named (`rules.go:188`, via `forwardRules`), while
+   `StaleRules` carries the forward jumps unconditionally and re-derives the
+   previous interface's rules from `LastLocalIface`. So an armed agent that
+   polled during a moment with no default route would **reconcile the
+   gateway's NAT and port forwards away**, and nothing in the payload said it
+   was an accident.
+
+   The fix gives the agent path the guard hz's other two reconcile paths
+   already had (`handleAPIIPTablesReconcile` → 503; `reconcileIPTables` →
+   return before axis 2), at the same seam — the caller that makes the
+   `DetectDefaultInterface` read, not `internal/projection`, which is pure and
+   never sees a routing table. **Withheld is not absent**: hz sends the section
+   flagged `stood_down` with a `why` and no rule sets, so the agent's plan
+   carries a `KindUnknown` line (never "in sync", never applied), and the
+   projection carries a gap with `reason: "stood-down"` — distinct from the
+   `unmodelled` and `unreadable` gaps it already raised. The positive control
+   is `TestAFlapWouldHaveRemovedTheGatewaysForwards`
+   (`internal/server/agent_iptables_standdown_test.go`), which builds the
+   payload hz used to publish, from hz's own generators, and asserts the plan
+   removing the MASQUERADE and all three forward jumps.
+
+   **Not changed, and still open:** `ExpectedRules` silently dropping the
+   forwards in the first place. See `plan/icebox.md`.
 2. **`iptables.LiveRules`' INPUT scope widened to admit ban rules**
    (`classify.go:131`), *before* bans move — otherwise `Reconcile` installs a
    ban it cannot see and installs it again every pass. The classification says
@@ -1024,8 +1042,8 @@ rough order of value per risk:
   them needs the flip. `maybeSelfInstall`, `POST /iptables/remove`,
   `autoheal.Run`, the two unit-writing endpoints. A gateway is strictly safer
   after each, flip or no flip.
-- **The stand-down guard (1) and the LiveRules widening (2).** Both are small,
-  pure, and testable without a machine to break.
+- ~~**The stand-down guard (1)**~~ ✅ done; **the LiveRules widening (2)** is
+  still open. Small, pure, and testable without a machine to break.
 - **Reinstall the unit on upgrade, or warn that it is stale** (§1.3). It is the
   measured reason a shipped fix was inert, and the flip rewrites the unit
   anyway — better to find out now that nothing rewrites it.

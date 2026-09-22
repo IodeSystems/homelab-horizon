@@ -224,10 +224,47 @@ type Unit struct {
 // Section is one of the Section* constants — a stable key a screen can branch
 // on. Why is prose for a human, and it names what would close the gap, because
 // "hz does not know" without "and here is what would tell it" is a dead end.
+// Reason is one of the Reason* constants: WHICH KIND of not-knowing this is,
+// as a key rather than as prose, so a reader can branch on it the way the
+// drift screen already branches unmanaged / unreadable / empty.
 type Gap struct {
 	Section string `json:"section"`
-	Why     string `json:"why"`
+
+	// Reason is rendered even when it is the common one (no omitempty),
+	// because a reader must not have to infer a kind from an absence — the
+	// same rule Segment.Resolved follows.
+	Reason string `json:"reason"`
+
+	Why string `json:"why"`
 }
+
+// The kinds of not-knowing. There are three, and the difference between them
+// is the difference between three different next actions.
+const (
+	// ReasonUnmodelled — hz's own records do not yield an answer: nothing
+	// declares the thing, or two declarations contradict each other. The fix
+	// is a record. Every gap internal/projection raises is one of these,
+	// because records are the only thing it reads.
+	ReasonUnmodelled = "unmodelled"
+
+	// ReasonUnreadable — the answer is on a machine hz cannot open. hz has an
+	// opinion about its OWN edge and no way to look at anybody else's, so a
+	// remote machine's locally-read sections are absent rather than empty.
+	// The fix is the machine's own agent reporting, not a record here.
+	ReasonUnreadable = "unreadable"
+
+	// ReasonStoodDown — hz COULD look, did look, and refuses to publish the
+	// answer it got, because publishing it would be worse than publishing
+	// nothing. Nothing is wrong with the records and nothing is unreachable:
+	// this is hz declining, deliberately, for this pass. It is transient by
+	// construction — the fix is the condition clearing — which is exactly why
+	// it must not be filed under either of the two above, both of which
+	// persist until somebody does something.
+	//
+	// The firewall's no-default-route stand-down is the first of these; see
+	// desiredFor in internal/server/handlers_agent.go.
+	ReasonStoodDown = "stood-down"
+)
 
 // Section keys. Stable strings: a screen branches on these, and the first four
 // name sections of MachineConfig itself while the rest name sections of the
@@ -334,7 +371,7 @@ func Project(g Global, machineID string) (MachineConfig, error) {
 		// and a registration can name a machine nobody declared. Both are
 		// real states and both deserve a projection that says what it does not
 		// know rather than nothing at all.
-		mc.gap(SectionMachine, "no machine record declares "+machineID+
+		mc.gap(SectionMachine, ReasonUnmodelled, "no machine record declares "+machineID+
 			", so hz knows no segment membership for it — `hz machine add "+machineID+" --segment <segment>` declares one."+
 			" Instances registered on it are still projected below.")
 	}
@@ -360,7 +397,7 @@ func projectSegments(mc *MachineConfig, m config.Machine) {
 		return
 	}
 
-	mc.gap(SectionSegments, "hz can name this machine's segments and not what they mean:"+
+	mc.gap(SectionSegments, ReasonUnmodelled, "hz can name this machine's segments and not what they mean:"+
 		" nothing resolves a segment NAME to a CIDR, an interface, a per-machine address or a peer set."+
 		" That record is phase 4 item 15. Until it exists a membership is a declaration about a label,"+
 		" so `interface`, `address` and `peers` are absent because hz does not know them, not because they are empty.")
@@ -370,7 +407,7 @@ func projectSegments(mc *MachineConfig, m config.Machine) {
 	// record holds, so this gap is a consequence of the one above rather than
 	// an independent hole — said separately anyway, because a reader looking
 	// at an empty `hosts` must not have to derive it.
-	mc.gap(SectionHosts, "an /etc/hosts entry is a peer's address on a segment, and no record holds a per-segment address (phase 4 item 15),"+
+	mc.gap(SectionHosts, ReasonUnmodelled, "an /etc/hosts entry is a peer's address on a segment, and no record holds a per-segment address (phase 4 item 15),"+
 		" so hz has no host entries to declare rather than declaring that this machine should have none.")
 }
 
@@ -420,18 +457,18 @@ func projectInstances(mc *MachineConfig, cfg *config.Config, all []Instance, mac
 	for _, inst := range mine {
 		env, err := resolveEnvironment(cfg, inst)
 		if err != nil {
-			mc.gap(SectionInstances, "instance "+inst.Address()+" cannot be resolved to a project: "+err.Error()+
+			mc.gap(SectionInstances, ReasonUnmodelled, "instance "+inst.Address()+" cannot be resolved to a project: "+err.Error()+
 				". It contributes no package, feed or unit — a guess here would pin this machine to another project's version.")
 			continue
 		}
 
 		// The desired version is the ENVIRONMENT's, declared, opaque to hz.
 		if strings.TrimSpace(env.Version) == "" {
-			mc.gap(SectionPackages, "instance "+inst.Address()+" runs "+env.Project+"/"+env.Name+
+			mc.gap(SectionPackages, ReasonUnmodelled, "instance "+inst.Address()+" runs "+env.Project+"/"+env.Name+
 				", which declares no version — hz will not tell a machine to install an unspecified one,"+
 				" so no package is projected for it. `hz env set "+env.Project+"/"+env.Name+" --version <v>` declares one.")
 		} else if prev, dup := packages[env.Project]; dup && prev.version != env.Version {
-			mc.gap(SectionPackages, "package "+env.Project+" would be pinned to two versions on this machine: "+
+			mc.gap(SectionPackages, ReasonUnmodelled, "package "+env.Project+" would be pinned to two versions on this machine: "+
 				prev.version+" (from "+prev.from.Address()+") and "+env.Version+" (from "+inst.Address()+")."+
 				" apt cannot hold two versions of one package name, so hz projects the first and names the conflict rather than picking.")
 		} else if !dup {
@@ -445,12 +482,12 @@ func projectInstances(mc *MachineConfig, cfg *config.Config, all []Instance, mac
 		case err != nil:
 			if !seenFeedGap[env.Project] {
 				seenFeedGap[env.Project] = true
-				mc.gap(SectionFeeds, "the package feed for project "+env.Project+" cannot be resolved: "+err.Error())
+				mc.gap(SectionFeeds, ReasonUnmodelled, "the package feed for project "+env.Project+" cannot be resolved: "+err.Error())
 			}
 		case feed == nil:
 			if !seenFeedGap[env.Project] {
 				seenFeedGap[env.Project] = true
-				mc.gap(SectionFeeds, "project "+env.Project+" declares no package feed and neither does anything above it in the tree,"+
+				mc.gap(SectionFeeds, ReasonUnmodelled, "project "+env.Project+" declares no package feed and neither does anything above it in the tree,"+
 					" so hz cannot say where this machine installs "+env.Project+" from."+
 					" `hz feed set "+env.Project+" --url … --suite … --component …` declares one,"+
 					" and declaring it on an ancestor serves every project under it.")
@@ -496,7 +533,7 @@ func projectInstances(mc *MachineConfig, cfg *config.Config, all []Instance, mac
 		// coordinate again lands here on the very estate that found the
 		// original bug.
 		if owners := units[name]; len(owners) > 1 {
-			mc.gap(SectionUnits, "unit "+name+" is the projection of "+fmt.Sprint(len(owners))+" instances ("+
+			mc.gap(SectionUnits, ReasonUnmodelled, "unit "+name+" is the projection of "+fmt.Sprint(len(owners))+" instances ("+
 				strings.Join(owners, ", ")+"), and one unit is one instance. A unit name carries the project and all three"+
 				" coordinates of the address, and a registration is unique on (machine, environment, app, role), so two instances"+
 				" cannot legitimately share a name on one machine — this machine has been handed the same address more than once."+
@@ -704,17 +741,32 @@ const AgentPackage = "hz-agent"
 //
 // Recorded once: the same missing record reached from four instances is one
 // gap, not four.
-func (mc *MachineConfig) AddGap(section, why string) { mc.gap(section, why) }
+//
+// Reason defaults to ReasonUnreadable, which is what the composing call site's
+// gaps are: the sections it covers are the ones it reads off a filesystem, and
+// it raises a gap exactly when the filesystem is somebody else's. A caller
+// with a different kind of not-knowing says so with AddGapReason.
+func (mc *MachineConfig) AddGap(section, why string) {
+	mc.gap(section, ReasonUnreadable, why)
+}
+
+// AddGapReason is AddGap for a gap that is not the caller's usual kind. The
+// firewall stand-down is the case it exists for: hz read the routing table,
+// got no answer it is willing to publish, and that is neither a missing record
+// nor an unreachable machine.
+func (mc *MachineConfig) AddGapReason(section, reason, why string) {
+	mc.gap(section, reason, why)
+}
 
 // gap records something hz could not compute, once. Repeats are dropped: the
 // same missing record reached from four instances is one gap, not four.
-func (mc *MachineConfig) gap(section, why string) {
+func (mc *MachineConfig) gap(section, reason, why string) {
 	for _, g := range mc.Unresolved {
 		if g.Section == section && g.Why == why {
 			return
 		}
 	}
-	mc.Unresolved = append(mc.Unresolved, Gap{Section: section, Why: why})
+	mc.Unresolved = append(mc.Unresolved, Gap{Section: section, Reason: reason, Why: why})
 }
 
 // Gaps reports whether hz left anything unresolved, which is the question a
