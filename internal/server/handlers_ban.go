@@ -173,6 +173,28 @@ func (s *Server) startBanExpiry() {
 	}
 }
 
+// activeBanIPs is the ban list in the form the iptables generator wants: the
+// address of every ban that has not already expired, in config order.
+//
+// Expired-but-not-yet-reaped bans are filtered out here rather than emitted and
+// then removed. startBanExpiry reaps on a 30s tick and reconcileIPTables runs
+// on a 60s one, so without this an expired ban would spend up to 30s in the
+// expected set — long enough for a reconcile pass to reinstall the very rule
+// the expiry loop is about to delete.
+//
+// Takes the clock as an argument so the filtering is testable; the two callers
+// (reconcileIPTables, buildClassifierInputs) pass time.Now().Unix().
+func activeBanIPs(bans []config.IPBan, now int64) []string {
+	out := make([]string, 0, len(bans))
+	for _, b := range bans {
+		if b.ExpiresAt > 0 && b.ExpiresAt <= now {
+			continue
+		}
+		out = append(out, b.IP)
+	}
+	return out
+}
+
 // banListEntries converts config bans to API response entries.
 func banListEntries(bans []config.IPBan) []apitypes.BanEntry {
 	entries := make([]apitypes.BanEntry, len(bans))

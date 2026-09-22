@@ -25,10 +25,14 @@ import (
 // (OUTPUT, PREROUTING, custom admin chains, etc.) are not returned — that's
 // part of the "horizon only manages what it manages" boundary.
 //
-// INPUT is narrowed further, to just the rules that jump to WG-INPUT. Unlike
-// FORWARD, a normal host's INPUT is full of ufw/docker rules that horizon has
-// no opinion about; reading them all would classify every one as "unknown" and
-// bury the IPTables tab in noise the admin can't act on.
+// INPUT is narrowed further, to the rules that jump to WG-INPUT plus the ones
+// shaped like an IP ban (`-s <addr> -j DROP`). Unlike FORWARD, a normal host's
+// INPUT is full of ufw/docker rules that horizon has no opinion about; reading
+// them all would classify every one as "unknown" and bury the IPTables tab in
+// noise the admin can't act on. The ban shape is admitted because horizon
+// writes those rules and therefore has to be able to see them — scopeLiveRules
+// carries the reasoning, including why admitting more to read does not admit
+// more to delete.
 //
 // Returns an empty slice (not error) when iptables-save isn't available, so
 // the classifier can still run on hosts without iptables installed yet.

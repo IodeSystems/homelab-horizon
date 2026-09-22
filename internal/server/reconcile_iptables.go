@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/iptables"
@@ -154,6 +155,8 @@ func (s *Server) reconcileIPTables() {
 
 		Forwards:      iptables.ForwardsFromConfig(cfg),
 		ReservedPorts: cfg.ForwardReservedPorts(),
+
+		BannedIPs: activeBanIPs(cfg.IPBans, time.Now().Unix()),
 	})
 	stale := iptables.StaleRules(cfg, peers, serverWGIP, listenPort)
 
