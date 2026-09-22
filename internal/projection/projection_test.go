@@ -829,6 +829,52 @@ func TestEveryDeclaredVersionIsHeld(t *testing.T) {
 	}
 }
 
+// Every gap says WHICH KIND of not-knowing it is, as a key rather than as
+// prose, and the key crosses the wire. Without it a screen has to guess from a
+// sentence whether it is looking at a missing record (fix: declare it), a
+// machine hz cannot read (fix: its agent reports), or hz declining for a
+// moment (fix: wait) — three different next actions behind one word.
+func TestEveryGapNamesWhichKindOfNotKnowingItIs(t *testing.T) {
+	mc := mustProject(t, Global{Config: exampleEstate(), Instances: exampleInstances()}, "app-1")
+	if len(mc.Unresolved) == 0 {
+		t.Fatal("app-1 resolved everything, so this asserts nothing")
+	}
+	for _, g := range mc.Unresolved {
+		if g.Reason != ReasonUnmodelled {
+			t.Fatalf("gap %q has reason %q; a gap raised from records alone is unmodelled", g.Section, g.Reason)
+		}
+	}
+
+	// The caller's two kinds are distinct from each other and from the
+	// projection's own, and the three constants are three values.
+	var composed MachineConfig
+	composed.AddGap("certs", "hz cannot open another machine's store")
+	composed.AddGapReason("iptables", ReasonStoodDown, "no default route just now")
+	if composed.Unresolved[0].Reason != ReasonUnreadable {
+		t.Fatalf("AddGap's default reason is %q", composed.Unresolved[0].Reason)
+	}
+	if composed.Unresolved[1].Reason != ReasonStoodDown {
+		t.Fatalf("AddGapReason did not carry the reason: %q", composed.Unresolved[1].Reason)
+	}
+	seen := map[string]bool{}
+	for _, r := range []string{ReasonUnmodelled, ReasonUnreadable, ReasonStoodDown} {
+		if seen[r] {
+			t.Fatalf("two of the three reasons are the same string %q, so they cannot be told apart", r)
+		}
+		seen[r] = true
+	}
+
+	b, err := json.Marshal(composed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"reason":"unreadable"`, `"reason":"stood-down"`} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("the wire does not carry %s: %s", want, b)
+		}
+	}
+}
+
 // Serial is carried, not invented: a pure function has no monotonic anything.
 func TestSerialIsCarriedIn(t *testing.T) {
 	mc := mustProject(t, Global{Config: exampleEstate(), Serial: 47}, "app-1")

@@ -270,6 +270,27 @@ type WireGuardSection struct {
 // against them, so the wire carries the sets and the agent calls
 // iptables.Reconcile. Nothing is re-derived on the box.
 type IPTablesSection struct {
+	// StoodDown is hz saying "I looked, and I will not publish what I got".
+	//
+	// THE SETS BELOW ARE THEN MEANINGLESS AND ARE EMPTY. This is the desired
+	// half of the distinction Observed.IPTablesReadable draws on the observed
+	// half, and it exists for the same reason: an absence dressed as an answer
+	// is a reconcile that removes things. hz's expected set is pinned to the
+	// egress interface, so when hz cannot name that interface the set it would
+	// publish is missing the MASQUERADE and every port forward — and an agent
+	// handed that set would read the live ones as stale and delete them.
+	//
+	// A NIL SECTION WOULD NOT DO. nil means "hz manages no firewall here",
+	// which an agent correctly reads as "leave it alone" and a screen reads as
+	// hz having no opinion — and a plan with no firewall lines in it reports
+	// in sync. This is none of those: hz has an opinion, holds it, and says
+	// the pass was skipped. plan.go turns this into a KindUnknown line and
+	// apply.go refuses to reconcile on it.
+	StoodDown bool `json:"stood_down,omitempty"`
+
+	// Why is why, in one sentence, for whoever reads the plan.
+	Why string `json:"why,omitempty"`
+
 	Expected []iptables.Rule `json:"expected,omitempty"`
 	Stale    []iptables.Rule `json:"stale,omitempty"`
 	Blessed  []string        `json:"blessed,omitempty"`

@@ -229,9 +229,13 @@ func Apply(d *Desired, p Plan, obs Observed, r Reloader) (Result, error) {
 
 	// iptables has no file to change, so it reconciles on its own terms: the
 	// live set is compared to the expected set every pass, and Reconcile is
-	// itself a no-op when they agree. It runs only when the live set was
-	// actually readable — see Observed.IPTablesReadable.
-	if d.IPTables != nil && obs.IPTablesReadable {
+	// itself a no-op when they agree. It needs BOTH sides, so it runs only
+	// when the live set was actually readable (Observed.IPTablesReadable) AND
+	// hz actually published a desired set (IPTablesSection.StoodDown is the
+	// case where it did not). Reconciling against a withheld expected set is
+	// not a no-op — it is a delete of everything the set is missing, which is
+	// the whole reason hz withholds it.
+	if d.IPTables != nil && !d.IPTables.StoodDown && obs.IPTablesReadable {
 		rep, err := r.IPTables(d.IPTables, obs.LiveRules)
 		if err != nil {
 			res.Errors = append(res.Errors, "iptables: "+err.Error())
