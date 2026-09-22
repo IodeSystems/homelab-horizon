@@ -36,7 +36,6 @@ import type {
   HAStatusResponse,
   Invite,
   IPTablesReport,
-  IPTablesRule,
   IPTablesRulesResponse,
   MFAEnrollResponse,
   MFASettingsResponse,
@@ -1470,20 +1469,6 @@ export function useUnblessIPTablesRule() {
       apiFetch("/iptables/unbless", {
         method: "POST",
         body: JSON.stringify({ canonical }),
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["iptables", "rules"] });
-    },
-  });
-}
-
-export function useRemoveIPTablesRule() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (rule: IPTablesRule) =>
-      apiFetch("/iptables/remove", {
-        method: "POST",
-        body: JSON.stringify(rule),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["iptables", "rules"] });
