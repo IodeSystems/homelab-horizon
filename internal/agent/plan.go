@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/iodesystems/homelab-horizon/internal/iptables"
 )
@@ -37,9 +38,17 @@ const (
 	// through Desired.prunable rather than being decided here.
 	KindRemove ChangeKind = "remove"
 
-	// KindUnknown — the agent could not read the current state, so it will
-	// not claim one. Distinct from "unchanged" on purpose: an unreadable file
-	// reported as in-sync is a lie that survives right up until it matters.
+	// KindUnknown — one of the two sides is missing, so the agent will not
+	// claim a verdict. Distinct from "unchanged" on purpose: an unreadable
+	// file reported as in-sync is a lie that survives right up until it
+	// matters.
+	//
+	// Either side can be the missing one. Usually it is the observed side —
+	// the agent could not read the target. It is also the answer when hz
+	// withheld the DESIRED side (IPTablesSection.StoodDown): there is nothing
+	// to compare against, so there is no verdict either way, and the same
+	// three things have to follow — it is not pending, it is not in sync, and
+	// Apply must not act on it.
 	KindUnknown ChangeKind = "unknown"
 )
 
@@ -204,6 +213,19 @@ func iptablesChanges(sec *IPTablesSection, obs Observed) []Change {
 	if sec == nil {
 		return nil
 	}
+	// hz withheld the desired set. Checked BEFORE the observed side, because
+	// a readable live set changes nothing here: with no expected set to
+	// compare it against, every live rule would classify as unknown-or-stale
+	// off an empty opinion, and that "comparison" is the damage. Reported as
+	// a line rather than as nothing, so the pass cannot read as in sync.
+	if sec.StoodDown {
+		return []Change{{
+			Subsystem: SubsystemIPTables,
+			Target:    "live rule set",
+			Kind:      KindUnknown,
+			Detail:    orStoodDownWhy(sec.Why),
+		}}
+	}
 	if !obs.IPTablesReadable {
 		return []Change{{
 			Subsystem: SubsystemIPTables,
@@ -253,4 +275,14 @@ func iptablesChanges(sec *IPTablesSection, obs Observed) []Change {
 
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
 	return out
+}
+
+// orStoodDownWhy keeps a stood-down line from printing with no explanation.
+// hz always sends one; a payload from a version that did not, or a hand-built
+// section, still has to say what happened rather than showing a bare kind.
+func orStoodDownWhy(why string) string {
+	if strings.TrimSpace(why) == "" {
+		return "hz withheld the desired firewall for this pass and did not say why; nothing will be added or removed"
+	}
+	return why
 }
