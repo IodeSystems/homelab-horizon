@@ -22,7 +22,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import DeleteIcon from "@mui/icons-material/Delete";
+import TerminalIcon from "@mui/icons-material/Terminal";
 import VerifiedUserIcon from "@mui/icons-material/VerifiedUser";
 import RemoveCircleOutlineIcon from "@mui/icons-material/RemoveCircleOutlined";
 import RefreshIcon from "@mui/icons-material/Refresh";
@@ -30,7 +30,6 @@ import {
   useBlessIPTablesRule,
   useIPTablesRules,
   useReconcileIPTables,
-  useRemoveIPTablesRule,
   useServices,
   useUnblessIPTablesRule,
 } from "../api/hooks";
@@ -67,13 +66,13 @@ function RowActions({
   state,
   onBless,
   onUnbless,
-  onRemove,
+  onShowRemoveCommand,
 }: {
   rule: IPTablesRule;
   state: IPTablesRuleState;
   onBless: () => void;
   onUnbless: () => void;
-  onRemove: () => void;
+  onShowRemoveCommand: () => void;
 }) {
   const canonical = ruleCanonical(rule);
   return (
@@ -85,9 +84,9 @@ function RowActions({
               <VerifiedUserIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Remove this rule from iptables">
-            <IconButton size="small" color="error" onClick={onRemove}>
-              <DeleteIcon fontSize="small" />
+          <Tooltip title="Show the shell command that removes this rule">
+            <IconButton size="small" onClick={onShowRemoveCommand}>
+              <TerminalIcon fontSize="small" />
             </IconButton>
           </Tooltip>
         </>
@@ -100,9 +99,9 @@ function RowActions({
         </Tooltip>
       )}
       {state === "stale" && (
-        <Tooltip title="Remove now — auto-heal will do this on the next reconcile anyway">
-          <IconButton size="small" color="warning" onClick={onRemove}>
-            <DeleteIcon fontSize="small" />
+        <Tooltip title='Removed by "Reconcile now", and by the 60s tick anyway — or show the shell command'>
+          <IconButton size="small" color="warning" onClick={onShowRemoveCommand}>
+            <TerminalIcon fontSize="small" />
           </IconButton>
         </Tooltip>
       )}
@@ -212,33 +211,60 @@ function ReportDialog({
   );
 }
 
-function ConfirmDialog({
-  open,
-  title,
-  body,
-  confirmLabel,
-  confirmColor,
-  onConfirm,
-  onCancel,
+// removeCommand renders the exact shell line that deletes one rule.
+// The same three fields the deleted POST /iptables/remove took from its
+// request body — table, chain, args — laid out for a human to run instead.
+function removeCommand(rule: IPTablesRule): string {
+  return ["sudo iptables", "-t", rule.Table, "-D", rule.Chain, ...rule.Args].join(" ");
+}
+
+// RemoveCommandDialog replaces the old delete button.
+//
+// hz no longer shells `iptables -D` with a table, chain and args taken from a
+// request body — that was an authenticated arbitrary-firewall-delete primitive
+// (privilege-classification.md §3.3), and no amount of validation narrows it.
+// The screen keeps the useful half: it already knows the exact rule, so it
+// shows the exact command, and says which rules hz will remove on its own.
+function RemoveCommandDialog({
+  rule,
+  state,
+  onClose,
 }: {
-  open: boolean;
-  title: string;
-  body: string;
-  confirmLabel: string;
-  confirmColor?: "error" | "warning" | "primary";
-  onConfirm: () => void;
-  onCancel: () => void;
+  rule: IPTablesRule | null;
+  state: IPTablesRuleState | null;
+  onClose: () => void;
 }) {
   return (
-    <Dialog open={open} onClose={onCancel}>
-      <DialogTitle>{title}</DialogTitle>
+    <Dialog open={!!rule} onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle>Remove this rule at the shell</DialogTitle>
       <DialogContent>
-        <DialogContentText sx={{ fontFamily: "monospace" }}>{body}</DialogContentText>
+        {state === "stale" ? (
+          <DialogContentText sx={{ mb: 2 }}>
+            This rule is <strong>stale</strong>, so horizon removes it itself — press{" "}
+            <strong>Reconcile now</strong> above, or wait for the 60-second tick. You only
+            need the command below if you want it gone before then.
+          </DialogContentText>
+        ) : (
+          <DialogContentText sx={{ mb: 2 }}>
+            This rule is <strong>unknown</strong> to horizon, so horizon will never remove
+            it — it is not one of ours. If you want it kept, press <strong>Bless</strong> on
+            the row instead. If you want it gone, run this on the host:
+          </DialogContentText>
+        )}
+        <Paper
+          variant="outlined"
+          sx={{ p: 1.5, fontFamily: "monospace", fontSize: "0.85rem", overflowX: "auto" }}
+        >
+          {rule ? removeCommand(rule) : ""}
+        </Paper>
+        <DialogContentText variant="caption" sx={{ mt: 2, display: "block" }}>
+          Horizon deliberately has no button for this. Deleting an arbitrary firewall rule
+          on request is the one privileged action it will not perform on its own behalf.
+        </DialogContentText>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onCancel}>Cancel</Button>
-        <Button color={confirmColor || "primary"} variant="contained" onClick={onConfirm}>
-          {confirmLabel}
+        <Button variant="contained" onClick={onClose}>
+          Close
         </Button>
       </DialogActions>
     </Dialog>
@@ -296,12 +322,11 @@ export function IPTablesTab() {
   const { data, isLoading, error } = useIPTablesRules();
   const bless = useBlessIPTablesRule();
   const unbless = useUnblessIPTablesRule();
-  const remove = useRemoveIPTablesRule();
   const reconcile = useReconcileIPTables();
 
   const [filter, setFilter] = useState<IPTablesRuleState | "all">("all");
   const [report, setReport] = useState<IPTablesReport | null>(null);
-  const [removeTarget, setRemoveTarget] = useState<IPTablesRule | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<ClassifiedRule | null>(null);
 
   if (isLoading) {
     return (
@@ -327,7 +352,9 @@ export function IPTablesTab() {
           chains are not shown here. Auto-heal deletes
           <strong> stale </strong> rules and adds missing <strong>expected</strong> rules on every
           60s health-check tick. <strong>Unknown</strong> rules are surfaced for you to bless
-          (keep) or remove; nothing outside horizon's managed chains is ever auto-touched.
+          (keep); nothing outside horizon's managed chains is ever auto-touched. Horizon has no
+          delete button — a rule it does not own is removed at the shell, and each row will show
+          you the exact command.
         </Typography>
       </Paper>
 
@@ -393,7 +420,7 @@ export function IPTablesTab() {
                       state={cr.state}
                       onBless={() => bless.mutate(ruleCanonical(cr.rule))}
                       onUnbless={() => unbless.mutate(ruleCanonical(cr.rule))}
-                      onRemove={() => setRemoveTarget(cr.rule)}
+                      onShowRemoveCommand={() => setRemoveTarget(cr)}
                     />
                   </TableCell>
                 </TableRow>
@@ -404,17 +431,10 @@ export function IPTablesTab() {
       </Paper>
 
       <ReportDialog report={report} onClose={() => setReport(null)} />
-      <ConfirmDialog
-        open={!!removeTarget}
-        title="Remove iptables rule"
-        body={removeTarget ? ruleCanonical(removeTarget) : ""}
-        confirmLabel="Delete"
-        confirmColor="error"
-        onConfirm={() => {
-          if (removeTarget) remove.mutate(removeTarget);
-          setRemoveTarget(null);
-        }}
-        onCancel={() => setRemoveTarget(null)}
+      <RemoveCommandDialog
+        rule={removeTarget?.rule ?? null}
+        state={removeTarget?.state ?? null}
+        onClose={() => setRemoveTarget(null)}
       />
     </Stack>
   );

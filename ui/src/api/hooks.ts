@@ -36,7 +36,6 @@ import type {
   HAStatusResponse,
   Invite,
   IPTablesReport,
-  IPTablesRule,
   IPTablesRulesResponse,
   MFAEnrollResponse,
   MFASettingsResponse,
@@ -1412,32 +1411,11 @@ export const useFixWGForwardChain = () => useSystemFix("system/fix/wg-forward-ch
 export const useFixWGRules = () => useSystemFix("system/fix/wg-rules");
 export const useFixLogRetention = () => useSystemFix("system/fix/log-retention");
 export const useCreateWGConfig = () => useSystemFix("wg/create-config");
-export const useInstallHorizonUnit = () => useSystemFix("system/install/horizon-unit");
-export const useEnableHorizon = () => useSystemFix("system/enable/horizon");
 export const useFixHAProxyLogging = () => useSystemFix("haproxy/fix-logging");
 export const useWriteDNSMasqConfig = () => useSystemFix("dnsmasq/write-config");
 export const useReloadDNSMasq = () => useSystemFix("dnsmasq/reload");
 export const useStartDNSMasq = () => useSystemFix("dnsmasq/start");
 export const useFixDNSMasqInterfaces = () => useSystemFix("dnsmasq/fix-interfaces");
-
-// Package install — distinct from the generic fixer because it takes a body.
-export function useInstallPackage() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (pkg: string) =>
-      apiFetch<{ ok: boolean; package: string; output: string }>(
-        "/system/install/package",
-        {
-          method: "POST",
-          body: JSON.stringify({ package: pkg }),
-        },
-      ),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["system", "health"] });
-      qc.invalidateQueries({ queryKey: ["system", "apt-audit"] });
-    },
-  });
-}
 
 // --- IPTables rule inventory (Phase 5) ---
 
@@ -1470,20 +1448,6 @@ export function useUnblessIPTablesRule() {
       apiFetch("/iptables/unbless", {
         method: "POST",
         body: JSON.stringify({ canonical }),
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["iptables", "rules"] });
-    },
-  });
-}
-
-export function useRemoveIPTablesRule() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (rule: IPTablesRule) =>
-      apiFetch("/iptables/remove", {
-        method: "POST",
-        body: JSON.stringify(rule),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["iptables", "rules"] });

@@ -7,7 +7,6 @@
   "//dns3": "rule level rather than by resolving a name.",
   "listen_addr": ":8080",
   "admin_token": "e2e-fixture-token-do-not-use",
-  "auto_heal": false,
   "wg_interface": "wg0",
   "wg_config_path": "/etc/wireguard/wg0.conf",
   "server_endpoint": "10.77.0.1:51820",

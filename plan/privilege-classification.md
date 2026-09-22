@@ -126,16 +126,16 @@ plausibly exercises it (§3 says what would tell us; unknowns go to §8).
 | 3 | `POST /system/fix/wg-forward-chain` → `SetupForwardChain` | `:82`, `wireguard/apply.go:207` | rarely | **DELETE** (duplicate of the owned-chain rebuild) |
 | 4 | `POST /system/fix/wg-rules` → rewrite wg0.conf PostUp/Down + bounce the interface | `:101` | maybe | **AGENT-OWNED**, needs *restart-vs-reload* (§4.2) |
 | 5 | `POST /wg/create-config` → mint a server keypair, write wg0.conf | `:134` | **once, ever** | **DELETE from the web surface** → a CLI verb (§3.1) |
-| 6 | `POST /system/install/horizon-unit` → write `/etc/systemd/system/homelab-horizon.service` | `:190` | no (installed) | **DELETE** (the `install` verb owns it; long-term the agent's Units) |
-| 7 | `POST /system/enable/horizon` → `systemctl enable` | `:228` | no | **DELETE** (same) |
-| 8 | `POST /system/install/package` → allowlisted `apt-get install` | `:282`, `autoheal.go:165` | possibly | **DELETE from the web surface** → `install-deps` (§3.5) |
-| 9 | `GET /system/apt-audit` | `:330` | — | **HZ-KEEPS** (unprivileged read; see §5.3 for its fate) |
+| 6 | ~~`POST /system/install/horizon-unit`~~ | — | no (installed) | ✅ **DELETED 2026-09-22** (the `install` verb owns it; long-term the agent's Units) |
+| 7 | ~~`POST /system/enable/horizon`~~ | — | no | ✅ **DELETED 2026-09-22** (same) |
+| 8 | ~~`POST /system/install/package`~~ | — | possibly | ✅ **DELETED 2026-09-22** → `install-deps` (§3.5). `autoheal.InstallPackage` went with it. |
+| 9 | `GET /system/apt-audit` | `:330` | — | **HZ-KEEPS** (unprivileged read; see §5.3). Its writer is gone as of 2026-09-22 — closed record, not a live one. |
 | 10 | `POST /dnsmasq/write-config` / `/reload` / `/start` | `:374`, `:398`, `:494` | maybe | **DELETE** (the agent's poll already does exactly this) |
 | 11 | `POST /dnsmasq/fix-interfaces` | `:429` | maybe | **SPLIT** — config edit **HZ-KEEPS** (not privileged), write+reload **AGENT-OWNED** |
 | 12 | `POST /haproxy/fix-logging` → patch `/etc/apparmor.d/…`, `apparmor_parser -r`, touch+chown `/var/log/haproxy.log`, restart rsyslog | `:528` | likely, once | **DELETE from the web surface** → a provisioning step (§3.1) |
 | 13 | `POST /system/fix/log-retention` → journald drop-in + restart | `:588` | yes (PCI) | **AGENT-OWNED** — the model case (§3.1) |
 | 14 | ban / unban / reapply → `iptables -I\|-D INPUT … DROP` | `handlers_ban.go:22,31,40` | **yes, continuously** | **AGENT-OWNED**, needs the classifier widened (§3.2) |
-| 15 | `POST /iptables/remove` → `iptables -t <table> -D <chain> <args>` **from the request body** | `handlers_api_iptables.go:177` | rarely | **DELETE** (§3.3) |
+| 15 | ~~`POST /iptables/remove`~~ | — | rarely | ✅ **DELETED 2026-09-22** (§3.3) |
 | 16 | `POST /iptables/bless` / `/unbless` | `:106`, `:141` | maybe | **HZ-KEEPS** (already unprivileged — config only) |
 | 17 | `POST /iptables/reconcile` | `:207` | maybe | **AGENT-OWNED** (it *is* the agent's job) |
 | 18 | `GET /iptables/rules` → `iptables-save` **read** | `:76`, `iptables/reconcile.go:34` | yes (the tab) | **AGENT-OWNED**, needs a **report-back channel** (§4.1) |
@@ -145,11 +145,11 @@ plausibly exercises it (§3 says what would tell us; unknowns go to §8).
 | 22 | `rebuildWGChains` + `syncMFAJailACL` — ~18 call sites | `handlers_api_vpn.go:431`, `mfa_jail.go:106` | **yes, on every MFA transition** | **AGENT-OWNED** — missed by the audit (§3.7) |
 | 23 | static supervisor: fork a child as `nobody` | `static_supervisor.go:145-232` | yes, if static sites exist | **DELETE** — its reason to exist is what item 12 removes (§3.6) |
 | 24 | `sitedeploy` chown-to-`nobody` | `handlers_site.go:107`, `sitedeploy.go:326` | yes, if static sites exist | **DELETE** with #23 |
-| 25 | `autoheal.Run` — boot-time apt + mkdirs + sysctl + disable system dnsmasq | `autoheal.go:217` | **no** (`auto_heal` unset — audit §1.2) | **DELETE** (§3.5) |
+| 25 | ~~`autoheal.Run`~~ | — | **yes on some boxes** — audit §1.2's "nothing sets `auto_heal`" was WRONG (§3.5) | ✅ **DELETED 2026-09-22** (§3.5) |
 | 26 | `autoheal.Missing` | `:81` | yes (startup report) | **HZ-KEEPS** — pure, unprivileged, stays |
 | 27 | `autoheal.InstallMissing` / `aptInstall` | `:110`, `:134` | at install | **HZ-KEEPS as a CLI verb**, never in the daemon (§5.1) |
 | 28 | backup **restore** — writes wg0.conf, `<config>.token`, invites, cert PEMs from an uploaded zip | `handlers_backup.go:150-205` | **ask** (§8) | **SPLIT** — missed by the audit (§3.8) |
-| 29 | `maybeSelfInstall` — copy own binary to `/usr/local/bin`, write own unit, `systemctl restart` | `cmd/homelab-horizon/main.go:135-196` | **yes, at boot, today** | **DELETE** — missed by the audit (§3.9) |
+| 29 | ~~`maybeSelfInstall`~~ | — | **yes, at boot, until 2026-09-22** | ✅ **DELETED 2026-09-22** — missed by the audit (§3.9) |
 | 30 | `Config.WriteMaintenancePageFiles` — per-service `*_503.http` | `config/derive.go:339` | yes, if any service sets one | **AGENT-OWNED** — missed by the audit; cheapest win (§3.10) |
 | 31 | `handlers_integration.go` | — | — | **NOT PRIVILEGED** (§1.1) |
 | 32 | `internal/system/interfaces.go` | — | — | **NOT PRIVILEGED** (§1.2) |
@@ -294,7 +294,17 @@ run with a human present, refusing outright when `wg0.conf` already exists.
 Startup already prints the sentence that tells the operator to run it
 (`privilege-audit.md` §1.4, the WireGuard fix).
 
-**#6 install/horizon-unit and #7 enable/horizon are DELETE**, and the reason is
+**#6 install/horizon-unit and #7 enable/horizon — ✅ DELETED 2026-09-22.**
+Handlers, routes and the `useInstallHorizonUnit` / `useEnableHorizon` hooks are
+gone. The System card keeps both **observations** — `horizon_unit_installed`
+and `horizon_enabled` are reads and stay — and each failing row now carries the
+command (`sudo homelab-horizon install`, `sudo systemctl enable
+homelab-horizon`) where its button was. Nothing is lost that an operator could
+have used anyway: the only machine these buttons could act on is one whose
+admin UI is already being served by a running hz. What follows is the verdict
+as it was argued.
+
+The reason is
 structural rather than about privilege budget: after the flip, **hz web running
 as `hz` would be writing the unit file that says `User=hz`**. A web process that
 can rewrite its own unit has not been de-rooted; it has a one-request path back
@@ -305,7 +315,15 @@ Long-term, `architecture.md` says "hz-agent owns hz's unit file … hz is just
 another app the agent manages" — that is the eventual home, and it is item 13's
 `Units []Unit`, not this handler.
 
-**#8 install/package is DELETE from the web surface.** The allowlist
+**#8 install/package — ✅ DELETED 2026-09-22.** Handler, route,
+`autoheal.InstallPackage` (the systemd-run apt path), the `recordAptAudit`
+writer, the `useInstallPackage` hook and the never-used
+`InstallPackageDialog` are all gone. The three per-component "binary
+installed" rows carry `sudo homelab-horizon install-deps` where their Install
+button was; `GET /apt-audit` stays as a read, relabelled historical. What
+follows is the verdict as it was argued.
+
+The allowlist
 (`autoheal.KnownPackages`) is real and the audit log is real, and neither
 changes the shape: an HTTP request causes `apt-get install` on a live gateway.
 `autoheal.InstallMissing`'s own doc comment already states the rule — "hz NEVER
@@ -451,7 +469,14 @@ The agent *does* read it — `Observed.LiveRules` + `IPTablesReadable` +
 `http.MethodGet`, and there is no endpoint anywhere for an agent to report what
 it observed. See §4.1. This is the single largest structural gap found.
 
-**`POST /iptables/remove` (`:177`) — DELETE.** It decodes an `iptables.Rule`
+**`POST /iptables/remove` — ✅ DELETED 2026-09-22.** Handler, route and the
+`useRemoveIPTablesRule` hook are gone. The screen keeps the decision and loses
+only the execution: the delete icon became a terminal icon that shows the exact
+`sudo iptables -t … -D … ` line, and says which rules hz removes on its own
+(stale) versus never will (unknown — it is not hz's rule). What follows is the
+verdict as it was argued.
+
+It decoded an `iptables.Rule`
 from the request body and executes `iptables -t <rule.Table> -D <rule.Chain>
 <rule.Args...>` with `Table`, `Chain` and `Args` **taken from the body
 verbatim**. The only validation is that all three are non-empty (`:191`). It is
@@ -468,6 +493,17 @@ whatever it is handed, to duplicate a control that already exists. Described as
 a class, not a recipe: **a privileged executor whose subcommand and arguments
 come from the request body is not narrowable by adding checks; it is narrowable
 only by not existing.**
+
+> **One line of that was wrong, and the deletion is still right.** "already
+> served by bless/unbless plus reconcile" holds for a **stale** rule — `Reconcile`
+> deletes those (`reconcile.go:165-177`) — and does **not** hold for an
+> **unknown** one. `Reconcile` never touches an unknown rule; that is the
+> documented promise that "nothing outside horizon's managed chains is ever
+> auto-touched". So for an unknown rule the capability really is gone, not
+> relocated, and that is the correct outcome rather than an oversight: the rule
+> is by definition one hz does not own, and hz shelling `iptables -D` at it on
+> request is exactly the primitive being removed. The operator's replacement is
+> the shell, and the screen now hands them the exact line rather than a blank.
 
 **`POST /iptables/bless` and `/unbless` (`:106`, `:141`) — HZ-KEEPS, free.**
 They only call `updateConfig`. hz owns `config.json` before and after the flip.
@@ -568,6 +604,45 @@ So autoheal after item 12 is: **a pure observation function in hz, an allowlist,
 and a root CLI verb.** No `Run`, no HTTP install, no `auto_heal` key. That is a
 smaller surface than a `plan/execute` seam would have produced, and it removes
 the flag that made the original failure invisible.
+
+> **✅ DONE 2026-09-22 — and the evidence this rested on was wrong.**
+>
+> The verdict holds; the sentence "It has therefore never run on any box" does
+> not. `auto_heal: true` had **five** producers in-tree that §1.2 did not look
+> for, all of them outside `install`/the installer script/the template:
+>
+> | producer | what it provisions |
+> |---|---|
+> | `generateJoinScript` (`handlers_ha.go`) | every HA peer joined via the fleet join script |
+> | `examples/simple/setup.sh` | the single-node docker example |
+> | `examples/ha-same-subnet/setup.sh` (×2) | both peers |
+> | `examples/ha-site-to-site/setup.sh` (×2) | both peers |
+> | `docker/demo-config.json` | the demo image the `Dockerfile` bakes |
+>
+> and `examples/docker-entrypoint.sh` **polled for 120 seconds waiting for
+> auto-heal to install wireguard-tools** before bringing up `wg0`. So `Run` was
+> load-bearing for the fleet-join and example paths, and its deletion was a
+> behaviour change rather than dead-code removal. That is the lesson, restated
+> as a rule: *"nothing sets this key" is a claim about where you looked.* §1.2
+> looked at the three producers it could name and concluded there were none; the
+> join script it did not think to check is the one that mattered most, because a
+> peer joined by it enables dnsmasq and HAProxy in its config while step 1
+> installs only `wireguard-tools` and `curl`.
+>
+> Every one of those producers is now an explicit `homelab-horizon install-deps`
+> call, which is louder (it prints what it installed) and stricter (a non-zero
+> exit aborts the join instead of leaving a peer up with no proxy). The one
+> exception is the `Dockerfile`'s own `CMD`, deliberately left alone: its only
+> in-tree caller is `bin/screenshots`, which runs the image hermetically with
+> every daemon off and no outbound network, so an apt there would be pointless
+> and would contradict the "no outbound traffic" the config promises.
+>
+> The three side effects landed where §3.5 said, with one change:
+> `enableIPForwarding` was **deleted rather than rehomed** — it was the third
+> in-tree copy of `os.WriteFile("/proc/sys/net/ipv4/ip_forward", "1")`, and the
+> other two (`wireguard.EnableIPForwarding`, which §3.1 #1 makes the agent's
+> `File`, and `check --fix`'s interactive prompt) both survive. Rehoming a
+> redundant copy is not a rehome.
 
 ### 3.6 `static_supervisor.go` — DELETE, and one real trade to decide
 
@@ -673,7 +748,14 @@ While reading it: the cert loop derives its destination from the zip entry name
 That is the archive-extraction path-handling class of issue, described as a class
 because **this repo is public**. Filed to `plan/icebox.md`.
 
-### 3.9 `maybeSelfInstall` — DELETE, and the audit never listed it
+### 3.9 ✅ DELETED 2026-09-22 — `maybeSelfInstall`, and the audit never listed it
+
+Gone, with `copyFile`, its only other user. `runServer` no longer calls
+anything before `slog.Info("Homelab Horizon", …)`. Nothing lost that a verb
+does not already do: `sudo homelab-horizon install` writes the unit pointing
+at whatever path the binary is at, and copying a binary into `/usr/local/bin`
+is `install -m 0755`, not a daemon's boot path. What follows is the verdict as
+it was argued.
 
 `cmd/homelab-horizon/main.go:135-196`, called unconditionally from `main` when
 not in dry-run (`:62`). When running as root, not in Docker, not already at
@@ -1043,17 +1125,25 @@ This sits alongside `ha-and-the-agent.md` §7 (the peer-sync half) and
 - [ ] **Answer the three blocking decisions in §8** (generic section vs. named
       subsystems; observed-state channel; static-serving separation). The first
       one determines the shape of half the moves below.
-- [ ] **Delete `maybeSelfInstall`** (§3.9). It is in the boot path, it is root,
-      and it is dead after the flip anyway.
-- [ ] **Delete `POST /iptables/remove`** (§3.3). Body-supplied table/chain/args.
-- [ ] **Delete `autoheal.Run` and the `auto_heal` config key** (§3.5); rehome
-      its three side effects.
-- [ ] **Delete `POST /system/install/package`** and the `systemdRun` helper's
-      last shell-string callers (§3.1 #8, #12). Confirm `systemdRun` has no
-      callers left and delete it; §5.2 rule 1.
-- [ ] **Delete `/system/install/horizon-unit` and `/system/enable/horizon`**
-      (§3.1 #6, #7). A web process that can rewrite its own unit is not
-      de-rooted.
+- [x] ✅ **Delete `maybeSelfInstall`** (§3.9) — done 2026-09-22. It is in the
+      boot path, it is root, and it is dead after the flip anyway.
+- [x] ✅ **Delete `POST /iptables/remove`** (§3.3) — done 2026-09-22.
+      Body-supplied table/chain/args.
+- [x] ✅ **Delete `autoheal.Run` and the `auto_heal` config key** (§3.5); rehome
+      its three side effects — done 2026-09-22. `requiredDirs` → `install`,
+      `stopSystemDnsmasq` → `InstallMissing` (the `install-deps` path),
+      `enableIPForwarding` → deleted outright as the third redundant copy.
+- [◐] **Delete `POST /system/install/package`** — ✅ done 2026-09-22 — **and the
+      `systemdRun` helper's last shell-string callers** (§3.1 #8, #12). Confirm
+      `systemdRun` has no callers left and delete it; §5.2 rule 1.
+      **STILL OPEN:** `systemdRun` survives because #5 (`wg/create-config`) and
+      #12 (`haproxy/fix-logging`) are the two remaining callers, and both are
+      *move* items below rather than deletes — #5 needs §8's "which binary owns
+      the CLI verb", #12 needs a provisioning home. Delete `systemdRun` in the
+      commit that lands the second of those, not before.
+- [x] ✅ **Delete `/system/install/horizon-unit` and `/system/enable/horizon`**
+      (§3.1 #6, #7) — done 2026-09-22. A web process that can rewrite its own
+      unit is not de-rooted.
 - [ ] **Move `/wg/create-config` to a CLI verb** that refuses when `wg0.conf`
       exists (§3.1 #5). Decide which binary owns it (§8).
 - [ ] **Move `/haproxy/fix-logging` to provisioning** (§3.1 #12); keep the

@@ -108,12 +108,16 @@ POST /api/v1/system/fix/ip-forwarding      # EnableIPForwarding                 
 POST /api/v1/system/fix/masquerade         # AddMasqueradeRule                        ✅ done
 POST /api/v1/system/fix/wg-forward-chain   # SetupForwardChain                        ✅ done
 POST /api/v1/system/fix/wg-rules           # regen PostUp/PostDown + bounce iface     ✅ done
-POST /api/v1/system/install/package        # apt install <allow-listed pkg>           ✅ done (single endpoint, body {"package":"..."})
-GET  /api/v1/system/apt-audit              # JSONL audit log, newest-first             ✅ done
+# POST /api/v1/system/install/package — DELETED 2026-09-22 (privilege-classification.md §3.1 #8,
+#   §3.5). An HTTP request causing apt-get install on a live gateway can restart a daemon carrying
+#   traffic at a moment nobody chose. Replaced by: sudo homelab-horizon install-deps.
+GET  /api/v1/system/apt-audit              # JSONL audit log, newest-first             ✅ done (read-only; its writer was deleted 2026-09-22, so the file is a closed record)
 # /api/v1/system/install/acme dropped: lego is compiled into horizon, no external acme.sh binary to install.
 # Per-domain cert request: /api/v1/ssl/request-cert already exists (pre-Phase-0). ✅ pre-existing
-POST /api/v1/system/install/horizon-unit   # write /etc/systemd/system/homelab-horizon.service  ✅ done
-POST /api/v1/system/enable/horizon         # systemctl enable                         ✅ done
+# POST /api/v1/system/install/horizon-unit — DELETED 2026-09-22 (privilege-classification.md §3.1 #6/#7).
+# POST /api/v1/system/enable/horizon        — DELETED 2026-09-22. A web process that can rewrite the
+#   unit saying who it runs as has a one-request path back to User=root. The System Health card keeps
+#   both checks and shows `sudo homelab-horizon install` / `sudo systemctl enable homelab-horizon`.
 POST /api/v1/wg/create-config              # handleCreateWGConfig                     ✅ done
 POST /api/v1/dnsmasq/write-config          # WriteConfig + SetMappings                ✅ done
 POST /api/v1/dnsmasq/reload                # Reload (writes config first)             ✅ done
@@ -184,7 +188,9 @@ Single `POST /api/v1/system/fix/:id` with `id` switch is an alternative — less
 GET    /api/v1/iptables/rules          # returns []ClassifiedRule + summary counts
 POST   /api/v1/iptables/bless          # body: { canonical: "..." } → appends to BlessedIPTablesRules
 POST   /api/v1/iptables/unbless        # body: { canonical: "..." } → removes
-POST   /api/v1/iptables/remove         # body: { canonical: "..." } → executes iptables -D (admin only)
+# POST /api/v1/iptables/remove — DELETED 2026-09-22 (privilege-classification.md §3.3/§7.A).
+#   Took table/chain/args from the request body verbatim: an authenticated
+#   arbitrary-iptables-delete primitive. The UI shows the shell command instead.
 POST   /api/v1/iptables/reconcile      # triggers Reconcile immediately, returns report
 ```
 

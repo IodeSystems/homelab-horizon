@@ -448,8 +448,12 @@ type Config struct {
 	// IP banning
 	IPBans []IPBan `json:"ip_bans,omitempty"`
 
-	// Auto-heal: automatically install and configure missing dependencies on startup
-	AutoHeal bool `json:"auto_heal,omitempty"`
+	// `auto_heal` was here. Deleted 2026-09-22 with autoheal.Run
+	// (privilege-classification.md §3.5): a boot-path apt-get install gated
+	// behind a key that defaulted off. An unknown key in config.json is
+	// ignored on load, so a box that still carries it simply stops acting on
+	// it — which on every non-HA box is what was already happening.
+	// Dependencies are installed by `homelab-horizon install-deps`.
 
 	// Multi-instance HA (fleet) — see plan/plan.md
 	PeerID        string `json:"peer_id,omitempty"`        // local identity within the fleet
