@@ -1411,8 +1411,6 @@ export const useFixWGForwardChain = () => useSystemFix("system/fix/wg-forward-ch
 export const useFixWGRules = () => useSystemFix("system/fix/wg-rules");
 export const useFixLogRetention = () => useSystemFix("system/fix/log-retention");
 export const useCreateWGConfig = () => useSystemFix("wg/create-config");
-export const useInstallHorizonUnit = () => useSystemFix("system/install/horizon-unit");
-export const useEnableHorizon = () => useSystemFix("system/enable/horizon");
 export const useFixHAProxyLogging = () => useSystemFix("haproxy/fix-logging");
 export const useWriteDNSMasqConfig = () => useSystemFix("dnsmasq/write-config");
 export const useReloadDNSMasq = () => useSystemFix("dnsmasq/reload");
