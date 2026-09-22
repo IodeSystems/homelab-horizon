@@ -30,7 +30,6 @@ EOF
 cat > "$CONFIG_DIR/hz.json" <<EOF
 {
   "listen_addr": ":8080",
-  "auto_heal": true,
 
   "wg_interface": "wg0",
   "wg_config_path": "/etc/wireguard/wg0.conf",

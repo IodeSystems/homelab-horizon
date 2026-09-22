@@ -107,14 +107,6 @@ func runServer(configPath string, dryRun bool, mcpEnabled bool, enableAdminToken
 			"listen", listenAddr, "config_says", cfg.ListenAddr)
 	}
 
-	if cfg.AutoHeal {
-		slog.Info("auto-heal enabled, checking dependencies")
-		if err := autoheal.Run(cfg); err != nil {
-			slog.Error("auto-heal failed", "err", err)
-			os.Exit(1)
-		}
-	}
-
 	srv, err := server.NewWithConfig(cfg, cfgPath, dryRun, Version)
 	if err != nil {
 		slog.Error("failed to start server", "err", err)
@@ -618,6 +610,30 @@ func installService(configPath string, dryRun, withDeps bool) error {
 	}
 	if err := os.MkdirAll(workDir, 0755); err != nil {
 		return fmt.Errorf("creating working directory: %w", err)
+	}
+
+	// The directories hz writes into. These used to be created by
+	// autoheal.Run at every boot, as root, behind the `auto_heal` key
+	// (privilege-classification.md §3.5); `install` is where they belong —
+	// once, with a human present, at the moment the box is being set up.
+	//
+	// The unit's own ExecStartPre=+ already covers four of these, which is the
+	// overlap architecture.md says every remaining `+` will have to justify
+	// after the flip. Creating them here as well makes `install` complete on
+	// its own rather than depending on a first start to finish the job.
+	for _, d := range []struct {
+		path string
+		mode os.FileMode
+	}{
+		{"/etc/wireguard", 0700},
+		{"/etc/dnsmasq.d", 0755},
+		{"/etc/haproxy", 0755},
+		{"/etc/haproxy/certs", 0755},
+		{"/etc/haproxy/errors", 0755},
+	} {
+		if err := os.MkdirAll(d.path, d.mode); err != nil {
+			return fmt.Errorf("creating %s: %w", d.path, err)
+		}
 	}
 
 	if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {

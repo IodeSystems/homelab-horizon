@@ -1,6 +1,5 @@
 {
   "listen_addr": ":8080",
-  "auto_heal": true,
   "kiosk_url": "https://vpn.example.com",
 
   "wg_interface": "wg0",
