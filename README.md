@@ -165,17 +165,28 @@ make
 sudo ./homelab-horizon
 ```
 
-On first run, the binary:
-1. Copies itself to `/usr/local/bin/`
-2. Installs a systemd service
-3. Writes an admin token to `/etc/homelab-horizon/config.json.token`
+Set the box up with two explicit commands, then start it:
 
-With `auto_heal: true`, it detects and installs missing packages (`wireguard-tools`, `iproute2`, `haproxy`, `dnsmasq`) via `apt-get`.
+```bash
+sudo ./homelab-horizon install        # systemd unit + the directories hz writes into
+sudo homelab-horizon install-deps     # wireguard-tools, iproute2, and whatever your config enables
+sudo systemctl enable --now homelab-horizon
+```
+
+On first run the binary writes an admin token to
+`/etc/homelab-horizon/config.json.token`.
+
+Neither step happens on its own. hz does not copy itself into `/usr/local/bin`,
+does not rewrite its own unit, and does not run `apt-get` at boot — a daemon
+that installs packages at a moment nobody chose can restart something carrying
+traffic, and a daemon that can rewrite the unit saying who it runs as has not
+really been de-privileged. `install-deps` reports what is missing and why it
+matters before installing anything, and `--dry-run` shows the report alone.
 
 Pass config via environment for Docker or backup/restore workflows:
 
 ```bash
-sudo HZ_CONFIG='{"listen_addr":":8080","auto_heal":true,...}' ./homelab-horizon
+sudo HZ_CONFIG='{"listen_addr":":8080",...}' ./homelab-horizon
 ```
 
 ### Growing with you
@@ -973,7 +984,6 @@ Alternatively, pass the full config as JSON via the `HZ_CONFIG` environment vari
 ```json
 {
   "listen_addr": ":8080",
-  "auto_heal": true,
 
   "wg_interface": "wg0",
   "wg_config_path": "/etc/wireguard/wg0.conf",
@@ -1445,7 +1455,7 @@ Certificates cover:
 - Go 1.25+ and Node.js (for building from source)
 - Root access — needed for WireGuard, dnsmasq, HAProxy, iptables, systemd service management, and binding ports 80/443
 
-Runtime packages (auto-installed when `auto_heal` is enabled):
+Runtime packages (installed by `sudo homelab-horizon install-deps`, never on its own):
 - `iproute2` - Network interface management
 - `wireguard-tools` - VPN management
 - `haproxy` - Reverse proxy (when `haproxy_enabled`)

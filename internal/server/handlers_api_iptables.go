@@ -2,10 +2,8 @@ package server
 
 import (
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -167,39 +165,6 @@ func (s *Server) handleAPIIPTablesUnbless(w http.ResponseWriter, r *http.Request
 		c.BlessedIPTablesRules = out
 	}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.writeFixOK(w)
-}
-
-// POST /api/v1/iptables/remove — execute `iptables -t <table> -D <chain>
-// <args>`. Unlike the reconciler's automatic deletion of stale rules, this
-// is the admin manually reaching for the delete button on an "unknown" rule.
-// Takes a full Rule in the body so the server doesn't need to re-parse a
-// canonical string back into a spec.
-func (s *Server) handleAPIIPTablesRemove(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-	var rule iptables.Rule
-	if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid json: "+err.Error())
-		return
-	}
-	if rule.Table == "" || rule.Chain == "" || len(rule.Args) == 0 {
-		writeJSONError(w, http.StatusBadRequest, "table, chain, and args are required")
-		return
-	}
-	args := append([]string{"-t", rule.Table, "-D", rule.Chain}, rule.Args...)
-	out, err := exec.Command("iptables", args...).CombinedOutput()
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError,
-			fmt.Sprintf("%v: %s", err, strings.TrimSpace(string(out))))
 		return
 	}
 	s.writeFixOK(w)

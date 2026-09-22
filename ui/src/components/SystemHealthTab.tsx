@@ -8,16 +8,7 @@ import {
   CardHeader,
   Chip,
   CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
-  FormControl,
-  InputLabel,
-  MenuItem,
   Paper,
-  Select,
   Stack,
   Table,
   TableBody,
@@ -32,14 +23,11 @@ import {
 import {
   useAptAudit,
   useCreateWGConfig,
-  useEnableHorizon,
   useFixHAProxyLogging,
   useFixIPForwarding,
   useFixMasquerade,
   useFixWGForwardChain,
   useFixWGRules,
-  useInstallHorizonUnit,
-  useInstallPackage,
   useRequestCert,
   useRefreshPublicIP,
   useReloadDNSMasq,
@@ -53,9 +41,28 @@ import {
 import type { ComponentHealth, SystemHealth, Zone } from "../api/types";
 import { SystemMetricsCard } from "./SystemMetricsCard";
 
-// CheckRow renders one line: label + status chip + optional fix button.
+// The one command that installs every missing dependency, named once so the
+// three "binary installed" rows cannot drift apart or from the CLI's own
+// dependencyFixHint (cmd/homelab-horizon/deps.go).
+//
+// There is no install button any more, and that is deliberate rather than an
+// omission: an HTTP request that causes `apt-get install` on a live gateway can
+// pull a dependency that restarts a daemon carrying production traffic, at a
+// moment nobody chose (privilege-classification.md §3.1 #8, §3.5). You also
+// cannot open the admin UI of a gateway whose dependencies are missing badly
+// enough to matter — so the remedy has to be something a human at the box, or
+// a provisioning script, can run.
+const INSTALL_DEPS_HINT = "sudo homelab-horizon install-deps";
+
+// CheckRow renders one line: label + status chip + either a fix button or,
+// where hz deliberately has no button, the exact command that fixes it.
 // Keep the shape uniform across all component cards so the dashboard reads
 // as a consistent grid.
+//
+// `runToFix` is the second kind of remedy and is never a weaker version of the
+// first. A check whose fix hz will not perform on its own behalf still has to
+// say what to do — a row that only reports a red chip is a dead end, and "the
+// button used to be here" is not something an operator can know.
 function CheckRow({
   label,
   ok,
@@ -65,6 +72,7 @@ function CheckRow({
   fixLabel = "Fix",
   fixDisabled,
   fixRunning,
+  runToFix,
 }: {
   label: string;
   ok: boolean;
@@ -74,32 +82,40 @@ function CheckRow({
   fixLabel?: string;
   fixDisabled?: boolean;
   fixRunning?: boolean;
+  runToFix?: string;
 }) {
   return (
     <Stack
-      direction="row"
-     
-      spacing={2}
-      sx={{ alignItems: "center", py: 0.75, borderBottom: 1, borderColor: "divider" }}
+      sx={{ py: 0.75, borderBottom: 1, borderColor: "divider" }}
     >
-      <Typography variant="body2" sx={{ flex: 1 }}>
-        {label}
-      </Typography>
-      <Chip
-        size="small"
-        label={ok ? okLabel : (failingLabel ?? "Missing")}
-        color={ok ? "success" : "error"}
-        variant={ok ? "outlined" : "filled"}
-      />
-      {!ok && fix && (
-        <Button
+      <Stack direction="row" spacing={2} sx={{ alignItems: "center" }}>
+        <Typography variant="body2" sx={{ flex: 1 }}>
+          {label}
+        </Typography>
+        <Chip
           size="small"
-          variant="contained"
-          onClick={fix}
-          disabled={fixDisabled || fixRunning}
-        >
-          {fixRunning ? <CircularProgress size={16} /> : fixLabel}
-        </Button>
+          label={ok ? okLabel : (failingLabel ?? "Missing")}
+          color={ok ? "success" : "error"}
+          variant={ok ? "outlined" : "filled"}
+        />
+        {!ok && fix && (
+          <Button
+            size="small"
+            variant="contained"
+            onClick={fix}
+            disabled={fixDisabled || fixRunning}
+          >
+            {fixRunning ? <CircularProgress size={16} /> : fixLabel}
+          </Button>
+        )}
+      </Stack>
+      {!ok && runToFix && (
+        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+          Run on this host:{" "}
+          <Box component="code" sx={{ fontFamily: "monospace", userSelect: "all" }}>
+            {runToFix}
+          </Box>
+        </Typography>
       )}
     </Stack>
   );
@@ -261,10 +277,15 @@ function RangeAdvice({ health }: { health: SystemHealth }) {
 
 // SystemLevelCard — host-wide bits that don't fit a single component: IP
 // forwarding, horizon's own systemd unit.
+//
+// The unit rows report and do not act. hz will not write the unit file that
+// says who hz runs as, or enable itself at boot, from an HTTP request: a web
+// process that can rewrite its own unit has a one-request path back to
+// User=root (privilege-classification.md §3.1 #6/#7). Both rows carry the
+// command instead, which is what an operator standing at a box that has no
+// unit can actually use — they cannot open this page on it either way.
 function SystemLevelCard({ health }: { health: SystemHealth }) {
   const fixIPF = useFixIPForwarding();
-  const installUnit = useInstallHorizonUnit();
-  const enableHorizon = useEnableHorizon();
 
   return (
     <Card variant="outlined">
@@ -282,19 +303,14 @@ function SystemLevelCard({ health }: { health: SystemHealth }) {
           ok={health.horizon_unit_installed}
           okLabel="Installed"
           failingLabel="Missing"
-          fix={() => installUnit.mutate()}
-          fixRunning={installUnit.isPending}
-          fixLabel="Install unit"
+          runToFix="sudo homelab-horizon install"
         />
         <CheckRow
           label="horizon enabled at boot"
           ok={health.horizon_enabled}
           okLabel="Enabled"
           failingLabel="Disabled"
-          fix={() => enableHorizon.mutate()}
-          fixDisabled={!health.horizon_unit_installed}
-          fixRunning={enableHorizon.isPending}
-          fixLabel="Enable"
+          runToFix="sudo systemctl enable homelab-horizon"
         />
         <CheckRow
           label="horizon currently running"
@@ -312,7 +328,6 @@ function SystemLevelCard({ health }: { health: SystemHealth }) {
 // nudges the admin through the right order.
 function WireGuardCard({ health }: { health: SystemHealth }) {
   const wg = byName(health, "wireguard");
-  const install = useInstallPackage();
   const createConfig = useCreateWGConfig();
   const fixMasq = useFixMasquerade();
   const fixChain = useFixWGForwardChain();
@@ -325,9 +340,7 @@ function WireGuardCard({ health }: { health: SystemHealth }) {
       <CheckRow
         label="wg binary installed"
         ok={wg.installed}
-        fix={() => install.mutate("wireguard-tools")}
-        fixRunning={install.isPending}
-        fixLabel="Install"
+        runToFix={INSTALL_DEPS_HINT}
       />
       <CheckRow
         label="wg0.conf exists"
@@ -390,7 +403,6 @@ function WireGuardCard({ health }: { health: SystemHealth }) {
 
 function HAProxyCard({ health }: { health: SystemHealth }) {
   const hap = byName(health, "haproxy");
-  const install = useInstallPackage();
   const fixLogging = useFixHAProxyLogging();
 
   if (!hap) return null;
@@ -402,9 +414,7 @@ function HAProxyCard({ health }: { health: SystemHealth }) {
       <CheckRow
         label="haproxy binary installed"
         ok={hap.installed}
-        fix={() => install.mutate("haproxy")}
-        fixRunning={install.isPending}
-        fixLabel="Install"
+        runToFix={INSTALL_DEPS_HINT}
       />
       <CheckRow label="Config exists" ok={hap.config_exists} />
       <CheckRow label="Enabled at boot" ok={hap.enabled} okLabel="Enabled" failingLabel="Disabled" />
@@ -436,7 +446,6 @@ function HAProxyCard({ health }: { health: SystemHealth }) {
 
 function DNSMasqCard({ health }: { health: SystemHealth }) {
   const dns = byName(health, "dnsmasq");
-  const install = useInstallPackage();
   const writeConfig = useWriteDNSMasqConfig();
   const reload = useReloadDNSMasq();
   const start = useStartDNSMasq();
@@ -474,9 +483,7 @@ function DNSMasqCard({ health }: { health: SystemHealth }) {
       <CheckRow
         label="dnsmasq binary installed"
         ok={dns.installed}
-        fix={() => install.mutate("dnsmasq")}
-        fixRunning={install.isPending}
-        fixLabel="Install"
+        runToFix={INSTALL_DEPS_HINT}
       />
       <CheckRow
         label="Config exists"
@@ -868,20 +875,36 @@ function LetsEncryptCard({
   );
 }
 
-// AptInstallCard lists the apt-audit log so the admin can see what's been
-// installed, when, and whether it succeeded. No install button here —
-// per-component cards each have their own install button for the relevant
-// package. This card is read-only history.
+// AptInstallCard lists the apt-audit log — what the old in-UI install button
+// installed, when, and whether it succeeded.
+//
+// Closed record, not a live one. Horizon no longer installs packages over HTTP
+// at all (the remedy is `sudo homelab-horizon install-deps`), so nothing
+// appends here any more. The card stays because the file is the only answer to
+// "was that button ever pressed on this box", and a box provisioned since will
+// simply have none.
 function AptInstallCard() {
   const { data } = useAptAudit();
   const entries = data?.entries ?? [];
   return (
     <Card variant="outlined">
-      <CardHeader title={<Typography variant="h6">apt Install Audit</Typography>} sx={{ pb: 0 }} />
+      <CardHeader
+        title={<Typography variant="h6">apt Install Audit</Typography>}
+        subheader={
+          <Typography variant="caption" color="text.secondary">
+            Historical. Horizon no longer installs packages over HTTP — run{" "}
+            <Box component="code" sx={{ fontFamily: "monospace", userSelect: "all" }}>
+              {INSTALL_DEPS_HINT}
+            </Box>{" "}
+            on the host instead.
+          </Typography>
+        }
+        sx={{ pb: 0 }}
+      />
       <CardContent>
         {entries.length === 0 && (
           <Typography variant="body2" color="text.secondary">
-            No apt installs run from this UI yet.
+            No apt installs were ever run from this UI on this host.
           </Typography>
         )}
         {entries.length > 0 && (
@@ -1144,52 +1167,6 @@ function ConfigCard({
         </Box>
       </CardContent>
     </Card>
-  );
-}
-
-// InstallPackageDialog is currently unused — install buttons on each
-// component card call /install/package directly with a fixed pkg name.
-// Kept as scaffolding for a future "install arbitrary package" admin tool.
-export function InstallPackageDialog({
-  open,
-  packages,
-  onClose,
-}: {
-  open: boolean;
-  packages: string[];
-  onClose: () => void;
-}) {
-  const install = useInstallPackage();
-  const [pkg, setPkg] = useState(packages[0] || "");
-  return (
-    <Dialog open={open} onClose={onClose}>
-      <DialogTitle>Install package</DialogTitle>
-      <DialogContent>
-        <DialogContentText sx={{ mb: 2 }}>
-          apt-get update and install a whitelisted package. The invocation is logged.
-        </DialogContentText>
-        <FormControl fullWidth size="small">
-          <InputLabel>Package</InputLabel>
-          <Select label="Package" value={pkg} onChange={(e) => setPkg(e.target.value)}>
-            {packages.map((p) => (
-              <MenuItem key={p} value={p}>
-                {p}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
-        <Button
-          variant="contained"
-          onClick={() => install.mutate(pkg)}
-          disabled={install.isPending}
-        >
-          {install.isPending ? <CircularProgress size={16} /> : "Install"}
-        </Button>
-      </DialogActions>
-    </Dialog>
   );
 }
 

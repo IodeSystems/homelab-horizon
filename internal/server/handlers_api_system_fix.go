@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
-	"github.com/iodesystems/homelab-horizon/internal/autoheal"
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
 	"github.com/iodesystems/homelab-horizon/internal/wireguard"
@@ -184,66 +183,17 @@ PostDown = %s
 	s.writeFixOK(w)
 }
 
-// POST /api/v1/system/install/horizon-unit — writes the systemd unit that
-// supervises horizon itself into /etc/systemd/system/homelab-horizon.service
-// and runs daemon-reload so the new unit is visible.
-func (s *Server) handleAPISystemInstallHorizonUnit(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-
-	binaryPath := "/usr/local/bin/homelab-horizon"
-	if execPath, err := os.Executable(); err == nil {
-		if abs, err := filepath.Abs(execPath); err == nil {
-			binaryPath = abs
-		}
-	}
-	configPath := s.configPath
-	if abs, err := filepath.Abs(configPath); err == nil {
-		configPath = abs
-	}
-	content := config.GenerateServiceFile(binaryPath, configPath)
-
-	const servicePath = "/etc/systemd/system/homelab-horizon.service"
-	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
-		"bash", "-c", fmt.Sprintf("cat > %s", servicePath))
-	cmd.Stdin = strings.NewReader(content)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "write unit: "+err.Error()+" — "+strings.TrimSpace(string(out)))
-		return
-	}
-	if out, err := systemdRun("systemctl", "daemon-reload"); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "daemon-reload: "+err.Error()+" — "+out)
-		return
-	}
-	s.writeFixOK(w)
-}
-
-// POST /api/v1/system/enable/horizon — systemctl enable homelab-horizon
-func (s *Server) handleAPISystemEnableHorizon(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-	if out, err := systemdRun("systemctl", "enable", "homelab-horizon"); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error()+" — "+out)
-		return
-	}
-	s.writeFixOK(w)
-}
-
 // aptAuditEntry is one line in the apt-audit.log JSONL file. Horizon has a
 // single admin token so there's no per-user attribution — SourceIP is the
 // closest we get to "who asked for this."
+//
+// HISTORICAL as of 2026-09-22. POST /system/install/package was the only writer
+// and is gone (privilege-classification.md §3.1 #8) — packages are installed by
+// `homelab-horizon install-deps`, which journals rather than writing here. The
+// read stays because the file is the only record of what the button installed
+// while it existed, and answering "was it ever pressed on this box" is the
+// question §3.1 said to read it for. Nothing appends to it any more, so a box
+// provisioned after this commit will have none.
 type aptAuditEntry struct {
 	Timestamp time.Time `json:"timestamp"`
 	Package   string    `json:"package"`
@@ -253,76 +203,10 @@ type aptAuditEntry struct {
 	SourceIP  string    `json:"source_ip,omitempty"`
 }
 
-// aptAuditPath is the JSONL log file next to config.json; one entry per line,
-// append-only. Read via GET /api/v1/system/apt-audit (latest last, tail).
+// aptAuditPath is the JSONL log file next to config.json; one entry per line.
+// Read-only now — see aptAuditEntry. Read via GET /api/v1/system/apt-audit.
 func (s *Server) aptAuditPath() string {
 	return filepath.Join(filepath.Dir(s.configPath), "apt-audit.log")
-}
-
-// recordAptAudit appends one JSONL line. Best-effort: errors logged but not
-// surfaced — the install itself already returned, and the audit being incomplete
-// shouldn't break the response to the admin.
-func (s *Server) recordAptAudit(entry aptAuditEntry) {
-	f, err := os.OpenFile(s.aptAuditPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "apt-audit open: %v\n", err)
-		return
-	}
-	defer func() { _ = f.Close() }()
-	if err := json.NewEncoder(f).Encode(entry); err != nil {
-		fmt.Fprintf(os.Stderr, "apt-audit write: %v\n", err)
-	}
-}
-
-// POST /api/v1/system/install/package — admin installs one of the apt
-// packages horizon knows about. Whitelisted in autoheal.KnownPackages so
-// this endpoint can't be coerced into running arbitrary apt commands.
-// Every invocation is journaled to apt-audit.log (next to config.json)
-// with timestamp, admin, output, and error — readable via /apt-audit.
-func (s *Server) handleAPISystemInstallPackage(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-	var body struct {
-		Package string `json:"package"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid json body: "+err.Error())
-		return
-	}
-	if body.Package == "" {
-		writeJSONError(w, http.StatusBadRequest, "package is required")
-		return
-	}
-
-	output, err := autoheal.InstallPackage(body.Package)
-	entry := aptAuditEntry{
-		Timestamp: time.Now().UTC(),
-		Package:   body.Package,
-		Success:   err == nil,
-		Output:    output,
-		SourceIP:  s.getClientIP(r),
-	}
-	if err != nil {
-		entry.Error = err.Error()
-	}
-	s.recordAptAudit(entry)
-
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok":      true,
-		"package": body.Package,
-		"output":  output,
-	})
 }
 
 // GET /api/v1/system/apt-audit — returns the last ~N entries of the

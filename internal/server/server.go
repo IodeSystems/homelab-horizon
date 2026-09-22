@@ -1257,23 +1257,23 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/system/fix/wg-rules", s.handleAPISystemFixWGRules)
 	s.handlePeerInstance(mux, "/api/v1/system/fix/log-retention", s.handleAPISystemFixLogRetention)
 	s.handlePeerInstance(mux, "/api/v1/wg/create-config", s.handleAPIWGCreateConfig)
-	s.handlePeerInstance(mux, "/api/v1/system/install/horizon-unit", s.handleAPISystemInstallHorizonUnit)
-	s.handlePeerInstance(mux, "/api/v1/system/enable/horizon", s.handleAPISystemEnableHorizon)
 	s.handlePeerInstance(mux, "/api/v1/haproxy/fix-logging", s.handleAPIHAProxyFixLogging)
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/write-config", s.handleAPIDNSMasqWriteConfig)
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/reload", s.handleAPIDNSMasqReload)
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/start", s.handleAPIDNSMasqStart)
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/fix-interfaces", s.handleAPIDNSMasqFixInterfaces)
-	s.handlePeerInstance(mux, "/api/v1/system/install/package", s.handleAPISystemInstallPackage)
 	s.handlePeerInstance(mux, "/api/v1/system/apt-audit", s.handleAPISystemAptAudit)
 	s.handlePeerInstance(mux, "/api/v1/system/metrics", s.handleAPISystemMetrics)
 
-	// IPTables rule inventory + bless/unbless/remove/reconcile. All per-
-	// instance (iptables is a local-machine concern, bless is local-only).
+	// IPTables rule inventory + bless/unbless/reconcile. All per-instance
+	// (iptables is a local-machine concern, bless is local-only). There is no
+	// remove: hz will not run `iptables -D` with a table, chain and args from
+	// a request body (privilege-classification.md §3.3). Reconcile deletes
+	// stale rules; an unknown rule is not hz's to delete, and the UI hands the
+	// operator the shell command for it.
 	s.handlePeerInstance(mux, "/api/v1/iptables/rules", s.handleAPIIPTablesRules)
 	s.handlePeerInstance(mux, "/api/v1/iptables/bless", s.handleAPIIPTablesBless)
 	s.handlePeerInstance(mux, "/api/v1/iptables/unbless", s.handleAPIIPTablesUnbless)
-	s.handlePeerInstance(mux, "/api/v1/iptables/remove", s.handleAPIIPTablesRemove)
 	s.handlePeerInstance(mux, "/api/v1/iptables/reconcile", s.handleAPIIPTablesReconcile)
 
 	// API v1 settings routes
@@ -1374,22 +1374,19 @@ func (s *Server) ensureServicesRunning() []SubsystemState {
 		return nil
 	}
 
-	// Say what is missing whether or not auto-heal is allowed to fix it.
-	// autoheal.Run only executes when the `auto_heal` config flag is on, which
-	// it is not by default — so an install with none of the dependencies
-	// present used to produce cryptic start failures and no statement that the
-	// packages simply were not there.
+	// Say what is missing, unconditionally. There is no longer a flag that
+	// could install them instead: hz never installs packages at boot, so the
+	// only thing startup can do about an absent dependency is name it and the
+	// command that fixes it. An install with none of the dependencies present
+	// used to produce cryptic start failures and no statement that the packages
+	// simply were not there.
 	if missing := autoheal.Missing(s.cfg()); len(missing) > 0 {
 		pkgs := make([]string, 0, len(missing))
 		for _, d := range missing {
 			pkgs = append(pkgs, d.Package)
 		}
-		if s.cfg().AutoHeal {
-			slog.Warn("dependencies missing after auto-heal", "packages", strings.Join(pkgs, " "))
-		} else {
-			slog.Warn("dependencies missing and auto-heal is off; run `homelab-horizon install-deps`",
-				"packages", strings.Join(pkgs, " "))
-		}
+		slog.Warn("dependencies missing; run `homelab-horizon install-deps`",
+			"packages", strings.Join(pkgs, " "))
 	}
 
 	for _, p := range planStartup(s.observeSubsystems()) {

@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"strings"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
 )
@@ -45,16 +44,18 @@ var dependencies = []dependency{
 		func(c *config.Config) bool { return c.HAProxyEnabled }},
 	// Opt-in: hz does not need node-exporter to work, it just folds it into
 	// the scrape config it serves when present. Listing it here also puts it
-	// on the KnownPackages allowlist, so the install endpoint can fetch it on
-	// request without widening that allowlist to arbitrary packages.
+	// on the KnownPackages allowlist, so `install-deps` will fetch it on a box
+	// whose config enables it, without widening that allowlist.
 	{"Prometheus node exporter", "prometheus-node-exporter", "prometheus-node-exporter",
 		"host metrics for the scrape config hz publishes; optional",
 		func(c *config.Config) bool { return c.NodeExporterEnabled }},
 }
 
 // KnownPackages returns the set of apt package names autoheal knows how to
-// install. The system/install/package API endpoint uses this as a whitelist
-// so an admin can't coerce horizon into running `apt-get install anything`.
+// install. InstallMissing checks every package against it, so no path in hz
+// can run `apt-get install anything`. It used to guard an HTTP endpoint too;
+// that endpoint is gone (privilege-classification.md §3.1 #8) and the
+// allowlist is now the invariant for the CLI verb alone.
 func KnownPackages() []string {
 	pkgs := make([]string, 0, len(dependencies))
 	for _, d := range dependencies {
@@ -65,19 +66,19 @@ func KnownPackages() []string {
 
 // lookPath is exec.LookPath, replaceable in tests. Observation has to be
 // testable separately from installation: the whole point of Missing is that
-// something other than Run — the startup report — can ask what is absent
-// without any chance of it installing something as a side effect.
+// the startup report can ask what is absent without any chance of it
+// installing something as a side effect.
 var lookPath = exec.LookPath
 
 // Missing reports the dependencies this config requires whose binary is not on
 // PATH. It is pure observation: it installs nothing, changes nothing, and does
 // not need root.
 //
-// Run() is gated behind the `auto_heal` config flag, which is off by default,
-// so on an ordinary box nothing ever asks this question at boot. That is how a
-// gateway came up with haproxy, dnsmasq, wireguard-tools and qrencode all
-// absent and said nothing about it. Startup calls Missing and reports the
-// answer whether or not auto-heal is allowed to act on it.
+// It is what startup says out loud on every boot. The predecessor of that
+// report was `autoheal.Run`, gated behind an `auto_heal` config key that
+// defaulted off and that almost nothing set — which is how a gateway came up
+// with haproxy, dnsmasq, wireguard-tools and qrencode all absent and said
+// nothing about it. The gate is gone; the report is unconditional.
 func Missing(cfg *config.Config) []Dependency {
 	var missing []Dependency
 	for _, dep := range dependencies {
@@ -104,9 +105,9 @@ func Missing(cfg *config.Config) []Dependency {
 // reports what is absent and stops there, and this is what a human or a script
 // runs when they have decided to change the box.
 //
-// Every package goes through KnownPackages, the same allowlist the HTTP
-// install endpoint uses, so this path cannot install anything hz does not
-// already name.
+// Every package goes through KnownPackages, so this path cannot install
+// anything hz does not already name. It is now the only apt path in the tree:
+// the HTTP install endpoint that shared the allowlist is gone.
 func InstallMissing(cfg *config.Config) error {
 	missing := Missing(cfg)
 	if len(missing) == 0 {
@@ -126,7 +127,37 @@ func InstallMissing(cfg *config.Config) error {
 		}
 		pkgs = append(pkgs, d.Package)
 	}
-	return aptInstall(pkgs)
+	if err := aptInstall(pkgs); err != nil {
+		return err
+	}
+
+	// The one side effect that belongs here and nowhere else.
+	//
+	// Installing the dnsmasq package starts and enables the distro's own
+	// dnsmasq, which then holds :53 against the one hz manages. This is the
+	// single moment that can be true — nothing else in hz installs a package —
+	// so the disable lives beside the install rather than at boot, where it
+	// used to sit inside autoheal.Run re-running on every start of a box that
+	// never had the problem. It only fires when dnsmasq was in THIS install.
+	for _, p := range pkgs {
+		if p == "dnsmasq" {
+			stopSystemDNSMasq()
+			break
+		}
+	}
+	return nil
+}
+
+// stopSystemDNSMasq disables the distro's dnsmasq unit so it does not compete
+// with the one hz manages. Best-effort: on a host with no systemd (Docker) the
+// command simply fails, and a box where the package shipped no unit has
+// nothing to disable.
+func stopSystemDNSMasq() {
+	slog.Info("disabling the distro dnsmasq unit; hz manages its own")
+	cmd := exec.Command("systemctl", "disable", "--now", "dnsmasq")
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	_ = cmd.Run()
 }
 
 // aptInstall runs apt-get update + install for an already-validated package
@@ -151,124 +182,4 @@ func aptInstall(pkgs []string) error {
 		return fmt.Errorf("apt-get install failed: %w", err)
 	}
 	return nil
-}
-
-// InstallPackage runs `apt-get update` + `apt-get install -y -qq <pkg>` through
-// systemd-run so it escapes horizon's own ProtectSystem=strict sandbox at
-// runtime. Validates pkg against KnownPackages before executing. Returns the
-// combined stdout/stderr for logging even on success.
-//
-// NOTE: Unlike Run() — which is the startup bootstrap path and assumes it has
-// unsandboxed access — this is the runtime HTTP path. systemd-run is required;
-// on hosts without systemd (e.g. Docker) this will error, and the caller
-// should surface that cleanly rather than retry.
-func InstallPackage(pkg string) (string, error) {
-	allowed := false
-	for _, p := range KnownPackages() {
-		if p == pkg {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
-		return "", fmt.Errorf("package %q not in allow-list", pkg)
-	}
-
-	// apt-get update in its own one-shot so a slow mirror doesn't block the
-	// install step if apt metadata is already fresh enough.
-	upd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
-		"--setenv=DEBIAN_FRONTEND=noninteractive",
-		"apt-get", "update", "-qq")
-	updOut, updErr := upd.CombinedOutput()
-
-	ins := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
-		"--setenv=DEBIAN_FRONTEND=noninteractive",
-		"apt-get", "install", "-y", "-qq", pkg)
-	insOut, insErr := ins.CombinedOutput()
-
-	// Packages may install systemd units; reload so systemctl sees them.
-	_ = exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
-		"systemctl", "daemon-reload").Run()
-
-	combined := strings.TrimSpace(string(updOut)) + "\n" + strings.TrimSpace(string(insOut))
-	if insErr != nil {
-		if updErr != nil {
-			return combined, fmt.Errorf("apt-get update + install failed: %w", insErr)
-		}
-		return combined, fmt.Errorf("apt-get install failed: %w", insErr)
-	}
-	return combined, nil
-}
-
-var requiredDirs = []struct {
-	path string
-	mode os.FileMode
-}{
-	{"/etc/wireguard", 0700},
-	{"/etc/dnsmasq.d", 0755},
-	{"/etc/haproxy", 0755},
-	{"/etc/haproxy/certs", 0755},
-	{"/etc/haproxy/errors", 0755},
-	{"/etc/homelab-horizon", 0755},
-}
-
-// Run detects and installs missing dependencies, creates required directories,
-// and configures the system for homelab-horizon.
-func Run(cfg *config.Config) error {
-	// Detect missing packages. Same observation the startup report uses, so
-	// the two can never disagree about what is absent.
-	var missing []string
-	for _, dep := range Missing(cfg) {
-		slog.Warn("dependency missing", "name", dep.Name, "package", dep.Package)
-		missing = append(missing, dep.Package)
-	}
-
-	// Install missing packages
-	if len(missing) > 0 {
-		slog.Info("installing packages", "packages", strings.Join(missing, ", "))
-		if err := aptInstall(missing); err != nil {
-			return err
-		}
-		slog.Info("packages installed")
-	}
-
-	// Create required directories
-	for _, dir := range requiredDirs {
-		if err := os.MkdirAll(dir.path, dir.mode); err != nil {
-			return fmt.Errorf("creating %s: %w", dir.path, err)
-		}
-	}
-
-	// Enable IP forwarding
-	if err := enableIPForwarding(); err != nil {
-		slog.Warn("could not enable IP forwarding", "err", err)
-	}
-
-	// Stop system-provided dnsmasq if it was just installed — HZ manages its own
-	if cfg.DNSMasqEnabled {
-		stopSystemDnsmasq()
-	}
-
-	return nil
-}
-
-func enableIPForwarding() error {
-	current, err := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(string(current)) == "1" {
-		return nil
-	}
-	slog.Info("enabling IP forwarding")
-	return os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
-}
-
-func stopSystemDnsmasq() {
-	// Best-effort: stop and disable the system dnsmasq service so it doesn't
-	// conflict with the one HZ manages. Errors are expected in Docker (no systemd).
-	cmd := exec.Command("systemctl", "disable", "--now", "dnsmasq")
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	_ = cmd.Run()
 }
