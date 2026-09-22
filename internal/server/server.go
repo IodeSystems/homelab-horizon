@@ -1265,8 +1265,12 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/system/apt-audit", s.handleAPISystemAptAudit)
 	s.handlePeerInstance(mux, "/api/v1/system/metrics", s.handleAPISystemMetrics)
 
-	// IPTables rule inventory + bless/unbless/remove/reconcile. All per-
-	// instance (iptables is a local-machine concern, bless is local-only).
+	// IPTables rule inventory + bless/unbless/reconcile. All per-instance
+	// (iptables is a local-machine concern, bless is local-only). There is no
+	// remove: hz will not run `iptables -D` with a table, chain and args from
+	// a request body (privilege-classification.md §3.3). Reconcile deletes
+	// stale rules; an unknown rule is not hz's to delete, and the UI hands the
+	// operator the shell command for it.
 	s.handlePeerInstance(mux, "/api/v1/iptables/rules", s.handleAPIIPTablesRules)
 	s.handlePeerInstance(mux, "/api/v1/iptables/bless", s.handleAPIIPTablesBless)
 	s.handlePeerInstance(mux, "/api/v1/iptables/unbless", s.handleAPIIPTablesUnbless)
