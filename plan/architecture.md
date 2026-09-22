@@ -764,16 +764,31 @@ that changes hz's shape.
     `hz service assign`, never a guess. Only APPROVED registrations count — a
     pending one is an address a box asked for and nobody granted.
 
-    **Two things `example-projection.md` expresses that the code cannot**, both
-    worth more than the code: (a) §5 names a unit `<project>@<role>.service`,
-    which drops the app coordinate — and §3's own gateway hosts
-    `intern/prod/git/app` AND `intern/prod/idp/app`, two apps of one project at
-    one role, which collide on that name. The projection renders the name the
-    spec gives and reports the collision rather than quietly running one
-    service where the estate declares two; the spec has to move before the code
-    does. (b) §5's `serial: 47` has no producer: item 11 chose a content hash
-    over a counter deliberately, so `Serial` is carried in as an input and hz
-    passes 0 — `Desired.Fingerprint` is the generation every consumer compares.
+    **Two things `example-projection.md` expressed that the code could not.**
+    Both are closed as of 2026-09-22, after the audit moved the spec:
+
+    (a) **The unit name**, which used to be `<project>@<role>.service` and
+    dropped the app coordinate — §3's own gateway hosts `intern/prod/git/app`
+    AND `intern/prod/idp/app`, two apps of one project at one role, which
+    collided. §5 now settles it as
+    `<project>@systemd-escape(<environment>/<app>/<role>).service`: the project
+    is the prefix because the project IS the package name that ships the
+    template unit, and all three of environment/app/role are in the instance
+    part because dropping any one collides on this estate. It cannot collide —
+    a registration is unique on `(machine, environment, app, role)` (0009) and
+    the escape is reversible, so the name is a key. `systemd-escape` is
+    implemented in-package rather than shelled out, because the projection is
+    pure. The `units` gap stayed: it now catches a CALLER that hands the same
+    address twice, which nothing inside a pure function can rule out.
+
+    (b) **`serial`** has no producer and `MachineConfig.Serial` is always 0.
+    §5 no longer asks for a serial pair at all — item 11 chose a content hash
+    deliberately and `Desired.Fingerprint` is the generation every consumer
+    compares. The field is kept, carried in as an input, and its comment now
+    describes the monotonic FLOOR above rather than pointing at a spec that
+    stopped asking: a floor answers "is this older than what I already ran",
+    which is a different question from "is this current" and one nothing has
+    asked for yet.
 
     **The drift screen's `generationMatch` stops being `unknown` fleet-wide.**
     `observedFleet` computed desired state once, outside the loop, for hz's own

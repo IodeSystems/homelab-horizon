@@ -89,7 +89,7 @@ const gw1 = machine({
   changes: [
     { subsystem: "packages", target: "storefront", kind: "update" },
     { subsystem: "files", target: "/etc/hz/old.conf", kind: "remove" },
-    { subsystem: "units", target: "storefront@app.service", kind: "create" },
+    { subsystem: "units", target: "storefront@staging-web-app.service", kind: "create" },
     { subsystem: "files", target: "/etc/hz/kept.conf", kind: "unchanged" },
   ],
 });

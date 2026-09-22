@@ -74,16 +74,25 @@ type MachineConfig struct {
 	// MachineConfig that has been passed around still says whose it is.
 	Machine string `json:"machine"`
 
-	// Serial is architecture.md's monotonic floor, and it is an INPUT rather
-	// than something this function invents — a counter is state somebody has
-	// to keep correct across restarts, and a pure function has no state.
+	// Serial is architecture.md's monotonic floor — the rollback defence where
+	// hz refuses to serve a machine a generation older than one it has already
+	// applied ("apply → must re-reach hz within N seconds → else roll back to
+	// the previous Serial"). NOTHING PRODUCES ONE: projectionGlobal passes 0
+	// and this is always 0 today.
 	//
-	// hz does not keep one today and deliberately: item 11 chose a content
-	// hash (agent.Desired.Fingerprint) over a counter for exactly that reason,
-	// so the generation of what crosses the wire is the hash and this stays 0
-	// until something has a use for a floor. Carried rather than dropped
-	// because the rollback defence architecture.md wants it for is real and
-	// the field is where it will land.
+	// It is an INPUT rather than something this function invents, because a
+	// counter is state somebody has to keep correct across restarts and a pure
+	// function has no state.
+	//
+	// IT IS NOT THE GENERATION, and it is not waiting on a spec.
+	// example-projection.md §5 used to show a serial pair and no longer does:
+	// item 11 chose a content hash (agent.Desired.Fingerprint) for "is this
+	// current", deliberately, and that question is answered. A floor answers a
+	// different one — "is this OLDER than what I already ran" — which nothing
+	// has asked for yet. The field is carried rather than dropped because the
+	// defence architecture.md wants it for is real and this is where it lands;
+	// if it is still 0 when someone next reads this, the honest options are to
+	// build the floor or to delete the field, not to re-explain it.
 	Serial uint64 `json:"serial"`
 
 	// Segments are the network segments this machine is a member of.
@@ -284,8 +293,10 @@ type Global struct {
 	// to hold, which is the opposite of an exact version under hold.
 	AgentVersion string
 
-	// Serial is the monotonic floor to stamp on the result. See
-	// MachineConfig.Serial for why it is carried in rather than computed.
+	// Serial is the monotonic floor to stamp on the result, and nothing
+	// produces one: every caller passes 0. See MachineConfig.Serial for what a
+	// floor is for, why it is carried in rather than computed, and why it is
+	// not the generation.
 	Serial uint64
 }
 
@@ -451,13 +462,12 @@ func projectInstances(mc *MachineConfig, cfg *config.Config, all []Instance, mac
 			}
 		}
 
-		// THE UNIT NAME, AND THE SHAPE example-projection.md §5 GIVES IT.
-		// §5 projects storefront/prod/web/app to `storefront@app.service`:
-		// the project, then the ROLE, with the app coordinate dropped. That is
-		// the shape rendered here because that file is the spec — and §3 of
-		// the same file proves the shape collides, which is recorded as a gap
-		// below rather than papered over with a name §5 does not use.
-		name := env.Project + "@" + inst.Role + ".service"
+		// THE UNIT NAME, AND THE SHAPE example-projection.md §5 GIVES IT:
+		// <project>@<environment>-<app>-<role>.service, where the instance
+		// part is systemd-escape of the instance address environment/app/role.
+		// So storefront/prod/web/app on app-1 is
+		// `storefront@prod-web-app.service`. See unitName.
+		name := unitName(env.Project, inst)
 		if _, have := units[name]; !have {
 			unitOrder = append(unitOrder, name)
 		}
@@ -473,13 +483,120 @@ func projectInstances(mc *MachineConfig, cfg *config.Config, all []Instance, mac
 	sort.Strings(unitOrder)
 	for _, name := range unitOrder {
 		mc.Units = append(mc.Units, Unit{Name: name, Enabled: true})
+		// ONE UNIT IS ONE INSTANCE, and this says so when it is not.
+		//
+		// The NAME can no longer merge two instances — unitName carries all
+		// four coordinates and is reversible (see its doc comment) — so what
+		// is left for this to catch is the INPUT: Global.Instances is an
+		// argument, and nothing in here can know that cm_registrations is
+		// unique on (machine, environment, app, role). A caller that joins its
+		// tables carelessly and hands the same address twice is told, rather
+		// than quietly getting one unit for two rows it believes in. It also
+		// stays the standing guard on the naming itself: a scheme that drops a
+		// coordinate again lands here on the very estate that found the
+		// original bug.
 		if owners := units[name]; len(owners) > 1 {
-			mc.gap(SectionUnits, "unit "+name+" is the projection of "+fmt.Sprint(len(owners))+" different instances ("+
-				strings.Join(owners, ", ")+"). example-projection.md §5 names a unit <project>@<role>.service, which drops the APP coordinate,"+
-				" and §3's gateway hosts two apps of one project at one role — so the name is not unique and hz projects one unit where a machine runs several."+
-				" Naming the unit for the app as well would fix it and would stop matching §5; the spec has to move first.")
+			mc.gap(SectionUnits, "unit "+name+" is the projection of "+fmt.Sprint(len(owners))+" instances ("+
+				strings.Join(owners, ", ")+"), and one unit is one instance. A unit name carries the project and all three"+
+				" coordinates of the address, and a registration is unique on (machine, environment, app, role), so two instances"+
+				" cannot legitimately share a name on one machine — this machine has been handed the same address more than once."+
+				" hz projects one unit and names the duplicate rather than running one service where its input declares several.")
 		}
 	}
+}
+
+// unitName is the systemd unit one instance runs under, and it is
+// example-projection.md §5's scheme:
+//
+//	<project>@<environment>-<app>-<role>.service
+//
+// where the instance part is systemd-escape of the instance address
+// environment/app/role. `storefront` + `prod/web/app` is
+// `storefront@prod-web-app.service`.
+//
+// THE PROJECT IS THE PREFIX, not a fourth coordinate of the instance part,
+// because the project IS the package name. A systemd template unit
+// `<project>@.service` ships in `<project>`'s package, so the `packages` entry
+// of this very payload is what provides its `units` entry. Any other prefix
+// leaves nothing in the payload saying which package the unit came from.
+//
+// ALL THREE OF environment, app AND role are in the instance part because
+// dropping any one of them collides on the estate example-projection.md §3
+// already describes:
+//
+//   - dropping APP was the original bug — `intern/prod/git/app` and
+//     `intern/prod/idp/app` are two apps of one project at one role on gw-1,
+//     and both become `intern@app.service`;
+//   - dropping ROLE collides gw-1's three storefront slots (app, next, ops);
+//   - dropping ENVIRONMENT collides a box hosting two rungs of one project,
+//     which is the same case the package-version conflict gap already names.
+//
+// AND IT CANNOT COLLIDE. A registration is unique on
+// (machine, environment, app, role) — migration 0009 — so the triple is
+// already unique on one machine, systemdEscape is injective (it is reversible;
+// see its doc comment), and prefixing with the project can only narrow the
+// name space, never merge two names into one.
+func unitName(project string, inst Instance) string {
+	return project + "@" + systemdEscape(inst.Address()) + ".service"
+}
+
+// unitNameLiteral is what systemd leaves alone inside a unit name: its
+// VALID_CHARS less `-` and `\`, which the escaper handles before it gets here
+// because they are the separator and the escape.
+const unitNameLiteral = "0123456789" +
+	"abcdefghijklmnopqrstuvwxyz" +
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
+	":_."
+
+const hexDigits = "0123456789abcdef"
+
+// systemdEscape is `systemd-escape`: the transformation systemd itself applies
+// when a path becomes a template unit's instance parameter.
+//
+// IMPLEMENTED HERE RATHER THAN SHELLED OUT, and that is not a convenience.
+// The projection is pure — seam_test.go bans os/exec outright — and a name for
+// app-1 computed by running a command on gw-1 would be a statement about
+// gw-1's systemd rather than about app-1. The projection has to be computable
+// for a machine hz has never touched, which rules out asking the local box
+// what it thinks.
+//
+// The rules are systemd's own `do_escape` (src/basic/unit-name.c), per BYTE:
+//
+//   - a LEADING '.' escapes, so an instance parameter can never open a dotfile
+//   - '/' becomes '-' — systemd's own path separator escape
+//   - '-' and '\' always escape, being the separator and the escape itself
+//   - anything outside 0-9 A-Z a-z ':' '_' '.' escapes
+//   - an escape is `\x` plus two LOWERCASE hex digits
+//
+// The third rule is the one that matters for the unit name: a literal '-'
+// inside an environment, app or role name becomes `\x2d` rather than a second
+// separator, so `a-b/c` and `a/b-c` render differently (`a\x2db-c` against
+// `a-b\x2dc`). The escaping is therefore reversible, and a reversible function
+// is injective — which is what lets unitName claim it cannot collide for any
+// estate rather than merely for §3's.
+func systemdEscape(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case i == 0 && c == '.':
+			escapeByte(&b, c)
+		case c == '/':
+			b.WriteByte('-')
+		case strings.IndexByte(unitNameLiteral, c) >= 0:
+			b.WriteByte(c)
+		default:
+			escapeByte(&b, c)
+		}
+	}
+	return b.String()
+}
+
+func escapeByte(b *strings.Builder, c byte) {
+	b.WriteString(`\x`)
+	b.WriteByte(hexDigits[c>>4])
+	b.WriteByte(hexDigits[c&0x0f])
 }
 
 // resolveEnvironment answers the one question the registration record cannot:
