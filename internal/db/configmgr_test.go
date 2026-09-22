@@ -1153,6 +1153,54 @@ func TestComparePrereleaseSpecOrdering(t *testing.T) {
 	}
 }
 
+// CompareVersions is the exported door onto the two functions above, and it is
+// the ONLY one — the version-drift join outside this package uses it rather
+// than growing a second semver implementation that could disagree with the one
+// ResolveConfig applies to a config's version range.
+//
+// Two properties it must keep: it agrees with the unexported pair on every
+// string, and an unparseable version comes back as ErrInvalidVersion rather
+// than as an ordering. An opaque declared version (an image tag, a git sha)
+// reaching a comparison is an ordinary event, and answering "equal" or
+// "behind" for one would be a fabricated verdict.
+func TestCompareVersionsIsTheExportedDoorOntoTheSameComparison(t *testing.T) {
+	agree := [][2]string{
+		{"1.9.0", "1.10.0"}, {"1.10.0", "1.9.0"}, {"1.4.0", "1.4.0"},
+		{"v1.4.0", "1.4.0"}, {"1.4.0+deadbee", "1.4.0"}, {"1.4.0-rc.1", "1.4.0"},
+		{"2.0.0", "1.99.99"},
+	}
+	for _, pair := range agree {
+		a, err := parseVersion(pair[0])
+		if err != nil {
+			t.Fatalf("parse %q: %v", pair[0], err)
+		}
+		b, err := parseVersion(pair[1])
+		if err != nil {
+			t.Fatalf("parse %q: %v", pair[1], err)
+		}
+		want := compareVersions(a, b)
+		got, err := CompareVersions(pair[0], pair[1])
+		if err != nil {
+			t.Fatalf("CompareVersions(%q, %q): %v", pair[0], pair[1], err)
+		}
+		if got != want {
+			t.Errorf("CompareVersions(%q, %q) = %d, compareVersions = %d: two answers to one question",
+				pair[0], pair[1], got, want)
+		}
+	}
+
+	for _, pair := range [][2]string{
+		{"2026-09-22-nightly", "1.4.0"},
+		{"1.4.0", "noble-3"},
+		{"deadbeef", "cafebabe"},
+	} {
+		if _, err := CompareVersions(pair[0], pair[1]); !errors.Is(err, ErrInvalidVersion) {
+			t.Errorf("CompareVersions(%q, %q) err = %v, want ErrInvalidVersion: an opaque version has no ordering, and inventing one is a fabricated verdict",
+				pair[0], pair[1], err)
+		}
+	}
+}
+
 func TestParseVersionRejectsMalformed(t *testing.T) {
 	bad := []string{"", "1", "1.2", "1.2.3.4", "a.b.c", "1.2.-3", "1.2.3-", "01.2.3xx"}
 	for _, s := range bad {
