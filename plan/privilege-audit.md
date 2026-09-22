@@ -1004,10 +1004,37 @@ Concretely, still unhanded-over and still privileged in hz web:
 
    **Not changed, and still open:** `ExpectedRules` silently dropping the
    forwards in the first place. See `plan/icebox.md`.
-2. **`iptables.LiveRules`' INPUT scope widened to admit ban rules**
-   (`classify.go:131`), *before* bans move — otherwise `Reconcile` installs a
-   ban it cannot see and installs it again every pass. The classification says
-   this and it is not done.
+2. ~~**`iptables.LiveRules`' INPUT scope widened to admit ban rules**~~
+   ✅ **LANDED** 2026-09-22 (`scopeLiveRules`, `internal/iptables/classify.go`).
+   The finding, as recorded: the read narrowed INPUT to rules jumping to
+   `WG-INPUT`, so a ban rule was invisible; `Reconcile` would install a ban it
+   could not see and install it again every pass. Reproduced before the fix by
+   `TestReconcileDoesNotReinstallABanItCanSee`, which with bans in the expected
+   set but the read still narrowed emits
+   `-t filter -I INPUT 1 -s 192.0.2.5/32 -j DROP` on an already-banned address.
+
+   The fix admits the exact 4-token `-s <addr> -j DROP` shape and nothing else
+   (`isSourceDropShape`), and derives ban rules into the **expected** set from
+   `cfg.IPBans` (`Inputs.BannedIPs`, expired entries filtered by
+   `activeBanIPs`). Expected rather than blessed because hz genuinely generates
+   them, and because the tab's blessed row carries an Unbless button that a
+   derived canonical could not honour.
+
+   **Widening the read did not widen the delete.** `Reconcile` deletes only
+   *stale*, and `StaleRules` deliberately carries no bans — so a ban lifted from
+   config reads *unknown* and the rule survives, with `unbanIP` still the thing
+   that removes it. The positive control is
+   `TestReconcileLeavesAHandAddedInputDropAlone`
+   (`internal/iptables/bans_test.go`): a `-s 198.51.100.7/32 -j DROP` that no hz
+   code generates, invisible before the change, visible after, and asserted
+   against the **iptables commands Reconcile issues** rather than against the
+   classifier's verdict.
+
+   **Not changed, and deliberate:** bans have not moved. `cmd/hz-agent/install.go`
+   still never emits `--apply`, hz web is still the writer, and the desired
+   payload now merely *carries* the rules. **New residual:**
+   `reconcileIPTables` does not hold `banMu`, so a simultaneous insert could
+   leave a duplicate DROP — see `plan/icebox.md`.
 3. **The 18 `rebuildWGChains` sites** decided. Armed-and-hz-still-calling is two
    writers on one chain; de-rooted-and-still-calling is a permission error on the
    MFA login path, 18 times over. Either way this is not a thing to discover

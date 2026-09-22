@@ -383,16 +383,45 @@ replicated: `cfg.IPBans` is the record, expiry is a pure function of
 `ExpiresAt` and the clock, and the rule is one canonical form per IP. Bans
 become entries the agent reconciles, exactly like every other expected rule.
 
-**What it needs that does not exist.** `iptables.LiveRules` deliberately narrows
-`INPUT` to rules that jump to `WG-INPUT` (`iptables/reconcile.go:26-33`, with the
-reason: a normal host's INPUT is full of ufw/docker rules and reading them all
-would bury the tab in unknowns). So a ban rule is **invisible to the reconciler
-today** — `ha-and-the-agent.md` §4 relies on exactly that to prove peer-sync's
-bans cannot collide with the agent. Handing bans to the agent means widening the
-INPUT scope to also admit `-s <ip> -j DROP` rules, in `internal/iptables`, not in
-the agent. That is a small, pure change with a pure test, and it must land
-*before* the ban rules move, or `Reconcile` will install a ban it cannot see and
-install it again every pass.
+**What it needed that did not exist — ✅ LANDED 2026-09-22.** `iptables.LiveRules`
+deliberately narrowed `INPUT` to rules that jump to `WG-INPUT`
+(`iptables/reconcile.go:26-33`, with the reason: a normal host's INPUT is full of
+ufw/docker rules and reading them all would bury the tab in unknowns). So a ban
+rule was **invisible to the reconciler** — `ha-and-the-agent.md` §4 relied on
+exactly that to prove peer-sync's bans could not collide with the agent.
+
+The widening is in `internal/iptables`, not the agent, and is two pure pieces:
+
+- `scopeLiveRules` admits the **exact 4-token** `-s <addr> -j DROP` shape
+  (`isSourceDropShape`, checked positionally the way `isHorizonMasqShape` is)
+  alongside the WG-INPUT jump. Nothing else about INPUT changed: a ufw ACCEPT, a
+  negated source, a DROP with extra matchers all stay out, so the tab stays
+  actionable.
+- `Inputs.BannedIPs` → one expected rule per address, emitted in **readback
+  form** (`-s <addr>/32`) so the expected rule matches what `iptables-save`
+  prints; v4 only, because `iptables` is. Fed at both call sites from
+  `cfg.IPBans` through `activeBanIPs`, which drops already-expired bans so a
+  reconcile tick cannot reinstall what the 30s expiry loop is removing.
+
+**Expected, not blessed, and why.** Blessed means *admin-approved external*; the
+IPTables tab renders an **Unbless** button for it, which for a derived canonical
+that is not in `cfg.BlessedIPTablesRules` would be a control whose action
+silently does nothing. Expected is also simply true — hz generates the rule from
+its own ban list — and it is the same generator the ban move will hand to the
+agent, so nothing is built twice.
+
+**The delete scope did not widen, which is the safety property.** `Reconcile`
+removes exactly one classification, *stale*, and `StaleRules` deliberately does
+not carry bans (its doc comment says why). So a ban lifted from `cfg.IPBans`
+falls to **unknown** and the live rule is left alone — removing it stays
+`unbanIP`'s explicit job. That is the conservative call on purpose: making a
+config removal delete a live INPUT rule is a wider delete than horizon had, and
+belongs to the ban move, not to its precondition. Everything else the widened
+read newly exposes is unknown too, and unknown is surfaced, never deleted.
+
+Had this not landed first, `Reconcile` would have installed a ban it could not
+see and installed it again every pass — reproduced, before the widening, by
+`TestReconcileDoesNotReinstallABanItCanSee`.
 
 **The behaviour change to state out loud.** A ban is synchronous today: the
 service's POST returns after the rule is in the kernel. As agent state it takes
@@ -1036,9 +1065,18 @@ This sits alongside `ha-and-the-agent.md` §7 (the peer-sync half) and
 
 ### B. Hand over — each item independently verifiable by `hz-agent diff`
 
-- [ ] **Widen `iptables.LiveRules`' INPUT scope** to admit ban rules (§3.2),
-      with its pure test, **before** bans move. Note this invalidates
-      `ha-and-the-agent.md` §4's "cannot collide" row for bans — re-read it.
+- [x] **Widen `iptables.LiveRules`' INPUT scope** to admit ban rules (§3.2),
+      with its pure test, **before** bans move. Done 2026-09-22: `scopeLiveRules`
+      admits the exact 4-token `-s <addr> -j DROP` shape alongside the WG-INPUT
+      jump, and `Inputs.BannedIPs` (fed from `cfg.IPBans`, expired entries
+      filtered by `activeBanIPs`) makes a ban an **expected** rule. `StaleRules`
+      deliberately does NOT carry bans, so widening the read did not widen the
+      delete: a lifted ban reads *unknown*, not stale, and `unbanIP` stays the
+      thing that removes the rule. `ha-and-the-agent.md` §4's row is rewritten.
+      Positive control: `TestReconcileLeavesAHandAddedInputDropAlone`
+      (`internal/iptables/bans_test.go`) builds a DROP no hz code generates,
+      shows it newly visible, and asserts on the iptables commands issued —
+      not on the classifier's verdict.
 - [x] **Add the no-default-route stand-down to `buildAgentDesired`** (§3.3).
       Done in `iptablesSectionFor` — but **not the way this line said**: emitting
       NO section reads as "hz manages no firewall here" and yields a plan with no
