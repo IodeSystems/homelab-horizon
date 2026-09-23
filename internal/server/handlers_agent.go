@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -493,9 +494,15 @@ func iptablesSectionFor(expected, stale []iptables.Rule, blessed []string, curre
 // cannot know what a machine hosts, which is not the same as knowing it hosts
 // nothing. See instancesForProjection.
 func (s *Server) projectionGlobal(cfg *config.Config) projection.Global {
+	instances := s.instancesForProjection()
 	return projection.Global{
 		Config:    cfg,
-		Instances: s.instancesForProjection(),
+		Instances: instances,
+
+		// The sealed config behind each unit's generation, resolved from the
+		// same registrations the instances came from. Ciphertext, which hz
+		// holds and cannot read; the digest is the projection's.
+		SealedConfigs: s.sealedConfigsForProjection(cfg, instances),
 
 		// hz's own version is what it wants the fleet's agents on: the agent
 		// ships with hz and `hz-agent install` copies the running binary.
@@ -558,6 +565,87 @@ func (s *Server) instancesForProjection() []projection.Instance {
 			})
 		}
 	}
+	return out
+}
+
+// sealedConfigsForProjection resolves, for every address the projection will
+// answer about, the sealed config that address is meant to be running — and
+// hands over the CIPHERTEXT, not a digest.
+//
+// THE PRIVILEGED READ IS THE CALLER'S, the same discipline instancesForProjection
+// and haproxy.CertStore follow: a config lives in hz's database and a pure
+// function may not open one. What the projection does with the bytes — digest
+// them into a generation — needs no key, which is the whole reason this can
+// cross the seam at all. hz cannot read these values and neither can the
+// projection; sealing is the app's and the key never leaves it.
+//
+// RESOLVED AT THE RUNG'S VERSION, because a config is blessed over a version
+// range and the projection is about what a unit is MEANT to be running — the
+// same version the package it pins is at. The rung is looked up here with the
+// same cfg.LookupEnvironment call the projection makes, and the version is
+// carried back in the answer so the projection can check the two agree rather
+// than trust it (projection.SealedConfig.Version).
+//
+// THREE ANSWERS, AND SILENCE IS NOT ONE OF THEM. An address hz resolved with
+// nothing blessed there comes back Present:false — an answer — and one it
+// could not resolve comes back with Unknown set. An address left out entirely
+// is the projection's gap to raise, which is what an hz with no config store
+// produces for every unit: honest, and not mistaken for "no config here".
+//
+// The two states the projection ALREADY gaps are deliberately left out rather
+// than answered: an instance on a rung hz does not declare contributes no unit
+// at all, and a rung with no version has no version to resolve at and is
+// gapped there, by the code that knows the remedy.
+func (s *Server) sealedConfigsForProjection(cfg *config.Config, instances []projection.Instance) []projection.SealedConfig {
+	if s.users == nil || cfg == nil || len(instances) == 0 {
+		return nil
+	}
+	ctx := context.Background()
+
+	seen := map[string]bool{}
+	out := make([]projection.SealedConfig, 0, len(instances))
+	for _, inst := range instances {
+		addr := inst.Address()
+		if seen[addr] {
+			// One config per address: two machines at one address are meant to
+			// be running the same bytes and resolve to one answer.
+			continue
+		}
+		seen[addr] = true
+
+		env, err := cfg.LookupEnvironment(inst.Project, inst.Environment)
+		if err != nil {
+			continue // no rung: the projection drops the instance and says why
+		}
+		version := strings.TrimSpace(env.Version)
+		if version == "" {
+			continue // nothing to resolve at: the projection gaps it and names the fix
+		}
+
+		sc := projection.SealedConfig{Address: addr, Version: version}
+		res, err := s.users.ResolveConfig(ctx, inst.Project, inst.Environment, inst.App, inst.Role, version)
+		switch {
+		case errors.Is(err, db.ErrNoConfigMatches):
+			// AN ANSWER. Nothing is blessed at this address for this version,
+			// which is a state a fleet is legitimately in — every box before
+			// its first blessing — and is not hz failing to work something
+			// out. Present stays false and no Unknown is set, so the
+			// projection serves an empty generation with no gap.
+		case err != nil:
+			sc.Unknown = "the config store answered " + err.Error() + "."
+		default:
+			sc.Present = true
+			sc.Values = make([]projection.SealedValue, 0, len(res.Config.Values))
+			for _, v := range res.Config.Values {
+				// Ciphertext only, and a tombstoned or awaiting value carries
+				// none — which is itself a change worth a generation, because
+				// destroying a value changes what the address resolves to.
+				sc.Values = append(sc.Values, projection.SealedValue{Key: v.Key, Ciphertext: v.Ciphertext})
+			}
+		}
+		out = append(out, sc)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Address < out[j].Address })
 	return out
 }
 
