@@ -144,6 +144,14 @@ COMMANDS
                                      nothing explains are left unassigned, which is legal.
                                      Dry run without --execute; --merge is required to write
                                      over a config that already declares projects
+  import --plan-out FILE             Write that proposal out as an editable plan file. It
+                                     is a STARTING POINT: hz can only see what is in the
+                                     config, and a flat estate (one domain, a subdomain
+                                     per service) hides which services are one application
+  import --from FILE [--execute]     Import the plan file you corrected. Validated hard
+                                     first — unknown service, undeclared project, bad
+                                     posture, a rung spread across projects, or a service
+                                     the file forgot — and failures name the line
   config approve <registration-id>   Wrap this machine's environment key to the box's
                                      public key. You will be asked to TYPE the
                                      fingerprint the BOX printed; it is compared against
