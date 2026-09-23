@@ -490,3 +490,340 @@ func (c *Config) ValidateHostsAgainst(hosts []HostDecl) error {
 	}
 	return nil
 }
+
+// --- what CARRIES a host's address -------------------------------------------
+
+// A HOST REFERENCE and an ADDRESS OCCURRENCE answer two different questions,
+// and the whole value of this file depends on never merging them.
+//
+//	reference   a record written "@nas". It FOLLOWS the host: change the
+//	            declaration and the record moves with it.
+//	occurrence  a record that carries the host's address as a LITERAL string.
+//	            It does not follow anything. It is exactly what breaks.
+//
+// The objection to enumerating occurrences is that a literal says nothing about
+// which machine it means. That is true about INTENT and irrelevant to the
+// question being asked: if 192.168.1.160 becomes 192.168.1.77, every record
+// carrying that exact string breaks, whatever anyone meant by it. So this is
+// deliberately scoped as "occurrences of an ADDRESS", not "references to a
+// host" — the naming is the scope, and the two lists are reported separately,
+// with separate labels, because merging them would tell an operator that 47
+// records will follow a move when 47 records will break.
+//
+// WHAT THIS SCAN DOES NOT LOOK AT, stated rather than implied: only the fields
+// below are walked. A VPN endpoint, a machine record, a pinned lease or an
+// address inside a free-text comment is not an address hz can adopt, so it is
+// not counted. The set is exactly "every field that could hold a reference
+// instead" plus the two DECLARATION sites, which carry the address and can
+// never hold a reference — those are reported (they are occurrences) and
+// refused for adoption (they are where the chain bottoms out).
+
+// Occurrence kinds for the two declaration sites. Every other kind an
+// occurrence carries is a HostRefKind* constant, so the occurrence list and the
+// reference list are comparable field for field.
+const (
+	HostAddrKindLocalInterface = "local interface"
+	HostAddrKindHostDecl       = "host declaration"
+)
+
+// whyLocalInterfaceIsNotAdoptable and whyHostDeclIsNotAdoptable are the two
+// refusals, written once so the CLI, the API and the tests quote the same
+// sentence.
+const (
+	whyLocalInterfaceIsNotAdoptable = "local_interface is the declaration " + SelfRef +
+		" resolves TO. Rewriting it would make it resolve to itself — a cycle with no address at the bottom, and every " +
+		SelfRef + " record in the config would stop resolving. It is per instance and changes on the Settings page."
+	whyHostDeclIsNotAdoptable = "a declared host's ip is the address itself, so that references have somewhere to " +
+		"bottom out; hz refuses a reference here on save. If this declaration is the box that moved, " +
+		"`hz host set <name> <new ip>` is the edit."
+)
+
+// addressField is one config field that can carry an address, handed to
+// eachAddressField with a POINTER to it.
+//
+// One traversal hands out both the reading and the writing, so the dry run and
+// the write cannot disagree about which records exist — which is the failure a
+// second, parallel traversal would eventually produce, and the whole safety
+// claim of `hz host adopt` rests on the dry run being the write.
+type addressField struct {
+	Kind  string
+	Owner string
+	Field string
+	Ptr   *string
+	// AdoptWhyNot is empty when this field may be rewritten into a reference,
+	// and otherwise the sentence saying why hz refuses to.
+	AdoptWhyNot string
+}
+
+// eachAddressField visits every config field that can carry an address: the
+// same records HostReferences walks (same kinds, same owners, same field
+// names, so the two lists line up), plus local_interface and each host
+// declaration's ip.
+func (c *Config) eachAddressField(fn func(addressField)) {
+	for i := range c.Services {
+		svc := &c.Services[i]
+		if svc.Proxy != nil {
+			fn(addressField{Kind: HostRefKindServiceBackend, Owner: svc.Name, Field: "proxy.backend", Ptr: &svc.Proxy.Backend})
+			if svc.Proxy.Deploy != nil {
+				fn(addressField{Kind: HostRefKindDeployNext, Owner: svc.Name, Field: "proxy.deploy.next_backend", Ptr: &svc.Proxy.Deploy.NextBackend})
+			}
+		}
+		if svc.InternalDNS != nil {
+			fn(addressField{Kind: HostRefKindInternalDNS, Owner: svc.Name, Field: "internal_dns.ip", Ptr: &svc.InternalDNS.IP})
+		}
+		for j := range svc.Forwards {
+			fn(addressField{Kind: HostRefKindForward, Owner: svc.Name, Field: fmt.Sprintf("forwards[%d].backend", j), Ptr: &svc.Forwards[j].Backend})
+		}
+	}
+	for i := range c.LocalDNSRecords {
+		fn(addressField{Kind: HostRefKindLocalDNS, Owner: c.LocalDNSRecords[i].Normalized().Name, Field: "ip", Ptr: &c.LocalDNSRecords[i].IP})
+	}
+	for i := range c.Exporters {
+		e := &c.Exporters[i]
+		for j := range e.Targets {
+			fn(addressField{Kind: HostRefKindExporterTarget, Owner: e.Job, Field: fmt.Sprintf("targets[%d]", j), Ptr: &e.Targets[j]})
+		}
+		for j := range e.Hosts {
+			fn(addressField{Kind: HostRefKindExporterHost, Owner: e.Job, Field: fmt.Sprintf("hosts[%d]", j), Ptr: &e.Hosts[j]})
+		}
+	}
+	for i := range c.ScrapeExclusions {
+		fn(addressField{Kind: HostRefKindScrapeExclusion, Field: fmt.Sprintf("scrape_exclusions[%d]", i), Ptr: &c.ScrapeExclusions[i]})
+	}
+
+	// The declaration sites. They carry the address and can never carry a
+	// reference, so they are listed and refused rather than omitted: an
+	// operator counting what holds this address should see all of it.
+	fn(addressField{Kind: HostAddrKindLocalInterface, Field: "local_interface", Ptr: &c.LocalInterface, AdoptWhyNot: whyLocalInterfaceIsNotAdoptable})
+	for i := range c.Hosts {
+		fn(addressField{Kind: HostAddrKindHostDecl, Owner: c.Hosts[i].Name, Field: fmt.Sprintf("hosts[%d].ip", i), Ptr: &c.Hosts[i].IP, AdoptWhyNot: whyHostDeclIsNotAdoptable})
+	}
+}
+
+// carriesAddress reports whether the authored value v holds addr as a literal.
+//
+// The match is on the HOST PART and it is exact: "192.168.1.160:8080" carries
+// 192.168.1.160 and "192.168.1.1600" does not, which a substring test would
+// get wrong. A value already written as a reference carries no literal at all.
+func carriesAddress(v, addr string) bool {
+	v = strings.TrimSpace(v)
+	addr = strings.TrimSpace(addr)
+	if v == "" || addr == "" || IsHostRef(v) {
+		return false
+	}
+	host, _ := splitAddr(v)
+	return host == addr
+}
+
+// AddressOccurrence is one record whose authored value carries an address as a
+// literal string. Same four fields as HostReference on purpose: the two lists
+// are read side by side, and a different shape would invite comparing the wrong
+// columns.
+type AddressOccurrence struct {
+	Kind  string // a HostRefKind* constant, or HostAddrKindLocalInterface / HostAddrKindHostDecl
+	Owner string // service name, record name, exporter job
+	Field string // the field within that record, e.g. "proxy.backend"
+	Value string // the authored literal, e.g. "192.168.1.160:8080"
+}
+
+// AddressOccurrences returns every record carrying addr as a literal, in the
+// same order HostReferences uses (kind, then owner, then field), so the two
+// lists can be read against each other line by line.
+//
+// It is never merged into HostReferences and never will be. An empty result
+// means "no record carries this address as a literal" — which, unlike an empty
+// reference list, really does mean nothing here breaks when the box moves.
+func (c *Config) AddressOccurrences(addr string) []AddressOccurrence {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return nil
+	}
+	var out []AddressOccurrence
+	c.eachAddressField(func(f addressField) {
+		if !carriesAddress(*f.Ptr, addr) {
+			return
+		}
+		out = append(out, AddressOccurrence{Kind: f.Kind, Owner: f.Owner, Field: f.Field, Value: strings.TrimSpace(*f.Ptr)})
+	})
+	sortOccurrences(out)
+	return out
+}
+
+func sortOccurrences(out []AddressOccurrence) {
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		if out[i].Owner != out[j].Owner {
+			return out[i].Owner < out[j].Owner
+		}
+		return out[i].Field < out[j].Field
+	})
+}
+
+// DescribeAddressOccurrences renders occurrences the way
+// DescribeHostReferences renders references — the same indented shape, so a
+// refusal that names both reads as one document.
+func DescribeAddressOccurrences(occs []AddressOccurrence) string {
+	var b strings.Builder
+	for _, o := range occs {
+		b.WriteString("\n  ")
+		b.WriteString(o.Kind)
+		if o.Owner != "" {
+			b.WriteString(" ")
+			b.WriteString(o.Owner)
+		}
+		b.WriteString(" (")
+		b.WriteString(o.Field)
+		b.WriteString(" = ")
+		b.WriteString(o.Value)
+		b.WriteString(")")
+	}
+	return b.String()
+}
+
+// --- adoption: rewriting literals into references ----------------------------
+
+// HostAdoption is one occurrence and what adopting it would write — or, when
+// hz refuses, why it will not.
+//
+// Ref and WhyNot are exclusive and one of them is always set: "hz would write
+// @self:8080 here" and "hz refuses to touch this record, because …" are the
+// only two outcomes, and a record that silently appeared in neither list would
+// be the bug adoption exists to remove.
+type HostAdoption struct {
+	AddressOccurrence
+	// Ref is the value the record would carry after adoption, e.g. "@self:8080".
+	// Empty exactly when WhyNot is set.
+	Ref string
+	// WhyNot is hz's sentence for refusing to rewrite this record. Empty
+	// exactly when Ref is set.
+	WhyNot string
+}
+
+// AdoptionPlan is the whole dry run for one address: which reference every
+// adoptable record would be written as, why that spelling, and every record hz
+// refuses to touch.
+type AdoptionPlan struct {
+	// Address is the literal being adopted, e.g. "192.168.1.160".
+	Address string
+	// Ref is the spelling every adopted record receives, "@self" or "@name".
+	Ref string
+	// RefWhy says why THAT spelling and not the other one, whenever both were
+	// available. Empty when only one was.
+	RefWhy string
+	// Adopt is every record that would be (or was) rewritten.
+	Adopt []HostAdoption
+	// Refused is every record carrying the address that hz will not rewrite,
+	// each naming itself and the reason. Never silently dropped: a record hz
+	// cannot adopt is still a record that breaks when the box moves.
+	Refused []HostAdoption
+	// Written is how many records were actually rewritten. Zero on a dry run,
+	// which is the difference between the two calls and the only one.
+	Written int
+}
+
+// PlanAddressAdoption computes what `hz host adopt` would do, touching nothing.
+func (c *Config) PlanAddressAdoption(addr string) (*AdoptionPlan, error) {
+	return c.adoptAddress(addr, false)
+}
+
+// AdoptAddress rewrites every adoptable literal occurrence of addr into a
+// reference, and returns the same plan PlanAddressAdoption returned, with
+// Written set.
+//
+// Adoption changes how a config is WRITTEN, never what it PRODUCES: each
+// rewritten value resolves back to the literal it replaced, so every rendered
+// artifact is byte for byte what it was. That is the claim, and
+// test/integration/hostref_render_test.go is where it is measured.
+func (c *Config) AdoptAddress(addr string) (*AdoptionPlan, error) {
+	return c.adoptAddress(addr, true)
+}
+
+// adoptAddress is the one implementation behind both. The dry run is not a
+// description of the write, it IS the write with the assignment skipped — so a
+// plan that says one thing and a write that does another is not a bug that can
+// exist here.
+func (c *Config) adoptAddress(addr string, write bool) (*AdoptionPlan, error) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return nil, fmt.Errorf("adoption needs an address to look for")
+	}
+	if IsHostRef(addr) {
+		return nil, fmt.Errorf("%q is already a reference; adoption rewrites LITERAL addresses into references, so it takes the address (%s) rather than the spelling that points at it", addr, "e.g. 192.168.1.160")
+	}
+
+	ref, why, err := c.adoptionRefFor(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	plan := &AdoptionPlan{Address: addr, Ref: ref, RefWhy: why}
+	c.eachAddressField(func(f addressField) {
+		if !carriesAddress(*f.Ptr, addr) {
+			return
+		}
+		occ := AddressOccurrence{Kind: f.Kind, Owner: f.Owner, Field: f.Field, Value: strings.TrimSpace(*f.Ptr)}
+		if f.AdoptWhyNot != "" {
+			plan.Refused = append(plan.Refused, HostAdoption{AddressOccurrence: occ, WhyNot: f.AdoptWhyNot})
+			return
+		}
+		_, suffix := splitAddr(occ.Value)
+		next := ref + suffix
+		plan.Adopt = append(plan.Adopt, HostAdoption{AddressOccurrence: occ, Ref: next})
+		if write {
+			*f.Ptr = next
+			plan.Written++
+		}
+	})
+	sortAdoptions(plan.Adopt)
+	sortAdoptions(plan.Refused)
+	return plan, nil
+}
+
+func sortAdoptions(out []HostAdoption) {
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		if out[i].Owner != out[j].Owner {
+			return out[i].Owner < out[j].Owner
+		}
+		return out[i].Field < out[j].Field
+	})
+}
+
+// adoptionRefFor picks the spelling an address adopts to, and says why.
+//
+// "@self" WINS whenever the address is this instance's own, even when a
+// HostDecl also carries it. The two are not equally correct: "@self" resolves
+// per instance, so every peer resolves it to its own address, while a HostDecl
+// naming this gateway's address is a literal with a name on it — right here and
+// wrong on every peer, which is the fleet bug "@self" exists to remove. The
+// preference is stated in the output rather than applied quietly, because an
+// operator who declared that host deliberately is owed the reason.
+func (c *Config) adoptionRefFor(addr string) (ref, why string, err error) {
+	self := strings.TrimSpace(c.LocalInterface) == addr
+
+	declared := ""
+	for _, h := range c.Hosts {
+		if h.Name != "" && strings.TrimSpace(h.IP) == addr {
+			declared = h.Name
+			break
+		}
+	}
+
+	switch {
+	case self && declared != "":
+		return SelfRef, fmt.Sprintf(
+			"Host %q also declares %s, so @%s would resolve here too — but %s is this instance's own address, and %s is the spelling that stays correct in a fleet: each instance resolves it to its own local_interface, while @%s names THIS box's address in config every instance reads. Adopting to @%s instead would be wrong on every peer.",
+			declared, addr, declared, addr, SelfRef, declared, declared), nil
+	case self:
+		return SelfRef, "", nil
+	case declared != "":
+		return HostRefSigil + declared, "", nil
+	}
+	return "", "", fmt.Errorf(
+		"nothing declares %s, so there is no reference to adopt these records into: a reference has to bottom out in a declaration. `hz host add --name <name> --ip %s` declares one. If %s is this gateway's own address, it is local_interface (Settings page) that makes it %s, and hz has it set to %q",
+		addr, addr, addr, SelfRef, strings.TrimSpace(c.LocalInterface))
+}
