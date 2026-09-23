@@ -1306,6 +1306,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/checks/delete", s.handleAPIDeleteCheck)
 	mux.HandleFunc("/api/v1/checks/toggle", s.handleAPIToggleCheck)
 	mux.HandleFunc("/api/v1/checks/run", s.handleAPIRunCheck)
+	mux.HandleFunc(apitypes.ProbeDiagnosisPath, s.handleAPIProbeDiagnosis)
 	mux.HandleFunc("/api/v1/checks/remotes", s.handleAPIRemotes)
 	mux.HandleFunc("/api/v1/checks/remotes/add", s.handleAPIRemoteAdd)
 	mux.HandleFunc("/api/v1/checks/remotes/update", s.handleAPIRemoteUpdate)
