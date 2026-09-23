@@ -171,6 +171,14 @@ type Config struct {
 	// Additive in exactly the way Projects and Environments are. See
 	// internal/config/machine.go for what else is absent and why.
 	Machines []Machine `json:"machines,omitempty"`
+	// Segments are the networks a Machine.Segments NAME resolves to: a project,
+	// a range, an interface, and the addressed members on it. Additive in
+	// exactly the way Projects, Environments and Machines are, and empty on
+	// every config written before it existed — which is why ValidateMachines
+	// checks a membership's EXISTENCE only once one segment is declared. See
+	// internal/config/segment.go for the shape and what it deliberately does
+	// not hold.
+	Segments []Segment `json:"segments,omitempty"`
 
 	// Key custody. Both fields are fleet-shared and both ride the backup zip,
 	// which is the whole reason they are here rather than in the identity
@@ -1581,6 +1589,14 @@ func Save(path string, cfg *Config) error {
 	// reason is the one thing architecture.md refuses to let pass silently —
 	// both are cheaper to refuse at the write than to explain from a screen.
 	if err := cfg.ValidateMachines(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Segments, same chokepoint. Two of these checks cannot be made anywhere
+	// else and are silent when they fail: overlapping ranges give a machine in
+	// both two routes for one prefix and one of them wins, and two segments on
+	// one interface collide on the box rather than here. Both are cheaper to
+	// refuse at the write than to debug from a network that half works.
+	if err := cfg.ValidateSegments(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	// Recovery recipients, same chokepoint. A recipient whose public key does

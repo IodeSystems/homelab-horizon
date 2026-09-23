@@ -31,13 +31,14 @@ import (
 //   - NO PLACEMENT (port, state dir, unit name, slot). Machine-local, never in
 //     hz. Same section of architecture.md.
 //
-// WHAT THE SEGMENT NAMES RESOLVE AGAINST: nothing, yet. A Segment record does
-// not exist — that is phase 4 item 15, where VPNRange / WGInterface /
-// AllowedIPs go plural and a segment becomes a declared thing with a CIDR, an
-// interface and a peer set. Until then a segment name is a label this record
-// declares membership of, and ValidateMachines checks its SHAPE (non-empty,
-// not repeated) rather than its existence. Checking existence against a record
-// that does not exist would refuse every machine.
+// WHAT THE SEGMENT NAMES RESOLVE AGAINST: the Segment record, once one is
+// declared (internal/config/segment.go, phase 4 item 15). A config that
+// declares no segments is a config where the model is not in use, and every
+// membership in it is still a LABEL — ValidateMachines checks only the SHAPE
+// there (non-empty, not repeated), because checking existence against a record
+// nobody has written would refuse every machine on every config written before
+// segments existed. From the first segment on, a name that resolves to nothing
+// is a typo and is refused.
 type Machine struct {
 	// Name is the identity: what the box calls itself and what its agent
 	// credential is keyed by. Unique across the config.
@@ -70,12 +71,24 @@ type Machine struct {
 func (m Machine) MultiHomed() bool { return len(m.Segments) > 1 }
 
 // ValidateMachines checks the machine records are usable: names present and
-// unique, segment names present and not repeated within a machine, and every
+// unique, segment names present, not repeated within a machine and — once the
+// config declares any segment at all — naming one that EXISTS, and every
 // multi-homed machine carrying its reason.
 //
-// It does NOT check that a segment exists. There is no Segment record to check
-// against until item 15; see the type's doc comment.
+// The existence check is conditional, which is the same shape ValidateFleet
+// uses for single-instance mode: with no Segment records declared a membership
+// is a label and nothing can resolve it, so requiring resolution would refuse
+// every machine on every config written before item 15. Declaring the first
+// segment is the opt-in, and from there a name nothing answers to is a typo
+// that would otherwise reach a box as an interface nobody configures.
 func (c *Config) ValidateMachines() error {
+	// Built once rather than per machine: a machine names few segments and a
+	// fleet has many machines.
+	segments := make(map[string]struct{}, len(c.Segments))
+	for _, s := range c.Segments {
+		segments[s.Name] = struct{}{}
+	}
+
 	byName := make(map[string]struct{}, len(c.Machines))
 	for _, m := range c.Machines {
 		if strings.TrimSpace(m.Name) == "" {
@@ -95,6 +108,12 @@ func (c *Config) ValidateMachines() error {
 				return fmt.Errorf("machine %q names segment %q twice", m.Name, seg)
 			}
 			seen[seg] = struct{}{}
+			if len(segments) > 0 {
+				if _, ok := segments[seg]; !ok {
+					return fmt.Errorf("machine %q is a member of segment %q, which does not exist%s",
+						m.Name, seg, c.segmentHint())
+				}
+			}
 		}
 
 		if m.MultiHomed() && strings.TrimSpace(m.Note) == "" {
