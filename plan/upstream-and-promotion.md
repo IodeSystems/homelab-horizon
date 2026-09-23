@@ -256,9 +256,9 @@ Ordered by what unblocks the most, not by size.
 
 | | Item | Why here |
 |---|---|---|
-| 1 | **`ConfigGeneration` in the projection + gap section** | Closes the loop the user asked for. Pure, testable, no new concepts, no key anywhere new. |
-| 2 | **Agent acts on it** — restart the unit when the generation moves | Item 1 is inert without this. Small: the trigger already exists. |
-| 3 | **Item 15 — Segment records** | Now load-bearing, not optional. "redline-prod-hz is a client of an iodesystems segment" IS a segment membership; today `Machine.Segments` are names that resolve against nothing. |
+| 1 | ✅ **`ConfigGeneration` in the projection + gap section** — landed 2026-09-23 on `dev` | Closes the loop the user asked for. Pure, testable, no new concepts, no key anywhere new. **Decided while building, because §3 left it open:** the digest resolves at the **rung's** `Environment.Version`. A config is blessed over a version RANGE, so "the ciphertext for that address" is not a question until a version names one; the rung's version is the one the unit's package is already pinned to, so version and config move together instead of in two steps. The digest also covers key NAMES, not only ciphertext — otherwise adding or dropping a key without touching another value's bytes leaves the generation still. |
+| 2 | ◻ **Agent acts on it** — restart the unit when the generation moves | Item 1 is inert without this. Small: the trigger already exists. |
+| 3 | ◐ **Item 15 — Segment records** — the record + CLI landed 2026-09-23 on `dev`; the projection does not resolve it yet | Now load-bearing, not optional. "redline-prod-hz is a client of an iodesystems segment" IS a segment membership, and `Segment.Hub` is what makes it expressible: a non-hub member on a segment whose hub belongs to another project. **Blocked on enrolment, not on modelling** — nothing populates a member's `PublicKey`, so hz can route to a member and cannot emit a `[Peer]` block for it. |
 | 4 | **Item 12 steps 4–5 — arm the agent, de-root hz** | Nothing above acts on a real box until this. Also the PCI item. |
 | 5 | **`Environment.Upstream`** | Makes `redline/prod` readable. One field; do it once the estate actually has two hz instances, not before. |
 | 6 | **The registry crossing** — mirror + proxy on redline-prod-hz | The largest, and it depends on 3 and 4. |
