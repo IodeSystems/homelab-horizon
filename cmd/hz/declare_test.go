@@ -266,6 +266,58 @@ func (s *declareStub) start(t *testing.T) *client {
 			added, _ := s.cfg.FindSegment(req.Name)
 			_ = enc.Encode(wireSegment(s.cfg, added))
 
+		// Mirrors handleAPISegmentSet, including the half that is easy to skip:
+		// the dry run applies the REAL write to a copy, so a change the
+		// validator will refuse is refused on the dry run and not later.
+		case "/api/v1/segments/set":
+			var req apitypes.SegmentSetReq
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			patch := hzconfig.SegmentPatch{
+				Project: req.Project, CIDR: req.CIDR, Interface: req.Interface,
+				Note: req.Note, Hub: req.Hub, Unaddress: req.Unaddress,
+			}
+			for _, m := range req.Members {
+				patch.Members = append(patch.Members, hzconfig.SegmentMemberPatch{
+					Machine: m.Machine, Address: m.Address,
+					PublicKey: m.PublicKey, Endpoint: m.Endpoint,
+				})
+			}
+			_, blocked, err := s.cfg.SegmentSet(req.Name, patch, req.Cascade)
+			if err != nil {
+				fail(err)
+				return
+			}
+			if len(blocked) > 0 {
+				_ = enc.Encode(apitypes.SegmentSetResp{Blocked: wireDeps(blocked)})
+				return
+			}
+			trial := *s.cfg
+			change, err := trial.SetSegment(req.Name, patch, req.Cascade)
+			if err != nil {
+				fail(err)
+				return
+			}
+			seg, _ := trial.FindSegment(req.Name)
+			wire := wireSegment(&trial, seg)
+			out := apitypes.SegmentSetResp{
+				Changes: change.Fields, Strands: wireDeps(change.Strands), Segment: &wire,
+			}
+			if change.HubMove != nil {
+				out.HubMove = &apitypes.SegmentHubMoveResp{
+					From: change.HubMove.From, To: change.HubMove.To,
+				}
+				for _, p := range change.HubMove.Peers {
+					out.HubMove.Peers = append(out.HubMove.Peers,
+						apitypes.SegmentPeerChangeResp{Machine: p.Machine, Before: p.Before, After: p.After})
+				}
+			}
+			if len(change.Strands) == 0 || req.Confirm {
+				*s.cfg = trial
+				s.save(t)
+				out.OK = true
+			}
+			_ = enc.Encode(out)
+
 		case "/api/v1/segments/rm":
 			var req apitypes.SegmentRmReq
 			_ = json.NewDecoder(r.Body).Decode(&req)

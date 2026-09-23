@@ -83,6 +83,117 @@ func (s *Server) handleAPISegmentAdd(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, segmentResp(&next, saved))
 }
 
+// handleAPISegmentSet changes a segment that already exists, and the
+// memberships on it — the verb `ls|show|add|rm` left out, and the first thing
+// real use hits: re-addressing one member meant `rm --cascade` and re-declaring
+// the whole segment.
+//
+// It goes through config.SetSegment, which runs the SAME validator AddSegment
+// runs, over the whole model. That is the point of not writing the record here:
+// a second write path that validated differently is how a config becomes
+// unloadable, and the failure would surface from a later, unrelated writer.
+//
+// Two shapes of run, and the difference is whether the change drops a record the
+// operator did not name:
+//
+//	strands nobody  writes immediately, the way `hz env set` does.
+//	strands members a new CIDR putting an existing address outside itself
+//	                BLOCKS, naming each one; --cascade opts in to unaddressing
+//	                them and is a DRY RUN until --confirm.
+//
+// POST /api/v1/segments/set
+func (s *Server) handleAPISegmentSet(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	var req apitypes.SegmentSetReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+
+	patch := config.SegmentPatch{
+		Project:   req.Project,
+		CIDR:      req.CIDR,
+		Interface: req.Interface,
+		Note:      req.Note,
+		Hub:       req.Hub,
+		Unaddress: req.Unaddress,
+	}
+	for _, m := range req.Members {
+		patch.Members = append(patch.Members, config.SegmentMemberPatch{
+			Machine:   m.Machine,
+			Address:   m.Address,
+			PublicKey: m.PublicKey,
+			Endpoint:  m.Endpoint,
+		})
+	}
+
+	// The blockers first, structured: SetSegment collapses them into one error
+	// string, and a client that had to parse that back apart would be re-deriving
+	// a judgement hz already made.
+	_, blocked, err := s.cfg().SegmentSet(req.Name, patch, req.Cascade)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(blocked) > 0 {
+		writeJSON(w, apitypes.SegmentSetResp{Blocked: dependantsResp(blocked)})
+		return
+	}
+
+	// Applied to a COPY, whatever confirm says. A dry run that skipped the write
+	// would be a dry run that skipped the validation too, and the operator would
+	// meet the refusal on the confirmed run instead — which is the one thing a
+	// dry run exists to prevent.
+	next := *s.cfg()
+	change, err := next.SetSegment(req.Name, patch, req.Cascade)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	saved, _ := next.FindSegment(req.Name)
+	resp := apitypes.SegmentSetResp{
+		Changes: change.Fields,
+		Strands: dependantsResp(change.Strands),
+		HubMove: hubMoveResp(change.HubMove),
+	}
+	segResp := segmentResp(&next, saved)
+	resp.Segment = &segResp
+
+	// Confirm gates only the destructive half. A set that strands nobody writes
+	// immediately, because it is an edit to values and `hz segment set` can put
+	// every one of them back.
+	if len(change.Strands) > 0 && !req.Confirm {
+		writeJSON(w, resp)
+		return
+	}
+	if err := s.updateConfig(func(cfg *config.Config) { *cfg = next }); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
+		return
+	}
+	resp.OK = true
+	writeJSON(w, resp)
+}
+
+func hubMoveResp(move *config.SegmentHubMove) *apitypes.SegmentHubMoveResp {
+	if move == nil {
+		return nil
+	}
+	out := &apitypes.SegmentHubMoveResp{From: move.From, To: move.To}
+	for _, p := range move.Peers {
+		out.Peers = append(out.Peers, apitypes.SegmentPeerChangeResp{
+			Machine: p.Machine, Before: p.Before, After: p.After,
+		})
+	}
+	return out
+}
+
 // handleAPISegmentRm removes a segment, or — without confirm — says what that
 // would take.
 //
