@@ -224,7 +224,9 @@ func TestDiagnoseLadder(t *testing.T) {
 			denyPhrases: []string{"propagating"},
 		},
 		{
-			name:   "right address, connection refused: the router",
+			// hz does not know where it sees itself, so the instruction names
+			// the CATEGORY. Naming a blank would be worse than this.
+			name:   "right address, connection refused: the router, with no address to name",
 			target: webTarget(),
 			results: []probe.Result{
 				dnsResult(probe.StatusOK, "203.0.113.4", ""),
@@ -243,6 +245,63 @@ func TestDiagnoseLadder(t *testing.T) {
 				"LAN address of the machine running hz",
 				"curl -sS",
 			},
+			// "point the DMZ host at ." is an instruction to type nothing.
+			denyPhrases: []string{"point the DMZ host (or the port-443 forward) at ."},
+		},
+		{
+			// hz knows its own LAN address, so the instruction is an address
+			// somebody can type at a router admin page.
+			name:   "right address, connection refused: the router, and hz names where it is",
+			target: webTarget(),
+			results: []probe.Result{
+				dnsResult(probe.StatusOK, "203.0.113.4", ""),
+				httpsResult(probe.StatusFailed, "",
+					"Get \"https://blog.example.com/\": dial tcp 203.0.113.4:443: connect: connection refused"),
+			},
+			facts: func() Facts {
+				f := baseFacts()
+				f.LocalAddress = "192.168.1.160"
+				return f
+			}(),
+			cause:    CauseEdgeUnreachable,
+			status:   probe.StatusFailed,
+			device:   DeviceRouter,
+			hzCanFix: false,
+			wantPhrases: []string{
+				"hz cannot fix this",
+				"point the DMZ host (or the port-443 forward) at 192.168.1.160",
+				"where hz sees itself on the LAN right now",
+				// Reported, never promised: the page in front of the operator
+				// may be a cached view of an hz that is no longer answering.
+				"hz is reporting, not promising",
+			},
+			// With an address in hand the category phrasing must be GONE, not
+			// merely accompanied — two answers to "what do I type" is worse
+			// than one.
+			denyPhrases: []string{"LAN address of the machine running hz"},
+		},
+		{
+			// A value that is not an address it makes sense to forward to
+			// falls back rather than being printed. A router DMZ field holding
+			// 127.0.0.1 is an actively wrong instruction.
+			name:   "right address, connection refused: hz's idea of itself is a loopback",
+			target: webTarget(),
+			results: []probe.Result{
+				dnsResult(probe.StatusOK, "203.0.113.4", ""),
+				httpsResult(probe.StatusFailed, "",
+					"Get \"https://blog.example.com/\": dial tcp 203.0.113.4:443: connect: connection refused"),
+			},
+			facts: func() Facts {
+				f := baseFacts()
+				f.LocalAddress = "127.0.0.1"
+				return f
+			}(),
+			cause:       CauseEdgeUnreachable,
+			status:      probe.StatusFailed,
+			device:      DeviceRouter,
+			hzCanFix:    false,
+			wantPhrases: []string{"LAN address of the machine running hz"},
+			denyPhrases: []string{"127.0.0.1"},
 		},
 		{
 			name:   "right address, nothing answers at all: still the router",
@@ -517,6 +576,51 @@ func TestClassifyTransport(t *testing.T) {
 	for in, want := range cases {
 		if got := classifyTransport(in); got != want {
 			t.Errorf("classifyTransport(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// Which values are worth putting in a router's DMZ field, and which are not.
+//
+// The fallback matters more than the happy path here: every value that is not
+// an address a forward can sensibly point at has to come back empty, because
+// pointItAt prints whatever this returns.
+func TestUsableLocalAddress(t *testing.T) {
+	cases := map[string]string{
+		"192.168.1.160":   "192.168.1.160",
+		" 192.168.1.160 ": "192.168.1.160", // a hand-edited config field
+		"10.0.0.4":        "10.0.0.4",
+		"2001:db8::1":     "2001:db8::1",
+
+		// Everything below must fall back to the category wording.
+		"":          "",
+		"eth0":      "", // the confusion the field's name invites
+		"enx00051b": "",
+		"127.0.0.1": "", // a DMZ pointed here forwards to the router itself
+		"::1":       "",
+		"0.0.0.0":   "",
+		"224.0.0.1": "",
+		"192.168.1": "",
+	}
+	for in, want := range cases {
+		if got := usableLocalAddress(in); got != want {
+			t.Errorf("usableLocalAddress(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// pointItAt is the sentence that ends the router instruction, and it must
+// never end up telling somebody to type nothing.
+func TestPointItAtNeverNamesABlankAddress(t *testing.T) {
+	for _, bad := range []string{"", "   ", "eth0", "127.0.0.1", "0.0.0.0"} {
+		f := baseFacts()
+		f.LocalAddress = bad
+		got := pointItAt(f)
+		if !strings.Contains(got, "LAN address of the machine running hz") {
+			t.Errorf("LocalAddress %q should fall back to the category, got: %s", bad, got)
+		}
+		if strings.Contains(got, "at .") || strings.Contains(got, "at  ") {
+			t.Errorf("LocalAddress %q produced an instruction naming a blank: %s", bad, got)
 		}
 	}
 }
