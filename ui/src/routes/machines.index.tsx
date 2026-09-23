@@ -31,7 +31,7 @@ import {
 } from "@mui/material";
 import { useMachines, useVersionDrift } from "../api/hooks";
 import type { InstanceVersion, MachineResp } from "../api/generated-types";
-import { readHosting, readMultiHomed } from "../components/model/model";
+import { readHosting, readInstanceSource, readMultiHomed } from "../components/model/model";
 import {
   CannotAskBanner,
   Declared,
@@ -190,7 +190,12 @@ function MachinesScreen() {
   }
 
   const rows = machines.data ?? [];
-  const instances: InstanceVersion[] | null = drift.isError ? null : (drift.data?.instances ?? []);
+  // NOT `isError ? null : (data ?? [])`. A pending read has no error and no
+  // data, and `?? []` would turn "hz has not said yet" into "nothing is placed
+  // anywhere" — every box below captioned as hosting nothing, authoritatively,
+  // until the answer lands. Only a SUCCEEDED read yields rows.
+  const source = readInstanceSource(drift, "The instance list on every machine below");
+  const instances: InstanceVersion[] | null = source.known ? source.instances : null;
 
   return (
     <Box sx={{ p: 3 }}>
@@ -199,19 +204,14 @@ function MachinesScreen() {
         blurb="Every box hz declares, its segment memberships, and the instances placed on it. There is no project column: a machine carries no project and no environment — an instance's four-part address carries both, and one machine routinely hosts instances from two projects."
       />
 
-      {drift.isError ? (
-        <CannotAskBanner
-          what="The instance list is unanswered on every machine below."
-          detail={`hz could not be asked which instances are registered (${drift.error instanceof Error ? drift.error.message : String(drift.error)}). Every machine below therefore says "hz cannot say what this machine hosts" rather than showing an empty table — an empty table would claim these boxes run nothing.`}
-        />
-      ) : null}
+      {source.known ? null : <CannotAskBanner what={source.what} detail={source.detail} />}
 
-      {drift.data && drift.data.unadmitted > 0 ? (
+      {source.known && source.unadmitted > 0 ? (
         <Alert severity="info" sx={{ mb: 2 }}>
-          {drift.data.unadmitted} registered address{drift.data.unadmitted === 1 ? " is" : "es are"} not
-          listed on any machine below, because nobody has approved{" "}
-          {drift.data.unadmitted === 1 ? "it" : "them"} yet. Pending is per ADDRESS, not per box — a machine
-          already here can be waiting on a new one. They are in Config → Approvals.
+          {source.unadmitted} registered address{source.unadmitted === 1 ? " is" : "es are"} not listed on any
+          machine below, because nobody has approved {source.unadmitted === 1 ? "it" : "them"} yet. Pending is
+          per ADDRESS, not per box — a machine already here can be waiting on a new one. They are in Config →
+          Approvals.
         </Alert>
       ) : null}
 
