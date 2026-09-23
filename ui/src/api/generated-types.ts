@@ -225,7 +225,7 @@ export interface CMRecoveryRecipient {
 }
 /**
  * CMRecoveryWrap is one environment key wrapped to one recovery recipient.
- * Wrapped is served back to an admin on purpose: it is the blob `hz cm
+ * Wrapped is served back to an admin on purpose: it is the blob `hz config
  * recovery verify` has to open to prove custody, and only the recovery private
  * key opens it. hz already relays exactly this shape to a box at every boot.
  */
@@ -270,7 +270,7 @@ export interface CMRecoveryRecipientReq {
  * KindWrappedEnvKey envelope, and that its recipient fingerprint is the
  * fingerprint of the named recipient's public key. It cannot verify that the
  * key INSIDE is the key KeyID names — nothing but the private half can — and
- * that is exactly the hole `hz cm recovery verify` exists to close.
+ * that is exactly the hole `hz config recovery verify` exists to close.
  */
 export interface CMRecoveryWrapReq {
   environment: string;
@@ -2150,7 +2150,7 @@ export interface CMRegistrationResp {
 /**
  * CMMachineResp is one enrolled box, and — because the same shape answers the
  * read a removal is previewed from — everything removing it would destroy.
- * Registrations and SecretKeys are here for exactly that reason. `hz cm remove`
+ * Registrations and SecretKeys are here for exactly that reason. `hz config remove`
  * has to be able to show an operator what is about to go, and a count alone
  * ("3 registrations") does not let them recognise the box they meant. They
  * carry no key material: CMRegistrationResp has no field for a wrapped key, and

@@ -12,7 +12,7 @@ import (
 
 // `hz import` proposes a project tree for a gateway that predates one.
 //
-// The interaction model is `hz cm promote`'s, deliberately and without variation:
+// The interaction model is `hz config promote`'s, deliberately and without variation:
 // the whole plan is computed and printed first, a DRY RUN IS THE DEFAULT, and
 // only the write is withheld until --execute. Two commands that both propose a
 // change to the config should not have two different ideas of what running them

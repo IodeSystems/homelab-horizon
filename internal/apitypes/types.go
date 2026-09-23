@@ -1900,7 +1900,7 @@ type CMRegistrationResp struct {
 // CMMachineResp is one enrolled box, and — because the same shape answers the
 // read a removal is previewed from — everything removing it would destroy.
 //
-// Registrations and SecretKeys are here for exactly that reason. `hz cm remove`
+// Registrations and SecretKeys are here for exactly that reason. `hz config remove`
 // has to be able to show an operator what is about to go, and a count alone
 // ("3 registrations") does not let them recognise the box they meant. They
 // carry no key material: CMRegistrationResp has no field for a wrapped key, and

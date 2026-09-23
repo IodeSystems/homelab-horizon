@@ -358,8 +358,8 @@ func sealAdvice(addr EnvKeyAddr, cur CurrentKey, err error) error {
 	case errors.Is(err, ErrNoSuchKey):
 		return fmt.Errorf("%w\n"+
 			"  this machine holds no key for %s.\n"+
-			"  import the one from your password manager:  hz cm key import %s\n"+
-			"  or mint the first key for the address:       hz cm key new %s",
+			"  import the one from your password manager:  hz config key import %s\n"+
+			"  or mint the first key for the address:       hz config key new %s",
 			err, addr, addr, addr)
 	case errors.Is(err, ErrRefuseToSeal):
 		return fmt.Errorf("%w\n"+
@@ -367,8 +367,8 @@ func sealAdvice(addr EnvKeyAddr, cur CurrentKey, err error) error {
 			"  that is deliberate: created_at lives in a file anyone who can write the\n"+
 			"  keystore can set, and hz's pointer is the only thing that arbitrates it.\n"+
 			"  hz calls %s current for %s.\n"+
-			"  if that key is the right one:  hz cm key import %s\n"+
-			"  if the key you hold is newer:  hz cm key current %s --set <keyid>",
+			"  if that key is the right one:  hz config key import %s\n"+
+			"  if the key you hold is newer:  hz config key current %s --set <keyid>",
 			err, cur, addr, addr, addr)
 	case errors.Is(err, ErrInsecureKey):
 		return fmt.Errorf("%w\n  fix the mode and ownership (0600, owned by you, in a directory nobody else can write) and retry", err)
