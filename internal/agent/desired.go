@@ -55,6 +55,19 @@ const (
 	SubsystemIPTables  Subsystem = "iptables"
 	SubsystemCerts     Subsystem = "certs"
 	SubsystemFiles     Subsystem = "files"
+
+	// SubsystemConfig is the sealed config a unit is meant to be running —
+	// Model.Units[].ConfigGeneration, and the restart that follows when it
+	// moves.
+	//
+	// It is the one subsystem with no file and no bytes: the agent is given a
+	// DIGEST of ciphertext it never sees, compares it to what it last applied
+	// and restarts the unit. Named as a subsystem anyway because the reload
+	// granularity is exactly what the word means here — one unit's restart,
+	// triggered by one thing changing — and because a report that could not
+	// say why a unit was restarted would be a report an operator cannot act
+	// on.
+	SubsystemConfig Subsystem = "config"
 )
 
 // Desired is the whole of what hz says this machine should look like.

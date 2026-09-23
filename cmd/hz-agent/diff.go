@@ -40,7 +40,7 @@ func runDiff(args []string) error {
 		return err
 	}
 
-	plan := agent.Compute(d, agent.NewSystemObserver().Observe(d))
+	plan := agent.Compute(d, f.observer().Observe(d))
 
 	if f.asJSON {
 		enc := json.NewEncoder(os.Stdout)

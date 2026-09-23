@@ -83,7 +83,7 @@ func TestClaimedDirectoryPrunesOnlyWhatItStoppedListing(t *testing.T) {
 
 	// And a removal is what Apply does with it, once.
 	r := &recordingReloader{}
-	res, err := Apply(d, plan, NewSystemObserver().Observe(d), r)
+	res, err := Apply(d, plan, NewSystemObserver().Observe(d), r, nil)
 	if err != nil {
 		t.Fatalf("apply: %v (%v)", err, res.Errors)
 	}
@@ -110,7 +110,7 @@ func TestClaimedDirectoryPrunesOnlyWhatItStoppedListing(t *testing.T) {
 	if plan2.Changed() {
 		t.Fatalf("the prune is not idempotent, still pending: %+v", plan2.Pending())
 	}
-	res2, err := Apply(d, plan2, NewSystemObserver().Observe(d), again)
+	res2, err := Apply(d, plan2, NewSystemObserver().Observe(d), again, nil)
 	if err != nil || len(res2.Removed) != 0 || len(again.calls) != 0 {
 		t.Fatalf("second pass removed %v and reloaded %v (%v)", res2.Removed, again.calls, err)
 	}
@@ -192,7 +192,7 @@ func TestRemovalIsImpossibleOutsideAClaimedDirectory(t *testing.T) {
 	}
 
 	r := &recordingReloader{}
-	res, err := Apply(d, lying, NewSystemObserver().Observe(d), r)
+	res, err := Apply(d, lying, NewSystemObserver().Observe(d), r, nil)
 	if err == nil {
 		t.Fatal("Apply accepted a plan full of removals it must refuse")
 	}
@@ -305,7 +305,7 @@ func TestASymlinkInAClaimedDirectoryIsNeverRemoved(t *testing.T) {
 
 	// And if a plan says so anyway, the applier still will not.
 	lying := Plan{Changes: []Change{{Subsystem: SubsystemHAProxy, Target: link, Kind: KindRemove}}}
-	res, err := Apply(d, lying, NewSystemObserver().Observe(d), &recordingReloader{})
+	res, err := Apply(d, lying, NewSystemObserver().Observe(d), &recordingReloader{}, nil)
 	if err == nil {
 		t.Fatal("Apply removed a symlink without complaint")
 	}
@@ -365,7 +365,7 @@ func TestGenericSectionWritesFilesAndPokesOnlyItsUnits(t *testing.T) {
 
 	obs := NewSystemObserver()
 	r := &recordingReloader{}
-	res, err := Apply(d, Compute(d, obs.Observe(d)), obs.Observe(d), r)
+	res, err := Apply(d, Compute(d, obs.Observe(d)), obs.Observe(d), r, nil)
 	if err != nil {
 		t.Fatalf("apply: %v (%v)", err, res.Errors)
 	}
@@ -384,7 +384,7 @@ func TestGenericSectionWritesFilesAndPokesOnlyItsUnits(t *testing.T) {
 	if plan.Changed() {
 		t.Fatalf("still pending: %+v", plan.Pending())
 	}
-	if _, err := Apply(d, plan, obs.Observe(d), second); err != nil {
+	if _, err := Apply(d, plan, obs.Observe(d), second, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(second.calls) != 0 {

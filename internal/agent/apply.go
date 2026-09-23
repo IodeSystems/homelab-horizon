@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,6 +75,14 @@ type Reloader interface {
 	// have no semantics of their own, so all the agent can do after writing
 	// them is what the payload said to do.
 	Units(sec *FilesSection) error
+
+	// RestartUnit restarts ONE unit, because the sealed config hz says it
+	// should be running has moved.
+	//
+	// One unit per call rather than a list, so a failure is attributable: the
+	// generation of a unit that did not restart must not be recorded as
+	// applied, and a single error for a batch could not say which one it was.
+	RestartUnit(name string) error
 }
 
 // SystemReloader is the real one. Each method is a thin call into the apply
@@ -134,6 +143,20 @@ func (SystemReloader) Units(sec *FilesSection) error {
 	return nil
 }
 
+// RestartUnit restarts one unit. A restart, never a reload: the app reads its
+// sealed config once, at boot (plan/config-manager.md — nothing in the boot
+// path may depend on freshness, so it caches and does not poll), and a reload
+// is not a boot.
+func (SystemReloader) RestartUnit(name string) error {
+	if name == "" {
+		return nil
+	}
+	if out, err := exec.Command("systemctl", UnitRestart, name).CombinedOutput(); err != nil {
+		return fmt.Errorf("systemctl %s %s: %w: %s", UnitRestart, name, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // Result is what one apply pass did.
 type Result struct {
 	Generation string
@@ -147,6 +170,19 @@ type Result struct {
 	Reloaded []Subsystem
 	IPTables *iptables.Report
 	Errors   []string
+
+	// Restarted is the units restarted because their sealed config moved.
+	// Separate from Reloaded because the trigger is different in kind: no
+	// file on this box changed, hz simply said the config behind the unit is
+	// not the one the agent last recorded.
+	Restarted []string
+
+	// Adopted is the units whose sealed-config generation was written down
+	// for the first time. NOTHING WAS RESTARTED FOR THESE, and they are
+	// reported separately precisely so that is visible: a pass that adopts
+	// twenty units and restarts none is the correct first run, not a
+	// twenty-unit bounce that failed to log.
+	Adopted []string
 }
 
 // Apply writes what differs and reloads what a write touched.
@@ -157,7 +193,15 @@ type Result struct {
 //
 // Applying needs root. The caller checks; this returns an error rather than
 // half-writing if it was called anyway.
-func Apply(d *Desired, p Plan, obs Observed, r Reloader) (Result, error) {
+//
+// gens is the applied-generation record (generations.go). It is a parameter
+// rather than something Apply opens for itself for the same reason Reloader
+// is: the properties that matter — an unreadable record restarts nothing, a
+// failed restart is not recorded as applied — can only be tested against a
+// store that can be made to fail. A nil store means the agent keeps no record,
+// and an agent that keeps no record RESTARTS NOTHING: it would otherwise
+// restart on every pass, having forgotten by the next one.
+func Apply(d *Desired, p Plan, obs Observed, r Reloader, gens GenerationStore) (Result, error) {
 	res := Result{Generation: p.Generation}
 	if d == nil {
 		return res, nil
@@ -165,6 +209,14 @@ func Apply(d *Desired, p Plan, obs Observed, r Reloader) (Result, error) {
 	if r == nil {
 		r = SystemReloader{}
 	}
+
+	// restarted is every unit this pass has already restarted, whatever
+	// restarted it. It exists so a unit is restarted AT MOST ONCE per pass:
+	// the generic section's own poke and the sealed-config trigger can name
+	// the same unit, and two restarts of one service is a second outage for
+	// nothing. Item 16's package install joins this set when it lands — see
+	// restartForConfig for the ordering that goes with it.
+	restarted := map[string]bool{}
 
 	// A target the agent could not read is a target it must not overwrite.
 	// Writing over a file whose current contents are unknown is how a
@@ -224,7 +276,19 @@ func Apply(d *Desired, p Plan, obs Observed, r Reloader) (Result, error) {
 		res.reload(SubsystemWireGuard, r.WireGuard(d.WireGuard))
 	}
 	if d.Files != nil && touched[SubsystemFiles] {
-		res.reload(SubsystemFiles, r.Units(d.Files))
+		err := r.Units(d.Files)
+		res.reload(SubsystemFiles, err)
+		if err == nil {
+			// Only on success, and only for the units that were RESTARTED. A
+			// reload is not a restart: the app reads its sealed config at
+			// boot, so a unit that was reloaded has not picked up a new one
+			// and still needs the restart below.
+			for _, u := range d.Files.Units {
+				if u.Name != "" && u.Action == UnitRestart {
+					restarted[u.Name] = true
+				}
+			}
+		}
 	}
 
 	// iptables has no file to change, so it reconciles on its own terms: the
@@ -248,10 +312,117 @@ func Apply(d *Desired, p Plan, obs Observed, r Reloader) (Result, error) {
 		}
 	}
 
+	// THE SEALED-CONFIG RESTART IS LAST, after every write, every removal and
+	// every reload in this pass. See restartForConfig.
+	res.restartForConfig(d, obs, r, gens, restarted)
+
 	if len(res.Errors) > 0 {
 		return res, fmt.Errorf("apply finished with %d error(s)", len(res.Errors))
 	}
 	return res, nil
+}
+
+// restartForConfig restarts the units whose sealed config hz says has moved,
+// and records what it did.
+//
+// # IT RE-DERIVES THE DECISION AND DOES NOT TRUST THE PLAN
+//
+// Same discipline as prune, and for the same reason: a Plan is a plain struct
+// that anything can build and that already crosses a wire in the other
+// direction (observed.go). The answer to "which units may this restart" must
+// be a function of the PAYLOAD hz served and the record this box kept, not of
+// a list somebody handed in. DecideConfigRestarts is pure, so asking it twice
+// costs nothing and removes a whole class of "the plan said so".
+//
+// # WHY LAST IN THE PASS
+//
+// A unit restarted here must come up into a box that is already in its final
+// state — its files written, its stale files pruned, its subsystems reloaded.
+// Restarting first would boot the app against the configuration the pass was
+// in the middle of replacing, and the pass would then have no second restart
+// to correct it.
+//
+// THE SAME ORDERING ANSWERS THE PACKAGE CASE (item 16), and it is the reason
+// the `restarted` set is threaded through Apply rather than being local to
+// this function. When a payload moves a package version AND a config
+// generation for one unit, the install runs in the write half — before this —
+// and adds the unit to `restarted` if it restarted it. So the unit ends up on
+// the new binary with the new config, and is restarted ONCE: either by the
+// install (and this step skips it, having recorded the generation as applied)
+// or by this step, after the install has landed. Install-then-restart is the
+// only order that produces that; restart-then-install would run the new config
+// on the old binary and need a second bounce.
+//
+// # WHAT IS RECORDED, AND WHAT IS NOT
+//
+// A generation is written down only when the unit was actually restarted for
+// it — or adopted, which is the case where no restart was owed. A restart that
+// FAILED leaves the unit's previous record in place, so the next pass tries
+// again rather than believing a config took effect that never did.
+//
+// The record is written only when it would CHANGE. An unchanged pass writes
+// nothing, the same rule writeIfChanged states for files.
+func (res *Result) restartForConfig(d *Desired, obs Observed, r Reloader, gens GenerationStore, restarted map[string]bool) {
+	dec := DecideConfigRestarts(d, obs)
+	if dec.Unknown != "" {
+		// No verdict, so no restart and no write over a record that could not
+		// be read. Reported rather than skipped silently: a trigger that is
+		// not working is worth a line.
+		res.Errors = append(res.Errors, "sealed-config restart: "+dec.Unknown)
+		return
+	}
+	if dec.Next == nil {
+		return
+	}
+	if gens == nil {
+		if dec.Restarting() {
+			res.Errors = append(res.Errors,
+				"sealed-config restart: this agent keeps no applied-generation record, so a restart it performed would be performed again on every pass — refusing to restart "+
+					strings.Join(unitNames(dec.Restarts), ", "))
+		}
+		return
+	}
+
+	for _, rs := range dec.Restarts {
+		if restarted[rs.Unit] {
+			// Already restarted in this pass by something else, so it is
+			// already running the new config. Recorded as applied, not
+			// restarted twice.
+			res.Restarted = append(res.Restarted, rs.Unit)
+			continue
+		}
+		if err := r.RestartUnit(rs.Unit); err != nil {
+			res.Errors = append(res.Errors, "sealed-config restart: "+err.Error())
+			// Put the record back where it was, so the next pass retries.
+			if prior, had := obs.ConfigGenerations[rs.Unit]; had {
+				dec.Next[rs.Unit] = prior
+			} else {
+				delete(dec.Next, rs.Unit)
+			}
+			continue
+		}
+		restarted[rs.Unit] = true
+		res.Restarted = append(res.Restarted, rs.Unit)
+	}
+	for _, a := range dec.Adopted {
+		res.Adopted = append(res.Adopted, a.Unit)
+	}
+
+	if maps.Equal(dec.Next, obs.ConfigGenerations) {
+		return
+	}
+	if err := gens.Save(dec.Next); err != nil {
+		res.Errors = append(res.Errors, "recording the applied config generations: "+err.Error())
+	}
+}
+
+// unitNames is the unit names out of a restart list, for a message.
+func unitNames(rs []ConfigRestart) []string {
+	out := make([]string, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, r.Unit)
+	}
+	return out
 }
 
 // prune removes what the plan said a claimed directory no longer holds — and
