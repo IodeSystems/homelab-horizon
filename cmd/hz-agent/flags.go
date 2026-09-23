@@ -69,6 +69,18 @@ type agentFlags struct {
 	// unedited.
 	carried    *agent.Desired
 	lastReport time.Time
+
+	// hold is the apply backoff, and it lives here for the same reason
+	// carried does: onePass's signature is pinned by the inertness tests, so
+	// loop state that has to survive a pass goes on the flags rather than
+	// into a parameter.
+	hold applyHold
+
+	// testReloader replaces the systemd reloader. Nil everywhere but in a
+	// test — a backoff whose only proof was that the code reads correctly is
+	// not proven, and SystemReloader was hardcoded at the call site until
+	// this seam.
+	testReloader agent.Reloader
 }
 
 const (
@@ -135,6 +147,14 @@ func (f *agentFlags) generations() agent.GenerationStore {
 // last applied.
 func (f *agentFlags) observer() *agent.SystemObserver {
 	return agent.NewSystemObserver().WithGenerations(f.generations())
+}
+
+// reloader is the privileged half that reloads services and restarts units.
+func (f *agentFlags) reloader() agent.Reloader {
+	if f.testReloader != nil {
+		return f.testReloader
+	}
+	return agent.SystemReloader{}
 }
 
 // reporter is where this agent tells hz what it found, or nil.

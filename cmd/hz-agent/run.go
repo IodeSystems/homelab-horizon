@@ -117,13 +117,26 @@ func onePass(ctx context.Context, f *agentFlags, src agent.Source, obs agent.Obs
 		return newETag
 	}
 
-	res, err := agent.Apply(d, plan, obs.Observe(d), agent.SystemReloader{}, f.generations())
+	// A failed apply holds off the NEXT apply, never this poll and never the
+	// report above — which has already gone out. A box that cannot apply must
+	// keep saying so; backing the whole loop off would make it read as silent
+	// instead of failing.
+	if wait := f.hold.remaining(plan.Generation, time.Now()); wait > 0 {
+		slog.Warn("apply held off after repeated failures",
+			"generation", short(plan.Generation), "fails", f.hold.fails, "retry_in", wait)
+		return etag
+	}
+
+	res, err := agent.Apply(d, plan, obs.Observe(d), f.reloader(), f.generations())
 	if err != nil {
-		slog.Error("apply failed", "err", err, "errors", res.Errors)
+		wait := f.hold.fail(plan.Generation, time.Now(), f.interval)
+		slog.Error("apply failed", "err", err, "errors", res.Errors,
+			"fails", f.hold.fails, "next_attempt_in", wait)
 		// Do NOT advance the ETag: the next pass must re-plan against what is
 		// actually on disk now, which a partial apply has changed.
 		return etag
 	}
+	f.hold.clear()
 	// adopted is logged beside restarted, and at info, because "this pass
 	// wrote down twenty generations and restarted nothing" is the correct
 	// first run and has to be distinguishable in a journal from a pass that
