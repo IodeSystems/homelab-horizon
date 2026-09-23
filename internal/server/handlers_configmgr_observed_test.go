@@ -10,7 +10,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 )
 
-// cmMachineList reads the admin machine listing the way `hz cm machines` does.
+// cmMachineList reads the admin machine listing the way `hz config machines` does.
 func cmMachineList(t *testing.T, s *Server, admin *http.Cookie) []apitypes.CMMachineResp {
 	t.Helper()
 	w := cmAdminCall(t, admin, s.handleAPICMMachines, http.MethodGet, apitypes.CMPathMachines, nil)

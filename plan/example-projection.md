@@ -279,7 +279,7 @@ screens, so this is the honest state of it:
 - **The CLI** renders the project tree, the rungs and their postures and
   versions, the promotion edges, and the multi-homed bridge listing:
   `hz project ls|show`, `hz env ls|show`, `hz machine ls [--multi-homed]`,
-  `hz cm machines`.
+  `hz config machines`.
 - **Version drift is SERVED and not yet rendered.** `GET
   /api/v1/cm/version-drift` is the join — one row per approved instance,
   carrying the rung's declared version, the instance's observed one, that

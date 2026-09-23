@@ -38,7 +38,7 @@ type cmStub struct {
 	machines map[string]apitypes.CMMachineResp
 
 	// recovery is the key-custody state: the recipients hz holds and the wraps
-	// stored against them. It answers every `hz cm key new`, not just the
+	// stored against them. It answers every `hz config key new`, not just the
 	// recovery tests — minting a key now wraps it to every recipient, so a stub
 	// that did not route this would turn "no custody configured" into a
 	// transport error and every key test would fail for the wrong reason.
@@ -604,7 +604,7 @@ func TestSealRefusalIsActionable(t *testing.T) {
 	if err == nil {
 		t.Fatal("sealing should be refused while the pointer disagrees")
 	}
-	for _, want := range []string{"refusing to seal", "hz cm key current", old.ID().String()} {
+	for _, want := range []string{"refusing to seal", "hz config key current", old.ID().String()} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal should mention %q:\n%v", want, err)
 		}
@@ -616,7 +616,7 @@ func TestSealRefusalWhenNothingIsHeld(t *testing.T) {
 	s := newCMStub()
 	c := s.start(t)
 	_, _, err := cmSealingKey(ks, c, configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"})
-	if err == nil || !strings.Contains(err.Error(), "hz cm key import") {
+	if err == nil || !strings.Contains(err.Error(), "hz config key import") {
 		t.Fatalf("an empty address should say how to fill it: %v", err)
 	}
 }
@@ -875,7 +875,7 @@ func TestKeyAddressEnumerationIgnoresStrayFiles(t *testing.T) {
 
 // --- argument order --------------------------------------------------------
 
-// TestFlagsAfterThePositionalAreHonoured: `hz cm deny reg-1 --reason=x` is the
+// TestFlagsAfterThePositionalAreHonoured: `hz config deny reg-1 --reason=x` is the
 // natural order, and Go's flag package stops at the first non-flag token, so
 // without splitCMPositional the reason would be silently dropped.
 func TestFlagsAfterThePositionalAreHonoured(t *testing.T) {

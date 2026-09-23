@@ -29,7 +29,7 @@ import (
 //   - receive one. There is no field in apitypes.CMRecovery* that could carry a
 //     private key, no handler below reads one, and none may be added.
 //   - prove a wrap holds the key it names. That needs the private half, so it
-//     happens on the operator's machine — `hz cm recovery verify`.
+//     happens on the operator's machine — `hz config recovery verify`.
 //
 // Removal is not revocation. Dropping a recipient stops FUTURE wraps; the wraps
 // already addressed to it stay readable by whoever holds that private key, and
@@ -188,7 +188,7 @@ func (s *Server) cmRecoveryRemoveRecipient(w http.ResponseWriter, r *http.Reques
 // at the only moment it is ever needed.
 //
 // What it cannot check is the content: whether the bytes inside are the key
-// KeyID names. That requires the private half, so it is `hz cm recovery
+// KeyID names. That requires the private half, so it is `hz config recovery
 // verify`'s job, and no message here may imply this endpoint proved it.
 func (s *Server) handleAPICMRecoveryWraps(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {

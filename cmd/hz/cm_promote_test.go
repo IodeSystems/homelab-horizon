@@ -9,7 +9,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 )
 
-// `hz cm promote` as an operator meets it: a dry run by default, a refusal when
+// `hz config promote` as an operator meets it: a dry run by default, a refusal when
 // the ladder or the declaration says no, and — when it does run — invariants
 // copied, answered keys carried, and unanswered ones left DECLARED rather than
 // dropped.

@@ -533,7 +533,7 @@ func (c *Client) registerAndWait(ctx context.Context, req RegisterRequest) (*Reg
 		// approval, and it only works if an operator compares it against a
 		// value THE BOX produced. Before this, the library printed no such
 		// value: an implementor would have had to open the private key file and
-		// derive it, which nobody does — so `hz cm pending` said "you will need
+		// derive it, which nobody does — so `hz config pending` said "you will need
 		// the fingerprint the box printed" and the box had printed nothing.
 		//
 		// An operator with no source for the number reaches for the one on

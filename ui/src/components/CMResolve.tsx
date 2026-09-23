@@ -261,7 +261,7 @@ export function CMResolve({
                 The values themselves are sealed and hz has no key. To read what
                 the box would actually get:
               </Typography>
-              <CopyBox text={`hz cm show ${data.winner.id}`} />
+              <CopyBox text={`hz config show ${data.winner.id}`} />
             </Box>
           </Box>
         ) : null}

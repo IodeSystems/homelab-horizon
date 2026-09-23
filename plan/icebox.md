@@ -732,3 +732,65 @@ fixed here. Each names the section with the evidence.
   expected, never cleaned up. Fixing it means holding `banMu` across
   `reconcileIPTables`, or making the ban writer single. Not worth doing before
   the ban move decides which writer survives. `ha-and-the-agent.md` §4.
+
+## ◻ Two machine lists, one word — and `hz cm` → `hz config` made it louder (2026-09-22)
+
+`hz config machines` and `hz machine ls` print different fleets. They are joined
+by NOTHING but a name string, and nothing checks that the names agree.
+
+- `hz machine ls` reads `config.Machine` (`internal/config/machine.go:41`) — a
+  DECLARED record in `config.json`: identity plus segment membership, with no
+  project and no environment by design.
+- `hz config machines` reads the `cm_machines` table in `hz.db`
+  (`internal/db/configmgr.go`) — an OBSERVED record the config manager creates
+  when a box enrols itself: public key, fingerprint, registrations, secret keys.
+
+A box can be in one and not the other, in both directions. Enrolling does not
+declare, declaring does not enrol, and a typo in either name produces two rows
+that look like two machines. `hz config remove <machine>` destroys the enrolment
+and leaves the declaration; `hz machine rm` does the reverse.
+
+**What the rename changed about it.** Nothing in the code, and it made the
+surface read WORSE. `hz cm machines` was opaque enough that an operator had to
+look `cm` up, and the lookup told them which list they were in. `hz config
+machines` and `hz machine ls` are now two plain-English commands that look like
+the same thing, with `machine(s)` the salient word in both. The rename traded a
+what-is-`cm` question for a which-one-is-this question, and the second is the
+one people answer wrong without noticing they answered it.
+
+Deliberately NOT fixed in `refactor/cm-to-config`: the rename is a noun change,
+this is a model question. Options, none costed:
+
+1. Rename the config-manager verb to what its rows actually are — enrolments,
+   not machines (`hz config enrolled`). Cheapest, and it stops the CLI implying
+   the two lists are the same kind of thing.
+2. Join them: `hz machine show <name>` reports the enrolment state, and
+   `hz config machines` flags an enrolled name that is not declared. Needs a
+   decision on whether enrolling an undeclared name is an error or a warning.
+3. Leave both and say so in each one's help. Weakest, but closest to what ships
+   today — neither command mentions the other at all.
+
+**Evidence:** `internal/config/machine.go:41` and the `cm_machines` statements
+in `internal/db/configmgr.go` are the two record types; nothing in either file,
+nor in `cmd/hz/cm_machines.go` or `cmd/hz/machine.go`, references the other.
+
+## ◻ Two UI strings name commands that do not exist (found during the rename, 2026-09-22)
+
+Both predate `refactor/cm-to-config` and were carried through it verbatim (only
+`cm` → `config`), because fixing which VERB they name is a different change:
+
+- `ui/src/components/CMPromote.tsx` renders a COPY BUTTON for
+  `hz config push <env>/<app>/<role>`, and `ui/src/components/CMConfigs.tsx`
+  names `hz config push` in prose. There is no `push` verb — `runCM`'s switch is
+  `key | recovery | machines | pending | approve | deny | remove | promote |
+  show | resolve`. Pushing is deliberately not hz's: `plan/config-manager.md`
+  line 572 settles it as `redline config push`, i.e. the APP links `configmgr`
+  and calls `configmgr.Push`. So the button hands an operator a command that
+  cannot work, in a shape that looks authoritative because it is copyable.
+- `ui/src/components/CMPromote.tsx:123` helper text says a config id can be
+  "pasted from `hz config ls`". There is no `ls` verb at that level either; the
+  id comes from the Configs tab, or from `hz config resolve`.
+
+The fix is to name the real command (the app's own `<app> config push`, and the
+Configs tab), which needs someone to decide what the button should say when the
+command is not hz's to give.

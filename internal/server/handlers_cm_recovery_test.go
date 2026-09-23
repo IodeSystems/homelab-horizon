@@ -397,7 +397,7 @@ func TestRecoveryRefusesANonAdmin(t *testing.T) {
 // table in cm_routes_test.go can only reach GET — and the two routes that
 // matter most here are a POST to a collection and a DELETE on a subtree, which
 // is exactly the pair that was unrouted for machines. An unrouted wrap endpoint
-// would mean `hz cm key new` silently cannot establish custody, discovered
+// would mean `hz config key new` silently cannot establish custody, discovered
 // during a recovery rather than now.
 func TestCMRecoveryRoutesAreReachableAsBuilt(t *testing.T) {
 	s, admin, _ := cmRecoveryServer(t)

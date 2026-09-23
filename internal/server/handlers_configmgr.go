@@ -215,7 +215,7 @@ func (s *Server) handleAPICMRegister(w http.ResponseWriter, r *http.Request) {
 		// re-key path in internal/db and there must not be one.
 		//
 		// A genuine reinstall needs an operator to REMOVE the machine, which
-		// frees the name: handleAPICMMachine's DELETE, or `hz cm remove
+		// frees the name: handleAPICMMachine's DELETE, or `hz config remove
 		// <machine>`. The refusal names it, because an instruction to perform
 		// an action the reader cannot find is where this used to end — the
 		// route and the command did not exist, so a rebuilt box could never
@@ -225,12 +225,12 @@ func (s *Server) handleAPICMRegister(w http.ResponseWriter, r *http.Request) {
 		// The caller of a conflicting register is by definition not the machine
 		// that holds that key, and the fingerprint is the value an operator
 		// compares against a box's console — so it goes to admins, who have
-		// `hz cm machines`, and not to whoever reached this endpoint.
+		// `hz config machines`, and not to whoever reached this endpoint.
 		if !bytes.Equal(pub.Bytes(), machine.PublicKey) {
 			writeJSONError(w, http.StatusConflict,
 				"machine "+req.Machine+" is enrolled with a different public key; "+
 					"an operator must remove it before it can re-enrol: "+
-					"`hz cm remove "+req.Machine+"`")
+					"`hz config remove "+req.Machine+"`")
 			return
 		}
 	}
@@ -600,9 +600,9 @@ func (s *Server) handleAPICMRegistrationAction(w http.ResponseWriter, r *http.Re
 			"expected /api/v1/cm/registrations/{id}, or {id}/public-key, /approve or /deny")
 		return
 	}
-	// A bare {id} reads one registration. It was missing, so `hz cm approve`
+	// A bare {id} reads one registration. It was missing, so `hz config approve`
 	// 404'd on its very first call — the command is the first line of
-	// `hz cm pending`'s own instructions, so approval was dead for every
+	// `hz config pending`'s own instructions, so approval was dead for every
 	// operator. Same class as the promote path: a URL agreed in two places and
 	// enforced in neither.
 	if !found {

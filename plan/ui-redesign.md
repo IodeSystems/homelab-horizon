@@ -545,7 +545,7 @@ report time of its own; only its instances do.** So:
 - Machine freshness is *derived* — the most recent `observed_at` across its
   instances — and must be labelled as derived, not presented as a heartbeat.
 - A machine with instances whose ages disagree gets the CLI's answer, not an
-  average: `hz cm machines` already prints **`mixed`** and points at `--json`
+  average: `hz config machines` already prints **`mixed`** and points at `--json`
   rather than electing one version as the box's. The UI does the same, and the
   machine row's Observation links to the instance table instead of picking.
 - **A machine with no instances has no freshness at all** — `ci-1` is the case.
