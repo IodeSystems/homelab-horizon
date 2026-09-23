@@ -37,8 +37,9 @@ type MachineProjectionResp struct {
 	// generation: the generation is the agent channel's content hash.
 	Serial uint64 `json:"serial"`
 
-	// Segments are the segment NAMES this machine is a member of. Resolved is
-	// false on every one of them today; see ProjectionSegment.
+	// Segments are this machine's memberships, resolved against the Segment
+	// records where one answers to the name. See ProjectionSegment for the two
+	// ways an entry can still be a label.
 	Segments []ProjectionSegment `json:"segments"`
 
 	// Forwards are the declared exceptions to "a machine may not forward
@@ -46,7 +47,10 @@ type MachineProjectionResp struct {
 	// the rule's default is deny, and empty is the rule's own answer.
 	Forwards []ProjectionForward `json:"forwards"`
 
-	// Hosts is what /etc/hosts should carry. Empty AND gapped today.
+	// Hosts is what /etc/hosts should carry: one entry per peer on a resolved
+	// segment. Empty with no gap means hz worked out there is nothing to
+	// write (a hub with no spoke); empty WITH one means it could not resolve
+	// the membership the entries would have come from.
 	Hosts []ProjectionHostEntry `json:"hosts"`
 
 	// Packages is what should be installed, at an exact version, held.
@@ -74,10 +78,19 @@ type MachineProjectionResp struct {
 // ProjectionSegment is one segment membership.
 //
 // Resolved: false means hz can NAME this segment and cannot say what the
-// membership means — there is no Segment record (plan/architecture.md phase 4
-// item 15), so Interface, Address and Peers are empty because they are
+// membership means, so Interface, Address and Peers are empty because they are
 // UNKNOWN, not because they are absent. A screen that renders a blank
-// interface field here has reintroduced the founding bug.
+// interface field here has reintroduced the founding bug. There are two ways
+// to be false and a `segments` gap names which: no Segment record answers to
+// the name, or the record has no member entry for this machine (UNADDRESSED —
+// legal, and what `hz machine add --segment` leaves; the interface is the
+// segment's and IS known there).
+//
+// Resolved: true is not a tunnel. Peers is who this machine talks to on the
+// segment, by machine name. Nothing holds a peer's WireGuard public key, so hz
+// cannot emit a `[Peer]` block for one, and a `segments` gap says so beside a
+// resolved membership. A screen that renders Peers as "configured peers" is
+// claiming something hz did not say.
 type ProjectionSegment struct {
 	Name string `json:"name"`
 
@@ -96,7 +109,13 @@ type ProjectionForward struct {
 	Reason string `json:"reason"`
 }
 
-// ProjectionHostEntry is one /etc/hosts line hz wants on the machine.
+// ProjectionHostEntry is one /etc/hosts line hz wants on the machine: a peer's
+// address ON a segment this machine is resolved into.
+//
+// THE ADDRESS IS A RECORD AND THE NAME IS hz's BEST. Nothing says what a
+// machine answers to on a segment, so Name is the peer's MACHINE name and a
+// `hosts` gap says that is what it is. A peer reachable at two addresses gets
+// two entries and a gap, because hz will not silently pick one.
 type ProjectionHostEntry struct {
 	Name    string `json:"name"`
 	Address string `json:"address"`
