@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -369,5 +370,464 @@ func TestRemovingAnUnknownSegmentListsTheDeclaredOnes(t *testing.T) {
 	_, _, err = empty.SegmentRemoval("nope", false)
 	if err == nil || !strings.Contains(err.Error(), "declares no segments at all") {
 		t.Fatalf("an empty config does not say it is empty: %v", err)
+	}
+}
+
+// THE GAP `ls|show|add|rm` LEFT, closed: addressing a membership on a segment
+// that already exists. Before SetSegment the only way to give `late-box` an
+// address was `rm --cascade` and re-declaring the whole segment — a destructive
+// round trip for a routine edit, which is how a hub and two public keys get
+// dropped on the way through.
+func TestAMembershipCanBeAddressedOnASegmentThatAlreadyExists(t *testing.T) {
+	c := estateWithSegment(t)
+	if err := c.AddMachine(Machine{Name: "late-box", Segments: []string{"iode-net"}}); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := c.FindSegment("iode-net")
+	if _, addressed := s.Member("late-box"); addressed {
+		t.Fatal("joining a segment invented an address")
+	}
+
+	addr := "10.42.0.7"
+	change, err := c.SetSegment("iode-net", SegmentPatch{
+		Members: []SegmentMemberPatch{{Machine: "late-box", Address: &addr}},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(change.Fields) != 1 || !strings.Contains(change.Fields[0], "10.42.0.7") {
+		t.Fatalf("the change was not reported: %+v", change.Fields)
+	}
+	s, _ = c.FindSegment("iode-net")
+	mem, ok := s.Member("late-box")
+	if !ok || mem.Address != "10.42.0.7" {
+		t.Fatalf("late-box is %+v", mem)
+	}
+	// And it now peers with the hub, which is the whole point of addressing it.
+	peers := s.PeersOf("late-box")
+	if len(peers) != 1 || peers[0].Machine != "gw-1" {
+		t.Fatalf("an addressed member peers with %+v", peers)
+	}
+	if err := Save(t.TempDir()+"/config.json", c); err != nil {
+		t.Fatalf("the config after a set cannot be saved: %v", err)
+	}
+}
+
+// RE-ADDRESSING KEEPS WHAT IT WAS NOT ASKED TO CHANGE. A whole-member write
+// would drop the public key and the endpoint the operator did not retype, and
+// the box would go on answering to a key hz no longer holds.
+func TestReAddressingKeepsTheKeyAndTheEndpoint(t *testing.T) {
+	c := estateWithSegment(t)
+	key := "abc+/def="
+
+	// A key on a membership with no address has nothing to attach to: the entry
+	// would be a member with a key and no address, which the validator refuses
+	// anyway. Refused here instead, where the answer is "give it an address".
+	if err := c.AddMachine(Machine{Name: "late-box", Segments: []string{"iode-net"}}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := c.SetSegment("iode-net", SegmentPatch{
+		Members: []SegmentMemberPatch{{Machine: "late-box", PublicKey: &key}},
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), "address") {
+		t.Fatalf("a key on an unaddressed membership was accepted: %v", err)
+	}
+
+	if _, err := c.SetSegment("iode-net", SegmentPatch{
+		Members: []SegmentMemberPatch{{Machine: "redline-prod-hz", PublicKey: &key}},
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+
+	moved := "10.42.0.9"
+	if _, err := c.SetSegment("iode-net", SegmentPatch{
+		Members: []SegmentMemberPatch{{Machine: "redline-prod-hz", Address: &moved}},
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := c.FindSegment("iode-net")
+	mem, _ := s.Member("redline-prod-hz")
+	if mem.Address != "10.42.0.9" {
+		t.Fatalf("the address did not move: %+v", mem)
+	}
+	if mem.PublicKey != key {
+		t.Fatalf("re-addressing dropped the public key: %+v", mem)
+	}
+	// The hub's endpoint survived a write that never mentioned the hub.
+	hub, _ := s.Member("gw-1")
+	if hub.Endpoint != "hz.example.com:51820" || !hub.Hub {
+		t.Fatalf("the hub was disturbed by a member patch: %+v", hub)
+	}
+
+	// An empty key CLEARS it, which is the pointer contract and is what a
+	// rotated-away key needs: absent beats stale.
+	empty := ""
+	if _, err := c.SetSegment("iode-net", SegmentPatch{
+		Members: []SegmentMemberPatch{{Machine: "redline-prod-hz", PublicKey: &empty}},
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	s, _ = c.FindSegment("iode-net")
+	mem, _ = s.Member("redline-prod-hz")
+	if mem.PublicKey != "" {
+		t.Fatalf("an empty key did not clear it: %q", mem.PublicKey)
+	}
+}
+
+// A set routes through the SAME validator `add` does, so every invariant still
+// holds afterwards. A second write path that validated differently is how a
+// config becomes unloadable.
+func TestASetCannotBreakAnInvariant(t *testing.T) {
+	str := func(s string) *string { return &s }
+
+	for name, tc := range map[string]struct {
+		patch SegmentPatch
+		want  string
+	}{
+		"address outside the range": {
+			SegmentPatch{Members: []SegmentMemberPatch{{Machine: "redline-prod-hz", Address: str("10.99.0.2")}}},
+			"outside the segment's range",
+		},
+		"address already held": {
+			SegmentPatch{Members: []SegmentMemberPatch{{Machine: "redline-prod-hz", Address: str("10.42.0.1")}}},
+			"same address",
+		},
+		"address is not an address": {
+			SegmentPatch{Members: []SegmentMemberPatch{{Machine: "redline-prod-hz", Address: str("not-an-ip")}}},
+			"not an IP address",
+		},
+		"a machine that does not claim the segment": {
+			SegmentPatch{Members: []SegmentMemberPatch{{Machine: "unrelated", Address: str("10.42.0.5")}}},
+			"does not name segment",
+		},
+		"a machine that does not exist": {
+			SegmentPatch{Members: []SegmentMemberPatch{{Machine: "ghost", Address: str("10.42.0.5")}}},
+			"no machine",
+		},
+		"the interface another segment holds": {
+			SegmentPatch{Interface: str("wg-other")},
+			"both use interface",
+		},
+		// Wide enough to still hold both member addresses, so the refusal is
+		// about the overlap and not about stranding somebody.
+		"a range another segment holds": {
+			SegmentPatch{CIDR: str("10.32.0.0/12")},
+			"overlap",
+		},
+		"a range that is a host address": {
+			SegmentPatch{CIDR: str("10.42.0.1/24")},
+			"host address",
+		},
+		"a project that does not exist": {
+			SegmentPatch{Project: str("nope")},
+			"no project",
+		},
+		"no project at all": {
+			SegmentPatch{Project: str("")},
+			"cannot have its project cleared",
+		},
+		"no interface at all": {
+			SegmentPatch{Interface: str("")},
+			"cannot have its interface cleared",
+		},
+		"no range at all": {
+			SegmentPatch{CIDR: str("")},
+			"cannot have its range cleared",
+		},
+		"no hub at all": {
+			SegmentPatch{Hub: str("")},
+			"cannot be left without a hub",
+		},
+		"a hub that is not addressed": {
+			SegmentPatch{Hub: str("unrelated")},
+			"does not address unrelated",
+		},
+		"unaddressing the hub with spokes left": {
+			SegmentPatch{Unaddress: []string{"gw-1"}},
+			"no hub",
+		},
+		"unaddressing somebody who is not addressed": {
+			SegmentPatch{Unaddress: []string{"unrelated"}},
+			"nothing to unaddress",
+		},
+		"an empty address": {
+			SegmentPatch{Members: []SegmentMemberPatch{{Machine: "gw-1", Address: str("")}}},
+			"empty address",
+		},
+	} {
+		// A subtest each, so breaking ONE invariant shows up as that invariant
+		// rather than as whichever map key the runtime happened to visit first.
+		t.Run(name, func(t *testing.T) {
+			c := estateWithSegment(t)
+			if err := c.AddMachine(Machine{Name: "unrelated"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.AddSegment(Segment{Name: "other", Project: "iodesystems", CIDR: "10.43.0.0/24", Interface: "wg-other"}); err != nil {
+				t.Fatal(err)
+			}
+			before, _ := c.FindSegment("iode-net")
+
+			_, err := c.SetSegment("iode-net", tc.patch, false)
+			if err == nil {
+				t.Fatal("the set was accepted")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("the refusal does not say %q: %v", tc.want, err)
+			}
+			after, _ := c.FindSegment("iode-net")
+			if fmt.Sprintf("%+v", before) != fmt.Sprintf("%+v", after) {
+				t.Fatalf("a refused set was written anyway:\n  before %+v\n  after  %+v", before, after)
+			}
+		})
+	}
+
+	// The positive control: the table is not passing because SetSegment refuses
+	// everything. A legal move on the same estate is accepted and saved.
+	c := estateWithSegment(t)
+	if _, err := c.SetSegment("iode-net", SegmentPatch{
+		Interface: str("wg-iode-2"),
+		Members:   []SegmentMemberPatch{{Machine: "redline-prod-hz", Address: str("10.42.0.3")}},
+	}, false); err != nil {
+		t.Fatalf("a legal set was refused: %v", err)
+	}
+	if err := Save(t.TempDir()+"/config.json", c); err != nil {
+		t.Fatalf("Save refused the result of a legal set: %v", err)
+	}
+}
+
+// MOVING THE HUB IS A TOPOLOGY CHANGE, and the rewiring it causes is REPORTED
+// rather than left to happen quietly. Peers is derived hub and spoke, so the new
+// hub gains every spoke, the old one drops to a single peer, and every other
+// spoke swaps the peer it had — none of which shows in a diff of the record.
+func TestMovingTheHubRewiresEveryPeerSetAndSaysSo(t *testing.T) {
+	c := estateWithSegment(t)
+	if err := c.AddMachine(Machine{Name: "third", Segments: []string{"iode-net"}}); err != nil {
+		t.Fatal(err)
+	}
+	addr := "10.42.0.3"
+	if _, err := c.SetSegment("iode-net", SegmentPatch{
+		Members: []SegmentMemberPatch{{Machine: "third", Address: &addr}},
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+
+	hub := "redline-prod-hz"
+	change, err := c.SetSegment("iode-net", SegmentPatch{Hub: &hub}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if change.HubMove == nil {
+		t.Fatal("moving the hub was not reported as a hub move")
+	}
+	if change.HubMove.From != "gw-1" || change.HubMove.To != "redline-prod-hz" {
+		t.Fatalf("the hub move reads %+v", change.HubMove)
+	}
+	// Every one of the three members' peer sets changed, and every one is named.
+	if len(change.HubMove.Peers) != 3 {
+		t.Fatalf("the rewiring lists %d members: %+v", len(change.HubMove.Peers), change.HubMove.Peers)
+	}
+	got := map[string][]string{}
+	for _, p := range change.HubMove.Peers {
+		got[p.Machine] = p.After
+	}
+	want := map[string][]string{
+		"gw-1":            {"redline-prod-hz"},
+		"redline-prod-hz": {"gw-1", "third"},
+		"third":           {"redline-prod-hz"},
+	}
+	for machine, peers := range want {
+		if strings.Join(got[machine], ",") != strings.Join(peers, ",") {
+			t.Fatalf("%s now peers with %v, want %v", machine, got[machine], peers)
+		}
+	}
+	// And the record agrees with the report — the report is not a second answer.
+	s, _ := c.FindSegment("iode-net")
+	for machine, peers := range want {
+		if strings.Join(peerNames(s.PeersOf(machine)), ",") != strings.Join(peers, ",") {
+			t.Fatalf("the record disagrees with the reported rewiring for %s", machine)
+		}
+	}
+	if h, ok := s.Hub(); !ok || h.Machine != "redline-prod-hz" {
+		t.Fatalf("the hub is %+v", h)
+	}
+	// Exactly one hub survived: the old one was demoted, not joined.
+	hubs := 0
+	for _, m := range s.Members {
+		if m.Hub {
+			hubs++
+		}
+	}
+	if hubs != 1 {
+		t.Fatalf("the segment has %d hubs", hubs)
+	}
+
+	// Naming the hub that already holds it is not a change and not an error.
+	change, err = c.SetSegment("iode-net", SegmentPatch{Hub: &hub}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if change.HubMove != nil {
+		t.Fatalf("re-naming the same hub reported a move: %+v", change.HubMove)
+	}
+}
+
+// A NEW RANGE CAN STRAND EVERY MEMBER INSIDE THE OLD ONE, so it follows the
+// discipline `rm` uses: refuse, and NAME each address that would fall outside.
+// hz does not renumber a box — two machines on one address is the failure that
+// would cause — so cascade UNADDRESSES them instead, and that is opt-in.
+func TestANewRangeThatStrandsMembersIsRefusedAndNamesThem(t *testing.T) {
+	c := estateWithSegment(t)
+	narrow := "10.42.9.0/24"
+
+	change, blocked, err := c.SegmentSet("iode-net", SegmentPatch{CIDR: &narrow}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked) != 2 {
+		t.Fatalf("the stranded members did not block the change: %+v", blocked)
+	}
+	for _, d := range blocked {
+		if !strings.Contains(d.How, "outside the new range") {
+			t.Fatalf("a blocker does not say why: %+v", d)
+		}
+	}
+	if len(change.Strands) != 0 {
+		t.Fatalf("a blocked change proposed to unaddress %+v", change.Strands)
+	}
+	if _, err := c.SetSegment("iode-net", SegmentPatch{CIDR: &narrow}, false); err == nil {
+		t.Fatal("a range that strands two members was written without cascade")
+	}
+	s, _ := c.FindSegment("iode-net")
+	if s.CIDR != "10.42.0.0/24" || len(s.Members) != 2 {
+		t.Fatalf("a refused range change was written anyway: %+v", s)
+	}
+
+	// Cascade: the dry run lists exactly who it would unaddress, and says they
+	// STAY in the segment. Nothing is renumbered.
+	change, blocked, err = c.SegmentSet("iode-net", SegmentPatch{CIDR: &narrow}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked) != 0 || len(change.Strands) != 2 {
+		t.Fatalf("cascade proposed strands=%+v blocked=%+v", change.Strands, blocked)
+	}
+	if !strings.Contains(change.Strands[0].How, "UNADDRESSED") {
+		t.Fatalf("cascade does not say what happens to the address: %q", change.Strands[0].How)
+	}
+	s, _ = c.FindSegment("iode-net")
+	if s.CIDR != "10.42.0.0/24" {
+		t.Fatal("computing a change wrote it")
+	}
+
+	// And with cascade it writes: the machines stay IN the segment, unaddressed.
+	if _, err := c.SetSegment("iode-net", SegmentPatch{CIDR: &narrow}, true); err != nil {
+		t.Fatal(err)
+	}
+	s, _ = c.FindSegment("iode-net")
+	if s.CIDR != "10.42.9.0/24" || len(s.Members) != 0 {
+		t.Fatalf("cascade left %+v", s)
+	}
+	for _, name := range []string{"gw-1", "redline-prod-hz"} {
+		m, ok := c.FindMachine(name)
+		if !ok || len(m.Segments) != 1 || m.Segments[0] != "iode-net" {
+			t.Fatalf("cascade took %s out of the segment, which it only promised to unaddress: %+v", name, m)
+		}
+	}
+	if err := Save(t.TempDir()+"/config.json", c); err != nil {
+		t.Fatalf("the config after a cascading range change cannot be saved: %v", err)
+	}
+}
+
+// Renumbering in ONE command is the move an operator actually wants: the new
+// range and the new addresses together. The range is applied LAST so the
+// addresses are checked as they will BE, not as they were.
+func TestARangeAndItsAddressesCanMoveInOneCommand(t *testing.T) {
+	c := estateWithSegment(t)
+	cidr, hubAddr, spokeAddr := "10.50.0.0/24", "10.50.0.1", "10.50.0.2"
+
+	change, err := c.SetSegment("iode-net", SegmentPatch{
+		CIDR: &cidr,
+		Members: []SegmentMemberPatch{
+			{Machine: "gw-1", Address: &hubAddr},
+			{Machine: "redline-prod-hz", Address: &spokeAddr},
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("a renumber in one command was refused: %v", err)
+	}
+	if len(change.Strands) != 0 {
+		t.Fatalf("a complete renumber stranded %+v", change.Strands)
+	}
+	s, _ := c.FindSegment("iode-net")
+	if s.CIDR != "10.50.0.0/24" || len(s.Members) != 2 {
+		t.Fatalf("the segment reads %+v", s)
+	}
+	hub, _ := s.Member("gw-1")
+	if hub.Address != "10.50.0.1" || !hub.Hub || hub.Endpoint != "hz.example.com:51820" {
+		t.Fatalf("the hub reads %+v", hub)
+	}
+	if err := Save(t.TempDir()+"/config.json", c); err != nil {
+		t.Fatalf("the renumbered config cannot be saved: %v", err)
+	}
+}
+
+// Unaddressing leaves the machine IN the segment — the legal state
+// `hz machine add --segment` leaves, not a removal. The hub has to move first,
+// because a segment with members and no hub is refused.
+func TestUnaddressingLeavesTheMachineInTheSegment(t *testing.T) {
+	c := estateWithSegment(t)
+	hub := "redline-prod-hz"
+	change, err := c.SetSegment("iode-net", SegmentPatch{Hub: &hub, Unaddress: []string{"gw-1"}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(change.Fields) != 1 || !strings.Contains(change.Fields[0], "gw-1") {
+		t.Fatalf("the unaddressing was not reported: %+v", change.Fields)
+	}
+	s, _ := c.FindSegment("iode-net")
+	if _, addressed := s.Member("gw-1"); addressed {
+		t.Fatal("gw-1 is still addressed")
+	}
+	m, ok := c.FindMachine("gw-1")
+	if !ok || len(m.Segments) != 1 {
+		t.Fatalf("unaddressing removed the membership too: %+v", m)
+	}
+	// It peers with nothing, which is what an unaddressed membership means.
+	if peers := s.PeersOf("gw-1"); peers != nil {
+		t.Fatalf("an unaddressed member peers with %+v", peers)
+	}
+	if err := Save(t.TempDir()+"/config.json", c); err != nil {
+		t.Fatalf("the config after an unaddress cannot be saved: %v", err)
+	}
+}
+
+// The name is IDENTITY and there is no way to change it here: every machine's
+// membership resolves through it. The patch type has no Name field at all, so
+// the guarantee is structural rather than a check — this pins that a set on a
+// segment leaves the name, and every membership that resolves through it, alone.
+func TestASetCannotRenameASegment(t *testing.T) {
+	c := estateWithSegment(t)
+	note := "the iodesystems network"
+	if _, err := c.SetSegment("iode-net", SegmentPatch{Note: &note}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.FindSegment("iode-net"); !ok {
+		t.Fatal("a set renamed the segment")
+	}
+	for _, name := range []string{"gw-1", "redline-prod-hz"} {
+		m, _ := c.FindMachine(name)
+		if len(m.Segments) != 1 || m.Segments[0] != "iode-net" {
+			t.Fatalf("%s resolves through %v", name, m.Segments)
+		}
+	}
+
+	// And an empty patch is refused rather than written as a no-op success.
+	if _, err := c.SetSegment("iode-net", SegmentPatch{}, false); err == nil {
+		t.Fatal("an empty patch reported success")
+	}
+	// As is a set on a segment that does not exist, listing the ones that do.
+	_, err := c.SetSegment("nope", SegmentPatch{Note: &note}, false)
+	if err == nil || !strings.Contains(err.Error(), "iode-net") {
+		t.Fatalf("the refusal does not list what exists: %v", err)
 	}
 }
