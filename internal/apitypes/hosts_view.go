@@ -82,22 +82,39 @@ type HostView struct {
 	// groups by kind without re-sorting. Always non-nil: an empty list is the
 	// answer "nothing points at this", which is different from not asking.
 	References []HostRefView `json:"references"`
+
+	// Occurrences is every record carrying this host's ADDRESS as a literal
+	// string — the records that do NOT follow the host and therefore break
+	// when it moves. Same sort order and same Kind vocabulary as References,
+	// and never merged into it: the two describe opposite behaviours, and a
+	// combined count would say "47 records will follow this move" about 47
+	// records that will break.
+	Occurrences []HostOccurrenceResp `json:"occurrences"`
+
+	// OccurrencesKnown is whether hz could scan at all. False only when the
+	// host has no address to scan for — @self before local_interface is
+	// detected — and OccurrencesUnknownWhy then says so. An empty list under a
+	// false flag is not the answer "nothing carries this address"; it is hz
+	// not having looked, and the screen must not render the two the same way.
+	OccurrencesKnown      bool   `json:"occurrencesKnown"`
+	OccurrencesUnknownWhy string `json:"occurrencesUnknownWhy,omitempty"`
+
+	// AdoptCommand is what an operator types to turn the adoptable
+	// occurrences into references, e.g. "hz host adopt self". Empty when there
+	// is nothing to adopt, or when hz could not scan.
+	AdoptCommand string `json:"adoptCommand,omitempty"`
 }
 
 // HostsViewResp is the whole host screen in one read: "@self" first, then every
 // declaration in config order.
 //
-// LiteralsUnlisted is the boundary this response cannot cross, stated rather
-// than implied. HostReferences matches records written "@name"; a record that
-// carries the same address as a LITERAL string resolves to the same box and
-// hz cannot find it, because a literal says nothing about which machine it
-// means. So an empty References list means "nothing REFERENCES this host", not
-// "nothing breaks if it moves" — and a screen that renders those two the same
-// way reintroduces exactly the bug host references were built to remove.
+// It used to carry LiteralsUnlisted — a flag saying this response could not
+// name the records that carry a host's address as a plain string, so the screen
+// could print the caveat instead of a number. hz can enumerate them now
+// (config.AddressOccurrences), so the flag is gone and each host carries the
+// real list. The caveat was correct while it stood and would have been a lie
+// the moment the scan landed, which is exactly why it was a field and not a
+// hard-coded sentence.
 type HostsViewResp struct {
 	Hosts []HostView `json:"hosts"`
-	// LiteralsUnlisted is always true today. It is a field rather than a
-	// hard-coded sentence in the client so that the day hz can enumerate
-	// literal occurrences, the screen stops claiming it cannot.
-	LiteralsUnlisted bool `json:"literalsUnlisted"`
 }

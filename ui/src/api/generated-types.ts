@@ -374,26 +374,44 @@ export interface HostView {
    * answer "nothing points at this", which is different from not asking.
    */
   references: HostRefView[];
+  /**
+   * Occurrences is every record carrying this host's ADDRESS as a literal
+   * string — the records that do NOT follow the host and therefore break
+   * when it moves. Same sort order and same Kind vocabulary as References,
+   * and never merged into it: the two describe opposite behaviours, and a
+   * combined count would say "47 records will follow this move" about 47
+   * records that will break.
+   */
+  occurrences: HostOccurrenceResp[];
+  /**
+   * OccurrencesKnown is whether hz could scan at all. False only when the
+   * host has no address to scan for — @self before local_interface is
+   * detected — and OccurrencesUnknownWhy then says so. An empty list under a
+   * false flag is not the answer "nothing carries this address"; it is hz
+   * not having looked, and the screen must not render the two the same way.
+   */
+  occurrencesKnown: boolean;
+  occurrencesUnknownWhy?: string;
+  /**
+   * AdoptCommand is what an operator types to turn the adoptable
+   * occurrences into references, e.g. "hz host adopt self". Empty when there
+   * is nothing to adopt, or when hz could not scan.
+   */
+  adoptCommand?: string;
 }
 /**
  * HostsViewResp is the whole host screen in one read: "@self" first, then every
  * declaration in config order.
- * LiteralsUnlisted is the boundary this response cannot cross, stated rather
- * than implied. HostReferences matches records written "@name"; a record that
- * carries the same address as a LITERAL string resolves to the same box and
- * hz cannot find it, because a literal says nothing about which machine it
- * means. So an empty References list means "nothing REFERENCES this host", not
- * "nothing breaks if it moves" — and a screen that renders those two the same
- * way reintroduces exactly the bug host references were built to remove.
+ * It used to carry LiteralsUnlisted — a flag saying this response could not
+ * name the records that carry a host's address as a plain string, so the screen
+ * could print the caveat instead of a number. hz can enumerate them now
+ * (config.AddressOccurrences), so the flag is gone and each host carries the
+ * real list. The caveat was correct while it stood and would have been a lie
+ * the moment the scan landed, which is exactly why it was a field and not a
+ * hard-coded sentence.
  */
 export interface HostsViewResp {
   hosts: HostView[];
-  /**
-   * LiteralsUnlisted is always true today. It is a field rather than a
-   * hard-coded sentence in the client so that the day hz can enumerate
-   * literal occurrences, the screen stops claiming it cannot.
-   */
-  literalsUnlisted: boolean;
 }
 
 //////////
@@ -1303,13 +1321,108 @@ export interface HostReferenceResp {
   value: string; // the authored value, e.g. "@nas:8080"
 }
 /**
+ * HostOccurrenceResp is one record that carries a host's address as a LITERAL
+ * string. It is the same four fields as HostReferenceResp and it is a separate
+ * list on purpose — see HostShowResp.
+ */
+export interface HostOccurrenceResp {
+  kind: string; // a reference kind, or "local interface" / "host declaration"
+  owner: string; // service name, record name, exporter job
+  field: string; // field within that record, e.g. "proxy.backend"
+  value: string; // the authored literal, e.g. "192.168.1.160:8080"
+  /**
+   * Ref is what `hz host adopt` would write here, e.g. "@self:8080". Empty
+   * exactly when WhyNotAdoptable is set.
+   */
+  ref?: string;
+  /**
+   * WhyNotAdoptable is hz's sentence for refusing to rewrite this record —
+   * the declaration sites, which are where references bottom out. Empty
+   * exactly when Ref is set.
+   */
+  whyNotAdoptable?: string;
+}
+/**
  * HostShowResp is one declared host and everything that points at it — the
  * answer to "what breaks if I move this box", which is the question a host
  * reference exists to make answerable.
+ * TWO LISTS, NEVER ONE. References are records written "@name": they FOLLOW
+ * the host, so `hz host set` moves them. Occurrences are records carrying the
+ * host's address as a plain string: they follow nothing, and they are exactly
+ * what breaks. Merging them would report records about to move as records
+ * about to break, or the reverse — so they stay apart, with separate labels,
+ * on every surface that shows them.
  */
 export interface HostShowResp {
   host: HostDecl;
   references: HostReferenceResp[];
+  /**
+   * Occurrences is every record carrying this host's address as a literal.
+   * Non-nil whenever OccurrencesKnown is true.
+   */
+  occurrences: HostOccurrenceResp[];
+  /**
+   * OccurrencesKnown distinguishes "nothing carries this address" from "hz
+   * could not look". It is false only when the host has no address to scan
+   * for — @self before hz has detected local_interface — and
+   * OccurrencesUnknownWhy then says so. An empty list under a false flag
+   * would be the reassuring-zero bug the reference list already has.
+   */
+  occurrencesKnown: boolean;
+  occurrencesUnknownWhy?: string;
+}
+/**
+ * HostAdoptRequest rewrites every literal occurrence of a host's address into a
+ * reference to it. DRY RUN unless Confirm is set: the listing is the product.
+ */
+export interface HostAdoptRequest {
+  /**
+   * Name is the declared host, or "self" for this gateway's own address.
+   */
+  name: string;
+  /**
+   * Confirm writes. Without it hz computes the identical plan and returns it
+   * having touched nothing.
+   */
+  confirm: boolean;
+}
+/**
+ * HostAdoptResp is what adoption would do, or did.
+ */
+export interface HostAdoptResp {
+  /**
+   * Address is the literal being adopted, e.g. "192.168.1.160".
+   */
+  address: string;
+  /**
+   * Ref is the spelling every adopted record receives: "@self" or "@name".
+   */
+  ref: string;
+  /**
+   * RefWhy explains the choice when both spellings were available — a
+   * declared host and @self holding the same address. Empty when only one
+   * candidate existed.
+   */
+  refWhy?: string;
+  /**
+   * Adopt is every record that would be, or was, rewritten.
+   */
+  adopt: HostOccurrenceResp[];
+  /**
+   * Refused is every record carrying the address that hz will not rewrite,
+   * each naming itself and the reason. Listed rather than dropped: a record
+   * hz cannot adopt is still a record that breaks when the box moves.
+   */
+  refused: HostOccurrenceResp[];
+  /**
+   * Confirmed is whether this was a write. False means nothing was touched.
+   */
+  confirmed: boolean;
+  /**
+   * Written is how many records were rewritten. Always 0 when Confirmed is
+   * false — that is the only difference between the two runs.
+   */
+  written: number /* int */;
 }
 /**
  * HostSetRequest repoints a declared host at a new address. It is the whole

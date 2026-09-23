@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -172,8 +173,46 @@ func (s *Server) handleAPITopologyHostShow(w http.ResponseWriter, r *http.Reques
 			Kind: ref.Kind, Owner: ref.Owner, Field: ref.Field, Value: ref.Value,
 		})
 	}
+	fillShowOccurrences(cfg, &resp)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// fillShowOccurrences attaches the second list — the records carrying this
+// host's address as a literal — to `hz host show`.
+//
+// It is the half the command could not answer: the live gateway's config names
+// its own address dozens of times and every one of them reported zero
+// dependants, which is an honest answer to "what references this" and the wrong
+// answer to "what breaks if I move it". The two lists stay separate here for
+// the same reason they do everywhere else: a reference follows the host, an
+// occurrence does not.
+func fillShowOccurrences(cfg *config.Config, resp *apitypes.HostShowResp) {
+	addr := strings.TrimSpace(resp.Host.IP)
+	resp.Occurrences = []apitypes.HostOccurrenceResp{}
+	if addr == "" {
+		resp.OccurrencesUnknownWhy = "hz does not know this host's address, so it could not look for " +
+			"records carrying it. This list is empty because the search could not run."
+		return
+	}
+	resp.OccurrencesKnown = true
+	if plan, err := cfg.PlanAddressAdoption(addr); err == nil {
+		for _, a := range plan.Adopt {
+			resp.Occurrences = append(resp.Occurrences, adoptionToAPI(a))
+		}
+		for _, r := range plan.Refused {
+			resp.Occurrences = append(resp.Occurrences, adoptionToAPI(r))
+		}
+		sortOccurrenceResps(resp.Occurrences)
+		return
+	}
+	// Nothing declares the address, so there is nothing to adopt into. The
+	// occurrences are still real.
+	for _, o := range cfg.AddressOccurrences(addr) {
+		resp.Occurrences = append(resp.Occurrences, apitypes.HostOccurrenceResp{
+			Kind: o.Kind, Owner: o.Owner, Field: o.Field, Value: o.Value,
+		})
+	}
 }
 
 // handleAPITopologyHostSet repoints a declared host at a new address, leaving
@@ -413,4 +452,135 @@ func (s *Server) kickExporterStatus() {
 		defer cancel()
 		s.refreshExporterStatus(ctx)
 	}()
+}
+
+// handleAPITopologyHostAdopt rewrites every literal occurrence of a host's
+// address into a reference to it. Admin-only.
+//
+// DRY RUN BY DEFAULT — the listing is the product and --confirm is the
+// afterthought, the discipline `hz project rm` and `hz segment rm` use. This is
+// a config rewrite on a live gateway, touching dozens of records at once; an
+// operator gets to read every line before any of it is written.
+//
+// The plan and the write are one computation (config.adoptAddress), so the
+// confirmed run cannot do something the dry run did not describe.
+func (s *Server) handleAPITopologyHostAdopt(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost && r.Method != http.MethodPut {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST or PUT required")
+		return
+	}
+	var req apitypes.HostAdoptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		writeJSONError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	cfg := s.cfg()
+	addr, err := adoptAddressForHost(cfg, req.Name)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	plan, err := cfg.PlanAddressAdoption(addr)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp := adoptPlanToAPI(plan)
+	if !req.Confirm {
+		writeJSON(w, resp)
+		return
+	}
+
+	// Rehearse on a DEEP copy and validate it before anything is stored.
+	// updateConfig's copy is shallow — the slices and the *ProxyConfig
+	// pointers adoption writes through are shared with the live config — so a
+	// rewrite that turned out invalid would already be in memory. A JSON round
+	// trip is the cheap honest copy.
+	rehearsal, err := deepCopyConfig(cfg)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not rehearse the rewrite: "+err.Error())
+		return
+	}
+	if _, err := rehearsal.AdoptAddress(addr); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := rehearsal.ValidateHostRefs(); err != nil {
+		writeJSONError(w, http.StatusBadRequest,
+			"the rewrite would leave a config hz cannot save, so nothing was written: "+err.Error())
+		return
+	}
+
+	var written *config.AdoptionPlan
+	if err := s.updateConfig(func(c *config.Config) {
+		written, _ = c.AdoptAddress(addr)
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.kickExporterStatus()
+	resp = adoptPlanToAPI(written)
+	resp.Confirmed = true
+	writeJSON(w, resp)
+}
+
+// adoptAddressForHost turns the host name the caller named into the address to
+// scan for. "self" is the reserved pseudo-host and the case that dominates a
+// gateway, so it is resolved here rather than being a name lookup that fails.
+func adoptAddressForHost(cfg *config.Config, name string) (string, error) {
+	if name == config.HostRefSelfName {
+		self := strings.TrimSpace(cfg.LocalInterface)
+		if self == "" {
+			return "", fmt.Errorf("hz has not detected this instance's own LAN address, so it cannot say which literals are %s; local_interface on the Settings page is what fills it in", config.SelfRef)
+		}
+		return self, nil
+	}
+	h := cfg.HostDeclByName(name)
+	if h == nil {
+		return "", fmt.Errorf("host not found: %s", name)
+	}
+	if strings.TrimSpace(h.IP) == "" {
+		return "", fmt.Errorf("host %q carries no address, so there is nothing to look for", name)
+	}
+	return strings.TrimSpace(h.IP), nil
+}
+
+// deepCopyConfig round-trips a config through JSON. It is used to rehearse a
+// rewrite: the result shares no slice or pointer with the live config, which a
+// struct copy does not give.
+func deepCopyConfig(cfg *config.Config) (*config.Config, error) {
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return config.LoadFromJSON(raw)
+}
+
+func adoptPlanToAPI(p *config.AdoptionPlan) apitypes.HostAdoptResp {
+	resp := apitypes.HostAdoptResp{
+		Address: p.Address,
+		Ref:     p.Ref,
+		RefWhy:  p.RefWhy,
+		Adopt:   make([]apitypes.HostOccurrenceResp, 0, len(p.Adopt)),
+		Refused: make([]apitypes.HostOccurrenceResp, 0, len(p.Refused)),
+		Written: p.Written,
+	}
+	for _, a := range p.Adopt {
+		resp.Adopt = append(resp.Adopt, adoptionToAPI(a))
+	}
+	for _, r := range p.Refused {
+		resp.Refused = append(resp.Refused, adoptionToAPI(r))
+	}
+	return resp
 }
