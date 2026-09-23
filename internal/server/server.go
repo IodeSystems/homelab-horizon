@@ -1106,6 +1106,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/machines", s.handleAPIMachines)
 	mux.HandleFunc("/api/v1/machines/add", s.handleAPIMachineAdd)
 	mux.HandleFunc("/api/v1/machines/rm", s.handleAPIMachineRm)
+	// The segments: what a machine's segment NAME resolves to — a project, a
+	// range, an interface and the addressed members on it.
+	mux.HandleFunc("/api/v1/segments", s.handleAPISegments)
+	mux.HandleFunc("/api/v1/segments/add", s.handleAPISegmentAdd)
+	mux.HandleFunc("/api/v1/segments/rm", s.handleAPISegmentRm)
 	mux.HandleFunc("/api/v1/import", s.handleAPIImport)
 	mux.HandleFunc("/api/v1/domains", s.handleAPIDomains)
 	mux.HandleFunc("/api/v1/vpn/peers", s.handleAPIVPNPeers)

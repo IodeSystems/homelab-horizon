@@ -76,9 +76,10 @@ an agent credential only for a machine it has been told about.
                and a box that bridges segments is a declared exception with a
                reason, not a default.
 
-Segment names are not checked against anything yet — a Segment record does not
-exist until VPN ranges and WireGuard interfaces go plural (phase 4 item 15).
-Until then this declares membership of a name.
+A segment name must name a segment that EXISTS, once any is declared —
+"hz segment ls" lists them. On a config that declares none, every membership is
+still a label and the name is only checked for shape: nothing resolves it to an
+interface, an address or a peer set.
 `
 
 // repeatedFlag collects a flag given more than once, which is how segment

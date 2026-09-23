@@ -33,10 +33,12 @@ import (
 // it is in the way. A removal that said only "3 things depend on this" would
 // leave them to find out which.
 type Dependant struct {
-	// Kind is "project", "environment", "machine", "service" or "credential".
+	// Kind is "project", "environment", "service", "segment", "machine" or
+	// "credential".
 	Kind string `json:"kind"`
 	// Name identifies the record: a project name, "<project>/<environment>",
-	// a machine name, a service name, or the machine a credential belongs to.
+	// a segment name, a machine name, a service name, or the machine a
+	// credential belongs to.
 	Name string `json:"name"`
 	// How says what the relationship is, in a sentence.
 	How string `json:"how"`
@@ -48,8 +50,10 @@ func (d Dependant) String() string { return d.Kind + " " + d.Name + " — " + d.
 // identical list. Kind order is the tree's: projects, then their rungs, then
 // what sits on them — with machines and the credentials keyed to them after
 // the tree, because a machine is not in it (it has no project by design).
+// Segments sit between: a segment IS owned by a project, and the machines on it
+// are not.
 func sortDependants(list []Dependant) {
-	rank := map[string]int{"project": 0, "environment": 1, "service": 2, "machine": 3, "credential": 4}
+	rank := map[string]int{"project": 0, "environment": 1, "service": 2, "segment": 3, "machine": 4, "credential": 5}
 	sort.SliceStable(list, func(i, j int) bool {
 		if rank[list[i].Kind] != rank[list[j].Kind] {
 			return rank[list[i].Kind] < rank[list[j].Kind]
@@ -484,11 +488,14 @@ func (c *Config) validateModel() error {
 	if err := c.ValidateEnvironments(); err != nil {
 		return err
 	}
-	return c.ValidateMachines()
+	if err := c.ValidateMachines(); err != nil {
+		return err
+	}
+	return c.ValidateSegments()
 }
 
 // copyForWrite returns a config with fresh Projects/Environments/Services/
-// Machines slices, for the reason ApplyImport gives: a Config is copied
+// Machines/Segments slices, for the reason ApplyImport gives: a Config is copied
 // shallowly in several places, so writing through the existing backing array
 // would mutate the config another goroutine is still serving.
 func (c *Config) copyForWrite() *Config {
@@ -497,6 +504,7 @@ func (c *Config) copyForWrite() *Config {
 	next.Environments = append([]Environment(nil), c.Environments...)
 	next.Services = append([]Service(nil), c.Services...)
 	next.Machines = append([]Machine(nil), c.Machines...)
+	next.Segments = append([]Segment(nil), c.Segments...)
 	return &next
 }
 
@@ -504,7 +512,7 @@ func (c *Config) copyForWrite() *Config {
 // validateModel has passed — a config is never left half-written.
 func (c *Config) adopt(next *Config) {
 	c.Projects, c.Environments, c.Services = next.Projects, next.Environments, next.Services
-	c.Machines = next.Machines
+	c.Machines, c.Segments = next.Machines, next.Segments
 }
 
 func (c *Config) hasProject(name string) bool {
