@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -152,5 +153,63 @@ func TestDisabledVantageProducesNoVerdicts(t *testing.T) {
 	cfg.RemoteProbes[0].Enabled = false
 	if got := New(cfg).Diagnoses(); len(got) != 0 {
 		t.Fatalf("a disabled vantage produced %d verdicts", len(got))
+	}
+}
+
+// config.LocalInterface reaches the instruction.
+//
+// The field is named for an interface and holds an IP — config.DetectLocalInterface
+// returns GetInterfaceIP, and the NIC name lives in LastLocalIface. This is the
+// test that pins which of the two the router instruction uses: wiring the NIC
+// name in would put "enx00051b94b7cc" in a DMZ field.
+func TestTheRouterInstructionNamesHZsOwnLANAddress(t *testing.T) {
+	cfg := diagnoseCfg()
+	cfg.LocalInterface = "192.168.1.160"
+	cfg.LastLocalIface = "enx00051b94b7cc"
+
+	m := New(cfg)
+	rp := m.cfg().RemoteProbes[0]
+	at := time.Now().UTC()
+
+	m.foldRemoteResult(rp, probe.Result{
+		Host: "api.example.com", Kind: probe.KindDNS,
+		At: at, Status: probe.StatusOK, Detail: "203.0.113.10",
+	})
+	m.foldRemoteResult(rp, probe.Result{
+		Host: "api.example.com", Kind: probe.KindHTTPS, At: at, Status: probe.StatusFailed,
+		Error: "Get \"https://api.example.com/\": dial tcp 203.0.113.10:443: connect: connection refused",
+	})
+
+	api := byHost(m.Diagnoses())["api.example.com"]
+	if api.Cause != CauseEdgeUnreachable {
+		t.Fatalf("cause = %q (summary: %s)", api.Cause, api.Summary)
+	}
+	if !strings.Contains(api.Fix, "192.168.1.160") {
+		t.Fatalf("the instruction does not name hz's own LAN address:\n%s", api.Fix)
+	}
+	if strings.Contains(api.Fix, "enx00051b94b7cc") {
+		t.Fatalf("the NIC NAME reached a router instruction instead of the address:\n%s", api.Fix)
+	}
+}
+
+// With no LocalInterface the instruction keeps the category. A config that has
+// never reconciled has an empty one.
+func TestTheRouterInstructionFallsBackWhenHZDoesNotKnowWhereItIs(t *testing.T) {
+	m := New(diagnoseCfg()) // LocalInterface unset
+	rp := m.cfg().RemoteProbes[0]
+	at := time.Now().UTC()
+
+	m.foldRemoteResult(rp, probe.Result{
+		Host: "api.example.com", Kind: probe.KindDNS,
+		At: at, Status: probe.StatusOK, Detail: "203.0.113.10",
+	})
+	m.foldRemoteResult(rp, probe.Result{
+		Host: "api.example.com", Kind: probe.KindHTTPS, At: at, Status: probe.StatusFailed,
+		Error: "Get \"https://api.example.com/\": dial tcp 203.0.113.10:443: connect: connection refused",
+	})
+
+	api := byHost(m.Diagnoses())["api.example.com"]
+	if !strings.Contains(api.Fix, "LAN address of the machine running hz") {
+		t.Fatalf("an hz that does not know where it is must still give the category:\n%s", api.Fix)
 	}
 }

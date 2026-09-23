@@ -44,6 +44,7 @@ package monitor
 
 import (
 	"fmt"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -170,6 +171,25 @@ type Facts struct {
 	// are one undifferentiated failure, which is the state this replaces.
 	PublicIP      string
 	PublicIPStale bool
+
+	// LocalAddress is the address hz currently sees ITSELF at on the LAN —
+	// config.LocalInterface, which despite the name holds an IP and not an
+	// interface name (config.DetectLocalInterface returns GetInterfaceIP; the
+	// NIC name is the separate LastLocalIface). The codebase already treats it
+	// as "the address other hosts reach this hz on": DeriveLocalDNSMappings
+	// rewrites a service's `localhost` record to it, and ValidateForwards
+	// refuses a port-forward backend equal to it as "points at the gateway
+	// itself".
+	//
+	// It is what turns the router instruction from a category into an address.
+	// Carried here rather than read from config for the same reason PublicIP
+	// is: Diagnose stays pure, and a test can pin it.
+	//
+	// EMPTY IS ALLOWED AND MEANS "do not name one". DetectLocalInterface falls
+	// back through eth0 to the VPN range to a hardcoded last resort, so the
+	// value is not guaranteed to be a LAN address; the prose says hz is
+	// reporting where it sees itself rather than asserting where it is.
+	LocalAddress string
 
 	// Now anchors every age. Passed rather than read so the classifier stays
 	// pure and the table test can pin a clock.
@@ -628,15 +648,59 @@ func edgeUnreachable(d Diagnosis, t probe.Target, f Facts, flavour string) Diagn
 			"not the problem: whatever forwards port %d from %s is not sending it to hz. That setting "+
 			"is on the edge router — its DMZ host, or its port-%d forward — which hz can neither read "+
 			"nor change. Open the router's admin page and point the DMZ host (or the port-%d forward) "+
-			"at the LAN address of the machine running hz. If that machine's address changed recently "+
-			"— a move to wireless gives it a new one — the forward is still aimed at where it used to be.",
-		p, expectList(t, f), p, p)
+			"%s",
+		p, expectList(t, f), p, p, pointItAt(f))
 	d.Confirm = fmt.Sprintf(
 		"From a host OUTSIDE the network, run: %s — any HTTP code at all, even 404 or 502, means the "+
 			"forward is carrying again. A connection error means it still is not. This row also clears "+
 			"on its own when %s next reports (%s).",
 		curlLine(t), vantageName(f), every(f))
 	return d
+}
+
+// pointItAt finishes the router instruction: an actual address when hz knows
+// one, and the category when it does not.
+//
+// Naming the address is the difference between an instruction somebody can
+// follow at a router admin page and one they have to go and research. Naming
+// an EMPTY address would be worse than the category — "point the DMZ host at
+// ." is an instruction to type nothing — so the fallback is kept and tested
+// rather than left to chance.
+//
+// The prose reports rather than promises. hz is saying where it currently sees
+// itself, which after a move is already the new address (that is what makes it
+// the useful one); it is not asserting that the browser showing this sentence
+// is looking at a live hz.
+func pointItAt(f Facts) string {
+	addr := usableLocalAddress(f.LocalAddress)
+	if addr == "" {
+		return "at the LAN address of the machine running hz. If that machine's address changed " +
+			"recently — a move to wireless gives it a new one — the forward is still aimed at where " +
+			"it used to be."
+	}
+	return fmt.Sprintf(
+		"at %s — where hz sees itself on the LAN right now, so after a move that is already the new "+
+			"address. hz is reporting, not promising: if this page has gone stale because hz is "+
+			"unreachable, reload it before typing the address in.",
+		addr)
+}
+
+// usableLocalAddress is hz's LAN address when it is one worth putting in an
+// instruction, and empty otherwise.
+//
+// config.DetectLocalInterface falls back through the default route to eth0 to
+// the VPN range to a hardcoded last resort, and the field can also be edited
+// by hand, so the value is not guaranteed to be anything in particular. A
+// loopback or unspecified address reaching a router's DMZ field would be an
+// actively wrong instruction — worse than the category it replaced — so those
+// fall back alongside the unparseable ones.
+func usableLocalAddress(s string) string {
+	s = strings.TrimSpace(s)
+	ip := net.ParseIP(s)
+	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() {
+		return ""
+	}
+	return s
 }
 
 // acceptedThenSilent is a connection that got through and then went nowhere.

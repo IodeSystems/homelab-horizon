@@ -41,6 +41,9 @@ func diagnosisCfg() *config.Config {
 			Domains: []string{"api.example.com"},
 			Proxy:   &config.ProxyConfig{Backend: "10.0.0.1:9000"},
 		}},
+		// Where hz sees itself on the LAN. The router instruction names it,
+		// so it has to survive the trip to the wire.
+		LocalInterface: "192.168.1.160",
 		RemoteProbes: []config.RemoteProbe{{
 			Name: "vps-nyc", Mode: config.ProbeModePush, Enabled: true, Probe: 300, Poll: 300,
 		}},
@@ -123,7 +126,14 @@ func TestTheRouterCaseReachesTheWireWithAnInstructionAndNoAction(t *testing.T) {
 	if d.HZCanFix {
 		t.Fatal("hz offered to change a device it has no path to")
 	}
-	for _, want := range []string{"hz cannot fix this", "DMZ host", "LAN address"} {
+	for _, want := range []string{
+		"hz cannot fix this",
+		"DMZ host",
+		// The address itself, not a category. This is the whole difference
+		// between an instruction somebody can follow at a router admin page
+		// and one they have to go and research.
+		"192.168.1.160",
+	} {
 		if !strings.Contains(d.Fix, want) {
 			t.Errorf("the instruction never says %q:\n%s", want, d.Fix)
 		}
