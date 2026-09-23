@@ -278,6 +278,10 @@ Phase 3 replaces this with: restart horizon, done.
 | 12 | [Observed-state channel](privilege-classification.md#41--closed-2026-09-21--the-observed-state-channel-exists) — the agent reports back | ✅ store + serve on **`dev`**; ✅ the drift SCREEN at `/drift` ([ui-redesign.md](ui-redesign.md)) — one screen in the existing shell, NOT the nav redesign |
 | 13 | [Agent handover](architecture.md#the-path) steps 1–3 — credential, WireGuard, error pages + certs + directory ownership | ✅ on **`dev`**, and the agent is still **INERT**; ◻ steps 4–5 (arm the unit, then de-root hz). Blocker 1 of [§8.3](privilege-audit.md) — the no-default-route stand-down, which would have had an armed agent reconcile the gateway's port forwards away — is ✅ done (`iptablesSectionFor`); blockers 2–7 are open |
 | 14 | [The project coordinate](project-coordinate.md) — the cm address is `<project>/<environment>/<app>/<role>` | ✅ **done** 2026-09-22. Flag day for every sealed value and every wrap; the freeze check found none to lose (gateway `hz.db` at schema 10, every `cm_*` table zero rows). Migration `0013`; the backwards resolution and `projection.ResolveEnvironment` are deleted; `configmgr.TestCrossProjectReadIsRefused` is the standing proof |
+| 15 | [Segment records](upstream-and-promotion.md#7-build-order) — `Machine.Segments` names resolve against nothing | ◐ **required, not optional** as of 2026-09-23: "redline-prod-hz is a client of an iodesystems segment" IS a segment membership. `projection.Segment.Resolved` is `false` for every membership until this lands |
+| 17 | [The config generation](upstream-and-promotion.md#3-the-config-generation--the-missing-link) — bless a config ⇒ the unit restarts | ◐ **the hole in the promotion loop.** Nothing today connects "a config was promoted" to "restart the unit", and it is not an oversight: the agent may not hold an environment key, and the app may not depend on freshness at boot. hz serves a DIGEST of the ciphertext per address; the agent acts on the change without being able to read it |
+| 18 | [`Environment.Upstream`](upstream-and-promotion.md#5-two-hz-instances-and-the-reach-between-them) — a rung whose placements live in another hz | ◻ not started. Until it exists `redline/prod` reads as *broken* rather than *remote*. One field plus a projection branch that emits a statement instead of a `Gap` |
+| 19 | [The registry crossing](upstream-and-promotion.md#what-crosses-and-how) — packages mirrored, config proxied | ◻ not started; depends on 15 and on 13 steps 4–5 |
 
 **Where this is all heading:** [architecture.md](architecture.md) — the model
 (project / environment / machine / instance / version / service), the two
@@ -285,6 +289,14 @@ channels, per-project network segments, and the phased path from here. Written
 2026-09-20; it supersedes nothing, it explains what the items above are for.
 [example-projection.md](example-projection.md) populates that model with a
 worked instance, and its §4 is the list of states any UI has to render.
+
+**Amended 2026-09-23 by [upstream-and-promotion.md](upstream-and-promotion.md).**
+architecture.md assumes exactly ONE hz and never says so. The estate is two —
+`iodesystems-hz` (registry, artifacts, promotion) and `redline-prod-hz` (a light
+gateway inside the CDE that reaches up to it as a VPN client). That amendment
+carries items 15, 17, 18 and 19 above, and states plainly that **the VPN reduces
+exposure, not PCI scope**: a system that ships config into the CDE is in scope
+however it is reached.
 
 ### ⚠ `dev` is the integration branch — read this before deploying anything
 

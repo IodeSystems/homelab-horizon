@@ -7,6 +7,15 @@
 >
 > Written 2026-09-20 from a design session. Every "today" claim below is
 > grounded in a file reference — check them before trusting them.
+>
+> **AMENDED 2026-09-23 by
+> [upstream-and-promotion.md](upstream-and-promotion.md).** This document
+> assumes exactly ONE hz instance and never says so. The estate is two: a
+> registry/promotion plane and a light prod gateway that reaches up to it. That
+> amendment also carries the **config generation** — the missing link between
+> "a config was blessed" and "the unit restarted" — and promotes item 15
+> (segments) from optional to required. Read it alongside "The model" and "The
+> path" below.
 
 ## The goal
 
