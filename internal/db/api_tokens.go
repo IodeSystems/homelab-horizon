@@ -145,11 +145,33 @@ func (d *DB) LookupAPIToken(ctx context.Context, token, ip string) (*User, *APIT
 // ListAPITokens returns a user's tokens, newest first. Revoked ones are not
 // returned: the list is for deciding what to revoke next, not a history.
 func (d *DB) ListAPITokens(ctx context.Context, userID string) ([]APIToken, error) {
+	return d.liveAPITokens(ctx, `user_id = ?`, userID)
+}
+
+// APITokensByName returns the user's live tokens carrying this name.
+//
+// A slice rather than one token because a name is NOT unique: the schema has no
+// index over (user_id, name) and creation does not look for a clash, so the same
+// name can legitimately name two credentials — a key rotated by minting the
+// replacement before retiring the original does exactly that. A caller naming a
+// token by name therefore has to handle "more than one", and the only honest way
+// to hand it that decision is to give it every match.
+//
+// Matching is exact, including case: the name is an operator's own label, not an
+// identity like a username, and quietly revoking "CI-Deploy" because someone
+// asked for "ci-deploy" is a guess about which credential they meant.
+func (d *DB) APITokensByName(ctx context.Context, userID, name string) ([]APIToken, error) {
+	return d.liveAPITokens(ctx, `user_id = ? AND name = ?`, userID, strings.TrimSpace(name))
+}
+
+// liveAPITokens is the one reader of unrevoked tokens; every caller differs only
+// in its filter, so the scan (and the NULL handling it gets right) exists once.
+func (d *DB) liveAPITokens(ctx context.Context, where string, args ...any) ([]APIToken, error) {
 	rows, err := d.QueryContext(ctx, `
 		SELECT id, user_id, name, created_at, expires_at, last_used_at, last_used_ip, mfa_required
 		FROM api_tokens
-		WHERE user_id = ? AND revoked_at IS NULL
-		ORDER BY created_at DESC, id DESC`, userID)
+		WHERE `+where+` AND revoked_at IS NULL
+		ORDER BY created_at DESC, id DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
