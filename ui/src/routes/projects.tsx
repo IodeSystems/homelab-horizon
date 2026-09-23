@@ -37,6 +37,7 @@ import type { EnvironmentResp, InstanceVersion, ProjectResp } from "../api/gener
 import {
   flattenTree,
   readFeed,
+  readInstanceSource,
   readPlacement,
   readRung,
   type TreeNode,
@@ -325,10 +326,12 @@ function ProjectsScreen() {
 
   const tree = flattenTree(projects.data ?? []);
   const envs = environments.data ?? [];
-  // null, deliberately, and not []: hz could not be asked, which is a
-  // different answer from "nothing is placed". Every placement reading below
-  // branches on it.
-  const instances: InstanceVersion[] | null = drift.isError ? null : (drift.data?.instances ?? []);
+  // null, deliberately, and not []: hz has not answered, which is a different
+  // answer from "nothing is placed". A PENDING read counts as not-answered too
+  // — `?? []` there would caption every prod rung "no machine yet" for as long
+  // as the read takes. Every placement reading below branches on the null.
+  const source = readInstanceSource(drift, "The placement column on every rung below");
+  const instances: InstanceVersion[] | null = source.known ? source.instances : null;
   // `undefined` only when the tree is empty, which is its own rendered state
   // below. A project the operator selected and that has since gone falls back
   // to the first row rather than to a blank panel.
@@ -341,19 +344,14 @@ function ProjectsScreen() {
         blurb="What hz declares: the project tree, the feed each project installs from, every rung's posture and declared version, and where those rungs actually run. Nothing here is editable — this is hz's own record, read back."
       />
 
-      {drift.isError ? (
-        <CannotAskBanner
-          what="The placement column is unanswered on every rung below."
-          detail={`hz could not be asked which machines host which rung (${drift.error instanceof Error ? drift.error.message : String(drift.error)}). Every rung below therefore says "hz cannot say" rather than "no machine" — those are different facts and only one of them is about the rung.`}
-        />
-      ) : null}
+      {source.known ? null : <CannotAskBanner what={source.what} detail={source.detail} />}
 
-      {drift.data && drift.data.unadmitted > 0 ? (
+      {source.known && source.unadmitted > 0 ? (
         <Alert severity="info" sx={{ mb: 2 }}>
-          {drift.data.unadmitted} registered address{drift.data.unadmitted === 1 ? " is" : "es are"} left out
-          of the placement column because nobody has approved {drift.data.unadmitted === 1 ? "it" : "them"}{" "}
-          yet. A pending address is one a machine has asked for and no admin has granted; it is waiting in
-          Config → Approvals, not missing.
+          {source.unadmitted} registered address{source.unadmitted === 1 ? " is" : "es are"} left out of the
+          placement column because nobody has approved {source.unadmitted === 1 ? "it" : "them"} yet. A
+          pending address is one a machine has asked for and no admin has granted; it is waiting in Config →
+          Approvals, not missing.
         </Alert>
       ) : null}
 

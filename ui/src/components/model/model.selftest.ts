@@ -32,6 +32,7 @@ import {
   readFeed,
   readGapReason,
   readHosting,
+  readInstanceSource,
   readMultiHomed,
   readPlacement,
   readRung,
@@ -222,6 +223,47 @@ console.log("· placement has three answers, and 'hz cannot say' is one of them"
   check(
     otherProject.knowledge === "unplaced",
     "another project's rung named 'prod' does not place this one — the name alone is not an identity",
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("· a pending read is not an empty answer");
+// ---------------------------------------------------------------------------
+{
+  // THE REGRESSION. An offline render of the real screens found both of them
+  // captioning every machine "hosts nothing addressable" and every rung "no
+  // machine yet" while the read was still in flight: `isError ? null : (data
+  // ?? [])` has no branch for pending, so `?? []` answered a question nobody
+  // had answered. It looked authoritative and then corrected itself, which is
+  // worse than the failed-read case it was written to handle.
+  const pending = readInstanceSource({ isSuccess: false, isError: false }, "The placement column");
+  const failed = readInstanceSource(
+    { isSuccess: false, isError: true, error: new Error("no identity store") },
+    "The placement column",
+  );
+  const answered = readInstanceSource(
+    { isSuccess: true, isError: false, data: { instances: [instance({})], unadmitted: 2 } },
+    "The placement column",
+  );
+
+  check(!pending.known, "a read still in flight has NOT answered");
+  check(!failed.known, "and neither has a read that failed");
+  check(answered.known, "only a succeeded read yields rows");
+  check(
+    answered.known && answered.instances.length === 1 && answered.unadmitted === 2,
+    "and it yields the rows and the unapproved count it actually carries",
+  );
+  check(
+    !pending.known && !failed.known && pending.detail !== failed.detail,
+    "pending and failed are told apart: one resolves on its own and the other does not",
+  );
+  check(
+    !failed.known && failed.detail.includes("no identity store"),
+    "the failed read names what went wrong rather than saying only that something did",
+  );
+  check(
+    !pending.known && pending.detail.includes("not the same as"),
+    "and the pending one says out loud that an unanswered question is not the answer none",
   );
 }
 

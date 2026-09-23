@@ -201,6 +201,58 @@ export function readSegment(seg: ProjectionSegment): SegmentReading {
 }
 
 // ---------------------------------------------------------------------------
+// Where the instance rows come from, and when there are none to have
+// ---------------------------------------------------------------------------
+
+/** The shape of a react-query result, narrowed to what this decision reads. */
+export interface InstanceQuery {
+  isSuccess: boolean;
+  isError: boolean;
+  data?: { instances: InstanceVersion[]; unadmitted: number };
+  error?: unknown;
+}
+
+export type InstanceSource =
+  | { known: true; instances: InstanceVersion[]; unadmitted: number }
+  | { known: false; what: string; detail: string };
+
+/**
+ * Whether hz has actually answered "which instances are registered".
+ *
+ * THIS EXISTS BECAUSE OF A BUG AN OFFLINE RENDER CAUGHT. The screens read
+ * `isError ? null : (data?.instances ?? [])`, which is right for a failed read
+ * and WRONG for every millisecond before the first one lands: a pending query
+ * has no error and no data, so `?? []` made an unanswered question into the
+ * answer "nothing is placed anywhere" — every machine captioned "hosts nothing
+ * addressable", every rung "no machine yet". That is the founding bug with a
+ * loading spinner in front of it, and it is worse than the failed-read case
+ * because it looks authoritative and then corrects itself.
+ *
+ * So the ONLY state that yields rows is `isSuccess`. Pending and failed are
+ * both "hz has not said", and they are separated for the operator because one
+ * of them will resolve on its own and the other will not.
+ */
+export function readInstanceSource(q: InstanceQuery, subject: string): InstanceSource {
+  if (q.isSuccess && q.data) {
+    return { known: true, instances: q.data.instances, unadmitted: q.data.unadmitted };
+  }
+  if (q.isError) {
+    const message = q.error instanceof Error ? q.error.message : String(q.error);
+    return {
+      known: false,
+      what: `${subject} is unanswered: hz could not be asked which instances are registered.`,
+      detail: `The read failed (${message}), so every row below says "hz cannot say" rather than showing an empty list. An empty list would claim nothing is placed anywhere, which is a fact about the fleet; this is a fact about hz.`,
+    };
+  }
+  return {
+    known: false,
+    what: `${subject} is unanswered: hz has not answered yet.`,
+    detail:
+      "The registrations are still being read. Nothing below is claiming anything is unplaced — that answer has not arrived, and it is not the same as the answer being none.",
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Placement: which machines host a rung, and when hz cannot say
 // ---------------------------------------------------------------------------
 
