@@ -25,6 +25,7 @@ import DashboardIcon from "@mui/icons-material/Dashboard";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import AccountTreeIcon from "@mui/icons-material/AccountTree";
 import ComputerIcon from "@mui/icons-material/Computer";
+import LanIcon from "@mui/icons-material/Lan";
 import DnsIcon from "@mui/icons-material/Dns";
 import StorageIcon from "@mui/icons-material/Storage";
 import LanguageIcon from "@mui/icons-material/Language";
@@ -64,6 +65,13 @@ const navItems: NavItem[] = [
   // machine at /machines/$machine, which is where you are when you ask.
   { icon: <AccountTreeIcon />, label: "Projects", path: "/projects" },
   { icon: <ComputerIcon />, label: "Machines", path: "/machines" },
+  // Beside Machines and deliberately NOT merged into it: a machine is a box hz
+  // manages with an agent, a host is an address other records resolve through,
+  // and the two lists do not have to match. Hosts answers one job — what points
+  // at this box, and what breaks if I move it — which nothing rendered before.
+  // The /observability host table is a third thing again (names and labels for
+  // scrape targets), so it stays where it is.
+  { icon: <LanIcon />, label: "Hosts", path: "/hosts" },
   { icon: <DnsIcon />, label: "Services", path: "/services" },
   { icon: <LanguageIcon />, label: "Domains", path: "/domains" },
   { icon: <StorageIcon />, label: "DNS", path: "/dns" },

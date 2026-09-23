@@ -15,6 +15,8 @@ import type {
   MachineResp,
   MachineProjectionResp,
   VersionDriftResponse,
+  HostsViewResp,
+  HostShowResp,
 } from "./generated-types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
@@ -1570,6 +1572,44 @@ export function useSaveTopologyHosts() {
       apiFetch("/topology/hosts", {
         method: "PUT",
         body: JSON.stringify({ hosts }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["topology"] });
+    },
+  });
+}
+
+/**
+ * Every declared host plus "@self", each with the records that resolve through
+ * it and what those records resolve to now. The /hosts screen's one read.
+ *
+ * Separate from useTopology on purpose: that query is the exporter editor's
+ * read-modify-write buffer (raw hosts + probed targets), and this one is the
+ * derived "what points at this box" answer. Sharing a cache key would make a
+ * host edit invalidate a probe sweep and vice versa.
+ */
+export function useHostsView() {
+  return useQuery({
+    queryKey: ["topology", "hosts-view"],
+    queryFn: () => apiFetch<HostsViewResp>("/topology/hosts/view"),
+  });
+}
+
+/**
+ * Repoint one declared host. THE one-edit move: every record written @name
+ * follows it in a single config write, which is what the indirection is for.
+ *
+ * Invalidates the topology reads rather than patching them — the resolved
+ * value of every dependant changed, and re-reading is the only way to be sure
+ * the screen shows what hz now holds.
+ */
+export function useSetHostIP() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; ip: string }) =>
+      apiFetch<HostShowResp>("/topology/hosts/set", {
+        method: "PUT",
+        body: JSON.stringify(input),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["topology"] });
