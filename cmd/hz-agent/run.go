@@ -51,7 +51,7 @@ func runAgent(args []string) error {
 	defer stop()
 
 	src := f.source()
-	obs := agent.NewSystemObserver()
+	obs := f.observer()
 
 	var etag string
 	for {
@@ -117,15 +117,20 @@ func onePass(ctx context.Context, f *agentFlags, src agent.Source, obs agent.Obs
 		return newETag
 	}
 
-	res, err := agent.Apply(d, plan, obs.Observe(d), agent.SystemReloader{})
+	res, err := agent.Apply(d, plan, obs.Observe(d), agent.SystemReloader{}, f.generations())
 	if err != nil {
 		slog.Error("apply failed", "err", err, "errors", res.Errors)
 		// Do NOT advance the ETag: the next pass must re-plan against what is
 		// actually on disk now, which a partial apply has changed.
 		return etag
 	}
+	// adopted is logged beside restarted, and at info, because "this pass
+	// wrote down twenty generations and restarted nothing" is the correct
+	// first run and has to be distinguishable in a journal from a pass that
+	// restarted twenty units.
 	slog.Info("applied", "generation", short(res.Generation),
-		"wrote", res.Wrote, "reloaded", res.Reloaded)
+		"wrote", res.Wrote, "reloaded", res.Reloaded,
+		"restarted", res.Restarted, "adopted", res.Adopted)
 	return newETag
 }
 

@@ -20,6 +20,15 @@ type recordingReloader struct {
 	calls []Subsystem
 	live  []iptables.Rule
 	units []Unit
+
+	// restarted is the units restarted for a moved sealed config, in the
+	// order they were restarted. A slice and not a set, because "restarted
+	// once" and "restarted after everything else" are both properties the
+	// config-restart tests have to be able to check.
+	restarted []string
+
+	// restartErr, when set, fails the restart of the unit it names.
+	restartErr map[string]error
 }
 
 func (r *recordingReloader) HAProxy(*HAProxySection) error {
@@ -44,6 +53,14 @@ func (r *recordingReloader) Units(sec *FilesSection) error {
 	if sec != nil {
 		r.units = append(r.units, sec.Units...)
 	}
+	return nil
+}
+func (r *recordingReloader) RestartUnit(name string) error {
+	if err := r.restartErr[name]; err != nil {
+		return err
+	}
+	r.calls = append(r.calls, SubsystemConfig)
+	r.restarted = append(r.restarted, name)
 	return nil
 }
 
@@ -78,7 +95,7 @@ func TestApplyIsIdempotentAndReloadsNothingSecondTime(t *testing.T) {
 	obs := NewSystemObserver()
 
 	first := &recordingReloader{}
-	res, err := Apply(d, Compute(d, obs.Observe(d)), obs.Observe(d), first)
+	res, err := Apply(d, Compute(d, obs.Observe(d)), obs.Observe(d), first, nil)
 	if err != nil {
 		t.Fatalf("first apply: %v (%v)", err, res.Errors)
 	}
@@ -94,7 +111,7 @@ func TestApplyIsIdempotentAndReloadsNothingSecondTime(t *testing.T) {
 	if plan.Changed() {
 		t.Fatalf("the second plan still wants changes: %+v", plan.Pending())
 	}
-	res2, err := Apply(d, plan, obs.Observe(d), second)
+	res2, err := Apply(d, plan, obs.Observe(d), second, nil)
 	if err != nil {
 		t.Fatalf("second apply: %v (%v)", err, res2.Errors)
 	}
@@ -111,13 +128,13 @@ func TestApplyReloadsOnlyTheSubsystemThatMoved(t *testing.T) {
 	dir := t.TempDir()
 	d := sectionsFor(t, dir)
 	obs := NewSystemObserver()
-	if _, err := Apply(d, Compute(d, obs.Observe(d)), obs.Observe(d), &recordingReloader{}); err != nil {
+	if _, err := Apply(d, Compute(d, obs.Observe(d)), obs.Observe(d), &recordingReloader{}, nil); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
 	d.DNSMasq.Files[1].Contents = "address=/y/10.0.0.2\n"
 	r := &recordingReloader{}
-	res, err := Apply(d, Compute(d, obs.Observe(d)), obs.Observe(d), r)
+	res, err := Apply(d, Compute(d, obs.Observe(d)), obs.Observe(d), r, nil)
 	if err != nil {
 		t.Fatalf("apply: %v (%v)", err, res.Errors)
 	}
@@ -159,7 +176,7 @@ func TestTheErrorPageExistsBeforeHAProxyIsReloaded(t *testing.T) {
 	}}
 
 	obs := NewSystemObserver()
-	res, err := Apply(d, Compute(d, obs.Observe(d)), obs.Observe(d), r)
+	res, err := Apply(d, Compute(d, obs.Observe(d)), obs.Observe(d), r, nil)
 	if err != nil {
 		t.Fatalf("apply: %v (%v)", err, res.Errors)
 	}
@@ -195,7 +212,7 @@ func TestApplyRefusesToWriteOverAnUnreadableFile(t *testing.T) {
 		path: {Exists: true, ReadErr: "permission denied"},
 	}}
 	r := &recordingReloader{}
-	res, err := Apply(d, Compute(d, obs), obs, r)
+	res, err := Apply(d, Compute(d, obs), obs, r, nil)
 	if err == nil {
 		t.Fatal("apply should report the refusal, not succeed quietly")
 	}
@@ -218,7 +235,7 @@ func TestIPTablesReconcilesOnlyWhenTheLiveSetWasRead(t *testing.T) {
 	}}
 
 	blind := &recordingReloader{}
-	if _, err := Apply(d, Compute(d, Observed{Files: map[string]FileState{}}), Observed{Files: map[string]FileState{}}, blind); err != nil {
+	if _, err := Apply(d, Compute(d, Observed{Files: map[string]FileState{}}), Observed{Files: map[string]FileState{}}, blind, nil); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if len(blind.calls) != 0 {
@@ -227,7 +244,7 @@ func TestIPTablesReconcilesOnlyWhenTheLiveSetWasRead(t *testing.T) {
 
 	seeing := &recordingReloader{}
 	obs := Observed{Files: map[string]FileState{}, IPTablesReadable: true}
-	if _, err := Apply(d, Compute(d, obs), obs, seeing); err != nil {
+	if _, err := Apply(d, Compute(d, obs), obs, seeing, nil); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if len(seeing.calls) != 1 || seeing.calls[0] != SubsystemIPTables {

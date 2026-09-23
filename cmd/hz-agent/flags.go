@@ -31,11 +31,17 @@ type agentFlags struct {
 	// machine has to be given a credential by somebody who has one.
 	adminTokenFile string
 	from           string
-	machine        string
-	interval       time.Duration
-	once           bool
-	apply          bool
-	asJSON         bool
+	// statePath is the applied-generation record: which sealed config this
+	// agent last restarted each unit for (internal/agent/generations.go). The
+	// one thing the agent remembers across a restart, and it has to be, or
+	// every boot would re-adopt and the config-restart trigger would never
+	// fire.
+	statePath string
+	machine   string
+	interval  time.Duration
+	once      bool
+	apply     bool
+	asJSON    bool
 
 	// report turns the report-back off. On by default: hz cannot show drift
 	// for a machine that does not speak, and a screen with no data is the
@@ -101,6 +107,7 @@ func (f *agentFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.tokenFile, "token-file", defaultTokenFile, "file holding the credential")
 	fs.StringVar(&f.adminTokenFile, "admin-token-file", defaultAdminTokenFile, "file holding an hz ADMIN credential, read once to authorise enrolment (enroll/install only)")
 	fs.StringVar(&f.from, "from", "", "read the desired state from a local JSON file instead of polling")
+	fs.StringVar(&f.statePath, "state", agent.DefaultGenerationsPath, "record of which sealed config each unit was last restarted for. Read always, written only when applying")
 	fs.StringVar(&f.machine, "machine", "", "refuse a payload addressed to another machine (default: this host)")
 	fs.DurationVar(&f.interval, "interval", defaultInterval, "poll interval")
 	fs.BoolVar(&f.once, "once", false, "one pass, then exit")
@@ -108,6 +115,26 @@ func (f *agentFlags) register(fs *flag.FlagSet) {
 	fs.BoolVar(&f.asJSON, "json", false, "print the plan as JSON")
 	fs.BoolVar(&f.report, "report", true, "tell hz what this machine looks like. Reports the PLAN, never file contents")
 	fs.DurationVar(&f.reportEvery, "report-interval", defaultReportEvery, "how often to report when nothing has changed")
+}
+
+// generations is the applied-generation record, or nil when the operator
+// asked for none.
+//
+// Nil is not a soft failure: an agent with nowhere to write what it applied
+// restarts nothing at all, because a restart it could not record would be
+// performed again on the next pass and every pass after it. The report says so
+// rather than the agent quietly never firing.
+func (f *agentFlags) generations() agent.GenerationStore {
+	if strings.TrimSpace(f.statePath) == "" {
+		return nil
+	}
+	return agent.FileGenerationStore{Path: f.statePath}
+}
+
+// observer reads the machine, including this agent's own record of what it
+// last applied.
+func (f *agentFlags) observer() *agent.SystemObserver {
+	return agent.NewSystemObserver().WithGenerations(f.generations())
 }
 
 // reporter is where this agent tells hz what it found, or nil.

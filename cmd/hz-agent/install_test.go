@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/agent"
+	"github.com/iodesystems/homelab-horizon/internal/projection"
 )
 
 func flagsFor() *agentFlags {
@@ -140,6 +141,38 @@ func TestReportOnlyPassWritesNothing(t *testing.T) {
 
 	if _, err := os.Stat(target); err == nil {
 		t.Fatal("a report-only pass created the file it was only supposed to report on")
+	}
+}
+
+// The applied-generation record is part of "writes nothing" too.
+//
+// A report-only agent must not write it, and the reason is not tidiness: the
+// record is the agent's claim that a unit is already running a given sealed
+// config. An agent that recorded a generation it never restarted anything for
+// would make the FIRST real restart, after somebody armed it, look like a
+// no-op — the one missed restart being the one that matters.
+func TestReportOnlyPassDoesNotRecordAConfigGeneration(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(dir, "generations.json")
+
+	d := &agent.Desired{
+		Machine: "app-1",
+		Model: &projection.MachineConfig{
+			Machine: "app-1",
+			Units:   []projection.Unit{{Name: "app.service", Enabled: true, ConfigGeneration: "gen-a"}},
+		},
+	}
+	payload := filepath.Join(dir, "desired.json")
+	b, _ := json.Marshal(d)
+	if err := os.WriteFile(payload, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &agentFlags{from: payload, machine: "app-1", statePath: state, interval: time.Second}
+	onePass(context.Background(), f, f.source(), f.observer(), "")
+
+	if _, err := os.Stat(state); err == nil {
+		t.Fatal("a report-only pass wrote the applied-generation record")
 	}
 }
 
