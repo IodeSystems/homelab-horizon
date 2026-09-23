@@ -370,6 +370,9 @@ const gatewayConfigJSON = `{
       "internal_dns": {"ip": "%[1]s"},
       "proxy": {"backend": "%[2]s:3000"}
     }
+  ],
+  "exporters": [
+    {"job": "node", "mode": "port", "port": 9100, "hosts": ["%[1]s"]}
   ]
 }`
 
@@ -421,10 +424,11 @@ func TestTheGatewayMovesItself(t *testing.T) {
 	}
 
 	// `hz host show self`: what points at this gateway. Six records here —
-	// two dnsmasq answers, two backends, one standby slot, and the wiki's.
+	// two dnsmasq answers, two backends, one standby slot, and one exporter
+	// host list.
 	refs := selfRef.HostReferences(config.HostRefSelfName)
-	if len(refs) != 5 {
-		t.Fatalf("want 5 self-references, got %d: %+v", len(refs), refs)
+	if len(refs) != 6 {
+		t.Fatalf("want 6 self-references, got %d: %+v", len(refs), refs)
 	}
 
 	// The whole edit. LocalInterface is per instance and never replicated, so
@@ -476,4 +480,199 @@ func diffLines(want, got string) []string {
 		}
 	}
 	return out
+}
+
+// --- adoption: the rewrite must change nothing --------------------------------
+
+// TestAdoptionRendersByteIdenticallyToTheLiteralConfig is the whole safety
+// claim of `hz host adopt`, measured rather than asserted.
+//
+// Adoption changes how a config is WRITTEN — 47 copies of an address become 47
+// references — and must change nothing about what it PRODUCES. The config here
+// is the legacy one, entirely literals, which is the state the live gateway is
+// in; after adopting "nas" every record that carried 192.168.1.160 is written
+// "@nas", and the bytes are compared against the SAME golden the pre-change
+// tree generated. So adoption is proved equal to the literal config and to the
+// output of the code that existed before references did, at once.
+func TestAdoptionRendersByteIdenticallyToTheLiteralConfig(t *testing.T) {
+	cfg, err := config.LoadFromJSON([]byte(legacyConfigJSON))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	plan, err := cfg.AdoptAddress("192.168.1.160")
+	if err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	if plan.Ref != "@nas" {
+		t.Fatalf("adopted to %q; 192.168.1.160 is declared as nas and is not this instance's address", plan.Ref)
+	}
+	// If this rewrote nothing the byte comparison below would pass for the
+	// wrong reason — a golden test of an untouched config.
+	if plan.Written < 6 {
+		t.Fatalf("adoption rewrote %d record(s); the legacy config carries the address in more than that: %+v", plan.Written, plan.Adopt)
+	}
+
+	want, err := os.ReadFile(filepath.Join("testdata", "legacy_render.golden"))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	got := renderAll(t, cfg)
+	if got != string(want) {
+		t.Errorf("adoption changed what the config renders — it may only change how the config is written")
+		for i, line := range diffLines(string(want), got) {
+			if i > 40 {
+				t.Errorf("  ... and more")
+				break
+			}
+			t.Errorf("  %s", line)
+		}
+	}
+}
+
+// TestAdoptionMakesTheDeclaredMoveOneEdit is the payoff: before adoption the
+// literal config still names the old address everywhere after the box moves;
+// after adoption the same move is one field.
+func TestAdoptionMakesTheDeclaredMoveOneEdit(t *testing.T) {
+	const oldIP, newIP = "192.168.1.160", "192.168.1.211"
+
+	// The problem, so the test fails if it stops modelling it.
+	before, err := config.LoadFromJSON([]byte(legacyConfigJSON))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for i := range before.Hosts {
+		if before.Hosts[i].Name == "nas" {
+			before.Hosts[i].IP = newIP
+		}
+	}
+	if out := renderAll(t, before); !strings.Contains(out, oldIP) {
+		t.Fatal("the literal config no longer carries the old address after the move — this test models nothing")
+	}
+
+	after, err := config.LoadFromJSON([]byte(legacyConfigJSON))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, err := after.AdoptAddress(oldIP); err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	for i := range after.Hosts {
+		if after.Hosts[i].Name == "nas" {
+			after.Hosts[i].IP = newIP
+		}
+	}
+	out := renderAll(t, after)
+	if strings.Contains(out, oldIP) {
+		t.Errorf("the old address survives after adopting and moving:\n%s", linesContaining(out, oldIP))
+	}
+	for _, want := range []string{
+		newIP + ":8080",
+		newIP + ":8081",
+		newIP + ":4433",
+		newIP + ":9100",
+		"host-record=nas," + newIP,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q after the adopted host moved", want)
+		}
+	}
+}
+
+// TestAdoptingTheGatewaysOwnAddressRendersByteIdentically is the case the live
+// config is actually in: 192.168.1.160 IS the gateway, and adoption must write
+// @self — the spelling that is correct on a peer — without moving a byte.
+//
+// It renders the gateway config with its literal address, adopts it, and
+// compares against the untouched literal render. Same comparison as above, on
+// the shape that dominates the real config: internal_dns answers, the backends
+// of processes on this box, and their standby slots.
+func TestAdoptingTheGatewaysOwnAddressRendersByteIdentically(t *testing.T) {
+	const gwIP = "192.168.1.160"
+
+	literal, err := config.LoadFromJSON([]byte(fmt.Sprintf(gatewayConfigJSON, gwIP, gwIP)))
+	if err != nil {
+		t.Fatalf("load literal: %v", err)
+	}
+	want := renderAll(t, literal)
+
+	adopted, err := config.LoadFromJSON([]byte(fmt.Sprintf(gatewayConfigJSON, gwIP, gwIP)))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	plan, err := adopted.AdoptAddress(gwIP)
+	if err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	if plan.Ref != config.SelfRef {
+		t.Fatalf("adopted the gateway's own address to %q, want %s", plan.Ref, config.SelfRef)
+	}
+	if plan.Written == 0 {
+		t.Fatal("adoption rewrote nothing, so the comparison below proves nothing")
+	}
+	// local_interface still carries the address: it is what @self resolves to.
+	if adopted.LocalInterface != gwIP {
+		t.Errorf("local_interface was rewritten to %q; it is the declaration @self resolves to, and rewriting it is a cycle", adopted.LocalInterface)
+	}
+
+	if got := renderAll(t, adopted); got != want {
+		t.Errorf("adopting the gateway's own address to @self changed what it renders")
+		for i, line := range diffLines(want, got) {
+			if i > 40 {
+				t.Errorf("  ... and more")
+				break
+			}
+			t.Errorf("  %s", line)
+		}
+	}
+
+	// And the move is now one field, on this box only.
+	adopted.LocalInterface = "192.168.1.211"
+	out := renderAll(t, adopted)
+	if strings.Contains(out, gwIP) {
+		t.Errorf("the gateway's old address survives after the one-field move:\n%s", linesContaining(out, gwIP))
+	}
+}
+
+// TestAdoptionCoversEveryRecordKindTheGoldenExercises pins the scope: the
+// record kinds adoption rewrites are the kinds the golden config uses, so a
+// kind quietly dropped from the walker shows up here rather than as a record
+// nobody adopted.
+func TestAdoptionCoversEveryRecordKindTheGoldenExercises(t *testing.T) {
+	cfg, err := config.LoadFromJSON([]byte(legacyConfigJSON))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	plan, err := cfg.PlanAddressAdoption("192.168.1.160")
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	kinds := map[string]int{}
+	for _, a := range plan.Adopt {
+		kinds[a.Kind]++
+	}
+	for _, want := range []string{
+		config.HostRefKindServiceBackend,
+		config.HostRefKindDeployNext,
+		config.HostRefKindForward,
+		config.HostRefKindLocalDNS,
+		config.HostRefKindInternalDNS,
+		config.HostRefKindExporterHost,
+	} {
+		if kinds[want] == 0 {
+			t.Errorf("no %q record was adopted; the golden config has one", want)
+		}
+	}
+
+	// The declaration itself is listed and refused, never adopted.
+	refusedFields := map[string]bool{}
+	for _, r := range plan.Refused {
+		refusedFields[r.Field] = true
+		if r.WhyNot == "" {
+			t.Errorf("%s/%s was refused with no reason given", r.Kind, r.Field)
+		}
+	}
+	if !refusedFields["hosts[0].ip"] {
+		t.Error("the nas declaration's own ip was not listed as a refused occurrence")
+	}
 }
