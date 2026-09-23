@@ -1106,6 +1106,12 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/machines", s.handleAPIMachines)
 	mux.HandleFunc("/api/v1/machines/add", s.handleAPIMachineAdd)
 	mux.HandleFunc("/api/v1/machines/rm", s.handleAPIMachineRm)
+	// What hz says one machine should look like, for a human. The PURE
+	// projection and nothing composed onto it — the agent's own poll
+	// (agent.DesiredPath) is a different question with a different answer.
+	// Read-only: hz publishes and the agent collects, so there is no apply
+	// beside this and there is not going to be one.
+	mux.HandleFunc(apitypes.MachineProjectionPath, s.handleAPIMachineProjection)
 	mux.HandleFunc("/api/v1/import", s.handleAPIImport)
 	mux.HandleFunc("/api/v1/domains", s.handleAPIDomains)
 	mux.HandleFunc("/api/v1/vpn/peers", s.handleAPIVPNPeers)
