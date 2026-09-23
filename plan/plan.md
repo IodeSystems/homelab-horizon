@@ -15,7 +15,7 @@
 | 5 | [OIDC: domain gating + docs](done.md#-oidc-domain-gating--docs--deployed-2026-09-17) | ✅ proven in production |
 | 6 | [Backend protocol (h2c)](icebox.md#-backend-protocol-h2c-for-grpc-backends--deployed-2026-09-17) | ✅ deployed + in use (Zitadel) |
 | 7 | Invites that can require a sign-in | ◻ not started, **and unwritten** — no section exists |
-| 8 | [DNS checks that would catch a broken forwarder](#-dns-checks-that-would-catch-a-broken-forwarder) | ✅ deployed |
+| 8 | DNS checks that would catch a broken forwarder | ✅ deployed. **Section is gone** — written in `9cd4c32`, removed later without being archived, so nothing describes what shipped. Unlinked 2026-09-23 rather than left dangling |
 | 9 | [Config manager](#-config-manager--registration-blessing-promotion) → [config-manager.md](config-manager.md) | ✅ **ceremony proven on a box 2026-09-19** |
 | 10 | [hz-client becomes a library](#-hz-client-becomes-a-library) | ◐ version surface in progress |
 | 11 | Projects · Environments · machine removal | ✅ on **`dev`**, not on main, nothing deployed |
