@@ -25,7 +25,9 @@ import (
 // actually respond (observed compatibility).
 func (s *Server) metricsCandidates() []integration.Target {
 	var out []integration.Target
-	for _, svc := range s.cfg().Services {
+	cfg := s.cfg()
+	for i := range cfg.Services {
+		svc := &cfg.Services[i]
 		if svc.Integrations == nil || svc.Integrations.Metrics == nil {
 			continue
 		}
@@ -33,15 +35,20 @@ func (s *Server) metricsCandidates() []integration.Target {
 		if m.Disabled || svc.Proxy == nil || svc.Proxy.Backend == "" {
 			continue
 		}
+		// Resolved: these addresses are probed and then handed to Prometheus.
+		backend := cfg.ServiceBackend(svc)
+		if backend == "" {
+			continue
+		}
 		path, bearer := m.MetricsPath(), m.Bearer
-		if svc.Proxy.Deploy != nil && svc.Proxy.Deploy.NextBackend != "" {
+		if next := cfg.ServiceNextBackend(svc); next != "" {
 			out = append(out,
-				integration.Target{Service: svc.Name, Slot: "current", Address: svc.Proxy.Backend, MetricsPath: path, Bearer: bearer},
-				integration.Target{Service: svc.Name, Slot: "next", Address: svc.Proxy.Deploy.NextBackend, MetricsPath: path, Bearer: bearer},
+				integration.Target{Service: svc.Name, Slot: "current", Address: backend, MetricsPath: path, Bearer: bearer},
+				integration.Target{Service: svc.Name, Slot: "next", Address: next, MetricsPath: path, Bearer: bearer},
 			)
 			continue
 		}
-		out = append(out, integration.Target{Service: svc.Name, Address: svc.Proxy.Backend, MetricsPath: path, Bearer: bearer})
+		out = append(out, integration.Target{Service: svc.Name, Address: backend, MetricsPath: path, Bearer: bearer})
 	}
 	return out
 }

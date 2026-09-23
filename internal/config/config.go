@@ -1999,17 +1999,41 @@ func (r LocalDNSRecord) Normalized() LocalDNSRecord {
 }
 
 // Validate reports why a record cannot be served, or nil.
+//
+// IP must be a literal address: dnsmasq answers with one, so a name here would
+// have nothing to answer. A host reference ("@nas") is accepted as a SHAPE and
+// resolved before this runs — see Config.ResolveLocalDNSRecord, which is what
+// every caller with a config in hand uses.
 func (r LocalDNSRecord) Validate() error {
 	r = r.Normalized()
 	switch {
 	case r.Name == "":
 		return errors.New("name is required")
+	case IsHostRef(r.IP):
+		return fmt.Errorf("%q is an unresolved host reference; resolve it against the declared hosts before serving it", r.IP)
 	case net.ParseIP(r.IP) == nil:
 		return fmt.Errorf("%q is not an IP address; local records answer with an address, not another name", r.IP)
 	case strings.ContainsAny(r.Name, " 	/"):
 		return fmt.Errorf("%q is not a hostname", r.Name)
 	}
 	return nil
+}
+
+// ResolveLocalDNSRecord normalizes a record and resolves a host reference in
+// its IP, returning the record as it will be served.
+//
+// This is the form every consumer wants: the derive path calls it and drops
+// what it refuses, the write path calls it and reports what it refuses. A bare
+// record.Validate() only sees the shape, and a reference has the wrong shape by
+// construction.
+func (c *Config) ResolveLocalDNSRecord(r LocalDNSRecord) (LocalDNSRecord, error) {
+	r = r.Normalized()
+	ip, err := c.ResolveHostRef(r.IP)
+	if err != nil {
+		return r, err
+	}
+	r.IP = ip
+	return r, r.Validate()
 }
 
 // LocalDNSConflicts returns the local records that shadow a name hz already

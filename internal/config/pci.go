@@ -77,10 +77,9 @@ func (c *Config) ServiceControls(coveredDomains map[string]bool, expiringDomains
 		// machine; anything else is cleartext HTTP across a network. Whether
 		// that network counts as "open, public" is a scoping argument, but an
 		// assessor will ask, so hz reports it rather than deciding.
-		backend := ""
-		if svc.Proxy != nil {
-			backend = svc.Proxy.Backend
-		}
+		// Resolved: "is the hop cleartext off-host" is a question about the
+		// address, so a reference has to become one before it is asked.
+		backend := c.ServiceBackend(&svc)
 		local := backendIsLocal(backend)
 		add("backend_not_cleartext_offhost", "4.2.1", local,
 			detailIf(!local, "hz reaches "+backend+" in cleartext over the network"))

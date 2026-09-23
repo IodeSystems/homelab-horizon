@@ -149,7 +149,14 @@ func (c *Config) ValidateForwards(forwards []Forward, exclude string) error {
 			return &ValidationError{Field: field, Message: fmt.Sprintf("%s is already forwarded by service %q", key, owner)}
 		}
 
-		ip, _, ok := f.BackendIPPort()
+		// A reference resolves before every address check below: the DNAT rule
+		// carries a literal address, so what has to be a LAN IPv4 is what the
+		// reference resolves TO.
+		backend, err := c.ResolveHostRef(f.Backend)
+		if err != nil {
+			return hostRefError(field+".backend", err)
+		}
+		ip, _, ok := Forward{Backend: backend}.BackendIPPort()
 		if !ok {
 			return &ValidationError{Field: field + ".backend", Message: "must be an IPv4 address and port, e.g. 192.168.1.76:4433"}
 		}
