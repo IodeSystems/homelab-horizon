@@ -405,6 +405,87 @@ type SegmentRmReq struct {
 	Confirm bool   `json:"confirm,omitempty"`
 }
 
+// SegmentSetReq changes a segment that already exists, and the memberships on
+// it. Every settable field is a POINTER, and that is the contract
+// EnvironmentSetReq sets: nil means "leave this alone", non-nil means "make it
+// this", and a non-nil empty string clears Note.
+//
+// THE NAME IS NOT HERE, and that is the model rather than an omission: it is the
+// identity every Machine.Segments entry resolves through, so renaming the
+// segment is renaming it on every machine in it — a rewrite of records the
+// operator did not name.
+//
+// MEMBERSHIP IS NOT HERE EITHER. Members are ADDRESSED and UNADDRESSED; a
+// machine cannot be joined to the segment here, because membership is declared
+// on the Machine and a second writer for it is how the two records come to
+// disagree.
+//
+// Cascade and Confirm carry only the CIDR case: a new range can put an existing
+// member address outside itself, which is a change to a record the operator did
+// not name, so it blocks, cascade opts in and unaddresses them, and confirm is
+// what actually writes that. A set that strands nobody writes immediately, the
+// way `hz env set` does.
+type SegmentSetReq struct {
+	Name      string                `json:"name"`
+	Project   *string               `json:"project,omitempty"`
+	CIDR      *string               `json:"cidr,omitempty"`
+	Interface *string               `json:"interface,omitempty"`
+	Note      *string               `json:"note,omitempty"`
+	Hub       *string               `json:"hub,omitempty"`
+	Members   []SegmentMemberSetReq `json:"members,omitempty"`
+	Unaddress []string              `json:"unaddress,omitempty"`
+	Cascade   bool                  `json:"cascade,omitempty"`
+	Confirm   bool                  `json:"confirm,omitempty"`
+}
+
+// SegmentMemberSetReq patches one membership. Machine says which; the rest are
+// pointers so re-addressing a member does not silently drop the public key and
+// the endpoint the operator did not retype.
+//
+// Hub is absent on purpose: it is single-valued across the segment, so it lives
+// on SegmentSetReq as a machine NAME. Two members each carrying hub=true is a
+// contradiction a per-member flag invites and a name cannot express.
+type SegmentMemberSetReq struct {
+	Machine   string  `json:"machine"`
+	Address   *string `json:"address,omitempty"`
+	PublicKey *string `json:"publicKey,omitempty"`
+	Endpoint  *string `json:"endpoint,omitempty"`
+}
+
+// SegmentSetResp answers both halves of a set with one shape, for the reason
+// RemovalResp does: a dry run and a write differ only in whether anything was
+// written.
+//
+// OK is true only when the config actually changed. Blocked is what stands in
+// the way — non-empty means nothing was written whatever Confirm said. Changes
+// is one line per changed value. Strands is what cascade would unaddress.
+// HubMove is the peer rewiring, present only when the hub actually moves.
+type SegmentSetResp struct {
+	OK      bool                `json:"ok"`
+	Blocked []DependantResp     `json:"blocked,omitempty"`
+	Changes []string            `json:"changes,omitempty"`
+	Strands []DependantResp     `json:"strands,omitempty"`
+	HubMove *SegmentHubMoveResp `json:"hubMove,omitempty"`
+	Segment *SegmentResp        `json:"segment,omitempty"`
+}
+
+// SegmentHubMoveResp is what moving the hub does, carried explicitly because it
+// is not a field edit: Peers is derived hub and spoke, so the hub moving rewires
+// every member's peer set, and none of that shows up in a diff of the record.
+type SegmentHubMoveResp struct {
+	From  string                  `json:"from,omitempty"`
+	To    string                  `json:"to"`
+	Peers []SegmentPeerChangeResp `json:"peers,omitempty"`
+}
+
+// SegmentPeerChangeResp is one member's peer set before and after. Only members
+// whose peers actually change appear.
+type SegmentPeerChangeResp struct {
+	Machine string   `json:"machine"`
+	Before  []string `json:"before,omitempty"`
+	After   []string `json:"after,omitempty"`
+}
+
 // RemovalResp answers both halves of a removal with one shape, because a dry run
 // and a write differ only in whether anything was written.
 //
