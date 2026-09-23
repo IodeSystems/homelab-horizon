@@ -441,3 +441,197 @@ func TestTheGapsCrossTheWire(t *testing.T) {
 		t.Fatal("the payload has no unresolved key at all")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// The config generation, over the real config store
+// (plan/upstream-and-promotion.md §3, item 17)
+// ---------------------------------------------------------------------------
+
+// bless writes a config at an address the way an operator does, open-ended
+// from 1.0.0, and returns nothing: what the test asserts on is what the
+// projection says afterwards.
+func bless(t *testing.T, s *Server, app, role string, kv ...string) {
+	t.Helper()
+	values := make([]db.ConfigValue, 0, len(kv)/2)
+	for i := 0; i+1 < len(kv); i += 2 {
+		values = append(values, db.ConfigValue{
+			Key:        kv[i],
+			Binding:    db.BindingEnv,
+			Ciphertext: []byte(kv[i+1]),
+			KeyID:      "key-1",
+			Origin:     db.OriginDirect,
+		})
+	}
+	if _, err := s.users.CreateConfig(t.Context(), "storefront", "prod", app, role, "1.0.0", "", operatorID(t, s), values); err != nil {
+		t.Fatalf("bless %s/%s: %v", app, role, err)
+	}
+}
+
+// operatorID is the one account these tests bless as. A config's created_by is
+// a real user row, so the id has to exist; blessing twice must not need two
+// operators.
+func operatorID(t *testing.T, s *Server) string {
+	t.Helper()
+	const name = "the-operator"
+	if u, err := s.users.UserByUsername(t.Context(), name); err == nil && u != nil {
+		return u.ID
+	}
+	u, err := s.users.CreateUser(t.Context(), name, "", db.RoleAdmin)
+	if err != nil {
+		t.Fatalf("create operator: %v", err)
+	}
+	return u.ID
+}
+
+func unitNamed(t *testing.T, mc *projection.MachineConfig, name string) projection.Unit {
+	t.Helper()
+	if mc == nil {
+		t.Fatal("no projection")
+	}
+	for _, u := range mc.Units {
+		if u.Name == name {
+			return u
+		}
+	}
+	t.Fatalf("no unit %s in %+v", name, mc.Units)
+	return projection.Unit{}
+}
+
+func configGapFor(mc *projection.MachineConfig) string {
+	if mc == nil {
+		return ""
+	}
+	for _, g := range mc.Unresolved {
+		if g.Section == projection.SectionConfig {
+			return g.Why
+		}
+	}
+	return ""
+}
+
+const webAppUnit = "storefront@prod-web-app.service"
+
+// THE HOLE THIS CLOSES, end to end: blessing a config used to land in hz and
+// poke nothing. Now it moves the unit's generation AND the payload
+// fingerprint, which is the thing an agent already polls on — so no new
+// change-detection was needed anywhere.
+func TestBlessingAConfigMovesTheUnitsGenerationAndTheFingerprint(t *testing.T) {
+	s := projectionServer(t)
+	approve(t, s, registerAt(t, s, "app-1", "prod", "web", "app"))
+
+	// Before anything is blessed: hz resolved the address and holds no config
+	// there. An ANSWER — empty, and no gap beside it. An agent reading this as
+	// "restart" would bounce every unit on the box.
+	d := s.desiredFor("app-1")
+	if gen := unitNamed(t, d.Model, webAppUnit).ConfigGeneration; gen != "" {
+		t.Fatalf("generation = %q before anything was blessed", gen)
+	}
+	if why := configGapFor(d.Model); why != "" {
+		t.Fatalf("hz gapped an address it answered about: %q", why)
+	}
+	empty := d.Fingerprint()
+
+	bless(t, s, "web", "app", "DB_URL", "sealed-one")
+	d = s.desiredFor("app-1")
+	first := unitNamed(t, d.Model, webAppUnit).ConfigGeneration
+	if first == "" {
+		t.Fatal("a blessed config produced no generation; the loop is still open")
+	}
+	if why := configGapFor(d.Model); why != "" {
+		t.Fatalf("hz gapped an address it just resolved: %q", why)
+	}
+	if d.Fingerprint() == empty {
+		t.Fatal("blessing a config did not move the payload fingerprint; a polling agent would get a 304 forever")
+	}
+
+	// And again: a second blessing at the same address supersedes the first
+	// (highest seq wins) and the generation follows it.
+	bless(t, s, "web", "app", "DB_URL", "sealed-two")
+	d = s.desiredFor("app-1")
+	second := unitNamed(t, d.Model, webAppUnit).ConfigGeneration
+	if second == "" || second == first {
+		t.Fatalf("re-blessing left the generation at %q", second)
+	}
+
+	// It is a digest and nothing else. A generation carrying the ciphertext
+	// would hand the agent the config it must never hold.
+	if len(second) != 64 || strings.Contains(second, "sealed") {
+		t.Fatalf("generation %q is not a sha256", second)
+	}
+	if strings.Contains(mustJSON(t, d), "sealed-two") {
+		t.Fatal("the sealed bytes crossed in the agent payload")
+	}
+}
+
+// A config blessed at ANOTHER address is not this unit's business. Without
+// this, every promotion anywhere would restart every unit everywhere.
+func TestAConfigAtAnotherAddressDoesNotMoveThisUnitsGeneration(t *testing.T) {
+	s := projectionServer(t)
+	approve(t, s, registerAt(t, s, "app-1", "prod", "web", "app"))
+	approve(t, s, registerAt(t, s, "app-1", "prod", "web", "next"))
+	const nextUnit = "storefront@prod-web-next.service"
+
+	bless(t, s, "web", "app", "DB_URL", "sealed-one")
+	mine := unitNamed(t, s.desiredFor("app-1").Model, webAppUnit).ConfigGeneration
+	if mine == "" {
+		t.Fatal("no generation to compare")
+	}
+	if gen := unitNamed(t, s.desiredFor("app-1").Model, nextUnit).ConfigGeneration; gen != "" {
+		t.Fatalf("the next slot has %q and nothing is blessed at its address", gen)
+	}
+
+	// Bless the OTHER slot. The two addresses are separate configs, so only
+	// the other unit's generation may appear.
+	bless(t, s, "web", "next", "DB_URL", "sealed-other")
+	mc := s.desiredFor("app-1").Model
+	if got := unitNamed(t, mc, webAppUnit).ConfigGeneration; got != mine {
+		t.Fatalf("another address's blessing moved this unit's generation: %q then %q", mine, got)
+	}
+	theirs := unitNamed(t, mc, nextUnit).ConfigGeneration
+	if theirs == "" {
+		t.Fatal("the slot that was blessed got no generation; the assertion above proves nothing")
+	}
+	if theirs == mine {
+		t.Fatal("two addresses with different configs digest the same")
+	}
+}
+
+// An hz with no config store says NOTHING about an address, which is not the
+// same as saying there is no config there — so every unit is gapped rather
+// than served an empty generation an agent might act on.
+func TestNoConfigStoreIsAGapOnEveryUnit(t *testing.T) {
+	s := projectionServer(t)
+	approve(t, s, registerAt(t, s, "app-1", "prod", "web", "app"))
+	bless(t, s, "web", "app", "DB_URL", "sealed-one")
+
+	instances := s.instancesForProjection()
+	if len(s.sealedConfigsForProjection(s.cfg(), instances)) != 1 {
+		t.Fatal("the fixture resolved no config, so this proves nothing")
+	}
+
+	s.users = nil
+	if got := s.sealedConfigsForProjection(s.cfg(), instances); got != nil {
+		t.Fatalf("an hz with no config store invented answers: %+v", got)
+	}
+}
+
+// The generation crosses the wire under the name the agent reads it by. A
+// field that stops at the JSON boundary is a loop that is still open.
+func TestTheGenerationCrossesTheAgentWire(t *testing.T) {
+	s := projectionServer(t)
+	approve(t, s, registerAt(t, s, "app-1", "prod", "web", "app"))
+	bless(t, s, "web", "app", "DB_URL", "sealed-one")
+
+	body := mustJSON(t, s.desiredFor("app-1"))
+	if !strings.Contains(body, `"configGeneration"`) {
+		t.Fatalf("no configGeneration in the payload: %s", body)
+	}
+
+	var d agent.Desired
+	if err := json.Unmarshal([]byte(body), &d); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if unitNamed(t, d.Model, webAppUnit).ConfigGeneration == "" {
+		t.Fatal("the generation did not survive the round trip")
+	}
+}
