@@ -722,12 +722,83 @@ type HostReferenceResp struct {
 	Value string `json:"value"` // the authored value, e.g. "@nas:8080"
 }
 
+// HostOccurrenceResp is one record that carries a host's address as a LITERAL
+// string. It is the same four fields as HostReferenceResp and it is a separate
+// list on purpose — see HostShowResp.
+type HostOccurrenceResp struct {
+	Kind  string `json:"kind"`  // a reference kind, or "local interface" / "host declaration"
+	Owner string `json:"owner"` // service name, record name, exporter job
+	Field string `json:"field"` // field within that record, e.g. "proxy.backend"
+	Value string `json:"value"` // the authored literal, e.g. "192.168.1.160:8080"
+
+	// Ref is what `hz host adopt` would write here, e.g. "@self:8080". Empty
+	// exactly when WhyNotAdoptable is set.
+	Ref string `json:"ref,omitempty"`
+	// WhyNotAdoptable is hz's sentence for refusing to rewrite this record —
+	// the declaration sites, which are where references bottom out. Empty
+	// exactly when Ref is set.
+	WhyNotAdoptable string `json:"whyNotAdoptable,omitempty"`
+}
+
 // HostShowResp is one declared host and everything that points at it — the
 // answer to "what breaks if I move this box", which is the question a host
 // reference exists to make answerable.
+//
+// TWO LISTS, NEVER ONE. References are records written "@name": they FOLLOW
+// the host, so `hz host set` moves them. Occurrences are records carrying the
+// host's address as a plain string: they follow nothing, and they are exactly
+// what breaks. Merging them would report records about to move as records
+// about to break, or the reverse — so they stay apart, with separate labels,
+// on every surface that shows them.
 type HostShowResp struct {
 	Host       HostDecl            `json:"host"`
 	References []HostReferenceResp `json:"references"`
+
+	// Occurrences is every record carrying this host's address as a literal.
+	// Non-nil whenever OccurrencesKnown is true.
+	Occurrences []HostOccurrenceResp `json:"occurrences"`
+	// OccurrencesKnown distinguishes "nothing carries this address" from "hz
+	// could not look". It is false only when the host has no address to scan
+	// for — @self before hz has detected local_interface — and
+	// OccurrencesUnknownWhy then says so. An empty list under a false flag
+	// would be the reassuring-zero bug the reference list already has.
+	OccurrencesKnown      bool   `json:"occurrencesKnown"`
+	OccurrencesUnknownWhy string `json:"occurrencesUnknownWhy,omitempty"`
+}
+
+// HostAdoptRequest rewrites every literal occurrence of a host's address into a
+// reference to it. DRY RUN unless Confirm is set: the listing is the product.
+type HostAdoptRequest struct {
+	// Name is the declared host, or "self" for this gateway's own address.
+	Name string `json:"name"`
+	// Confirm writes. Without it hz computes the identical plan and returns it
+	// having touched nothing.
+	Confirm bool `json:"confirm"`
+}
+
+// HostAdoptResp is what adoption would do, or did.
+type HostAdoptResp struct {
+	// Address is the literal being adopted, e.g. "192.168.1.160".
+	Address string `json:"address"`
+	// Ref is the spelling every adopted record receives: "@self" or "@name".
+	Ref string `json:"ref"`
+	// RefWhy explains the choice when both spellings were available — a
+	// declared host and @self holding the same address. Empty when only one
+	// candidate existed.
+	RefWhy string `json:"refWhy,omitempty"`
+
+	// Adopt is every record that would be, or was, rewritten.
+	Adopt []HostOccurrenceResp `json:"adopt"`
+	// Refused is every record carrying the address that hz will not rewrite,
+	// each naming itself and the reason. Listed rather than dropped: a record
+	// hz cannot adopt is still a record that breaks when the box moves.
+	Refused []HostOccurrenceResp `json:"refused"`
+
+	// Confirmed is whether this was a write. False means nothing was touched.
+	Confirmed bool `json:"confirmed"`
+	// Written is how many records were rewritten. Always 0 when Confirmed is
+	// false — that is the only difference between the two runs.
+	Written int `json:"written"`
 }
 
 // HostSetRequest repoints a declared host at a new address. It is the whole

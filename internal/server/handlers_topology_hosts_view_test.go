@@ -30,6 +30,15 @@ func hostsViewFixture() *config.Config {
 				Proxy:       &config.ProxyConfig{Backend: "127.0.0.1:8080"}, // a literal: not a reference
 				InternalDNS: &config.InternalDNS{IP: "@self"},
 			},
+			{
+				// Two records carrying @spare's ADDRESS as a plain string.
+				// Nothing references @spare, so before occurrences existed
+				// this host read as "nothing depends on it" — the reassuring
+				// zero that is the whole reason the second list is here.
+				Name:        "backups",
+				Proxy:       &config.ProxyConfig{Backend: "192.168.1.60:5000"},
+				InternalDNS: &config.InternalDNS{IP: "192.168.1.60"},
+			},
 		},
 		LocalDNSRecords:  []config.LocalDNSRecord{{Name: "desktop", IP: "@nas"}},
 		Exporters:        []config.Exporter{{Job: "node", Mode: "static", Targets: []string{"@nas:9100"}}},
@@ -154,8 +163,91 @@ func TestHostsViewUnreferencedHostIsEmptyNotAbsent(t *testing.T) {
 	if len(spare.References) != 0 {
 		t.Fatalf("nothing references @spare, got %d", len(spare.References))
 	}
-	if !resp.LiteralsUnlisted {
-		t.Error("the response must admit it cannot enumerate literal occurrences")
+
+	// ...and zero references is NOT zero dependants. Two records carry
+	// @spare's address as a plain string, plus its own declaration. Before
+	// this list existed the screen could only print a caveat here.
+	if !spare.OccurrencesKnown {
+		t.Fatal("the address is known, so the scan must have run")
+	}
+	if len(spare.Occurrences) != 3 {
+		t.Fatalf("want 2 literal records + the declaration itself, got %d: %+v", len(spare.Occurrences), spare.Occurrences)
+	}
+	adoptable, refused := 0, 0
+	for _, o := range spare.Occurrences {
+		switch {
+		case o.Ref != "" && o.WhyNotAdoptable == "":
+			adoptable++
+			if !strings.HasPrefix(o.Ref, "@spare") {
+				t.Errorf("%s would be written %q, want an @spare reference", o.Field, o.Ref)
+			}
+		case o.Ref == "" && o.WhyNotAdoptable != "":
+			refused++
+		default:
+			t.Errorf("%s is neither adoptable nor refused with a reason: %+v", o.Field, o)
+		}
+	}
+	if adoptable != 2 || refused != 1 {
+		t.Errorf("want 2 adoptable + 1 refused (the declaration's own ip), got %d/%d", adoptable, refused)
+	}
+	if spare.AdoptCommand != "hz host adopt spare" {
+		t.Errorf("the screen must name the command, got %q", spare.AdoptCommand)
+	}
+
+	// The two lists never merge: not one occurrence appears among the
+	// references, and the reference list stayed empty.
+	for _, o := range spare.Occurrences {
+		for _, r := range spare.References {
+			if o.Kind == r.Kind && o.Owner == r.Owner && o.Field == r.Field {
+				t.Errorf("record %s/%s/%s is in both lists", o.Kind, o.Owner, o.Field)
+			}
+		}
+	}
+}
+
+// A host nothing carries the address of reports an EMPTY occurrence list, not a
+// missing one — and that empty list is a real answer, unlike an empty reference
+// list on a config nobody has adopted.
+func TestHostsViewNoOccurrencesIsAnAnswer(t *testing.T) {
+	resp := buildHostsView(hostsViewFixture())
+	nas := findHost(t, resp, "nas")
+
+	if !nas.OccurrencesKnown {
+		t.Fatal("@nas has an address, so the scan ran")
+	}
+	if nas.Occurrences == nil {
+		t.Fatal("an empty occurrence list must be empty, never nil")
+	}
+	// Only its own declaration carries 192.168.1.51 literally; everything else
+	// that points at it is written @nas.
+	if len(nas.Occurrences) != 1 || nas.Occurrences[0].Kind != config.HostAddrKindHostDecl {
+		t.Fatalf("want only the declaration itself, got %+v", nas.Occurrences)
+	}
+	if nas.AdoptCommand != "" {
+		t.Errorf("nothing is adoptable, so no command should be offered, got %q", nas.AdoptCommand)
+	}
+}
+
+// @self before hz knows its own address: the scan CANNOT run, which is a
+// different state from running and finding nothing. Rendering the two the same
+// way is the founding bug of this screen with a new field on it.
+func TestHostsViewOccurrencesUnscannedIsNotEmpty(t *testing.T) {
+	cfg := hostsViewFixture()
+	cfg.LocalInterface = ""
+	resp := buildHostsView(cfg)
+	self := resp.Hosts[0]
+
+	if self.OccurrencesKnown {
+		t.Fatal("with no local_interface there is no address to scan for")
+	}
+	if self.Occurrences == nil || len(self.Occurrences) != 0 {
+		t.Fatalf("an unscanned host carries an empty list, got %+v", self.Occurrences)
+	}
+	if self.OccurrencesUnknownWhy == "" {
+		t.Error("hz did not say why it could not look")
+	}
+	if self.AdoptCommand != "" {
+		t.Errorf("nothing can be adopted without an address, got %q", self.AdoptCommand)
 	}
 }
 
