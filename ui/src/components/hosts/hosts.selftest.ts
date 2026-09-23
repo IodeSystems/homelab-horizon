@@ -22,12 +22,14 @@
  *
  * Names are placeholders — homelab-horizon is public.
  */
-import type { HostRefView, HostView } from "../../api/generated-types";
+import type { HostOccurrenceResp, HostRefView, HostView } from "../../api/generated-types";
 import {
   consequenceFor,
   groupByKind,
   kindSummary,
+  readAdoption,
   readDependants,
+  readOccurrences,
   readHostIdentity,
   readHostsSource,
   readMove,
@@ -66,6 +68,19 @@ function host(over: Partial<HostView>): HostView {
     editable: true,
     addressable: true,
     references: [],
+    occurrences: [],
+    occurrencesKnown: true,
+    ...over,
+  };
+}
+
+function occ(over: Partial<HostOccurrenceResp>): HostOccurrenceResp {
+  return {
+    kind: "service backend",
+    owner: "files",
+    field: "proxy.backend",
+    value: "192.168.1.51:8080",
+    ref: "@nas:8080",
     ...over,
   };
 }
@@ -95,7 +110,7 @@ console.log("· pending, failed and answered are three states, not two");
   const ok = readHostsSource({
     isSuccess: true,
     isError: false,
-    data: { hosts: [SELF], literalsUnlisted: true },
+    data: { hosts: [SELF] },
   });
 
   check(!pending.known, "a pending read yields no hosts");
@@ -154,33 +169,39 @@ console.log("· @self, a declared host and a nameless declaration are three rows
 console.log("· a zero dependant count never reads as 'safe to move'");
 // ---------------------------------------------------------------------------
 {
-  const none = readDependants(host({ references: [] }), true);
-  const some = readDependants(host({ references: [ref({}), ref({ kind: "port forward" })] }), true);
+  const none = readDependants(host({ references: [] }));
+  const some = readDependants(host({ references: [ref({}), ref({ kind: "port forward" })] }));
 
   check(none.knowledge === "unreferenced" && none.count === 0, "zero is the unreferenced state");
   check(some.knowledge === "referenced" && some.count === 2, "two is the referenced state");
   check(none.headline !== some.headline, "the two states do not share a headline");
 
-  check(none.literalCaveat.length > 0, "the zero case carries the literal caveat");
+  check(none.literalCaveat.length > 0, "the zero case points at the other list");
   check(some.literalCaveat.length > 0, "and so does the non-zero case");
   check(
-    /literal|plain string/i.test(none.literalCaveat),
-    "the caveat actually names literals",
+    /plain string/i.test(none.literalCaveat),
+    "the pointer actually names the plain-string records",
   );
   check(
     !/safe|nothing (will )?break|free/i.test(none.headline + " " + none.meaning),
     "nothing in the zero case promises that moving it is free",
   );
 
-  // The day hz can enumerate literals, the caveat must change by itself.
-  const complete = readDependants(host({ references: [] }), false);
+  // The pointer carries the OTHER count, so a zero here cannot be read alone.
+  const carried = readDependants(
+    host({ references: [], occurrences: [occ({}), occ({ field: "internal_dns.ip" })] }),
+  );
   check(
-    complete.literalCaveat !== none.literalCaveat && /complete/i.test(complete.literalCaveat),
-    "literalsUnlisted:false replaces the caveat rather than repeating it",
+    /2 records carry/.test(carried.literalCaveat),
+    `the zero-reference case names how many DO carry the address (got: ${carried.literalCaveat})`,
+  );
+  check(
+    carried.literalCaveat !== none.literalCaveat,
+    "a host with literals and one without do not get the same sentence",
   );
 
   // @self with nothing written @self is unusual on a gateway, not reassuring.
-  const selfNone = readDependants(SELF, true);
+  const selfNone = readDependants(SELF);
   check(
     /unusual/i.test(selfNone.meaning),
     "@self with no references says that is unusual, not fine",
@@ -343,6 +364,89 @@ console.log("· a refusal is an explanation, not a one-line error");
   check(!other.isReferenceRefusal, "an unrelated error is not dressed up as a dependency list");
   check(other.headline === "invalid IP: 192.168.1.999", "…and its text is intact");
   check(other.dependants.length === 0, "…with no invented dependants");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· found, none and could-not-look are three occurrence states");
+// ---------------------------------------------------------------------------
+{
+  const carried = readOccurrences(
+    host({ occurrences: [occ({}), occ({ kind: "host declaration", field: "hosts[0].ip", ref: "", whyNotAdoptable: "a declared host's ip is the address itself." })] }),
+  );
+  const clean = readOccurrences(host({ occurrences: [] }));
+  const unscanned = readOccurrences(
+    host({
+      occurrences: [],
+      occurrencesKnown: false,
+      occurrencesUnknownWhy: "hz has not detected this instance's own LAN address yet.",
+    }),
+  );
+
+  check(carried.knowledge === "carried" && carried.count === 2, "records found is the carried state");
+  check(clean.knowledge === "clean" && clean.count === 0, "none found is its own state");
+  check(unscanned.knowledge === "unscanned", "could-not-look is a third state");
+
+  check(
+    clean.headline !== unscanned.headline && clean.meaning !== unscanned.meaning,
+    "an empty scan and an impossible scan do not say the same thing",
+  );
+  check(
+    /could not (run|look)/i.test(unscanned.meaning),
+    "the unscanned case says the search did not run",
+  );
+  // It may MENTION the clean answer, but only to deny it. A bare "nothing
+  // carries this address" here would be hz stating a fact it did not check.
+  check(
+    !/nothing carries/i.test(unscanned.headline),
+    "the unscanned headline never claims nothing carries the address",
+  );
+  check(
+    /not because nothing carries/i.test(unscanned.meaning),
+    "…and the body explicitly denies that reading",
+  );
+  check(
+    unscanned.headline !== clean.headline,
+    "the two never share the headline an operator skims",
+  );
+  check(unscanned.why.length > 0, "the unscanned case carries hz's reason");
+  check(
+    /whole dependency|one edit/i.test(clean.meaning),
+    "a clean scan says the reference list is now complete",
+  );
+
+  // Only the adoptable half is offered a command, and the count is the
+  // adoptable count — not the total, which would over-promise.
+  check(carried.adoptable === 1, `only the adoptable record counts (got ${carried.adoptable})`);
+  check(
+    carried.command === "" || carried.command.length > 0,
+    "the command comes from the server, never invented here",
+  );
+  const noneAdoptable = readOccurrences(
+    host({ occurrences: [occ({ ref: "", whyNotAdoptable: "nothing declares this address" })] }),
+  );
+  check(noneAdoptable.command === "", "nothing adoptable means no command is offered");
+  check(
+    /stays manual/i.test(noneAdoptable.meaning),
+    "…and it says the move stays manual rather than going quiet",
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("· an occurrence is adoptable or refused, never neither");
+// ---------------------------------------------------------------------------
+{
+  const yes = readAdoption(occ({}));
+  const no = readAdoption(occ({ ref: "", whyNotAdoptable: "local_interface is what @self resolves to." }));
+  const silent = readAdoption(occ({ ref: "", whyNotAdoptable: "" }));
+
+  check(yes.state === "adoptable" && yes.after === "@nas:8080", "an adoptable record names what it becomes");
+  check(yes.why === "", "…and carries no refusal");
+  check(no.state === "refused" && no.after === "", "a refused record names nothing to write");
+  check(no.why.includes("local_interface"), "…and carries hz's reason verbatim");
+  check(
+    silent.state === "refused" && silent.why.length > 0,
+    "a server that forgot the reason still produces one",
+  );
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);
