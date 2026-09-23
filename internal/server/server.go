@@ -1333,6 +1333,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// authored value AND what it resolves to. See handlers_topology_hosts_view.go.
 	mux.HandleFunc("/api/v1/topology/hosts/view", s.handleAPITopologyHostsView)
 	mux.HandleFunc("/api/v1/topology/hosts/set", s.handleAPITopologyHostSet)
+	mux.HandleFunc("/api/v1/topology/hosts/adopt", s.handleAPITopologyHostAdopt)
 	mux.HandleFunc("/api/v1/topology/exporters", s.handleAPITopologyExporters)
 	mux.HandleFunc("/api/v1/topology/scrape-exclusions", s.handleAPITopologyScrapeExclusions)
 	mux.HandleFunc("/api/v1/topology/reprobe", s.handleAPITopologyReprobe)

@@ -13,10 +13,10 @@
  *   "hz has not said" is not "nothing points at this". A pending or failed read
  *   renders as a banner, never as an empty list — `readHostsSource`.
  *
- *   "Nothing references this host" is not "moving it is free". hz can only
- *   enumerate records written @name; a config written before references existed
- *   is entirely literals, and hz cannot find those. Every dependant count on
- *   this page carries that caveat.
+ *   "Nothing references this host" is not "moving it is free". Records written
+ *   @name follow the host; records carrying its address as a plain string do
+ *   not, and break. Both are listed, in SEPARATE sections with separate counts —
+ *   never merged, because they behave in opposite ways.
  *
  *   A reference shows BOTH halves. `@nas:8080 → 192.168.1.51:8080`, always.
  *
@@ -51,11 +51,12 @@ import type { HostView } from "../api/generated-types";
 import { ApiError } from "../api/client";
 import { useHostsView, useSetHostIP } from "../api/hooks";
 import { CannotAskBanner, ScreenHeading, ToneChip } from "../components/model/ModelBits";
-import { KindGroup, Note, RefusalNote } from "../components/hosts/HostBits";
+import { KindGroup, Note, OccurrenceSection, RefusalNote } from "../components/hosts/HostBits";
 import {
   groupByKind,
   kindSummary,
   readDependants,
+  readOccurrences,
   readHostIdentity,
   readHostsSource,
   readMove,
@@ -68,7 +69,7 @@ import {
  * Three lines, because the notation is the whole mechanism and an operator who
  * has only ever seen literal addresses has no reason to guess what "@" means.
  */
-export function Legend({ literalsUnlisted }: { literalsUnlisted: boolean }) {
+export function Legend() {
   return (
     <Paper sx={{ p: 2, mb: 3 }}>
       <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
@@ -95,15 +96,17 @@ export function Legend({ literalsUnlisted }: { literalsUnlisted: boolean }) {
         instance resolves it to its own, so a peer never inherits this box&apos;s
         address. On a gateway it is usually the busiest reference in the config.
       </Typography>
-      {literalsUnlisted ? (
-        <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          <strong>What this screen cannot show you:</strong> records that carry
-          an address as a plain string. A literal says nothing about which
-          machine it means — that is why references exist — so hz cannot find
-          them. A host with no records listed is a host nothing FOLLOWS, which
-          is not the same as a host nothing depends on.
-        </Typography>
-      ) : null}
+      <Typography variant="body2" sx={{ color: "text.secondary" }}>
+        <strong>Two lists per host, and they behave in opposite ways.</strong>{" "}
+        <em>What points at it</em> is records written{" "}
+        <Box component="span" sx={{ fontFamily: "monospace" }}>
+          @name
+        </Box>
+        : they follow the host, so moving it is one edit.{" "}
+        <em>What carries its address</em> is records holding the address as a
+        plain string: they follow nothing, and they are what breaks. A host with
+        no references is not a host nothing depends on — check the second list.
+      </Typography>
     </Paper>
   );
 }
@@ -232,15 +235,14 @@ export function MoveHostPanel({
 
 export function HostCard({
   host,
-  literalsUnlisted,
   onMove,
 }: {
   host: HostView;
-  literalsUnlisted: boolean;
   onMove: (h: HostView) => void;
 }) {
   const identity = readHostIdentity(host);
-  const dependants = readDependants(host, literalsUnlisted);
+  const dependants = readDependants(host);
+  const occurrences = readOccurrences(host);
   const move = readMove(host);
   const labels = Object.entries(host.labels ?? {});
 
@@ -329,13 +331,21 @@ export function HostCard({
           {kindSummary(host.references)}
         </Typography>
       ) : null}
-      {/* Said on every card, at both counts. A zero that is not qualified is a
-          promise this screen cannot keep. */}
+      {/* Said on every card, at both counts: this list is the half that
+          FOLLOWS the host, and the other half is below. A zero that is not
+          qualified is a promise this screen cannot keep. */}
       <Note title="what this list does not include">{dependants.literalCaveat}</Note>
 
       {groupByKind(host.references).map((g) => (
         <KindGroup key={g.kind} group={g} />
       ))}
+
+      <Divider sx={{ my: 1.5 }} />
+
+      {/* THE OTHER LIST. Separate section, separate heading, separate count —
+          never appended to the references above. One merged number would tell
+          the operator that records about to break are records about to move. */}
+      <OccurrenceSection reading={occurrences} records={host.occurrences} />
     </Paper>
   );
 }
@@ -370,7 +380,7 @@ export function HostsScreen() {
     <Box sx={{ p: 3 }}>
       <ScreenHeading title="Hosts" blurb={HOSTS_BLURB} />
 
-      <Legend literalsUnlisted={source.literalsUnlisted} />
+      <Legend />
 
       {declared.length === 0 ? (
         <Alert severity="info" sx={{ mb: 2 }}>
@@ -385,7 +395,6 @@ export function HostsScreen() {
         <HostCard
           key={h.self ? "@self" : h.name || `ip:${h.ip}`}
           host={h}
-          literalsUnlisted={source.literalsUnlisted}
           onMove={setMoving}
         />
       ))}

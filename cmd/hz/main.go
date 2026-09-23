@@ -82,6 +82,9 @@ COMMANDS
   host add --name N --ip IP [--label k=v ...]
                                      Declare a host (error if name/ip already used)
   host set <name> <ip>               Repoint a host: every @<name> record follows it
+  host adopt <name> [--confirm]      Rewrite records that carry this host's address as a
+                                     plain string into @<name> references, so the next
+                                     move is one edit. DRY RUN without --confirm
   host rm <name|ip>                  Remove a declared host (refused while referenced)
   exporter list                      List exporter jobs, then expanded live targets (up/down)
   exporter add --job J --mode port|service|static [mode flags] [--path P] [--bearer T] [--label k=v ...]

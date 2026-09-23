@@ -18,10 +18,16 @@
 import type { ReactNode } from "react";
 import { Box, Paper, Typography } from "@mui/material";
 import ArrowRightAltIcon from "@mui/icons-material/ArrowRightAlt";
-import type { HostRefView } from "../../api/generated-types";
+import type { HostOccurrenceResp, HostRefView } from "../../api/generated-types";
 import { hatchSx, toneColor } from "../drift/Observation";
 import { ToneChip } from "../model/ModelBits";
-import { readResolution, type RefGroup, type RefusalReading } from "./hosts";
+import {
+  readAdoption,
+  readResolution,
+  type OccurrenceReading,
+  type RefGroup,
+  type RefusalReading,
+} from "./hosts";
 
 /**
  * One dependant record: who owns it, which field it is, and both halves of
@@ -165,5 +171,127 @@ export function Note({ title, children }: { title: string; children: ReactNode }
         {children}
       </Typography>
     </Paper>
+  );
+}
+
+/**
+ * One record that CARRIES this host's address as a plain string.
+ *
+ * It renders as both halves too, and the halves mean something different from
+ * a reference's: `192.168.1.160:8080 → @self:8080` is not "what this resolves
+ * to", it is "what adoption would write here". The arrow is the same shape and
+ * the label under it says which it is, because two rows that look identical and
+ * mean opposite things is the failure this screen exists to prevent.
+ *
+ * A record hz refuses to rewrite keeps its value and gets the reason in hz's
+ * own words — never a blank second half, which would read as "nothing to do".
+ */
+export function OccurrenceRow({ record }: { record: HostOccurrenceResp }) {
+  const reading = readAdoption(record);
+  return (
+    <Paper
+      variant="outlined"
+      sx={{
+        p: 1.25,
+        mb: 0.75,
+        bgcolor: "transparent",
+        borderColor: toneColor(reading.state === "adoptable" ? "neutral" : "hatched"),
+      }}
+    >
+      <Box sx={{ display: "flex", gap: 1, alignItems: "baseline", flexWrap: "wrap" }}>
+        <Typography sx={{ fontFamily: "monospace", fontWeight: 700 }}>
+          {record.owner || "(config)"}
+        </Typography>
+        <Typography variant="caption" sx={{ color: "text.secondary", fontFamily: "monospace" }}>
+          {record.field}
+        </Typography>
+      </Box>
+      <Box sx={{ display: "flex", gap: 0.75, alignItems: "center", flexWrap: "wrap", mt: 0.5 }}>
+        <Typography component="span" sx={{ fontFamily: "monospace", fontWeight: 700 }}>
+          {record.value}
+        </Typography>
+        {reading.state === "adoptable" ? (
+          <>
+            <ArrowRightAltIcon fontSize="small" sx={{ color: "text.secondary" }} />
+            <Typography component="span" sx={{ fontFamily: "monospace" }}>
+              {reading.after}
+            </Typography>
+          </>
+        ) : (
+          <Typography
+            component="span"
+            variant="body2"
+            sx={{ color: "text.secondary", fontStyle: "italic", ...hatchSx, px: 0.75 }}
+          >
+            hz will not rewrite this
+          </Typography>
+        )}
+      </Box>
+      <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mt: 0.25 }}>
+        {reading.state === "adoptable"
+          ? `Written as a plain address, so it does NOT follow this host — moving the box breaks it. Adoption would write ${reading.after} here, which renders exactly the same bytes.`
+          : reading.why}
+      </Typography>
+    </Paper>
+  );
+}
+
+/**
+ * The whole "carries this address" section for one host — the OTHER list.
+ *
+ * It is a separate block under its own heading, below the references and never
+ * inside them. The three states are drawn differently on purpose: records
+ * found, none found, and hz unable to look are three different facts, and a
+ * screen that drew the last two the same way would be back to a reassuring
+ * blank.
+ */
+export function OccurrenceSection({
+  reading,
+  records,
+}: {
+  reading: OccurrenceReading;
+  records: HostOccurrenceResp[];
+}) {
+  return (
+    <Box sx={{ mt: 2 }}>
+      <Box sx={{ display: "flex", gap: 1.5, alignItems: "center", flexWrap: "wrap", mb: 0.25 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+          What carries its address
+        </Typography>
+        <ToneChip
+          label={reading.headline}
+          tone={reading.tone}
+          hatched={reading.knowledge !== "clean"}
+          dashed={reading.knowledge === "unscanned"}
+        />
+      </Box>
+      <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 1 }}>
+        {reading.meaning}
+      </Typography>
+
+      {reading.knowledge === "unscanned" ? <Note title="why hz could not look">{reading.why}</Note> : null}
+
+      {reading.command ? (
+        <Paper variant="outlined" sx={{ p: 1.5, mb: 1.5, bgcolor: "transparent", borderStyle: "dashed" }}>
+          <Typography
+            variant="caption"
+            sx={{ color: "text.secondary", textTransform: "uppercase", letterSpacing: 0.5, display: "block" }}
+          >
+            turn these into references
+          </Typography>
+          <Typography sx={{ fontFamily: "monospace", fontWeight: 700 }}>{reading.command}</Typography>
+          <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
+            It prints what it would change and writes nothing until you add
+            --confirm. Adoption changes how the config is written, never what it
+            renders, so the proxy, DNS, firewall and scrape output come out byte
+            for byte the same.
+          </Typography>
+        </Paper>
+      ) : null}
+
+      {records.map((r, i) => (
+        <OccurrenceRow key={`${r.kind}-${r.field}-${r.owner}-${i}`} record={r} />
+      ))}
+    </Box>
   );
 }

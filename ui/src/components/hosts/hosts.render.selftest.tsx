@@ -21,7 +21,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ThemeProvider } from "@mui/material/styles";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import theme from "../../theme";
-import type { HostRefView, HostView, HostsViewResp } from "../../api/generated-types";
+import type {
+  HostOccurrenceResp,
+  HostRefView,
+  HostView,
+  HostsViewResp,
+} from "../../api/generated-types";
 import { HostsScreen, HostCard, MoveHostPanel } from "../../routes/hosts";
 import { RefusalNote } from "./HostBits";
 import { readRefusal } from "./hosts";
@@ -100,6 +105,19 @@ function host(over: Partial<HostView>): HostView {
     editable: true,
     addressable: true,
     references: [],
+    occurrences: [],
+    occurrencesKnown: true,
+    ...over,
+  };
+}
+
+function occ(over: Partial<HostOccurrenceResp>): HostOccurrenceResp {
+  return {
+    kind: "service backend",
+    owner: "files",
+    field: "proxy.backend",
+    value: "192.168.1.51:8080",
+    ref: "@nas:8080",
     ...over,
   };
 }
@@ -108,7 +126,6 @@ const SELF_UNRESOLVED_WHY =
   "hz has not detected this instance's own LAN address yet, so it cannot say what @self means. local_interface on the Settings page is what fills it in.";
 
 const GATEWAY: HostsViewResp = {
-  literalsUnlisted: true,
   hosts: [
     host({
       name: "self",
@@ -204,18 +221,22 @@ console.log("· a host nothing points at does not read as a host nothing needs")
   const { text } = screenWith(GATEWAY);
   check(text.includes("nothing references this host"), "the zero state says so plainly");
   check(
-    text.includes("cannot list records that carry"),
-    "…and the literal caveat is on the page beside it",
+    text.includes("as a plain string follow nothing and break"),
+    "…and the pointer to the OTHER list is on the page beside it",
   );
   check(
     !/nothing (will )?break|safe to move/i.test(text),
     "nothing on the page promises that moving an unreferenced host is free",
   );
 
-  // The caveat is not a one-off footnote under the empty host: it is stated
+  // The pointer is not a one-off footnote under the empty host: it is stated
   // for a populated host too, where "2 records" is just as incomplete.
-  const caveats = text.split("cannot list records that carry").length - 1;
-  check(caveats >= 3, `the caveat is carried by every host row (found ${caveats}, wanted 3)`);
+  const pointers = text.split("as a plain string follow nothing and break").length - 1;
+  check(pointers >= 3, `the pointer is carried by every host row (found ${pointers}, wanted 3)`);
+  // And every row carries the second section, so no row can be read as a
+  // single number.
+  const sections = text.split("What carries its address").length - 1;
+  check(sections >= 3, `every host row has the occurrence section (found ${sections}, wanted 3)`);
 }
 
 // ---------------------------------------------------------------------------
@@ -251,7 +272,6 @@ console.log("· not answered, failed, and answered-with-nothing are three pages"
 
   // Answered, and the answer is "only @self".
   const empty = screenWith({
-    literalsUnlisted: true,
     hosts: [
       host({ name: "self", ip: "192.168.1.1", self: true, ref: "@self", editable: false, notEditableWhy: "set on Settings", references: [] }),
     ],
@@ -295,7 +315,6 @@ console.log("· @self before hz knows its own address: named, not resolved");
 // ---------------------------------------------------------------------------
 {
   const { text } = screenWith({
-    literalsUnlisted: true,
     hosts: [
       host({
         name: "self",
@@ -427,7 +446,6 @@ console.log("· a kind this screen does not know is listed, not dropped");
   const { text } = render(
     <HostCard
       host={host({ references: [ref({ kind: "wireguard peer address", field: "peers[0].endpoint" })] })}
-      literalsUnlisted
       onMove={() => {}}
     />,
     client(),
@@ -438,6 +456,92 @@ console.log("· a kind this screen does not know is listed, not dropped");
     text.includes("does not recognise"),
     "…and the screen admits it does not know what the kind means",
   );
+}
+
+// ---------------------------------------------------------------------------
+console.log("· the two lists are two sections, never one");
+// ---------------------------------------------------------------------------
+{
+  const { text } = render(
+    <HostCard
+      host={host({
+        references: [ref({})],
+        occurrences: [
+          occ({ owner: "backups", field: "internal_dns.ip", value: "192.168.1.51", ref: "@nas" }),
+          occ({
+            kind: "host declaration",
+            owner: "nas",
+            field: "hosts[0].ip",
+            value: "192.168.1.51",
+            ref: "",
+            whyNotAdoptable: "a declared host's ip is the address itself, so references bottom out.",
+          }),
+        ],
+        adoptCommand: "hz host adopt nas",
+      })}
+      onMove={() => {}}
+    />,
+    client(),
+  );
+
+  check(text.includes("What points at it"), "the reference section keeps its heading");
+  check(text.includes("What carries its address"), "the occurrence section has its own heading");
+  check(
+    text.indexOf("What points at it") < text.indexOf("What carries its address"),
+    "…and follows the references rather than being mixed into them",
+  );
+  // The counts are separate numbers, and neither is the sum.
+  check(/1 record resolves through this host/.test(text), "the reference count is its own");
+  check(/2 records carry this address/.test(text), "the occurrence count is its own");
+  check(!/3 record/.test(text), "no merged total appears anywhere");
+
+  // An occurrence renders both halves, like a reference — but the second half
+  // means "what adoption would write", and the row says so.
+  check(text.includes("192.168.1.51:8080"), "the literal it holds now is shown");
+  check(text.includes("@nas:8080"), "…and what it would become");
+  check(
+    text.includes("does NOT follow this host"),
+    "…with the sentence saying it breaks rather than follows",
+  );
+
+  // The refused record keeps its value and gets hz's reason, not a blank.
+  check(text.includes("hz will not rewrite this"), "a refused record says so in place of a target");
+  check(text.includes("references bottom out"), "…and carries hz's reason verbatim");
+
+  // The command is offered, with the dry run named.
+  check(text.includes("hz host adopt nas"), "the command that fixes it is on the page");
+  check(text.includes("--confirm"), "…and says it writes nothing without --confirm");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· an unscanned host does not render as a clean one");
+// ---------------------------------------------------------------------------
+{
+  const clean = render(
+    <HostCard host={host({ occurrences: [], occurrencesKnown: true })} onMove={() => {}} />,
+    client(),
+  ).text;
+  const unscanned = render(
+    <HostCard
+      host={host({
+        ip: "",
+        addressable: false,
+        notAddressableWhy: "hz has not detected this instance's own LAN address yet.",
+        occurrences: [],
+        occurrencesKnown: false,
+        occurrencesUnknownWhy: "hz does not know this host's address, so it could not look.",
+      })}
+      onMove={() => {}}
+    />,
+    client(),
+  ).text;
+
+  check(/nothing carries this address/i.test(clean), "a clean scan says nothing carries it");
+  check(!/nothing carries this address/i.test(unscanned.split("What carries its address")[1] ?? ""), "an unscanned host never says that");
+  check(/could not look/i.test(unscanned), "…it says hz could not look");
+  check(unscanned.includes("it could not look"), "…and carries hz's own reason");
+  check(clean !== unscanned, "the two render differently");
+  check(!/hz host adopt/.test(unscanned), "nothing can be adopted without an address");
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

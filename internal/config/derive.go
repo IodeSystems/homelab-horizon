@@ -1018,8 +1018,17 @@ func (c *Config) DeriveExporterTargets() []ExporterTarget {
 					// compatibility; "@name" is the sigil form every other
 					// consumer takes, accepted here so one syntax works
 					// everywhere.
+					//
+					// Resolution goes through ResolveHostRef rather than the
+					// local ipByName map, which is built from c.Hosts alone and
+					// therefore has no entry for "self": "@self" here used to
+					// resolve to "" and the target was dropped without a word,
+					// while the same address written literally produced a
+					// target. That is a rendered difference between two
+					// spellings that must mean the same thing, and it is the
+					// one field kind `hz host adopt` could not have rewritten.
 					if name := HostRefName(ip); name != "" {
-						ip = ipByName[name]
+						ip = c.resolveRefOrDrop(ip, HostRefKindExporterHost, e.Job)
 					} else if resolved, ok := ipByName[ip]; ok {
 						ip = resolved
 					}

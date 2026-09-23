@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
+	"strings"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
@@ -32,8 +34,7 @@ func (s *Server) handleAPITopologyHostsView(w http.ResponseWriter, r *http.Reque
 // handler so it can be tested without a Server.
 func buildHostsView(cfg *config.Config) apitypes.HostsViewResp {
 	resp := apitypes.HostsViewResp{
-		Hosts:            make([]apitypes.HostView, 0, len(cfg.Hosts)+1),
-		LiteralsUnlisted: true,
+		Hosts: make([]apitypes.HostView, 0, len(cfg.Hosts)+1),
 	}
 
 	// "@self" leads, as it does in `hz host list`. On a gateway it is the
@@ -53,6 +54,7 @@ func buildHostsView(cfg *config.Config) apitypes.HostsViewResp {
 			"It moves by setting local_interface on the Settings page, and `hz host set self` is refused.",
 		References: hostRefViews(cfg, config.HostRefSelfName),
 	}
+	fillOccurrences(cfg, &selfView)
 	if !selfView.Addressable {
 		selfView.NotAddressableWhy = "hz has not detected this instance's own LAN address yet, so it " +
 			"cannot say what @self means. Every record below is a reference hz can name and cannot " +
@@ -82,6 +84,7 @@ func buildHostsView(cfg *config.Config) apitypes.HostsViewResp {
 			v.Editable = true
 			v.Ref = config.HostRefSigil + h.Name
 		}
+		fillOccurrences(cfg, &v)
 		resp.Hosts = append(resp.Hosts, v)
 	}
 	return resp
@@ -105,4 +108,86 @@ func hostRefViews(cfg *config.Config, name string) []apitypes.HostRefView {
 		out = append(out, v)
 	}
 	return out
+}
+
+// fillOccurrences attaches the OTHER list: the records that carry this host's
+// address as a plain string.
+//
+// It is a separate field, filled by a separate call, and it is never appended
+// to References. The two answer opposite questions — "what follows this host"
+// and "what breaks when it moves" — and the only reason the screen is worth
+// building is that it can now show both.
+//
+// A host with no address (only @self, before hz detects local_interface) is
+// UNSCANNED rather than empty. There is nothing to search for, so reporting
+// zero occurrences would be hz answering a question it never asked.
+func fillOccurrences(cfg *config.Config, v *apitypes.HostView) {
+	addr := strings.TrimSpace(v.IP)
+	if addr == "" {
+		v.OccurrencesKnown = false
+		v.Occurrences = []apitypes.HostOccurrenceResp{}
+		v.OccurrencesUnknownWhy = "hz does not know this host's address, so it cannot look for records " +
+			"carrying it. This is an empty list because the search could not run, not because nothing " +
+			"carries the address."
+		return
+	}
+	v.OccurrencesKnown = true
+
+	// The adoption plan, dry, so each occurrence carries what `hz host adopt`
+	// would write here — or hz's reason for refusing. One computation behind
+	// the screen and the CLI, so the screen cannot promise a rewrite the
+	// command declines to do.
+	plan, err := cfg.PlanAddressAdoption(addr)
+	if err != nil {
+		// Nothing declares the address, so nothing can be adopted into. The
+		// occurrences are still real and still listed; only the "what would be
+		// written" half is missing.
+		occs := cfg.AddressOccurrences(addr)
+		v.Occurrences = make([]apitypes.HostOccurrenceResp, 0, len(occs))
+		for _, o := range occs {
+			v.Occurrences = append(v.Occurrences, apitypes.HostOccurrenceResp{
+				Kind: o.Kind, Owner: o.Owner, Field: o.Field, Value: o.Value, WhyNotAdoptable: err.Error(),
+			})
+		}
+		return
+	}
+
+	v.Occurrences = make([]apitypes.HostOccurrenceResp, 0, len(plan.Adopt)+len(plan.Refused))
+	for _, a := range plan.Adopt {
+		v.Occurrences = append(v.Occurrences, adoptionToAPI(a))
+	}
+	for _, r := range plan.Refused {
+		v.Occurrences = append(v.Occurrences, adoptionToAPI(r))
+	}
+	sortOccurrenceResps(v.Occurrences)
+	if len(plan.Adopt) > 0 {
+		// Named from the plan's own choice, not from this row: a nameless
+		// declaration holding the gateway's address adopts to @self, and
+		// echoing this row's (empty) name would print a command that fails.
+		v.AdoptCommand = "hz host adopt " + strings.TrimPrefix(plan.Ref, config.HostRefSigil)
+	}
+}
+
+// adoptionToAPI is the one place a config.HostAdoption becomes wire shape, so
+// the CLI's list and the screen's list cannot describe the same record
+// differently.
+func adoptionToAPI(a config.HostAdoption) apitypes.HostOccurrenceResp {
+	return apitypes.HostOccurrenceResp{
+		Kind: a.Kind, Owner: a.Owner, Field: a.Field, Value: a.Value,
+		Ref: a.Ref, WhyNotAdoptable: a.WhyNot,
+	}
+}
+
+// sortOccurrenceResps restores the config's order (kind, owner, field) after
+// the adoptable and refused halves are concatenated.
+func sortOccurrenceResps(out []apitypes.HostOccurrenceResp) {
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		if out[i].Owner != out[j].Owner {
+			return out[i].Owner < out[j].Owner
+		}
+		return out[i].Field < out[j].Field
+	})
 }
