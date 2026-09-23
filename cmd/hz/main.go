@@ -147,6 +147,15 @@ COMMANDS
                                      to. Ranges may not overlap and two segments may not
                                      share an interface — that is what lets a machine be
                                      in two. Membership itself is declared on the machine
+  segment set <name> [--cidr C] [--interface I] [--project P] [--note "what for"]
+              [--hub <machine>] [--member machine=M[,address=A][,endpoint=H:P][,key=K]]...
+              [--unaddress <machine>]... [--cascade] [--confirm]
+                                     Change a segment that exists, and address or re-address
+                                     one of its memberships. The NAME is identity and cannot
+                                     change. --hub is a TOPOLOGY change: it rewires every
+                                     member's peers, and the rewiring is printed. A --cidr
+                                     that would strand an addressed member refuses and names
+                                     them; --cascade unaddresses them, dry run until --confirm
   segment rm <name> [--cascade] [--confirm]
                                      Remove a segment. Dry run without --confirm; refused
                                      while a machine is a member (--cascade drops the

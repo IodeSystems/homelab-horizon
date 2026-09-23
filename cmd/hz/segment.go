@@ -43,10 +43,12 @@ func runSegment(c *client, args []string) error {
 		return segmentShow(c, args)
 	case "add", "create":
 		return segmentAdd(c, args)
+	case "set":
+		return segmentSet(c, args)
 	case "rm", "remove", "delete":
 		return segmentRm(c, args)
 	default:
-		return fmt.Errorf("unknown segment subcommand: %s (want ls, show, add or rm)", sub)
+		return fmt.Errorf("unknown segment subcommand: %s (want ls, show, add, set or rm)", sub)
 	}
 }
 
@@ -175,6 +177,238 @@ func parseMemberSpec(spec string) (apitypes.SegmentMemberAddReq, error) {
 	}
 	if out.Address == "" {
 		return out, fmt.Errorf("--member %q gives %s no address — a member hz cannot address is a membership, and that is declared with `hz machine add --segment`", spec, out.Machine)
+	}
+	return out, nil
+}
+
+const segmentSetUsage = `usage: hz segment set <name> [--cidr C] [--interface I] [--project P] [--note "what for"]
+                        [--hub <machine>]
+                        [--member machine=M[,address=A][,endpoint=H:P][,key=K]]...
+                        [--unaddress <machine>]...
+                        [--cascade] [--confirm]
+
+Changes a segment that already exists, and the memberships on it. Only the flags
+you pass are touched. This is how a member gets ADDRESSED or RE-ADDRESSED without
+removing the segment and declaring it again.
+
+  --member ...    address or re-address a machine that already names this
+                  segment. Repeatable, same key=value spelling as 'segment add'.
+                  Only the keys you give change: re-addressing a member keeps its
+                  public key and its endpoint.
+                    address=<ip>          a bare IP inside the range
+                    endpoint=<host:port>  where to dial it; empty clears it
+                    key=<publickey>       its PUBLIC key; empty clears it
+                  There is no hub= here — see --hub.
+  --unaddress M   drop M's address, leaving it IN the segment and unaddressed.
+                  It peers with nothing until it is addressed again. Repeatable.
+  --hub M         make M the hub, demoting whoever holds it. This is a TOPOLOGY
+                  change, not a field edit: peers are derived hub and spoke, so
+                  every member's peer set is rewired. The rewiring is printed
+                  before it is written. There is no way to leave a segment with
+                  members and no hub — the only move is naming a different one.
+  --interface I   the interface the segment lands on. Still unique across
+                  segments; a clash names the other segment and refuses.
+  --project P     the project that owns it. Cannot be cleared.
+  --note TEXT     what it is for. --note "" clears it.
+  --cidr C        the range, as a NETWORK (10.42.0.0/24). THIS CAN STRAND
+                  MEMBERS: any address outside the new range refuses the write
+                  and is named. --cascade opts in to UNADDRESSING each one
+                  (never renumbering — hz does not invent an address), and with
+                  --cascade this is a DRY RUN until --confirm.
+
+The NAME cannot be changed: it is the identity every machine's membership
+resolves through, so renaming it here would rename it on every machine in the
+segment. 'hz segment rm --cascade' and re-declare says that honestly.
+
+Membership itself is still declared on the MACHINE (hz machine add <m>
+--segment <s>). This command addresses a membership; it does not grant one.
+
+Writes immediately unless it would strand a member — then it refuses, or
+dry-runs under --cascade until --confirm.
+`
+
+func segmentSet(c *client, args []string) error {
+	fs := flag.NewFlagSet("segment set", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Fprint(os.Stderr, segmentSetUsage) }
+	project := fs.String("project", "", "the project that owns this segment")
+	cidr := fs.String("cidr", "", "the segment's range, as a network (10.42.0.0/24)")
+	iface := fs.String("interface", "", "the WireGuard interface this segment lands on")
+	note := fs.String("note", "", "what this segment is for; empty clears it")
+	hub := fs.String("hub", "", "make this machine the hub, rewiring every member's peers")
+	cascade := fs.Bool("cascade", false, "unaddress the members a new range would strand")
+	confirm := fs.Bool("confirm", false, "actually write a change that strands members")
+	var members, unaddress repeatedFlag
+	fs.Var(&members, "member", "address or re-address a machine (repeatable): machine=M[,address=A][,endpoint=H][,key=K]")
+	fs.Var(&unaddress, "unaddress", "drop a machine's address, leaving it in the segment (repeatable)")
+
+	name, rest := splitCMPositional(args)
+	if err := fs.Parse(rest); err != nil {
+		return err
+	}
+	if name == "" {
+		name = fs.Arg(0)
+	}
+	if name == "" || fs.NArg() > 1 {
+		return fmt.Errorf("%s", segmentSetUsage)
+	}
+
+	// fs.Visit reports only the flags actually on the command line, which is the
+	// patch contract `hz env set` sets: absent means "leave it alone" and
+	// `--note ""` means "clear it". A zero-value check could not tell those
+	// apart, and clearing a note would be inexpressible.
+	req := apitypes.SegmentSetReq{
+		Name: name, Unaddress: unaddress, Cascade: *cascade, Confirm: *confirm,
+	}
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "project":
+			req.Project = project
+		case "cidr":
+			req.CIDR = cidr
+		case "interface":
+			req.Interface = iface
+		case "note":
+			req.Note = note
+		case "hub":
+			req.Hub = hub
+		}
+	})
+	for _, spec := range members {
+		m, err := parseMemberSetSpec(spec)
+		if err != nil {
+			return err
+		}
+		req.Members = append(req.Members, m)
+	}
+	if req.Project == nil && req.CIDR == nil && req.Interface == nil && req.Note == nil &&
+		req.Hub == nil && len(req.Members) == 0 && len(req.Unaddress) == 0 {
+		return fmt.Errorf("nothing to set on segment %s — pass at least one of --project, --cidr, --interface, --note, --hub, --member or --unaddress\n%s",
+			name, segmentSetUsage)
+	}
+
+	var out apitypes.SegmentSetResp
+	if err := c.do(http.MethodPost, "/api/v1/segments/set", req, &out); err != nil {
+		return err
+	}
+	return renderSegmentSet(name, *cascade, *confirm, out)
+}
+
+// renderSegmentSet prints the one answer a set gives: what is in the way, or
+// what it would do, or what it did. The server computes all three — a client
+// re-deriving them from a read before and a read after would be a second answer
+// free to disagree with the one that wrote them.
+func renderSegmentSet(name string, cascade, confirm bool, out apitypes.SegmentSetResp) error {
+	if len(out.Blocked) > 0 {
+		fmt.Printf("REFUSED: the new range would strand %d addressed member(s) of segment %s.\n\n",
+			len(out.Blocked), name)
+		printDependants(out.Blocked)
+		fmt.Println("\nA member addressed outside its own segment's range is a config hz cannot save,")
+		fmt.Println("and hz will not renumber a box for you — two machines on one address is the")
+		fmt.Println("failure that would cause. Give each of the above an address inside the new")
+		fmt.Println("range in the same command:")
+		fmt.Printf("  hz segment set %s --cidr <range> --member machine=%s,address=<ip>\n", name, out.Blocked[0].Name)
+		fmt.Println("or re-run with --cascade to UNADDRESS them (they stay in the segment).")
+		return fmt.Errorf("segment %s: the new range would strand %d member(s)", name, len(out.Blocked))
+	}
+
+	if len(out.Changes) == 0 && out.HubMove == nil && len(out.Strands) == 0 {
+		fmt.Printf("Segment %s already reads that way — nothing changed.\n", name)
+		if out.Segment != nil {
+			printSegment(*out.Segment, "  ")
+		}
+		return nil
+	}
+
+	if len(out.Changes) > 0 {
+		fmt.Println("Changes:")
+		for _, line := range out.Changes {
+			fmt.Printf("  %s\n", line)
+		}
+	}
+	printHubMove(out.HubMove)
+	if len(out.Strands) > 0 {
+		fmt.Printf("\n--cascade would UNADDRESS %d member(s) the new range puts outside itself:\n\n", len(out.Strands))
+		printDependants(out.Strands)
+		fmt.Println("\nThey stay IN the segment and peer with nothing until they are addressed again.")
+	}
+
+	if len(out.Strands) > 0 && !confirm {
+		fmt.Println("\nDry run: nothing was written. Re-run with --confirm to write it.")
+		return nil
+	}
+	if !out.OK {
+		// Belt and braces: a run that wrote nothing and named no blocker would
+		// otherwise report success.
+		return fmt.Errorf("the server did not change segment %s and gave no reason — nothing was written", name)
+	}
+	fmt.Printf("\nSet segment %s.\n", name)
+	if out.Segment != nil {
+		printSegment(*out.Segment, "  ")
+	}
+	return nil
+}
+
+// printHubMove prints the rewiring moving the hub causes. It is printed in full
+// rather than summarised because it is the part of this command that changes
+// records nobody named: Peers is derived hub and spoke, so the new hub gains
+// every spoke, the old one loses all but one, and every spoke swaps its single
+// peer. None of that appears in a diff of the segment record.
+func printHubMove(move *apitypes.SegmentHubMoveResp) {
+	if move == nil {
+		return
+	}
+	if move.From == "" {
+		fmt.Printf("\nHUB SET: %s\n", move.To)
+	} else {
+		fmt.Printf("\nHUB MOVES: %s → %s\n", move.From, move.To)
+	}
+	fmt.Println("This is a topology change, not a field edit — peers are derived hub and spoke,")
+	fmt.Println("so every member's peer set is rewired:")
+	fmt.Printf("  %-24s %-28s %s\n", "MACHINE", "PEERS NOW", "WAS")
+	for _, p := range move.Peers {
+		fmt.Printf("  %-24s %-28s %s\n", p.Machine,
+			dash(strings.Join(p.After, ", ")), dash(strings.Join(p.Before, ", ")))
+	}
+}
+
+// parseMemberSetSpec reads one `segment set --member` value. It differs from
+// parseMemberSpec in the one way a patch differs from a declaration: an ABSENT
+// key means "leave it alone" and a present-but-empty one means "clear it", so
+// every field is a pointer. Re-addressing a member must not silently drop the
+// public key the operator did not retype.
+func parseMemberSetSpec(spec string) (apitypes.SegmentMemberSetReq, error) {
+	out := apitypes.SegmentMemberSetReq{}
+	for _, pair := range strings.Split(spec, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		k, v, ok := strings.Cut(pair, "=")
+		if !ok {
+			return out, fmt.Errorf("--member %q: %q is not key=value. Want machine=M[,address=A][,endpoint=H:P][,key=K]", spec, pair)
+		}
+		v = strings.TrimSpace(v)
+		switch strings.ToLower(strings.TrimSpace(k)) {
+		case "machine":
+			out.Machine = v
+		case "address", "addr":
+			out.Address = &v
+		case "key", "publickey", "public_key":
+			out.PublicKey = &v
+		case "endpoint":
+			out.Endpoint = &v
+		case "hub":
+			// Refused rather than accepted, because hub is single-valued across
+			// the whole segment: setting it on one member necessarily unsets it
+			// on another, and a per-member flag invites two members each
+			// claiming it. `--hub <machine>` cannot express the contradiction.
+			return out, fmt.Errorf("--member %q: the hub is not a per-member field — it is one machine per segment, and moving it rewires every member's peers. Use `--hub %s`", spec, out.Machine)
+		default:
+			return out, fmt.Errorf("--member %q: unknown field %q. Want machine, address, endpoint or key (the hub is `--hub <machine>`)", spec, k)
+		}
+	}
+	if out.Machine == "" {
+		return out, fmt.Errorf("--member %q names no machine — a member is a MACHINE at an address on this segment", spec)
 	}
 	return out, nil
 }
@@ -332,10 +566,8 @@ func printSegment(s apitypes.SegmentResp, prefix string) {
 	if len(s.Unaddressed) > 0 {
 		fmt.Printf("%sUNADDRESSED %s\n", prefix, strings.Join(s.Unaddressed, ", "))
 		fmt.Printf("%s  These machines name this segment and have no address on it. They ARE members;\n", prefix)
-		fmt.Printf("%s  hz cannot say where they are, so nothing peers with them.\n", prefix)
-		fmt.Printf("%s  Addressing a membership on a segment that already exists has no command yet —\n", prefix)
-		fmt.Printf("%s  address them at declaration time (`hz segment add ... --member machine=%s,address=...`),\n", prefix, s.Unaddressed[0])
-		fmt.Printf("%s  or edit the segment record directly. `hz segment set` is the follow-up.\n", prefix)
+		fmt.Printf("%s  hz cannot say where they are, so nothing peers with them. Address one with:\n", prefix)
+		fmt.Printf("%s    hz segment set %s --member machine=%s,address=<ip>\n", prefix, s.Name, s.Unaddressed[0])
 	}
 }
 
