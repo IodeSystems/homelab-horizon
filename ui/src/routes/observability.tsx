@@ -38,6 +38,7 @@ import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import AutorenewIcon from "@mui/icons-material/Autorenew";
+import CloseIcon from "@mui/icons-material/Close";
 import {
   useTopology,
   useSaveTopologyHosts,
@@ -49,6 +50,8 @@ import {
   useRotateScrapeToken,
 } from "../api/hooks";
 import type { HostDecl, Exporter, ExporterTargetResp } from "../api/types";
+import { readRefusal, type RefusalReading } from "../components/hosts/hosts";
+import { RefusalNote } from "../components/hosts/HostBits";
 
 // --- Labels editor (shared by host + exporter forms) ---
 
@@ -1435,6 +1438,7 @@ function ObservabilityPage() {
   const [addHostPrefillIP, setAddHostPrefillIP] = useState("");
   const [editHostTarget, setEditHostTarget] = useState<HostDecl | null>(null);
   const [deleteHostTarget, setDeleteHostTarget] = useState<string | null>(null);
+  const [hostRefusal, setHostRefusal] = useState<RefusalReading | null>(null);
 
   const [snack, setSnack] = useState<SnackState>({ open: false, message: "", severity: "success" });
   const showSnack = (message: string, severity: "success" | "error") =>
@@ -1504,6 +1508,23 @@ function ObservabilityPage() {
     });
   };
 
+  // Removing or RENAMING a host that something still references is refused by
+  // the backend, and the refusal names every dependant on its own line. A
+  // snackbar shows the first line and eats the rest — the operator is told
+  // "still referenced by 31 record(s):" and given no way to find out which,
+  // which is the same as not being told. So a reference refusal opens as an
+  // explanation; anything else stays a toast.
+  const onHostMutationError = (err: Error) => {
+    const refusal = readRefusal(err.message);
+    if (!refusal.isReferenceRefusal) {
+      showSnack(err.message, "error");
+      return;
+    }
+    setEditHostTarget(null);
+    setDeleteHostTarget(null);
+    setHostRefusal(refusal);
+  };
+
   const handleEditHost = (form: HostFormState) => {
     if (!editHostTarget) return;
     const next = hosts.map((h) => (h.name === editHostTarget.name ? formToHost(form) : h));
@@ -1512,7 +1533,7 @@ function ObservabilityPage() {
         setEditHostTarget(null);
         showSnack("Host updated", "success");
       },
-      onError: (err) => showSnack(err.message, "error"),
+      onError: onHostMutationError,
     });
   };
 
@@ -1524,7 +1545,7 @@ function ObservabilityPage() {
         setDeleteHostTarget(null);
         showSnack("Host deleted", "success");
       },
-      onError: (err) => showSnack(err.message, "error"),
+      onError: onHostMutationError,
     });
   };
 
@@ -1638,6 +1659,36 @@ function ObservabilityPage() {
         onConfirm={handleDeleteHost}
         isDeleting={saveHosts.isPending}
       />
+
+      {/* The refusal, as an explanation. Dismissal is explicit twice: a
+          labelled button and a visible X. */}
+      {hostRefusal && (
+        <Dialog open onClose={() => setHostRefusal(null)} maxWidth="md" fullWidth>
+          <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <Box sx={{ flex: 1 }}>That host is still in use — nothing was changed</Box>
+            <IconButton
+              onClick={() => setHostRefusal(null)}
+              aria-label="Close this dialog"
+              title="Close"
+            >
+              <CloseIcon />
+            </IconButton>
+          </DialogTitle>
+          <DialogContent dividers>
+            <RefusalNote refusal={hostRefusal} />
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+              If the box simply moved, its address is one edit on the Hosts
+              screen and every record above follows it — nothing has to be
+              repointed by hand.
+            </Typography>
+          </DialogContent>
+          <DialogActions>
+            <Button variant="contained" onClick={() => setHostRefusal(null)}>
+              Close — nothing was changed
+            </Button>
+          </DialogActions>
+        </Dialog>
+      )}
 
       {/* Snackbar feedback */}
       <Snackbar
