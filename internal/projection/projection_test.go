@@ -176,17 +176,18 @@ func TestAppBoxMatchesTheWorkedExample(t *testing.T) {
 	}
 }
 
-// §5 shows a segment with an interface, an address and a peer set. hz cannot
-// produce any of the three, and the test that matters is that it SAYS so:
-// a membership with no interface must not read as "this machine wants no
-// interface".
+// §5's estate declares no Segment records at all, which is a real and
+// supported state — a config where the model is not in use, and every
+// membership in it is still a LABEL (config.ValidateMachines checks only the
+// shape there). The test that matters is that hz SAYS so: a membership with no
+// interface must not read as "this machine wants no interface".
 func TestASegmentMembershipIsNotAConfiguredInterface(t *testing.T) {
 	g := Global{Config: exampleEstate(), Instances: exampleInstances()}
 	mc := mustProject(t, g, "app-1")
 
 	seg := mc.Segments[0]
 	if seg.Resolved {
-		t.Fatal("a segment reported itself resolved; nothing resolves a segment name until item 15")
+		t.Fatal("a segment reported itself resolved; no Segment record answers to its name")
 	}
 	if seg.Interface != "" || seg.Address != "" || len(seg.Peers) > 0 {
 		t.Fatalf("segment carries detail hz cannot know: %+v", seg)
@@ -195,7 +196,7 @@ func TestASegmentMembershipIsNotAConfiguredInterface(t *testing.T) {
 	if why == "" {
 		t.Fatal("an unresolved segment produced no gap — an empty interface is then indistinguishable from a wanted one")
 	}
-	if !strings.Contains(why, "item 15") {
+	if !strings.Contains(why, "hz segment add") {
 		t.Fatalf("the segment gap does not name what would close it: %q", why)
 	}
 	if gapFor(mc, SectionHosts) == "" {

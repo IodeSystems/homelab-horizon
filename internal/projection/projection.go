@@ -46,10 +46,14 @@
 // is wanted, is named in Unresolved with the reason. A reader of a
 // MachineConfig can therefore always tell hz's opinion from hz's silence.
 //
-// Today the biggest such gap is the Segment record, which does not exist:
-// Machine.Segments holds NAMES that resolve against nothing (item 15). So hz
-// can say which segments a machine is a member of and cannot say what
-// interface, address or peer set that membership means.
+// The Segment record now exists (internal/config/segment.go, item 15), so a
+// membership resolves: interface, address and peer set are computed from the
+// records rather than left out. What it does NOT close is the tunnel. Nothing
+// fills SegmentMember.PublicKey — a box mints its key at enrolment and
+// `hz-agent enroll` does not send one — so hz can name a peer and address it
+// and cannot emit a WireGuard `[Peer]` block for it. That is a gap on the
+// segments section beside a RESOLVED membership, which is the shape this file
+// uses everywhere: an answer and the part of it hz still does not hold.
 package projection
 
 import (
@@ -99,9 +103,9 @@ type MachineConfig struct {
 	// build the floor or to delete the field, not to re-explain it.
 	Serial uint64 `json:"serial"`
 
-	// Segments are the network segments this machine is a member of.
-	//
-	// NAMES ONLY TODAY. See Segment.Resolved.
+	// Segments are the network segments this machine is a member of, resolved
+	// against the Segment records where one answers to the name. See
+	// Segment.Resolved for the two ways an entry can still be a label.
 	Segments []Segment `json:"segments"`
 
 	// Forwards are the declared exceptions to "a machine may not forward
@@ -118,9 +122,15 @@ type MachineConfig struct {
 	// Hosts is what /etc/hosts should carry — the names this machine resolves
 	// without asking anything.
 	//
-	// Empty and unresolvable while segments are: example-projection.md §5's
-	// single entry is the gateway's address ON THAT SEGMENT, and no record
-	// holds a per-segment address.
+	// One entry per PEER on a resolved segment: example-projection.md §5's
+	// single entry is the gateway's address ON THAT SEGMENT, which is exactly
+	// what SegmentMember.Address holds. A membership hz could not resolve
+	// contributes nothing here and a hosts gap says which, because a peer hz
+	// cannot address is a peer it cannot write a line for.
+	//
+	// THE ADDRESS IS A RECORD AND THE NAME IS THE BEST hz HAS: see the hosts
+	// gap projectSegments always raises. Nothing says what a machine answers
+	// to ON a segment, so the name is the peer's machine name.
 	Hosts []HostEntry `json:"hosts"`
 
 	// Packages is what this machine should have installed, at an exact
@@ -149,21 +159,43 @@ type MachineConfig struct {
 	Unresolved []Gap `json:"unresolved,omitempty"`
 }
 
-// Segment is one network-segment membership.
+// Segment is one network-segment membership, resolved against the Segment
+// record that answers to the name.
 type Segment struct {
 	Name string `json:"name"`
 
-	// Interface, Address and Peers are what the membership MEANS on the box,
-	// and they are empty until item 15.
+	// Interface, Address and Peers are what the membership MEANS on the box.
+	//
+	// Interface is the SEGMENT's, so it is known from the record alone and is
+	// populated even on an unaddressed membership — two segments may not share
+	// one, which is the collision the per-segment interface exists to prevent.
+	// Address is this machine's on this segment. Peers are the machine NAMES
+	// this machine peers with, derived by config.Segment.PeersOf: hub and
+	// spoke, never a stored list.
+	//
+	// PEERS IS NAMES, NOT A TUNNEL. It is who this box talks to on this
+	// segment; it is not enough to bring a tunnel up, because nothing holds a
+	// peer's WireGuard public key. A membership whose peers are unkeyed is
+	// still Resolved — the three fields here are computed — and carries a
+	// segments gap naming the peers hz cannot emit a `[Peer]` block for.
 	Interface string   `json:"interface,omitempty"`
 	Address   string   `json:"address,omitempty"`
 	Peers     []string `json:"peers,omitempty"`
 
 	// Resolved says whether the three fields above were computed or merely
-	// left out. False means this entry is a declared MEMBERSHIP OF A LABEL and
-	// nothing more — there is no Segment record to resolve the name against
-	// (phase 4 item 15), so an empty Interface here does not mean "no
-	// interface", it means hz does not know.
+	// left out. False means this entry is still a declared MEMBERSHIP OF A
+	// LABEL, so an empty Address here does not mean "no address", it means hz
+	// does not know. There are exactly two ways to be false and a segments gap
+	// names which one applies:
+	//
+	//   - NO RECORD. No Segment answers to the name. Nothing is known except
+	//     that the machine claims it. (Config.ValidateMachines refuses this
+	//     once any segment is declared, so it survives only on a config nobody
+	//     has saved — and on one that declares no segments at all, where every
+	//     membership is a label by design.)
+	//   - UNADDRESSED. The segment exists and has no member entry for this
+	//     machine. Interface is known, Address and Peers are not. LEGAL AND
+	//     NOT AN ERROR: it is the state `hz machine add --segment` leaves.
 	//
 	// Rendered even when false (no omitempty) because a reader must not have
 	// to infer it from an absence.
@@ -493,19 +525,25 @@ func Project(g Global, machineID string) (MachineConfig, error) {
 			" Instances registered on it are still projected below.")
 	}
 
-	projectSegments(&mc, m)
+	projectSegments(&mc, cfg, m)
 	projectInstances(&mc, cfg, g.Instances, g.SealedConfigs, machineID)
 	projectAgent(&mc, g.AgentVersion)
 
 	return mc, nil
 }
 
-// projectSegments turns a machine's segment memberships into Segment entries,
-// and says what a membership does not yet mean.
-func projectSegments(mc *MachineConfig, m config.Machine) {
-	for _, name := range m.Segments {
-		mc.Segments = append(mc.Segments, Segment{Name: name, Resolved: false})
-	}
+// projectSegments resolves a machine's segment memberships against the Segment
+// records, fills /etc/hosts from the peers it resolved, and says what is left.
+//
+// THREE STATES PER MEMBERSHIP, and the caller can tell them apart without
+// guessing: resolved; unresolved because no record answers to the name;
+// unresolved because the record has no member entry for this machine. The last
+// is LEGAL — `hz machine add --segment` leaves it, and a machine that is in a
+// segment and not addressed on it is a true statement, not a broken one — so it
+// is a gap rather than a failure and the gap names what addresses it.
+//
+// WHAT RESOLVING DOES NOT BUY: a tunnel. See the keyless-peer gap below.
+func projectSegments(mc *MachineConfig, cfg *config.Config, m config.Machine) {
 	if len(m.Segments) == 0 {
 		// Nothing declared, nothing unknown. A machine with no segments has an
 		// empty segment list because it has no segments, and that is an
@@ -514,18 +552,180 @@ func projectSegments(mc *MachineConfig, m config.Machine) {
 		return
 	}
 
-	mc.gap(SectionSegments, ReasonUnmodelled, "hz can name this machine's segments and not what they mean:"+
-		" nothing resolves a segment NAME to a CIDR, an interface, a per-machine address or a peer set."+
-		" That record is phase 4 item 15. Until it exists a membership is a declaration about a label,"+
-		" so `interface`, `address` and `peers` are absent because hz does not know them, not because they are empty.")
+	var (
+		unmodelled  []string // names no Segment record answers to
+		unaddressed []string // segments this machine is in and not addressed on
+		keyless     []string // segment/peer pairs with no WireGuard public key
+		hubless     []string // segments where this spoke has no hub to peer with
+		undialable  []string // segments whose hub has no endpoint to dial
+	)
 
-	// /etc/hosts follows the segments. example-projection.md §5's single entry
-	// is the gateway's address ON A SEGMENT, which is precisely the thing no
-	// record holds, so this gap is a consequence of the one above rather than
-	// an independent hole — said separately anyway, because a reader looking
-	// at an empty `hosts` must not have to derive it.
-	mc.gap(SectionHosts, ReasonUnmodelled, "an /etc/hosts entry is a peer's address on a segment, and no record holds a per-segment address (phase 4 item 15),"+
-		" so hz has no host entries to declare rather than declaring that this machine should have none.")
+	// hostAddrs remembers which addresses a name was seen at, so a peer
+	// reachable at two of them is reported rather than silently written twice.
+	hostAddrs := map[string][]string{}
+
+	for _, name := range m.Segments {
+		seg, declared := cfg.FindSegment(name)
+		if !declared {
+			mc.Segments = append(mc.Segments, Segment{Name: name})
+			unmodelled = append(unmodelled, name)
+			continue
+		}
+
+		// The interface belongs to the SEGMENT, so it is known as soon as the
+		// record is, addressed or not.
+		entry := Segment{Name: name, Interface: seg.Interface}
+
+		self, addressed := seg.Member(m.Name)
+		if !addressed {
+			mc.Segments = append(mc.Segments, entry)
+			unaddressed = append(unaddressed, name)
+			continue
+		}
+
+		entry.Address = self.Address
+		// DERIVED, NEVER STORED: hub and spoke is the rule and PeersOf is the
+		// one implementation of it. A peer list on the record would be a second
+		// answer free to disagree with the membership it is a view of.
+		peers := seg.PeersOf(m.Name)
+		for _, p := range peers {
+			entry.Peers = append(entry.Peers, p.Machine)
+			if strings.TrimSpace(p.PublicKey) == "" {
+				keyless = append(keyless, name+"/"+p.Machine)
+			}
+			// Only a spoke dials: the hub answers. A spoke's one peer is the
+			// hub, and a hub with no endpoint is a tunnel that cannot come up.
+			if !self.Hub && strings.TrimSpace(p.Endpoint) == "" {
+				undialable = append(undialable, name+"/"+p.Machine)
+			}
+			hostAddrs[p.Machine] = appendDistinct(hostAddrs[p.Machine], p.Address)
+			mc.Hosts = append(mc.Hosts, HostEntry{Name: p.Machine, Address: p.Address})
+		}
+		if !self.Hub {
+			if _, has := seg.Hub(); !has {
+				hubless = append(hubless, name)
+			}
+		}
+
+		entry.Resolved = true
+		mc.Segments = append(mc.Segments, entry)
+	}
+
+	segmentGaps(mc, m, unmodelled, unaddressed, keyless, hubless, undialable)
+	hostGaps(mc, unmodelled, unaddressed, hostAddrs)
+}
+
+// segmentGaps says, per kind, what hz did not work out about the memberships.
+// Each kind is one gap naming every membership it applies to, rather than one
+// gap per membership: a screen renders these in the section they are about and
+// four copies of one sentence is four copies of one sentence.
+func segmentGaps(mc *MachineConfig, m config.Machine, unmodelled, unaddressed, keyless, hubless, undialable []string) {
+	if len(unmodelled) > 0 {
+		mc.gap(SectionSegments, ReasonUnmodelled, "no segment record answers to "+list(unmodelled)+
+			", so that membership is still a declaration about a LABEL: `interface`, `address` and `peers` are absent"+
+			" because hz does not know them, not because they are empty."+
+			" `hz segment add <name> --project <project> --cidr <range> --interface <iface>` declares the network the name means.")
+	}
+	if len(unaddressed) > 0 {
+		mc.gap(SectionSegments, ReasonUnmodelled, m.Name+" is a member of "+list(unaddressed)+
+			" and has no address on it — LEGAL, and the state `hz machine add --segment` leaves: the machine is in the segment"+
+			" and hz cannot say where. The interface is the segment's and is known; `address` and `peers` are unknown,"+
+			" and nothing peers with an unaddressed member."+
+			" Address it with `hz segment add ... --member machine="+m.Name+",address=<ip>` at declaration time;"+
+			" addressing a membership on a segment that already exists is `hz segment set`.")
+	}
+	if len(keyless) > 0 {
+		// THE LIMIT THAT RESOLUTION DOES NOT REMOVE. Resolved means hz knows
+		// the interface, the address and who the peers are. It does not mean a
+		// tunnel can be built: WireGuard needs each peer's public key, and
+		// nothing puts one on the record.
+		mc.gap(SectionSegments, ReasonUnmodelled, "hz can name and address "+list(keyless)+
+			" and cannot emit a WireGuard `[Peer]` block for it: no record holds that peer's public key."+
+			" A box mints its key per interface at enrolment and `hz-agent enroll` does not send one, so SegmentMember.PublicKey"+
+			" is empty everywhere. `peers` here is therefore WHO this machine talks to on the segment, not a usable tunnel config."+
+			" Enrolment reporting the per-interface public key, or an operator recording it, would close it.")
+	}
+	if len(hubless) > 0 {
+		mc.gap(SectionSegments, ReasonUnmodelled, list(hubless)+" has members and no hub, so hz cannot say who "+m.Name+
+			" peers with: it is hub and spoke, and a spoke with no hub peers with nothing."+
+			" An empty `peers` here is unknown rather than none. (Config.ValidateSegments refuses this, so a saved config cannot show it.)")
+	}
+	if len(undialable) > 0 {
+		mc.gap(SectionSegments, ReasonUnmodelled, m.Name+" is a spoke of "+list(undialable)+
+			", which has no endpoint — a spoke dials the hub, so there is nothing for it to dial."+
+			" The peering is known and cannot be brought up. Record the hub's `host:port` endpoint on the segment member.")
+	}
+}
+
+// hostGaps says what /etc/hosts is missing and what it is guessing.
+//
+// The section is populated now, so these sit BESIDE an answer rather than
+// instead of one — which is the point: a reader has to be able to tell a line
+// hz is sure of from a name it picked because it holds no better one.
+//
+// AND AN EMPTY LIST CAN STILL BE AN ANSWER. A machine that resolved every
+// membership and peers with nobody — a hub whose segment has no spoke yet —
+// gets no entries and NO gap, because hz worked it out: there is nothing to
+// write. The gaps below fire on a membership hz could not resolve, and on the
+// entries it did produce.
+func hostGaps(mc *MachineConfig, unmodelled, unaddressed []string, hostAddrs map[string][]string) {
+	missing := append(append([]string{}, unmodelled...), unaddressed...)
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		mc.gap(SectionHosts, ReasonUnmodelled, "an /etc/hosts entry is a peer's address on a segment, and hz could not resolve this machine's"+
+			" membership of "+list(missing)+" — so whatever peers it has there are missing from this list rather than absent from the machine."+
+			" The segments gap says what would resolve each one.")
+	}
+	if len(mc.Hosts) == 0 {
+		return
+	}
+
+	// NAMING IS THE HALF THE RECORD DOES NOT HOLD. The address is a record;
+	// the name is the peer's MACHINE name, because that is the only name hz
+	// has for a box. Nothing says what a machine answers to ON a segment, so
+	// this is said out loud rather than settled by a convention invented here.
+	mc.gap(SectionHosts, ReasonUnmodelled, "hz names each entry by the peer's MACHINE name, which is the only name the records carry:"+
+		" no record says what a machine answers to on a segment (a domain-qualified name, a service alias, the name a client actually asks for)."+
+		" Every address below is a record; every name is hz's best. A name on the segment member, or a domain on the segment, would close it.")
+
+	var collisions []string
+	for name, addrs := range hostAddrs {
+		if len(addrs) > 1 {
+			sort.Strings(addrs)
+			collisions = append(collisions, name+" ("+strings.Join(addrs, ", ")+")")
+		}
+	}
+	if len(collisions) > 0 {
+		sort.Strings(collisions)
+		mc.gap(SectionHosts, ReasonUnmodelled, list(collisions)+" is a peer on more than one of this machine's segments, at a different address on each,"+
+			" and /etc/hosts resolves a name to ONE of them — the first. hz emits both lines because both are true and refuses to pick,"+
+			" because nothing records which segment this machine should reach that peer over. A per-segment name, or a declared preference, would decide it.")
+	}
+}
+
+// appendDistinct appends v unless it is already there. The lists it builds are
+// a handful of addresses long, so a map per peer would cost more than it saves.
+func appendDistinct(in []string, v string) []string {
+	for _, have := range in {
+		if have == v {
+			return in
+		}
+	}
+	return append(in, v)
+}
+
+// list renders names for a gap's prose: "a", "a and b", "a, b and c".
+func list(names []string) string {
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	case 2:
+		return names[0] + " and " + names[1]
+	default:
+		return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+	}
 }
 
 // projectInstances is the join architecture.md describes and
