@@ -1326,6 +1326,8 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// Observability topology (admin): declared hosts + Prometheus exporters.
 	mux.HandleFunc("/api/v1/topology", s.handleAPITopology)
 	mux.HandleFunc("/api/v1/topology/hosts", s.handleAPITopologyHosts)
+	mux.HandleFunc("/api/v1/topology/hosts/show", s.handleAPITopologyHostShow)
+	mux.HandleFunc("/api/v1/topology/hosts/set", s.handleAPITopologyHostSet)
 	mux.HandleFunc("/api/v1/topology/exporters", s.handleAPITopologyExporters)
 	mux.HandleFunc("/api/v1/topology/scrape-exclusions", s.handleAPITopologyScrapeExclusions)
 	mux.HandleFunc("/api/v1/topology/reprobe", s.handleAPITopologyReprobe)

@@ -1093,10 +1093,44 @@ export interface ExporterTargetResp {
  */
 export interface TopologyResp {
   hosts: HostDecl[];
+  /**
+   * SelfHost is the reserved "@self" pseudo-host: this instance's own LAN
+   * address. Not a declaration and never editable — it is here so a client
+   * can show what @self resolves to beside the declared hosts.
+   */
+  selfHost: HostDecl;
   exporters: Exporter[];
   targets: ExporterTargetResp[];
   knownHosts: string[]; // all host IPs hz knows (derived + declared); the "*" population
   scrapeExclusions: string[]; // IPs/CIDRs dropped from the scrape config (host still listed, just not scraped)
+}
+/**
+ * HostReferenceResp is one record that resolves through a declared host via a
+ * "@name" reference: what kind of record it is, which one, and the value as
+ * the operator wrote it.
+ */
+export interface HostReferenceResp {
+  kind: string; // "service backend", "port forward", "local DNS record", ...
+  owner: string; // service name, record name, exporter job
+  field: string; // field within that record, e.g. "proxy.backend"
+  value: string; // the authored value, e.g. "@nas:8080"
+}
+/**
+ * HostShowResp is one declared host and everything that points at it — the
+ * answer to "what breaks if I move this box", which is the question a host
+ * reference exists to make answerable.
+ */
+export interface HostShowResp {
+  host: HostDecl;
+  references: HostReferenceResp[];
+}
+/**
+ * HostSetRequest repoints a declared host at a new address. It is the whole
+ * point of the indirection: one edit moves every record that references it.
+ */
+export interface HostSetRequest {
+  name: string;
+  ip: string;
 }
 /**
  * ScrapeTokenResp carries the read-only Prometheus scrape token.

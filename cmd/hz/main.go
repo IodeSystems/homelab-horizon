@@ -77,9 +77,12 @@ COMMANDS
   domain ssl rm <domain>... --confirm
                                      Drop HTTPS from domains (back to plain HTTP)
   host list                          List declared hosts (table)
+  host show <name>                   One host and EVERY record that resolves through it
+                                     ('self' = this gateway's own address, @self)
   host add --name N --ip IP [--label k=v ...]
                                      Declare a host (error if name/ip already used)
-  host rm <name|ip>                  Remove a declared host
+  host set <name> <ip>               Repoint a host: every @<name> record follows it
+  host rm <name|ip>                  Remove a declared host (refused while referenced)
   exporter list                      List exporter jobs, then expanded live targets (up/down)
   exporter add --job J --mode port|service|static [mode flags] [--path P] [--bearer T] [--label k=v ...]
                                      Add a Prometheus exporter job (error if job exists)
@@ -311,6 +314,11 @@ EXAMPLES
   hz sync --wait
   hz schema service
   hz host add --name nas --ip 192.168.1.50 --label role=storage
+  hz service edit web --backend @nas:8080                          # points at the DECLARATION, not the address
+  hz host show nas                                                # what breaks if that box moves
+  hz host set nas 192.168.1.51 --sync                             # it moved; one edit moves every record
+  hz host show self                                               # what points at THIS gateway
+  hz service edit app --internal-dns-ip @self                     # hz pointing at itself, per instance
   hz exporter add --job node --mode port --port 9100 --sync       # node_exporter on every known host
   hz exporter add --job app-metrics --mode service --path /api/metrics  # every non-opted-in service backend
   hz exporter add --job pg --mode static --target 192.168.1.60:9187 --label db=main
