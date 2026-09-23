@@ -17,6 +17,7 @@ import { Route as ConfigRouteImport } from './routes/config'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as DomainsRouteImport } from './routes/domains'
 import { Route as DriftRouteImport } from './routes/drift'
+import { Route as HostsRouteImport } from './routes/hosts'
 import { Route as MfaRouteImport } from './routes/mfa'
 import { Route as ObservabilityRouteImport } from './routes/observability'
 import { Route as PortsRouteImport } from './routes/ports'
@@ -67,6 +68,11 @@ const DomainsRoute = DomainsRouteImport.update({
 const DriftRoute = DriftRouteImport.update({
   id: '/drift',
   path: '/drift',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HostsRoute = HostsRouteImport.update({
+  id: '/hosts',
+  path: '/hosts',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MfaRoute = MfaRouteImport.update({
@@ -134,6 +140,7 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof DashboardRoute
   '/domains': typeof DomainsRoute
   '/drift': typeof DriftRoute
+  '/hosts': typeof HostsRoute
   '/mfa': typeof MfaRoute
   '/observability': typeof ObservabilityRoute
   '/ports': typeof PortsRoute
@@ -155,6 +162,7 @@ export interface FileRoutesByTo {
   '/dashboard': typeof DashboardRoute
   '/domains': typeof DomainsRoute
   '/drift': typeof DriftRoute
+  '/hosts': typeof HostsRoute
   '/mfa': typeof MfaRoute
   '/observability': typeof ObservabilityRoute
   '/ports': typeof PortsRoute
@@ -177,6 +185,7 @@ export interface FileRoutesById {
   '/dashboard': typeof DashboardRoute
   '/domains': typeof DomainsRoute
   '/drift': typeof DriftRoute
+  '/hosts': typeof HostsRoute
   '/mfa': typeof MfaRoute
   '/observability': typeof ObservabilityRoute
   '/ports': typeof PortsRoute
@@ -200,6 +209,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/domains'
     | '/drift'
+    | '/hosts'
     | '/mfa'
     | '/observability'
     | '/ports'
@@ -221,6 +231,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/domains'
     | '/drift'
+    | '/hosts'
     | '/mfa'
     | '/observability'
     | '/ports'
@@ -242,6 +253,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/domains'
     | '/drift'
+    | '/hosts'
     | '/mfa'
     | '/observability'
     | '/ports'
@@ -264,6 +276,7 @@ export interface RootRouteChildren {
   DashboardRoute: typeof DashboardRoute
   DomainsRoute: typeof DomainsRoute
   DriftRoute: typeof DriftRoute
+  HostsRoute: typeof HostsRoute
   MfaRoute: typeof MfaRoute
   ObservabilityRoute: typeof ObservabilityRoute
   PortsRoute: typeof PortsRoute
@@ -333,6 +346,13 @@ declare module '@tanstack/react-router' {
       path: '/drift'
       fullPath: '/drift'
       preLoaderRoute: typeof DriftRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/hosts': {
+      id: '/hosts'
+      path: '/hosts'
+      fullPath: '/hosts'
+      preLoaderRoute: typeof HostsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/mfa': {
@@ -424,6 +444,7 @@ const rootRouteChildren: RootRouteChildren = {
   DashboardRoute: DashboardRoute,
   DomainsRoute: DomainsRoute,
   DriftRoute: DriftRoute,
+  HostsRoute: HostsRoute,
   MfaRoute: MfaRoute,
   ObservabilityRoute: ObservabilityRoute,
   PortsRoute: PortsRoute,
