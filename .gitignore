@@ -15,8 +15,10 @@ deploy.sh
 ui/node_modules
 ui/dist
 ui/*.tsbuildinfo
-# `pnpm test:render` bundles the render check here before running it.
+# `pnpm test:render` / `test:model-render` bundle the render checks here
+# before running them.
 ui/.rendercheck
+ui/.rendercheck-model
 docs/node_modules
 docs/package-lock.json
 homelab-horizon-linux
