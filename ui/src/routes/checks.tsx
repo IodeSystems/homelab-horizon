@@ -34,12 +34,14 @@ import {
   useAllCheckHistory,
   useChecks,
   useDeleteCheck,
+  useProbeDiagnosis,
   useRunCheck,
   useToggleCheck,
 } from "../api/hooks";
-import type { CheckStatus } from "../api/types";
+import type { CheckStatus, ProbeDiagnosis } from "../api/types";
 import { ChecksHistory } from "../components/ChecksHistory";
 import { RemoteVantages } from "../components/RemoteVantages";
+import { EdgeDiagnosis, deviceLabel } from "../components/EdgeDiagnosis";
 
 function relativeTime(isoStr: string): string {
   if (!isoStr) return "Never";
@@ -82,7 +84,11 @@ function StatusDot({ status }: { status: string }) {
 // top of the page now carries the history signal (up/down ribbon + latency
 // stacked). Expanding each row to see its own sparkline was redundant.
 
-function CheckRow({ check }: { check: CheckStatus }) {
+// A remote check row carries the cause of its own failure, when the edge
+// diagnosis has one for it. The row says a probe failed; the cause says on
+// whose device, and an operator scanning the table should not have to work out
+// that the panel above is about this line.
+function CheckRow({ check, cause }: { check: CheckStatus; cause?: ProbeDiagnosis }) {
   const toggleCheck = useToggleCheck();
   const deleteCheck = useDeleteCheck();
   const runCheck = useRunCheck();
@@ -133,6 +139,16 @@ function CheckRow({ check }: { check: CheckStatus }) {
             <Typography variant="caption" color={check.status === "warning" ? "warning.main" : "error.main"} sx={{ display: "block", mt: 0.25, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={check.last_error}>
               {check.last_error}
             </Typography>
+          )}
+          {cause && cause.status !== "ok" && (
+            <Tooltip title={`${cause.summary} — ${deviceLabel(cause.device)}. See "What is wrong at the edge" above.`}>
+              <Chip
+                size="small"
+                variant="outlined"
+                label={cause.cause}
+                sx={{ mt: 0.5, height: 20, fontSize: "0.7rem" }}
+              />
+            </Tooltip>
           )}
         </TableCell>
         <TableCell>
@@ -191,6 +207,8 @@ function CheckRow({ check }: { check: CheckStatus }) {
 function ChecksPage() {
   const { data: checks, isLoading, error } = useChecks();
   const { data: allHistory } = useAllCheckHistory();
+  // Same query key the panel uses, so this costs no extra request.
+  const { data: diagnosis } = useProbeDiagnosis();
   const [addOpen, setAddOpen] = useState(false);
   const [snack, setSnack] = useState("");
   const addCheck = useAddCheck();
@@ -214,6 +232,11 @@ function ChecksPage() {
   }
 
   const checksList = checks ?? [];
+  // Keyed by vantage and host: a diagnosis is per name, and a name has one row
+  // per probe kind, so all of a name's rows share its cause.
+  const causeFor = new Map(
+    (diagnosis?.diagnoses ?? []).map((d) => [`${d.vantage}:${d.host}`, d]),
+  );
   const healthy = checksList.filter((c) => c.status === "ok").length;
   const failed = checksList.filter((c) => c.status === "failed").length;
   const warning = checksList.filter((c) => c.status === "warning").length;
@@ -247,6 +270,11 @@ function ChecksPage() {
 
       <ChecksHistory data={allHistory} />
 
+      {/* Causes before statuses. The table below says which probes failed;
+          this says why and on whose device, which is the only one of the two
+          an operator can act on. */}
+      <EdgeDiagnosis />
+
       <RemoteVantages />
 
       <TableContainer component={Paper}>
@@ -264,7 +292,15 @@ function ChecksPage() {
           </TableHead>
           <TableBody>
             {checksList.map((check) => (
-              <CheckRow key={check.name} check={check} />
+              <CheckRow
+                key={check.name}
+                check={check}
+                cause={
+                  check.vantage
+                    ? causeFor.get(`${check.vantage}:${check.target}`)
+                    : undefined
+                }
+              />
             ))}
             {checksList.length === 0 && (
               <TableRow>

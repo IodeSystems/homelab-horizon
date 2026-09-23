@@ -371,6 +371,33 @@ export const RemoteProbeTestSchema = z.object({
   certNotAfter: z.string().optional(),
 });
 
+// The edge diagnosis: one verdict per public name per vantage.
+//
+// `evidence` and `diagnoses` are required rather than optional on purpose. The
+// server never sends null for either — an empty list is an answer ("no rung
+// was climbed", "nothing is being watched") and marking them optional here
+// would let a client that silently received nothing render the same as one
+// that received an empty answer.
+export const ProbeDiagnosisSchema = z.object({
+  target: z.string(),
+  host: z.string(),
+  vantage: z.string(),
+  status: z.string(),
+  cause: z.string(),
+  device: z.string(),
+  hzCanFix: z.boolean(),
+  summary: z.string(),
+  fix: z.string(),
+  confirm: z.string(),
+  evidence: z.array(z.string()),
+  at: z.string(),
+});
+
+export const ProbeDiagnosisDataSchema = z.object({
+  vantages: z.number(),
+  diagnoses: z.array(ProbeDiagnosisSchema),
+});
+
 export const RemoteProbeTokenSchema = z.object({
   token: z.string(),
   // Where the install routes are actually served — the public/kiosk vhost,
