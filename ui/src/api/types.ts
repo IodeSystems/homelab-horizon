@@ -35,6 +35,8 @@ export type {
   RemoteProbeRequest,
   RemoteProbeTestResp as RemoteProbeTest,
   RemoteProbeTokenResp as RemoteProbeToken,
+  ProbeDiagnosisResp as ProbeDiagnosisData,
+  ProbeDiagnosis,
   ConfigResp as SystemConfig,
   SettingsResponse as SettingsData,
   HAProxyConfigPreview,

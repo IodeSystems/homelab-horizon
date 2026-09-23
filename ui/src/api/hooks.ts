@@ -26,6 +26,7 @@ import type {
   BanListResponse,
   CheckHistoryResponse,
   CheckStatus,
+  ProbeDiagnosisData,
   RemoteProbe,
   RemoteProbeRequest,
   RemoteProbeTest,
@@ -71,6 +72,7 @@ import {
   BanListResponseSchema,
   CheckHistoryResponseSchema,
   ChecksListSchema,
+  ProbeDiagnosisDataSchema,
   ConfigSharesSchema,
   DashboardDataSchema,
   DNSDriftStatusResponseSchema,
@@ -1040,6 +1042,24 @@ export function useChecks() {
     queryKey: ["checks"],
     queryFn: () =>
       apiFetch<CheckStatus[]>("/checks", { schema: ChecksListSchema }),
+    refetchInterval: 30000,
+  });
+}
+
+// --- The edge diagnosis ---
+//
+// useChecks answers "did this probe pass". This answers "why not, and whose
+// device has to change" — the ladder over a name's whole result set rather
+// than one probe's verdict. Same cadence as the rows it sits above, so the two
+// never disagree on screen.
+
+export function useProbeDiagnosis() {
+  return useQuery({
+    queryKey: ["probe-diagnosis"],
+    queryFn: () =>
+      apiFetch<ProbeDiagnosisData>("/checks/diagnosis", {
+        schema: ProbeDiagnosisDataSchema,
+      }),
     refetchInterval: 30000,
   });
 }
