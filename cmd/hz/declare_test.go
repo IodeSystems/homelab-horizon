@@ -237,6 +237,54 @@ func (s *declareStub) start(t *testing.T) *client {
 			}
 			_ = enc.Encode(out)
 
+		case "/api/v1/segments":
+			out := []apitypes.SegmentResp{}
+			for _, seg := range s.cfg.Segments {
+				out = append(out, wireSegment(s.cfg, seg))
+			}
+			sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+			_ = enc.Encode(out)
+
+		case "/api/v1/segments/add":
+			var req apitypes.SegmentAddReq
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			seg := hzconfig.Segment{
+				Name: req.Name, Project: req.Project, CIDR: req.CIDR,
+				Interface: req.Interface, Note: req.Note,
+			}
+			for _, m := range req.Members {
+				seg.Members = append(seg.Members, hzconfig.SegmentMember{
+					Machine: m.Machine, Address: m.Address,
+					PublicKey: m.PublicKey, Hub: m.Hub, Endpoint: m.Endpoint,
+				})
+			}
+			if err := s.cfg.AddSegment(seg); err != nil {
+				fail(err)
+				return
+			}
+			s.save(t)
+			added, _ := s.cfg.FindSegment(req.Name)
+			_ = enc.Encode(wireSegment(s.cfg, added))
+
+		case "/api/v1/segments/rm":
+			var req apitypes.SegmentRmReq
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			removes, blocked, err := s.cfg.SegmentRemoval(req.Name, req.Cascade)
+			if err != nil {
+				fail(err)
+				return
+			}
+			out := apitypes.RemovalResp{Removes: wireDeps(removes), Blocked: wireDeps(blocked)}
+			if len(blocked) == 0 && req.Confirm {
+				if _, err := s.cfg.RemoveSegment(req.Name, req.Cascade); err != nil {
+					fail(err)
+					return
+				}
+				s.save(t)
+				out.OK = true
+			}
+			_ = enc.Encode(out)
+
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"error":"unrouted: ` + r.URL.Path + `"}`))
@@ -256,6 +304,38 @@ func (s *declareStub) env(project, name string) apitypes.EnvironmentResp {
 		}
 	}
 	return apitypes.EnvironmentResp{Project: project, Name: name}
+}
+
+// wireSegment mirrors the server's segmentResp: the two joins a client must not
+// make for itself — each member's peers, and the machines that name the segment
+// without being addressed on it.
+func wireSegment(cfg *hzconfig.Config, seg hzconfig.Segment) apitypes.SegmentResp {
+	out := apitypes.SegmentResp{
+		Name: seg.Name, Project: seg.Project, CIDR: seg.CIDR,
+		Interface: seg.Interface, Note: seg.Note,
+	}
+	for _, m := range seg.Members {
+		mem := apitypes.SegmentMemberResp{
+			Machine: m.Machine, Address: m.Address,
+			PublicKey: m.PublicKey, Hub: m.Hub, Endpoint: m.Endpoint,
+		}
+		for _, p := range seg.PeersOf(m.Machine) {
+			mem.Peers = append(mem.Peers, p.Machine)
+		}
+		out.Members = append(out.Members, mem)
+	}
+	for _, machine := range cfg.Machines {
+		for _, name := range machine.Segments {
+			if name != seg.Name {
+				continue
+			}
+			if _, addressed := seg.Member(machine.Name); !addressed {
+				out.Unaddressed = append(out.Unaddressed, machine.Name)
+			}
+		}
+	}
+	sort.Strings(out.Unaddressed)
+	return out
 }
 
 func wireDeps(list []hzconfig.Dependant) []apitypes.DependantResp {

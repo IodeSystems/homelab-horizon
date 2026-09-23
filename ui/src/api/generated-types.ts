@@ -624,6 +624,87 @@ export interface MachineRmReq {
   confirm?: boolean;
 }
 /**
+ * SegmentResp is one declared segment: the thing a machine's segment NAME
+ * resolves to.
+ * IT CARRIES NO ENVIRONMENT and no version, for the reason MachineResp carries
+ * neither: a segment is a network, not a rung. It carries a PROJECT because a
+ * project's machines form the segment (plan/architecture.md, "Segments"), and
+ * the owner is what makes another project's machine on it read as a crossing.
+ * Peers on each member is DERIVED server-side rather than left to a client
+ * pairing members up, for the reason MachineResp derives MultiHomed: a client
+ * must never have to re-derive a judgement hz already makes. Hub and spoke, so
+ * a spoke's peers are the hub and the hub's are every spoke.
+ */
+export interface SegmentResp {
+  name: string;
+  project: string;
+  cidr: string;
+  interface: string;
+  note?: string;
+  members?: SegmentMemberResp[];
+  /**
+   * Unaddressed is every machine that names this segment and has no member
+   * entry. It is not an error — it is the state `hz machine add --segment`
+   * leaves — but it is the difference between a segment that is complete and
+   * one that is half declared, and a client counting Members would read it
+   * as the segment being smaller than it is.
+   */
+  unaddressed?: string[];
+}
+/**
+ * SegmentMemberResp is one machine's presence on one segment.
+ * PublicKey is the public half and only ever the public half; hz never holds
+ * the secret one. Empty means the box has not produced a key for this
+ * interface yet, which is a different state from not being a member.
+ */
+export interface SegmentMemberResp {
+  machine: string;
+  address: string;
+  publicKey?: string;
+  hub?: boolean;
+  endpoint?: string;
+  peers?: string[];
+}
+/**
+ * SegmentAddReq declares a segment. Project, CIDR and Interface are all
+ * required: a segment nobody owns is a network nobody is responsible for, a
+ * segment with no range cannot check a member address, and a segment with no
+ * interface has nowhere to land on the box.
+ * Members addresses machines that ALREADY name this segment. A member for a
+ * machine that does not is refused — membership is declared on the machine and
+ * addressed here, and the two must not disagree.
+ */
+export interface SegmentAddReq {
+  name: string;
+  project: string;
+  cidr: string;
+  interface: string;
+  note?: string;
+  members?: SegmentMemberAddReq[];
+}
+/**
+ * SegmentMemberAddReq is one member of a segment being declared.
+ */
+export interface SegmentMemberAddReq {
+  machine: string;
+  address: string;
+  publicKey?: string;
+  hub?: boolean;
+  endpoint?: string;
+}
+/**
+ * SegmentRmReq removes a segment. Confirm and Cascade mean what they mean on
+ * ProjectRmReq. Cascade here DROPS the membership from every machine that names
+ * the segment: without it a removal is refused while one does, because a
+ * membership naming a segment that no longer exists is a config hz will not
+ * save.
+ */
+export interface SegmentRmReq {
+  name: string;
+  cascade?: boolean;
+  confirm?: boolean;
+}
+/**
  * RemovalResp answers both halves of a removal with one shape, because a dry run
  * and a write differ only in whether anything was written.
  * OK is true only when the config actually changed. Blocked is what stands in

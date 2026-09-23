@@ -133,6 +133,21 @@ COMMANDS
   machine rm <name> [--cascade] [--confirm]
                                      Remove a machine. Dry run without --confirm; refused
                                      while its agent credential exists (--cascade revokes it)
+  segment ls                         Declared segments: project, range, interface, members,
+                                     hub. A membership is a LABEL until a segment exists
+  segment show <name>                One segment: its range, its interface, every addressed
+                                     member with its peers, and the memberships not yet
+                                     addressed
+  segment add <name> --project P --cidr C --interface I [--note "what for"]
+              [--member machine=M,address=A[,hub=true][,endpoint=H:P][,key=K]]...
+                                     Declare the network a machine's segment name resolves
+                                     to. Ranges may not overlap and two segments may not
+                                     share an interface — that is what lets a machine be
+                                     in two. Membership itself is declared on the machine
+  segment rm <name> [--cascade] [--confirm]
+                                     Remove a segment. Dry run without --confirm; refused
+                                     while a machine is a member (--cascade drops the
+                                     membership from each)
   feed ls                            Every project's package feed and where it came from
   feed show <project>                The feed a project installs from, and which project declared it
   feed set <project> --url U --suite S --component C [--key-id ID] [--execute]
@@ -398,6 +413,8 @@ func dispatch(c *client, cmd string, rest []string) error {
 		err = runEnvironment(c, rest)
 	case "machine", "machines":
 		err = runMachine(c, rest)
+	case "segment", "segments":
+		err = runSegment(c, rest)
 	case "feed":
 		err = runFeed(c, rest)
 	case "import":
