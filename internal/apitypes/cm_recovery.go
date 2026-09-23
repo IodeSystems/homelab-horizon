@@ -32,6 +32,7 @@ type CMRecoveryRecipient struct {
 // recovery verify` has to open to prove custody, and only the recovery private
 // key opens it. hz already relays exactly this shape to a box at every boot.
 type CMRecoveryWrap struct {
+	Project     string `json:"project"`
 	Environment string `json:"environment"`
 	App         string `json:"app"`
 	Role        string `json:"role"`
@@ -72,6 +73,7 @@ type CMRecoveryRecipientReq struct {
 // key INSIDE is the key KeyID names — nothing but the private half can — and
 // that is exactly the hole `hz config recovery verify` exists to close.
 type CMRecoveryWrapReq struct {
+	Project     string `json:"project"`
 	Environment string `json:"environment"`
 	App         string `json:"app"`
 	Role        string `json:"role"`

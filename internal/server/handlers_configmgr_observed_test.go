@@ -54,7 +54,7 @@ func TestCMResolveRecordsTheObservedVersion(t *testing.T) {
 	box := cmRegister(t, s, "box-1", "prod", "redline", "app")
 	k := configmgr.NewEnvKey()
 	cmApproveBox(t, s, admin, box, k)
-	cmBless(t, s, admin, k, "prod", "redline", "app", "1.0.0", "",
+	cmBless(t, s, admin, k, cmTestProject, "prod", "redline", "app", "1.0.0", "",
 		map[string]string{"DB_URL": configmgr.BindingEnv})
 
 	// The register alone already reports: cmRegister sends 1.2.0.
@@ -70,7 +70,7 @@ func TestCMResolveRecordsTheObservedVersion(t *testing.T) {
 	// output — provenance only, and not semver, which must not matter.
 	const build = "v1.0.0-rc.1-1377-g406804d5"
 	w := cmMachineCall(t, s.handleAPICMConfig, http.MethodPost, "/api/v1/cm/config",
-		configmgr.ConfigRequest{Machine: "box-1", Environment: "prod", App: "redline", Role: "app",
+		configmgr.ConfigRequest{Machine: "box-1", Project: cmTestProject, Environment: "prod", App: "redline", Role: "app",
 			Version: "1.3.0", Build: build})
 	if w.Code != http.StatusOK {
 		t.Fatalf("resolve: status %d: %s", w.Code, w.Body.String())
@@ -103,12 +103,12 @@ func TestCMResolveRefreshesObservedAtOnEveryCall(t *testing.T) {
 	box := cmRegister(t, s, "box-1", "prod", "redline", "app")
 	k := configmgr.NewEnvKey()
 	cmApproveBox(t, s, admin, box, k)
-	cmBless(t, s, admin, k, "prod", "redline", "app", "1.0.0", "",
+	cmBless(t, s, admin, k, cmTestProject, "prod", "redline", "app", "1.0.0", "",
 		map[string]string{"DB_URL": configmgr.BindingEnv})
 
 	resolve := func() string {
 		w := cmMachineCall(t, s.handleAPICMConfig, http.MethodPost, "/api/v1/cm/config",
-			configmgr.ConfigRequest{Machine: "box-1", Environment: "prod", App: "redline",
+			configmgr.ConfigRequest{Machine: "box-1", Project: cmTestProject, Environment: "prod", App: "redline",
 				Role: "app", Version: "1.2.0"})
 		if w.Code != http.StatusOK {
 			t.Fatalf("resolve: status %d: %s", w.Code, w.Body.String())
@@ -138,7 +138,7 @@ func TestCMResolveWithoutABuildStringStillWorks(t *testing.T) {
 	box := cmRegister(t, s, "box-1", "prod", "redline", "app")
 	k := configmgr.NewEnvKey()
 	cmApproveBox(t, s, admin, box, k)
-	cmBless(t, s, admin, k, "prod", "redline", "app", "1.0.0", "",
+	cmBless(t, s, admin, k, cmTestProject, "prod", "redline", "app", "1.0.0", "",
 		map[string]string{"DB_URL": configmgr.BindingEnv})
 
 	// Posted as a map rather than the struct, so the JSON genuinely has no
@@ -146,7 +146,7 @@ func TestCMResolveWithoutABuildStringStillWorks(t *testing.T) {
 	// a zero-valued struct field would not reproduce faithfully.
 	w := cmMachineCall(t, s.handleAPICMConfig, http.MethodPost, "/api/v1/cm/config",
 		map[string]string{
-			"machine": "box-1", "environment": "prod", "app": "redline",
+			"machine": "box-1", "project": cmTestProject, "environment": "prod", "app": "redline",
 			"role": "app", "version": "1.2.0",
 		})
 	if w.Code != http.StatusOK {
@@ -193,7 +193,7 @@ func TestCMMachineListingCarriesAVersionPerInstance(t *testing.T) {
 
 	// `next` is upgraded first — the whole middle of a rolling deploy.
 	w := cmMachineCall(t, s.handleAPICMConfig, http.MethodPost, "/api/v1/cm/config",
-		configmgr.ConfigRequest{Machine: "box-1", Environment: "prod", App: "redline",
+		configmgr.ConfigRequest{Machine: "box-1", Project: cmTestProject, Environment: "prod", App: "redline",
 			Role: "next", Version: "1.3.0"})
 	// `next` has never been approved, so hz serves it nothing — 409, one of the
 	// answers an agent boots its cache on. The report must land ANYWAY: what a

@@ -31,16 +31,21 @@ import type { CMConfigResp, CMConfigValueResp } from "../api/generated-types";
 // Nothing here touches WebCrypto. A browser served by hz cannot defend against
 // hz, so the ceremony lives in a locally installed binary instead.
 
-export type CMAddress = { env: string; app: string; role: string };
+export type CMAddress = { project: string; env: string; app: string; role: string };
 
-export const emptyCMAddress: CMAddress = { env: "", app: "", role: "" };
+export const emptyCMAddress: CMAddress = { project: "", env: "", app: "", role: "" };
 
 export function addressComplete(a: CMAddress): boolean {
-  return a.env.trim() !== "" && a.app.trim() !== "" && a.role.trim() !== "";
+  return (
+    a.project.trim() !== "" &&
+    a.env.trim() !== "" &&
+    a.app.trim() !== "" &&
+    a.role.trim() !== ""
+  );
 }
 
 export function addressLabel(a: CMAddress): string {
-  return `${a.env.trim()}/${a.app.trim()}/${a.role.trim()}`;
+  return `${a.project.trim()}/${a.env.trim()}/${a.app.trim()}/${a.role.trim()}`;
 }
 
 // A range with no maxVer is OPEN, not unknown and not blank. The newest config
@@ -120,7 +125,7 @@ export function AddressPicker({
 
   const seen = new Map<string, CMAddress>();
   for (const r of [...(approved.data ?? []), ...(pending.data ?? [])]) {
-    const a = { env: r.environment, app: r.app, role: r.role };
+    const a = { project: r.project, env: r.environment, app: r.app, role: r.role };
     seen.set(addressLabel(a), a);
   }
   const suggestions = [...seen.entries()].sort((a, b) => a[0].localeCompare(b[0]));
@@ -128,6 +133,15 @@ export function AddressPicker({
 
   return (
     <Box>
+      <TextField
+        label="Project"
+        size="small"
+        fullWidth
+        helperText='Environment names are unique per project, not globally — every project gets to have a "prod".'
+        value={value.project}
+        onChange={(e) => onChange({ ...value, project: e.target.value })}
+        sx={{ mb: 2 }}
+      />
       <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
         <TextField
           label="Environment"
@@ -384,6 +398,7 @@ function ConfigDetail({
   if (!data) return null;
 
   const elsewhere =
+    data.project !== address.project.trim() ||
     data.environment !== address.env.trim() ||
     data.app !== address.app.trim() ||
     data.role !== address.role.trim();
@@ -396,7 +411,7 @@ function ConfigDetail({
           <ConfigHeaderLine config={data} />
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.25 }}>
             <Box component="span" sx={{ fontFamily: "monospace" }}>
-              {data.environment}/{data.app}/{data.role}
+              {data.project}/{data.environment}/{data.app}/{data.role}
             </Box>{" "}
             · blessed by {data.createdBy || "unknown"} on {whenLabel(data.createdAt)}
           </Typography>
@@ -419,7 +434,7 @@ function ConfigDetail({
         <Alert severity="info" sx={{ mt: 1.5 }}>
           Followed lineage out of {addressLabel(address)}. This config lives at{" "}
           <strong>
-            {data.environment}/{data.app}/{data.role}
+            {data.project}/{data.environment}/{data.app}/{data.role}
           </strong>
           .
         </Alert>
@@ -462,6 +477,7 @@ export function CMConfigs({ initialAddress }: { initialAddress?: CMAddress }) {
 
   const ready = addressComplete(address);
   const { data, isLoading, error } = useCMConfigs(
+    address.project.trim(),
     address.env.trim(),
     address.app.trim(),
     address.role.trim(),
@@ -500,7 +516,8 @@ export function CMConfigs({ initialAddress }: { initialAddress?: CMAddress }) {
 
         {!ready ? (
           <Typography variant="body2" color="text.secondary" sx={{ mt: 2, fontStyle: "italic" }}>
-            Give an environment, an app and a role to list what is blessed there.
+            Give a project, an environment, an app and a role to list what is
+            blessed there.
           </Typography>
         ) : error ? (
           <Alert severity="error" sx={{ mt: 2 }}>

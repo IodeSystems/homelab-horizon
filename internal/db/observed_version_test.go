@@ -24,7 +24,7 @@ func TestObservedVersionRoundTripsAndLeavesTheReviewedVersionAlone(t *testing.T)
 	}
 
 	// A register is itself a report: the box says what it is running now.
-	reg, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "app", "1.2.0")
+	reg, err := d.UpsertRegistration(ctx, m.ID, "acme", "prod", "redline", "app", "1.2.0")
 	if err != nil {
 		t.Fatalf("first register: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestObservedVersionRoundTripsAndLeavesTheReviewedVersionAlone(t *testing.T)
 
 	// A later register reports again, and blanks the build it no longer
 	// carries rather than pairing an old build with a new version.
-	again, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "app", "1.4.0")
+	again, err := d.UpsertRegistration(ctx, m.ID, "acme", "prod", "redline", "app", "1.4.0")
 	if err != nil {
 		t.Fatalf("second register: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestObservedVersionIsAbsentNotWrongWhenNothingIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register machine: %v", err)
 	}
-	reg, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "app", "1.0.0")
+	reg, err := d.UpsertRegistration(ctx, m.ID, "acme", "prod", "redline", "app", "1.0.0")
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -142,11 +142,11 @@ func TestObservedVersionIsPerInstanceNotPerMachine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register machine: %v", err)
 	}
-	current, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "current", "1.2.0")
+	current, err := d.UpsertRegistration(ctx, m.ID, "acme", "prod", "redline", "current", "1.2.0")
 	if err != nil {
 		t.Fatalf("register current: %v", err)
 	}
-	next, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "next", "1.2.0")
+	next, err := d.UpsertRegistration(ctx, m.ID, "acme", "prod", "redline", "next", "1.2.0")
 	if err != nil {
 		t.Fatalf("register next: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestMigrate0011DownAndUpAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register machine: %v", err)
 	}
-	reg := registerAt(t, ctx, d, m, "prod", "redline", "app", admin.ID)
+	reg := registerAt(t, ctx, d, m, "acme", "prod", "redline", "app", admin.ID)
 	if err := d.RecordObservedVersion(ctx, reg.ID, "1.5.0", "v1.5.0-12-gdeadbee"); err != nil {
 		t.Fatalf("record observed: %v", err)
 	}
@@ -219,25 +219,33 @@ func TestMigrate0011DownAndUpAgain(t *testing.T) {
 	// compiled against the newest migration, so a hardcoded version here would
 	// rot the moment 0012 lands. Same reason TestMigrate0009DownAndUpAgain
 	// stopped hardcoding 9.
+	//
+	// Migrating all the way up also runs 0013, which deliberately deletes
+	// every cm_registrations row when the address gains the project
+	// coordinate: this registration's wrapped key was sealed under the old
+	// three-part AAD and is dead bytes at the new four-part address, so it
+	// does not survive the round trip — the box re-registers instead. That
+	// re-registration is now what "the column is usable again" reduces to.
 	if err := d.migrate(ctx); err != nil {
 		t.Fatalf("migrate back up to the current schema: %v", err)
 	}
-	back, err := d.RegistrationByID(ctx, reg.ID)
+	if _, err := d.RegistrationByID(ctx, reg.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("registration after 0013 = %v, want ErrNotFound (0013 deletes every registration)", err)
+	}
+	back, err := d.UpsertRegistration(ctx, m.ID, "acme", "prod", "redline", "app", "1.0.0")
 	if err != nil {
-		t.Fatalf("registration after the round trip: %v", err)
+		t.Fatalf("re-register after the round trip: %v", err)
 	}
-	if back.State != RegistrationApproved {
-		t.Fatalf("state after the round trip = %q", back.State)
+	if back.State != RegistrationPending {
+		t.Fatalf("state after re-registering post-0013 = %q, want pending (0013 wiped the old grant)", back.State)
 	}
-	// The observation is gone, which is the documented cost; what matters is
-	// that the column is usable again, so the box's next report lands.
-	if back.ObservedVersion != "" {
-		t.Fatalf("an observation survived a drop and recreate: %q", back.ObservedVersion)
+	if back.ObservedVersion != "1.0.0" {
+		t.Fatalf("observed after re-register = %q, want the version it registered with", back.ObservedVersion)
 	}
-	if err := d.RecordObservedVersion(ctx, reg.ID, "1.6.0", ""); err != nil {
+	if err := d.RecordObservedVersion(ctx, back.ID, "1.6.0", ""); err != nil {
 		t.Fatalf("record after the round trip: %v", err)
 	}
-	back, err = d.RegistrationByID(ctx, reg.ID)
+	back, err = d.RegistrationByID(ctx, back.ID)
 	if err != nil {
 		t.Fatalf("read back after the round trip: %v", err)
 	}

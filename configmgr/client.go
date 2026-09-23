@@ -149,12 +149,18 @@ type Options struct {
 	// Machine is the box's name. Defaults to os.Hostname.
 	Machine string
 
-	// Environment is a launch flag (--env), App is compiled in, Role is the
-	// process's own launch flag (redline's --serviceName). All three are
-	// required, and an empty Role is refused rather than defaulted: the
-	// unprefixed default maps to a NAMED default role, because an empty role
+	// Project and App are compiled in, Environment is a launch flag (--env),
+	// Role is the process's own launch flag (redline's --serviceName). All four
+	// are required, and an empty one is refused rather than defaulted: the
+	// unprefixed default maps to a NAMED default, because an empty segment
 	// breaks the state path even though the AEAD encodes an empty field
 	// happily.
+	//
+	// Project is compiled in beside App, and that is what makes binding it
+	// worth anything: a project IS a package and a package ships one binary, so
+	// the process knows its project independently of hz. A project supplied by
+	// hz would be hz's own opinion fed back to it, which authenticates nothing.
+	Project     string
 	Environment string
 	App         string
 	Role        string
@@ -213,9 +219,9 @@ func New(opts Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Validates environment, app and role as path segments, before anything
+	// Validates project, environment, app and role as path segments, before anything
 	// else has a chance to use them.
-	if _, err := state.addrDir(EnvKeyAddr{Environment: opts.Environment, App: opts.App, Role: opts.Role}); err != nil {
+	if _, err := state.addrDir(EnvKeyAddr{Project: opts.Project, Environment: opts.Environment, App: opts.App, Role: opts.Role}); err != nil {
 		return nil, err
 	}
 	c := &Client{
@@ -239,7 +245,7 @@ func New(opts Options) (*Client, error) {
 
 // Addr is this client's grant address, built from its own launch arguments.
 func (c *Client) Addr() EnvKeyAddr {
-	return EnvKeyAddr{Environment: c.opts.Environment, App: c.opts.App, Role: c.opts.Role}
+	return EnvKeyAddr{Project: c.opts.Project, Environment: c.opts.Environment, App: c.opts.App, Role: c.opts.Role}
 }
 
 // State is the tree this client reads and writes.
@@ -283,6 +289,7 @@ func (c *Client) Enrol(ctx context.Context) error {
 
 	req := RegisterRequest{
 		Machine:     c.opts.Machine,
+		Project:     c.opts.Project,
 		Environment: c.opts.Environment,
 		App:         c.opts.App,
 		Role:        c.opts.Role,
@@ -489,6 +496,7 @@ func (c *Client) open(key EnvKey, e ConfigEntry) ([]byte, error) {
 func (c *Client) configRequest() ConfigRequest {
 	return ConfigRequest{
 		Machine:     c.opts.Machine,
+		Project:     c.opts.Project,
 		Environment: c.opts.Environment,
 		App:         c.opts.App,
 		Role:        c.opts.Role,

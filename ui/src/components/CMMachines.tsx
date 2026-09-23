@@ -27,12 +27,12 @@ import type { CMRegistrationResp } from "../api/generated-types";
 // approved registration leaves those boxes unable to open anything sealed under
 // the new key, and until this page there was no way to see which ones.
 
-// An address is (environment, app, role) — the unit an environment key is
-// minted for, and the unit the current-key pointer is set on.
-type Addr = { environment: string; app: string; role: string };
+// An address is (project, environment, app, role) — the unit an environment
+// key is minted for, and the unit the current-key pointer is set on.
+type Addr = { project: string; environment: string; app: string; role: string };
 
 function addrKey(a: Addr): string {
-  return `${a.environment}/${a.app}/${a.role}`;
+  return `${a.project}/${a.environment}/${a.app}/${a.role}`;
 }
 
 // What hz says the current key at one address is. "unannounced" is its own
@@ -91,6 +91,7 @@ function CurrentKeyProbe({
   onAnswer: (key: string, value: AddrKey) => void;
 }) {
   const { data, isLoading, isError } = useCMCurrentKey(
+    addr.project,
     addr.environment,
     addr.app,
     addr.role,
@@ -281,7 +282,12 @@ export function CMMachines() {
   const addrs = useMemo(() => {
     const seen = new Map<string, Addr>();
     for (const r of regs) {
-      const a: Addr = { environment: r.environment, app: r.app, role: r.role };
+      const a: Addr = {
+        project: r.project,
+        environment: r.environment,
+        app: r.app,
+        role: r.role,
+      };
       const k = addrKey(a);
       if (!seen.has(k)) seen.set(k, a);
     }
@@ -349,8 +355,8 @@ export function CMMachines() {
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 680 }}>
           Every registration hz holds, grouped by machine. One machine has a
-          registration per <code>(environment, app, role)</code> it asks for, and
-          each one is approved separately. No config value appears here or
+          registration per <code>(project, environment, app, role)</code> it asks
+          for, and each one is approved separately. No config value appears here or
           anywhere else in this UI: every value is sealed and hz holds no key.
         </Typography>
 
@@ -383,7 +389,8 @@ export function CMMachines() {
             <Typography variant="body2">
               Nothing has been compared at these addresses — this is not a
               statement that the boxes are up to date. Set the pointer with{" "}
-              <code>hz config key current &lt;env&gt;/&lt;app&gt;/&lt;role&gt; --set
+              <code>hz config key current
+              &lt;project&gt;/&lt;env&gt;/&lt;app&gt;/&lt;role&gt; --set
               &lt;keyid&gt;</code> and the column becomes meaningful.
             </Typography>
           </Alert>

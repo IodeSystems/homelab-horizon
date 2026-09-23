@@ -133,7 +133,9 @@ type PushOptions struct {
 	// Schema declares each pushed key's binding. Required.
 	Schema Schema
 
-	// Environment, App and Role are the address being blessed. All required.
+	// Project, Environment, App and Role are the address being blessed. All
+	// required.
+	Project     string
 	Environment string
 	App         string
 	Role        string
@@ -206,7 +208,7 @@ func Push(ctx context.Context, opts PushOptions) (*PushResult, error) {
 	if err := opts.check(); err != nil {
 		return nil, err
 	}
-	addr := EnvKeyAddr{Environment: opts.Environment, App: opts.App, Role: opts.Role}
+	addr := EnvKeyAddr{Project: opts.Project, Environment: opts.Environment, App: opts.App, Role: opts.Role}
 	hc := opts.HTTP
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}
@@ -245,7 +247,7 @@ func Push(ctx context.Context, opts PushOptions) (*PushResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	key, info, err := opts.Keystore.SealingKey(Addr{Environment: addr.Environment, App: addr.App, Role: addr.Role}, cur)
+	key, info, err := opts.Keystore.SealingKey(Addr{Project: addr.Project, Environment: addr.Environment, App: addr.App, Role: addr.Role}, cur)
 	if err != nil {
 		return nil, sealAdvice(addr, cur, err)
 	}
@@ -257,7 +259,7 @@ func Push(ctx context.Context, opts PushOptions) (*PushResult, error) {
 		values = append(values, BlessValue{
 			Key:     k,
 			Binding: opts.Schema[k],
-			Sealed:  EncodeEnvelope(Seal(key, Addr{Environment: addr.Environment, App: addr.App, Role: addr.Role, Key: k}, opts.Values[k])),
+			Sealed:  EncodeEnvelope(Seal(key, Addr{Project: addr.Project, Environment: addr.Environment, App: addr.App, Role: addr.Role, Key: k}, opts.Values[k])),
 			KeyID:   info.ID.String(),
 		})
 	}
@@ -276,6 +278,7 @@ func Push(ctx context.Context, opts PushOptions) (*PushResult, error) {
 	}
 
 	req := BlessRequest{
+		Project:     addr.Project,
 		Environment: addr.Environment,
 		App:         addr.App,
 		Role:        addr.Role,
@@ -298,6 +301,8 @@ func (o PushOptions) check() error {
 		return errors.New("configmgr: no hz base URL to push to")
 	case o.Keystore == nil:
 		return errors.New("configmgr: no keystore; there is nothing to seal with")
+	case o.Project == "":
+		return errors.New("configmgr: no project; every config address names the project it belongs to")
 	case o.Environment == "":
 		return errors.New("configmgr: no environment")
 	case o.App == "":
@@ -326,9 +331,10 @@ func (o PushOptions) check() error {
 // only move the failure later and make it less legible.
 func currentKey(ctx context.Context, hc *http.Client, baseURL string, addr EnvKeyAddr) (CurrentKey, error) {
 	q := url.Values{
-		QueryEnv:  {addr.Environment},
-		QueryApp:  {addr.App},
-		QueryRole: {addr.Role},
+		QueryProject: {addr.Project},
+		QueryEnv:     {addr.Environment},
+		QueryApp:     {addr.App},
+		QueryRole:    {addr.Role},
 	}
 	var resp CurrentKeyPointer
 	if err := jsonRPC(ctx, hc, http.MethodGet, joinURL(baseURL, adminCurrentKeyPath)+"?"+q.Encode(), nil, &resp, false); err != nil {

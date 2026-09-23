@@ -18,7 +18,7 @@ import (
 // property of the filesystem, and a fake one would assert only that the fake
 // agrees with the code.
 
-var ksAddr = Addr{Environment: "prod", App: "redline", Role: "app", Key: "DB_PASSWORD"}
+var ksAddr = Addr{Project: "acme", Environment: "prod", App: "redline", Role: "app", Key: "DB_PASSWORD"}
 
 func ksNew(t *testing.T) *Keystore {
 	t.Helper()
@@ -48,7 +48,7 @@ func ksPut(t *testing.T, ks *Keystore, addr Addr, label string, createdAt time.T
 // ksRoleDir is the on-disk directory for an address. Tests build it directly
 // because they have to plant hostile files the API refuses to write.
 func ksRoleDir(ks *Keystore, addr Addr) string {
-	return filepath.Join(ks.Root(), "secrets", "keys", addr.Environment, addr.App, addr.Role)
+	return filepath.Join(ks.Root(), "secrets", "keys", addr.Project, addr.Environment, addr.App, addr.Role)
 }
 
 func ksWriteRaw(t *testing.T, ks *Keystore, addr Addr, name, content string) string {
@@ -96,7 +96,7 @@ func TestKeyForResolvesByKeyID(t *testing.T) {
 		t.Fatalf("absent key: want ErrNoSuchKey, got %v", err)
 	}
 	// So is an address with no directory at all.
-	other := Addr{Environment: "staging", App: "redline", Role: "app"}
+	other := Addr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
 	if _, err := ks.KeyFor(other, cur.ID()); !errors.Is(err, ErrNoSuchKey) {
 		t.Fatalf("absent address: want ErrNoSuchKey, got %v", err)
 	}
@@ -356,9 +356,11 @@ func TestTraversalInAddressFieldsRefused(t *testing.T) {
 	before := ksTreeSnapshot(t, ks.Root())
 
 	for _, hostile := range hostileNames {
-		for _, field := range []string{"environment", "app", "role"} {
+		for _, field := range []string{"project", "environment", "app", "role"} {
 			addr := ksAddr
 			switch field {
+			case "project":
+				addr.Project = hostile
 			case "environment":
 				addr.Environment = hostile
 			case "app":
@@ -484,7 +486,7 @@ func TestMalformedKeyIDRejectedBeforeGlobbing(t *testing.T) {
 
 	// The rejection happens before the filesystem is touched at all: an address
 	// with no directory still fails on the id, not on the missing directory.
-	empty := Addr{Environment: "staging", App: "redline", Role: "app"}
+	empty := Addr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
 	if _, err := ks.KeyForID(empty, "*"); !errors.Is(err, ErrMalformedKey) {
 		t.Fatalf("want ErrMalformedKey before any lookup, got %v", err)
 	}
@@ -660,8 +662,11 @@ func TestGroupOrWorldWritableParentDirectoryRefused(t *testing.T) {
 		func(ks *Keystore) string { return ks.Root() },
 		func(ks *Keystore) string { return filepath.Join(ks.Root(), "secrets") },
 		func(ks *Keystore) string { return filepath.Join(ks.Root(), "secrets", "keys") },
-		func(ks *Keystore) string { return filepath.Join(ks.Root(), "secrets", "keys", "prod") },
-		func(ks *Keystore) string { return filepath.Join(ks.Root(), "secrets", "keys", "prod", "redline") },
+		func(ks *Keystore) string { return filepath.Join(ks.Root(), "secrets", "keys", "acme") },
+		func(ks *Keystore) string { return filepath.Join(ks.Root(), "secrets", "keys", "acme", "prod") },
+		func(ks *Keystore) string {
+			return filepath.Join(ks.Root(), "secrets", "keys", "acme", "prod", "redline")
+		},
 		func(ks *Keystore) string { return ksRoleDir(ks, ksAddr) },
 	}
 	for i, pick := range dirs {

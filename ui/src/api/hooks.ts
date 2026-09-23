@@ -1795,14 +1795,19 @@ export function useCMDeny() {
   });
 }
 
-export function useCMConfigs(env: string, app: string, role: string) {
+export function useCMConfigs(
+  project: string,
+  env: string,
+  app: string,
+  role: string,
+) {
   return useQuery({
-    queryKey: ["cm-configs", env, app, role],
+    queryKey: ["cm-configs", project, env, app, role],
     queryFn: () =>
       apiFetch<CMConfigResp[]>(
-        `/cm/configs?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}&role=${encodeURIComponent(role)}`,
+        `/cm/configs?project=${encodeURIComponent(project)}&env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}&role=${encodeURIComponent(role)}`,
       ),
-    enabled: !!env && !!app && !!role,
+    enabled: !!project && !!env && !!app && !!role,
   });
 }
 
@@ -1819,19 +1824,20 @@ export function useCMConfig(id: string | null) {
 // there are always candidates the winner passed over, and silent resolution is
 // only acceptable when you can ask what it resolved to.
 export function useCMResolve(
+  project: string,
   env: string,
   app: string,
   role: string,
   version: string,
 ) {
   return useQuery({
-    queryKey: ["cm-resolve", env, app, role, version],
+    queryKey: ["cm-resolve", project, env, app, role, version],
     queryFn: () =>
       apiFetch<CMResolveResp>(
-        `/cm/resolve?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}` +
+        `/cm/resolve?project=${encodeURIComponent(project)}&env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}` +
           `&role=${encodeURIComponent(role)}&version=${encodeURIComponent(version)}`,
       ),
-    enabled: !!env && !!app && !!role && !!version,
+    enabled: !!project && !!env && !!app && !!role && !!version,
   });
 }
 
@@ -1851,19 +1857,24 @@ export function useCMPromotionGate(configID: string | null, targetEnv: string) {
 // The advisory current-key pointer. A 404 means nobody has announced one, which
 // is a different fact from "the current key is X" and must be shown as such —
 // a client told the wrong one seals under whatever its filesystem offers.
-export function useCMCurrentKey(env: string, app: string, role: string) {
+export function useCMCurrentKey(
+  project: string,
+  env: string,
+  app: string,
+  role: string,
+) {
   return useQuery({
-    queryKey: ["cm-current-key", env, app, role],
+    queryKey: ["cm-current-key", project, env, app, role],
     queryFn: async () => {
       try {
         return await apiFetch<CMCurrentKeyResp>(
-          `/cm/current-key?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}&role=${encodeURIComponent(role)}`,
+          `/cm/current-key?project=${encodeURIComponent(project)}&env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}&role=${encodeURIComponent(role)}`,
         );
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) return null;
         throw e;
       }
     },
-    enabled: !!env && !!app && !!role,
+    enabled: !!project && !!env && !!app && !!role,
   });
 }

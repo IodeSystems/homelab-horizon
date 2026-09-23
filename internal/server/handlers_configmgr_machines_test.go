@@ -65,7 +65,7 @@ func TestCMRemoveLetsARebuiltBoxReEnrol(t *testing.T) {
 		t.Fatalf("machine key: %v", err)
 	}
 	req := configmgr.RegisterRequest{
-		Machine: "box-1", Environment: "prod", App: "redline", Role: "app", Version: "1.2.0",
+		Machine: "box-1", Project: cmTestProject, Environment: "prod", App: "redline", Role: "app", Version: "1.2.0",
 		PublicKey: configmgr.MarshalMachinePublicKey(rebuilt.PublicKey()),
 	}
 

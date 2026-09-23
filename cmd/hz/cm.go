@@ -80,7 +80,14 @@ func runCM(c *client, args []string) error {
 
 // --- addresses -------------------------------------------------------------
 
-// parseCMAddr reads the <environment>/<app>/<role> form every cm command takes.
+// parseCMAddr reads the <project>/<environment>/<app>/<role> form every cm
+// command takes.
+//
+// FOUR PARTS, AND A THREE-PART ADDRESS IS AN ERROR THAT SAYS SO. Environment
+// names are unique per project and not globally, so the old three-part form
+// was never an identity — it only looked like one while exactly one project
+// declared each app name. An operator who types the old form gets told which
+// field is missing rather than having an address silently mean something else.
 //
 // Only the shape is checked here. The charset is the keystore's business
 // (configmgr.ErrBadName), and it is checked there because that is where a bad
@@ -88,15 +95,19 @@ func runCM(c *client, args []string) error {
 // definitions drift and the weaker one win.
 func parseCMAddr(s string) (configmgr.EnvKeyAddr, error) {
 	parts := strings.Split(s, "/")
-	if len(parts) != 3 {
-		return configmgr.EnvKeyAddr{}, fmt.Errorf("address %q must be <environment>/<app>/<role>, e.g. staging/redline/app", s)
+	if len(parts) != 4 {
+		hint := ""
+		if len(parts) == 3 {
+			hint = " — that is the old three-part form; the address now names the project it belongs to, because every project gets to have a \"prod\""
+		}
+		return configmgr.EnvKeyAddr{}, fmt.Errorf("address %q must be <project>/<environment>/<app>/<role>, e.g. acme/staging/redline/app%s", s, hint)
 	}
-	for i, what := range []string{"environment", "app", "role"} {
+	for i, what := range []string{"project", "environment", "app", "role"} {
 		if parts[i] == "" {
 			return configmgr.EnvKeyAddr{}, fmt.Errorf("address %q has an empty %s", s, what)
 		}
 	}
-	return configmgr.EnvKeyAddr{Environment: parts[0], App: parts[1], Role: parts[2]}, nil
+	return configmgr.EnvKeyAddr{Project: parts[0], Environment: parts[1], App: parts[2], Role: parts[3]}, nil
 }
 
 // splitCMPositional pulls a leading positional off the argument list.
@@ -117,19 +128,36 @@ func splitCMPositional(args []string) (string, []string) {
 }
 
 // keyAddr projects a grant address onto the keystore's address type. The
-// keystore ignores Addr.Key — the key tree is (environment, app, role) and the
-// config key name is bound into the AEAD, not into a path.
+// keystore ignores Addr.Key — the key tree is (project, environment, app, role)
+// and the config key name is bound into the AEAD, not into a path.
 func keyAddr(a configmgr.EnvKeyAddr) configmgr.Addr {
-	return configmgr.Addr{Environment: a.Environment, App: a.App, Role: a.Role}
+	return configmgr.Addr{Project: a.Project, Environment: a.Environment, App: a.App, Role: a.Role}
 }
 
 // valueAddr is the address one config VALUE is sealed at.
 func valueAddr(a configmgr.EnvKeyAddr, key string) configmgr.Addr {
-	return configmgr.Addr{Environment: a.Environment, App: a.App, Role: a.Role, Key: key}
+	return configmgr.Addr{Project: a.Project, Environment: a.Environment, App: a.App, Role: a.Role, Key: key}
 }
 
 func addrOfConfig(cfg apitypes.CMConfigResp) configmgr.EnvKeyAddr {
-	return configmgr.EnvKeyAddr{Environment: cfg.Environment, App: cfg.App, Role: cfg.Role}
+	return configmgr.EnvKeyAddr{Project: cfg.Project, Environment: cfg.Environment, App: cfg.App, Role: cfg.Role}
+}
+
+// addrOfWrap is the same projection for a stored recovery wrap, and it exists
+// because hand-spelling this address was a real bug twice in one file.
+//
+// `hz config recovery ls` and `hz config recovery backfill` both join wraps
+// against the keys this machine HOLDS, and the held side is keyed by
+// EnvKeyAddr.String(). Each had its own `w.Environment+"/"+w.App+"/"+w.Role`
+// on the wrap side, which silently stopped matching the moment the project
+// joined the address: ls split one address into two rows (held-but-uncovered
+// and covered-but-not-held), and backfill's idempotence check never fired, so
+// every run re-wrapped every key forever. Neither failed loudly.
+//
+// One projection, used by both sides of both joins, is what makes that class
+// of drift unrepresentable rather than merely fixed.
+func addrOfWrap(w apitypes.CMRecoveryWrap) configmgr.EnvKeyAddr {
+	return configmgr.EnvKeyAddr{Project: w.Project, Environment: w.Environment, App: w.App, Role: w.Role}
 }
 
 // --- the current-key pointer ----------------------------------------------
@@ -148,9 +176,10 @@ func addrOfConfig(cfg apitypes.CMConfigResp) configmgr.EnvKeyAddr {
 // only move the failure later and make it less legible.
 func cmCurrentKey(c *client, addr configmgr.EnvKeyAddr) (configmgr.CurrentKey, error) {
 	q := url.Values{
-		apitypes.CMQueryEnv:  {addr.Environment},
-		apitypes.CMQueryApp:  {addr.App},
-		apitypes.CMQueryRole: {addr.Role},
+		apitypes.CMQueryProject: {addr.Project},
+		apitypes.CMQueryEnv:     {addr.Environment},
+		apitypes.CMQueryApp:     {addr.App},
+		apitypes.CMQueryRole:    {addr.Role},
 	}
 	var resp apitypes.CMCurrentKeyResp
 	if err := c.do(http.MethodGet, cmAPI+"/current-key?"+q.Encode(), nil, &resp); err != nil {
@@ -234,7 +263,7 @@ func cmPending(c *client, args []string) error {
 	}
 	fmt.Printf("%-38s  %-20s  %-30s  %-10s  %s\n", "ID", "MACHINE", "ADDRESS", "STATE", "VERSION")
 	for _, r := range rows {
-		addr := configmgr.EnvKeyAddr{Environment: r.Environment, App: r.App, Role: r.Role}
+		addr := configmgr.EnvKeyAddr{Project: r.Project, Environment: r.Environment, App: r.App, Role: r.Role}
 		fmt.Printf("%-38s  %-20s  %-30s  %-10s  %s\n", r.ID, r.MachineName, addr, r.State, r.Version)
 		if r.EnrolledEnvironment != "" && r.EnrolledEnvironment != r.Environment {
 			fmt.Printf("%-38s  ! enrolled as %q, now asking for %q\n", "", r.EnrolledEnvironment, r.Environment)
@@ -290,7 +319,7 @@ func cmFetchPublicKey(c *client, id string) (*ecdh.PublicKey, error) {
 //     is the entire defence.
 //  3. Load the environment key from the LOCAL keystore, for the address taken
 //     from the registration.
-//  4. Wrap it to that public key at EnvKeyAddr{environment, app, role}.
+//  4. Wrap it to that public key at EnvKeyAddr{project, environment, app, role}.
 //  5. POST the wrapped blob and nothing else.
 //
 // What is deliberately NOT printed before the prompt: hz's fingerprint. Showing
@@ -327,7 +356,14 @@ func cmApprove(c *client, args []string) error {
 	if reg.State != configmgr.StatePending {
 		return fmt.Errorf("registration %s is %s, not pending; approving it again would grant a key to a machine somebody already decided about", id, reg.State)
 	}
-	addr := configmgr.EnvKeyAddr{Environment: reg.Environment, App: reg.App, Role: reg.Role}
+	// The PROJECT comes off the registration, like every other coordinate.
+	// Dropping it here would not fail loudly: the wrap would be produced, hz
+	// would relay it, and the box would refuse to unwrap it at boot with an
+	// authentication failure naming nothing — the approver's ceremony spent on
+	// a blob that opens for nobody.
+	addr := configmgr.EnvKeyAddr{
+		Project: reg.Project, Environment: reg.Environment, App: reg.App, Role: reg.Role,
+	}
 
 	pub, err := cmFetchPublicKey(c, id)
 	if err != nil {
