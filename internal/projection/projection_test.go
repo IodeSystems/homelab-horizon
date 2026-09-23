@@ -936,3 +936,258 @@ func TestSerialIsCarriedIn(t *testing.T) {
 		t.Fatalf("serial = %d, want the 47 the caller passed", mc.Serial)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// The config generation (plan/upstream-and-promotion.md §3).
+//
+// The loop these tests are about: bless a config, and the unit running at that
+// address restarts. hz's half is a DIGEST of ciphertext it cannot read, served
+// per unit. What has to be true of it is that it moves when the config moves,
+// stays put when anything else does, and that "empty" is never a restart.
+// ---------------------------------------------------------------------------
+
+// sealed is one address's resolved config, as the supplier hands it over.
+func sealed(address, version string, kv ...string) SealedConfig {
+	sc := SealedConfig{Address: address, Version: version, Present: true}
+	for i := 0; i+1 < len(kv); i += 2 {
+		sc.Values = append(sc.Values, SealedValue{Key: kv[i], Ciphertext: []byte(kv[i+1])})
+	}
+	return sc
+}
+
+// app1Address is example-projection.md §5's subject: storefront/prod at 1.4.0,
+// one instance, one unit.
+const (
+	app1Address = "storefront/prod/web/app"
+	app1Version = "1.4.0"
+	app1Unit    = "storefront@prod-web-app.service"
+)
+
+func app1Global(configs ...SealedConfig) Global {
+	return Global{Config: exampleEstate(), Instances: exampleInstances(), SealedConfigs: configs}
+}
+
+func theUnit(t *testing.T, mc MachineConfig) Unit {
+	t.Helper()
+	if len(mc.Units) != 1 {
+		t.Fatalf("units = %+v, want the one §5 shows", mc.Units)
+	}
+	return mc.Units[0]
+}
+
+// The point of the whole feature: new ciphertext at the address, new
+// generation on the unit. Nothing else in the estate changed.
+func TestGenerationMovesWhenTheCiphertextMoves(t *testing.T) {
+	before := theUnit(t, mustProject(t, app1Global(sealed(app1Address, app1Version, "DB_URL", "sealed-one")), "app-1"))
+	after := theUnit(t, mustProject(t, app1Global(sealed(app1Address, app1Version, "DB_URL", "sealed-two")), "app-1"))
+
+	if before.Name != app1Unit || after.Name != app1Unit {
+		t.Fatalf("unit names moved: %q then %q", before.Name, after.Name)
+	}
+	if before.ConfigGeneration == "" {
+		t.Fatal("hz served no generation for an address it holds a config for")
+	}
+	if before.ConfigGeneration == after.ConfigGeneration {
+		t.Fatalf("the generation did not move when the sealed bytes did: %q", before.ConfigGeneration)
+	}
+	// A hash, and nothing else. A generation that carried the ciphertext would
+	// hand the agent the config it must never hold.
+	if len(before.ConfigGeneration) != 64 || strings.Contains(before.ConfigGeneration, "sealed") {
+		t.Fatalf("generation %q is not a sha256 of the bytes", before.ConfigGeneration)
+	}
+}
+
+// A key ADDED with nobody else's bytes touched still moves it — the key names
+// are in the digest for exactly this — and so does a key removed.
+func TestGenerationMovesWhenAKeyIsAddedOrRemoved(t *testing.T) {
+	one := sealed(app1Address, app1Version, "DB_URL", "sealed-one")
+	two := sealed(app1Address, app1Version, "DB_URL", "sealed-one", "API_KEY", "sealed-two")
+
+	a := theUnit(t, mustProject(t, app1Global(one), "app-1")).ConfigGeneration
+	b := theUnit(t, mustProject(t, app1Global(two), "app-1")).ConfigGeneration
+	if a == b {
+		t.Fatal("adding a key left the generation still; a key cannot be added or dropped invisibly")
+	}
+}
+
+// And the collision the length prefix exists to stop: {"ab": ""} against
+// {"a": "b"} is the same concatenation and must not be the same digest.
+func TestGenerationDoesNotCollideOnConcatenation(t *testing.T) {
+	a := digestSealed([]SealedValue{{Key: "ab", Ciphertext: []byte("")}})
+	b := digestSealed([]SealedValue{{Key: "a", Ciphertext: []byte("b")}})
+	if a == b {
+		t.Fatal("two different configs digest the same: the fields are not length-prefixed")
+	}
+}
+
+// Config elsewhere in the estate is not this unit's business. If an unrelated
+// blessing moved this generation, every promotion anywhere would restart every
+// unit everywhere.
+func TestGenerationDoesNotMoveWhenUnrelatedConfigChanges(t *testing.T) {
+	mine := sealed(app1Address, app1Version, "DB_URL", "sealed-one")
+
+	base := theUnit(t, mustProject(t, app1Global(mine,
+		sealed("analytics/beta/api/app", "0.9.1", "TOKEN", "sealed-a")), "app-1")).ConfigGeneration
+
+	// Another address's config moves, a third address appears, and the order
+	// the supplier listed them in changes.
+	after := theUnit(t, mustProject(t, app1Global(
+		sealed("intern/prod/git/app", "", "K", "sealed-new"),
+		sealed("analytics/beta/api/app", "0.9.1", "TOKEN", "sealed-b"),
+		mine), "app-1")).ConfigGeneration
+
+	if base == "" {
+		t.Fatal("no generation to compare")
+	}
+	if base != after {
+		t.Fatal("another address's config moved this unit's generation")
+	}
+}
+
+// The supplier's row order is not a change either. A database returning the
+// same values in another order must not restart the fleet.
+func TestGenerationIgnoresValueOrder(t *testing.T) {
+	a := digestSealed([]SealedValue{{Key: "A", Ciphertext: []byte("1")}, {Key: "B", Ciphertext: []byte("2")}})
+	b := digestSealed([]SealedValue{{Key: "B", Ciphertext: []byte("2")}, {Key: "A", Ciphertext: []byte("1")}})
+	if a != b {
+		t.Fatal("the digest depends on the order values arrived in")
+	}
+}
+
+// Two machines at one address are meant to be running one config, so they get
+// one generation. The config is blessed for the ADDRESS, not the box.
+func TestOneAddressOnTwoMachinesIsOneGeneration(t *testing.T) {
+	g := app1Global(sealed(app1Address, app1Version, "DB_URL", "sealed-one"))
+	one := theUnit(t, mustProject(t, g, "app-1")).ConfigGeneration
+	two := theUnit(t, mustProject(t, g, "app-2")).ConfigGeneration
+	if one == "" || one != two {
+		t.Fatalf("app-1 has %q and app-2 has %q for one address", one, two)
+	}
+}
+
+// EMPTY IS NOT "RESTART", HALF ONE: hz resolved the address and holds no
+// config there. That is an answer, so there is no gap beside it — and an agent
+// reading the pair has been told "nothing to track", not "hz is unsure".
+func TestNoConfigAtTheAddressIsAnAnswerAndNotAGap(t *testing.T) {
+	none := SealedConfig{Address: app1Address, Version: app1Version, Present: false}
+	mc := mustProject(t, app1Global(none), "app-1")
+
+	if gen := theUnit(t, mc).ConfigGeneration; gen != "" {
+		t.Fatalf("generation = %q, want empty: hz holds no config for this address", gen)
+	}
+	if why := gapFor(mc, SectionConfig); why != "" {
+		t.Fatalf("hz gapped an address it answered about: %q", why)
+	}
+}
+
+// EMPTY IS NOT "RESTART", HALF TWO: hz could not work out which config the
+// address resolves to. Same empty generation, and a gap beside it saying so.
+func TestCannotResolveIsEmptyPlusAGap(t *testing.T) {
+	broke := SealedConfig{Address: app1Address, Version: app1Version, Unknown: "the config store could not be read."}
+	mc := mustProject(t, app1Global(broke), "app-1")
+
+	if gen := theUnit(t, mc).ConfigGeneration; gen != "" {
+		t.Fatalf("generation = %q, want empty: hz does not know", gen)
+	}
+	why := gapFor(mc, SectionConfig)
+	if !strings.Contains(why, app1Address) || !strings.Contains(why, "could not be read") {
+		t.Fatalf("the gap does not say what hz could not resolve: %q", why)
+	}
+	if !strings.Contains(why, "hz does not know") {
+		t.Fatalf("the gap does not distinguish itself from an empty answer: %q", why)
+	}
+}
+
+// A supplier that said NOTHING about the address has not said "no config".
+// An hz with no config store is this case for every unit on the box, and it
+// must not read as "every unit has no config" — let alone as a restart.
+func TestAnAddressHzSaidNothingAboutIsAGap(t *testing.T) {
+	mc := mustProject(t, app1Global(), "app-1")
+
+	if gen := theUnit(t, mc).ConfigGeneration; gen != "" {
+		t.Fatalf("generation = %q, want empty", gen)
+	}
+	if why := gapFor(mc, SectionConfig); !strings.Contains(why, app1Address) {
+		t.Fatalf("silence about an address produced no gap: %q", why)
+	}
+}
+
+// A rung with no version cannot be resolved at all — a config is blessed over
+// a version range — so it is a gap, and the gap names the command that closes
+// it rather than leaving an operator to work it out.
+func TestARungWithNoVersionCannotHaveAGeneration(t *testing.T) {
+	cfg := exampleEstate()
+	for i := range cfg.Environments {
+		if cfg.Environments[i].Project == "storefront" && cfg.Environments[i].Name == "prod" {
+			cfg.Environments[i].Version = ""
+		}
+	}
+	mc := mustProject(t, Global{Config: cfg, Instances: exampleInstances(),
+		SealedConfigs: []SealedConfig{sealed(app1Address, app1Version, "DB_URL", "sealed-one")}}, "app-1")
+
+	if gen := theUnit(t, mc).ConfigGeneration; gen != "" {
+		t.Fatalf("generation = %q for a rung declaring no version", gen)
+	}
+	if why := gapFor(mc, SectionConfig); !strings.Contains(why, "hz env set storefront/prod --version") {
+		t.Fatalf("the gap does not name the command that declares a version: %q", why)
+	}
+}
+
+// The two halves of the join have to agree about which version was resolved.
+// A digest of another version's config would be a restart trigger pointing at
+// the wrong bytes, so hz says nothing rather than something wrong.
+func TestAVersionMismatchIsEmptyPlusAGapRatherThanAWrongDigest(t *testing.T) {
+	stale := sealed(app1Address, "1.3.9", "DB_URL", "sealed-one")
+	mc := mustProject(t, app1Global(stale), "app-1")
+
+	if gen := theUnit(t, mc).ConfigGeneration; gen != "" {
+		t.Fatalf("generation = %q, want empty: the supplier resolved another version", gen)
+	}
+	why := gapFor(mc, SectionConfig)
+	if !strings.Contains(why, "1.3.9") || !strings.Contains(why, app1Version) {
+		t.Fatalf("the gap does not name both versions: %q", why)
+	}
+}
+
+// Every gap this section raises is an unmodelled one, like every other gap the
+// projection raises, and it crosses the wire under a stable section key a
+// screen can branch on.
+func TestTheConfigGapIsAStableSectionAnAgentCanBranchOn(t *testing.T) {
+	mc := mustProject(t, app1Global(), "app-1")
+	if !mc.Unresolvable(SectionConfig) {
+		t.Fatal("the config gap is not reachable by section")
+	}
+	for _, g := range mc.Unresolved {
+		if g.Section == SectionConfig && g.Reason != ReasonUnmodelled {
+			t.Fatalf("the config gap's reason is %q", g.Reason)
+		}
+	}
+	b, err := json.Marshal(mc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"section":"config"`) {
+		t.Fatalf("the config section key does not cross the wire: %s", b)
+	}
+}
+
+// The generation is omitted from the wire when it is empty, and present when
+// it is not: an agent decoding a payload from an older hz sees the same
+// absence it would see for an address with no config, which is the reading
+// that is safe.
+func TestTheGenerationCrossesTheWireOnlyWhenThereIsOne(t *testing.T) {
+	with, err := json.Marshal(Unit{Name: "x", Enabled: true, ConfigGeneration: "abc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(with), `"configGeneration":"abc"`) {
+		t.Fatalf("the generation does not cross the wire: %s", with)
+	}
+	without, err := json.Marshal(Unit{Name: "x", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(without), "configGeneration") {
+		t.Fatalf("an empty generation renders a key: %s", without)
+	}
+}

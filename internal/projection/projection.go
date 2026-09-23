@@ -53,8 +53,12 @@
 package projection
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"sort"
 	"strings"
 
@@ -217,6 +221,28 @@ type Feed struct {
 type Unit struct {
 	Name    string `json:"name"`
 	Enabled bool   `json:"enabled"`
+
+	// ConfigGeneration identifies the sealed config this unit is meant to be
+	// running, WITHOUT disclosing it. It is a digest over the resolved
+	// ciphertext for this unit's instance address — hz computes it from bytes
+	// it already holds and cannot read.
+	//
+	// The agent compares it to what it last applied and restarts the unit when
+	// it moves. That is the whole mechanism: the agent learns THAT the config
+	// changed, never WHAT changed. No key is in the path, so this breaks
+	// neither of the two rules that made the hole (plan/config-manager.md): the
+	// agent still holds no environment key, and nothing in the app's boot path
+	// gained a dependency on freshness — the restart is a trigger from the
+	// side, not something a boot waits for.
+	//
+	// EMPTY IS NOT "RESTART", and it is not one state either. Empty with no
+	// SectionConfig gap beside it means hz resolved this address and holds no
+	// config for it — an answer. Empty WITH a gap means hz does not know. An
+	// agent that read either as "restart" would bounce every unit on the box
+	// the first time hz answered without a config, which is why the two are
+	// distinguishable here exactly as they are everywhere else in this file
+	// (MachineConfig.Unresolved, Segment.Resolved).
+	ConfigGeneration string `json:"configGeneration,omitempty"`
 }
 
 // Gap is one thing hz could not compute for this machine, named and explained.
@@ -278,6 +304,15 @@ const (
 	SectionFeeds     = "feeds"
 	SectionUnits     = "units"
 	SectionInstances = "instances"
+
+	// SectionConfig is the per-address sealed config behind Unit.ConfigGeneration.
+	//
+	// It exists so that an empty generation has two readings and a reader can
+	// tell them apart: with no gap on this section the generation is empty
+	// because hz holds no config for the address, and with one it is empty
+	// because hz does not know. Without the section there would be only the
+	// absence, and an agent acting on an absence would restart everything.
+	SectionConfig = "config"
 )
 
 // Instance is one (machine, project, environment, app, role) a box has booted
@@ -311,6 +346,68 @@ func (i Instance) Address() string {
 	return i.Project + "/" + i.Environment + "/" + i.App + "/" + i.Role
 }
 
+// SealedConfig is what hz holds for ONE instance address, as bytes it cannot
+// read: the sealed values of the config that address resolves to.
+//
+// It arrives as an ARGUMENT for the same reason Instance does — the configs
+// live in hz's database and a pure function may not open one — and it carries
+// CIPHERTEXT rather than a finished digest so that the digest itself is
+// computed here, where it is a pure function of stated inputs and testable
+// with no database anywhere. hz cannot read these bytes and neither can this
+// package; digesting bytes needs no key.
+//
+// THREE STATES, AND THEY ARE THREE DIFFERENT ANSWERS. The supplier says which
+// one it got, rather than leaving the projection to infer it from an absence:
+//
+//   - Unknown set — hz could not work out which config this address resolves
+//     to. Empty generation, SectionConfig gap.
+//   - Present true — hz resolved it and holds it. The generation is the digest
+//     over Values.
+//   - Present false, Unknown empty — hz resolved the address and there is no
+//     config there. Empty generation, NO gap: that is the answer.
+//
+// An address with no SealedConfig at all is none of the three and becomes a
+// gap, because a supplier that said nothing has not said "no config".
+type SealedConfig struct {
+	// Address is the instance address this resolution is for, as
+	// Instance.Address renders it: project/environment/app/role.
+	Address string
+
+	// Version is the version the supplier resolved at. A config is blessed
+	// over a version range, so "the config at this address" is not a question
+	// until a version is named.
+	//
+	// Carried so the projection can check it against the version the rung
+	// declares rather than trusting that the two agree. They are worked out
+	// from the same records by two callers, and a silent disagreement here
+	// would put a digest of one version's config on a unit running another.
+	Version string
+
+	// Present says hz resolved the address to a config. See the three states
+	// above; rendered explicitly rather than inferred from len(Values),
+	// following Segment.Resolved.
+	Present bool
+
+	// Values are the resolved config's sealed values. Ciphertext only: there
+	// is no plaintext field because there is no plaintext anywhere.
+	Values []SealedValue
+
+	// Unknown is why hz could not resolve this address, when it could not. It
+	// is prose for the gap, and it wins over Present if a supplier sets both.
+	Unknown string
+}
+
+// SealedValue is one key of a sealed config: the key NAME, which hz stores in
+// the clear and has always been metadata, and the sealed bytes, which it
+// cannot open.
+//
+// Both go into the digest. The name must, or adding a key without changing any
+// other value's bytes would leave the generation still.
+type SealedValue struct {
+	Key        string
+	Ciphertext []byte
+}
+
 // Global is everything the projection reads: hz's declared config plus the
 // registrations, which live outside it.
 //
@@ -327,6 +424,20 @@ type Global struct {
 	// filters to the one it was asked about rather than making the caller do
 	// it, so a caller cannot accidentally narrow it wrongly.
 	Instances []Instance
+
+	// SealedConfigs is what hz holds, per instance address, of the sealed
+	// config that address resolves to — the input behind Unit.ConfigGeneration.
+	//
+	// Keyed by ADDRESS and not by machine, because a config is blessed for an
+	// address: two machines at one address are meant to be running the same
+	// config and get the same generation. Like Instances it may carry
+	// addresses this machine does not host; Project takes the ones it needs.
+	//
+	// NIL IS NOT "NO CONFIG ANYWHERE". A caller with no config store supplies
+	// nothing, every unit is then an address hz said nothing about, and each
+	// one gets a gap saying so. That is the honest answer and it is why the
+	// empty generation does not stand on its own.
+	SealedConfigs []SealedConfig
 
 	// AgentVersion is the hz-agent version hz wants the fleet on.
 	// example-projection.md §5 carries it as a package beside the app's.
@@ -383,7 +494,7 @@ func Project(g Global, machineID string) (MachineConfig, error) {
 	}
 
 	projectSegments(&mc, m)
-	projectInstances(&mc, cfg, g.Instances, machineID)
+	projectInstances(&mc, cfg, g.Instances, g.SealedConfigs, machineID)
 	projectAgent(&mc, g.AgentVersion)
 
 	return mc, nil
@@ -428,7 +539,7 @@ func projectSegments(mc *MachineConfig, m config.Machine) {
 //
 // Every step of it can fail to resolve against today's records, and each
 // failure is a Gap rather than a dropped row.
-func projectInstances(mc *MachineConfig, cfg *config.Config, all []Instance, machineID string) {
+func projectInstances(mc *MachineConfig, cfg *config.Config, all []Instance, sealed []SealedConfig, machineID string) {
 	mine := make([]Instance, 0, len(all))
 	for _, inst := range all {
 		if inst.Machine == machineID {
@@ -457,8 +568,10 @@ func projectInstances(mc *MachineConfig, cfg *config.Config, all []Instance, mac
 	packages := map[string]pkgSource{}
 	feeds := map[string]Feed{}
 	units := map[string][]string{} // unit name -> the instance addresses that produced it
+	generations := map[string]string{}
 	var unitOrder []string
 	seenFeedGap := map[string]bool{}
+	configs := indexSealed(sealed)
 
 	for _, inst := range mine {
 		env, err := resolveEnvironment(cfg, inst)
@@ -522,6 +635,12 @@ func projectInstances(mc *MachineConfig, cfg *config.Config, all []Instance, mac
 			unitOrder = append(unitOrder, name)
 		}
 		units[name] = append(units[name], inst.Address())
+
+		// AND THE CONFIG THAT UNIT IS MEANT TO BE RUNNING, as a digest. The
+		// version resolved against is the RUNG's — the same one the package
+		// above is pinned to — because this says what the unit should be
+		// running, not what it is. See configGeneration.
+		generations[name] = configGeneration(mc, configs, inst, env)
 	}
 
 	for _, name := range sortedKeys(packages) {
@@ -532,7 +651,7 @@ func projectInstances(mc *MachineConfig, cfg *config.Config, all []Instance, mac
 	}
 	sort.Strings(unitOrder)
 	for _, name := range unitOrder {
-		mc.Units = append(mc.Units, Unit{Name: name, Enabled: true})
+		mc.Units = append(mc.Units, Unit{Name: name, Enabled: true, ConfigGeneration: generations[name]})
 		// ONE UNIT IS ONE INSTANCE, and this says so when it is not.
 		//
 		// The NAME can no longer merge two instances — unitName carries all
@@ -553,6 +672,128 @@ func projectInstances(mc *MachineConfig, cfg *config.Config, all []Instance, mac
 				" hz projects one unit and names the duplicate rather than running one service where its input declares several.")
 		}
 	}
+}
+
+// indexSealed turns the supplied sealed configs into a lookup by address.
+//
+// A duplicate address overwrites, and nothing here complains: a config is
+// blessed PER ADDRESS, so two entries for one address are one supplier
+// resolving one thing twice. The state worth naming is an address with NO
+// entry — a supplier that said nothing has not said "no config" — and
+// configGeneration is where that becomes a gap.
+func indexSealed(sealed []SealedConfig) map[string]SealedConfig {
+	out := make(map[string]SealedConfig, len(sealed))
+	for _, sc := range sealed {
+		out[strings.TrimSpace(sc.Address)] = sc
+	}
+	return out
+}
+
+// configGeneration is Unit.ConfigGeneration for one instance: the digest of the
+// sealed config hz holds for that instance's address, or empty.
+//
+// THE VERSION IT RESOLVES AT IS THE RUNG'S, not the one the box reported. A
+// config is blessed over a version range, so "the config at this address" is
+// not a question until a version names one; and this field says what the unit
+// is MEANT to be running, which is the same version the package above it is
+// pinned to. Resolving at the observed version instead would mean a freshly
+// blessed version and its config reached the box in two steps rather than one.
+//
+// EVERY RETURN OF "" IS ACCOUNTED FOR. Three of the four leave a SectionConfig
+// gap — hz does not know — and exactly one does not: hz resolved the address
+// and there is no config there. That single distinction is the whole reason
+// this function talks to mc rather than returning a bare string, and the
+// reason an agent may treat a moved generation as "restart" without treating
+// an empty one as anything at all.
+func configGeneration(mc *MachineConfig, configs map[string]SealedConfig, inst Instance, env config.Environment) string {
+	addr := inst.Address()
+	version := strings.TrimSpace(env.Version)
+
+	if version == "" {
+		mc.gap(SectionConfig, ReasonUnmodelled, "hz cannot say which config "+addr+" is meant to be running: a config is blessed over a version range,"+
+			" and "+env.Project+"/"+env.Name+" declares no version to resolve one at."+
+			" `hz env set "+env.Project+"/"+env.Name+" --version <v>` declares one."+
+			" The unit's configGeneration is empty because hz does not know, not because the address has no config.")
+		return ""
+	}
+
+	sc, answered := configs[addr]
+	if !answered {
+		mc.gap(SectionConfig, ReasonUnmodelled, "hz holds no answer about the sealed config at "+addr+": the address was not resolved for this projection,"+
+			" which is what an hz with no config store looks like from in here."+
+			" The unit's configGeneration is empty because hz does not know, not because the address has no config.")
+		return ""
+	}
+
+	if strings.TrimSpace(sc.Unknown) != "" {
+		mc.gap(SectionConfig, ReasonUnmodelled, "hz could not resolve the sealed config at "+addr+" for version "+version+": "+strings.TrimSpace(sc.Unknown)+
+			" The unit's configGeneration is empty because hz does not know, not because the address has no config.")
+		return ""
+	}
+
+	// THE TWO HALVES OF THE JOIN HAVE TO AGREE ABOUT THE VERSION. The supplier
+	// worked out which version to resolve at from the same records this
+	// function reads the rung from, and two callers deriving one fact is
+	// exactly the shape that drifts (see resolveEnvironment for the last one).
+	// A mismatch is not repairable here — this function cannot resolve a
+	// config — so it is named rather than papered over: a digest of one
+	// version's config on a unit pinned to another would be a restart trigger
+	// pointing at the wrong bytes.
+	if got := strings.TrimSpace(sc.Version); got != version {
+		mc.gap(SectionConfig, ReasonUnmodelled, "hz resolved the sealed config at "+addr+" for version "+got+" and the rung "+env.Project+"/"+env.Name+
+			" declares "+version+", so the digest would name a config this unit is not meant to be running."+
+			" The unit's configGeneration is empty rather than wrong.")
+		return ""
+	}
+
+	if !sc.Present {
+		// AN ANSWER, AND NO GAP. hz resolved the address and nothing is
+		// blessed there. An empty generation with nothing beside it is that
+		// sentence, and it is the one case an agent must read as "no config to
+		// track" rather than as "hz is unsure" — or as "restart".
+		return ""
+	}
+
+	return digestSealed(sc.Values)
+}
+
+// digestSealed is the generation itself: sha256 over an address's sealed
+// values, in key order.
+//
+// A DIGEST, NOT A COUNTER — which is what lets it be computed here at all. A
+// counter is state somebody keeps correct across restarts and rollbacks, and a
+// pure function has none; a digest is a function of bytes hz already holds.
+// The same reasoning agent.Desired.Fingerprint is built on, one level down.
+//
+// IT DISCLOSES NOTHING. The input is ciphertext plus key names, and key names
+// are already metadata hz stores in the clear. No key is involved, nothing is
+// opened, and the output is a hash.
+//
+// KEY ORDER, NOT SUPPLIED ORDER, because a generation that moved when a
+// database returned the same rows in another order would restart the fleet for
+// nothing. Both halves of every value are LENGTH-PREFIXED: without the prefix
+// {"ab": ""} and {"a": "b"} feed the hash identical bytes, and a config change
+// between those two would be invisible.
+func digestSealed(values []SealedValue) string {
+	ordered := make([]SealedValue, len(values))
+	copy(ordered, values)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Key < ordered[j].Key })
+
+	h := sha256.New()
+	for _, v := range ordered {
+		digestChunk(h, []byte(v.Key))
+		digestChunk(h, v.Ciphertext)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// digestChunk writes one length-prefixed field. hash.Hash never errors, which
+// is why the write is discarded rather than handled.
+func digestChunk(h hash.Hash, b []byte) {
+	var n [8]byte
+	binary.BigEndian.PutUint64(n[:], uint64(len(b)))
+	_, _ = h.Write(n[:])
+	_, _ = h.Write(b)
 }
 
 // unitName is the systemd unit one instance runs under, and it is
