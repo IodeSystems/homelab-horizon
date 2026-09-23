@@ -59,6 +59,7 @@ func (s *Server) buildTopologyResp() apitypes.TopologyResp {
 	}
 	resp := apitypes.TopologyResp{
 		Hosts:            make([]apitypes.HostDecl, 0, len(cfg.Hosts)),
+		SelfHost:         hostDeclToAPI(cfg.SelfHostDecl()),
 		Exporters:        make([]apitypes.Exporter, 0, len(cfg.Exporters)),
 		Targets:          []apitypes.ExporterTargetResp{},
 		KnownHosts:       cfg.DeriveKnownHostIPs(),
@@ -123,12 +124,131 @@ func (s *Server) handleAPITopologyHosts(w http.ResponseWriter, r *http.Request) 
 		}
 		hosts = append(hosts, hostDeclFromAPI(h))
 	}
+	// A whole-list replace is how a removal AND a rename both arrive, and
+	// neither says so. Checking the proposed list against what the config
+	// references refuses either while something still resolves through the
+	// name, and names every dependant — the shape `hz project rm` uses.
+	if err := s.cfg().ValidateHostsAgainst(hosts); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := s.updateConfig(func(cfg *config.Config) { cfg.Hosts = hosts }); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.kickExporterStatus()
 	writeJSONOK(w)
+}
+
+// handleAPITopologyHostShow returns one declared host and every record that
+// resolves through it, grouped nowhere — the CLI groups. It is the question hz
+// could not answer before references existed: what points at this box, and so
+// what breaks if it moves. Admin-only.
+func (s *Server) handleAPITopologyHostShow(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		writeJSONError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	cfg := s.cfg()
+	// "@self" is not declared and never will be, but it is the reference an
+	// operator most needs to interrogate: it is how hz points at itself, and
+	// "what points at this gateway" is the question a move actually asks.
+	var h *config.HostDecl
+	if name == config.HostRefSelfName {
+		self := cfg.SelfHostDecl()
+		h = &self
+	} else if h = cfg.HostDeclByName(name); h == nil {
+		writeJSONError(w, http.StatusNotFound, "host not found: "+name)
+		return
+	}
+	resp := apitypes.HostShowResp{Host: hostDeclToAPI(*h), References: []apitypes.HostReferenceResp{}}
+	for _, ref := range cfg.HostReferences(name) {
+		resp.References = append(resp.References, apitypes.HostReferenceResp{
+			Kind: ref.Kind, Owner: ref.Owner, Field: ref.Field, Value: ref.Value,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleAPITopologyHostSet repoints a declared host at a new address, leaving
+// every referencing record untouched. This is the one-edit move: the address
+// lives in one record, so changing it moves the proxy backends, the forwards,
+// the DNS answers and the scrape targets together, in one config write and one
+// sync. Admin-only.
+func (s *Server) handleAPITopologyHostSet(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost && r.Method != http.MethodPut {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST or PUT required")
+		return
+	}
+	var req apitypes.HostSetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.IP = strings.TrimSpace(req.IP)
+	if req.Name == "" || req.IP == "" {
+		writeJSONError(w, http.StatusBadRequest, "name and ip are required")
+		return
+	}
+	// The declaration is the bottom of the chain, so its address is an address.
+	if config.IsHostRef(req.IP) {
+		writeJSONError(w, http.StatusBadRequest, "a declared host's ip is the address itself, not another reference")
+		return
+	}
+	if net.ParseIP(req.IP) == nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid IP: "+req.IP)
+		return
+	}
+	cfg := s.cfg()
+	if req.Name == config.HostRefSelfName {
+		writeJSONError(w, http.StatusBadRequest,
+			"@self is this instance's own address, not a declared host; it is per-instance (a peer resolves it to its own), and it changes by setting local_interface on the Settings page")
+		return
+	}
+	if cfg.HostDeclByName(req.Name) == nil {
+		writeJSONError(w, http.StatusNotFound, "host not found: "+req.Name)
+		return
+	}
+	for _, h := range cfg.Hosts {
+		if h.Name != req.Name && h.IP == req.IP {
+			writeJSONError(w, http.StatusBadRequest, "host ip already declared by "+h.Name+": "+req.IP)
+			return
+		}
+	}
+	moved := apitypes.HostShowResp{References: []apitypes.HostReferenceResp{}}
+	for _, ref := range cfg.HostReferences(req.Name) {
+		moved.References = append(moved.References, apitypes.HostReferenceResp{
+			Kind: ref.Kind, Owner: ref.Owner, Field: ref.Field, Value: ref.Value,
+		})
+	}
+	if err := s.updateConfig(func(c *config.Config) {
+		for i := range c.Hosts {
+			if c.Hosts[i].Name == req.Name {
+				c.Hosts[i].IP = req.IP
+			}
+		}
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.kickExporterStatus()
+	moved.Host = apitypes.HostDecl{Name: req.Name, IP: req.IP}
+	if h := s.cfg().HostDeclByName(req.Name); h != nil {
+		moved.Host = hostDeclToAPI(*h)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(moved)
 }
 
 // handleAPITopologyExporters replaces the exporter list. Admin-only.
@@ -153,6 +273,12 @@ func (s *Server) handleAPITopologyExporters(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		exporters = append(exporters, exporterFromAPI(e))
+	}
+	next := *s.cfg()
+	next.Exporters = exporters
+	if err := next.ValidateExporters(); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	if err := s.updateConfig(func(cfg *config.Config) { cfg.Exporters = exporters }); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
@@ -187,6 +313,13 @@ func (s *Server) handleAPITopologyScrapeExclusions(w http.ResponseWriter, r *htt
 		if strings.Contains(e, "/") {
 			if _, _, err := net.ParseCIDR(e); err != nil {
 				writeJSONError(w, http.StatusBadRequest, "invalid CIDR: "+e)
+				return
+			}
+		} else if config.IsHostRef(e) {
+			// An exclusion names a machine, so a reference is the right way to
+			// write one — it keeps excluding the same box after it moves.
+			if _, err := s.cfg().ResolveHostRef(e); err != nil {
+				writeJSONError(w, http.StatusBadRequest, err.Error())
 				return
 			}
 		} else if net.ParseIP(e) == nil {
@@ -241,9 +374,11 @@ func (s *Server) handleAPIServiceScanMetrics(w http.ResponseWriter, r *http.Requ
 
 	// Slots to probe: single backend, or blue-green current+next.
 	type slot struct{ name, addr string }
-	slots := []slot{{"", svc.Proxy.Backend}}
-	if svc.Proxy.Deploy != nil && svc.Proxy.Deploy.NextBackend != "" {
-		slots = []slot{{"current", svc.Proxy.Backend}, {"next", svc.Proxy.Deploy.NextBackend}}
+	// Resolved: the scan dials each slot.
+	cfg := s.cfg()
+	slots := []slot{{"", cfg.ServiceBackend(svc)}}
+	if next := cfg.ServiceNextBackend(svc); next != "" {
+		slots = []slot{{"current", cfg.ServiceBackend(svc)}, {"next", next}}
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)

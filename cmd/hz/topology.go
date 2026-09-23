@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/url"
+	"os"
 	"sort"
 	"strings"
 
@@ -57,15 +59,19 @@ func formatLabels(m map[string]string) string {
 
 func runHost(c *client, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("host subcommand required: list | add | rm")
+		return fmt.Errorf("host subcommand required: list | show | add | set | rm")
 	}
 	sub := args[0]
 	rest := args[1:]
 	switch sub {
 	case "list", "ls":
 		return hostList(c)
+	case "show":
+		return hostShow(c, rest)
 	case "add", "create":
 		return hostAdd(c, rest)
+	case "set":
+		return hostSet(c, rest)
 	case "rm", "remove", "delete":
 		return hostRm(c, rest)
 	default:
@@ -78,15 +84,138 @@ func hostList(c *client) error {
 	if err != nil {
 		return err
 	}
-	if len(topo.Hosts) == 0 {
-		fmt.Println("No hosts.")
-		return nil
-	}
 	fmt.Printf("%-20s  %-16s  %s\n", "NAME", "IP", "LABELS")
+	// @self first: it is not a declaration and cannot be edited, but it is the
+	// reference that matters most — it is how hz points at itself, and it is
+	// the only spelling that stays right on a peer.
+	fmt.Printf("%-20s  %-16s  %s\n", "@self (this hz)", topo.SelfHost.IP, "-")
 	for _, h := range topo.Hosts {
 		fmt.Printf("%-20s  %-16s  %s\n", h.Name, h.IP, formatLabels(h.Labels))
 	}
+	if len(topo.Hosts) == 0 {
+		fmt.Println("\nNo hosts declared besides @self.")
+		fmt.Println("`hz host add --name <name> --ip <ip>` declares one.")
+	}
+	fmt.Println("\nWrite @<name> (or @<name>:<port>) wherever an address goes to point a record")
+	fmt.Println("at one of these, and @self for this gateway's own address. `hz host show <name>`")
+	fmt.Println("lists what already does; `hz host show self` covers this gateway.")
 	return nil
+}
+
+const hostShowUsage = `usage: hz host show <name>
+
+Shows one declared host and EVERY record that resolves through it, grouped by
+kind: proxy backends, deploy slots, port forwards, DNS answers, scrape targets.
+
+This is the "what breaks if I move this box" list. Moving it is then one edit:
+  hz host set <name> <new ip>
+`
+
+func hostShow(c *client, args []string) error {
+	fs := flag.NewFlagSet("host show", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Fprint(os.Stderr, hostShowUsage) }
+	name, rest := splitNameArgs(args)
+	if err := fs.Parse(rest); err != nil {
+		return err
+	}
+	if name == "" {
+		return fmt.Errorf("%s", hostShowUsage)
+	}
+
+	var out apitypes.HostShowResp
+	if err := c.do("GET", "/api/v1/topology/hosts/show?name="+url.QueryEscape(name), nil, &out); err != nil {
+		return err
+	}
+
+	fmt.Printf("Host:   %s\n", out.Host.Name)
+	fmt.Printf("IP:     %s\n", out.Host.IP)
+	fmt.Printf("Labels: %s\n", formatLabels(out.Host.Labels))
+	fmt.Println()
+
+	self := name == "self"
+	if len(out.References) == 0 {
+		fmt.Println("Nothing references it.")
+		fmt.Printf("Records still carry this address as a literal string, so moving the box means\n")
+		fmt.Printf("hand-editing each one. Write @%s (or @%s:<port>) in a backend, a forward, a\n", out.Host.Name, out.Host.Name)
+		if self {
+			fmt.Printf("DNS record or a scrape target and it resolves to whichever instance is running,\n")
+			fmt.Printf("which is also the only spelling that stays correct on a peer.\n")
+		} else {
+			fmt.Printf("DNS record or a scrape target and it resolves through this declaration instead.\n")
+		}
+		return nil
+	}
+
+	printHostReferences(out.References)
+	if self {
+		fmt.Printf("\n%d record(s) resolve to THIS instance's own address. They follow it: each\n", len(out.References))
+		fmt.Println("instance resolves @self to its own local_interface, so nothing here has to be")
+		fmt.Println("rewritten when the gateway moves, and a peer does not inherit this box's address.")
+		return nil
+	}
+	fmt.Printf("\n%d record(s) resolve through this host. `hz host set %s <new ip>` moves them\n", len(out.References), out.Host.Name)
+	fmt.Println("all at once — one edit, one sync. Removing or renaming the host is refused")
+	fmt.Println("while any of them still points at it.")
+	return nil
+}
+
+// printHostReferences prints the dependants grouped by kind, in the order the
+// server returned them (already sorted by kind, owner, field).
+func printHostReferences(refs []apitypes.HostReferenceResp) {
+	fmt.Println("REFERENCED BY")
+	kind := ""
+	for _, r := range refs {
+		if r.Kind != kind {
+			kind = r.Kind
+			fmt.Printf("\n  %s\n", strings.ToUpper(kind))
+		}
+		owner := r.Owner
+		if owner == "" {
+			owner = "(config)"
+		}
+		fmt.Printf("    %-24s  %-28s  %s\n", owner, r.Field, r.Value)
+	}
+}
+
+const hostSetUsage = `usage: hz host set <name> <ip> [--sync]
+
+Repoints a declared host at a new address. Every record written @<name> follows
+it — proxy backends, deploy slots, port forwards, DNS answers, scrape targets —
+in one config write.
+
+This is the command a machine move needs. ` + "`hz host show <name>`" + ` lists what will
+move before you run it.
+`
+
+func hostSet(c *client, args []string) error {
+	name, rest := splitNameArgs(args)
+	ip, rest := splitNameArgs(rest)
+	fs := flag.NewFlagSet("host set", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Fprint(os.Stderr, hostSetUsage) }
+	doSync := fs.Bool("sync", false, "trigger a global sync after the mutation")
+	if err := fs.Parse(rest); err != nil {
+		return err
+	}
+	if name == "" || ip == "" {
+		return fmt.Errorf("%s", hostSetUsage)
+	}
+
+	var out apitypes.HostShowResp
+	if err := c.do("PUT", "/api/v1/topology/hosts/set", apitypes.HostSetRequest{Name: name, IP: ip}, &out); err != nil {
+		return err
+	}
+	fmt.Printf("Host %q is now %s.\n", out.Host.Name, out.Host.IP)
+	if len(out.References) == 0 {
+		fmt.Printf("\nNothing referenced it, so nothing else moved. Records that should follow this\n")
+		fmt.Printf("host need to be written @%s rather than carrying the address themselves.\n", out.Host.Name)
+	} else {
+		fmt.Printf("\n%d record(s) moved with it:\n\n", len(out.References))
+		printHostReferences(out.References)
+	}
+	if !*doSync {
+		fmt.Println("\nNothing is rendered until the next sync. `hz sync` applies it now.")
+	}
+	return maybeSync(c, *doSync)
 }
 
 func hostAdd(c *client, args []string) error {

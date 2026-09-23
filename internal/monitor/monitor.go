@@ -208,10 +208,15 @@ func (m *Monitor) getAllChecks() []config.ServiceCheck {
 		case svc.Proxy.StaticRoot != "":
 			target = cfg.StaticServeAddr()
 		case svc.Proxy.Backend != "":
-			target = svc.Proxy.Backend
+			// Resolved: the check dials the address, so a host reference has
+			// to have become one first.
+			target = cfg.ServiceBackend(&svc)
+			if target == "" {
+				continue
+			}
 			if svc.Proxy.HealthCheck != nil && svc.Proxy.HealthCheck.Path != "" {
 				checkType = "http"
-				target = "http://" + svc.Proxy.Backend + svc.Proxy.HealthCheck.Path
+				target = "http://" + target + svc.Proxy.HealthCheck.Path
 			}
 		default:
 			continue

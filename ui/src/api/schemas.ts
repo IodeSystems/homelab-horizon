@@ -521,6 +521,10 @@ export const ExporterTargetSchema = z.object({
 
 export const TopologyDataSchema = z.object({
   hosts: z.array(HostDeclSchema),
+  // The reserved "@self" pseudo-host: this instance's own LAN address. Not a
+  // declaration and never edited — present so a client can show what @self
+  // resolves to. Defaulted because a server from before it existed omits it.
+  selfHost: HostDeclSchema.default({ name: "self", ip: "" }),
   exporters: z.array(ExporterSchema),
   targets: z.array(ExporterTargetSchema),
   knownHosts: z.array(z.string()),

@@ -89,7 +89,10 @@ func (s *Server) upsertLocalDNS(w http.ResponseWriter, r *http.Request) {
 		Comment:  body.Comment,
 	}.Normalized()
 
-	if err := record.Validate(); err != nil {
+	// Validated through the config so "@nas" is checked as a reference, but
+	// STORED as authored: the whole point is that the record keeps naming the
+	// host, so the next `hz host set` moves it too.
+	if _, err := s.cfg().ResolveLocalDNSRecord(record); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}

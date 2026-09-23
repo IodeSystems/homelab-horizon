@@ -620,11 +620,40 @@ type ExporterTargetResp struct {
 // TopologyResp is the read view of the observability topology: the raw declared
 // hosts and exporters (for editing) plus the fully-expanded targets with status.
 type TopologyResp struct {
-	Hosts            []HostDecl           `json:"hosts"`
+	Hosts []HostDecl `json:"hosts"`
+	// SelfHost is the reserved "@self" pseudo-host: this instance's own LAN
+	// address. Not a declaration and never editable — it is here so a client
+	// can show what @self resolves to beside the declared hosts.
+	SelfHost         HostDecl             `json:"selfHost"`
 	Exporters        []Exporter           `json:"exporters"`
 	Targets          []ExporterTargetResp `json:"targets"`
 	KnownHosts       []string             `json:"knownHosts"`       // all host IPs hz knows (derived + declared); the "*" population
 	ScrapeExclusions []string             `json:"scrapeExclusions"` // IPs/CIDRs dropped from the scrape config (host still listed, just not scraped)
+}
+
+// HostReferenceResp is one record that resolves through a declared host via a
+// "@name" reference: what kind of record it is, which one, and the value as
+// the operator wrote it.
+type HostReferenceResp struct {
+	Kind  string `json:"kind"`  // "service backend", "port forward", "local DNS record", ...
+	Owner string `json:"owner"` // service name, record name, exporter job
+	Field string `json:"field"` // field within that record, e.g. "proxy.backend"
+	Value string `json:"value"` // the authored value, e.g. "@nas:8080"
+}
+
+// HostShowResp is one declared host and everything that points at it — the
+// answer to "what breaks if I move this box", which is the question a host
+// reference exists to make answerable.
+type HostShowResp struct {
+	Host       HostDecl            `json:"host"`
+	References []HostReferenceResp `json:"references"`
+}
+
+// HostSetRequest repoints a declared host at a new address. It is the whole
+// point of the indirection: one edit moves every record that references it.
+type HostSetRequest struct {
+	Name string `json:"name"`
+	IP   string `json:"ip"`
 }
 
 // ScrapeTokenResp carries the read-only Prometheus scrape token.

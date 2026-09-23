@@ -131,12 +131,12 @@ func (c *Config) DeriveDNSMappings() map[string]string {
 	// derived one is the override case this feature exists for; hz surfaces
 	// the shadowing rather than refusing it (see LocalDNSConflicts).
 	for _, r := range c.LocalDNSRecords {
-		r = r.Normalized()
-		if r.Validate() != nil {
-			slog.Warn("skipping invalid local DNS record", "name", r.Name, "ip", r.IP)
+		resolved, err := c.ResolveLocalDNSRecord(r)
+		if err != nil {
+			slog.Warn("skipping invalid local DNS record", "name", resolved.Name, "ip", r.IP, "err", err)
 			continue
 		}
-		mappings[r.Name] = r.IP
+		mappings[resolved.Name] = resolved.IP
 	}
 
 	return mappings
@@ -154,8 +154,21 @@ func (c *Config) deriveServiceDNSMappings() map[string]string {
 		if svc.InternalDNS == nil || svc.InternalDNS.IP == "" {
 			continue
 		}
-		ip := svc.InternalDNS.IP
+		// A host reference resolves to the declared address before anything
+		// else looks at it; an unresolvable one drops the mapping rather than
+		// publishing "@nas" as a dnsmasq answer.
+		ip := c.resolveRefOrDrop(svc.InternalDNS.IP, HostRefKindInternalDNS, svc.Name)
+		if ip == "" {
+			continue
+		}
 		// Replace localhost with LocalInterface IP - dnsmasq requires an IP address.
+		//
+		// This rewrite is a SELF-REFERENCE spelled as a magic string, and it
+		// predates references by years. "@self" is the same resolution named
+		// out loud (and it happens above, in the resolve step), so a record
+		// written that way arrives here already an address. The two spellings
+		// are kept because every config written before references uses this
+		// one, and rewriting them would change files nobody asked to change.
 		// Publishing a loopback address into dnsmasq would broadcast it LAN-wide,
 		// making every client resolve the domain to its own 127.0.0.1. If we can't
 		// resolve a real interface IP, skip the mapping rather than leak loopback.
@@ -183,9 +196,9 @@ func (c *Config) deriveServiceDNSMappings() map[string]string {
 func (c *Config) DeriveWildcardDNSNames() map[string]bool {
 	out := map[string]bool{}
 	for _, r := range c.LocalDNSRecords {
-		r = r.Normalized()
-		if r.Wildcard && r.Validate() == nil {
-			out[r.Name] = true
+		resolved, err := c.ResolveLocalDNSRecord(r)
+		if r.Wildcard && err == nil {
+			out[resolved.Name] = true
 		}
 	}
 	return out
@@ -275,7 +288,9 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 		// guarantees these are mutually exclusive.
 		static := svc.Proxy.StaticRoot != ""
 		self := svc.Proxy.Self
-		server := svc.Proxy.Backend
+		// Resolved here, once, so haproxy.cfg carries a literal address — the
+		// same point every other renderer resolves at.
+		server := c.ServiceBackend(&svc)
 		switch {
 		case static:
 			server = c.StaticServeAddr()
@@ -308,9 +323,10 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 		if !static && !self && svc.Proxy.Deploy != nil {
 			b.Deploy = true
 			b.HTTPCheck = true
-			b.DeployBalance = svc.Proxy.Deploy.Balance
-			b.CurrentServer = svc.Proxy.Deploy.CurrentServer(svc.Proxy.Backend)
-			b.NextServer = svc.Proxy.Deploy.InactiveServer(svc.Proxy.Backend)
+			deploy := c.ResolvedDeploy(&svc)
+			b.DeployBalance = deploy.Balance
+			b.CurrentServer = deploy.CurrentServer(server)
+			b.NextServer = deploy.InactiveServer(server)
 		}
 
 		// Custom 503 maintenance page
@@ -628,7 +644,7 @@ func (c *Config) DeriveHostPortMap() HostPortMap {
 		if svc.Proxy == nil || svc.Proxy.Backend == "" {
 			continue
 		}
-		host, port, err := net.SplitHostPort(svc.Proxy.Backend)
+		host, port, err := net.SplitHostPort(c.ServiceBackend(&svc))
 		if err != nil {
 			continue
 		}
@@ -651,7 +667,7 @@ func (c *Config) DeriveHostPortMap() HostPortMap {
 		// standby release — it's in use even when the service points at the
 		// active one, so allocation must not hand it out.
 		if svc.Proxy.Deploy != nil && svc.Proxy.Deploy.NextBackend != "" {
-			if nh, np, err := net.SplitHostPort(svc.Proxy.Deploy.NextBackend); err == nil {
+			if nh, np, err := net.SplitHostPort(c.ServiceNextBackend(&svc)); err == nil {
 				if nh == "localhost" || nh == "127.0.0.1" {
 					if c.LocalInterface != "" {
 						nh = c.LocalInterface
@@ -686,7 +702,9 @@ func (c *Config) DeriveHostPortMap() HostPortMap {
 				Domain:  svc.PrimaryDomain(),
 				Forward: true,
 			})
-			if bh, bp, err := net.SplitHostPort(f.Backend); err == nil {
+			// The gateway half above is reserved whatever the backend says; only
+			// the target half needs an address, so only it resolves.
+			if bh, bp, err := net.SplitHostPort(c.resolveRefOrDrop(f.Backend, HostRefKindForward, svc.Name)); err == nil {
 				m[bh] = append(m[bh], HostPortEntry{
 					Port:    bp,
 					Proto:   f.Proto,
@@ -798,6 +816,12 @@ func (c *Config) scrapeExcluder() func(string) bool {
 			if _, n, err := net.ParseCIDR(e); err == nil {
 				nets = append(nets, n)
 			}
+			continue
+		}
+		// An exclusion names a machine, so "@nas" is the natural way to write
+		// one: it keeps excluding the same box after the box moves. A CIDR is
+		// a range rather than a host and takes no reference.
+		if e = c.resolveRefOrDrop(e, HostRefKindScrapeExclusion, ""); e == "" {
 			continue
 		}
 		exact[e] = true
@@ -953,7 +977,9 @@ func (c *Config) DeriveExporterTargets() []ExporterTarget {
 		switch e.EffectiveMode() {
 		case "static":
 			for _, t := range e.Targets {
-				emitOnce(strings.TrimSpace(t), nil)
+				// A static target may be written "@nas:9100"; the scrape
+				// config carries the address it resolves to.
+				emitOnce(c.resolveRefOrDrop(strings.TrimSpace(t), HostRefKindExporterTarget, e.Job), nil)
 			}
 
 		case "service":
@@ -963,11 +989,11 @@ func (c *Config) DeriveExporterTargets() []ExporterTarget {
 					continue
 				}
 				if svc.Proxy.Deploy != nil && svc.Proxy.Deploy.NextBackend != "" {
-					emitOnce(svc.Proxy.Backend, map[string]string{"service": svc.Name, "slot": "current"})
-					emitOnce(svc.Proxy.Deploy.NextBackend, map[string]string{"service": svc.Name, "slot": "next"})
+					emitOnce(c.ServiceBackend(svc), map[string]string{"service": svc.Name, "slot": "current"})
+					emitOnce(c.ServiceNextBackend(svc), map[string]string{"service": svc.Name, "slot": "next"})
 					continue
 				}
-				emitOnce(svc.Proxy.Backend, map[string]string{"service": svc.Name})
+				emitOnce(c.ServiceBackend(svc), map[string]string{"service": svc.Name})
 			}
 
 		default: // "port"
@@ -987,8 +1013,18 @@ func (c *Config) DeriveExporterTargets() []ExporterTarget {
 					if ip == "*" {
 						continue
 					}
-					if resolved, ok := ipByName[ip]; ok {
+					// Two spellings reach the same place. The bare name is the
+					// original, port-mode-only resolution and stays for
+					// compatibility; "@name" is the sigil form every other
+					// consumer takes, accepted here so one syntax works
+					// everywhere.
+					if name := HostRefName(ip); name != "" {
+						ip = ipByName[name]
+					} else if resolved, ok := ipByName[ip]; ok {
 						ip = resolved
+					}
+					if ip == "" {
+						continue
 					}
 					emitOnce(net.JoinHostPort(ip, strconv.Itoa(e.Port)), nil)
 				}
@@ -1093,9 +1129,13 @@ func (c *Config) ValidateService(svc *Service) error {
 		}
 	}
 
-	// Validate InternalDNS if present
+	// Validate InternalDNS if present. A host reference resolves first, so the
+	// address check below runs on what dnsmasq will actually answer with.
 	if svc.InternalDNS != nil && svc.InternalDNS.IP != "" {
-		ip := svc.InternalDNS.IP
+		ip, err := c.ResolveHostRef(svc.InternalDNS.IP)
+		if err != nil {
+			return hostRefError("internal_dns.ip", err)
+		}
 		// Allow localhost or valid IP
 		if ip != "localhost" && ip != "127.0.0.1" {
 			if net.ParseIP(ip) == nil {
@@ -1106,9 +1146,27 @@ func (c *Config) ValidateService(svc *Service) error {
 
 	// Validate Proxy backend address format if present
 	if svc.Proxy != nil && svc.Proxy.Backend != "" {
-		_, _, err := net.SplitHostPort(svc.Proxy.Backend)
+		backend, err := c.ResolveHostRef(svc.Proxy.Backend)
 		if err != nil {
+			return hostRefError("proxy.backend", err)
+		}
+		if _, _, err := net.SplitHostPort(backend); err != nil {
 			return &ValidationError{Field: "proxy.backend", Message: "invalid address format (expected host:port)"}
+		}
+	}
+
+	// The standby slot had NO validator at all until host references arrived:
+	// a next_backend was accepted in any shape and only failed later, in the
+	// generated haproxy.cfg. It gets the same two checks slot A has, for the
+	// same reason — a reference must resolve, and the result must be an
+	// address HAProxy can write into a `server` line.
+	if svc.Proxy != nil && svc.Proxy.Deploy != nil && svc.Proxy.Deploy.NextBackend != "" {
+		next, err := c.ResolveHostRef(svc.Proxy.Deploy.NextBackend)
+		if err != nil {
+			return hostRefError("proxy.deploy.next_backend", err)
+		}
+		if _, _, err := net.SplitHostPort(next); err != nil {
+			return &ValidationError{Field: "proxy.deploy.next_backend", Message: "invalid address format (expected host:port)"}
 		}
 	}
 
@@ -1432,12 +1490,12 @@ func (c *Config) DeriveDNSRecords() []dnsmasq.Record {
 	wildcards := c.DeriveWildcardDNSNames()
 	local := map[string]bool{}
 	for _, r := range c.LocalDNSRecords {
-		r = r.Normalized()
-		if r.Validate() != nil {
+		resolved, err := c.ResolveLocalDNSRecord(r)
+		if err != nil {
 			continue
 		}
-		local[r.Name] = true
-		comments[r.Name] = r.Comment
+		local[resolved.Name] = true
+		comments[resolved.Name] = resolved.Comment
 	}
 
 	mappings := c.DeriveDNSMappings()
