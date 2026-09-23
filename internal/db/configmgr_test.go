@@ -27,22 +27,22 @@ func oneValue(key string) []ConfigValue {
 
 // blessOpen creates the open-ended config every address needs before any
 // closed-range config can be blessed there.
-func blessOpen(t *testing.T, ctx context.Context, d *DB, env, app, role, minVer, by string) *Config {
+func blessOpen(t *testing.T, ctx context.Context, d *DB, project, env, app, role, minVer, by string) *Config {
 	t.Helper()
-	c, err := d.CreateConfig(ctx, env, app, role, minVer, "", by, oneValue("A"))
+	c, err := d.CreateConfig(ctx, project, env, app, role, minVer, "", by, oneValue("A"))
 	if err != nil {
-		t.Fatalf("bless open %s/%s/%s: %v", env, app, role, err)
+		t.Fatalf("bless open %s/%s/%s/%s: %v", project, env, app, role, err)
 	}
 	return c
 }
 
 // registerAt is the setup most tests need: a machine, one registration at an
 // address, approved with some plausible wrapped key material.
-func registerAt(t *testing.T, ctx context.Context, d *DB, m *Machine, env, app, role, approver string) *Registration {
+func registerAt(t *testing.T, ctx context.Context, d *DB, m *Machine, project, env, app, role, approver string) *Registration {
 	t.Helper()
-	reg, err := d.UpsertRegistration(ctx, m.ID, env, app, role, "1.0.0")
+	reg, err := d.UpsertRegistration(ctx, m.ID, project, env, app, role, "1.0.0")
 	if err != nil {
-		t.Fatalf("register %s/%s/%s: %v", env, app, role, err)
+		t.Fatalf("register %s/%s/%s/%s: %v", project, env, app, role, err)
 	}
 	if reg.State != RegistrationPending {
 		t.Fatalf("new registration state = %q, want pending", reg.State)
@@ -70,7 +70,7 @@ func TestRegisterApproveResolve(t *testing.T) {
 		t.Fatalf("enrolled environment = %q", m.EnrolledEnvironment)
 	}
 
-	reg := registerAt(t, ctx, d, m, "prod", "redline", "current", admin.ID)
+	reg := registerAt(t, ctx, d, m, "acme", "prod", "redline", "current", admin.ID)
 	if reg.State != RegistrationApproved {
 		t.Fatalf("state = %q, want approved", reg.State)
 	}
@@ -81,7 +81,7 @@ func TestRegisterApproveResolve(t *testing.T) {
 		t.Fatalf("registration version = %q", reg.Version)
 	}
 
-	cfg, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "", admin.ID, []ConfigValue{
+	cfg, err := d.CreateConfig(ctx, "acme", "prod", "redline", "current", "1.0.0", "", admin.ID, []ConfigValue{
 		{Key: "RETENTION_DAYS", Binding: BindingInvariant, Ciphertext: sealed("30"), KeyID: "envkey-v1"},
 		{Key: "PUBLIC_URL", Binding: BindingEnv, Ciphertext: sealed("https://prod.example"), KeyID: "envkey-v1"},
 	})
@@ -92,7 +92,7 @@ func TestRegisterApproveResolve(t *testing.T) {
 		t.Fatalf("values = %d, want 2", len(cfg.Values))
 	}
 
-	res, err := d.ResolveConfig(ctx, "prod", "redline", "current", "1.2.0")
+	res, err := d.ResolveConfig(ctx, "acme", "prod", "redline", "current", "1.2.0")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -118,9 +118,9 @@ func TestEnvironmentChangeReEntersPending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register machine: %v", err)
 	}
-	prod := registerAt(t, ctx, d, m, "prod", "redline", "app", admin.ID)
+	prod := registerAt(t, ctx, d, m, "acme", "prod", "redline", "app", admin.ID)
 
-	staging, err := d.UpsertRegistration(ctx, m.ID, "staging", "redline", "app", "1.0.0")
+	staging, err := d.UpsertRegistration(ctx, m.ID, "acme", "staging", "redline", "app", "1.0.0")
 	if err != nil {
 		t.Fatalf("register with a different env: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestEnvironmentChangeReEntersPending(t *testing.T) {
 	}
 
 	// A role change is a new tuple for the same reason.
-	ops, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "ops", "1.0.0")
+	ops, err := d.UpsertRegistration(ctx, m.ID, "acme", "prod", "redline", "ops", "1.0.0")
 	if err != nil {
 		t.Fatalf("register a second role: %v", err)
 	}
@@ -164,8 +164,8 @@ func TestWrappedKeysArePerRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register machine: %v", err)
 	}
-	app := registerAt(t, ctx, d, m, "prod", "redline", "app", admin.ID)
-	ops := registerAt(t, ctx, d, m, "prod", "redline", "ops", admin.ID)
+	app := registerAt(t, ctx, d, m, "acme", "prod", "redline", "app", admin.ID)
+	ops := registerAt(t, ctx, d, m, "acme", "prod", "redline", "ops", admin.ID)
 
 	appKey, err := d.RegistrationWrappedKey(ctx, app.ID)
 	if err != nil {
@@ -220,7 +220,7 @@ func TestApproveRefusesDeniedRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register machine: %v", err)
 	}
-	reg := registerAt(t, ctx, d, m, "prod", "redline", "app", admin.ID)
+	reg := registerAt(t, ctx, d, m, "acme", "prod", "redline", "app", admin.ID)
 
 	denied, err := d.DenyRegistration(ctx, reg.ID, "compromised box")
 	if err != nil {
@@ -262,7 +262,7 @@ func TestPlaintextValueIsUnrepresentable(t *testing.T) {
 	ctx := context.Background()
 	d := open(t)
 	admin := newUser(t, d, "carl")
-	cfg := blessOpen(t, ctx, d, "prod", "redline", "app", "1.0.0", admin.ID)
+	cfg := blessOpen(t, ctx, d, "acme", "prod", "redline", "app", "1.0.0", admin.ID)
 
 	rows, err := d.QueryContext(ctx, `SELECT name FROM pragma_table_info('cm_config_values')`)
 	if err != nil {
@@ -347,7 +347,7 @@ func TestEmptyValueRoundTripsAndOmissionFails(t *testing.T) {
 	d := open(t)
 	admin := newUser(t, d, "carl")
 
-	cfg, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
+	cfg, err := d.CreateConfig(ctx, "acme", "prod", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
 		{Key: "BUCKET_PREFIX", Binding: BindingEnv, Ciphertext: sealed(""), KeyID: "envkey-v1"},
 	})
 	if err != nil {
@@ -362,13 +362,13 @@ func TestEmptyValueRoundTripsAndOmissionFails(t *testing.T) {
 	}
 
 	// Omission — a key with nothing sealed under it — is what gets refused.
-	_, err = d.CreateConfig(ctx, "prod", "redline", "ops", "1.0.0", "", admin.ID, []ConfigValue{
+	_, err = d.CreateConfig(ctx, "acme", "prod", "redline", "ops", "1.0.0", "", admin.ID, []ConfigValue{
 		{Key: "BUCKET_PREFIX", Binding: BindingEnv, KeyID: "envkey-v1"},
 	})
 	if !errors.Is(err, ErrValueOmitted) {
 		t.Fatalf("omitted value = %v, want ErrValueOmitted", err)
 	}
-	if _, err := d.CreateConfig(ctx, "prod", "redline", "ops", "1.0.0", "", admin.ID, nil); err == nil {
+	if _, err := d.CreateConfig(ctx, "acme", "prod", "redline", "ops", "1.0.0", "", admin.ID, nil); err == nil {
 		t.Fatal("a config with no values at all was accepted")
 	}
 }
@@ -380,9 +380,9 @@ func TestLineageSurvivesSupersession(t *testing.T) {
 	d := open(t)
 	admin := newUser(t, d, "carl")
 
-	source := blessOpen(t, ctx, d, "staging", "redline", "app", "1.0.0", admin.ID)
+	source := blessOpen(t, ctx, d, "acme", "staging", "redline", "app", "1.0.0", admin.ID)
 
-	promoted, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
+	promoted, err := d.CreateConfig(ctx, "acme", "prod", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
 		{Key: "RETENTION_DAYS", Binding: BindingInvariant, Ciphertext: sealed("30"),
 			KeyID: "prodkey-v1", Origin: OriginPromoted, SourceConfigID: source.ID},
 		{Key: "DB_PASSWORD", Binding: BindingEnv, Ciphertext: sealed("born-in-prod"), KeyID: "prodkey-v1"},
@@ -405,7 +405,7 @@ func TestLineageSurvivesSupersession(t *testing.T) {
 
 	// A direct set after a promotion is a NEW value in a NEW config,
 	// superseding by seq. Nothing is overwritten.
-	superseding, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.0.0", "2.0.0", admin.ID, []ConfigValue{
+	superseding, err := d.CreateConfig(ctx, "acme", "prod", "redline", "app", "1.0.0", "2.0.0", admin.ID, []ConfigValue{
 		{Key: "RETENTION_DAYS", Binding: BindingInvariant, Ciphertext: sealed("7"), KeyID: "prodkey-v1"},
 	})
 	if err != nil {
@@ -415,7 +415,7 @@ func TestLineageSurvivesSupersession(t *testing.T) {
 		t.Fatalf("seq did not advance: %d then %d", promoted.Seq, superseding.Seq)
 	}
 
-	res, err := d.ResolveConfig(ctx, "prod", "redline", "app", "1.5.0")
+	res, err := d.ResolveConfig(ctx, "acme", "prod", "redline", "app", "1.5.0")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -456,15 +456,15 @@ func TestTombstoneKeepsRowAndDropsBytes(t *testing.T) {
 	d := open(t)
 	admin := newUser(t, d, "carl")
 
-	source := blessOpen(t, ctx, d, "staging", "redline", "app", "1.0.0", admin.ID)
-	first, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
+	source := blessOpen(t, ctx, d, "acme", "staging", "redline", "app", "1.0.0", admin.ID)
+	first, err := d.CreateConfig(ctx, "acme", "prod", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
 		{Key: "LEAKED", Binding: BindingInvariant, Ciphertext: sealed("old"),
 			KeyID: "prodkey-v1", Origin: OriginPromoted, SourceConfigID: source.ID},
 	})
 	if err != nil {
 		t.Fatalf("first config: %v", err)
 	}
-	second, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.0.0", "2.0.0", admin.ID, []ConfigValue{
+	second, err := d.CreateConfig(ctx, "acme", "prod", "redline", "app", "1.0.0", "2.0.0", admin.ID, []ConfigValue{
 		{Key: "LEAKED", Binding: BindingInvariant, Ciphertext: sealed("new"), KeyID: "prodkey-v1"},
 	})
 	if err != nil {
@@ -509,7 +509,7 @@ func TestTombstoneKeepsRowAndDropsBytes(t *testing.T) {
 	}
 
 	// Sweeping the address is what revocation means.
-	n, err := d.TombstoneValueAtAddress(ctx, "PROD", "redline", "app", "LEAKED", admin.ID)
+	n, err := d.TombstoneValueAtAddress(ctx, "acme", "PROD", "redline", "app", "LEAKED", admin.ID)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -537,21 +537,21 @@ func TestCreateConfigBlessTimeValidation(t *testing.T) {
 
 	// A closed range at a fresh address leaves every box above max_ver with
 	// nothing to resolve to.
-	_, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.0.0", "1.3.0", admin.ID, oneValue("A"))
+	_, err := d.CreateConfig(ctx, "acme", "prod", "redline", "app", "1.0.0", "1.3.0", admin.ID, oneValue("A"))
 	if !errors.Is(err, ErrNoOpenRange) {
 		t.Fatalf("closed range with no open config = %v, want ErrNoOpenRange", err)
 	}
 
-	open1 := blessOpen(t, ctx, d, "prod", "redline", "app", "1.0.0", admin.ID)
+	open1 := blessOpen(t, ctx, d, "acme", "prod", "redline", "app", "1.0.0", admin.ID)
 
 	// A second open-ended config is LEGAL, and is how supersession works: the
 	// newer one wins on seq for versions both contain, while the older keeps
 	// serving binaries below the newer one's min_ver. Refusing it would deadlock
 	// against ranges being immutable, since replacing the incumbent would mean
 	// editing its max_ver.
-	open2 := blessOpen(t, ctx, d, "prod", "redline", "app", "1.4.0", admin.ID)
+	open2 := blessOpen(t, ctx, d, "acme", "prod", "redline", "app", "1.4.0", admin.ID)
 
-	got, err := d.ResolveConfig(ctx, "prod", "redline", "app", "1.5.0")
+	got, err := d.ResolveConfig(ctx, "acme", "prod", "redline", "app", "1.5.0")
 	if err != nil {
 		t.Fatalf("resolve above both min_vers: %v", err)
 	}
@@ -564,7 +564,7 @@ func TestCreateConfigBlessTimeValidation(t *testing.T) {
 
 	// Below the newer one's min_ver only the older still contains the version,
 	// which is the rollback case ranges exist for.
-	got, err = d.ResolveConfig(ctx, "prod", "redline", "app", "1.2.0")
+	got, err = d.ResolveConfig(ctx, "acme", "prod", "redline", "app", "1.2.0")
 	if err != nil {
 		t.Fatalf("resolve below the newer min_ver: %v", err)
 	}
@@ -573,17 +573,17 @@ func TestCreateConfigBlessTimeValidation(t *testing.T) {
 	}
 
 	// A range that contains nothing.
-	if _, err := d.CreateConfig(ctx, "prod", "redline", "app", "2.0.0", "1.0.0", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidVersionRange) {
+	if _, err := d.CreateConfig(ctx, "acme", "prod", "redline", "app", "2.0.0", "1.0.0", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidVersionRange) {
 		t.Fatalf("inverted range = %v, want ErrInvalidVersionRange", err)
 	}
 
 	// A closed range alongside the open one is the legal shape, and nothing
 	// above was written.
-	closed, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.0.0", "1.3.0", admin.ID, oneValue("A"))
+	closed, err := d.CreateConfig(ctx, "acme", "prod", "redline", "app", "1.0.0", "1.3.0", admin.ID, oneValue("A"))
 	if err != nil {
 		t.Fatalf("closed range beside an open one: %v", err)
 	}
-	list, err := d.ListConfigsForAddress(ctx, "prod", "redline", "app")
+	list, err := d.ListConfigsForAddress(ctx, "acme", "prod", "redline", "app")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -601,7 +601,7 @@ func TestAddressCanonicalisation(t *testing.T) {
 	d := open(t)
 	admin := newUser(t, d, "carl")
 
-	cfg, err := d.CreateConfig(ctx, "  PROD ", "Redline", "App", "1.0.0", "", admin.ID, oneValue("A"))
+	cfg, err := d.CreateConfig(ctx, "acme", "  PROD ", "Redline", "App", "1.0.0", "", admin.ID, oneValue("A"))
 	if err != nil {
 		t.Fatalf("create with a shouted address: %v", err)
 	}
@@ -611,7 +611,7 @@ func TestAddressCanonicalisation(t *testing.T) {
 
 	// The folded spelling and the shouted one are the same address, which is
 	// the whole point: today they resolve to two.
-	res, err := d.ResolveConfig(ctx, "Prod", "redline", "APP", "1.1.0")
+	res, err := d.ResolveConfig(ctx, "acme", "Prod", "redline", "APP", "1.1.0")
 	if err != nil {
 		t.Fatalf("resolve a shouted address: %v", err)
 	}
@@ -621,14 +621,14 @@ func TestAddressCanonicalisation(t *testing.T) {
 
 	// The reserved role names break the client's own file naming.
 	for _, role := range []string{"config", "secret", "local", "CONFIG"} {
-		if _, err := d.CreateConfig(ctx, "prod", "redline", role, "1.0.0", "", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidAddress) {
+		if _, err := d.CreateConfig(ctx, "acme", "prod", "redline", role, "1.0.0", "", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidAddress) {
 			t.Errorf("reserved role %q = %v, want ErrInvalidAddress", role, err)
 		}
 	}
 
 	bad := []string{"", "  ", "a/b", "../..", "a.b", "_leading", "-leading", "pröd", "a b", "a*"}
 	for _, s := range bad {
-		if _, err := d.CreateConfig(ctx, s, "redline", "app", "1.0.0", "", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidAddress) {
+		if _, err := d.CreateConfig(ctx, "acme", s, "redline", "app", "1.0.0", "", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidAddress) {
 			t.Errorf("environment %q = %v, want ErrInvalidAddress", s, err)
 		}
 	}
@@ -640,14 +640,14 @@ func TestAddressCanonicalisation(t *testing.T) {
 	if m.EnrolledEnvironment != "prod" {
 		t.Fatalf("enrolled environment = %q, want folded", m.EnrolledEnvironment)
 	}
-	reg, err := d.UpsertRegistration(ctx, m.ID, "Prod", "Redline", "App", "1.0.0")
+	reg, err := d.UpsertRegistration(ctx, m.ID, "acme", "Prod", "Redline", "App", "1.0.0")
 	if err != nil {
 		t.Fatalf("register address: %v", err)
 	}
 	if reg.Environment != "prod" || reg.App != "redline" || reg.Role != "app" {
 		t.Fatalf("registration address not folded: %+v", reg)
 	}
-	again, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "app", "1.0.0")
+	again, err := d.UpsertRegistration(ctx, m.ID, "acme", "prod", "redline", "app", "1.0.0")
 	if err != nil {
 		t.Fatalf("re-register: %v", err)
 	}
@@ -716,7 +716,7 @@ func TestDeleteMachineFreesTheNameAndCascades(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	reg, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "app", "1.2.0")
+	reg, err := d.UpsertRegistration(ctx, m.ID, "acme", "prod", "redline", "app", "1.2.0")
 	if err != nil {
 		t.Fatalf("upsert registration: %v", err)
 	}
@@ -763,9 +763,9 @@ func TestDuplicateMachineNameIsUniqueViolation(t *testing.T) {
 	}
 }
 
-// UNIQUE (machine_id, environment, app, role) is what makes UpsertRegistration
-// safe to call from every boot; prove it exists independent of the Go upsert
-// path by inserting the row twice directly.
+// UNIQUE (machine_id, project, environment, app, role) is what makes
+// UpsertRegistration safe to call from every boot; prove it exists independent
+// of the Go upsert path by inserting the row twice directly.
 func TestDuplicateRegistrationTupleIsUniqueViolation(t *testing.T) {
 	ctx := context.Background()
 	d := open(t)
@@ -774,16 +774,21 @@ func TestDuplicateRegistrationTupleIsUniqueViolation(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	insert := `INSERT INTO cm_registrations (id, machine_id, environment, app, role, version) VALUES (?, ?, ?, ?, ?, ?)`
-	if _, err := d.ExecContext(ctx, insert, "reg_one", m.ID, "prod", "redline", "current", "1.0.0"); err != nil {
+	insert := `INSERT INTO cm_registrations (id, machine_id, project, environment, app, role, version) VALUES (?, ?, ?, ?, ?, ?, ?)`
+	if _, err := d.ExecContext(ctx, insert, "reg_one", m.ID, "acme", "prod", "redline", "current", "1.0.0"); err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
-	if _, err := d.ExecContext(ctx, insert, "reg_two", m.ID, "prod", "redline", "current", "1.1.0"); !isUniqueViolation(err) {
+	if _, err := d.ExecContext(ctx, insert, "reg_two", m.ID, "acme", "prod", "redline", "current", "1.1.0"); !isUniqueViolation(err) {
 		t.Fatalf("duplicate tuple insert = %v, want a unique violation", err)
 	}
 	// A different environment is a different tuple, and must be accepted.
-	if _, err := d.ExecContext(ctx, insert, "reg_three", m.ID, "staging", "redline", "current", "1.1.0"); err != nil {
+	if _, err := d.ExecContext(ctx, insert, "reg_three", m.ID, "acme", "staging", "redline", "current", "1.1.0"); err != nil {
 		t.Fatalf("same app and role in another environment: %v", err)
+	}
+	// A different project sharing the same (environment, app, role) is also a
+	// different tuple — the whole point of the project joining the address.
+	if _, err := d.ExecContext(ctx, insert, "reg_four", m.ID, "globex", "prod", "redline", "current", "1.1.0"); err != nil {
+		t.Fatalf("same environment/app/role in another project: %v", err)
 	}
 }
 
@@ -799,8 +804,8 @@ func TestUpsertRegistrationIsIdempotentOnVersion(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	first := registerAt(t, ctx, d, m, "prod", "redline", "current", admin.ID)
-	second, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "current", "1.1.0")
+	first := registerAt(t, ctx, d, m, "acme", "prod", "redline", "current", admin.ID)
+	second, err := d.UpsertRegistration(ctx, m.ID, "acme", "prod", "redline", "current", "1.1.0")
 	if err != nil {
 		t.Fatalf("second upsert: %v", err)
 	}
@@ -828,7 +833,7 @@ func TestForeignKeyCascadeDeletesDependents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	if _, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "current", "1.0.0"); err != nil {
+	if _, err := d.UpsertRegistration(ctx, m.ID, "acme", "prod", "redline", "current", "1.0.0"); err != nil {
 		t.Fatalf("registration: %v", err)
 	}
 	if err := d.SetMachineSecret(ctx, m.ID, "TOKEN", []byte("sealed"), admin.ID); err != nil {
@@ -855,7 +860,7 @@ func TestForeignKeyCascadeDeletesConfigValues(t *testing.T) {
 	ctx := context.Background()
 	d := open(t)
 	admin := newUser(t, d, "carl")
-	cfg := blessOpen(t, ctx, d, "prod", "redline", "current", "1.0.0", admin.ID)
+	cfg := blessOpen(t, ctx, d, "acme", "prod", "redline", "current", "1.0.0", admin.ID)
 
 	if _, err := d.ExecContext(ctx, `DELETE FROM cm_configs WHERE id = ?`, cfg.ID); err != nil {
 		t.Fatalf("delete config: %v", err)
@@ -923,8 +928,8 @@ func TestResolvePicksHighestSeqAmongOverlapping(t *testing.T) {
 	d := open(t)
 	admin := newUser(t, d, "carl")
 
-	older := blessOpen(t, ctx, d, "prod", "redline", "current", "1.0.0", admin.ID)
-	newer, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "9.0.0", admin.ID, oneValue("A"))
+	older := blessOpen(t, ctx, d, "acme", "prod", "redline", "current", "1.0.0", admin.ID)
+	newer, err := d.CreateConfig(ctx, "acme", "prod", "redline", "current", "1.0.0", "9.0.0", admin.ID, oneValue("A"))
 	if err != nil {
 		t.Fatalf("newer: %v", err)
 	}
@@ -932,7 +937,7 @@ func TestResolvePicksHighestSeqAmongOverlapping(t *testing.T) {
 		t.Fatalf("seq did not advance: older=%d newer=%d", older.Seq, newer.Seq)
 	}
 
-	res, err := d.ResolveConfig(ctx, "prod", "redline", "current", "1.5.0")
+	res, err := d.ResolveConfig(ctx, "acme", "prod", "redline", "current", "1.5.0")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -944,7 +949,7 @@ func TestResolvePicksHighestSeqAmongOverlapping(t *testing.T) {
 	}
 
 	// Past the newer config's range, the open-ended one is all that matches.
-	res, err = d.ResolveConfig(ctx, "prod", "redline", "current", "9.5.0")
+	res, err = d.ResolveConfig(ctx, "acme", "prod", "redline", "current", "9.5.0")
 	if err != nil {
 		t.Fatalf("resolve above the closed range: %v", err)
 	}
@@ -959,12 +964,12 @@ func TestResolveZeroMatchesReturnsNamedError(t *testing.T) {
 	d := open(t)
 	admin := newUser(t, d, "carl")
 
-	blessOpen(t, ctx, d, "prod", "redline", "current", "1.0.0", admin.ID)
+	blessOpen(t, ctx, d, "acme", "prod", "redline", "current", "1.0.0", admin.ID)
 
-	if _, err := d.ResolveConfig(ctx, "prod", "redline", "current", "0.9.0"); !errors.Is(err, ErrNoConfigMatches) {
+	if _, err := d.ResolveConfig(ctx, "acme", "prod", "redline", "current", "0.9.0"); !errors.Is(err, ErrNoConfigMatches) {
 		t.Fatalf("resolve below min_ver = %v, want ErrNoConfigMatches", err)
 	}
-	if _, err := d.ResolveConfig(ctx, "prod", "nobody", "current", "1.0.0"); !errors.Is(err, ErrNoConfigMatches) {
+	if _, err := d.ResolveConfig(ctx, "acme", "prod", "nobody", "current", "1.0.0"); !errors.Is(err, ErrNoConfigMatches) {
 		t.Fatalf("resolve unknown address = %v, want ErrNoConfigMatches", err)
 	}
 }
@@ -978,17 +983,17 @@ func TestResolveOpenEndedVsClosedMaxVer(t *testing.T) {
 	admin := newUser(t, d, "carl")
 
 	// The forward config, open-ended from 1.2.0 on.
-	latest, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.2.0", "", admin.ID, oneValue("A"))
+	latest, err := d.CreateConfig(ctx, "acme", "prod", "redline", "current", "1.2.0", "", admin.ID, oneValue("A"))
 	if err != nil {
 		t.Fatalf("v2 config: %v", err)
 	}
 	// The rollback target, closed at 1.1.0.
-	rollbackTarget, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "1.1.0", admin.ID, oneValue("A"))
+	rollbackTarget, err := d.CreateConfig(ctx, "acme", "prod", "redline", "current", "1.0.0", "1.1.0", admin.ID, oneValue("A"))
 	if err != nil {
 		t.Fatalf("v1 config: %v", err)
 	}
 
-	res, err := d.ResolveConfig(ctx, "prod", "redline", "current", "9.9.9")
+	res, err := d.ResolveConfig(ctx, "acme", "prod", "redline", "current", "9.9.9")
 	if err != nil {
 		t.Fatalf("resolve forward: %v", err)
 	}
@@ -996,7 +1001,7 @@ func TestResolveOpenEndedVsClosedMaxVer(t *testing.T) {
 		t.Fatalf("forward resolve = %s, want %s", res.Config.ID, latest.ID)
 	}
 
-	res, err = d.ResolveConfig(ctx, "prod", "redline", "current", "1.0.5")
+	res, err = d.ResolveConfig(ctx, "acme", "prod", "redline", "current", "1.0.5")
 	if err != nil {
 		t.Fatalf("resolve rollback: %v", err)
 	}
@@ -1006,7 +1011,7 @@ func TestResolveOpenEndedVsClosedMaxVer(t *testing.T) {
 
 	// Between the two: nothing covers 1.1.5 — the named error, not a silent
 	// pick.
-	if _, err := d.ResolveConfig(ctx, "prod", "redline", "current", "1.1.5"); !errors.Is(err, ErrNoConfigMatches) {
+	if _, err := d.ResolveConfig(ctx, "acme", "prod", "redline", "current", "1.1.5"); !errors.Is(err, ErrNoConfigMatches) {
 		t.Fatalf("gap resolve = %v, want ErrNoConfigMatches", err)
 	}
 }
@@ -1016,16 +1021,16 @@ func TestCreateConfigRejectsMalformedVersionRange(t *testing.T) {
 	d := open(t)
 	admin := newUser(t, d, "carl")
 
-	if _, err := d.CreateConfig(ctx, "prod", "redline", "current", "not-a-version", "", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidVersion) {
+	if _, err := d.CreateConfig(ctx, "acme", "prod", "redline", "current", "not-a-version", "", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidVersion) {
 		t.Fatalf("bad min_ver = %v, want ErrInvalidVersion", err)
 	}
-	if _, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "1.x.0", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidVersion) {
+	if _, err := d.CreateConfig(ctx, "acme", "prod", "redline", "current", "1.0.0", "1.x.0", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidVersion) {
 		t.Fatalf("bad max_ver = %v, want ErrInvalidVersion", err)
 	}
-	if _, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0", "", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidVersion) {
+	if _, err := d.CreateConfig(ctx, "acme", "prod", "redline", "current", "1.0", "", admin.ID, oneValue("A")); !errors.Is(err, ErrInvalidVersion) {
 		t.Fatalf("two-part min_ver = %v, want ErrInvalidVersion", err)
 	}
-	if _, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "", "", oneValue("A")); err == nil {
+	if _, err := d.CreateConfig(ctx, "acme", "prod", "redline", "current", "1.0.0", "", "", oneValue("A")); err == nil {
 		t.Fatal("a config with no creator was accepted")
 	}
 }
@@ -1048,7 +1053,7 @@ func TestCreateConfigRejectsInconsistentValues(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "", admin.ID, []ConfigValue{tc.value}); err == nil {
+			if _, err := d.CreateConfig(ctx, "acme", "prod", "redline", "current", "1.0.0", "", admin.ID, []ConfigValue{tc.value}); err == nil {
 				t.Fatal("malformed value was accepted")
 			}
 		})
@@ -1060,15 +1065,15 @@ func TestListConfigsForAddress(t *testing.T) {
 	d := open(t)
 	admin := newUser(t, d, "carl")
 
-	first := blessOpen(t, ctx, d, "prod", "redline", "current", "1.2.0", admin.ID)
-	second, err := d.CreateConfig(ctx, "prod", "redline", "current", "1.0.0", "1.1.0", admin.ID, oneValue("A"))
+	first := blessOpen(t, ctx, d, "acme", "prod", "redline", "current", "1.2.0", admin.ID)
+	second, err := d.CreateConfig(ctx, "acme", "prod", "redline", "current", "1.0.0", "1.1.0", admin.ID, oneValue("A"))
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
 	// Different address: must not show up.
-	blessOpen(t, ctx, d, "staging", "redline", "current", "1.0.0", admin.ID)
+	blessOpen(t, ctx, d, "acme", "staging", "redline", "current", "1.0.0", admin.ID)
 
-	list, err := d.ListConfigsForAddress(ctx, "prod", "redline", "current")
+	list, err := d.ListConfigsForAddress(ctx, "acme", "prod", "redline", "current")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -1444,47 +1449,52 @@ func TestMigrate0009OverPopulated0008(t *testing.T) {
 		t.Fatalf("machine = %+v", m)
 	}
 
-	// The grant lands on every registration the machine owned, each now
-	// carrying the environment the box enrolled with.
+	// Open(path) migrates all the way to CURRENT, which now includes 0013.
+	// 0013 lands on top of 0009 in the same run and deliberately deletes every
+	// cm_registrations row: a registration's wrapped_env_key was sealed under
+	// the old three-part AAD, and re-addressing changes the authenticated
+	// context — the grant is dead bytes at the new four-part address, so the
+	// box must re-register. This is the behaviour 0013 replaces "the grant
+	// lands on every registration the machine owned" with.
 	regs, err := d.ListRegistrationsForMachine(ctx, "mch_a")
 	if err != nil {
 		t.Fatalf("registrations after migrate: %v", err)
 	}
-	if len(regs) != 2 {
-		t.Fatalf("registrations = %d, want 2", len(regs))
-	}
-	for _, r := range regs {
-		if r.Environment != "prod" || r.State != RegistrationApproved || r.WrapKeyID != "envkey-v1" {
-			t.Fatalf("registration not carried forward: %+v", r)
-		}
-		key, err := d.RegistrationWrappedKey(ctx, r.ID)
-		if err != nil || string(key) != "wrapped-prod" {
-			t.Fatalf("wrapped key for %s = %q, %v", r.ID, key, err)
-		}
+	if len(regs) != 0 {
+		t.Fatalf("registrations after 0013 = %d, want 0 (0013 deletes every registration)", len(regs))
 	}
 
-	// Sealed values survive as environment-bound; plaintext ones cannot be
-	// carried and are gone.
+	// Sealed values survive as environment-bound rows carried forward under the
+	// 0013 sentinel project, but 0013 tombstones every one of them — the bytes
+	// no longer open at any address. Plaintext ones were already gone at 0009
+	// and stay gone.
 	cfg, err := d.GetConfig(ctx, "cfg_1")
 	if err != nil {
 		t.Fatalf("config after migrate: %v", err)
+	}
+	if cfg.Project != "unmigrated" {
+		t.Fatalf("config project = %q, want the 0013 sentinel %q", cfg.Project, "unmigrated")
 	}
 	if len(cfg.Values) != 1 {
 		t.Fatalf("values = %+v, want only the sealed one", cfg.Values)
 	}
 	v := cfg.Values[0]
-	if v.Key != "DB_PASSWORD" || v.Binding != BindingEnv || v.Origin != OriginDirect ||
-		string(v.Ciphertext) != string(sealed("hunter2")) {
-		t.Fatalf("carried value = %+v", v)
+	if v.Key != "DB_PASSWORD" || v.Binding != BindingEnv || v.Origin != OriginDirect {
+		t.Fatalf("carried value lost its provenance = %+v", v)
+	}
+	if !v.Tombstoned() || v.Ciphertext != nil {
+		t.Fatalf("0013 must tombstone every value it carries forward, got %+v", v)
 	}
 
-	// The unfolded address was folded.
+	// The unfolded address was folded at 0009, and reassigned to the 0013
+	// sentinel project.
 	folded, err := d.GetConfig(ctx, "cfg_2")
 	if err != nil {
 		t.Fatalf("folded config: %v", err)
 	}
-	if folded.Environment != "prod" || folded.App != "ops" || folded.Role != "app" {
-		t.Fatalf("address not folded by the migration: %s/%s/%s", folded.Environment, folded.App, folded.Role)
+	if folded.Project != "unmigrated" || folded.Environment != "prod" || folded.App != "ops" || folded.Role != "app" {
+		t.Fatalf("address not folded by the migration: %s/%s/%s/%s",
+			folded.Project, folded.Environment, folded.App, folded.Role)
 	}
 
 	// Bystanders survive untouched.
@@ -1497,7 +1507,7 @@ func TestMigrate0009OverPopulated0008(t *testing.T) {
 	}
 
 	// The whole thing is usable afterwards, not merely present.
-	if _, err := d.UpsertRegistration(ctx, "mch_a", "staging", "redline", "app", "1.1.0"); err != nil {
+	if _, err := d.UpsertRegistration(ctx, "mch_a", "acme", "staging", "redline", "app", "1.1.0"); err != nil {
 		t.Fatalf("register a new address after migrate: %v", err)
 	}
 }
@@ -1517,12 +1527,12 @@ func TestMigrate0009DownAndUpAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register machine: %v", err)
 	}
-	reg := registerAt(t, ctx, d, m, "prod", "redline", "app", admin.ID)
+	registerAt(t, ctx, d, m, "acme", "prod", "redline", "app", admin.ID)
 	// A second environment on the same (app, role): 0008 cannot hold both.
-	if _, err := d.UpsertRegistration(ctx, m.ID, "staging", "redline", "app", "1.0.0"); err != nil {
+	if _, err := d.UpsertRegistration(ctx, m.ID, "acme", "staging", "redline", "app", "1.0.0"); err != nil {
 		t.Fatalf("second environment: %v", err)
 	}
-	cfg := blessOpen(t, ctx, d, "prod", "redline", "app", "1.0.0", admin.ID)
+	cfg := blessOpen(t, ctx, d, "acme", "prod", "redline", "app", "1.0.0", admin.ID)
 	if err := d.SetMachineSecret(ctx, m.ID, "TOKEN", []byte("sealed"), admin.ID); err != nil {
 		t.Fatalf("machine secret: %v", err)
 	}
@@ -1563,18 +1573,24 @@ func TestMigrate0009DownAndUpAgain(t *testing.T) {
 	// one schema and the code another, and the test fails on a column that has
 	// simply not been created yet. That is the rot migrateTo's own doc comment
 	// warns about, and hardcoding 11 here would only move it to 0012.
+	//
+	// Bringing the schema all the way up also runs 0013, which deliberately
+	// deletes every cm_registrations row when the address gains the project
+	// coordinate: this registration's wrapped key was sealed under the old
+	// three-part AAD and is dead bytes at the new four-part address, so it
+	// does not survive the round trip — the box re-registers instead.
 	if err := d.migrate(ctx); err != nil {
 		t.Fatalf("migrate back up to the current schema: %v", err)
 	}
-	back, err := d.RegistrationAt(ctx, m.ID, "prod", "redline", "app")
+	if _, err := d.RegistrationAt(ctx, m.ID, "acme", "prod", "redline", "app"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("registration after 0013 = %v, want ErrNotFound (0013 deletes every registration)", err)
+	}
+	back, err := d.UpsertRegistration(ctx, m.ID, "acme", "prod", "redline", "app", "1.0.0")
 	if err != nil {
-		t.Fatalf("registration after the round trip: %v", err)
+		t.Fatalf("re-register after the round trip: %v", err)
 	}
-	if back.State != RegistrationApproved {
-		t.Fatalf("state after the round trip = %q", back.State)
-	}
-	if back.ID != reg.ID {
-		t.Logf("registration id changed across the round trip: %s -> %s", reg.ID, back.ID)
+	if back.State != RegistrationPending {
+		t.Fatalf("state after re-registering post-0013 = %q, want pending (0013 wiped the old grant)", back.State)
 	}
 	if _, err := d.MachineSecret(ctx, m.ID, "TOKEN"); err != nil {
 		t.Fatalf("machine secret after the round trip: %v", err)
@@ -1588,12 +1604,12 @@ func TestCurrentKeyPointer(t *testing.T) {
 
 	// Never announced is a distinct fact from "announced as X". A client told
 	// the wrong one seals under whatever its filesystem offers.
-	if _, err := d.CurrentKeyFor(ctx, "prod", "redline", "app"); !errors.Is(err, ErrNotFound) {
+	if _, err := d.CurrentKeyFor(ctx, "acme", "prod", "redline", "app"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unannounced address = %v, want ErrNotFound", err)
 	}
 
 	const k1 = "a3f1c02b9d4e5f60"
-	cur, err := d.SetCurrentKey(ctx, "PROD", "Redline", "App", "A3F1C02B9D4E5F60", admin.ID)
+	cur, err := d.SetCurrentKey(ctx, "acme", "PROD", "Redline", "App", "A3F1C02B9D4E5F60", admin.ID)
 	if err != nil {
 		t.Fatalf("SetCurrentKey: %v", err)
 	}
@@ -1607,10 +1623,10 @@ func TestCurrentKeyPointer(t *testing.T) {
 
 	// Announcing again is a rotation, not a conflict.
 	const k2 = "b70dd91e4c2a8f53"
-	if _, err := d.SetCurrentKey(ctx, "prod", "redline", "app", k2, admin.ID); err != nil {
+	if _, err := d.SetCurrentKey(ctx, "acme", "prod", "redline", "app", k2, admin.ID); err != nil {
 		t.Fatalf("re-announce: %v", err)
 	}
-	cur, err = d.CurrentKeyFor(ctx, "prod", "redline", "app")
+	cur, err = d.CurrentKeyFor(ctx, "acme", "prod", "redline", "app")
 	if err != nil {
 		t.Fatalf("CurrentKeyFor: %v", err)
 	}
@@ -1621,7 +1637,7 @@ func TestCurrentKeyPointer(t *testing.T) {
 	// hz holds no key, so it cannot check an id against material — but a value
 	// that is not an id at all is a typo worth refusing at the one write path.
 	for _, bad := range []string{"", "short", "a3f1c02b9d4e5f6z", "a3f1c02b9d4e5f600"} {
-		if _, err := d.SetCurrentKey(ctx, "prod", "redline", "app", bad, admin.ID); err == nil {
+		if _, err := d.SetCurrentKey(ctx, "acme", "prod", "redline", "app", bad, admin.ID); err == nil {
 			t.Fatalf("key id %q was accepted", bad)
 		}
 	}
@@ -1640,7 +1656,7 @@ func TestRegistrationsHoldingStaleKeyIsTheRotationAffordance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("RegisterMachine %s: %v", name, err)
 		}
-		reg, err := d.UpsertRegistration(ctx, m.ID, "prod", "redline", "app", "1.0.0")
+		reg, err := d.UpsertRegistration(ctx, m.ID, "acme", "prod", "redline", "app", "1.0.0")
 		if err != nil {
 			t.Fatalf("UpsertRegistration %s: %v", name, err)
 		}
@@ -1655,7 +1671,7 @@ func TestRegistrationsHoldingStaleKeyIsTheRotationAffordance(t *testing.T) {
 
 	// With no pointer announced nothing is stale — there is nothing to be stale
 	// against, and reporting the whole fleet would be noise.
-	got, err := d.RegistrationsHoldingStaleKey(ctx, "prod", "redline", "app")
+	got, err := d.RegistrationsHoldingStaleKey(ctx, "acme", "prod", "redline", "app")
 	if err != nil {
 		t.Fatalf("stale with no pointer: %v", err)
 	}
@@ -1663,13 +1679,13 @@ func TestRegistrationsHoldingStaleKeyIsTheRotationAffordance(t *testing.T) {
 		t.Fatalf("stale with no pointer = %d rows, want 0", len(got))
 	}
 
-	if _, err := d.SetCurrentKey(ctx, "prod", "redline", "app", newKey, admin.ID); err != nil {
+	if _, err := d.SetCurrentKey(ctx, "acme", "prod", "redline", "app", newKey, admin.ID); err != nil {
 		t.Fatalf("SetCurrentKey: %v", err)
 	}
 
 	// A box holding the old key cannot open anything sealed under the new one,
 	// so this list is exactly the re-wrap queue a rotation needs.
-	got, err = d.RegistrationsHoldingStaleKey(ctx, "prod", "redline", "app")
+	got, err = d.RegistrationsHoldingStaleKey(ctx, "acme", "prod", "redline", "app")
 	if err != nil {
 		t.Fatalf("stale after announce: %v", err)
 	}
@@ -1680,5 +1696,147 @@ func TestRegistrationsHoldingStaleKeyIsTheRotationAffordance(t *testing.T) {
 		if r.ID == fresh.ID {
 			t.Fatal("a registration already holding the current key was reported stale")
 		}
+	}
+}
+
+// TestConfigManagerIsolatesProjects proves the project coordinate actually
+// isolates. Two projects sharing (environment, app, role) is exactly the
+// collision 0013's header names: "prod/redline/app" was never a real identity
+// on its own, only the app coordinate carried the project along implicitly,
+// by luck. Every read here must see only its own project's rows.
+//
+// RegistrationsHoldingStaleKey gets the sharpest data: both registrations hold
+// their OWN project's current key (so correctly neither is stale), but the two
+// projects' keys are DIFFERENT strings. The self-join's correlated subquery is
+// driven by (environment, app, role) alone — identical for both projects,
+// since they share that triple — so if project were missing from either side
+// of that join, the subquery would return the SAME single (wrong-for-one-of-
+// them) key for both calls below, and at least one of the two assertions would
+// see a false positive. That failure does not depend on which row an unscoped
+// query happens to pick: whichever key comes back, it disagrees with one of
+// the two projects' own registrations.
+func TestConfigManagerIsolatesProjects(t *testing.T) {
+	ctx := context.Background()
+	d := open(t)
+	admin := newUser(t, d, "carl")
+
+	acmeMachine, err := d.RegisterMachine(ctx, "box-acme", "prod", testPublicKey(101))
+	if err != nil {
+		t.Fatalf("register acme machine: %v", err)
+	}
+	globexMachine, err := d.RegisterMachine(ctx, "box-globex", "prod", testPublicKey(102))
+	if err != nil {
+		t.Fatalf("register globex machine: %v", err)
+	}
+
+	const acmeKey = "1111111111111111"
+	const globexKey = "2222222222222222"
+
+	acmeReg, err := d.UpsertRegistration(ctx, acmeMachine.ID, "acme", "prod", "redline", "app", "1.0.0")
+	if err != nil {
+		t.Fatalf("register acme address: %v", err)
+	}
+	acmeReg, err = d.ApproveRegistration(ctx, acmeReg.ID, []byte("wrapped-acme"), acmeKey, admin.ID)
+	if err != nil {
+		t.Fatalf("approve acme registration: %v", err)
+	}
+	globexReg, err := d.UpsertRegistration(ctx, globexMachine.ID, "globex", "prod", "redline", "app", "1.0.0")
+	if err != nil {
+		t.Fatalf("register globex address: %v", err)
+	}
+	globexReg, err = d.ApproveRegistration(ctx, globexReg.ID, []byte("wrapped-globex"), globexKey, admin.ID)
+	if err != nil {
+		t.Fatalf("approve globex registration: %v", err)
+	}
+
+	acmeCfg, err := d.CreateConfig(ctx, "acme", "prod", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
+		{Key: "SHARED_KEY", Binding: BindingInvariant, Ciphertext: sealed("acme-value"), KeyID: acmeKey},
+	})
+	if err != nil {
+		t.Fatalf("bless acme config: %v", err)
+	}
+	globexCfg, err := d.CreateConfig(ctx, "globex", "prod", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
+		{Key: "SHARED_KEY", Binding: BindingInvariant, Ciphertext: sealed("globex-value"), KeyID: globexKey},
+	})
+	if err != nil {
+		t.Fatalf("bless globex config: %v", err)
+	}
+
+	if _, err := d.SetCurrentKey(ctx, "acme", "prod", "redline", "app", acmeKey, admin.ID); err != nil {
+		t.Fatalf("set acme current key: %v", err)
+	}
+	if _, err := d.SetCurrentKey(ctx, "globex", "prod", "redline", "app", globexKey, admin.ID); err != nil {
+		t.Fatalf("set globex current key: %v", err)
+	}
+
+	// RegistrationAt: each project sees only its own registration, and a
+	// machine registered under one project is invisible under the other.
+	got, err := d.RegistrationAt(ctx, acmeMachine.ID, "acme", "prod", "redline", "app")
+	if err != nil || got.ID != acmeReg.ID || got.Project != "acme" {
+		t.Fatalf("RegistrationAt(acme) = %+v, %v, want acme's own registration", got, err)
+	}
+	if _, err := d.RegistrationAt(ctx, acmeMachine.ID, "globex", "prod", "redline", "app"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("RegistrationAt(acme's machine, globex) = %v, want ErrNotFound", err)
+	}
+	got, err = d.RegistrationAt(ctx, globexMachine.ID, "globex", "prod", "redline", "app")
+	if err != nil || got.ID != globexReg.ID || got.Project != "globex" {
+		t.Fatalf("RegistrationAt(globex) = %+v, %v, want globex's own registration", got, err)
+	}
+	if _, err := d.RegistrationAt(ctx, globexMachine.ID, "acme", "prod", "redline", "app"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("RegistrationAt(globex's machine, acme) = %v, want ErrNotFound", err)
+	}
+
+	// ResolveConfig: each project resolves to its own value, never the other's.
+	res, err := d.ResolveConfig(ctx, "acme", "prod", "redline", "app", "1.0.0")
+	if err != nil {
+		t.Fatalf("resolve acme: %v", err)
+	}
+	if res.Config.ID != acmeCfg.ID || string(res.Config.Values[0].Ciphertext) != string(sealed("acme-value")) {
+		t.Fatalf("acme resolved to the wrong config: %+v", res.Config)
+	}
+	res, err = d.ResolveConfig(ctx, "globex", "prod", "redline", "app", "1.0.0")
+	if err != nil {
+		t.Fatalf("resolve globex: %v", err)
+	}
+	if res.Config.ID != globexCfg.ID || string(res.Config.Values[0].Ciphertext) != string(sealed("globex-value")) {
+		t.Fatalf("globex resolved to the wrong config: %+v", res.Config)
+	}
+
+	// ListConfigsForAddress: each project lists only its own config.
+	list, err := d.ListConfigsForAddress(ctx, "acme", "prod", "redline", "app")
+	if err != nil || len(list) != 1 || list[0].ID != acmeCfg.ID {
+		t.Fatalf("ListConfigsForAddress(acme) = %+v, %v, want only acme's config", list, err)
+	}
+	list, err = d.ListConfigsForAddress(ctx, "globex", "prod", "redline", "app")
+	if err != nil || len(list) != 1 || list[0].ID != globexCfg.ID {
+		t.Fatalf("ListConfigsForAddress(globex) = %+v, %v, want only globex's config", list, err)
+	}
+
+	// CurrentKeyFor: each project's pointer is its own.
+	cur, err := d.CurrentKeyFor(ctx, "acme", "prod", "redline", "app")
+	if err != nil || cur.KeyID != acmeKey {
+		t.Fatalf("CurrentKeyFor(acme) = %+v, %v, want %s", cur, err, acmeKey)
+	}
+	cur, err = d.CurrentKeyFor(ctx, "globex", "prod", "redline", "app")
+	if err != nil || cur.KeyID != globexKey {
+		t.Fatalf("CurrentKeyFor(globex) = %+v, %v, want %s", cur, err, globexKey)
+	}
+
+	// RegistrationsHoldingStaleKey: see the function comment above for why this
+	// pair of calls is the sharpest test of the self-join carrying project on
+	// both sides.
+	staleAcme, err := d.RegistrationsHoldingStaleKey(ctx, "acme", "prod", "redline", "app")
+	if err != nil {
+		t.Fatalf("stale(acme): %v", err)
+	}
+	if len(staleAcme) != 0 {
+		t.Fatalf("stale(acme) = %+v, want none: acme's own registration holds acme's own current key", staleAcme)
+	}
+	staleGlobex, err := d.RegistrationsHoldingStaleKey(ctx, "globex", "prod", "redline", "app")
+	if err != nil {
+		t.Fatalf("stale(globex): %v", err)
+	}
+	if len(staleGlobex) != 0 {
+		t.Fatalf("stale(globex) = %+v, want none: globex's own registration holds globex's own current key", staleGlobex)
 	}
 }

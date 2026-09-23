@@ -80,10 +80,10 @@ func TestRecoveryWrapIsStoredInTheConfigTheBackupCarries(t *testing.T) {
 	ops := recoveryFixtureKey(t)
 	addRecoveryRecipient(t, s, admin, "ops", ops)
 
-	addr := configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
 	key := configmgr.NewEnvKey()
 	req := apitypes.CMRecoveryWrapReq{
-		Environment: addr.Environment, App: addr.App, Role: addr.Role,
+		Project: addr.Project, Environment: addr.Environment, App: addr.App, Role: addr.Role,
 		KeyID: key.ID().String(), Recipient: "ops",
 		Wrapped: wrapFor(t, ops.PublicKey(), addr, key),
 	}
@@ -107,7 +107,7 @@ func TestRecoveryWrapIsStoredInTheConfigTheBackupCarries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load saved config: %v", err)
 	}
-	stored, ok := saved.FindRecoveryWrap(addr.Environment, addr.App, addr.Role, key.ID().String(), "ops")
+	stored, ok := saved.FindRecoveryWrap(addr.Project, addr.Environment, addr.App, addr.Role, key.ID().String(), "ops")
 	if !ok {
 		t.Fatalf("the wrap is not in the saved config: %+v", saved.RecoveryWraps)
 	}
@@ -138,11 +138,11 @@ func TestRecoveryWrapsToEveryRecipientIndependently(t *testing.T) {
 	addRecoveryRecipient(t, s, admin, "ops", ops)
 	addRecoveryRecipient(t, s, admin, "successor", successor)
 
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	key := configmgr.NewEnvKey()
 	for name, priv := range map[string]*ecdh.PrivateKey{"ops": ops, "successor": successor} {
 		req := apitypes.CMRecoveryWrapReq{
-			Environment: addr.Environment, App: addr.App, Role: addr.Role,
+			Project: addr.Project, Environment: addr.Environment, App: addr.App, Role: addr.Role,
 			KeyID: key.ID().String(), Recipient: name,
 			Wrapped: wrapFor(t, priv.PublicKey(), addr, key),
 		}
@@ -193,10 +193,10 @@ func TestRecoveryWrapRefusesABlobAddressedElsewhere(t *testing.T) {
 	someoneElse := recoveryFixtureKey(t)
 	addRecoveryRecipient(t, s, admin, "ops", ops)
 
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	key := configmgr.NewEnvKey()
 	req := apitypes.CMRecoveryWrapReq{
-		Environment: addr.Environment, App: addr.App, Role: addr.Role,
+		Project: addr.Project, Environment: addr.Environment, App: addr.App, Role: addr.Role,
 		KeyID: key.ID().String(), Recipient: "ops",
 		Wrapped: wrapFor(t, someoneElse.PublicKey(), addr, key),
 	}
@@ -226,7 +226,7 @@ func TestRecoveryWrapRefusesTheWrongKindOfEnvelope(t *testing.T) {
 	}
 	key := configmgr.NewEnvKey()
 	req := apitypes.CMRecoveryWrapReq{
-		Environment: "prod", App: "redline", Role: "app",
+		Project: "acme", Environment: "prod", App: "redline", Role: "app",
 		KeyID: key.ID().String(), Recipient: "ops",
 		Wrapped: configmgr.EncodeEnvelope(sealed),
 	}
@@ -240,12 +240,12 @@ func TestRecoveryWrapRefusesAnUnknownRecipientAndABadKeyID(t *testing.T) {
 	s, admin, _ := cmRecoveryServer(t)
 	ops := recoveryFixtureKey(t)
 	addRecoveryRecipient(t, s, admin, "ops", ops)
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	key := configmgr.NewEnvKey()
 	good := wrapFor(t, ops.PublicKey(), addr, key)
 
 	t.Run("unknown recipient", func(t *testing.T) {
-		req := apitypes.CMRecoveryWrapReq{Environment: "prod", App: "redline", Role: "app",
+		req := apitypes.CMRecoveryWrapReq{Project: "acme", Environment: "prod", App: "redline", Role: "app",
 			KeyID: key.ID().String(), Recipient: "nobody", Wrapped: good}
 		w := cmAdminCall(t, admin, s.handleAPICMRecoveryWraps, http.MethodPost, apitypes.CMPathRecoveryWraps, req)
 		if w.Code != http.StatusNotFound {
@@ -255,7 +255,7 @@ func TestRecoveryWrapRefusesAnUnknownRecipientAndABadKeyID(t *testing.T) {
 	t.Run("key id is not canonical", func(t *testing.T) {
 		// The id becomes a keystore filename on every client, so "*" must never
 		// reach a directory scan. Same reason cmApprove validates it.
-		req := apitypes.CMRecoveryWrapReq{Environment: "prod", App: "redline", Role: "app",
+		req := apitypes.CMRecoveryWrapReq{Project: "acme", Environment: "prod", App: "redline", Role: "app",
 			KeyID: "*", Recipient: "ops", Wrapped: good}
 		w := cmAdminCall(t, admin, s.handleAPICMRecoveryWraps, http.MethodPost, apitypes.CMPathRecoveryWraps, req)
 		if w.Code != http.StatusBadRequest {
@@ -275,13 +275,13 @@ func TestRecoveryWrapIsIdempotentAndReplaceable(t *testing.T) {
 	s, admin, _ := cmRecoveryServer(t)
 	ops := recoveryFixtureKey(t)
 	addRecoveryRecipient(t, s, admin, "ops", ops)
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	key := configmgr.NewEnvKey()
 
 	post := func(replace bool) apitypes.CMRecoveryWrapResp {
 		t.Helper()
 		req := apitypes.CMRecoveryWrapReq{
-			Environment: addr.Environment, App: addr.App, Role: addr.Role,
+			Project: addr.Project, Environment: addr.Environment, App: addr.App, Role: addr.Role,
 			KeyID: key.ID().String(), Recipient: "ops",
 			Wrapped: wrapFor(t, ops.PublicKey(), addr, key), Replace: replace,
 		}
@@ -320,10 +320,10 @@ func TestRecoveryRecipientRemovalKeepsTheWraps(t *testing.T) {
 	s, admin, _ := cmRecoveryServer(t)
 	ops := recoveryFixtureKey(t)
 	addRecoveryRecipient(t, s, admin, "ops", ops)
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	key := configmgr.NewEnvKey()
 	req := apitypes.CMRecoveryWrapReq{
-		Environment: addr.Environment, App: addr.App, Role: addr.Role,
+		Project: addr.Project, Environment: addr.Environment, App: addr.App, Role: addr.Role,
 		KeyID: key.ID().String(), Recipient: "ops", Wrapped: wrapFor(t, ops.PublicKey(), addr, key),
 	}
 	if w := cmAdminCall(t, admin, s.handleAPICMRecoveryWraps, http.MethodPost, apitypes.CMPathRecoveryWraps, req); w.Code != http.StatusOK {
@@ -429,10 +429,10 @@ func TestCMRecoveryRoutesAreReachableAsBuilt(t *testing.T) {
 		t.Fatalf("add recipient through the mux: %d: %s", w.Code, w.Body.String())
 	}
 
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	key := configmgr.NewEnvKey()
 	if w := call(t, http.MethodPost, apitypes.CMPathRecoveryWraps, apitypes.CMRecoveryWrapReq{
-		Environment: addr.Environment, App: addr.App, Role: addr.Role,
+		Project: addr.Project, Environment: addr.Environment, App: addr.App, Role: addr.Role,
 		KeyID: key.ID().String(), Recipient: "ops", Wrapped: wrapFor(t, ops.PublicKey(), addr, key),
 	}); w.Code != http.StatusOK {
 		t.Fatalf("store wrap through the mux: %d: %s", w.Code, w.Body.String())

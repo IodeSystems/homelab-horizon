@@ -51,20 +51,26 @@ export function CMPromote({
   const [targetEnv, setTargetEnv] = useState("");
 
   const configs = useCMConfigs(
+    address.project.trim(),
     address.env.trim(),
     address.app.trim(),
     address.role.trim(),
   );
   const rows = [...(configs.data ?? [])].sort((a, b) => b.sequence - a.sequence);
 
-  // Environments hz has seen a machine register in. Not the set of environments
-  // that exist — a target can be blessed before anything runs there — so these
-  // are suggestions, not a list to choose from.
+  // Environments hz has seen a machine register in, within the same project —
+  // environment names are unique per project, not globally, so a suggestion
+  // from another project would name an environment this promotion can't
+  // reach. Not the set of environments that exist — a target can be blessed
+  // before anything runs there — so these are suggestions, not a list to
+  // choose from.
   const pending = useCMRegistrations("pending");
   const approved = useCMRegistrations("approved");
   const envs = [
     ...new Set(
-      [...(approved.data ?? []), ...(pending.data ?? [])].map((r) => r.environment),
+      [...(approved.data ?? []), ...(pending.data ?? [])]
+        .filter((r) => r.project === address.project.trim())
+        .map((r) => r.environment),
     ),
   ]
     .filter((e) => e && e !== address.env.trim())
@@ -200,7 +206,7 @@ export function CMPromote({
                 </Typography>
                 <Box sx={{ mt: 0.5 }}>
                   <CopyBox
-                    text={`hz config push ${gate.data.targetEnv}/${address.app.trim() || "<app>"}/${address.role.trim() || "<role>"}`}
+                    text={`hz config push ${address.project.trim() || "<project>"}/${gate.data.targetEnv}/${address.app.trim() || "<app>"}/${address.role.trim() || "<role>"}`}
                   />
                 </Box>
               </Alert>

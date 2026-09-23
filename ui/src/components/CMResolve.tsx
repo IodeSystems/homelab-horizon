@@ -153,6 +153,7 @@ export function CMResolve({
 
   const ready = addressComplete(address) && version.trim() !== "";
   const { data, isLoading, error } = useCMResolve(
+    address.project.trim(),
     address.env.trim(),
     address.app.trim(),
     address.role.trim(),

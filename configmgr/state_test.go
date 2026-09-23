@@ -17,7 +17,7 @@ func newState(t *testing.T) *State {
 	return s
 }
 
-var stateAddr = EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+var stateAddr = EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 
 func TestOpenStateRefusesARelativeRoot(t *testing.T) {
 	// A cwd-relative state directory means a repository that ships a hostile
@@ -176,12 +176,12 @@ func TestEnvKeyIsPerAddressAndWriteOnce(t *testing.T) {
 
 	// Another address on the same box is a different directory and a
 	// different key.
-	ops := EnvKeyAddr{Environment: "prod", App: "redline", Role: "ops"}
+	ops := EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "ops"}
 	if _, err := s.EnvKey(ops); !errors.Is(err, ErrNotEnrolled) {
 		t.Fatalf("EnvKey at %s = %v", ops, err)
 	}
 
-	fi, err := os.Stat(filepath.Join(s.Root(), "prod", "redline", "app", envKeyName))
+	fi, err := os.Stat(filepath.Join(s.Root(), "acme", "prod", "redline", "app", envKeyName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestEnvKeyFileCarriesItsOwnChecksum(t *testing.T) {
 	if err := s.PutEnvKey(stateAddr, NewEnvKey()); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(s.Root(), "prod", "redline", "app", envKeyName)
+	path := filepath.Join(s.Root(), "acme", "prod", "redline", "app", envKeyName)
 	blob, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -220,13 +220,19 @@ func TestEnvKeyFileCarriesItsOwnChecksum(t *testing.T) {
 func TestAddressSegmentsAreValidatedNeverInterpolated(t *testing.T) {
 	s := newState(t)
 	bad := []EnvKeyAddr{
-		{Environment: "..", App: "redline", Role: "app"},
-		{Environment: "prod/../../etc", App: "redline", Role: "app"},
-		{Environment: "prod", App: "", Role: "app"},
-		{Environment: "prod", App: "redline", Role: ""},
-		{Environment: "Prod", App: "redline", Role: "app"},
-		{Environment: "prod", App: "red.line", Role: "app"},
-		{Environment: strings.Repeat("a", maxNameLen+1), App: "redline", Role: "app"},
+		{Project: "acme", Environment: "..", App: "redline", Role: "app"},
+		{Project: "acme", Environment: "prod/../../etc", App: "redline", Role: "app"},
+		{Project: "acme", Environment: "prod", App: "", Role: "app"},
+		{Project: "acme", Environment: "prod", App: "redline", Role: ""},
+		{Project: "acme", Environment: "Prod", App: "redline", Role: "app"},
+		{Project: "acme", Environment: "prod", App: "red.line", Role: "app"},
+		{Project: "acme", Environment: strings.Repeat("a", maxNameLen+1), App: "redline", Role: "app"},
+		// The project is the first field checked, so it needs its own traversal
+		// and emptiness cases: an empty project is not a default, it is the
+		// field that says whose "prod" this is.
+		{Project: "..", Environment: "prod", App: "redline", Role: "app"},
+		{Project: "prod/../../etc", Environment: "prod", App: "redline", Role: "app"},
+		{Project: "", Environment: "prod", App: "redline", Role: "app"},
 	}
 	for _, addr := range bad {
 		if _, err := s.addrDir(addr); !errors.Is(err, ErrBadName) {
@@ -295,7 +301,7 @@ func TestCacheHoldsNoPlaintextAndNoClock(t *testing.T) {
 	if err := s.PutCache(stateAddr, "1.2.3", resp, nil); err != nil {
 		t.Fatal(err)
 	}
-	blob, err := os.ReadFile(filepath.Join(s.Root(), "prod", "redline", "app", cacheName))
+	blob, err := os.ReadFile(filepath.Join(s.Root(), "acme", "prod", "redline", "app", cacheName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +319,7 @@ func TestCacheDecodeIsStrict(t *testing.T) {
 	if err := s.PutCache(stateAddr, "1.2.3", ConfigResponse{ConfigID: "cfg"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(s.Root(), "prod", "redline", "app", cacheName)
+	path := filepath.Join(s.Root(), "acme", "prod", "redline", "app", cacheName)
 
 	// A field this build does not know is an error, not a field quietly
 	// defaulted — which is the bug class this project exists to kill.
@@ -344,7 +350,7 @@ func TestPutCacheIsAtomic(t *testing.T) {
 	if err := s.PutCache(stateAddr, "1.2.3", ConfigResponse{ConfigID: "first", Sequence: 1}, nil); err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(s.Root(), "prod", "redline", "app")
+	dir := filepath.Join(s.Root(), "acme", "prod", "redline", "app")
 	if err := s.PutCache(stateAddr, "1.2.3", ConfigResponse{ConfigID: "second", Sequence: 2}, s.Floors(stateAddr)); err != nil {
 		t.Fatal(err)
 	}
@@ -378,10 +384,13 @@ func TestAddressesListsWhatTheBoxHolds(t *testing.T) {
 	if got := s.Addresses(); len(got) != 0 {
 		t.Fatalf("Addresses on an empty tree = %v", got)
 	}
+	// A second project proves Addresses() walks the tree one level deeper than
+	// it used to: the project directory, not just environment/app/role.
 	want := []EnvKeyAddr{
-		{Environment: "prod", App: "redline", Role: "app"},
-		{Environment: "prod", App: "redline", Role: "ops"},
-		{Environment: "staging", App: "redline", Role: "app"},
+		{Project: "acme", Environment: "prod", App: "redline", Role: "app"},
+		{Project: "acme", Environment: "prod", App: "redline", Role: "ops"},
+		{Project: "acme", Environment: "staging", App: "redline", Role: "app"},
+		{Project: "globex", Environment: "prod", App: "redline", Role: "app"},
 	}
 	for _, a := range want {
 		if err := s.PutEnvKey(a, NewEnvKey()); err != nil {
@@ -389,7 +398,7 @@ func TestAddressesListsWhatTheBoxHolds(t *testing.T) {
 		}
 	}
 	// A directory with a cache but no key is not an address this box holds.
-	if err := s.PutCache(EnvKeyAddr{Environment: "dev", App: "redline", Role: "app"}, "1.2.3", ConfigResponse{}, nil); err != nil {
+	if err := s.PutCache(EnvKeyAddr{Project: "acme", Environment: "dev", App: "redline", Role: "app"}, "1.2.3", ConfigResponse{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	got := s.Addresses()
@@ -408,7 +417,7 @@ func TestCacheSizeIsCapped(t *testing.T) {
 	if err := s.PutCache(stateAddr, "1.2.3", ConfigResponse{ConfigID: "cfg"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(s.Root(), "prod", "redline", "app", cacheName)
+	path := filepath.Join(s.Root(), "acme", "prod", "redline", "app", cacheName)
 	if err := os.WriteFile(path, make([]byte, maxCacheFileSize+1), 0o600); err != nil {
 		t.Fatal(err)
 	}

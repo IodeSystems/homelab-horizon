@@ -64,11 +64,12 @@ type RecoveryRecipient struct {
 
 // RecoveryWrap is one environment key wrapped to one recovery recipient.
 //
-// Keyed by (environment, app, role, key id, recipient): one blob per key per
-// recipient. The fingerprint is recorded beside the blob so a listing can say
-// which key it is addressed to without re-deriving it from a recipient entry
-// that may since have been removed.
+// Keyed by (project, environment, app, role, key id, recipient): one blob per
+// key per recipient. The fingerprint is recorded beside the blob so a listing
+// can say which key it is addressed to without re-deriving it from a recipient
+// entry that may since have been removed.
 type RecoveryWrap struct {
+	Project     string `json:"project"`
 	Environment string `json:"environment"`
 	App         string `json:"app"`
 	Role        string `json:"role"`
@@ -86,10 +87,10 @@ type RecoveryWrap struct {
 	WrappedAt string `json:"wrapped_at,omitempty"`
 }
 
-// Addr renders the wrap's address in the <environment>/<app>/<role> form every
-// cm surface prints.
+// Addr renders the wrap's address in the
+// <project>/<environment>/<app>/<role> form every cm surface prints.
 func (w RecoveryWrap) Addr() string {
-	return w.Environment + "/" + w.App + "/" + w.Role
+	return w.Project + "/" + w.Environment + "/" + w.App + "/" + w.Role
 }
 
 // ValidateRecoveryRecipients is the Save-time check.
@@ -166,13 +167,18 @@ func (c *Config) FindRecoveryRecipient(name string) (RecoveryRecipient, bool) {
 }
 
 // FindRecoveryWrap returns the wrap stored for one (address, key id, recipient).
-func (c *Config) FindRecoveryWrap(environment, app, role, keyID, recipient string) (RecoveryWrap, bool) {
+//
+// The address includes the PROJECT. Without it two projects' rungs of the same
+// name share one wrap entry, and a backfill for one would report coverage for
+// the other — the same collision the project coordinate exists to refuse, in
+// the one store that has to be right when everything else is gone.
+func (c *Config) FindRecoveryWrap(project, environment, app, role, keyID, recipient string) (RecoveryWrap, bool) {
 	folded, err := CanonRecoveryName(recipient)
 	if err != nil {
 		return RecoveryWrap{}, false
 	}
 	for _, w := range c.RecoveryWraps {
-		if w.Environment == environment && w.App == app && w.Role == role && w.KeyID == keyID {
+		if w.Project == project && w.Environment == environment && w.App == app && w.Role == role && w.KeyID == keyID {
 			if got, err := CanonRecoveryName(w.Recipient); err == nil && got == folded {
 				return w, true
 			}
@@ -200,7 +206,8 @@ func (c *Config) FindRecoveryWrap(environment, app, role, keyID, recipient strin
 // prevent, arriving by the back door.
 func (c *Config) PutRecoveryWrap(w RecoveryWrap, replace bool) bool {
 	for i, have := range c.RecoveryWraps {
-		if have.Environment != w.Environment || have.App != w.App || have.Role != w.Role || have.KeyID != w.KeyID {
+		if have.Project != w.Project || have.Environment != w.Environment ||
+			have.App != w.App || have.Role != w.Role || have.KeyID != w.KeyID {
 			continue
 		}
 		a, errA := CanonRecoveryName(have.Recipient)

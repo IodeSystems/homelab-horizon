@@ -89,16 +89,16 @@ func exampleEstate() *config.Config {
 func exampleInstances() []Instance {
 	return []Instance{
 		// gw-1: two projects on one machine, and three slots of one of them.
-		{Machine: "gw-1", Environment: "prod", App: "git", Role: "app"},
-		{Machine: "gw-1", Environment: "prod", App: "idp", Role: "app"},
-		{Machine: "gw-1", Environment: "staging", App: "web", Role: "app"},
-		{Machine: "gw-1", Environment: "staging", App: "web", Role: "next"},
-		{Machine: "gw-1", Environment: "staging", App: "web", Role: "ops"},
+		{Machine: "gw-1", Project: "intern", Environment: "prod", App: "git", Role: "app"},
+		{Machine: "gw-1", Project: "intern", Environment: "prod", App: "idp", Role: "app"},
+		{Machine: "gw-1", Project: "storefront", Environment: "staging", App: "web", Role: "app"},
+		{Machine: "gw-1", Project: "storefront", Environment: "staging", App: "web", Role: "next"},
+		{Machine: "gw-1", Project: "storefront", Environment: "staging", App: "web", Role: "ops"},
 
-		{Machine: "app-1", Environment: "prod", App: "web", Role: "app"},
-		{Machine: "app-2", Environment: "prod", App: "web", Role: "app"},
+		{Machine: "app-1", Project: "storefront", Environment: "prod", App: "web", Role: "app"},
+		{Machine: "app-2", Project: "storefront", Environment: "prod", App: "web", Role: "app"},
 
-		{Machine: "an-1", Environment: "beta", App: "api", Role: "app"},
+		{Machine: "an-1", Project: "analytics", Environment: "beta", App: "api", Role: "app"},
 	}
 }
 
@@ -357,9 +357,12 @@ func TestTheUnitNameCannotCollideOnTheExampleEstate(t *testing.T) {
 
 	// 2. Every name unescapes to the address it came from.
 	for _, machine := range []string{"gw-1", "app-1", "app-2", "an-1"} {
+		// THE INSTANCE PART IS THREE-PART, on purpose: the project is already
+		// the unit-name PREFIX, so taking it from Address() would put it in
+		// twice and rename every unit on every box. See unitName.
 		want := map[string]bool{}
 		for _, inst := range perMachine[machine] {
-			want[inst.Address()] = true
+			want[inst.Environment+"/"+inst.App+"/"+inst.Role] = true
 		}
 		for _, u := range mustProject(t, g, machine).Units {
 			at := strings.Index(u.Name, "@")
@@ -502,7 +505,7 @@ func systemdUnescape(t *testing.T, s string) string {
 // in.
 func TestTwoInstancesAtOneAddressAreNamedNotDeduped(t *testing.T) {
 	inst := append(exampleInstances(),
-		Instance{Machine: "app-1", Environment: "prod", App: "web", Role: "app"})
+		Instance{Machine: "app-1", Project: "storefront", Environment: "prod", App: "web", Role: "app"})
 
 	mc := mustProject(t, Global{Config: exampleEstate(), Instances: inst}, "app-1")
 	if len(mc.Units) != 1 {
@@ -604,11 +607,24 @@ func TestAnEnvironmentWithNoMachineAppearsNowhere(t *testing.T) {
 // This test is the positive control for that join. If Service.Project ever
 // stops being consulted, app-1 falls back to the ambiguous environment name
 // and this fails.
-func TestTheAppCoordinateSuppliesTheProjectTheAddressLacks(t *testing.T) {
+// REPLACES TestTheAppCoordinateSuppliesTheProjectTheAddressLacks.
+//
+// That test asserted the backwards resolution: with no project on the address,
+// hz looked the APP name up as a service and took that service's project, with
+// a globally-unique environment name as a fallback and a gap naming
+// `hz service assign` when both roads closed. Its negative half deleted the
+// `web` service and required hz to refuse.
+//
+// All of that is gone. The address carries the project, so there is nothing to
+// derive, no service to consult and no ambiguity to refuse. What is worth
+// asserting now is the property the derivation was a means to: an estate where
+// several projects declare a rung called "prod" resolves each instance to its
+// OWN project's rung, and does so without reading cfg.Services at all.
+func TestTheAddressCarriesTheProject(t *testing.T) {
 	cfg := exampleEstate()
 
 	// Precondition, asserted rather than assumed: "prod" is not an identity in
-	// this estate.
+	// this estate. This is the whole reason the coordinate exists.
 	if n := len(cfg.EnvironmentsNamed("prod")); n < 2 {
 		t.Fatalf("precondition: %d projects declare \"prod\"; the ambiguity this test is about does not exist", n)
 	}
@@ -624,45 +640,77 @@ func TestTheAppCoordinateSuppliesTheProjectTheAddressLacks(t *testing.T) {
 		t.Fatalf("app-1 pinned to %q, want storefront/prod's 1.4.0", mc.Packages[0].Version)
 	}
 
-	// And the negative: take the service away and the address goes back to
-	// being ambiguous, refused rather than guessed.
+	// THE SERVICE RECORD IS NO LONGER CONSULTED. Deleting every service used to
+	// make app-1 unresolvable, because the app coordinate was the only road to
+	// the project. Now it changes nothing about the instance join.
 	cfg2 := exampleEstate()
-	var kept []config.Service
-	for _, s := range cfg2.Services {
-		if s.Name != "web" {
-			kept = append(kept, s)
-		}
-	}
-	cfg2.Services = kept
+	cfg2.Services = nil
 
 	mc2 := mustProject(t, Global{Config: cfg2, Instances: exampleInstances()}, "app-1")
-	if len(mc2.Units) != 0 || len(mc2.Packages) != 0 {
-		t.Fatalf("hz guessed a project for an ambiguous environment name: units=%+v packages=%+v", mc2.Units, mc2.Packages)
+	if len(mc2.Packages) == 0 {
+		t.Fatalf("removing every service broke the instance join, so something still derives the project: %+v", mc2.Unresolved)
 	}
-	why := gapFor(mc2, SectionInstances)
-	if !strings.Contains(why, "prod/web/app") || !strings.Contains(why, "no project coordinate") {
-		t.Fatalf("the ambiguity gap does not explain itself: %q", why)
-	}
-	if !strings.Contains(why, "hz service assign web") {
-		t.Fatalf("the gap does not name what would fix it: %q", why)
+	if mc2.Packages[0].Version != "1.4.0" {
+		t.Fatalf("app-1 pinned to %q with no services declared, want 1.4.0", mc2.Packages[0].Version)
 	}
 }
 
-// One app name, two projects. Nothing in the address breaks the tie and hz
-// must not pick — picking would install a client's version on another
-// client's box.
-func TestAnAppNamedByTwoProjectsIsRefused(t *testing.T) {
+// REPLACES TestAnAppNamedByTwoProjectsIsRefused.
+//
+// That test added a second service called "web" under client-a and required hz
+// to refuse rather than pick, because nothing in a three-part address broke the
+// tie. The tie no longer exists: two projects may both name an app "web" and
+// each instance says which one it is. So the assertion inverts — hz must now
+// resolve BOTH, correctly and differently.
+//
+// This is the case the whole change is for, and it is the same shape as
+// configmgr.TestCrossProjectReadIsRefused one layer up.
+func TestTwoProjectsMayNameOneApp(t *testing.T) {
 	cfg := exampleEstate()
 	cfg.Services = append(cfg.Services,
 		config.Service{Name: "web", Project: "client-a", Environment: "prod"})
 
-	mc := mustProject(t, Global{Config: cfg, Instances: exampleInstances()}, "app-1")
-	if len(mc.Packages) != 0 {
-		t.Fatalf("hz picked between two projects claiming the app: %+v", mc.Packages)
+	insts := append(exampleInstances(),
+		Instance{Machine: "app-9", Project: "client-a", Environment: "prod", App: "web", Role: "app"})
+
+	// storefront/prod declares 1.4.0; client-a/prod declares 2.1.0. Two boxes,
+	// the same (environment, app, role), two different answers.
+	mine := mustProject(t, Global{Config: cfg, Instances: insts}, "app-1")
+	if len(mine.Packages) == 0 || mine.Packages[0].Version != "1.4.0" {
+		t.Fatalf("app-1 = %+v, want storefront/prod's 1.4.0 (gaps: %+v)", mine.Packages, mine.Unresolved)
+	}
+	theirs := mustProject(t, Global{Config: cfg, Instances: insts}, "app-9")
+	if len(theirs.Packages) == 0 || theirs.Packages[0].Version != "2.1.0" {
+		t.Fatalf("app-9 = %+v, want client-a/prod's 2.1.0 (gaps: %+v)", theirs.Packages, theirs.Unresolved)
+	}
+	if mine.Packages[0].Name == theirs.Packages[0].Name {
+		t.Fatalf("both boxes got package %q; the project is not reaching the package name", mine.Packages[0].Name)
+	}
+}
+
+// An instance naming a rung hz does not declare is the narrowed meaning of the
+// instances gap, and the only one left. It is a fact about the CONFIG — the
+// rung was renamed, deleted, or never added — which an operator can fix, where
+// the old ambiguity was a fact about the address, which they could not.
+func TestAnInstanceOnAnUndeclaredRungIsAGapNotAGuess(t *testing.T) {
+	cfg := exampleEstate()
+	insts := []Instance{
+		{Machine: "app-1", Project: "storefront", Environment: "canary", App: "web", Role: "app"},
+	}
+
+	mc := mustProject(t, Global{Config: cfg, Instances: insts}, "app-1")
+	if len(mc.Units) != 0 || len(mc.Packages) != 0 {
+		t.Fatalf("hz guessed a rung it does not declare: units=%+v packages=%+v", mc.Units, mc.Packages)
 	}
 	why := gapFor(mc, SectionInstances)
-	if !strings.Contains(why, "client-a") || !strings.Contains(why, "storefront") {
-		t.Fatalf("the gap does not name both claimants: %q", why)
+	if !strings.Contains(why, "storefront/canary/web/app") {
+		t.Fatalf("the gap does not name the instance: %q", why)
+	}
+	// The gap must NOT tell an operator to run `hz service assign`. That
+	// command still exists for every other reason it did; it was the config
+	// manager's crutch and it is not the fix for this.
+	if strings.Contains(why, "hz service assign") {
+		t.Fatalf("the gap still names the deleted derivation's remedy: %q", why)
 	}
 }
 
@@ -671,12 +719,18 @@ func TestAnAppNamedByTwoProjectsIsRefused(t *testing.T) {
 // answer from "which project" and has a different fix.
 func TestAnAppOnARungItsProjectDoesNotDeclare(t *testing.T) {
 	inst := append(exampleInstances(),
-		Instance{Machine: "app-1", Environment: "qa", App: "web", Role: "app"})
+		Instance{Machine: "app-1", Project: "storefront", Environment: "qa", App: "web", Role: "app"})
 
 	mc := mustProject(t, Global{Config: exampleEstate(), Instances: inst}, "app-1")
 	why := gapFor(mc, SectionInstances)
-	if !strings.Contains(why, "declares no environment \"qa\"") {
-		t.Fatalf("the gap does not say the rung is missing: %q", why)
+	// The message is now config.LookupEnvironment's — the derivation that used
+	// to hand-write this sentence is deleted — so the assertion follows the
+	// wording it actually produces. What must NOT change is that the gap names
+	// the rung and the command that declares it: a gap an operator cannot act
+	// on is a gap that stays open, and that is the point the old test was
+	// making.
+	if !strings.Contains(why, "\"qa\"") || !strings.Contains(why, "storefront") {
+		t.Fatalf("the gap does not say which rung is missing: %q", why)
 	}
 	if !strings.Contains(why, "hz env add storefront/qa") {
 		t.Fatalf("the gap does not name the command that declares it: %q", why)

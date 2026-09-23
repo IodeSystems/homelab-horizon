@@ -99,7 +99,7 @@ func TestRecoveryWrapsRoundTripThroughJSON(t *testing.T) {
 	cfg := &Config{
 		RecoveryRecipients: []RecoveryRecipient{{Name: "ops", PublicKey: key, AddedAt: "2026-09-20T00:00:00Z"}},
 		RecoveryWraps: []RecoveryWrap{{
-			Environment: "staging", App: "redline", Role: "app",
+			Project: "acme", Environment: "staging", App: "redline", Role: "app",
 			KeyID: "0123456789abcdef", Recipient: "ops",
 			Fingerprint: "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF", Wrapped: "hzenv-blob",
 		}},
@@ -114,11 +114,11 @@ func TestRecoveryWrapsRoundTripThroughJSON(t *testing.T) {
 	if len(loaded.RecoveryRecipients) != 1 || loaded.RecoveryRecipients[0].PublicKey != key {
 		t.Fatalf("recipients did not survive the round trip: %+v", loaded.RecoveryRecipients)
 	}
-	w, ok := loaded.FindRecoveryWrap("staging", "redline", "app", "0123456789abcdef", "ops")
+	w, ok := loaded.FindRecoveryWrap("acme", "staging", "redline", "app", "0123456789abcdef", "ops")
 	if !ok || w.Wrapped != "hzenv-blob" {
 		t.Fatalf("wrap did not survive the round trip: %+v", loaded.RecoveryWraps)
 	}
-	if w.Addr() != "staging/redline/app" {
+	if w.Addr() != "acme/staging/redline/app" {
 		t.Fatalf("Addr() = %q", w.Addr())
 	}
 
@@ -140,7 +140,7 @@ func TestRecoveryWrapsRoundTripThroughJSON(t *testing.T) {
 
 func TestPutRecoveryWrapIsFirstWinsUnlessReplacing(t *testing.T) {
 	cfg := &Config{}
-	base := RecoveryWrap{Environment: "prod", App: "redline", Role: "app", KeyID: "0123456789abcdef", Recipient: "ops", Wrapped: "first"}
+	base := RecoveryWrap{Project: "acme", Environment: "prod", App: "redline", Role: "app", KeyID: "0123456789abcdef", Recipient: "ops", Wrapped: "first"}
 	if !cfg.PutRecoveryWrap(base, false) {
 		t.Fatal("the first wrap should have been written")
 	}
@@ -150,14 +150,14 @@ func TestPutRecoveryWrapIsFirstWinsUnlessReplacing(t *testing.T) {
 	if cfg.PutRecoveryWrap(second, false) {
 		t.Fatal("a second wrap for the same tuple overwrote a stored one without being asked")
 	}
-	if w, _ := cfg.FindRecoveryWrap("prod", "redline", "app", "0123456789abcdef", "ops"); w.Wrapped != "first" {
+	if w, _ := cfg.FindRecoveryWrap("acme", "prod", "redline", "app", "0123456789abcdef", "ops"); w.Wrapped != "first" {
 		t.Fatalf("stored wrap is %q, want the original", w.Wrapped)
 	}
 
 	if !cfg.PutRecoveryWrap(second, true) {
 		t.Fatal("replace was asked for and refused")
 	}
-	if w, _ := cfg.FindRecoveryWrap("prod", "redline", "app", "0123456789abcdef", "ops"); w.Wrapped != "second" {
+	if w, _ := cfg.FindRecoveryWrap("acme", "prod", "redline", "app", "0123456789abcdef", "ops"); w.Wrapped != "second" {
 		t.Fatalf("replace did not take: %q", w.Wrapped)
 	}
 	if len(cfg.RecoveryWraps) != 1 {
@@ -182,12 +182,12 @@ func TestRecoveryMutationsDoNotWriteThroughASharedSlice(t *testing.T) {
 	// slice a concurrent reader is holding. This is that torn read, staged.
 	live := &Config{
 		RecoveryRecipients: []RecoveryRecipient{{Name: "ops", PublicKey: testRecoveryKey(t)}},
-		RecoveryWraps:      []RecoveryWrap{{Environment: "prod", App: "redline", Role: "app", KeyID: "0123456789abcdef", Recipient: "ops", Wrapped: "original"}},
+		RecoveryWraps:      []RecoveryWrap{{Project: "acme", Environment: "prod", App: "redline", Role: "app", KeyID: "0123456789abcdef", Recipient: "ops", Wrapped: "original"}},
 	}
 	copyOfLive := *live
 
 	copyOfLive.PutRecoveryWrap(RecoveryWrap{
-		Environment: "prod", App: "redline", Role: "app",
+		Project: "acme", Environment: "prod", App: "redline", Role: "app",
 		KeyID: "0123456789abcdef", Recipient: "ops", Wrapped: "replaced",
 	}, true)
 	copyOfLive.RemoveRecoveryRecipient("ops")
@@ -207,7 +207,7 @@ func TestRemovingARecipientKeepsItsWraps(t *testing.T) {
 	// would destroy custody without removing access — the worst of both.
 	cfg := &Config{
 		RecoveryRecipients: []RecoveryRecipient{{Name: "ops", PublicKey: testRecoveryKey(t)}},
-		RecoveryWraps:      []RecoveryWrap{{Environment: "prod", App: "redline", Role: "app", KeyID: "0123456789abcdef", Recipient: "ops", Wrapped: "blob"}},
+		RecoveryWraps:      []RecoveryWrap{{Project: "acme", Environment: "prod", App: "redline", Role: "app", KeyID: "0123456789abcdef", Recipient: "ops", Wrapped: "blob"}},
 	}
 	if !cfg.RemoveRecoveryRecipient("OPS") {
 		t.Fatal("removal should fold the name")

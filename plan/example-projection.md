@@ -175,9 +175,12 @@ ci-1        segments: seg:intern · seg:storefront   ⚠ MULTI-HOMED (2)
 
 new-box     ⏳ pending approval — the ADDRESS is pending, not the box
             fingerprint  A1B2-C3D4-E5F6-0718-293A-4B5C     requested 8m ago
-            wants:  staging/web/app     ← (environment, app, role). No project:
-                    the address has no project coordinate; it is derived from
-                    the app. No Machine record declares new-box yet.
+            wants:  storefront/staging/web/app
+                    ← (project, environment, app, role), the config address.
+                      The project is CARRIED, not derived: it used to be worked
+                      out backwards from the app coordinate, which was an
+                      identity only while one project named each app.
+                      No Machine record declares new-box yet.
 ```
 
 **A multi-homed machine MUST carry a note, and `gw-1` is multi-homed.** It was
@@ -220,9 +223,9 @@ reverse. `cm_machines.enrolled_environment` is the config-manager environment
 the agent registered under — it is **not** a rung of §1, and reading it as one
 is a mistake the UI already guards with an "environment mismatch" chip.
 
-**Pending is per address, not per box** (migration 0009). The tuple is
-`(machine, environment, app, role)` and a new `--env` or a new role re-enters
-pending, so what is waiting on an approver is an *address*. The projection
+**Pending is per address, not per box** (migrations 0009 and 0013). The tuple is
+`(machine, project, environment, app, role)` and a new project, a new `--env` or
+a new role re-enters pending, so what is waiting on an approver is an *address*. The projection
 counts **approved registrations only**: a pending one is an address a machine
 has asked for and nobody has granted, and counting it would let a box put
 itself into another machine's projection by booting.
@@ -333,7 +336,15 @@ that shows a value the code must invent is a spec that asks it to lie.
 found and deliberately left open; the code adopted it on 2026-09-22 (§7.1):
 
 > **`<project>@<environment>-<app>-<role>.service`**, where the instance part
-> is `systemd-escape` of the instance address `environment/app/role`.
+> is `systemd-escape` of `environment/app/role`.
+
+**The project coordinate (2026-09-22, migration 0013) did NOT change this
+scheme, and must not.** `Instance` now carries a project and
+`Instance.Address()` renders all four parts, but the instance part of a unit
+name is still the three remaining fields — the project is already the prefix,
+and taking the instance part from `Address()` would put it in twice and rename
+every unit on every box as a side effect of an unrelated change. `unitName`
+builds the three explicitly and `projection_test.go` pins the rendered names.
 
 - *Why the project is the prefix, not a coordinate of the instance part:* the
   project **is** the package name. A systemd template unit `<project>@.service`
@@ -348,9 +359,9 @@ found and deliberately left open; the code adopted it on 2026-09-22 (§7.1):
   collides on a box hosting two rungs of one project, which is the same case
   the package-version conflict gap already names.
 - *Why it cannot collide:* a registration is unique on
-  `(machine, environment, app, role)` (migration 0009), so `(environment, app,
-  role)` is already unique on one machine. Prefixing with the project can only
-  narrow, never merge.
+  `(machine, project, environment, app, role)` (migration 0013), so
+  `(environment, app, role)` is already unique on one machine within one
+  project. Prefixing with the project can only narrow, never merge.
 - *Why `systemd-escape`:* `/` → `-` is systemd's own escape, so the instance
   parameter is literally `systemd-escape "prod/web/app"` and unescaping is
   unambiguous — a literal `-` inside a name escapes to `\x2d` rather than
@@ -421,9 +432,9 @@ project      1 ─── n  subprojects       tree; inherits the FEED and nothin
 project      1 ─── n  environments      name unique per project, never globally
 project      0 ─── n  segments          BY NAMING CONVENTION ONLY — see below
 machine      n ─── n  segments          usually 1; >1 is flagged and needs a note
-machine      1 ─── n  instances         (machine, environment, app, role), unique
-instance     n ─── 1  environment       the rung the registration names
-instance     n ─── 1  service           via the APP coordinate, which supplies the project
+machine      1 ─── n  instances         (machine, project, environment, app, role), unique
+instance     n ─── 1  environment       the rung the registration names, looked up directly
+instance     n ─── 1  service           by app name; the project is on the address, not derived
 service      1 ─── n  instances         0 is normal: `registry` has none
 service      1 ─── 1..2 backends        proxy.backend + deploy.next_backend; one active
 service      1 ─── n  domains
@@ -480,7 +491,8 @@ unit name), and they are kept here as the record of what moved:
    two assertions in `internal/server/handlers_agent_projection_test.go`.
    **The `units` gap was KEPT, not removed**, because it is still reachable:
    `Global.Instances` is an argument and nothing in a pure projection can know
-   that `cm_registrations` is unique on (machine, environment, app, role), so a
+   that `cm_registrations` is unique on (machine, project, environment, app,
+   role), so a
    caller handing the same address twice is told rather than quietly given one
    unit for two rows — `TestTwoInstancesAtOneAddressAreNamedNotDeduped` is the
    input that fires it.

@@ -330,18 +330,28 @@ func ParseMachinePrivateKey(s string) (*ecdh.PrivateKey, error) {
 	return priv, nil
 }
 
-// Addr names one value inside one config: the (environment, app, role) the
-// config is addressed by, plus the key name within it.
+// Addr names one value inside one config: the (project, environment, app,
+// role) the config is addressed by, plus the key name within it.
 //
 // It is NOT stored in the envelope. It is authenticated additional data, which
 // means the opener has to supply it from its own context and a mismatch is an
 // authentication failure rather than a wrong value quietly applied. That is the
 // whole point: hz holds the blobs and decides which one to serve, so without
-// this an agent asking for prod/redline/app#DB_PASSWORD would accept the
+// this an agent asking for acme/prod/redline/app#DB_PASSWORD would accept the
 // ciphertext of staging's, or of a different key in the same config, or an
 // older blessed value, and every one of those authenticates perfectly. An
 // address carried INSIDE the envelope could only ever agree with itself.
+//
+// Project leads, and it is not decoration. Environment names are unique per
+// project, not globally — every project gets to have a "prod" — so without it
+// the triple prod/redline/app is an identity only while exactly one project
+// declares an app called redline. Two projects that both do, sharing one key
+// (which `hz config key import` exists to arrange), read each other's secrets
+// with every authentication passing. The project is compiled into the client
+// beside the app name, so it passes the binding test the scheme rests on: the
+// opener knows it independently of the party serving the blob.
 type Addr struct {
+	Project     string
 	Environment string
 	App         string
 	Role        string
@@ -349,23 +359,23 @@ type Addr struct {
 }
 
 func (a Addr) String() string {
-	return a.Environment + "/" + a.App + "/" + a.Role + "#" + a.Key
+	return a.Project + "/" + a.Environment + "/" + a.App + "/" + a.Role + "#" + a.Key
 }
 
 func (a Addr) context() []byte {
-	return canonicalContext(labelAddr, a.Environment, a.App, a.Role, a.Key)
+	return canonicalContext(labelAddr, a.Project, a.Environment, a.App, a.Role, a.Key)
 }
 
 // EnvKeyAddr is the grant address this value lives under: the same
-// (environment, app, role), without the key name.
+// (project, environment, app, role), without the key name.
 func (a Addr) EnvKeyAddr() EnvKeyAddr {
-	return EnvKeyAddr{Environment: a.Environment, App: a.App, Role: a.Role}
+	return EnvKeyAddr{Project: a.Project, Environment: a.Environment, App: a.App, Role: a.Role}
 }
 
 // EnvKeyAddr names the address an environment key is granted AT: the
-// (environment, app, role) a registration is made for. There is no key name,
-// because a wrapped environment key is not one config's value — it opens every
-// value at that address.
+// (project, environment, app, role) a registration is made for. There is no key
+// name, because a wrapped environment key is not one config's value — it opens
+// every value at that address.
 //
 // It is authenticated additional data on a kind 0x02 envelope for the same
 // reason Addr is on a kind 0x01 one, and it stops being optional the moment a
@@ -374,23 +384,25 @@ func (a Addr) EnvKeyAddr() EnvKeyAddr {
 // staging/redline/ops can be relayed into the prod/redline/app slot: the agent
 // unwraps it perfectly — right recipient, right ECDH, right kind — and notices
 // only later, as a key-id mismatch the first time it tries to open a prod
-// value. That is detection after the fact, not refusal.
+// value. That is detection after the fact, not refusal. The project field
+// refuses the same relay across two projects' rungs of the same name.
 //
 // It passes the binding test the whole scheme rests on: the agent knows its own
-// (environment, app, role) from its own argv, so the address it authenticates
-// is not one hz could have chosen for it.
+// (project, environment, app, role) from its own argv and its own build, so the
+// address it authenticates is not one hz could have chosen for it.
 type EnvKeyAddr struct {
+	Project     string
 	Environment string
 	App         string
 	Role        string
 }
 
 func (a EnvKeyAddr) String() string {
-	return a.Environment + "/" + a.App + "/" + a.Role
+	return a.Project + "/" + a.Environment + "/" + a.App + "/" + a.Role
 }
 
 func (a EnvKeyAddr) context() []byte {
-	return canonicalContext(labelEnvKeyAddr, a.Environment, a.App, a.Role)
+	return canonicalContext(labelEnvKeyAddr, a.Project, a.Environment, a.App, a.Role)
 }
 
 // MachineAddr names one machine-scoped secret. Machine is hz's machine id, not
@@ -546,7 +558,7 @@ func Open(k EnvKey, addr Addr, envelope []byte) ([]byte, error) {
 // open it. An unapproved machine cannot decrypt anything even holding every
 // blob in the database, because nobody ever handed it the key.
 //
-// addr is the registration's (environment, app, role) — authenticated, stored
+// addr is the registration's (project, environment, app, role) — authenticated, stored
 // nowhere. The recipient fingerprint and the ECDH bind the grant to one
 // machine; addr binds it to one of that machine's registrations, which is a
 // different thing as soon as a box runs more than one. See EnvKeyAddr.
@@ -557,7 +569,7 @@ func WrapEnvKey(recipient *ecdh.PublicKey, addr EnvKeyAddr, k EnvKey) ([]byte, e
 // UnwrapEnvKey is the agent's side of the grant, run once at approval. The
 // recovered key is persisted at 0600 so later boots need no human.
 //
-// addr must be the agent's own (environment, app, role), taken from its own
+// addr must be the agent's own (project, environment, app, role), taken from its own
 // launch arguments rather than from hz's answer; a grant relayed into a
 // different registration fails authentication instead of unwrapping and going
 // wrong later.

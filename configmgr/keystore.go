@@ -18,8 +18,8 @@ import (
 // The client keystore: the tree on a client's disk that answers "which key
 // opens this envelope", and "which key should I seal with".
 //
-//	<root>/secrets/keys/<environment>/<app>/<role>/<label>.<keyid>.key
-//	~/.hz/secrets/keys/prod/redline/app/2026-09.a3f1c02b9d4e5f60.key
+//	<root>/secrets/keys/<project>/<environment>/<app>/<role>/<label>.<keyid>.key
+//	~/.hz/secrets/keys/acme/prod/redline/app/2026-09.a3f1c02b9d4e5f60.key
 //
 // hz never holds an environment key, so this tree is the only place one lives.
 // Everything below exists because the obvious implementation of a file lookup
@@ -27,8 +27,8 @@ import (
 //
 // # Nothing is ever interpolated into a path
 //
-// Every segment of that path is free text an operator chose: the environment,
-// the app, the role, and the label. An environment named "../../.." or a label
+// Every segment of that path is free text an operator chose: the project, the
+// environment, the app, the role, and the label. An environment named "../../.." or a label
 // of "2026-09/../.." walks out of the tree. Two independent defences, because
 // either alone has been enough to lose this argument before:
 //
@@ -636,12 +636,13 @@ func parseKeyFileName(name string) (string, KeyID, error) {
 	return label, id, nil
 }
 
-// addrSegments validates the three address fields that are path segments and
+// addrSegments validates the four address fields that are path segments and
 // returns the full segment list from the root. addr.Key is not one of them: the
 // config key name is bound into the AEAD, not into the path, and it has its own
 // charset (DB_PASSWORD is a legal key and an illegal directory name).
 func (ks *Keystore) addrSegments(addr Addr) ([]string, error) {
 	for _, f := range []struct{ what, value string }{
+		{"project", addr.Project},
 		{"environment", addr.Environment},
 		{"app", addr.App},
 		{"role", addr.Role},
@@ -650,9 +651,9 @@ func (ks *Keystore) addrSegments(addr Addr) ([]string, error) {
 			return nil, err
 		}
 	}
-	segments := make([]string, 0, len(keyTreePrefix)+3)
+	segments := make([]string, 0, len(keyTreePrefix)+4)
 	segments = append(segments, keyTreePrefix...)
-	return append(segments, addr.Environment, addr.App, addr.Role), nil
+	return append(segments, addr.Project, addr.Environment, addr.App, addr.Role), nil
 }
 
 func checkName(what, name string) error {

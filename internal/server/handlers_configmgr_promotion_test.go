@@ -57,7 +57,7 @@ func TestPromotionGateAllowsTheUpwardEdge(t *testing.T) {
 	promoEnvironments(s)
 	staging := configmgr.NewEnvKey()
 
-	src := cmBless(t, s, admin, staging, "staging", "redline", "app", "1.0.0", "", map[string]string{
+	src := cmBless(t, s, admin, staging, "redline", "staging", "redline", "app", "1.0.0", "", map[string]string{
 		"RETENTION_DAYS": "invariant",
 		"PUBLIC_URL":     "env",
 	})
@@ -98,7 +98,7 @@ func TestPromotionGateRefusesDownward(t *testing.T) {
 		},
 	})
 	prod := configmgr.NewEnvKey()
-	src := cmBless(t, s, admin, prod, "prod", "redline", "app", "1.0.0", "", map[string]string{"A": "invariant"})
+	src := cmBless(t, s, admin, prod, "redline", "prod", "redline", "app", "1.0.0", "", map[string]string{"A": "invariant"})
 
 	gate := promoGate(t, s, admin, src.ID, "staging")
 	if gate.Edge.OK {
@@ -122,7 +122,7 @@ func TestPromotionGateRefusesAMissingFrom(t *testing.T) {
 	s, admin := cmServer(t)
 	promoEnvironments(s)
 	staging := configmgr.NewEnvKey()
-	src := cmBless(t, s, admin, staging, "staging", "redline", "app", "1.0.0", "", map[string]string{"A": "invariant"})
+	src := cmBless(t, s, admin, staging, "redline", "staging", "redline", "app", "1.0.0", "", map[string]string{"A": "invariant"})
 
 	gate := promoGate(t, s, admin, src.ID, "orphan")
 	if gate.Edge.OK {
@@ -147,7 +147,7 @@ func TestPromotionGateRefusesAnUndeclaredTarget(t *testing.T) {
 	s, admin := cmServer(t)
 	promoEnvironments(s)
 	staging := configmgr.NewEnvKey()
-	src := cmBless(t, s, admin, staging, "staging", "redline", "app", "1.0.0", "", map[string]string{"A": "invariant"})
+	src := cmBless(t, s, admin, staging, "redline", "staging", "redline", "app", "1.0.0", "", map[string]string{"A": "invariant"})
 
 	gate := promoGate(t, s, admin, src.ID, "ghost")
 	if gate.Edge.OK {
@@ -167,14 +167,14 @@ func TestBlessAcceptsAnAwaitingValue(t *testing.T) {
 	prod := configmgr.NewEnvKey()
 	// The source carries PUBLIC_URL as environment-bound, so the gate has
 	// something to report about prod both before and after the blank is written.
-	src := cmBless(t, s, admin, staging, "staging", "redline", "app", "1.0.0", "", map[string]string{
+	src := cmBless(t, s, admin, staging, "redline", "staging", "redline", "app", "1.0.0", "", map[string]string{
 		"A":          "invariant",
 		"PUBLIC_URL": "env",
 	})
 
-	sealedA := configmgr.Seal(prod, configmgr.Addr{Environment: "prod", App: "redline", Role: "app", Key: "A"}, []byte("a"))
+	sealedA := configmgr.Seal(prod, configmgr.Addr{Project: "redline", Environment: "prod", App: "redline", Role: "app", Key: "A"}, []byte("a"))
 	req := apitypes.CMCreateConfigReq{
-		Environment: "prod", App: "redline", Role: "app", MinVer: "1.0.0",
+		Project: "redline", Environment: "prod", App: "redline", Role: "app", MinVer: "1.0.0",
 		Values: []apitypes.CMConfigValueReq{
 			{Key: "A", Binding: configmgr.BindingInvariant, Sealed: configmgr.EncodeEnvelope(sealedA),
 				KeyID: prod.ID().String(), SourceConfigID: src.ID},
@@ -230,14 +230,18 @@ func TestPullRefusesAConfigAwaitingAValue(t *testing.T) {
 	promoEnvironments(s)
 	staging := configmgr.NewEnvKey()
 	prod := configmgr.NewEnvKey()
-	src := cmBless(t, s, admin, staging, "staging", "redline", "app", "1.0.0", "", map[string]string{"A": "invariant"})
+	src := cmBless(t, s, admin, staging, "redline", "staging", "redline", "app", "1.0.0", "", map[string]string{"A": "invariant"})
 
 	box := cmRegister(t, s, "box-1", "prod", "redline", "app")
 	cmApproveBox(t, s, admin, box, prod)
 
-	sealedA := configmgr.Seal(prod, configmgr.Addr{Environment: "prod", App: "redline", Role: "app", Key: "A"}, []byte("a"))
+	// The target config lands under the BOX's project — cmTestProject, what
+	// cmRegister enrolled it under — not src's "redline": ResolveConfig runs on
+	// the registration's project, and a mismatch here would 404 the pull for a
+	// reason unrelated to what this test is checking.
+	sealedA := configmgr.Seal(prod, configmgr.Addr{Project: cmTestProject, Environment: "prod", App: "redline", Role: "app", Key: "A"}, []byte("a"))
 	req := apitypes.CMCreateConfigReq{
-		Environment: "prod", App: "redline", Role: "app", MinVer: "1.0.0",
+		Project: cmTestProject, Environment: "prod", App: "redline", Role: "app", MinVer: "1.0.0",
 		Values: []apitypes.CMConfigValueReq{
 			{Key: "A", Binding: configmgr.BindingInvariant, Sealed: configmgr.EncodeEnvelope(sealedA),
 				KeyID: prod.ID().String(), SourceConfigID: src.ID},
@@ -250,7 +254,7 @@ func TestPullRefusesAConfigAwaitingAValue(t *testing.T) {
 	}
 
 	w := cmMachineCall(t, s.handleAPICMConfig, http.MethodPost, "/api/v1/cm/config", configmgr.ConfigRequest{
-		Machine: "box-1", Environment: "prod", App: "redline", Role: "app", Version: "1.2.0",
+		Machine: "box-1", Project: cmTestProject, Environment: "prod", App: "redline", Role: "app", Version: "1.2.0",
 	})
 	if w.Code != http.StatusConflict {
 		t.Fatalf("pull: status %d, want 409: %s", w.Code, w.Body.String())
