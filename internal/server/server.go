@@ -1110,6 +1110,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// range, an interface and the addressed members on it.
 	mux.HandleFunc("/api/v1/segments", s.handleAPISegments)
 	mux.HandleFunc("/api/v1/segments/add", s.handleAPISegmentAdd)
+	mux.HandleFunc("/api/v1/segments/set", s.handleAPISegmentSet)
 	mux.HandleFunc("/api/v1/segments/rm", s.handleAPISegmentRm)
 	// What hz says one machine should look like, for a human. The PURE
 	// projection and nothing composed onto it — the agent's own poll
