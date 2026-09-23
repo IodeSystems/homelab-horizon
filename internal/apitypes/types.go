@@ -1848,6 +1848,7 @@ type CMRegistrationResp struct {
 	ID          string `json:"id"`
 	MachineID   string `json:"machineId"`
 	MachineName string `json:"machineName"`
+	Project     string `json:"project"`
 	Environment string `json:"environment"`
 	App         string `json:"app"`
 	Role        string `json:"role"`
@@ -2006,6 +2007,7 @@ type CMConfigValueReq struct {
 // CMCreateConfigReq blesses a config. Ranges are immutable afterwards, so this
 // is the only moment the operator is present to be told no.
 type CMCreateConfigReq struct {
+	Project     string             `json:"project"`
 	Environment string             `json:"environment"`
 	App         string             `json:"app"`
 	Role        string             `json:"role"`
@@ -2030,6 +2032,7 @@ type CMConfigValueResp struct {
 // CMConfigResp is one blessed config.
 type CMConfigResp struct {
 	ID          string              `json:"id"`
+	Project     string              `json:"project"`
 	Environment string              `json:"environment"`
 	App         string              `json:"app"`
 	Role        string              `json:"role"`
@@ -2086,6 +2089,13 @@ type CMPromotionGateResp struct {
 // operator may override the refusal, and only a not-upward refusal ever is — a
 // missing edge is a declaration that does not exist, and no flag can invent it.
 type CMPromotionEdgeResp struct {
+	// Project is the project whose rungs these are. It is the project the
+	// CALLER NAMED, not one hz worked out: `hz config promote --project` sends
+	// it, and the promotion gate reads config.Environments to check the edge.
+	// It used to be "the project we resolved for you" — a narrowing hint that
+	// was required only when a bare environment name was ambiguous — which was
+	// the config address's missing project coordinate showing through on one
+	// surface. The address names the project now; this field only echoes it.
 	Project       string `json:"project,omitempty"`
 	SourceEnv     string `json:"sourceEnv"`
 	SourcePosture string `json:"sourcePosture,omitempty"`
@@ -2113,6 +2123,7 @@ type CMCurrentKeyReq struct {
 }
 
 type CMCurrentKeyResp struct {
+	Project     string `json:"project"`
 	Environment string `json:"environment"`
 	App         string `json:"app"`
 	Role        string `json:"role"`

@@ -105,7 +105,7 @@ and one app may hold several (`{app, ops}` on one box). The **key address is
 exactly the config address** — see [Keys](#keys-are-symmetric-per-environment-app-role).
 
 Each config carries **`minVer` / `maxVer`**. Resolution: take every config for
-the `(environment, app, role)`, keep those whose range contains the running
+the `(project, environment, app, role)`, keep those whose range contains the running
 version, **take the last**. The newest config always has an open `maxVer`, so the
 common case has exactly one candidate and ranges only do work on rollback.
 
@@ -210,7 +210,7 @@ on startup" means a 3am OOM-restart on prod blocks until a human wakes up. So:
 
 **The machine enrols once; processes fetch per role.** One machine identity, one
 keypair — but **one wrapped key per registration**, because the key address is
-`(environment, app, role)` and a box may run several. `cm_machines` currently
+`(project, environment, app, role)` and a box may run several. `cm_machines` currently
 holds a single `wrapped_env_key`, which is wrong on both counts; it moves to the
 registration in `0009`.
 
@@ -323,7 +323,7 @@ plaintext is a client.
     promote(addr, ciphertext) -> (addr, ciphertext)
 
 a method on a client already holding the keyset, so keys are not a per-call
-argument. `addr` is `(environment, app, role)`; the key name is not a parameter
+argument. `addr` is `(project, environment, app, role)`; the key name is not a parameter
 because promote iterates a config, but it **is** bound into each value's AAD by
 the re-seal underneath — without it hz could serve `ANALYTICS_KEY`'s blob in the
 `DB_PASSWORD` slot of the same config and it would authenticate.
@@ -384,7 +384,7 @@ openable ciphertext at the identical address), and `0008`'s CHECK requires
 Keys live with the client, never with hz — hz stores blobs it cannot open, so it
 has no key to keep.
 
-    ~/.hz/secrets/keys/<environment>/<app>/<role>/<label>.<keyid>.key
+    ~/.hz/secrets/keys/<project>/<environment>/<app>/<role>/<label>.<keyid>.key
     ~/.hz/secrets/keys/prod/redline/app/2026-09.a3f1c02b9d4e5f60.key
 
 **Addressed by `(environment, app, role, keyid)`.** The key id is not optional:
@@ -428,7 +428,7 @@ after any copy.
 1. **"Newest" is a property of the file's CONTENTS.** A key file holds
    `{key material, created_at, label}`; current = max `created_at`. Filenames stay
    cosmetic and cannot cause a wrong choice.
-2. **hz stores a current key id per `(environment, app, role)`** as advisory
+2. **hz stores a current key id per `(project, environment, app, role)`** as advisory
    metadata. It already handles key ids, so this leaks nothing new, and it is what
    makes every client learn a rotation happened instead of each laptop drifting
    alone.
@@ -491,8 +491,8 @@ pending, and only an approval delivers that address's key.
 path:
 
     <state>/machine.key                            ← one keypair per machine
-    <state>/<env>/<app>/<role>/config.key          ← unwrapped, per registration
-    <state>/<env>/<app>/<role>/last-known-good     ← cache, scoped by layout
+    <state>/<proj>/<env>/<app>/<role>/config.key          ← unwrapped, per registration
+    <state>/<proj>/<env>/<app>/<role>/last-known-good     ← cache, scoped by layout
 
 A box restarted with a different `--env` looks in a directory that does not
 exist, so it cannot boot the other environment's cache. If state exists for a
@@ -749,7 +749,7 @@ plaintext values had none — hz could substitute them freely. See
 Two residual leaks, both deliberate: **key names** (the shape of the config) and
 **the fleet map** (which machines run which addresses).
 
-### Keys are symmetric, per (environment, app, role)
+### Keys are symmetric, per (project, environment, app, role)
 
 **Requirement (owner):** an operator must be able to paste a key to **see and
 debug deltas** as well as submit new values. That forces symmetric keys — every
@@ -1289,7 +1289,7 @@ them are flag days:
   role)`. This is what makes the `--env` fail-closed claim true; today it is
   false. `cm_machines.environment` stops being meaningful.
 - **Wrapped key moves to the registration**, since the key address is
-  `(environment, app, role)` and a box may run several.
+  `(project, environment, app, role)` and a box may run several.
 - **Lineage on the value** — origin discriminator plus a nullable source config
   id — and **relax the `binding='secret' ⇒ ciphertext NOT NULL` CHECK** so a
   tombstone can null the bytes and keep the row.

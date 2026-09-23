@@ -753,15 +753,32 @@ that changes hz's shape.
     The local box is served declared or not — requiring a declaration would
     404 a live gateway's agent the day this shipped.
 
-    **The join is the one `example-projection.md` §5 shows the output of**, and
-    it needed a coordinate the registration record does not have: an address is
+    **The join is the one `example-projection.md` §5 shows the output of.** It
+    needed a coordinate the registration record did not have: an address was
     `(environment, app, role)` and an environment name is unique PER PROJECT,
-    so `prod/web/app` is ambiguous on its face — §1 has six projects declaring
-    a "prod". THE APP COORDINATE SUPPLIES THE PROJECT: `Service` already
-    carries `Project`, for this exact reason by its own doc comment, so `web`
-    resolves to storefront and the rung is then looked up inside it. A globally
-    unique environment name is the fallback; both roads closed is a gap naming
-    `hz service assign`, never a guess. Only APPROVED registrations count — a
+    so `prod/web/app` was ambiguous on its face — §1 has six projects declaring
+    a "prod". hz used to resolve it BACKWARDS, from the app coordinate:
+    `Service` carries `Project`, so `web` resolved to storefront and the rung
+    was looked up inside it, with a globally-unique environment name as the
+    fallback and a gap naming `hz service assign` when both roads closed.
+
+    **That derivation is deleted as of 2026-09-22.** The address is now
+    `(project, environment, app, role)` — migration `0013`, and
+    `configmgr.Addr`/`EnvKeyAddr` carry the project as the FIRST field of the
+    authenticated additional data. `resolveEnvironment` is one line,
+    `cfg.LookupEnvironment(inst.Project, inst.Environment)`; the service→project
+    map, the globally-unique fallback, the ambiguity branch and the exported
+    `ResolveEnvironment` are gone, and the version-drift join calls
+    `cfg.LookupEnvironment` directly because there is no longer a guess for two
+    callers to disagree about. The instances gap survives with a narrower
+    meaning — an instance naming a rung hz does not declare — and no longer
+    names `hz service assign`, which keeps existing for every other reason it
+    did. Why it was worth a flag day rather than a convention: an environment
+    key can be installed at several addresses (`hz config key import`), and once
+    it is, the AAD is the only thing between two projects' rungs of the same
+    name — a three-field AAD does not name the project, and the cross-project
+    read was demonstrated. `configmgr.TestCrossProjectReadIsRefused` is the
+    standing proof it is now refused. Only APPROVED registrations count — a
     pending one is an address a box asked for and nobody granted.
 
     **Two things `example-projection.md` expressed that the code could not.**
@@ -775,11 +792,20 @@ that changes hz's shape.
     is the prefix because the project IS the package name that ships the
     template unit, and all three of environment/app/role are in the instance
     part because dropping any one collides on this estate. It cannot collide —
-    a registration is unique on `(machine, environment, app, role)` (0009) and
-    the escape is reversible, so the name is a key. `systemd-escape` is
-    implemented in-package rather than shelled out, because the projection is
+    a registration is unique on `(machine, project, environment, app, role)`
+    (0013) and the escape is reversible, so the name is a key. `systemd-escape`
+    is implemented in-package rather than shelled out, because the projection is
     pure. The `units` gap stayed: it now catches a CALLER that hands the same
     address twice, which nothing inside a pure function can rule out.
+
+    **THE PROJECT COORDINATE DID NOT CHANGE THIS SCHEME, and must not.**
+    `Instance` now carries a project and `Instance.Address()` renders it, but
+    the instance part of a unit name is still the THREE-part
+    `environment/app/role` — the project is already the prefix, and taking it
+    from `Address()` would put it in twice and rename every unit on every box as
+    a side effect. `unitName` builds the three fields explicitly and
+    `projection_test.go` pins the rendered names byte for byte. Anyone
+    "tidying" `unitName` to use `Address()` is breaking this.
 
     (b) **`serial`** has no producer and `MachineConfig.Serial` is always 0.
     §5 no longer asks for a serial pair at all — item 11 chose a content hash

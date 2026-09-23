@@ -12,9 +12,9 @@ package apitypes
 // screen puts them side by side".
 //
 // THE ROWS ARE INSTANCES, NOT MACHINES. An instance is
-// (machine, environment, app, role) and several share a box — that is why the
-// observed version lives on the registration and not on the machine. A row here
-// is one registration.
+// (machine, project, environment, app, role) and several share a box — that is
+// why the observed version lives on the registration and not on the machine. A
+// row here is one registration.
 //
 // # This is not the agent channel, and its clock is not that clock
 //
@@ -111,12 +111,25 @@ const (
 	// same and cannot say which is newer.
 	VersionDriftNotComparable = "not-comparable"
 
-	// VersionDriftUnresolved — hz cannot work out which project's rung this
-	// instance is on, so it has no declared version to compare at all. A
-	// registration's address is environment/app/role with no project
-	// coordinate, and an environment name is unique per project rather than
-	// globally. Why carries the projection's own message, which names the `hz`
-	// command that closes it.
+	// VersionDriftUnresolved — the instance names a rung hz does not declare,
+	// so there is no declared version to compare against at all.
+	//
+	// THE MEANING NARROWED WHEN THE PROJECT JOINED THE ADDRESS, and the state
+	// did not go away. It used to mean "hz cannot work out which project's rung
+	// this is", because a registration's address was environment/app/role and
+	// the project had to be derived backwards from the app name; two projects
+	// declaring one app name, or an app no service named, both landed here.
+	// That derivation is gone — the address carries the project now — so what
+	// is left is the honest remaining cause: the registration names a project
+	// hz does not declare, or a rung that project does not declare.
+	//
+	// It is reachable and must stay reachable. A box is registered by ITS OWN
+	// compiled-in project and its own launch flags; hz's declared config is
+	// edited separately, so an instance naming a rung that was renamed, not yet
+	// added, or deleted is an ordinary state and the one this verdict is for.
+	// The difference is that it is now a fact about the CONFIG, which an
+	// operator can fix, rather than an ambiguity in the address, which they
+	// could not. Why names the rung.
 	VersionDriftUnresolved = "unresolved"
 )
 
@@ -172,19 +185,22 @@ type VersionDriftResponse struct {
 // neither is rendered as a version and neither is rendered as drift: Drift says
 // which, Why says it in a sentence.
 type InstanceVersion struct {
-	// The instance's identity: (machine, environment, app, role), plus the
-	// address hz prints everywhere else and the project the rung belongs to.
+	// The instance's identity: (machine, project, environment, app, role),
+	// plus the address hz prints everywhere else.
 	Machine     string `json:"machine"`
 	Environment string `json:"environment"`
 	App         string `json:"app"`
 	Role        string `json:"role"`
-	// Address is environment/app/role, the form the CLI and the approval queue
-	// already print. Carried rather than left to the client to join, so two
-	// screens cannot punctuate it differently.
+	// Address is project/environment/app/role, the form the CLI and the
+	// approval queue already print. Carried rather than left to the client to
+	// join, so two screens cannot punctuate it differently.
 	Address string `json:"address"`
-	// Project is the project whose rung this is. Empty when Drift is
-	// "unresolved" — hz could not work it out, which is the whole of that
-	// verdict.
+	// Project is the project whose rung this is. It is CARRIED on the
+	// registration address, not derived: it used to be worked out backwards
+	// from the app name and was therefore empty exactly when that derivation
+	// failed. It is now always present, including when Drift is "unresolved" —
+	// an instance that names a rung hz does not declare still knows which rung
+	// it named, and saying so is what makes the verdict actionable.
 	Project string `json:"project,omitempty"`
 
 	// DesiredVersion is what the rung DECLARES (config.Environment.Version).

@@ -203,7 +203,7 @@ func cmRemove(c *client, args []string) error {
 	} else {
 		fmt.Println("  registrations that will be destroyed:")
 		for _, reg := range m.Registrations {
-			addr := configmgr.EnvKeyAddr{Environment: reg.Environment, App: reg.App, Role: reg.Role}
+			addr := configmgr.EnvKeyAddr{Project: reg.Project, Environment: reg.Environment, App: reg.App, Role: reg.Role}
 			note := ""
 			if reg.State == configmgr.StateApproved {
 				grants++

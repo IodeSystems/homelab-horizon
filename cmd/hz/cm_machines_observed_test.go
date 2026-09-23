@@ -13,10 +13,10 @@ import (
 func observedMachine(currentVer, nextVer, at string) apitypes.CMMachineResp {
 	m := stubMachine()
 	m.Registrations = []apitypes.CMRegistrationResp{
-		{ID: "reg-1", Environment: "prod", App: "redline", Role: "current",
+		{ID: "reg-1", Project: "acme", Environment: "prod", App: "redline", Role: "current",
 			State: configmgr.StateApproved, Version: "1.2.0",
 			ObservedVersion: currentVer, ObservedAt: at},
-		{ID: "reg-2", Environment: "prod", App: "redline", Role: "next",
+		{ID: "reg-2", Project: "acme", Environment: "prod", App: "redline", Role: "next",
 			State: configmgr.StateApproved, Version: "1.2.0",
 			ObservedVersion: nextVer, ObservedAt: at},
 	}

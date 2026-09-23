@@ -551,6 +551,7 @@ func (s *Server) instancesForProjection() []projection.Instance {
 			}
 			out = append(out, projection.Instance{
 				Machine:     m.Name,
+				Project:     r.Project,
 				Environment: r.Environment,
 				App:         r.App,
 				Role:        r.Role,

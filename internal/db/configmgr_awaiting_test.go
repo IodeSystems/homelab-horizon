@@ -26,7 +26,7 @@ func TestAwaitingValueIsDistinguishableFromAbsent(t *testing.T) {
 	d := open(t)
 	admin := newUser(t, d, "carl")
 
-	src, err := d.CreateConfig(ctx, "staging", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
+	src, err := d.CreateConfig(ctx, "acme", "staging", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
 		{Key: "RETENTION_DAYS", Binding: BindingInvariant, Ciphertext: sealed("30"), KeyID: "envkey-staging"},
 		{Key: "PUBLIC_URL", Binding: BindingEnv, Ciphertext: sealed("https://staging"), KeyID: "envkey-staging"},
 	})
@@ -36,7 +36,7 @@ func TestAwaitingValueIsDistinguishableFromAbsent(t *testing.T) {
 
 	// The promotion: the invariant re-sealed under prod's key, the
 	// environment-bound key declared and left blank.
-	promoted, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
+	promoted, err := d.CreateConfig(ctx, "acme", "prod", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
 		{Key: "RETENTION_DAYS", Binding: BindingInvariant, Ciphertext: sealed("30"),
 			KeyID: "envkey-prod", Origin: OriginPromoted, SourceConfigID: src.ID},
 		{Key: "PUBLIC_URL", Binding: BindingEnv, Origin: OriginAwaiting, SourceConfigID: src.ID},
@@ -101,9 +101,9 @@ func TestAwaitingIsNotATombstone(t *testing.T) {
 	ctx := context.Background()
 	d := open(t)
 	admin := newUser(t, d, "carl")
-	src := blessOpen(t, ctx, d, "staging", "redline", "app", "1.0.0", admin.ID)
+	src := blessOpen(t, ctx, d, "acme", "staging", "redline", "app", "1.0.0", admin.ID)
 
-	cfg, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
+	cfg, err := d.CreateConfig(ctx, "acme", "prod", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
 		{Key: "DOOMED", Binding: BindingEnv, Ciphertext: sealed("x"), KeyID: "envkey-prod"},
 		{Key: "BLANK", Binding: BindingEnv, Origin: OriginAwaiting, SourceConfigID: src.ID},
 	})
@@ -157,7 +157,7 @@ func TestAwaitingValueRefusals(t *testing.T) {
 	ctx := context.Background()
 	d := open(t)
 	admin := newUser(t, d, "carl")
-	src := blessOpen(t, ctx, d, "staging", "redline", "app", "1.0.0", admin.ID)
+	src := blessOpen(t, ctx, d, "acme", "staging", "redline", "app", "1.0.0", admin.ID)
 
 	for _, tc := range []struct {
 		name  string
@@ -184,7 +184,7 @@ func TestAwaitingValueRefusals(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := d.CreateConfig(ctx, "prod", "redline", "other", "1.0.0", "", admin.ID, []ConfigValue{tc.value})
+			_, err := d.CreateConfig(ctx, "acme", "prod", "redline", "other", "1.0.0", "", admin.ID, []ConfigValue{tc.value})
 			if err == nil {
 				t.Fatal("accepted a malformed awaiting value")
 			}
@@ -201,7 +201,7 @@ func TestOmittedValueIsStillRefused(t *testing.T) {
 	d := open(t)
 	admin := newUser(t, d, "carl")
 
-	_, err := d.CreateConfig(ctx, "prod", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
+	_, err := d.CreateConfig(ctx, "acme", "prod", "redline", "app", "1.0.0", "", admin.ID, []ConfigValue{
 		{Key: "FORGOTTEN", Binding: BindingEnv, KeyID: "envkey-prod"},
 	})
 	if err == nil {

@@ -280,8 +280,8 @@ const (
 	SectionInstances = "instances"
 )
 
-// Instance is one (machine, environment, app, role) a box has booted as — a
-// registration, flattened to values.
+// Instance is one (machine, project, environment, app, role) a box has booted
+// as — a registration, flattened to values.
 //
 // It arrives as an ARGUMENT rather than being read, because registrations live
 // in hz's database and a pure function may not open one. The caller that owns
@@ -291,18 +291,24 @@ const (
 //
 // Machine is the machine NAME (cm_machines.name), not the row id: the config's
 // Machine record is keyed by name and this is the field the two are joined on.
+//
+// Project is CARRIED, not derived. It used to be worked out backwards from the
+// app coordinate — app name -> service -> project — which was an identity only
+// while exactly one project declared each app name, and which produced a gap
+// whenever it was not. The registration address now names it, so the question
+// the derivation answered no longer exists.
 type Instance struct {
 	Machine     string
+	Project     string
 	Environment string
 	App         string
 	Role        string
 }
 
 // Address is the instance's address as hz prints it everywhere else,
-// environment/app/role. No project: see the note on Project's environment
-// resolution for why that is the interesting part.
+// project/environment/app/role.
 func (i Instance) Address() string {
-	return i.Environment + "/" + i.App + "/" + i.Role
+	return i.Project + "/" + i.Environment + "/" + i.App + "/" + i.Role
 }
 
 // Global is everything the projection reads: hz's declared config plus the
@@ -457,8 +463,15 @@ func projectInstances(mc *MachineConfig, cfg *config.Config, all []Instance, mac
 	for _, inst := range mine {
 		env, err := resolveEnvironment(cfg, inst)
 		if err != nil {
-			mc.gap(SectionInstances, ReasonUnmodelled, "instance "+inst.Address()+" cannot be resolved to a project: "+err.Error()+
-				". It contributes no package, feed or unit — a guess here would pin this machine to another project's version.")
+			// THE REMEDY IS NAMED HERE, not inside the lookup. The deleted
+			// backwards resolution built this sentence itself, because it was
+			// the only thing that knew which project it had landed on; the
+			// address knows now, so the command is exact rather than a guess
+			// about which project the operator meant. A gap an operator cannot
+			// act on is a gap that stays open.
+			mc.gap(SectionInstances, ReasonUnmodelled, "instance "+inst.Address()+" names a rung hz does not declare: "+err.Error()+
+				" — `hz env add "+inst.Project+"/"+inst.Environment+" --posture <dev|staging|prod>` declares the rung."+
+				" It contributes no package, feed or unit — a guess here would pin this machine to another project's version.")
 			continue
 		}
 
@@ -569,12 +582,20 @@ func projectInstances(mc *MachineConfig, cfg *config.Config, all []Instance, mac
 //     which is the same case the package-version conflict gap already names.
 //
 // AND IT CANNOT COLLIDE. A registration is unique on
-// (machine, environment, app, role) — migration 0009 — so the triple is
+// (machine, project, environment, app, role) — migration 0013 — so the tuple is
 // already unique on one machine, systemdEscape is injective (it is reversible;
 // see its doc comment), and prefixing with the project can only narrow the
 // name space, never merge two names into one.
+//
+// THE PROJECT COORDINATE DID NOT CHANGE THIS SCHEME, and must not. Instance
+// now carries a project and Instance.Address() renders it, so the instance part
+// is built from the three remaining fields EXPLICITLY rather than from
+// Address() — otherwise the project would appear twice in every unit name and
+// every unit on every box would be renamed as a side effect of a change that
+// has nothing to do with systemd. projection_test.go pins the rendered names
+// byte for byte.
 func unitName(project string, inst Instance) string {
-	return project + "@" + systemdEscape(inst.Address()) + ".service"
+	return project + "@" + systemdEscape(inst.Environment+"/"+inst.App+"/"+inst.Role) + ".service"
 }
 
 // unitNameLiteral is what systemd leaves alone inside a unit name: its
@@ -636,83 +657,30 @@ func escapeByte(b *strings.Builder, c byte) {
 	b.WriteByte(hexDigits[c&0x0f])
 }
 
-// resolveEnvironment answers the one question the registration record cannot:
-// WHICH PROJECT is this instance's?
+// resolveEnvironment finds the rung an instance names. It is a direct lookup,
+// and that is the whole of it.
 //
-// A registration's address is (environment, app, role) and carries no project,
-// while an environment name is unique PER PROJECT rather than globally —
-// example-projection.md §1 has six projects declaring an environment called
-// "prod". So the environment name alone is not an identity and hz has to get
-// the project from somewhere else.
+// It used to be a derivation. A registration's address was (environment, app,
+// role) and carried no project, while an environment name is unique PER PROJECT
+// rather than globally — example-projection.md §1 has six projects declaring an
+// environment called "prod" — so hz had to get the project from somewhere else.
+// It got it from the APP coordinate: app name -> the service of that name ->
+// that service's project, with a fallback to a globally-unique environment name
+// and an ambiguity error when two projects declared the same app name. There
+// was also an exported ResolveEnvironment so the version-drift join could not
+// disagree with the projection about which project `prod/web/app` was on.
 //
-// IT GETS IT FROM THE APP COORDINATE, through a record that already exists.
-// Service carries Project and Environment for exactly this reason — its own
-// doc comment says naming them "lets a service be joined to the config
-// manager, whose addresses are environment/app/role". The app coordinate IS
-// the service name, so `prod/web/app` resolves through the service called
-// `web` to the project that declares it, and the environment is then looked up
-// within that project.
+// All of it is gone, because the address names the project now. There is no
+// derivation for two callers to disagree about, so internal/server calls
+// cfg.LookupEnvironment directly rather than through an export whose only job
+// was to be the single copy of a guess.
 //
-// The service's OWN environment is deliberately not required to match. A
-// service sits on one rung and a project's package ships to several: `web` is
-// declared at storefront/staging and app-1 runs storefront/prod. What the
-// service supplies here is the PROJECT; the rung comes from the registration.
-//
-// Failing that, a globally unique environment name still identifies one. That
-// is the common small estate — one project, one "prod" — and refusing it would
-// make the projection useless everywhere the ambiguity does not exist.
-//
-// Both roads closed is a real dead end and returns an error, which becomes a
-// gap. It is not a fault in the config: it is the missing project coordinate
-// on the registration address, and the message says so.
+// A wrong-looking answer is still possible and still becomes a gap — an
+// instance can name a project hz does not declare, or a rung that project does
+// not declare — but it is now a fact about the CONFIG, which an operator can
+// fix, rather than an ambiguity in the address, which they could not.
 func resolveEnvironment(cfg *config.Config, inst Instance) (config.Environment, error) {
-	projects := map[string]bool{}
-	for _, svc := range cfg.Services {
-		if svc.Name == inst.App && strings.TrimSpace(svc.Project) != "" {
-			projects[svc.Project] = true
-		}
-	}
-
-	switch len(projects) {
-	case 1:
-		project := sortedKeys(projects)[0]
-		env, err := cfg.LookupEnvironment(project, inst.Environment)
-		if err != nil {
-			return config.Environment{}, fmt.Errorf("app %q is service %q of project %q, which declares no environment %q — `hz env add %s/%s --posture <dev|staging|prod>` declares the rung",
-				inst.App, inst.App, project, inst.Environment, project, inst.Environment)
-		}
-		return env, nil
-	case 0:
-		// No service of that name. Fall back to the environment name, which is
-		// an identity only while exactly one project uses it.
-		env, err := cfg.LookupEnvironment("", inst.Environment)
-		if err != nil {
-			return config.Environment{}, fmt.Errorf("%v. A registration's address is environment/app/role with no project coordinate, and no service is named %q to supply one — `hz service assign %s <project>/%s` joins the app to a project",
-				err, inst.App, inst.App, inst.Environment)
-		}
-		return env, nil
-	default:
-		return config.Environment{}, fmt.Errorf("app %q is a service of %s, so hz cannot tell which project's rung %q is",
-			inst.App, strings.Join(sortedKeys(projects), " and "), inst.Environment)
-	}
-}
-
-// ResolveEnvironment is resolveEnvironment, exported for the one other caller
-// that has to answer the same question about the same registration.
-//
-// The version-drift join (internal/server/handlers_version_drift.go) needs an
-// instance's DECLARED version, and that version is `Environment.Version` on the
-// rung the instance names — so it needs the project coordinate a registration
-// address does not carry, by exactly the road resolveEnvironment documents.
-// Re-deriving it there would give hz two answers to "which project is
-// prod/web/app?", and the screen showing drift would then be free to compare
-// against a different rung than the projection installs from.
-//
-// Exported rather than moved: this is the projection's join, the projection is
-// its primary caller, and the error text names the `hz` command that closes
-// each dead end — which the drift row renders verbatim.
-func ResolveEnvironment(cfg *config.Config, inst Instance) (config.Environment, error) {
-	return resolveEnvironment(cfg, inst)
+	return cfg.LookupEnvironment(inst.Project, inst.Environment)
 }
 
 // projectAgent adds hz-agent itself to the package list.

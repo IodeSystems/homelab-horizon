@@ -277,7 +277,7 @@ Phase 3 replaces this with: restart horizon, done.
 | 11 | Projects · Environments · machine removal | ✅ on **`dev`**, not on main, nothing deployed |
 | 12 | [Observed-state channel](privilege-classification.md#41--closed-2026-09-21--the-observed-state-channel-exists) — the agent reports back | ✅ store + serve on **`dev`**; ✅ the drift SCREEN at `/drift` ([ui-redesign.md](ui-redesign.md)) — one screen in the existing shell, NOT the nav redesign |
 | 13 | [Agent handover](architecture.md#the-path) steps 1–3 — credential, WireGuard, error pages + certs + directory ownership | ✅ on **`dev`**, and the agent is still **INERT**; ◻ steps 4–5 (arm the unit, then de-root hz). Blocker 1 of [§8.3](privilege-audit.md) — the no-default-route stand-down, which would have had an armed agent reconcile the gateway's port forwards away — is ✅ done (`iptablesSectionFor`); blockers 2–7 are open |
-| 14 | [The project coordinate](project-coordinate.md) — the cm address becomes `<project>/<environment>/<app>/<role>` | ◻ **designed, not implemented.** Flag day for every sealed value and every wrap; verified there is none to lose. Do it before redline imports `configmgr`, and after the `hz cm` → `hz config` rename |
+| 14 | [The project coordinate](project-coordinate.md) — the cm address is `<project>/<environment>/<app>/<role>` | ✅ **done** 2026-09-22. Flag day for every sealed value and every wrap; the freeze check found none to lose (gateway `hz.db` at schema 10, every `cm_*` table zero rows). Migration `0013`; the backwards resolution and `projection.ResolveEnvironment` are deleted; `configmgr.TestCrossProjectReadIsRefused` is the standing proof |
 
 **Where this is all heading:** [architecture.md](architecture.md) — the model
 (project / environment / machine / instance / version / service), the two
@@ -478,7 +478,7 @@ same, and in Go `config` is already taken by `internal/config` (the gateway's
 own config), so renaming the identifiers would trade one ambiguity for a worse
 one. Pinned by `cmd/hz/config_alias_test.go`.
 
-A store of config blobs addressed by `(environment, app, role)` with a version
+A store of config blobs addressed by `(project, environment, app, role)` with a version
 range and an approval state. A box registers, an admin approves the
 **registration** (not every boot), and the box pulls what resolves for its
 running version. Promotion `dev → staging → prod` is a diff and a gate, not a

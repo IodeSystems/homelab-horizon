@@ -123,7 +123,7 @@ func cmRecoveryKeygen(args []string) error {
 	fmt.Fprintln(os.Stderr, "# Register the PUBLIC half with hz, then wrap the keys you already hold to it:")
 	fmt.Fprintf(os.Stderr, "#   hz config recovery add %s --public-key %s\n", label, configmgr.MarshalMachinePublicKey(pub))
 	fmt.Fprintln(os.Stderr, "#   hz config recovery backfill")
-	fmt.Fprintf(os.Stderr, "#   hz config recovery verify <environment>/<app>/<role>   # prove it before you rely on it\n")
+	fmt.Fprintf(os.Stderr, "#   hz config recovery verify <project>/<environment>/<app>/<role>   # prove it before you rely on it\n")
 	return nil
 }
 
@@ -183,7 +183,7 @@ func cmRecoveryAdd(c *client, args []string) error {
 	fmt.Println("that already exist are NOT — the recipient list is fixed at the moment a key is")
 	fmt.Println("wrapped, so they have to be re-wrapped explicitly:")
 	fmt.Println("  hz config recovery backfill")
-	fmt.Println("  hz config recovery verify <environment>/<app>/<role>   # then prove it opens")
+	fmt.Println("  hz config recovery verify <project>/<environment>/<app>/<role>   # then prove it opens")
 	return nil
 }
 
@@ -286,7 +286,10 @@ func cmRecoveryList(c *client, args []string) error {
 		row(h.addr.String(), h.id).Held = true
 	}
 	for _, w := range rec.Wraps {
-		r := row(w.Environment+"/"+w.App+"/"+w.Role, w.KeyID)
+		// addrOfWrap, not a hand-spelled join: the held side above keys by
+		// EnvKeyAddr.String(), and two spellings of one address split a single
+		// key into two rows that each tell half the truth.
+		r := row(addrOfWrap(w).String(), w.KeyID)
 		r.WrappedTo = append(r.WrappedTo, w.Recipient)
 	}
 	out := make([]cmRecoveryCoverage, 0, len(rows))
@@ -382,7 +385,7 @@ func cmRecoveryList(c *client, args []string) error {
 		}
 	} else {
 		fmt.Println("\nEvery known key is wrapped to every recipient. That a wrap EXISTS is not proof")
-		fmt.Println("it opens — prove one: hz config recovery verify <environment>/<app>/<role>")
+		fmt.Println("it opens — prove one: hz config recovery verify <project>/<environment>/<app>/<role>")
 	}
 	return nil
 }
@@ -471,9 +474,12 @@ func cmRecoveryBackfill(c *client, args []string) error {
 	}
 
 	// Which (address, key id, recipient) tuples already have a wrap.
+	// The probe below is h.addr.String(), so this must be too — see addrOfWrap.
+	// A key built any other way makes every backfill re-wrap everything, which
+	// is silent: it looks exactly like a first run.
 	have := map[string]bool{}
 	for _, w := range rec.Wraps {
-		have[w.Environment+"/"+w.App+"/"+w.Role+" "+w.KeyID+" "+w.Recipient] = true
+		have[addrOfWrap(w).String()+" "+w.KeyID+" "+w.Recipient] = true
 	}
 
 	ks, err := configmgr.DefaultKeystore()
@@ -524,6 +530,7 @@ func cmRecoveryBackfill(c *client, args []string) error {
 			}
 			var resp apitypes.CMRecoveryWrapResp
 			req := apitypes.CMRecoveryWrapReq{
+				Project:     h.addr.Project,
 				Environment: h.addr.Environment, App: h.addr.App, Role: h.addr.Role,
 				KeyID: h.id, Recipient: r.Name,
 				Wrapped: configmgr.EncodeEnvelope(blob), Replace: *replace,
@@ -552,7 +559,7 @@ func cmRecoveryBackfill(c *client, args []string) error {
 		return fmt.Errorf("%d wrap(s) failed; the custody gap they leave is still open", failed)
 	}
 	fmt.Println("A stored wrap is not a proved one. Prove at least one before relying on it:")
-	fmt.Println("  hz config recovery verify <environment>/<app>/<role>")
+	fmt.Println("  hz config recovery verify <project>/<environment>/<app>/<role>")
 	return nil
 }
 
@@ -597,7 +604,7 @@ func cmRecoveryVerify(c *client, args []string) error {
 		pos = fs.Arg(0)
 	}
 	if pos == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz config recovery verify <environment>/<app>/<role> [--id KEYID] < recovery-key.txt")
+		return fmt.Errorf("usage: hz config recovery verify <project>/<environment>/<app>/<role> [--id KEYID] < recovery-key.txt")
 	}
 	addr, err := parseCMAddr(pos)
 	if err != nil {
@@ -734,6 +741,7 @@ func cmWrapToRecovery(c *client, addr configmgr.EnvKeyAddr, keyID string, key co
 			return n, fmt.Errorf("wrapping to recovery recipient %s: %w", r.Name, err)
 		}
 		req := apitypes.CMRecoveryWrapReq{
+			Project:     addr.Project,
 			Environment: addr.Environment, App: addr.App, Role: addr.Role,
 			KeyID: keyID, Recipient: r.Name, Wrapped: configmgr.EncodeEnvelope(blob),
 		}

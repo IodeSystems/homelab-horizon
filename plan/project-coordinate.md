@@ -1,13 +1,82 @@
 # The project coordinate — making the config address `<project>/<environment>/<app>/<role>`
 
-> **Status: design only. No code changed.** Written 2026-09-22 against `dev` at
-> `96fef0c`. Every claim below was checked against the code, and the three
-> verification questions were answered by a throwaway test in `package configmgr`
-> that was run and then deleted; its output is transcribed in §1.
+> **Status: IMPLEMENTED 2026-09-22** on `feat/project-coordinate`, off `dev` at
+> `a26688c`. The `hz cm` → `hz config` rename landed first, as this plan
+> required. Written 2026-09-22 against `dev` at `96fef0c`; every claim below was
+> checked against the code, and the three verification questions were answered by
+> a throwaway test in `package configmgr` that was run and then deleted (its
+> output is transcribed in §1). That throwaway is now PERMANENT, as
+> `configmgr/project_binding_test.go`.
 >
-> **Implement after the `hz cm` → `hz config` rename lands.** That rename touches
-> every file this change touches (`cmd/hz/cm*.go`), so the two would collide head
-> on. Spellings below are the POST-rename ones (`hz config …`).
+> **The freeze check (§6, stage 1) passed.** Measured on the office gateway
+> before stage 3: `schema version 10`, and `cm_machines`, `cm_registrations`,
+> `cm_configs`, `cm_config_values` and `cm_current_keys` **all zero rows**. The
+> config manager has never run there. Combined with §1 Q3's five other items,
+> the "there is nothing to migrate" claim is closed, not merely likely — so
+> migration `0013` destroys no capability grant that ever existed.
+>
+> **The positive control, measured against the OLD binding before any code
+> changed**, so that the refusal below is a change and not a tautology:
+>
+> ```
+> CONTROL: cross-project read SUCCEEDED, plaintext "acme's production password"
+> CONTROL: cross-project unwrap SUCCEEDED, key id 2d65328724b33f88
+> ```
+>
+> One environment key installed at two projects' identical `prod/redline/app`
+> opened both a kind 0x01 value and a kind 0x02 grant. Under the four-field
+> binding the same two operations fail with `envelope failed authentication`;
+> `configmgr.TestCrossProjectReadIsRefused` and
+> `TestCrossProjectGrantIsRefused` are that, permanently.
+>
+> **Where the design met the code and was wrong, or incomplete** — three places,
+> all recorded in the implementing commit:
+>
+> 1. **`config.RecoveryWrap` needed more than `Project` + `Addr()`.**
+>    `Config.FindRecoveryWrap` and `Config.PutRecoveryWrap` key on
+>    `(environment, app, role, key id, recipient)`, so without the project two
+>    projects' rungs of the same name share one wrap entry and a backfill for
+>    one reports coverage for the other. Both now key on the project. §2 named
+>    the struct and the method but not the two accessors.
+> 2. **`apitypes.CMRecoveryWrap` / `CMRecoveryWrapReq` were not in §2's list**
+>    and needed the field, along with `handleAPICMRecoveryWraps`' required-field
+>    check.
+> 3. **The promotion gate's `--project` is now a cross-check, not a selector.**
+>    §6 said to keep it as a narrowing hint. With the project on the source
+>    config's address that would be a second source of truth able to disagree
+>    with the first, which is the defect one layer down, so the gate reads
+>    `src.Project` and **refuses** a `project=` that disagrees rather than
+>    obeying it. A promotion cannot change project — `cmPromotionEdge` already
+>    looked the source rung up inside the target's project — so there is nothing
+>    the parameter could legitimately select.
+> 4. **`cmApprove` was not in §2's CLI list, and it is the one that mattered
+>    most.** `cmd/hz/cm.go`'s approve path builds the `EnvKeyAddr` it wraps the
+>    environment key to, and it built a three-part one. The compiler cannot see
+>    that — a zero-value `Project` is a legal string — so the wrap would have
+>    been produced, hz would have relayed it, and the box would have refused to
+>    unwrap at boot with an authentication failure naming nothing: the whole
+>    typed-fingerprint ceremony spent on a blob that opens for nobody. Found by
+>    a test, not by review. `cmPending`'s address column had the same omission,
+>    with a cosmetic rather than a cryptographic consequence.
+> 5. **Two UI defects surfaced while threading the field through.** `CMPromote`'s
+>    copy-box printed `hz config push <target>/<app>/<role>` — already wrong
+>    before this change, and now a command `parseCMAddr` refuses. And its
+>    "seen environments" suggestion list pooled environment NAMES across every
+>    project, which becomes actively misleading once names are not globally
+>    unique: it would offer another project's rung as a promotion target. Both
+>    fixed.
+>
+> Everything else in §2's inventory was accurate, including the two it warned
+> would be easy to get wrong: `RegistrationsHoldingStaleKey`'s self-join needed
+> the project on BOTH sides, and `unitName` kept its THREE-part instance part.
+>
+> **The generalisable lesson.** Items 1, 4 and 5 are all the same shape: a place
+> where an address was assembled field by field rather than passed as a value,
+> so adding a field to the struct left the assembly site silently short. Nothing
+> in the type system catches it — every field is a `string` and the zero value
+> is legal — and three of the four were found by tests rather than by reading
+> §2's inventory. An audit that greps for the TYPE name finds them; one that
+> greps for the field names does not.
 
 ## 0. The problem, stated exactly
 
@@ -581,10 +650,20 @@ Rejected, for two reasons, the first of which is fatal.
    is") into a silent stamp of the wrong project, which is the failure mode this
    codebase spends most of its comments avoiding.
 
-**Where (B) IS right, and stays:** the promotion gate's `--project` narrowing
-(`cm_config.go:339` → `handlers_configmgr.go:1394`). There a human typed a bare
-environment name at a CLI and hz resolving it is fine, because nothing is sealed
-against the answer. Keep it; it just stops being the only surface that knows.
+**Where (B) looked right, and turned out not to be:** the promotion gate's
+`--project` narrowing (`cm_config.go:339` → `handlers_configmgr.go:1394`). The
+argument above was that a human typed a bare environment name at a CLI and hz
+resolving it is fine, because nothing is sealed against the answer.
+
+**Superseded at implementation.** With the project on the source config's
+address, a caller-supplied `--project` is a second source of truth about which
+project the promotion is in, able to disagree with the first — the identical
+defect one layer down. And it could never legitimately select anything:
+`cmPromotionEdge` already looks the SOURCE rung up inside the TARGET's project,
+so a promotion cannot change project. The gate therefore reads `src.Project`,
+and a `project=` that disagrees is a 400 naming both rather than an override.
+The parameter is still read, so a caller sending the wrong one is told instead
+of having it silently ignored.
 
 ### (C) Do nothing
 
@@ -626,16 +705,17 @@ should not. Run the freeze check below before stage 3.
 ## 8. Staged plan
 
 Status marks: ◻ todo · ◐ in progress · ✅ done · ⏸ parked · ❓ blocked.
-All ◻ — nothing here is implemented.
+All ✅ — every stage below landed in one merge, as §8's last assumption said it
+would have to.
 
-### ◻ Stage 0 — precondition: the rename has landed
+### ✅ Stage 0 — precondition: the rename has landed
 
 **Must be true before starting:** `hz cm` → `hz config` is merged on `dev`;
 `go build ./...` and `go test ./... -count=1` are green.
 **Why:** both changes rewrite every `cmd/hz/cm*.go` usage string. Doing them at
 once is one conflict per file.
 
-### ◻ Stage 1 — freeze check: prove there is nothing to migrate
+### ✅ Stage 1 — freeze check: prove there is nothing to migrate
 
 On the gateway, and on any box that has ever run `hz config`:
 
@@ -658,7 +738,7 @@ capability grants must carry the evidence that there were none.
 re-seal exercise §3 declines to build. If that happens, stop and re-plan — do not
 proceed and "fix it later".
 
-### ◻ Stage 2 — `configmgr` gains the coordinate
+### ✅ Stage 2 — `configmgr` gains the coordinate
 
 `Addr`, `EnvKeyAddr`, both `context()`s, both `String()`s, the keystore segments,
 the state tree, `Options`, `PushOptions`, the four wire types, and `doc.go`'s three
@@ -671,7 +751,7 @@ is the standing guard on the flag day ever being reversed by accident.
 **Not true yet:** hz still speaks three parts. The tree does not build end to end
 between stages 2 and 3.
 
-### ◻ Stage 3 — hz's schema and handlers
+### ✅ Stage 3 — hz's schema and handlers
 
 Migration `0013_project_coordinate`, following 0009's restate-everything shape and
 its header-comment convention (say what it does to existing data, in the file).
@@ -688,7 +768,7 @@ the current-key row is **gone**, and `cm_machine_secrets` and `cm_secret_reads` 
 hit it and documents the workaround (stage into constraint-free `_temp` tables
 first). Reuse that shape rather than rediscovering it.
 
-### ◻ Stage 4 — projection and drift
+### ✅ Stage 4 — projection and drift
 
 `Instance.Project`; `resolveEnvironment` collapses to one line; delete the export,
 the map, the fallback, the ambiguity branch and the gap (§4's table);
@@ -700,7 +780,7 @@ unit names in `projection_test.go` are byte-identical to today's** — `unitName
 must keep its three-part instance part, or every unit on every box is renamed as a
 side effect of this change.
 
-### ◻ Stage 5 — CLI, config model, UI
+### ✅ Stage 5 — CLI, config model, UI
 
 `parseCMAddr` and every usage string; `cmd/hz/main.go`'s CONFIG MANAGER block;
 `RecoveryWrap.Project` + `Addr()`; the three `CM*.tsx` components; regenerate
@@ -710,7 +790,7 @@ side effect of this change.
 regeneration leaves no unexpected diff; `make lint` (or the repo's equivalent)
 clean.
 
-### ◻ Stage 6 — docs
+### ✅ Stage 6 — docs
 
 - `plan/config-manager.md` — the keystore path at `:381`, and `:102, 188, 207,
   320, 384, 425, 458, 746, 1286`, every one of which keys off the triple.

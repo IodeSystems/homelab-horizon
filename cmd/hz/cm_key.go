@@ -65,7 +65,7 @@ func cmKeyNew(c *client, args []string) error {
 		pos = fs.Arg(0)
 	}
 	if pos == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz config key new <environment>/<app>/<role> [--label L] [--set-current]")
+		return fmt.Errorf("usage: hz config key new <project>/<environment>/<app>/<role> [--label L] [--set-current]")
 	}
 	addr, err := parseCMAddr(pos)
 	if err != nil {
@@ -94,7 +94,8 @@ func cmKeyNew(c *client, args []string) error {
 	}
 	id := key.ID()
 	fmt.Printf("Minted %s (%s) for %s.\n", id, *label, addr)
-	fmt.Printf("  %s\n", filepath.Join(ks.Root(), "secrets", "keys", addr.Environment, addr.App, addr.Role, *label+"."+id.String()+".key"))
+	fmt.Printf("  %s\n", filepath.Join(ks.Root(), "secrets", "keys",
+		addr.Project, addr.Environment, addr.App, addr.Role, *label+"."+id.String()+".key"))
 	fmt.Println()
 
 	// Custody, automatically, at the one moment an environment key comes into
@@ -159,7 +160,7 @@ func cmKeyList(args []string) error {
 		pos = fs.Arg(0)
 	}
 	if fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz config key ls [<environment>/<app>/<role>]")
+		return fmt.Errorf("usage: hz config key ls [<project>/<environment>/<app>/<role>]")
 	}
 	ks, err := configmgr.DefaultKeystore()
 	if err != nil {
@@ -224,7 +225,7 @@ func cmKeyList(args []string) error {
 //
 // This walks directory NAMES with os.ReadDir, which the keystore itself never
 // does, and the distinction matters: nothing found here is opened or trusted.
-// Each candidate triple is handed back to Keystore.List, which re-validates
+// Each candidate address is handed back to Keystore.List, which re-validates
 // every segment and re-walks the tree with openat(2) and its own permission
 // checks. A directory whose name is not a legal segment is skipped rather than
 // reported, because it is not a key by definition — the keystore could never
@@ -232,22 +233,30 @@ func cmKeyList(args []string) error {
 func cmKeyAddresses(ks *configmgr.Keystore) ([]configmgr.EnvKeyAddr, error) {
 	root := filepath.Join(ks.Root(), "secrets", "keys")
 	var out []configmgr.EnvKeyAddr
-	envs, err := readDirNames(root)
+	projects, err := readDirNames(root)
 	if err != nil {
 		return nil, err
 	}
-	for _, env := range envs {
-		apps, err := readDirNames(filepath.Join(root, env))
+	for _, project := range projects {
+		envs, err := readDirNames(filepath.Join(root, project))
 		if err != nil {
 			return nil, err
 		}
-		for _, app := range apps {
-			roles, err := readDirNames(filepath.Join(root, env, app))
+		for _, env := range envs {
+			apps, err := readDirNames(filepath.Join(root, project, env))
 			if err != nil {
 				return nil, err
 			}
-			for _, role := range roles {
-				out = append(out, configmgr.EnvKeyAddr{Environment: env, App: app, Role: role})
+			for _, app := range apps {
+				roles, err := readDirNames(filepath.Join(root, project, env, app))
+				if err != nil {
+					return nil, err
+				}
+				for _, role := range roles {
+					out = append(out, configmgr.EnvKeyAddr{
+						Project: project, Environment: env, App: app, Role: role,
+					})
+				}
 			}
 		}
 	}
@@ -290,7 +299,7 @@ func cmKeyExport(args []string) error {
 		pos = fs.Arg(0)
 	}
 	if pos == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz config key export <environment>/<app>/<role> [--id KEYID]")
+		return fmt.Errorf("usage: hz config key export <project>/<environment>/<app>/<role> [--id KEYID]")
 	}
 	addr, err := parseCMAddr(pos)
 	if err != nil {
@@ -378,7 +387,7 @@ func cmKeyImport(args []string) error {
 		pos = fs.Arg(0)
 	}
 	if pos == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz config key import <environment>/<app>/<role> [--label L] [--created-at T] < key.txt")
+		return fmt.Errorf("usage: hz config key import <project>/<environment>/<app>/<role> [--label L] [--created-at T] < key.txt")
 	}
 	addr, err := parseCMAddr(pos)
 	if err != nil {
@@ -440,7 +449,7 @@ func cmKeyCurrent(c *client, args []string) error {
 		pos = fs.Arg(0)
 	}
 	if pos == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz config key current <environment>/<app>/<role> [--set KEYID]")
+		return fmt.Errorf("usage: hz config key current <project>/<environment>/<app>/<role> [--set KEYID]")
 	}
 	addr, err := parseCMAddr(pos)
 	if err != nil {
@@ -468,9 +477,10 @@ func cmKeyCurrent(c *client, args []string) error {
 
 func cmSetCurrentKey(c *client, addr configmgr.EnvKeyAddr, id string) error {
 	q := url.Values{
-		apitypes.CMQueryEnv:  {addr.Environment},
-		apitypes.CMQueryApp:  {addr.App},
-		apitypes.CMQueryRole: {addr.Role},
+		apitypes.CMQueryProject: {addr.Project},
+		apitypes.CMQueryEnv:     {addr.Environment},
+		apitypes.CMQueryApp:     {addr.App},
+		apitypes.CMQueryRole:    {addr.Role},
 	}
 	return c.do(http.MethodPut, cmAPI+"/current-key?"+q.Encode(), apitypes.CMCurrentKeyReq{KeyID: id}, nil)
 }

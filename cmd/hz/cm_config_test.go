@@ -20,8 +20,8 @@ import (
 // ciphertext is different bytes, and it authenticates at the TARGET address.
 func TestPromoteOpensUnderSourceAndResealsUnderTarget(t *testing.T) {
 	ks := testKeystore(t)
-	srcAddr := configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}
-	dstAddr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	srcAddr := configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
+	dstAddr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	srcKey := putKey(t, ks, srcAddr, "2026-01", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	dstKey := putKey(t, ks, dstAddr, "2026-01", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 
@@ -31,10 +31,10 @@ func TestPromoteOpensUnderSourceAndResealsUnderTarget(t *testing.T) {
 		configmgr.Seal(dstKey, valueAddr(dstAddr, "DB_PASSWORD"), []byte("prod-password")))
 
 	s := newCMStub()
-	s.currentKeys["staging/redline/app"] = srcKey.ID().String()
-	s.currentKeys["prod/redline/app"] = dstKey.ID().String()
+	s.currentKeys["acme/staging/redline/app"] = srcKey.ID().String()
+	s.currentKeys["acme/prod/redline/app"] = dstKey.ID().String()
 	s.configs["cfg-1"] = apitypes.CMConfigResp{
-		ID: "cfg-1", Environment: "staging", App: "redline", Role: "app", MinVer: "1.2.0", Sequence: 7,
+		ID: "cfg-1", Project: "acme", Environment: "staging", App: "redline", Role: "app", MinVer: "1.2.0", Sequence: 7,
 		Values: []apitypes.CMConfigValueResp{
 			{Key: "RETENTION_DAYS", Binding: configmgr.BindingInvariant, KeyID: srcKey.ID().String(), Origin: "direct", Sealed: sourceSealed},
 			{Key: "DB_PASSWORD", Binding: configmgr.BindingEnv, KeyID: srcKey.ID().String(), Origin: "direct", Sealed: "ignored"},
@@ -42,7 +42,7 @@ func TestPromoteOpensUnderSourceAndResealsUnderTarget(t *testing.T) {
 	}
 	s.gate = apitypes.CMPromotionGateResp{SourceConfigID: "cfg-1", TargetEnv: "prod", Promotes: []string{"RETENTION_DAYS"}, OK: true,
 		Edge: upwardEdge("staging", "prod")}
-	s.resolve["prod/redline/app"] = apitypes.CMResolveResp{Winner: &apitypes.CMConfigResp{
+	s.resolve["acme/prod/redline/app"] = apitypes.CMResolveResp{Winner: &apitypes.CMConfigResp{
 		ID: "cfg-prod", Environment: "prod", App: "redline", Role: "app",
 		Values: []apitypes.CMConfigValueResp{
 			{Key: "DB_PASSWORD", Binding: configmgr.BindingEnv, KeyID: dstKey.ID().String(), Origin: "direct", Sealed: prodBound},
@@ -116,12 +116,12 @@ func TestPromoteOpensUnderSourceAndResealsUnderTarget(t *testing.T) {
 
 func TestPromoteStopsAtTheGate(t *testing.T) {
 	ks := testKeystore(t)
-	srcAddr := configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}
+	srcAddr := configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
 	srcKey := putKey(t, ks, srcAddr, "2026-01", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	s := newCMStub()
-	s.currentKeys["staging/redline/app"] = srcKey.ID().String()
-	s.configs["cfg-1"] = apitypes.CMConfigResp{ID: "cfg-1", Environment: "staging", App: "redline", Role: "app", MinVer: "1.2.0"}
+	s.currentKeys["acme/staging/redline/app"] = srcKey.ID().String()
+	s.configs["cfg-1"] = apitypes.CMConfigResp{ID: "cfg-1", Project: "acme", Environment: "staging", App: "redline", Role: "app", MinVer: "1.2.0"}
 	s.gate = apitypes.CMPromotionGateResp{SourceConfigID: "cfg-1", TargetEnv: "prod", Blocked: []string{"PUBLIC_URL", "PAY_ORIGIN"}, OK: false,
 		Edge: upwardEdge("staging", "prod")}
 	c := s.start(t)
@@ -144,15 +144,15 @@ func TestPromoteStopsAtTheGate(t *testing.T) {
 // omit, never inject, but an empty set is a no-op dressed as a release step.
 func TestPromoteCarriesOnlyWhatTheGateNames(t *testing.T) {
 	ks := testKeystore(t)
-	srcAddr := configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}
-	dstAddr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	srcAddr := configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
+	dstAddr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	srcKey := putKey(t, ks, srcAddr, "2026-01", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	putKey(t, ks, dstAddr, "2026-01", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	s := newCMStub()
-	s.currentKeys["staging/redline/app"] = srcKey.ID().String()
+	s.currentKeys["acme/staging/redline/app"] = srcKey.ID().String()
 	s.configs["cfg-1"] = apitypes.CMConfigResp{
-		ID: "cfg-1", Environment: "staging", App: "redline", Role: "app", MinVer: "1.2.0",
+		ID: "cfg-1", Project: "acme", Environment: "staging", App: "redline", Role: "app", MinVer: "1.2.0",
 		Values: []apitypes.CMConfigValueResp{{
 			Key: "RETENTION_DAYS", Binding: configmgr.BindingInvariant, KeyID: srcKey.ID().String(), Origin: "direct",
 			Sealed: configmgr.EncodeEnvelope(configmgr.Seal(srcKey, valueAddr(srcAddr, "RETENTION_DAYS"), []byte("30-days-retained"))),
@@ -174,7 +174,7 @@ func TestPromoteCarriesOnlyWhatTheGateNames(t *testing.T) {
 func TestPromoteRefusesTheSameEnvironment(t *testing.T) {
 	testKeystore(t)
 	s := newCMStub()
-	s.configs["cfg-1"] = apitypes.CMConfigResp{ID: "cfg-1", Environment: "prod", App: "redline", Role: "app"}
+	s.configs["cfg-1"] = apitypes.CMConfigResp{ID: "cfg-1", Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	c := s.start(t)
 	if err := cmPromote(c, []string{"--to", "prod", "cfg-1"}); err == nil {
 		t.Fatal("promoting into the environment a config is already in must be refused")
@@ -185,13 +185,13 @@ func TestPromoteRefusesTheSameEnvironment(t *testing.T) {
 
 func TestShowDecryptsLocally(t *testing.T) {
 	ks := testKeystore(t)
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	key := putKey(t, ks, addr, "2026-01", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	s := newCMStub()
-	s.currentKeys["prod/redline/app"] = key.ID().String()
+	s.currentKeys["acme/prod/redline/app"] = key.ID().String()
 	s.configs["cfg-1"] = apitypes.CMConfigResp{
-		ID: "cfg-1", Environment: "prod", App: "redline", Role: "app", MinVer: "1.0.0", Sequence: 3,
+		ID: "cfg-1", Project: "acme", Environment: "prod", App: "redline", Role: "app", MinVer: "1.0.0", Sequence: 3,
 		Values: []apitypes.CMConfigValueResp{{
 			Key: "DB_PASSWORD", Binding: configmgr.BindingEnv, KeyID: key.ID().String(), Origin: "direct",
 			Sealed: configmgr.EncodeEnvelope(configmgr.Seal(key, valueAddr(addr, "DB_PASSWORD"), []byte("s3cret"))),
@@ -214,15 +214,15 @@ func TestShowDecryptsLocally(t *testing.T) {
 // complete and is not.
 func TestShowFailsWholeOnAPartialDecrypt(t *testing.T) {
 	ks := testKeystore(t)
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	key := putKey(t, ks, addr, "2026-01", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	// A value sealed under a key this machine does not hold.
 	absent := configmgr.NewEnvKey()
 
 	s := newCMStub()
-	s.currentKeys["prod/redline/app"] = key.ID().String()
+	s.currentKeys["acme/prod/redline/app"] = key.ID().String()
 	s.configs["cfg-1"] = apitypes.CMConfigResp{
-		ID: "cfg-1", Environment: "prod", App: "redline", Role: "app", MinVer: "1.0.0",
+		ID: "cfg-1", Project: "acme", Environment: "prod", App: "redline", Role: "app", MinVer: "1.0.0",
 		Values: []apitypes.CMConfigValueResp{
 			{Key: "A", Binding: configmgr.BindingInvariant, KeyID: key.ID().String(), Origin: "direct",
 				Sealed: configmgr.EncodeEnvelope(configmgr.Seal(key, valueAddr(addr, "A"), []byte("value-of-a")))},
@@ -244,13 +244,13 @@ func TestShowFailsWholeOnAPartialDecrypt(t *testing.T) {
 
 func TestShowRefusesATombstonedValue(t *testing.T) {
 	ks := testKeystore(t)
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	key := putKey(t, ks, addr, "2026-01", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	s := newCMStub()
-	s.currentKeys["prod/redline/app"] = key.ID().String()
+	s.currentKeys["acme/prod/redline/app"] = key.ID().String()
 	s.configs["cfg-1"] = apitypes.CMConfigResp{
-		ID: "cfg-1", Environment: "prod", App: "redline", Role: "app", MinVer: "1.0.0",
+		ID: "cfg-1", Project: "acme", Environment: "prod", App: "redline", Role: "app", MinVer: "1.0.0",
 		Values: []apitypes.CMConfigValueResp{{
 			Key: "GONE", Binding: configmgr.BindingEnv, KeyID: key.ID().String(), Origin: "direct",
 			TombstonedAt: "2026-03-01T00:00:00Z", TombstonedBy: "carl",
@@ -268,7 +268,7 @@ func TestShowRefusesATombstonedValue(t *testing.T) {
 func TestResolveReportsWhatItShadowed(t *testing.T) {
 	testKeystore(t)
 	s := newCMStub()
-	s.resolve["prod/redline/app"] = apitypes.CMResolveResp{
+	s.resolve["acme/prod/redline/app"] = apitypes.CMResolveResp{
 		Winner: &apitypes.CMConfigResp{ID: "cfg-9", MinVer: "1.4.0", Sequence: 9,
 			Values: []apitypes.CMConfigValueResp{{Key: "A", Binding: configmgr.BindingInvariant, Origin: "promoted"}}},
 		Shadowed: []apitypes.CMConfigResp{{ID: "cfg-4", MinVer: "1.0.0", MaxVer: "1.3.0", Sequence: 4}},
@@ -276,7 +276,7 @@ func TestResolveReportsWhatItShadowed(t *testing.T) {
 	c := s.start(t)
 
 	out := captureStdout(t, func() {
-		if err := cmResolve(c, []string{"--version", "1.4.2", "prod/redline/app"}); err != nil {
+		if err := cmResolve(c, []string{"--version", "1.4.2", "acme/prod/redline/app"}); err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
 	})
@@ -285,7 +285,7 @@ func TestResolveReportsWhatItShadowed(t *testing.T) {
 			t.Errorf("resolve output is missing %q:\n%s", want, out)
 		}
 	}
-	if err := cmResolve(c, []string{"prod/redline/app"}); err == nil {
+	if err := cmResolve(c, []string{"acme/prod/redline/app"}); err == nil {
 		t.Error("--version must be required: resolution is a range containment test")
 	}
 }
@@ -293,9 +293,9 @@ func TestResolveReportsWhatItShadowed(t *testing.T) {
 func TestResolveNamesTheFailureWhenNothingMatches(t *testing.T) {
 	testKeystore(t)
 	s := newCMStub()
-	s.resolve["prod/redline/app"] = apitypes.CMResolveResp{Error: "no config satisfies v1.4.0 for prod/redline/app"}
+	s.resolve["acme/prod/redline/app"] = apitypes.CMResolveResp{Error: "no config satisfies v1.4.0 for prod/redline/app"}
 	c := s.start(t)
-	err := captureStdoutErr(t, func() error { return cmResolve(c, []string{"--version", "1.4.0", "prod/redline/app"}) })
+	err := captureStdoutErr(t, func() error { return cmResolve(c, []string{"--version", "1.4.0", "acme/prod/redline/app"}) })
 	if err == nil || !strings.Contains(err.Error(), "no config satisfies") {
 		t.Fatalf("zero matches must be a named failure, not a hang: %v", err)
 	}

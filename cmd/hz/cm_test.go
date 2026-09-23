@@ -138,7 +138,7 @@ func (s *cmStub) start(t *testing.T) *client {
 
 		case p == "/api/v1/cm/current-key":
 			q := r.URL.Query()
-			k := q.Get(apitypes.CMQueryEnv) + "/" + q.Get(apitypes.CMQueryApp) + "/" + q.Get(apitypes.CMQueryRole)
+			k := q.Get(apitypes.CMQueryProject) + "/" + q.Get(apitypes.CMQueryEnv) + "/" + q.Get(apitypes.CMQueryApp) + "/" + q.Get(apitypes.CMQueryRole)
 			if r.Method == http.MethodPut {
 				var req apitypes.CMCurrentKeyReq
 				_ = json.Unmarshal(raw, &req)
@@ -152,7 +152,8 @@ func (s *cmStub) start(t *testing.T) *client {
 			id := s.currentKeys[k]
 			s.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(apitypes.CMCurrentKeyResp{
-				Environment: q.Get(apitypes.CMQueryEnv), App: q.Get(apitypes.CMQueryApp), Role: q.Get(apitypes.CMQueryRole), KeyID: id,
+				Project: q.Get(apitypes.CMQueryProject), Environment: q.Get(apitypes.CMQueryEnv),
+				App: q.Get(apitypes.CMQueryApp), Role: q.Get(apitypes.CMQueryRole), KeyID: id,
 			})
 
 		case p == "/api/v1/cm/configs" && r.Method == http.MethodPost:
@@ -181,7 +182,7 @@ func (s *cmStub) start(t *testing.T) *client {
 		// agrees with the code under test proves only that they agree.
 		case p == apitypes.CMPathResolve:
 			q := r.URL.Query()
-			k := q.Get(apitypes.CMQueryEnv) + "/" + q.Get(apitypes.CMQueryApp) + "/" + q.Get(apitypes.CMQueryRole)
+			k := q.Get(apitypes.CMQueryProject) + "/" + q.Get(apitypes.CMQueryEnv) + "/" + q.Get(apitypes.CMQueryApp) + "/" + q.Get(apitypes.CMQueryRole)
 			_ = json.NewEncoder(w).Encode(s.resolve[k])
 
 		// Key custody. The wrap route enforces what hz enforces — a blob must
@@ -327,12 +328,12 @@ func (s *cmStub) storeWrapLocked(req apitypes.CMRecoveryWrapReq) error {
 
 	s.wraps = append(s.wraps, req)
 	row := apitypes.CMRecoveryWrap{
-		Environment: req.Environment, App: req.App, Role: req.Role,
+		Project: req.Project, Environment: req.Environment, App: req.App, Role: req.Role,
 		KeyID: req.KeyID, Recipient: req.Recipient,
 		Fingerprint: header.Recipient.String(), Wrapped: req.Wrapped,
 	}
 	for i, have := range s.recovery.Wraps {
-		if have.Environment == row.Environment && have.App == row.App && have.Role == row.Role &&
+		if have.Project == row.Project && have.Environment == row.Environment && have.App == row.App && have.Role == row.Role &&
 			have.KeyID == row.KeyID && have.Recipient == row.Recipient {
 			if !req.Replace {
 				return nil
@@ -425,17 +426,43 @@ func captureStdout(t *testing.T, fn func()) string {
 // --- address parsing -------------------------------------------------------
 
 func TestParseCMAddr(t *testing.T) {
-	good, err := parseCMAddr("staging/redline/app")
+	good, err := parseCMAddr("acme/staging/redline/app")
 	if err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
-	if good.Environment != "staging" || good.App != "redline" || good.Role != "app" {
+	if good.Project != "acme" || good.Environment != "staging" || good.App != "redline" || good.Role != "app" {
 		t.Fatalf("got %+v", good)
 	}
-	for _, bad := range []string{"staging/redline", "a/b/c/d", "/b/c", "a//c", "a/b/", ""} {
+	for _, bad := range []string{"staging/redline/app", "staging/redline", "/staging/redline/app", "acme//redline/app", "acme/staging/redline/", ""} {
 		if _, err := parseCMAddr(bad); err == nil {
 			t.Errorf("%q should not parse", bad)
 		}
+	}
+}
+
+// TestParseCMAddrRejectsTheOldThreePartForm pins the deliberate behaviour
+// change: a three-part address used to be a complete identity and is now
+// rejected outright, because environment names are unique per project and not
+// globally — the old form would otherwise silently mean something else. The
+// refusal must name the project, since that is the field an operator typing
+// the old form is missing.
+func TestParseCMAddrRejectsTheOldThreePartForm(t *testing.T) {
+	_, err := parseCMAddr("staging/redline/app")
+	if err == nil {
+		t.Fatal("a three-part address should be refused now that addresses name a project")
+	}
+	if !strings.Contains(err.Error(), "project") {
+		t.Fatalf("the refusal should name the missing project: %v", err)
+	}
+	if !strings.Contains(err.Error(), "<project>/<environment>/<app>/<role>") {
+		t.Fatalf("the refusal should show the new four-part shape: %v", err)
+	}
+
+	// A four-part address with the same three trailing segments is accepted,
+	// so the refusal above is about arity, not about these particular names.
+	good, err := parseCMAddr("acme/staging/redline/app")
+	if err != nil || good.Project != "acme" {
+		t.Fatalf("the four-part form of the same address should parse: %+v, %v", good, err)
 	}
 }
 
@@ -447,12 +474,12 @@ func TestKeyNewAndList(t *testing.T) {
 	c := s.start(t)
 
 	out := captureStdout(t, func() {
-		if err := cmKeyNew(c, []string{"--label", "2026-01", "staging/redline/app"}); err != nil {
+		if err := cmKeyNew(c, []string{"--label", "2026-01", "acme/staging/redline/app"}); err != nil {
 			t.Fatalf("key new: %v", err)
 		}
 	})
 
-	held, err := ks.List(keyAddr(configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}))
+	held, err := ks.List(keyAddr(configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}))
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -465,7 +492,7 @@ func TestKeyNewAndList(t *testing.T) {
 
 	// The material must not be in the output, and nothing must have been
 	// posted: minting is a local act.
-	key, err := ks.KeyFor(keyAddr(configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}), held[0].ID)
+	key, err := ks.KeyFor(keyAddr(configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}), held[0].ID)
 	if err != nil {
 		t.Fatalf("key for: %v", err)
 	}
@@ -481,7 +508,7 @@ func TestKeyNewAndList(t *testing.T) {
 			t.Fatalf("key ls: %v", err)
 		}
 	})
-	if !strings.Contains(listed, "staging/redline/app") || !strings.Contains(listed, held[0].ID.String()) {
+	if !strings.Contains(listed, "acme/staging/redline/app") || !strings.Contains(listed, held[0].ID.String()) {
 		t.Errorf("ls did not report the key:\n%s", listed)
 	}
 	if strings.Contains(listed, key.Text()) {
@@ -495,13 +522,13 @@ func TestKeyNewSetCurrentSendsOnlyAnID(t *testing.T) {
 	c := s.start(t)
 
 	captureStdout(t, func() {
-		if err := cmKeyNew(c, []string{"--label", "2026-01", "--set-current", "staging/redline/app"}); err != nil {
+		if err := cmKeyNew(c, []string{"--label", "2026-01", "--set-current", "acme/staging/redline/app"}); err != nil {
 			t.Fatalf("key new: %v", err)
 		}
 	})
-	addr := configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
 	held, _ := ks.List(keyAddr(addr))
-	if got := s.currentKeys["staging/redline/app"]; got != held[0].ID.String() {
+	if got := s.currentKeys["acme/staging/redline/app"]; got != held[0].ID.String() {
 		t.Fatalf("pointer is %q, want %q", got, held[0].ID)
 	}
 	key, _ := ks.KeyFor(keyAddr(addr), held[0].ID)
@@ -512,12 +539,12 @@ func TestKeyNewSetCurrentSendsOnlyAnID(t *testing.T) {
 
 func TestKeyImportRoundTrip(t *testing.T) {
 	ks := testKeystore(t)
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	original := configmgr.NewEnvKey()
 
 	withStdin(t, "  "+original.Text()+"\n")
 	captureStdout(t, func() {
-		if err := cmKeyImport([]string{"--label", "2026-01", "--created-at", "2026-01-15T00:00:00Z", "prod/redline/app"}); err != nil {
+		if err := cmKeyImport([]string{"--label", "2026-01", "--created-at", "2026-01-15T00:00:00Z", "acme/prod/redline/app"}); err != nil {
 			t.Fatalf("import: %v", err)
 		}
 	})
@@ -538,7 +565,7 @@ func TestKeyImportRoundTrip(t *testing.T) {
 func TestKeyImportRejectsGarbage(t *testing.T) {
 	testKeystore(t)
 	withStdin(t, "not-a-key\n")
-	if err := cmKeyImport([]string{"prod/redline/app"}); err == nil {
+	if err := cmKeyImport([]string{"acme/prod/redline/app"}); err == nil {
 		t.Fatal("importing garbage should fail")
 	}
 }
@@ -548,10 +575,10 @@ func TestKeyImportRejectsGarbage(t *testing.T) {
 // test` stdout is a pipe, so the refusal is the natural path here.
 func TestKeyExportRefusesWithoutATTY(t *testing.T) {
 	ks := testKeystore(t)
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	key := putKey(t, ks, addr, "2026-01", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 
-	err := cmKeyExport([]string{"prod/redline/app"})
+	err := cmKeyExport([]string{"acme/prod/redline/app"})
 	if err == nil {
 		t.Fatal("export to a pipe should be refused")
 	}
@@ -565,7 +592,7 @@ func TestKeyExportRefusesWithoutATTY(t *testing.T) {
 
 func TestSelectKeyNeedsAnIDWhenSeveralAreHeld(t *testing.T) {
 	ks := testKeystore(t)
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	putKey(t, ks, addr, "2026-01", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	putKey(t, ks, addr, "2026-02", time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC))
 	held, _ := ks.List(keyAddr(addr))
@@ -589,7 +616,7 @@ func TestSelectKeyNeedsAnIDWhenSeveralAreHeld(t *testing.T) {
 
 func TestSealRefusalIsActionable(t *testing.T) {
 	ks := testKeystore(t)
-	addr := configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
 	old := putKey(t, ks, addr, "2026-01", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	putKey(t, ks, addr, "2026-02", time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC))
 
@@ -597,7 +624,7 @@ func TestSealRefusalIsActionable(t *testing.T) {
 	// hz still calls the OLD key current, so the newest file on disk is one hz
 	// has never heard of. That is exactly the drop-a-file-into-the-keystore
 	// shape, and sealing must stop.
-	s.currentKeys["staging/redline/app"] = old.ID().String()
+	s.currentKeys["acme/staging/redline/app"] = old.ID().String()
 	c := s.start(t)
 
 	_, _, err := cmSealingKey(ks, c, addr)
@@ -615,7 +642,7 @@ func TestSealRefusalWhenNothingIsHeld(t *testing.T) {
 	ks := testKeystore(t)
 	s := newCMStub()
 	c := s.start(t)
-	_, _, err := cmSealingKey(ks, c, configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"})
+	_, _, err := cmSealingKey(ks, c, configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"})
 	if err == nil || !strings.Contains(err.Error(), "hz config key import") {
 		t.Fatalf("an empty address should say how to fill it: %v", err)
 	}
@@ -623,7 +650,7 @@ func TestSealRefusalWhenNothingIsHeld(t *testing.T) {
 
 func TestSealUsesTheOnlyKeyWhenHzHasNoPointer(t *testing.T) {
 	ks := testKeystore(t)
-	addr := configmgr.EnvKeyAddr{Environment: "dev", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "dev", App: "redline", Role: "app"}
 	only := putKey(t, ks, addr, "2026-01", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	s := newCMStub()
 	c := s.start(t)
@@ -641,7 +668,7 @@ func TestSealUsesTheOnlyKeyWhenHzHasNoPointer(t *testing.T) {
 
 func TestApproveWrapsTheKeyAndSendsNoKeyMaterial(t *testing.T) {
 	ks := testKeystore(t)
-	addr := configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
 	key := putKey(t, ks, addr, "2026-01", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	priv, err := configmgr.NewMachineKey()
@@ -654,10 +681,10 @@ func TestApproveWrapsTheKeyAndSendsNoKeyMaterial(t *testing.T) {
 	s.publicKey = configmgr.MarshalMachinePublicKey(priv.PublicKey())
 	s.registration = apitypes.CMRegistrationResp{
 		ID: "reg-1", MachineID: "m-1", MachineName: "redline-01",
-		Environment: "staging", App: "redline", Role: "app", Version: "1.3.0",
+		Project: "acme", Environment: "staging", App: "redline", Role: "app", Version: "1.3.0",
 		State: configmgr.StatePending, Fingerprint: fp.String(),
 	}
-	s.currentKeys["staging/redline/app"] = key.ID().String()
+	s.currentKeys["acme/staging/redline/app"] = key.ID().String()
 	c := s.start(t)
 
 	// The operator types the fingerprint the box printed.
@@ -695,7 +722,7 @@ func TestApproveWrapsTheKeyAndSendsNoKeyMaterial(t *testing.T) {
 
 	// And the grant is bound to this registration's address: relayed into
 	// another slot on the same machine, it must not open.
-	wrong := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	wrong := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	if _, err := configmgr.UnwrapEnvKey(priv, wrong, envelope); err == nil {
 		t.Fatal("the grant opened at an address it was not made for")
 	}
@@ -708,7 +735,7 @@ func TestApproveWrapsTheKeyAndSendsNoKeyMaterial(t *testing.T) {
 
 func TestApproveRefusesAFingerprintMismatch(t *testing.T) {
 	ks := testKeystore(t)
-	addr := configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
 	key := putKey(t, ks, addr, "2026-01", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	// hz serves a public key whose private half hz holds — the substitution
@@ -726,10 +753,10 @@ func TestApproveRefusesAFingerprintMismatch(t *testing.T) {
 	s := newCMStub()
 	s.publicKey = configmgr.MarshalMachinePublicKey(attacker.PublicKey())
 	s.registration = apitypes.CMRegistrationResp{
-		ID: "reg-1", Environment: "staging", App: "redline", Role: "app",
+		ID: "reg-1", Project: "acme", Environment: "staging", App: "redline", Role: "app",
 		State: configmgr.StatePending, Fingerprint: configmgr.FingerprintOf(attacker.PublicKey()).String(),
 	}
-	s.currentKeys["staging/redline/app"] = key.ID().String()
+	s.currentKeys["acme/staging/redline/app"] = key.ID().String()
 	c := s.start(t)
 
 	withStdin(t, configmgr.FingerprintOf(boxKey.PublicKey()).String()+"\n")
@@ -751,17 +778,17 @@ func TestApproveRefusesAFingerprintMismatch(t *testing.T) {
 func TestApproveRefusesAnEmptyOrUnparseableFingerprint(t *testing.T) {
 	for _, typed := range []string{"\n", "yes\n", "\n\n"} {
 		ks := testKeystore(t)
-		addr := configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}
+		addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
 		key := putKey(t, ks, addr, "2026-01", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 		priv, _ := configmgr.NewMachineKey()
 
 		s := newCMStub()
 		s.publicKey = configmgr.MarshalMachinePublicKey(priv.PublicKey())
 		s.registration = apitypes.CMRegistrationResp{
-			ID: "reg-1", Environment: "staging", App: "redline", Role: "app",
+			ID: "reg-1", Project: "acme", Environment: "staging", App: "redline", Role: "app",
 			State: configmgr.StatePending, Fingerprint: configmgr.FingerprintOf(priv.PublicKey()).String(),
 		}
-		s.currentKeys["staging/redline/app"] = key.ID().String()
+		s.currentKeys["acme/staging/redline/app"] = key.ID().String()
 		c := s.start(t)
 
 		withStdin(t, typed)
@@ -778,7 +805,7 @@ func TestApproveRefusesAnEmptyOrUnparseableFingerprint(t *testing.T) {
 // internally inconsistent, before a human is asked anything.
 func TestApproveRefusesWhenHzContradictsItself(t *testing.T) {
 	ks := testKeystore(t)
-	addr := configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
 	putKey(t, ks, addr, "2026-01", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	served, _ := configmgr.NewMachineKey()
 	other, _ := configmgr.NewMachineKey()
@@ -786,7 +813,7 @@ func TestApproveRefusesWhenHzContradictsItself(t *testing.T) {
 	s := newCMStub()
 	s.publicKey = configmgr.MarshalMachinePublicKey(served.PublicKey())
 	s.registration = apitypes.CMRegistrationResp{
-		ID: "reg-1", Environment: "staging", App: "redline", Role: "app",
+		ID: "reg-1", Project: "acme", Environment: "staging", App: "redline", Role: "app",
 		State: configmgr.StatePending, Fingerprint: configmgr.FingerprintOf(other.PublicKey()).String(),
 	}
 	c := s.start(t)
@@ -802,7 +829,7 @@ func TestApproveRefusesANonPendingRegistration(t *testing.T) {
 	testKeystore(t)
 	s := newCMStub()
 	s.registration = apitypes.CMRegistrationResp{
-		ID: "reg-1", Environment: "staging", App: "redline", Role: "app", State: configmgr.StateDenied,
+		ID: "reg-1", Project: "acme", Environment: "staging", App: "redline", Role: "app", State: configmgr.StateDenied,
 	}
 	c := s.start(t)
 	if err := cmApprove(c, []string{"reg-1"}); err == nil || !strings.Contains(err.Error(), "not pending") {
@@ -839,9 +866,9 @@ func captureStdoutErr(t *testing.T, fn func() error) error {
 
 func TestCurrentKeyQueryCarriesTheWholeAddress(t *testing.T) {
 	s := newCMStub()
-	s.currentKeys["prod/redline/ops"] = "00112233445566aa"
+	s.currentKeys["acme/prod/redline/ops"] = "00112233445566aa"
 	c := s.start(t)
-	cur, err := cmCurrentKey(c, configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "ops"})
+	cur, err := cmCurrentKey(c, configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "ops"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -850,7 +877,7 @@ func TestCurrentKeyQueryCarriesTheWholeAddress(t *testing.T) {
 	}
 	// An address with nothing set reads as unavailable, not as an error: that
 	// is the ordinary state of a brand-new address.
-	cur, err = cmCurrentKey(c, configmgr.EnvKeyAddr{Environment: "dev", App: "redline", Role: "app"})
+	cur, err = cmCurrentKey(c, configmgr.EnvKeyAddr{Project: "acme", Environment: "dev", App: "redline", Role: "app"})
 	if err != nil || cur.String() != "unavailable" {
 		t.Fatalf("got %s, %v", cur, err)
 	}
@@ -858,8 +885,8 @@ func TestCurrentKeyQueryCarriesTheWholeAddress(t *testing.T) {
 
 func TestKeyAddressEnumerationIgnoresStrayFiles(t *testing.T) {
 	ks := testKeystore(t)
-	putKey(t, ks, configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}, "2026-01", time.Now())
-	putKey(t, ks, configmgr.EnvKeyAddr{Environment: "dev", App: "redline", Role: "ops"}, "2026-01", time.Now())
+	putKey(t, ks, configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}, "2026-01", time.Now())
+	putKey(t, ks, configmgr.EnvKeyAddr{Project: "acme", Environment: "dev", App: "redline", Role: "ops"}, "2026-01", time.Now())
 	// A file where a directory would be must not become an address.
 	if err := os.WriteFile(filepath.Join(ks.Root(), "secrets", "keys", "README"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
@@ -868,7 +895,7 @@ func TestKeyAddressEnumerationIgnoresStrayFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(addrs) != 2 || addrs[0].String() != "dev/redline/ops" || addrs[1].String() != "prod/redline/app" {
+	if len(addrs) != 2 || addrs[0].String() != "acme/dev/redline/ops" || addrs[1].String() != "acme/prod/redline/app" {
 		t.Fatalf("got %v", addrs)
 	}
 }
@@ -892,10 +919,10 @@ func TestFlagsAfterThePositionalAreHonoured(t *testing.T) {
 
 	testKeystore(t)
 	s2 := newCMStub()
-	s2.resolve["prod/redline/app"] = apitypes.CMResolveResp{Winner: &apitypes.CMConfigResp{ID: "cfg-1", MinVer: "1.0.0"}}
+	s2.resolve["acme/prod/redline/app"] = apitypes.CMResolveResp{Winner: &apitypes.CMConfigResp{ID: "cfg-1", MinVer: "1.0.0"}}
 	c2 := s2.start(t)
 	out := captureStdout(t, func() {
-		if err := cmResolve(c2, []string{"prod/redline/app", "--version=1.4.2"}); err != nil {
+		if err := cmResolve(c2, []string{"acme/prod/redline/app", "--version=1.4.2"}); err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
 	})
@@ -912,11 +939,11 @@ func TestKeyNewDoesNotMistakeAFlagValueForTheAddress(t *testing.T) {
 	s := newCMStub()
 	c := s.start(t)
 	captureStdout(t, func() {
-		if err := cmKeyNew(c, []string{"--label", "2026-01", "staging/redline/app"}); err != nil {
+		if err := cmKeyNew(c, []string{"--label", "2026-01", "acme/staging/redline/app"}); err != nil {
 			t.Fatalf("key new: %v", err)
 		}
 	})
-	held, err := ks.List(keyAddr(configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}))
+	held, err := ks.List(keyAddr(configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}))
 	if err != nil || len(held) != 1 || held[0].Label != "2026-01" {
 		t.Fatalf("got %+v, %v", held, err)
 	}

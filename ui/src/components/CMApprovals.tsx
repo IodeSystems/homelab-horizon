@@ -52,7 +52,7 @@ function relativeTime(isoStr: string | undefined): string {
 }
 
 function address(reg: CMRegistrationResp): string {
-  return `${reg.environment}/${reg.app}/${reg.role}`;
+  return `${reg.project}/${reg.environment}/${reg.app}/${reg.role}`;
 }
 
 // A command to run somewhere else. Matches RemoteVantages' CopyBox: a

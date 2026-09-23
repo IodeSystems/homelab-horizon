@@ -193,7 +193,7 @@ func cmResolve(c *client, args []string) error {
 		pos = fs.Arg(0)
 	}
 	if pos == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz config resolve <environment>/<app>/<role> --version=<v>")
+		return fmt.Errorf("usage: hz config resolve <project>/<environment>/<app>/<role> --version=<v>")
 	}
 	if *version == "" {
 		return fmt.Errorf("--version is required: resolution is a range containment test, and there is no default version to test")
@@ -203,6 +203,7 @@ func cmResolve(c *client, args []string) error {
 		return err
 	}
 	q := url.Values{
+		apitypes.CMQueryProject: {addr.Project},
 		apitypes.CMQueryEnv:     {addr.Environment},
 		apitypes.CMQueryApp:     {addr.App},
 		apitypes.CMQueryRole:    {addr.Role},
@@ -328,7 +329,13 @@ func cmPromote(c *client, args []string) error {
 	if srcAddr.Environment == *to {
 		return fmt.Errorf("%s is already in %s", src.ID, *to)
 	}
-	dstAddr := configmgr.EnvKeyAddr{Environment: *to, App: src.App, Role: src.Role}
+	// A promotion moves between two rungs of ONE project: the ladder is
+	// declared inside a project, and `config.CheckPromotion` looks both rungs
+	// up there. So the target inherits the source's project and --project no
+	// longer chooses it — see the gate below.
+	dstAddr := configmgr.EnvKeyAddr{
+		Project: srcAddr.Project, Environment: *to, App: src.App, Role: src.Role,
+	}
 
 	// The gate, first and separately. It asks only whether a key is BOUND in
 	// the target, never what it holds, which is why it survives hz reading
@@ -475,6 +482,7 @@ func cmPromote(c *client, args []string) error {
 
 	var resp apitypes.CMConfigResp
 	req := apitypes.CMCreateConfigReq{
+		Project:     dstAddr.Project,
 		Environment: dstAddr.Environment,
 		App:         dstAddr.App,
 		Role:        dstAddr.Role,
@@ -544,10 +552,11 @@ func cmCheckEdge(edge *apitypes.CMPromotionEdgeResp, from, to string, force bool
 // minimum version — the config a box there is running now.
 func cmBoundEnvValues(c *client, addr configmgr.EnvKeyAddr, version string) ([]apitypes.CMConfigValueResp, error) {
 	q := url.Values{
-		apitypes.CMQueryEnv:  {addr.Environment},
-		apitypes.CMQueryApp:  {addr.App},
-		apitypes.CMQueryRole: {addr.Role},
-		"version":            {version},
+		apitypes.CMQueryProject: {addr.Project},
+		apitypes.CMQueryEnv:     {addr.Environment},
+		apitypes.CMQueryApp:     {addr.App},
+		apitypes.CMQueryRole:    {addr.Role},
+		"version":               {version},
 	}
 	var resp apitypes.CMResolveResp
 	if err := c.do(http.MethodGet, cmAPI+"/resolve?"+q.Encode(), nil, &resp); err != nil {

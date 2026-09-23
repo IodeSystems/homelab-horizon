@@ -23,7 +23,7 @@ postures, machines in segments, instances addressed by four parts, and
 declared-versus-observed versions. None of them has a home. Worse, the one
 surface that already touches the new model — `/config`, the config-manager UI
 — reaches it sideways: an "environment" there is a free-text string component
-of a `(environment, app, role)` tuple, with `AddressPicker` offering
+of a `(project, environment, app, role)` tuple, with `AddressPicker` offering
 suggestions harvested from past registrations because *hz has no endpoint that
 lists addresses*. There is no projects concept anywhere in `ui/src`. There is
 no segments concept. "Machine" means one thing in `CMMachines.tsx` and a
@@ -380,7 +380,7 @@ Concrete against `ui/src/`.
 | `routes/dashboard.tsx` (321 lines) | **Overview** | Its stat tiles count inventory that never needs you. Keep the fleet-peer-sync tile's *shape* (last attempt / last success / error) — that is a freshness display, and it should be rebuilt on the Observation component rather than kept as a bespoke one. |
 | `routes/vpn.tsx` (1098 lines) | **Network** → `seg:people` | Peer CRUD, admin toggles, profiles and QR all keep working; they become "the members of one segment" instead of a top-level noun. The HA join-token flow moves to Settings → HA Fleet, which is where the other HA machinery already lives. |
 | `routes/config.tsx` + `CMApprovals` + `CMMachines` | **Machines** (+ its enrolment state) | `CMApprovals` is already the typed-fingerprint approval queue and its copy is good — reuse the `FingerprintBlock` warning verbatim, including *"hz cannot read this machine's public key… Do not approve it."* `CMMachines`' key-currency chips (`current key` / `old key` / `no key id`) are real fleet facts and belong on the machine row. What goes is the *grouping-by-machine-because-there-is-no-machine-record* workaround: once a machine is a first-class record, `CMMachines` stops being a view that reconstructs one from registrations. |
-| `CMConfigs` + `CMResolve` + `CMPromote` | **Environment detail**, as a "Config" section | These are already per-`(environment, app, role)`. Once environment is a record, they are that record's config tab rather than three tabs behind an `AddressPicker` that guesses the address list from past registrations. `CMResolve`'s "what would a box at version X get" keeps its own sub-screen — it is a simulator, not a view. **Keep every `CopyBox`**: the crypto belongs in the CLI on the operator's own machine and must not migrate into the browser. |
+| `CMConfigs` + `CMResolve` + `CMPromote` | **Environment detail**, as a "Config" section | These are already per-`(project, environment, app, role)`. Once environment is a record, they are that record's config tab rather than three tabs behind an `AddressPicker` that guesses the address list from past registrations. `CMResolve`'s "what would a box at version X get" keeps its own sub-screen — it is a simulator, not a view. **Keep every `CopyBox`**: the crypto belongs in the CLI on the operator's own machine and must not migrate into the browser. |
 | `routes/domains.tsx` + `routes/dns.index.tsx` + `dns.$zone.tsx` | **Services** (domains as a tab), **DNS stays its own route** | A domain is an attribute of a Service; a DNS zone is not — it has providers, credentials and records of its own. Merging domains into Services removes a nav entry that only ever gets reached from a service anyway. |
 
 ### Goes

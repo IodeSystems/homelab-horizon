@@ -35,6 +35,7 @@ func TestCMAdminRoutesAreReachableAsBuilt(t *testing.T) {
 		q    url.Values
 	}{
 		{"resolve", apitypes.CMPathResolve, url.Values{
+			apitypes.CMQueryProject: {"acme"},
 			apitypes.CMQueryEnv:     {"prod"},
 			apitypes.CMQueryApp:     {"redline"},
 			apitypes.CMQueryRole:    {"app"},
@@ -45,14 +46,16 @@ func TestCMAdminRoutesAreReachableAsBuilt(t *testing.T) {
 			apitypes.CMQueryTarget:   {"prod"},
 		}},
 		{"current key", apitypes.CMPathCurrentKey, url.Values{
-			apitypes.CMQueryEnv:  {"prod"},
-			apitypes.CMQueryApp:  {"redline"},
-			apitypes.CMQueryRole: {"app"},
+			apitypes.CMQueryProject: {"acme"},
+			apitypes.CMQueryEnv:     {"prod"},
+			apitypes.CMQueryApp:     {"redline"},
+			apitypes.CMQueryRole:    {"app"},
 		}},
 		{"configs", apitypes.CMPathConfigs, url.Values{
-			apitypes.CMQueryEnv:  {"prod"},
-			apitypes.CMQueryApp:  {"redline"},
-			apitypes.CMQueryRole: {"app"},
+			apitypes.CMQueryProject: {"acme"},
+			apitypes.CMQueryEnv:     {"prod"},
+			apitypes.CMQueryApp:     {"redline"},
+			apitypes.CMQueryRole:    {"app"},
 		}},
 		{"machines", apitypes.CMPathMachines, nil},
 		// Key custody. Registered from the same constants the CLI reads, for

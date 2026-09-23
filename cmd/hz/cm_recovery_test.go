@@ -44,7 +44,7 @@ func TestKeyNewWrapsToEveryRecoveryRecipient(t *testing.T) {
 	var out string
 	err := func() error {
 		var e error
-		out = captureStdout(t, func() { e = cmKeyNew(c, []string{"--label", "2026-01", "staging/redline/app"}) })
+		out = captureStdout(t, func() { e = cmKeyNew(c, []string{"--label", "2026-01", "acme/staging/redline/app"}) })
 		return e
 	}()
 	if err != nil {
@@ -61,7 +61,7 @@ func TestKeyNewWrapsToEveryRecoveryRecipient(t *testing.T) {
 		t.Fatalf("want one wrap per recipient, got %d", len(wraps))
 	}
 
-	addr := configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
 	for _, w := range wraps {
 		priv, ok := privs[w.Recipient]
 		if !ok {
@@ -110,7 +110,7 @@ func TestKeyNewFailsLoudlyWhenCustodyCannotBeEstablished(t *testing.T) {
 	s.mu.Unlock()
 
 	var err error
-	captureStdout(t, func() { err = cmKeyNew(c, []string{"--label", "2026-01", "staging/redline/app"}) })
+	captureStdout(t, func() { err = cmKeyNew(c, []string{"--label", "2026-01", "acme/staging/redline/app"}) })
 	if err == nil {
 		t.Fatal("minting reported success with no wrap written")
 	}
@@ -125,7 +125,7 @@ func TestKeyNewFailsLoudlyWhenCustodyCannotBeEstablished(t *testing.T) {
 	if kerr != nil {
 		t.Fatal(kerr)
 	}
-	held, kerr := ks.List(keyAddr(configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}))
+	held, kerr := ks.List(keyAddr(configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}))
 	if kerr != nil || len(held) != 1 {
 		t.Fatalf("the minted key is not in the keystore: %v %+v", kerr, held)
 	}
@@ -137,7 +137,7 @@ func TestKeyNewWithNoRecipientsStillWorksAndSaysWhatIsMissing(t *testing.T) {
 	// now exists in one place.
 	_, c, _, _ := recoveryFixture(t)
 	var err error
-	out := captureStdout(t, func() { err = cmKeyNew(c, []string{"--label", "2026-01", "staging/redline/app"}) })
+	out := captureStdout(t, func() { err = cmKeyNew(c, []string{"--label", "2026-01", "acme/staging/redline/app"}) })
 	if err != nil {
 		t.Fatalf("minting must not require custody to be configured: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestRecoveryRoundTripAcrossTwoRecipients(t *testing.T) {
 	// confirm a third unrelated key cannot. That last clause is the one that
 	// makes the first two mean anything.
 	s, c, ks, privs := recoveryFixture(t, "ops", "successor")
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	key := putKey(t, ks, addr, "2026-01", time.Now().UTC())
 
 	var err error
@@ -179,7 +179,7 @@ func TestRecoveryRoundTripAcrossTwoRecipients(t *testing.T) {
 	}
 
 	for name, priv := range privs {
-		out, err := backfillAndVerify(t, c, "prod/redline/app", priv)
+		out, err := backfillAndVerify(t, c, "acme/prod/redline/app", priv)
 		if err != nil {
 			t.Fatalf("%s should be able to open it: %v\n%s", name, err, out)
 		}
@@ -197,7 +197,7 @@ func TestRecoveryRoundTripAcrossTwoRecipients(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := backfillAndVerify(t, c, "prod/redline/app", stranger)
+	out, err := backfillAndVerify(t, c, "acme/prod/redline/app", stranger)
 	if err == nil {
 		t.Fatalf("an unrelated key verified:\n%s", out)
 	}
@@ -219,7 +219,7 @@ func TestRecoveryRoundTripAcrossTwoRecipients(t *testing.T) {
 //  3. an honest wrap of the right key made at a DIFFERENT address — the address
 //     is authenticated additional data, so it must not pass for this one.
 func TestVerifyFailsOnASabotagedWrap(t *testing.T) {
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 
 	sabotage := map[string]func(t *testing.T, s *cmStub, priv *ecdh.PrivateKey, key configmgr.EnvKey, keyID string) string{
 		"flipped bit in the ciphertext": func(t *testing.T, s *cmStub, priv *ecdh.PrivateKey, key configmgr.EnvKey, _ string) string {
@@ -240,7 +240,7 @@ func TestVerifyFailsOnASabotagedWrap(t *testing.T) {
 			return configmgr.EncodeEnvelope(blob)
 		},
 		"the right key, wrapped at another address": func(t *testing.T, s *cmStub, priv *ecdh.PrivateKey, key configmgr.EnvKey, _ string) string {
-			elsewhere := configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}
+			elsewhere := configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
 			blob, err := configmgr.WrapEnvKey(priv.PublicKey(), elsewhere, key)
 			if err != nil {
 				t.Fatal(err)
@@ -259,7 +259,7 @@ func TestVerifyFailsOnASabotagedWrap(t *testing.T) {
 			// is a bad wrap sitting in hz, however it got there.
 			s.mu.Lock()
 			s.recovery.Wraps = []apitypes.CMRecoveryWrap{{
-				Environment: addr.Environment, App: addr.App, Role: addr.Role,
+				Project: addr.Project, Environment: addr.Environment, App: addr.App, Role: addr.Role,
 				KeyID:       key.ID().String(),
 				Recipient:   "ops",
 				Fingerprint: configmgr.FingerprintOf(priv.PublicKey()).String(),
@@ -267,7 +267,7 @@ func TestVerifyFailsOnASabotagedWrap(t *testing.T) {
 			}}
 			s.mu.Unlock()
 
-			out, err := backfillAndVerify(t, c, "prod/redline/app", priv)
+			out, err := backfillAndVerify(t, c, "acme/prod/redline/app", priv)
 			if err == nil {
 				t.Fatalf("VERIFY PASSED a sabotaged wrap (%s). A verify that always says yes is worse than none:\n%s", name, out)
 			}
@@ -286,7 +286,7 @@ func TestVerifyPassesOnlyTheUnsabotagedTwin(t *testing.T) {
 	// must pass. Without this the sabotage tests would also pass against a
 	// verify that always says no.
 	s, c, ks, privs := recoveryFixture(t, "ops")
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	key := putKey(t, ks, addr, "2026-01", time.Now().UTC())
 	priv := privs["ops"]
 	blob, err := configmgr.WrapEnvKey(priv.PublicKey(), addr, key)
@@ -295,14 +295,14 @@ func TestVerifyPassesOnlyTheUnsabotagedTwin(t *testing.T) {
 	}
 	s.mu.Lock()
 	s.recovery.Wraps = []apitypes.CMRecoveryWrap{{
-		Environment: addr.Environment, App: addr.App, Role: addr.Role,
+		Project: addr.Project, Environment: addr.Environment, App: addr.App, Role: addr.Role,
 		KeyID: key.ID().String(), Recipient: "ops",
 		Fingerprint: configmgr.FingerprintOf(priv.PublicKey()).String(),
 		Wrapped:     configmgr.EncodeEnvelope(blob),
 	}}
 	s.mu.Unlock()
 
-	out, err := backfillAndVerify(t, c, "prod/redline/app", priv)
+	out, err := backfillAndVerify(t, c, "acme/prod/redline/app", priv)
 	if err != nil {
 		t.Fatalf("an intact wrap did not verify: %v\n%s", err, out)
 	}
@@ -313,13 +313,13 @@ func TestVerifyPassesOnlyTheUnsabotagedTwin(t *testing.T) {
 
 func TestVerifySendsNothingAndRefusesAKeyInArgv(t *testing.T) {
 	s, c, ks, privs := recoveryFixture(t, "ops")
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	putKey(t, ks, addr, "2026-01", time.Now().UTC())
 	captureStdout(t, func() { _ = cmRecoveryBackfill(c, nil) })
 
 	priv := privs["ops"]
 	text := configmgr.MarshalMachinePrivateKey(priv)
-	if _, err := backfillAndVerify(t, c, "prod/redline/app", priv); err != nil {
+	if _, err := backfillAndVerify(t, c, "acme/prod/redline/app", priv); err != nil {
 		t.Fatalf("verify: %v", err)
 	}
 	// hz must never receive a private key. There is no field for one and verify
@@ -330,7 +330,7 @@ func TestVerifySendsNothingAndRefusesAKeyInArgv(t *testing.T) {
 	// And there is no flag that would put it in argv, which /proc publishes.
 	withStdin(t, text+"\n")
 	var err error
-	captureStdout(t, func() { err = cmRecoveryVerify(c, []string{"prod/redline/app", "--key", text}) })
+	captureStdout(t, func() { err = cmRecoveryVerify(c, []string{"acme/prod/redline/app", "--key", text}) })
 	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
 		t.Fatalf("a --key flag was accepted or failed for the wrong reason: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestVerifyRejectsSomethingThatIsNotAKeyWithoutEchoingIt(t *testing.T) {
 	_, c, _, _ := recoveryFixture(t, "ops")
 	withStdin(t, "hunter2-this-is-not-a-key\n")
 	var err error
-	out := captureStdout(t, func() { err = cmRecoveryVerify(c, []string{"prod/redline/app"}) })
+	out := captureStdout(t, func() { err = cmRecoveryVerify(c, []string{"acme/prod/redline/app"}) })
 	if err == nil {
 		t.Fatal("garbage was accepted as a recovery key")
 	}
@@ -354,7 +354,7 @@ func TestVerifyRejectsSomethingThatIsNotAKeyWithoutEchoingIt(t *testing.T) {
 func TestVerifyIsSilentAboutOtherAddresses(t *testing.T) {
 	// Custody is per key. A wrap at staging must not make prod look covered.
 	s, c, ks, privs := recoveryFixture(t, "ops")
-	staging := configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}
+	staging := configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
 	putKey(t, ks, staging, "2026-01", time.Now().UTC())
 	captureStdout(t, func() { _ = cmRecoveryBackfill(c, nil) })
 	s.mu.Lock()
@@ -364,11 +364,11 @@ func TestVerifyIsSilentAboutOtherAddresses(t *testing.T) {
 		t.Fatalf("setup: %d wraps", wrapped)
 	}
 
-	out, err := backfillAndVerify(t, c, "prod/redline/app", privs["ops"])
+	out, err := backfillAndVerify(t, c, "acme/prod/redline/app", privs["ops"])
 	if err == nil {
 		t.Fatalf("prod verified off a staging wrap:\n%s", out)
 	}
-	if !strings.Contains(out, "no wrap for prod/redline/app") {
+	if !strings.Contains(out, "no wrap for acme/prod/redline/app") {
 		t.Fatalf("the answer does not name what is missing:\n%s", out)
 	}
 }
@@ -381,14 +381,14 @@ func TestBackfillReachesOnlyTheKeysThisMachineHolds(t *testing.T) {
 	// opens with a recovery private key, which is not on this box — so an
 	// address whose key lives on another laptop is reported, never guessed at.
 	s, c, ks, privs := recoveryFixture(t, "ops")
-	held := configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}
+	held := configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
 	key := putKey(t, ks, held, "2026-01", time.Now().UTC())
 
 	// An address hz knows about because a wrap exists, whose key this machine
 	// does NOT hold.
 	s.mu.Lock()
 	s.recovery.Wraps = append(s.recovery.Wraps, apitypes.CMRecoveryWrap{
-		Environment: "prod", App: "redline", Role: "app",
+		Project: "acme", Environment: "prod", App: "redline", Role: "app",
 		KeyID: "0123456789abcdef", Recipient: "ops", Wrapped: "hzenv-elsewhere",
 	})
 	s.mu.Unlock()
@@ -404,7 +404,7 @@ func TestBackfillReachesOnlyTheKeysThisMachineHolds(t *testing.T) {
 	if len(sent) != 1 || sent[0].Environment != "staging" || sent[0].KeyID != key.ID().String() {
 		t.Fatalf("backfill wrapped something other than the key it holds: %+v", sent)
 	}
-	if !strings.Contains(out, "wrapped staging/redline/app") {
+	if !strings.Contains(out, "wrapped acme/staging/redline/app") {
 		t.Fatalf("backfill did not report what it did:\n%s", out)
 	}
 	if strings.Contains(out, key.Text()) {
@@ -417,15 +417,25 @@ func TestBackfillReachesOnlyTheKeysThisMachineHolds(t *testing.T) {
 			t.Fatalf("ls: %v", err)
 		}
 	})
-	if !strings.Contains(lsOut, "prod/redline/app") {
+	// Fully qualified, and that is the assertion. ls joins the keys this
+	// machine HOLDS against the wraps hz stores, and the two sides used to
+	// spell the address differently — the held side four-part, the wrap side
+	// three — so one address split into two rows, each telling half the truth:
+	// "held, all missing" beside "not held, fully covered". Both sides now go
+	// through addrOfWrap/EnvKeyAddr.String(); matching the bare three-part
+	// substring would pass either way and prove nothing.
+	if !strings.Contains(lsOut, "acme/prod/redline/app") {
 		t.Fatalf("ls hides an address hz holds a wrap for:\n%s", lsOut)
+	}
+	if strings.Count(lsOut, "prod/redline/app") != strings.Count(lsOut, "acme/prod/redline/app") {
+		t.Fatalf("an unqualified address leaked into the coverage matrix, so one key has two rows:\n%s", lsOut)
 	}
 	_ = privs
 }
 
 func TestBackfillIsIdempotentAndDryRunSendsNothing(t *testing.T) {
 	s, c, ks, _ := recoveryFixture(t, "ops", "successor")
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	putKey(t, ks, addr, "2026-01", time.Now().UTC())
 
 	dry := captureStdout(t, func() {
@@ -461,7 +471,7 @@ func TestBackfillIsIdempotentAndDryRunSendsNothing(t *testing.T) {
 func TestBackfillWithNoRecipientsOrNoKeysIsANoOp(t *testing.T) {
 	t.Run("no recipients", func(t *testing.T) {
 		_, c, ks, _ := recoveryFixture(t)
-		putKey(t, ks, configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}, "2026-01", time.Now().UTC())
+		putKey(t, ks, configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}, "2026-01", time.Now().UTC())
 		out := captureStdout(t, func() {
 			if err := cmRecoveryBackfill(c, nil); err != nil {
 				t.Fatalf("backfill: %v", err)
@@ -491,7 +501,7 @@ func TestRecoveryListSurfacesTheGap(t *testing.T) {
 	// not another. It is silent everywhere else and is discovered during a
 	// recovery that then half-fails.
 	s, c, ks, privs := recoveryFixture(t, "ops", "successor")
-	addr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	addr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	key := putKey(t, ks, addr, "2026-01", time.Now().UTC())
 	blob, err := configmgr.WrapEnvKey(privs["ops"].PublicKey(), addr, key)
 	if err != nil {
@@ -499,7 +509,7 @@ func TestRecoveryListSurfacesTheGap(t *testing.T) {
 	}
 	s.mu.Lock()
 	s.recovery.Wraps = []apitypes.CMRecoveryWrap{{
-		Environment: addr.Environment, App: addr.App, Role: addr.Role,
+		Project: addr.Project, Environment: addr.Environment, App: addr.App, Role: addr.Role,
 		KeyID: key.ID().String(), Recipient: "ops", Wrapped: configmgr.EncodeEnvelope(blob),
 	}}
 	s.mu.Unlock()
@@ -540,7 +550,7 @@ func TestRecoveryListNotesAWrapToADelistedRecipient(t *testing.T) {
 	s, c, _, _ := recoveryFixture(t, "ops")
 	s.mu.Lock()
 	s.recovery.Wraps = []apitypes.CMRecoveryWrap{{
-		Environment: "prod", App: "redline", Role: "app",
+		Project: "acme", Environment: "prod", App: "redline", Role: "app",
 		KeyID: "0123456789abcdef", Recipient: "departed", Wrapped: "hzenv-blob",
 	}}
 	s.mu.Unlock()

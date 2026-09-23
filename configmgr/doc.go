@@ -107,16 +107,18 @@
 // # Binding a ciphertext to its address
 //
 // hz cannot read a blob, but it chooses which blob to hand a machine. Without
-// this binding, a value sealed for prod/redline/app#DB_PASSWORD authenticates
-// exactly as well when served as staging's, as a different key in the same
-// config, or as an older blessed value — every substitution decrypts cleanly
-// and the agent applies the wrong secret. So the address is authenticated
-// additional data, supplied by the OPENER from its own request and stored
-// nowhere. An address carried inside the envelope could only ever agree with
-// itself.
+// this binding, a value sealed for acme/prod/redline/app#DB_PASSWORD
+// authenticates exactly as well when served as staging's, as a different key in
+// the same config, or as an older blessed value — every substitution decrypts
+// cleanly and the agent applies the wrong secret. So the address is
+// authenticated additional data, supplied by the OPENER from its own request
+// and stored nowhere. An address carried inside the envelope could only ever
+// agree with itself.
 //
-// Kind 0x01 is addressed by (environment, app, role, key name); kind 0x02 by
-// (environment, app, role); kind 0x03 by (machine id, key name).
+// Kind 0x01 is addressed by (project, environment, app, role, key name); kind
+// 0x02 by (project, environment, app, role); kind 0x03 by (machine id, key
+// name). A machine id is globally unique, so kind 0x03 has no project field:
+// there would be no referent for one.
 //
 // The encoding is length-prefixed, not delimited. Each field is a 4-byte
 // big-endian length followed by its UTF-8 bytes, and a label goes first. The
@@ -124,10 +126,12 @@
 // no field content can make one read as another:
 //
 //	field(s)  = uint32be(byteLength(s)) || utf8(s)
-//	context   = field("hz-config/v1 addr") || field(environment) ||
-//	            field(app) || field(role) || field(keyName)  // kind 0x01
-//	context   = field("hz-config/v1 env-key-addr") || field(environment) ||
-//	            field(app) || field(role)                    // kind 0x02
+//	context   = field("hz-config/v1 addr") || field(project) ||
+//	            field(environment) || field(app) || field(role) ||
+//	            field(keyName)                               // kind 0x01
+//	context   = field("hz-config/v1 env-key-addr") || field(project) ||
+//	            field(environment) || field(app) || field(role)
+//	                                                         // kind 0x02
 //	context   = field("hz-config/v1 machine-addr") || field(machineID) ||
 //	            field(keyName)                               // kind 0x03
 //
@@ -136,27 +140,50 @@
 // substitution the additional data exists to refuse, so the encoding has to be
 // one no field content can make ambiguous.
 //
-// # Why a wrapped environment key is addressed by (environment, app, role)
+// # Why the project leads the address
+//
+// Environment names are unique PER PROJECT, not globally: every project gets to
+// have a "prod". So the triple (environment, app, role) is an identity only for
+// as long as exactly one project declares an app by that name, and it is the
+// app coordinate that is silently carrying the project — by luck, not by
+// design. Two projects that legitimately name an app the same thing address the
+// same triple.
+//
+// On its own that is a collision, not a disclosure, because an environment key
+// is minted per address and no code path copies one between addresses. But
+// `hz config key import` exists precisely so one key CAN sit at several
+// addresses, and the moment it does the additional data is the only thing left
+// standing between the two projects — and a three-field context does not name
+// the project. One imported key plus one identical triple is a clean
+// cross-project read, with every authentication passing.
+//
+// Binding the project refuses that structurally. It passes the binding test the
+// rest of this section applies: the project is compiled into the client beside
+// the app name (a project IS a package, and a package ships one binary), so the
+// agent knows it independently of hz — it is not feeding back a field hz chose
+// for it.
+//
+// # Why a wrapped environment key is addressed by (project, environment, app, role)
 //
 // A key name would be wrong: a wrapped environment key is not one config's
 // value, it is the capability that opens every value at an address. There is no
 // single key it belongs to, so there is nothing to put in that field.
 //
-// The (environment, app, role) triple is right, and binding it is not optional.
-// While a machine holds exactly one wrapped key, the recipient fingerprint and
-// the ECDH already pin the grant to one box and an address would add nothing.
-// The moment the wrapped key moves to the REGISTRATION — one box may run
-// several, at several addresses — hz is the party that decides which slot a
-// relayed blob lands in. An approver who grants staging's key to
+// The (project, environment, app, role) tuple is right, and binding it is not
+// optional. While a machine holds exactly one wrapped key, the recipient
+// fingerprint and the ECDH already pin the grant to one box and an address
+// would add nothing. The moment the wrapped key moves to the REGISTRATION — one
+// box may run several, at several addresses — hz is the party that decides
+// which slot a relayed blob lands in. An approver who grants staging's key to
 // staging/redline/ops hands hz a blob that, filed under prod/redline/app,
 // unwraps perfectly on that same box: right recipient, right ECDH, right kind.
 // The agent finds out only later, as a key-id mismatch the first time it opens
 // a prod value. Binding the address turns that into a refusal at unwrap.
 //
 // It passes the binding test the rest of this section applies: the agent knows
-// its own environment, app and role from its own launch arguments, so it is not
-// feeding back a field hz chose for it — the same reason seq is NOT bound and
-// the machine id must be persisted.
+// its own project, environment, app and role from its own build and its own
+// launch arguments, so it is not feeding back a field hz chose for it — the
+// same reason seq is NOT bound and the machine id must be persisted.
 //
 // Changing an envelope's additional data is a flag day: every blob minted under
 // the old rule stops opening under the new one. This binding therefore has to
@@ -174,9 +201,10 @@
 // ceremony.
 //
 // The second is that binding only means something for fields the opener knows
-// INDEPENDENTLY of the party serving the blob. Environment, app, role and key
-// name come from the agent's own request, and the machine id is learned once at
-// approval and persisted beside the private key. seq arrives inside hz's
+// INDEPENDENTLY of the party serving the blob. Project, environment, app, role
+// and key name come from the agent's own build and its own request, and the
+// machine id is learned once at approval and persisted beside the private key.
+// seq arrives inside hz's
 // answer, so an agent could only ever feed back the number hz just sent it —
 // authenticating that binds nothing at all. The same test is why MachineID must
 // be persisted rather than re-read from each response.
@@ -232,9 +260,12 @@
 //     bytes from "Binding a ciphertext to its address" — header || context for
 //     all three kinds, with the label and the fields that kind's row names.
 //     The approval page wraps a key for a pending registration, so its kind
-//     0x02 context is field("hz-config/v1 env-key-addr") || field(environment)
-//     || field(app) || field(role), read off the registration it is approving
-//     and matching what the agent sends. Build the length prefixes with
+//     0x02 context is field("hz-config/v1 env-key-addr") || field(project) ||
+//     field(environment) || field(app) || field(role), read off the
+//     registration it is approving and matching what the agent sends. A page
+//     that omits the project field produces a wrap the agent refuses at unwrap,
+//     which is the intended outcome, not a bug to route around. Build the
+//     length prefixes with
 //     DataView.setUint32(offset, n) — big-endian is the default — and the
 //     field bytes with TextEncoder().encode(s), whose length is the BYTE
 //     length, which is what the prefix must carry for any non-ASCII field.

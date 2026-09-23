@@ -100,24 +100,28 @@ func canonSegment(kind, s string) (string, error) {
 	return s, nil
 }
 
-// canonAddress folds a whole (environment, app, role) triple.
-func canonAddress(environment, app, role string) (string, string, string, error) {
+// canonAddress folds a whole (project, environment, app, role) quadruple.
+func canonAddress(project, environment, app, role string) (string, string, string, string, error) {
+	p, err := canonSegment("project", project)
+	if err != nil {
+		return "", "", "", "", err
+	}
 	env, err := canonSegment("environment", environment)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	a, err := canonSegment("app", app)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	r, err := canonSegment("role", role)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	if reservedRoles[r] {
-		return "", "", "", fmt.Errorf("%w: role %q is reserved", ErrInvalidAddress, r)
+		return "", "", "", "", fmt.Errorf("%w: role %q is reserved", ErrInvalidAddress, r)
 	}
-	return env, a, r, nil
+	return p, env, a, r, nil
 }
 
 // Machine is a box's identity: one row per box, one keypair per box,
@@ -309,6 +313,7 @@ const (
 type Registration struct {
 	ID          string
 	MachineID   string
+	Project     string
 	Environment string
 	App         string
 	Role        string
@@ -345,7 +350,7 @@ type Registration struct {
 }
 
 const selectRegistration = `
-	SELECT id, machine_id, environment, app, role, version,
+	SELECT id, machine_id, project, environment, app, role, version,
 	       COALESCE(observed_version, ''), COALESCE(observed_build, ''), observed_at,
 	       state,
 	       COALESCE(wrap_key_id, ''), COALESCE(approved_by, ''), approved_at,
@@ -374,31 +379,31 @@ const selectRegistration = `
 // no build string — keeping the previous one would pair a build with a version
 // it may not belong to, and the resolve that follows within the same boot puts
 // the real one back.
-func (d *DB) UpsertRegistration(ctx context.Context, machineID, environment, app, role, version string) (*Registration, error) {
+func (d *DB) UpsertRegistration(ctx context.Context, machineID, project, environment, app, role, version string) (*Registration, error) {
 	machineID = strings.TrimSpace(machineID)
 	version = strings.TrimSpace(version)
 	if machineID == "" || version == "" {
 		return nil, errors.New("a registration needs a machine and a version")
 	}
-	env, a, r, err := canonAddress(environment, app, role)
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return nil, err
 	}
 
 	_, err = d.ExecContext(ctx, `
 		INSERT INTO cm_registrations
-		    (id, machine_id, environment, app, role, version, observed_version, observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT (machine_id, environment, app, role) DO UPDATE SET
+		    (id, machine_id, project, environment, app, role, version, observed_version, observed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT (machine_id, project, environment, app, role) DO UPDATE SET
 		    last_seen_at = CURRENT_TIMESTAMP,
 		    observed_version = excluded.observed_version,
 		    observed_build = NULL,
 		    observed_at = CURRENT_TIMESTAMP`,
-		ashid.New("reg"), machineID, env, a, r, version, version)
+		ashid.New("reg"), machineID, p, env, a, r, version, version)
 	if err != nil {
 		return nil, fmt.Errorf("upsert registration: %w", err)
 	}
-	return d.RegistrationAt(ctx, machineID, env, a, r)
+	return d.RegistrationAt(ctx, machineID, p, env, a, r)
 }
 
 // RecordObservedVersion stamps what one registration reported it is running.
@@ -451,13 +456,13 @@ func (d *DB) RegistrationByID(ctx context.Context, id string) (*Registration, er
 }
 
 // RegistrationAt looks a registration up by the tuple that identifies it.
-func (d *DB) RegistrationAt(ctx context.Context, machineID, environment, app, role string) (*Registration, error) {
-	env, a, r, err := canonAddress(environment, app, role)
+func (d *DB) RegistrationAt(ctx context.Context, machineID, project, environment, app, role string) (*Registration, error) {
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return nil, err
 	}
 	return scanRegistration(d.QueryRowContext(ctx, selectRegistration+
-		` WHERE machine_id = ? AND environment = ? AND app = ? AND role = ?`, machineID, env, a, r))
+		` WHERE machine_id = ? AND project = ? AND environment = ? AND app = ? AND role = ?`, machineID, p, env, a, r))
 }
 
 // ListRegistrationsByState lists registrations in one admission state, oldest
@@ -613,7 +618,7 @@ func scanRegistrationRow(row rowScanner) (*Registration, error) {
 	var r Registration
 	var state string
 	var approvedAt, lastSeen, observedAt sql.NullTime
-	if err := row.Scan(&r.ID, &r.MachineID, &r.Environment, &r.App, &r.Role, &r.Version,
+	if err := row.Scan(&r.ID, &r.MachineID, &r.Project, &r.Environment, &r.App, &r.Role, &r.Version,
 		&r.ObservedVersion, &r.ObservedBuild, &observedAt,
 		&state, &r.WrapKeyID, &r.ApprovedBy, &approvedAt, &r.DeniedReason,
 		&r.CreatedAt, &lastSeen); err != nil {
@@ -784,6 +789,7 @@ func (v ConfigValue) withInferredOrigin() ConfigValue {
 // never be recomputed.
 type Config struct {
 	ID          string
+	Project     string
 	Environment string
 	App         string
 	Role        string
@@ -810,7 +816,7 @@ func (c Config) AwaitingKeys() []string {
 }
 
 const selectConfig = `
-	SELECT id, environment, app, role, min_ver, COALESCE(max_ver, ''), seq, created_at, created_by
+	SELECT id, project, environment, app, role, min_ver, COALESCE(max_ver, ''), seq, created_at, created_by
 	FROM cm_configs`
 
 // CreateConfig blesses a config and its values in one transaction: a config
@@ -836,8 +842,8 @@ const selectConfig = `
 // retroactively change what a running box gets with no diff anywhere. That
 // tension is real and is the caller's to resolve, not something to paper over
 // by dropping the check.
-func (d *DB) CreateConfig(ctx context.Context, environment, app, role, minVer, maxVer, createdBy string, values []ConfigValue) (*Config, error) {
-	env, a, r, err := canonAddress(environment, app, role)
+func (d *DB) CreateConfig(ctx context.Context, project, environment, app, role, minVer, maxVer, createdBy string, values []ConfigValue) (*Config, error) {
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return nil, err
 	}
@@ -895,19 +901,19 @@ func (d *DB) CreateConfig(ctx context.Context, environment, app, role, minVer, m
 	var openEnded int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM cm_configs
-		WHERE environment = ? AND app = ? AND role = ? AND max_ver IS NULL`,
-		env, a, r).Scan(&openEnded); err != nil {
+		WHERE project = ? AND environment = ? AND app = ? AND role = ? AND max_ver IS NULL`,
+		p, env, a, r).Scan(&openEnded); err != nil {
 		return nil, fmt.Errorf("count open-ended configs: %w", err)
 	}
 	if maxVer != "" && openEnded == 0 {
-		return nil, fmt.Errorf("%w: %s/%s/%s", ErrNoOpenRange, env, a, r)
+		return nil, fmt.Errorf("%w: %s/%s/%s/%s", ErrNoOpenRange, p, env, a, r)
 	}
 
 	id := ashid.New("cfg")
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO cm_configs (id, environment, app, role, min_ver, max_ver, created_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, env, a, r, minVer, nullString(maxVer), createdBy,
+		INSERT INTO cm_configs (id, project, environment, app, role, min_ver, max_ver, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, p, env, a, r, minVer, nullString(maxVer), createdBy,
 	); err != nil {
 		return nil, fmt.Errorf("create config: %w", err)
 	}
@@ -951,13 +957,13 @@ func (d *DB) GetConfig(ctx context.Context, id string) (*Config, error) {
 // ListConfigsForAddress lists every config ever blessed for
 // (environment, app, role), oldest (lowest seq) first. Values are not
 // populated — use GetConfig for a single config's contents.
-func (d *DB) ListConfigsForAddress(ctx context.Context, environment, app, role string) ([]Config, error) {
-	env, a, r, err := canonAddress(environment, app, role)
+func (d *DB) ListConfigsForAddress(ctx context.Context, project, environment, app, role string) ([]Config, error) {
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return nil, err
 	}
 	rows, err := d.QueryContext(ctx, selectConfig+
-		` WHERE environment = ? AND app = ? AND role = ? ORDER BY seq`, env, a, r)
+		` WHERE project = ? AND environment = ? AND app = ? AND role = ? ORDER BY seq`, p, env, a, r)
 	if err != nil {
 		return nil, err
 	}
@@ -1024,8 +1030,8 @@ func (d *DB) TombstoneConfigValue(ctx context.Context, configID, key, actor stri
 // What it still does not reach, and cannot: every box that ever applied the
 // value holds it in plaintext in its last-known-good cache, indefinitely. Only
 // rotating the key touches that.
-func (d *DB) TombstoneValueAtAddress(ctx context.Context, environment, app, role, key, actor string) (int64, error) {
-	env, a, r, err := canonAddress(environment, app, role)
+func (d *DB) TombstoneValueAtAddress(ctx context.Context, project, environment, app, role, key, actor string) (int64, error) {
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return 0, err
 	}
@@ -1038,9 +1044,9 @@ func (d *DB) TombstoneValueAtAddress(ctx context.Context, environment, app, role
 		UPDATE cm_config_values
 		SET ciphertext = NULL, tombstoned_at = CURRENT_TIMESTAMP, tombstoned_by = ?
 		WHERE key = ? AND tombstoned_at IS NULL AND origin != 'awaiting' AND config_id IN (
-			SELECT id FROM cm_configs WHERE environment = ? AND app = ? AND role = ?
+			SELECT id FROM cm_configs WHERE project = ? AND environment = ? AND app = ? AND role = ?
 		)`,
-		nullString(actor), key, env, a, r)
+		nullString(actor), key, p, env, a, r)
 	if err != nil {
 		return 0, fmt.Errorf("tombstone value at address: %w", err)
 	}
@@ -1087,7 +1093,7 @@ func scanConfig(row rowScanner) (*Config, error) {
 
 func scanConfigRow(row rowScanner) (*Config, error) {
 	var c Config
-	if err := row.Scan(&c.ID, &c.Environment, &c.App, &c.Role, &c.MinVer, &c.MaxVer,
+	if err := row.Scan(&c.ID, &c.Project, &c.Environment, &c.App, &c.Role, &c.MinVer, &c.MaxVer,
 		&c.Seq, &c.CreatedAt, &c.CreatedBy); err != nil {
 		return nil, err
 	}
@@ -1113,8 +1119,8 @@ type Resolution struct {
 // overlap that produced the winner is always inspectable. Zero matches is
 // ErrNoConfigMatches — never an empty Resolution, and never mistaken for a
 // pending approval.
-func (d *DB) ResolveConfig(ctx context.Context, environment, app, role, version string) (*Resolution, error) {
-	env, a, r, err := canonAddress(environment, app, role)
+func (d *DB) ResolveConfig(ctx context.Context, project, environment, app, role, version string) (*Resolution, error) {
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return nil, err
 	}
@@ -1123,7 +1129,7 @@ func (d *DB) ResolveConfig(ctx context.Context, environment, app, role, version 
 		return nil, fmt.Errorf("resolve version: %w", err)
 	}
 
-	candidates, err := d.ListConfigsForAddress(ctx, env, a, r)
+	candidates, err := d.ListConfigsForAddress(ctx, p, env, a, r)
 	if err != nil {
 		return nil, err
 	}
@@ -1139,8 +1145,8 @@ func (d *DB) ResolveConfig(ctx context.Context, environment, app, role, version 
 		}
 	}
 	if len(matches) == 0 {
-		return nil, fmt.Errorf("%w: no config satisfies %s for %s/%s/%s",
-			ErrNoConfigMatches, version, env, a, r)
+		return nil, fmt.Errorf("%w: no config satisfies %s for %s/%s/%s/%s",
+			ErrNoConfigMatches, version, p, env, a, r)
 	}
 
 	// candidates (and so matches) came back ordered by seq ascending; the
@@ -1513,6 +1519,7 @@ func (d *DB) ListRecentSecretReads(ctx context.Context, limit int) ([]SecretRead
 // should be sealed under. SetAt/SetBy are here so an operator can see when a
 // rotation was announced and by whom.
 type CurrentKey struct {
+	Project     string
 	Environment string
 	App         string
 	Role        string
@@ -1526,18 +1533,18 @@ type CurrentKey struct {
 // none, and a client must be able to tell that apart from a pointer naming some
 // other key. Answering "no pointer" as if it were "this key" would be a silent
 // lie, and a client told that seals under whatever its filesystem offers.
-func (d *DB) CurrentKeyFor(ctx context.Context, environment, app, role string) (*CurrentKey, error) {
-	env, a, r, err := canonAddress(environment, app, role)
+func (d *DB) CurrentKeyFor(ctx context.Context, project, environment, app, role string) (*CurrentKey, error) {
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return nil, err
 	}
 	var c CurrentKey
 	var setBy sql.NullString
 	err = d.QueryRowContext(ctx, `
-		SELECT environment, app, role, key_id, set_by, set_at
+		SELECT project, environment, app, role, key_id, set_by, set_at
 		FROM cm_current_keys
-		WHERE environment = ? AND app = ? AND role = ?`, env, a, r,
-	).Scan(&c.Environment, &c.App, &c.Role, &c.KeyID, &setBy, &c.SetAt)
+		WHERE project = ? AND environment = ? AND app = ? AND role = ?`, p, env, a, r,
+	).Scan(&c.Project, &c.Environment, &c.App, &c.Role, &c.KeyID, &setBy, &c.SetAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -1554,8 +1561,8 @@ func (d *DB) CurrentKeyFor(ctx context.Context, environment, app, role string) (
 // nothing about that. Announcing a key hz has never seen is legitimate and
 // expected: the operator mints it locally and tells the fleet, and the first
 // seal under it necessarily precedes any config that uses it.
-func (d *DB) SetCurrentKey(ctx context.Context, environment, app, role, keyID, setBy string) (*CurrentKey, error) {
-	env, a, r, err := canonAddress(environment, app, role)
+func (d *DB) SetCurrentKey(ctx context.Context, project, environment, app, role, keyID, setBy string) (*CurrentKey, error) {
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return nil, err
 	}
@@ -1569,17 +1576,17 @@ func (d *DB) SetCurrentKey(ctx context.Context, environment, app, role, keyID, s
 		}
 	}
 	if _, err := d.ExecContext(ctx, `
-		INSERT INTO cm_current_keys (environment, app, role, key_id, set_by)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT (environment, app, role) DO UPDATE SET
+		INSERT INTO cm_current_keys (project, environment, app, role, key_id, set_by)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (project, environment, app, role) DO UPDATE SET
 			key_id = excluded.key_id,
 			set_by = excluded.set_by,
 			set_at = CURRENT_TIMESTAMP`,
-		env, a, r, keyID, nullString(setBy),
+		p, env, a, r, keyID, nullString(setBy),
 	); err != nil {
 		return nil, fmt.Errorf("set current key: %w", err)
 	}
-	return d.CurrentKeyFor(ctx, env, a, r)
+	return d.CurrentKeyFor(ctx, p, env, a, r)
 }
 
 // RegistrationsHoldingStaleKey lists approved registrations at an address whose
@@ -1589,8 +1596,8 @@ func (d *DB) SetCurrentKey(ctx context.Context, environment, app, role, keyID, s
 // open anything sealed under Y, so a rotation not followed by re-wrapping every
 // approved registration breaks config pulls fleet-wide — and before this the
 // only way to find out was a box failing at its next restart.
-func (d *DB) RegistrationsHoldingStaleKey(ctx context.Context, environment, app, role string) ([]Registration, error) {
-	env, a, r, err := canonAddress(environment, app, role)
+func (d *DB) RegistrationsHoldingStaleKey(ctx context.Context, project, environment, app, role string) ([]Registration, error) {
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return nil, err
 	}
@@ -1598,17 +1605,23 @@ func (d *DB) RegistrationsHoldingStaleKey(ctx context.Context, environment, app,
 	// false and nothing is reported stale: an address with no announced current
 	// key has nothing to be stale against, and reporting the whole fleet would
 	// be noise the first time anyone opened the page.
+	//
+	// The self-join carries project on BOTH sides. Comparing only environment
+	// and role would let a registration in one project match cm_current_keys'
+	// pointer for a different project sharing that (environment, app, role) —
+	// a cross-project leak in the very query rotation depends on.
 	rows, err := d.QueryContext(ctx, selectRegistration+`
-		WHERE environment = ? AND app = ? AND role = ?
+		WHERE project = ? AND environment = ? AND app = ? AND role = ?
 		  AND state = 'approved'
 		  AND wrap_key_id IS NOT NULL
 		  AND wrap_key_id <> COALESCE(
 		        (SELECT key_id FROM cm_current_keys c
-		          WHERE c.environment = cm_registrations.environment
+		          WHERE c.project = cm_registrations.project
+		            AND c.environment = cm_registrations.environment
 		            AND c.app = cm_registrations.app
 		            AND c.role = cm_registrations.role),
 		        wrap_key_id)
-		ORDER BY created_at`, env, a, r)
+		ORDER BY created_at`, p, env, a, r)
 	if err != nil {
 		return nil, fmt.Errorf("list stale registrations: %w", err)
 	}
