@@ -16,10 +16,14 @@
  *
  * There is a THIRD state on this screen that is easy to lose, and it is the
  * dangerous one: a host with no dependants is NOT a host that is safe to move.
- * hz can enumerate records written `@nas`; it cannot find the ones that carry
- * `192.168.1.51` as a literal string, because a literal says nothing about
- * which machine it means — that is the entire reason references exist. So
- * "0 records reference @nas" must never be rendered as "nothing breaks".
+ * "0 records reference @nas" is not "nothing breaks" — the records that carry
+ * `192.168.1.51` as a plain string break and do not follow anything.
+ *
+ * hz used to be unable to name those, and this module printed a caveat. It can
+ * now (`config.AddressOccurrences`), so the caveat is gone and `readOccurrences`
+ * is the second reading. THE TWO ARE NEVER MERGED, here or anywhere: a
+ * reference follows the host, an occurrence breaks, and one combined number
+ * would be wrong about both.
  *
  * # One vocabulary, not a second taxonomy
  *
@@ -29,7 +33,12 @@
  * ("what goes wrong if this address is wrong") and nothing else. It never
  * renames, merges or re-sorts a kind.
  */
-import type { HostRefView, HostView, HostsViewResp } from "../../api/generated-types";
+import type {
+  HostOccurrenceResp,
+  HostRefView,
+  HostView,
+  HostsViewResp,
+} from "../../api/generated-types";
 import type { Tone } from "../drift/observation";
 
 // ---------------------------------------------------------------------------
@@ -45,7 +54,7 @@ export interface HostsQuery {
 }
 
 export type HostsSource =
-  | { known: true; hosts: HostView[]; literalsUnlisted: boolean }
+  | { known: true; hosts: HostView[] }
   | { known: false; what: string; detail: string };
 
 /**
@@ -60,7 +69,7 @@ export type HostsSource =
  */
 export function readHostsSource(q: HostsQuery): HostsSource {
   if (q.isSuccess && q.data) {
-    return { known: true, hosts: q.data.hosts, literalsUnlisted: q.data.literalsUnlisted };
+    return { known: true, hosts: q.data.hosts };
   }
   if (q.isError) {
     const message = q.error instanceof Error ? q.error.message : String(q.error);
@@ -154,7 +163,7 @@ export interface DependantReading {
   count: number;
   headline: string;
   meaning: string;
-  /** The sentence that stops "0" being read as "safe". Always present. */
+  /** The sentence that points at the OTHER list. Always present. */
   literalCaveat: string;
   tone: Tone;
 }
@@ -169,15 +178,15 @@ export interface DependantReading {
  * operator that moving the box costs nothing, on the exact screen built to
  * tell them what it costs.
  *
- * `literalsUnlisted` comes from the server so the caveat disappears by itself
- * the day hz can enumerate literal occurrences, rather than surviving as a
- * stale sentence nobody dares delete.
+ * It no longer takes a caveat flag. hz can enumerate the literals now, so this
+ * reading points at `readOccurrences` instead of apologising for its absence —
+ * and the pointer stays, because a reader who sees "0 references" still has to
+ * be sent to the number that is not zero.
  */
-export function readDependants(h: HostView, literalsUnlisted: boolean): DependantReading {
+export function readDependants(h: HostView): DependantReading {
   const n = h.references.length;
-  const caveat = literalsUnlisted
-    ? `hz lists records written ${h.ref || "@name"}. It cannot list records that carry ${h.ip || "this address"} as a plain string — a literal says nothing about which machine it means, which is why references exist. So this is "what FOLLOWS this host", not "everything that would break".`
-    : "hz can enumerate every occurrence of this address, literal or referenced, so this list is complete.";
+  const other = readOccurrences(h);
+  const caveat = `This counts records written ${h.ref || "@name"}, which FOLLOW this host. Records that carry ${h.ip || "this address"} as a plain string follow nothing and break when it moves — ${other.headline}, listed separately below.`;
 
   if (n === 0) {
     return {
@@ -200,6 +209,118 @@ export function readDependants(h: HostView, literalsUnlisted: boolean): Dependan
       : "Every one of these follows the address below. Changing it moves them all in one config write.",
     literalCaveat: caveat,
     tone: "fresh",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// What CARRIES this host's address — the other list, never the same list
+// ---------------------------------------------------------------------------
+
+export type OccurrenceKnowledge =
+  /** hz scanned and found records carrying this address as a plain string. */
+  | "carried"
+  /** hz scanned and found none. A real answer. */
+  | "clean"
+  /** hz could not scan: there is no address to look for. Not an answer. */
+  | "unscanned";
+
+export interface OccurrenceReading {
+  knowledge: OccurrenceKnowledge;
+  count: number;
+  /** How many of them `hz host adopt` would rewrite into references. */
+  adoptable: number;
+  headline: string;
+  meaning: string;
+  /** What to type, or "" when there is nothing to adopt. */
+  command: string;
+  /** Why hz could not look. Empty unless knowledge is "unscanned". */
+  why: string;
+  tone: Tone;
+}
+
+/**
+ * The records that carry this host's ADDRESS as a plain string.
+ *
+ * This is the number an operator moving a box actually needs, and the one the
+ * screen could not show. It is kept apart from `readDependants` at every level
+ * — separate function, separate field, separate section — because the two have
+ * opposite behaviour: a reference follows the host automatically, an occurrence
+ * does not and is exactly what breaks. One combined "dependants" figure would
+ * be a comfortable lie in whichever direction the reader happened to assume.
+ *
+ * THREE STATES, NOT TWO. "carried" and "clean" are both answers about the
+ * config; "unscanned" is a fact about hz — it has no address to search for
+ * (@self before local_interface is detected), and an empty list there means
+ * nothing at all.
+ */
+export function readOccurrences(h: HostView): OccurrenceReading {
+  if (!h.occurrencesKnown) {
+    return {
+      knowledge: "unscanned",
+      count: 0,
+      adoptable: 0,
+      headline: "hz could not look",
+      meaning:
+        "This list is empty because the search could not run, not because nothing carries the address. Treat it as unanswered.",
+      command: "",
+      why:
+        h.occurrencesUnknownWhy ||
+        "hz did not say why it could not scan. Treat this as unanswered rather than as none.",
+      tone: "hatched",
+    };
+  }
+
+  const n = h.occurrences.length;
+  const adoptable = h.occurrences.filter((o) => !!o.ref).length;
+  if (n === 0) {
+    return {
+      knowledge: "clean",
+      count: 0,
+      adoptable: 0,
+      headline: "nothing carries this address",
+      meaning:
+        "No record holds this address as a plain string, so the references above are the whole dependency: every one of them follows this host, and moving it is one edit.",
+      command: "",
+      why: "",
+      tone: "fresh",
+    };
+  }
+  return {
+    knowledge: "carried",
+    count: n,
+    adoptable,
+    headline: `${n} record${n === 1 ? "" : "s"} carr${n === 1 ? "ies" : "y"} this address as a plain string`,
+    meaning:
+      adoptable > 0
+        ? `These do NOT follow this host: moving the box breaks every one of them, by hand, one at a time. ${adoptable} of them can be rewritten into references, which makes the next move one edit.`
+        : "These do NOT follow this host. None of them can be rewritten — each says why below — so they are the part of a move that stays manual.",
+    command: adoptable > 0 ? h.adoptCommand || "" : "",
+    why: "",
+    tone: "hatched",
+  };
+}
+
+/**
+ * What one occurrence would become, or why hz will not touch it.
+ *
+ * Exactly one of the two is always true, and a record that fell into neither
+ * would be a record shown to the operator with nothing said about it — which is
+ * the failure this screen exists to prevent.
+ */
+export function readAdoption(o: HostOccurrenceResp): {
+  state: "adoptable" | "refused";
+  after: string;
+  why: string;
+} {
+  if (o.ref) {
+    return { state: "adoptable", after: o.ref, why: "" };
+  }
+  return {
+    state: "refused",
+    after: "",
+    why:
+      o.whyNotAdoptable ||
+      "hz will not rewrite this record and did not say why. Treat it as untouched and check it by hand.",
   };
 }
 
