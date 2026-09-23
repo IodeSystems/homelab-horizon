@@ -703,13 +703,78 @@ export interface ImportPlanResp {
   existingProjects: number /* int */;
 }
 /**
- * ImportApplyReq writes a plan. Fingerprint is the one the dry run printed.
+ * ImportApplyReq writes a plan.
+ * TWO SOURCES, ONE PIPELINE. With no Plan the server recomputes its own
+ * proposal and writes that; Fingerprint is the one the dry run printed, and a
+ * config that changed since is refused rather than silently importing something
+ * nobody read. With a Plan the operator has EDITED the proposal — the heuristic
+ * cannot see a flat estate's structure and the operator can — so the file is the
+ * authority, and Fingerprint must be empty because a hand-edited plan is by
+ * definition not the one hz computed. Both paths end in the same ApplyImport.
+ * A client-supplied plan is a bigger thing to have authorised than "apply your
+ * own proposal", so it is validated against the config before anything is
+ * written: every service it names must exist, every service in the config must
+ * be accounted for by name, and an environment may not be spread across
+ * projects. See config.ImportFile.
  * Merge is the acknowledgement that this config already has a tree and the
  * import is to ADD to it — existing projects, rungs and assignments are kept.
  */
 export interface ImportApplyReq {
   fingerprint: string;
   merge: boolean;
+  /**
+   * Plan is the edited plan file. Optional; absent means "apply your own
+   * proposal", which is what `hz import --execute` has always meant.
+   */
+  plan?: ImportFileReq;
+}
+/**
+ * ImportFileReq is the editable plan file on the wire: the DECISIONS only.
+ * The evidence strings the proposal carries (ImportPlanResp's Reason/Note
+ * fields) are deliberately absent. They are hz's account of how it reached a
+ * row, and the moment an operator moves that row they are a lie sitting beside
+ * it. They are output, not input.
+ */
+export interface ImportFileReq {
+  version: number /* int */;
+  projects: ImportFileProjectReq[];
+  environments: ImportFileEnvironmentReq[];
+  assign: ImportFilePlacementReq[];
+  /**
+   * Unassigned names the services the plan deliberately leaves with no
+   * project. Explicit rather than implied: a service the file simply does not
+   * mention is refused, because an omission and a deliberate "leave this one
+   * alone" would otherwise be the same file.
+   */
+  unassigned: string[];
+}
+/**
+ * ImportFileProjectReq declares a project. Parent names another project in the
+ * same file.
+ */
+export interface ImportFileProjectReq {
+  name: string;
+  parent?: string;
+}
+/**
+ * ImportFileEnvironmentReq declares a rung. Project is required: an environment
+ * belongs to exactly one project, and this field is what makes a rung shared
+ * across projects inexpressible.
+ */
+export interface ImportFileEnvironmentReq {
+  project: string;
+  name: string;
+  posture: string;
+}
+/**
+ * ImportFilePlacementReq puts one service in one project, optionally on one
+ * rung. Environment resolves against this service's project, never globally —
+ * every project gets to have a "dev".
+ */
+export interface ImportFilePlacementReq {
+  service: string;
+  project: string;
+  environment?: string;
 }
 /**
  * ImportApplyResp is what the write actually did, counted from the config after
