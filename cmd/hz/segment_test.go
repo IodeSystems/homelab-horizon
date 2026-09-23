@@ -192,3 +192,260 @@ func TestMemberSpecParsing(t *testing.T) {
 		}
 	}
 }
+
+// THE GAP CLOSED, as an operator meets it. Before `set`, addressing a
+// membership on a segment that already existed meant `rm --cascade` and
+// re-declaring the whole segment — a destructive round trip for a routine edit.
+func TestSegmentSetAddressesAndReAddressesAMember(t *testing.T) {
+	s := newDeclareStub(t, &hzconfig.Config{})
+	c := s.start(t)
+	if err := runProject(c, []string{"add", "iodesystems"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runMachine(c, []string{"add", "gw-1", "--segment", "iode-net"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runSegment(c, []string{"add", "iode-net",
+		"--project", "iodesystems", "--cidr", "10.42.0.0/24", "--interface", "wg-iode",
+		"--member", "machine=gw-1,address=10.42.0.1,hub=true,endpoint=hz.example.com:51820"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runMachine(c, []string{"add", "late-box", "--segment", "iode-net"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// `show` points at the command that fixes it, rather than saying there is
+	// none — which is what it used to say.
+	out := captureStdout(t, func() {
+		if err := runSegment(c, []string{"show", "iode-net"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(out, "hz segment set iode-net --member machine=late-box,address=") {
+		t.Fatalf("show does not name the command that addresses a membership:\n%s", out)
+	}
+
+	out = captureStdout(t, func() {
+		if err := runSegment(c, []string{"set", "iode-net",
+			"--member", "machine=late-box,address=10.42.0.7"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	for _, want := range []string{"Changes:", "10.42.0.7", "Set segment iode-net", "peers: gw-1"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the set does not report %q:\n%s", want, out)
+		}
+	}
+	seg, _ := s.cfg.FindSegment("iode-net")
+	mem, ok := seg.Member("late-box")
+	if !ok || mem.Address != "10.42.0.7" {
+		t.Fatalf("late-box is %+v", mem)
+	}
+
+	// RE-ADDRESSING KEEPS WHAT IT WAS NOT ASKED TO CHANGE: the hub's endpoint
+	// survives a command that never mentions it, and a key survives a move.
+	if err := runSegment(c, []string{"set", "iode-net", "--member", "machine=late-box,key=abc+/def="}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runSegment(c, []string{"set", "iode-net", "--member", "machine=late-box,address=10.42.0.8"}); err != nil {
+		t.Fatal(err)
+	}
+	seg, _ = s.cfg.FindSegment("iode-net")
+	mem, _ = seg.Member("late-box")
+	if mem.Address != "10.42.0.8" || mem.PublicKey != "abc+/def=" {
+		t.Fatalf("re-addressing dropped something: %+v", mem)
+	}
+	hub, _ := seg.Member("gw-1")
+	if hub.Endpoint != "hz.example.com:51820" || !hub.Hub {
+		t.Fatalf("the hub was disturbed: %+v", hub)
+	}
+
+	// --unaddress leaves the machine IN the segment, unaddressed.
+	if err := runSegment(c, []string{"set", "iode-net", "--unaddress", "late-box"}); err != nil {
+		t.Fatal(err)
+	}
+	seg, _ = s.cfg.FindSegment("iode-net")
+	if _, addressed := seg.Member("late-box"); addressed {
+		t.Fatal("late-box is still addressed")
+	}
+	m, _ := s.cfg.FindMachine("late-box")
+	if len(m.Segments) != 1 {
+		t.Fatalf("unaddressing dropped the membership too: %+v", m)
+	}
+
+	// An empty patch is refused rather than reported as a successful no-op.
+	if err := runSegment(c, []string{"set", "iode-net"}); err == nil {
+		t.Fatal("an empty set reported success")
+	}
+}
+
+// Moving the hub PRINTS the rewiring. Peers is derived hub and spoke, so it is
+// the one change here that would otherwise happen entirely off-screen.
+func TestSegmentSetPrintsTheHubRewiring(t *testing.T) {
+	s := newDeclareStub(t, &hzconfig.Config{})
+	c := s.start(t)
+	if err := runProject(c, []string{"add", "iodesystems"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []string{"gw-1", "gw-2", "spoke"} {
+		if err := runMachine(c, []string{"add", m, "--segment", "iode-net"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := runSegment(c, []string{"add", "iode-net",
+		"--project", "iodesystems", "--cidr", "10.42.0.0/24", "--interface", "wg-iode",
+		"--member", "machine=gw-1,address=10.42.0.1,hub=true",
+		"--member", "machine=gw-2,address=10.42.0.2",
+		"--member", "machine=spoke,address=10.42.0.3"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := runSegment(c, []string{"set", "iode-net", "--hub", "gw-2"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	for _, want := range []string{
+		"HUB MOVES: gw-1 → gw-2", "topology change", "PEERS NOW", "WAS",
+		"gw-1", "spoke",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the hub move does not report %q:\n%s", want, out)
+		}
+	}
+	seg, _ := s.cfg.FindSegment("iode-net")
+	h, ok := seg.Hub()
+	if !ok || h.Machine != "gw-2" {
+		t.Fatalf("the hub is %+v", h)
+	}
+
+	// hub= inside --member is refused and points at --hub, rather than being a
+	// second way to say the same thing.
+	if _, err := parseMemberSetSpec("machine=gw-1,hub=true"); err == nil {
+		t.Fatal("hub= was accepted inside a set --member")
+	}
+}
+
+// A range that would strand a member is REFUSED and names each address; cascade
+// is a dry run until --confirm, and unaddresses rather than renumbering. The
+// discipline `hz segment rm` already uses, on the one field that can invalidate
+// a record the operator did not name.
+func TestSegmentSetRefusesARangeThatStrandsMembers(t *testing.T) {
+	s := newDeclareStub(t, &hzconfig.Config{})
+	c := s.start(t)
+	if err := runProject(c, []string{"add", "iodesystems"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []string{"gw-1", "spoke"} {
+		if err := runMachine(c, []string{"add", m, "--segment", "iode-net"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := runSegment(c, []string{"add", "iode-net",
+		"--project", "iodesystems", "--cidr", "10.42.0.0/24", "--interface", "wg-iode",
+		"--member", "machine=gw-1,address=10.42.0.1,hub=true",
+		"--member", "machine=spoke,address=10.42.0.2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() {
+		err := runSegment(c, []string{"set", "iode-net", "--cidr", "10.99.0.0/24", "--confirm"})
+		if err == nil {
+			t.Fatal("a confirmed range change was not refused by the stranded members")
+		}
+	})
+	for _, want := range []string{"REFUSED", "gw-1", "spoke", "10.42.0.1", "outside the new range", "--cascade"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the refusal does not report %q:\n%s", want, out)
+		}
+	}
+	seg, _ := s.cfg.FindSegment("iode-net")
+	if seg.CIDR != "10.42.0.0/24" {
+		t.Fatal("a refused range change was written anyway")
+	}
+
+	// Cascade, no confirm: a dry run that names who it would unaddress.
+	out = captureStdout(t, func() {
+		if err := runSegment(c, []string{"set", "iode-net", "--cidr", "10.99.0.0/24", "--cascade"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	for _, want := range []string{"UNADDRESS", "Dry run", "--confirm"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the dry run does not report %q:\n%s", want, out)
+		}
+	}
+	seg, _ = s.cfg.FindSegment("iode-net")
+	if seg.CIDR != "10.42.0.0/24" {
+		t.Fatal("a dry run wrote the range")
+	}
+
+	// The move an operator actually wants: the range and the addresses in ONE
+	// command, no cascade needed because nobody is stranded.
+	out = captureStdout(t, func() {
+		if err := runSegment(c, []string{"set", "iode-net", "--cidr", "10.99.0.0/24",
+			"--member", "machine=gw-1,address=10.99.0.1",
+			"--member", "machine=spoke,address=10.99.0.2"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(out, "Dry run") || !strings.Contains(out, "Set segment iode-net") {
+		t.Fatalf("a renumber in one command did not write:\n%s", out)
+	}
+	seg, _ = s.cfg.FindSegment("iode-net")
+	if seg.CIDR != "10.99.0.0/24" || len(seg.Members) != 2 {
+		t.Fatalf("the segment reads %+v", seg)
+	}
+	hub, _ := seg.Member("gw-1")
+	if hub.Address != "10.99.0.1" || !hub.Hub {
+		t.Fatalf("the hub reads %+v", hub)
+	}
+}
+
+// `segment set --member` is a PATCH, so an absent key means "leave it alone"
+// and a present-but-empty one means "clear it". That is what makes re-addressing
+// safe, and it is why this parser is not parseMemberSpec.
+func TestMemberSetSpecParsing(t *testing.T) {
+	m, err := parseMemberSetSpec("machine=gw-1,address=10.42.0.1,endpoint=hz.example.com:51820,key=abc+/def=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Machine != "gw-1" || m.Address == nil || *m.Address != "10.42.0.1" {
+		t.Fatalf("parsed %+v", m)
+	}
+	if m.Endpoint == nil || *m.Endpoint != "hz.example.com:51820" {
+		t.Fatalf("a host:port endpoint did not survive: %+v", m.Endpoint)
+	}
+	if m.PublicKey == nil || *m.PublicKey != "abc+/def=" {
+		t.Fatalf("base64 padding did not survive: %+v", m.PublicKey)
+	}
+
+	// Absent is nil — "leave it alone" — rather than an empty string that would
+	// clear the field the operator never mentioned.
+	m, err = parseMemberSetSpec("machine=gw-1,address=10.42.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.PublicKey != nil || m.Endpoint != nil {
+		t.Fatalf("an absent key was read as a clear: %+v", m)
+	}
+	// Present and empty IS a clear.
+	m, err = parseMemberSetSpec("machine=gw-1,key=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.PublicKey == nil || *m.PublicKey != "" {
+		t.Fatalf("an empty key was not read as a clear: %+v", m)
+	}
+
+	for _, bad := range []string{
+		"address=10.42.0.1",      // no machine
+		"machine=gw-1,rubbish=x", // unknown field
+		"machine=gw-1,10.42.0.1", // not key=value
+		"machine=gw-1,hub=true",  // the hub is --hub
+	} {
+		if _, err := parseMemberSetSpec(bad); err == nil {
+			t.Fatalf("--member %q was accepted", bad)
+		}
+	}
+}
