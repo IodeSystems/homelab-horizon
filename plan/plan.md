@@ -23,7 +23,7 @@
 | 13 | [Agent handover](architecture.md#the-path) steps 1–3 — credential, WireGuard, error pages + certs + directory ownership | ✅ on **`dev`**, and the agent is still **INERT**; ◻ steps 4–5 (arm the unit, then de-root hz). Blocker 1 of [§8.3](privilege-audit.md) — the no-default-route stand-down, which would have had an armed agent reconcile the gateway's port forwards away — is ✅ done (`iptablesSectionFor`); blockers 2–7 are open |
 | 14 | [The project coordinate](project-coordinate.md) — the cm address is `<project>/<environment>/<app>/<role>` | ✅ **done** 2026-09-22. Flag day for every sealed value and every wrap; the freeze check found none to lose (gateway `hz.db` at schema 10, every `cm_*` table zero rows). Migration `0013`; the backwards resolution and `projection.ResolveEnvironment` are deleted; `configmgr.TestCrossProjectReadIsRefused` is the standing proof |
 | 15 | [Segment records](upstream-and-promotion.md#7-build-order) — what a `Machine.Segments` name resolves to | ◐ **the record landed 2026-09-23** on **`dev`** (`feat/segment-records`): `config.Segment{Name, Project, CIDR, Interface, Members}` + `hz segment ls\|show\|add\|rm`, validated sixth on `Save()`. `Peers` is DERIVED from hub/spoke, never stored (a stored peer set is a second answer free to disagree with the membership it is a view of); no private key is held, ever. `Hub` is what makes *a client of someone else's segment* expressible — item 19's crossing. ◻ **the projection does not resolve it yet** — `Segment.Resolved` is still `false`; that wiring was held back to keep this branch off `projection.go` while item 17 was in flight, and is now unblocked. ◻ **no verb addresses a membership on an EXISTING segment** (`add`/`rm --cascade` only). ❓ **nothing populates `PublicKey`** — a box mints its key at enrolment and `hz-agent enroll` does not send one, so hz can route to a member and cannot emit a `[Peer]` block for it |
-| 17 | [The config generation](upstream-and-promotion.md#3-the-config-generation--the-missing-link) — bless a config ⇒ the unit restarts | ◐ **hz's half is done** (build-order item 1, `feat/config-generation`): `projection.Unit.ConfigGeneration` is a sha256 over the resolved sealed values for the unit's address, supplied as ciphertext through `projection.Global` and digested in the pure projection; `SectionConfig` keeps "no config here" (empty, no gap) apart from "hz does not know" (empty + gap), so an empty generation is never a restart. Blessing moves the unit's generation AND the payload fingerprint, so no new change-detection was needed. ◻ **the agent still does nothing with it** — build-order item 2 |
+| 17 | [The config generation](upstream-and-promotion.md#3-the-config-generation--the-missing-link) — bless a config ⇒ the unit restarts | ◐ **hz's half is done** (build-order item 1, `feat/config-generation`): `projection.Unit.ConfigGeneration` is a sha256 over the resolved sealed values for the unit's address, supplied as ciphertext through `projection.Global` and digested in the pure projection; `SectionConfig` keeps "no config here" (empty, no gap) apart from "hz does not know" (empty + gap), so an empty generation is never a restart. Blessing moves the unit's generation AND the payload fingerprint, so no new change-detection was needed. ✅ **the agent's half landed too** (build-order item 2, `feat/config-restart`): first sighting ADOPTS and restarts nothing, the record is an observation at `/var/lib/hz-agent/generations.json`, and the restart is last in the pass. ⏸ **BOTH HALVES ARE INERT** — the agent is armed on zero boxes, so this changes no behaviour anywhere until item 13 steps 4–5. ⚠ fix the 5s no-backoff restart retry before arming |
 | 18 | [`Environment.Upstream`](upstream-and-promotion.md#5-two-hz-instances-and-the-reach-between-them) — a rung whose placements live in another hz | ◻ not started. Until it exists `redline/prod` reads as *broken* rather than *remote*. One field plus a projection branch that emits a statement instead of a `Gap` |
 | 19 | [The registry crossing](upstream-and-promotion.md#what-crosses-and-how) — packages mirrored, config proxied | ◻ not started; depends on 15 and on 13 steps 4–5 |
 | 20 | Screens for the model | ◐ **three landed 2026-09-23** on **`dev`** (`feat/model-screens`): `/projects`, `/machines`, `/machines/$machine` (the pure projection, `Unresolved` given equal weight), read-only, in the existing shell. **Ten of [example-projection.md](example-projection.md) §4's seventeen states are satisfied, two partly, five not** — and the five are blocked on the MODEL, not the UI: an instance has no port or entry point anywhere, `ProjectResp.Services` is names only, and nothing joins the agent's clock to the instance clock. `MachineProjectionResp` mirrors `projection.MachineConfig` and a **bidirectional** tag test fails the build when either side gains a field — it earned its keep on the merge, catching item 17's `ConfigGeneration` before it could render as empty forever |
@@ -48,6 +48,27 @@ however it is reached.
 The new model lands on **`dev`**, not `main`, because it will break and churn
 before it is release-ready and **the gateway is serving real traffic**. Nothing
 on `dev` has been deployed or pushed.
+
+#### ⚠ The deploy gap is now the largest single risk in this project
+
+**`dev` is 115 commits ahead of `main` and none of it is deployed** (2026-09-23).
+Items 1 and 3 are separately marked "code done, not deployed"; the gateway runs
+a build from before the entire project/environment/machine model. The gap grew
+by four merges today and has never been paid down.
+
+Nothing above says this, which is why it is written here: a backlog this size
+stops being a queue and becomes a release, and a release nobody has rehearsed
+is a different risk from the one each item carries alone.
+
+**Do not pay it down during the office move.** The gateway itself is being moved
+to wireless, so `last_local_iface` goes from `enx00051b94b7cc` (a USB ethernet
+adapter) to a `wlan*` name. A changed egress interface leaving a stale
+`MASQUERADE` behind IS the founding outage of this repo — the Phase 0–3 tree in
+[done.md](done.md) exists because of it. The auto-heal is deployed and proven on
+the current binary. Deploying 115 commits the same day means debugging a move
+and a release at once with no way to attribute a failure to either.
+
+Order: **move, confirm the reconcile heals the interface change, then deploy.**
 
 Landed on `dev` 2026-09-20:
 
