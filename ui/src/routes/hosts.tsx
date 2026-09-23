@@ -77,11 +77,11 @@ export function Legend({ literalsUnlisted }: { literalsUnlisted: boolean }) {
       <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
         A record can name a host instead of carrying its address:{" "}
         <Box component="span" sx={{ fontFamily: "monospace", fontWeight: 700 }}>
-          @nas:8080
+          @printer:9100
         </Box>{" "}
         rather than{" "}
         <Box component="span" sx={{ fontFamily: "monospace" }}>
-          192.168.1.51:8080
+          192.168.1.40:9100
         </Box>
         . Every such record is listed under its host below, showing what it says
         and what it means right now — both halves, because one alone hides
