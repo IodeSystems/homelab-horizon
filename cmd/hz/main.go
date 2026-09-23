@@ -38,12 +38,16 @@ const usage = `hz - operator CLI for homelab-horizon (admin-token scoped)
 USAGE
   hz [--host URL] [--token TOK] <command> [args]
 
-CONFIG
+CONNECTING (hz's own settings — NOT the 'hz config' command below)
   Resolved in order (later wins): ~/.hz_config -> env -> flags.
   ~/.hz_config   JSON: {"host": "http://192.168.1.89:8080", "token": "<admin-token>"}
   HZ_HOST HZ_TOKEN   env overrides
   --host --token     flag overrides
   HZ_CONFIG          alternate config path
+  These say which instance hz talks to and as whom. There is no command that
+  edits them — edit the file. 'hz config' is the config manager: the sealed
+  application config hz holds for OTHER machines. Two different things that
+  share a word; the second is the admin UI's Config page.
 
 COMMANDS
   service list                       List services (table)
@@ -80,18 +84,20 @@ COMMANDS
   exporter add --job J --mode port|service|static [mode flags] [--path P] [--bearer T] [--label k=v ...]
                                      Add a Prometheus exporter job (error if job exists)
   exporter rm <job>                  Remove an exporter job
-  cm key new <env>/<app>/<role> [--label L] [--set-current]
+  config ...                         The config manager. Was 'hz cm'; 'cm' still works
+                                     as a deprecated alias for every verb below
+  config key new <env>/<app>/<role> [--label L] [--set-current]
                                      Mint an environment key into the local keystore
-  cm key ls [<env>/<app>/<role>] [--json]
+  config key ls [<env>/<app>/<role>] [--json]
                                      List what this machine holds (ids and labels, never material)
-  cm key export <env>/<app>/<role> [--id KEYID]
+  config key export <env>/<app>/<role> [--id KEYID]
                                      Print the key text for a password manager (terminal only)
-  cm key import <env>/<app>/<role> [--label L] [--created-at T]
+  config key import <env>/<app>/<role> [--label L] [--created-at T]
                                      Read key text from STDIN into the keystore
-  cm key current <env>/<app>/<role> [--set KEYID]
+  config key current <env>/<app>/<role> [--set KEYID]
                                      Read or move hz's advisory current-key pointer
-  cm machines [--json]               List enrolled boxes: addresses, secrets, fingerprint
-  cm pending [--all]                 Show the approval queue
+  config machines [--json]           List enrolled boxes: addresses, secrets, fingerprint
+  config pending [--all]             Show the approval queue
   project ls                         Services grouped by project and environment
   project show <project>             One project: its parent, its feed, its services
   project add <name> [--parent P]    Declare a project (writes immediately — a declared
@@ -138,20 +144,20 @@ COMMANDS
                                      nothing explains are left unassigned, which is legal.
                                      Dry run without --execute; --merge is required to write
                                      over a config that already declares projects
-  cm approve <registration-id>       Wrap this machine's environment key to the box's
+  config approve <registration-id>   Wrap this machine's environment key to the box's
                                      public key. You will be asked to TYPE the
                                      fingerprint the BOX printed; it is compared against
                                      the key hz served and a mismatch sends nothing
-  cm deny <registration-id> --reason=...
+  config deny <registration-id> --reason=...
                                      Refuse a registration (not a revocation)
-  cm remove <machine> [--yes]        Remove an enrolled box so its name can be enrolled
+  config remove <machine> [--yes]    Remove an enrolled box so its name can be enrolled
                                      again — the fix for "enrolled with a different public
                                      key" after a rebuild. Destroys its registrations and
                                      machine secrets; NOT a revocation
-  cm promote <config-id> --to=<env> [--dry-run]
+  config promote <config-id> --to=<env> [--dry-run]
                                      Open under the source key, re-seal under the target's
-  cm show <config-id>                Decrypt a config locally and print it
-  cm resolve <env>/<app>/<role> --version=V [--json]
+  config show <config-id>            Decrypt a config locally and print it
+  config resolve <env>/<app>/<role> --version=V [--json]
                                      What a box would get, and what it shadowed
   schema [service]                   Dump the JSON request schema
   version                            Print version
@@ -223,14 +229,17 @@ The generated Prometheus scrape config is served at
   GET /integration/prometheus/scrape.yaml
   GET /integration/prometheus/targets.json
 
-CONFIG MANAGER ('hz cm')
+CONFIG MANAGER ('hz config')
+  Was 'hz cm'. The old spelling still works and does the same thing; it prints a
+  one-line notice on stderr so a script that still uses it keeps running.
+
   Environment keys live in a keystore on THIS machine, under $HZ_HOME or ~/.hz.
   hz never holds one: it stores blobs it cannot open. Every value is sealed and
   unsealed here, and the approval ceremony runs here rather than in the browser
   because a page served by hz cannot defend against hz.
 
   No command takes key material in argv — argv is world-readable through /proc.
-  Keys come from the keystore, or from stdin ('hz cm key import').
+  Keys come from the keystore, or from stdin ('hz config key import').
 
   Blessing a config is NOT here. An application pushes its own config by linking
   configmgr and calling configmgr.Push: the key-to-binding declaration is then
@@ -239,18 +248,18 @@ CONFIG MANAGER ('hz cm')
   what is generic — the keys, the ceremony, and operations on blobs it cannot
   read.
 
-KEY CUSTODY ('hz cm recovery')
+KEY CUSTODY ('hz config recovery')
   A keystore on one machine is a single point of failure: lose it and the
   environment keys are gone, not locked. A recovery recipient is a recipient
   that is always approved — every environment key is wrapped to its PUBLIC key
   as it is minted, so the key survives the loss of that machine. The PRIVATE
   half lives in a password manager, never on a box and never in hz.
 
-    hz cm recovery keygen --name ops     mint a recovery keypair (terminal only)
-    hz cm recovery add ops --public-key K  register the PUBLIC half with hz
-    hz cm recovery backfill              wrap the keys that already exist
-    hz cm recovery ls                    which keys are covered, and by whom
-    hz cm recovery verify prod/app/role  PROVE a recovery key opens one
+    hz config recovery keygen --name ops       mint a recovery keypair (terminal only)
+    hz config recovery add ops --public-key K  register the PUBLIC half with hz
+    hz config recovery backfill                wrap the keys that already exist
+    hz config recovery ls                      which keys are covered, and by whom
+    hz config recovery verify prod/app/role    PROVE a recovery key opens one
 
   Run verify. A backup nobody has restored from is not a backup, and every
   other command here reports only that a blob was produced.
@@ -341,6 +350,22 @@ func main() {
 	// any subcommand work without a config present.
 	c := newClient(cfgHost, cfgToken)
 
+	err := dispatch(c, cmd, rest)
+	if errors.Is(err, flag.ErrHelp) {
+		return // flag already printed usage to stderr
+	}
+	if err != nil {
+		fatal(err)
+	}
+}
+
+// dispatch maps a top-level command word onto its runner.
+//
+// It is a function rather than a switch inline in main() so a test can assert
+// what a word dispatches to — which is what the 'cm' -> 'config' rename needs:
+// the old spelling has to reach the same runner, and a rename whose old form
+// silently does nothing is worse than no rename at all.
+func dispatch(c *client, cmd string, rest []string) error {
 	var err error
 	switch cmd {
 	case "service":
@@ -369,17 +394,20 @@ func main() {
 		err = runFeed(c, rest)
 	case "import":
 		err = runImport(c, rest)
+	case "config":
+		err = runCM(c, rest)
 	case "cm":
+		// `cm` was the original spelling and it is in muscle memory, in the
+		// plan docs, and — the part that decides this — in scripts on boxes
+		// this repo cannot see. Breaking it silently would turn a rename into
+		// an outage, so it keeps working and says so on stderr, where a
+		// pipeline reading stdout is unaffected.
+		fmt.Fprintln(os.Stderr, "hz: 'hz cm' is now 'hz config'. The old name still works; nothing else changed.")
 		err = runCM(c, rest)
 	default:
 		err = fmt.Errorf("unknown command: %s\nRun 'hz --help'", cmd)
 	}
-	if errors.Is(err, flag.ErrHelp) {
-		return // flag already printed usage to stderr
-	}
-	if err != nil {
-		fatal(err)
-	}
+	return err
 }
 
 func fatal(err error) {

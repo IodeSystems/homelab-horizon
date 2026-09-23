@@ -73,7 +73,7 @@ type RecoveryWrap struct {
 	App         string `json:"app"`
 	Role        string `json:"role"`
 	// KeyID is the id of the environment key INSIDE the blob, as the wrapper
-	// claimed it. It is a claim, not a proof — `hz cm recovery verify` is what
+	// claimed it. It is a claim, not a proof — `hz config recovery verify` is what
 	// proves the blob holds the key this names.
 	KeyID string `json:"key_id"`
 	// Recipient is the RecoveryRecipient.Name the blob was addressed to.

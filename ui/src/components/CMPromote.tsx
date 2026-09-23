@@ -120,7 +120,7 @@ export function CMPromote({
             label="Config id"
             size="small"
             sx={{ flex: 1 }}
-            helperText="Picked above, or pasted from hz cm ls."
+            helperText="Picked above, or pasted from hz config ls."
             value={configID}
             onChange={(e) => setConfigID(e.target.value)}
           />
@@ -200,7 +200,7 @@ export function CMPromote({
                 </Typography>
                 <Box sx={{ mt: 0.5 }}>
                   <CopyBox
-                    text={`hz cm push ${gate.data.targetEnv}/${address.app.trim() || "<app>"}/${address.role.trim() || "<role>"}`}
+                    text={`hz config push ${gate.data.targetEnv}/${address.app.trim() || "<app>"}/${address.role.trim() || "<role>"}`}
                   />
                 </Box>
               </Alert>
@@ -252,7 +252,7 @@ export function CMPromote({
                   locally and hz sees one ciphertext read and another written.
                 </Typography>
                 <CopyBox
-                  text={`hz cm promote ${gate.data.sourceConfigId} --to=${gate.data.targetEnv}`}
+                  text={`hz config promote ${gate.data.sourceConfigId} --to=${gate.data.targetEnv}`}
                 />
                 <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
                   Add <code>--dry-run</code> to see what it would write first.

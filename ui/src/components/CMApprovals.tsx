@@ -135,7 +135,7 @@ function FingerprintBlock({ fingerprint }: { fingerprint: string }) {
         </Typography>
       )}
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
-        Not the value to compare against. <code>hz cm approve</code> asks you to
+        Not the value to compare against. <code>hz config approve</code> asks you to
         type the fingerprint the <strong>box</strong> printed when it generated
         its key — read it off that console. If hz substituted its own public key,
         it substituted this line too, so matching the CLI against this page
@@ -245,7 +245,7 @@ function PendingRow({
       <Typography variant="caption" sx={{ display: "block", mt: 1.5, mb: 0.5, fontWeight: 600 }}>
         Approve it from a terminal
       </Typography>
-      <CopyBox text={`hz cm approve ${reg.id}`} />
+      <CopyBox text={`hz config approve ${reg.id}`} />
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
         The command wraps this environment's key to the box's public key on your
         machine; the key itself never reaches hz. It will refuse to send anything

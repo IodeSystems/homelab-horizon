@@ -11,7 +11,7 @@ package apitypes
 //
 // NOTHING in this file carries a private key, and nothing added to it may. hz
 // never receives one, never writes one, and has no endpoint that would accept
-// one — recovery is proved by `hz cm recovery verify` on the operator's own
+// one — recovery is proved by `hz config recovery verify` on the operator's own
 // machine, which reads the private key from stdin and sends nothing back.
 
 // CMRecoveryRecipient is one recipient as hz holds it.
@@ -28,7 +28,7 @@ type CMRecoveryRecipient struct {
 
 // CMRecoveryWrap is one environment key wrapped to one recovery recipient.
 //
-// Wrapped is served back to an admin on purpose: it is the blob `hz cm
+// Wrapped is served back to an admin on purpose: it is the blob `hz config
 // recovery verify` has to open to prove custody, and only the recovery private
 // key opens it. hz already relays exactly this shape to a box at every boot.
 type CMRecoveryWrap struct {
@@ -70,7 +70,7 @@ type CMRecoveryRecipientReq struct {
 // KindWrappedEnvKey envelope, and that its recipient fingerprint is the
 // fingerprint of the named recipient's public key. It cannot verify that the
 // key INSIDE is the key KeyID names — nothing but the private half can — and
-// that is exactly the hole `hz cm recovery verify` exists to close.
+// that is exactly the hole `hz config recovery verify` exists to close.
 type CMRecoveryWrapReq struct {
 	Environment string `json:"environment"`
 	App         string `json:"app"`

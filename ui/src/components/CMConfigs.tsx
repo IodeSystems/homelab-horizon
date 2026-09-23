@@ -26,7 +26,7 @@ import type { CMConfigResp, CMConfigValueResp } from "../api/generated-types";
 // never shows a value, because there is no value to show: everything is sealed
 // client-side and hz holds no key. `sealed` is base64 ciphertext and is
 // deliberately not rendered anywhere in this file — decrypting is
-// `hz cm show <config-id>`, in the CLI, which is where the keys are.
+// `hz config show <config-id>`, in the CLI, which is where the keys are.
 //
 // Nothing here touches WebCrypto. A browser served by hz cannot defend against
 // hz, so the ceremony lives in a locally installed binary instead.
@@ -449,7 +449,7 @@ function ConfigDetail({
         <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
           To read the values, decrypt them where the keys are:
         </Typography>
-        <CopyBox text={`hz cm show ${data.id}`} />
+        <CopyBox text={`hz config show ${data.id}`} />
       </Box>
     </Box>
   );
@@ -513,7 +513,7 @@ export function CMConfigs({ initialAddress }: { initialAddress?: CMAddress }) {
         ) : configs.length === 0 ? (
           <Typography variant="body2" color="text.secondary" sx={{ mt: 2, fontStyle: "italic" }}>
             Nothing blessed at {addressLabel(address)} yet. Configs are pushed with{" "}
-            <code>hz cm push</code>, which seals the values on the machine that
+            <code>hz config push</code>, which seals the values on the machine that
             holds the key.
           </Typography>
         ) : (

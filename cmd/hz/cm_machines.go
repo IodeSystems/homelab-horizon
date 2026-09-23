@@ -34,7 +34,7 @@ import (
 
 // cmMachines lists every enrolled box.
 func cmMachines(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm machines", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config machines", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "print the raw response")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -72,9 +72,9 @@ func cmMachines(c *client, args []string) error {
 	fmt.Println("OBSERVED is the version the box reported it is RUNNING, and REPORTED is how long")
 	fmt.Println("ago it said so — a box reports on every config resolve, so a stale REPORTED means")
 	fmt.Println("it has stopped asking. 'mixed' means this box's addresses reported DIFFERENT")
-	fmt.Println("versions, which is the normal state mid-rollout; 'hz cm machines --json' shows")
+	fmt.Println("versions, which is the normal state mid-rollout; 'hz config machines --json' shows")
 	fmt.Println("each address on its own. hz only displays this — it never upgrades anything.")
-	fmt.Println("Remove a box so its name can be enrolled again: 'hz cm remove <machine>'.")
+	fmt.Println("Remove a box so its name can be enrolled again: 'hz config remove <machine>'.")
 	return nil
 }
 
@@ -153,9 +153,9 @@ func since(t time.Time) string {
 // every machine-scoped secret key. Printing counts alone would not let an
 // operator tell the box they rebuilt from a box that took its name.
 func cmRemove(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm remove", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config remove", flag.ContinueOnError)
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, "usage: hz cm remove <machine-name-or-id> [--yes]\n\n"+
+		fmt.Fprint(os.Stderr, "usage: hz config remove <machine-name-or-id> [--yes]\n\n"+
 			"Removes an enrolled box so its name can be enrolled again — the fix for\n"+
 			"\"machine X is enrolled with a different public key\" after a rebuild.\n\n"+
 			"This destroys every registration the box holds (including approved ones)\n"+
@@ -184,7 +184,7 @@ func cmRemove(c *client, args []string) error {
 			// The ordinary outcome of removing something twice, and of a typo.
 			// Both deserve the listing rather than a stack of HTTP.
 			return fmt.Errorf("no machine named or identified by %q is enrolled.\n"+
-				"  'hz cm machines' lists what is", ref)
+				"  'hz config machines' lists what is", ref)
 		}
 		return err
 	}
@@ -250,7 +250,7 @@ func cmRemove(c *client, args []string) error {
 	}
 
 	// confirm carries the name hz resolved, not the reference the operator
-	// typed: `hz cm remove mch_abc123` is legitimate, and the server checks the
+	// typed: `hz config remove mch_abc123` is legitimate, and the server checks the
 	// NAME. Sending the raw ref would make the id form fail its own guard.
 	q := url.Values{apitypes.CMQueryConfirm: {m.Name}}
 	var removed apitypes.CMMachineRemovedResp
@@ -261,7 +261,7 @@ func cmRemove(c *client, args []string) error {
 	fmt.Printf("\nRemoved %s: %d registration(s), %d of them holding a grant, %d machine secret(s).\n",
 		removed.Name, removed.RegistrationsRemoved, removed.GrantsRemoved, removed.SecretsRemoved)
 	fmt.Printf("The name %q is free. The box's next boot registers as pending, with whatever\n", removed.Name)
-	fmt.Println("keypair it holds now — approve it with 'hz cm approve <id>', comparing the")
+	fmt.Println("keypair it holds now — approve it with 'hz config approve <id>', comparing the")
 	fmt.Println("fingerprint it prints. Nothing it held before carries over.")
 	return nil
 }

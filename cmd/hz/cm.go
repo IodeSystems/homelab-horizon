@@ -49,7 +49,7 @@ const cmAPI = "/api/v1/cm"
 
 func runCM(c *client, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("cm subcommand required: key | recovery | machines | pending | approve | deny | remove | promote | show | resolve")
+		return fmt.Errorf("config subcommand required: key | recovery | machines | pending | approve | deny | remove | promote | show | resolve")
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
@@ -74,7 +74,7 @@ func runCM(c *client, args []string) error {
 	case "resolve":
 		return cmResolve(c, rest)
 	default:
-		return fmt.Errorf("unknown cm subcommand: %s", sub)
+		return fmt.Errorf("unknown config subcommand: %s", sub)
 	}
 }
 
@@ -101,7 +101,7 @@ func parseCMAddr(s string) (configmgr.EnvKeyAddr, error) {
 
 // splitCMPositional pulls a leading positional off the argument list.
 //
-// Go's flag package stops at the first non-flag token, so `hz cm deny reg-1
+// Go's flag package stops at the first non-flag token, so `hz config deny reg-1
 // --reason=x` would silently drop --reason. The repo's splitNameArgs solves
 // that by taking the first non-flag token anywhere, which misreads the value of
 // a space-separated flag (`--label 2026-01 prod/redline/app` would take
@@ -194,8 +194,8 @@ func cmSealAdvice(addr configmgr.EnvKeyAddr, cur configmgr.CurrentKey, err error
 	case errors.Is(err, configmgr.ErrNoSuchKey):
 		return fmt.Errorf("%w\n"+
 			"  this machine holds no key for %s.\n"+
-			"  import the one from your password manager:  hz cm key import %s\n"+
-			"  or mint the first key for the address:       hz cm key new %s",
+			"  import the one from your password manager:  hz config key import %s\n"+
+			"  or mint the first key for the address:       hz config key new %s",
 			err, addr, addr, addr)
 	case errors.Is(err, configmgr.ErrRefuseToSeal):
 		return fmt.Errorf("%w\n"+
@@ -203,8 +203,8 @@ func cmSealAdvice(addr configmgr.EnvKeyAddr, cur configmgr.CurrentKey, err error
 			"  that is deliberate: created_at lives in a file anyone who can write the\n"+
 			"  keystore can set, and hz's pointer is the only thing that arbitrates it.\n"+
 			"  hz calls %s current for %s.\n"+
-			"  if that key is the right one:  hz cm key import %s\n"+
-			"  if the key you hold is newer:  hz cm key current %s --set <keyid>",
+			"  if that key is the right one:  hz config key import %s\n"+
+			"  if the key you hold is newer:  hz config key current %s --set <keyid>",
 			err, cur, addr, addr, addr)
 	case errors.Is(err, configmgr.ErrInsecureKey):
 		return fmt.Errorf("%w\n  fix the mode and ownership (0600, owned by you, in a directory nobody else can write) and retry", err)
@@ -215,7 +215,7 @@ func cmSealAdvice(addr configmgr.EnvKeyAddr, cur configmgr.CurrentKey, err error
 // --- the approval queue ----------------------------------------------------
 
 func cmPending(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm pending", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config pending", flag.ContinueOnError)
 	all := fs.Bool("all", false, "list every registration, not only pending ones")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -241,7 +241,7 @@ func cmPending(c *client, args []string) error {
 		}
 	}
 	// The fingerprint is deliberately not a column. See cmApprove.
-	fmt.Println("\nApprove one with 'hz cm approve <id>'. You will need the fingerprint the box printed.")
+	fmt.Println("\nApprove one with 'hz config approve <id>'. You will need the fingerprint the box printed.")
 	return nil
 }
 
@@ -300,9 +300,9 @@ func cmFetchPublicKey(c *client, id string) (*ecdh.PublicKey, error) {
 // afterwards — on a match, to confirm, and on a mismatch, so the difference is
 // visible.
 func cmApprove(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm approve", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config approve", flag.ContinueOnError)
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, "usage: hz cm approve <registration-id>\n\n"+
+		fmt.Fprint(os.Stderr, "usage: hz config approve <registration-id>\n\n"+
 			"Wraps this machine's environment key to the box's public key and sends the\n"+
 			"wrapped blob. The key itself never leaves this process.\n\n"+
 			"You will be asked to type the fingerprint the BOX printed. Read it from the\n"+
@@ -415,7 +415,7 @@ func cmApprove(c *client, args []string) error {
 }
 
 func cmDeny(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm deny", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config deny", flag.ContinueOnError)
 	reason := fs.String("reason", "", "why this registration is refused (required)")
 	id, rest := splitCMPositional(args)
 	if err := fs.Parse(rest); err != nil {
@@ -425,7 +425,7 @@ func cmDeny(c *client, args []string) error {
 		id = fs.Arg(0)
 	}
 	if id == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz cm deny <registration-id> --reason=\"...\"")
+		return fmt.Errorf("usage: hz config deny <registration-id> --reason=\"...\"")
 	}
 	if strings.TrimSpace(*reason) == "" {
 		return fmt.Errorf("--reason is required: a denial with no stated cause is indistinguishable from a mistake six months later")
@@ -457,7 +457,7 @@ func isTTY(f *os.File) bool {
 
 // readLine reads one line, without echo suppression. Everything read this way
 // is public — a fingerprint, a key id — and the one genuinely secret thing read
-// from stdin (hz cm key import) is a whole-stream read, not a prompt.
+// from stdin (hz config key import) is a whole-stream read, not a prompt.
 func readLine(r *os.File) (string, error) {
 	br := bufio.NewReader(r)
 	line, err := br.ReadString('\n')

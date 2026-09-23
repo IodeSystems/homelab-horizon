@@ -12,8 +12,8 @@ import (
 )
 
 // Four config-manager endpoints were unreachable from the CLI and nothing
-// caught it: `hz cm resolve` sent "environment=" where the handler read "env=",
-// `hz cm key current` did the same for both GET and PUT, and `hz cm promote`
+// caught it: `hz config resolve` sent "environment=" where the handler read "env=",
+// `hz config key current` did the same for both GET and PUT, and `hz config promote`
 // sent "configId"/"to" to /promote while the handler read "config"/"target" at
 // /promote/gate. Every one 400'd or 404'd for every user.
 //
@@ -57,7 +57,7 @@ func TestCMAdminRoutesAreReachableAsBuilt(t *testing.T) {
 		{"machines", apitypes.CMPathMachines, nil},
 		// Key custody. Registered from the same constants the CLI reads, for
 		// the reason this whole file exists — and reachability matters more
-		// here than anywhere: an unrouted recovery endpoint means `hz cm key
+		// here than anywhere: an unrouted recovery endpoint means `hz config key
 		// new` cannot wrap, which would be discovered as a missing wrap during
 		// a recovery rather than as a 404 now.
 		{"recovery", apitypes.CMPathRecovery, nil},
@@ -95,9 +95,9 @@ func TestCMAdminRoutesAreReachableAsBuilt(t *testing.T) {
 	}
 }
 
-// `hz cm approve` reads the registration before it does anything else, and the
+// `hz config approve` reads the registration before it does anything else, and the
 // bare {id} route did not exist — so approval 404'd on its first call for every
-// operator, on the command `hz cm pending` tells them to run.
+// operator, on the command `hz config pending` tells them to run.
 //
 // The suffixed forms all existed and were tested. Nothing tested the shape the
 // CLI actually asks for, which is the same gap that made four other endpoints
@@ -176,7 +176,7 @@ func TestCMMachineRoutesAreReachableAsBuilt(t *testing.T) {
 			t.Fatalf("want one machine box-1, got %+v", rows)
 		}
 		// The preview an operator acts on has to carry the registration, or
-		// `hz cm remove` cannot say what it is about to destroy.
+		// `hz config remove` cannot say what it is about to destroy.
 		if len(rows[0].Registrations) != 1 {
 			t.Errorf("machine listing carries no registrations: %+v", rows[0])
 		}

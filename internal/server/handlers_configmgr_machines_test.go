@@ -76,7 +76,7 @@ func TestCMRemoveLetsARebuiltBoxReEnrol(t *testing.T) {
 	// The refusal has to name the way out. Instructing an operator to perform
 	// an act nothing implements is the bug this whole change exists to fix, so
 	// the message losing the pointer is a regression worth failing on.
-	if !strings.Contains(w.Body.String(), "hz cm remove") {
+	if !strings.Contains(w.Body.String(), "hz config remove") {
 		t.Errorf("the refusal does not say how to remove the machine: %s", w.Body.String())
 	}
 

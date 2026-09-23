@@ -64,7 +64,7 @@ func cmFetchConfig(c *client, id string) (apitypes.CMConfigResp, error) {
 // complete and is not, and "which keys did I actually see" is not a question
 // anybody asks of output they have already read.
 func cmShow(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm show", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config show", flag.ContinueOnError)
 	pos, rest := splitCMPositional(args)
 	if err := fs.Parse(rest); err != nil {
 		return err
@@ -73,7 +73,7 @@ func cmShow(c *client, args []string) error {
 		pos = fs.Arg(0)
 	}
 	if pos == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz cm show <config-id>")
+		return fmt.Errorf("usage: hz config show <config-id>")
 	}
 	cfg, err := cmFetchConfig(c, pos)
 	if err != nil {
@@ -182,7 +182,7 @@ func cmOpenValues(ks *configmgr.Keystore, addr configmgr.EnvKeyAddr, values []ap
 // passed over; silent resolution is fine only when you can ask what it resolved
 // to.
 func cmResolve(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm resolve", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config resolve", flag.ContinueOnError)
 	version := fs.String("version", "", "the app version to resolve for (required)")
 	asJSON := fs.Bool("json", false, "output raw JSON")
 	pos, rest := splitCMPositional(args)
@@ -193,7 +193,7 @@ func cmResolve(c *client, args []string) error {
 		pos = fs.Arg(0)
 	}
 	if pos == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz cm resolve <environment>/<app>/<role> --version=<v>")
+		return fmt.Errorf("usage: hz config resolve <environment>/<app>/<role> --version=<v>")
 	}
 	if *version == "" {
 		return fmt.Errorf("--version is required: resolution is a range containment test, and there is no default version to test")
@@ -290,9 +290,9 @@ func cmResolve(c *client, args []string) error {
 // skipped them would tell you nothing about whether the real one would work.
 // Only the POST is withheld.
 func cmPromote(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm promote", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config promote", flag.ContinueOnError)
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, "usage: hz cm promote <config-id> --to=<environment> [--execute]\n\n"+
+		fmt.Fprint(os.Stderr, "usage: hz config promote <config-id> --to=<environment> [--execute]\n\n"+
 			"Copies the invariants, carries the environment-bound keys the target has\n"+
 			"already answered, and blanks the ones it has not. Prints the plan and posts\n"+
 			"NOTHING unless --execute is given.\n\n"+
@@ -315,7 +315,7 @@ func cmPromote(c *client, args []string) error {
 		pos = fs.Arg(0)
 	}
 	if pos == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz cm promote <config-id> --to=<environment> [--execute]")
+		return fmt.Errorf("usage: hz config promote <config-id> --to=<environment> [--execute]")
 	}
 	if *to == "" {
 		return fmt.Errorf("--to is required")
