@@ -129,6 +129,13 @@ func (s *Server) handleDeployStatus(w http.ResponseWriter, svc *config.Service, 
 		nextSlot = "a"
 	}
 
+	// Both slots are reported as ADDRESSES: this is the status a deployer
+	// reads to know where to push, and HAProxy's own state is keyed by the
+	// address too, so a "@nas:8080" here would match nothing.
+	cfg := s.cfg()
+	backend := cfg.ServiceBackend(svc)
+	resolved := cfg.ResolvedDeploy(svc)
+
 	status := apitypes.DeployStatus{
 		Service:     svc.Name,
 		Domain:      svc.PrimaryDomain(),
@@ -138,12 +145,12 @@ func (s *Server) handleDeployStatus(w http.ResponseWriter, svc *config.Service, 
 		HealthCheck: healthCheck,
 		Current: apitypes.DeploySlotStatus{
 			Slot:    currentSlot,
-			Backend: deploy.CurrentServer(svc.Proxy.Backend),
+			Backend: resolved.CurrentServer(backend),
 			State:   "unknown",
 		},
 		Next: apitypes.DeploySlotStatus{
 			Slot:    nextSlot,
-			Backend: deploy.InactiveServer(svc.Proxy.Backend),
+			Backend: resolved.InactiveServer(backend),
 			State:   "unknown",
 		},
 	}
@@ -262,14 +269,16 @@ func (s *Server) handleDeploySwap(w http.ResponseWriter, svcIdx int) {
 		return
 	}
 
-	svc := s.cfg().Services[svcIdx]
-	deploy := svc.Proxy.Deploy
+	cfg := s.cfg()
+	svc := &cfg.Services[svcIdx]
+	resolved := cfg.ResolvedDeploy(svc)
+	backend := cfg.ServiceBackend(svc)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(apitypes.DeploySwapResponse{
 		Status:     "ok",
-		ActiveSlot: deploy.ActiveSlot,
-		Current:    deploy.CurrentServer(svc.Proxy.Backend),
-		Next:       deploy.InactiveServer(svc.Proxy.Backend),
+		ActiveSlot: resolved.ActiveSlot,
+		Current:    resolved.CurrentServer(backend),
+		Next:       resolved.InactiveServer(backend),
 	})
 }
