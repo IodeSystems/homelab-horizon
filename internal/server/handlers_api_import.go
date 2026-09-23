@@ -17,12 +17,29 @@ import (
 // the same facts, free to disagree with the one that writes them — and it would
 // see less, because ServiceResp does not carry everything config.Service does.
 //
-// The write takes no plan from the client. It recomputes the proposal and
-// applies THAT, with the client's fingerprint as the guard: a config that
-// changed between the dry run and the execute is refused rather than quietly
-// importing something nobody read. A client-supplied plan would make this
-// endpoint "write these project assignments", which is a different and much
-// larger thing to have authorised.
+// The write takes the plan from ONE OF TWO PLACES.
+//
+// With no `plan` in the body it recomputes the proposal and applies THAT, with
+// the client's fingerprint as the guard: a config that changed between the dry
+// run and the execute is refused rather than quietly importing something nobody
+// read. That is what `hz import --execute` has always meant and it is unchanged.
+//
+// With a `plan` the operator has edited the proposal, which is the case a dry
+// run against a real flat estate proved the heuristic cannot handle: thirty
+// services under one domain suffix collapse into one project, and the operator
+// is the only party that knows they are eight applications. The proposal is a
+// starting point and not a verdict, so an edited one has to be applicable.
+//
+// A client-supplied plan IS a larger thing to have authorised than "apply your
+// own proposal", and it is paid for with validation rather than refusal:
+// config.PlanFromImportFile checks the file against THIS config before anything
+// is written — every service named exists, every service in the config is
+// accounted for by name (which is also how a gateway that changed since the file
+// was written is caught), every project and rung a row refers to is declared in
+// the same file, a posture is one of the three, and an environment may not be
+// spread across projects. A fingerprint is refused alongside a plan: a
+// hand-edited plan is by definition not the one hz computed, so a fingerprint
+// there could only be stale or ignored.
 
 // handleAPIImport serves the proposal (GET) and applies it (POST).
 // GET  /api/v1/import
@@ -54,10 +71,8 @@ func (s *Server) applyImport(w http.ResponseWriter, r *http.Request) {
 	// updateConfig stores the new config and then saves it, so a config that
 	// fails validation would already be live by the time Save says so.
 	next := *s.cfg()
-	plan := next.ProposeImport()
-	if req.Fingerprint != "" && req.Fingerprint != plan.Fingerprint() {
-		writeJSONError(w, http.StatusConflict,
-			"the config changed since that plan was read (plan "+req.Fingerprint+", now "+plan.Fingerprint()+"); re-run the dry run")
+	plan, ok := importPlanFor(w, &next, req)
+	if !ok {
 		return
 	}
 	before := assignedCount(&next)
@@ -77,6 +92,58 @@ func (s *Server) applyImport(w http.ResponseWriter, r *http.Request) {
 		EnvironmentsAdded: len(next.Environments) - envsBefore,
 		ServicesAssigned:  assignedCount(&next) - before,
 	})
+}
+
+// importPlanFor resolves the request's plan against this config, writing the
+// refusal itself when there is one. Both sources end in the same ImportPlan, so
+// ApplyImport never learns which one it got.
+func importPlanFor(w http.ResponseWriter, cfg *config.Config, req apitypes.ImportApplyReq) (config.ImportPlan, bool) {
+	if req.Plan == nil {
+		plan := cfg.ProposeImport()
+		if req.Fingerprint != "" && req.Fingerprint != plan.Fingerprint() {
+			writeJSONError(w, http.StatusConflict,
+				"the config changed since that plan was read (plan "+req.Fingerprint+", now "+plan.Fingerprint()+"); re-run the dry run")
+			return config.ImportPlan{}, false
+		}
+		return plan, true
+	}
+	if req.Fingerprint != "" {
+		writeJSONError(w, http.StatusBadRequest,
+			"a plan file and a fingerprint were both sent. A fingerprint identifies a plan hz computed; an edited file is a different plan, so the two cannot both be the authority")
+		return config.ImportPlan{}, false
+	}
+	plan, err := cfg.PlanFromImportFile(importFileFromReq(*req.Plan))
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return config.ImportPlan{}, false
+	}
+	return plan, true
+}
+
+// importFileFromReq converts the wire form. One field per field, dull on
+// purpose, for the reason importPlanResp gives in the other direction.
+func importFileFromReq(r apitypes.ImportFileReq) config.ImportFile {
+	f := config.ImportFile{
+		Version:      r.Version,
+		Projects:     make([]config.ImportFileProject, 0, len(r.Projects)),
+		Environments: make([]config.ImportFileEnvironment, 0, len(r.Environments)),
+		Assign:       make([]config.ImportFilePlacement, 0, len(r.Assign)),
+		Unassigned:   append([]string(nil), r.Unassigned...),
+	}
+	for _, x := range r.Projects {
+		f.Projects = append(f.Projects, config.ImportFileProject{Name: x.Name, Parent: x.Parent})
+	}
+	for _, x := range r.Environments {
+		f.Environments = append(f.Environments, config.ImportFileEnvironment{
+			Project: x.Project, Name: x.Name, Posture: x.Posture,
+		})
+	}
+	for _, x := range r.Assign {
+		f.Assign = append(f.Assign, config.ImportFilePlacement{
+			Service: x.Service, Project: x.Project, Environment: x.Environment,
+		})
+	}
+	return f
 }
 
 // assignedCount counts services that name a project, so the response reports
