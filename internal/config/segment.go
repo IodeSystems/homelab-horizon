@@ -517,6 +517,489 @@ func (c *Config) RemoveSegment(name string, cascade bool) ([]Dependant, error) {
 	return removes, nil
 }
 
+// SegmentPatch is a partial update to one segment and to the memberships on it.
+// A nil field is "leave this alone"; a non-nil one is the new value.
+//
+// WHY A PATCH AND NOT A WHOLE RECORD, the reason EnvironmentPatch gives: these
+// are independent facts about one network, and making an operator restate the
+// range and the interface in order to address one member is how a range gets
+// retyped wrong. It matters more here than on a rung — a Segment carries a
+// member list, and a whole-record write would make "re-address one member" mean
+// "resend every member", with the hub and every public key along for the ride.
+//
+// WHAT IS NOT IN HERE, and each absence is the model rather than an omission:
+//
+//   - NO NAME. The name is the IDENTITY: every Machine.Segments entry resolves
+//     through it, so renaming a segment is renaming it on every machine that is
+//     in it — a different operation from editing this record, and one that would
+//     have to rewrite records the operator did not name. `hz segment rm
+//     --cascade` and re-declare is the honest way to say it.
+//
+//   - NO MEMBERSHIP. Members can be ADDRESSED and UNADDRESSED here; a machine
+//     cannot be joined to or removed from the segment. Membership is declared on
+//     the Machine (segment.go's opening comment), and a second writer for it
+//     here is exactly how the two records come to disagree.
+//
+//   - NO HUB FLAG PER MEMBER. Hub is single-valued across the whole segment, so
+//     it is SegmentPatch.Hub — a machine name — rather than a bool on each
+//     member. Two members each carrying hub=true is a contradiction the record
+//     cannot hold and a per-member flag invites; naming the one hub cannot
+//     express it at all.
+type SegmentPatch struct {
+	// Project is the owner. Settable: ownership moves, and nothing resolves
+	// through it. Not clearable — a network nobody owns is a network nobody is
+	// responsible for.
+	Project *string
+
+	// CIDR is the range. Settable, and the one field that can STRAND members:
+	// every member address is checked against it, so a narrower or moved range
+	// can put an existing address outside. See SegmentSet — stranded members
+	// block the write unless cascade is given, and cascade UNADDRESSES them
+	// rather than renumbering, because hz does not invent an address.
+	CIDR *string
+
+	// Interface is the interface the segment lands on. Settable and checked
+	// unique across segments by the same validator `add` runs.
+	Interface *string
+
+	// Note is free prose. Settable, and the only field here that clears: a
+	// non-nil empty string removes it.
+	Note *string
+
+	// Hub names the member that becomes the hub, demoting whoever holds it now.
+	// It is a TOPOLOGY change and not a field edit — Peers is derived hub and
+	// spoke, so moving the hub rewires every member's peer set — which is why
+	// SegmentChange carries the whole before/after rewiring for the caller to
+	// print rather than letting it happen quietly.
+	//
+	// There is no way to say "no hub": a segment with members and no hub is
+	// refused, so the only legal move is naming a different one.
+	Hub *string
+
+	// Members addresses or re-addresses machines already in the segment. This
+	// is the gap `ls|show|add|rm` left: with only those verbs, changing one
+	// member's address meant `rm --cascade` and re-declaring the whole segment.
+	Members []SegmentMemberPatch
+
+	// Unaddress drops the member entry for each named machine, leaving it IN
+	// the segment and unaddressed — the legal state `hz machine add --segment`
+	// leaves, and the honest one for a box that is being renumbered later.
+	Unaddress []string
+}
+
+// SegmentMemberPatch is a partial update to one membership. Machine identifies
+// it; every other field is nil for "leave this alone".
+//
+// Partial for the reason the segment patch is: re-addressing a member must not
+// silently drop its public key and its endpoint, which a whole-member write
+// would do to every field the operator did not retype.
+type SegmentMemberPatch struct {
+	// Machine is which membership. It must already name the segment — this
+	// addresses a membership, it does not grant one.
+	Machine string
+
+	// Address is the new address, a bare IP inside the segment's range. It
+	// cannot be cleared: a member with no address is not a member entry at all,
+	// and SegmentPatch.Unaddress is how that is said.
+	Address *string
+
+	// PublicKey is the public half, clearable with an empty string — a key that
+	// has been rotated away is better absent than stale.
+	PublicKey *string
+
+	// Endpoint is host:port, clearable with an empty string.
+	Endpoint *string
+}
+
+// Empty reports a patch that changes nothing, so a caller can refuse it rather
+// than write a no-op and report success.
+func (p SegmentPatch) Empty() bool {
+	return p.Project == nil && p.CIDR == nil && p.Interface == nil && p.Note == nil &&
+		p.Hub == nil && len(p.Members) == 0 && len(p.Unaddress) == 0
+}
+
+// SegmentChange is what a set did, or — on a dry run — what it would do.
+//
+// It is returned whole rather than left for a caller to diff, for the reason
+// RemovalResp is: a client that re-derived "what changed" from a read before and
+// a read after would be a second answer, free to disagree with the one that
+// wrote it, and the hub rewiring in particular is not a diff anybody would think
+// to look for.
+type SegmentChange struct {
+	// Segment is the record as it would read, or now reads.
+	Segment Segment
+
+	// Fields is one line per changed value, "name  before → after". Empty when
+	// the patch asked only for something that was already true.
+	Fields []string
+
+	// Strands is every member entry a new CIDR would put outside the range.
+	// Without cascade they are the BLOCKERS; with it they are what the write
+	// unaddresses, listed before it happens.
+	Strands []Dependant
+
+	// HubMove is set only when the hub actually moves, and carries the peer
+	// rewiring that follows from it.
+	HubMove *SegmentHubMove
+}
+
+// SegmentHubMove is the topology change moving the hub amounts to: who it was,
+// who it is, and what every member's peer set becomes as a result.
+type SegmentHubMove struct {
+	From  string
+	To    string
+	Peers []SegmentPeerChange
+}
+
+// SegmentPeerChange is one member's peer set before and after. Only members
+// whose peers actually change are listed.
+type SegmentPeerChange struct {
+	Machine string
+	Before  []string
+	After   []string
+}
+
+// SegmentSet computes what a patch would do to one segment, WITHOUT writing:
+// the segment as it would read, the values that would change, the hub rewiring,
+// and what stands in the way.
+//
+// It is the SegmentRemoval half of the pair — the dry run and the write share
+// one computation, so the thing `--confirm` writes is the thing the dry run
+// printed. Only the CIDR can block: it is the one field whose new value can
+// invalidate a record the operator did not name.
+func (c *Config) SegmentSet(name string, patch SegmentPatch, cascade bool) (SegmentChange, []Dependant, error) {
+	before, ok := c.FindSegment(name)
+	if !ok {
+		return SegmentChange{}, nil, fmt.Errorf("no segment %q — `hz segment ls` lists what exists%s", name, c.segmentHint())
+	}
+	if patch.Empty() {
+		return SegmentChange{}, nil, fmt.Errorf("nothing to set on segment %s — pass at least one of --project, --cidr, --interface, --note, --hub, --member or --unaddress", name)
+	}
+
+	next := before
+	next.Members = append([]SegmentMember(nil), before.Members...)
+	change := SegmentChange{}
+
+	if patch.Project != nil {
+		v := strings.TrimSpace(*patch.Project)
+		if v == "" {
+			return SegmentChange{}, nil, fmt.Errorf("segment %s cannot have its project cleared — a project's machines form the segment, and a network nobody owns is a network nobody is responsible for", name)
+		}
+		if !c.hasProject(v) {
+			return SegmentChange{}, nil, fmt.Errorf("no project %q to own segment %s — declare the project first%s", v, name, c.projectHint())
+		}
+		change.note("project", next.Project, v)
+		next.Project = v
+	}
+	if patch.Interface != nil {
+		v := strings.TrimSpace(*patch.Interface)
+		if v == "" {
+			return SegmentChange{}, nil, fmt.Errorf("segment %s cannot have its interface cleared — a membership has to land on a named interface on the box", name)
+		}
+		change.note("interface", next.Interface, v)
+		next.Interface = v
+	}
+	if patch.Note != nil {
+		v := strings.TrimSpace(*patch.Note)
+		change.note("note", next.Note, v)
+		next.Note = v
+	}
+
+	if err := c.applyMemberPatches(name, &next, patch.Members, &change); err != nil {
+		return SegmentChange{}, nil, err
+	}
+	if err := applyUnaddress(name, &next, patch.Unaddress, &change); err != nil {
+		return SegmentChange{}, nil, err
+	}
+	if err := applyHubMove(before, &next, patch.Hub, &change); err != nil {
+		return SegmentChange{}, nil, err
+	}
+
+	// CIDR LAST, deliberately. An operator renumbering a segment passes the new
+	// range and the new addresses in one command; checking the range against the
+	// addresses as they will BE is the only order in which that is not a refusal
+	// about an address the operator just replaced.
+	blocked, err := applyCIDR(name, &next, patch.CIDR, cascade, &change)
+	if err != nil {
+		return SegmentChange{}, nil, err
+	}
+
+	change.Segment = next
+	return change, blocked, nil
+}
+
+// SetSegment applies a patch and returns what it changed. It refuses while
+// anything stands in the way and cascade is off, naming what — the contract
+// RemoveSegment sets, and for the same reason: the alternative writes a config
+// Save would refuse and hands the operator a validation error about a record
+// they never mentioned.
+func (c *Config) SetSegment(name string, patch SegmentPatch, cascade bool) (SegmentChange, error) {
+	change, blocked, err := c.SegmentSet(name, patch, cascade)
+	if err != nil {
+		return SegmentChange{}, err
+	}
+	if len(blocked) > 0 {
+		// Not blockedError: that one says "removing it", and nothing is being
+		// removed. The refusal has to describe the change the operator actually
+		// typed, which is the whole reason for refusing rather than cascading.
+		lines := make([]string, 0, len(blocked))
+		for _, d := range blocked {
+			lines = append(lines, "  "+d.String())
+		}
+		return SegmentChange{}, fmt.Errorf("segment %s: the new range would strand %d addressed member(s), and a member outside its own segment's range is a config that cannot be saved:\n%s\nGive each of them an address inside the new range in the same command, or pass cascade to UNADDRESS them (hz will not renumber a box for you — two machines on one address is the failure that would cause)",
+			name, len(blocked), strings.Join(lines, "\n"))
+	}
+
+	next := c.copyForWrite()
+	for i := range next.Segments {
+		if next.Segments[i].Name == name {
+			next.Segments[i] = change.Segment
+			break
+		}
+	}
+	// The same validator `add` runs, over the whole model. A second path that
+	// validated differently is how a config becomes unloadable: addresses inside
+	// the range, unique per segment, members the machine claims, one hub,
+	// interfaces unique across segments — all of it is checked here or nowhere.
+	if err := next.validateModel(); err != nil {
+		return SegmentChange{}, err
+	}
+	c.adopt(next)
+	return change, nil
+}
+
+// note records one changed value, and records nothing when the patch asked for
+// the value the field already holds — a "set" that changed nothing must not
+// report that it did.
+func (ch *SegmentChange) note(field, before, after string) {
+	if before == after {
+		return
+	}
+	ch.Fields = append(ch.Fields, fmt.Sprintf("%-11s %s → %s", field, dashOrEmpty(before), dashOrEmpty(after)))
+}
+
+func dashOrEmpty(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
+// applyMemberPatches addresses or re-addresses memberships.
+//
+// The refusals here are ahead of ValidateSegments and say more than it can: the
+// validator can only report that a member is not claimed by its machine, and the
+// answer an operator needs is that membership is declared on the MACHINE and
+// this command addresses it.
+func (c *Config) applyMemberPatches(segment string, next *Segment, patches []SegmentMemberPatch, change *SegmentChange) error {
+	for _, mp := range patches {
+		machine := strings.TrimSpace(mp.Machine)
+		if machine == "" {
+			return fmt.Errorf("segment %s: a member patch names no machine — a member is a MACHINE at an address on this segment", segment)
+		}
+		m, declared := c.FindMachine(machine)
+		if !declared {
+			return fmt.Errorf("no machine %q to address on segment %s%s", machine, segment, c.machineHint())
+		}
+		if !machineNamesSegment(m, segment) {
+			return fmt.Errorf("machine %s does not name segment %s among its segments (%s), so there is no membership here to address — membership is declared on the MACHINE and addressed here, and this command does not grant one",
+				machine, segment, dashOrEmpty(strings.Join(m.Segments, ", ")))
+		}
+
+		idx := -1
+		for i := range next.Members {
+			if next.Members[i].Machine == machine {
+				idx = i
+				break
+			}
+		}
+		mem := SegmentMember{Machine: machine}
+		existed := idx >= 0
+		if existed {
+			mem = next.Members[idx]
+		}
+
+		if mp.Address != nil {
+			v := strings.TrimSpace(*mp.Address)
+			if v == "" {
+				return fmt.Errorf("segment %s cannot give %s an empty address — a member with no address is not an entry at all, and unaddressing is how that is said (`hz segment set %s --unaddress %s`)",
+					segment, machine, segment, machine)
+			}
+			change.note("member "+machine, mem.Address, v)
+			mem.Address = v
+		} else if !existed {
+			return fmt.Errorf("segment %s does not address %s yet, so setting its key or endpoint has nothing to attach to — give it an address in the same command (`--member machine=%s,address=<ip>`)",
+				segment, machine, machine)
+		}
+		if mp.PublicKey != nil {
+			v := strings.TrimSpace(*mp.PublicKey)
+			change.note(machine+" key", mem.PublicKey, v)
+			mem.PublicKey = v
+		}
+		if mp.Endpoint != nil {
+			v := strings.TrimSpace(*mp.Endpoint)
+			change.note(machine+" endpoint", mem.Endpoint, v)
+			mem.Endpoint = v
+		}
+
+		if existed {
+			next.Members[idx] = mem
+		} else {
+			next.Members = append(next.Members, mem)
+		}
+	}
+	return nil
+}
+
+// applyUnaddress drops member entries, leaving the machines IN the segment.
+func applyUnaddress(segment string, next *Segment, machines []string, change *SegmentChange) error {
+	for _, raw := range machines {
+		machine := strings.TrimSpace(raw)
+		if machine == "" {
+			continue
+		}
+		idx := -1
+		for i := range next.Members {
+			if next.Members[i].Machine == machine {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return fmt.Errorf("segment %s does not address %s, so there is nothing to unaddress — `hz segment show %s` lists who is addressed and who is not",
+				segment, machine, segment)
+		}
+		change.note("member "+machine, next.Members[idx].Address, "")
+		next.Members = append(next.Members[:idx], next.Members[idx+1:]...)
+	}
+	return nil
+}
+
+// applyHubMove moves the hub and records the peer rewiring it causes.
+//
+// The rewiring is computed rather than described because it is not obvious: a
+// spoke's peers become the new hub, the OLD hub stops peering with every other
+// spoke and gains one peer, and the new hub gains all of them. None of that is
+// visible in the record — Peers is derived — so it is the one change here that
+// would otherwise happen entirely off-screen.
+func applyHubMove(before Segment, next *Segment, hub *string, change *SegmentChange) error {
+	if hub == nil {
+		return nil
+	}
+	machine := strings.TrimSpace(*hub)
+	if machine == "" {
+		return fmt.Errorf("segment %s cannot be left without a hub — it is hub and spoke, so a segment with members has one, and the only move is naming a different member",
+			next.Name)
+	}
+	found := false
+	for i := range next.Members {
+		if next.Members[i].Machine == machine {
+			found = true
+		}
+	}
+	if !found {
+		addressed := make([]string, 0, len(next.Members))
+		for _, m := range next.Members {
+			addressed = append(addressed, m.Machine)
+		}
+		sort.Strings(addressed)
+		return fmt.Errorf("segment %s does not address %s, so it cannot be the hub — the hub is a MEMBER with an address and an endpoint to dial. Addressed: %s",
+			next.Name, machine, dashOrEmpty(strings.Join(addressed, ", ")))
+	}
+
+	old, hadHub := next.Hub()
+	if hadHub && old.Machine == machine {
+		return nil // already the hub; not a change and not an error
+	}
+	for i := range next.Members {
+		next.Members[i].Hub = next.Members[i].Machine == machine
+	}
+
+	move := &SegmentHubMove{From: old.Machine, To: machine}
+	if !hadHub {
+		move.From = ""
+	}
+	seen := map[string]bool{}
+	for _, m := range append(append([]SegmentMember(nil), before.Members...), next.Members...) {
+		if seen[m.Machine] {
+			continue
+		}
+		seen[m.Machine] = true
+		was, now := peerNames(before.PeersOf(m.Machine)), peerNames(next.PeersOf(m.Machine))
+		if strings.Join(was, ",") == strings.Join(now, ",") {
+			continue
+		}
+		move.Peers = append(move.Peers, SegmentPeerChange{Machine: m.Machine, Before: was, After: now})
+	}
+	sort.Slice(move.Peers, func(i, j int) bool { return move.Peers[i].Machine < move.Peers[j].Machine })
+	change.HubMove = move
+	return nil
+}
+
+func peerNames(peers []SegmentMember) []string {
+	out := make([]string, 0, len(peers))
+	for _, p := range peers {
+		out = append(out, p.Machine)
+	}
+	return out
+}
+
+// applyCIDR changes the range, and answers the question the range change raises:
+// what happens to a member whose address is no longer inside it.
+//
+// REFUSE, THEN CASCADE — the discipline `rm` already uses, for the same reason.
+// A narrower range silently dropping three machines' addresses is a change to
+// records the operator did not name; naming each one and stopping is the only
+// version of this that the operator can act on. Cascade UNADDRESSES them — it
+// does not renumber them, because hz inventing an address is how two machines
+// come to hold one, and an unaddressed membership is a state the model already
+// has a meaning for.
+func applyCIDR(segment string, next *Segment, cidr *string, cascade bool, change *SegmentChange) ([]Dependant, error) {
+	if cidr == nil {
+		return nil, nil
+	}
+	v := strings.TrimSpace(*cidr)
+	if v == "" {
+		return nil, fmt.Errorf("segment %s cannot have its range cleared — the range is what a member address is checked against and what a spoke routes to the hub", segment)
+	}
+	was := next.CIDR
+	next.CIDR = v
+	ipnet, err := parseSegmentCIDR(*next)
+	if err != nil {
+		next.CIDR = was
+		return nil, err
+	}
+	change.note("range", was, v)
+
+	kept := make([]SegmentMember, 0, len(next.Members))
+	var stranded []Dependant
+	for _, m := range next.Members {
+		ip := net.ParseIP(strings.TrimSpace(m.Address))
+		if ip != nil && ipnet.Contains(ip) {
+			kept = append(kept, m)
+			continue
+		}
+		d := Dependant{
+			Kind: "machine", Name: m.Machine,
+			How: "is addressed " + m.Address + ", which is outside the new range " + ipnet.String(),
+		}
+		if !cascade {
+			stranded = append(stranded, d)
+			kept = append(kept, m)
+			continue
+		}
+		d.How += ", and it would be UNADDRESSED — it stays IN the segment and peers with nothing until it is given an address inside " + ipnet.String()
+		if m.Hub {
+			d.How += " (it is the HUB, so name a new one with --hub in the same command)"
+		}
+		change.Strands = append(change.Strands, d)
+	}
+	next.Members = kept
+	sortDependants(stranded)
+	sortDependants(change.Strands)
+	return stranded, nil
+}
+
 // segmentHint lists the declared segments, for the reason projectHint lists the
 // projects: "no segment X" with no list reads as a typo when the real answer is
 // that this config declares no segments at all, and every membership in it is
