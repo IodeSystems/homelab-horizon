@@ -301,6 +301,80 @@ export interface CMRecoveryWrapResp {
 }
 
 //////////
+// source: probe_diagnosis.go
+
+/**
+ * ProbeDiagnosisPath is where the diagnosis is served, as a constant so a
+ * client and a test cannot disagree about the route.
+ */
+export const ProbeDiagnosisPath = "/api/v1/checks/diagnosis";
+/**
+ * ProbeDiagnosisResp is the whole answer.
+ * Vantages is carried because an EMPTY LIST HAS TWO MEANINGS and only this
+ * number tells them apart: no vantage is configured (hz has no outside-in
+ * reading of anything, and nothing below is evidence of health), or vantages
+ * exist and hz serves nothing (which cannot happen — every target gets a row,
+ * see monitor.Diagnoses). A screen must say the first one out loud.
+ */
+export interface ProbeDiagnosisResp {
+  /**
+   * Vantages is how many ENABLED outside vantages hz holds.
+   */
+  vantages: number /* int */;
+  /**
+   * Diagnoses is one row per (vantage, public target). Never null.
+   */
+  diagnoses: ProbeDiagnosis[];
+}
+/**
+ * ProbeDiagnosis is one target's verdict from one vantage.
+ */
+export interface ProbeDiagnosis {
+  target: string;
+  host: string;
+  vantage: string;
+  /**
+   * Status is "ok", "warning", "failed" or "unknown". Unknown is not a
+   * shade of ok.
+   */
+  status: string;
+  /**
+   * Cause is the stable key a screen branches on; Device names whose box has
+   * to change. Both are keys, not prose, so rows can be grouped by the trip
+   * they imply — everything the router needs, together.
+   */
+  cause: string;
+  device: string;
+  /**
+   * HZCanFix is false whenever the change has to happen somewhere hz cannot
+   * reach. A SCREEN RENDERS AN ACTION ONLY WHEN THIS IS TRUE. The router
+   * case is the reason the field exists: hz has no path to the router, no
+   * credential for it and no API on it, so a button there would be a lie.
+   */
+  hzCanFix: boolean;
+  /**
+   * Summary is what is wrong. Fix names the device and the change. Confirm
+   * is how the operator knows it worked without coming back to this screen —
+   * which matters most in exactly the case hz cannot fix, because the person
+   * is standing at a router admin page when they need it.
+   */
+  summary: string;
+  fix: string;
+  confirm: string;
+  /**
+   * Evidence is the ladder as observed, one line per rung. Never null: an
+   * empty list is "no rung was climbed", which is the honest reading for a
+   * target nothing has reported on.
+   */
+  evidence: string[];
+  /**
+   * At is the newest result this rests on. The zero time means there is
+   * none; read it with Status.
+   */
+  at: any /* time.Time */;
+}
+
+//////////
 // source: projection_view.go
 
 /**

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/probe"
 )
 
 // Check states.
@@ -125,6 +126,12 @@ type Monitor struct {
 
 	// remoteStates is per-vantage poll state, keyed by probe name.
 	remoteStates map[string]*RemoteState
+
+	// remoteResults is the newest probe result per vantage, keyed by
+	// "<kind>:<host>". The check rows built from these lose the fact the edge
+	// diagnosis needs — a healthy DNS row's answer — so the results are kept
+	// beside them. See diagnose_live.go.
+	remoteResults map[string]map[string]probe.Result
 
 	// remoteCancel stops one vantage's poll loop, keyed by probe name. Each
 	// loop gets its own context so a vantage can be added, edited or removed
