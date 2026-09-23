@@ -10,6 +10,11 @@ import type {
   CMPromotionGateResp,
   CMCurrentKeyResp,
   AgentObservedResponse,
+  ProjectResp,
+  EnvironmentResp,
+  MachineResp,
+  MachineProjectionResp,
+  VersionDriftResponse,
 } from "./generated-types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
@@ -105,6 +110,76 @@ export function useAgentObserved() {
         schema: AgentObservedResponseSchema,
       }),
     refetchInterval: 60_000,
+  });
+}
+
+// The model: projects, environments, machines, instances, and one machine's
+// projection. Five reads behind three read-only screens.
+//
+// NOT POLLED, unlike the drift screen. Every value these carry is DECLARED —
+// hz asserts it and it changes when somebody edits the config, not on a
+// cadence — except the instance rows, which carry their own age and are read
+// through the same `presentObservation` the drift screen uses. A declared
+// value does not go stale on screen, so refetching it on a timer would buy
+// nothing and spend a request per minute per open tab.
+
+/** The project tree, each node's feed already resolved with its provenance. */
+export function useProjects() {
+  return useQuery({
+    queryKey: ["projects"],
+    queryFn: () => apiFetch<ProjectResp[]>("/projects"),
+  });
+}
+
+/** Every declared rung, across every project. Name and posture are separate. */
+export function useEnvironments() {
+  return useQuery({
+    queryKey: ["environments"],
+    queryFn: () => apiFetch<EnvironmentResp[]>("/environments"),
+  });
+}
+
+/** The declared machines: identity and segment membership. No project. */
+export function useMachines() {
+  return useQuery({
+    queryKey: ["machines"],
+    queryFn: () => apiFetch<MachineResp[]>("/machines"),
+  });
+}
+
+/**
+ * Every approved instance, with the version its rung declares beside the one
+ * it last reported and the age of that reading.
+ *
+ * THE FAILURE OF THIS QUERY IS INFORMATION, not an empty list. hz answers 503
+ * when it has no identity store at all, and the screens read `isError` as "hz
+ * cannot say what is placed" rather than as "nothing is placed" — the two are
+ * different facts and conflating them is the bug these screens exist to avoid.
+ * So `retry: false`: a screen waiting through three silent retries shows the
+ * wrong one of those two for as long as it waits.
+ */
+export function useVersionDrift() {
+  return useQuery({
+    queryKey: ["cm", "version-drift"],
+    queryFn: () => apiFetch<VersionDriftResponse>("/cm/version-drift"),
+    retry: false,
+  });
+}
+
+/**
+ * What hz says one machine should look like — the pure projection.
+ *
+ * A machine hz does not declare is a normal 200 carrying a gap that says so,
+ * so this hook has no "not found" branch and must not grow one.
+ */
+export function useMachineProjection(machine: string) {
+  return useQuery({
+    queryKey: ["machines", "projection", machine],
+    queryFn: () =>
+      apiFetch<MachineProjectionResp>(
+        `/machines/projection?machine=${encodeURIComponent(machine)}`,
+      ),
+    enabled: machine !== "",
   });
 }
 
