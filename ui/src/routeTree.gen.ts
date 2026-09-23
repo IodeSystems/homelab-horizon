@@ -20,11 +20,14 @@ import { Route as DriftRouteImport } from './routes/drift'
 import { Route as MfaRouteImport } from './routes/mfa'
 import { Route as ObservabilityRouteImport } from './routes/observability'
 import { Route as PortsRouteImport } from './routes/ports'
+import { Route as ProjectsRouteImport } from './routes/projects'
 import { Route as ServicesRouteImport } from './routes/services'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as VpnRouteImport } from './routes/vpn'
 import { Route as DnsIndexRouteImport } from './routes/dns.index'
 import { Route as DnsZoneRouteImport } from './routes/dns.$zone'
+import { Route as MachinesIndexRouteImport } from './routes/machines.index'
+import { Route as MachinesMachineRouteImport } from './routes/machines.$machine'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -81,6 +84,11 @@ const PortsRoute = PortsRouteImport.update({
   path: '/ports',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProjectsRoute = ProjectsRouteImport.update({
+  id: '/projects',
+  path: '/projects',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ServicesRoute = ServicesRouteImport.update({
   id: '/services',
   path: '/services',
@@ -106,6 +114,16 @@ const DnsZoneRoute = DnsZoneRouteImport.update({
   path: '/dns/$zone',
   getParentRoute: () => rootRouteImport,
 } as any)
+const MachinesIndexRoute = MachinesIndexRouteImport.update({
+  id: '/machines/',
+  path: '/machines/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MachinesMachineRoute = MachinesMachineRouteImport.update({
+  id: '/machines/$machine',
+  path: '/machines/$machine',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -119,11 +137,14 @@ export interface FileRoutesByFullPath {
   '/mfa': typeof MfaRoute
   '/observability': typeof ObservabilityRoute
   '/ports': typeof PortsRoute
+  '/projects': typeof ProjectsRoute
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
   '/dns/$zone': typeof DnsZoneRoute
+  '/machines/$machine': typeof MachinesMachineRoute
   '/dns/': typeof DnsIndexRoute
+  '/machines/': typeof MachinesIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -137,11 +158,14 @@ export interface FileRoutesByTo {
   '/mfa': typeof MfaRoute
   '/observability': typeof ObservabilityRoute
   '/ports': typeof PortsRoute
+  '/projects': typeof ProjectsRoute
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
   '/dns/$zone': typeof DnsZoneRoute
+  '/machines/$machine': typeof MachinesMachineRoute
   '/dns': typeof DnsIndexRoute
+  '/machines': typeof MachinesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -156,11 +180,14 @@ export interface FileRoutesById {
   '/mfa': typeof MfaRoute
   '/observability': typeof ObservabilityRoute
   '/ports': typeof PortsRoute
+  '/projects': typeof ProjectsRoute
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
   '/dns/$zone': typeof DnsZoneRoute
+  '/machines/$machine': typeof MachinesMachineRoute
   '/dns/': typeof DnsIndexRoute
+  '/machines/': typeof MachinesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -176,11 +203,14 @@ export interface FileRouteTypes {
     | '/mfa'
     | '/observability'
     | '/ports'
+    | '/projects'
     | '/services'
     | '/settings'
     | '/vpn'
     | '/dns/$zone'
+    | '/machines/$machine'
     | '/dns/'
+    | '/machines/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -194,11 +224,14 @@ export interface FileRouteTypes {
     | '/mfa'
     | '/observability'
     | '/ports'
+    | '/projects'
     | '/services'
     | '/settings'
     | '/vpn'
     | '/dns/$zone'
+    | '/machines/$machine'
     | '/dns'
+    | '/machines'
   id:
     | '__root__'
     | '/'
@@ -212,11 +245,14 @@ export interface FileRouteTypes {
     | '/mfa'
     | '/observability'
     | '/ports'
+    | '/projects'
     | '/services'
     | '/settings'
     | '/vpn'
     | '/dns/$zone'
+    | '/machines/$machine'
     | '/dns/'
+    | '/machines/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -231,11 +267,14 @@ export interface RootRouteChildren {
   MfaRoute: typeof MfaRoute
   ObservabilityRoute: typeof ObservabilityRoute
   PortsRoute: typeof PortsRoute
+  ProjectsRoute: typeof ProjectsRoute
   ServicesRoute: typeof ServicesRoute
   SettingsRoute: typeof SettingsRoute
   VpnRoute: typeof VpnRoute
   DnsZoneRoute: typeof DnsZoneRoute
+  MachinesMachineRoute: typeof MachinesMachineRoute
   DnsIndexRoute: typeof DnsIndexRoute
+  MachinesIndexRoute: typeof MachinesIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -317,6 +356,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PortsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/projects': {
+      id: '/projects'
+      path: '/projects'
+      fullPath: '/projects'
+      preLoaderRoute: typeof ProjectsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/services': {
       id: '/services'
       path: '/services'
@@ -352,6 +398,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DnsZoneRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/machines/': {
+      id: '/machines/'
+      path: '/machines'
+      fullPath: '/machines/'
+      preLoaderRoute: typeof MachinesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/machines/$machine': {
+      id: '/machines/$machine'
+      path: '/machines/$machine'
+      fullPath: '/machines/$machine'
+      preLoaderRoute: typeof MachinesMachineRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -367,11 +427,14 @@ const rootRouteChildren: RootRouteChildren = {
   MfaRoute: MfaRoute,
   ObservabilityRoute: ObservabilityRoute,
   PortsRoute: PortsRoute,
+  ProjectsRoute: ProjectsRoute,
   ServicesRoute: ServicesRoute,
   SettingsRoute: SettingsRoute,
   VpnRoute: VpnRoute,
   DnsZoneRoute: DnsZoneRoute,
+  MachinesMachineRoute: MachinesMachineRoute,
   DnsIndexRoute: DnsIndexRoute,
+  MachinesIndexRoute: MachinesIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
