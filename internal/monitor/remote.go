@@ -97,6 +97,11 @@ func (m *Monitor) stopRemoteProbe(name string) {
 	}
 	m.externalNames = kept
 	m.mu.Unlock()
+
+	// The cached results go with the rows, for the same reason: a result
+	// nothing updates any more would keep feeding a verdict that reads as
+	// current.
+	m.forgetVantageResults(name)
 }
 
 // ReloadRemotes applies a config change to the remote vantages alone.
@@ -450,6 +455,10 @@ func (m *Monitor) recordAgentStatus(rp config.RemoteProbe, err error) {
 // foldRemoteResult turns one agent result into a check status + history entry,
 // indistinguishable downstream from a locally-run check.
 func (m *Monitor) foldRemoteResult(rp config.RemoteProbe, r probe.Result) {
+	// Kept before it is folded: the row loses the DNS answer on a healthy
+	// lookup, and that answer is what the edge diagnosis climbs.
+	m.recordRemoteResult(rp.Name, r)
+
 	var err error
 	if r.Error != "" {
 		err = errors.New(r.Error)
@@ -655,6 +664,14 @@ func (m *Monitor) pruneVantageRows(rp config.RemoteProbe, ts probe.TargetSet) {
 		delete(m.history, name)
 	}
 	m.externalNames = kept
+
+	// Same sweep over the cached results the diagnosis reads. A target that
+	// is no longer probed must not keep answering the ladder.
+	for key := range m.remoteResults[rp.Name] {
+		if !wanted[key] {
+			delete(m.remoteResults[rp.Name], key)
+		}
+	}
 }
 
 // Default kinds, mirroring probe.Run when a target names none.

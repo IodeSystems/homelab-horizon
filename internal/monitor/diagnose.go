@@ -145,12 +145,17 @@ type Diagnosis struct {
 	Fix     string `json:"fix"`
 	Confirm string `json:"confirm"`
 
-	// Evidence is the ladder as observed, in order, one line per rung. It is
-	// what makes the verdict arguable rather than authoritative.
-	Evidence []string `json:"evidence,omitempty"`
+	// Evidence is the ladder as observed, in order, one line per rung.
+	//
+	// Never null and never omitted: an empty list is hz saying "no rung was
+	// climbed", which is a fact about a target nothing has reported on, and a
+	// missing key would make it indistinguishable from a client that failed to
+	// read one.
+	Evidence []string `json:"evidence"`
 
-	// At is the newest result the verdict rests on. Zero when there are none.
-	At time.Time `json:"at,omitempty"`
+	// At is the newest result the verdict rests on. The zero time means there
+	// are none — read it with Status, which says StatusUnknown in that case.
+	At time.Time `json:"at"`
 }
 
 // Facts are the hz-side inputs the ladder needs and the agent must not hold.
@@ -184,9 +189,10 @@ type Facts struct {
 // computable, and it has to be testable with no agent anywhere.
 func Diagnose(t probe.Target, results []probe.Result, f Facts) Diagnosis {
 	d := Diagnosis{
-		Target:  t.Name,
-		Host:    t.Host,
-		Vantage: f.Vantage,
+		Target:   t.Name,
+		Host:     t.Host,
+		Vantage:  f.Vantage,
+		Evidence: []string{},
 	}
 
 	kinds := wantedKinds(t)
