@@ -86,15 +86,15 @@ COMMANDS
   exporter rm <job>                  Remove an exporter job
   config ...                         The config manager. Was 'hz cm'; 'cm' still works
                                      as a deprecated alias for every verb below
-  config key new <env>/<app>/<role> [--label L] [--set-current]
+  config key new <project>/<env>/<app>/<role> [--label L] [--set-current]
                                      Mint an environment key into the local keystore
-  config key ls [<env>/<app>/<role>] [--json]
+  config key ls [<project>/<env>/<app>/<role>] [--json]
                                      List what this machine holds (ids and labels, never material)
-  config key export <env>/<app>/<role> [--id KEYID]
+  config key export <project>/<env>/<app>/<role> [--id KEYID]
                                      Print the key text for a password manager (terminal only)
-  config key import <env>/<app>/<role> [--label L] [--created-at T]
+  config key import <project>/<env>/<app>/<role> [--label L] [--created-at T]
                                      Read key text from STDIN into the keystore
-  config key current <env>/<app>/<role> [--set KEYID]
+  config key current <project>/<env>/<app>/<role> [--set KEYID]
                                      Read or move hz's advisory current-key pointer
   config machines [--json]           List enrolled boxes: addresses, secrets, fingerprint
   config pending [--all]             Show the approval queue
@@ -157,7 +157,7 @@ COMMANDS
   config promote <config-id> --to=<env> [--dry-run]
                                      Open under the source key, re-seal under the target's
   config show <config-id>            Decrypt a config locally and print it
-  config resolve <env>/<app>/<role> --version=V [--json]
+  config resolve <project>/<env>/<app>/<role> --version=V [--json]
                                      What a box would get, and what it shadowed
   schema [service]                   Dump the JSON request schema
   version                            Print version
@@ -259,7 +259,7 @@ KEY CUSTODY ('hz config recovery')
     hz config recovery add ops --public-key K  register the PUBLIC half with hz
     hz config recovery backfill                wrap the keys that already exist
     hz config recovery ls                      which keys are covered, and by whom
-    hz config recovery verify prod/app/role    PROVE a recovery key opens one
+    hz config recovery verify acme/prod/web/app    PROVE a recovery key opens one
 
   Run verify. A backup nobody has restored from is not a backup, and every
   other command here reports only that a blob was produced.

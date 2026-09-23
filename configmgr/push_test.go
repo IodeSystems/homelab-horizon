@@ -20,7 +20,7 @@ import (
 // sealed at, so a test that passed while the binding was missing is not
 // available here.
 
-var pushAddr = EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}
+var pushAddr = EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
 
 var pushSchema = Schema{
 	"DB_PASSWORD":    BindingEnv,
@@ -72,9 +72,9 @@ func (h *blessHZ) handleCurrentKey(w http.ResponseWriter, r *http.Request) {
 	// The names hz actually reads. This fixture spelled them the way Push
 	// happened to send — so Push's tests passed against Push's own mistake, and
 	// the one test aimed at this bug could not see it.
-	addr := q.Get(QueryEnv) + "/" + q.Get(QueryApp) + "/" + q.Get(QueryRole)
+	addr := q.Get(QueryProject) + "/" + q.Get(QueryEnv) + "/" + q.Get(QueryApp) + "/" + q.Get(QueryRole)
 	writeJSON(h.t, w, CurrentKeyPointer{
-		Environment: q.Get(QueryEnv), App: q.Get(QueryApp), Role: q.Get(QueryRole),
+		Project: q.Get(QueryProject), Environment: q.Get(QueryEnv), App: q.Get(QueryApp), Role: q.Get(QueryRole),
 		KeyID: h.pointers[addr],
 	})
 }
@@ -95,7 +95,7 @@ func (h *blessHZ) handleBless(w http.ResponseWriter, r *http.Request) {
 	}
 	h.posted = append(h.posted, req)
 	writeJSON(h.t, w, BlessResponse{
-		ID: "cfg-1", Environment: req.Environment, App: req.App, Role: req.Role,
+		ID: "cfg-1", Project: req.Project, Environment: req.Environment, App: req.App, Role: req.Role,
 		MinVer: req.MinVer, MaxVer: req.MaxVer, Sequence: 7,
 	})
 }
@@ -129,6 +129,7 @@ func pushOpts(h *blessHZ, ks *Keystore, mutate func(*PushOptions)) PushOptions {
 		BaseURL:     h.srv.URL,
 		Keystore:    ks,
 		Schema:      schema,
+		Project:     pushAddr.Project,
 		Environment: pushAddr.Environment,
 		App:         pushAddr.App,
 		Role:        pushAddr.Role,
@@ -152,7 +153,7 @@ func pushFixture(t *testing.T) (*blessHZ, *Keystore, EnvKey) {
 }
 
 func keystoreAddr(a EnvKeyAddr) Addr {
-	return Addr{Environment: a.Environment, App: a.App, Role: a.Role}
+	return Addr{Project: a.Project, Environment: a.Environment, App: a.App, Role: a.Role}
 }
 
 func pushCtx(t *testing.T) context.Context {
@@ -182,7 +183,7 @@ func TestPushSealsUnderTheCurrentKey(t *testing.T) {
 		t.Fatalf("posted %d configs, want 1", len(h.posted))
 	}
 	req := h.posted[0]
-	if req.Environment != "staging" || req.App != "redline" || req.Role != "app" || req.MinVer != "1.0.0" || req.MaxVer != "" {
+	if req.Project != "acme" || req.Environment != "staging" || req.App != "redline" || req.Role != "app" || req.MinVer != "1.0.0" || req.MaxVer != "" {
 		t.Errorf("blessed the wrong address or range: %+v", req)
 	}
 	if len(req.Values) != 2 {
@@ -200,7 +201,7 @@ func TestPushSealsUnderTheCurrentKey(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", v.Key, err)
 		}
-		pt, err := Open(key, Addr{Environment: "staging", App: "redline", Role: "app", Key: v.Key}, envelope)
+		pt, err := Open(key, Addr{Project: "acme", Environment: "staging", App: "redline", Role: "app", Key: v.Key}, envelope)
 		if err != nil {
 			t.Fatalf("%s did not open at its own address: %v", v.Key, err)
 		}
@@ -209,7 +210,7 @@ func TestPushSealsUnderTheCurrentKey(t *testing.T) {
 		}
 		// The key name is bound into the AEAD, so the same bytes must not open
 		// under another key's address.
-		if _, err := Open(key, Addr{Environment: "staging", App: "redline", Role: "app", Key: "SOMETHING_ELSE"}, envelope); err == nil {
+		if _, err := Open(key, Addr{Project: "acme", Environment: "staging", App: "redline", Role: "app", Key: "SOMETHING_ELSE"}, envelope); err == nil {
 			t.Errorf("%s opened at the wrong key name", v.Key)
 		}
 	}
@@ -375,6 +376,7 @@ func TestPushValidatesItsOptions(t *testing.T) {
 	}{
 		{"no base url", func(o *PushOptions) { o.BaseURL = "" }},
 		{"no keystore", func(o *PushOptions) { o.Keystore = nil }},
+		{"no project", func(o *PushOptions) { o.Project = "" }},
 		{"no environment", func(o *PushOptions) { o.Environment = "" }},
 		{"no app", func(o *PushOptions) { o.App = "" }},
 		{"no role", func(o *PushOptions) { o.Role = "" }},
@@ -405,7 +407,7 @@ func TestPushReportsWhatHzCalledIt(t *testing.T) {
 		t.Fatalf("Push: %v", err)
 	}
 	s := res.String()
-	for _, want := range []string{"staging/redline/app", "cfg-1", "sequence 7", "1.0.0–2.0.0", key.ID().String()} {
+	for _, want := range []string{"acme/staging/redline/app", "cfg-1", "sequence 7", "1.0.0–2.0.0", key.ID().String()} {
 		if !strings.Contains(s, want) {
 			t.Errorf("String() = %q, should mention %q", s, want)
 		}
@@ -476,7 +478,7 @@ func TestPushTreatsNamesAsOpaque(t *testing.T) {
 			t.Fatalf("decode %q: %v", v.Key, err)
 		}
 		pt, err := Open(key, Addr{
-			Environment: pushAddr.Environment, App: pushAddr.App,
+			Project: pushAddr.Project, Environment: pushAddr.Environment, App: pushAddr.App,
 			Role: pushAddr.Role, Key: v.Key,
 		}, env)
 		if err != nil {
@@ -514,7 +516,7 @@ func TestPushQueriesTheCurrentKeyByTheNamesHZReads(t *testing.T) {
 	ksPut(t, ks, keystoreAddr(pushAddr), "2026-01", ksAt("2026-01-01T00:00:00Z"))
 	_, _ = Push(pushCtx(t), PushOptions{
 		BaseURL: srv.URL, Keystore: ks, Schema: Schema{"K": BindingEnv},
-		Environment: pushAddr.Environment, App: pushAddr.App, Role: pushAddr.Role,
+		Project: pushAddr.Project, Environment: pushAddr.Environment, App: pushAddr.App, Role: pushAddr.Role,
 		MinVer: "1.0.0", Values: map[string][]byte{"K": []byte("v")},
 	})
 
@@ -524,9 +526,10 @@ func TestPushQueriesTheCurrentKeyByTheNamesHZReads(t *testing.T) {
 	// The exact strings hz's handler reads. Spelled out here on purpose: using
 	// the constant on both sides would assert only that it equals itself.
 	for name, want := range map[string]string{
-		"env":  pushAddr.Environment,
-		"app":  pushAddr.App,
-		"role": pushAddr.Role,
+		"project": pushAddr.Project,
+		"env":     pushAddr.Environment,
+		"app":     pushAddr.App,
+		"role":    pushAddr.Role,
 	} {
 		if got.Get(name) != want {
 			t.Errorf("current-key query %q = %q, want %q (sent: %s)",

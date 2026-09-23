@@ -169,6 +169,10 @@ func projectionServer(t *testing.T) *Server {
 
 // registerAt boots a box at an address, the way a real one does, and approves
 // it — approval being the act that puts the instance in hz's projection.
+//
+// The project is always "storefront": every projectionServer fixture declares
+// exactly that one project tree, and a registration under any other project
+// would not join to it at all.
 func registerAt(t *testing.T, s *Server, machine, env, app, role string) *db.Registration {
 	t.Helper()
 	ctx := t.Context()
@@ -179,7 +183,7 @@ func registerAt(t *testing.T, s *Server, machine, env, app, role string) *db.Reg
 			t.Fatalf("register machine: %v", err)
 		}
 	}
-	reg, err := s.users.UpsertRegistration(ctx, m.ID, env, app, role, "1.0.0")
+	reg, err := s.users.UpsertRegistration(ctx, m.ID, "storefront", env, app, role, "1.0.0")
 	if err != nil {
 		t.Fatalf("upsert registration: %v", err)
 	}

@@ -19,8 +19,8 @@ func stubMachine() apitypes.CMMachineResp {
 		ID: "mch_1", Name: "box-1", EnrolledEnvironment: "prod",
 		Fingerprint: "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF", CreatedAt: "2026-09-01T00:00:00Z",
 		Registrations: []apitypes.CMRegistrationResp{
-			{ID: "reg-1", Environment: "prod", App: "redline", Role: "app", State: configmgr.StateApproved},
-			{ID: "reg-2", Environment: "prod", App: "redline", Role: "worker", State: configmgr.StatePending},
+			{ID: "reg-1", Project: "acme", Environment: "prod", App: "redline", Role: "app", State: configmgr.StateApproved},
+			{ID: "reg-2", Project: "acme", Environment: "prod", App: "redline", Role: "worker", State: configmgr.StatePending},
 		},
 		SecretKeys: []string{"NPM_TOKEN"},
 	}

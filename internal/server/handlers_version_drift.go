@@ -116,12 +116,14 @@ func (s *Server) versionDrift(ctx context.Context, now time.Time) ([]apitypes.In
 func versionDriftRow(cfg *config.Config, machine string, reg *db.Registration, now time.Time) apitypes.InstanceVersion {
 	inst := projection.Instance{
 		Machine:     machine,
+		Project:     reg.Project,
 		Environment: reg.Environment,
 		App:         reg.App,
 		Role:        reg.Role,
 	}
 	row := apitypes.InstanceVersion{
 		Machine:     machine,
+		Project:     reg.Project,
 		Environment: reg.Environment,
 		App:         reg.App,
 		Role:        reg.Role,
@@ -161,16 +163,21 @@ func versionDriftRow(cfg *config.Config, machine string, reg *db.Registration, n
 		}
 	}
 
-	// THE DECLARED HALF. Resolved through the projection's own join, so this
-	// screen compares against the rung the projection installs from rather than
-	// a second opinion about which project `prod/web/app` belongs to.
-	env, err := projection.ResolveEnvironment(cfg, inst)
+	// THE DECLARED HALF. A direct lookup of the rung the address names.
+	//
+	// It used to go through projection.ResolveEnvironment, an export that
+	// existed so that this screen and the projection could not disagree about
+	// which project `prod/web/app` was on — because neither of them knew, and
+	// both had to guess the same way. The address carries the project now, so
+	// there is no guess to keep two callers honest about and no export left to
+	// call: this reads the config the same way everything else does.
+	env, err := cfg.LookupEnvironment(reg.Project, reg.Environment)
 	if err != nil {
 		row.Drift = apitypes.VersionDriftUnresolved
-		row.Why = "hz cannot tell which project's rung this instance is on, so it has no declared version to compare: " + err.Error()
+		row.Why = "hz declares no rung " + inst.Project + "/" + inst.Environment +
+			", so this instance has no declared version to compare: " + err.Error()
 		return row
 	}
-	row.Project = env.Project
 	row.DesiredVersion = strings.TrimSpace(env.Version)
 
 	row.Drift, row.Why = versionVerdict(row.DesiredVersion, row.ObservedVersion, env)

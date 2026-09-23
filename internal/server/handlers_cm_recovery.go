@@ -71,6 +71,7 @@ func cmRecoveryResp(cfg *config.Config) apitypes.CMRecoveryResp {
 	}
 	for _, wrap := range cfg.RecoveryWraps {
 		out.Wraps = append(out.Wraps, apitypes.CMRecoveryWrap{
+			Project:     wrap.Project,
 			Environment: wrap.Environment,
 			App:         wrap.App,
 			Role:        wrap.Role,
@@ -205,11 +206,17 @@ func (s *Server) handleAPICMRecoveryWraps(w http.ResponseWriter, r *http.Request
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
+	project := strings.TrimSpace(req.Project)
 	env := strings.TrimSpace(req.Environment)
 	app := strings.TrimSpace(req.App)
 	role := strings.TrimSpace(req.Role)
-	if env == "" || app == "" || role == "" {
-		writeJSONError(w, http.StatusBadRequest, "a wrap needs an environment, an app and a role")
+	// A recovery wrap is a kind 0x02 envelope bound to an EnvKeyAddr, and the
+	// project is the first field of that address. A wrap stored without one
+	// names an address no agent will ever ask for, so it is refused here
+	// rather than discovered at the moment somebody is recovering.
+	if project == "" || env == "" || app == "" || role == "" {
+		writeJSONError(w, http.StatusBadRequest,
+			"a wrap needs a project, an environment, an app and a role")
 		return
 	}
 	// The key id is a keystore filename on every client, so it is validated as
@@ -261,6 +268,7 @@ func (s *Server) handleAPICMRecoveryWraps(w http.ResponseWriter, r *http.Request
 	}
 
 	stored := config.RecoveryWrap{
+		Project:     project,
 		Environment: env,
 		App:         app,
 		Role:        role,
@@ -283,10 +291,11 @@ func (s *Server) handleAPICMRecoveryWraps(w http.ResponseWriter, r *http.Request
 			"recipient", name, "fingerprint", want.String(),
 			"by", s.adminActor(r), "ip", s.getClientIP(r))
 	}
-	held, _ := s.cfg().FindRecoveryWrap(env, app, role, stored.KeyID, name)
+	held, _ := s.cfg().FindRecoveryWrap(project, env, app, role, stored.KeyID, name)
 	writeJSON(w, apitypes.CMRecoveryWrapResp{
 		Stored: wrote,
 		Wrap: apitypes.CMRecoveryWrap{
+			Project:     held.Project,
 			Environment: held.Environment,
 			App:         held.App,
 			Role:        held.Role,

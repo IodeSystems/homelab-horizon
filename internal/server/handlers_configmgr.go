@@ -179,15 +179,45 @@ func (s *Server) handleAPICMRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Machine = strings.TrimSpace(req.Machine)
+	req.Project = strings.TrimSpace(req.Project)
 	req.Environment = strings.TrimSpace(req.Environment)
 	req.App = strings.TrimSpace(req.App)
 	req.Role = strings.TrimSpace(req.Role)
 	req.Version = strings.TrimSpace(req.Version)
 	req.PublicKey = strings.TrimSpace(req.PublicKey)
 
-	if req.Machine == "" || req.Environment == "" || req.App == "" || req.Role == "" || req.Version == "" {
+	// A THREE-PART REGISTRATION IS REFUSED, BY NAME. An enrolled box built
+	// before the project joined the address sends no project, and the three
+	// answers were: accept it as project-less, refuse to start, or reject the
+	// request. This is the third.
+	//
+	// Accepting it project-less is the defect re-created inside the AAD. It
+	// needs an envelope context that encodes an EMPTY project field — a fourth
+	// encoding the browser and every client must reproduce byte for byte, for
+	// an address nobody can promote, route or name — and it makes `project`
+	// nullable, which forecloses putting it in cm_current_keys' PRIMARY KEY and
+	// cm_registrations' UNIQUE, i.e. gives up the thing the coordinate is for.
+	//
+	// Refusing to START has the wrong blast radius: the trigger is one client's
+	// message and hz must not die because one box is old.
+	//
+	// A rejected box does not go down, it goes loud: configmgr.Client falls
+	// back to its last-known-good cache on any unsettled answer and logs it,
+	// which is the design's chosen failure mode. And there is no protocol
+	// version field on this wire — the presence of `project` is a sufficient
+	// discriminator, and a version field would be a second source of truth
+	// about the same fact, able to disagree with it.
+	if missing := cmMissingFields(map[string]string{
+		"machine":     req.Machine,
+		"project":     req.Project,
+		"environment": req.Environment,
+		"app":         req.App,
+		"role":        req.Role,
+		"version":     req.Version,
+	}); len(missing) > 0 {
 		writeJSONError(w, http.StatusBadRequest,
-			"a registration needs machine, environment, app, role and version")
+			"a registration needs machine, project, environment, app, role and version; missing: "+
+				strings.Join(missing, ", "))
 		return
 	}
 	pub, err := configmgr.ParseMachinePublicKey(req.PublicKey)
@@ -241,7 +271,7 @@ func (s *Server) handleAPICMRegister(w http.ResponseWriter, r *http.Request) {
 	// against it.
 	if peer != req.Machine {
 		slog.Info("cm registration name differs from vpn peer",
-			"peer", peer, "machine", req.Machine, "app", req.App, "role", req.Role)
+			"peer", peer, "machine", req.Machine, "project", req.Project, "app", req.App, "role", req.Role)
 	}
 
 	if err := s.users.RecordMachineSeen(r.Context(), machine.ID); err != nil {
@@ -249,7 +279,7 @@ func (s *Server) handleAPICMRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reg, err := s.users.UpsertRegistration(r.Context(), machine.ID,
-		req.Environment, req.App, req.Role, req.Version)
+		req.Project, req.Environment, req.App, req.Role, req.Version)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "could not register: "+err.Error())
 		return
@@ -343,15 +373,27 @@ func (s *Server) handleAPICMConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Machine = strings.TrimSpace(req.Machine)
+	req.Project = strings.TrimSpace(req.Project)
 	req.Environment = strings.TrimSpace(req.Environment)
 	req.App = strings.TrimSpace(req.App)
 	req.Role = strings.TrimSpace(req.Role)
 	req.Version = strings.TrimSpace(req.Version)
 	req.Build = strings.TrimSpace(req.Build)
 
-	if req.Machine == "" || req.Environment == "" || req.App == "" || req.Role == "" || req.Version == "" {
+	// Refused by name for the same reason register is: see the note there. A
+	// project-less config request cannot name a blob that opens, because the
+	// project is the first field of every envelope's authenticated address.
+	if missing := cmMissingFields(map[string]string{
+		"machine":     req.Machine,
+		"project":     req.Project,
+		"environment": req.Environment,
+		"app":         req.App,
+		"role":        req.Role,
+		"version":     req.Version,
+	}); len(missing) > 0 {
 		writeJSONError(w, http.StatusBadRequest,
-			"a config request needs machine, environment, app, role and version")
+			"a config request needs machine, project, environment, app, role and version; missing: "+
+				strings.Join(missing, ", "))
 		return
 	}
 
@@ -364,7 +406,7 @@ func (s *Server) handleAPICMConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reg, err := s.users.RegistrationAt(r.Context(), machine.ID, req.Environment, req.App, req.Role)
+	reg, err := s.users.RegistrationAt(r.Context(), machine.ID, req.Project, req.Environment, req.App, req.Role)
 	if errors.Is(err, db.ErrNotFound) {
 		// The registration fixes an environment; the request carries one too.
 		// Resolving on the request would let a mistyped --env succeed, and
@@ -374,13 +416,14 @@ func (s *Server) handleAPICMConfig(w http.ResponseWriter, r *http.Request) {
 		// anywhere explaining why.
 		if other := s.cmOtherEnvironment(r, machine.ID, req.App, req.Role); other != "" {
 			writeJSONError(w, http.StatusBadRequest,
-				"environment mismatch: "+req.Machine+" is registered in "+other+
-					" for "+req.App+"/"+req.Role+", but asked for "+req.Environment+
-					". Fix --env on the box, or approve a registration in "+req.Environment+".")
+				"rung mismatch: "+req.Machine+" is registered at "+other+
+					" for "+req.App+"/"+req.Role+", but asked for "+req.Project+"/"+req.Environment+
+					". Fix the project or --env on the box, or approve a registration at "+
+					req.Project+"/"+req.Environment+".")
 			return
 		}
 		writeJSONError(w, http.StatusNotFound, "no registration for "+
-			req.Environment+"/"+req.App+"/"+req.Role+" on "+req.Machine)
+			req.Project+"/"+req.Environment+"/"+req.App+"/"+req.Role+" on "+req.Machine)
 		return
 	} else if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -422,7 +465,7 @@ func (s *Server) handleAPICMConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Resolution runs on the REGISTRATION's address, which the check above has
 	// already established the request agrees with.
-	res, err := s.users.ResolveConfig(r.Context(), reg.Environment, reg.App, reg.Role, req.Version)
+	res, err := s.users.ResolveConfig(r.Context(), reg.Project, reg.Environment, reg.App, reg.Role, req.Version)
 	if errors.Is(err, db.ErrNoConfigMatches) {
 		// A named failure, never a hang, and never mistaken for a pending
 		// approval (plan/config-manager.md, resolution rule 3).
@@ -450,7 +493,7 @@ func (s *Server) handleAPICMConfig(w http.ResponseWriter, r *http.Request) {
 			// recording the blank as a row instead of omitting the key.
 			writeJSONError(w, http.StatusConflict,
 				"config "+res.Config.ID+" declares "+v.Key+" and is awaiting a value for it in "+
-					reg.Environment+"; bind it at "+reg.Environment+"/"+reg.App+"/"+reg.Role+
+					reg.Environment+"; bind it at "+reg.Project+"/"+reg.Environment+"/"+reg.App+"/"+reg.Role+
 					" and bless a config that answers it")
 			return
 		}
@@ -460,7 +503,7 @@ func (s *Server) handleAPICMConfig(w http.ResponseWriter, r *http.Request) {
 			// app's compiled default — the founding bug this exists to stop.
 			writeJSONError(w, http.StatusGone,
 				"config "+res.Config.ID+" has a destroyed value for "+v.Key+
-					"; bless a replacement config at "+reg.Environment+"/"+reg.App+"/"+reg.Role)
+					"; bless a replacement config at "+reg.Project+"/"+reg.Environment+"/"+reg.App+"/"+reg.Role)
 			return
 		}
 		entries = append(entries, configmgr.ConfigEntry{
@@ -479,10 +522,16 @@ func (s *Server) handleAPICMConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// cmOtherEnvironment reports an environment this machine IS registered in for
-// (app, role), when it is not registered in the one asked for. Empty means the
+// cmOtherEnvironment reports a RUNG this machine IS registered at for
+// (app, role), when it is not registered at the one asked for. Empty means the
 // machine has never registered at that app/role at all, which is a different
 // answer and gets a different status.
+//
+// It returns project/environment rather than the bare environment name. With
+// the project on the address, "registered in prod" is not an answer: every
+// project has one, and the whole reason a box can be at the wrong rung is that
+// two of them look alike. Naming both coordinates makes the signal sharper
+// rather than changing it.
 func (s *Server) cmOtherEnvironment(r *http.Request, machineID, app, role string) string {
 	regs, err := s.users.ListRegistrationsForMachine(r.Context(), machineID)
 	if err != nil {
@@ -492,10 +541,25 @@ func (s *Server) cmOtherEnvironment(r *http.Request, machineID, app, role string
 	role = strings.ToLower(strings.TrimSpace(role))
 	for _, reg := range regs {
 		if reg.App == app && reg.Role == role {
-			return reg.Environment
+			return reg.Project + "/" + reg.Environment
 		}
 	}
 	return ""
+}
+
+// cmMissingFields names which required address fields arrived empty, in a
+// stable order, so a 400 can say WHICH one rather than restating the whole
+// list and leaving the caller to diff it. An old client sending a three-part
+// address gets back the single word "project".
+func cmMissingFields(fields map[string]string) []string {
+	order := []string{"machine", "project", "environment", "app", "role", "version"}
+	var missing []string
+	for _, name := range order {
+		if v, ok := fields[name]; ok && v == "" {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 // --- Admin: the approval queue ---------------------------------------------
@@ -557,6 +621,7 @@ func cmRegistrationResp(m *db.Machine, reg *db.Registration) apitypes.CMRegistra
 	out := apitypes.CMRegistrationResp{
 		ID:          reg.ID,
 		MachineID:   reg.MachineID,
+		Project:     reg.Project,
 		Environment: reg.Environment,
 		App:         reg.App,
 		Role:        reg.Role,
@@ -998,7 +1063,7 @@ func (s *Server) cmRemoveMachine(w http.ResponseWriter, r *http.Request, machine
 	}
 	addresses := make([]string, 0, len(regs))
 	for _, reg := range regs {
-		addresses = append(addresses, reg.Environment+"/"+reg.App+"/"+reg.Role)
+		addresses = append(addresses, reg.Project+"/"+reg.Environment+"/"+reg.App+"/"+reg.Role)
 		if reg.State == db.RegistrationApproved {
 			resp.GrantsRemoved++
 		}
@@ -1048,15 +1113,16 @@ func (s *Server) handleAPICMConfigs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) cmListConfigs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	project := strings.TrimSpace(q.Get(apitypes.CMQueryProject))
 	env := strings.TrimSpace(q.Get(apitypes.CMQueryEnv))
 	app := strings.TrimSpace(q.Get(apitypes.CMQueryApp))
 	role := strings.TrimSpace(q.Get(apitypes.CMQueryRole))
-	if env == "" || app == "" || role == "" {
-		writeJSONError(w, http.StatusBadRequest, "env, app and role are required")
+	if project == "" || env == "" || app == "" || role == "" {
+		writeJSONError(w, http.StatusBadRequest, "project, env, app and role are required")
 		return
 	}
 
-	configs, err := s.users.ListConfigsForAddress(r.Context(), env, app, role)
+	configs, err := s.users.ListConfigsForAddress(r.Context(), project, env, app, role)
 	if errors.Is(err, db.ErrInvalidAddress) {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1080,14 +1146,15 @@ func (s *Server) cmCreateConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
+	req.Project = strings.TrimSpace(req.Project)
 	req.Environment = strings.TrimSpace(req.Environment)
 	req.App = strings.TrimSpace(req.App)
 	req.Role = strings.TrimSpace(req.Role)
 	req.MinVer = strings.TrimSpace(req.MinVer)
 	req.MaxVer = strings.TrimSpace(req.MaxVer)
 
-	if req.Environment == "" || req.App == "" || req.Role == "" {
-		writeJSONError(w, http.StatusBadRequest, "env, app and role are required")
+	if req.Project == "" || req.Environment == "" || req.App == "" || req.Role == "" {
+		writeJSONError(w, http.StatusBadRequest, "project, env, app and role are required")
 		return
 	}
 	if len(req.Values) == 0 {
@@ -1191,7 +1258,7 @@ func (s *Server) cmCreateConfig(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	cfg, err := s.users.CreateConfig(r.Context(), req.Environment, req.App, req.Role,
+	cfg, err := s.users.CreateConfig(r.Context(), req.Project, req.Environment, req.App, req.Role,
 		req.MinVer, req.MaxVer, actor, values)
 	switch {
 	case errors.Is(err, db.ErrInvalidAddress),
@@ -1207,7 +1274,7 @@ func (s *Server) cmCreateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("cm config blessed", "config", cfg.ID,
-		"address", cfg.Environment+"/"+cfg.App+"/"+cfg.Role,
+		"address", cfg.Project+"/"+cfg.Environment+"/"+cfg.App+"/"+cfg.Role,
 		"range", cfg.MinVer+"-"+cfg.MaxVer, "seq", cfg.Seq,
 		"keys", len(cfg.Values), "by", s.adminActor(r), "ip", s.getClientIP(r))
 	writeJSON(w, cmConfigRespWithValues(*cfg))
@@ -1243,6 +1310,7 @@ func (s *Server) handleAPICMConfigByID(w http.ResponseWriter, r *http.Request) {
 func cmConfigResp(c db.Config) apitypes.CMConfigResp {
 	return apitypes.CMConfigResp{
 		ID:          c.ID,
+		Project:     c.Project,
 		Environment: c.Environment,
 		App:         c.App,
 		Role:        c.Role,
@@ -1297,16 +1365,17 @@ func (s *Server) handleAPICMResolve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := r.URL.Query()
+	project := strings.TrimSpace(q.Get(apitypes.CMQueryProject))
 	env := strings.TrimSpace(q.Get(apitypes.CMQueryEnv))
 	app := strings.TrimSpace(q.Get(apitypes.CMQueryApp))
 	role := strings.TrimSpace(q.Get(apitypes.CMQueryRole))
 	version := strings.TrimSpace(q.Get(apitypes.CMQueryVersion))
-	if env == "" || app == "" || role == "" || version == "" {
-		writeJSONError(w, http.StatusBadRequest, "env, app, role and version are required")
+	if project == "" || env == "" || app == "" || role == "" || version == "" {
+		writeJSONError(w, http.StatusBadRequest, "project, env, app, role and version are required")
 		return
 	}
 
-	res, err := s.users.ResolveConfig(r.Context(), env, app, role, version)
+	res, err := s.users.ResolveConfig(r.Context(), project, env, app, role, version)
 	if errors.Is(err, db.ErrNoConfigMatches) {
 		// Zero matches is an answer, not an error: CMResolveResp has a field
 		// for it precisely so the inspection surface can say "nothing covers
@@ -1364,7 +1433,10 @@ func (s *Server) handleAPICMPromotionGate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	bound, err := s.cmBoundKeys(r, target, src.App, src.Role)
+	// A promotion moves between two rungs of ONE project — cmPromotionEdge
+	// looks the source environment up inside the target's project — so the
+	// target address is the source's project with a different environment.
+	bound, err := s.cmBoundKeys(r, src.Project, target, src.App, src.Role)
 	if errors.Is(err, db.ErrInvalidAddress) {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1391,7 +1463,24 @@ func (s *Server) handleAPICMPromotionGate(w http.ResponseWriter, r *http.Request
 	// travels in a 200 body rather than as an HTTP error because it is a fact
 	// about the declaration, not about the request: the caller asked a legible
 	// question and this is the legible answer.
-	edge := s.cmPromotionEdge(src.Environment, target, strings.TrimSpace(q.Get(apitypes.CMQueryProject)))
+	//
+	// THE PROJECT COMES FROM THE SOURCE CONFIG, not from the query. `project`
+	// used to be a narrowing hint the caller supplied — "required only when it
+	// is ambiguous" — because a config address carried no project and a bare
+	// `--to prod` did not say whose. The address names it now, so the source
+	// config is the authority and a caller that names a different one is
+	// refused rather than obeyed: two sources of truth about which project a
+	// promotion is in is exactly the defect this coordinate closes. The
+	// parameter is still READ, so that a caller sending the wrong one is told
+	// so instead of having it silently ignored.
+	if asked := strings.TrimSpace(q.Get(apitypes.CMQueryProject)); asked != "" && asked != src.Project {
+		writeJSONError(w, http.StatusBadRequest,
+			"config "+src.ID+" is at "+src.Project+"/"+src.Environment+
+				", but the request names project "+asked+
+				"; a promotion cannot change project, so drop --project or name "+src.Project)
+		return
+	}
+	edge := s.cmPromotionEdge(src.Environment, target, src.Project)
 	resp.Edge = &edge
 	writeJSON(w, resp)
 }
@@ -1405,6 +1494,9 @@ func (s *Server) handleAPICMPromotionGate(w http.ResponseWriter, r *http.Request
 //
 // An environment named nowhere is not a permission failure but a missing rung, and
 // it says so: "declare it" is a different instruction from "you may not".
+// project is the SOURCE CONFIG's project, carried on its address. It was once
+// a caller-supplied narrowing hint, needed because a config address had no
+// project coordinate; it is now simply the project the address names.
 func (s *Server) cmPromotionEdge(sourceEnv, targetEnv, project string) apitypes.CMPromotionEdgeResp {
 	out := apitypes.CMPromotionEdgeResp{SourceEnv: sourceEnv, TargetEnv: targetEnv, Project: project}
 	cfg := s.cfg()
@@ -1446,8 +1538,8 @@ func (s *Server) cmPromotionEdge(sourceEnv, targetEnv, project string) apitypes.
 // precisely to say this key has never been answered here. Counting it would let
 // the second promotion into an environment pass a gate the first one failed,
 // purely because the first one recorded the debt.
-func (s *Server) cmBoundKeys(r *http.Request, environment, app, role string) (map[string]bool, error) {
-	configs, err := s.users.ListConfigsForAddress(r.Context(), environment, app, role)
+func (s *Server) cmBoundKeys(r *http.Request, project, environment, app, role string) (map[string]bool, error) {
+	configs, err := s.users.ListConfigsForAddress(r.Context(), project, environment, app, role)
 	if err != nil {
 		return nil, err
 	}
@@ -1489,17 +1581,18 @@ func (s *Server) handleAPICMCurrentKey(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusServiceUnavailable, "identity store unavailable")
 		return
 	}
+	project := strings.TrimSpace(r.URL.Query().Get(apitypes.CMQueryProject))
 	env := strings.TrimSpace(r.URL.Query().Get(apitypes.CMQueryEnv))
 	app := strings.TrimSpace(r.URL.Query().Get(apitypes.CMQueryApp))
 	role := strings.TrimSpace(r.URL.Query().Get(apitypes.CMQueryRole))
-	if env == "" || app == "" || role == "" {
-		writeJSONError(w, http.StatusBadRequest, "env, app and role are required")
+	if project == "" || env == "" || app == "" || role == "" {
+		writeJSONError(w, http.StatusBadRequest, "project, env, app and role are required")
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
-		cur, err := s.users.CurrentKeyFor(r.Context(), env, app, role)
+		cur, err := s.users.CurrentKeyFor(r.Context(), project, env, app, role)
 		if errors.Is(err, db.ErrNotFound) {
 			writeJSONError(w, http.StatusNotFound, "no current key announced for this address")
 			return
@@ -1524,13 +1617,13 @@ func (s *Server) handleAPICMCurrentKey(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
 			return
 		}
-		cur, err := s.users.SetCurrentKey(r.Context(), env, app, role, req.KeyID, actor)
+		cur, err := s.users.SetCurrentKey(r.Context(), project, env, app, role, req.KeyID, actor)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		slog.Info("config manager current key announced",
-			"env", cur.Environment, "app", cur.App, "role", cur.Role,
+			"project", cur.Project, "env", cur.Environment, "app", cur.App, "role", cur.Role,
 			"keyId", cur.KeyID, "by", s.adminActor(r))
 		writeJSON(w, cmCurrentKeyResp(cur))
 
@@ -1541,6 +1634,7 @@ func (s *Server) handleAPICMCurrentKey(w http.ResponseWriter, r *http.Request) {
 
 func cmCurrentKeyResp(c *db.CurrentKey) apitypes.CMCurrentKeyResp {
 	out := apitypes.CMCurrentKeyResp{
+		Project:     c.Project,
 		Environment: c.Environment,
 		App:         c.App,
 		Role:        c.Role,

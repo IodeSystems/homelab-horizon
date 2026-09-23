@@ -47,9 +47,15 @@ func driftConfig() *config.Config {
 
 // driftReg builds one approved registration by hand, so a test can place the
 // observed reading at an exact age instead of whatever CURRENT_TIMESTAMP was.
-func driftReg(env, app, role, reviewed, observed string, at *time.Time) *db.Registration {
+//
+// project is explicit rather than defaulted: versionDriftRow now reads
+// reg.Project and calls cfg.LookupEnvironment(reg.Project, reg.Environment)
+// directly (projection.ResolveEnvironment, which used to derive a project from
+// the app coordinate via config.Service, is gone), so a caller has to say which
+// of driftConfig's three projects an address belongs to.
+func driftReg(project, env, app, role, reviewed, observed string, at *time.Time) *db.Registration {
 	return &db.Registration{
-		Environment: env, App: app, Role: role,
+		Project: project, Environment: env, App: app, Role: role,
 		Version:         reviewed,
 		ObservedVersion: observed,
 		ObservedAt:      at,
@@ -57,7 +63,8 @@ func driftReg(env, app, role, reviewed, observed string, at *time.Time) *db.Regi
 	}
 }
 
-// driftRegisterAgain enrols the SAME box at a second address.
+// driftRegisterAgain enrols the SAME box at a second address, in the SAME
+// project as its first — carried over from box.req rather than re-guessed.
 //
 // cmRegister mints a fresh keypair per call, and a machine re-enrolling with a
 // different public key is refused — correctly: that is the re-enrol guard. Two
@@ -67,19 +74,46 @@ func driftReg(env, app, role, reviewed, observed string, at *time.Time) *db.Regi
 func driftRegisterAgain(t *testing.T, s *Server, box *cmBox, env, app, role string) *cmBox {
 	t.Helper()
 	req := configmgr.RegisterRequest{
-		Machine: box.req.Machine, Environment: env, App: app, Role: role,
+		Machine: box.req.Machine, Project: box.req.Project, Environment: env, App: app, Role: role,
 		Version:   box.req.Version,
 		PublicKey: box.req.PublicKey,
 	}
 	w := cmMachineCall(t, s.handleAPICMRegister, http.MethodPost, "/api/v1/cm/register", req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("register %s/%s/%s: status %d: %s", env, app, role, w.Code, w.Body.String())
+		t.Fatalf("register %s/%s/%s/%s: status %d: %s", box.req.Project, env, app, role, w.Code, w.Body.String())
 	}
 	var resp configmgr.RegisterResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode register response: %v", err)
 	}
 	return &cmBox{priv: box.priv, req: req, resp: resp}
+}
+
+// driftRegisterAt enrols a box under an EXPLICIT project. The shared
+// cmRegister always uses cmTestProject ("acme"), which is not one of
+// driftConfig's declared projects — this file's fixture needs "storefront" so
+// versionDriftRow's LookupEnvironment(reg.Project, reg.Environment) actually
+// resolves.
+func driftRegisterAt(t *testing.T, s *Server, machine, project, env, app, role string) *cmBox {
+	t.Helper()
+	priv, err := configmgr.NewMachineKey()
+	if err != nil {
+		t.Fatalf("machine key: %v", err)
+	}
+	req := configmgr.RegisterRequest{
+		Machine: machine, Project: project, Environment: env, App: app, Role: role,
+		Version:   "1.2.0",
+		PublicKey: configmgr.MarshalMachinePublicKey(priv.PublicKey()),
+	}
+	w := cmMachineCall(t, s.handleAPICMRegister, http.MethodPost, "/api/v1/cm/register", req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("register %s/%s/%s/%s: status %d: %s", project, env, app, role, w.Code, w.Body.String())
+	}
+	var resp configmgr.RegisterResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode register response: %v", err)
+	}
+	return &cmBox{priv: priv, req: req, resp: resp}
 }
 
 func ago(now time.Time, d time.Duration) *time.Time {
@@ -98,6 +132,7 @@ func TestVersionDriftDistinguishesEveryVerdict(t *testing.T) {
 
 	cases := []struct {
 		name          string
+		project       string
 		env, app      string
 		observed      string
 		wantDrift     string
@@ -107,46 +142,46 @@ func TestVersionDriftDistinguishesEveryVerdict(t *testing.T) {
 		wantObservedV string
 	}{
 		{
-			name: "behind is a rollout in progress",
-			env:  "prod", app: "web", observed: "1.3.8",
+			name:    "behind is a rollout in progress",
+			project: "storefront", env: "prod", app: "web", observed: "1.3.8",
 			wantDrift: apitypes.VersionDriftBehind, wantDesired: "1.4.0",
 			wantSaid: "BEHIND", wantObservedV: "1.3.8",
 		},
 		{
-			name: "ahead is something nobody declared",
-			env:  "prod", app: "web", observed: "1.5.0",
+			name:    "ahead is something nobody declared",
+			project: "storefront", env: "prod", app: "web", observed: "1.5.0",
 			wantDrift: apitypes.VersionDriftAhead, wantDesired: "1.4.0",
 			wantSaid: "AHEAD", wantObservedV: "1.5.0",
 		},
 		{
-			name: "equal strings match",
-			env:  "prod", app: "web", observed: "1.4.0",
+			name:    "equal strings match",
+			project: "storefront", env: "prod", app: "web", observed: "1.4.0",
 			wantDrift: apitypes.VersionDriftMatch, wantDesired: "1.4.0",
 			wantObservedV: "1.4.0",
 		},
 		{
 			// Same version, written differently. A string comparison would
 			// call this drift and send somebody looking for a rollout.
-			name: "a leading v is the same version",
-			env:  "prod", app: "web", observed: "v1.4.0",
+			name:    "a leading v is the same version",
+			project: "storefront", env: "prod", app: "web", observed: "v1.4.0",
 			wantDrift: apitypes.VersionDriftMatch, wantDesired: "1.4.0",
 			wantObservedV: "v1.4.0",
 		},
 		{
 			// Build metadata never participates in semver precedence.
-			name: "build metadata does not make it a different version",
-			env:  "prod", app: "web", observed: "1.4.0+deadbee",
+			name:    "build metadata does not make it a different version",
+			project: "storefront", env: "prod", app: "web", observed: "1.4.0+deadbee",
 			wantDrift: apitypes.VersionDriftMatch, wantDesired: "1.4.0",
 		},
 		{
-			name: "a rung that declares no version is not drift",
-			env:  "prod", app: "git", observed: "9.9.9",
+			name:    "a rung that declares no version is not drift",
+			project: "intern", env: "prod", app: "git", observed: "9.9.9",
 			wantDrift: apitypes.VersionDriftNoDeclaredVersion, wantDesired: "",
 			wantSaid: "declares no version", wantNotInWhy: "BEHIND",
 		},
 		{
-			name: "an instance that never reported is not drift",
-			env:  "prod", app: "web", observed: "",
+			name:    "an instance that never reported is not drift",
+			project: "storefront", env: "prod", app: "web", observed: "",
 			wantDrift: apitypes.VersionDriftNotObserved, wantDesired: "1.4.0",
 			wantSaid: "never reported a version",
 		},
@@ -154,30 +189,35 @@ func TestVersionDriftDistinguishesEveryVerdict(t *testing.T) {
 			// An observed value hz cannot order. NOT an error: a declared
 			// version is opaque by design and a `git describe` string is not
 			// semver.
-			name: "an opaque reported version is not comparable",
-			env:  "prod", app: "web", observed: "2026-09-22-nightly",
+			name:    "an opaque reported version is not comparable",
+			project: "storefront", env: "prod", app: "web", observed: "2026-09-22-nightly",
 			wantDrift: apitypes.VersionDriftNotComparable, wantDesired: "1.4.0",
 			wantSaid: "reported version is not a semver tag",
 		},
 		{
-			name: "an unknown app cannot be resolved to a rung",
-			env:  "prod", app: "nowhere", observed: "1.4.0",
+			// The address now carries its project directly (no more deriving
+			// one from the app coordinate via config.Service), so "unresolved"
+			// means the project or the rung itself is undeclared — here, a
+			// project nothing in driftConfig names.
+			name:    "an undeclared project cannot be resolved to a rung",
+			project: "ghost", env: "prod", app: "nowhere", observed: "1.4.0",
 			wantDrift: apitypes.VersionDriftUnresolved, wantDesired: "",
-			wantSaid: "cannot tell which project's rung",
+			wantSaid: "no such environment",
 		},
 		{
-			// Two projects declare an environment called "prod", so the app
-			// coordinate is what says which rung this is. Getting this wrong
-			// would compare client-a's box against storefront's version.
-			name: "the app coordinate picks the project, not the environment name",
-			env:  "prod", app: "portal", observed: "2.0.0",
+			// Two projects declare an environment called "prod", so the
+			// registration's OWN project field is what says which rung this
+			// is — getting this wrong would compare client-a's box against
+			// storefront's version.
+			name:    "the registration's project picks the rung, not the environment name",
+			project: "client-a", env: "prod", app: "portal", observed: "2.0.0",
 			wantDrift: apitypes.VersionDriftBehind, wantDesired: "2.1.0",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			reg := driftReg(tc.env, tc.app, "app", "1.0.0", tc.observed, fresh)
+			reg := driftReg(tc.project, tc.env, tc.app, "app", "1.0.0", tc.observed, fresh)
 			if tc.observed == "" {
 				reg.ObservedAt = nil
 			}
@@ -201,7 +241,7 @@ func TestVersionDriftDistinguishesEveryVerdict(t *testing.T) {
 			if tc.wantNotInWhy != "" && strings.Contains(row.Why, tc.wantNotInWhy) {
 				t.Errorf("why = %q, must not contain %q", row.Why, tc.wantNotInWhy)
 			}
-			if row.Address != tc.env+"/"+tc.app+"/app" {
+			if row.Address != tc.project+"/"+tc.env+"/"+tc.app+"/app" {
 				t.Errorf("address = %q", row.Address)
 			}
 		})
@@ -217,11 +257,11 @@ func TestVersionDriftSeparatesTheTwoAbsences(t *testing.T) {
 	now := time.Now()
 
 	// Declared, never observed.
-	a := versionDriftRow(cfg, "app-1", driftReg("prod", "web", "app", "1.0.0", "", nil), now)
+	a := versionDriftRow(cfg, "app-1", driftReg("storefront", "prod", "web", "app", "1.0.0", "", nil), now)
 	// Observed, nothing declared.
-	b := versionDriftRow(cfg, "app-1", driftReg("prod", "git", "app", "1.0.0", "3.0.0", ago(now, time.Hour)), now)
+	b := versionDriftRow(cfg, "app-1", driftReg("intern", "prod", "git", "app", "1.0.0", "3.0.0", ago(now, time.Hour)), now)
 	// Neither.
-	c := versionDriftRow(cfg, "app-1", driftReg("prod", "git", "app", "1.0.0", "", nil), now)
+	c := versionDriftRow(cfg, "app-1", driftReg("intern", "prod", "git", "app", "1.0.0", "", nil), now)
 
 	if a.Drift != apitypes.VersionDriftNotObserved || a.DesiredVersion == "" || a.ObservedVersion != "" {
 		t.Errorf("declared-but-unobserved rendered as %q (desired %q, observed %q)", a.Drift, a.DesiredVersion, a.ObservedVersion)
@@ -253,7 +293,7 @@ func TestVersionDriftOrdersNumericallyNotLexically(t *testing.T) {
 	cfg.Environments[0].Version = "1.10.0"
 
 	row := versionDriftRow(cfg, "app-1",
-		driftReg("prod", "web", "app", "1.0.0", "1.9.0", ago(now, time.Hour)), now)
+		driftReg("storefront", "prod", "web", "app", "1.0.0", "1.9.0", ago(now, time.Hour)), now)
 	if row.Drift != apitypes.VersionDriftBehind {
 		t.Fatalf("1.9.0 against declared 1.10.0 = %q, want behind (a lexical compare says ahead)", row.Drift)
 	}
@@ -261,7 +301,7 @@ func TestVersionDriftOrdersNumericallyNotLexically(t *testing.T) {
 	// And a prerelease is BELOW the release of the same core.
 	cfg.Environments[0].Version = "1.4.0"
 	row = versionDriftRow(cfg, "app-1",
-		driftReg("prod", "web", "app", "1.0.0", "1.4.0-rc.1", ago(now, time.Hour)), now)
+		driftReg("storefront", "prod", "web", "app", "1.0.0", "1.4.0-rc.1", ago(now, time.Hour)), now)
 	if row.Drift != apitypes.VersionDriftBehind {
 		t.Fatalf("1.4.0-rc.1 against declared 1.4.0 = %q, want behind", row.Drift)
 	}
@@ -295,7 +335,7 @@ func TestVersionDriftAgesTheReadingOnTheInstanceClock(t *testing.T) {
 			if tc.at == nil {
 				observed = ""
 			}
-			row := versionDriftRow(cfg, "app-1", driftReg("prod", "web", "app", "1.0.0", observed, tc.at), now)
+			row := versionDriftRow(cfg, "app-1", driftReg("storefront", "prod", "web", "app", "1.0.0", observed, tc.at), now)
 
 			if row.State != tc.wantState {
 				t.Fatalf("state = %q, want %q (age %ds, threshold %ds)",
@@ -335,7 +375,7 @@ func TestVersionDriftAgesTheReadingOnTheInstanceClock(t *testing.T) {
 func TestVersionDriftStillComparesALateReading(t *testing.T) {
 	now := time.Now()
 	row := versionDriftRow(driftConfig(), "app-2",
-		driftReg("prod", "web", "app", "1.0.0", "1.3.8", ago(now, 90*24*time.Hour)), now)
+		driftReg("storefront", "prod", "web", "app", "1.0.0", "1.3.8", ago(now, 90*24*time.Hour)), now)
 
 	if row.State != apitypes.InstanceStateLate {
 		t.Fatalf("state = %q, want late", row.State)
@@ -355,7 +395,7 @@ func TestVersionDriftStillComparesALateReading(t *testing.T) {
 func TestVersionDriftCarriesTheReviewedVersionSeparately(t *testing.T) {
 	now := time.Now()
 	row := versionDriftRow(driftConfig(), "app-1",
-		driftReg("prod", "web", "app", "1.2.0", "1.4.0", ago(now, time.Hour)), now)
+		driftReg("storefront", "prod", "web", "app", "1.2.0", "1.4.0", ago(now, time.Hour)), now)
 
 	if row.ReviewedVersion != "1.2.0" {
 		t.Errorf("reviewedVersion = %q, want the frozen 1.2.0", row.ReviewedVersion)
@@ -376,10 +416,12 @@ func TestVersionDriftEndpointServesTheJoin(t *testing.T) {
 	mux := s.setupRoutes()
 
 	// Two instances on one box, which is the case the row shape exists for.
-	app := cmRegister(t, s, "app-1", "prod", "web", "app")
+	// Registered under "storefront" — the project driftConfig actually
+	// declares "prod/web" in — not the shared cmTestProject.
+	app := driftRegisterAt(t, s, "app-1", "storefront", "prod", "web", "app")
 	next := driftRegisterAgain(t, s, app, "prod", "web", "next")
 	// And one nobody has approved.
-	cmRegister(t, s, "new-box", "prod", "web", "app")
+	driftRegisterAt(t, s, "new-box", "storefront", "prod", "web", "app")
 
 	k := configmgr.NewEnvKey()
 	cmApproveBox(t, s, admin, app, k)
@@ -430,12 +472,12 @@ func TestVersionDriftEndpointServesTheJoin(t *testing.T) {
 		byAddr[row.Address] = row
 	}
 
-	a, ok := byAddr["prod/web/app"]
+	a, ok := byAddr["storefront/prod/web/app"]
 	if !ok {
-		t.Fatalf("no row for prod/web/app: %+v", byAddr)
+		t.Fatalf("no row for storefront/prod/web/app: %+v", byAddr)
 	}
 	if a.Drift != apitypes.VersionDriftBehind || a.DesiredVersion != "1.4.0" || a.ObservedVersion != "1.3.8" {
-		t.Errorf("prod/web/app = %s (desired %q, observed %q), want behind 1.4.0 vs 1.3.8",
+		t.Errorf("storefront/prod/web/app = %s (desired %q, observed %q), want behind 1.4.0 vs 1.3.8",
 			a.Drift, a.DesiredVersion, a.ObservedVersion)
 	}
 	if a.ObservedBuild != "v1.3.8-2-gdeadbee" {
@@ -448,9 +490,9 @@ func TestVersionDriftEndpointServesTheJoin(t *testing.T) {
 		t.Errorf("state %q at %q: a reading recorded a moment ago is fresh and carries its time", a.State, a.ObservedAt)
 	}
 
-	b := byAddr["prod/web/next"]
+	b := byAddr["storefront/prod/web/next"]
 	if b.Drift != apitypes.VersionDriftMatch {
-		t.Errorf("prod/web/next = %s, want match", b.Drift)
+		t.Errorf("storefront/prod/web/next = %s, want match", b.Drift)
 	}
 
 	// Two instances of one box are two rows. The whole reason observed_version

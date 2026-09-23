@@ -56,6 +56,7 @@ const (
 // thing by construction rather than by a matching check somewhere.
 type RegisterRequest struct {
 	Machine     string `json:"machine"`
+	Project     string `json:"project"`
 	Environment string `json:"environment"`
 	App         string `json:"app"`
 	Role        string `json:"role"`
@@ -69,7 +70,7 @@ type RegisterRequest struct {
 // files a relayed blob under whichever registration it likes, and a box may
 // hold several.
 func (r RegisterRequest) EnvKeyAddr() EnvKeyAddr {
-	return EnvKeyAddr{Environment: r.Environment, App: r.App, Role: r.Role}
+	return EnvKeyAddr{Project: r.Project, Environment: r.Environment, App: r.App, Role: r.Role}
 }
 
 // RegisterResponse is hz's answer, polled until the state settles.
@@ -104,6 +105,7 @@ type RegisterResponse struct {
 // must never take part in range containment.
 type ConfigRequest struct {
 	Machine     string `json:"machine"`
+	Project     string `json:"project"`
 	Environment string `json:"environment"`
 	App         string `json:"app"`
 	Role        string `json:"role"`
@@ -115,7 +117,7 @@ type ConfigRequest struct {
 // It comes from the request the agent made, never from hz's answer: that is
 // what makes it worth authenticating.
 func (r ConfigRequest) Addr(key string) Addr {
-	return Addr{Environment: r.Environment, App: r.App, Role: r.Role, Key: key}
+	return Addr{Project: r.Project, Environment: r.Environment, App: r.App, Role: r.Role, Key: key}
 }
 
 // ConfigEntry is one resolved key. Sealed is never empty: there is no plaintext
@@ -196,6 +198,7 @@ type BlessValue struct {
 // BlessRequest creates a config. Ranges are immutable once blessed, so this is
 // the only moment an operator is present to be told no.
 type BlessRequest struct {
+	Project     string       `json:"project"`
 	Environment string       `json:"environment"`
 	App         string       `json:"app"`
 	Role        string       `json:"role"`
@@ -219,6 +222,7 @@ type BlessedValue struct {
 // BlessResponse is hz's answer to a bless.
 type BlessResponse struct {
 	ID          string         `json:"id"`
+	Project     string         `json:"project"`
 	Environment string         `json:"environment"`
 	App         string         `json:"app"`
 	Role        string         `json:"role"`
@@ -235,6 +239,7 @@ type BlessResponse struct {
 // a different fact from "the current key is X", and the client must treat it as
 // such rather than sealing under whatever its filesystem offers.
 type CurrentKeyPointer struct {
+	Project     string `json:"project"`
 	Environment string `json:"environment"`
 	App         string `json:"app"`
 	Role        string `json:"role"`
@@ -271,10 +276,17 @@ const (
 	QueryTarget   = "target"
 	QueryState    = "state"
 
-	// QueryProject narrows a target environment to one project. Environment names
+	// QueryProject names the project the address belongs to. Environment names
 	// are unique per project and not globally — every project gets to have a
-	// "prod" — so a bare name is an identity only while one project declares it.
-	// Optional, and required only when it is ambiguous.
+	// "prod" — so a bare name is not an identity and never was; the triple
+	// (environment, app, role) only looked like one while exactly one project
+	// declared each app name.
+	//
+	// It is a STRUCTURAL parameter of every cm call, not a narrowing hint: the
+	// project is the first field of the authenticated address, so a request that
+	// omits it cannot name a blob that will open. It was optional once, when the
+	// app coordinate carried the project by luck; that is the defect the project
+	// coordinate closes.
 	QueryProject = "project"
 
 	// QueryConfirm carries the name of the machine a removal is aimed at. The

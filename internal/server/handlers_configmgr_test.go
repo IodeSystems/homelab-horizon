@@ -107,6 +107,12 @@ type cmBox struct {
 	resp configmgr.RegisterResponse
 }
 
+// cmTestProject is the project every fixture in this package registers under
+// unless a test is specifically about telling two projects apart — see
+// TestCMTwoProjectsShareAnAddressWithoutCrossing for the one that needs a
+// second name.
+const cmTestProject = "acme"
+
 // cmRegister enrols a box at an address and returns hz's answer.
 func cmRegister(t *testing.T, s *Server, machine, env, app, role string) *cmBox {
 	t.Helper()
@@ -115,7 +121,7 @@ func cmRegister(t *testing.T, s *Server, machine, env, app, role string) *cmBox 
 		t.Fatalf("machine key: %v", err)
 	}
 	req := configmgr.RegisterRequest{
-		Machine: machine, Environment: env, App: app, Role: role,
+		Machine: machine, Project: cmTestProject, Environment: env, App: app, Role: role,
 		Version:   "1.2.0",
 		PublicKey: configmgr.MarshalMachinePublicKey(priv.PublicKey()),
 	}
@@ -147,14 +153,18 @@ func cmApproveBox(t *testing.T, s *Server, admin *http.Cookie, box *cmBox, k con
 }
 
 // cmBless creates a config through the admin endpoint, sealing each value with
-// k the way a client holding the key would.
-func cmBless(t *testing.T, s *Server, admin *http.Cookie, k configmgr.EnvKey, env, app, role, minVer, maxVer string, values map[string]string) apitypes.CMConfigResp {
+// k the way a client holding the key would. project is explicit rather than
+// defaulted, because the promotion-ladder tests bless under the project their
+// fixture config.Environments actually declares (see promoEnvironments) and a
+// silently-defaulted project here would have the gate's LookupEnvironment
+// fail against fixtures the test never touched.
+func cmBless(t *testing.T, s *Server, admin *http.Cookie, k configmgr.EnvKey, project, env, app, role, minVer, maxVer string, values map[string]string) apitypes.CMConfigResp {
 	t.Helper()
 	req := apitypes.CMCreateConfigReq{
-		Environment: env, App: app, Role: role, MinVer: minVer, MaxVer: maxVer,
+		Project: project, Environment: env, App: app, Role: role, MinVer: minVer, MaxVer: maxVer,
 	}
 	for key, binding := range values {
-		sealed := configmgr.Seal(k, configmgr.Addr{Environment: env, App: app, Role: role, Key: key},
+		sealed := configmgr.Seal(k, configmgr.Addr{Project: project, Environment: env, App: app, Role: role, Key: key},
 			[]byte("value-of-"+key))
 		req.Values = append(req.Values, apitypes.CMConfigValueReq{
 			Key: key, Binding: binding, Sealed: configmgr.EncodeEnvelope(sealed), KeyID: k.ID().String(),
@@ -225,10 +235,10 @@ func TestCMUnapprovedMachineCannotFetchConfig(t *testing.T) {
 	}
 
 	k := configmgr.NewEnvKey()
-	cmBless(t, s, admin, k, "prod", "redline", "app", "1.0.0", "", map[string]string{"DB_PASSWORD": "env"})
+	cmBless(t, s, admin, k, cmTestProject, "prod", "redline", "app", "1.0.0", "", map[string]string{"DB_PASSWORD": "env"})
 
 	w := cmMachineCall(t, s.handleAPICMConfig, http.MethodPost, "/api/v1/cm/config",
-		configmgr.ConfigRequest{Machine: "box-1", Environment: "prod", App: "redline", Role: "app", Version: "1.2.0"})
+		configmgr.ConfigRequest{Machine: "box-1", Project: cmTestProject, Environment: "prod", App: "redline", Role: "app", Version: "1.2.0"})
 	if w.Code != http.StatusConflict {
 		t.Fatalf("pending fetch: status %d, want 409: %s", w.Code, w.Body.String())
 	}
@@ -240,7 +250,7 @@ func TestCMUnapprovedMachineCannotFetchConfig(t *testing.T) {
 	// and not a broken resolve.
 	cmApproveBox(t, s, admin, box, k)
 	w = cmMachineCall(t, s.handleAPICMConfig, http.MethodPost, "/api/v1/cm/config",
-		configmgr.ConfigRequest{Machine: "box-1", Environment: "prod", App: "redline", Role: "app", Version: "1.2.0"})
+		configmgr.ConfigRequest{Machine: "box-1", Project: cmTestProject, Environment: "prod", App: "redline", Role: "app", Version: "1.2.0"})
 	if w.Code != http.StatusOK {
 		t.Fatalf("approved fetch: status %d: %s", w.Code, w.Body.String())
 	}
@@ -272,7 +282,7 @@ func TestCMDeniedIsDistinguishableFromUnknown(t *testing.T) {
 	}
 
 	denied := cmMachineCall(t, s.handleAPICMConfig, http.MethodPost, "/api/v1/cm/config",
-		configmgr.ConfigRequest{Machine: "box-1", Environment: "prod", App: "redline", Role: "app", Version: "1.2.0"})
+		configmgr.ConfigRequest{Machine: "box-1", Project: cmTestProject, Environment: "prod", App: "redline", Role: "app", Version: "1.2.0"})
 	if denied.Code != http.StatusForbidden {
 		t.Fatalf("denied fetch: status %d, want 403: %s", denied.Code, denied.Body.String())
 	}
@@ -283,7 +293,7 @@ func TestCMDeniedIsDistinguishableFromUnknown(t *testing.T) {
 	// A machine hz has never heard of — the signature of a restore from backup,
 	// not of an attack.
 	unknown := cmMachineCall(t, s.handleAPICMConfig, http.MethodPost, "/api/v1/cm/config",
-		configmgr.ConfigRequest{Machine: "box-99", Environment: "prod", App: "redline", Role: "app", Version: "1.2.0"})
+		configmgr.ConfigRequest{Machine: "box-99", Project: cmTestProject, Environment: "prod", App: "redline", Role: "app", Version: "1.2.0"})
 	if unknown.Code != http.StatusNotFound {
 		t.Fatalf("unknown machine: status %d, want 404: %s", unknown.Code, unknown.Body.String())
 	}
@@ -293,7 +303,7 @@ func TestCMDeniedIsDistinguishableFromUnknown(t *testing.T) {
 
 	// Known machine, address it never registered at: also unknown, not denied.
 	otherAddr := cmMachineCall(t, s.handleAPICMConfig, http.MethodPost, "/api/v1/cm/config",
-		configmgr.ConfigRequest{Machine: "box-1", Environment: "prod", App: "redline", Role: "ops", Version: "1.2.0"})
+		configmgr.ConfigRequest{Machine: "box-1", Project: cmTestProject, Environment: "prod", App: "redline", Role: "ops", Version: "1.2.0"})
 	if otherAddr.Code != http.StatusNotFound {
 		t.Fatalf("unregistered address: status %d, want 404: %s", otherAddr.Code, otherAddr.Body.String())
 	}
@@ -330,15 +340,15 @@ func TestCMEnvironmentMismatchIsRefusedReadably(t *testing.T) {
 	box := cmRegister(t, s, "box-1", "prod", "redline", "app")
 	k := configmgr.NewEnvKey()
 	cmApproveBox(t, s, admin, box, k)
-	cmBless(t, s, admin, k, "prod", "redline", "app", "1.0.0", "", map[string]string{"DB_URL": "env"})
+	cmBless(t, s, admin, k, cmTestProject, "prod", "redline", "app", "1.0.0", "", map[string]string{"DB_URL": "env"})
 
 	w := cmMachineCall(t, s.handleAPICMConfig, http.MethodPost, "/api/v1/cm/config",
-		configmgr.ConfigRequest{Machine: "box-1", Environment: "staging", App: "redline", Role: "app", Version: "1.2.0"})
+		configmgr.ConfigRequest{Machine: "box-1", Project: cmTestProject, Environment: "staging", App: "redline", Role: "app", Version: "1.2.0"})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("environment mismatch: status %d, want 400: %s", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	for _, want := range []string{"environment mismatch", "prod", "staging"} {
+	for _, want := range []string{"rung mismatch", "prod", "staging"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the refusal must name %q so the box is not left guessing: %s", want, body)
 		}
@@ -401,7 +411,7 @@ func TestCMPromotionGateBlocksUnboundEnvKey(t *testing.T) {
 	staging := configmgr.NewEnvKey()
 	prod := configmgr.NewEnvKey()
 
-	src := cmBless(t, s, admin, staging, "staging", "redline", "app", "1.0.0", "", map[string]string{
+	src := cmBless(t, s, admin, staging, cmTestProject, "staging", "redline", "app", "1.0.0", "", map[string]string{
 		"RETENTION_DAYS": "invariant",
 		"PUBLIC_URL":     "env",
 	})
@@ -427,7 +437,7 @@ func TestCMPromotionGateBlocksUnboundEnvKey(t *testing.T) {
 	}
 
 	// Bind it in prod and the gate opens.
-	cmBless(t, s, admin, prod, "prod", "redline", "app", "1.0.0", "", map[string]string{"PUBLIC_URL": "env"})
+	cmBless(t, s, admin, prod, cmTestProject, "prod", "redline", "app", "1.0.0", "", map[string]string{"PUBLIC_URL": "env"})
 	w = cmAdminCall(t, admin, s.handleAPICMPromotionGate, http.MethodGet,
 		"/api/v1/cm/promote/gate?config="+src.ID+"&target=prod", nil)
 	if w.Code != http.StatusOK {
@@ -478,11 +488,11 @@ func TestCMAdminEndpointsRefuseNonAdmins(t *testing.T) {
 func TestCMResolveReportsShadowedCandidates(t *testing.T) {
 	s, admin := cmServer(t)
 	k := configmgr.NewEnvKey()
-	first := cmBless(t, s, admin, k, "prod", "redline", "app", "1.0.0", "", map[string]string{"A": "invariant"})
-	second := cmBless(t, s, admin, k, "prod", "redline", "app", "1.0.0", "", map[string]string{"A": "invariant"})
+	first := cmBless(t, s, admin, k, cmTestProject, "prod", "redline", "app", "1.0.0", "", map[string]string{"A": "invariant"})
+	second := cmBless(t, s, admin, k, cmTestProject, "prod", "redline", "app", "1.0.0", "", map[string]string{"A": "invariant"})
 
 	w := cmAdminCall(t, admin, s.handleAPICMResolve, http.MethodGet,
-		"/api/v1/cm/resolve?env=prod&app=redline&role=app&version=1.2.0", nil)
+		"/api/v1/cm/resolve?project="+cmTestProject+"&env=prod&app=redline&role=app&version=1.2.0", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("resolve: status %d: %s", w.Code, w.Body.String())
 	}
@@ -505,7 +515,7 @@ func TestCMResolveReportsShadowedCandidates(t *testing.T) {
 	// Zero matches is a named answer, never a hang and never mistakable for a
 	// pending approval.
 	w = cmAdminCall(t, admin, s.handleAPICMResolve, http.MethodGet,
-		"/api/v1/cm/resolve?env=prod&app=redline&role=ops&version=1.2.0", nil)
+		"/api/v1/cm/resolve?project="+cmTestProject+"&env=prod&app=redline&role=ops&version=1.2.0", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("resolve with no candidates: status %d: %s", w.Code, w.Body.String())
 	}
@@ -526,10 +536,10 @@ func TestCMBlessRefusesMislabelledKeyID(t *testing.T) {
 	real := configmgr.NewEnvKey()
 	other := configmgr.NewEnvKey()
 
-	sealed := configmgr.Seal(real, configmgr.Addr{Environment: "prod", App: "redline", Role: "app", Key: "A"}, []byte("x"))
+	sealed := configmgr.Seal(real, configmgr.Addr{Project: cmTestProject, Environment: "prod", App: "redline", Role: "app", Key: "A"}, []byte("x"))
 	w := cmAdminCall(t, admin, s.handleAPICMConfigs, http.MethodPost, "/api/v1/cm/configs",
 		apitypes.CMCreateConfigReq{
-			Environment: "prod", App: "redline", Role: "app", MinVer: "1.0.0",
+			Project: cmTestProject, Environment: "prod", App: "redline", Role: "app", MinVer: "1.0.0",
 			Values: []apitypes.CMConfigValueReq{{
 				Key: "A", Binding: "invariant",
 				Sealed: configmgr.EncodeEnvelope(sealed), KeyID: other.ID().String(),
@@ -556,7 +566,7 @@ func TestCMRegisterRefusesAKeySwapOnAnEnrolledName(t *testing.T) {
 	}
 	w := cmMachineCall(t, s.handleAPICMRegister, http.MethodPost, "/api/v1/cm/register",
 		configmgr.RegisterRequest{
-			Machine: "box-1", Environment: "prod", App: "redline", Role: "app", Version: "1.2.0",
+			Machine: "box-1", Project: cmTestProject, Environment: "prod", App: "redline", Role: "app", Version: "1.2.0",
 			PublicKey: configmgr.MarshalMachinePublicKey(impostor.PublicKey()),
 		})
 	if w.Code != http.StatusConflict {
@@ -629,7 +639,7 @@ func TestCMRegisterAdmitsLoopback(t *testing.T) {
 				t.Fatalf("NewMachineKey: %v", err)
 			}
 			body := configmgr.RegisterRequest{
-				Machine: "box-" + ip, Environment: "prod", App: "redline", Role: "app",
+				Machine: "box-" + ip, Project: cmTestProject, Environment: "prod", App: "redline", Role: "app",
 				Version: "1.2.0", PublicKey: configmgr.MarshalMachinePublicKey(priv.PublicKey()),
 			}
 			raw, _ := json.Marshal(body)
@@ -665,5 +675,230 @@ func TestCMRegisterStillRefusesAStranger(t *testing.T) {
 	s.handleAPICMRegister(w, r)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("an off-VPN, non-loopback caller got %d, want 403", w.Code)
+	}
+}
+
+// TestCMRegisterAndConfigRefuseAThreePartRequestByName: a box that has not
+// picked up the project coordinate sends every other field, and the answer
+// must not merely 400 — it must name "project" specifically, so an operator
+// (or an old client's own log) can tell a stale build from a typo elsewhere in
+// the request.
+func TestCMRegisterAndConfigRefuseAThreePartRequestByName(t *testing.T) {
+	s, _ := cmServer(t)
+
+	t.Run("register", func(t *testing.T) {
+		priv, err := configmgr.NewMachineKey()
+		if err != nil {
+			t.Fatalf("machine key: %v", err)
+		}
+		w := cmMachineCall(t, s.handleAPICMRegister, http.MethodPost, "/api/v1/cm/register",
+			configmgr.RegisterRequest{
+				Machine: "box-1", Environment: "prod", App: "redline", Role: "app", Version: "1.2.0",
+				PublicKey: configmgr.MarshalMachinePublicKey(priv.PublicKey()),
+				// Project deliberately left empty: the three-part shape.
+			})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status %d, want 400: %s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "project") {
+			t.Fatalf("the refusal does not name project: %s", w.Body.String())
+		}
+	})
+
+	t.Run("config request", func(t *testing.T) {
+		w := cmMachineCall(t, s.handleAPICMConfig, http.MethodPost, "/api/v1/cm/config",
+			configmgr.ConfigRequest{
+				Machine: "box-1", Environment: "prod", App: "redline", Role: "app", Version: "1.2.0",
+				// Project deliberately left empty.
+			})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status %d, want 400: %s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "project") {
+			t.Fatalf("the refusal does not name project: %s", w.Body.String())
+		}
+	})
+}
+
+// TestCMTwoProjectsShareAnAddressWithoutCrossing is the test that would FAIL
+// against the old three-part (environment, app, role) code: two projects
+// registering, approving and blessing the identical (environment, app, role)
+// tuple must never let one project's read see the other's config or current
+// key. Under the old address shape this pair would have collided into ONE
+// row — "prod/redline/app" was the whole identity — so this is not a
+// hypothetical, it is the exact defect the project coordinate exists to close.
+func TestCMTwoProjectsShareAnAddressWithoutCrossing(t *testing.T) {
+	s, admin := cmServer(t)
+	const sameEnv, sameApp, sameRole = "prod", "redline", "app"
+
+	// Register, approve and bless the SAME tuple under two different projects.
+	cfgA, keyA := func() (string, string) {
+		priv, err := configmgr.NewMachineKey()
+		if err != nil {
+			t.Fatalf("machine key: %v", err)
+		}
+		reqA := configmgr.RegisterRequest{
+			Machine: "box-a", Project: "acme", Environment: sameEnv, App: sameApp, Role: sameRole,
+			Version: "1.2.0", PublicKey: configmgr.MarshalMachinePublicKey(priv.PublicKey()),
+		}
+		w := cmMachineCall(t, s.handleAPICMRegister, http.MethodPost, "/api/v1/cm/register", reqA)
+		if w.Code != http.StatusOK {
+			t.Fatalf("register acme/box-a: status %d: %s", w.Code, w.Body.String())
+		}
+		var resp configmgr.RegisterResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		boxA := &cmBox{priv: priv, req: reqA, resp: resp}
+		k := configmgr.NewEnvKey()
+		cmApproveBox(t, s, admin, boxA, k)
+		out := cmBless(t, s, admin, k, "acme", sameEnv, sameApp, sameRole, "1.0.0", "",
+			map[string]string{"MARKER": "invariant"})
+		return out.ID, k.ID().String()
+	}()
+
+	cfgB, keyB := func() (string, string) {
+		priv, err := configmgr.NewMachineKey()
+		if err != nil {
+			t.Fatalf("machine key: %v", err)
+		}
+		reqB := configmgr.RegisterRequest{
+			Machine: "box-b", Project: "umbrella", Environment: sameEnv, App: sameApp, Role: sameRole,
+			Version: "1.2.0", PublicKey: configmgr.MarshalMachinePublicKey(priv.PublicKey()),
+		}
+		w := cmMachineCall(t, s.handleAPICMRegister, http.MethodPost, "/api/v1/cm/register", reqB)
+		if w.Code != http.StatusOK {
+			t.Fatalf("register umbrella/box-b: status %d: %s", w.Code, w.Body.String())
+		}
+		var resp configmgr.RegisterResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		boxB := &cmBox{priv: priv, req: reqB, resp: resp}
+		k := configmgr.NewEnvKey()
+		cmApproveBox(t, s, admin, boxB, k)
+		out := cmBless(t, s, admin, k, "umbrella", sameEnv, sameApp, sameRole, "1.0.0", "",
+			map[string]string{"MARKER": "invariant"})
+		return out.ID, k.ID().String()
+	}()
+
+	if cfgA == cfgB {
+		t.Fatal("two projects blessing the same tuple produced the same config id; the address collided")
+	}
+
+	// /cm/configs: each project's listing must show only its own config.
+	for _, tc := range []struct{ project, wantID, wantNotID string }{
+		{"acme", cfgA, cfgB},
+		{"umbrella", cfgB, cfgA},
+	} {
+		w := cmAdminCall(t, admin, s.handleAPICMConfigs, http.MethodGet,
+			"/api/v1/cm/configs?project="+tc.project+"&env="+sameEnv+"&app="+sameApp+"&role="+sameRole, nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("list configs for %s: status %d: %s", tc.project, w.Code, w.Body.String())
+		}
+		var rows []apitypes.CMConfigResp
+		if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(rows) != 1 || rows[0].ID != tc.wantID {
+			t.Fatalf("configs for %s = %+v, want exactly [%s]", tc.project, rows, tc.wantID)
+		}
+		for _, row := range rows {
+			if row.ID == tc.wantNotID {
+				t.Fatalf("project %s's config listing leaked the other project's config %s", tc.project, tc.wantNotID)
+			}
+		}
+	}
+
+	// /cm/resolve: each project resolves to its OWN config, never the other's.
+	for _, tc := range []struct{ project, wantID, wantNotID string }{
+		{"acme", cfgA, cfgB},
+		{"umbrella", cfgB, cfgA},
+	} {
+		w := cmAdminCall(t, admin, s.handleAPICMResolve, http.MethodGet,
+			"/api/v1/cm/resolve?project="+tc.project+"&env="+sameEnv+"&app="+sameApp+"&role="+sameRole+"&version=1.2.0", nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("resolve for %s: status %d: %s", tc.project, w.Code, w.Body.String())
+		}
+		var res apitypes.CMResolveResp
+		if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if res.Winner == nil || res.Winner.ID != tc.wantID {
+			t.Fatalf("resolve for %s = %+v, want winner %s", tc.project, res.Winner, tc.wantID)
+		}
+		if res.Winner.ID == tc.wantNotID {
+			t.Fatalf("resolve for %s returned the OTHER project's config", tc.project)
+		}
+	}
+
+	// /cm/current-key: setting it for one project must not be visible from the
+	// other's read of the identical (environment, app, role).
+	setW := cmAdminCall(t, admin, s.handleAPICMCurrentKey, http.MethodPut,
+		"/api/v1/cm/current-key?project=acme&env="+sameEnv+"&app="+sameApp+"&role="+sameRole,
+		apitypes.CMCurrentKeyReq{KeyID: keyA})
+	if setW.Code != http.StatusOK {
+		t.Fatalf("set current key for acme: status %d: %s", setW.Code, setW.Body.String())
+	}
+
+	getA := cmAdminCall(t, admin, s.handleAPICMCurrentKey, http.MethodGet,
+		"/api/v1/cm/current-key?project=acme&env="+sameEnv+"&app="+sameApp+"&role="+sameRole, nil)
+	if getA.Code != http.StatusOK {
+		t.Fatalf("get current key for acme: status %d: %s", getA.Code, getA.Body.String())
+	}
+	var curA apitypes.CMCurrentKeyResp
+	if err := json.Unmarshal(getA.Body.Bytes(), &curA); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if curA.KeyID != keyA {
+		t.Fatalf("current key for acme = %q, want %q", curA.KeyID, keyA)
+	}
+
+	// umbrella has never had a current key announced, so its read of the SAME
+	// (environment, app, role) must be a clean 404 — not acme's pointer, and
+	// not a pointer that happens to equal umbrella's own key by coincidence.
+	getB := cmAdminCall(t, admin, s.handleAPICMCurrentKey, http.MethodGet,
+		"/api/v1/cm/current-key?project=umbrella&env="+sameEnv+"&app="+sameApp+"&role="+sameRole, nil)
+	if getB.Code != http.StatusNotFound {
+		t.Fatalf("current key for umbrella = %d: %s; acme's pointer leaked across the project boundary",
+			getB.Code, getB.Body.String())
+	}
+	_ = keyB
+}
+
+// TestCMPromotionGateRefusesADisagreeingProject: the gate takes its project
+// from the SOURCE CONFIG's own address, never from the query, because the
+// config address is the only authority once it carries a project coordinate.
+// A caller naming a DIFFERENT project is told so rather than silently
+// overridden or silently ignored.
+func TestCMPromotionGateRefusesADisagreeingProject(t *testing.T) {
+	s, admin := cmServer(t)
+	k := configmgr.NewEnvKey()
+	src := cmBless(t, s, admin, k, "acme", "staging", "redline", "app", "1.0.0", "",
+		map[string]string{"A": "invariant"})
+
+	w := cmAdminCall(t, admin, s.handleAPICMPromotionGate, http.MethodGet,
+		"/api/v1/cm/promote/gate?config="+src.ID+"&target=prod&project=umbrella", nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", w.Code, w.Body.String())
+	}
+	for _, want := range []string{"acme", "umbrella"} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("the refusal must name both projects (%q): %s", want, w.Body.String())
+		}
+	}
+
+	// Naming the AGREEING project, or none at all, must still work — the
+	// refusal above is about disagreement, not about the parameter's mere
+	// presence.
+	agree := cmAdminCall(t, admin, s.handleAPICMPromotionGate, http.MethodGet,
+		"/api/v1/cm/promote/gate?config="+src.ID+"&target=prod&project=acme", nil)
+	if agree.Code != http.StatusOK {
+		t.Fatalf("agreeing project: status %d, want 200: %s", agree.Code, agree.Body.String())
+	}
+	absent := cmAdminCall(t, admin, s.handleAPICMPromotionGate, http.MethodGet,
+		"/api/v1/cm/promote/gate?config="+src.ID+"&target=prod", nil)
+	if absent.Code != http.StatusOK {
+		t.Fatalf("absent project: status %d, want 200: %s", absent.Code, absent.Body.String())
 	}
 }

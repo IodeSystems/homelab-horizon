@@ -230,6 +230,7 @@ export interface CMRecoveryRecipient {
  * key opens it. hz already relays exactly this shape to a box at every boot.
  */
 export interface CMRecoveryWrap {
+  project: string;
   environment: string;
   app: string;
   role: string;
@@ -273,6 +274,7 @@ export interface CMRecoveryRecipientReq {
  * that is exactly the hole `hz config recovery verify` exists to close.
  */
 export interface CMRecoveryWrapReq {
+  project: string;
   environment: string;
   app: string;
   role: string;
@@ -2093,6 +2095,7 @@ export interface CMRegistrationResp {
   id: string;
   machineId: string;
   machineName: string;
+  project: string;
   environment: string;
   app: string;
   role: string;
@@ -2262,6 +2265,7 @@ export interface CMConfigValueReq {
  * is the only moment the operator is present to be told no.
  */
 export interface CMCreateConfigReq {
+  project: string;
   environment: string;
   app: string;
   role: string;
@@ -2288,6 +2292,7 @@ export interface CMConfigValueResp {
  */
 export interface CMConfigResp {
   id: string;
+  project: string;
   environment: string;
   app: string;
   role: string;
@@ -2345,6 +2350,15 @@ export interface CMPromotionGateResp {
  * missing edge is a declaration that does not exist, and no flag can invent it.
  */
 export interface CMPromotionEdgeResp {
+  /**
+   * Project is the project whose rungs these are. It is the project the
+   * CALLER NAMED, not one hz worked out: `hz config promote --project` sends
+   * it, and the promotion gate reads config.Environments to check the edge.
+   * It used to be "the project we resolved for you" — a narrowing hint that
+   * was required only when a bare environment name was ambiguous — which was
+   * the config address's missing project coordinate showing through on one
+   * surface. The address names the project now; this field only echoes it.
+   */
   project?: string;
   sourceEnv: string;
   sourcePosture?: string;
@@ -2373,6 +2387,7 @@ export interface CMCurrentKeyReq {
   keyId: string;
 }
 export interface CMCurrentKeyResp {
+  project: string;
   environment: string;
   app: string;
   role: string;
@@ -2447,12 +2462,23 @@ export const VersionDriftNotObserved = "not-observed";
  */
 export const VersionDriftNotComparable = "not-comparable";
 /**
- * VersionDriftUnresolved — hz cannot work out which project's rung this
- * instance is on, so it has no declared version to compare at all. A
- * registration's address is environment/app/role with no project
- * coordinate, and an environment name is unique per project rather than
- * globally. Why carries the projection's own message, which names the `hz`
- * command that closes it.
+ * VersionDriftUnresolved — the instance names a rung hz does not declare,
+ * so there is no declared version to compare against at all.
+ * THE MEANING NARROWED WHEN THE PROJECT JOINED THE ADDRESS, and the state
+ * did not go away. It used to mean "hz cannot work out which project's rung
+ * this is", because a registration's address was environment/app/role and
+ * the project had to be derived backwards from the app name; two projects
+ * declaring one app name, or an app no service named, both landed here.
+ * That derivation is gone — the address carries the project now — so what
+ * is left is the honest remaining cause: the registration names a project
+ * hz does not declare, or a rung that project does not declare.
+ * It is reachable and must stay reachable. A box is registered by ITS OWN
+ * compiled-in project and its own launch flags; hz's declared config is
+ * edited separately, so an instance naming a rung that was renamed, not yet
+ * added, or deleted is an ordinary state and the one this verdict is for.
+ * The difference is that it is now a fact about the CONFIG, which an
+ * operator can fix, rather than an ambiguity in the address, which they
+ * could not. Why names the rung.
  */
 export const VersionDriftUnresolved = "unresolved";
 /**
@@ -2509,23 +2535,26 @@ export interface VersionDriftResponse {
  */
 export interface InstanceVersion {
   /**
-   * The instance's identity: (machine, environment, app, role), plus the
-   * address hz prints everywhere else and the project the rung belongs to.
+   * The instance's identity: (machine, project, environment, app, role),
+   * plus the address hz prints everywhere else.
    */
   machine: string;
   environment: string;
   app: string;
   role: string;
   /**
-   * Address is environment/app/role, the form the CLI and the approval queue
-   * already print. Carried rather than left to the client to join, so two
-   * screens cannot punctuate it differently.
+   * Address is project/environment/app/role, the form the CLI and the
+   * approval queue already print. Carried rather than left to the client to
+   * join, so two screens cannot punctuate it differently.
    */
   address: string;
   /**
-   * Project is the project whose rung this is. Empty when Drift is
-   * "unresolved" — hz could not work it out, which is the whole of that
-   * verdict.
+   * Project is the project whose rung this is. It is CARRIED on the
+   * registration address, not derived: it used to be worked out backwards
+   * from the app name and was therefore empty exactly when that derivation
+   * failed. It is now always present, including when Drift is "unresolved" —
+   * an instance that names a rung hz does not declare still knows which rung
+   * it named, and saying so is what makes the verdict actionable.
    */
   project?: string;
   /**

@@ -39,17 +39,17 @@ type promoteFixture struct {
 func newPromoteFixture(t *testing.T) *promoteFixture {
 	t.Helper()
 	ks := testKeystore(t)
-	srcAddr := configmgr.EnvKeyAddr{Environment: "staging", App: "redline", Role: "app"}
-	dstAddr := configmgr.EnvKeyAddr{Environment: "prod", App: "redline", Role: "app"}
+	srcAddr := configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "app"}
+	dstAddr := configmgr.EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "app"}
 	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	srcKey := putKey(t, ks, srcAddr, "2026-01", at)
 	dstKey := putKey(t, ks, dstAddr, "2026-01", at)
 
 	s := newCMStub()
-	s.currentKeys["staging/redline/app"] = srcKey.ID().String()
-	s.currentKeys["prod/redline/app"] = dstKey.ID().String()
+	s.currentKeys["acme/staging/redline/app"] = srcKey.ID().String()
+	s.currentKeys["acme/prod/redline/app"] = dstKey.ID().String()
 	s.configs["cfg-1"] = apitypes.CMConfigResp{
-		ID: "cfg-1", Environment: "staging", App: "redline", Role: "app", MinVer: "1.2.0", Sequence: 7,
+		ID: "cfg-1", Project: "acme", Environment: "staging", App: "redline", Role: "app", MinVer: "1.2.0", Sequence: 7,
 		Values: []apitypes.CMConfigValueResp{
 			{Key: "RETENTION_DAYS", Binding: configmgr.BindingInvariant, KeyID: srcKey.ID().String(), Origin: "direct",
 				Sealed: configmgr.EncodeEnvelope(configmgr.Seal(srcKey, valueAddr(srcAddr, "RETENTION_DAYS"), []byte("30-days-retained")))},
