@@ -23,6 +23,8 @@ import AccountCircleIcon from "@mui/icons-material/AccountCircle";
 import PersonIcon from "@mui/icons-material/PersonOutlined";
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
+import AccountTreeIcon from "@mui/icons-material/AccountTree";
+import ComputerIcon from "@mui/icons-material/Computer";
 import DnsIcon from "@mui/icons-material/Dns";
 import StorageIcon from "@mui/icons-material/Storage";
 import LanguageIcon from "@mui/icons-material/Language";
@@ -53,6 +55,15 @@ const navItems: NavItem[] = [
   // navigation redesign (plan/ui-redesign.md) reshapes this list properly;
   // this is one entry in the existing shell, not that change.
   { icon: <CompareArrowsIcon />, label: "Drift", path: "/drift" },
+  // The model's two read-only surfaces, beside Drift for the same reason. They
+  // are NOT one entry each per data type: Projects is "what exists and what
+  // does each rung declare", Machines is "what boxes are there and what runs
+  // on them". Instances get no entry of their own — an instance is a config
+  // address, not a thing with an identity, so a global instance list would
+  // answer no question anyone asks. A machine's projection hangs off its
+  // machine at /machines/$machine, which is where you are when you ask.
+  { icon: <AccountTreeIcon />, label: "Projects", path: "/projects" },
+  { icon: <ComputerIcon />, label: "Machines", path: "/machines" },
   { icon: <DnsIcon />, label: "Services", path: "/services" },
   { icon: <LanguageIcon />, label: "Domains", path: "/domains" },
   { icon: <StorageIcon />, label: "DNS", path: "/dns" },
