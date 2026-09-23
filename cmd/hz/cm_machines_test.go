@@ -136,7 +136,7 @@ func TestRemoveUnknownMachineSaysWhereToLook(t *testing.T) {
 		if err == nil {
 			t.Fatal("removing an unknown machine succeeded")
 		}
-		if !strings.Contains(err.Error(), "hz cm machines") {
+		if !strings.Contains(err.Error(), "hz config machines") {
 			t.Errorf("the error does not point at the listing: %v", err)
 		}
 	})

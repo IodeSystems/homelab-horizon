@@ -119,7 +119,7 @@ func runImportCapturing(t *testing.T, c *client, args ...string) (string, error)
 }
 
 // TestImportIsADryRunByDefault: the whole plan is computed and printed, and
-// nothing is posted. Same contract as `hz cm promote`, deliberately — two
+// nothing is posted. Same contract as `hz config promote`, deliberately — two
 // commands that both propose a change to the config must not have two different
 // ideas of what running them means.
 func TestImportIsADryRunByDefault(t *testing.T) {

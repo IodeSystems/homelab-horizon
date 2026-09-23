@@ -299,8 +299,8 @@ Landed on `dev` 2026-09-20:
 | Environments | `Environment{Project, Name, Posture, From, Version}`, ordered postures, `hz env ls\|show`, `GET /api/v1/environments`, and now **`hz env add\|set\|rm`** |
 | Write surface | The model can now be DECLARED, not only imported into — `internal/config/declare.go` + `POST /api/v1/{projects,environments}/{add,rm}` and `/environments/set`. Step 2 of [architecture.md](architecture.md)'s walkthrough ("redline declares its own environments: staging, prod") had no command before this. `add`/`set` write immediately (reversible, and a declared project changes no rendered artifact); `rm` is a **dry run until `--confirm`** and **refuses while anything depends on the target, naming each dependant** — `--cascade` is the opt-in that takes them, listed first |
 | Assignment | **`hz service assign <svc> <project>[/<env>]`** / **`unassign`** + `POST /api/v1/services/assign`. A service could be READ with its placement since the tree landed and only `hz import --execute` could write one. `ServiceRequest.Project`/`.Environment` are **`*string`**, not `string` — the web UI's `formToInput` never sends them and `/services/edit` is full-replace, so plain strings would have silently unassigned every service edited from the UI. `TestEditWithoutPlacementLeavesTheAssignmentAlone` pins it |
-| Key custody | **`hz cm recovery`** — recipients in `config.json` (NOT `hz.db`, which rides no backup; see icebox), wrap reuses `configmgr.WrapEnvKey`, `backfill` for keys that already exist, and `verify` to prove a recovery key actually opens something. **`hz cm key new` now fails if hz is unreachable** and custody cannot be established; the key is still minted and the error names `backfill` |
-| Machine removal | `hz cm machines\|remove`, closing holes 11 and 14 |
+| Key custody | **`hz config recovery`** — recipients in `config.json` (NOT `hz.db`, which rides no backup; see icebox), wrap reuses `configmgr.WrapEnvKey`, `backfill` for keys that already exist, and `verify` to prove a recovery key actually opens something. **`hz config key new` now fails if hz is unreachable** and custody cannot be established; the key is still minted and the error names `backfill` |
+| Machine removal | `hz config machines\|remove`, closing holes 11 and 14 |
 | Feed | `Project.Feed`, inherited whole down `Parent`, `hz feed ls\|show`, and now **`hz feed set`** — the writer it lacked |
 | Import | `hz import` proposes a tree for a gateway that has none. Dry run by default, `--execute` to write, `--merge` to add to an existing tree. `GET/POST /api/v1/import` |
 
@@ -463,6 +463,20 @@ when an operator most needs in.
 [config-manager.md](config-manager.md); that doc is the authority and carries
 the phases, the known holes and the open questions. This entry is the pointer.
 
+**The CLI noun is `hz config`, not `hz cm` (renamed 2026-09-22).** Nobody can
+expand a two-letter abbreviation on sight and `hz cm approve` said nothing about
+what it did; `config` also matches what the admin UI already calls the same
+surface (`/config`, nav label "Config"). `cm` is KEPT as a deprecated alias — it
+is in muscle memory and in scripts on boxes this repo cannot see — and prints a
+one-line notice on stderr, never stdout, so `hz cm machines --json | jq` still
+works. The rename stopped at the CLI, its help and the docs: the `/api/v1/cm/*`
+routes, the `cm_registrations` / `cm_machines` tables, the `CM*` apitypes and
+the `configmgr` package are UNCHANGED, on purpose. A route rename breaks a
+client for a spelling nobody types, a table rename needs a migration for the
+same, and in Go `config` is already taken by `internal/config` (the gateway's
+own config), so renaming the identifiers would trade one ambiguity for a worse
+one. Pinned by `cmd/hz/config_alias_test.go`.
+
 A store of config blobs addressed by `(environment, app, role)` with a version
 range and an approval state. A box registers, an admin approves the
 **registration** (not every boot), and the box pulls what resolves for its
@@ -480,7 +494,7 @@ nothing is reachable from outside the process.
 (This line said "handlers, client library, CLI, UI, and the whole promotion
 graph" until 2026-09-20 and was stale on every item —
 [config-manager.md](config-manager.md)'s phase tables are the authority and mark
-them landed. The promotion graph's config half landed 2026-09-20: `hz cm
+them landed. The promotion graph's config half landed 2026-09-20: `hz config
 promote`, dry-run by default, copying invariants, blanking unanswered
 environment-bound keys as declared rows, and gating on the declared edge.)
 
@@ -491,8 +505,8 @@ environment-bound keys as declared rows, and gating on the declared edge.)
 - **risks:** largest feature ever proposed for hz, landing in the box the whole
   network depends on; hz becomes a dependency of every box's startup path, so
   the cached-boot fallback is not optional. (The escrow half of that risk closed
-  2026-09-20: `hz cm recovery` wraps every environment key to a list of recovery
-  public keys and `hz cm recovery verify` proves one opens. It is only closed on
+  2026-09-20: `hz config recovery` wraps every environment key to a list of recovery
+  public keys and `hz config recovery verify` proves one opens. It is only closed on
   a box where `verify` has actually been run — see
   [architecture.md](architecture.md) *Key custody*.)
 - **blocking decisions (yours):** the five open questions in the design doc.

@@ -17,7 +17,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 )
 
-// `hz cm recovery` — key custody, and the reason the whole config manager
+// `hz config recovery` — key custody, and the reason the whole config manager
 // needs it.
 //
 // configmgr/keystore.go:24 says it plainly: "hz never holds an environment key,
@@ -28,7 +28,7 @@ import (
 // them.
 //
 // A recovery key is a recipient that is always approved. There is NO new crypto
-// here: `hz cm approve` already wraps an environment key to a machine's public
+// here: `hz config approve` already wraps an environment key to a machine's public
 // key with configmgr.WrapEnvKey, and every command below does exactly that to a
 // public key that lives in a password manager instead of on a box.
 //
@@ -38,7 +38,7 @@ import (
 //     endpoint accepts one, and there is no field it could travel in.
 //  2. A private key never appears in argv. /proc is world-readable and `ps` is
 //     how it would leak, so `verify` reads it from stdin — the same rule that
-//     gives `hz cm key import` no --key flag.
+//     gives `hz config key import` no --key flag.
 //  3. No environment key and no private key is ever printed, logged or put in
 //     an error. Names, key ids and fingerprints only. `keygen` is the single
 //     exception and it is deliberate: it exists to hand an operator a private
@@ -46,7 +46,7 @@ import (
 
 func runCMRecovery(c *client, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("cm recovery subcommand required: ls | keygen | add | rm | backfill | verify")
+		return fmt.Errorf("config recovery subcommand required: ls | keygen | add | rm | backfill | verify")
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
@@ -63,7 +63,7 @@ func runCMRecovery(c *client, args []string) error {
 	case "verify":
 		return cmRecoveryVerify(c, rest)
 	default:
-		return fmt.Errorf("unknown cm recovery subcommand: %s", sub)
+		return fmt.Errorf("unknown config recovery subcommand: %s", sub)
 	}
 }
 
@@ -80,19 +80,19 @@ func cmFetchRecovery(c *client) (apitypes.CMRecoveryResp, error) {
 // at all — that is the point. hz sees the public half only, and only when the
 // operator chooses to add it.
 //
-// stdout must be a terminal, for the reason `hz cm key export` gives: a
+// stdout must be a terminal, for the reason `hz config key export` gives: a
 // redirect is how key material lands in a file nobody set 0600 on, a shell
 // history, a CI log, or a scrollback that gets pasted into a ticket. There is
 // deliberately no --out flag. The private key is meant to go into a password
 // manager by hand and never to exist as a file on this machine.
 func cmRecoveryKeygen(args []string) error {
-	fs := flag.NewFlagSet("cm recovery keygen", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config recovery keygen", flag.ContinueOnError)
 	name := fs.String("name", "", "the recipient name this key will be added under")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() > 0 {
-		return fmt.Errorf("usage: hz cm recovery keygen [--name NAME]")
+		return fmt.Errorf("usage: hz config recovery keygen [--name NAME]")
 	}
 	if !isTTY(os.Stdout) {
 		return fmt.Errorf("refusing to print a recovery private key to something that is not a terminal.\n" +
@@ -121,9 +121,9 @@ func cmRecoveryKeygen(args []string) error {
 	fmt.Fprintf(os.Stderr, "# fingerprint  %s\n", configmgr.FingerprintOf(pub))
 	fmt.Fprintln(os.Stderr, "#")
 	fmt.Fprintln(os.Stderr, "# Register the PUBLIC half with hz, then wrap the keys you already hold to it:")
-	fmt.Fprintf(os.Stderr, "#   hz cm recovery add %s --public-key %s\n", label, configmgr.MarshalMachinePublicKey(pub))
-	fmt.Fprintln(os.Stderr, "#   hz cm recovery backfill")
-	fmt.Fprintf(os.Stderr, "#   hz cm recovery verify <environment>/<app>/<role>   # prove it before you rely on it\n")
+	fmt.Fprintf(os.Stderr, "#   hz config recovery add %s --public-key %s\n", label, configmgr.MarshalMachinePublicKey(pub))
+	fmt.Fprintln(os.Stderr, "#   hz config recovery backfill")
+	fmt.Fprintf(os.Stderr, "#   hz config recovery verify <environment>/<app>/<role>   # prove it before you rely on it\n")
 	return nil
 }
 
@@ -135,7 +135,7 @@ func cmRecoveryKeygen(args []string) error {
 // argv is fine for it — the no-argv rule is about secrets, and treating a
 // public key as one would only teach an operator that the rule is arbitrary.
 func cmRecoveryAdd(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm recovery add", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config recovery add", flag.ContinueOnError)
 	pubFlag := fs.String("public-key", "", "the recipient's public key (public: safe in argv). Omit to read it from stdin")
 	name, rest := splitCMPositional(args)
 	if err := fs.Parse(rest); err != nil {
@@ -145,7 +145,7 @@ func cmRecoveryAdd(c *client, args []string) error {
 		name = fs.Arg(0)
 	}
 	if name == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz cm recovery add <name> [--public-key K]")
+		return fmt.Errorf("usage: hz config recovery add <name> [--public-key K]")
 	}
 
 	raw := strings.TrimSpace(*pubFlag)
@@ -182,8 +182,8 @@ func cmRecoveryAdd(c *client, args []string) error {
 	fmt.Println("Every environment key minted from now on is wrapped to it automatically. The keys")
 	fmt.Println("that already exist are NOT — the recipient list is fixed at the moment a key is")
 	fmt.Println("wrapped, so they have to be re-wrapped explicitly:")
-	fmt.Println("  hz cm recovery backfill")
-	fmt.Println("  hz cm recovery verify <environment>/<app>/<role>   # then prove it opens")
+	fmt.Println("  hz config recovery backfill")
+	fmt.Println("  hz config recovery verify <environment>/<app>/<role>   # then prove it opens")
 	return nil
 }
 
@@ -191,7 +191,7 @@ func cmRecoveryAdd(c *client, args []string) error {
 // do, every time, because the difference is the whole risk: the wraps already
 // addressed to that key stay openable by whoever holds it.
 func cmRecoveryRemove(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm recovery rm", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config recovery rm", flag.ContinueOnError)
 	yes := fs.Bool("yes", false, "skip the confirmation")
 	name, rest := splitCMPositional(args)
 	if err := fs.Parse(rest); err != nil {
@@ -201,7 +201,7 @@ func cmRecoveryRemove(c *client, args []string) error {
 		name = fs.Arg(0)
 	}
 	if name == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz cm recovery rm <name> [--yes]")
+		return fmt.Errorf("usage: hz config recovery rm <name> [--yes]")
 	}
 
 	if !*yes {
@@ -251,13 +251,13 @@ type cmRecoveryCoverage struct {
 // list: a recipient with no wraps and an address with no recipients look
 // identical in any listing that reports only one of the two.
 func cmRecoveryList(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm recovery ls", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config recovery ls", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "output raw JSON")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() > 0 {
-		return fmt.Errorf("usage: hz cm recovery ls [--json]")
+		return fmt.Errorf("usage: hz config recovery ls [--json]")
 	}
 
 	rec, err := cmFetchRecovery(c)
@@ -328,9 +328,9 @@ func cmRecoveryList(c *client, args []string) error {
 		fmt.Println("place: the ~/.hz tree of whichever machine minted it. Losing that directory")
 		fmt.Println("destroys the secrets rather than locking them.")
 		fmt.Println()
-		fmt.Println("  hz cm recovery keygen --name <name>    # mint a recovery key, terminal only")
-		fmt.Println("  hz cm recovery add <name> ...          # register its PUBLIC half")
-		fmt.Println("  hz cm recovery backfill                # wrap the keys that already exist")
+		fmt.Println("  hz config recovery keygen --name <name>    # mint a recovery key, terminal only")
+		fmt.Println("  hz config recovery add <name> ...          # register its PUBLIC half")
+		fmt.Println("  hz config recovery backfill                # wrap the keys that already exist")
 		return nil
 	}
 
@@ -375,14 +375,14 @@ func cmRecoveryList(c *client, args []string) error {
 	}
 	if gaps > 0 {
 		fmt.Printf("\n%d key(s) are not wrapped to every recipient.\n", gaps)
-		fmt.Println("  hz cm recovery backfill       # closes every gap on a key THIS machine holds")
+		fmt.Println("  hz config recovery backfill       # closes every gap on a key THIS machine holds")
 		if unreachable > 0 {
 			fmt.Printf("  %d of them are on keys this machine does not hold: they can only be closed\n", unreachable)
 			fmt.Println("  from a machine whose keystore has them, or after importing the key here.")
 		}
 	} else {
 		fmt.Println("\nEvery known key is wrapped to every recipient. That a wrap EXISTS is not proof")
-		fmt.Println("it opens — prove one: hz cm recovery verify <environment>/<app>/<role>")
+		fmt.Println("it opens — prove one: hz config recovery verify <environment>/<app>/<role>")
 	}
 	return nil
 }
@@ -439,14 +439,14 @@ func cmHeldKeys() ([]cmHeldKey, error) {
 // It never prints key material, including in --dry-run, where it does not even
 // load a key: a plan is a list of addresses, key ids and recipient names.
 func cmRecoveryBackfill(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm recovery backfill", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config recovery backfill", flag.ContinueOnError)
 	dryRun := fs.Bool("dry-run", false, "list what would be wrapped and send nothing")
 	replace := fs.Bool("replace", false, "re-wrap even where a wrap is already stored")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() > 0 {
-		return fmt.Errorf("usage: hz cm recovery backfill [--dry-run] [--replace]")
+		return fmt.Errorf("usage: hz config recovery backfill [--dry-run] [--replace]")
 	}
 
 	rec, err := cmFetchRecovery(c)
@@ -455,8 +455,8 @@ func cmRecoveryBackfill(c *client, args []string) error {
 	}
 	if len(rec.Recipients) == 0 {
 		fmt.Println("No recovery recipients are registered, so there is nothing to wrap to.")
-		fmt.Println("  hz cm recovery keygen --name <name>")
-		fmt.Println("  hz cm recovery add <name> --public-key <key>")
+		fmt.Println("  hz config recovery keygen --name <name>")
+		fmt.Println("  hz config recovery add <name> --public-key <key>")
 		return nil
 	}
 
@@ -552,7 +552,7 @@ func cmRecoveryBackfill(c *client, args []string) error {
 		return fmt.Errorf("%d wrap(s) failed; the custody gap they leave is still open", failed)
 	}
 	fmt.Println("A stored wrap is not a proved one. Prove at least one before relying on it:")
-	fmt.Println("  hz cm recovery verify <environment>/<app>/<role>")
+	fmt.Println("  hz config recovery verify <environment>/<app>/<role>")
 	return nil
 }
 
@@ -587,7 +587,7 @@ func cmRecoveryBackfill(c *client, args []string) error {
 // nothing on hz, and prints no key material on any path — the answer is "yes"
 // or "no" and the identifiers involved.
 func cmRecoveryVerify(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm recovery verify", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config recovery verify", flag.ContinueOnError)
 	id := fs.String("id", "", "verify only this key id (default: every wrapped key at the address)")
 	pos, rest := splitCMPositional(args)
 	if err := fs.Parse(rest); err != nil {
@@ -597,7 +597,7 @@ func cmRecoveryVerify(c *client, args []string) error {
 		pos = fs.Arg(0)
 	}
 	if pos == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz cm recovery verify <environment>/<app>/<role> [--id KEYID] < recovery-key.txt")
+		return fmt.Errorf("usage: hz config recovery verify <environment>/<app>/<role> [--id KEYID] < recovery-key.txt")
 	}
 	addr, err := parseCMAddr(pos)
 	if err != nil {
@@ -688,14 +688,14 @@ func cmRecoveryVerify(c *client, args []string) error {
 			fmt.Printf("Nothing is stored for key %s at that address, or it is wrapped to somebody else.\n", *id)
 		}
 		fmt.Println("Either this is the wrong recovery key, or the wrap was never written:")
-		fmt.Println("  hz cm recovery ls          # which keys are covered, and by whom")
-		fmt.Println("  hz cm recovery backfill    # from the machine that holds the environment key")
+		fmt.Println("  hz config recovery ls          # which keys are covered, and by whom")
+		fmt.Println("  hz config recovery backfill    # from the machine that holds the environment key")
 		return errors.New("no wrap at that address is addressed to this key")
 	}
 	if failures > 0 {
 		fmt.Printf("NO. %d of %d wrap(s) addressed to this key did not verify.\n", failures, addressed)
 		fmt.Println("Do not treat this address as recoverable. Re-wrap it from the machine that holds")
-		fmt.Println("the environment key and verify again:  hz cm recovery backfill --replace")
+		fmt.Println("the environment key and verify again:  hz config recovery backfill --replace")
 		return fmt.Errorf("%d wrap(s) failed to verify", failures)
 	}
 	fmt.Printf("YES. This key opens %s: %d of %d wrap(s) addressed to it, all verified.\n", addr, opened, addressed)
@@ -706,7 +706,7 @@ func cmRecoveryVerify(c *client, args []string) error {
 	return nil
 }
 
-// --- shared with `hz cm key new` -------------------------------------------
+// --- shared with `hz config key new` -------------------------------------------
 
 // cmWrapToRecovery wraps a freshly minted key to every recovery recipient.
 //

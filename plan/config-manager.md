@@ -1,5 +1,11 @@
 # Config manager — registration, blessing, promotion
 
+> **The CLI noun is `hz config` (renamed from `hz cm`, 2026-09-22).** `cm` still
+> works as a deprecated alias and prints a notice on stderr. The rename is the
+> CLI, its help and these docs only: `/api/v1/cm/*`, the `cm_*` tables, the
+> `CM*` apitypes and the `configmgr` package are unchanged. Reasoning and the
+> alias decision: `plan/plan.md`, *Config manager* entry.
+
 > **Status: the ceremony completed on a real box, 2026-09-19.**
 >
 > Push → register → typed-fingerprint approval → key wrap → config decrypted on
@@ -265,7 +271,7 @@ edge**. `Environment.From` names the source and `PostureRank` orders the rungs, 
 hz answers whether a promotion runs along an edge somebody declared and whether it
 climbs. Two refusals with two remedies — a missing edge is not forcible (declare
 it), a wrong direction is (`--force`), because a disposable rung borrowing a
-posture is a real shape. `hz cm promote` is a **dry run by default**.
+posture is a real shape. `hz config promote` is a **dry run by default**.
 
 That example is redline's live state, not a hypothetical. Today the only thing
 that catches it is a hand-written boot check, firing after a deploy has shipped.
@@ -569,7 +575,7 @@ drifts. JSON also expresses less than Go, so push-time validation was
 permanently the weaker half for no reason but the plumbing.
 
 **Decided: `push` moves to the implementing application's own CLI.**
-`redline config push`, not `hz cm push`.
+`redline config push`, not `hz config push`.
 
 **And the library validates nothing at all** (owner, 2026-09-18). No value
 validators — a library shipping `NonEmpty` is guessing at semantics it cannot
@@ -599,7 +605,7 @@ The ceremony stays in `hz` deliberately: it is identical for every app, and the
 operator performing it is not the app's developer.
 
 **What this costs:** `configmgr` must export the push *logic* — schema, seal,
-bless — so an app wires it into its own CLI in a few lines. `hz cm push` and the
+bless — so an app wires it into its own CLI in a few lines. `hz config push` and the
 `--schema` JSON format go away. Cheaper now than after anything ships against
 that format.
 
@@ -1016,8 +1022,8 @@ re-enrolment —
 named an operator action that did not exist, so the config manager was one-shot
 per machine name while reprovisioning is its normal case.
 
-Now built: `GET/DELETE /api/v1/cm/machines[/{ref}]`, `hz cm machines`,
-`hz cm remove <machine>`. `ref` resolves name-first, because the name is what
+Now built: `GET/DELETE /api/v1/cm/machines[/{ref}]`, `hz config machines`,
+`hz config remove <machine>`. `ref` resolves name-first, because the name is what
 the refusal hands the operator. Removal cascades every registration and
 machine-scoped secret, because both are sealed to a keypair that is gone and
 keeping them would preserve rows that look live and open nothing. The audit
@@ -1034,12 +1040,12 @@ than undesigned: `RegisterMachine` returns `ErrMachineNameTaken`, there is **no
 UPDATE path for `public_key` anywhere in the package**, and re-registering
 under the name with a new key was refused with *"an operator must remove it
 before it can re-enrol"* — **an instruction to perform an act nothing
-implemented**. No `/api/v1/cm/machines` route, no `hz cm` subcommand. The
+implemented**. No `/api/v1/cm/machines` route, no `hz config` subcommand. The
 config manager was one-shot per machine name, and reprovisioning is its normal
 case.
 
 Closed by **removal, not re-keying**: `GET/DELETE /api/v1/cm/machines/{ref}`
-(+ `GET /api/v1/cm/machines`), driven by `hz cm machines` and `hz cm remove`.
+(+ `GET /api/v1/cm/machines`), driven by `hz config machines` and `hz config remove`.
 Re-keying in place was rejected deliberately — it is exactly the machine-identity
 takeover the register refusal exists to prevent, and it would still have had to
 clear every grant and secret, so it buys nothing but a surviving row id.
@@ -1049,7 +1055,7 @@ clear every grant and secret, so it buys nothing but a surviving row id.
 > registration's `wrapped_env_key` are sealed to the keypair that is gone, so
 > preserving them preserves nothing a new keypair can open; it preserves an
 > illusion of live rows. What was actually owed is that the destruction be
-> **loud**: `hz cm remove` prints every address and every secret key by name
+> **loud**: `hz config remove` prints every address and every secret key by name
 > before asking, hz refuses a `DELETE` whose `confirm=` does not repeat the
 > machine name, and the answer reports what it destroyed. `cm_secret_reads`
 > stays `ON DELETE SET NULL` — evidence outlives the thing it is evidence

@@ -251,8 +251,8 @@ type CurrentKeyPointer struct {
 // conform to, not the other way round.
 //
 // They exist because the names were spelled out as literals in three places and
-// three of them disagreed. `hz cm resolve` and `hz cm key current` sent
-// "environment=" where the handler read "env="; `hz cm promote` sent
+// three of them disagreed. `hz config resolve` and `hz config key current` sent
+// "environment=" where the handler read "env="; `hz config promote` sent
 // "configId"/"to" to /promote where the handler read "config"/"target" at
 // /promote/gate. All four were fixed by giving the CLI and the server shared
 // constants in internal/apitypes — and the fix could not reach THIS package,

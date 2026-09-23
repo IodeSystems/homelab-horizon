@@ -277,7 +277,7 @@ func TestPushSurfacesTheSealRefusal(t *testing.T) {
 	if !errors.Is(err, ErrRefuseToSeal) {
 		t.Fatalf("Push err = %v, want ErrRefuseToSeal", err)
 	}
-	for _, want := range []string{"hz cm key import", "hz cm key current", newer.ID().String()} {
+	for _, want := range []string{"hz config key import", "hz config key current", newer.ID().String()} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal should mention %q:\n%v", want, err)
 		}
@@ -297,7 +297,7 @@ func TestPushRefusesWhenNothingIsHeld(t *testing.T) {
 	if !errors.Is(err, ErrNoSuchKey) {
 		t.Fatalf("Push err = %v, want ErrNoSuchKey", err)
 	}
-	if !strings.Contains(err.Error(), "hz cm key new") {
+	if !strings.Contains(err.Error(), "hz config key new") {
 		t.Errorf("the refusal should say how to mint the first key: %v", err)
 	}
 	if len(h.posted) != 0 {

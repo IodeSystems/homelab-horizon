@@ -114,7 +114,7 @@ func TestKeyNewFailsLoudlyWhenCustodyCannotBeEstablished(t *testing.T) {
 	if err == nil {
 		t.Fatal("minting reported success with no wrap written")
 	}
-	for _, want := range []string{"was minted", "ONE place", "hz cm recovery backfill"} {
+	for _, want := range []string{"was minted", "ONE place", "hz config recovery backfill"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("the error does not say %q:\n%v", want, err)
 		}
@@ -141,7 +141,7 @@ func TestKeyNewWithNoRecipientsStillWorksAndSaysWhatIsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("minting must not require custody to be configured: %v", err)
 	}
-	if !strings.Contains(out, "exactly one place") || !strings.Contains(out, "hz cm recovery keygen") {
+	if !strings.Contains(out, "exactly one place") || !strings.Contains(out, "hz config recovery keygen") {
 		t.Fatalf("the no-custody state is not stated:\n%s", out)
 	}
 }
@@ -512,7 +512,7 @@ func TestRecoveryListSurfacesTheGap(t *testing.T) {
 	if !strings.Contains(out, "MISSING: successor") {
 		t.Fatalf("ls did not name the recipient with no wrap:\n%s", out)
 	}
-	if !strings.Contains(out, "hz cm recovery backfill") {
+	if !strings.Contains(out, "hz config recovery backfill") {
 		t.Fatalf("ls did not say how to close it:\n%s", out)
 	}
 	if strings.Contains(out, key.Text()) {
@@ -527,7 +527,7 @@ func TestRecoveryListWithNothingConfiguredExplainsTheRisk(t *testing.T) {
 			t.Fatalf("ls: %v", err)
 		}
 	})
-	for _, want := range []string{"No recovery recipients", "destroys the secrets rather than locking them", "hz cm recovery keygen"} {
+	for _, want := range []string{"No recovery recipients", "destroys the secrets rather than locking them", "hz config recovery keygen"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("the empty state does not say %q:\n%s", want, out)
 		}
@@ -572,7 +572,7 @@ func TestRecoveryAddSendsOnlyAPublicKey(t *testing.T) {
 	if !strings.Contains(out, configmgr.FingerprintOf(priv.PublicKey()).String()) {
 		t.Fatalf("add did not print the fingerprint it derived:\n%s", out)
 	}
-	if !strings.Contains(out, "hz cm recovery backfill") {
+	if !strings.Contains(out, "hz config recovery backfill") {
 		t.Fatalf("add did not say that existing keys are NOT covered:\n%s", out)
 	}
 	if s.sentAnywhere(configmgr.MarshalMachinePrivateKey(priv)) {

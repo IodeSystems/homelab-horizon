@@ -11,7 +11,7 @@ import { CMPromote } from "../components/CMPromote";
 //
 // Everything here is METADATA. hz holds no key, so there is no config value to
 // show and none of these tabs can show one: key names, bindings, ranges,
-// sequences, lineage and state. Decrypting anything is `hz cm show`, in the
+// sequences, lineage and state. Decrypting anything is `hz config show`, in the
 // CLI, which is where the keys live.
 //
 // Nothing on this page accepts a key, and nothing on it does crypto. The
@@ -30,7 +30,7 @@ function ConfigPage() {
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
         Registrations, blessed configs and promotion. Values are sealed and hz
-        cannot read them — use <code>hz cm</code> to decrypt or to approve.
+        cannot read them — use <code>hz config</code> to decrypt or to approve.
       </Typography>
 
       <Tabs

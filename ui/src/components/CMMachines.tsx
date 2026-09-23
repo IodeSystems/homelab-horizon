@@ -368,7 +368,7 @@ export function CMMachines() {
               Those boxes cannot open anything sealed under the current key, so
               their config pulls fail — a rotation is not finished until every
               approved registration at the address has been re-wrapped. There is
-              no re-wrap command today: <code>hz cm approve</code> acts only on a
+              no re-wrap command today: <code>hz config approve</code> acts only on a
               pending registration, so a rotation strands these until that
               exists.
             </Typography>
@@ -383,7 +383,7 @@ export function CMMachines() {
             <Typography variant="body2">
               Nothing has been compared at these addresses — this is not a
               statement that the boxes are up to date. Set the pointer with{" "}
-              <code>hz cm key current &lt;env&gt;/&lt;app&gt;/&lt;role&gt; --set
+              <code>hz config key current &lt;env&gt;/&lt;app&gt;/&lt;role&gt; --set
               &lt;keyid&gt;</code> and the column becomes meaningful.
             </Typography>
           </Alert>

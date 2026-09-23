@@ -412,7 +412,7 @@ never done is *execute* on a box it is not.
 
 1. Merge `wt/projects`.
 2. Back up environment keys to the password manager. Before anything depends
-   on them. **The tooling landed 2026-09-20** (`hz cm recovery`, see *Key
+   on them. **The tooling landed 2026-09-20** (`hz config recovery`, see *Key
    custody* below); what remains is running it on the real box —
    `keygen` → `add` → `backfill` → **`verify`**. Not done until `verify` says
    yes.
@@ -895,8 +895,8 @@ restore: recovery privkey → unwrap any environment key
 **Ordering is load-bearing: custody before deletion.** Phase 1 item 2 gates
 item 3.
 
-✅ **Shipped 2026-09-20** as `hz cm recovery` — `keygen` / `add` / `rm` / `ls` /
-`backfill` / `verify`, with `hz cm key new` wrapping to every recipient
+✅ **Shipped 2026-09-20** as `hz config recovery` — `keygen` / `add` / `rm` / `ls` /
+`backfill` / `verify`, with `hz config key new` wrapping to every recipient
 automatically and failing loudly if it cannot. Two things the design above did
 not settle, decided in the build:
 
@@ -911,7 +911,7 @@ not settle, decided in the build:
   `backfill` can reach exactly the keys in this machine's `~/.hz`. Gaps on keys
   held elsewhere are reported by `ls`, never guessed at.
 
-So item 2 is now a command rather than a hand-export: `hz cm recovery backfill`
+So item 2 is now a command rather than a hand-export: `hz config recovery backfill`
 then `verify`. Item 3 stays gated on `verify` having actually been run.
 
 ### Succession — a second recovery recipient (2026-09-20)
@@ -1217,12 +1217,12 @@ now. See plan/plan.md for which signals turned out usable.
 **Step 5 has both halves as of 2026-09-20.** Desired lives on
 `Environment.Version`; observed lives on every registration, which now carries
 the version, build string and report time its instance last sent, shown by
-`hz cm machines` with an age beside it. What is still owed is the *join* —
+`hz config machines` with an age beside it. What is still owed is the *join* —
 nothing yet renders desired against observed as one drift view. (An earlier
 draft of this paragraph said an environment had no declared version to drift
 from; that was written before the Environment record landed.)
 
-**Step 6 landed 2026-09-20** — the config half of it. `hz cm promote` copies the
+**Step 6 landed 2026-09-20** — the config half of it. `hz config promote` copies the
 invariants by client-side re-seal, carries the environment-bound keys the target
 has already answered, and BLANKS the ones it has not; refuses a promotion that is
 not upward by `PostureRank` unless forced; and errors by name when the target
