@@ -69,6 +69,28 @@ type Observed struct {
 	IPTablesReadable bool
 	IPTablesWhy      string
 	LiveRules        []iptables.Rule
+
+	// ConfigGenerations is the agent's own record of the sealed config it
+	// last restarted each unit for (generations.go).
+	//
+	// IT BELONGS HERE, and not somewhere the pure half has to reach for,
+	// because it is a thing the agent READ off the machine — exactly like the
+	// files and the live rule set beside it. Putting it in Observed is what
+	// keeps Compute's signature and the whole pure/privileged seam intact: the
+	// decision to restart is then a function of (payload, observed) like every
+	// other decision in plan.go, and nothing in the pure half opens a file.
+	//
+	// Nil is the FIRST-RUN state: no record, so every generation is adopted
+	// and nothing is restarted. It is not an error and must never be reported
+	// as one.
+	ConfigGenerations AppliedGenerations
+
+	// GenerationsErr is set when the record EXISTS and could not be read.
+	// Distinct from a nil map above for the same reason FileState.ReadErr is
+	// distinct from !Exists: "I cannot see it" and "there is nothing there"
+	// lead to different actions. An unreadable record produces a KindUnknown
+	// line, no restarts, and no write over the file that could not be read.
+	GenerationsErr string
 }
 
 // Observer reads the machine. The interface exists so Compute can be exercised
@@ -85,10 +107,26 @@ type SystemObserver struct {
 	euidFn func() int
 	// liveRules is seamed for tests; nil uses iptables.LiveRules.
 	liveRules func() ([]iptables.Rule, error)
+
+	// generations is the applied-generation record. Nil means this observer
+	// was given none, which is reported as unreadable rather than as empty —
+	// an agent that cannot keep a record cannot tell a moved generation from
+	// a first sighting, and must say so rather than adopt silently forever.
+	generations GenerationStore
 }
 
 // NewSystemObserver reads files and, when root, the live firewall.
 func NewSystemObserver() *SystemObserver { return &SystemObserver{} }
+
+// WithGenerations attaches the applied-generation record this agent keeps.
+//
+// Chained rather than a constructor argument so the three existing callers of
+// NewSystemObserver that have no record to offer — and the tests that assert
+// what an agent without one does — keep saying what they say today.
+func (o *SystemObserver) WithGenerations(g GenerationStore) *SystemObserver {
+	o.generations = g
+	return o
+}
 
 func (o *SystemObserver) euid() int {
 	if o.euidFn != nil {
@@ -119,6 +157,14 @@ func (o *SystemObserver) Observe(d *Desired) Observed {
 		}
 	}
 
+	// The applied-generation record is read only when hz actually projected a
+	// model for this machine. A payload with no Model carries no unit and no
+	// generation, so there is nothing to compare and no reason to complain
+	// about a record that is not needed.
+	if d.Model != nil {
+		obs.ConfigGenerations, obs.GenerationsErr = o.readGenerations()
+	}
+
 	if d.IPTables == nil {
 		return obs
 	}
@@ -138,6 +184,24 @@ func (o *SystemObserver) Observe(d *Desired) Observed {
 	obs.IPTablesReadable = true
 	obs.LiveRules = live
 	return obs
+}
+
+// readGenerations reads the agent's own record of what it last applied.
+//
+// A store that has never been written is not an error and must not be reported
+// as one: it is the first-run state, and the first-run answer is "adopt
+// everything, restart nothing". An absent store — an observer nobody gave one
+// to — IS reported, because an agent that cannot keep a record would otherwise
+// adopt silently on every pass and the trigger would never fire.
+func (o *SystemObserver) readGenerations() (AppliedGenerations, string) {
+	if o.generations == nil {
+		return nil, "this agent keeps no applied-generation record, so it cannot tell a moved sealed config from one it is seeing for the first time"
+	}
+	g, err := o.generations.Load()
+	if err != nil {
+		return nil, err.Error()
+	}
+	return g, ""
 }
 
 // readFile turns one path into a FileState.

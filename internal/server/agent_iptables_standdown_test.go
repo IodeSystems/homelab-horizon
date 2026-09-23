@@ -184,6 +184,7 @@ func (r standDownReloader) HAProxy(*agent.HAProxySection) error     { return nil
 func (r standDownReloader) DNSMasq(*agent.DNSMasqSection) error     { return nil }
 func (r standDownReloader) WireGuard(*agent.WireGuardSection) error { return nil }
 func (r standDownReloader) Units(*agent.FilesSection) error         { return nil }
+func (r standDownReloader) RestartUnit(string) error                { return nil }
 func (r standDownReloader) IPTables(*agent.IPTablesSection, []iptables.Rule) (iptables.Report, error) {
 	r.t.Fatal("Apply reconciled the firewall off a stood-down payload")
 	return iptables.Report{}, nil
@@ -200,7 +201,7 @@ func TestApplyDoesNotReconcileAStoodDownFirewall(t *testing.T) {
 		IPTables: iptablesSectionFor(rulesFor(cfg, "", "", fwd), iptables.StaleRules(cfg, nil, "10.100.0.1", "8080"), nil, "", cfg.LastLocalIface),
 	}
 	obs := agent.Observed{IPTablesReadable: true, LiveRules: live}
-	res, err := agent.Apply(d, agent.Compute(d, obs), obs, standDownReloader{t})
+	res, err := agent.Apply(d, agent.Compute(d, obs), obs, standDownReloader{t}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
