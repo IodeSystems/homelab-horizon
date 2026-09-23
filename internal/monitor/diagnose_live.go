@@ -103,6 +103,13 @@ func (m *Monitor) Diagnoses() []Diagnosis {
 	publicIP := cfg.EffectivePublicIP()
 	publicIPStale := cfg.IsPublicIPStale()
 
+	// Where hz sees itself on the LAN. Kept current by the 60-second iptables
+	// reconcile, which rewrites it whenever the default-route interface's
+	// address changes — so after the machine moves this is already the new
+	// address, which is precisely the one the router's forward should point
+	// at. Read here rather than in the classifier so Diagnose stays pure.
+	localAddress := cfg.LocalInterface
+
 	out := make([]Diagnosis, 0, len(targets))
 	for _, rp := range cfg.RemoteProbes {
 		if !rp.Enabled {
@@ -117,6 +124,7 @@ func (m *Monitor) Diagnoses() []Diagnosis {
 			Vantage:       rp.Name,
 			PublicIP:      publicIP,
 			PublicIPStale: publicIPStale,
+			LocalAddress:  localAddress,
 			Now:           now,
 			ReportEvery:   cadence,
 			StaleAfter:    cadence * pushStaleMultiple,
