@@ -303,7 +303,7 @@ Landed on `dev` 2026-09-20:
 | Key custody | **`hz config recovery`** — recipients in `config.json` (NOT `hz.db`, which rides no backup; see icebox), wrap reuses `configmgr.WrapEnvKey`, `backfill` for keys that already exist, and `verify` to prove a recovery key actually opens something. **`hz config key new` now fails if hz is unreachable** and custody cannot be established; the key is still minted and the error names `backfill` |
 | Machine removal | `hz config machines\|remove`, closing holes 11 and 14 |
 | Feed | `Project.Feed`, inherited whole down `Parent`, `hz feed ls\|show`, and now **`hz feed set`** — the writer it lacked |
-| Import | `hz import` proposes a tree for a gateway that has none. Dry run by default, `--execute` to write, `--merge` to add to an existing tree. `GET/POST /api/v1/import` |
+| Import | `hz import` proposes a tree for a gateway that has none. Dry run by default, `--execute` to write, `--merge` to add to an existing tree. `GET/POST /api/v1/import`. The proposal is a **starting point, not a verdict** — a flat estate hides its structure from every signal hz has — so `--plan-out FILE` writes it out as an editable plan and `--from FILE [--execute]` imports the corrected one, validated hard with the line named |
 
 #### `hz import` — what it will and will not infer
 
@@ -346,6 +346,53 @@ them. The proxy backend is the surviving analogue.
 *within* the struct does not matter: the validators run over the finished
 config. `TestImportOrderWithinTheSaveDoesNotMatter` pins that from the side
 `legacy_compat_test.go` does not.
+
+#### The plan file — the proposal is a starting point, not a verdict
+
+A dry run against a real **33-service** estate returned *33 assigned, 0
+unassigned, 2 projects* and was wrong. That estate is **flat** — every service
+sits at `<name>.<our-co>.<tld>` — so the domain suffix cannot tell one
+application from another and thirty services collapsed into one project. The
+environment grouping inherited the coarseness: one `dev` rung carrying three
+unrelated applications. Config promotion flows along an environment, so
+executing that would have been *actively wrong*, not merely coarse. (What the
+heuristic got right: the separate apex domain, and every posture word.)
+
+The fix is not a better heuristic. **The operator knows the structure; the
+config does not contain it.** So:
+
+```
+hz import --plan-out tree.json      # the proposal, as an editable file
+$EDITOR tree.json
+hz import --from tree.json          # dry run — validated, nothing written
+hz import --from tree.json --execute
+```
+
+Same pipeline: `ImportFile` → `ImportPlan` → `ApplyImport`. Only the *source*
+of the plan changes (`internal/config/import_file.go`).
+
+**What the file carries: the decisions, nothing else.** `projects`,
+`environments` (each owned by exactly one project), `assign` (service →
+project[/rung]), `unassigned` (plain list of names). It deliberately omits the
+**evidence strings**, the **signals** section and the **fingerprint** — evidence
+is hz's account of how *it* reached a row, and the moment the operator moves
+that row it is a lie sitting beside it. A regenerated `_readme` block carries
+the editing rules into the file; it is ignored on read.
+
+**Every service must appear exactly once**, in `assign` or in `unassigned`. An
+omission and a deliberate "leave this one alone" are otherwise the same file. It
+pays for itself twice: it is also the **drift guard** — a service added to or
+removed from the gateway since `--plan-out` is refused *by name*, which is
+strictly better than the fingerprint mismatch the proposal path reports.
+
+**The `iodesystems/dev` failure is inexpressible.** A rung is
+`{project, name, posture}` and a service's `environment` resolves against *its
+own* project, so an environment owned by one project and stood on by services in
+several is refused, listing every project, the services each contributed, and
+which of them declares no such rung
+(`ImportFile.validateRungOwnership`). Validated on both sides: the CLI holds the
+raw bytes so it names the **line** (`tree.json:12:`); the server re-validates
+because the API is a surface of its own.
 
 **Deploy gate, found while building Environments.** `Save()` now refuses a
 config where a service names both a project *and* an environment that is not
