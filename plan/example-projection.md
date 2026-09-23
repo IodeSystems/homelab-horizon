@@ -300,18 +300,19 @@ screens, so this is the honest state of it:
   "machine": "app-1",
   "serial": 0,
   "segments": [
-    { "name": "seg:storefront", "resolved": false }
+    { "name": "seg:storefront", "interface": "wg-storefront",
+      "address": "10.20.0.11", "peers": ["gw-1"], "resolved": true }
   ],
   "forwards": [],
-  "hosts":    [],
+  "hosts":    [ { "name": "gw-1", "address": "10.20.0.1" } ],
   "packages": [ { "name": "storefront", "version": "1.4.0", "hold": true },
                 { "name": "hz-agent",   "version": "0.5.1", "hold": true } ],
   "feeds":    [ { "from": "acme-co", "url": "<registry-host>/debian",
                   "suite": "noble", "component": "main", "key_id": "<fingerprint>" } ],
   "units":    [ { "name": "storefront@prod-web-app.service", "enabled": true } ],
   "unresolved": [
-    { "section": "segments", "why": "hz can name this machine's segments and not what they mean … (item 15)" },
-    { "section": "hosts",    "why": "an /etc/hosts entry is a peer's address on a segment, and no record holds one (item 15)" }
+    { "section": "segments", "why": "peer gw-1 has no public key, so hz can name and address it and cannot emit a [Peer] block for it — `hz-agent enroll` does not send one. `peers` is who this machine talks to, not a tunnel config" },
+    { "section": "hosts",    "why": "the ADDRESS is a record and the NAME is hz's best: nothing says what a machine answers to on a segment, so this is the peer's machine name" }
   ]
 }
 ```

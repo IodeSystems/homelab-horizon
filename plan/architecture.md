@@ -842,7 +842,19 @@ that changes hz's shape.
     interface (today's single `WGInterface`) and its peer/`AllowedIPs` set —
     then extend `ValidateMachines` from checking a segment name's SHAPE to
     checking its EXISTENCE, and give a machine a per-segment address and key.
-    Until then a membership is a declaration about a label.
+
+    **DONE 2026-09-23, except the key.** `config.Segment{Name, Project, CIDR,
+    Interface, Members}` landed with `hz segment ls|show|add|rm`,
+    `ValidateMachines` now checks existence (conditionally, so a config
+    declaring no segments is not retroactively invalid), and the projection
+    resolves a membership to its interface, address and derived peer set.
+
+    **A membership is no longer a declaration about a label — but it is still
+    not a tunnel.** Nothing populates `SegmentMember.PublicKey`: a box mints
+    its key at enrolment and `hz-agent enroll` does not send one. So hz can
+    name a peer and its address and **cannot emit a `[Peer]` block for it**,
+    and a `segments` gap says exactly that beside every resolved membership.
+    Rendering the WireGuard section, below, waits on that one field.
 
     **Item 14 now names, precisely, what item 15 must add for the WireGuard
     section to be RENDERED rather than read.** hz's WireGuard section is
