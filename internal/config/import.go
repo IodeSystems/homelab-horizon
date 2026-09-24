@@ -31,6 +31,11 @@ import (
 // ApplyImport writes — the Fingerprint is how a caller proves that between the
 // two.
 type ImportPlan struct {
+	// Machines to declare, each with the evidence for it. In practice this is
+	// the gateway and nothing else — see proposeSelfMachine. Omitted when empty
+	// so a plan that proposes none fingerprints exactly as it did before
+	// machines were proposable.
+	Machines []ImportMachine `json:"machines,omitempty"`
 	// Projects to declare, roots first, each with the evidence for it.
 	Projects []ImportProject `json:"projects"`
 	// Environments to declare. An environment belongs to a project, so this is
@@ -47,6 +52,20 @@ type ImportPlan struct {
 	// operator can tell "hz did not consider this" from "hz considered it and it
 	// said nothing here".
 	Signals []ImportSignal `json:"signals,omitempty"`
+}
+
+// ImportMachine is a machine to declare, and why.
+//
+// NAME ONLY. A Machine record also carries segment membership and the reason a
+// multi-homed box is multi-homed, and neither belongs in an import: a segment
+// name has to resolve to a Segment record (ValidateMachines, once any segment
+// is declared) and an import file cannot declare one. So an import proposes
+// that the box EXISTS; where it sits on the network stays `hz machine add
+// --segment` and `hz segment set`. A machine in no segment is legal and needs
+// no Note — the Note is required only of a bridge, and this proposes none.
+type ImportMachine struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
 }
 
 // ImportProject is a project to declare, and why.
@@ -225,7 +244,26 @@ type importSvc struct {
 //	NOT   internal_only      exposure is neither a project nor a posture: an
 //	                         internal-only admin tool is production.
 func (c *Config) ProposeImport() ImportPlan {
+	return c.ProposeImportFor("")
+}
+
+// ProposeImportFor is ProposeImport plus the one proposal that cannot be read
+// out of the config: the box hz is itself running on.
+//
+// `self` is an INPUT rather than something this package reads, and that is the
+// same line internal/server's localMachineName draws: a Machine record is a
+// DECLARATION about a box, never an identity claim by the process reading it.
+// A config that could name its own host would let a declaration rename the box
+// hz is actually configuring. So the kernel answers "which box am I", the
+// server passes that answer in, and this function stays the pure function of a
+// config that ImportPlan's doc comment promises.
+//
+// Empty `self` proposes no machine. That is the honest answer for a caller that
+// has no identity to offer — a CLI reading somebody else's config file, a test
+// — and it is why ProposeImport above is unchanged for every existing caller.
+func (c *Config) ProposeImportFor(self string) ImportPlan {
 	plan := ImportPlan{}
+	proposeSelfMachine(&plan, c, self)
 
 	svcs, common := importFacts(c.Services)
 	if len(svcs) == 0 {
@@ -304,8 +342,57 @@ func (c *Config) ProposeImport() ImportPlan {
 	sort.Slice(plan.Assignments, func(i, j int) bool { return plan.Assignments[i].Service < plan.Assignments[j].Service })
 	sort.Slice(plan.Unassigned, func(i, j int) bool { return plan.Unassigned[i].Service < plan.Unassigned[j].Service })
 
-	plan.Signals = unusedSignals(svcs, common, grouping)
+	// Appended, not assigned: proposeSelfMachine may already have recorded one.
+	plan.Signals = append(plan.Signals, unusedSignals(svcs, common, grouping)...)
 	return plan
+}
+
+// proposeSelfMachine proposes the box hz is running on as a machine.
+//
+// WHY AN IMPORT MAY PROPOSE THIS WHEN NOTHING ELSE MAY. Declare-then-enrol is
+// the trust direction the whole Machine record rests on: hz issues an agent
+// credential only for a machine an operator declared, so a box that could
+// declare itself could then ask for a credential. Nothing about that changes
+// here. What changes is who is asked about ONE box — the one hz is running on,
+// where the operator has no question to answer, because hz is already on it and
+// already serving from it.
+//
+// And it is a PROPOSAL, on the same terms as every other row in this plan: a
+// dry run is the default, --plan-out writes it into a file the operator edits,
+// deleting the row refuses it, and nothing is written without --execute. An
+// operator who does not want the gateway in the model never gets it.
+//
+// ALREADY DECLARED IS A SIGNAL, NOT A PROPOSAL. Proposing a machine hz holds a
+// record for would make a second `hz import` look like it had work to do, and
+// ApplyImport would skip it anyway. Saying so in Signals is the difference
+// between "hz looked and there was nothing to do" and "hz never looked".
+func proposeSelfMachine(plan *ImportPlan, c *Config, self string) {
+	self = strings.TrimSpace(self)
+	if self == "" {
+		return
+	}
+	if _, declared := c.FindMachine(self); declared {
+		plan.Signals = append(plan.Signals, ImportSignal{
+			Name:   "this gateway",
+			Detail: fmt.Sprintf("hz runs on %s and %s is already declared as a machine, so there is nothing to propose", self, self),
+		})
+		return
+	}
+	plan.Machines = append(plan.Machines, ImportMachine{
+		Name: self,
+		Reason: fmt.Sprintf("hz is running on %s and no machine record declares it. The gateway is machine #1, not a special case:"+
+			" until it is declared hz cannot project its own config, cannot be a segment member, and `hz machine ls` is empty on a box that is itself a machine", self),
+	})
+	// A service that fronts this box is STILL just a service. Said out loud
+	// because the proposal now names a machine and a hostname in the same plan,
+	// and the obvious next thought — "so which service is the gateway?" — has
+	// no answer in this model: nothing records that a service fronts a machine,
+	// and an import that invented one would be inventing a record type.
+	plan.Signals = append(plan.Signals, ImportSignal{
+		Name: "this gateway",
+		Detail: fmt.Sprintf("%s is proposed as a MACHINE. Any service that fronts it stays an ordinary service in the lists below —"+
+			" hz has no record joining a service to the machine it runs on, and an import will not invent one", self),
+	})
 }
 
 // importFacts reduces the services to the facts a proposal may rest on, and
@@ -656,10 +743,15 @@ func (c *Config) ApplyImport(p ImportPlan, merge bool) error {
 	// Fresh slices rather than in-place writes: a Config is copied shallowly in
 	// several places, so assigning through the existing backing array would
 	// mutate the config another goroutine is still serving.
+	machines := append([]Machine(nil), c.Machines...)
 	projects := append([]Project(nil), c.Projects...)
 	environments := append([]Environment(nil), c.Environments...)
 	services := append([]Service(nil), c.Services...)
 
+	haveMachine := map[string]bool{}
+	for _, existing := range machines {
+		haveMachine[existing.Name] = true
+	}
 	haveProject := map[string]bool{}
 	for _, existing := range projects {
 		haveProject[existing.Name] = true
@@ -673,6 +765,23 @@ func (c *Config) ApplyImport(p ImportPlan, merge bool) error {
 		byName[svc.Name] = i
 	}
 
+	// MACHINES ARE ADDITIVE AND MERGE-FREE. The merge gate above is about a
+	// PROJECT TREE — an import that silently reorganises one somebody built is
+	// the destructive case. A machine is a flat, independent record: adding one
+	// reorganises nothing, and a name already declared is skipped exactly as a
+	// project already declared is, so running an import twice is a no-op rather
+	// than AddMachine's "already exists" refusal surfacing as a failed import.
+	for _, want := range p.Machines {
+		name := strings.TrimSpace(want.Name)
+		if name == "" {
+			return fmt.Errorf("the plan declares a machine with no name")
+		}
+		if haveMachine[name] {
+			continue
+		}
+		haveMachine[name] = true
+		machines = append(machines, Machine{Name: name})
+	}
 	for _, want := range p.Projects {
 		if haveProject[want.Name] {
 			continue
@@ -700,11 +809,14 @@ func (c *Config) ApplyImport(p ImportPlan, merge bool) error {
 		services[i].Environment = want.Environment
 	}
 
-	c.Projects, c.Environments, c.Services = projects, environments, services
+	c.Machines, c.Projects, c.Environments, c.Services = machines, projects, environments, services
 
 	// Validated here as well as in Save, so a caller that holds the config in
 	// memory before writing it finds out now rather than after it has published
 	// a tree it cannot persist.
+	if err := c.ValidateMachines(); err != nil {
+		return err
+	}
 	if err := c.ValidateProjects(); err != nil {
 		return err
 	}
