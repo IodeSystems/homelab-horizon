@@ -70,6 +70,17 @@ type ImportFile struct {
 	// editing rules into the file, because the operator editing it at 2am is not
 	// the person who read the help text.
 	Readme []string `json:"_readme,omitempty"`
+	// Machines to declare. In practice the gateway, and refusing it is deleting
+	// the row. It is NOT the accounted-for-by-name list `unassigned` makes of
+	// services: a machine hz already declares is simply absent from a proposal,
+	// so a file that names none is a file proposing none rather than a file that
+	// forgot one.
+	//
+	// The section is optional on read, which is what keeps a plan file written
+	// before machines were proposable readable by this code: absent decodes to
+	// nil and proposes nothing. The version is unchanged for the same reason —
+	// there are real plan files on disk and a bump would refuse every one.
+	Machines []ImportFileMachine `json:"machines,omitempty"`
 	// Projects to declare. Order is irrelevant; a parent may appear after its
 	// child.
 	Projects []ImportFileProject `json:"projects"`
@@ -81,6 +92,12 @@ type ImportFile struct {
 	// project. A service with no project is legal and keeps working unchanged;
 	// saying so explicitly is how the file distinguishes that from an omission.
 	Unassigned []string `json:"unassigned"`
+}
+
+// ImportFileMachine declares a machine. Name only, for the reason ImportMachine
+// gives: an import proposes that a box exists, not where it sits on the network.
+type ImportFileMachine struct {
+	Name string `json:"name"`
 }
 
 // ImportFileProject declares a project. Parent is optional and names another
@@ -117,6 +134,9 @@ type ImportFilePlacement struct {
 var importFileReadme = []string{
 	"This is an hz import plan. Edit it, then: hz import --from <this file>",
 	"",
+	"  machines      boxes to declare. hz proposes the gateway it is running on and",
+	"                nothing else; delete the row to refuse it. Name only — segment",
+	"                membership is `hz machine add --segment` / `hz segment set`.",
 	"  projects      the tree. `parent` names another project in this file.",
 	"  environments  the rungs. Every rung belongs to exactly ONE project, and a",
 	"                service may only name a rung declared under its own project.",
@@ -142,10 +162,14 @@ func ImportFileFor(p ImportPlan) ImportFile {
 	f := ImportFile{
 		Version:      importFileVersion,
 		Readme:       append([]string(nil), importFileReadme...),
+		Machines:     make([]ImportFileMachine, 0, len(p.Machines)),
 		Projects:     make([]ImportFileProject, 0, len(p.Projects)),
 		Environments: make([]ImportFileEnvironment, 0, len(p.Environments)),
 		Assign:       make([]ImportFilePlacement, 0, len(p.Assignments)),
 		Unassigned:   make([]string, 0, len(p.Unassigned)),
+	}
+	for _, x := range p.Machines {
+		f.Machines = append(f.Machines, ImportFileMachine{Name: x.Name})
 	}
 	for _, x := range p.Projects {
 		f.Projects = append(f.Projects, ImportFileProject{Name: x.Name, Parent: x.Parent})
@@ -203,6 +227,7 @@ func (f ImportFile) Marshal() ([]byte, error) {
 		name string
 		rows []any
 	}{
+		{"machines", anyRows(f.Machines)},
 		{"projects", anyRows(f.Projects)},
 		{"environments", anyRows(f.Environments)},
 		{"assign", anyRows(f.Assign)},
@@ -371,6 +396,9 @@ func (f ImportFile) Validate() error {
 				f.Version, importFileVersion),
 		}
 	}
+	if err := f.validateMachines(); err != nil {
+		return err
+	}
 	projects, err := f.validateProjects()
 	if err != nil {
 		return err
@@ -383,6 +411,28 @@ func (f ImportFile) Validate() error {
 		return err
 	}
 	return f.validateRungOwnership(envs)
+}
+
+// validateMachines: named and unique within the file.
+//
+// That is the whole of it, and the two checks it does NOT do are the point. A
+// machine is not cross-referenced by anything else in the file — no service
+// names one, no project owns one — so there is no reference to resolve. And a
+// name this config already declares is not refused: ApplyImport skips it, which
+// is what makes running an import twice a no-op instead of a failure.
+func (f ImportFile) validateMachines() error {
+	seen := map[string]bool{}
+	for _, m := range f.Machines {
+		name := strings.TrimSpace(m.Name)
+		if name == "" {
+			return &ImportFileError{Token: "machines", Msg: "a machine in `machines` has no name"}
+		}
+		if seen[name] {
+			return &ImportFileError{Token: name, Msg: fmt.Sprintf("machine %q is declared twice in `machines`", name)}
+		}
+		seen[name] = true
+	}
+	return nil
 }
 
 // validateProjects: named, unique, and every parent declared here with no cycle.
@@ -758,10 +808,14 @@ func (c *Config) PlanFromImportFile(f ImportFile) (ImportPlan, error) {
 // unchecked.
 func (f ImportFile) plan() ImportPlan {
 	p := ImportPlan{
+		Machines:     make([]ImportMachine, 0, len(f.Machines)),
 		Projects:     make([]ImportProject, 0, len(f.Projects)),
 		Environments: make([]ImportEnvironment, 0, len(f.Environments)),
 		Assignments:  make([]ImportAssignment, 0, len(f.Assign)),
 		Unassigned:   make([]ImportUnassigned, 0, len(f.Unassigned)),
+	}
+	for _, x := range f.Machines {
+		p.Machines = append(p.Machines, ImportMachine{Name: x.Name})
 	}
 	for _, x := range f.Projects {
 		p.Projects = append(p.Projects, ImportProject{Name: x.Name, Parent: x.Parent})
