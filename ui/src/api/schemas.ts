@@ -93,6 +93,14 @@ export const ServiceSchema = z.object({
     )
     .optional(),
   name: z.string(),
+  // Which project (and rung) the service belongs to. Listed for the same
+  // reason as `dormant`: a zod object STRIPS what it does not name, so without
+  // these two lines the server's `project` never reached the client and every
+  // project-scoped screen selected nothing — an empty list that looks exactly
+  // like a project with no services. Both are optional on the record: naming no
+  // project at all is explicitly legal and permanent.
+  project: z.string().optional(),
+  environment: z.string().optional(),
   domains: z.array(z.string()),
   internalDNS: z.object({ ip: z.string() }).optional(),
   externalDNS: z
