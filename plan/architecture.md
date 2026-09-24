@@ -259,6 +259,15 @@ fix.
 
 ## Segments
 
+> **A segment's identity is under revision.** The operator's model is that a
+> **realm** (an addressing realm — LAN, VPN, site-b) *contains* segments, so
+> identity becomes `(realm, segment)` and `redline` can exist in both the LAN
+> realm and the VPN realm. What that does to every rule below — interface
+> uniqueness, CIDR overlap, the multi-homing note, IP ban scoping — and the
+> decisions it leaves open are worked out in
+> [network-zones.md](network-zones.md). This section still describes what hz
+> enforces today.
+
 A project's machines form a network segment. `code` has machines, `redline` has
 machines, and those are different segments. This is what makes `Parent`
 load-bearing — today it records the tree and confers nothing, by deliberate
