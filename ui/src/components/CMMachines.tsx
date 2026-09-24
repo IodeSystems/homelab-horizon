@@ -255,7 +255,16 @@ function RegistrationRow({
   );
 }
 
-export function CMMachines() {
+/**
+ * `projects` scopes the list to the URL that opened it.
+ *
+ * Undefined means the whole gateway. A list keeps only registrations naming one
+ * of those projects — and because a MACHINE carries no project, a machine
+ * hosting instances in two projects appears on both screens with only its own
+ * rows each time. That is the model, not a rendering compromise: an environment
+ * never modifies a machine; it is a coordinate of an instance.
+ */
+export function CMMachines({ projects }: { projects?: string[] }) {
   // There is no "all states" listing: the endpoint defaults to pending and
   // accepts one state at a time. Three queries, merged here, so the counts
   // below describe the whole fleet rather than one filter's worth of it.
@@ -274,10 +283,10 @@ export function CMMachines() {
     });
   }, []);
 
-  const regs = useMemo(
-    () => [...(pending.data ?? []), ...(approved.data ?? []), ...(denied.data ?? [])],
-    [pending.data, approved.data, denied.data],
-  );
+  const regs = useMemo(() => {
+    const all = [...(pending.data ?? []), ...(approved.data ?? []), ...(denied.data ?? [])];
+    return projects ? all.filter((r) => projects.includes(r.project)) : all;
+  }, [pending.data, approved.data, denied.data, projects]);
 
   const addrs = useMemo(() => {
     const seen = new Map<string, Addr>();
@@ -335,9 +344,9 @@ export function CMMachines() {
 
   const counts = {
     all: regs.length,
-    pending: pending.data?.length ?? 0,
-    approved: approved.data?.length ?? 0,
-    denied: denied.data?.length ?? 0,
+    pending: regs.filter((r) => r.state === "pending").length,
+    approved: regs.filter((r) => r.state === "approved").length,
+    denied: regs.filter((r) => r.state === "denied").length,
   };
 
   return (
@@ -353,6 +362,13 @@ export function CMMachines() {
             Machines
           </Typography>
         </Box>
+        {projects ? (
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            Scoped to {projects.join(", ")}. A machine carries no project of its own, so a box
+            hosting instances in more than one project appears on each of those projects&apos;
+            screens, carrying only the rows that belong there.
+          </Typography>
+        ) : null}
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 680 }}>
           Every registration hz holds, grouped by machine. One machine has a
           registration per <code>(project, environment, app, role)</code> it asks

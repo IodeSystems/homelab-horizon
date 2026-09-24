@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { buildProjectIndex, type ProjectIndex } from "../components/model/projectRoutes.ts";
+import { LocationCell, PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
 import {
   Alert,
   Box,
@@ -35,6 +37,8 @@ import {
   useRemoveDomainSSL,
   useDNSDriftStatus,
   useClearDNSDrift,
+  useProjects,
+  useServices,
 } from "../api/hooks";
 import SyncButton from "../components/SyncButton";
 import type { DomainAnalysis, DNSDriftInfoResp } from "../api/types";
@@ -104,9 +108,14 @@ interface SnackState {
 
 function DomainRow({
   domain,
+  projectIndex,
+  project,
   onSnack,
 }: {
   domain: DomainAnalysis;
+  projectIndex: ProjectIndex;
+  /** The project of the service this domain belongs to, if hz lists one. */
+  project: string | undefined;
   onSnack: (message: string, severity: "success" | "error") => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -166,6 +175,13 @@ function DomainRow({
             </Typography>
           )}
         </TableCell>
+        {/* A domain has no record of its own: it is Service.Domains, so it is
+            scoped through the service that serves it. Uniqueness is
+            gateway-wide, which is why this flat list survives — a clash between
+            two projects is only ever visible here. */}
+        <TableCell>
+          <LocationCell index={projectIndex} project={project} />
+        </TableCell>
         <TableCell align="center">
           <StatusDot
             configured={domain.hasInternalDNS}
@@ -211,7 +227,7 @@ function DomainRow({
         </TableCell>
       </TableRow>
       <TableRow>
-        <TableCell sx={{ py: 0 }} colSpan={7}>
+        <TableCell sx={{ py: 0 }} colSpan={8}>
           <Collapse in={open} timeout="auto" unmountOnExit>
             <Box
               sx={{
@@ -433,7 +449,14 @@ function DriftBanner({ detail }: { detail: DNSDriftInfoResp }) {
 
 function DomainsPage() {
   const { data, isLoading, error } = useDomains();
+  const projects = useProjects();
+  const servicesQuery = useServices();
   const driftQuery = useDNSDriftStatus();
+  const projectIndex = buildProjectIndex(projects.data ?? []);
+  // serviceName → project. A domain whose service hz does not list falls
+  // through as unowned rather than silently borrowing somebody's project.
+  const projectOf = new Map<string, string | undefined>();
+  for (const svc of servicesQuery.data ?? []) projectOf.set(svc.name, svc.project);
   const addSSLMutation = useAddDomainSSL();
   const [addOpen, setAddOpen] = useState(false);
   const [addDomain, setAddDomain] = useState("");
@@ -578,6 +601,7 @@ function DomainsPage() {
                   <TableRow>
                     <TableCell sx={{ width: 40 }} />
                     <TableCell>Domain</TableCell>
+                    <TableCell>{PROJECT_COLUMN_LABEL}</TableCell>
                     <TableCell align="center">Int DNS</TableCell>
                     <TableCell align="center">Ext DNS</TableCell>
                     <TableCell align="center">Proxy</TableCell>
@@ -587,7 +611,13 @@ function DomainsPage() {
                 </TableHead>
                 <TableBody>
                   {domains.map((d) => (
-                    <DomainRow key={d.domain} domain={d} onSnack={showSnack} />
+                    <DomainRow
+                      key={d.domain}
+                      domain={d}
+                      projectIndex={projectIndex}
+                      project={projectOf.get(d.serviceName)}
+                      onSnack={showSnack}
+                    />
                   ))}
                 </TableBody>
               </Table>
@@ -601,7 +631,7 @@ function DomainsPage() {
           <Table>
             <TableBody>
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
                     No domains found.
                   </Typography>
