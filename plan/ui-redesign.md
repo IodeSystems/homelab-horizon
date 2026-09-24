@@ -74,6 +74,451 @@ origin named: the feed shows on the root project's panel as "inherited by
 — from acme-co, pinned and held". Inheritance is a fact about a value, not a
 shape of a menu.
 
+## Decision 1, amended 2026-09-24 — a project scopes a URL; it does not scope the navigation
+
+> Decision 1 above stays on the page. It is not deleted and it is not wrong in
+> full: one of its three reasons is measurably false, one is true but does not
+> support the conclusion it was used for, and one is true, fatal, and survives
+> intact. This amendment says which is which, and replaces the conclusion with
+> a narrower one that keeps everything reason 3 protects.
+>
+> **The change in one line:** routes shaped `/$project/…` for every record that
+> carries a `Project` field, flat routes for every record that does not.
+
+### What was asked for
+
+Routes shaped `/project.nested/route`; the flat sections nested under projects;
+a **location** column naming which subproject a row belongs to; and a
+mobile-first, index-then-select Projects screen. That is, near enough, the
+tree-first navigation Decision 1 argued against.
+
+### Reason 1 — true, and it never supported the conclusion
+
+> *"The tree is one level deep and seven nodes wide. In the example, `acme-co`
+> has six children and no grandchildren. A tree control whose every node is a
+> leaf is a list with extra indentation."*
+
+**Still true.** The live estate is `iodesystems` plus seven children —
+`redline`, `emuni`, `veliode`, `bringit`, `pb`, `iode`, `experimental` — and no
+grandchildren. Eight projects, matching the count recorded independently in
+[plan.md](plan.md) item 23 ("8 projects and 11 environments").
+
+But the sentence is an argument about a **tree control**, and it was used to
+settle a question about **URLs**. Those are different things. "A tree widget
+earns primary navigation only at a depth the model does not yet have" is
+correct and says nothing about whether `/redline/domains` should exist. A flat
+list of eight links is still a list of eight *links*, and a link needs a
+destination. Reason 1 rules out the left-column tree control as the nav; it
+does not rule out the project being in the path.
+
+`flattenTree` (`ui/src/components/model/model.ts:417`) already renders the tree
+as a depth-ordered flat list with a `depth` field rather than as a nested
+widget, which is reason 1 applied correctly — and it is entirely compatible
+with each row being a `<Link to="/$project">`.
+
+### Reason 2 — measurably false, and it was already wrong against its own source
+
+> *"Most projects have exactly one environment. Five of six. A tree-first nav
+> makes the operator drill project → environment → thing on every single
+> navigation, and four times out of five the middle step has one option. That
+> is a click tax paid on the common case to serve `storefront`."*
+
+**False on the live estate.** Eleven environments across five projects:
+
+| project | environments |
+|---|---|
+| `bringit` | dev, prod |
+| `iode` | dev, prod |
+| `pb` | dev, prod |
+| `redline` | staging, prod |
+| `veliode` | beta, staging, prod |
+| `iodesystems`, `emuni`, `experimental` | none |
+
+**Zero projects have exactly one environment.** Three have none. The "click tax
+on the common case" reason 2 feared does not exist: the middle step never has
+exactly one option, so it is never a step with no choice in it. Where it
+appears at all it is a real branch, and where it would be empty the project has
+no rung to drill into and the step does not appear.
+
+Reason 2 reasoned from the *example* estate in
+[example-projection.md](example-projection.md), not the real one — and it
+miscounted that too. The example's six children are `intern` (1 environment),
+`storefront` (3), `analytics` (2), `client-a`, `client-b`, `client-c` (1 each)
+— **four of six**, not five, and "four times out of five" is inconsistent with
+its own "five of six" in the same sentence. The source claim
+(`example-projection.md:84`, "Most projects have exactly one environment") is
+true of the example and was overstated in the quoting.
+
+This is the reason the amendment exists. Nothing else changed.
+
+### Reason 3 — true, verified, and it still kills a *pure* project-first navigation
+
+> *"A machine has no project, and the most important machine has two. … Under a
+> tree-first navigation there is no URL at which you see `gw-1`. You would see
+> half of it under `intern` and half under `storefront`, and its diff — the
+> single most valuable screen in the tool — would have no home at all."*
+
+**Verified in the record itself.** `config.Machine`
+(`internal/config/machine.go:42`) is `{Name, Segments, Note}` and nothing else,
+and the doc comment above it states the absence as the model's shape rather
+than an omission (`internal/config/machine.go:15`):
+
+> *"NO PROJECT AND NO ENVIRONMENT. plan/architecture.md, 'Instance, not machine,
+> carries the environment': an environment never modifies a machine; it is a
+> coordinate of an instance. … a Project field on a machine would be false for
+> that row the day it was added, and every screen built on it would inherit the
+> lie."*
+
+`TestAMachineCarriesNoProjectAndNoEnvironment` pins it. So `/machines`,
+`/machines/$machine` and `/drift` cannot move under `/$project/…` — there is no
+value to put in the parameter, and inventing one is exactly the lie the record
+comment refuses.
+
+Reason 3 is why this amendment is a **split** and not a move. It is the reason
+the answer is not "nest everything".
+
+### Reason 4 — never weighed: the screen is a desktop pattern
+
+Decision 1's answer was *"Projects gets a tree picker in a left column because
+that is where you are actually browsing the hierarchy"*, and the shipped screen
+is that: a `minWidth: 240` `Paper` (`ui/src/routes/projects.tsx:76`) in a
+`flexWrap` row (`ui/src/routes/projects.tsx:364`). At phone width the row wraps
+and the whole eight-row tree stacks **above** the detail panel, so reaching any
+content means scrolling past the entire picker, every time.
+
+The shell is not the problem — `AppLayout` already switches to a temporary
+`Drawer` below the `md` breakpoint (`ui/src/components/AppLayout.tsx:257`). The
+problem is the page, and Decision 1's own "no mobile-first rework" scope note
+(`ui-redesign.md`, *What this design does not propose*) is what let it through.
+Index-then-select is not a mobile concession here; it is the only layout that
+works at both widths, because it is a **route change** rather than a column.
+
+### The argument Decision 1 never engaged, and the strongest one for the proposal
+
+**One URL renders the same thing for everyone who can open it.**
+
+`/iodesystems/domains` and `/redline/domains` being *different URLs* is the
+point. A single `/domains` whose contents depend on a picker held in component
+state is the anti-pattern: it cannot be linked, shared, bookmarked, or put in a
+ticket, and two people looking at "the domains screen" are not looking at the
+same screen.
+
+This is not hypothetical. `/projects` holds its selection in
+`useState<string>("")` (`ui/src/routes/projects.tsx:304`) and falls back to the
+first project when the selected one disappears
+(`ui/src/routes/projects.tsx:338`). There is no URL for "the `redline`
+project". The screen already morphs, and the state is already unaddressable.
+
+The same principle answers *why the location column is necessary* rather than
+merely nice: if a row can appear under more than one URL, the row has to say
+where it actually lives, or the two URLs become indistinguishable to the reader
+and the shareable-link property is lost again one level down.
+
+### What carries a project — the classification, from the records
+
+The split is **what the record holds**, checked field by field rather than by
+intuition. A record with a `Project` field is project-scoped; one without is
+gateway-scoped.
+
+**Carries a `Project` field:**
+
+| record | where | note |
+|---|---|---|
+| `config.Project` | `internal/config/config.go:608` | the tree itself; `Parent` at :610 |
+| `config.Environment` | `internal/config/config.go:696` | `Project` at :697, required |
+| `config.Service` | `internal/config/config.go:1080` | `Project` at :1089, **optional** — unassigned is legal and permanent |
+| `config.Segment` | `internal/config/segment.go:63` | `Project` at :74, **required**, enforced at :242 and :448 |
+| `apitypes.CMRegistrationResp` | `internal/apitypes/types.go:2217` | `Project` at :2221 — the config address |
+| domains | `config.Service.Domains`, `internal/config/config.go:1091` | no record of its own; project-scoped **through its service** |
+
+**Carries none** — checked individually, each struct read end to end:
+
+| record | where |
+|---|---|
+| `config.Machine` | `internal/config/machine.go:42` (`{Name, Segments, Note}`) |
+| `config.HostDecl` | `internal/config/config.go:498` (`{Name, IP, Labels}`) |
+| `config.Zone` | `internal/config/config.go:956` — providers, credentials, records of its own |
+| `config.IPBan` | `internal/config/config.go:946`, collection at :457 |
+| `config.WGPeer` | `internal/config/config.go:575`, collection at :429 |
+| `config.ServiceCheck` | `internal/config/config.go:1322`, collection at :365 — `Target` is an IP or URL, not a service reference |
+| `config.RemoteProbe` | `internal/config/config.go:1335`, collection at :372 |
+| `config.PortRange` | `internal/config/ports.go:16` — a gateway-wide reserved-port denylist |
+| `config.Exporter` | `internal/config/config.go:514`, collection at :474 |
+| `config.Forward` | `internal/config/forwards.go:20` |
+| `config.Peer` (fleet) | `internal/config/config.go:584` — hz's own replicas |
+
+Searched with `grep -n "Project\s*string\s*\`json" internal/`, positive-
+controlled against `Name string \`json` in `machine.go` (which hits) before
+trusting the absences; and each struct above was then read in full rather than
+grepped, because a field named something other than `Project` would not have
+shown up.
+
+### All 21 routes, classified
+
+`ui/src/routes/`, every file. **4 project-scoped, 17 gateway-scoped, 0
+unresolved** — with three called out below as arguable and the reason each
+lands where it does.
+
+| # | route | side | new URL | why |
+|---|---|---|---|---|
+| 1 | `projects.tsx` | **project** | `/projects` (index) + `/$project` | the tree's own screen; becomes the index-then-select entry |
+| 2 | `services.tsx` | **project** | `/$project/services` + `/services` kept | `Service.Project` (`config.go:1089`) |
+| 3 | `domains.tsx` | **project** | `/$project/domains` + `/domains` kept | `Service.Domains` (`config.go:1091`) — scoped through the service |
+| 4 | `config.tsx` | **project** | `/$project/config` | `CMRegistrationResp.Project` (`types.go:2221`); the address is `<project>/<env>/<app>/<role>` |
+| 5 | `machines.index.tsx` | gateway | `/machines` | `Machine` has no project (`machine.go:15`) — reason 3 |
+| 6 | `machines.$machine.tsx` | gateway | `/machines/$machine` | same; the instance table inside it carries the projects |
+| 7 | `drift.tsx` | gateway | `/drift` | per machine, fed by `GET /api/v1/agent/observed` |
+| 8 | `hosts.tsx` | gateway | `/hosts` | `HostDecl` (`config.go:498`) — an address other records resolve through |
+| 9 | `dns.index.tsx` | gateway | `/dns` | `Zone` (`config.go:956`) — registrar credentials, not a project asset |
+| 10 | `dns.$zone.tsx` | gateway | `/dns/$zone` | same |
+| 11 | `vpn.tsx` | gateway | `/vpn` | `WGPeer` (`config.go:575`); members are laptops and phones, not machines |
+| 12 | `bans.tsx` | gateway | `/bans` | `IPBan` (`config.go:946`) — an edge fact |
+| 13 | `checks.tsx` | gateway | `/checks` | `ServiceCheck` (`config.go:1322`) + `RemoteProbe` (:1335); outside-in, no service reference |
+| 14 | `ports.tsx` | gateway | `/ports` | `PortRange` (`ports.go:16`) — one denylist for the box |
+| 15 | `observability.tsx` | gateway | `/observability` | `Exporter` (`config.go:514`); one Prometheus topology |
+| 16 | `settings.tsx` | gateway | `/settings` | `Config` scalars — `ListenAddr`, `WGInterface`, `VPNRange` (`config.go:122`, :143, :148) |
+| 17 | `account.tsx` | gateway | `/account` | everything about *you*, not about the estate |
+| 18 | `mfa.tsx` | gateway | `/mfa` | public chrome-free jail portal; outside the admin shell entirely |
+| 19 | `dashboard.tsx` | gateway | `/dashboard` | "is anything waiting on me" is a gateway question and deliberately crosses projects |
+| 20 | `index.tsx` | gateway | `/` | `<Navigate to="/dashboard" />`, four lines |
+| 21 | `__root.tsx` | gateway | — | the shell |
+
+**The three arguable ones, stated rather than assumed:**
+
+- **`checks`** is the closest call. A check *sounds* per-service, but
+  `ServiceCheck` holds `{Name, Type, Target, Interval, Enabled}`
+  (`config.go:1322`) and `Target` is an IP or a URL — there is no service
+  reference to follow to a project. It stays gateway. **If a check ever gains a
+  service reference it becomes project-scoped-through-its-service, exactly like
+  domains**, and that is the trigger to revisit.
+- **`observability`** has a `service`-mode exporter that expands one target per
+  service backend (`config.go:508`), so *some* of its targets are transitively
+  project-scoped. The `Exporter` record is not, and the scrape config is one
+  document for one Prometheus. Stays gateway.
+- **`vpn`** looks like it should follow `Segment` (which *is* project-scoped).
+  It does not today, and there is a live contradiction about it — see
+  *Contradictions found* below.
+
+**Records with no route yet.** `Environment` and `Segment` both carry a project
+and both render today *inside* `/projects` rather than at a URL. Under this
+split they get `/$project/environments/$env` and `/$project/segments`. They are
+not in the 21 because they are not routes yet; they are named so the build task
+does not have to re-derive the side they land on.
+
+### Decision A — the dotted path
+
+**Decided: yes, `/$project` carrying a dotted full path —
+`/iodesystems.redline/domains` — resolved by lookup, never by parsing.**
+
+*Mechanically supported.* One `$param` per variable-depth tree, not a segment
+per level, because a file route needs a fixed nesting depth and the tree does
+not have one. Dots survive a param intact:
+`@tanstack/router-core@1.171.25`'s `parseSegment` splits on `/` and nothing
+else (`dist/esm/new-process-route-tree.js:23`), and `extractParams` assigns the
+whole segment as the value (`:411`). The repo already relies on this: `/dns/$zone`
+(`ui/src/routes/dns.$zone.tsx:7`) carries FQDNs — `Zone.Name` is *"e.g.,
+example.com"* (`config.go:957`) — and it works.
+
+*Static routes are not at risk.* `isFrameMoreSpecific`
+(`new-process-route-tree.js:667`) compares static-segment count first and
+decisively, so `/settings` beats `/$project` for the path `/settings`. A
+root-level `$project` does **not** shadow the seventeen flat routes.
+**But** an unmatched path falls through to `/$project`: `/setings` renders the
+project screen with `project = "setings"`. That is not a 404 — it must render
+*"There is no project named `setings`"* with the project list, which is a
+better answer than the router's generic not-found anyway. The build task owns
+that component.
+
+*What breaks if a project name contains a dot.* `a.b.c` is ambiguous: project
+`c` under `b` under `a`, or project `b.c` under `a`. **Resolve by lookup, not
+by parse** — build the dotted path for every project from `flattenTree`, and
+exact-match the parameter against that map. Project names are unique across the
+config (`ValidateProjects`, `config.go:633`), so the map is unambiguous even
+when a name contains a dot, and a bare-name fallback (`/redline/domains`) is
+one extra map. Parsing on `.` is the thing that breaks; matching against the
+known set does not.
+
+*Does `ValidateProjects` prevent a dotted name?* **No.** Read in full at
+`internal/config/config.go:630`: it checks name non-empty (:633), unique
+(:636), parent exists (:645), no cycle (:651), and that a service's named
+project exists (:659). **There is no character check at all.** `AddProject`
+(`internal/config/declare.go:72`) only `TrimSpace`s and rejects a duplicate.
+`grep -n "MustCompile\|MatchString\|ContainsAny" internal/config/*.go` finds
+exactly one name charset check in the package and it is on a DNS record
+(`config.go:2016`, `strings.ContainsAny(r.Name, " \t/")`) — positive control
+that the search reaches this kind of code, so the absence on project names is
+real. `hz project add "a.b"` is accepted today.
+
+*The guard, and why it goes where it goes.* Add a name check to **`AddProject`
+only** — reject `.`, `/`, whitespace, and any name equal to a top-level static
+route (`settings`, `machines`, `dns`, …, which would otherwise be unreachable).
+Do **not** add it to `ValidateProjects`: that runs on every `Save`
+(`declare.go:485`), so a rule there would refuse a config that loads today,
+over a record the operator never touched. Legacy dotted names keep working
+through the lookup map. **This is a behaviour change on a write path and the
+operator owns whether it lands** — see *Not decided* below.
+
+### Decision B — own rows, or own plus descendants?
+
+**Decided: own plus descendants, with a Location column. This is the crux and
+it is the reason the column exists.**
+
+Own-only makes `/iodesystems` nearly useless: it is the parent of everything,
+it owns nine services directly while the gateway serves thirty-three
+([plan.md](plan.md) item 23), and a root whose page shows a quarter of the
+estate and hides the rest is a page nobody opens twice. Worse, it would hide
+precisely the rows that matter at the root: a cross-project segment membership
+reads as a *crossing* only when you can see both sides (`segment.go:71`).
+
+The tree already means "my subtree" for at least one value. `Feed` cascades —
+`Project.Feed` is a pointer specifically so that nil means *"this project says
+nothing, ask my parent"* (`config.go:612`), and `ProjectResp` ships both the
+resolved value and its origin (`ResolvedFeed` + `FeedFrom`,
+`internal/apitypes/types.go:185`). Descendants are already in scope for
+inheritance; making them in scope for listing is consistent, not novel.
+
+**What the Location column shows for a row that belongs to the project you are
+already looking at: its own project name, rendered plainly.** Not blank, not a
+dash, not "(this project)".
+
+- Blank reads as *missing data*, which is the failure mode this whole document
+  is organised against.
+- A dash reads as *not applicable*, which is false — the row does have a
+  project.
+- "(this project)" is only legible if you know which project you are on, and
+  the row will be screenshotted, pasted into a ticket, and read by someone who
+  does not.
+
+This is Decision 1's own surviving principle applied one level out:
+*"Inheritance is a fact about a value, not a shape of a menu."* **Membership is
+a fact about a row, not a shape of a page.** `FeedFrom` names where a value came
+from; Location names where a row lives. Same move, same reason.
+
+*Implementation note, so the build task does not re-derive it.* `flattenTree`
+(`model.ts:417`) emits depth-first with a `depth` field and `children` holding
+direct children only (`model.ts:406`). Depth-first order means a node's
+descendants are the contiguous run of following rows with `depth` greater than
+its own — the closure needs no new endpoint and no recursion.
+
+*The scope toggle is a URL, not state.* "This project only / including N
+subprojects" is a filter on one screen, so it is a **search param**
+(`?scope=own`), not `useState`. A toggle held in component state would
+reintroduce the exact morphing-URL problem this amendment is built to remove,
+one level down, on the screen that exists to demonstrate the fix.
+
+### Decision C — mobile
+
+**Decided: index-then-select, as routes. The same two routes at both widths;
+only the chrome differs.**
+
+- **Phone (below `md`, the breakpoint `AppLayout.tsx:257` already uses):**
+  `/projects` is a full-width list of the eight projects and nothing else — no
+  detail panel, no picker column. Tapping a row navigates to `/$project`.
+  Hardware Back returns to the list, because it is a real navigation.
+- **Desktop:** `/projects` is the *same* list screen. `/$project` renders the
+  project, and the tree appears as a persistent left column **inside the
+  project layout** (`$project.tsx`), where it is a jump list between siblings
+  rather than the thing holding the selection. Clicking it navigates; it never
+  sets state.
+
+The important property is that this is one behaviour, not two: the tree column
+is a desktop *affordance on the project page*, and removing it at phone width
+removes an accelerator, never the only path. Decision 1's tree-in-a-left-column
+survives — it just stops being where the selection lives.
+
+**The project switcher lives on the page, in the project header — not in the
+nav.** Two reasons:
+
+1. The nav is job-shaped and gateway-wide. Seventeen of twenty-one routes are
+   gateway-scoped; a project switcher sitting in the nav would imply the other
+   entries follow it, and they do not. A control that changes nothing on
+   fifteen of the screens it is visible on is a support ticket.
+2. On a phone the nav is behind a hamburger (`AppLayout.tsx:301`). A switcher
+   there is invisible and two taps deep, on the one screen size where the
+   switch matters most.
+
+### Decision D — `/projects`, `/services`, `/domains` as they exist today
+
+**All three survive. None redirects. `/config` redirects and is kept as a
+redirect.**
+
+- **`/projects` survives** as the tree's own screen and the mobile index. What
+  goes is `useState<string>("")` (`projects.tsx:304`) and the first-project
+  fallback (`:338`): selecting navigates to `/$project`.
+- **`/services` survives as the all-projects view, at `/services`.** A flat
+  "every service on this gateway" list is still the right answer to real
+  questions — what is publicly served, what a certificate renewal touches — and
+  it is the **only** screen where an unassigned service can appear at all. A
+  service may name no project, permanently (`config.go:1087`;
+  `ValidateProjects` skips it, `config.go:660`), so a project-scoped view
+  structurally cannot render that row. Deleting `/services` would delete the
+  home of a legal state.
+- **`/domains` survives, at `/domains`**, for that reason and one more: domain
+  uniqueness is gateway-wide — two projects cannot both serve `x.com` — so the
+  conflict is only visible on the flat list.
+- Both gain a **Project** column (they have none today: `grep -ic project` over
+  `services.tsx` and `domains.tsx` returns **0** for each, against controls of
+  66 and 40 for `Service`/`Domain` — the two most obviously project-scoped
+  screens are completely project-blind) and each row links to
+  `/$project/services`.
+- **`/config` redirects to `/projects`** once `/$project/config` exists. Its
+  five-tab shell was *"an enclosure for a feature with nowhere to live"*
+  (below, *Goes*); the contents are per-`(project, environment, app, role)` and
+  belong on the project. The redirect is **kept rather than deleted** so
+  existing bookmarks land somewhere true.
+
+### Contradictions found while checking this
+
+Three, all pre-existing, none created by this amendment. Recorded because the
+next person will hit them.
+
+1. **`Segment.Project` is required in code; `example-projection.md` §2 says
+   `seg:people` has none.** The field comment says *"Required — a segment owned
+   by nobody is a network nobody is responsible for"* (`segment.go:74`) and it
+   is enforced twice (`segment.go:242` in `ValidateSegments`, `:448` in
+   `AddSegment`). `example-projection.md:114` shows `seg:people` with
+   `NO PROJECT` and builds an argument on it. **Both cannot be true.** This
+   decides nothing here — `/vpn` is gateway-scoped either way, since `WGPeer`
+   carries no project — but it blocks the "`seg:people` is a row in the Network
+   table" plan below, and it should be settled before that lands.
+2. **The nav is fifteen entries, not eleven.** *The problem, stated once* (top
+   of this file) says *"eleven flat entries"*; `navItems`
+   (`ui/src/components/AppLayout.tsx:52`) now holds fifteen — Drift, Projects,
+   Machines and Hosts were added after that paragraph was written. The argument
+   is unaffected and gets stronger.
+3. **Decision 1's "five of six" is wrong against its own source**, which is
+   four of six, and inconsistent with the "four times out of five" in the same
+   sentence. Noted above.
+
+### Not decided here — the build task's judgement, deliberately
+
+Named so the build task knows where it is expected to choose rather than
+follow.
+
+- **Whether the `AddProject` name guard lands at all.** It is a behaviour
+  change on a write path (it would refuse a name that is legal today), so it is
+  the operator's call, not the build's. The lookup-map resolution works without
+  it; the guard only stops *new* unreachable names.
+- **The route file layout.** Whether `$project.tsx` exists as a layout route.
+  If it does it **must render an `<Outlet/>`** or every child silently shows
+  the parent instead — TanStack nests by filename prefix, and every route in
+  this app currently parents to root (`ui/src/routeTree.gen.ts:113`–`:131`),
+  so the repo has no precedent either way. `code_.$code.tsx`-style non-nesting
+  is the escape hatch if the layout is not wanted.
+- **Whether the location column is a column or a chip**, and whether it renders
+  on the flat `/services` and `/domains` views as well. The *content* is
+  decided (the project's own name, always rendered); the widget is not.
+- **What `/$project` shows for a project with no environments.** Three of eight
+  are in that state. This document's existing rule — *"a ladder with one rung
+  must not render as a ladder with two empty ones"* — points at the answer but
+  does not cover zero rungs.
+- **Whether `/iodesystems` gets a different default scope from a leaf project.**
+  The root is the only node with descendants today; `?scope=` defaults may
+  reasonably differ for it.
+- **Anything about visual identity, the palette, or Decisions 2 and 3.**
+  Untouched. The freshness pattern, the ranking rule and the machine/instance
+  lensing are orthogonal to where a URL puts a project.
+
 ## Decision 2 — machines and instances are one surface, two lenses
 
 Not two top-level surfaces, and not one merged table.
