@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -141,6 +142,18 @@ func (f *agentFlags) generations() agent.GenerationStore {
 		return nil
 	}
 	return agent.FileGenerationStore{Path: f.statePath}
+}
+
+// segmentKeys is where this box keeps its per-segment WireGuard private keys.
+//
+// DERIVED FROM THE CREDENTIAL PATH rather than given its own flag, and that is
+// the point: these files live under the same root-only directory as the agent
+// credential, which is the directory whose permissions are already asserted and
+// already reasoned about. A separate --keys-dir would be a second place to get
+// wrong, and an operator who moved one and not the other would have a box whose
+// secrets are half in a directory nobody audits.
+func (f *agentFlags) segmentKeys() agent.SegmentKeyStore {
+	return agent.SegmentKeyStore{Dir: filepath.Join(filepath.Dir(f.tokenFile), "keys")}
 }
 
 // observer reads the machine, including this agent's own record of what it

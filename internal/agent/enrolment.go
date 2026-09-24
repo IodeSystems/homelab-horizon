@@ -74,6 +74,86 @@ type EnrollRequest struct {
 	// Rotate mints a new secret even when CurrentHash still matches, retiring
 	// the old one in the same write.
 	Rotate bool `json:"rotate,omitempty"`
+
+	// SegmentKeys is this box's WireGuard PUBLIC key for each segment it is a
+	// member of. It rides on enrolment rather than on a channel of its own, and
+	// that is the whole trust argument: enrolment is ALREADY the authenticated
+	// act (an hz admin credential, supplied by the operator, at the box), so the
+	// key arrives with exactly the authority the credential hz issues in the
+	// same request arrives with. A separate "report my key" endpoint would be a
+	// SECOND trust model for the same fact, and configmgr's registration
+	// ceremony exists precisely because inventing one of those is a decision.
+	//
+	// PER SEGMENT, never per machine. A machine in two segments has two
+	// interfaces and two key pairs, and one machine-level key would hand an
+	// attacker who took wg-code the tunnel to wg-redline — the isolation the
+	// whole segment model exists for (architecture.md, "Segments").
+	//
+	// THE PUBLIC HALF ONLY. The private one is minted on the box, written 0600
+	// beside the agent credential and never transmitted; see
+	// segmentkey.go. There is no field here it could travel in, which is the
+	// only guarantee available, because a private key and a public key are the
+	// same 44 characters and nothing that inspects the bytes can tell.
+	SegmentKeys []SegmentKey `json:"segmentKeys,omitempty"`
+
+	// RotateKeys lets a reported key REPLACE a different one hz already holds.
+	//
+	// Off by default, because a box re-enrolling with a different key is either
+	// a rotation or an impostor and hz cannot tell from the request. Accepting
+	// it silently is a peer takeover: whoever gets their key recorded receives
+	// that machine's traffic. So the default assumption is IMPOSTOR — hz keeps
+	// what it has and reports a conflict — and a rotation is made to say so,
+	// which an operator does with `hz-agent enroll --rotate-keys` while standing
+	// at the box with an admin credential in hand.
+	RotateKeys bool `json:"rotateKeys,omitempty"`
+}
+
+// SegmentKey is one (segment, public key) pair reported by the box.
+//
+// Keyed by SEGMENT rather than by interface name even though the key is
+// per-interface, for one reason: the interface name is a property hz owns
+// (Segment.Interface) and the box does not learn it at enrolment. The two are
+// one-to-one — ValidateSegments refuses two segments on one interface — so
+// naming the segment names the interface, and it names it in the vocabulary
+// both ends already share.
+type SegmentKey struct {
+	Segment   string `json:"segment"`
+	PublicKey string `json:"publicKey"`
+}
+
+// The outcomes of reporting one key. They are distinct because an operator has
+// a different next step for each, and collapsing them into ok/failed would put
+// "hz already had this" and "hz thinks you are an impostor" in one bucket.
+const (
+	// SegmentKeyRecorded: hz wrote it. The member had no key, or had this one's
+	// predecessor and the request asked for a rotation.
+	SegmentKeyRecorded = "recorded"
+	// SegmentKeyUnchanged: hz already holds exactly this key. Nothing written.
+	SegmentKeyUnchanged = "unchanged"
+	// SegmentKeyConflict: hz holds a DIFFERENT key for this member and the
+	// request did not ask to rotate. Nothing written, and this is the state
+	// that must never be silent — it is a rotation somebody forgot to declare
+	// or a box claiming another's peering.
+	SegmentKeyConflict = "conflict"
+	// SegmentKeyUnaddressed: the machine is in the segment and has no address
+	// on it, so there is no member entry to attach a key to. Legal, and the
+	// state `hz machine add --segment` leaves.
+	SegmentKeyUnaddressed = "unaddressed"
+	// SegmentKeyUnknown: hz does not declare that segment, or does not have
+	// this machine in it. The box reported a key for something hz does not
+	// model.
+	SegmentKeyUnknown = "unknown"
+	// SegmentKeyInvalid: the reported string is not a WireGuard key.
+	SegmentKeyInvalid = "invalid"
+)
+
+// SegmentKeyResult is what hz did with one reported key, per segment.
+type SegmentKeyResult struct {
+	Segment string `json:"segment"`
+	Status  string `json:"status"`
+	// Detail is the sentence for a human, present when the status alone does
+	// not say what to do about it.
+	Detail string `json:"detail,omitempty"`
 }
 
 // EnrollResponse is hz's answer.
@@ -91,6 +171,30 @@ type EnrollResponse struct {
 	// Note is the multi-homed machine's declared reason, echoed for the same
 	// purpose: enrolling a bridge should say out loud that it is one.
 	Note string `json:"note,omitempty"`
+
+	// SegmentKeys is what hz did with each key the request reported, one entry
+	// per reported segment. Absent when none were reported.
+	//
+	// A CONFLICT DOES NOT FAIL THE REQUEST, deliberately. `hz-agent install`
+	// enrols every time and the credential half has to stay idempotent, so a
+	// refused key must not cost a box its credential. The refusal is carried
+	// here instead and the command turns it into a non-zero exit with the
+	// segment named — visible, actionable, and not a 500 anybody has to
+	// correlate with a log line.
+	SegmentKeys []SegmentKeyResult `json:"segmentKeys,omitempty"`
+}
+
+// Conflicts is every reported key hz refused to overwrite. A helper rather
+// than a loop at each call site because "did anything get refused" is the
+// question every caller asks and the one an ignored slice quietly answers no to.
+func (r *EnrollResponse) Conflicts() []SegmentKeyResult {
+	var out []SegmentKeyResult
+	for _, k := range r.SegmentKeys {
+		if k.Status == SegmentKeyConflict {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // ErrMachineNotDeclared is hz refusing to issue a credential for a machine it

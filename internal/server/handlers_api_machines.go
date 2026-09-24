@@ -2,12 +2,16 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/iodesystems/homelab-horizon/internal/agent"
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/wgkey"
 )
 
 // The Machine record's surface, and hz becoming the ISSUER of agent
@@ -157,6 +161,13 @@ func (s *Server) handleAPIMachineRm(w http.ResponseWriter, r *http.Request) {
 // SHA-256 (CredentialStore.Enroll). An already-enrolled box that asks again
 // gets an acknowledgement and no secret: the agent sends the HASH of what it
 // holds, so re-running enrolment never puts a working credential on the wire.
+//
+// IT ALSO CARRIES THE BOX'S SEGMENT KEYS NOW, which is what closes the
+// projection's "cannot emit a `[Peer]` block" gap. The keys are the PUBLIC
+// halves, one per segment, minted on the box; recordSegmentKeys below is where
+// they land and where the rotation-versus-impostor question is answered. They
+// ride on this request rather than on one of their own because this request is
+// already the authenticated act — see that function's comment.
 // POST /api/v1/agent/enroll
 func (s *Server) handleAPIAgentEnroll(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {
@@ -185,6 +196,22 @@ func (s *Server) handleAPIAgentEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// THE KEYS FIRST, then the credential. A key that cannot be recorded (a
+	// config hz cannot save) must not cost the box a minted credential nobody
+	// received — the mint is the expensive, once-only half, so everything that
+	// can fail cheaply fails before it.
+	keyResults, keyedCfg, err := s.recordSegmentKeys(m.Name, req.SegmentKeys, req.RotateKeys)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if keyedCfg != nil {
+		if err := s.updateConfig(func(cfg *config.Config) { *cfg = *keyedCfg }); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "recording this machine's segment keys: "+err.Error())
+			return
+		}
+	}
+
 	store := s.agentCredentials()
 
 	// Already holding the credential hz has? Say so and write nothing. This is
@@ -195,6 +222,7 @@ func (s *Server) handleAPIAgentEnroll(w http.ResponseWriter, r *http.Request) {
 		if existing, ok := store.Find(req.Machine); ok && existing.Hash == req.CurrentHash {
 			writeJSON(w, agent.EnrollResponse{
 				Machine: m.Name, AlreadyEnrolled: true, Segments: m.Segments, Note: m.Note,
+				SegmentKeys: keyResults,
 			})
 			return
 		}
@@ -215,7 +243,117 @@ func (s *Server) handleAPIAgentEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, agent.EnrollResponse{
 		Machine: m.Name, Secret: secret, Segments: m.Segments, Note: m.Note,
+		SegmentKeys: keyResults,
 	})
+}
+
+// recordSegmentKeys writes the public keys a box reported onto its
+// SegmentMember entries, and says per segment what it did.
+//
+// WHY THIS IS TRUSTED ON SIGHT, AND WHY THAT IS NOT TRUST-ON-FIRST-USE.
+// Enrolment is already an authenticated act of authority: handleAPIAgentEnroll
+// is isAdmin-gated, the credential is supplied by an operator standing at the
+// box and is never stored there, and the whole point of item 13 is that a
+// machine cannot write itself into hz. A key arriving on that request carries
+// exactly the authority the credential hz issues in the same request carries.
+// configmgr's registration ceremony (fingerprints, an approval queue) exists
+// because an agent registers ITSELF there, unauthenticated, and somebody has to
+// vouch for it; here somebody already has. Adding a second approval step would
+// be a second trust model for one fact, which is the thing that makes a
+// security model impossible to reason about.
+//
+// WHAT IS NOT TRUSTED: A CHANGE. A box re-enrolling with a DIFFERENT key for a
+// segment it is already keyed on is either a rotation or an impostor, and
+// nothing in the request distinguishes them. Accepting it silently is a peer
+// takeover — whoever last reported a key receives that machine's traffic. So hz
+// assumes IMPOSTOR: it keeps what it holds, reports a conflict, and logs it at
+// WARN. A rotation is made to say so (`--rotate-keys`), which is a deliberate
+// act by the same operator who could enrol the box in the first place.
+//
+// The returned config is nil when nothing was written, so the caller can skip
+// the save entirely rather than rewriting the file to say what it already said.
+func (s *Server) recordSegmentKeys(machine string, reported []agent.SegmentKey, rotate bool) ([]agent.SegmentKeyResult, *config.Config, error) {
+	if len(reported) == 0 {
+		return nil, nil, nil
+	}
+
+	next := *s.cfg()
+	results := make([]agent.SegmentKeyResult, 0, len(reported))
+	wrote := false
+
+	for _, rep := range reported {
+		segment := strings.TrimSpace(rep.Segment)
+		key := strings.TrimSpace(rep.PublicKey)
+		result := agent.SegmentKeyResult{Segment: segment}
+
+		seg, declared := next.FindSegment(segment)
+		switch {
+		case segment == "":
+			continue
+		case !wgkey.Valid(key):
+			result.Status = agent.SegmentKeyInvalid
+			result.Detail = "that is not a WireGuard public key — hz stores only what `wg pubkey` prints"
+		case !declared:
+			result.Status = agent.SegmentKeyUnknown
+			result.Detail = "hz declares no segment by that name, so there is no membership to key"
+		default:
+			mem, addressed := seg.Member(machine)
+			switch {
+			case !addressed:
+				// LEGAL, and the state `hz machine add --segment` leaves. A key
+				// needs a member entry to attach to, and hz will not invent an
+				// address to make one.
+				result.Status = agent.SegmentKeyUnaddressed
+				result.Detail = "this machine is in " + segment + " with no address on it, so there is no member entry to hold a key. " +
+					"Address it: hz segment set " + segment + " --member machine=" + machine + ",address=<ip>"
+			case mem.PublicKey == key:
+				result.Status = agent.SegmentKeyUnchanged
+			case mem.PublicKey != "" && !rotate:
+				result.Status = agent.SegmentKeyConflict
+				result.Detail = "hz already holds a DIFFERENT key for " + machine + " on " + segment + " and kept it. " +
+					"A box presenting a new key is either a rotation or another box claiming this peering, and hz cannot tell. " +
+					"If it is a rotation, say so: hz-agent enroll --rotate-keys"
+				slog.Warn("enrol: refused a changed segment key",
+					"machine", machine, "segment", segment,
+					"held_prefix", keyPrefix(mem.PublicKey), "presented_prefix", keyPrefix(key))
+			default:
+				if _, err := next.SetSegment(segment, config.SegmentPatch{
+					Members: []config.SegmentMemberPatch{{Machine: machine, PublicKey: &key}},
+				}, false); err != nil {
+					// The validator refusing is a refusal about the estate, not
+					// about this key — a duplicate key on the segment, say. It
+					// is the operator's to resolve, so it fails the request
+					// rather than being folded into a per-segment status.
+					return nil, nil, fmt.Errorf("recording %s's key on %s: %w", machine, segment, err)
+				}
+				wrote = true
+				result.Status = agent.SegmentKeyRecorded
+				if mem.PublicKey != "" {
+					result.Detail = "replaced the key hz held, because the enrolment asked for a rotation"
+					slog.Warn("enrol: rotated a segment key",
+						"machine", machine, "segment", segment,
+						"was_prefix", keyPrefix(mem.PublicKey), "now_prefix", keyPrefix(key))
+				}
+			}
+		}
+		results = append(results, result)
+	}
+
+	if !wrote {
+		return results, nil, nil
+	}
+	return results, &next, nil
+}
+
+// keyPrefix is how a key appears in a log: enough to tell two apart, not enough
+// to be the key. It is a PUBLIC key, so this is legibility rather than secrecy —
+// a whole one per line makes the log unreadable and invites pasting it around as
+// though it meant something on its own.
+func keyPrefix(key string) string {
+	if len(key) <= 8 {
+		return key
+	}
+	return key[:8] + "…"
 }
 
 // machineResp renders one machine for the wire, joining hz's own credential
