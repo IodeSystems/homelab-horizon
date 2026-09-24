@@ -392,6 +392,31 @@ and `password_history` met by default. 10.5.1 is one button away. `8.2.8` idle
 timeout and `8.3.9` rotation are deliberate operator decisions, off until
 someone turns them on.
 
+### ◻ 194 doc paths in code comments are stale after this reorganisation
+
+**Owed by the 2026-09-24 plan reorganisation, and not done there** — that pass
+was docs-only. Go doc comments, SQL migrations, TS/TSX files and the Dockerfile
+name plan documents in prose. Measured 2026-09-24: **206 references across 110
+files**, of which 194 now point at a path that moved or a file that no longer
+exists. It is one mechanical `sed`, in this order:
+
+```
+plan/architecture.md        → plan/design/architecture.md        (71)
+plan/example-projection.md  → plan/design/example-projection.md  (45)
+plan/config-manager.md      → plan/design/config-manager.md      (30)
+plan/ui-redesign.md         → plan/design/ui.md                  (13)  § numbers unchanged, now Part 2
+plan/privilege-audit.md     → plan/design/privilege-audit.md     (12)
+plan/upstream-and-promotion.md → plan/design/estate.md            (8)  § numbers unchanged, now Part A
+plan/ha-and-the-agent.md    → plan/design/ha-and-the-agent.md     (7)
+plan/privilege-classification.md → DELETED                        (6)  its §5.2/§7/§8 are at the end of
+                                                                       plan/design/privilege-audit.md
+plan/prometheus-topology.md, plan/dns-records.md → DELETED        (2)  rescued into plan/done.md
+plan/plan.md, plan/icebox.md → unchanged                         (12)
+```
+
+The six `privilege-classification.md` citations and the two deleted-design ones
+need judgement, not a `sed` — they name section numbers in files that are gone.
+
 ### Operator follow-ups (not code)
 
 - **Point the LAN's DHCP DNS at hz (<gateway-lan-ip>)** — optional, still
