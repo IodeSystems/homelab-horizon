@@ -308,7 +308,7 @@ func TestAVersionBumpMovesTheProjectedGeneration(t *testing.T) {
 // remote one has.
 func TestTheGatewayGoesThroughTheProjectionToo(t *testing.T) {
 	s := projectionServer(t)
-	local := localMachineName()
+	local := LocalMachineName()
 	if err := s.cfg().AddMachine(config.Machine{Name: local, Segments: []string{"seg:storefront"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func TestTheGatewayGoesThroughTheProjectionToo(t *testing.T) {
 // started special-casing.
 func TestTheLocalExtrasAreAComposition(t *testing.T) {
 	s := projectionServer(t)
-	local := localMachineName()
+	local := LocalMachineName()
 	if err := s.cfg().AddMachine(config.Machine{Name: local, Segments: []string{"seg:storefront"}}); err != nil {
 		t.Fatal(err)
 	}
