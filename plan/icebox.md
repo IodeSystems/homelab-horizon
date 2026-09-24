@@ -14,7 +14,7 @@ How this plan works: see `/home/nthalk/CLAUDE.md` "Planning". These are queued, 
 
 Closed on `fix/peer-api-access`: an empty peer list now admits nobody. Full
 write-up, including what else that surface hands out and whether the cert
-channel should exist at all, in `plan/ha-and-the-agent.md` §9-§10.
+channel should exist at all, in `plan/design/ha-and-the-agent.md` §9-§10.
 
 ## ◻ Read-only access, if it is ever wanted
 
@@ -55,7 +55,7 @@ hands out non-conflicting listener ports.
 **Why it beats the alternatives.** No NAT, no third DNS view, and unlike
 renumbering it does not need physical access or a maintenance window. It also
 removes the need for the `/32` host routes recorded in
-[plan.md](plan.md#decision-remote-access-uses-host-routes-not-a-renumber-2026-09-10).
+[done.md](done.md#decision-remote-access-uses-host-routes-not-a-renumber-2026-09-10).
 
 **risks:** a TCP frontend is a hole with no Host header to route on, so each
 one is a port that reaches exactly one backend and needs `internal_only`
@@ -67,7 +67,7 @@ this is opt-in rather than pending.
 
 ## ◻ Replicated state for HA, instead of a JSON pull and a per-instance sqlite
 
-Surfaced 2026-09-18 while scoping the [config manager](config-manager.md), which
+Surfaced 2026-09-18 while scoping the [config manager](design/config-manager.md), which
 needs registration and approval state to survive a failover and found nothing to
 put it in.
 
@@ -263,7 +263,7 @@ it once by source-IP identity, the row is deleted. Driver was
 configure npm, maven, docker, go, apt and brew.
 
 **Retired, not shipped and not rejected.** The
-[config manager](config-manager.md) covers the need with better properties, as
+[config manager](design/config-manager.md) covers the need with better properties, as
 *machine-scoped secrets*: encrypted to the keypair the machine generates at
 registration, so hz holds ciphertext it cannot read, revocation is per-device,
 and the value survives a lost response instead of being gone. The reasoning,
@@ -331,9 +331,147 @@ an admin. Below that, this feature buys one less paste and costs a new hz
 feature, a plaintext token at rest in hz's database, and an interaction with
 the MFA jail.
 
-## ✅ Moved to active 2026-09-18 — hz-client becomes a library
+## ◻ hz-client becomes a library
 
-Scoped, then promoted the same day. See [plan.md](plan.md), item 10.
+**Back in the icebox 2026-09-24**, where it was between 2026-09-18 and today.
+Its own last line always said *"Not scheduled. Scoped so the size is known, not
+because it is next."* The version surface — step 1, and the only part that was
+ever urgent — **landed 2026-09-18** and is described below; the rest is
+excluded from this release.
+
+**Resume condition:** redline-ops wants to stop `curl`-ing a bash script, or a
+second non-bash consumer appears. Waits on nobody's capacity — it is a scope
+decision.
+
+**Driver:** redline-ops manages its own config by `curl`-ing `bin/hz-client`,
+`chmod +x`, and `fork/exec`. Now that [the config manager](design/config-manager.md)
+has shipped a working importable package, the same shape should cover the rest.
+
+#### What it is today
+
+632 lines of bash, copied **verbatim** into a Go raw string literal
+(`internal/server/hz_client_script.go`) with a test whose only job is noticing
+when the two copies drift. Served unauthenticated from `/admin/haproxy/hz-client`
+— fine, it holds no secret, though the handler's comment claiming
+`backupAuthMiddleware` guards it is stale and should not be believed.
+
+**There are no consumers in this repo.** It appears only as copy-paste text in
+`README.md` and the Service Integration dialog. The real consumer is redline-ops,
+in another repo — which means **this can be migrated incrementally**: redline
+adopts the library while the script keeps working, and the drift test keeps the
+script honest meanwhile. No big bang.
+
+**The business logic is already in Go, server-side.** `internal/sitedeploy` does
+tar extraction, path-traversal defence, size caps, atomic symlink swap and
+release pruning; `internal/haproxy` does the socket commands. The script is a
+thin HTTP-plus-orchestration wrapper. Porting is mostly wire calls, not logic.
+
+#### The evidence that this is not cosmetic
+
+`hz-client bans` has **never** printed a timestamp. The server marshals
+`createdAt`/`expiresAt` (`internal/apitypes/types.go:969-976`); the script reads
+`created_at`/`expires_at` (`bin/hz-client:529-530`). Every ban prints
+`created=-  expires=never`.
+
+That is a JSON contract drifting silently **inside one repository**, past a
+review, past a drift test that only compares the script to its own copy. It is
+the whole argument in one bug: a typed client would not have compiled.
+
+#### The blocking problem: there is no version surface at all
+
+Grepped the script and every relevant wire struct. **Zero version fields, zero
+`X-*-Version` headers, nothing negotiated.** A downloaded script always matches
+the server; a linked library is pinned at build time, and today it would have no
+signal that it had skewed.
+
+**This is the first slice, and it is worth landing whether or not the library
+happens** — the bans bug is what unnoticed drift looks like with the *current*
+model, and pinning consumers makes it worse rather than better. Shape: the
+server declares an API version and a minimum it still serves; the client sends
+what it was built against; a mismatch is a named error naming both numbers, not
+a 400 with a guess.
+
+#### Verb inventory
+
+**Trivial — a typed HTTP call, logic already server-side:** `status`,
+`current|next up|drain|down`, `swap`, `ban`, `unban`, `bans` (fix the casing bug
+while there), `maint-page set|clear`, `site rollback`, `site releases`.
+
+**Substantial — design, not translation:**
+
+- **`promote` and `rolling status|start|continue|finalize`.** The rolling *phase*
+  is inferred client-side from two polled state strings; **the server holds no
+  phase state at all**, so a library must reproduce that state machine exactly
+  rather than call something. And both poll for up to `--timeout` seconds while
+  printing lines a human watches — a library needs a progress callback, not
+  `fmt.Println`, which is an API decision.
+- **`site push`.** Needs in-process tar streaming (`archive/tar` +
+  `compress/gzip`, replacing a shell-out to `tar`) and a decision about the
+  can't-rewind-a-pipe behaviour the script deliberately relies on.
+
+**Do NOT port as-is:**
+
+- **The OTP preflight** is a no-op for the token type this tool actually uses. It
+  inspects `/api/v1/auth/status` for `otpRequired`, but that route only examines
+  a bearer token with the `hz_pat_` prefix — a service/deploy token never
+  matches, so it fires only when an operator misuses a personal token as
+  `HZ_TOKEN`. A real 401 from the real endpoint says the same thing.
+- **The http→https redirect trap** defends against curl dropping `Authorization`
+  across a scheme change. Go's client strips sensitive headers on a **host**
+  change, not a scheme change, so this must be **re-derived from Go's actual
+  redirect semantics**, not copied. Getting this wrong silently leaks a token or
+  silently 401s.
+
+#### What porting deletes
+
+The `python3` dependency (JSON build, parse and pretty-print in every verb), the
+shell-out to `tar`, the `HZ_TOP_PID`/`trap` workaround for `set -e` not crossing
+command substitution, and the drift test — because there stops being a second
+copy.
+
+#### The honest cost
+
+A downloaded script always matches the server. A linked library is pinned at
+build time, so an hz upgrade can break a consumer in a way the current model
+cannot. That is bought, not avoided, and the version surface above is what makes
+it survivable.
+
+**If the script survives for non-Go consumers it must be GENERATED** from the
+library's command surface, or the two copies come straight back — which is the
+failure this entry exists to end.
+
+#### Suggested cut
+
+1. **The version surface.** ✅ **Landed 2026-09-18** — `hzapi/`, a middleware on
+   `/api/`, and every client declaring itself: `configmgr`, `cmd/hz` and the bash
+   script. One integer, not semver, because the only question is "can these
+   talk" and semver invites an argument about whether a change is breaking —
+   decided optimistically, under deadline, by whoever wants to ship. One version
+   for the whole API, because the families ship from one binary.
+
+   A missing header is served and logged, because hz-client sent none and
+   refusing would have broken every consumer on the day this shipped; the log is
+   the evidence for eventually flipping `UnversionedOK`, so that becomes a
+   decision someone makes holding proof rather than a default that drifts into
+   place. A header present but unparseable is refused — that is a client bug,
+   not a legacy client.
+
+   A client NEWER than the server is refused too. Serving it and hoping is how a
+   consumer meets a missing field as a nil dereference in production instead of
+   a refusal on its first call.
+
+   **And the `bans` bug is fixed** — the thing that justified the work. It had
+   printed `created=- expires=never` for every ban for as long as the script has
+   existed.
+2. **The trivial verbs**, as a `deploy`/`site`/`ban` client package beside
+   `configmgr`. Lifting `internal/apitypes` is mechanical — nothing in it depends
+   on `internal`-only packages — but mirror rather than import, for the reason
+   `configmgr/types.go` records.
+3. **`site push`**, which is self-contained and removes the `tar` shell-out.
+4. **`promote` and `rolling` last**, because they are the only genuinely new
+   design and the ones most likely to want a second opinion on the progress API.
+
+**Not scheduled.** Scoped so the size is known, not because it is next.
 
 ## Found during the render/apply seam refactor (2026-09-20) — deliberately left
 
@@ -579,7 +717,7 @@ the recovery-recipient work that found it.
 
 ## ◻ Found while classifying privileged operations (2026-09-21)
 
-From `plan/privilege-classification.md`. None fixed there — that investigation
+From `plan/design/privilege-classification.md`. None fixed there — that investigation
 changed no code. Each names the section with the evidence.
 
 - **IP forwarding is never persisted.** Three places write
@@ -640,7 +778,10 @@ changed no code. Each names the section with the evidence.
 
 - **`POST /api/v1/wg/create-config` has no confirmation.** It mints a new
   WireGuard server keypair and rewrites `wg0.conf`, which invalidates every
-  client config ever handed out (`privilege-audit.md` §1.4 already records the
+  client config ever handed out — **because every issued client config pins
+  the OLD server public key**, which is the mechanism the audit citation for
+  this (`privilege-audit.md §1.4`) never actually contained; rescued here
+  2026-09-24 when `privilege-classification.md` was deleted (`privilege-audit.md` §1.4 already records the
   consequence). In `SystemHealthTab.tsx` it is a plain button. Whether or not it
   becomes a CLI verb, a control with that blast radius needs a modal naming the
   consequence. §3.1 #5.
@@ -650,7 +791,7 @@ changed no code. Each names the section with the evidence.
   root; dev mode)` whenever `Geteuid() != 0` — which is exactly the state item
   12 puts a production gateway into. §3.6.
 
-- **Two stale references in `plan/architecture.md`.** `User=root` is at
+- **Two stale references in `plan/design/architecture.md`.** `User=root` is at
   `internal/config/config.go:2809`, not `:2477`; and item 12's "four `Geteuid`
   gates" misses two more in `internal/server` (`static_supervisor.go:110`,
   `handlers_site.go:109`) which change branch at the flip rather than going
@@ -658,7 +799,7 @@ changed no code. Each names the section with the evidence.
 
 ## ◻ Found re-measuring the privilege audit on a VM (2026-09-22)
 
-From the re-run recorded in `plan/privilege-audit.md`. Docs-only pass, nothing
+From the re-run recorded in `plan/design/privilege-audit.md`. Docs-only pass, nothing
 fixed here. Each names the section with the evidence.
 
 - **A box enrolled before the issuer change cannot rotate its credential.**
@@ -783,7 +924,7 @@ Both predate `refactor/cm-to-config` and were carried through it verbatim (only
   `hz config push <env>/<app>/<role>`, and `ui/src/components/CMConfigs.tsx`
   names `hz config push` in prose. There is no `push` verb — `runCM`'s switch is
   `key | recovery | machines | pending | approve | deny | remove | promote |
-  show | resolve`. Pushing is deliberately not hz's: `plan/config-manager.md`
+  show | resolve`. Pushing is deliberately not hz's: `plan/design/config-manager.md`
   line 572 settles it as `redline config push`, i.e. the APP links `configmgr`
   and calls `configmgr.Push`. So the button hands an operator a command that
   cannot work, in a shape that looks authoritative because it is copyable.
@@ -794,3 +935,83 @@ Both predate `refactor/cm-to-config` and were carried through it verbatim (only
 The fix is to name the real command (the app's own `<app> config push`, and the
 Configs tab), which needs someone to decide what the button should say when the
 command is not hz's to give.
+
+
+---
+
+# Excluded from the next release (decided 2026-09-24)
+
+**The icebox IS what the release excludes.** Each entry below was an active row
+in plan.md and is now out, with the reason it is out and the condition that
+brings it back. The release itself is `plan.md`, "The release".
+
+## ◻ `Environment.Upstream` — a rung whose placements live in another hz
+
+**Why excluded:** Tier 3 — the estate as described, not the release. It is one field plus a projection branch, so it is not excluded for size; it is excluded because nothing consumes it until a second hz exists, and there is no second hz.
+
+**Resume condition:** a second hz instance is stood up, OR `redline/prod` reading as *broken* rather than *remote* costs someone an hour. Design: [design/estate.md](design/estate.md) Part A §5.
+
+> Was plan.md item 18, verbatim:
+>
+> ◻ not started. Until it exists `redline/prod` reads as *broken* rather than *remote*. One field plus a projection branch that emits a statement instead of a `Gap`
+
+## ◻ The registry crossing — packages mirrored, config proxied
+
+**Why excluded:** Tier 3, and it is the only item with a hard dependency chain — it needs item 15's tunnel AND item 13 steps 4–5. Two unbuilt things deep.
+
+**Resume condition:** the agent is armed (Tier 0) and a segment resolves to an actual tunnel. Design: [design/estate.md](design/estate.md) Part A, "What crosses, and how".
+
+> Was plan.md item 19, verbatim:
+>
+> ◻ not started; depends on 15 and on 13 steps 4–5
+
+## ◻ Segment records → an actual WireGuard tunnel
+
+**Why excluded:** the RECORD is in the release and landed — `config.Segment`, `hz segment ls|show|add|set|rm`, the projection resolving a membership, and enrolment reporting a per-segment key ([done.md](done.md#item-15--segment-records--what-a-machinesegments-name-resolves-to)). **The tunnel is not**, and it is Tier 3.
+
+**What is still owed**, precisely: `projection.Segment.Peers` is machine NAMES, so the projection must grow a peer struct (with `AllowedIPs` derived from CIDR + hub) before anything could write a wg config, and `agent.Desired` has no WireGuard section to apply one. Also open: the `/etc/hosts` NAME is hz's best guess (the peer's machine name) because **no record says what a machine answers to on a segment**.
+
+❓ **And a matching gap on the machine side:** there is no way to add a segment to an already-declared machine. `AddMachine` refuses a duplicate and there is no `hz machine set`, so `segment set --member` can only address machines declared with `--segment` up front.
+
+**Resume condition:** a second machine actually needs to reach the gateway over a project segment.
+
+## ◻ Realms — a segment lives in an addressing realm
+
+**Why excluded:** Tier 3, design only, and it carries **8 decisions that are the operator's** — including whether a segment may have no project, which is already a live contradiction in the tree (`Segment.Project` is required; `example-projection.md:114` says `seg:people` has none). A design with 8 open operator calls is not a release item.
+
+⚠ **It is a wire-format break when it lands:** `agent.SegmentKey{Segment, PublicKey}`'s own comment states the precondition realms void — unfixed it would silently write one realm's key into another realm's member.
+
+**Resume condition:** the operator answers §11's decisions. Design: [design/estate.md](design/estate.md) Part B (825 lines, unchanged).
+
+> Was plan.md item 25, verbatim:
+>
+> ◻ design only (`plan/design/estate.md`, 825 lines). Segment identity becomes `(realm, segment)`; **interface uniqueness stays GLOBAL** and is strengthened, not weakened — a box has one interface namespace however many realms it is in. Roaming is the **Endpoint**, not the address, evidenced by `config.WGPeer` carrying a tunnel address and no Endpoint field at all. ⚠ **`agent.SegmentKey{Segment, PublicKey}` is a wire-format break** whose own comment states the precondition realms void — unfixed it would silently write one realm's key into another realm's member. 8 decisions left to the operator, including whether a segment may have no project (`seg:people`)
+
+## ◻ Invites that can require a sign-in
+
+**Why excluded:** ◻ not started **and unwritten** — no section, no design, no measurement. It has never been more than a line in a table, and a line in a table is not a release item.
+
+**Resume condition:** someone writes down what it should do.
+
+> Was plan.md item 7, verbatim:
+>
+> ◻ not started, **and unwritten** — no section exists
+
+
+## ◻ The DNS record manager has never been verified end to end
+
+Rescued 2026-09-24 from `dns-records.md` before that file was deleted (the code
+carries the design; it does not carry this).
+
+All phases shipped and are unit-tested, but **no live DNS provider and no
+two-peer fleet existed in the environment it was built in**, so a real add-TXT
+round trip and a real drift round trip have never been driven.
+
+**Why excluded:** it is a verification, not a build, and it needs credentials
+and a second box. It waits on SYSTEMS, not on a decision.
+
+**Resume condition:** a zone with live provider credentials, and a second hz
+instance. **Watch on the first run:** the first publish seeds
+`LastPublishedRecords`, so a public-IP change reads as `driftPublish`, not
+`driftDrift` — confirm that on a real IP rotation, because the drift-halt scope
+is ALL DNS sync and a false `driftDrift` halts automated failover.

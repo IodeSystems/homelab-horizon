@@ -63,7 +63,7 @@ other material on that surface. Rotation is the remediation.
 
 **Follow-on, not done here:** whether the cert-distribution channel should
 exist at all. It is removable — investigation and cost in
-`plan/ha-and-the-agent.md` §10.
+`plan/design/ha-and-the-agent.md` §10.
 
 ## VPN MFA jail (2026-08-12)
 
@@ -1461,3 +1461,321 @@ now names the escape hatch rather than repeating "unknown token" forever.
   a second vantage on a different continent, now that standing one up is one
   command and needs nothing inbound.
 
+
+## `hz import` — the signals, and the plan file (2026-09-20)
+
+> Moved here from plan.md 2026-09-24. Import shipped; this is the record of
+> which signals were measured and why the proposal is a starting point.
+
+### `hz import` — what it will and will not infer
+
+The rule is **a wrong project assignment is worse than none**: a service on the
+wrong rung resolves the wrong config later and nothing looks wrong at the time.
+So there is no confidence score and no ranking — every proposed row carries the
+evidence it came from, printed beside it, and a service with no evidence is
+proposed as *unassigned*, which `ValidateProjects` already permits.
+
+Four signals were measured against real config shapes. Two are used:
+
+- **domain suffix** — the suffix one label below the one *every* domain shares.
+  A group needs **two** services: a suffix only one service sits under is that
+  service's own hostname. This is the signal that does nearly all the work, and
+  it produces nothing at all on the common single-domain gateway (one company
+  domain, a subdomain per service) — correctly, because there is no tree in
+  that config to find.
+- **identical backend** (`host:port`, byte-for-byte) — the same listening
+  process under two names (`git`/`registry` in example-projection.md §4). It
+  can only *join* a project the suffix already named; a backend address has no
+  project name in it. A cluster straddling two projects unassigns all of it.
+- **posture word** (`dev`/`test`/`stage`/`staging`/`beta`/`prod`) names an
+  ENVIRONMENT, never a project, and is matched as a whole token — `reproduction`
+  contains `prod` and means nothing of the kind. Unusable on a service with no
+  project, because a rung belongs to one.
+
+Two are reported as examined and rejected, with this config's numbers, because
+silence about a signal reads the same as not having looked:
+
+- **backend host** (port ignored) — a host is a machine and one machine hosts
+  several projects (`gw-1`). Co-location is not evidence.
+- **`internal_only`** — exposure is neither a project nor a posture; an
+  internal-only admin tool is production.
+
+`target_host`/`target_port` from the pre-projects JSON are **not fields on
+`config.Service` any more** — they are dropped on load, so nothing can key off
+them. The proxy backend is the surviving analogue.
+
+**Ordering.** Declarations and assignments go in one `Save`, and the order
+*within* the struct does not matter: the validators run over the finished
+config. `TestImportOrderWithinTheSaveDoesNotMatter` pins that from the side
+`legacy_compat_test.go` does not.
+
+### The plan file — the proposal is a starting point, not a verdict
+
+A dry run against a real **33-service** estate returned *33 assigned, 0
+unassigned, 2 projects* and was wrong. That estate is **flat** — every service
+sits at `<name>.<our-co>.<tld>` — so the domain suffix cannot tell one
+application from another and thirty services collapsed into one project. The
+environment grouping inherited the coarseness: one `dev` rung carrying three
+unrelated applications. Config promotion flows along an environment, so
+executing that would have been *actively wrong*, not merely coarse. (What the
+heuristic got right: the separate apex domain, and every posture word.)
+
+The fix is not a better heuristic. **The operator knows the structure; the
+config does not contain it.** So:
+
+```
+hz import --plan-out tree.json      # the proposal, as an editable file
+$EDITOR tree.json
+hz import --from tree.json          # dry run — validated, nothing written
+hz import --from tree.json --execute
+```
+
+Same pipeline: `ImportFile` → `ImportPlan` → `ApplyImport`. Only the *source*
+of the plan changes (`internal/config/import_file.go`).
+
+**What the file carries: the decisions, nothing else.** `projects`,
+`environments` (each owned by exactly one project), `assign` (service →
+project[/rung]), `unassigned` (plain list of names). It deliberately omits the
+**evidence strings**, the **signals** section and the **fingerprint** — evidence
+is hz's account of how *it* reached a row, and the moment the operator moves
+that row it is a lie sitting beside it. A regenerated `_readme` block carries
+the editing rules into the file; it is ignored on read.
+
+**Every service must appear exactly once**, in `assign` or in `unassigned`. An
+omission and a deliberate "leave this one alone" are otherwise the same file. It
+pays for itself twice: it is also the **drift guard** — a service added to or
+removed from the gateway since `--plan-out` is refused *by name*, which is
+strictly better than the fingerprint mismatch the proposal path reports.
+
+**The `iodesystems/dev` failure is inexpressible.** A rung is
+`{project, name, posture}` and a service's `environment` resolves against *its
+own* project, so an environment owned by one project and stood on by services in
+several is refused, listing every project, the services each contributed, and
+which of them declares no such rung
+(`ImportFile.validateRungOwnership`). Validated on both sides: the CLI holds the
+raw bytes so it names the **line** (`tree.json:12:`); the server re-validates
+because the API is a surface of its own.
+
+**Deploy gate, found while building Environments.** `Save()` now refuses a
+config where a service names both a project *and* an environment that is not
+declared. No deployed hz writes those fields yet, so no live config can hit it
+today — but check before the first deploy, and declare the `Environment`
+records before assigning services to them:
+
+```
+jq '.services[] | select(.project != null and .environment != null)' <config.json>
+```
+
+The order of operations is **declare the environment, then assign the service**,
+not the reverse.
+
+## Decision: remote access uses host routes, not a renumber (2026-09-10)
+
+The office LAN and a remote network were both `192.168.1.0/24`, so a
+`lan-access` peer got two routes for one prefix and its own won — the office
+unreachable, while hz's DNS kept resolving names to addresses on the remote
+side of the collision. Names worked, connections landed on whatever device
+held that address there.
+
+**Resolved by host-routing the specific office hosts** in the peer config,
+which wins on longest-prefix match over the client's own `/24`:
+
+```ini
+AllowedIPs = 10.100.0.0/24, <gateway-lan-ip>/32, <desktop-lan-ip>/32, <laptop-lan-ip>/32
+```
+
+**Carl, 2026-09-10: this is fine, not a stopgap.** hz's DNS works and the
+local network is shadowed at those addresses deliberately.
+
+What it costs, recorded so nobody "fixes" it later without knowing: any local
+device at a shadowed address is unreachable while the tunnel is up, and every
+host you want needs its own `/32`. `vpn-only` is not an alternative here —
+this deployment's internal DNS answers with real LAN hosts rather than the WG
+gateway, so routing only the VPN range reaches nothing.
+
+Two durable alternatives, both deferred rather than rejected:
+
+- **Renumber the office off `192.168.1.0/24`.** The only fix that scales to
+  every remote network, since that range is every consumer router's default.
+  Not doable remotely, and touches hz's address, `local_interface`, service
+  backends, DHCP reservations and `LastLanCIDR`.
+- **HAProxy `mode tcp` frontends on the VPN address** (see
+  [icebox](icebox.md)). Would collapse raw-IP LAN access into the gateway the
+  way HTTP services already are, removing the need for host routes *and* for
+  renumbering, with no NAT and no third DNS view.
+
+NETMAP was considered and dropped: it needs a VPN-specific DNS view on top of
+the two hz has, because `LocalDNSRecords` is one shared answer set for LAN and
+VPN both. Generating NAT rules under a DNS layer that keeps answering with
+unmapped addresses is drift you cannot see.
+
+---
+
+# Deleted designs — what was rescued before they went (2026-09-24)
+
+Four design documents were deleted because **the code carries them**: each was
+built, tested, and its reasoning now lives in Go doc comments and tests that
+cannot drift from the thing they describe. What follows is the part of each that
+the code did NOT carry. The files are in git history under their old paths.
+
+## `project-coordinate.md` — the config address became `<project>/<environment>/<app>/<role>`
+
+Implemented 2026-09-22, migration `0013`. The address type, the four-field AAD
+and the refusal are `configmgr/crypto.go:400-402`, the `0013` migration's
+`UNIQUE`/`PRIMARY KEY` on `(project, environment, app, role)`, and
+`configmgr/project_binding_test.go:38 TestCrossProjectReadIsRefused`. Four
+things the code cannot say:
+
+**The positive control, measured against the OLD binding before any code
+changed** — so the refusal is a change and not a tautology:
+
+```
+CONTROL: cross-project read SUCCEEDED, plaintext "acme's production password"
+CONTROL: cross-project unwrap SUCCEEDED, key id 2d65328724b33f88
+```
+
+**The freeze check.** Measured on the office gateway before the flag day:
+schema version 10, and `cm_machines`, `cm_registrations`, `cm_configs`,
+`cm_config_values`, `cm_current_keys` **all zero rows**. So `0013` destroyed no
+capability grant that ever existed — the claim is closed, not merely likely.
+
+**The generalisable lesson, which is the reason to keep any of this.** Three of
+the four places the design was wrong were the same shape: *a place where an
+address was assembled field by field rather than passed as a value, so adding a
+field to the struct left the assembly site silently short.* Nothing in the type
+system catches it — every field is a `string` and the zero value is legal — and
+three of the four were found by TESTS rather than by reading the inventory.
+**An audit that greps for the TYPE name finds them; one that greps for the field
+names does not.** The worst of them was `cmApprove`: it would have wrapped the
+environment key to a three-part address, hz would have relayed it, and the box
+would have refused to unwrap at boot with an authentication failure naming
+nothing — the whole typed-fingerprint ceremony spent on a blob that opens for
+nobody.
+
+**Three cheaper alternatives, rejected — recorded so they are not re-proposed:**
+
+- **(A) Keep three fields; require globally-unique environment names.** Costs the
+  estate its own naming (six `prod` rungs become `storefront-prod`, … — the
+  project coordinate spelled as a prefix inside one field, with no delimiter
+  anything can parse); contradicts the declared invariant that *every project
+  gets to have a prod*; and **does not fix the AAD, which is the actual defect** —
+  convention is not a binding.
+- **(B) Derive the project server-side; never put it on the wire.** Fatal:
+  **a field hz derived cannot be bound.** Binding only means something for fields
+  the opener knows INDEPENDENTLY of the party serving the blob (`configmgr/doc.go:176`).
+  A server-derived project is exactly `seq` — bind it and you have authenticated
+  hz's own opinion; don't and the substitution stays open. It also converts a
+  legible refusal into a silent stamp of the wrong project.
+- **(C) Do nothing.** Works on today's estate and fails only when a second
+  project reuses an app name — and the failure is a *gap*, not a wrong answer.
+  **The case for acting was never that it was broken**: the price was zero and
+  rises monotonically, and the next two steps on the path (key custody, redline
+  importing `configmgr`) are what turn a 200-line refactor into a coordinated
+  secrets migration.
+
+**Compatibility, decided:** an enrolled box sending a three-part address is
+**rejected with a 400 naming the missing field** — not accepted as project-less
+(that re-creates the defect and forecloses the PRIMARY KEY), not "refuse to
+start" (wrong blast radius: hz must not die because one box is old). A rejected
+box does not go down, it goes loud — `configmgr.Client` falls back to
+last-known-good cache. **No protocol version field**: the presence of `project`
+is a sufficient discriminator, and a version field would be a second source of
+truth about the same fact.
+
+## `dns-records.md` — the record manager
+
+All phases shipped (`internal/server/handlers_dns_records.go`, `classifyDrift`,
+`Config.LastPublishedRecords`/`DNSDriftBlocked`, the Records section on
+`domains.tsx`). Two rules and one open gap the code does not state:
+
+- **A DNS publish is SET-BASED, never single-shot.** Records are keyed by
+  `(name, type)`, and TXT at one name is a *set* — google-verify, SPF and DKIM
+  coexist. libdns `SetRecords` replaces the entire `(name,type)` RRset
+  (`libdns.go:161,185`) and `DeleteRecord` sends empty Data, which **matches ANY
+  value** (`libdns.go:205-210`). So a naive per-record add or delete wipes its
+  siblings. Always publish the whole set.
+- **Drift-halt scope is ALL DNS sync** (decided, option B), including service
+  A/AAAA. Consequence accepted at the time: an out-of-band edit to ANY managed
+  record halts the whole sync, automated failover included — which is why the
+  alert is loud and clearing drift is a one-click *accept live → adopt*.
+- ⚠ **Never verified end to end** — no live provider credentials and no fleet in
+  that environment. Needs a real drift round-trip and a two-peer HA test before
+  it is trusted on HA. Watch the first-run branch of `classifyDrift`: the first
+  publish seeds `LastPublished`, so a public-IP change reads as `driftPublish`,
+  not `driftDrift`. Filed as a resume condition in [icebox.md](icebox.md).
+
+## `prometheus-topology.md` + `metrics-writepath.md` — the scrape model
+
+Both shipped through `aa1445c` (exporter model with `mode: port|service|static`,
+scrape-token auth, multi-path probing, the served `setup.sh` + refresh timer,
+`ScrapeExclusions`, the Observability UI). Three things worth keeping:
+
+- **Host aliases were tried and reverted.** A machine reachable at both a VPN and
+  a LAN address was scraped twice. `HostDecl.Aliases` + canonical folding landed
+  (`31e7c57`) and was reverted (`a1e586b`) — identity-linking was more machinery
+  than the problem needed. What shipped instead is `Config.ScrapeExclusions`
+  (IPs/CIDRs never emitted as targets, still listed so the UI can un-exclude).
+- **`looksLikeExposition` had a false positive worth remembering.** It returned
+  true on the *first* matching sample line, so a catchall or status page carrying
+  one `word 123` line passed as a metrics endpoint. Now EVERY non-comment,
+  non-blank line must be a valid sample and the value uses a strict float grammar.
+- ⚠ **Operator action still owed** and carried forward to [plan.md](plan.md):
+  the Prometheus box was never re-wired to the token-gated endpoints. The old
+  unauthenticated `prometheus.yml` refresh script now 401s. Fix is
+  `GET /integration/prometheus/setup.sh` as admin → `sudo bash`.
+
+---
+
+# Landed on `dev`, not deployed — the record (moved from plan.md 2026-09-24)
+
+These were the long status cells of plan.md's active-work table. They are
+**completed work** and the house rule sends completed work here, but they are
+kept VERBATIM rather than summarised: each carries measured findings, the
+reasoning behind a hard call, and `file:line` evidence that exists nowhere
+else. plan.md's table now carries a one-line row and a link to each.
+
+⚠ Everything below is on **`dev`**. None of it has been deployed.
+
+## Item 11 — Projects · Environments · machine removal
+
+✅ on **`dev`**, not on main, nothing deployed
+
+## Item 12 — The observed-state channel — the agent reports back
+
+✅ store + serve on **`dev`**; ✅ the drift SCREEN at `/drift` ([ui.md](design/ui.md) Part 2) — one screen in the existing shell, NOT the nav redesign
+
+## Item 13 — Agent handover steps 1–3 — credential, WireGuard, certs + error pages
+
+✅ on **`dev`**, and the agent is still **INERT**; ◻ steps 4–5 (arm the unit, then de-root hz). Blocker 1 of [§8.3](design/privilege-audit.md) — the no-default-route stand-down, which would have had an armed agent reconcile the gateway's port forwards away — is ✅ done (`iptablesSectionFor`); blockers 2–7 are open
+
+## Item 14 — The project coordinate
+
+✅ **done** 2026-09-22. Flag day for every sealed value and every wrap; the freeze check found none to lose (gateway `hz.db` at schema 10, every `cm_*` table zero rows). Migration `0013`; the backwards resolution and `projection.ResolveEnvironment` are deleted; `configmgr.TestCrossProjectReadIsRefused` is the standing proof
+
+## Item 15 — Segment records — what a `Machine.Segments` name resolves to
+
+◐ **the record landed 2026-09-23** on **`dev`** (`feat/segment-records`): `config.Segment{Name, Project, CIDR, Interface, Members}` + `hz segment ls\|show\|add\|rm`, validated FIFTH on `Save()` (Projects, Environments, Feeds, Machines, Segments, RecoveryRecipients). `Peers` is DERIVED from hub/spoke, never stored (a stored peer set is a second answer free to disagree with the membership it is a view of); no private key is held, ever. `Hub` is what makes *a client of someone else's segment* expressible — item 19's crossing. ✅ **the projection resolves it** (`feat/segment-resolve`): interface, address and a DERIVED peer set, with UNADDRESSED (a record with no member entry) as its own legal third state rather than a failure. A hub with no spokes resolves to an empty peer set and ZERO gaps — the "empty is the answer" case. A peer reachable at two addresses is reported, never picked. ✅ **`hz segment set`** (`feat/segment-set`): `--member machine=X,address=…` is a PATCH (absent leaves alone, empty clears) so re-addressing keeps the key and endpoint; `--hub` is separate because a hub is single-valued and a re-hub rewires every derived peer set — printed before the write, since it shows nothing in a diff of the record. A CIDR that would strand members is refused and names each; `--cascade` UNADDRESSES them, never renumbers. ❓ **no way to add a segment to an already-declared machine** — `AddMachine` refuses a duplicate and there is no `hz machine set`, so `segment set --member` can only address machines declared with `--segment` up front. That is the matching gap on the machine side. ✅ **enrolment reports the key** (`feat/segment-key`): per SEGMENT (one machine key would defeat the isolation the model exists for), minted on the box in-process via `crypto/ecdh` X25519 checked against RFC 7748's vector, private half 0600 beside the agent credential and never sent. Trusted on sight because enrolment is ALREADY admin-gated — a second endpoint would be a second trust model for one fact. A re-enrolment with a DIFFERENT key assumes **impostor**: refused, `--rotate-keys` is the deliberate act, and a key conflict never costs the box its credential. The keyless-peer gap now clears end to end through the real handler. ◻ **still not a tunnel**: `projection.Segment.Peers` is machine NAMES, so the projection must grow a peer struct (with `AllowedIPs` derived from CIDR + hub) before anything could write a wg config, and `agent.Desired` has no WireGuard section to apply one. Also open: the `/etc/hosts` NAME is hz's best guess (the peer's machine name) because no record says what a machine answers to on a segment
+
+## Item 17 — The config generation — bless a config ⇒ the unit restarts
+
+◐ **hz's half is done** (build-order item 1, `feat/config-generation`): `projection.Unit.ConfigGeneration` is a sha256 over the resolved sealed values for the unit's address, supplied as ciphertext through `projection.Global` and digested in the pure projection; `SectionConfig` keeps "no config here" (empty, no gap) apart from "hz does not know" (empty + gap), so an empty generation is never a restart. Blessing moves the unit's generation AND the payload fingerprint, so no new change-detection was needed. ✅ **the agent's half landed too** (build-order item 2, `feat/config-restart`): first sighting ADOPTS and restarts nothing, the record is an observation at `/var/lib/hz-agent/generations.json`, and the restart is last in the pass. ⏸ **BOTH HALVES ARE INERT, twice over.** The agent is armed on zero boxes, so nothing acts until item 13 steps 4–5 — AND the live gateway's config manager is **completely empty** (measured 2026-09-23: all seven `cm_*` tables zero rows, read via python's sqlite3 because `sqlite3` is not installed on the box and a bare query silently returned nothing). With no config stored for any address, every `ConfigGeneration` is correctly empty WITH NO GAP — the "that is the answer" case, not the "hz does not know" case. So the loop is whole and waits on a config actually being blessed, which needs the ceremony run for real on the new binary. ✅ the 5s no-backoff retry is fixed (`5ca7611`) — apply-only hold, a new payload is never held
+
+## Item 20 — Screens for the model
+
+◐ **three landed 2026-09-23** on **`dev`** (`feat/model-screens`): `/projects`, `/machines`, `/machines/$machine` (the pure projection, `Unresolved` given equal weight), read-only, in the existing shell. **Ten of [example-projection.md](design/example-projection.md) §4's seventeen states are satisfied, two partly, five not** — and the five are blocked on the MODEL, not the UI: an instance has no port or entry point anywhere, `ProjectResp.Services` is names only, and nothing joins the agent's clock to the instance clock. `MachineProjectionResp` mirrors `projection.MachineConfig` and a **bidirectional** tag test fails the build when either side gains a field — it earned its keep on the merge, catching item 17's `ConfigGeneration` before it could render as empty forever
+
+## Item 21 — Host references — `@name` and `@self`
+
+✅ landed 2026-09-23 on **`dev`** (`feat/host-references`). Driver: the gateway moves to wireless and its own config held **47 occurrences of its address** (31 `internal_dns.ip`, 8 `proxy.backend`, 6 `deploy.next_backend`, `local_interface`, one `HostDecl`). Extends the indirection `Config.Hosts` already had for exporters instead of inventing a second. **The sigil is load-bearing**: `ProxyConfig.Backend` is only `net.SplitHostPort`-checked so it already accepts a DNS name, and resolving a bare `nas:8080` by "is there a HostDecl called nas" would make an existing config's meaning depend on a record added later. `@self` is HA-correct where a literal is not (`peer_sync` pins `LocalInterface` per-instance) and generalises the `localhost`→`LocalInterface` rewrite that was already a magic-string self-reference. Compatibility proven by a golden generated from a **detached worktree at `dev` before the change**, byte-identical at 5480 bytes. ⚠ `DeployConfig.NextBackend` had NO validator and now has one — it can reject a config that loads today. ✅ **`/hosts` screen** (`feat/host-screen`): every host with `@self` first, each dependant showing the AUTHORED value and what it resolves to now, guided address edit naming the consequence. It also fixed a violation it found — Observability sent `ValidateHostRemoval`'s refusal to a snackbar, which eats the lines naming all 31 dependants. ✅ **occurrences are scanned and adoptable** (`feat/host-adopt`): a literal address is found and listed in its OWN list beside references, never merged — a reference FOLLOWS the host, an occurrence does NOT and is exactly what breaks. `hz host adopt self` (dry run; `--confirm` to write) converts them, proven byte-identical against the golden the PRE-reference tree generated. **For the gateway move that is `hz host adopt self --confirm` once, then the address is one field on Settings, per instance.** ⚠ needs the new binary on the box first. It also fixed a live bug: `@self` in an exporter's port-mode `hosts[]` resolved to empty and the scrape target was SILENTLY DROPPED, while the same address written literally produced one
+
+## Item 22 — Edge diagnosis — a failed vantage check names the cause AND the device
+
+✅ landed 2026-09-23 on **`dev`** (`feat/probe-diagnosis`). `Result.Detail` was free prose; hz now classifies a target's whole result SET into a cause key plus prose naming the device, the `projection.Gap` shape applied to reachability. **The router case renders NO button** — the DMZ is on a device hz can neither read nor change, so an instruction is the entire deliverable. Two unknown keys, never `ok`: "nobody ever reported" and "reported then went quiet" have different next actions, and the row list is driven by the TARGET SET so an unprobed name gets a row instead of vanishing. The classifier lives in `internal/monitor`, which `cmd/hz-probe` does not link — the vantage structurally cannot call it. ◐ follow-up in flight: name hz's own address (`Config.LocalInterface`) in the router instruction instead of "the LAN address of the machine running hz"
+
+## Item 23 — hz declares its own machine
+
+✅ **landed 2026-09-24** (`feat/self-machine`) — `hz machine add --self`, and `hz import` proposes the gateway as an editable dry-run row. **The server resolves `--self`, never the CLI**: hz runs where the operator is and the gateway is where hz is, so a client resolving its own hostname would declare the operator's laptop. **The name pin is the point** — hz's `LocalMachineName` and the agent's `machineName` both call `os.Hostname` and already agreed, but nothing asserted it and nothing COULD, since Go cannot import a `main` package; exporting it makes the comparison possible, and the test asks both for their real answer then asserts it IS the kernel's, so agreeing on `"unknown"` also fails. ⚠ **that one test is the ONLY guard** — breaking the agreement reddens nothing else in the suite, because every other test derives both names from one function or hard-codes a literal. Was: The live gateway runs hz, hosts 33 services, 8 projects and 11 environments, and declares **0 machines** — so hz cannot project its own config (`Project(global, machineID)` has no machine to name), cannot be a segment member (the `@self` / item-15 / redline-prod-hz story), renders `/machines` empty on a box that IS a machine, and every segment gap it reports is vacuous rather than informative. **Nothing creates a machine**: `AddMachine` has exactly one caller (`handlers_api_machines.go:79`, the `hz machine add` API) — not deploy, not install, not enrol, not import. **Declare-then-enrol is CORRECT and stays**: enrolment refuses an undeclared machine on purpose, because a box that could declare itself could write itself into the model and then ask for a credential, inverting the trust direction the design rests on. The gateway is the one case where the operator has no reason to be asked — hz is running on it — so import should PROPOSE it (visible, editable, refusable) and `hz machine add --self` should exist, with declaration still a deliberate act. ❓ **nothing expresses "this service fronts that machine"** — `hz.office.iodesystems.com` sits in `unassigned` under a note saying that slot is for services fronting a machine, which is the model noticing the gap and not closing it
+
+## Item 24 — Project-scoped URLs — `/$project/…`
+
+◻ **doc only, 2026-09-24** (`doc/nav-amendment`) — no code touched. [ui.md](design/ui.md) Part 2's Decision 1 rejected project-first nav on three reasons; **reason 2 is measurably false** (it claimed "five of six projects have exactly one environment" — the live estate is 11 environments across 5 projects and **zero** have exactly one; three have none, and the example it reasoned from was 4 of 6, not 5). **Reason 3 survives and is fatal to a *pure* project-first nav**: `config.Machine` is `{Name, Segments, Note}` with no project, deliberately (`internal/config/machine.go:15`), so `gw-1` would have no URL. So the answer is a **split, not a move**, on what the RECORD carries: project-scoped `/$project/…` for `Project`/`Environment`/`Service`/`Segment`/CM-address (and domains, through their service); flat for `Machine`, `HostDecl`, `Zone`, `IPBan`, `WGPeer`, `ServiceCheck`, `PortRange`, `Exporter`. **All 21 routes classified — 4 project-scoped, 17 flat, 0 unresolved.** Four decisions made and argued: dotted `/$project` resolved by LOOKUP not parse (the router carries dots fine — `parseSegment` splits on `/` only — and static routes still win; but **`ValidateProjects` has no charset check at all**, so `hz project add "a.b"` is legal today); **own + descendants with a Location column** (the root owns 9 of 33 services, so own-only makes it useless) showing the row's own project name even on its own page; index-then-select at both widths with the switcher **on the page, not in the nav**; `/projects` `/services` `/domains` all SURVIVE as all-project views (an unassigned service is legal and permanent and has no other home). ⚠ found while checking: **`Segment.Project` is REQUIRED in code** (`internal/config/segment.go:74`, enforced :242/:448) while [example-projection.md](design/example-projection.md):114 asserts `seg:people` has none — settle before the "VPN becomes a segment row" plan lands. **next:** the build task (routes + the `$project` layout + the Location column). **blocking decision (yours):** whether an `AddProject` name guard lands — it would refuse a name that is legal today

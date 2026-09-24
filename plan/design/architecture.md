@@ -2,14 +2,14 @@
 
 > Design doc, not a work queue. The model, the boundaries, and the path from
 > what exists to what this describes. Active slices live in
-> [plan.md](plan.md); the config layer's own design is
+> [plan.md](../plan.md); the config layer's own design is
 > [config-manager.md](config-manager.md).
 >
 > Written 2026-09-20 from a design session. Every "today" claim below is
 > grounded in a file reference — check them before trusting them.
 >
 > **AMENDED 2026-09-23 by
-> [upstream-and-promotion.md](upstream-and-promotion.md).** This document
+> [estate.md](estate.md) Part A.** This document
 > assumes exactly ONE hz instance and never says so. The estate is two: a
 > registry/promotion plane and a light prod gateway that reaches up to it. That
 > amendment also carries the **config generation** — the missing link between
@@ -265,7 +265,7 @@ fix.
 > realm and the VPN realm. What that does to every rule below — interface
 > uniqueness, CIDR overlap, the multi-homing note, IP ban scoping — and the
 > decisions it leaves open are worked out in
-> [network-zones.md](network-zones.md). This section still describes what hz
+> [estate.md](estate.md) Part B. This section still describes what hz
 > enforces today.
 
 A project's machines form a network segment. `code` has machines, `redline` has
@@ -394,7 +394,7 @@ None of them is a packaging strategy.
 - Config manager — persistence, crypto, handlers, client library, CLI, UI
   (v0.4.0). Ran end-to-end once on `redline-virgin` 2026-09-19: registered,
   approved by typed fingerprint, key wrapped, config decrypted, absent
-  distinguished from empty. Recorded in [plan.md](plan.md) item 9.
+  distinguished from empty. Recorded in [plan.md](../plan.md) item 9.
   **redline's** copy of `plan/config-manager.md` still says "none of it has run
   against a real box or a live hz" — stale there, correct here.
 - redline: `.deb` → Gitea registry → `apt-get install`, proven over a tunnel.
@@ -459,7 +459,7 @@ never done is *execute* on a box it is not.
    a display: an agent poll is a heartbeat on a fixed cadence, an instance's
    `observed_at` refreshes at boot, and a healthy long-running instance has a
    fresh agent and an old version reading (`example-projection.md` §3). The
-   SCREEN is still unbuilt; `ui-redesign.md` designs it.
+   SCREEN is still unbuilt; `ui.md` Part 2 designs it.
 
 **Phase 3 — climb the rung.** Mostly not software.
 
@@ -548,7 +548,7 @@ that changes hz's shape.
     1. ✅ **Done 2026-09-21.** Give the agent a credential of its own. It did
        not merely hold too much authority — it held *none that worked*:
        `isAdmin` has no Bearer path, so the poll answered 401 on a real box
-       (`plan/privilege-audit.md` §1.1). Fixed with a per-machine secret
+       (`plan/design/privilege-audit.md` §1.1). Fixed with a per-machine secret
        (`hz-agent enroll` → `/etc/hz-agent/token`, 0600) whose SHA-256 hash hz
        keeps in `<config>.agents`, checked by `Server.agentCaller` on one
        route. `isAdmin` was deliberately NOT widened: a Bearer branch there
@@ -684,7 +684,7 @@ that changes hz's shape.
        rather than inside it): hz-agent and HA peer-sync are now mutually
        exclusive on one machine, and hz REFUSES TO SERVE DESIRED STATE to a
        machine in a fleet — `internal/server/agent_fleet_guard.go`, decided in
-       `plan/ha-and-the-agent.md` §6 option B and §7. Refusing at hz needs no
+       `plan/design/ha-and-the-agent.md` §6 option B and §7. Refusing at hz needs no
        cooperation from the agent, so it is already correct for the agent this
        step arms. Checked at boot, in `applyNewConfig` before the config swap
        (fleet topology is per-instance and never comes off the wire), and on
@@ -995,7 +995,7 @@ Why it is worth the step at all: redline moves real donations for real
 organisations. If the operator is unavailable, someone has to be able to keep
 it running or wind it down without the secrets being unrecoverable.
 
-Together these two close the risk [plan.md](plan.md) names as *"the key has no
+Together these two close the risk [plan.md](../plan.md) names as *"the key has no
 escrow and no recovery path, which is the failure most likely to actually
 happen."*
 
