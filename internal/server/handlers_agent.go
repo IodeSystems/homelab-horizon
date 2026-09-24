@@ -153,7 +153,7 @@ func (s *Server) canProjectFor(machine string) bool {
 	if _, declared := s.cfg().FindMachine(machine); declared {
 		return true
 	}
-	return machine == localMachineName()
+	return machine == LocalMachineName()
 }
 
 // noProjectionFor is what hz says to an agent it cannot serve.
@@ -173,7 +173,7 @@ func (s *Server) noProjectionFor(machine string) string {
 		" hz has nothing to project for a machine it has not been told about."
 }
 
-// localMachineName is hz's answer to "which box am I", and it is the KERNEL's
+// LocalMachineName is hz's answer to "which box am I", and it is the KERNEL's
 // answer, deliberately, now that a Machine record exists.
 //
 // A Machine record is a DECLARATION about a box; it is not an identity claim
@@ -181,7 +181,15 @@ func (s *Server) noProjectionFor(machine string) string {
 // declaration rename the box hz is actually configuring — and after item 14
 // that would be worse, not better, because it would make the box hz can open
 // files on and the box hz thinks it is two different machines.
-func localMachineName() string {
+//
+// EXPORTED so the agent's own answer can be pinned against it. hz now DECLARES
+// the gateway under this name (`hz machine add --self`, and the import
+// proposal) and the agent ENROLS under cmd/hz-agent's machineName(); if those
+// two ever disagree the box is declared as one machine and enrols as another,
+// which matches nothing and says nothing. A Go test cannot import package main,
+// so the comparison has to live in cmd/hz-agent and this has to be visible from
+// there — cmd/hz-agent/selfname_test.go.
+func LocalMachineName() string {
 	host, err := os.Hostname()
 	if err != nil {
 		return "unknown"
@@ -193,7 +201,7 @@ func localMachineName() string {
 // hz is running on. Kept as a name because it is what hz's own screens, its
 // enrolment helper and its startup checks ask for.
 func (s *Server) buildAgentDesired() *agent.Desired {
-	return s.desiredFor(localMachineName())
+	return s.desiredFor(LocalMachineName())
 }
 
 // desiredFor assembles one machine's payload, and it is the composition item
@@ -238,7 +246,7 @@ func (s *Server) desiredFor(machine string) *agent.Desired {
 
 	d := &agent.Desired{Machine: machine, Model: &mc}
 
-	if machine != localMachineName() {
+	if machine != LocalMachineName() {
 		// Every section below this point comes off the local filesystem. Say
 		// so, once per section, rather than letting five nils speak for hz.
 		noteRemoteGaps(&mc, cfg)

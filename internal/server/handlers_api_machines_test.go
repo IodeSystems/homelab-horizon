@@ -458,7 +458,7 @@ func TestNoDesiredStateForAMachineNobodyDeclared(t *testing.T) {
 		t.Fatal("hz leaked this machine's config into a refusal")
 	}
 	// The refusal is not hz's chance to say which box it is.
-	if strings.Contains(body, "the host it runs on") || strings.Contains(body, localMachineName()) {
+	if strings.Contains(body, "the host it runs on") || strings.Contains(body, LocalMachineName()) {
 		t.Fatalf("the refusal answers with hz's own identity: %s", body)
 	}
 
