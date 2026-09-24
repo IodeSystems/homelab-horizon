@@ -2,8 +2,19 @@ package config
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
+)
+
+// testWGKey and testWGKey2 are real WireGuard public keys — minted once with
+// wgkey.Generate and pasted here rather than generated per run, so a failure
+// prints the same string twice and a test that compares keys is deterministic.
+// They are PUBLIC halves of key pairs whose private halves were never written
+// down; there is nothing here to protect.
+const (
+	testWGKey  = "8AQZQtkyrdjWkUHvaVMTAFDOP/o3gDfiIECAkq2bdU0="
+	testWGKey2 = "IeNDqihcCycgQ9s+UnsC4lShD7/9oHii3oOaBqZqjSY="
 )
 
 // estateWithSegment is the smallest config that has something to resolve: a
@@ -418,7 +429,11 @@ func TestAMembershipCanBeAddressedOnASegmentThatAlreadyExists(t *testing.T) {
 // the box would go on answering to a key hz no longer holds.
 func TestReAddressingKeepsTheKeyAndTheEndpoint(t *testing.T) {
 	c := estateWithSegment(t)
-	key := "abc+/def="
+	// A REAL key, because the field is validated as one now. The fixture used
+	// to be "abc+/def=", which is nine characters and nothing WireGuard would
+	// load — a test that proved the key survived a re-address while proving
+	// nothing about what a key is.
+	key := testWGKey
 
 	// A key on a membership with no address has nothing to attach to: the entry
 	// would be a member with a key and no address, which the validator refuses
@@ -830,4 +845,115 @@ func TestASetCannotRenameASegment(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "iode-net") {
 		t.Fatalf("the refusal does not list what exists: %v", err)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// A key is validated as a key
+// ---------------------------------------------------------------------------
+
+// A PublicKey is the ONE field on a member that another program parses: it goes
+// into a `PublicKey =` line and wg-quick either loads the interface or does not.
+// So hz refuses a string that is not a key, at the same validator every write
+// runs through, rather than storing it and letting the box find out.
+func TestAMemberKeyMustBeAWireGuardKey(t *testing.T) {
+	for name, key := range map[string]string{
+		"a placeholder":   "key-gw-1",
+		"the old fixture": "abc+/def=",
+		"a hostname":      "gw-1.example.com",
+		"unpadded":        strings.TrimSuffix(testWGKey, "="),
+		"one char short":  testWGKey[:43],
+	} {
+		c := estateWithSegment(t)
+		c.Segments[0].Members[0].PublicKey = key
+		if err := c.ValidateSegments(); err == nil {
+			t.Errorf("%s: %q was accepted as a public key", name, key)
+		} else if !strings.Contains(err.Error(), "public key") {
+			t.Errorf("%s: the refusal does not say it is about the key: %v", name, err)
+		}
+	}
+
+	// And a real one is accepted, through the write path an operator uses.
+	c := estateWithSegment(t)
+	if _, err := c.SetSegment("iode-net", SegmentPatch{
+		Members: []SegmentMemberPatch{{Machine: "gw-1", PublicKey: strPtr(testWGKey)}},
+	}, false); err != nil {
+		t.Fatalf("a real key was refused: %v", err)
+	}
+	if err := Save(t.TempDir()+"/config.json", c); err != nil {
+		t.Fatalf("a keyed segment cannot be saved: %v", err)
+	}
+}
+
+// A DRY RUN REFUSES IT TOO. SegmentSet computes without writing, and a dry run
+// that printed "key → nonsense" only for the confirmed write to refuse it is
+// the failure a dry run exists to prevent.
+func TestADryRunRefusesAKeyThatIsNotAKey(t *testing.T) {
+	c := estateWithSegment(t)
+	_, _, err := c.SegmentSet("iode-net", SegmentPatch{
+		Members: []SegmentMemberPatch{{Machine: "gw-1", PublicKey: strPtr("not-a-key")}},
+	}, false)
+	if err == nil {
+		t.Fatal("a dry run accepted a key the write would refuse")
+	}
+	if !strings.Contains(err.Error(), "wg pubkey") {
+		t.Fatalf("the refusal does not say what a key looks like: %v", err)
+	}
+}
+
+// TWO MEMBERS, ONE KEY is a peer set that cannot be rendered: WireGuard
+// identifies a peer BY its key, so the second [Peer] block replaces the first
+// and one machine silently loses its route. It is what a copy-pasted key looks
+// like, and it is refused.
+func TestTwoMembersCannotShareAPublicKey(t *testing.T) {
+	c := estateWithSegment(t)
+	c.Segments[0].Members[0].PublicKey = testWGKey
+	c.Segments[0].Members[1].PublicKey = testWGKey
+	err := c.ValidateSegments()
+	if err == nil {
+		t.Fatal("two members share one public key and the config was accepted")
+	}
+	if !strings.Contains(err.Error(), "gw-1") || !strings.Contains(err.Error(), "redline-prod-hz") {
+		t.Fatalf("the refusal does not name both members: %v", err)
+	}
+
+	// Distinct keys on the same two members are fine — this is the normal state
+	// of a keyed segment, and the check above must not be refusing that.
+	c.Segments[0].Members[1].PublicKey = testWGKey2
+	if err := c.ValidateSegments(); err != nil {
+		t.Fatalf("two members with two keys were refused: %v", err)
+	}
+}
+
+// THE RECORD CANNOT HOLD A PRIVATE KEY, structurally: SegmentMember has exactly
+// one key field and it is the public half. This is the guarantee that matters,
+// because a private key has the SAME SHAPE as a public one (wgkey's own test
+// says so) and no validator can tell them apart. If a field named for the
+// private half ever appears here, this fails and somebody has to explain it.
+func TestASegmentMemberHasNowhereToPutAPrivateKey(t *testing.T) {
+	for _, field := range structFields(SegmentMember{}) {
+		lower := strings.ToLower(field)
+		if strings.Contains(lower, "priv") || strings.Contains(lower, "secret") {
+			t.Errorf("SegmentMember has a field %q — hz holds the public half and only the public half", field)
+		}
+	}
+	for _, field := range structFields(SegmentMemberPatch{}) {
+		lower := strings.ToLower(field)
+		if strings.Contains(lower, "priv") || strings.Contains(lower, "secret") {
+			t.Errorf("SegmentMemberPatch has a field %q — nothing may write a private key onto a member", field)
+		}
+	}
+}
+
+func strPtr(s string) *string { return &s }
+
+// structFields is every field name on a struct, for the structural guards
+// above: a rule about what a record may NOT hold has to be checked against the
+// type, not against one instance of it.
+func structFields(v any) []string {
+	t := reflect.TypeOf(v)
+	out := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		out = append(out, t.Field(i).Name)
+	}
+	return out
 }
