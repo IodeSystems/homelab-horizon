@@ -7,6 +7,12 @@ import (
 	hzconfig "github.com/iodesystems/homelab-horizon/internal/config"
 )
 
+// testWGKey is a real WireGuard public key. The key field is validated as a key
+// now, so a command that sets one has to set a real one; the PARSER tests below
+// still use nonsense on purpose, because parsing a spec and validating a key are
+// different jobs and only the second is hz's to refuse.
+const testWGKey = "8AQZQtkyrdjWkUHvaVMTAFDOP/o3gDfiIECAkq2bdU0="
+
 // `hz segment` as an operator meets it, over the same stub `hz machine` is
 // tested against: a REAL config, the REAL writers, and a real Save at every
 // write.
@@ -244,7 +250,7 @@ func TestSegmentSetAddressesAndReAddressesAMember(t *testing.T) {
 
 	// RE-ADDRESSING KEEPS WHAT IT WAS NOT ASKED TO CHANGE: the hub's endpoint
 	// survives a command that never mentions it, and a key survives a move.
-	if err := runSegment(c, []string{"set", "iode-net", "--member", "machine=late-box,key=abc+/def="}); err != nil {
+	if err := runSegment(c, []string{"set", "iode-net", "--member", "machine=late-box,key=" + testWGKey}); err != nil {
 		t.Fatal(err)
 	}
 	if err := runSegment(c, []string{"set", "iode-net", "--member", "machine=late-box,address=10.42.0.8"}); err != nil {
@@ -252,7 +258,7 @@ func TestSegmentSetAddressesAndReAddressesAMember(t *testing.T) {
 	}
 	seg, _ = s.cfg.FindSegment("iode-net")
 	mem, _ = seg.Member("late-box")
-	if mem.Address != "10.42.0.8" || mem.PublicKey != "abc+/def=" {
+	if mem.Address != "10.42.0.8" || mem.PublicKey != testWGKey {
 		t.Fatalf("re-addressing dropped something: %+v", mem)
 	}
 	hub, _ := seg.Member("gw-1")

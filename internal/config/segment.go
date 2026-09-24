@@ -6,6 +6,8 @@ import (
 	"net"
 	"sort"
 	"strings"
+
+	"github.com/iodesystems/homelab-horizon/internal/wgkey"
 )
 
 // The Segment record: what a Machine.Segments NAME resolves to.
@@ -124,6 +126,16 @@ type SegmentMember struct {
 	// secret half never reaches hz. Empty until the box has one — a declared
 	// address with no key is a member hz can route to and cannot yet peer with,
 	// which is a different state from not being a member.
+	//
+	// FILLED BY THE BOX, at enrolment: `hz-agent enroll` mints a key per segment
+	// and reports the public half (internal/agent/segmentkey.go), and the
+	// enrolment handler writes it here. An operator can still set it by hand
+	// (`hz segment set --member machine=M,key=K`) for a peer that runs no agent.
+	//
+	// VALIDATED AS A KEY when it is set — 32 Curve25519 bytes in canonical
+	// base64, ValidateSegments below. A string that is not a key renders a
+	// `[Peer]` block WireGuard refuses to load, and the box that finds out is
+	// the one whose tunnel does not come up.
 	PublicKey string `json:"public_key,omitempty"`
 
 	// Hub marks the one member every other member peers with. Hub and spoke,
@@ -294,6 +306,7 @@ func parseSegmentCIDR(s Segment) (*net.IPNet, error) {
 func validateSegmentMembers(s Segment, ipnet *net.IPNet, machines map[string]Machine) error {
 	seen := make(map[string]struct{}, len(s.Members))
 	addrs := make(map[string]string, len(s.Members))
+	keys := make(map[string]string, len(s.Members))
 	hubs := 0
 
 	for _, mem := range s.Members {
@@ -328,6 +341,29 @@ func validateSegmentMembers(s Segment, ipnet *net.IPNet, machines map[string]Mac
 			return fmt.Errorf("segment %q gives %s and %s the same address %s", s.Name, other, mem.Machine, ip)
 		}
 		addrs[ip.String()] = mem.Machine
+
+		// A KEY IS CHECKED AS A KEY. Empty is legal and means "not keyed yet" —
+		// the state the projection raises its `[Peer]` gap for. Anything else has
+		// to be a WireGuard key, because the only thing this field is ever used
+		// for is a PublicKey line in a wg config, and a string that is not a key
+		// there is an interface that will not load. hz is the last place that can
+		// refuse it cheaply; after this it is a tunnel that does not come up on a
+		// box nobody is standing at.
+		if mem.PublicKey != "" {
+			if _, err := wgkey.Parse(mem.PublicKey); err != nil {
+				return fmt.Errorf("segment %q gives machine %q a public key that is %v — WireGuard keys are %d bytes in base64 (%d characters), the form `wg pubkey` prints",
+					s.Name, mem.Machine, err, wgkey.KeyLen, wgkey.EncodedLen)
+			}
+			if other, dup := keys[mem.PublicKey]; dup {
+				// Two members on one key is a peer set that cannot be rendered:
+				// WireGuard identifies a peer BY its key, so the second [Peer]
+				// block silently replaces the first and one machine loses its
+				// route. Usually a copy-paste of somebody else's key.
+				return fmt.Errorf("segment %q gives %s and %s the same public key — WireGuard identifies a peer by its key, so one of those two would silently lose its peering. Each interface mints its own",
+					s.Name, other, mem.Machine)
+			}
+			keys[mem.PublicKey] = mem.Machine
+		}
 
 		if mem.Hub {
 			hubs++
@@ -833,6 +869,16 @@ func (c *Config) applyMemberPatches(segment string, next *Segment, patches []Seg
 		}
 		if mp.PublicKey != nil {
 			v := strings.TrimSpace(*mp.PublicKey)
+			// Ahead of ValidateSegments so a DRY RUN refuses it too: SegmentSet
+			// computes the change without saving, and a dry run that printed
+			// "key → nonsense" and then had the confirmed write refuse it would
+			// be the one thing a dry run exists to prevent.
+			if v != "" {
+				if _, err := wgkey.Parse(v); err != nil {
+					return fmt.Errorf("segment %s: the key given for %s is %v. A WireGuard public key is what `wg pubkey` prints — %d base64 characters. hz holds the PUBLIC half only; the private one never leaves the box",
+						segment, machine, err, wgkey.EncodedLen)
+				}
+			}
 			change.note(machine+" key", mem.PublicKey, v)
 			mem.PublicKey = v
 		}

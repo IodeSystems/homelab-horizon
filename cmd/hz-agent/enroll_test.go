@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/iodesystems/homelab-horizon/internal/agent"
+	"github.com/iodesystems/homelab-horizon/internal/wgkey"
 )
 
 // WHAT THESE TESTS COVER, AND WHAT THEY DO NOT.
@@ -38,6 +39,15 @@ type stubHZ struct {
 	declared map[string]agent.EnrollResponse
 	adminTok string
 	mints    int
+
+	// keys is what hz has recorded per (machine, segment) — the SegmentMember
+	// field, in miniature. The stub makes the same rotation-versus-impostor
+	// decision the real handler makes, because the CLI's behaviour on a
+	// conflict is the thing these tests are about; what it does NOT do is
+	// validate, address or save, which are internal/server's to prove.
+	keys map[string]string
+	// enrolls counts requests, so the two-pass shape is assertable.
+	enrolls int
 }
 
 func newStubHZ(t *testing.T, declared ...string) *stubHZ {
@@ -46,6 +56,7 @@ func newStubHZ(t *testing.T, declared ...string) *stubHZ {
 		store:    agent.CredentialStore{Path: filepath.Join(t.TempDir(), "config.json"+agent.CredentialsSuffix)},
 		declared: map[string]agent.EnrollResponse{},
 		adminTok: "the-admin-token",
+		keys:     map[string]string{},
 	}
 	for _, name := range declared {
 		hz.declared[name] = agent.EnrollResponse{Machine: name, Segments: []string{"seg:lan"}}
@@ -71,6 +82,8 @@ func newStubHZ(t *testing.T, declared ...string) *stubHZ {
 			http.Error(w, "hz declares no machine named "+req.Machine, http.StatusNotFound)
 			return
 		}
+		hz.enrolls++
+		m.SegmentKeys = hz.recordKeys(req)
 		if !req.Rotate && req.CurrentHash != "" {
 			if existing, found := hz.store.Find(req.Machine); found && existing.Hash == req.CurrentHash {
 				m.AlreadyEnrolled = true
@@ -94,6 +107,30 @@ func newStubHZ(t *testing.T, declared ...string) *stubHZ {
 	hz.Server = httptest.NewServer(mux)
 	t.Cleanup(hz.Close)
 	return hz
+}
+
+// recordKeys is the stub's half of the key exchange: record on sight, refuse a
+// CHANGE unless the request declares a rotation. Same three answers the real
+// handler gives for a keyable membership.
+func (hz *stubHZ) recordKeys(req agent.EnrollRequest) []agent.SegmentKeyResult {
+	var out []agent.SegmentKeyResult
+	for _, k := range req.SegmentKeys {
+		at := req.Machine + "/" + k.Segment
+		held, have := hz.keys[at]
+		result := agent.SegmentKeyResult{Segment: k.Segment}
+		switch {
+		case have && held == k.PublicKey:
+			result.Status = agent.SegmentKeyUnchanged
+		case have && !req.RotateKeys:
+			result.Status = agent.SegmentKeyConflict
+			result.Detail = "hz holds a different key; if this is a rotation say so: hz-agent enroll --rotate-keys"
+		default:
+			hz.keys[at] = k.PublicKey
+			result.Status = agent.SegmentKeyRecorded
+		}
+		out = append(out, result)
+	}
+	return out
 }
 
 func writeStubJSON(w http.ResponseWriter, v any) {
@@ -140,7 +177,7 @@ func enrollFlags(t *testing.T) (*agentFlags, *stubHZ) {
 func TestEnrolmentGivesTheAgentACredentialHZAccepts(t *testing.T) {
 	f, hz := enrollFlags(t)
 	var out bytes.Buffer
-	if err := enroll(f, false, &out); err != nil {
+	if err := enroll(f, enrollOpts{}, &out); err != nil {
 		t.Fatal(err)
 	}
 
@@ -160,7 +197,7 @@ func TestEnrollingAMachineHZDoesNotDeclareIsRefused(t *testing.T) {
 	f, _ := enrollFlags(t)
 	f.machine = "a-box-nobody-declared"
 
-	err := enroll(f, false, new(bytes.Buffer))
+	err := enroll(f, enrollOpts{}, new(bytes.Buffer))
 	if err == nil {
 		t.Fatal("hz enrolled a machine it does not declare")
 	}
@@ -179,7 +216,7 @@ func TestEnrolmentNeedsAnAdminCredential(t *testing.T) {
 	f.adminTokenFile = filepath.Join(t.TempDir(), "absent")
 	t.Setenv(adminTokenEnv, "")
 
-	err := enroll(f, false, new(bytes.Buffer))
+	err := enroll(f, enrollOpts{}, new(bytes.Buffer))
 	if err == nil || !strings.Contains(err.Error(), adminTokenEnv) {
 		t.Fatalf("want a refusal naming how to supply a credential, got %v", err)
 	}
@@ -190,7 +227,7 @@ func TestEnrolmentNeedsAnAdminCredential(t *testing.T) {
 func TestEnrolmentNeverPrintsTheSecret(t *testing.T) {
 	f, _ := enrollFlags(t)
 	var out bytes.Buffer
-	if err := enroll(f, false, &out); err != nil {
+	if err := enroll(f, enrollOpts{}, &out); err != nil {
 		t.Fatal(err)
 	}
 	secret := readTokenFile(f.tokenFile)
@@ -200,7 +237,7 @@ func TestEnrolmentNeverPrintsTheSecret(t *testing.T) {
 	}
 	// Re-running prints again; that path must be clean too.
 	out.Reset()
-	if err := enroll(f, false, &out); err != nil {
+	if err := enroll(f, enrollOpts{}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out.String(), secret) {
@@ -218,7 +255,7 @@ func TestEnrolmentNeverPrintsTheSecret(t *testing.T) {
 // flag at all, only a file and the environment.
 func TestEnrolmentPutsNoCredentialInArgv(t *testing.T) {
 	f, hz := enrollFlags(t)
-	if err := enroll(f, false, new(bytes.Buffer)); err != nil {
+	if err := enroll(f, enrollOpts{}, new(bytes.Buffer)); err != nil {
 		t.Fatal(err)
 	}
 	secret := readTokenFile(f.tokenFile)
@@ -253,7 +290,7 @@ func TestTheCredentialFileIsRootOnly(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(f.tokenFile), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := enroll(f, false, new(bytes.Buffer)); err != nil {
+	if err := enroll(f, enrollOpts{}, new(bytes.Buffer)); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(f.tokenFile)
@@ -276,7 +313,7 @@ func TestTheCredentialFileIsRootOnly(t *testing.T) {
 // that is already enrolled keeps the credential it has, and hz mints nothing.
 func TestReEnrolmentKeepsAWorkingCredential(t *testing.T) {
 	f, hz := enrollFlags(t)
-	if err := enroll(f, false, new(bytes.Buffer)); err != nil {
+	if err := enroll(f, enrollOpts{}, new(bytes.Buffer)); err != nil {
 		t.Fatal(err)
 	}
 	first := readTokenFile(f.tokenFile)
@@ -284,7 +321,7 @@ func TestReEnrolmentKeepsAWorkingCredential(t *testing.T) {
 		t.Fatalf("first enrolment minted %d times", hz.mints)
 	}
 
-	if err := enroll(f, false, new(bytes.Buffer)); err != nil {
+	if err := enroll(f, enrollOpts{}, new(bytes.Buffer)); err != nil {
 		t.Fatal(err)
 	}
 	if got := readTokenFile(f.tokenFile); got != first {
@@ -295,7 +332,7 @@ func TestReEnrolmentKeepsAWorkingCredential(t *testing.T) {
 	}
 
 	// --rotate is the deliberate replacement, and it retires the old one.
-	if err := enroll(f, true, new(bytes.Buffer)); err != nil {
+	if err := enroll(f, enrollOpts{Rotate: true}, new(bytes.Buffer)); err != nil {
 		t.Fatal(err)
 	}
 	second := readTokenFile(f.tokenFile)
@@ -314,7 +351,7 @@ func TestReEnrolmentKeepsAWorkingCredential(t *testing.T) {
 // whether it is still current. The HASH does, and that is all hz needs.
 func TestReEnrolmentSendsTheHashAndNotTheSecret(t *testing.T) {
 	f, hz := enrollFlags(t)
-	if err := enroll(f, false, new(bytes.Buffer)); err != nil {
+	if err := enroll(f, enrollOpts{}, new(bytes.Buffer)); err != nil {
 		t.Fatal(err)
 	}
 	secret := readTokenFile(f.tokenFile)
@@ -328,7 +365,7 @@ func TestReEnrolmentSendsTheHashAndNotTheSecret(t *testing.T) {
 			sawHash = true
 		}
 	})
-	if err := enroll(f, false, new(bytes.Buffer)); err != nil {
+	if err := enroll(f, enrollOpts{}, new(bytes.Buffer)); err != nil {
 		t.Fatal(err)
 	}
 	if sawSecret {
@@ -350,7 +387,7 @@ func TestAnUnrecognisedCredentialIsReplaced(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := enroll(f, false, new(bytes.Buffer)); err != nil {
+	if err := enroll(f, enrollOpts{}, new(bytes.Buffer)); err != nil {
 		t.Fatal(err)
 	}
 	if got := readTokenFile(f.tokenFile); got == "a-token-hz-never-issued" {
@@ -377,7 +414,7 @@ func TestEnrollNeedsRoot(t *testing.T) {
 // properties are unchanged by having a credential.
 func TestEnrolmentDoesNotArmTheAgent(t *testing.T) {
 	f, _ := enrollFlags(t)
-	if err := enroll(f, false, new(bytes.Buffer)); err != nil {
+	if err := enroll(f, enrollOpts{}, new(bytes.Buffer)); err != nil {
 		t.Fatal(err)
 	}
 	unit := generateUnit(f, "/usr/local/bin/hz-agent")
@@ -386,5 +423,238 @@ func TestEnrolmentDoesNotArmTheAgent(t *testing.T) {
 	}
 	if strings.Contains(unit, "[Install]") || strings.Contains(unit, "WantedBy") {
 		t.Fatalf("enrolment produced an enableable unit:\n%s", unit)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The segment keys enrolment now reports
+// ---------------------------------------------------------------------------
+
+// keyFiles is every private key file this box wrote, by segment.
+func keyFiles(t *testing.T, f *agentFlags, segments ...string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, seg := range segments {
+		b, err := os.ReadFile(f.segmentKeys().Path(seg))
+		if err != nil {
+			t.Fatalf("no private key for %s: %v", seg, err)
+		}
+		out[seg] = strings.TrimSpace(string(b))
+	}
+	return out
+}
+
+// THE BOX MINTS AND REPORTS, IN ONE ACT. After enrolment hz holds a public key
+// for every segment it says this machine is in — which is exactly what the
+// projection needed to stop saying it cannot emit a `[Peer]` block.
+func TestEnrolmentReportsAPublicKeyPerSegment(t *testing.T) {
+	f, hz := enrollFlags(t)
+	if err := enroll(f, enrollOpts{}, new(bytes.Buffer)); err != nil {
+		t.Fatal(err)
+	}
+
+	// The stub declares "gateway" in seg:lan.
+	got, ok := hz.keys["gateway/seg:lan"]
+	if !ok {
+		t.Fatalf("hz was told no key for seg:lan; it holds %+v", hz.keys)
+	}
+	if !wgkey.Valid(got) {
+		t.Fatalf("what reached hz is not a WireGuard key: %q", got)
+	}
+	// It is the public half of what the box kept, derived from the file rather
+	// than taken on the command's word.
+	private := keyFiles(t, f, "seg:lan")["seg:lan"]
+	derived, err := wgkey.Public(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if derived != got {
+		t.Fatalf("hz holds %q, which is not the public half of this box's key", got)
+	}
+
+	// TWO REQUESTS, not two enrolments: the box learns its segments from the
+	// first answer and reports keys on the second, and the credential is minted
+	// exactly once across both.
+	if hz.enrolls != 2 {
+		t.Fatalf("enrolment made %d requests, want 2 (credential, then keys)", hz.enrolls)
+	}
+	if hz.mints != 1 {
+		t.Fatalf("the two-pass enrolment minted %d credentials", hz.mints)
+	}
+}
+
+// THE PRIVATE KEY NEVER LEAVES THE BOX. Asserted on the WIRE — every request
+// body, not the argument that built one — because a struct field is easy to
+// read correctly and a marshalling mistake is not.
+func TestEnrolmentNeverPutsAPrivateKeyOnTheWire(t *testing.T) {
+	f, hz := enrollFlags(t)
+
+	var bodies []string
+	hz.Config.Handler = watchBodies(hz.Config.Handler, func(body string) { bodies = append(bodies, body) })
+
+	if err := enroll(f, enrollOpts{}, new(bytes.Buffer)); err != nil {
+		t.Fatal(err)
+	}
+	private := keyFiles(t, f, "seg:lan")["seg:lan"]
+	public, err := wgkey.Public(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sawPublic := false
+	for _, body := range bodies {
+		if strings.Contains(body, private) {
+			t.Fatal("a private WireGuard key was put on the wire")
+		}
+		if strings.Contains(body, public) {
+			sawPublic = true
+		}
+	}
+	// THE POSITIVE CONTROL. Without it this test passes on an enrolment that
+	// reports no keys at all, which is the state this change exists to end.
+	if !sawPublic {
+		t.Fatalf("no public key crossed the wire either, so the assertion above proves nothing; bodies=%v", bodies)
+	}
+	// Nor may it reach the terminal: a key in scrollback is a key in a support
+	// paste, and the private half is the one that matters.
+	var out bytes.Buffer
+	if err := enroll(f, enrollOpts{}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), private) {
+		t.Fatal("enrolment printed the private key")
+	}
+}
+
+// A KEY IS MINTED ONCE AND THEN REPORTED. Re-running enrolment — which is what
+// `install` does every time — must not rotate: every peer on the segment is
+// configured against the old key, so a silent rotation is a fleet of stale
+// configs.
+func TestReEnrolmentReportsTheSameKey(t *testing.T) {
+	f, hz := enrollFlags(t)
+	if err := enroll(f, enrollOpts{}, new(bytes.Buffer)); err != nil {
+		t.Fatal(err)
+	}
+	first := keyFiles(t, f, "seg:lan")["seg:lan"]
+
+	if err := enroll(f, enrollOpts{}, new(bytes.Buffer)); err != nil {
+		t.Fatal(err)
+	}
+	if got := keyFiles(t, f, "seg:lan")["seg:lan"]; got != first {
+		t.Fatal("re-enrolment rotated a working key")
+	}
+
+	// --rotate-keys is the deliberate replacement, and hz is told it is one.
+	if err := enroll(f, enrollOpts{RotateKeys: true}, new(bytes.Buffer)); err != nil {
+		t.Fatal(err)
+	}
+	second := keyFiles(t, f, "seg:lan")["seg:lan"]
+	if second == first {
+		t.Fatal("--rotate-keys kept the old key")
+	}
+	wantPub, err := wgkey.Public(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hz.keys["gateway/seg:lan"] != wantPub {
+		t.Fatalf("hz holds %q after a declared rotation, want %q", hz.keys["gateway/seg:lan"], wantPub)
+	}
+}
+
+// A REFUSED KEY IS LOUD. hz keeping the key it holds is the safe answer, and
+// the unsafe version of this is the command exiting 0 while the box believes it
+// is peered. The refusal names the segment and the flag that resolves it.
+func TestAKeyHZRefusesFailsTheCommandAndNamesTheFix(t *testing.T) {
+	f, hz := enrollFlags(t)
+	if err := enroll(f, enrollOpts{}, new(bytes.Buffer)); err != nil {
+		t.Fatal(err)
+	}
+	mine := hz.keys["gateway/seg:lan"]
+
+	// Somebody else's key is recorded for this machine — the shape a rebuilt
+	// box, a restored backup or a cloned VM presents.
+	_, theirs, err := wgkey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hz.keys["gateway/seg:lan"] = theirs
+
+	var out bytes.Buffer
+	err = enroll(f, enrollOpts{}, &out)
+	if err == nil {
+		t.Fatal("enrolment reported success while hz refused this box's key")
+	}
+	for _, want := range []string{"seg:lan", "--rotate-keys", "DIFFERENT"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
+	}
+	if !strings.Contains(out.String(), "CONFLICT") {
+		t.Errorf("the printed report does not flag the conflict:\n%s", out.String())
+	}
+	// hz kept what it had. The command failing is the whole defence; a failure
+	// that had already overwritten the record would be theatre.
+	if hz.keys["gateway/seg:lan"] != theirs {
+		t.Fatal("the refused enrolment overwrote hz's record anyway")
+	}
+	if mine == theirs {
+		t.Fatal("the fixture did not actually change the key")
+	}
+
+	// And the credential half survived: the box can still poll. Losing that
+	// over a disputed key would turn a visible problem into two.
+	if readTokenFile(f.tokenFile) == "" {
+		t.Fatal("a refused key cost the box its credential")
+	}
+}
+
+// The private keys live at 0600 in a 0700 directory, beside the credential.
+func TestThePrivateKeysAreRootOnly(t *testing.T) {
+	f, _ := enrollFlags(t)
+	// The directory exists world-readable first, which is the state a box that
+	// was enrolled before this change is in.
+	if err := os.MkdirAll(filepath.Dir(f.tokenFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := enroll(f, enrollOpts{}, new(bytes.Buffer)); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(f.segmentKeys().Path("seg:lan"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != agent.SegmentKeyFileMode {
+		t.Fatalf("the private key is mode %04o, want %04o", mode, agent.SegmentKeyFileMode)
+	}
+	dir, err := os.Stat(f.segmentKeys().Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := dir.Mode().Perm(); mode != agent.SegmentKeyDirMode {
+		t.Fatalf("the key directory is mode %04o, want %04o", mode, agent.SegmentKeyDirMode)
+	}
+}
+
+// Reporting a key must not arm anything either: the unit is still inert, and
+// --rotate-keys has no way into it.
+func TestReportingKeysDoesNotArmTheAgent(t *testing.T) {
+	f, _ := enrollFlags(t)
+	if err := enroll(f, enrollOpts{}, new(bytes.Buffer)); err != nil {
+		t.Fatal(err)
+	}
+	unit := generateUnit(f, "/usr/local/bin/hz-agent")
+	if strings.Contains(unit, "--apply") || strings.Contains(unit, "[Install]") || strings.Contains(unit, "WantedBy") {
+		t.Fatalf("enrolment produced an armed unit:\n%s", unit)
+	}
+	if strings.Contains(unit, "--rotate-keys") || strings.Contains(unit, "keys") {
+		t.Fatalf("an enrolment-only concern reached the unit:\n%s", unit)
+	}
+	// The running agent has no rotate-keys flag at all: rotating a key is an
+	// operator act at the box, never something a daemon does on a timer.
+	var probe agentFlags
+	fs := flag.NewFlagSet("probe", flag.ContinueOnError)
+	probe.register(fs)
+	if fs.Lookup("rotate-keys") != nil {
+		t.Fatal("--rotate-keys is on the shared flag set, so `run` accepts it")
 	}
 }

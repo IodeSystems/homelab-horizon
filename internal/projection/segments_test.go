@@ -17,9 +17,20 @@ import (
 // the peer set it could not before.
 //
 // The thing these tests exist to hold is the part resolution does NOT close.
-// Nothing fills SegmentMember.PublicKey, so hz can name a peer and address it
-// and cannot peer with it, and a `peers` list that reads as a WireGuard
-// configuration would be the founding bug in a new place.
+// A peer with no key is a peer hz can name and cannot peer with, and a `peers`
+// list that reads as a WireGuard configuration would be the founding bug in a
+// new place.
+
+// testWGKeys are real WireGuard public keys — the field is validated as a key
+// now (config.ValidateSegments), so a fixture spelling one "solo-key" is a
+// fixture describing a config hz would refuse to save. Fixed strings rather
+// than minted per run so a failure prints the same thing twice.
+var testWGKeys = []string{
+	"8AQZQtkyrdjWkUHvaVMTAFDOP/o3gDfiIECAkq2bdU0=",
+	"IeNDqihcCycgQ9s+UnsC4lShD7/9oHii3oOaBqZqjSY=",
+	"UXJR3INLkRixItTxQksh2Bf53PypSSqKUhFOIP2P7ko=",
+	"TivW3BGw5YXBPSQi0UwrLhFO7tUsHP8NM2upYYvImAQ=",
+}
 
 // segmentedEstate is exampleEstate() with §2's networks declared and §3's
 // machines addressed on them. gw-1 is the hub of all four, which is
@@ -188,7 +199,7 @@ func TestAHubWithNoSpokesResolvesToAnEmptyPeerSet(t *testing.T) {
 	cfg.Segments = append(cfg.Segments, config.Segment{
 		Name: "seg:solo", Project: "intern", CIDR: "10.10.9.0/24", Interface: "wg-solo",
 		Members: []config.SegmentMember{
-			{Machine: "solo-1", Address: "10.10.9.1", Hub: true, Endpoint: "solo.example.invalid:51820", PublicKey: "solo-key"},
+			{Machine: "solo-1", Address: "10.10.9.1", Hub: true, Endpoint: "solo.example.invalid:51820", PublicKey: testWGKeys[0]},
 		},
 	})
 	if err := cfg.ValidateSegments(); err != nil {
@@ -305,9 +316,9 @@ func TestANameNoRecordAnswersToIsItsOwnGap(t *testing.T) {
 // The limit resolution does not remove
 // ---------------------------------------------------------------------------
 
-// RESOLVED IS NOT PEERABLE. Nothing puts a public key on a member — a box mints
-// its key at enrolment and `hz-agent enroll` does not send one — so hz can name
-// a peer and address it and cannot emit a WireGuard `[Peer]` block for it. A
+// RESOLVED IS NOT PEERABLE. Enrolment fills SegmentMember.PublicKey now, but a
+// peer that has not enrolled against this hz still has none — so hz can name a
+// peer and address it and cannot emit a WireGuard `[Peer]` block for it. A
 // `peers` list that stood alone would read as a tunnel that exists.
 func TestAResolvedMembershipStillCannotPeerWithoutAPublicKey(t *testing.T) {
 	g := Global{Config: segmentedEstate(), Instances: exampleInstances()}
@@ -338,10 +349,19 @@ func TestAResolvedMembershipStillCannotPeerWithoutAPublicKey(t *testing.T) {
 // estate, not a sentence stapled to every projection.
 func TestTheKeylessGapClearsWhenEveryPeerHasAKey(t *testing.T) {
 	cfg := segmentedEstate()
+	// REAL keys, and the fixture is checked against the validator: a config hz
+	// would refuse to save is not evidence about what hz projects. Distinct per
+	// (segment, machine), which is the property the whole per-interface design
+	// exists for — one key reused everywhere is refused.
+	next := 0
 	for i := range cfg.Segments {
 		for j := range cfg.Segments[i].Members {
-			cfg.Segments[i].Members[j].PublicKey = "key-" + cfg.Segments[i].Members[j].Machine
+			cfg.Segments[i].Members[j].PublicKey = testWGKeys[next%len(testWGKeys)]
+			next++
 		}
+	}
+	if err := cfg.ValidateSegments(); err != nil {
+		t.Fatalf("fixture: %v", err)
 	}
 	mc := mustProject(t, Global{Config: cfg}, "app-1")
 	if why := gapMentioning(mc, SectionSegments, "[Peer]"); why != "" {

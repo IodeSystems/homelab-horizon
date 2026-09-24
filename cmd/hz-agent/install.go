@@ -151,7 +151,7 @@ func runInstall(args []string) error {
 	// the machine to be declared. That is the intended cost: an installer that
 	// could enrol a box hz has never heard of would be the local-mint hole
 	// under a different name.
-	if err := enroll(&f, false, os.Stdout); err != nil {
+	if err := enroll(&f, enrollOpts{}, os.Stdout); err != nil {
 		return fmt.Errorf("enrolling this machine: %w", err)
 	}
 	fmt.Println()
