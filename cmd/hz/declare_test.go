@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -36,11 +37,21 @@ type declareStub struct {
 	// writers take it as an input for exactly that reason, so a stub supplies
 	// it the same way the server does.
 	enrolled map[string]bool
+	// self stands in for the SERVER's os.Hostname — the box hz is running on.
+	// It is the server's answer and never the client's: `hz` runs wherever the
+	// operator is, so a CLI that resolved its own hostname would declare the
+	// operator's laptop. A stub that let the client decide would hide that.
+	self string
 }
+
+// errSelfAndName is the server's refusal of `--self` beside a name, as the stub
+// speaks it. The CLI refuses this before the request too; the stub carries it so
+// a client that stopped refusing is caught rather than silently served.
+var errSelfAndName = errors.New("self and a name were both given")
 
 func newDeclareStub(t *testing.T, cfg *hzconfig.Config) *declareStub {
 	t.Helper()
-	s := &declareStub{cfg: cfg, path: filepath.Join(t.TempDir(), "config.json"), enrolled: map[string]bool{}}
+	s := &declareStub{cfg: cfg, path: filepath.Join(t.TempDir(), "config.json"), enrolled: map[string]bool{}, self: "<gw>"}
 	if err := hzconfig.Save(s.path, cfg); err != nil {
 		t.Fatalf("the fixture must be saveable to begin with: %v", err)
 	}
@@ -205,13 +216,32 @@ func (s *declareStub) start(t *testing.T) *client {
 		case "/api/v1/machines/add":
 			var req apitypes.MachineAddReq
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			m := hzconfig.Machine{Name: req.Name, Segments: req.Segments, Note: req.Note}
+			name := req.Name
+			if req.Self {
+				// Mirrors handleAPIMachineAdd: the SERVER names itself, a name
+				// beside --self is refused, and an already-declared gateway is
+				// an answer rather than a duplicate-name failure.
+				if strings.TrimSpace(req.Name) != "" {
+					fail(errSelfAndName)
+					return
+				}
+				name = s.self
+				if existing, declared := s.cfg.FindMachine(name); declared {
+					_ = enc.Encode(apitypes.MachineResp{
+						Name: existing.Name, Segments: existing.Segments, Note: existing.Note,
+						MultiHomed: existing.MultiHomed(), Enrolled: s.enrolled[existing.Name],
+						AlreadyDeclared: true,
+					})
+					return
+				}
+			}
+			m := hzconfig.Machine{Name: name, Segments: req.Segments, Note: req.Note}
 			if err := s.cfg.AddMachine(m); err != nil {
 				fail(err)
 				return
 			}
 			s.save(t)
-			added, _ := s.cfg.FindMachine(req.Name)
+			added, _ := s.cfg.FindMachine(name)
 			_ = enc.Encode(apitypes.MachineResp{
 				Name: added.Name, Segments: added.Segments, Note: added.Note,
 				MultiHomed: added.MultiHomed(), Enrolled: s.enrolled[added.Name],

@@ -59,6 +59,7 @@ func fetchMachines(c *client) ([]apitypes.MachineResp, error) {
 }
 
 const machineAddUsage = `usage: hz machine add <name> [--segment S]... [--note "why"]
+       hz machine add --self [--segment S]... [--note "why"]
 
 Declares a machine: its identity and which network segments it is in. A machine
 has NO project and NO environment — those belong to an INSTANCE, and one box
@@ -68,6 +69,13 @@ Writes immediately. A declared machine renders nothing — no DNS record, no
 HAProxy backend, no apt source. What it confers is the right to ENROL: hz issues
 an agent credential only for a machine it has been told about.
 
+  --self       declare THE GATEWAY — the box hz itself is running on. hz fills
+               the name in from its own identity, which is the same name its
+               agent enrols under, so you do not have to look a hostname up and
+               cannot mistype one. It is the only machine hz may name for you,
+               and only because it is already running on it: every other box is
+               still something an operator asserts exists. Running it twice says
+               "already declared" and writes nothing. Cannot be given with a name.
   --segment S  a network segment this machine is a member of. Repeatable.
                Usually one. More than one is legal and is flagged everywhere it
                appears: blast radius is the UNION of a machine's segments.
@@ -99,6 +107,7 @@ func machineAdd(c *client, args []string) error {
 	var segments repeatedFlag
 	fs.Var(&segments, "segment", "a network segment this machine is in (repeatable)")
 	note := fs.String("note", "", "why this machine is in more than one segment")
+	self := fs.Bool("self", false, "declare the box hz is running on; hz supplies the name")
 
 	name, rest := splitCMPositional(args)
 	if err := fs.Parse(rest); err != nil {
@@ -107,16 +116,40 @@ func machineAdd(c *client, args []string) error {
 	if name == "" {
 		name = fs.Arg(0)
 	}
-	if name == "" || fs.NArg() > 1 {
+	switch {
+	case *self && name != "":
+		return fmt.Errorf("--self declares the box hz runs on and fills the name in itself, so a name beside it is a second answer to one question. Drop one:\n  hz machine add --self\n  hz machine add %s", name)
+	case !*self && name == "":
+		return fmt.Errorf("%s", machineAddUsage)
+	case fs.NArg() > 1:
 		return fmt.Errorf("%s", machineAddUsage)
 	}
 
 	var out apitypes.MachineResp
-	req := apitypes.MachineAddReq{Name: name, Segments: segments, Note: *note}
+	// THE NAME IS NOT SENT for --self. hz runs on the gateway and this CLI runs
+	// wherever the operator is, so a hostname resolved here would be the
+	// operator's laptop. The server answers with the name it used.
+	req := apitypes.MachineAddReq{Name: name, Segments: segments, Note: *note, Self: *self}
 	if err := c.do(http.MethodPost, "/api/v1/machines/add", req, &out); err != nil {
 		return err
 	}
+	if out.AlreadyDeclared {
+		// NOT AN ERROR, and said in full rather than silently. `--self` asserts
+		// a state, so the second run has already achieved what it asked for —
+		// but an operator who typed a command and got no output would reasonably
+		// wonder whether it ran, so the record is printed exactly as a fresh
+		// declaration prints it.
+		fmt.Printf("%s is already declared as a machine. Nothing was written.\n", out.Name)
+		printMachine(out, "  ")
+		fmt.Println("\nTo change its segment membership, declare the segment and address it there:")
+		fmt.Printf("  hz segment set <segment> --member machine=%s,address=<ip>\n", out.Name)
+		return nil
+	}
 	fmt.Printf("Declared machine %s.\n", out.Name)
+	if *self {
+		fmt.Println("That is this gateway — the box hz is running on, named from hz's own")
+		fmt.Println("identity, which is the name its agent enrols under.")
+	}
 	printMachine(out, "  ")
 	fmt.Println("\nIt has no project and no environment, and that is the model: those are")
 	fmt.Println("coordinates of an instance, not of a box.")
@@ -182,9 +215,11 @@ func machineList(c *client, args []string) error {
 	}
 
 	if len(machines) == 0 {
-		fmt.Println("No machines declared.")
-		fmt.Println("`hz machine add <name> --segment <segment>` declares the first one. A machine")
-		fmt.Println("must be declared before hz will issue it an agent credential.")
+		fmt.Println("No machines declared — including the box hz itself is running on, which is")
+		fmt.Println("a machine like any other and is missing from the model until it is declared.")
+		fmt.Println("\n  hz machine add --self                       declare THIS gateway")
+		fmt.Println("  hz machine add <name> --segment <segment>   declare any other box")
+		fmt.Println("\nA machine must be declared before hz will issue it an agent credential.")
 		return nil
 	}
 

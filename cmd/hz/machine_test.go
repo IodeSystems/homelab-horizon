@@ -280,3 +280,100 @@ func TestMachineUnknownSubcommand(t *testing.T) {
 		t.Fatalf("an unknown subcommand does not list the real ones: %v", err)
 	}
 }
+
+// --- `hz machine add --self` -----------------------------------------------
+//
+// The verb for an estate that already exists: declare the box hz is running on
+// without the operator having to go and look a hostname up. The NAME COMES FROM
+// THE SERVER — hz is on the gateway and this CLI is wherever the operator is —
+// so the stub answers with its own `self`, and a client that started resolving
+// its own hostname would fail these.
+
+func TestMachineAddSelfDeclaresTheGatewayByItsServerSideName(t *testing.T) {
+	s := newDeclareStub(t, &hzconfig.Config{})
+	c := s.start(t)
+
+	out := captureStdout(t, func() {
+		if err := runMachine(c, []string{"add", "--self"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(out, "Declared machine <gw>") {
+		t.Fatalf("--self did not declare the server's own box:\n%s", out)
+	}
+	if !strings.Contains(out, "the name its agent enrols under") {
+		t.Fatalf("--self does not say the name matches the agent's:\n%s", out)
+	}
+	// No segments invented, and the state that leaves is stated rather than
+	// shown as a blank.
+	if !strings.Contains(out, "In no segment yet") {
+		t.Fatalf("--self does not say the box is in no segment:\n%s", out)
+	}
+	if len(s.cfg.Machines) != 1 || s.cfg.Machines[0].Name != "<gw>" {
+		t.Fatalf("the config holds %+v", s.cfg.Machines)
+	}
+	if len(s.cfg.Machines[0].Segments) != 0 || s.cfg.Machines[0].Note != "" {
+		t.Fatalf("--self invented network membership: %+v", s.cfg.Machines[0])
+	}
+}
+
+// IDEMPOTENCE, as the operator sees it: the second run is not an error and does
+// not go quiet either — it reprints the record and says nothing was written.
+func TestMachineAddSelfTwiceSaysAlreadyDeclared(t *testing.T) {
+	s := newDeclareStub(t, &hzconfig.Config{})
+	c := s.start(t)
+
+	if err := captureStdoutErr(t, func() error { return runMachine(c, []string{"add", "--self"}) }); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() {
+		if err := runMachine(c, []string{"add", "--self"}); err != nil {
+			t.Fatalf("the second --self failed instead of reporting the state: %v", err)
+		}
+	})
+	if !strings.Contains(out, "already declared as a machine") || !strings.Contains(out, "Nothing was written") {
+		t.Fatalf("the second run does not say it was already done:\n%s", out)
+	}
+	if len(s.cfg.Machines) != 1 {
+		t.Fatalf("a duplicate was written: %+v", s.cfg.Machines)
+	}
+}
+
+// --self and a name are two answers to one question. Refused BEFORE the
+// request, so the message can name both alternatives.
+func TestMachineAddSelfWithANameIsRefusedBeforeTheRequest(t *testing.T) {
+	s := newDeclareStub(t, &hzconfig.Config{})
+	c := s.start(t)
+
+	err := captureStdoutErr(t, func() error { return runMachine(c, []string{"add", "app-1", "--self"}) })
+	if err == nil {
+		t.Fatal("--self beside a name was accepted")
+	}
+	if !strings.Contains(err.Error(), "hz machine add --self") || !strings.Contains(err.Error(), "hz machine add app-1") {
+		t.Fatalf("the refusal does not offer both ways to say it: %v", err)
+	}
+	for _, p := range s.posts {
+		if p == "/api/v1/machines/add" {
+			t.Fatal("the CLI sent a request it should have refused itself")
+		}
+	}
+}
+
+// An empty listing points at BOTH verbs, because the box the operator is
+// standing on is the one `hz machine add <name>` makes them type a hostname for.
+func TestAnEmptyMachineListPointsAtSelf(t *testing.T) {
+	s := newDeclareStub(t, &hzconfig.Config{})
+	c := s.start(t)
+
+	out := captureStdout(t, func() {
+		if err := runMachine(c, []string{"ls"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(out, "hz machine add --self") {
+		t.Fatalf("an empty listing on a box that IS a machine does not offer --self:\n%s", out)
+	}
+	if !strings.Contains(out, "hz machine add <name>") {
+		t.Fatalf("an empty listing stopped mentioning how to declare any other box:\n%s", out)
+	}
+}
