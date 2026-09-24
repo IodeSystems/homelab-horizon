@@ -126,7 +126,7 @@ seg:people        10.10.9.0/24    gw-1 · laptops, phones     NO PROJECT  ⚠ SE
 > quietly patch: a human-access VPN genuinely belongs to no project, and a
 > segment with no owner genuinely has nobody accountable for it. Until it is
 > settled, anything built on "a segment may have no project" — including
-> ui-redesign.md's plan to render `seg:people` as a Network row — is building
+> [ui.md](ui.md) Part 2's plan to render `seg:people` as a Network row — is building
 > on a shape hz will refuse.
 >
 > The two ways out: let `Project` be empty and say in the record what an

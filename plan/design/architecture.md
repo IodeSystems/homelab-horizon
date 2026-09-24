@@ -9,7 +9,7 @@
 > grounded in a file reference — check them before trusting them.
 >
 > **AMENDED 2026-09-23 by
-> [upstream-and-promotion.md](upstream-and-promotion.md).** This document
+> [estate.md](estate.md) Part A.** This document
 > assumes exactly ONE hz instance and never says so. The estate is two: a
 > registry/promotion plane and a light prod gateway that reaches up to it. That
 > amendment also carries the **config generation** — the missing link between
@@ -265,7 +265,7 @@ fix.
 > realm and the VPN realm. What that does to every rule below — interface
 > uniqueness, CIDR overlap, the multi-homing note, IP ban scoping — and the
 > decisions it leaves open are worked out in
-> [network-zones.md](network-zones.md). This section still describes what hz
+> [estate.md](estate.md) Part B. This section still describes what hz
 > enforces today.
 
 A project's machines form a network segment. `code` has machines, `redline` has
@@ -459,7 +459,7 @@ never done is *execute* on a box it is not.
    a display: an agent poll is a heartbeat on a fixed cadence, an instance's
    `observed_at` refreshes at boot, and a healthy long-running instance has a
    fresh agent and an old version reading (`example-projection.md` §3). The
-   SCREEN is still unbuilt; `ui-redesign.md` designs it.
+   SCREEN is still unbuilt; `ui.md` Part 2 designs it.
 
 **Phase 3 — climb the rung.** Mostly not software.
 

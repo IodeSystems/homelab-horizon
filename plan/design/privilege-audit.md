@@ -1,5 +1,14 @@
 # Privilege audit — what actually needs root, measured
 
+> **`privilege-classification.md` was DELETED 2026-09-24.** Every `§x` citation
+> of it — in this file, in [../icebox.md](../icebox.md), in
+> [architecture.md](architecture.md) and in [../done.md](../done.md) — is
+> historical provenance for a decision the code now carries. The three parts of
+> it that the code did NOT carry are reproduced verbatim at the end of this
+> file: its §5.2 (the three bounding properties), its §7 (the item-12 readiness
+> checklist, which §8 below scores against) and its §8 (the operator questions).
+
+
 > Run 2026-09-21 on a throwaway multipass VM (`hz-audit`, Ubuntu 24.04), with a
 > **synthetic config**: no DNS provider, no `external_dns`, no SSL, no office
 > keys, no office hostnames. Zero credentials of any kind were copied onto it.
@@ -1092,3 +1101,223 @@ rough order of value per risk:
 - **Reinstall the unit on upgrade, or warn that it is stale** (§1.3). It is the
   measured reason a shipped fix was inert, and the flip rewrites the unit
   anyway — better to find out now that nothing rewrites it.
+
+---
+
+# Rescued from `privilege-classification.md`, 2026-09-24
+
+That document classified 33 privileged operations and is now **deleted**: every
+DELETE it ordered is gone from the tree, every ✅ it claims is real in the code,
+and the classifications themselves are what `internal/agent` and
+`internal/server` now do. Three things in it were NOT carried by the code and
+are reproduced verbatim below, because nothing else holds them:
+
+- **§5.2's three bounding properties** — the reusable rule that stops the next
+  privileged verb becoming a general-purpose root helper. (Also condensed into
+  the repo's root `CLAUDE.md`.)
+- **§7's item-12 readiness checklist** — the ONLY enumerated to-do list for
+  finishing the flip. §8 of this document scores against it ("6 of 34"); it
+  never reproduced it.
+- **§8's operator questions** — cross-referenced from §4 here, never restated.
+
+Everything else was either duplicated in [../icebox.md](../icebox.md) (its §9,
+all six items, checked) or is reasoning whose conclusion is already cross-linked
+from this document. Section numbers below are that document's own.
+
+### 5.2 What bounds it — three properties, each checkable
+
+If a privileged verb is ever added back, these are the properties that stop it
+becoming a general-purpose root helper. State them as a rule, because
+`systemdRun` (§3.1) shows how fast one appears:
+
+1. **Never a shell string.** `systemd-run … bash -c "<hz-built string>"`
+   appears three times today. A verb takes typed arguments or nothing.
+2. **Never a subcommand from a request.** `POST /iptables/remove` (§3.3) takes
+   its table, chain and arguments from the body. A privileged executor whose
+   *verb* is caller-controlled cannot be narrowed by validation.
+3. **Never reachable from the web process.** Not by exec, not by socket, not by
+   `systemd-run`. If hz web can trigger it, it is hz web's privilege regardless
+   of which process holds the uid.
+
+A fourth, weaker one, worth writing into the unit: after the flip, every
+`ExecStartPre=+` in hz's unit has to justify itself (`architecture.md` already
+says this) — the `+` prefix runs as root regardless of `User=`, and hz's unit has
+one today creating `/etc/letsencrypt`, `/etc/haproxy/certs` and
+`/etc/systemd/journald.conf.d` (`config.go:2802`). Two of those three are
+directories the **agent** should own after 12.3 and §3.1 #13.
+
+## 7. The item-12 readiness checklist
+
+In order. Each line is checkable, and the ordering is load-bearing: everything
+in **A** removes a privileged path, everything in **B** hands one over, **C** is
+the flip itself, **D** is what proves it.
+
+This sits alongside `ha-and-the-agent.md` §7 (the peer-sync half) and
+`privilege-audit.md` §3 (the ordered consequences). It does not replace either.
+
+### A. Decide, then delete — before anything moves
+
+- [ ] **Answer the three blocking decisions in §8** (generic section vs. named
+      subsystems; observed-state channel; static-serving separation). The first
+      one determines the shape of half the moves below.
+- [x] ✅ **Delete `maybeSelfInstall`** (§3.9) — done 2026-09-22. It is in the
+      boot path, it is root, and it is dead after the flip anyway.
+- [x] ✅ **Delete `POST /iptables/remove`** (§3.3) — done 2026-09-22.
+      Body-supplied table/chain/args.
+- [x] ✅ **Delete `autoheal.Run` and the `auto_heal` config key** (§3.5); rehome
+      its three side effects — done 2026-09-22. `requiredDirs` → `install`,
+      `stopSystemDnsmasq` → `InstallMissing` (the `install-deps` path),
+      `enableIPForwarding` → deleted outright as the third redundant copy.
+- [◐] **Delete `POST /system/install/package`** — ✅ done 2026-09-22 — **and the
+      `systemdRun` helper's last shell-string callers** (§3.1 #8, #12). Confirm
+      `systemdRun` has no callers left and delete it; §5.2 rule 1.
+      **STILL OPEN:** `systemdRun` survives because #5 (`wg/create-config`) and
+      #12 (`haproxy/fix-logging`) are the two remaining callers, and both are
+      *move* items below rather than deletes — #5 needs §8's "which binary owns
+      the CLI verb", #12 needs a provisioning home. Delete `systemdRun` in the
+      commit that lands the second of those, not before.
+- [x] ✅ **Delete `/system/install/horizon-unit` and `/system/enable/horizon`**
+      (§3.1 #6, #7) — done 2026-09-22. A web process that can rewrite its own
+      unit is not de-rooted.
+- [ ] **Move `/wg/create-config` to a CLI verb** that refuses when `wg0.conf`
+      exists (§3.1 #5). Decide which binary owns it (§8).
+- [ ] **Move `/haproxy/fix-logging` to provisioning** (§3.1 #12); keep the
+      diagnosis card.
+- [ ] **Decide axes 4 and 5** of `reconcileIPTables` (§3.4) — delete, or one-shot
+      verb. Needs §8's "has every box passed that version" answer.
+- [ ] **Delete the static supervisor, the static child and `sitedeploy`'s
+      chown** (§3.6) — *after* the §8 decision on static-serving separation.
+
+### B. Hand over — each item independently verifiable by `hz-agent diff`
+
+- [x] **Widen `iptables.LiveRules`' INPUT scope** to admit ban rules (§3.2),
+      with its pure test, **before** bans move. Done 2026-09-22: `scopeLiveRules`
+      admits the exact 4-token `-s <addr> -j DROP` shape alongside the WG-INPUT
+      jump, and `Inputs.BannedIPs` (fed from `cfg.IPBans`, expired entries
+      filtered by `activeBanIPs`) makes a ban an **expected** rule. `StaleRules`
+      deliberately does NOT carry bans, so widening the read did not widen the
+      delete: a lifted ban reads *unknown*, not stale, and `unbanIP` stays the
+      thing that removes the rule. `ha-and-the-agent.md` §4's row is rewritten.
+      Positive control: `TestReconcileLeavesAHandAddedInputDropAlone`
+      (`internal/iptables/bans_test.go`) builds a DROP no hz code generates,
+      shows it newly visible, and asserts on the iptables commands issued —
+      not on the classifier's verdict.
+- [x] **Add the no-default-route stand-down to `buildAgentDesired`** (§3.3).
+      Done in `iptablesSectionFor` — but **not the way this line said**: emitting
+      NO section reads as "hz manages no firewall here" and yields a plan with no
+      firewall lines, i.e. one that reports *in sync*. hz emits the section
+      flagged `stood_down`, with no rule sets. See the correction under §3.3.
+- [ ] **Move `WriteMaintenancePageFiles` into `HAProxySection.Files`** (§3.10).
+      Cheapest item; fits today's model unchanged; **do it first** as the proof
+      that a file-set move works end to end.
+- [ ] **Move ip-forwarding** as two `File` entries — `/etc/sysctl.d/…` and
+      `/proc/sys/net/ipv4/ip_forward` (§3.1 #1). Also fixes the
+      lost-on-reboot bug in the icebox.
+- [ ] **Move log-retention** (§3.1 #13) — the first fifth-section item, so it
+      lands *after* the §4.3 decision.
+- [ ] **Move bans** (§3.2). State the sync→async contract change in the service
+      API's docs: `{ok:true}` means recorded, not installed.
+- [ ] **Stop calling `rebuildWGChains`/`syncMFAJailACL` from all 18 sites**
+      (§3.7) — the largest-volume handover, and the one with a visible latency
+      cost on the MFA login path. Decide whether that path gets a nudge (§4.6).
+- [ ] **Move `reconcileIPTables` axes 2/3** to the agent; keep axis 1's
+      observe+persist in hz (§3.4).
+- [ ] **Widen `ha-and-the-agent.md` §7's `errors/503.http` item** to "every file
+      under the haproxy errors directory" (§3.10).
+- [ ] **Route backup-restore's wg0.conf and cert writes** through 12.2 and 12.3
+      (§3.8). Restore is *blocked on both*; it must not grow a private path.
+- [ ] Item 12 steps 2 and 3 as already written in `architecture.md` (WireGuard
+      section served + admin path off `handleAgentDesired`; certs and
+      `/etc/haproxy/certs`; `loadTLSAssets` becomes an input, not a read).
+- [ ] The peer-sync guard from `ha-and-the-agent.md` §7, checked at boot **and**
+      in `applyNewConfig`.
+
+### C. The flip
+
+- [ ] `hz-agent`'s unit gains `[Install]` and `--apply` (item 12 step 4). Its
+      four inertness tests in `cmd/hz-agent` are the checklist.
+- [ ] `syncServices` renders and stops (item 12 step 5).
+- [ ] hz's unit: `User=root` → `User=hz` (`config.go:2809`, **not** `:2477` —
+      §1.5). Drop `AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW`. Set
+      `NoNewPrivileges=true` (it is `false` today). Re-justify every
+      `ExecStartPre=+` (§5.2). Narrow `ReadWritePaths` to what hz still writes —
+      `/etc/homelab-horizon` and its state directory — and take
+      `/etc/wireguard`, `/etc/dnsmasq.d`, `/etc/haproxy`, `/etc/letsencrypt`,
+      `/etc/systemd/system`, `/etc/systemd/journald.conf.d` and `/proc/sys/net/ipv4`
+      **out**. `cmd/hz-probe/install.go:65-96` is the in-tree model for what the
+      hardened unit looks like (§1.3).
+- [ ] The **six** `Geteuid` branches, not four (§1.5): `main.go:68`, `:141`,
+      `:277`, `:688` go away; `static_supervisor.go:110` and
+      `handlers_site.go:109` are deleted with the supervisor (§3.6). If the
+      supervisor survives the §8 decision, its "dev mode" warning must stop
+      firing on production.
+- [ ] `chown` `/etc/homelab-horizon/config.json`, its directory, `<config>.token`
+      and `<config>.agents` to `hz` (`architecture.md` names the first;
+      `agent_credential.go`'s store is the one added since).
+      `StateDirectory=homelab-horizon` migrates `/var/lib` on its own.
+
+### D. Prove it
+
+- [ ] `sudo hz-agent diff` on the live gateway reports **in sync for every
+      served section** (`architecture.md` item 12's verification step). A section
+      reporting *changed* is evidence a plan doc is stale, not a routine diff.
+- [ ] **Every fixer card in `SystemHealthTab.tsx` and `PCITab.tsx` resolves to
+      shape A, B or C in §6, with none left as an enabled button.** Grep the two
+      files for the hooks listed in §6 and confirm each is gone or rebound.
+- [ ] **The IPTables tab is not blank** — either §4.1 landed, or the tab states
+      why and what to run (§6).
+- [ ] After a reboot: IP forwarding is still on, dnsmasq has hz's config (not a
+      bare caching resolver — `privilege-audit.md` §1.4's measured regression),
+      and `systemctl status homelab-horizon` carries no degraded line.
+- [ ] Positive control on the flip itself: with `User=hz`, confirm that one
+      deleted operation actually **fails** if reintroduced — otherwise "it all
+      still works" is equally consistent with the unit not having changed.
+      (`~/inflight` canon: validate the instrument before trusting silence.)
+
+## 8. What only the operator can answer
+
+Recorded here and cross-referenced from `privilege-audit.md` §4. One at a time —
+several of these make the next moot.
+
+**Blocking decisions (the user owns these; do not guess):**
+
+1. **Generic section, or keep adding named subsystems?** (§4.3) Four of this
+   document's verdicts want a fifth `Desired` section. Deciding after the first
+   one lands means porting it twice.
+2. **Does the agent report observed state back to hz?** (§4.1) Without it the
+   IPTables tab is blank after the flip and hz cannot say whether the agent is
+   converging. `handleProbeReport` is the in-tree pattern.
+3. **Static file serving after the flip** (§3.6): accept in-process, a
+   separate agent-managed unit, or let haproxy serve the roots? The
+   privilege-separation the supervisor provides today goes away either way; the
+   question is whether anything replaces it.
+4. **Does the MFA unjail path get a nudge?** (§3.7, §4.6) A poll-interval delay
+   between passing MFA and the network working is the most user-visible cost of
+   item 12. `architecture.md` item 11 rejected long-poll for service changes on
+   good grounds; this is a different case.
+5. **Which binary owns `wg create-config`** (§3.1 #5) — `homelab-horizon` or
+   `hz-agent`? It writes a file the agent will own, which argues for `hz-agent`;
+   it is needed at bootstrap before the agent is enrolled, which argues the
+   other way.
+
+**Facts about the estate:**
+
+6. **Is `peer_id` set in `/etc/homelab-horizon/config.json`?** (already
+   `privilege-audit.md` §4 q1 — repeated because half of §2's verdicts assume
+   "no".)
+7. **Is `cfg.IPBans` non-empty, with recent `CreatedAt`?** (§3.2) Decides
+   whether bans are a live path or a dormant one, and therefore whether the
+   sync→async change matters.
+8. **What does `apt-audit.log` (beside `config.json`) contain?** (§3.1) It is an
+   append-only record of every install-package press, with timestamp and source
+   IP. It answers "is the install button used" exactly, with no guessing.
+9. **Has every box in the estate run an hz version newer than the legacy
+   PostUp templates?** (§3.4) Decides whether `reconcileIPTables` axes 4/5 can
+   simply be deleted.
+10. **Has the backup-restore endpoint ever been used on this box?** (§3.8)
+    Decides whether restore is a live constraint on 12.2/12.3 ordering or a
+    path that can be narrowed freely.
+11. **Does any service have `Proxy.MaintenancePage` set?** (§3.10) Decides
+    whether the maintenance-page file set is a real handover or an empty one.
+12. **Does any service use `Proxy.StaticRoot`?** (§3.6) If none does, the
+    static-supervisor decision (#3) is free.
