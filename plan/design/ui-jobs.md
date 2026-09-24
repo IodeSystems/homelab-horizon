@@ -28,7 +28,7 @@ the data types of the pre-model product; `/drift`, `/projects`, `/machines` and
 `/hosts` were each appended to a nav that already had eleven flat entries. It
 reads half-migrated because it is half-migrated, and the code says so out loud:
 
-> *"The navigation redesign (plan/ui-redesign.md) reshapes this list properly;
+> *"The navigation redesign (plan/design/ui-redesign.md) reshapes this list properly;
 > this is one entry in the existing shell, not that change."*
 > — `ui/src/components/AppLayout.tsx:55-58`
 
@@ -219,7 +219,7 @@ address (`useSetHostIP` → `POST /topology/hosts/set`, `ui/src/api/hooks.ts:161
 
 **Where it breaks.** The expensive half of this job is not moving a declared
 host — it is the **47 literal occurrences** of the gateway's own address in a
-config that predates `@self` ([plan.md](plan.md) item 21: 31 `internal_dns.ip`,
+config that predates `@self` ([plan.md](../plan.md) item 21: 31 `internal_dns.ip`,
 8 `proxy.backend`, 6 `deploy.next_backend`, and more). `/hosts` finds and lists
 them — `OccurrenceSection` (`ui/src/components/hosts/HostBits.tsx:248`) renders
 each one and explains exactly what adoption would write — and then hands the
@@ -257,7 +257,7 @@ there, already admin-gated, already tested.
 
 `hz import` is likewise CLI-only: `/api/v1/import` (`server.go:1121`) has no UI
 caller, and the 33-service estate that this gateway actually has is exactly the
-population that needs it ([plan.md](plan.md), *The plan file*).
+population that needs it ([plan.md](../plan.md), *The plan file*).
 
 **Verdict: CLI only — and read-only in the UI as a decision nothing in the
 model forces.** Whether that decision stands is §8's first operator call.
@@ -274,7 +274,7 @@ service is the one place the service's project is invisible and unsettable.
 
 Note the ordering trap the CLI documents and the UI cannot: **declare the
 environment, then assign the service** — `Save()` refuses a service naming an
-undeclared rung ([plan.md](plan.md), *Deploy gate*). A UI that added assignment
+undeclared rung ([plan.md](../plan.md), *Deploy gate*). A UI that added assignment
 without the declaration screens would walk operators straight into it.
 
 **Verdict: CLI only.**
@@ -332,10 +332,10 @@ per-segment public key (`feat/segment-key`).
   finds 108 `domain` in `domains.tsx`.
 - **It is not a tunnel yet.** `projection.Segment.Peers` is machine *names*, so
   nothing can write a wg config, and `agent.Desired` has no WireGuard section
-  for one ([plan.md](plan.md) item 15).
+  for one ([plan.md](../plan.md) item 15).
 - **A declared machine cannot join a segment.** `AddMachine` refuses a
   duplicate and there is no `hz machine set`, so `segment set --member` only
-  reaches machines declared with `--segment` up front ([plan.md](plan.md) item
+  reaches machines declared with `--segment` up front ([plan.md](../plan.md) item
   15, marked ❓).
 
 **Verdict: CLI only, and the job it exists for is not finished at the model
@@ -350,7 +350,7 @@ that into a held apt package for every instance on every machine in that rung
 **Where it breaks.**
 
 - **Nothing installs it.** The agent is armed on zero boxes
-  ([plan.md](plan.md) item 13, steps 4-5 open).
+  ([plan.md](../plan.md) item 13, steps 4-5 open).
 - **No UI.** `/environments/set` has zero UI callers; `/projects` displays the
   declared version read-only.
 - **One version per project per rung.** The projection keys packages on
@@ -374,7 +374,7 @@ that into a held apt package for every instance on every machine in that rung
 restarts it.
 
 **Where it breaks: nowhere in the code, and everywhere in practice.** Both
-halves landed ([plan.md](plan.md) item 17) and both are inert **twice over**:
+halves landed ([plan.md](../plan.md) item 17) and both are inert **twice over**:
 
 1. The agent is armed on zero boxes.
 2. **All seven `cm_*` tables on the live gateway are empty** (measured
@@ -384,7 +384,7 @@ halves landed ([plan.md](plan.md) item 17) and both are inert **twice over**:
    answer"* case, not the *"hz does not know"* case.
 
 The ceremony has run end to end exactly once, on `redline-virgin`, 2026-09-19
-(`architecture.md`, *Where we are*). [plan.md](plan.md) item 9 is explicit that
+(`architecture.md`, *Where we are*). [plan.md](../plan.md) item 9 is explicit that
 this must not be read as *"safe for real secrets"* — holes 1, 3, 5, 6, 8 and 9
 of [config-manager.md](config-manager.md) are open, and hole 9 is that hz's own
 JavaScript could be tampered with to steal the environment key at approval
@@ -413,7 +413,7 @@ lives on `Environment.Version`; observed lives on the registration
 halves exist; nothing renders one against the other as a rollout view.
 [ui-redesign.md](ui-redesign.md) designs that screen (*Environment — "is this
 rung actually running, and at what?"*, with the generated verdict sentence) and
-it is unbuilt. [plan.md](plan.md) item 20 records why: **five of
+it is unbuilt. [plan.md](../plan.md) item 20 records why: **five of
 [example-projection.md](example-projection.md) §4's seventeen states are
 blocked on the MODEL, not the UI** — an instance has no port and no entry point
 anywhere, `ProjectResp.Services` is names only, and nothing joins the agent's
@@ -439,7 +439,7 @@ until item 13 lands, so **every machine but hz itself reads "hz cannot
 compare"** ([ui-redesign.md](ui-redesign.md), *Built so far*). The screen says
 that in those words, which is right — but it means the most valuable screen in
 the tool currently has one row of real content on an estate of one declared
-machine ([plan.md](plan.md) item 23: the live gateway declares **0** machines
+machine ([plan.md](../plan.md) item 23: the live gateway declares **0** machines
 before `--self`).
 
 **Verdict: served, for one machine.**
@@ -513,7 +513,7 @@ an intern opens a PR
 | Someone blesses the **version** | `hz env set --version` | ✅ exists, CLI only, **no approval record** |
 | Someone blesses the **config** | `hz config promote --to=<env> --execute` | ✅ exists, CLI only **and necessarily so** — the re-seal runs between two local keys; the server offers only `/cm/promote/gate` (`server.go:1247`), never a promote |
 | The two are blessed as one act | — | ◻ **designed, unbuilt.** `--version` on `hz config promote` is build-order item 7 ([upstream-and-promotion.md](upstream-and-promotion.md) §4) |
-| The config change causes a restart | `Unit.ConfigGeneration` + the agent's `generations.json` | ✅ **both halves built** ([plan.md](plan.md) item 17) — and **inert twice**: no armed agent, and all seven `cm_*` tables empty on the live gateway |
+| The config change causes a restart | `Unit.ConfigGeneration` + the agent's `generations.json` | ✅ **both halves built** ([plan.md](../plan.md) item 17) — and **inert twice**: no armed agent, and all seven `cm_*` tables empty on the live gateway |
 | It reaches prod | `hz env add prod --from staging`, posture-gated promotion | ◐ **the gate exists; the placement does not.** `redline/prod` is declared with no machine and the model has no way to say *why* — `Environment.Upstream` is item 18, not started |
 | Anyone can prove afterwards who did what | — | ❌ see J15 |
 
@@ -535,7 +535,7 @@ Four things, in descending order of how badly they break the claim:
 3. **It has never run on real data.** All seven `cm_*` tables on the live
    gateway are empty. The ceremony ran once, on a throwaway box, on an older
    binary. A loop that is whole in the tree and has never carried a real secret
-   is a loop nobody has tested; and [plan.md](plan.md) item 9 says in terms
+   is a loop nobody has tested; and [plan.md](../plan.md) item 9 says in terms
    that it must not be used for one yet.
 4. **It leaves no paper trail.** Which is the third clause of the mission
    sentence — *"real money, real isolation and a paper trail"* — and the only
@@ -811,7 +811,7 @@ single highest-value change in the project and it is not a UI change.*
 
 **2. Run the config ceremony once on real data.** All seven `cm_*` tables are
 empty. Until one real config is blessed, the loop is whole in the tree and
-unproven on the estate, and the holes [plan.md](plan.md) item 9 names stay
+unproven on the estate, and the holes [plan.md](../plan.md) item 9 names stay
 theoretical rather than tested. Cheap, and it converts a paragraph of claims
 into evidence.
 
@@ -922,5 +922,5 @@ defensible; being in neither state is not.
 - **Whether any of `architecture.md`'s phases are right.** They are taken as
   given; this measures the product against them.
 - **Anything about the deploy backlog.** `dev` being 167 commits ahead of
-  `origin/main` is [plan.md](plan.md)'s risk to carry, and it is the reason
+  `origin/main` is [plan.md](../plan.md)'s risk to carry, and it is the reason
   every ✅ in this document means *"on `dev`"* and not *"on the gateway"*.

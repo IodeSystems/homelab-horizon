@@ -1,6 +1,6 @@
 # HA peer-sync and hz-agent — two writers, or one trigger?
 
-> Investigation, 2026-09-21. Written because `plan/privilege-audit.md` §2 flags
+> Investigation, 2026-09-21. Written because `plan/design/privilege-audit.md` §2 flags
 > `internal/server/handlers_ha.go` as writing the same files `hz-agent` writes,
 > and §3 item 3 makes deciding it a precondition for item 12.
 >
@@ -15,7 +15,7 @@ Every claim below is against code at `443a3ca` on `dev`.
 
 ## 1. What the audit got wrong
 
-`plan/privilege-audit.md` §2 lists:
+`plan/design/privilege-audit.md` §2 lists:
 
 | site | what it touches |
 |---|---|
@@ -134,7 +134,7 @@ today (Carl, 2026-09-18)."* That statement plus the gates above means:
 > on a single gateway.
 
 Confirm it on the real box before item 12 anyway: `peer_id` in
-`/etc/homelab-horizon/config.json`. That is already `plan/privilege-audit.md`
+`/etc/homelab-horizon/config.json`. That is already `plan/design/privilege-audit.md`
 §4's first question, now with a specific thing to look at.
 
 ## 4. The overlap, file by file
@@ -268,7 +268,7 @@ tests that it stays true once the agent is the only writer.
 ## 7. What has to be true before item 12 can flip
 
 The peer-sync half of the checklist. It sits alongside
-`plan/privilege-audit.md` §3, it does not replace it.
+`plan/design/privilege-audit.md` §3, it does not replace it.
 
 - [ ] **Confirm `peer_id` is unset** in `/etc/homelab-horizon/config.json` on
       the office gateway. If it is set, stop: §4's three bypass rows are live
@@ -357,7 +357,7 @@ The peer-sync half of the checklist. It sits alongside
 
 ## 8. What only the operator can answer
 
-`plan/privilege-audit.md` §4 already asks whether HA peer-sync is configured.
+`plan/design/privilege-audit.md` §4 already asks whether HA peer-sync is configured.
 This investigation sharpens it and adds one follow-up; both are recorded there.
 
 Nothing else here needs a human — the gates, the renderers and the byte

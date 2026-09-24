@@ -516,7 +516,7 @@ is the degradation.
 > **The danger is not the membership, it is forwarding.** A dual-homed machine
 > with `ip_forward` on bridges two segments that were meant to be isolated — a
 > bypass, not a smell.
-> — `plan/architecture.md`, "Machines in more than one segment"
+> — `plan/design/architecture.md`, "Machines in more than one segment"
 
 Options, with consequences:
 
@@ -564,7 +564,7 @@ copy-pasted name grants for free.
 
 > **Joining a machine to a second segment requires someone physically at that
 > box.** ... joining a second segment: **yes** [needs a trip]
-> — `plan/architecture.md`, "Presence — a trip to the box to join a second segment"
+> — `plan/design/architecture.md`, "Presence — a trip to the box to join a second segment"
 
 If `lan/redline` + `vpn/redline` is the normal case, does joining the VPN realm
 require a trip to the box? Under the presence table's own logic the answer is

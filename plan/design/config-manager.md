@@ -102,7 +102,7 @@ at **bless time**, with the operator present.
 
 Config is addressed by **environment / app / role**, where **role is a FUNCTION**
 and one app may hold several (`{app, ops}` on one box). The **key address is
-exactly the config address** — see [Keys](#keys-are-symmetric-per-environment-app-role).
+exactly the config address** — see [Keys](#keys-are-symmetric-per-project-environment-app-role).
 
 Each config carries **`minVer` / `maxVer`**. Resolution: take every config for
 the `(project, environment, app, role)`, keep those whose range contains the running
@@ -587,7 +587,7 @@ So the pull path is now: fetch → sequence floor → decrypt (any failure fails
 whole config and falls back to cache) → hand over. Nothing about keys.
 
 **And a linked library cannot be missing.** The
-[client-library icebox entry](icebox.md) already recorded this failing for real:
+[client-library icebox entry](../icebox.md) already recorded this failing for real:
 a consumer whose provisioning skipped the client download died with
 `fork/exec …/bin/hz-client: no such file or directory`, after migrations had
 run. An app that pushes its own config needs no separate binary on a developer's
@@ -1345,7 +1345,7 @@ a partial decrypt fails the whole config.
   replicated and never has been, so a failover loses every registration — which
   is *why* hole 6's fix matters. Do not put this state in `config.json` to get it
   replicated: `updateConfig` is a read-modify-write with no mutex. The
-  replication exploration is [iceboxed](icebox.md).
+  replication exploration is [iceboxed](../icebox.md).
 - **Intern onboarding** has no path in hz until this lands, which is the cost of
   retiring per-peer secrets.
 

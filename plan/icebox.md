@@ -14,7 +14,7 @@ How this plan works: see `/home/nthalk/CLAUDE.md` "Planning". These are queued, 
 
 Closed on `fix/peer-api-access`: an empty peer list now admits nobody. Full
 write-up, including what else that surface hands out and whether the cert
-channel should exist at all, in `plan/ha-and-the-agent.md` §9-§10.
+channel should exist at all, in `plan/design/ha-and-the-agent.md` §9-§10.
 
 ## ◻ Read-only access, if it is ever wanted
 
@@ -67,7 +67,7 @@ this is opt-in rather than pending.
 
 ## ◻ Replicated state for HA, instead of a JSON pull and a per-instance sqlite
 
-Surfaced 2026-09-18 while scoping the [config manager](config-manager.md), which
+Surfaced 2026-09-18 while scoping the [config manager](design/config-manager.md), which
 needs registration and approval state to survive a failover and found nothing to
 put it in.
 
@@ -263,7 +263,7 @@ it once by source-IP identity, the row is deleted. Driver was
 configure npm, maven, docker, go, apt and brew.
 
 **Retired, not shipped and not rejected.** The
-[config manager](config-manager.md) covers the need with better properties, as
+[config manager](design/config-manager.md) covers the need with better properties, as
 *machine-scoped secrets*: encrypted to the keypair the machine generates at
 registration, so hz holds ciphertext it cannot read, revocation is per-device,
 and the value survives a lost response instead of being gone. The reasoning,
@@ -579,7 +579,7 @@ the recovery-recipient work that found it.
 
 ## ◻ Found while classifying privileged operations (2026-09-21)
 
-From `plan/privilege-classification.md`. None fixed there — that investigation
+From `plan/design/privilege-classification.md`. None fixed there — that investigation
 changed no code. Each names the section with the evidence.
 
 - **IP forwarding is never persisted.** Three places write
@@ -650,7 +650,7 @@ changed no code. Each names the section with the evidence.
   root; dev mode)` whenever `Geteuid() != 0` — which is exactly the state item
   12 puts a production gateway into. §3.6.
 
-- **Two stale references in `plan/architecture.md`.** `User=root` is at
+- **Two stale references in `plan/design/architecture.md`.** `User=root` is at
   `internal/config/config.go:2809`, not `:2477`; and item 12's "four `Geteuid`
   gates" misses two more in `internal/server` (`static_supervisor.go:110`,
   `handlers_site.go:109`) which change branch at the flip rather than going
@@ -658,7 +658,7 @@ changed no code. Each names the section with the evidence.
 
 ## ◻ Found re-measuring the privilege audit on a VM (2026-09-22)
 
-From the re-run recorded in `plan/privilege-audit.md`. Docs-only pass, nothing
+From the re-run recorded in `plan/design/privilege-audit.md`. Docs-only pass, nothing
 fixed here. Each names the section with the evidence.
 
 - **A box enrolled before the issuer change cannot rotate its credential.**
@@ -783,7 +783,7 @@ Both predate `refactor/cm-to-config` and were carried through it verbatim (only
   `hz config push <env>/<app>/<role>`, and `ui/src/components/CMConfigs.tsx`
   names `hz config push` in prose. There is no `push` verb — `runCM`'s switch is
   `key | recovery | machines | pending | approve | deny | remove | promote |
-  show | resolve`. Pushing is deliberately not hz's: `plan/config-manager.md`
+  show | resolve`. Pushing is deliberately not hz's: `plan/design/config-manager.md`
   line 572 settles it as `redline config push`, i.e. the APP links `configmgr`
   and calls `configmgr.Push`. So the button hands an operator a command that
   cannot work, in a shape that looks authoritative because it is copyable.

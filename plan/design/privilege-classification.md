@@ -1,6 +1,6 @@
 # Privilege classification — who owns each privileged operation after item 12
 
-> Investigation, 2026-09-21. Written because `plan/privilege-audit.md` §3 item 5
+> Investigation, 2026-09-21. Written because `plan/design/privilege-audit.md` §3 item 5
 > says "classify the fixer buttons, `handlers_ban`, `handlers_integration`,
 > `system/interfaces` — agent actions, or hz keeps a minimal privileged helper.
 > Say which; do not discover it after the flip."
@@ -37,9 +37,9 @@
 
 ## 1. Audit rows that are wrong
 
-`plan/privilege-audit.md` §2's "not covered by anything" table came from
+`plan/design/privilege-audit.md` §2's "not covered by anything" table came from
 `grep -rnE 'exec\.Command|systemctl|os\.WriteFile'` plus hand-added rows.
-`plan/ha-and-the-agent.md` §1 already corrected one (`handlers_ha.go` — a
+`plan/design/ha-and-the-agent.md` §1 already corrected one (`handlers_ha.go` — a
 path-string artifact). **Three more rows do not survive contact with the code**,
 and two of them fail the same way as `handlers_ha.go`: a privileged-looking
 string inside text hz *serves* rather than text hz *executes*.
@@ -105,7 +105,7 @@ are all `iptables`. The `net` import is `net.ParseIP`, a pure parse. The
 operation is real and does need classifying (§3.2) — only the `ip` half is
 wrong.
 
-### 1.5 Two stale references in `plan/architecture.md`
+### 1.5 Two stale references in `plan/design/architecture.md`
 
 - `User=root` is at `internal/config/config.go:2809`, not `:2477`.
 - Item 12 says "`main.go`'s four `Geteuid` gates … go away". There are four in
@@ -1301,5 +1301,5 @@ Found while verifying, not fixed here (this investigation changes no code):
   invalidates every issued client config (§3.1 #5).
 - The static supervisor warns "dev mode" on a correctly-configured unprivileged
   host (§3.6).
-- `plan/architecture.md`'s stale `config.go:2477` and "four `Geteuid` gates"
+- `plan/design/architecture.md`'s stale `config.go:2477` and "four `Geteuid` gates"
   (§1.5).

@@ -90,7 +90,7 @@ not globally — `internal/config/config.go:696` says so in the type itself:
 type envKey struct{ project, name string }
 ```
 
-`plan/example-projection.md` §1 has six projects declaring an environment called
+`plan/design/example-projection.md` §1 has six projects declaring an environment called
 `prod` (`intern`, `storefront`, `analytics`, `client-a`, `client-b`, `client-c`).
 
 What carries the project today is the **app** coordinate, implicitly and by luck:
@@ -116,8 +116,8 @@ There are already two ad-hoc patches, on two independent surfaces:
 
 **And the model already says the address is four-part; only the code disagrees.**
 
-- `plan/architecture.md:83` — `Instance (project, environment, app, role) — the config address`
-- `plan/ui-redesign.md:81` — "An **instance** is `(project, environment, app, role)`"
+- `plan/design/architecture.md:83` — `Instance (project, environment, app, role) — the config address`
+- `plan/design/ui-redesign.md:81` — "An **instance** is `(project, environment, app, role)`"
 - `internal/db/migrations/0011_observed_version.up.sql`, header comment — "An
   instance address is (project, environment, app, role)", written over a schema
   whose columns are three.
@@ -236,16 +236,16 @@ Evidence, in descending strength:
    `github.com/iodesystems/homelab-horizon v0.3.0`, and
    `grep -rl 'homelab-horizon/configmgr' --include=*.go` over the redline tree
    returns nothing. The first intended client has not started using it. This
-   independently confirms `plan/architecture.md`'s own "Not true yet" row
+   independently confirms `plan/design/architecture.md`'s own "Not true yet" row
    ("redline still ships plaintext secrets … `configmgr` not imported").
-4. **The one recorded run was on a throwaway VM.** `plan/architecture.md:377` —
-   "Ran end-to-end once on `redline-virgin` 2026-09-19". `plan/config-manager.md:3`
+4. **The one recorded run was on a throwaway VM.** `plan/design/architecture.md:377` —
+   "Ran end-to-end once on `redline-virgin` 2026-09-19". `plan/design/config-manager.md:3`
    says the same. A multipass VM; its disk is not a system of record.
-5. **Key custody has never been run for real.** `plan/architecture.md`'s path,
+5. **Key custody has never been run for real.** `plan/design/architecture.md`'s path,
    Phase 1 step 2: "**The tooling landed 2026-09-20**; what remains is running it
    on the real box — `keygen` → `add` → `backfill` → **`verify`**. Not done until
    `verify` says yes." So there are no recovery wraps to invalidate either.
-6. **Rotation has never run** (`plan/config-manager.md:22` — "rotation has no
+6. **Rotation has never run** (`plan/design/config-manager.md:22` — "rotation has no
    re-wrap path at all"), so no address holds a second key whose re-wrap would be
    lost.
 
@@ -534,7 +534,7 @@ The backwards resolution and its gap both become unnecessary. Exactly:
 | the exported wrapper `ResolveEnvironment` and its 16-line "two callers must not disagree" rationale | `:700–716` |
 | the instances gap "cannot be resolved to a project … `hz service assign`" | `:460–461` |
 | the drift handler's call through the projection's export | `internal/server/handlers_version_drift.go:167` |
-| the prose describing the derivation as the design ("THE APP COORDINATE SUPPLIES THE PROJECT") | `plan/architecture.md:758–778` |
+| the prose describing the derivation as the design ("THE APP COORDINATE SUPPLIES THE PROJECT") | `plan/design/architecture.md:758–778` |
 
 What replaces the function body is one line:
 
@@ -611,7 +611,7 @@ The genuinely cheaper option: **no flag day, no migration, no re-registration.**
 
 Rejected, for three reasons in increasing order of weight.
 
-1. **It costs the estate its own naming.** `plan/example-projection.md` §1's six
+1. **It costs the estate its own naming.** `plan/design/example-projection.md` §1's six
    `prod` rungs become `storefront-prod`, `client-a-prod`, … — which is the project
    coordinate, spelled as a prefix inside a single field, with no delimiter
    anything can parse and no CHECK that enforces it. `configmgr/doc.go:134` argues
@@ -682,14 +682,14 @@ see §7.
 Cheap today = a schema rebuild on a database with no rows worth keeping, plus
 deleting 80 lines of derivation. There is no ceremony, no re-key, no fleet.
 
-What the same change costs at each later point on `plan/architecture.md`'s own
+What the same change costs at each later point on `plan/design/architecture.md`'s own
 path:
 
 | after… | added cost |
 |---|---|
 | **key custody runs** (Phase 1 step 2 — `keygen`/`add`/`backfill`/`verify`) | every recovery wrap is invalidated (kind 0x02). Recoverable — `backfill` re-wraps from the keystore — but it must be re-run and re-**verified** per address, by the human holding the keystore. Small. |
 | **redline imports `configmgr`** (Phase 1 step 3) | every production secret becomes a kind 0x01 envelope. The change now needs an open-old/re-seal-new tool, or a full re-push of every config from a machine holding every environment key. |
-| **the first real approval** | every approved box needs a fresh **typed-fingerprint ceremony** per address (`plan/config-manager.md` — a human comparing a 24-hex string on two screens, deliberately un-automatable). That cost is per address and scales with the fleet. |
+| **the first real approval** | every approved box needs a fresh **typed-fingerprint ceremony** per address (`plan/design/config-manager.md` — a human comparing a 24-hex string on two screens, deliberately un-automatable). That cost is per address and scales with the fleet. |
 | **rotation exists** | an address may hold several keys and several wraps; the re-wrap path that "has no re-wrap path at all" today has to be correct *during* a flag day. |
 
 The order matters: items 2 and 3 are the next two steps on the declared path.
@@ -792,18 +792,18 @@ clean.
 
 ### ✅ Stage 6 — docs
 
-- `plan/config-manager.md` — the keystore path at `:381`, and `:102, 188, 207,
+- `plan/design/config-manager.md` — the keystore path at `:381`, and `:102, 188, 207,
   320, 384, 425, 458, 746, 1286`, every one of which keys off the triple.
-- `plan/architecture.md` — `:758–778`, the section that *describes the backwards
+- `plan/design/architecture.md` — `:758–778`, the section that *describes the backwards
   resolution as the design* ("THE APP COORDINATE SUPPLIES THE PROJECT"). That
   section is what this change retires; `:83` already states the target form and
   needs no edit. `:774`'s unit-name scheme is unchanged and should say so
   explicitly, or someone will "fix" it.
-- `plan/example-projection.md:179` — `new-box`'s "wants: staging/web/app ←
+- `plan/design/example-projection.md:179` — `new-box`'s "wants: staging/web/app ←
   (environment, app, role). No project: the address has no project coordinate; it
   is derived from the app" becomes the worked four-part example. Also `:224, 332,
   336, 351, 424, 469, 483`.
-- `plan/ui-redesign.md:26` (the `AddressPicker` concept) and `:383` ("already
+- `plan/design/ui-redesign.md:26` (the `AddressPicker` concept) and `:383` ("already
   per-`(environment, app, role)`").
 - `plan/plan.md:466`.
 - `configmgr/doc.go` (done in stage 2), and this file's status line.

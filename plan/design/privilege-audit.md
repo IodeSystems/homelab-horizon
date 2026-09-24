@@ -548,7 +548,7 @@ the agent's own tree.
 | `internal/server/handlers_backup.go:172,:201` | restore writes `wg0.conf` (server private key) and cert PEMs **from an uploaded zip**. **Missed by this table**, added by `privilege-classification.md` §3.8. |
 | `handlers_api_vpn.go:431`, `mfa_jail.go:106` | `rebuildWGChains` + `syncMFAJailACL` — flush and repopulate two hz-owned iptables chains and reload HAProxy, from **18 call sites**, on every MFA transition and two timers. **Missed by this table**, added by `privilege-classification.md` §3.7, and by volume the largest privileged surface hz web has. |
 
-**Corrected 2026-09-21 — see `plan/ha-and-the-agent.md`.** The row above said
+**Corrected 2026-09-21 — see `plan/design/ha-and-the-agent.md`.** The row above said
 `handlers_ha.go` was the one to worry about, because it writes *the same files
 the agent writes*. It does not. `handlers_ha.go` has no `os.WriteFile`, no
 `os.Create` and no `exec.Command`; those three paths appear in it only as
@@ -564,7 +564,7 @@ also **latent**: every loop is gated on `peer_id` being set in `config.json`,
 and there is no fleet today. The live exposure is three paths that bypass
 `syncServices` — cert pull, WG peer application, ban re-apply — which are
 already items 12.2, 12.3 and §3 item 5 below. Full analysis, overlap table and
-item-12 checklist: `plan/ha-and-the-agent.md`.
+item-12 checklist: `plan/design/ha-and-the-agent.md`.
 
 ## 3. Consequences for item 12
 
@@ -633,7 +633,7 @@ Ordered, replacing the handover list in `architecture.md`.
    **Other handlers with a test-only credential** are listed in §6. They are
    not fixed here; fixing them is separate work.
 3. **Decide peer-sync** (not `handlers_ha.go` — see the correction in §2).
-   Recommendation in `plan/ha-and-the-agent.md`: guard first (refuse to arm the
+   Recommendation in `plan/design/ha-and-the-agent.md`: guard first (refuse to arm the
    agent while a fleet is configured, and re-check in `applyNewConfig`), then
    route the three `syncServices` bypasses — cert pull, WG peer application, ban
    re-apply — through whatever items 12.2/12.3 and §3 item 5 below decide. The
@@ -663,13 +663,13 @@ Ordered, replacing the handover list in `architecture.md`.
    (served bundle only, never the account key or DNS credentials, `Secret`
    forced by the payload, admin path off `handleAgentDesired` first — ✅ done
    2026-09-21 with item 12 step 2, which is also when WireGuard started
-   crossing — hashed not logged). Reasoned out in `plan/architecture.md`, "Cert material and the two
+   crossing — hashed not logged). Reasoned out in `plan/design/architecture.md`, "Cert material and the two
    channels", rather than inferred from the WireGuard precedent.
 
    Six pre-existing defects found and left, in `plan/icebox.md` — the loudest
    being that a corrupt `fullchain.pem` makes the sweep re-request a
    certificate every 12 hours for ever.
-5. ✅ **Done 2026-09-21 — `plan/privilege-classification.md`.** Every privileged
+5. ✅ **Done 2026-09-21 — `plan/design/privilege-classification.md`.** Every privileged
    operation classified AGENT-OWNED / HZ-KEEPS / DELETE, with the item-12
    readiness checklist in its §7. Three of the rows named here perform no
    privileged operation at all (`handlers_integration`, `system/interfaces`,
@@ -684,13 +684,13 @@ The VM shows they exist; only the estate says whether they run. Specifically
 worth checking against the real box before item 12:
 
 - **is `peer_id` set in `/etc/homelab-horizon/config.json`?** That one key turns
-  every peer-sync loop on or off (`plan/ha-and-the-agent.md` §3). Empty ⇒ the
+  every peer-sync loop on or off (`plan/design/ha-and-the-agent.md` §3). Empty ⇒ the
   whole feature is dead code at runtime and item 12 needs only a guard.
 - **if it is set, is this box the primary (`config_primary: true`)?** The
   primary never pulls — only a non-primary runs the config pull, the WG peer
   application and the cert pull. Ban sync runs on both. So "which side is the
   gateway on" decides which of the three bypasses in
-  `plan/ha-and-the-agent.md` §4 actually fire here.
+  `plan/design/ha-and-the-agent.md` §4 actually fire here.
 - are the Prometheus/integration paths in use?
 - how are certs currently renewed, and on what schedule?
 - has anyone hand-edited `/etc/wireguard/*.conf`? (decides whether the
@@ -915,7 +915,7 @@ item 12 changes. Two consequences worth stating before the flip:
 ## 8. Can item 12 steps 4–5 be attempted? No, and not close.
 
 Added 2026-09-22, because that is the question this re-measurement exists to
-answer. `plan/privilege-classification.md` §7 and `plan/ha-and-the-agent.md` §7
+answer. `plan/design/privilege-classification.md` §7 and `plan/design/ha-and-the-agent.md` §7
 were both walked item by item against the tree at `f6e06bd`.
 
 **Score: 6 of 34 checklist items are done. Every one of them is in section B

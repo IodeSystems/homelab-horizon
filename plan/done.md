@@ -63,7 +63,7 @@ other material on that surface. Rotation is the remediation.
 
 **Follow-on, not done here:** whether the cert-distribution channel should
 exist at all. It is removable — investigation and cost in
-`plan/ha-and-the-agent.md` §10.
+`plan/design/ha-and-the-agent.md` §10.
 
 ## VPN MFA jail (2026-08-12)
 

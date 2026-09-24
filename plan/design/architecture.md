@@ -2,7 +2,7 @@
 
 > Design doc, not a work queue. The model, the boundaries, and the path from
 > what exists to what this describes. Active slices live in
-> [plan.md](plan.md); the config layer's own design is
+> [plan.md](../plan.md); the config layer's own design is
 > [config-manager.md](config-manager.md).
 >
 > Written 2026-09-20 from a design session. Every "today" claim below is
@@ -394,7 +394,7 @@ None of them is a packaging strategy.
 - Config manager — persistence, crypto, handlers, client library, CLI, UI
   (v0.4.0). Ran end-to-end once on `redline-virgin` 2026-09-19: registered,
   approved by typed fingerprint, key wrapped, config decrypted, absent
-  distinguished from empty. Recorded in [plan.md](plan.md) item 9.
+  distinguished from empty. Recorded in [plan.md](../plan.md) item 9.
   **redline's** copy of `plan/config-manager.md` still says "none of it has run
   against a real box or a live hz" — stale there, correct here.
 - redline: `.deb` → Gitea registry → `apt-get install`, proven over a tunnel.
@@ -548,7 +548,7 @@ that changes hz's shape.
     1. ✅ **Done 2026-09-21.** Give the agent a credential of its own. It did
        not merely hold too much authority — it held *none that worked*:
        `isAdmin` has no Bearer path, so the poll answered 401 on a real box
-       (`plan/privilege-audit.md` §1.1). Fixed with a per-machine secret
+       (`plan/design/privilege-audit.md` §1.1). Fixed with a per-machine secret
        (`hz-agent enroll` → `/etc/hz-agent/token`, 0600) whose SHA-256 hash hz
        keeps in `<config>.agents`, checked by `Server.agentCaller` on one
        route. `isAdmin` was deliberately NOT widened: a Bearer branch there
@@ -684,7 +684,7 @@ that changes hz's shape.
        rather than inside it): hz-agent and HA peer-sync are now mutually
        exclusive on one machine, and hz REFUSES TO SERVE DESIRED STATE to a
        machine in a fleet — `internal/server/agent_fleet_guard.go`, decided in
-       `plan/ha-and-the-agent.md` §6 option B and §7. Refusing at hz needs no
+       `plan/design/ha-and-the-agent.md` §6 option B and §7. Refusing at hz needs no
        cooperation from the agent, so it is already correct for the agent this
        step arms. Checked at boot, in `applyNewConfig` before the config swap
        (fleet topology is per-instance and never comes off the wire), and on
@@ -995,7 +995,7 @@ Why it is worth the step at all: redline moves real donations for real
 organisations. If the operator is unavailable, someone has to be able to keep
 it running or wind it down without the secrets being unrecoverable.
 
-Together these two close the risk [plan.md](plan.md) names as *"the key has no
+Together these two close the risk [plan.md](../plan.md) names as *"the key has no
 escrow and no recovery path, which is the failure most likely to actually
 happen."*
 

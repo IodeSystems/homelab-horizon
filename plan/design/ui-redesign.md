@@ -101,7 +101,7 @@ tree-first navigation Decision 1 argued against.
 **Still true.** The live estate is `iodesystems` plus seven children —
 `redline`, `emuni`, `veliode`, `bringit`, `pb`, `iode`, `experimental` — and no
 grandchildren. Eight projects, matching the count recorded independently in
-[plan.md](plan.md) item 23 ("8 projects and 11 environments").
+[plan.md](../plan.md) item 23 ("8 projects and 11 environments").
 
 But the sentence is an argument about a **tree control**, and it was used to
 settle a question about **URLs**. Those are different things. "A tree widget
@@ -163,7 +163,7 @@ This is the reason the amendment exists. Nothing else changed.
 and the doc comment above it states the absence as the model's shape rather
 than an omission (`internal/config/machine.go:15`):
 
-> *"NO PROJECT AND NO ENVIRONMENT. plan/architecture.md, 'Instance, not machine,
+> *"NO PROJECT AND NO ENVIRONMENT. plan/design/architecture.md, 'Instance, not machine,
 > carries the environment': an environment never modifies a machine; it is a
 > coordinate of an instance. … a Project field on a machine would be false for
 > that row the day it was added, and every screen built on it would inherit the
@@ -365,7 +365,7 @@ it is the reason the column exists.**
 
 Own-only makes `/iodesystems` nearly useless: it is the parent of everything,
 it owns nine services directly while the gateway serves thirty-three
-([plan.md](plan.md) item 23), and a root whose page shows a quarter of the
+([plan.md](../plan.md) item 23), and a root whose page shows a quarter of the
 estate and hides the rest is a page nobody opens twice. Worse, it would hide
 precisely the rows that matter at the root: a cross-project segment membership
 reads as a *crossing* only when you can see both sides (`segment.go:71`).
