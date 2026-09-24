@@ -112,8 +112,24 @@ has no row for the one segment every human is in.
 seg:intern        10.10.1.0/24    gw-1 · ci-1                project: intern
 seg:storefront    10.10.2.0/24    gw-1 · app-1 · app-2 · ci-1   project: storefront
 seg:analytics     10.10.3.0/24    gw-1 · an-1                project: analytics
-seg:people        10.10.9.0/24    gw-1 · laptops, phones     NO PROJECT
+seg:people        10.10.9.0/24    gw-1 · laptops, phones     NO PROJECT  ⚠ SEE BELOW
                                         ← the human-access VPN:
+
+> **⚠ This line contradicts the code as of 2026-09-24, and the code wins today.**
+> `config.Segment.Project` is REQUIRED (`internal/config/segment.go:74`,
+> enforced at `:242` and `:448`) — *"a segment nobody owns is a network nobody
+> is responsible for"*. So `seg:people` as written here cannot be declared.
+>
+> Both positions are defensible and this is an OPEN DECISION, not a bug to
+> quietly patch: a human-access VPN genuinely belongs to no project, and a
+> segment with no owner genuinely has nobody accountable for it. Until it is
+> settled, anything built on "a segment may have no project" — including
+> ui-redesign.md's plan to render `seg:people` as a Network row — is building
+> on a shape hz will refuse.
+>
+> The two ways out: let `Project` be empty and say in the record what an
+> unowned segment means, or own it (`iodesystems`) and accept that the
+> human-access VPN has a nominal owner. Nobody has chosen.
                                         one segment among many, not "the" VPN
 ```
 
