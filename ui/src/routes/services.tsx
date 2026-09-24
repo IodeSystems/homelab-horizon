@@ -1,5 +1,8 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { useProjects } from "../api/hooks";
+import { buildProjectIndex, type ProjectIndex } from "../components/model/projectRoutes.ts";
+import { LocationCell, PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
 import {
   Alert,
   Box,
@@ -1826,11 +1829,13 @@ function PortMapDialog({
 
 function ServiceRow({
   service,
+  projectIndex,
   zones,
   onEdit,
   onDelete,
 }: {
   service: Service;
+  projectIndex: ProjectIndex;
   zones: Zone[];
   onEdit: (svc: Service) => void;
   onDelete: (name: string) => void;
@@ -1863,6 +1868,12 @@ function ServiceRow({
           <Typography variant="body2" sx={{ fontWeight: 600 }}>
             {service.name}
           </Typography>
+        </TableCell>
+        {/* Which project owns this row. The flat list is the ONLY screen that
+            can show a service naming no project — a state that is legal and
+            permanent — so the cell says so in words rather than going blank. */}
+        <TableCell>
+          <LocationCell index={projectIndex} project={service.project} />
         </TableCell>
         <TableCell>
           <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
@@ -1907,7 +1918,7 @@ function ServiceRow({
         </TableCell>
       </TableRow>
       <TableRow>
-        <TableCell sx={{ py: 0 }} colSpan={6}>
+        <TableCell sx={{ py: 0 }} colSpan={7}>
           <Collapse in={open} timeout="auto" unmountOnExit>
             <Box
               sx={{
@@ -2148,6 +2159,8 @@ interface SnackState {
 
 function ServicesPage() {
   const { data, isLoading, error } = useServices();
+  const projects = useProjects();
+  const projectIndex = useMemo(() => buildProjectIndex(projects.data ?? []), [projects.data]);
   const { data: settings } = useSettings();
   const { data: zonesData } = useZones();
   const addMutation = useAddService();
@@ -2301,6 +2314,7 @@ function ServicesPage() {
             <TableRow>
               <TableCell sx={{ width: 40 }} />
               <TableCell>Name</TableCell>
+              <TableCell>{PROJECT_COLUMN_LABEL}</TableCell>
               <TableCell>Domains</TableCell>
               <TableCell align="center">Int DNS</TableCell>
               <TableCell align="center">Ext DNS</TableCell>
@@ -2310,7 +2324,7 @@ function ServicesPage() {
           <TableBody>
             {filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} align="center">
+                <TableCell colSpan={7} align="center">
                   <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
                     {services.length === 0 ? "No services configured." : "No matching services."}
                   </Typography>
@@ -2321,6 +2335,7 @@ function ServicesPage() {
                 <ServiceRow
                   key={svc.name}
                   service={svc}
+                  projectIndex={projectIndex}
                   zones={zones}
                   onEdit={setEditTarget}
                   onDelete={setDeleteTarget}

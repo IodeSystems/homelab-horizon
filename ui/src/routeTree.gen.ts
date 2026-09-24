@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ProjectRouteImport } from './routes/$project'
 import { Route as AccountRouteImport } from './routes/account'
 import { Route as BansRouteImport } from './routes/bans'
 import { Route as ChecksRouteImport } from './routes/checks'
@@ -25,6 +26,10 @@ import { Route as ProjectsRouteImport } from './routes/projects'
 import { Route as ServicesRouteImport } from './routes/services'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as VpnRouteImport } from './routes/vpn'
+import { Route as ProjectIndexRouteImport } from './routes/$project.index'
+import { Route as ProjectConfigRouteImport } from './routes/$project.config'
+import { Route as ProjectDomainsRouteImport } from './routes/$project.domains'
+import { Route as ProjectServicesRouteImport } from './routes/$project.services'
 import { Route as DnsIndexRouteImport } from './routes/dns.index'
 import { Route as DnsZoneRouteImport } from './routes/dns.$zone'
 import { Route as MachinesIndexRouteImport } from './routes/machines.index'
@@ -33,6 +38,11 @@ import { Route as MachinesMachineRouteImport } from './routes/machines.$machine'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectRoute = ProjectRouteImport.update({
+  id: '/$project',
+  path: '/$project',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AccountRoute = AccountRouteImport.update({
@@ -110,6 +120,26 @@ const VpnRoute = VpnRouteImport.update({
   path: '/vpn',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProjectIndexRoute = ProjectIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ProjectRoute,
+} as any)
+const ProjectConfigRoute = ProjectConfigRouteImport.update({
+  id: '/config',
+  path: '/config',
+  getParentRoute: () => ProjectRoute,
+} as any)
+const ProjectDomainsRoute = ProjectDomainsRouteImport.update({
+  id: '/domains',
+  path: '/domains',
+  getParentRoute: () => ProjectRoute,
+} as any)
+const ProjectServicesRoute = ProjectServicesRouteImport.update({
+  id: '/services',
+  path: '/services',
+  getParentRoute: () => ProjectRoute,
+} as any)
 const DnsIndexRoute = DnsIndexRouteImport.update({
   id: '/dns/',
   path: '/dns/',
@@ -133,6 +163,7 @@ const MachinesMachineRoute = MachinesMachineRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/$project': typeof ProjectRouteWithChildren
   '/account': typeof AccountRoute
   '/bans': typeof BansRoute
   '/checks': typeof ChecksRoute
@@ -148,8 +179,12 @@ export interface FileRoutesByFullPath {
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
+  '/$project/config': typeof ProjectConfigRoute
+  '/$project/domains': typeof ProjectDomainsRoute
+  '/$project/services': typeof ProjectServicesRoute
   '/dns/$zone': typeof DnsZoneRoute
   '/machines/$machine': typeof MachinesMachineRoute
+  '/$project/': typeof ProjectIndexRoute
   '/dns/': typeof DnsIndexRoute
   '/machines/': typeof MachinesIndexRoute
 }
@@ -170,14 +205,19 @@ export interface FileRoutesByTo {
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
+  '/$project/config': typeof ProjectConfigRoute
+  '/$project/domains': typeof ProjectDomainsRoute
+  '/$project/services': typeof ProjectServicesRoute
   '/dns/$zone': typeof DnsZoneRoute
   '/machines/$machine': typeof MachinesMachineRoute
+  '/$project': typeof ProjectIndexRoute
   '/dns': typeof DnsIndexRoute
   '/machines': typeof MachinesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/$project': typeof ProjectRouteWithChildren
   '/account': typeof AccountRoute
   '/bans': typeof BansRoute
   '/checks': typeof ChecksRoute
@@ -193,8 +233,12 @@ export interface FileRoutesById {
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
+  '/$project/config': typeof ProjectConfigRoute
+  '/$project/domains': typeof ProjectDomainsRoute
+  '/$project/services': typeof ProjectServicesRoute
   '/dns/$zone': typeof DnsZoneRoute
   '/machines/$machine': typeof MachinesMachineRoute
+  '/$project/': typeof ProjectIndexRoute
   '/dns/': typeof DnsIndexRoute
   '/machines/': typeof MachinesIndexRoute
 }
@@ -202,6 +246,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/$project'
     | '/account'
     | '/bans'
     | '/checks'
@@ -217,8 +262,12 @@ export interface FileRouteTypes {
     | '/services'
     | '/settings'
     | '/vpn'
+    | '/$project/config'
+    | '/$project/domains'
+    | '/$project/services'
     | '/dns/$zone'
     | '/machines/$machine'
+    | '/$project/'
     | '/dns/'
     | '/machines/'
   fileRoutesByTo: FileRoutesByTo
@@ -239,13 +288,18 @@ export interface FileRouteTypes {
     | '/services'
     | '/settings'
     | '/vpn'
+    | '/$project/config'
+    | '/$project/domains'
+    | '/$project/services'
     | '/dns/$zone'
     | '/machines/$machine'
+    | '/$project'
     | '/dns'
     | '/machines'
   id:
     | '__root__'
     | '/'
+    | '/$project'
     | '/account'
     | '/bans'
     | '/checks'
@@ -261,14 +315,19 @@ export interface FileRouteTypes {
     | '/services'
     | '/settings'
     | '/vpn'
+    | '/$project/config'
+    | '/$project/domains'
+    | '/$project/services'
     | '/dns/$zone'
     | '/machines/$machine'
+    | '/$project/'
     | '/dns/'
     | '/machines/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ProjectRoute: typeof ProjectRouteWithChildren
   AccountRoute: typeof AccountRoute
   BansRoute: typeof BansRoute
   ChecksRoute: typeof ChecksRoute
@@ -297,6 +356,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/$project': {
+      id: '/$project'
+      path: '/$project'
+      fullPath: '/$project'
+      preLoaderRoute: typeof ProjectRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/account': {
@@ -404,6 +470,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof VpnRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/$project/': {
+      id: '/$project/'
+      path: '/'
+      fullPath: '/$project/'
+      preLoaderRoute: typeof ProjectIndexRouteImport
+      parentRoute: typeof ProjectRoute
+    }
+    '/$project/config': {
+      id: '/$project/config'
+      path: '/config'
+      fullPath: '/$project/config'
+      preLoaderRoute: typeof ProjectConfigRouteImport
+      parentRoute: typeof ProjectRoute
+    }
+    '/$project/domains': {
+      id: '/$project/domains'
+      path: '/domains'
+      fullPath: '/$project/domains'
+      preLoaderRoute: typeof ProjectDomainsRouteImport
+      parentRoute: typeof ProjectRoute
+    }
+    '/$project/services': {
+      id: '/$project/services'
+      path: '/services'
+      fullPath: '/$project/services'
+      preLoaderRoute: typeof ProjectServicesRouteImport
+      parentRoute: typeof ProjectRoute
+    }
     '/dns/': {
       id: '/dns/'
       path: '/dns'
@@ -435,8 +529,26 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface ProjectRouteChildren {
+  ProjectConfigRoute: typeof ProjectConfigRoute
+  ProjectDomainsRoute: typeof ProjectDomainsRoute
+  ProjectServicesRoute: typeof ProjectServicesRoute
+  ProjectIndexRoute: typeof ProjectIndexRoute
+}
+
+const ProjectRouteChildren: ProjectRouteChildren = {
+  ProjectConfigRoute: ProjectConfigRoute,
+  ProjectDomainsRoute: ProjectDomainsRoute,
+  ProjectServicesRoute: ProjectServicesRoute,
+  ProjectIndexRoute: ProjectIndexRoute,
+}
+
+const ProjectRouteWithChildren =
+  ProjectRoute._addFileChildren(ProjectRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ProjectRoute: ProjectRouteWithChildren,
   AccountRoute: AccountRoute,
   BansRoute: BansRoute,
   ChecksRoute: ChecksRoute,

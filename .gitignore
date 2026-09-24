@@ -21,6 +21,7 @@ ui/.rendercheck
 ui/.rendercheck-model
 ui/.rendercheck-edge
 ui/.rendercheck-hosts
+ui/.rendercheck-routes
 docs/node_modules
 docs/package-lock.json
 homelab-horizon-linux
