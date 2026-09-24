@@ -25,7 +25,7 @@ import (
 // worth stating precisely. Every other verdict is a comparison between two
 // things the agent can SEE — hz's bytes and the file on disk. A config
 // generation is a digest of ciphertext the agent is never given and could not
-// read if it were (plan/config-manager.md: the agent holds no environment
+// read if it were (plan/design/config-manager.md: the agent holds no environment
 // key). There is nothing on the box to compare it against. So the only
 // possible record of "this unit is already running that config" is a note the
 // agent writes to itself, and a note that does not survive a reboot is a note

@@ -2,7 +2,7 @@
 // certificates.
 //
 // The package is split along one seam, and the split is load-bearing for the
-// hz-agent work (plan/architecture.md, phase 4 items 10 and 12):
+// hz-agent work (plan/design/architecture.md, phase 4 items 10 and 12):
 //
 //	render.go      pure     facts in, decisions out. No files, no commands, no
 //	                        clock, no CA. Runs anywhere, as anyone.

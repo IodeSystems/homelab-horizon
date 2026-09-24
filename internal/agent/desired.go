@@ -3,7 +3,7 @@
 // applies them.
 //
 // The package is split the same way the subsystem packages already are
-// (plan/architecture.md, "hz-agent de-roots the hz web surface"):
+// (plan/design/architecture.md, "hz-agent de-roots the hz web surface"):
 //
 //	desired.go  wire     what hz says a machine should look like. Types only.
 //	plan.go     pure     desired + observed -> changes. No files, no commands.
@@ -99,8 +99,7 @@ type Desired struct {
 	// to call a different thing. A journald drop-in, a sysctl file, a unit
 	// drop-in: those are "put these bytes at this path, then maybe poke a
 	// unit", and a fifth, sixth and seventh named type for them would buy
-	// nothing but three more branches on both sides of a version boundary
-	// (plan/privilege-classification.md §4.3).
+	// nothing but three more branches on both sides of a version boundary.
 	//
 	// nil still means unmanaged, exactly as for the named sections.
 	Files *FilesSection `json:"files,omitempty"`
@@ -108,7 +107,7 @@ type Desired struct {
 	// Model is the projection: what hz's RECORDS say this machine should look
 	// like — its segment memberships, the packages its instances pin, the
 	// units those instances run, and what hz could not work out about any of
-	// it (plan/architecture.md phase 4 item 14).
+	// it (plan/design/architecture.md phase 4 item 14).
 	//
 	// IT IS THE ONLY SECTION HZ CAN COMPUTE FOR A MACHINE IT CANNOT TOUCH, and
 	// that is why it exists. Every other section above is produced by
@@ -217,7 +216,7 @@ type FilesSection struct {
 // CertSection carries the certificate bundles HAProxy loads, and nothing else
 // about certificates.
 //
-// Five constraints govern this section (plan/architecture.md, "Cert material
+// Five constraints govern this section (plan/design/architecture.md, "Cert material
 // and the two channels"); the two this type is responsible for:
 //
 //   - Only the SERVED bundle, <cert dir>/<domain>.pem — the leaf plus key the
@@ -230,7 +229,7 @@ type FilesSection struct {
 //
 // There is no Dirs claim here deliberately. hz is not the only writer in that
 // directory — pullCertFromPeer writes a peer's bundle into it
-// (plan/ha-and-the-agent.md §4) — so claiming it would have the agent delete
+// (plan/design/ha-and-the-agent.md §4) — so claiming it would have the agent delete
 // files another live path had just put there. Whether that writer survives at
 // all is a separate decision (§10.5), and this section does not pre-empt it.
 type CertSection struct {
@@ -251,8 +250,7 @@ type HAProxySection struct {
 	// per-service <svc>_503.http maintenance pages are hz's, everything else
 	// in there is the distribution's. A page that stops being wanted has to be
 	// REMOVED — HAProxy keeps serving a file it can still open — which is why
-	// the Directory concept exists at all
-	// (plan/privilege-classification.md §3.10, §4.5).
+	// the Directory concept exists at all.
 	Dirs []Directory `json:"dirs,omitempty"`
 }
 

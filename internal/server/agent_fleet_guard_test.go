@@ -18,7 +18,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
-// The guard is plan/ha-and-the-agent.md §6 option B: hz-agent and HA peer-sync
+// The guard is plan/design/ha-and-the-agent.md §6 option B: hz-agent and HA peer-sync
 // are mutually exclusive on one machine, and hz refuses to serve desired state
 // to a machine in a fleet.
 //

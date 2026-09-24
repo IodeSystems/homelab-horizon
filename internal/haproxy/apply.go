@@ -23,7 +23,7 @@ import (
 //   - drive the admin socket to change a server's state
 //
 // Nothing here decides what the config should say — that is render.go, which is
-// pure. When this half moves into hz-agent (plan/architecture.md, phase 4, item
+// pure. When this half moves into hz-agent (plan/design/architecture.md, phase 4, item
 // 10), this list is what moves.
 //
 // The cert-store READ is on that list on purpose. It is not a write and it does

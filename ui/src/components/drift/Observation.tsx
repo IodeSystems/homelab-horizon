@@ -1,7 +1,7 @@
 /**
  * The Observation component — an observed value and its age, inseparably.
  *
- * plan/example-projection.md §4: "Anything showing an observed value must show
+ * plan/design/example-projection.md §4: "Anything showing an observed value must show
  * its age beside it or it lies." So there is no way to render an observed
  * value on the drift screen except through `<ObservedValue>`, and `ageSeconds`
  * is a required prop with no overload that omits it. That stops a CALLER

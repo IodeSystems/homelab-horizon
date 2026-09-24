@@ -498,7 +498,7 @@ func (s *Server) syncZoneRecords(run *dnsSyncRun) (updated, failed int, err erro
 // adopts what is there and the next sync proceeds — "clear" means "yes, that
 // name is ours now".
 // Once blocked, every sync entrypoint refuses until an operator clears the drift
-// (POST /api/v1/dns/drift/clear). See plan/dns-records.md Phase 3.
+// (POST /api/v1/dns/drift/clear).
 
 // errDNSDriftBlocked aborts a sync run: drift was just detected, or a prior
 // block is still in effect.

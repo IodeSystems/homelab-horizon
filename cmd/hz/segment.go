@@ -17,7 +17,7 @@ import (
 // machine is in the segment and names every one, and --cascade is opt-in and
 // lists what it will take before it takes it.
 //
-// WHAT A SEGMENT IS: a project's machines form one (plan/architecture.md,
+// WHAT A SEGMENT IS: a project's machines form one (plan/design/architecture.md,
 // "Segments"), hub and spoke, and the hub is normally hz's own box. It has a
 // range and an interface of its own so that a machine in two segments has two
 // interfaces rather than one that collides.

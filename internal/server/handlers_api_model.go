@@ -28,7 +28,7 @@ import (
 // # Read-only, and that is a rule rather than a phase
 //
 // hz publishes; the agent collects. There is no apply here, no push, and no
-// endpoint next to this one that reaches a machine — see plan/ui-redesign.md,
+// endpoint next to this one that reaches a machine — see plan/design/ui.md,
 // "No Apply button, no push, no reach into a machine".
 
 // handleAPIMachineProjection serves projection.Project for one machine.

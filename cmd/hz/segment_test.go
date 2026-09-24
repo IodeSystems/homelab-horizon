@@ -17,7 +17,7 @@ const testWGKey = "8AQZQtkyrdjWkUHvaVMTAFDOP/o3gDfiIECAkq2bdU0="
 // tested against: a REAL config, the REAL writers, and a real Save at every
 // write.
 
-// The walkthrough plan/upstream-and-promotion.md §5 asks for, typed out: an
+// The walkthrough plan/design/estate.md §5 asks for, typed out: an
 // iodesystems segment with the gateway as its hub, and redline-prod-hz on it as
 // a CLIENT. Before the record, the last of those was a label and could not be
 // said at all.

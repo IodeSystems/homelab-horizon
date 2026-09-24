@@ -66,7 +66,7 @@ func TestCMAdminRoutesAreReachableAsBuilt(t *testing.T) {
 		{"recovery", apitypes.CMPathRecovery, nil},
 		// Version drift. Unrouted, the join would simply be missing from the
 		// screen that is supposed to carry it, which is exactly the state
-		// plan/example-projection.md §7 records — one unreachable path away
+		// plan/design/example-projection.md §7 records — one unreachable path away
 		// from the gap it exists to close.
 		{"version drift", apitypes.CMPathVersionDrift, nil},
 	}

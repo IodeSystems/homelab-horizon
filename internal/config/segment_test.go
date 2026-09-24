@@ -19,7 +19,7 @@ const (
 
 // estateWithSegment is the smallest config that has something to resolve: a
 // project, a hub box and a spoke box, and the segment they are both on. It is
-// the shape plan/upstream-and-promotion.md §5 describes in miniature — one
+// the shape plan/design/estate.md §5 describes in miniature — one
 // gateway and one client.
 func estateWithSegment(t *testing.T) *Config {
 	t.Helper()
@@ -51,7 +51,7 @@ func estateWithSegment(t *testing.T) *Config {
 // THE POINT OF THE RECORD: a membership stops being a label. The three
 // questions projection.Segment asks — interface, address, peers — all have an
 // answer, and the answer for a CLIENT of someone else's segment is different
-// from the hub's. That asymmetry is what plan/upstream-and-promotion.md §5
+// from the hub's. That asymmetry is what plan/design/estate.md §5
 // needs and what a list of names could not express.
 func TestAMembershipResolvesToAnInterfaceAnAddressAndPeers(t *testing.T) {
 	c := estateWithSegment(t)
@@ -169,7 +169,7 @@ func TestSegmentRangesMayNotOverlap(t *testing.T) {
 }
 
 // Two segments must not share an interface either. That is the collision
-// pluralising WGInterface exists to prevent (plan/architecture.md item 15): a
+// pluralising WGInterface exists to prevent (plan/design/architecture.md item 15): a
 // machine in both would have one interface for two networks, and it would
 // discover that at the box.
 func TestTwoSegmentsMayNotShareAnInterface(t *testing.T) {

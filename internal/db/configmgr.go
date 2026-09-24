@@ -14,7 +14,7 @@ import (
 
 // Config manager persistence: machine enrolment, per-address registration and
 // approval, blessed configs and their sealed values, machine-scoped secrets,
-// and the audit trail of ciphertext relays. See plan/config-manager.md and
+// and the audit trail of ciphertext relays. See plan/design/config-manager.md and
 // migrations/0009_config_manager_addresses.up.sql for the model this
 // implements — 0009, not 0008, is the current schema.
 
@@ -24,7 +24,7 @@ var (
 	ErrMachineNameTaken = errors.New("machine name already registered")
 	// ErrNoConfigMatches means resolution found zero candidates for the
 	// address and version asked about — a named failure, never a hang and
-	// never mistaken for a pending approval (plan/config-manager.md
+	// never mistaken for a pending approval (plan/design/config-manager.md
 	// "Resolution rules", rule 3).
 	ErrNoConfigMatches = errors.New("no config matches")
 	// ErrInvalidVersion means a version string is not a clean semver tag
@@ -148,7 +148,7 @@ type Machine struct {
 }
 
 // RegisterMachine creates a machine identity. The caller supplies the
-// agent-generated public key (a fresh key per plan/config-manager.md, never
+// agent-generated public key (a fresh key per plan/design/config-manager.md, never
 // the WireGuard key); hz never sees a private key, at registration or ever.
 //
 // Enrolling is not admission. A machine row grants nothing on its own — every
@@ -223,7 +223,7 @@ func (d *DB) ListMachines(ctx context.Context) ([]Machine, error) {
 //     environment key wrapped to this machine's public key. With the box's
 //     private half gone, the blob is bytes.
 //   - cm_machine_secrets CASCADE. Sealed directly to the same public key, so
-//     identically unopenable. plan/config-manager.md hole 11 asked for a
+//     identically unopenable. plan/design/config-manager.md hole 11 asked for a
 //     re-enrol path that does NOT destroy these; that requirement is withdrawn
 //     here, because preserving a secret nothing can decrypt preserves an
 //     illusion. What is owed instead is that the destruction is LOUD — the
@@ -326,7 +326,7 @@ type Registration struct {
 	// reported since 0011 added the column, which is an ordinary state and not
 	// a fault: the next register or resolve fills it in.
 	//
-	// It is the "observed" half of plan/architecture.md's desired/observed
+	// It is the "observed" half of plan/design/architecture.md's desired/observed
 	// split. hz displays the drift and never closes it; there is no upgrade
 	// verb anywhere near this field.
 	ObservedVersion string
@@ -363,7 +363,7 @@ const selectRegistration = `
 // pending row, which is the thing an admin reviews. Every later call for the
 // same tuple touches last_seen_at and nothing else: later boots must never
 // re-litigate approval or a routine restart would block on a human
-// (plan/config-manager.md "Approve the REGISTRATION, not the BOOT").
+// (plan/design/config-manager.md "Approve the REGISTRATION, not the BOOT").
 //
 // Environment is part of the tuple, and that is the correction 0009 exists
 // for. A box restarted with a different --env is a different tuple, so it
@@ -562,7 +562,7 @@ func (d *DB) ApproveRegistration(ctx context.Context, id string, wrappedEnvKey [
 // clearing hz's copy of the wrapped blob reaches none of it, and the box keeps
 // reading every value at that address. The only true revocation of an
 // environment key is rotating it — see "de-approval is not revocation" in
-// plan/config-manager.md. Stated plainly here because a false security
+// plan/design/config-manager.md. Stated plainly here because a false security
 // property asserted next to the function that appears to implement it is the
 // kind of thing that gets repeated.
 func (d *DB) DenyRegistration(ctx context.Context, id, reason string) (*Registration, error) {
@@ -670,7 +670,7 @@ const (
 	// declared it, and carries no bytes.
 	//
 	// This is the difference between blank and absent, and it is goal property 6
-	// (plan/architecture.md): a config key cannot be SILENTLY absent. Omitting
+	// (plan/design/architecture.md): a config key cannot be SILENTLY absent. Omitting
 	// the key would leave the target holding a config in which it had never been
 	// heard of, and the app would fall back to its compiled default — the
 	// founding bug. An awaiting row says "declared here, awaiting a value", and
@@ -820,7 +820,7 @@ const selectConfig = `
 	FROM cm_configs`
 
 // CreateConfig blesses a config and its values in one transaction: a config
-// with half its keys written is not a config, per plan/config-manager.md.
+// with half its keys written is not a config, per plan/design/config-manager.md.
 //
 // Three refusals happen here that 0008 accepted, and every one of them is a
 // fleet-wide time bomb rather than a typo. They are checked at BLESS time
@@ -1102,7 +1102,7 @@ func scanConfigRow(row rowScanner) (*Config, error) {
 
 // Resolution is what ResolveConfig returns: the winning config, in full
 // (values populated), and every other candidate it shadowed, most-recently
-// shadowed first. Shadowed configs carry no Values — plan/config-manager.md
+// shadowed first. Shadowed configs carry no Values — plan/design/config-manager.md
 // rule 2 asks that the overlap be inspectable, not that every loser's
 // ciphertext be pulled along for the ride.
 type Resolution struct {
@@ -1110,7 +1110,7 @@ type Resolution struct {
 	Shadowed []Config
 }
 
-// ResolveConfig implements plan/config-manager.md "Resolution rules": every
+// ResolveConfig implements plan/design/config-manager.md "Resolution rules": every
 // config for (environment, app, role) whose [MinVer, MaxVer] range contains
 // version is a candidate; the candidate with the highest seq wins, because
 // seq is assigned once at blessing time and never recomputed (see cm_configs
@@ -1169,7 +1169,7 @@ func (d *DB) ResolveConfig(ctx context.Context, project, environment, app, role,
 
 // parsedVersion is a clean semver tag: MAJOR.MINOR.PATCH with an optional
 // -PRERELEASE. Build metadata (+...), if present, is stripped before parsing
-// and never compared — per plan/config-manager.md open question 1, the
+// and never compared — per plan/design/config-manager.md open question 1, the
 // caller supplies the clean tag and carries the full `git describe` string
 // elsewhere, for provenance only.
 type parsedVersion struct {

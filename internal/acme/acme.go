@@ -2,7 +2,7 @@
 // DNS-01 challenges.
 //
 // The package is split along one seam, the same seam as internal/haproxy and
-// internal/letsencrypt (plan/architecture.md, phase 4 items 10 and 12):
+// internal/letsencrypt (plan/design/architecture.md, phase 4 items 10 and 12):
 //
 //	render.go  pure     text in, text out. No files, no commands, no clock,
 //	                    no network — and above all, no certificate authority.

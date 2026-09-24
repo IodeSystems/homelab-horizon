@@ -15,7 +15,7 @@ import (
 )
 
 // The Machine record's surface, and hz becoming the ISSUER of agent
-// credentials (plan/architecture.md, phase 4 item 13).
+// credentials (plan/design/architecture.md, phase 4 item 13).
 //
 // Same layering as handlers_api_declare.go and for the same reason: the server
 // owns the config, holds it in an atomic pointer, and is the only thing that
@@ -39,7 +39,7 @@ import (
 // own file sitting beside its config. Nothing else about the agent is here:
 // last poll and observed version belong to the report-back and to instances
 // respectively, and a machine column derived from them would have to say so
-// (plan/example-projection.md §3, the two clocks).
+// (plan/design/example-projection.md §3, the two clocks).
 // GET /api/v1/machines
 func (s *Server) handleAPIMachines(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {

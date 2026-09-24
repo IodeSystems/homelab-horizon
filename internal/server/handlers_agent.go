@@ -18,7 +18,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/projection"
 )
 
-// The hz side of hz-agent's poll (plan/architecture.md, phase 4 item 11).
+// The hz side of hz-agent's poll (plan/design/architecture.md, phase 4 item 11).
 //
 // This is a READ. hz renders what it already renders — the pure halves of
 // internal/haproxy, internal/dnsmasq and internal/iptables — and serves the
@@ -49,7 +49,7 @@ import (
 // rule set, "an admin may read what is already on hz's own screens" was true
 // and harmless; wg0.conf carries the machine's private key, so leaving the
 // branch in would have turned the shared admin token into a key-fetch
-// (plan/privilege-audit.md §3, constraint 4). An admin who wants to see drift
+// (plan/design/privilege-audit.md §3, constraint 4). An admin who wants to see drift
 // gets a drift SCREEN that hz renders, not this endpoint's raw payload.
 //
 // What did NOT happen here is a Bearer branch in isAdmin. See
@@ -384,7 +384,7 @@ func (s *Server) desiredFor(machine string) *agent.Desired {
 	}
 
 	// The certificate bundles HAProxy loads, and NOTHING ELSE ABOUT
-	// CERTIFICATES. The reasoning is in plan/architecture.md, "Cert material
+	// CERTIFICATES. The reasoning is in plan/design/architecture.md, "Cert material
 	// and the two channels"; what it comes to here:
 	//
 	//   - <SSLHAProxyCertDir>/<domain>.pem only — the leaf plus key this

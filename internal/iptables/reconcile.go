@@ -11,7 +11,7 @@ package iptables
 // forwards.go, which are pure — and nothing here decides what a live rule
 // *means*, which is classify.go, also pure. Reconcile is the orchestration
 // between the two: it reads, asks the pure half for a verdict, and applies.
-// When this half moves into hz-agent (plan/architecture.md, phase 4, item 10),
+// When this half moves into hz-agent (plan/design/architecture.md, phase 4, item 10),
 // this list is what moves.
 
 import (

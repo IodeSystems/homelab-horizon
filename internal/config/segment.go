@@ -14,12 +14,12 @@ import (
 //
 // Item 13 shipped the membership and said so in its own comment: "segment names
 // resolve against nothing yet — that is item 15". This is item 15's half.
-// plan/upstream-and-promotion.md §7 promotes it from optional to required and
+// plan/design/estate.md §7 promotes it from optional to required and
 // names the consumer: redline-prod-hz joins an iodesystems segment as a CLIENT,
 // which IS a segment membership, and a list of labels cannot say it.
 //
 // WHAT THE SHAPE IS FOR. plan/projection's Segment asks three questions of a
-// membership — Interface, Address, Peers — and plan/architecture.md item 15
+// membership — Interface, Address, Peers — and plan/design/architecture.md item 15
 // lists what answering them takes, per (machine, segment). Every field here
 // exists to answer one of them and nothing here answers anything else:
 //
@@ -53,7 +53,7 @@ import (
 //   - NO AllowedIPs. It is derivable from CIDR + Members + Hub (a spoke routes
 //     the whole CIDR to the hub; the hub routes each spoke its own /32) and a
 //     stored copy is a second answer free to disagree — the founding bug in
-//     plan/architecture.md's goal property 6. The projection derives it when it
+//     plan/design/architecture.md's goal property 6. The projection derives it when it
 //     is wired to (item 15's follow-up); nothing derives it here because
 //     nothing here would call it.
 //
@@ -145,7 +145,7 @@ type SegmentMember struct {
 	// It is also what makes "a CLIENT of someone else's segment" expressible:
 	// a member with Hub false on a segment whose hub is another project's
 	// machine is precisely redline-prod-hz's relationship to iodesystems
-	// (plan/upstream-and-promotion.md §5).
+	// (plan/design/estate.md §5).
 	Hub bool `json:"hub,omitempty"`
 
 	// Endpoint is where this member is reachable from outside the segment,

@@ -9,7 +9,7 @@ import (
 
 func ptr(s string) *string { return &s }
 
-// tree is the shape plan/architecture.md's walkthrough describes: a root that
+// tree is the shape plan/design/architecture.md's walkthrough describes: a root that
 // declares the feed, a child that declares its own rungs, and a service on one
 // of them.
 func tree() *Config {

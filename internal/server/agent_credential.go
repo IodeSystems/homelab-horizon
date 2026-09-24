@@ -7,7 +7,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/agent"
 )
 
-// hz's half of the agent credential (plan/privilege-audit.md §1.1, §3 item 1).
+// hz's half of the agent credential (plan/design/privilege-audit.md §1.1, §3 item 1).
 //
 // This is deliberately NOT a Bearer branch in isAdmin. The agent could not
 // authenticate at all, and the one-line repair — teach isAdmin to accept

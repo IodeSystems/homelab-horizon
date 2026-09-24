@@ -167,7 +167,7 @@ type Config struct {
 	// Machines are the boxes: identity and segment membership, and deliberately
 	// neither a project nor an environment — those are coordinates of an
 	// INSTANCE, and one machine hosts instances from several projects
-	// (plan/architecture.md, "Instance, not machine, carries the environment").
+	// (plan/design/architecture.md, "Instance, not machine, carries the environment").
 	// Additive in exactly the way Projects and Environments are. See
 	// internal/config/machine.go for what else is absent and why.
 	Machines []Machine `json:"machines,omitempty"`
@@ -469,7 +469,7 @@ type Config struct {
 	Peers         []Peer `json:"peers,omitempty"`          // every other instance in the fleet
 
 	// Observability topology — declared hosts and Prometheus exporter scrape
-	// jobs for endpoints hz does not proxy (see plan/prometheus-topology.md).
+	// jobs for endpoints hz does not proxy.
 	Hosts     []HostDecl `json:"hosts,omitempty"`     // extra hosts beyond those derived from the port map
 	Exporters []Exporter `json:"exporters,omitempty"` // Prometheus exporter jobs (node, postgres, ...)
 
@@ -618,7 +618,7 @@ type Project struct {
 	// A pointer because absent and empty are different answers: nil is "this
 	// project says nothing, ask my parent", and a zero Feed is a declaration
 	// with nothing in it, which ValidateFeeds rejects. Collapsing the two is
-	// goal property 6 in plan/architecture.md — the founding bug.
+	// goal property 6 in plan/design/architecture.md — the founding bug.
 	Feed *Feed `json:"feed,omitempty"`
 }
 

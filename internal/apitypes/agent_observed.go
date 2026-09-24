@@ -3,9 +3,9 @@ package apitypes
 // What GET /api/v1/agent/observed serves: every machine hz knows of, with
 // what it last reported and how old that is.
 //
-// This is the data behind the redesign's drift screen (plan/ui-redesign.md) —
+// This is the data behind the redesign's drift screen (plan/design/ui.md) —
 // "desired minus observed, per machine, before anything is applied", which
-// plan/architecture.md calls the most valuable screen in the tool. The screen
+// plan/design/architecture.md calls the most valuable screen in the tool. The screen
 // itself is somebody else's commit; this is the shape it consumes.
 //
 // NOTHING IN THIS FILE CARRIES KEY MATERIAL, and nothing added to it may.
@@ -15,7 +15,7 @@ package apitypes
 // file contents never reach hz at all.
 
 // Agent report states. Four, and they are not interchangeable — collapsing
-// any pair of them is the bug plan/example-projection.md §4 is written to
+// any pair of them is the bug plan/design/example-projection.md §4 is written to
 // prevent.
 const (
 	// AgentStateFresh — a report arrived within this machine's cadence and
@@ -44,7 +44,7 @@ const (
 )
 
 // Generation comparison outcomes. The pair carries more than "behind"
-// (plan/example-projection.md §5).
+// (plan/design/example-projection.md §5).
 const (
 	// AgentGenerationMatch — the machine planned against the desired state hz
 	// would serve right now. Together with pending > 0 this is the

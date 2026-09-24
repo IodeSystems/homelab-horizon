@@ -9,7 +9,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
-// The Segment record's surface (plan/architecture.md, phase 4 item 15).
+// The Segment record's surface (plan/design/architecture.md, phase 4 item 15).
 //
 // Same layering as handlers_api_machines.go and for the same reason: every
 // decision lives in internal/config beside the validator it has to satisfy, and

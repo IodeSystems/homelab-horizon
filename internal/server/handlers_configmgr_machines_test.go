@@ -108,7 +108,7 @@ func TestCMRemoveLetsARebuiltBoxReEnrol(t *testing.T) {
 
 // Removal destroys the rows that hang off the machine, and the counts it
 // reports are what an operator checks their preview against. Both halves are
-// asserted here because a silent cascade is exactly what plan/config-manager.md
+// asserted here because a silent cascade is exactly what plan/design/config-manager.md
 // hole 11 objected to: the secrets went and nothing said so.
 func TestCMRemoveDestroysGrantsAndSecretsAndSaysHowMany(t *testing.T) {
 	s, admin := cmServer(t)

@@ -3,7 +3,7 @@
  * anything is applied.
  *
  * There is NO APPLY BUTTON here, and that is not an omission
- * (plan/ui-redesign.md). hz publishes; the agent pulls. hz never reaches into
+ * (plan/design/ui.md). hz publishes; the agent pulls. hz never reaches into
  * a machine, and the agent ships inert. The existing `SyncButton` applies to
  * the four subsystems hz owns on its OWN box and must never be confused for
  * this — which is why this card carries its own standing note saying so.

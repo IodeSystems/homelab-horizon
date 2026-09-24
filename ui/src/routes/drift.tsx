@@ -1,11 +1,11 @@
 /**
  * Drift — desired minus observed, per machine, before anything is applied.
  *
- * plan/architecture.md calls this "the most valuable single screen in the
+ * plan/design/architecture.md calls this "the most valuable single screen in the
  * tool". It reads GET /api/v1/agent/observed and nothing else.
  *
  * The screen is a RANKED QUEUE, not a table. Two placements in that ranking
- * are decisions rather than conveniences (plan/ui-redesign.md):
+ * are decisions rather than conveniences (plan/design/ui.md):
  *
  *   Unknown outranks bad. A fault you can see is a smaller problem than a box
  *   you cannot.

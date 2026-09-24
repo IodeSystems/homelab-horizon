@@ -9,7 +9,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
-// THE ESTATE IS plan/example-projection.md §1–§3, TRANSCRIBED.
+// THE ESTATE IS plan/design/example-projection.md §1–§3, TRANSCRIBED.
 //
 // That file is the spec for this function, so the tests run against it rather
 // than against a fixture invented to suit the code: a gateway hosting two
@@ -939,7 +939,7 @@ func TestSerialIsCarriedIn(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// The config generation (plan/upstream-and-promotion.md §3).
+// The config generation (plan/design/estate.md §3).
 //
 // The loop these tests are about: bless a config, and the unit running at that
 // address restarts. hz's half is a DIGEST of ciphertext it cannot read, served

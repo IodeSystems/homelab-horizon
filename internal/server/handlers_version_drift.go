@@ -13,7 +13,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/projection"
 )
 
-// The join plan/example-projection.md §7 says nothing performs:
+// The join plan/design/example-projection.md §7 says nothing performs:
 //
 //	config.Environment.Version            declared   — GET /api/v1/environments
 //	cm_registrations.observed_version     observed   — the config-manager API
@@ -30,7 +30,7 @@ import (
 //     does not close it." There is no upgrade verb anywhere near this file and
 //     there must never be one.
 //   - It does not render an absence as drift. Two rungs in
-//     plan/example-projection.md §1 declare no version on purpose, and a
+//     plan/design/example-projection.md §1 declare no version on purpose, and a
 //     registration that has never resolved reports none. Neither is a rollout.
 //   - It does not serve an observed version without its age. Every row carries
 //     ObservedAt, AgeSeconds, StaleAfterSeconds and a State computed HERE, so a

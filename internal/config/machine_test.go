@@ -14,9 +14,9 @@ import (
 // wrong obvious answer. So they are asserted by reflection over the struct
 // rather than left to the comment that explains them.
 
-// A machine has no project and no environment. plan/architecture.md: "an
+// A machine has no project and no environment. plan/design/architecture.md: "an
 // environment never modifies a machine; it is a coordinate of an instance." The
-// gateway in plan/example-projection.md §3 hosts instances from two projects, so
+// gateway in plan/design/example-projection.md §3 hosts instances from two projects, so
 // a Project field would be false for that row on the day it was added.
 func TestAMachineCarriesNoProjectAndNoEnvironment(t *testing.T) {
 	forbidden := []string{"project", "environment", "env", "posture", "rung"}
@@ -27,7 +27,7 @@ func TestAMachineCarriesNoProjectAndNoEnvironment(t *testing.T) {
 			if name == bad {
 				t.Fatalf("Machine has a %s field. An environment is a coordinate of an INSTANCE; "+
 					"one machine hosts instances from several projects, so this field is false for the gateway "+
-					"the moment it exists (plan/architecture.md, \"Instance, not machine, carries the environment\")",
+					"the moment it exists (plan/design/architecture.md, \"Instance, not machine, carries the environment\")",
 					tp.Field(i).Name)
 			}
 		}
@@ -49,7 +49,7 @@ func TestAMachineCarriesNoObservedVersion(t *testing.T) {
 	}
 }
 
-// Multi-segment is legal — ci-1 in plan/example-projection.md §3 is in two on
+// Multi-segment is legal — ci-1 in plan/design/example-projection.md §3 is in two on
 // purpose — and it is visible: the record says so, and the config can enumerate
 // every machine that bridges.
 func TestAMultiSegmentMachineIsLegalAndListable(t *testing.T) {

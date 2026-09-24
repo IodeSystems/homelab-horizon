@@ -98,7 +98,7 @@ func onePass(ctx context.Context, f *agentFlags, src agent.Source, obs agent.Obs
 
 	// Report BEFORE applying, always. What the drift screen is for is
 	// "desired minus observed, per machine, BEFORE anything is applied"
-	// (plan/architecture.md); a report taken after a write would show hz the
+	// (plan/design/architecture.md); a report taken after a write would show hz the
 	// result rather than the disagreement.
 	f.sendReport(ctx, f.reporter(src), d, plan, observed)
 

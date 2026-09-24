@@ -14,7 +14,7 @@ import (
 //
 // `hz project ls/show` and `hz env ls/show` read a tree that, until this landed,
 // only `hz import --execute` or an editor on config.json could create. Step 2 of
-// the acceptance walkthrough in plan/architecture.md — "redline declares its own
+// the acceptance walkthrough in plan/design/architecture.md — "redline declares its own
 // environments: staging, prod" — had no command.
 //
 // DRY RUN, PER COMMAND, on purpose rather than for consistency.

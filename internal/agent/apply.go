@@ -144,7 +144,7 @@ func (SystemReloader) Units(sec *FilesSection) error {
 }
 
 // RestartUnit restarts one unit. A restart, never a reload: the app reads its
-// sealed config once, at boot (plan/config-manager.md — nothing in the boot
+// sealed config once, at boot (plan/design/config-manager.md — nothing in the boot
 // path may depend on freshness, so it caches and does not poll), and a reload
 // is not a boot.
 func (SystemReloader) RestartUnit(name string) error {

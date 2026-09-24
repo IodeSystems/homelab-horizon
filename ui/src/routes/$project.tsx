@@ -1,7 +1,7 @@
 /**
  * `/$project` — the layout every project-scoped screen sits inside.
  *
- * The job (plan/ui-redesign.md, Decision 1 amended): a project scopes a URL.
+ * The job (plan/design/ui.md, Decision 1 amended): a project scopes a URL.
  * Four screens carry one because their records carry one — `Project` on the
  * project, on the environment, on the service, on the config registration — and
  * seventeen do not, because `config.Machine` is `{Name, Segments, Note}` and a

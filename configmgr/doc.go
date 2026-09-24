@@ -30,7 +30,7 @@
 // per-device revocation expressible: deleting the blob revokes it on one box
 // and nowhere else.
 //
-// The full model is in plan/config-manager.md.
+// The full model is in plan/design/config-manager.md.
 //
 // # Primitive choices
 //
@@ -45,7 +45,7 @@
 //
 // # Deviation from the plan: P-256 rather than X25519
 //
-// plan/config-manager.md specifies X25519. This package uses ECDH on P-256
+// plan/design/config-manager.md specifies X25519. This package uses ECDH on P-256
 // instead. X25519 is the better curve on the merits, but WebCrypto's support
 // for it is recent and uneven across browsers and versions, while ECDH P-256 is
 // universally available. The plan's load-bearing claim is that decryption

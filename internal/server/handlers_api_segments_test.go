@@ -26,7 +26,7 @@ func listSegments(t *testing.T, s *Server) []apitypes.SegmentResp {
 	return out
 }
 
-// The walkthrough plan/upstream-and-promotion.md §5 asks for, over the write
+// The walkthrough plan/design/estate.md §5 asks for, over the write
 // surface: an iodesystems segment with the gateway as its hub, and
 // redline-prod-hz on it as a CLIENT. Every write goes through updateConfig,
 // which calls Save, so a green run also proves each intermediate state was

@@ -11,7 +11,7 @@ import (
 
 // hz-agent and HA peer-sync are mutually exclusive on one machine.
 //
-// The investigation is plan/ha-and-the-agent.md; this file is its §6 option B
+// The investigation is plan/design/ha-and-the-agent.md; this file is its §6 option B
 // and its §7 checklist item. The short version:
 //
 // Peer-sync is a 30-second config-replication pull. It is NOT a second writer
@@ -93,7 +93,7 @@ var errAgentArmed = errors.New("an hz-agent on this machine is applying config")
 
 // guardDoc is where the reasoning lives. Named once so every message points at
 // the same place.
-const guardDoc = "plan/ha-and-the-agent.md"
+const guardDoc = "plan/design/ha-and-the-agent.md"
 
 // fleetConfigured reports whether cfg puts this machine in an HA fleet.
 //
@@ -178,7 +178,7 @@ func (s *Server) announceAgentGuardAtBoot() {
 // The boot check reads the config on disk. applyNewConfig REPLACES that config
 // while hz runs, from bytes that came off a socket — so a boot-only check is
 // defeated by the exact mechanism it is guarding against
-// (plan/ha-and-the-agent.md §6, option B's stated risk: "a pulled config can
+// (plan/design/ha-and-the-agent.md §6, option B's stated risk: "a pulled config can
 // introduce Peers at runtime"). The difference is not "the agent gets disarmed
 // a moment later". It is that the machine's fleet membership — the single input
 // the guard's whole answer is computed from — changes with nobody watching. A

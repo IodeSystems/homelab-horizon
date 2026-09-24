@@ -1102,7 +1102,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/environments/rm", s.handleAPIEnvironmentRm)
 	// The machines: identity and segment membership. No project and no
 	// environment — those are coordinates of an instance, not of a box
-	// (plan/architecture.md, "Instance, not machine, carries the environment").
+	// (plan/design/architecture.md, "Instance, not machine, carries the environment").
 	mux.HandleFunc("/api/v1/machines", s.handleAPIMachines)
 	mux.HandleFunc("/api/v1/machines/add", s.handleAPIMachineAdd)
 	mux.HandleFunc("/api/v1/machines/rm", s.handleAPIMachineRm)
@@ -1248,7 +1248,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/cm/current-key", s.handleAPICMCurrentKey)
 	// Version drift: the declared version of every instance's rung beside the
 	// version that instance last reported. The join
-	// plan/example-projection.md §7 records as missing — see
+	// plan/design/example-projection.md §7 records as missing — see
 	// handlers_version_drift.go. Not the agent channel: different clock.
 	mux.HandleFunc(apitypes.CMPathVersionDrift, s.handleAPICMVersionDrift)
 	// Key custody. These read and write the CONFIG, not the identity store, so

@@ -1,6 +1,6 @@
 // Command hz-agent is homelab-horizon's privileged on-box component: the
 // thing that writes /etc and reloads services, so hz's web surface does not
-// have to (plan/architecture.md, "hz-agent de-roots the hz web surface").
+// have to (plan/design/architecture.md, "hz-agent de-roots the hz web surface").
 //
 // It polls; hz never initiates. That is what lets a machine behind NAT be
 // managed with no inbound credential and no ssh key on hz, and it makes the
@@ -55,7 +55,7 @@ COMMANDS
 
 IT DOES NOTHING BY DEFAULT, ON PURPOSE
   hz is still root and still applies its own config. Until that changes
-  (plan/architecture.md phase 4 item 12), two processes reconciling the same
+  (plan/design/architecture.md phase 4 item 12), two processes reconciling the same
   haproxy is a broken gateway. So:
 
     install    writes the unit and stops. No enable, no start.
@@ -86,7 +86,7 @@ CREDENTIAL
 
   Today the agent mints locally because hz is on the same box and both halves
   are root. A remote machine will be issued its credential BY hz, through the
-  Machine record (plan/architecture.md phase 4 item 13) — that changes who
+  Machine record (plan/design/architecture.md phase 4 item 13) — that changes who
   issues it, not what it is or how it is presented.
 
 FLAGS

@@ -12,10 +12,10 @@ import (
 // WHAT IS DELIBERATELY ABSENT, because each absence is the model's shape rather
 // than a field nobody got round to:
 //
-//   - NO PROJECT AND NO ENVIRONMENT. plan/architecture.md, "Instance, not
+//   - NO PROJECT AND NO ENVIRONMENT. plan/design/architecture.md, "Instance, not
 //     machine, carries the environment": *an environment never modifies a
 //     machine; it is a coordinate of an instance*. The gateway in
-//     plan/example-projection.md §3 hosts instances from two projects at once,
+//     plan/design/example-projection.md §3 hosts instances from two projects at once,
 //     so a Project field on a machine would be false for that row the day it
 //     was added, and every screen built on it would inherit the lie. The
 //     instance carries (project, environment, app, role); this record carries

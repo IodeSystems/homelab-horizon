@@ -33,7 +33,7 @@ import (
 // STATUS CODES ARE PART OF THE MACHINE CONTRACT. An agent boots its cached
 // last-known-good on anything that is not a positive denial, and refuses only
 // on a denial, so those two answers must never be collapsed
-// (plan/config-manager.md, "Three states, not two"):
+// (plan/design/config-manager.md, "Three states, not two"):
 //
 //	404  unknown — no such machine, no such registration, or no config matches
 //	     the running version. NOT a denial. Boot the cache.
@@ -431,7 +431,7 @@ func (s *Server) handleAPICMConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// What the box says it is RUNNING — the observed half of the
-	// desired/observed split (plan/architecture.md "Versions"). It is recorded
+	// desired/observed split (plan/design/architecture.md "Versions"). It is recorded
 	// HERE, before the admission switch, for two reasons. The report is a fact
 	// about the box independent of whether hz will serve it anything, so a
 	// denied or pending registration that is still booting 1.2.1 is worth
@@ -468,7 +468,7 @@ func (s *Server) handleAPICMConfig(w http.ResponseWriter, r *http.Request) {
 	res, err := s.users.ResolveConfig(r.Context(), reg.Project, reg.Environment, reg.App, reg.Role, req.Version)
 	if errors.Is(err, db.ErrNoConfigMatches) {
 		// A named failure, never a hang, and never mistaken for a pending
-		// approval (plan/config-manager.md, resolution rule 3).
+		// approval (plan/design/config-manager.md, resolution rule 3).
 		writeJSONError(w, http.StatusNotFound, err.Error())
 		return
 	} else if errors.Is(err, db.ErrInvalidVersion) || errors.Is(err, db.ErrInvalidAddress) {

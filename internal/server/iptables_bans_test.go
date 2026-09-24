@@ -9,7 +9,7 @@ import (
 )
 
 // This file covers the hz-web half of "bans become rules the reconciler can
-// see" (plan/privilege-audit.md §8.3, blocker 2). The iptables half — the
+// see" (plan/design/privilege-audit.md §8.3, blocker 2). The iptables half — the
 // widened read and the proof that it did not widen the delete — is
 // internal/iptables/bans_test.go.
 

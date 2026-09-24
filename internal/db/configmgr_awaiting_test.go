@@ -8,7 +8,7 @@ import (
 // The blank a promotion leaves: a key DECLARED in an environment with no value
 // for it, stored as a row rather than an omission.
 //
-// This is goal property 6 (plan/architecture.md) at the storage layer. The
+// This is goal property 6 (plan/design/architecture.md) at the storage layer. The
 // founding bug is an empty BACKUP_BUCKET selecting the production bucket because
 // absent and empty could not be told apart; a promotion that dropped the key
 // entirely would rebuild it one level up. Everything below is about three states

@@ -15,7 +15,7 @@ import (
 )
 
 // The estate these tests compare against, cut down from
-// plan/example-projection.md §1 to the rows that make version drift hard:
+// plan/design/example-projection.md §1 to the rows that make version drift hard:
 //
 //	storefront/prod      1.4.0   a declared version to drift from
 //	intern/prod          —       a rung that deliberately declares NONE
