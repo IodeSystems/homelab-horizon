@@ -301,6 +301,15 @@ type MachineResp struct {
 	MultiHomed bool     `json:"multiHomed,omitempty"`
 	Enrolled   bool     `json:"enrolled,omitempty"`
 	EnrolledAt int64    `json:"enrolledAt,omitempty"`
+
+	// AlreadyDeclared says the record came back unchanged because it already
+	// existed, rather than because this request created it. Only `--self` can
+	// produce it: that is the one add whose whole job is to reach a state
+	// ("this gateway is declared"), so a second run must read as done rather
+	// than as AddMachine's duplicate-name refusal. A named add still refuses —
+	// there the operator asserted something about the estate, and hz telling
+	// them it was already true is information they asked for.
+	AlreadyDeclared bool `json:"alreadyDeclared,omitempty"`
 }
 
 // MachineAddReq declares a machine. Segments are names; there is no Segment
@@ -314,6 +323,24 @@ type MachineAddReq struct {
 	Name     string   `json:"name"`
 	Segments []string `json:"segments,omitempty"`
 	Note     string   `json:"note,omitempty"`
+
+	// Self declares the box HZ ITSELF IS RUNNING ON, and Name must then be
+	// empty: the name comes from hz's own identity (os.Hostname, the same
+	// answer the agent gives) rather than from a hostname the operator has to
+	// go and look up and can mistype. Getting it wrong is not a small error —
+	// a machine declared under one name and enrolled under another matches
+	// nothing, and nothing says so.
+	//
+	// THE SERVER RESOLVES IT, never the CLI. `hz` runs wherever the operator
+	// is; the gateway is where hz is. A client that sent its own hostname
+	// would declare the operator's laptop.
+	//
+	// It does NOT weaken declare-then-enrol. A machine record is still an
+	// operator's assertion — this is an operator running an operator command
+	// with an admin credential. What it removes is the question hz has no
+	// business asking about one box: whether the machine it is running on
+	// exists.
+	Self bool `json:"self,omitempty"`
 }
 
 // MachineRmReq removes a machine. Confirm and Cascade mean what they mean on
@@ -509,6 +536,15 @@ type RemovalResp struct {
 // evidence it came from, and the services it cannot explain are listed as
 // unassigned rather than guessed at.
 
+// ImportMachineResp is a machine the import would declare, and why. In practice
+// the gateway: hz runs on a box, and a box hz runs on that nothing declares is
+// a machine missing from the model. Name only — an import proposes that the box
+// exists, not where it sits on the network.
+type ImportMachineResp struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
+}
+
 // ImportProjectResp is a project the import would declare, and why.
 type ImportProjectResp struct {
 	Name   string `json:"name"`
@@ -560,6 +596,7 @@ type ImportSignalResp struct {
 // typing the flag rather than after.
 type ImportPlanResp struct {
 	Fingerprint      string                  `json:"fingerprint"`
+	Machines         []ImportMachineResp     `json:"machines,omitempty"`
 	Projects         []ImportProjectResp     `json:"projects"`
 	Environments     []ImportEnvironmentResp `json:"environments"`
 	Assignments      []ImportAssignmentResp  `json:"assignments"`
@@ -601,7 +638,10 @@ type ImportApplyReq struct {
 // row, and the moment an operator moves that row they are a lie sitting beside
 // it. They are output, not input.
 type ImportFileReq struct {
-	Version      int                        `json:"version"`
+	Version int `json:"version"`
+	// Machines the plan declares. Additive and skipped when already declared,
+	// so re-sending a plan is a no-op rather than a duplicate-name refusal.
+	Machines     []ImportFileMachineReq     `json:"machines,omitempty"`
 	Projects     []ImportFileProjectReq     `json:"projects"`
 	Environments []ImportFileEnvironmentReq `json:"environments"`
 	Assign       []ImportFilePlacementReq   `json:"assign"`
@@ -610,6 +650,12 @@ type ImportFileReq struct {
 	// mention is refused, because an omission and a deliberate "leave this one
 	// alone" would otherwise be the same file.
 	Unassigned []string `json:"unassigned"`
+}
+
+// ImportFileMachineReq declares a machine. Name only: segment membership needs
+// a Segment record to resolve against and an import file cannot declare one.
+type ImportFileMachineReq struct {
+	Name string `json:"name"`
 }
 
 // ImportFileProjectReq declares a project. Parent names another project in the
@@ -641,10 +687,14 @@ type ImportFilePlacementReq struct {
 // it rather than from the plan before it — under merge the two differ, because
 // anything already declared is skipped.
 type ImportApplyResp struct {
-	OK                bool `json:"ok"`
-	ProjectsAdded     int  `json:"projectsAdded"`
-	EnvironmentsAdded int  `json:"environmentsAdded"`
-	ServicesAssigned  int  `json:"servicesAssigned"`
+	OK bool `json:"ok"`
+	// MachinesAdded is counted from the config after the write like every
+	// other number here, so a plan that proposed a machine hz already declared
+	// reports 0 rather than 1.
+	MachinesAdded     int `json:"machinesAdded"`
+	ProjectsAdded     int `json:"projectsAdded"`
+	EnvironmentsAdded int `json:"environmentsAdded"`
+	ServicesAssigned  int `json:"servicesAssigned"`
 }
 
 // IntegrationsResp mirrors config.Integrations for read/round-trip.
