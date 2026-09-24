@@ -556,7 +556,8 @@ func printSegment(s apitypes.SegmentResp, prefix string) {
 				fmt.Printf("%s    endpoint   — (the hub has none declared; a spoke has nothing to dial)\n", prefix)
 			}
 			if m.PublicKey == "" {
-				fmt.Printf("%s    public key — (none yet; hz can route to it and cannot peer with it)\n", prefix)
+				fmt.Printf("%s    public key — (none yet; hz can route to it and cannot peer with it.\n", prefix)
+				fmt.Printf("%s                 A box reports its key when it runs `hz-agent enroll`)\n", prefix)
 			} else {
 				fmt.Printf("%s    public key %s\n", prefix, m.PublicKey)
 			}

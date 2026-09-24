@@ -316,9 +316,9 @@ func TestANameNoRecordAnswersToIsItsOwnGap(t *testing.T) {
 // The limit resolution does not remove
 // ---------------------------------------------------------------------------
 
-// RESOLVED IS NOT PEERABLE. Nothing puts a public key on a member — a box mints
-// its key at enrolment and `hz-agent enroll` does not send one — so hz can name
-// a peer and address it and cannot emit a WireGuard `[Peer]` block for it. A
+// RESOLVED IS NOT PEERABLE. Enrolment fills SegmentMember.PublicKey now, but a
+// peer that has not enrolled against this hz still has none — so hz can name a
+// peer and address it and cannot emit a WireGuard `[Peer]` block for it. A
 // `peers` list that stood alone would read as a tunnel that exists.
 func TestAResolvedMembershipStillCannotPeerWithoutAPublicKey(t *testing.T) {
 	g := Global{Config: segmentedEstate(), Instances: exampleInstances()}

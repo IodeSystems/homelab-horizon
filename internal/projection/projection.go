@@ -48,12 +48,15 @@
 //
 // The Segment record now exists (internal/config/segment.go, item 15), so a
 // membership resolves: interface, address and peer set are computed from the
-// records rather than left out. What it does NOT close is the tunnel. Nothing
-// fills SegmentMember.PublicKey — a box mints its key at enrolment and
-// `hz-agent enroll` does not send one — so hz can name a peer and address it
-// and cannot emit a WireGuard `[Peer]` block for it. That is a gap on the
-// segments section beside a RESOLVED membership, which is the shape this file
-// uses everywhere: an answer and the part of it hz still does not hold.
+// records rather than left out. The keys arrive with ENROLMENT — a box mints one
+// per segment and reports the public half, and hz records it on the
+// SegmentMember — so a peer hz can name is a peer hz can usually emit a
+// WireGuard `[Peer]` block for. USUALLY, not always: a peer that has not
+// enrolled yet, or was keyed before this existed, still has no key, and that
+// is a gap on the segments section beside a RESOLVED membership. It is the
+// shape this file uses everywhere: an answer and the part of it hz does not
+// hold, stated per estate rather than as a sentence stapled to every
+// projection.
 package projection
 
 import (
@@ -641,9 +644,10 @@ func segmentGaps(mc *MachineConfig, m config.Machine, unmodelled, unaddressed, k
 		// nothing puts one on the record.
 		mc.gap(SectionSegments, ReasonUnmodelled, "hz can name and address "+list(keyless)+
 			" and cannot emit a WireGuard `[Peer]` block for it: no record holds that peer's public key."+
-			" A box mints its key per interface at enrolment and `hz-agent enroll` does not send one, so SegmentMember.PublicKey"+
-			" is empty everywhere. `peers` here is therefore WHO this machine talks to on the segment, not a usable tunnel config."+
-			" Enrolment reporting the per-interface public key, or an operator recording it, would close it.")
+			" `peers` here is therefore WHO this machine talks to on the segment, not a usable tunnel config."+
+			" A box mints its key per interface and reports the public half when it enrols, so the usual cause is that"+
+			" the peer has not run `hz-agent enroll` against this hz yet."+
+			" Enrol it from that box, or record its key with `hz segment set <segment> --member machine=<peer>,key=<public key>`.")
 	}
 	if len(hubless) > 0 {
 		mc.gap(SectionSegments, ReasonUnmodelled, list(hubless)+" has members and no hub, so hz cannot say who "+m.Name+
