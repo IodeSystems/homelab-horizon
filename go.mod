@@ -24,7 +24,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/route53 v1.70.0
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/go-acme/lego/v4 v4.35.2
-	github.com/go-webauthn/webauthn v0.18.1
+	github.com/go-webauthn/webauthn v0.18.2
 	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/libdns/cloudflare v0.2.2
 	github.com/libdns/digitalocean v0.0.0-20250606071607-dfa7af5c2e31
@@ -41,8 +41,8 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/wildeagency/ashid/go v0.0.0-20260627205826-4c70d22c1032
 	golang.org/x/crypto v0.57.0
-	golang.org/x/oauth2 v0.36.0
-	modernc.org/sqlite v1.58.0
+	golang.org/x/oauth2 v0.37.0
+	modernc.org/sqlite v1.59.0
 )
 
 require (
@@ -67,7 +67,7 @@ require (
 	github.com/digitalocean/godo v1.198.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
-	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
+	github.com/fxamacker/cbor/v2 v2.9.4 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -115,7 +115,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
 	google.golang.org/grpc v1.83.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-	modernc.org/libc v1.75.6 // indirect
+	modernc.org/libc v1.75.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
