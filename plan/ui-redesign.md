@@ -519,6 +519,60 @@ follow.
   Untouched. The freshness pattern, the ranking rule and the machine/instance
   lensing are orthogonal to where a URL puts a project.
 
+### Built 2026-09-24 — what the amendment got right, and the one thing it did not
+
+The split shipped as written: `/$project` as a layout route with four children
+(`/$project`, `/$project/services`, `/$project/domains`, `/$project/config`),
+seventeen flat routes untouched and still parented to root, `/config` kept as a
+redirect to `/projects`, `?scope=` as a search param with own-plus-descendants
+as the default, and a Location column that always renders the row's own project
+name. The decisions live in `ui/src/components/model/projectRoutes.ts`, the
+widgets in `ProjectBits.tsx`, and both are checked by
+`projectRoutes.selftest.ts` (the decisions) and
+`projectRoutes.render.selftest.tsx` (the real router, SSR, over a seeded query
+cache — the Outlet check is the first one in the file).
+
+Two things the build found that reading could not.
+
+1. **Decision A is wrong that the dotted map cannot be ambiguous.** It says
+   *"Project names are unique across the config … so the map is unambiguous even
+   when a name contains a dot."* Unique NAMES do not give unique PATHS. A
+   project named `c` under `b` under `a`, and a project named `b.c` under `a`,
+   are both legal, both uniquely named, and both address as `a.b.c`. Lookup does
+   not fix this — there is nothing left to look up. So resolution has **three**
+   answers, not two: one project, no project, or more than one; the third
+   renders an ambiguity screen naming both candidates and linking each by its
+   bare name, which is unique. A bare name can in turn be claimed by another
+   project's path (`a.b` beside `b` under `a`), leaving a project with no
+   address at all — that corner is reported on `/projects` and only the
+   `AddProject` name guard, still the operator's call, can close it.
+2. **A service's `project` never reached the browser.** `ServiceSchema`
+   (`ui/src/api/schemas.ts`) is a `z.object`, which strips what it does not
+   name, and it named neither `project` nor `environment` — so every
+   project-scoped listing would have selected nothing and rendered as a project
+   that owns no services. The render checks cannot see this, because they seed
+   the query cache with already-parsed objects; the parser is exercised
+   directly in `projectRoutes.selftest.ts` for that reason.
+
+Choices the amendment left to the build:
+
+- **Layout route, with an `<Outlet/>`,** rather than the `code_.$code.tsx`
+  escape hatch — and the Outlet has a test that reddens alone when it is
+  removed (17 checks, all of them children of `/$project`).
+- **Location is a column** on the project screens and on the flat `/services`
+  and `/domains`, rendered as the project's own name linked to its screen, with
+  an explicit *"not assigned to any project"* line for the unassigned case.
+- **A project with no environments** renders the same sentence the old detail
+  panel used ("declares no environment. Legal — a project is declared before
+  anything moves into it"), phrased for the current scope.
+- **The root gets no special default scope.** Own-plus-descendants everywhere;
+  a leaf says the control would change nothing rather than hiding it.
+- **The `Config` nav entry is gone.** Its contents moved under the project; a
+  nav label pointing at a URL that redirects elsewhere is the support ticket the
+  amendment warns about. `/config` itself still redirects, for bookmarks.
+- **`/$project/config` keeps its `useState` tabs** — unchanged behaviour, just
+  relocated. Making them routed is a separate change.
+
 ## Decision 2 — machines and instances are one surface, two lenses
 
 Not two top-level surfaces, and not one merged table.
