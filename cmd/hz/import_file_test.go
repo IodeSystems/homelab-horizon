@@ -443,3 +443,108 @@ func TestBareImportPointsAtThePlanFile(t *testing.T) {
 		t.Errorf("a config hz can propose nothing for must point at the file:\n%s", out)
 	}
 }
+
+// --- the gateway row, through the plan file ---------------------------------
+
+// --plan-out carries the machine into the file, with the editing rule beside it
+// and without the evidence — the same terms every other row is on.
+func TestPlanOutCarriesTheGatewayMachine(t *testing.T) {
+	stub := &importStub{cfg: importableConfig(), self: "<gw-host>"}
+	path := planFilePath(t)
+
+	out, err := runImportCapturing(t, stub.start(t), "--plan-out", path)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "1 machine(s)") {
+		t.Errorf("the write summary does not count the machine:\n%s", out)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := hzconfig.ParseImportFile(raw)
+	if err != nil {
+		t.Fatalf("hz wrote a file hz will not read: %v\n%s", err, raw)
+	}
+	if len(file.Machines) != 1 || file.Machines[0].Name != "<gw-host>" {
+		t.Fatalf("the machine is not in the file: %+v\n%s", file.Machines, raw)
+	}
+	if strings.Contains(string(raw), "hz is running on") {
+		t.Errorf("the evidence leaked into the file:\n%s", raw)
+	}
+	// The readme has to say how to refuse it, because the person editing this
+	// at 2am is not the person who read the help text.
+	if !strings.Contains(string(raw), "delete the row to refuse it") {
+		t.Errorf("the file does not say how to refuse the machine:\n%s", raw)
+	}
+}
+
+// REFUSING IT is deleting the row, and the whole justification for proposing
+// the gateway at all is that this works.
+func TestDeletingTheMachineRowSendsNoMachine(t *testing.T) {
+	stub := &importStub{cfg: importableConfig(), self: "<gw-host>"}
+	c := stub.start(t)
+	path := planFilePath(t)
+
+	if _, err := runImportCapturing(t, c, "--plan-out", path); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := hzconfig.ParseImportFile(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file.Machines = nil // the operator said no
+	edited, err := file.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, edited, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runImportCapturing(t, c, "--from", path, "--execute")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "MACHINES (0)") {
+		t.Errorf("the edited plan still shows a machine:\n%s", out)
+	}
+	var req apitypes.ImportApplyReq
+	if err := json.Unmarshal([]byte(stub.posts[0]), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Plan == nil {
+		t.Fatal("--from posted no plan")
+	}
+	if len(req.Plan.Machines) != 0 {
+		t.Fatalf("a machine the operator deleted was sent anyway: %+v", req.Plan.Machines)
+	}
+}
+
+// And the undeleted row survives the round trip to the wire, so an operator who
+// keeps it gets what the dry run showed.
+func TestTheKeptMachineRowReachesTheWire(t *testing.T) {
+	stub := &importStub{cfg: importableConfig(), self: "<gw-host>"}
+	c := stub.start(t)
+	path := planFilePath(t)
+
+	if _, err := runImportCapturing(t, c, "--plan-out", path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runImportCapturing(t, c, "--from", path, "--execute"); err != nil {
+		t.Fatal(err)
+	}
+	var req apitypes.ImportApplyReq
+	if err := json.Unmarshal([]byte(stub.posts[0]), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Plan == nil || len(req.Plan.Machines) != 1 || req.Plan.Machines[0].Name != "<gw-host>" {
+		t.Fatalf("the machine did not survive the round trip: %+v", req.Plan)
+	}
+}

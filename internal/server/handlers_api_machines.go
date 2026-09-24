@@ -59,6 +59,19 @@ func (s *Server) handleAPIMachines(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAPIMachineAdd declares a machine.
+//
+// SELF IS RESOLVED HERE, and it has to be. `hz` runs wherever the operator is
+// and the gateway is where hz is, so a client that filled in its own hostname
+// would declare the operator's laptop. The name is LocalMachineName() —
+// os.Hostname, which is also what cmd/hz-agent's machineName() defaults to, so
+// a box declared this way enrols under the name it was declared under. That
+// agreement is the whole risk in this feature and
+// TestTheNameHZDeclaresIsTheNameTheAgentEnrolsWith is where it is pinned.
+//
+// Declare-then-enrol is unchanged: this is still an admin-gated write by an
+// operator holding a credential, and no box gains the ability to write itself
+// in. What it removes is the one question hz has no business asking — whether
+// the machine it is running on exists.
 // POST /api/v1/machines/add
 func (s *Server) handleAPIMachineAdd(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {
@@ -75,8 +88,36 @@ func (s *Server) handleAPIMachineAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	name := req.Name
+	if req.Self {
+		if strings.TrimSpace(req.Name) != "" {
+			writeJSONError(w, http.StatusBadRequest,
+				"self and a name were both given. The point of self is that hz fills the name in from its own identity;"+
+					" a name beside it is either the same string typed twice or a disagreement hz would have to pick a winner of")
+			return
+		}
+		name = LocalMachineName()
+		if strings.TrimSpace(name) == "" || name == "unknown" {
+			writeJSONError(w, http.StatusInternalServerError,
+				"hz cannot read this host's name from the kernel, so it has nothing to declare itself as."+
+					" Declare it by name instead: `hz machine add <name>`")
+			return
+		}
+		// ALREADY DECLARED IS SUCCESS. `--self` asserts a state — this gateway
+		// is in the model — so running it twice has to read as done. A named
+		// add still gets AddMachine's refusal: there the operator asserted
+		// something about the estate and being told it was already true is the
+		// answer they asked for.
+		if existing, declared := s.cfg().FindMachine(name); declared {
+			out := s.machineResp(existing)
+			out.AlreadyDeclared = true
+			writeJSON(w, out)
+			return
+		}
+	}
+
 	next := *s.cfg()
-	if err := next.AddMachine(config.Machine{Name: req.Name, Segments: req.Segments, Note: req.Note}); err != nil {
+	if err := next.AddMachine(config.Machine{Name: name, Segments: req.Segments, Note: req.Note}); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -84,7 +125,7 @@ func (s *Server) handleAPIMachineAdd(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
 		return
 	}
-	m, _ := next.FindMachine(req.Name)
+	m, _ := next.FindMachine(name)
 	writeJSON(w, s.machineResp(m))
 }
 

@@ -52,7 +52,14 @@ func (s *Server) handleAPIImport(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		cfg := s.cfg()
-		writeJSON(w, importPlanResp(cfg.ProposeImport(), len(cfg.Projects)))
+		// LocalMachineName, not a config field: the kernel answers "which box
+		// am I" and a Machine record is a declaration ABOUT a box, never an
+		// identity claim by the process reading it. It is also the same answer
+		// hz-agent gives itself (cmd/hz-agent's machineName), which is what
+		// makes a gateway declared by this proposal enrol under the name it
+		// was declared under. TestTheNameHZDeclaresIsTheNameTheAgentEnrolsWith
+		// pins that.
+		writeJSON(w, importPlanResp(cfg.ProposeImportFor(LocalMachineName()), len(cfg.Projects)))
 	case http.MethodPost:
 		s.applyImport(w, r)
 	default:
@@ -76,6 +83,7 @@ func (s *Server) applyImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	before := assignedCount(&next)
+	machinesBefore := len(next.Machines)
 	projectsBefore, envsBefore := len(next.Projects), len(next.Environments)
 	if err := next.ApplyImport(plan, req.Merge); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -88,6 +96,7 @@ func (s *Server) applyImport(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, apitypes.ImportApplyResp{
 		OK:                true,
+		MachinesAdded:     len(next.Machines) - machinesBefore,
 		ProjectsAdded:     len(next.Projects) - projectsBefore,
 		EnvironmentsAdded: len(next.Environments) - envsBefore,
 		ServicesAssigned:  assignedCount(&next) - before,
@@ -99,7 +108,7 @@ func (s *Server) applyImport(w http.ResponseWriter, r *http.Request) {
 // ApplyImport never learns which one it got.
 func importPlanFor(w http.ResponseWriter, cfg *config.Config, req apitypes.ImportApplyReq) (config.ImportPlan, bool) {
 	if req.Plan == nil {
-		plan := cfg.ProposeImport()
+		plan := cfg.ProposeImportFor(LocalMachineName())
 		if req.Fingerprint != "" && req.Fingerprint != plan.Fingerprint() {
 			writeJSONError(w, http.StatusConflict,
 				"the config changed since that plan was read (plan "+req.Fingerprint+", now "+plan.Fingerprint()+"); re-run the dry run")
@@ -125,10 +134,14 @@ func importPlanFor(w http.ResponseWriter, cfg *config.Config, req apitypes.Impor
 func importFileFromReq(r apitypes.ImportFileReq) config.ImportFile {
 	f := config.ImportFile{
 		Version:      r.Version,
+		Machines:     make([]config.ImportFileMachine, 0, len(r.Machines)),
 		Projects:     make([]config.ImportFileProject, 0, len(r.Projects)),
 		Environments: make([]config.ImportFileEnvironment, 0, len(r.Environments)),
 		Assign:       make([]config.ImportFilePlacement, 0, len(r.Assign)),
 		Unassigned:   append([]string(nil), r.Unassigned...),
+	}
+	for _, x := range r.Machines {
+		f.Machines = append(f.Machines, config.ImportFileMachine{Name: x.Name})
 	}
 	for _, x := range r.Projects {
 		f.Projects = append(f.Projects, config.ImportFileProject{Name: x.Name, Parent: x.Parent})
@@ -211,11 +224,15 @@ func (s *Server) handleAPIProjectFeed(w http.ResponseWriter, r *http.Request) {
 func importPlanResp(p config.ImportPlan, existingProjects int) apitypes.ImportPlanResp {
 	out := apitypes.ImportPlanResp{
 		Fingerprint:      p.Fingerprint(),
+		Machines:         make([]apitypes.ImportMachineResp, 0, len(p.Machines)),
 		Projects:         make([]apitypes.ImportProjectResp, 0, len(p.Projects)),
 		Environments:     make([]apitypes.ImportEnvironmentResp, 0, len(p.Environments)),
 		Assignments:      make([]apitypes.ImportAssignmentResp, 0, len(p.Assignments)),
 		Unassigned:       make([]apitypes.ImportUnassignedResp, 0, len(p.Unassigned)),
 		ExistingProjects: existingProjects,
+	}
+	for _, x := range p.Machines {
+		out.Machines = append(out.Machines, apitypes.ImportMachineResp{Name: x.Name, Reason: x.Reason})
 	}
 	for _, x := range p.Projects {
 		out.Projects = append(out.Projects, apitypes.ImportProjectResp{Name: x.Name, Parent: x.Parent, Reason: x.Reason})

@@ -47,6 +47,13 @@ projects, environments, and which service belongs on which rung. Every proposal
 names the evidence it came from. A service nothing explains is left UNASSIGNED,
 which is legal and which is what it already is.
 
+It also proposes ONE MACHINE: the box hz is running on. hz is on it, so there is
+no question to ask about whether it exists — but it is still a proposal like
+every other row, so it is printed, it is in the plan file, and deleting the row
+refuses it. Every OTHER machine stays something an operator declares by name:
+hz issues an agent credential only for a machine it has been told about, and a
+box that could declare itself could then ask for one.
+
 Prints the plan and writes NOTHING to the config unless --execute is given.
 
 The proposal is a STARTING POINT, not a verdict. hz can only see what is in the
@@ -125,15 +132,24 @@ func runImport(c *client, args []string) error {
 		fmt.Println("reorganises a tree somebody built is the destructive case, so --execute is")
 		fmt.Println("refused without --merge. With --merge the existing projects, rungs and")
 		fmt.Println("service assignments are kept and only what is missing is added.")
+		if len(plan.Machines) > 0 {
+			// The common case on an estate somebody already built: the tree is
+			// right and the only thing missing is the gateway itself. There is
+			// a verb for exactly that, and it needs no import and no --merge.
+			fmt.Printf("\nIf the only row you want here is the machine %s, you do not need an\n", plan.Machines[0].Name)
+			fmt.Println("import at all — `hz machine add --self` declares this gateway and touches")
+			fmt.Println("nothing else.")
+		}
 		if *execute {
 			return fmt.Errorf("REFUSED: %d project(s) already declared; re-run with --merge to add to them", plan.ExistingProjects)
 		}
 	}
 
-	if len(plan.Projects) == 0 && len(plan.Assignments) == 0 {
+	if len(plan.Projects) == 0 && len(plan.Assignments) == 0 && len(plan.Machines) == 0 {
 		if *from != "" {
-			fmt.Printf("\n%s declares no project and assigns no service, so there is nothing to\n", *from)
-			fmt.Println("import. Every service stays unassigned, which is legal and is what they are.")
+			fmt.Printf("\n%s declares no machine, no project and assigns no service, so there is\n", *from)
+			fmt.Println("nothing to import. Every service stays unassigned, which is legal and is what")
+			fmt.Println("they are.")
 			return nil
 		}
 		fmt.Println("\nThere is nothing to import. That is an answer, not a failure: nothing in")
@@ -165,8 +181,12 @@ func runImport(c *client, args []string) error {
 	if err := c.do(http.MethodPost, "/api/v1/import", req, &resp); err != nil {
 		return err
 	}
-	fmt.Printf("\nImported: %d project(s), %d environment(s), %d service(s) assigned.\n",
-		resp.ProjectsAdded, resp.EnvironmentsAdded, resp.ServicesAssigned)
+	fmt.Printf("\nImported: %d machine(s), %d project(s), %d environment(s), %d service(s) assigned.\n",
+		resp.MachinesAdded, resp.ProjectsAdded, resp.EnvironmentsAdded, resp.ServicesAssigned)
+	if resp.MachinesAdded > 0 {
+		fmt.Println("The machine is declared and in no segment, which is legal. What it confers is")
+		fmt.Println("the right to ENROL — from the box, as root: `hz-agent enroll --hz <hz url>`.")
+	}
 	if len(plan.Unassigned) > 0 {
 		fmt.Printf("%d service(s) were left unassigned on purpose; `hz service edit` is how one moves.\n", len(plan.Unassigned))
 	}
@@ -187,7 +207,8 @@ func writePlanFile(path string, proposal apitypes.ImportPlanResp) error {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	total := len(proposal.Assignments) + len(proposal.Unassigned)
-	fmt.Printf("\nWrote %s — %d project(s), %d rung(s), %d service(s).\n", path, len(proposal.Projects), len(proposal.Environments), total)
+	fmt.Printf("\nWrote %s — %d machine(s), %d project(s), %d rung(s), %d service(s).\n",
+		path, len(proposal.Machines), len(proposal.Projects), len(proposal.Environments), total)
 	fmt.Println("Nothing was written to the config.")
 	fmt.Println()
 	fmt.Println("This is the proposal as a file you can correct. hz can only see what is in")
@@ -240,6 +261,10 @@ func planFromFile(path string, proposal apitypes.ImportPlanResp) (apitypes.Impor
 
 	out := apitypes.ImportPlanResp{ExistingProjects: proposal.ExistingProjects}
 	req := &apitypes.ImportFileReq{Version: file.Version, Unassigned: append([]string(nil), file.Unassigned...)}
+	for _, m := range file.Machines {
+		out.Machines = append(out.Machines, apitypes.ImportMachineResp{Name: m.Name})
+		req.Machines = append(req.Machines, apitypes.ImportFileMachineReq{Name: m.Name})
+	}
 	for _, p := range file.Projects {
 		out.Projects = append(out.Projects, apitypes.ImportProjectResp{Name: p.Name, Parent: p.Parent})
 		req.Projects = append(req.Projects, apitypes.ImportFileProjectReq{Name: p.Name, Parent: p.Parent})
@@ -263,6 +288,9 @@ func planFromFile(path string, proposal apitypes.ImportPlanResp) (apitypes.Impor
 // carries; what it drops is the evidence, on purpose.
 func planFromResp(p apitypes.ImportPlanResp) hzconfig.ImportPlan {
 	out := hzconfig.ImportPlan{}
+	for _, x := range p.Machines {
+		out.Machines = append(out.Machines, hzconfig.ImportMachine{Name: x.Name})
+	}
 	for _, x := range p.Projects {
 		out.Projects = append(out.Projects, hzconfig.ImportProject{Name: x.Name, Parent: x.Parent})
 	}
@@ -298,6 +326,27 @@ func printImportPlan(plan apitypes.ImportPlanResp, from string) {
 	// Every section prints, empty or not. A section that vanishes when it has
 	// nothing in it leaves the reader to work out whether hz found none or never
 	// looked, and those are different answers.
+	fmt.Printf("\nMACHINES (%d)\n", len(plan.Machines))
+	if len(plan.Machines) == 0 {
+		if from != "" {
+			fmt.Printf("  Nothing. %s declares no machine.\n", from)
+		} else {
+			// The SIGNALS section says which of these it is for this config —
+			// "already declared" is a signal there, not a silence here.
+			fmt.Println("  Nothing. hz proposes only the box it is running on, and only when no")
+			fmt.Println("  machine record declares it already.")
+		}
+	}
+	for _, m := range plan.Machines {
+		fmt.Printf("  %s\n", m.Name)
+		printReason("", m.Reason)
+	}
+	if len(plan.Machines) > 0 {
+		fmt.Println("  A machine is declared with no segment here. That is legal — the box is in")
+		fmt.Println("  the model and peers with nothing — and membership is a separate, declared")
+		fmt.Println("  act: `hz segment set <segment> --member machine=<name>,address=<ip>`.")
+	}
+
 	fmt.Printf("\nPROJECTS (%d)\n", len(plan.Projects))
 	if len(plan.Projects) == 0 {
 		if from != "" {
