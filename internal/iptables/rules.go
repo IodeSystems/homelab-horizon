@@ -24,7 +24,7 @@
 // and horizon must not claim them.
 //
 // The package is split along one seam, and the split is load-bearing for the
-// hz-agent work (plan/architecture.md, "hz-agent de-roots the hz web surface"):
+// hz-agent work (plan/design/architecture.md, "hz-agent de-roots the hz web surface"):
 //
 //	rules.go     pure  inputs in, desired rule set out.
 //	forwards.go  pure  the layer-4 forward half of that rule set.

@@ -950,7 +950,7 @@ export interface EnvironmentRmReq {
  * MachineResp is one declared machine: identity and segment membership.
  * IT CARRIES NO PROJECT AND NO ENVIRONMENT, and that is the model rather than
  * an omission — an environment is a coordinate of an INSTANCE, and one machine
- * hosts instances from several projects (plan/architecture.md, "Instance, not
+ * hosts instances from several projects (plan/design/architecture.md, "Instance, not
  * machine, carries the environment"). It carries no observed version either:
  * that belongs to an instance and several instances share a box, so a
  * machine-level version would report a half-finished rollout as finished.
@@ -1027,7 +1027,7 @@ export interface MachineRmReq {
  * resolves to.
  * IT CARRIES NO ENVIRONMENT and no version, for the reason MachineResp carries
  * neither: a segment is a network, not a rung. It carries a PROJECT because a
- * project's machines form the segment (plan/architecture.md, "Segments"), and
+ * project's machines form the segment (plan/design/architecture.md, "Segments"), and
  * the owner is what makes another project's machine on it read as a crossing.
  * Peers on each member is DERIVED server-side rather than left to a client
  * pairing members up, for the reason MachineResp derives MultiHomed: a client
@@ -3226,7 +3226,7 @@ export const VersionDriftBehind = "behind";
 export const VersionDriftAhead = "ahead";
 /**
  * VersionDriftNoDeclaredVersion — the rung this instance names declares no
- * version. NOT drift and not a fault: plan/example-projection.md §1 has two
+ * version. NOT drift and not a fault: plan/design/example-projection.md §1 has two
  * rungs deliberately in this state, and the projection's answer is to
  * install no package at all rather than "whatever the feed holds". There is
  * nothing to compare against, whatever the box reports.
@@ -3373,7 +3373,7 @@ export interface InstanceVersion {
   observedAt?: string;
   /**
    * AgeSeconds is how old the reading is, against ServerTime. It travels with
-   * the observed value on purpose: plan/example-projection.md §4 —
+   * the observed value on purpose: plan/design/example-projection.md §4 —
    * "anything showing an observed value must show its age beside it or it
    * lies". Zero when silent, which is why State has to be read before any
    * number is.

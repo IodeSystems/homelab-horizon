@@ -10,7 +10,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/projection"
 )
 
-// THE BUG THIS FILE IS ABOUT (plan/privilege-audit.md §8.3, blocker 1).
+// THE BUG THIS FILE IS ABOUT (plan/design/privilege-audit.md §8.3, blocker 1).
 //
 // desiredFor used to publish an IPTablesSection unconditionally. The sets in
 // it come from iptables.ExpectedRules, which emits NO MASQUERADE and NO port

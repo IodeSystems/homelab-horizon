@@ -162,7 +162,7 @@ func truncate(s string, n int) string {
 
 // Report renders a plan as the text `hz-agent diff` prints and the daemon
 // logs. It is the data behind the redesign's drift screen
-// (plan/ui-redesign.md), which is why the plan carries structure and this
+// (plan/design/ui.md), which is why the plan carries structure and this
 // function only formats it.
 func Report(p Plan) string {
 	var b strings.Builder

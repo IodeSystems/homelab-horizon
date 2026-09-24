@@ -7,7 +7,7 @@
  * or that the Location column has collapsed into a blank cell for the project
  * you are already on. Both of those pass every type check and both are the bug.
  *
- * Names are placeholders from plan/example-projection.md.
+ * Names are placeholders from plan/design/example-projection.md.
  */
 import type { ProjectResp } from "../../api/generated-types";
 import {

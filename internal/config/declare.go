@@ -12,7 +12,7 @@ import (
 // payload onto a node that already exists. Neither of them can CREATE the node,
 // so until this file landed the only way to declare a project or a rung was
 // `hz import --execute` or an editor on config.json — and step 2 of the
-// acceptance walkthrough in plan/architecture.md ("redline declares its own
+// acceptance walkthrough in plan/design/architecture.md ("redline declares its own
 // environments: staging, prod") had no command at all.
 //
 // The order these enforce is the one legacy_compat_test.go pins from the other

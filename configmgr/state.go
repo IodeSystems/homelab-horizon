@@ -53,7 +53,7 @@ import (
 // # No freshness anywhere
 //
 // Nothing here records an expiry, a TTL or a last-checked time, and nothing
-// reads one. A three-year-old cache is valid config. See plan/config-manager.md,
+// reads one. A three-year-old cache is valid config. See plan/design/config-manager.md,
 // "Constraint: nothing in the boot path may depend on freshness".
 
 const (
@@ -141,7 +141,7 @@ func (s *State) MachineKey() (*ecdh.PrivateKey, error) {
 // One keypair per machine, not per registration. A box running two roles shares
 // it, so either role can unwrap anything granted to that machine — separate
 // users with separate state trees, or the separation is advisory. See
-// plan/config-manager.md, "How a client knows its own address".
+// plan/design/config-manager.md, "How a client knows its own address".
 func (s *State) EnsureMachineKey() (*ecdh.PrivateKey, error) {
 	priv, err := s.MachineKey()
 	if err == nil {

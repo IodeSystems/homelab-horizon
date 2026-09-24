@@ -9,7 +9,7 @@ import (
 // The promotion edge: which rung may be promoted into which, and why a refusal is
 // one of two different refusals with two different remedies.
 //
-// These are the rules plan/architecture.md step 6 rests on. Everything here runs
+// These are the rules plan/design/architecture.md step 6 rests on. Everything here runs
 // on declared records alone — no keys, no values, no database — which is what lets
 // hz answer the question at all when it can read nothing.
 

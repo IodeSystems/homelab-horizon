@@ -439,7 +439,7 @@ func walkthroughFixture(t *testing.T) *declareStub {
 }
 
 // TestWalkthroughStepTwoHasCommands is the gap this change exists to close:
-// step 2 of plan/architecture.md — "redline declares its own environments:
+// step 2 of plan/design/architecture.md — "redline declares its own environments:
 // staging, prod", and then "assign a service to it" — driven entirely from the
 // CLI, with no hand-edited JSON.
 //

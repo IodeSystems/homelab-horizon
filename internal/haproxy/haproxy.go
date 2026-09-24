@@ -1,7 +1,7 @@
 // Package haproxy computes and applies the gateway's HAProxy configuration.
 //
 // The package is split along one seam, and the split is load-bearing for the
-// hz-agent work (plan/architecture.md, "hz-agent de-roots the hz web surface"):
+// hz-agent work (plan/design/architecture.md, "hz-agent de-roots the hz web surface"):
 //
 //	render.go   pure     desired state in, bytes out. No files, no commands,
 //	                     no clock, no environment. Runs anywhere, as anyone.
@@ -13,7 +13,7 @@
 // The cert store reaches render through CertStore, a replaceable function,
 // rather than a read inside config generation. That is what lets an
 // unprivileged hz web still render an HTTPS config once /etc/haproxy/certs is
-// out of reach (plan/architecture.md, phase 4 item 12 step 3) — it supplies the
+// out of reach (plan/design/architecture.md, phase 4 item 12 step 3) — it supplies the
 // facts instead of opening the directory.
 //
 // Anything that computes what the config *should* be belongs in render.go, so

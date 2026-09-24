@@ -21,13 +21,13 @@ import (
 //
 // WHY IT IS NOT THE ADMIN TOKEN. The agent used to poll with an hz admin
 // credential, and it did not work — `isAdmin` has no Bearer path, so the poll
-// answered 401 (plan/privilege-audit.md §1.1). The tempting repair is to grow
+// answered 401 (plan/design/privilege-audit.md §1.1). The tempting repair is to grow
 // one. That would make the admin token usable as a header on EVERY admin
 // surface in hz, which is a fleet-wide widening to fix one endpoint. So the
 // agent gets its own credential instead, checked by its own code, accepted by
 // exactly one route.
 //
-// It is also the only shape that satisfies plan/architecture.md's "Two
+// It is also the only shape that satisfies plan/design/architecture.md's "Two
 // channels": what the agent holds must be worth a machine's network shape and
 // nothing else. An admin token is worth the estate.
 //

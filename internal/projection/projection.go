@@ -1,7 +1,7 @@
 // Package projection is `project(global, machineID) -> MachineConfig`: what hz
 // says one machine should look like, computed from hz's records alone.
 //
-// It is phase 4 item 14 of plan/architecture.md, and the generalisation of a
+// It is phase 4 item 14 of plan/design/architecture.md, and the generalisation of a
 // thing hz already did for exactly one box. `internal/haproxy`,
 // `internal/dnsmasq`, `internal/iptables` and `internal/wireguard` are all
 // `render(global) -> local files -> reload`, hardcoded to the machine hz runs
@@ -20,7 +20,7 @@
 //   - It is diffable before anything is applied — "what would change on box X"
 //     is a question with an offline answer.
 //   - It is testable against a fixture estate with no machine anywhere. See
-//     projection_test.go, which runs plan/example-projection.md §3.
+//     projection_test.go, which runs plan/design/example-projection.md §3.
 //
 // # The gateway is machine #1, not a special case
 //
@@ -73,8 +73,8 @@ import (
 )
 
 // MachineConfig is what hz says one machine should look like: the struct
-// plan/architecture.md names under "The projection", populated the way
-// plan/example-projection.md §5 shows.
+// plan/design/architecture.md names under "The projection", populated the way
+// plan/design/example-projection.md §5 shows.
 //
 // Every slice is non-nil after Project returns, so "hz wants nothing here" is
 // an empty list rather than a null — and a section hz could not compute is an
@@ -265,7 +265,7 @@ type Unit struct {
 	// The agent compares it to what it last applied and restarts the unit when
 	// it moves. That is the whole mechanism: the agent learns THAT the config
 	// changed, never WHAT changed. No key is in the path, so this breaks
-	// neither of the two rules that made the hole (plan/config-manager.md): the
+	// neither of the two rules that made the hole (plan/design/config-manager.md): the
 	// agent still holds no environment key, and nothing in the app's boot path
 	// gained a dependency on freshness — the restart is a trigger from the
 	// side, not something a boot waits for.

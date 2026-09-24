@@ -14,7 +14,7 @@ package letsencrypt
 // (apply.go) only carries them out.
 //
 // The seam is also the reason this half may be linked into an unprivileged hz
-// web process after plan/architecture.md phase 4 item 12: nothing in this file
+// web process after plan/design/architecture.md phase 4 item 12: nothing in this file
 // can read a private key, because nothing in this file can read anything.
 
 import (

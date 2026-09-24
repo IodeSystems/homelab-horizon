@@ -10,7 +10,7 @@
  * most important machine hosts two projects at once. Putting a project on a
  * machine row would force a choice the model refuses to make.
  *
- * Three states this screen must not flatten (plan/example-projection.md §4):
+ * Three states this screen must not flatten (plan/design/example-projection.md §4):
  *
  *   A machine that hosts NOTHING is not silent. A build box with a segment, an
  *   agent and a healthy poll has nothing to report an observed version FOR,

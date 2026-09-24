@@ -13,8 +13,8 @@ import (
 
 // The other half of hz-agent's channel: what a machine reports back.
 //
-// `Desired` was GET-only, so `Observed` never left the box it was computed on
-// (plan/privilege-classification.md §4.1). Two things were impossible as a
+// `Desired` was GET-only, so `Observed` never left the box it was computed on.
+// Two things were impossible as a
 // result: hz could not show drift — the screen architecture.md calls the most
 // valuable in the tool — and after item 12 the IPTables tab loses its data
 // source outright, because hz web will not be able to run iptables-save.

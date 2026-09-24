@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// The observed half of plan/architecture.md's desired/observed split, added in
+// The observed half of plan/design/architecture.md's desired/observed split, added in
 // 0011. It is worth nothing unless it is actually written down, and until 0011
 // it was not: a box reported its version on every register and every resolve
 // and hz kept neither.

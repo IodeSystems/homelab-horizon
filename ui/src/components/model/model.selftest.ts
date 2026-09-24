@@ -15,7 +15,7 @@
  * below compare renderings for DISTINCTNESS rather than asserting golden
  * strings.
  *
- * Names are placeholders from plan/example-projection.md; homelab-horizon is
+ * Names are placeholders from plan/design/example-projection.md; homelab-horizon is
  * a public repo.
  */
 import type {

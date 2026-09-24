@@ -46,7 +46,7 @@ func agentTestServer(t *testing.T) (*Server, string) {
 // THE POINT OF THIS HELPER. These tests used to authenticate with a session
 // cookie — a credential hz-agent has never sent and cannot send. The handler
 // was green for a caller that does not exist while the real one got a 401
-// (plan/privilege-audit.md §1.1). Every test below now presents what the agent
+// (plan/design/privilege-audit.md §1.1). Every test below now presents what the agent
 // presents, through agent.Authorize, which is the same function the client
 // calls. A cookie cannot get in here any more without somebody deliberately
 // writing one.
@@ -171,7 +171,7 @@ func TestAgentDesiredNeedsAdmin(t *testing.T) {
 // This is the durable half of the fix. Every other test here drives the
 // handler directly, so any of them can be written against a credential the
 // agent does not send; that is exactly how a 401 shipped with 37 green tests
-// (plan/privilege-audit.md §1.1). This one cannot be: the request is built by
+// (plan/design/privilege-audit.md §1.1). This one cannot be: the request is built by
 // agent.HTTPSource, which is the code the daemon runs, and the route comes
 // from setupRoutes, which is the table hz serves. Break the credential at
 // either end and this fails.
@@ -523,7 +523,7 @@ func TestNoKeyMaterialReachesARefusalOrAnotherMachine(t *testing.T) {
 // The admin path is GONE, stated on its own so a regression names itself.
 // An hz admin session used to read this endpoint; while the payload was
 // haproxy.cfg that was defensible, and it stopped being the moment a private
-// key started crossing (plan/privilege-audit.md §3, constraint 4).
+// key started crossing (plan/design/privilege-audit.md §3, constraint 4).
 func TestAnAdminSessionIsRefused(t *testing.T) {
 	s, _ := agentTestServer(t)
 

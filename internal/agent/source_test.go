@@ -12,7 +12,7 @@ import (
 //
 // hz disarms the agent by refusing to serve desired state when the machine is
 // in an HA fleet (internal/server/agent_fleet_guard.go,
-// plan/ha-and-the-agent.md). That refusal is the whole operator-facing product
+// plan/design/ha-and-the-agent.md). That refusal is the whole operator-facing product
 // of the guard on this side: it is what `journalctl -u hz-agent` and
 // `hz-agent diff` show. A client that reduced it to "hz answered 409" would
 // leave the operator with a number and no cause, on a box that has quietly
@@ -22,7 +22,7 @@ import (
 // fit; this asserts the part that names the cause survives it.
 func TestARefusedPollSaysWhy(t *testing.T) {
 	const refusal = `{"error":"hz-agent is disarmed on this machine because HA peer-sync is configured ` +
-		`(peer_id=\"site-b\", 1 peer(s) in config.json). See plan/ha-and-the-agent.md."}`
+		`(peer_id=\"site-b\", 1 peer(s) in config.json). See plan/design/ha-and-the-agent.md."}`
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusConflict)

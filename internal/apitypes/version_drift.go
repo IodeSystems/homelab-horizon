@@ -3,11 +3,11 @@ package apitypes
 // What GET /api/v1/cm/version-drift serves: the DECLARED version of every
 // instance's rung beside the version that instance last reported it is running.
 //
-// plan/architecture.md's walkthrough step 5 is "hz shows: desired 1.2.3,
+// plan/design/architecture.md's walkthrough step 5 is "hz shows: desired 1.2.3,
 // observed 1.2.1". Both numbers have been stored and served for some time —
 // the declared one by `GET /api/v1/environments` (config.Environment.Version),
 // the observed one on `cm_registrations` (migration 0011) — and until this
-// endpoint no screen put them side by side. plan/example-projection.md §7
+// endpoint no screen put them side by side. plan/design/example-projection.md §7
 // records the gap: "both stored and both served, by different endpoints, and no
 // screen puts them side by side".
 //
@@ -20,10 +20,10 @@ package apitypes
 //
 // `GET /api/v1/agent/observed` is the MACHINE heartbeat: an agent polling on a
 // declared cadence, where a missed report is news. This is a different channel
-// with a different meaning (plan/architecture.md, "Versions", the two clocks):
+// with a different meaning (plan/design/architecture.md, "Versions", the two clocks):
 // an instance's `observed_at` moves when the instance RESOLVES ITS CONFIG,
 // which happens at boot. There is no heartbeat and there is deliberately not
-// going to be one — plan/config-manager.md forbids anything in the boot path
+// going to be one — plan/design/config-manager.md forbids anything in the boot path
 // depending on freshness.
 //
 // Two consequences a screen has to honour:
@@ -94,7 +94,7 @@ const (
 	VersionDriftAhead = "ahead"
 
 	// VersionDriftNoDeclaredVersion — the rung this instance names declares no
-	// version. NOT drift and not a fault: plan/example-projection.md §1 has two
+	// version. NOT drift and not a fault: plan/design/example-projection.md §1 has two
 	// rungs deliberately in this state, and the projection's answer is to
 	// install no package at all rather than "whatever the feed holds". There is
 	// nothing to compare against, whatever the box reports.
@@ -229,7 +229,7 @@ type InstanceVersion struct {
 	ObservedAt string `json:"observedAt,omitempty"`
 
 	// AgeSeconds is how old the reading is, against ServerTime. It travels with
-	// the observed value on purpose: plan/example-projection.md §4 —
+	// the observed value on purpose: plan/design/example-projection.md §4 —
 	// "anything showing an observed value must show its age beside it or it
 	// lies". Zero when silent, which is why State has to be read before any
 	// number is.

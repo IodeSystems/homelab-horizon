@@ -5,7 +5,7 @@
  * picker held in `useState`. It is a route now, so "the storefront project" has
  * an address: it can be linked, bookmarked, and put in a ticket.
  *
- * Four states from plan/example-projection.md §4 shape this screen, and each is
+ * Four states from plan/design/example-projection.md §4 shape this screen, and each is
  * a sentence rather than an empty cell:
  *
  *   ONE ENVIRONMENT is the common case, not an unfinished ladder.

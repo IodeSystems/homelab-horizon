@@ -17,7 +17,7 @@ import (
 
 // The config-manager operator surface, and the reason it lives in a CLI at all.
 //
-// An adversarial review of the browser ceremony (plan/config-manager.md, hole
+// An adversarial review of the browser ceremony (plan/design/config-manager.md, hole
 // 9) settled this: a page served by hz cannot defend against hz. Compromise hz,
 // edit one line of the bundle, and the approval page POSTs the pasted key
 // before wrapping it. Every mitigation the design named — a mandatory

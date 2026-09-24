@@ -282,7 +282,7 @@ func cmResolve(c *client, args []string) error {
 // rather than an omission. A promoted config that simply left PUBLIC_URL out
 // would leave prod holding a config in which the key had never been heard of —
 // indistinguishable from one nobody declared, and the app falls back to its
-// compiled default. That is the founding bug (plan/architecture.md, goal
+// compiled default. That is the founding bug (plan/design/architecture.md, goal
 // property 6), and promotion is exactly where it would be reintroduced.
 //
 // DRY RUN IS THE DEFAULT. This is an irreversible, cross-environment operation

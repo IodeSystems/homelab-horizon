@@ -46,7 +46,7 @@ import (
 //
 // SameSince is what makes "pending since 4h ago" answerable, which is the
 // difference between a box mid-rollout and a box that is failing to converge
-// (plan/example-projection.md §5). An audit trail of every report is a
+// (plan/design/example-projection.md §5). An audit trail of every report is a
 // metrics problem and is deliberately not this.
 
 // ObservedSuffix names the store beside hz's config, the way the admin token
@@ -56,7 +56,7 @@ const ObservedSuffix = ".observed"
 // Observation is one machine's last report, plus when it arrived.
 //
 // ReportedAt is not optional and never omitted: an observed value shown
-// without its age is a lie (plan/example-projection.md §4). Everything that
+// without its age is a lie (plan/design/example-projection.md §4). Everything that
 // serves a Report has to serve this beside it.
 type Observation struct {
 	Machine string `json:"machine"`

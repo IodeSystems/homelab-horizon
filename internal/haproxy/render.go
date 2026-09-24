@@ -99,7 +99,7 @@ func TLSWanted(ssl *SSLConfig) bool {
 // This is the half of the old certRedirectPatterns that did not touch a disk.
 // The other half is ScanCertDir, in apply.go: the split is what lets an
 // unprivileged hz render an HTTPS config for a cert store it cannot open
-// (plan/architecture.md, phase 4 item 12 step 3).
+// (plan/design/architecture.md, phase 4 item 12 step 3).
 func TLSAssetsFor(certDir string, certs []Cert) *TLSAssets {
 	if len(certs) == 0 {
 		return nil

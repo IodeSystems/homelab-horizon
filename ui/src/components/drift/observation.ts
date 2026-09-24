@@ -8,7 +8,7 @@
  * `observation.selftest.ts`, which the UI build runs), and so that the screen
  * is left with layout.
  *
- * Two rules from plan/ui-redesign.md govern the whole file:
+ * Two rules from plan/design/ui.md govern the whole file:
  *
  *   1. An observed value never renders without its age. Every presentation
  *      below carries the age, and the one state with no reading at all says so
@@ -241,7 +241,7 @@ export interface GenerationReading {
 /**
  * The pair, not a badge.
  *
- * plan/example-projection.md §5: "47 vs 46 is behind. Equal serials with
+ * plan/design/example-projection.md §5: "47 vs 46 is behind. Equal serials with
  * differing rows is *applied and did not take*, which is a different fault and
  * the one worth an alarm. A single badge merges them." So does collapsing
  * `unknown` into `behind`: `unknown` means hz cannot make the comparison, and
@@ -576,7 +576,7 @@ export interface TierDef {
 }
 
 /**
- * The queue order, from plan/ui-redesign.md.
+ * The queue order, from plan/design/ui.md.
  *
  * Two placements are decisions rather than conveniences. **Unknown outranks
  * bad**: a fault you can see is smaller than a box you cannot. **Drifting

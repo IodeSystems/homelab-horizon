@@ -14,7 +14,7 @@ import (
 // How the agent learns what to apply.
 //
 // THE AGENT POLLS. hz NEVER INITIATES. That is the constraint from
-// plan/architecture.md ("Two channels"), and it is what lets a machine behind
+// plan/design/architecture.md ("Two channels"), and it is what lets a machine behind
 // NAT be managed with no inbound credential, no port forward and no ssh key on
 // hz. The gateway's agent polls localhost exactly the way a remote agent polls
 // hz, so the local path is the remote path — the gateway is machine #1, not a
@@ -53,7 +53,7 @@ import (
 //     now: it makes hz's own sync depend on an agent being alive, and this
 //     agent ships inert. hz would wait on something that is deliberately not
 //     running. It needs a report-back endpoint and an applied-generation
-//     record, which is item 16's work — see plan/architecture.md.
+//     record, which is item 16's work — see plan/design/architecture.md.
 //
 // THE LATENCY COST. Today a service change reloads haproxy synchronously
 // inside the hz request that made it. Once the agent owns the apply (item 12),

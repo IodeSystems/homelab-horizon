@@ -16,7 +16,7 @@ import (
 // Nothing here decides what either file should say — that is render.go, which
 // is pure. Installing and poking the systemd unit is a *different* privilege
 // and lives in unit.go. When this half moves into hz-agent
-// (plan/architecture.md, phase 4, item 10), this list is what moves.
+// (plan/design/architecture.md, phase 4, item 10), this list is what moves.
 
 // WriteConfig writes dnsmasq.conf, creating its directory if needed, and seeds
 // the records file when it does not exist yet.

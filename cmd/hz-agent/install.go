@@ -54,7 +54,7 @@ MemoryDenyWriteExecute=true
 
 # There is deliberately no install section here, so "systemctl enable" has
 # nothing to hook the unit onto and refuses. hz still owns this box. See
-# plan/architecture.md phase 4, item 12 — that is the commit where the agent
+# plan/design/architecture.md phase 4, item 12 — that is the commit where the agent
 # takes over, and where this paragraph goes away.
 `
 
@@ -114,7 +114,7 @@ func runShowSystemd(args []string) error {
 // that runs.
 //
 // It does one more thing than it used to: it ENROLS the machine first, because
-// an agent with no credential cannot poll at all (plan/privilege-audit.md
+// an agent with no credential cannot poll at all (plan/design/privilege-audit.md
 // §1.1) and an installer that leaves a unit unable to authenticate is the
 // half-done shape that hid the bug. Enrolment is still inert — a credential
 // buys a READ of the desired state; applying needs the three separate

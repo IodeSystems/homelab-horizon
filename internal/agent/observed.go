@@ -11,8 +11,8 @@ import (
 // `Desired` goes hz -> agent over a conditional GET and, until this file,
 // nothing came back. `Observed` was computed on the box, handed to Compute,
 // printed and discarded, so hz could not show drift and — after item 12 —
-// could not read the live firewall at all (plan/privilege-classification.md
-// §4.1, the largest gap in the agent's model).
+// could not read the live firewall at all — the largest gap in the agent's
+// model.
 //
 // # THE AGENT STILL INITIATES
 //
@@ -83,7 +83,7 @@ type StateReport struct {
 	// hz compares it with what it would serve now: a different one means the
 	// box has not polled the current config yet; the SAME one with pending
 	// changes means the agent planned against today's config and the machine
-	// still does not match it (plan/example-projection.md §5 — "applied and
+	// still does not match it (plan/design/example-projection.md §5 — "applied and
 	// did not take" is a different fault from "behind", and one badge merges
 	// them).
 	Generation string `json:"generation"`
@@ -219,7 +219,7 @@ func (r StateReport) Sanitized() StateReport {
 //
 // False is "nothing to report" — an enrolled box with an agent and no managed
 // subsystem, which is correct and permanent and must not render as silence
-// (plan/example-projection.md §3, ci-1).
+// (plan/design/example-projection.md §3, ci-1).
 func (r StateReport) HasTargets() bool { return len(r.Changes) > 0 || r.IPTables != nil }
 
 // Pending counts the changes that would touch the machine. A removal counts:

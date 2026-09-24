@@ -409,8 +409,8 @@ func (c *Config) MaintenancePages() []MaintenancePage {
 //
 // THE PRUNE IS WHY THE AGENT NEEDED A DIRECTORY CONCEPT. A list of files that
 // should exist cannot express "and nothing else with this shape", so moving
-// this function to the agent needed something agent.File does not model
-// (plan/privilege-classification.md §4.5). It is served now as a claim on this
+// this function to the agent needed something agent.File does not model.
+// It is served now as a claim on this
 // directory; this writer stays until hz stops writing files at all (item 12
 // step 5), and both work from MaintenancePages above.
 func (c *Config) WriteMaintenancePageFiles() error {

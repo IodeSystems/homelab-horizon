@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// ENROLMENT: hz is the issuer now (plan/architecture.md, phase 4 item 13).
+// ENROLMENT: hz is the issuer now (plan/design/architecture.md, phase 4 item 13).
 //
 // WHAT CHANGED AND WHAT DID NOT. `hz-agent enroll` used to mint a secret
 // locally and write its own record into hz's store, which only worked because
@@ -27,7 +27,7 @@ import (
 //
 // WHY BOTH HALVES LIVE IN THIS PACKAGE, again. The bug this whole area exists
 // to prevent was a client and a server written in different packages against
-// different assumptions, never exercised together (plan/privilege-audit.md
+// different assumptions, never exercised together (plan/design/privilege-audit.md
 // §1.1). So the request the agent sends and the shape hz answers with are
 // declared here, once, and internal/server marshals into them rather than
 // re-declaring them. The end-to-end test in internal/server drives THIS client

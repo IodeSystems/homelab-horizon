@@ -20,7 +20,7 @@
  * return a plain boolean where three answers exist, and every one that can say
  * "unknown" says it with the reason and the prose that would close it.
  *
- * Names in examples are placeholders from plan/example-projection.md;
+ * Names in examples are placeholders from plan/design/example-projection.md;
  * homelab-horizon is a public repo.
  */
 import type {

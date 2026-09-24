@@ -14,7 +14,7 @@ import (
 //
 // `hz project add` and `hz env add` declare the tree; this is the verb that
 // points a service at it, and step 2 of the acceptance walkthrough in
-// plan/architecture.md — "assign a service to it" — had no command until it
+// plan/design/architecture.md — "assign a service to it" — had no command until it
 // landed. The only thing that ever wrote Service.Project was `hz import
 // --execute`, so a service created after an import could never join a project
 // and one the import placed could never be moved or taken off.

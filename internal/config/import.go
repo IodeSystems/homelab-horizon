@@ -137,7 +137,7 @@ func (p ImportPlan) Fingerprint() string {
 // postureWords maps a word that appears in service names and hostnames to the
 // posture it implies. The word becomes the environment's NAME and the mapping
 // its POSTURE, which is why "beta" is here at all: it is a real environment name
-// sitting at staging's isolation level (plan/example-projection.md, analytics).
+// sitting at staging's isolation level (plan/design/example-projection.md, analytics).
 //
 // Matched as a whole token, never as a substring: "reproduction" contains "prod"
 // and means nothing of the kind.
@@ -240,7 +240,7 @@ type importSvc struct {
 //	                         ENVIRONMENT, never a project. Useless on a service with
 //	                         no project, because an environment belongs to one.
 //	NOT   backend host       a host is a machine, and one machine hosts several
-//	                         projects (plan/example-projection.md, gw-1).
+//	                         projects (plan/design/example-projection.md, gw-1).
 //	NOT   internal_only      exposure is neither a project nor a posture: an
 //	                         internal-only admin tool is production.
 func (c *Config) ProposeImport() ImportPlan {
@@ -282,7 +282,7 @@ func (c *Config) ProposeImportFor(self string) ImportPlan {
 	// would write the hostnames back as if they were a tree. So a group needs
 	// two members to be a group at all.
 	//
-	// This does cost the real single-service project (plan/example-projection.md
+	// This does cost the real single-service project (plan/design/example-projection.md
 	// has three of them, client-a..c). Nothing in a legacy config distinguishes
 	// one of those from a service that simply has a hostname, and the asymmetry
 	// decides it: the operator adds a project hz did not propose in one command,
@@ -489,7 +489,7 @@ func projectNamesForGroups(groups map[string][]int) map[string]string {
 
 // joinByBackend pulls a service into the project its process-mates are already
 // in. Two services whose proxy backend is byte-identical are the same listening
-// process — the `git` and `registry` row of plan/example-projection.md — so this
+// process — the `git` and `registry` row of plan/design/example-projection.md — so this
 // is not an inference about intent, it is the same program under two names.
 //
 // A cluster that straddles two projects is a genuine contradiction, and the

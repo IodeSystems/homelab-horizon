@@ -152,7 +152,7 @@ func (s *Server) handleProbeBinary(w http.ResponseWriter, r *http.Request) {
 // one download where "whoever was handed an install command in the last hour"
 // is doing real work: what arrives is a binary a human then runs with sudo.
 // Enrolment-time trust is not ongoing trust — the agent never updates itself
-// from here (plan/architecture.md, "Agent identity"), and hz can never push a
+// from here (plan/design/architecture.md, "Agent identity"), and hz can never push a
 // replacement to a machine already enrolled.
 func (s *Server) handleAgentBinary(w http.ResponseWriter, r *http.Request) {
 	if !s.requirePublicVhost(w, r) || !s.requireInstallGrant(w, r) {

@@ -6,7 +6,7 @@
  * the answers for DISTINCTNESS; `projectRoutes.render.selftest.tsx` proves they
  * reach the page through the real router.
  *
- * # The rules these functions serve (plan/ui-redesign.md, Decision 1 amended)
+ * # The rules these functions serve (plan/design/ui.md, Decision 1 amended)
  *
  * **A project scopes a URL; it does not scope the navigation.** Four screens
  * carry a project because their records carry one; seventeen do not, because a
@@ -37,7 +37,7 @@
  * (illegible the moment the row is pasted into a ticket by someone who does not
  * know which page it came from).
  *
- * Names in examples are placeholders from plan/example-projection.md;
+ * Names in examples are placeholders from plan/design/example-projection.md;
  * homelab-horizon is a public repo.
  */
 import type { ProjectResp } from "../../api/generated-types";

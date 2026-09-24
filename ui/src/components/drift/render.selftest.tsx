@@ -11,7 +11,7 @@
  * rendering to a string, and substring assertions over that string. Vite
  * bundles it because Node cannot strip JSX; `pnpm test` runs both halves.
  *
- * Names are placeholders from plan/example-projection.md — homelab-horizon is
+ * Names are placeholders from plan/design/example-projection.md — homelab-horizon is
  * public.
  */
 import { renderToStaticMarkup } from "react-dom/server";
@@ -68,7 +68,7 @@ console.log("drift screen — rendered markup");
 console.log("· every observed value reaches the page with its age");
 // ---------------------------------------------------------------------------
 {
-  // app-1 of plan/example-projection.md §5: reporting, behind, two changes.
+  // app-1 of plan/design/example-projection.md §5: reporting, behind, two changes.
   const { text } = render(
     machine({
       machine: "app-1",

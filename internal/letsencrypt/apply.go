@@ -27,7 +27,7 @@ import (
 //
 // Nothing here decides anything — which paths, which SANs, which files are
 // orphans, whether a certificate is stale: all of that is render.go, which is
-// pure. When this half moves into hz-agent (plan/architecture.md, phase 4,
+// pure. When this half moves into hz-agent (plan/design/architecture.md, phase 4,
 // items 10 and 12 step 3), this list is what moves.
 //
 // This is the surface that fails on a CLOCK rather than on a click. Everything

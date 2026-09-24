@@ -1,7 +1,7 @@
 // Package dnsmasq computes and applies the gateway's dnsmasq configuration.
 //
 // The package is split along one seam, and the split is load-bearing for the
-// hz-agent work (plan/architecture.md, "hz-agent de-roots the hz web surface"):
+// hz-agent work (plan/design/architecture.md, "hz-agent de-roots the hz web surface"):
 //
 //	render.go   pure     desired state in, bytes out. No files, no commands,
 //	                     no clock, no environment. Runs anywhere, as anyone.

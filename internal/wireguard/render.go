@@ -77,7 +77,7 @@ const (
 //
 // This is the seam's answer to the first of this package's fights: the file on
 // disk is still the state of record (moving that is a model change, not this
-// refactor — plan/architecture.md phase 4, items 13–15), but *parsing* it is
+// refactor — plan/design/architecture.md phase 4, items 13–15), but *parsing* it is
 // pure and *holding* it is the manager's job. Nothing below this line reads a
 // file to find out what the peers are; WGConfig does that once and passes the
 // result in.

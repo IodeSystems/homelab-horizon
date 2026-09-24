@@ -52,7 +52,7 @@ const navItems: NavItem[] = [
   { icon: <DashboardIcon />, label: "Dashboard", path: "/dashboard" },
   // Sits next to Dashboard rather than under Config: the drift screen answers
   // "what would change on which box", which is a job, not a data type. The
-  // navigation redesign (plan/ui-redesign.md) reshapes this list properly;
+  // navigation redesign (plan/design/ui.md) reshapes this list properly;
   // this is one entry in the existing shell, not that change.
   { icon: <CompareArrowsIcon />, label: "Drift", path: "/drift" },
   // The model's two read-only surfaces, beside Drift for the same reason. They
@@ -82,7 +82,7 @@ const navItems: NavItem[] = [
   { icon: <SettingsIcon />, label: "Settings", path: "/settings" },
 ];
 
-// WHAT IS NOT IN THE LIST, and why (plan/ui-redesign.md, Decision 1 amended):
+// WHAT IS NOT IN THE LIST, and why (plan/design/ui.md, Decision 1 amended):
 //
 //   Config. Everything on that surface is addressed as
 //   `(project, environment, app, role)` and CMRegistrationResp carries

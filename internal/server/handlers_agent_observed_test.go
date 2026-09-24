@@ -118,7 +118,7 @@ func TestAMachineReportsAndHZServesItBack(t *testing.T) {
 
 // THE FOUR STATES, and none of them is any of the others.
 //
-// plan/example-projection.md §4: fresh, late, silent and nothing-to-report
+// plan/design/example-projection.md §4: fresh, late, silent and nothing-to-report
 // are four different machines, and collapsing any pair is the bug. "Reported
 // nothing to CHANGE" is a fifth reading of the same row and is carried by
 // inSync, not by the state — a healthy in-sync box is fresh.
@@ -180,7 +180,7 @@ func TestTheFourStatesAreDistinct(t *testing.T) {
 	}
 
 	// A late reading is served WITH its age, because an observed value shown
-	// without its age is a lie (plan/example-projection.md §4).
+	// without its age is a lie (plan/design/example-projection.md §4).
 	late := rowFor(t, resp, "gone-box")
 	if late.AgeSeconds < int64((5 * 24 * time.Hour).Seconds()) {
 		t.Fatalf("a six-day-old reading reported an age of %ds", late.AgeSeconds)
@@ -518,7 +518,7 @@ func TestObservedRejectsOtherMethods(t *testing.T) {
 //
 // The credential bug this pattern exists for was invisible because the
 // handler and the client were each tested against a DIFFERENT credential
-// (plan/privilege-audit.md §1.1). So the report-back gets the same treatment
+// (plan/design/privilege-audit.md §1.1). So the report-back gets the same treatment
 // from its first commit: the POST below is built by agent.HTTPSource, which
 // is the code the daemon runs, and the route comes from setupRoutes, which is
 // the table hz serves. Break either end and this fails.

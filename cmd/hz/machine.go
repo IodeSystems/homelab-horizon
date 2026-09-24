@@ -21,7 +21,7 @@ import (
 // look for it: it has no project and no environment. Those are coordinates of
 // an INSTANCE — the gateway hosts instances from two projects at once — so a
 // project column on this table would be wrong for the most important row in the
-// fleet (plan/architecture.md, "Instance, not machine, carries the
+// fleet (plan/design/architecture.md, "Instance, not machine, carries the
 // environment"). It has no observed version either: that belongs to an
 // instance, and several instances share a box, so a machine-level version would
 // report a half-finished rollout as finished.

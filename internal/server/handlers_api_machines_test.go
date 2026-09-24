@@ -39,7 +39,7 @@ func machineByName(t *testing.T, list []apitypes.MachineResp, name string) apity
 	return apitypes.MachineResp{}
 }
 
-// Declare the machines from plan/example-projection.md §3 over the write
+// Declare the machines from plan/design/example-projection.md §3 over the write
 // surface, then read them back off the read endpoint — the whole round trip,
 // not a handler talking to itself. Every write goes through updateConfig, which
 // calls Save, so a green run also proves each intermediate state was saveable.

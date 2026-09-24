@@ -6,7 +6,7 @@
  * section, passes tsc and vite and every decision check. `model.render.selftest.tsx`
  * renders these to a string and counts what must be there.
  *
- * TWO TYPOGRAPHIC REGISTERS AND NO THIRD (plan/ui-redesign.md, Decision 3):
+ * TWO TYPOGRAPHIC REGISTERS AND NO THIRD (plan/design/ui.md, Decision 3):
  *
  *   DECLARED values — hz asserts them — render plainly. No chip, no age. hz is
  *   not remembering them.
@@ -179,7 +179,7 @@ export function SectionPanel({
 /**
  * One instance's observed version, with its age, always.
  *
- * plan/example-projection.md §4: "anything showing an observed value must show
+ * plan/design/example-projection.md §4: "anything showing an observed value must show
  * its age beside it or it lies". The row reuses `presentObservation` — the
  * drift screen's function — because the version-drift API deliberately sends
  * the same three fields (`state`, `ageSeconds`, `staleAfterSeconds`) so that

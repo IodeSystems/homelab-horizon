@@ -281,7 +281,7 @@ type EnvironmentRmReq struct {
 //
 // IT CARRIES NO PROJECT AND NO ENVIRONMENT, and that is the model rather than
 // an omission — an environment is a coordinate of an INSTANCE, and one machine
-// hosts instances from several projects (plan/architecture.md, "Instance, not
+// hosts instances from several projects (plan/design/architecture.md, "Instance, not
 // machine, carries the environment"). It carries no observed version either:
 // that belongs to an instance and several instances share a box, so a
 // machine-level version would report a half-finished rollout as finished.
@@ -359,7 +359,7 @@ type MachineRmReq struct {
 //
 // IT CARRIES NO ENVIRONMENT and no version, for the reason MachineResp carries
 // neither: a segment is a network, not a rung. It carries a PROJECT because a
-// project's machines form the segment (plan/architecture.md, "Segments"), and
+// project's machines form the segment (plan/design/architecture.md, "Segments"), and
 // the owner is what makes another project's machine on it read as a crossing.
 //
 // Peers on each member is DERIVED server-side rather than left to a client

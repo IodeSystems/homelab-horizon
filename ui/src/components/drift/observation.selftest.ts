@@ -18,7 +18,7 @@
  * the same object type-check perfectly — so the checks below compare
  * renderings for distinctness rather than asserting a golden string.
  *
- * Names are placeholders from plan/example-projection.md. homelab-horizon is
+ * Names are placeholders from plan/design/example-projection.md. homelab-horizon is
  * public: no real hostname, domain or address appears here.
  */
 import type { AgentObservation } from "../../api/generated-types";
@@ -75,7 +75,7 @@ function machine(over: Partial<AgentObservation>): AgentObservation {
   };
 }
 
-// The fleet of plan/example-projection.md §3, as this endpoint would serve it.
+// The fleet of plan/design/example-projection.md §3, as this endpoint would serve it.
 const gw1 = machine({
   machine: "gw-1",
   state: "fresh",
