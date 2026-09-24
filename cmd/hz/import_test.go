@@ -28,6 +28,14 @@ type importStub struct {
 	paths    []string // every POST path
 	feedResp apitypes.ProjectResp
 	projects []apitypes.ProjectResp
+	// self stands in for the SERVER's os.Hostname. Empty by default: a plan is
+	// a pure function of the config PLUS an identity, and a caller with no
+	// identity to offer proposes no machine — which is exactly what every test
+	// written before the gateway was proposable expects.
+	self string
+	// machinesAdded is what the stub's apply reports, so the CLI's summary line
+	// is checked against a number the server supplied rather than one it made up.
+	machinesAdded int
 }
 
 func (s *importStub) start(t *testing.T) *client {
@@ -52,7 +60,8 @@ func (s *importStub) start(t *testing.T) *client {
 			_ = json.NewEncoder(w).Encode(s.plan())
 		case r.URL.Path == "/api/v1/import":
 			_ = json.NewEncoder(w).Encode(apitypes.ImportApplyResp{
-				OK: true, ProjectsAdded: 3, EnvironmentsAdded: 1, ServicesAssigned: 4,
+				OK: true, MachinesAdded: s.machinesAdded,
+				ProjectsAdded: 3, EnvironmentsAdded: 1, ServicesAssigned: 4,
 			})
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -68,8 +77,11 @@ func (s *importStub) start(t *testing.T) *client {
 // the plan and forgotten here shows up as an empty column in this test's output
 // rather than as a silent pass.
 func (s *importStub) plan() apitypes.ImportPlanResp {
-	p := s.cfg.ProposeImport()
+	p := s.cfg.ProposeImportFor(s.self)
 	out := apitypes.ImportPlanResp{Fingerprint: p.Fingerprint(), ExistingProjects: len(s.cfg.Projects)}
+	for _, x := range p.Machines {
+		out.Machines = append(out.Machines, apitypes.ImportMachineResp{Name: x.Name, Reason: x.Reason})
+	}
 	for _, x := range p.Projects {
 		out.Projects = append(out.Projects, apitypes.ImportProjectResp{Name: x.Name, Parent: x.Parent, Reason: x.Reason})
 	}
@@ -203,7 +215,7 @@ func TestImportExecutePostsThePlanItPrinted(t *testing.T) {
 	if req.Merge {
 		t.Error("merge was sent without being asked for")
 	}
-	if !strings.Contains(out, "Imported: 3 project(s), 1 environment(s), 4 service(s) assigned.") {
+	if !strings.Contains(out, "Imported: 0 machine(s), 3 project(s), 1 environment(s), 4 service(s) assigned.") {
 		t.Errorf("the result must be reported:\n%s", out)
 	}
 	if !strings.Contains(out, "left unassigned on purpose") {
@@ -383,5 +395,85 @@ func TestFeedSetNeedsTheThreeStringsAndAKnownProject(t *testing.T) {
 	}
 	if len(stub.posts) != 0 {
 		t.Fatalf("a refused feed set posted %v", stub.posts)
+	}
+}
+
+// --- the gateway row --------------------------------------------------------
+//
+// `hz import` proposes ONE machine: the box hz is running on. It is a proposal
+// like every other row — printed with its evidence, dry-run by default, in the
+// plan file, and refused by deleting it — which is what keeps declare-then-enrol
+// intact while closing the case where the operator has nothing to be asked.
+
+func TestImportPrintsTheGatewayMachineWithItsEvidence(t *testing.T) {
+	stub := &importStub{cfg: importableConfig(), self: "<gw-host>"}
+	out, err := runImportCapturing(t, stub.start(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"MACHINES (1)",
+		"<gw-host>",
+		"hz is running on <gw-host>",
+		// The state it leaves, said rather than left blank.
+		"declared with no segment here",
+		"hz segment set",
+		// And the signal that stops the reader concluding a service IS the machine.
+		"no record joining a service to the machine it runs on",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the machine proposal is missing %q:\n%s", want, out)
+		}
+	}
+	if len(stub.posts) != 0 {
+		t.Fatalf("proposing a machine posted something in a dry run: %v", stub.posts)
+	}
+}
+
+// The section prints EMPTY too. A section that vanishes when it has nothing in
+// it leaves the reader to work out whether hz found none or never looked.
+func TestTheMachinesSectionPrintsWhenThereIsNothingToPropose(t *testing.T) {
+	stub := &importStub{cfg: importableConfig()} // no identity: proposes none
+	out, err := runImportCapturing(t, stub.start(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "MACHINES (0)") {
+		t.Fatalf("the machines section vanished when it was empty:\n%s", out)
+	}
+	if !strings.Contains(out, "hz proposes only the box it is running on") {
+		t.Fatalf("an empty machines section does not say what it would have proposed:\n%s", out)
+	}
+}
+
+// The execute path reports the machine it declared and what that confers.
+func TestImportExecuteReportsTheMachineItDeclared(t *testing.T) {
+	stub := &importStub{cfg: importableConfig(), self: "<gw-host>", machinesAdded: 1}
+	out, err := runImportCapturing(t, stub.start(t), "--execute")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Imported: 1 machine(s), 3 project(s)") {
+		t.Fatalf("the machine is not in the result line:\n%s", out)
+	}
+	if !strings.Contains(out, "hz-agent enroll") {
+		t.Fatalf("the result does not say what declaring a machine confers:\n%s", out)
+	}
+}
+
+// THE ESTATE THAT ALREADY EXISTS. A config with a tree somebody built refuses
+// --execute without --merge, and the refusal points at the verb that declares
+// the gateway without touching the tree at all.
+func TestAnExistingTreeIsPointedAtMachineAddSelf(t *testing.T) {
+	cfg := importableConfig()
+	cfg.Projects = []hzconfig.Project{{Name: "hand-built"}}
+	stub := &importStub{cfg: cfg, self: "<gw-host>"}
+
+	out, err := runImportCapturing(t, stub.start(t))
+	if err != nil {
+		t.Fatalf("a dry run over an existing tree must still print: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "hz machine add --self") {
+		t.Fatalf("the operator is not told about the verb that needs no import:\n%s", out)
 	}
 }
