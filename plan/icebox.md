@@ -55,7 +55,7 @@ hands out non-conflicting listener ports.
 **Why it beats the alternatives.** No NAT, no third DNS view, and unlike
 renumbering it does not need physical access or a maintenance window. It also
 removes the need for the `/32` host routes recorded in
-[plan.md](plan.md#decision-remote-access-uses-host-routes-not-a-renumber-2026-09-10).
+[done.md](done.md#decision-remote-access-uses-host-routes-not-a-renumber-2026-09-10).
 
 **risks:** a TCP frontend is a hole with no Host header to route on, so each
 one is a port that reaches exactly one backend and needs `internal_only`
@@ -778,7 +778,10 @@ changed no code. Each names the section with the evidence.
 
 - **`POST /api/v1/wg/create-config` has no confirmation.** It mints a new
   WireGuard server keypair and rewrites `wg0.conf`, which invalidates every
-  client config ever handed out (`privilege-audit.md` §1.4 already records the
+  client config ever handed out — **because every issued client config pins
+  the OLD server public key**, which is the mechanism the audit citation for
+  this (`privilege-audit.md §1.4`) never actually contained; rescued here
+  2026-09-24 when `privilege-classification.md` was deleted (`privilege-audit.md` §1.4 already records the
   consequence). In `SystemHealthTab.tsx` it is a plain button. Whether or not it
   becomes a CLI verb, a control with that blast radius needs a modal naming the
   consequence. §3.1 #5.
@@ -932,3 +935,83 @@ Both predate `refactor/cm-to-config` and were carried through it verbatim (only
 The fix is to name the real command (the app's own `<app> config push`, and the
 Configs tab), which needs someone to decide what the button should say when the
 command is not hz's to give.
+
+
+---
+
+# Excluded from the next release (decided 2026-09-24)
+
+**The icebox IS what the release excludes.** Each entry below was an active row
+in plan.md and is now out, with the reason it is out and the condition that
+brings it back. The release itself is `plan.md`, "The release".
+
+## ◻ `Environment.Upstream` — a rung whose placements live in another hz
+
+**Why excluded:** Tier 3 — the estate as described, not the release. It is one field plus a projection branch, so it is not excluded for size; it is excluded because nothing consumes it until a second hz exists, and there is no second hz.
+
+**Resume condition:** a second hz instance is stood up, OR `redline/prod` reading as *broken* rather than *remote* costs someone an hour. Design: [design/estate.md](design/estate.md) Part A §5.
+
+> Was plan.md item 18, verbatim:
+>
+> ◻ not started. Until it exists `redline/prod` reads as *broken* rather than *remote*. One field plus a projection branch that emits a statement instead of a `Gap`
+
+## ◻ The registry crossing — packages mirrored, config proxied
+
+**Why excluded:** Tier 3, and it is the only item with a hard dependency chain — it needs item 15's tunnel AND item 13 steps 4–5. Two unbuilt things deep.
+
+**Resume condition:** the agent is armed (Tier 0) and a segment resolves to an actual tunnel. Design: [design/estate.md](design/estate.md) Part A, "What crosses, and how".
+
+> Was plan.md item 19, verbatim:
+>
+> ◻ not started; depends on 15 and on 13 steps 4–5
+
+## ◻ Segment records → an actual WireGuard tunnel
+
+**Why excluded:** the RECORD is in the release and landed — `config.Segment`, `hz segment ls|show|add|set|rm`, the projection resolving a membership, and enrolment reporting a per-segment key ([done.md](done.md#item-15--segment-records--what-a-machinesegments-name-resolves-to)). **The tunnel is not**, and it is Tier 3.
+
+**What is still owed**, precisely: `projection.Segment.Peers` is machine NAMES, so the projection must grow a peer struct (with `AllowedIPs` derived from CIDR + hub) before anything could write a wg config, and `agent.Desired` has no WireGuard section to apply one. Also open: the `/etc/hosts` NAME is hz's best guess (the peer's machine name) because **no record says what a machine answers to on a segment**.
+
+❓ **And a matching gap on the machine side:** there is no way to add a segment to an already-declared machine. `AddMachine` refuses a duplicate and there is no `hz machine set`, so `segment set --member` can only address machines declared with `--segment` up front.
+
+**Resume condition:** a second machine actually needs to reach the gateway over a project segment.
+
+## ◻ Realms — a segment lives in an addressing realm
+
+**Why excluded:** Tier 3, design only, and it carries **8 decisions that are the operator's** — including whether a segment may have no project, which is already a live contradiction in the tree (`Segment.Project` is required; `example-projection.md:114` says `seg:people` has none). A design with 8 open operator calls is not a release item.
+
+⚠ **It is a wire-format break when it lands:** `agent.SegmentKey{Segment, PublicKey}`'s own comment states the precondition realms void — unfixed it would silently write one realm's key into another realm's member.
+
+**Resume condition:** the operator answers §11's decisions. Design: [design/estate.md](design/estate.md) Part B (825 lines, unchanged).
+
+> Was plan.md item 25, verbatim:
+>
+> ◻ design only (`plan/design/estate.md`, 825 lines). Segment identity becomes `(realm, segment)`; **interface uniqueness stays GLOBAL** and is strengthened, not weakened — a box has one interface namespace however many realms it is in. Roaming is the **Endpoint**, not the address, evidenced by `config.WGPeer` carrying a tunnel address and no Endpoint field at all. ⚠ **`agent.SegmentKey{Segment, PublicKey}` is a wire-format break** whose own comment states the precondition realms void — unfixed it would silently write one realm's key into another realm's member. 8 decisions left to the operator, including whether a segment may have no project (`seg:people`)
+
+## ◻ Invites that can require a sign-in
+
+**Why excluded:** ◻ not started **and unwritten** — no section, no design, no measurement. It has never been more than a line in a table, and a line in a table is not a release item.
+
+**Resume condition:** someone writes down what it should do.
+
+> Was plan.md item 7, verbatim:
+>
+> ◻ not started, **and unwritten** — no section exists
+
+
+## ◻ The DNS record manager has never been verified end to end
+
+Rescued 2026-09-24 from `dns-records.md` before that file was deleted (the code
+carries the design; it does not carry this).
+
+All phases shipped and are unit-tested, but **no live DNS provider and no
+two-peer fleet existed in the environment it was built in**, so a real add-TXT
+round trip and a real drift round trip have never been driven.
+
+**Why excluded:** it is a verification, not a build, and it needs credentials
+and a second box. It waits on SYSTEMS, not on a decision.
+
+**Resume condition:** a zone with live provider credentials, and a second hz
+instance. **Watch on the first run:** the first publish seeds
+`LastPublishedRecords`, so a public-IP change reads as `driftPublish`, not
+`driftDrift` — confirm that on a real IP rotation, because the drift-halt scope
+is ALL DNS sync and a false `driftDrift` halts automated failover.
