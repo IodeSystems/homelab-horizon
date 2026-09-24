@@ -34,7 +34,6 @@ import BlockIcon from "@mui/icons-material/Block";
 import MonitorHeartIcon from "@mui/icons-material/MonitorHeart";
 import HubIcon from "@mui/icons-material/Hub";
 import RouterIcon from "@mui/icons-material/Router";
-import TuneIcon from "@mui/icons-material/Tune";
 import SettingsIcon from "@mui/icons-material/Settings";
 import LogoutIcon from "@mui/icons-material/Logout";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
@@ -80,9 +79,26 @@ const navItems: NavItem[] = [
   { icon: <MonitorHeartIcon />, label: "Checks", path: "/checks" },
   { icon: <HubIcon />, label: "Observability", path: "/observability" },
   { icon: <RouterIcon />, label: "Ports", path: "/ports" },
-  { icon: <TuneIcon />, label: "Config", path: "/config" },
   { icon: <SettingsIcon />, label: "Settings", path: "/settings" },
 ];
+
+// WHAT IS NOT IN THE LIST, and why (plan/ui-redesign.md, Decision 1 amended):
+//
+//   Config. Everything on that surface is addressed as
+//   `(project, environment, app, role)` and CMRegistrationResp carries
+//   `Project`, so it lives at /$project/config now. A nav entry pointing at a
+//   URL that redirects to Projects is a label that does not describe its
+//   destination, which is a support ticket; /config is kept as a REDIRECT so
+//   bookmarks land somewhere true, and that is all it is.
+//
+//   A project switcher. The fifteen entries above are gateway-wide and do not
+//   follow a project, so a switcher here would imply they do. It lives on the
+//   project page, where the things it changes are.
+//
+// Everything that IS here is here because its record carries no project: a
+// machine is `{Name, Segments, Note}` and the gateway box hosts instances from
+// several projects at once, so nesting Machines under one of them would leave
+// the most important machine in the estate with no URL.
 
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const navigate = useNavigate();

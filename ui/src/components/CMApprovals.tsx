@@ -255,7 +255,16 @@ function PendingRow({
   );
 }
 
-export function CMApprovals() {
+/**
+ * `projects` scopes the queue to the URL that opened it.
+ *
+ * Undefined means the whole gateway, which is what the flat surface asked for.
+ * A list means "only registrations naming one of these projects" — the project
+ * screen's scope, passed down rather than re-derived — and the scope is STATED
+ * on the card, because a filtered queue that does not say it is filtered is how
+ * a waiting box goes unnoticed.
+ */
+export function CMApprovals({ projects }: { projects?: string[] }) {
   const { data, isLoading, error } = useCMRegistrations("pending");
   const deny = useCMDeny();
 
@@ -272,7 +281,9 @@ export function CMApprovals() {
     );
   }
 
-  const pending = data ?? [];
+  const everything = data ?? [];
+  const pending = projects ? everything.filter((r) => projects.includes(r.project)) : everything;
+  const hidden = everything.length - pending.length;
 
   function openDeny(reg: CMRegistrationResp) {
     setDenying(reg);
@@ -304,6 +315,14 @@ export function CMApprovals() {
             <Chip size="small" color="primary" label={pending.length} sx={{ height: 20 }} />
           )}
         </Box>
+        {projects ? (
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            Scoped to {projects.join(", ")}.{" "}
+            {hidden > 0
+              ? `${hidden} registration${hidden === 1 ? "" : "s"} waiting under other projects ${hidden === 1 ? "is" : "are"} not shown here — open that project to see ${hidden === 1 ? "it" : "them"}.`
+              : "No registration is waiting under any other project."}
+          </Typography>
+        ) : null}
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 680 }}>
           Boxes that have enrolled and are waiting for an environment key.
           Approving one happens in the <code>hz</code> CLI on your own machine,
