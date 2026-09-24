@@ -969,6 +969,16 @@ export interface MachineResp {
   multiHomed?: boolean;
   enrolled?: boolean;
   enrolledAt?: number /* int64 */;
+  /**
+   * AlreadyDeclared says the record came back unchanged because it already
+   * existed, rather than because this request created it. Only `--self` can
+   * produce it: that is the one add whose whole job is to reach a state
+   * ("this gateway is declared"), so a second run must read as done rather
+   * than as AddMachine's duplicate-name refusal. A named add still refuses —
+   * there the operator asserted something about the estate, and hz telling
+   * them it was already true is information they asked for.
+   */
+  alreadyDeclared?: boolean;
 }
 /**
  * MachineAddReq declares a machine. Segments are names; there is no Segment
@@ -982,6 +992,23 @@ export interface MachineAddReq {
   name: string;
   segments?: string[];
   note?: string;
+  /**
+   * Self declares the box HZ ITSELF IS RUNNING ON, and Name must then be
+   * empty: the name comes from hz's own identity (os.Hostname, the same
+   * answer the agent gives) rather than from a hostname the operator has to
+   * go and look up and can mistype. Getting it wrong is not a small error —
+   * a machine declared under one name and enrolled under another matches
+   * nothing, and nothing says so.
+   * THE SERVER RESOLVES IT, never the CLI. `hz` runs wherever the operator
+   * is; the gateway is where hz is. A client that sent its own hostname
+   * would declare the operator's laptop.
+   * It does NOT weaken declare-then-enrol. A machine record is still an
+   * operator's assertion — this is an operator running an operator command
+   * with an admin credential. What it removes is the question hz has no
+   * business asking about one box: whether the machine it is running on
+   * exists.
+   */
+  self?: boolean;
 }
 /**
  * MachineRmReq removes a machine. Confirm and Cascade mean what they mean on
@@ -1173,6 +1200,16 @@ export interface RemovalResp {
   feed?: FeedResp;
 }
 /**
+ * ImportMachineResp is a machine the import would declare, and why. In practice
+ * the gateway: hz runs on a box, and a box hz runs on that nothing declares is
+ * a machine missing from the model. Name only — an import proposes that the box
+ * exists, not where it sits on the network.
+ */
+export interface ImportMachineResp {
+  name: string;
+  reason: string;
+}
+/**
  * ImportProjectResp is a project the import would declare, and why.
  */
 export interface ImportProjectResp {
@@ -1229,6 +1266,7 @@ export interface ImportSignalResp {
  */
 export interface ImportPlanResp {
   fingerprint: string;
+  machines?: ImportMachineResp[];
   projects: ImportProjectResp[];
   environments: ImportEnvironmentResp[];
   assignments: ImportAssignmentResp[];
@@ -1271,6 +1309,11 @@ export interface ImportApplyReq {
  */
 export interface ImportFileReq {
   version: number /* int */;
+  /**
+   * Machines the plan declares. Additive and skipped when already declared,
+   * so re-sending a plan is a no-op rather than a duplicate-name refusal.
+   */
+  machines?: ImportFileMachineReq[];
   projects: ImportFileProjectReq[];
   environments: ImportFileEnvironmentReq[];
   assign: ImportFilePlacementReq[];
@@ -1281,6 +1324,13 @@ export interface ImportFileReq {
    * alone" would otherwise be the same file.
    */
   unassigned: string[];
+}
+/**
+ * ImportFileMachineReq declares a machine. Name only: segment membership needs
+ * a Segment record to resolve against and an import file cannot declare one.
+ */
+export interface ImportFileMachineReq {
+  name: string;
 }
 /**
  * ImportFileProjectReq declares a project. Parent names another project in the
@@ -1317,6 +1367,12 @@ export interface ImportFilePlacementReq {
  */
 export interface ImportApplyResp {
   ok: boolean;
+  /**
+   * MachinesAdded is counted from the config after the write like every
+   * other number here, so a plan that proposed a machine hz already declared
+   * reports 0 rather than 1.
+   */
+  machinesAdded: number /* int */;
   projectsAdded: number /* int */;
   environmentsAdded: number /* int */;
   servicesAssigned: number /* int */;
