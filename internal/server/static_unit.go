@@ -69,6 +69,8 @@ const (
 //     acquired, so the drop cannot be undone.
 //   - RestrictAddressFamilies: it can speak IP and nothing else. No unix
 //     socket to hz, no netlink.
+//   - DynamicUser rather than the fork's uid 65534, which systemd itself
+//     reports as unsafe because every service choosing `nobody` shares it.
 //   - A syscall filter, PrivateDevices, PrivateTmp, and the kernel-surface
 //     restrictions.
 //
@@ -96,13 +98,23 @@ RestartSec=5
 Environment=HZ_STATIC_SERVER_ADDR=__ADDR__
 Environment=HZ_STATIC_SITES=__SITES__
 
-# The privilege separation. hz used to get this by forking and dropping the
-# child to nobody. It comes from here now, and the binary above must be
-# readable and executable by this user — a binary under a mode-0750 home
-# directory is the measured way that fails (privilege-audit.md §1.5). Under a
-# unit that failure is a failed unit in systemctl status, not a silent respawn
-# loop.
-User=nobody
+# The privilege separation, and it is NOT User=nobody.
+#
+# The fork drops to uid 65534, and "systemd-analyze verify" says of that:
+# "Special user nobody configured, this is not safe!" — nobody is shared by
+# every service that picks it, so one compromised nobody process sits in the
+# same identity as the rest. A transient per-unit uid has no such neighbours.
+#
+# What made this possible is deleting sitedeploy's chown: a release used to be
+# owned by the serving user, which pins the serving user to a stable uid. It is
+# readable by mode now (internal/sitedeploy's package doc), so the identity can
+# be one systemd invents per start.
+#
+# The binary above must still be readable and executable by that uid — a binary
+# under a mode-0750 home directory is the measured way that fails
+# (privilege-audit.md §1.5). Under a unit that is a failed unit in
+# "systemctl status", not a silent respawn loop.
+DynamicUser=yes
 
 NoNewPrivileges=true
 CapabilityBoundingSet=

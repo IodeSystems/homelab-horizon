@@ -1280,11 +1280,20 @@ status of each as of 2026-09-25. One at a time — several make the next moot.
    `TestTheDeclaredStaticUnitIsInert` fails if either moves alone.
 
    **What the unit boundary gives that the fork does not.** The fork's entire
-   separation is `User=nobody`. The unit keeps that and adds
-   `ProtectSystem=strict` with **no** `ReadWritePaths` (so the server cannot
-   write the site it serves), an empty `CapabilityBoundingSet`,
-   `NoNewPrivileges`, `RestrictAddressFamilies=AF_INET AF_INET6`, a syscall
-   filter and the kernel-surface restrictions.
+   separation is uid 65534. The unit gives a **narrower identity** plus a
+   sandbox: `DynamicUser=yes` (a transient per-unit uid), `ProtectSystem=strict`
+   with **no** `ReadWritePaths` (so the server cannot write the site it serves),
+   an empty `CapabilityBoundingSet`, `NoNewPrivileges`,
+   `RestrictAddressFamilies=AF_INET AF_INET6`, a syscall filter and the
+   kernel-surface restrictions. `systemd-analyze verify` parses it clean.
+
+   **Not `User=nobody`, and the instrument is what said so.** Running
+   `systemd-analyze verify` over the rendered unit answered: *"Special user
+   nobody configured, this is not safe!"* — `nobody` is shared by every service
+   that picks it, so the fork's uid 65534 has neighbours. Deleting the chown is
+   what made a transient uid possible: a release used to be OWNED by the serving
+   user, which pins that user to a stable uid; it is readable by mode now, so
+   the identity can be one systemd invents per start.
 
 3b. ❓ **NEW, BLOCKING, and the operator's: an hz-managed static root sits
    under a directory `nobody` cannot traverse.** Found by reading the code
@@ -1301,9 +1310,9 @@ status of each as of 2026-09-25. One at a time — several make the next moot.
 
    If that is true on the box, then for hz-managed roots the fork's uid drop is
    not "real separation doing work" — it makes the site **unservable**, and
-   `serveFile` turns the `EACCES` into a 500. It also means a unit running as
-   `nobody` inherits the same problem: declaring one is necessary but not
-   sufficient.
+   `serveFile` turns the `EACCES` into a 500. It also means the declared unit
+   inherits the same problem, `DynamicUser` or `nobody` alike: declaring one is
+   necessary but not sufficient.
 
    **One line answers it on the gateway:**
    `sudo -u nobody stat /var/lib/homelab-horizon/web` (and §8 q12 — does any
@@ -1317,7 +1326,7 @@ status of each as of 2026-09-25. One at a time — several make the next moot.
       an explicit prior decision, which is why it is not made here.
    2. Move `StaticWebDir` out from under the state directory (a path change
       with a migration for every deployed site).
-   3. Drop `User=nobody` from the unit and take the isolation from the
+   3. Drop the uid change from the unit and take the isolation from the
       namespace instead — root with an empty capability set,
       `ProtectSystem=strict` and `InaccessiblePaths` over hz's own state. Reads
       as more privilege, and would need its own argument.
