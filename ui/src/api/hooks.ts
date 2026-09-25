@@ -17,6 +17,8 @@ import type {
   VersionDriftResponse,
   HostsViewResp,
   HostShowResp,
+  ServiceAssignReq,
+  ServiceAssignResp,
 } from "./generated-types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
@@ -312,6 +314,42 @@ export function useEditService() {
       qc.invalidateQueries({ queryKey: ["services"] });
       qc.invalidateQueries({ queryKey: ["domains"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["pending"] });
+    },
+  });
+}
+
+/**
+ * Put one service into the project tree, or — with both fields empty — take it
+ * back out. J8, which had no UI caller at all until this landed.
+ *
+ * NOT /services/edit, deliberately, and the server side says why: edit is
+ * full-replace across domains, proxy, DNS and forwards, so an assign routed
+ * through it would have to round-trip the whole service and could drop a port
+ * forward somebody added between the read and the write. Two fields move; this
+ * writes two fields.
+ *
+ * `projects` and `environments` are invalidated as well as `services`: a
+ * project's `services` list is computed server-side from the assignment, so
+ * leaving them alone would show the moved service in both its old project and
+ * its new one until something else refetched.
+ *
+ * Nothing is RENDERED by an assignment — no DNS record, no HAProxy backend —
+ * so there is no sync to trigger, and `pending` is invalidated only because the
+ * config file itself changed.
+ */
+export function useAssignService() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: ServiceAssignReq) =>
+      apiFetch<ServiceAssignResp>("/services/assign", {
+        method: "POST",
+        body: JSON.stringify(req),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["services"] });
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      qc.invalidateQueries({ queryKey: ["environments"] });
       qc.invalidateQueries({ queryKey: ["pending"] });
     },
   });
