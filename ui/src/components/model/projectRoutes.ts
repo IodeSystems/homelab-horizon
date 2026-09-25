@@ -6,12 +6,18 @@
  * the answers for DISTINCTNESS; `projectRoutes.render.selftest.tsx` proves they
  * reach the page through the real router.
  *
- * # The rules these functions serve (plan/design/ui.md, Decision 1 amended)
+ * # The rules these functions serve (plan/design/ui.md, Decision 1, amended twice)
  *
- * **A project scopes a URL; it does not scope the navigation.** Four screens
- * carry a project because their records carry one; seventeen do not, because a
- * machine deliberately has no project and inventing one would be a lie the
- * whole fleet inherits.
+ * **A project scopes a URL, and you ENTER it.** The sidebar's first zone is the
+ * project tree; entering a project replaces that zone with the project's own
+ * nav and a link back to its parent. The gateway zone below never changes, at
+ * any depth, because fourteen surfaces carry no project and cannot be derived
+ * into one.
+ *
+ * **A derived surface gets a LIST route and never a DETAIL route.** A machine
+ * deliberately has no project — the same box hosts instances from several at
+ * once — so a project's machine list is a QUERY, and giving it a detail route
+ * would give one box one URL per project that hosts it. See `PROJECT_NAV`.
  *
  * **The dotted path is resolved by LOOKUP, never by parsing.** `a.b.c` cannot
  * be split on "." without guessing: it is project `c` under `b` under `a`, or
@@ -402,45 +408,266 @@ export function readLocation(
 }
 
 // ---------------------------------------------------------------------------
-// The sub-screens a project has
+// The sub-screens a project has — the project zone of the sidebar
 // ---------------------------------------------------------------------------
 
-export interface ProjectTab {
+/**
+ * How a project's rows are selected, which decides whether the surface may
+ * have a DETAIL route under the project.
+ *
+ *   owned    the record carries `Project` itself. The row belongs to exactly
+ *            one project and a detail route under it would be honest.
+ *   derived  the record carries NO project and the rows are a QUERY. The same
+ *            thing appears under several projects at once, so it has exactly
+ *            one page of its own, somewhere else.
+ */
+export type ProjectSurfaceKind = "owned" | "derived";
+
+/**
+ * Every route a project's nav may point at, spelled out.
+ *
+ * A union rather than `string` so that a `<Link to={entry.to}>` is checked by
+ * tsc against the real route tree: a typo, or an entry for a screen that was
+ * never built, is a red type check rather than a dead sidebar row.
+ */
+export type ProjectNavTo =
+  | "/$project"
+  | "/$project/services"
+  | "/$project/domains"
+  | "/$project/machines"
+  | "/$project/segments"
+  | "/$project/config";
+
+export interface ProjectNavEntry {
   label: string;
   /** The route id, as TanStack knows it. */
-  to: string;
+  to: ProjectNavTo;
   /** What this screen answers. Rendered, not a tooltip. */
   blurb: string;
+  kind: ProjectSurfaceKind;
+  /**
+   * Where the single page for one of these rows lives. Empty for an owned
+   * surface, which has no separate home. A derived surface MUST name one — the
+   * rule below is only safe because the thing is still reachable.
+   */
+  detailAt: string;
 }
 
 /**
- * The four project-scoped screens, in the order they answer questions in.
+ * The six project-scoped screens, in the order they answer questions in.
  *
- * FOUR, not seventeen. A screen is here only because its record carries a
- * `Project` field; `machines`, `drift`, `hosts`, `dns`, `vpn`, `bans`,
- * `checks`, `ports`, `observability` and `settings` are gateway-scoped and
- * adding any of them here would require inventing a project for a record that
- * has none.
+ * SIX, not twenty. A screen is here only because a project can SELECT its rows
+ * — four because the record carries `Project` (services, domains, config, and
+ * the overview's environments) and one because the rows are derivable from
+ * instances (machines). `drift`, `hosts`, `dns`, `vpn`, `bans`, `checks`,
+ * `ports`, `observability` and `settings` are gateway-scoped: adding any of
+ * them would require inventing a project for a record that has none.
+ *
+ * # A DERIVED SURFACE GETS A LIST ROUTE AND NEVER A DETAIL ROUTE
+ *
+ * This is the load-bearing rule of the whole drill-in (plan/design/ui.md,
+ * Decision 1 amended again). `/$project/machines` exists;
+ * `/$project/machines/$machine` must never. `config.Machine` is
+ * `{Name, Segments, Note}` and the gateway box hosts instances from several
+ * projects at once, so a detail route under a project would give `gw-1` one URL
+ * per project it happens to host and its diff one home per URL — which is
+ * exactly the failure Decision 1's reason 3 names and the reason a
+ * project-FIRST navigation lost in the first place. The list is scoped; the
+ * thing has one page, at `detailAt`.
+ *
+ * `projectRoutes.render.selftest.tsx` walks the router's real route table and
+ * fails if any route id starts with a derived entry's path plus "/".
  */
-export const PROJECT_TABS: ProjectTab[] = [
+export const PROJECT_NAV: ProjectNavEntry[] = [
   {
     label: "Overview",
     to: "/$project",
     blurb: "The feed this project installs from, every rung it declares, and where those rungs run.",
+    kind: "owned",
+    detailAt: "",
   },
   {
     label: "Services",
     to: "/$project/services",
     blurb: "The services assigned to this project. A service carries its project on the record.",
+    kind: "owned",
+    detailAt: "",
   },
   {
     label: "Domains",
     to: "/$project/domains",
     blurb: "The domains this project's services serve. A domain is scoped through its service.",
+    kind: "owned",
+    detailAt: "",
+  },
+  {
+    label: "Machines",
+    to: "/$project/machines",
+    blurb:
+      "The boxes this project's instances run on. A machine carries no project — this list is derived through its instances, so the same box appears under every project it hosts.",
+    kind: "derived",
+    detailAt: "/machines/$machine",
+  },
+  {
+    label: "Network segments",
+    to: "/$project/segments",
+    blurb:
+      "The networks this project declares. A segment carries its project on the record, and it is required — a segment owned by nobody is a network nobody is responsible for.",
+    kind: "owned",
+    detailAt: "",
   },
   {
     label: "Config",
     to: "/$project/config",
     blurb: "Registrations, blessed configs and promotion at this project's addresses. Metadata only — hz holds no key.",
+    kind: "owned",
+    detailAt: "",
   },
 ];
+
+/** The route ids under which no detail route may ever be added. */
+export function derivedProjectSurfaces(): ProjectNavEntry[] {
+  return PROJECT_NAV.filter((e) => e.kind === "derived");
+}
+
+/**
+ * A surface the project nav would naturally list and hz cannot select rows for.
+ *
+ * RENDERED, GREYED, WITH THE REASON — never removed. A missing entry is
+ * unaskable: the operator cannot tell whether this project has no bans or
+ * whether hz cannot say, and a support conversation about a nav entry that is
+ * not on the screen has nowhere to start. Each names the gateway screen that
+ * does hold the rows, so the answer is one click away even though the scoped
+ * answer does not exist.
+ */
+export interface ProjectNavGap {
+  label: string;
+  /** The gateway route that holds these rows unscoped. */
+  gatewayAt: "/bans" | "/vpn";
+  gatewayLabel: string;
+  /** Why hz cannot scope it, in the record's own terms. */
+  why: string;
+}
+
+export const PROJECT_NAV_GAPS: ProjectNavGap[] = [
+  {
+    label: "IP Bans",
+    gatewayAt: "/bans",
+    gatewayLabel: "IP Bans",
+    why: "A ban is `{IP, Timeout, CreatedAt, ExpiresAt, Reason, Service}` and its Service is free text passed in by whoever placed the ban — never checked against a declared service, so it cannot be followed to a project. Enforcement is one gateway-wide `filter INPUT … DROP`, which is not per-project either. Scoping this needs a second record with a different guarantee, not a filter on this screen.",
+  },
+  {
+    label: "VPN Clients",
+    gatewayAt: "/vpn",
+    gatewayLabel: "VPN Clients",
+    why: "A client is `{Name, PublicKey, AllowedIPs}`. Segment membership names a MACHINE on both sides and a peer is not a machine record, so there is no link from a client to a segment and none from there to a project. The chain has neither of its two links yet.",
+  },
+];
+
+// ---------------------------------------------------------------------------
+// The sidebar's project zone — decided by the route, never by state
+// ---------------------------------------------------------------------------
+
+/** Where "back" goes from a project, and what the link must be labelled. */
+export interface ProjectBack {
+  /** Rendered text. Names the DESTINATION — "← iodesystems", never "← Back". */
+  label: string;
+  /** True when back leaves the tree entirely, for `/projects`. */
+  toEstate: boolean;
+  /** The `$project` parameter for the parent. Empty when `toEstate`. */
+  param: string;
+  meaning: string;
+}
+
+/**
+ * The link out of a project.
+ *
+ * A `<Link>` to the PARENT, labelled with the parent's name. A generic "Back"
+ * does not say where it goes, and the sidebar is the one place a wrong guess is
+ * expensive: browser Back goes whence you came, this goes UP, and the two are
+ * allowed to differ — which only works if the label says which one this is.
+ */
+export function projectBack(index: ProjectIndex, route: ProjectRoute): ProjectBack {
+  const parent = route.parent ? index.byName.get(route.parent) : undefined;
+  if (!parent) {
+    return {
+      label: "← All projects",
+      toEstate: true,
+      param: "",
+      meaning: `${route.name} is a root project, so there is nothing above it but the estate itself.`,
+    };
+  }
+  return {
+    label: `← ${parent.name}`,
+    toEstate: false,
+    param: projectParam(index, parent),
+    meaning: `Up one level, to ${parent.name}. Its screens show ${route.name}'s rows as well as its own, with the Location column naming which project each row actually lives in.`,
+  };
+}
+
+/**
+ * What the sidebar's project zone shows, decided by the URL alone.
+ *
+ * NOTHING HERE MAY BECOME `useState`. Which project you are in, how deep you
+ * are, and which nav the sidebar is showing are all facts about the address:
+ * a sidebar that morphs on component state cannot be linked, shared or
+ * bookmarked, and "open the redline nav" would send two people to two different
+ * screens. That argument is the spine of all three amendments, and this is the
+ * function it has to hold in.
+ */
+export type ProjectZone =
+  | {
+      kind: "estate";
+      headline: string;
+      meaning: string;
+    }
+  | {
+      kind: "project";
+      route: ProjectRoute;
+      back: ProjectBack;
+      /** Direct children, as routes, for the descend-one-level links. */
+      children: ProjectRoute[];
+      meaning: string;
+    }
+  | {
+      kind: "unresolved";
+      param: string;
+      headline: string;
+      meaning: string;
+    };
+
+export function readProjectZone(index: ProjectIndex, param: string | undefined): ProjectZone {
+  if (param === undefined) {
+    return {
+      kind: "estate",
+      headline: "Projects",
+      meaning:
+        index.routes.length === 0
+          ? "hz declares no project yet. This is an empty tree, not a failed read."
+          : `Every project hz declares, nested. Entering one replaces this zone with that project's own navigation; the gateway entries below it never change.`,
+    };
+  }
+  const resolution = resolveProjectParam(index, param);
+  if (!resolution.found) {
+    return {
+      kind: "unresolved",
+      param,
+      headline: resolution.ambiguous ? "More than one project" : "No such project",
+      meaning: resolution.headline,
+    };
+  }
+  const route = resolution.route;
+  const children = route.children
+    .map((name) => index.byName.get(name))
+    .filter((r): r is ProjectRoute => r !== undefined);
+  return {
+    kind: "project",
+    route,
+    back: projectBack(index, route),
+    children,
+    meaning:
+      children.length === 0
+        ? `${route.name} has no subprojects. These screens show its own rows and nothing below it, because there is nothing below it.`
+        : `${children.length} subproject${children.length === 1 ? "" : "s"} sit${children.length === 1 ? "s" : ""} under ${route.name}. Entering one narrows every screen above to that project's rows.`,
+  };
+}

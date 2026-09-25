@@ -33,14 +33,17 @@ import { Route as ConfigRoute } from "../../routes/config";
 import { ThemeProvider, createTheme } from "@mui/material/styles";
 import baseTheme from "../../theme";
 import type {
+  CMRegistrationResp,
   DomainResp,
   DomainsResponse,
   EnvironmentResp,
   ProjectResp,
+  SegmentResp,
   ServiceResp,
   VersionDriftResponse,
 } from "../../api/generated-types";
 import { routeTree } from "../../routeTree.gen";
+import { derivedProjectSurfaces, PROJECT_NAV, PROJECT_NAV_GAPS } from "./projectRoutes.ts";
 
 let failures = 0;
 let checks = 0;
@@ -61,6 +64,12 @@ const PROJECTS: ProjectResp[] = [
   { name: "acme-co", resolvedFeed: { url: "https://apt.example.net", suite: "stable", component: "main", keyId: "ABC123" }, feedFrom: "acme-co", services: ["billing"] },
   { name: "intern", parent: "acme-co", feedFrom: "acme-co", resolvedFeed: { url: "https://apt.example.net", suite: "stable", component: "main", keyId: "ABC123" }, services: ["git"] },
   { name: "storefront", parent: "acme-co", feedFrom: "acme-co", resolvedFeed: { url: "https://apt.example.net", suite: "stable", component: "main", keyId: "ABC123" }, services: ["web"] },
+  // A GRANDCHILD. The live estate has none, and the model has always allowed
+  // one — so the nav is exercised at depth 2 rather than at the depth today's
+  // config happens to stop at. Everything the drill-in does (back naming the
+  // parent, the gateway zone staying put, a child's rows being a strict subset)
+  // is only interesting below the first level.
+  { name: "eu", parent: "storefront", feedFrom: "acme-co", resolvedFeed: { url: "https://apt.example.net", suite: "stable", component: "main", keyId: "ABC123" }, services: [] },
 ];
 
 const ENVIRONMENTS: EnvironmentResp[] = [
@@ -160,6 +169,70 @@ const DRIFT: VersionDriftResponse = {
   serverTime: "2026-09-24T12:00:00Z",
 };
 
+/**
+ * Registrations, as the config manager serves them.
+ *
+ * TWO LISTS, KEYED BY STATE, and the split matters: `useCMRegistrations()` with
+ * no argument keys itself "all" and asks the server for PENDING, so a screen
+ * built on the bare hook renders the unapproved boxes and looks fine. The
+ * checks below seed a machine that exists ONLY in the pending list, and assert
+ * it is not on the derived machine list — which is the one assertion that can
+ * tell the two hooks apart from the outside.
+ */
+function reg(
+  id: string,
+  machineName: string,
+  project: string,
+  environment: string,
+  app: string,
+  state: string,
+): CMRegistrationResp {
+  return {
+    id,
+    machineId: `m-${machineName}`,
+    machineName,
+    project,
+    environment,
+    app,
+    role: "app",
+    version: "1.0.0",
+    state,
+    fingerprint: "SHA256:aaaa",
+    createdAt: "2026-09-24T12:00:00Z",
+  };
+}
+
+const APPROVED: CMRegistrationResp[] = [
+  // The shared box. It hosts an instance of `intern` AND one of `storefront`,
+  // which is the whole reason a machine carries no project.
+  reg("r1", "gw-1", "intern", "prod", "git", "approved"),
+  reg("r2", "gw-1", "storefront", "staging", "web", "approved"),
+  reg("r3", "box-2", "storefront", "prod", "web", "approved"),
+];
+
+/** Approved by nobody. If this box appears on a machine list, the hook is wrong. */
+const PENDING: CMRegistrationResp[] = [
+  reg("r9", "unapproved-box", "storefront", "staging", "web", "pending"),
+];
+
+const SEGMENTS: SegmentResp[] = [
+  {
+    name: "seg-shop",
+    project: "storefront",
+    cidr: "10.10.0.0/24",
+    interface: "wg-shop",
+    members: [{ machine: "gw-1", address: "10.10.0.1", hub: true }],
+    unaddressed: ["box-2"],
+  },
+  {
+    name: "seg-core",
+    project: "acme-co",
+    cidr: "10.20.0.0/24",
+    interface: "wg-core",
+    members: [],
+  },
+];
+
 function seeded(): QueryClient {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
@@ -178,9 +251,10 @@ function seeded(): QueryClient {
   qc.setQueryData(["zones"], [{ name: "example.net", sslEnabled: true, subZones: ["*"] }]);
   qc.setQueryData(["settings"], { config: { localInterface: "10.0.0.5", publicIP: "203.0.113.9" } });
   qc.setQueryData(["dns", "drift"], { blocked: false });
-  qc.setQueryData(["cm-registrations", "pending"], []);
-  qc.setQueryData(["cm-registrations", "approved"], []);
+  qc.setQueryData(["cm-registrations", "pending"], PENDING);
+  qc.setQueryData(["cm-registrations", "approved"], APPROVED);
   qc.setQueryData(["cm-registrations", "denied"], []);
+  qc.setQueryData(["segments"], SEGMENTS);
   return qc;
 }
 
@@ -293,7 +367,14 @@ console.log("· the tree the router actually built");
     return r?.parentRoute?.id ?? "(missing)";
   };
   check(parentOf("/$project") === "__root__", "the project layout hangs off the root");
-  for (const child of ["/$project/", "/$project/services", "/$project/domains", "/$project/config"]) {
+  for (const child of [
+    "/$project/",
+    "/$project/services",
+    "/$project/domains",
+    "/$project/machines",
+    "/$project/segments",
+    "/$project/config",
+  ]) {
     check(parentOf(child) === "/$project", `${child} is a CHILD of /$project, by filename`);
   }
   // Seventeen gateway routes must NOT have been pulled under the project.
@@ -445,7 +526,368 @@ console.log("· /projects is a list that navigates, and holds no selection");
 }
 
 // ---------------------------------------------------------------------------
-console.log("· the tree column is an accelerator on desktop, never the only path");
+console.log("· the sidebar is the tree, and entering a project replaces it");
+// ---------------------------------------------------------------------------
+{
+  // THE ZONE IS A REGION IN THE MARKUP, so every assertion below is scoped to
+  // it rather than to "somewhere on the page" — a link to a project appears in
+  // a table's Location cell too, and that would satisfy a loose search while
+  // the sidebar rendered nothing at all.
+  const zone = (r: Rendered): { kind: string; html: string } => {
+    const m = /<div[^>]*data-project-zone="([a-z]+)"[^>]*>([\s\S]*)$/.exec(r.html);
+    if (!m) return { kind: "(absent)", html: "" };
+    // Everything up to the gateway zone's list, which follows it.
+    const rest = m[2]!;
+    const end = rest.indexOf("data-gateway-zone");
+    return { kind: m[1]!, html: end === -1 ? rest : rest.slice(0, end) };
+  };
+  const zoneLinks = (r: Rendered) => [...zone(r).html.matchAll(/href="([^"]*)"/g)].map((m) => m[1]!);
+  const zoneText = (r: Rendered) =>
+    zone(r)
+      .html.replace(/<style[^>]*>[\s\S]*?<\/style>/g, " ")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/&#x27;/g, "'")
+      .replace(/\s+/g, " ");
+
+  // --- at the top level: the whole tree, nested
+  const top = await at("/dashboard");
+  check(zone(top).kind === "estate", "outside a project the sidebar's first zone is the estate tree");
+  for (const p of ["acme-co", "intern", "storefront"]) {
+    check(zoneText(top).includes(p), `${p} is in the sidebar tree (${p})`);
+  }
+  check(
+    zoneLinks(top).some((h) => h.endsWith("/acme-co.intern")),
+    "and every node is a link to that project's own URL",
+  );
+
+  // --- entered: the project's nav, and the tree is gone from the zone
+  const entered = await at("/acme-co.storefront");
+  check(zone(entered).kind === "project", "entering a project replaces the zone with its nav");
+  for (const entry of PROJECT_NAV) {
+    check(
+      zoneText(entered).includes(entry.label),
+      `the project nav carries ${entry.label}`,
+    );
+  }
+  check(
+    zoneLinks(entered).some((h) => h.endsWith("/acme-co.storefront/machines")),
+    "including the machines list, which is new",
+  );
+  check(
+    zoneLinks(entered).some((h) => h.endsWith("/acme-co.storefront/segments")),
+    "and the segments list, which is new",
+  );
+  check(
+    !zoneText(entered).includes("intern"),
+    "and the sibling projects are NOT in it — the zone is this project's nav, not the tree",
+  );
+
+  // --- BACK IS A LINK AND IT NAMES THE PARENT
+  check(zoneText(entered).includes("← acme-co"), "back names the parent by name");
+  check(
+    !/←\s*Back/.test(zoneText(entered)),
+    "and never reads a bare '← Back', which does not say where it goes",
+  );
+  check(
+    zoneLinks(entered).some((h) => h.endsWith("/acme-co")),
+    "and it is a real link to the parent's URL",
+  );
+
+  const atRoot = await at("/acme-co");
+  check(zoneText(atRoot).includes("← All projects"), "a ROOT project's back leaves the tree");
+  check(
+    zoneLinks(atRoot).some((h) => h.endsWith("/projects")),
+    "and goes to the estate index",
+  );
+  check(
+    !zoneText(atRoot).includes("← acme-co"),
+    "the two backs are different sentences, not one label",
+  );
+
+  // --- descending: a subproject is a link out of the parent's zone
+  check(
+    zoneLinks(atRoot).some((h) => h.endsWith("/acme-co.storefront")),
+    "a project's zone lists its own children, so descending is one click",
+  );
+  check(
+    zoneText(atRoot).toLowerCase().includes("subprojects"),
+    "under a heading that says what they are",
+  );
+  const leaf = await at("/acme-co.intern");
+  check(
+    zoneText(leaf).includes("has none"),
+    "a leaf says it has no subprojects rather than rendering an empty heading",
+  );
+
+  // --- TWO DEEP. The one depth the live estate cannot demonstrate.
+  const deep = await at("/acme-co.storefront.eu");
+  check(zone(deep).kind === "project", "a grandchild is entered like any other project");
+  check(zoneText(deep).includes("← storefront"), "and its back names ITS parent, not the root");
+  check(
+    !zoneText(deep).includes("← acme-co") && !zoneText(deep).includes("← All projects"),
+    "back goes up ONE level, never straight to the top",
+  );
+  check(
+    zoneLinks(deep).some((h) => h.endsWith("/acme-co.storefront")),
+    "and it is a link to the parent's own URL",
+  );
+  check(
+    zoneText(deep).includes("eu") && zoneText(deep).includes("acme-co.storefront.eu"),
+    "the zone names where you are, by name and by path",
+  );
+  for (const entry of PROJECT_NAV) {
+    check(zoneText(deep).includes(entry.label), `the same project nav is there two deep (${entry.label})`);
+  }
+
+  // --- the unbuildable surfaces are SHOWN, greyed, with the reason
+  for (const gap of PROJECT_NAV_GAPS) {
+    check(zoneText(entered).includes(gap.label), `${gap.label} is still on the project nav`);
+  }
+  check(
+    zoneText(entered).includes("cannot be scoped to a project"),
+    "under a heading naming why they are not links",
+  );
+  check(
+    zoneText(entered).includes("hz cannot select these by project"),
+    "and each says it in words — a removed entry is unaskable",
+  );
+  check(
+    zoneLinks(entered).some((h) => h.endsWith("/bans")) &&
+      zoneLinks(entered).some((h) => h.endsWith("/vpn")),
+    "with a link to the gateway screen that does hold the rows",
+  );
+  check(
+    !zoneLinks(entered).some((h) => /\/(bans|vpn)$/.test(h.replace("/acme-co.storefront", ""))
+      && h.includes("acme-co.storefront")),
+    "and NOT to a /$project/bans or /$project/clients that cannot answer",
+  );
+
+  // --- an unresolvable project still gets a zone with a way out
+  const miss = await at("/setings");
+  check(zone(miss).kind === "unresolved", "a parameter naming no project is its own zone state");
+  check(
+    zoneText(miss).includes("← All projects"),
+    "which still offers the way out, by name",
+  );
+  check(zoneText(miss).includes("acme-co"), "and lists the projects that do exist");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· the gateway zone is at every depth, unchanged");
+// ---------------------------------------------------------------------------
+{
+  const gateway = (r: Rendered) => {
+    const m = /data-gateway-zone[\s\S]*$/.exec(r.html);
+    const html = m?.[0] ?? "";
+    return {
+      links: [...html.matchAll(/href="([^"]*)"/g)].map((x) => x[1]!),
+      text: html.replace(/<style[^>]*>[\s\S]*?<\/style>/g, " ").replace(/<[^>]*>/g, " ").replace(/\s+/g, " "),
+    };
+  };
+  const EXPECTED = [
+    "/dashboard", "/drift", "/projects", "/machines", "/hosts", "/services", "/domains",
+    "/dns", "/vpn", "/bans", "/checks", "/observability", "/ports", "/settings",
+  ];
+
+  const depths: [string, Rendered][] = [
+    ["the dashboard", await at("/dashboard")],
+    ["a root project", await at("/acme-co")],
+    ["one level in", await at("/acme-co.storefront")],
+    ["a child screen of a project", await at("/acme-co.storefront/machines")],
+    ["a GRANDCHILD project's segments screen", await at("/acme-co.storefront.eu/segments")],
+    ["an unresolvable project", await at("/setings")],
+  ];
+  for (const [where, r] of depths) {
+    const g = gateway(r);
+    // Same entries, same order, every time. A zone that reorders is a zone
+    // that moved Settings, which is the click this decision is about.
+    const found = EXPECTED.filter((p) => g.links.some((h) => h.endsWith(p)));
+    check(
+      found.length === EXPECTED.length,
+      `every gateway entry is present at ${where} (${found.length}/${EXPECTED.length})`,
+    );
+    check(
+      g.links.some((h) => h.endsWith("/settings")),
+      `Settings is ONE CLICK from ${where} — no walking back up the tree`,
+    );
+  }
+
+  // The order, read out of the markup rather than assumed.
+  const order = (r: Rendered) =>
+    gateway(r)
+      .links.map((h) => EXPECTED.find((p) => h.endsWith(p)))
+      .filter((p): p is string => p !== undefined);
+  const a = order(depths[0]![1]).join(",");
+  const b = order(depths[3]![1]).join(",");
+  check(a === b, "and the entries are in the same order at depth as at the top");
+  check(a.startsWith("/dashboard,/drift,/projects,/machines"), "which is today's order, unchanged");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· A DERIVED SURFACE HAS A LIST ROUTE AND NEVER A DETAIL ROUTE");
+// ---------------------------------------------------------------------------
+{
+  // The load-bearing rule. `gw-1` hosts instances from several projects at
+  // once; a detail route under a project would give it one URL per hosting
+  // project and its diff one home per URL — the exact failure Decision 1's
+  // reason 3 names. Reverse this by adding `$project.machines.$machine.tsx`
+  // and this section is what goes red.
+  const router = createRouter({ routeTree, history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const ids = Object.keys(router.routesById) as string[];
+
+  check(derivedProjectSurfaces().length > 0, "there is at least one derived surface to check");
+  for (const surface of derivedProjectSurfaces()) {
+    check(ids.includes(surface.to), `${surface.to} exists as a list route`);
+    const under = ids.filter((id) => id.startsWith(`${surface.to}/`));
+    check(
+      under.length === 0,
+      `NOTHING is routed under ${surface.to} — found ${under.join(", ") || "nothing"}`,
+    );
+    check(
+      ids.includes(surface.detailAt),
+      `and the one page its rows DO have still exists, at ${surface.detailAt}`,
+    );
+  }
+
+  // Said the other way as well, so a renamed surface cannot slip past: no route
+  // under /$project may take a second parameter.
+  const twoParams = ids.filter((id) => id.startsWith("/$project/") && id.includes("$", 10));
+  check(
+    twoParams.length === 0,
+    `no route under /$project takes a second parameter — found ${twoParams.join(", ") || "none"}`,
+  );
+
+  // And the rows really do link OUT to that one page.
+  const machines = await at("/acme-co.storefront/machines");
+  check(
+    machines.links.some((h) => h.endsWith("/machines/gw-1")),
+    "a machine row links to /machines/$machine, the box's one page",
+  );
+  check(
+    !machines.links.some((h) => h.includes("storefront/machines/")),
+    "and nothing links to a machine under the project",
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("· /$project/machines is DERIVED, approved-only, and honest when empty");
+// ---------------------------------------------------------------------------
+{
+  const storefront = await at("/acme-co.storefront/machines");
+  check(storefront.text.includes("Machines running storefront"), "the screen renders under the project");
+  check(storefront.text.includes("gw-1"), "the shared box is listed");
+  check(storefront.text.includes("box-2"), "and so is the project's own box");
+
+  // THE TRAP. `useCMRegistrations()` with no argument asks for PENDING and
+  // keys itself "all". `unapproved-box` exists only in the pending list; if it
+  // is on this screen, the screen is listing exactly the boxes nobody approved.
+  check(
+    !/Machine[\s\S]*?unapproved-box[\s\S]*?Waiting for approval/.test(storefront.text),
+    "a box whose registration is PENDING is not in the derived list",
+  );
+  check(
+    storefront.text.includes("Waiting for approval"),
+    "it is counted in its own panel instead, so a filtered list does not hide a waiting box",
+  );
+  check(
+    storefront.text.includes("unapproved-box") === false ||
+      storefront.text.indexOf("Waiting for approval") < storefront.text.indexOf("unapproved-box"),
+    "and if it is named at all, it is named under that heading",
+  );
+
+  // THE SUBPROJECT LABEL ON THE TABLE — the phrase the amendment asks for, and
+  // what makes a projection of a shared box readable as one.
+  check(
+    /<th[^>]*>Location<\/th>/.test(storefront.html),
+    "the derived list carries the Location column",
+  );
+  check(
+    /box-2[\s\S]{0,400}?storefront/.test(storefront.text),
+    "and each row names the project whose instance put it there",
+  );
+
+  // gw-1 is on storefront AND on intern, carrying no project in either.
+  const intern = await at("/acme-co.intern/machines");
+  check(intern.text.includes("gw-1"), "the same box appears under another project it hosts");
+  check(
+    !intern.text.includes("box-2"),
+    "and a box with nothing of this project's on it does not",
+  );
+  check(
+    /gw-1[\s\S]{0,600}intern\/prod\/git/.test(intern.text),
+    "each row says WHICH of its instances put it there — this project's addresses, not all of them",
+  );
+  check(
+    !/gw-1[\s\S]{0,600}storefront\/staging\/web/.test(intern.text),
+    "and not the other project's, which would be the shared box leaking across",
+  );
+
+  // Empty, which is the state the live gateway is in today: all seven cm_*
+  // tables are empty, so every project's list here is correctly empty.
+  const empty = await at("/acme-co/machines?scope=own");
+  check(
+    empty.text.includes("runs on any box yet"),
+    "a project with no instance of its own says so in words",
+  );
+  check(
+    !/<th[^>]*>Machine<\/th>/.test(empty.html),
+    "rather than rendering an empty table the operator has to interpret",
+  );
+  check(
+    /<th[^>]*>Machine<\/th>/.test(storefront.html),
+    "— and the table IS rendered when there are rows, so that check can fail",
+  );
+  check(
+    empty.links.some((h) => h.endsWith("/machines")),
+    "and points at the machines hz does declare",
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("· /$project/segments reads the endpoint nothing had ever called");
+// ---------------------------------------------------------------------------
+{
+  const storefront = await at("/acme-co.storefront/segments");
+  check(storefront.text.includes("Network segments in storefront"), "the screen renders");
+  check(storefront.text.includes("seg-shop"), "the project's own segment is listed");
+  check(storefront.text.includes("10.10.0.0/24"), "with its range");
+  check(!storefront.text.includes("seg-core"), "and another project's is not");
+  check(
+    /<th[^>]*>Location<\/th>/.test(storefront.html),
+    "the segment list carries the Location column too",
+  );
+  check(
+    /seg-shop[\s\S]{0,400}?storefront/.test(storefront.text),
+    "and the row names the project that owns the network",
+  );
+
+  check(
+    storefront.links.some((h) => h.endsWith("/machines/gw-1")),
+    "a member links to the machine's one page, not to a machine under the project",
+  );
+  // UNADDRESSED IS NOT EMPTY. box-2 names the segment and has no address on it.
+  check(storefront.text.includes("box-2"), "a machine that named the segment and has no address is shown");
+  check(
+    storefront.text.includes("half declared"),
+    "and is called what it is, rather than being counted as absent",
+  );
+
+  const root = await at("/acme-co/segments?scope=own");
+  check(root.text.includes("seg-core"), "the root's own segment is on its own screen");
+  check(
+    root.text.includes("no machine is addressed on this network yet"),
+    "a segment with no member says so rather than rendering a blank cell",
+  );
+
+  const leaf = await at("/acme-co.intern/segments");
+  check(
+    leaf.text.includes("No segment names intern"),
+    "a project with no segment says so, and says hz has others",
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("· phone width: the same routes, the shell's own responsive behaviour");
 // ---------------------------------------------------------------------------
 {
   const desktop = await at("/acme-co.storefront");
@@ -453,19 +895,43 @@ console.log("· the tree column is an accelerator on desktop, never the only pat
 
   check(desktop.text.includes("Package feed"), "the project renders on desktop");
   check(phone.text.includes("Package feed"), "and renders the same content at phone width");
+
+  // BELOW `md` THE SIDEBAR IS A DRAWER, and a closed MUI Drawer renders through
+  // a portal — which produces NOTHING under SSR. So the project zone is absent
+  // from the phone markup by design, and that is exactly why the page itself
+  // must still carry the way up and the way down. A check that only looked for
+  // a link "somewhere" would pass on the desktop render and tell us nothing.
   check(
-    phone.links.some((h) => h.endsWith("/acme-co.intern")),
-    "the switcher reaches a sibling at phone width — the jump list is not the only way across",
+    !phone.html.includes('data-project-zone'),
+    "the sidebar is behind the hamburger at phone width — the shell's own behaviour, not a per-page branch",
   );
   check(
-    desktop.links.some((h) => h.endsWith("/acme-co.intern")),
-    "and on desktop as well",
+    phone.text.includes("← acme-co"),
+    "so the page's own header carries the way UP, labelled with the parent",
   );
-  // The switcher is on the PAGE. A control in the nav would imply the other
-  // fifteen entries follow it, and they do not.
   check(
-    !/Homelab Horizon[\s\S]{0,400}switch project/i.test(desktop.text),
-    "the project switcher is not in the gateway nav",
+    phone.links.some((h) => h.endsWith("/acme-co")),
+    "and it is a real link",
+  );
+
+  const parent = await at("/acme-co", { phone: true });
+  check(
+    parent.text.includes("enter a subproject"),
+    "and the way DOWN is on the page too, labelled",
+  );
+  check(
+    parent.links.some((h) => h.endsWith("/acme-co.storefront")),
+    "with each child a real link",
+  );
+  check(
+    parent.text.includes("Menu"),
+    "the drawer's button is labelled 'Menu', not an unlabelled hamburger",
+  );
+
+  // No per-page width branch is left: the same markup shape, minus the shell.
+  check(
+    phone.text.includes("storefront") && desktop.text.includes("storefront"),
+    "the project's identity renders at both widths",
   );
 }
 
