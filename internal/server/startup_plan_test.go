@@ -133,8 +133,15 @@ func TestPlanStartupDoesNotBringUpWireGuardWithoutAConfig(t *testing.T) {
 	if !strings.Contains(p.Skip, "/etc/wireguard/wg0.conf") {
 		t.Errorf("the skip reason must name the missing file; got %q", p.Skip)
 	}
-	if !strings.Contains(p.Skip, "create-config") {
-		t.Errorf("the skip reason must say how to create it; got %q", p.Skip)
+	// The remedy is a CLI verb on the binary that owns the file, and the skip
+	// reason has to name it exactly — "create-config" alone was satisfied by the
+	// dead endpoint too, so it would have stayed green through the move.
+	if !strings.Contains(p.Skip, "sudo hz-agent wg-create-config") {
+		t.Errorf("the skip reason must name the verb that creates it; got %q", p.Skip)
+	}
+	// And it must not send anyone to an endpoint that no longer exists.
+	if strings.Contains(p.Skip, "/api/v1/") {
+		t.Errorf("the skip reason names an HTTP endpoint; wg0.conf is not written from a request: %q", p.Skip)
 	}
 	if got := skipStatus(p.Skip); got != monitor.StatusWarning {
 		t.Errorf("an unconfigured VPN is degraded, not a clean disabled state; got %q", got)
@@ -173,8 +180,8 @@ func TestDegradedSummaryNamesEveryBrokenSubsystem(t *testing.T) {
 		// The WireGuard detail carries its whole remedy; the summary keeps the
 		// first sentence so `systemctl status` stays readable.
 		{Name: SubsystemWireGuard, Status: monitor.StatusWarning,
-			Detail: "WireGuard is not configured. Create it from Settings → System, " +
-				"or POST /api/v1/wg/create-config."},
+			Detail: "WireGuard is not configured. " +
+				"Create it on this host with: sudo hz-agent wg-create-config."},
 		{Name: SubsystemDNSMasq, Status: monitor.StatusFailed, Detail: "failed to start: exit status 5."},
 		{Name: SubsystemHAProxy, Status: monitor.StatusFailed, Detail: "failed to start: exit status 5."},
 	}
