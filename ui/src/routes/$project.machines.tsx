@@ -204,7 +204,7 @@ function ProjectMachines() {
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
           {waiting.length === 0
             ? "No box has asked to run anything of this project's without being granted it. The list above is every approved instance and nothing is held back from it."
-            : `A box has asked to run ${waiting.map(address).join(", ")} and nobody has granted it. Those addresses are NOT on the list above: hz declares no version for an address nobody approved, and a box that could put itself on a screen by booting is a box that has approved itself.`}{" "}
+            : `${waiting.map((r) => `${r.machineName || "an unnamed box"} has asked to run ${address(r)}`).join("; ")} — and nobody has granted it. Those boxes are NOT on the list above: hz declares no version for an address nobody approved, and a box that could put itself on a screen by booting is a box that has approved itself.`}{" "}
           Approvals are on this project's <Link to="/$project/config" params={{ project: param }} search={{}}>Config</Link> screen.
         </Typography>
       </Paper>
