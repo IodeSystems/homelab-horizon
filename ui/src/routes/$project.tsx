@@ -28,33 +28,17 @@
  * cannot be made correct, and for the collision the amendment believed was
  * impossible.
  */
-import {
-  createFileRoute,
-  Link,
-  Outlet,
-  useRouterState,
-} from "@tanstack/react-router";
-import {
-  Alert,
-  Box,
-  Chip,
-  CircularProgress,
-  Divider,
-  Paper,
-  Typography,
-  useMediaQuery,
-  useTheme,
-} from "@mui/material";
+import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
+import { Alert, Box, Chip, CircularProgress, Paper, Typography } from "@mui/material";
 import {
   AmbiguousProject,
   NoSuchProject,
-  ProjectPickList,
   useProjectContext,
 } from "../components/model/ProjectBits";
 import {
   parseScope,
+  projectBack,
   projectParam,
-  PROJECT_NAV,
   type ProjectIndex,
   type ProjectRoute,
   type ProjectScope,
@@ -72,53 +56,43 @@ interface ProjectSearch {
   scope?: ProjectScope;
 }
 
-/** The project's screens, as tabs that are links. Never a `useState` tab index. */
-function ProjectTabs({ param, current }: { param: string; current: string }) {
-  return (
-    <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", mb: 2 }}>
-      {PROJECT_NAV.map((t) => {
-        const active = t.to === current;
-        return (
-          <Link
-            key={t.to}
-            to={t.to}
-            params={{ project: param }}
-            search={{}}
-            style={{ textDecoration: "none" }}
-          >
-            <Chip
-              label={t.label}
-              variant={active ? "filled" : "outlined"}
-              color={active ? "primary" : "default"}
-              sx={{ fontWeight: active ? 700 : 400, cursor: "pointer" }}
-            />
-          </Link>
-        );
-      })}
-    </Box>
-  );
-}
-
 /**
- * Who you are looking at, and how to get to another one.
+ * Who you are looking at.
  *
- * THE SWITCHER IS ON THE PAGE, NOT IN THE NAV. The nav is job-shaped and
- * gateway-wide; a project switcher sitting in it would imply the other fifteen
- * entries follow it, and they do not. On a phone the nav is behind a hamburger,
- * which is the one width where switching matters most.
+ * IDENTITY ONLY — THE PICKER IS GONE. The sidebar's project zone IS the
+ * switcher now: it holds the tree at the top level, this project's nav once you
+ * are inside one, and the link back up. A second control on the page doing the
+ * same job is two controls for one job, and the one on the page was the third
+ * column this amendment removes.
+ *
+ * What stays is the header's own sentence: what this project is, what it
+ * inherits, and what sits below it. The "← parent" link is repeated here as an
+ * in-page affordance so the way up is visible without going to the sidebar,
+ * which on a phone is behind the hamburger.
  */
-function ProjectHeader({
-  route,
-  index,
-  compactSwitcher,
-}: {
-  route: ProjectRoute;
-  index: ProjectIndex;
-  /** True when no tree column is rendered beside this, so this must carry the switch. */
-  compactSwitcher: boolean;
-}) {
+function ProjectHeader({ route, index }: { route: ProjectRoute; index: ProjectIndex }) {
+  const back = projectBack(index, route);
+  const children = route.children
+    .map((name) => index.byName.get(name))
+    .filter((r): r is ProjectRoute => r !== undefined);
   return (
     <Paper sx={{ p: 2, mb: 2 }}>
+      <Box sx={{ mb: 0.5 }}>
+        {back.toEstate ? (
+          <Link to="/projects" style={{ color: "inherit", fontSize: "0.85rem" }}>
+            {back.label}
+          </Link>
+        ) : (
+          <Link
+            to="/$project"
+            params={{ project: back.param }}
+            search={{}}
+            style={{ color: "inherit", fontSize: "0.85rem" }}
+          >
+            {back.label}
+          </Link>
+        )}
+      </Box>
       <Box sx={{ display: "flex", gap: 1.5, alignItems: "baseline", flexWrap: "wrap" }}>
         <Typography variant="h4" sx={{ fontWeight: 700, fontFamily: "monospace" }}>
           {route.name}
@@ -150,48 +124,40 @@ function ProjectHeader({
           : " Nothing sits below it."}
       </Typography>
 
-      {compactSwitcher ? (
-        <>
-          <Divider sx={{ my: 1.5 }} />
-          <Typography
-            variant="caption"
-            sx={{ textTransform: "uppercase", letterSpacing: 0.5, color: "text.secondary" }}
-          >
-            switch project
+      {/* The way DOWN, on the page as well as in the sidebar. Not a picker — it
+          reaches this project's own children and nothing else. It is here
+          because below `md` the sidebar is a drawer behind the hamburger, and a
+          header that says "3 projects sit below it" with no way to reach any of
+          them is the unaskable state this whole surface is organised against. */}
+      {children.length > 0 ? (
+        <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", mt: 1, alignItems: "center" }}>
+          <Typography variant="caption" sx={{ color: "text.secondary" }}>
+            enter a subproject:
           </Typography>
-          <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", mt: 0.5 }}>
-            {index.routes.map((r) => (
-              <Link
-                key={r.name}
-                to="/$project"
-                params={{ project: projectParam(index, r) }}
-                search={{}}
-                style={{ textDecoration: "none" }}
-              >
-                <Chip
-                  size="small"
-                  label={r.name}
-                  variant={r.name === route.name ? "filled" : "outlined"}
-                  color={r.name === route.name ? "primary" : "default"}
-                  sx={{ fontFamily: "monospace", cursor: "pointer" }}
-                />
-              </Link>
-            ))}
-          </Box>
-        </>
+          {children.map((c) => (
+            <Link
+              key={c.name}
+              to="/$project"
+              params={{ project: projectParam(index, c) }}
+              search={{}}
+              style={{ textDecoration: "none" }}
+            >
+              <Chip
+                size="small"
+                variant="outlined"
+                label={c.name}
+                sx={{ fontFamily: "monospace", cursor: "pointer" }}
+              />
+            </Link>
+          ))}
+        </Box>
       ) : null}
     </Paper>
   );
 }
 
 function ProjectLayout() {
-  const { projects, index, resolution, param } = useProjectContext();
-  const theme = useTheme();
-  // A JS breakpoint, not a CSS one: the tree column must be ABSENT at phone
-  // width, not merely hidden, or "the switcher still works on a phone" is a
-  // claim nothing can check.
-  const isMobile = useMediaQuery(theme.breakpoints.down("md"));
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const { projects, index, resolution } = useProjectContext();
 
   if (projects.isLoading) {
     return (
@@ -229,30 +195,18 @@ function ProjectLayout() {
     );
   }
 
-  const route = resolution.route;
-  // Which of the four tabs is active, by the path's tail rather than by state.
-  const tail = pathname.replace(/\/+$/, "").split("/").pop() ?? "";
-  const current =
-    tail === "services" || tail === "domains" || tail === "config"
-      ? (`/$project/${tail}` as const)
-      : ("/$project" as const);
-
   return (
     <Box>
-      <ProjectHeader route={route} index={index} compactSwitcher={isMobile} />
-      <ProjectTabs param={param} current={current} />
-      <Box sx={{ display: "flex", gap: 2, alignItems: "flex-start" }}>
-        {isMobile ? null : (
-          <Box sx={{ width: 260, flexShrink: 0 }}>
-            <ProjectPickList index={index} title="The tree" current={route.name} />
-          </Box>
-        )}
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          {/* THE OUTLET. Remove it and every child screen silently renders this
-              page instead. projectRoutes.render.selftest.tsx is the check. */}
-          <Outlet />
-        </Box>
-      </Box>
+      <ProjectHeader route={resolution.route} index={index} />
+      {/* NO TREE COLUMN AND NO TAB STRIP. Both moved into the sidebar's project
+          zone — the column was a third column beside the sidebar and the page,
+          and the tabs were a second copy of the nav the sidebar now holds.
+          There is no `isMobile` branch left here either: the sidebar is already
+          a Drawer below `md`, so the project nav gets the responsive behaviour
+          the shell already has, at both widths, with no per-page branch. */}
+      {/* THE OUTLET. Remove it and every child screen silently renders this
+          page instead. projectRoutes.render.selftest.tsx is the check. */}
+      <Outlet />
     </Box>
   );
 }

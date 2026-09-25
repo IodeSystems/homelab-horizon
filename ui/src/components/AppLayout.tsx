@@ -3,7 +3,6 @@ import {
   Alert,
   Box,
   Drawer,
-  IconButton,
   List,
   ListItemButton,
   ListItemIcon,
@@ -36,15 +35,37 @@ import HubIcon from "@mui/icons-material/Hub";
 import RouterIcon from "@mui/icons-material/Router";
 import SettingsIcon from "@mui/icons-material/Settings";
 import LogoutIcon from "@mui/icons-material/Logout";
-import { useNavigate, useRouterState } from "@tanstack/react-router";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useAuthStatus, useLogout } from "../api/auth";
+import { SidebarProjectZone } from "./model/ProjectNavZone";
 
-const SIDEBAR_WIDTH = 240;
+const SIDEBAR_WIDTH = 260;
+
+/**
+ * Every gateway route the sidebar may point at, spelled out — so a `<Link>`
+ * built from this list is checked by tsc against the real route tree rather
+ * than accepting any string.
+ */
+type GatewayPath =
+  | "/dashboard"
+  | "/drift"
+  | "/projects"
+  | "/machines"
+  | "/hosts"
+  | "/services"
+  | "/domains"
+  | "/dns"
+  | "/vpn"
+  | "/bans"
+  | "/checks"
+  | "/observability"
+  | "/ports"
+  | "/settings";
 
 interface NavItem {
   icon: ReactNode;
   label: string;
-  path: string;
+  path: GatewayPath;
   disabled?: boolean;
 }
 
@@ -82,7 +103,7 @@ const navItems: NavItem[] = [
   { icon: <SettingsIcon />, label: "Settings", path: "/settings" },
 ];
 
-// WHAT IS NOT IN THE LIST, and why (plan/design/ui.md, Decision 1 amended):
+// WHAT IS NOT IN THE LIST, and why (plan/design/ui.md, Decision 1, amended twice):
 //
 //   Config. Everything on that surface is addressed as
 //   `(project, environment, app, role)` and CMRegistrationResp carries
@@ -91,45 +112,73 @@ const navItems: NavItem[] = [
 //   destination, which is a support ticket; /config is kept as a REDIRECT so
 //   bookmarks land somewhere true, and that is all it is.
 //
-//   A project switcher. The fifteen entries above are gateway-wide and do not
-//   follow a project, so a switcher here would imply they do. It lives on the
-//   project page, where the things it changes are.
+//   Anything project-scoped. Those live in the PROJECT ZONE above this list,
+//   which is replaced when you enter a project. This list is not.
 //
 // Everything that IS here is here because its record carries no project: a
 // machine is `{Name, Segments, Note}` and the gateway box hosts instances from
 // several projects at once, so nesting Machines under one of them would leave
-// the most important machine in the estate with no URL.
+// the most important machine in the estate with no URL. /services is still the
+// only screen an unassigned service can appear on, /domains the only place a
+// gateway-wide domain collision is visible, /machines the only page gw-1 has.
 
+/**
+ * THE SIDEBAR HAS TWO ZONES AND ONLY THE FIRST ONE CHANGES.
+ *
+ * Zone 1 — the project tree, replaced on entry by the project's own nav and a
+ * link back to its parent. Zone 2 — these fourteen gateway entries, identical
+ * at every depth, in the same order and the same place on screen.
+ *
+ * Three projects deep and you need Settings: you click Settings. The two
+ * alternatives both lose. Settings at the root only costs N clicks up and N
+ * back down and makes a gateway-wide fact feel like one project's property;
+ * Settings appearing only sometimes is a sidebar that morphs, which is the
+ * thing this whole navigation is organised against.
+ */
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
-  const navigate = useNavigate();
   const routerState = useRouterState();
   const currentPath = routerState.location.pathname;
-
-  const handleNav = (path: string) => {
-    navigate({ to: path });
-    onNavigate?.();
-  };
 
   return (
     <Box
       sx={{
         display: "flex",
         flexDirection: "column",
-        height: "100%",
+        minHeight: "100%",
         bgcolor: "#16213e",
       }}
     >
       <Box sx={{ p: 2, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-        <Typography
-          variant="h6"
-          onClick={() => handleNav("/dashboard")}
-          sx={{ fontWeight: 700, color: "#fff", cursor: "pointer" }}
-        >
-          Homelab Horizon
-        </Typography>
+        <Link to="/dashboard" style={{ textDecoration: "none" }} onClick={onNavigate}>
+          <Typography variant="h6" sx={{ fontWeight: 700, color: "#fff", cursor: "pointer" }}>
+            Homelab Horizon
+          </Typography>
+        </Link>
       </Box>
 
-      <List sx={{ flex: 1, pt: 1 }}>
+      {/* ZONE 1 — where you are. A pure function of the URL; see
+          readProjectZone. Nothing here is component state. */}
+      <Box sx={{ pb: 1, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+        <SidebarProjectZone onNavigate={onNavigate} />
+      </Box>
+
+      {/* ZONE 2 — the gateway. Never changes, at any depth. */}
+      <Typography
+        variant="caption"
+        sx={{
+          textTransform: "uppercase",
+          letterSpacing: 0.6,
+          fontSize: "0.65rem",
+          color: "text.secondary",
+          px: 2,
+          pt: 1.5,
+          pb: 0.5,
+          display: "block",
+        }}
+      >
+        the gateway
+      </Typography>
+      <List data-gateway-zone sx={{ flex: 1, pt: 0 }}>
         {navItems.map((item) => {
           const isActive = currentPath === item.path;
           const button = (
@@ -137,21 +186,21 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
               key={item.path}
               disabled={item.disabled}
               selected={isActive}
-              onClick={() => handleNav(item.path)}
               sx={{
                 borderRadius: 1,
                 mx: 1,
-                mb: 0.5,
+                mb: 0.25,
+                py: 0.4,
                 "&.Mui-selected": {
                   bgcolor: "rgba(233, 69, 96, 0.15)",
                   "&:hover": { bgcolor: "rgba(233, 69, 96, 0.25)" },
                 },
               }}
             >
-              <ListItemIcon sx={{ minWidth: 40, color: isActive ? "primary.main" : "text.secondary" }}>
+              <ListItemIcon sx={{ minWidth: 36, color: isActive ? "primary.main" : "text.secondary" }}>
                 {item.icon}
               </ListItemIcon>
-              <ListItemText primary={item.label} />
+              <ListItemText primary={item.label} slotProps={{ primary: { sx: { fontSize: "0.88rem" } } }} />
             </ListItemButton>
           );
 
@@ -162,21 +211,34 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
               </Tooltip>
             );
           }
-          return button;
+          // A real link, so the entry can be middle-clicked, copied and read
+          // out of the markup — and so "Settings is one click from three deep"
+          // is a claim a check can make against an href.
+          return (
+            <Link
+              key={item.path}
+              to={item.path}
+              style={{ textDecoration: "none", color: "inherit" }}
+              onClick={onNavigate}
+            >
+              {button}
+            </Link>
+          );
         })}
       </List>
 
       <List sx={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-        <ListItemButton
-          onClick={() => handleNav("/account")}
-          selected={currentPath === "/account"}
-          sx={{ borderRadius: 1, mx: 1, mb: 1 }}
-        >
-          <ListItemIcon sx={{ minWidth: 40, color: "text.secondary" }}>
-            <PersonIcon />
-          </ListItemIcon>
-          <ListItemText primary="Account" />
-        </ListItemButton>
+        <Link to="/account" style={{ textDecoration: "none", color: "inherit" }} onClick={onNavigate}>
+          <ListItemButton
+            selected={currentPath === "/account"}
+            sx={{ borderRadius: 1, mx: 1, mb: 1 }}
+          >
+            <ListItemIcon sx={{ minWidth: 36, color: "text.secondary" }}>
+              <PersonIcon />
+            </ListItemIcon>
+            <ListItemText primary="Account" />
+          </ListItemButton>
+        </Link>
       </List>
     </Box>
   );
@@ -314,9 +376,17 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         </Box>
         {isMobile && (
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
-            <IconButton onClick={() => setDrawerOpen(true)} edge="start">
-              <MenuIcon />
-            </IconButton>
+            {/* LABELLED, not an icon alone. Below `md` this button is the only
+                way to the project tree and the gateway entries, so "Menu" is
+                spelled out rather than left to a hamburger the operator has to
+                recognise. */}
+            <Button
+              onClick={() => setDrawerOpen(true)}
+              startIcon={<MenuIcon />}
+              sx={{ textTransform: "none" }}
+            >
+              Menu
+            </Button>
             <Typography
               variant="h6"
               onClick={() => navigate({ to: "/dashboard" })}
