@@ -8,7 +8,10 @@
 >   [architecture.md](architecture.md)'s mission sentence.
 > - **Part 2 — the redesign** (was `ui-redesign.md`). The screens, the three
 >   decisions behind them, and the `/$project` routing amendment that shipped
->   2026-09-24.
+>   2026-09-24. Decision 1 has been amended **four** times since; the last one
+>   (*ONE RECURSIVE MENU, whose root is the estate*) is the shape that is built,
+>   and it REVERSES Decision F. Read the amendments in order — they are history,
+>   and each says what it changed.
 >
 > **Jobs first is the point.** Part 2 was derived from a data-type inventory,
 > which is how the current shape happened; Part 1 is what it should have been
@@ -1744,6 +1747,12 @@ makes that unambiguous.
 
 #### Decision F — the gateway surfaces live in a second, fixed sidebar zone
 
+> **REVERSED 2026-09-25 by the fourth amendment below** (*Decision J*). The
+> fourteen entries at every depth were rendered and rejected as clutter: the
+> gateway block is level 0's alone now, and Settings from inside a project costs
+> two clicks. The classification in this block — what carries a project — is
+> untouched and still correct.
+
 Settings, Checks, Observability, Ports, DNS, Hosts, Drift, Dashboard, Machines,
 Account and MFA carry no project and cannot be derived into one — that is the
 seventeen-flat-routes table above, unchanged. Under "the sidebar is the project
@@ -1924,6 +1933,203 @@ Three things the build found that reading did not.
    the same assertion on the populated screen, so a regression that stopped
    rendering the table everywhere reddens instead of reading as a good empty
    state. Same shape as the "a passing lint proves nothing on its own" rule.
+
+### Decision 1, amended a fourth time 2026-09-25 — ONE RECURSIVE MENU, whose root is the estate
+
+> The three blocks above stay on the page; they are history. This one changes
+> the **shape of the sidebar** again, and it is the only amendment written
+> **after seeing the thing rendered**: the two-zone sidebar was accepted on a
+> description and rejected on sight.
+>
+> **The change in one line:** the estate is LEVEL 0 of the same tree rather
+> than a second zone beside it — the same five scopable entries at every level,
+> narrowing as you descend, over a subtree block that renders one level and
+> expands, over a way up labelled with its destination; the ten gateway
+> surfaces render at level 0 and nowhere else.
+
+#### What was rejected, measured
+
+The rendered sidebar, counted by the check that now guards it
+(`projectRoutes.render.selftest.tsx`, "THE SIDEBAR, RENDERED AND COUNTED"):
+**24 lines at the top level, 38 inside a project** (the operator counted 40 on a
+project with more children). Of the 38:
+
+- `in this project` / `acme-co` / `acme-co.storefront` — **the name twice**, under
+  a caption that says nothing the name does not.
+- **six lines apologising** for two surfaces a project cannot scope: a caption
+  (`cannot be scoped to a project`), two greyed rows with a `not scopable — see
+  below` secondary, and a sentence each.
+- **fourteen gateway rows, repeated at every depth**, of which `Machines`,
+  `Services` and `Domains` were *also* rows inside the project — the same words,
+  two meanings, both on screen — and `Projects` a third time beside the tree it
+  duplicated.
+
+The operator's phrasing: *"projects should be a nested tree in the sidebar … the
+filtered subtree is expandable, but only single level rendered by default"*, and
+on the clutter, that the estate is not a second zone: it is the root.
+
+#### The shape
+
+```
+LEVEL 0 — the estate                    LEVEL 1 — acme-co
+  Estate            ← the caption         ← Estate
+  Overview                                acme-co          ← the caption
+  Services                                Overview
+  Domains                                 Services
+  Machines                                Domains
+  Network                                 Machines
+  ── projects ──                          Network
+  acme-co        ▸                        ── subprojects ──
+  ── the gateway ──                       intern
+  Drift · DNS · Hosts · VPN Clients       storefront    ▸
+  · IP Bans · Checks · Observability
+  · Ports · Settings · Account
+```
+
+**11 lines at level 0 (about 13 on screen — the gateway flow wraps to three in a
+260px column), 11 inside a project, 10 two deep.** Against 24 and 38.
+
+#### Decision I — five scopable entries, the same five at every level
+
+`Overview · Services · Domains · Machines · Network` (`SCOPABLE_NAV`). Each
+carries BOTH addresses — `estateTo` and `projectTo` — so the word means the same
+thing wherever it appears and only the rows narrow:
+
+| entry | level 0 | inside a project |
+|---|---|---|
+| Overview | `/dashboard` | `/$project` |
+| Services | `/services` | `/$project/services` |
+| Domains | `/domains` | `/$project/domains` |
+| Machines | `/machines` | `/$project/machines` |
+| Network | `/segments` — **new screen** | `/$project/segments` |
+
+`Services` and `Domains` stay **two entries**: a domain conflict is a different
+question from a service's backend, and folding them would put a tab inside a nav
+entry. `Network` is the label for the segments surface at both levels (the route
+`/$project/segments` is unchanged; only the words `Network segments` are gone).
+
+**`/segments` is new and the amendment required it.** A surface that exists at
+only one level breaks the one promise the menu makes. It is also the screen this
+document already specified as *"Network — who can reach what?"*: the segment
+table, gateway-wide, with the owner on every row. The **bridge report** that
+section also asks for is NOT built — hz serves no multi-segment-machine
+derivation, and deriving one from the member lists would be a guess printed as a
+report. The table is one component (`components/model/SegmentBits.tsx`) used by
+both screens, so "the same surface, narrowed" is true of the markup and not only
+of the label.
+
+#### Decision J — the gateway block is level 0's, and this REVERSES the last amendment
+
+Decision F put the fourteen gateway entries *at every depth* so that *"three
+projects deep and you need Settings: you click Settings"*. **That is reversed.**
+Ten entries (`GATEWAY_NAV`: Drift · DNS · Hosts · VPN Clients · IP Bans · Checks
+· Observability · Ports · Settings · Account) render at level 0 only.
+
+- **The cost:** Settings from inside a project is **two clicks** — `← Estate`,
+  then Settings — instead of one.
+- **What it buys:** ten permanent rows out of every project's sidebar, at every
+  depth, forever.
+- **Why the trade is right:** Settings is *rare* and the clutter was *constant*.
+  `← Estate` is a labelled affordance in a fixed place, not a hunt, and the
+  second click lands on the estate's own menu, which is where the gateway things
+  belong. The old argument was about a cost paid occasionally; the thing it
+  bought was paid for on every screen.
+- `Dashboard`, `Projects`, `Machines`, `Services` and `Domains` left the gateway
+  block entirely: they ARE the estate's reading of the five entries. `/projects`
+  keeps its route and its content and is what `← Estate` links to — the estate's
+  own index, the one screen that lists what the tree contains.
+
+Enforced: the render check asserts all ten are in the estate's menu and that
+**none** of them, and no gateway caption, appears at a root project, one deeper,
+or a grandchild.
+
+#### Decision K — the greyed bans/clients block is DELETED, and the rule that justified it was misapplied
+
+The previous instruction was *"a restricted surface is greyed with a reason,
+never removed."* **That rule is about a FIELD ON A SCREEN** — where the value
+matters, where somebody may need to ask who can change it, and where a removed
+field is unaskable. **A nav entry to a surface that does not exist at this scope
+is not a restricted field; it is a door to a room that is not there.**
+
+`IPBan.Service` is attribution, not scope, and `WGPeer` has no link to a segment
+([estate.md](estate.md) Part C measures both), so bans and clients are estate
+surfaces and nothing else. Their absence from a project's menu is **correct and
+needs no apology**.
+
+The explanation is still real, so it survives **once, on the project's
+Overview**: a panel headed *"Gateway-wide, not scoped to `<project>`"*, the
+record-level reason for each, and a link to the estate screen that holds the
+rows (`GATEWAY_WIDE_SURFACES`, rendered by `$project.index.tsx`). One place, on
+the screen you are on when you wonder — not a permanent row on every project's
+nav.
+
+#### Decision L — Config folds into the project's Overview, and is not a sixth entry
+
+Config **is** project-scoped (`CMRegistrationResp.Project`), so
+`/$project/config` is honest and unchanged. It is off the menu because the menu's
+one promise is that an entry means the same thing at every level, **and there is
+no estate-wide config screen for a level-0 `Config` to point at**: the five-tab
+gateway shell was deleted on purpose when the surface became project-scoped, and
+`/config` is a redirect for bookmarks. A sixth entry would be blank at level 0 or
+a label pointing at a redirect — *"a label that does not describe its
+destination, which is a support ticket"*, by Decision 1's own words.
+
+So the Overview carries it: a named section, a sentence about what is there, and
+a **labelled button** (*"Open `<project>`'s config"*) beside the pending-
+registration count that is the reason anybody opens it. The Overview's own
+"waiting for approval" banner now links there too, instead of naming a "Config
+tab" that had not existed since the tab strip was deleted.
+
+#### Decision M — expansion is component state; where you are is not
+
+`readMenu(index, param, open)` takes the expanded set as an argument and decides
+everything else from the `$project` parameter alone. The set lives in
+`useState` in `SidebarMenu`, and that is deliberate:
+
+- **A disclosure triangle is not a location.** The page does not change, the rows
+  in scope do not change; the reader is peeking at what is under a sibling before
+  deciding whether to go there.
+- The menu renders on **every** route, so a search param would have to be
+  declared on the root route and preserved by every `<Link>` in the app — one
+  link that dropped it would silently collapse the tree.
+- The default is **closed**, which is a function of nothing at all, so a fresh
+  load of any URL renders exactly one level for everybody. Two people opening the
+  same link see the same screen, which is the whole invariant.
+
+The label is a link and the triangle is a button: going there and looking inside
+are two jobs, and one click that did both would leave the operator unable to undo
+the one they did not mean. Every control names what it will do (*"Show the 1
+project under storefront"*).
+
+#### What the build found that reading did not
+
+1. **A line-count budget cannot see a new caption.** Adding one more caption line
+   left every total inside its budget — the slack a fixture with one more project
+   needs is the same slack clutter hides in. Found by positive control. The check
+   now counts **overhead** structurally (every rendered line that is not a
+   clickable row) and asserts it verbatim: `Estate | projects | the gateway` at
+   level 0, `acme-co | subprojects` inside a project, plus a prose guard. That
+   check reddens on the sabotage the totals missed.
+2. **Emotion's inlined `<style>` blocks parse as content.** The first row of any
+   MUI list carries the rule's first use, so a naive "read the label out of the
+   markup" read CSS and reported an empty first entry — and a naive "read the
+   link texts" counted the first link as overhead. Both helpers strip style
+   blocks first; every text assertion in this file already did.
+3. **The `Menu`/`Estate` wording has to match in three places** — the up-link, the
+   level-0 caption, and this document — or the operator is being told about two
+   different places. `ESTATE_LABEL` is the single source, and `← All projects` is
+   gone.
+
+#### Still not decided here
+
+- **Whether the gateway block should collapse or scroll** once it is only at
+  level 0 — it is one wrapped flow now, which needs neither.
+- **Whether `IPBan` gains scope at all**, which record shape it takes, and
+  therefore whether `/$project/bans` ever exists. [estate.md](estate.md) Part C
+  has the measurement; the call is the operator's.
+- **The bridge report** on the new `/segments` screen, which needs a derivation hz
+  does not serve.
+- **Visual identity, the palette, Decisions 2 and 3.** Untouched, as before.
 
 ### Decision 2 — machines and instances are one surface, two lenses
 
@@ -2176,6 +2382,13 @@ value. Crossing between a machine's own interfaces is a declared exception with
 a reason."
 
 #### Network — *"who can reach what?"*
+
+> **Built 2026-09-25 as `/segments`**, the estate's reading of the `Network`
+> entry (fourth amendment, Decision I): the segment table, gateway-wide, with the
+> owner on every row, sharing one table component with `/$project/segments`. The
+> **bridge report** below is NOT built — hz serves no multi-segment-machine
+> derivation, and deriving one from the member lists would be a guess printed as
+> a report.
 
 **Job:** segments, membership, and the bridge audit.
 **At rest:** the segment table (segment, range, project, members, size), then
