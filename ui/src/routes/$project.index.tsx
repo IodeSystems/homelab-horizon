@@ -18,8 +18,8 @@
  * Three of the eight live projects are in that state and it is not an error —
  * a project is declared before anything moves into it.
  */
-import { createFileRoute } from "@tanstack/react-router";
-import { Alert, Box, Divider, Paper, Typography } from "@mui/material";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { Alert, Box, Button, Divider, Paper, Typography } from "@mui/material";
 import { useEnvironments, useServices, useVersionDrift } from "../api/hooks";
 import type { EnvironmentResp, InstanceVersion } from "../api/generated-types";
 import {
@@ -28,7 +28,11 @@ import {
   readPlacement,
   readRung,
 } from "../components/model/model";
-import { inScope } from "../components/model/projectRoutes.ts";
+import {
+  inScope,
+  CONFIG_AT,
+  GATEWAY_WIDE_SURFACES,
+} from "../components/model/projectRoutes.ts";
 import {
   CannotAskBanner,
   Declared,
@@ -166,7 +170,11 @@ function ProjectOverview() {
           {source.unadmitted} registered address{source.unadmitted === 1 ? " is" : "es are"} left out
           of the placement column because nobody has approved{" "}
           {source.unadmitted === 1 ? "it" : "them"} yet. A pending address is one a machine has asked
-          for and no admin has granted; it is waiting in this project&apos;s Config tab, not missing.
+          for and no admin has granted; it is waiting in this project&apos;s{" "}
+          <Link to={CONFIG_AT} params={{ project: param }} search={{}}>
+            config
+          </Link>
+          , not missing.
         </Alert>
       ) : null}
 
@@ -257,6 +265,54 @@ function ProjectOverview() {
             ))}
           </Box>
         )}
+      </Paper>
+
+      {/* CONFIG IS HERE, AND NOT A SIXTH NAV ENTRY. The five entries in the menu
+          are the five that exist at every level of it; there is no estate-wide
+          config screen for a level-0 `Config` to point at, and a label that
+          points at a redirect is a support ticket. So it is a named section with
+          a labelled button, next to the pending count that is the reason anyone
+          opens it. See CONFIG_AT. */}
+      <Paper sx={{ p: 2, mt: 2 }}>
+        <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5 }}>
+          Config
+        </Typography>
+        <Typography variant="body2" sx={{ color: "text.secondary", mb: 1.5 }}>
+          Registrations, blessed configs and promotion at this project&apos;s addresses — metadata
+          only, hz holds no key. A machine that has asked to join one of this project&apos;s
+          addresses is waiting there until an admin approves it.
+        </Typography>
+        <Link to={CONFIG_AT} params={{ project: param }} search={{}} style={{ textDecoration: "none" }}>
+          <Button variant="outlined" size="small">
+            Open {route.name}&apos;s config
+          </Button>
+        </Link>
+      </Paper>
+
+      {/* WHERE THE BANS-AND-CLIENTS EXPLANATION LIVES: ONCE, HERE.
+          It used to be six lines in the sidebar — two greyed nav entries under a
+          caption, each with a sentence of apology, at every project and every
+          depth. A nav entry to a surface that does not exist at this scope is a
+          door to a room that is not there, so the entries are gone; the fact
+          they were explaining is real, so the explanation stays, on the screen
+          you are on when you wonder, with a link to the rows. */}
+      <Paper variant="outlined" sx={{ p: 2, mt: 2, bgcolor: "transparent" }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
+          Gateway-wide, not scoped to {route.name}
+        </Typography>
+        <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
+          Two surfaces hz cannot narrow to a project, because the record has no link to follow.
+          They are not missing from this project — they are not per-project at all, and every one of
+          them is on its own estate screen.
+        </Typography>
+        {GATEWAY_WIDE_SURFACES.map((g) => (
+          <Box key={g.label} sx={{ mb: 1 }}>
+            <Link to={g.gatewayAt}>{g.gatewayLabel}</Link>
+            <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }}>
+              {g.why}
+            </Typography>
+          </Box>
+        ))}
       </Paper>
     </Box>
   );

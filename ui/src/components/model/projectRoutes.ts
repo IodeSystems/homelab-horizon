@@ -6,18 +6,19 @@
  * the answers for DISTINCTNESS; `projectRoutes.render.selftest.tsx` proves they
  * reach the page through the real router.
  *
- * # The rules these functions serve (plan/design/ui.md, Decision 1, amended twice)
+ * # The rules these functions serve (plan/design/ui.md, Decision 1, amended ×4)
  *
- * **A project scopes a URL, and you ENTER it.** The sidebar's first zone is the
- * project tree; entering a project replaces that zone with the project's own
- * nav and a link back to its parent. The gateway zone below never changes, at
- * any depth, because fourteen surfaces carry no project and cannot be derived
- * into one.
+ * **A project scopes a URL, and you ENTER it.** The sidebar is ONE RECURSIVE
+ * MENU whose root is the estate: the same five scopable entries at every level,
+ * narrowing as you descend, over a subtree block that renders one level and
+ * expands, over the way up labelled with its destination. The ten gateway
+ * surfaces are level 0's own block and are not repeated inside a project — the
+ * trade the fourth amendment makes, and records.
  *
  * **A derived surface gets a LIST route and never a DETAIL route.** A machine
  * deliberately has no project — the same box hosts instances from several at
  * once — so a project's machine list is a QUERY, and giving it a detail route
- * would give one box one URL per project that hosts it. See `PROJECT_NAV`.
+ * would give one box one URL per project that hosts it. See `SCOPABLE_NAV`.
  *
  * **The dotted path is resolved by LOOKUP, never by parsing.** `a.b.c` cannot
  * be split on "." without guessing: it is project `c` under `b` under `a`, or
@@ -408,7 +409,7 @@ export function readLocation(
 }
 
 // ---------------------------------------------------------------------------
-// The sub-screens a project has — the project zone of the sidebar
+// The surfaces a scope has — the same five at every level of the menu
 // ---------------------------------------------------------------------------
 
 /**
@@ -424,7 +425,8 @@ export function readLocation(
 export type ProjectSurfaceKind = "owned" | "derived";
 
 /**
- * Every route a project's nav may point at, spelled out.
+ * Every route the menu may point at, spelled out — the estate's five and the
+ * project's five (plus config, which the Overview links to).
  *
  * A union rather than `string` so that a `<Link to={entry.to}>` is checked by
  * tsc against the real route tree: a typo, or an entry for a screen that was
@@ -438,10 +440,15 @@ export type ProjectNavTo =
   | "/$project/segments"
   | "/$project/config";
 
-export interface ProjectNavEntry {
+/** The same five surfaces, addressed at the estate rather than at a project. */
+export type EstateNavTo = "/dashboard" | "/services" | "/domains" | "/machines" | "/segments";
+
+export interface ScopableSurface {
   label: string;
-  /** The route id, as TanStack knows it. */
-  to: ProjectNavTo;
+  /** Where this surface lives for the whole estate — level 0's address. */
+  estateTo: EstateNavTo;
+  /** Where it lives inside a project. Same surface, narrower rows. */
+  projectTo: ProjectNavTo;
   /** What this screen answers. Rendered, not a tooltip. */
   blurb: string;
   kind: ProjectSurfaceKind;
@@ -454,93 +461,174 @@ export interface ProjectNavEntry {
 }
 
 /**
- * The six project-scoped screens, in the order they answer questions in.
+ * THE FIVE SCOPABLE SURFACES — THE SAME FIVE AT EVERY LEVEL OF THE MENU.
  *
- * SIX, not twenty. A screen is here only because a project can SELECT its rows
- * — four because the record carries `Project` (services, domains, config, and
- * the overview's environments) and one because the rows are derivable from
- * instances (machines). `drift`, `hosts`, `dns`, `vpn`, `bans`, `checks`,
- * `ports`, `observability` and `settings` are gateway-scoped: adding any of
- * them would require inventing a project for a record that has none.
+ * (plan/design/ui.md, Decision 1, amended a fourth time.) The estate is the
+ * ROOT OF THE TREE, not a second zone beside it: `Services` means "every
+ * service hz declares" at level 0 and "this project's services" inside
+ * `acme-co`, and it is the same word in the same place on screen either way.
+ * That is the whole of what the fourth amendment buys — one menu to learn
+ * instead of two lists of the same nouns with different meanings.
+ *
+ * FIVE, not twenty. A surface is here only because a scope can SELECT its rows:
+ * three because the record carries `Project` (services, domains, segments), one
+ * because the rows are derivable from instances (machines), and the Overview,
+ * which is the scope itself. `drift`, `hosts`, `dns`, `vpn`, `bans`, `checks`,
+ * `ports`, `observability`, `settings` and `account` are gateway-only — see
+ * `GATEWAY_NAV`, which renders at level 0 and NOWHERE ELSE.
+ *
+ * `Services` and `Domains` stay two entries. A domain conflict is a different
+ * question from a service's backend, and folding them together would put a tab
+ * inside a nav entry — one more control for the operator to find.
+ *
+ * `Config` is deliberately NOT here: see `CONFIG_AT`.
  *
  * # A DERIVED SURFACE GETS A LIST ROUTE AND NEVER A DETAIL ROUTE
  *
- * This is the load-bearing rule of the whole drill-in (plan/design/ui.md,
- * Decision 1 amended again). `/$project/machines` exists;
- * `/$project/machines/$machine` must never. `config.Machine` is
- * `{Name, Segments, Note}` and the gateway box hosts instances from several
- * projects at once, so a detail route under a project would give `gw-1` one URL
- * per project it happens to host and its diff one home per URL — which is
- * exactly the failure Decision 1's reason 3 names and the reason a
- * project-FIRST navigation lost in the first place. The list is scoped; the
- * thing has one page, at `detailAt`.
+ * The load-bearing rule of the whole drill-in, unchanged by this amendment.
+ * `/$project/machines` exists; `/$project/machines/$machine` must never.
+ * `config.Machine` is `{Name, Segments, Note}` and the gateway box hosts
+ * instances from several projects at once, so a detail route under a project
+ * would give `gw-1` one URL per project it happens to host and its diff one
+ * home per URL — exactly the failure Decision 1's reason 3 names. The list is
+ * scoped; the thing has one page, at `detailAt`.
  *
  * `projectRoutes.render.selftest.tsx` walks the router's real route table and
  * fails if any route id starts with a derived entry's path plus "/".
  */
-export const PROJECT_NAV: ProjectNavEntry[] = [
+export const SCOPABLE_NAV: ScopableSurface[] = [
   {
     label: "Overview",
-    to: "/$project",
-    blurb: "The feed this project installs from, every rung it declares, and where those rungs run.",
+    estateTo: "/dashboard",
+    projectTo: "/$project",
+    blurb:
+      "What this scope is: at the estate, what is waiting on somebody; in a project, the feed it installs from, every rung it declares, and where those rungs run.",
     kind: "owned",
     detailAt: "",
   },
   {
     label: "Services",
-    to: "/$project/services",
-    blurb: "The services assigned to this project. A service carries its project on the record.",
+    estateTo: "/services",
+    projectTo: "/$project/services",
+    blurb:
+      "The services in scope. A service carries its project on the record — and may carry none, which is why the estate list is the only place an unassigned service can appear.",
     kind: "owned",
     detailAt: "",
   },
   {
     label: "Domains",
-    to: "/$project/domains",
-    blurb: "The domains this project's services serve. A domain is scoped through its service.",
+    estateTo: "/domains",
+    projectTo: "/$project/domains",
+    blurb:
+      "The domains those services serve. A domain is scoped through its service, and uniqueness is gateway-wide — which is what the estate list is for.",
     kind: "owned",
     detailAt: "",
   },
   {
     label: "Machines",
-    to: "/$project/machines",
+    estateTo: "/machines",
+    projectTo: "/$project/machines",
     blurb:
-      "The boxes this project's instances run on. A machine carries no project — this list is derived through its instances, so the same box appears under every project it hosts.",
+      "The boxes in scope. A machine carries no project — a project's list is derived through its instances, so the same box appears under every project it hosts, and its one page is at the estate.",
     kind: "derived",
     detailAt: "/machines/$machine",
   },
   {
-    label: "Network segments",
-    to: "/$project/segments",
+    label: "Network",
+    estateTo: "/segments",
+    projectTo: "/$project/segments",
     blurb:
-      "The networks this project declares. A segment carries its project on the record, and it is required — a segment owned by nobody is a network nobody is responsible for.",
-    kind: "owned",
-    detailAt: "",
-  },
-  {
-    label: "Config",
-    to: "/$project/config",
-    blurb: "Registrations, blessed configs and promotion at this project's addresses. Metadata only — hz holds no key.",
+      "The segments in scope. A segment carries its project on the record and it is required — a segment owned by nobody is a network nobody is responsible for.",
     kind: "owned",
     detailAt: "",
   },
 ];
 
+/**
+ * Config is reached from the project's Overview, and is not a sixth entry.
+ *
+ * It IS project-scoped — `CMRegistrationResp` carries `Project`, so the surface
+ * is honest at `/$project/config`. It is off the menu because the menu's one
+ * promise is that the same entries mean the same things at every level, and
+ * there is no estate-wide config screen to put under a level-0 `Config`: the
+ * five-tab gateway shell was deleted on purpose when the surface became
+ * project-scoped, and `/config` is a redirect for bookmarks. A sixth entry
+ * would therefore be either blank at level 0 or a label pointing at a redirect
+ * — "a label that does not describe its destination, which is a support
+ * ticket", by the previous amendment's own words.
+ *
+ * So the project Overview carries it as a named section with a labelled button,
+ * beside the pending-registration count that is the reason anyone opens it.
+ */
+export const CONFIG_AT: ProjectNavTo = "/$project/config";
+
 /** The route ids under which no detail route may ever be added. */
-export function derivedProjectSurfaces(): ProjectNavEntry[] {
-  return PROJECT_NAV.filter((e) => e.kind === "derived");
+export function derivedProjectSurfaces(): ScopableSurface[] {
+  return SCOPABLE_NAV.filter((e) => e.kind === "derived");
 }
 
 /**
- * A surface the project nav would naturally list and hz cannot select rows for.
+ * THE GATEWAY BLOCK — LEVEL 0 ONLY, AND THAT IS THE TRADE.
  *
- * RENDERED, GREYED, WITH THE REASON — never removed. A missing entry is
- * unaskable: the operator cannot tell whether this project has no bans or
- * whether hz cannot say, and a support conversation about a nav entry that is
- * not on the screen has nowhere to start. Each names the gateway screen that
- * does hold the rows, so the answer is one click away even though the scoped
- * answer does not exist.
+ * Ten surfaces whose records carry no project and cannot be derived into one.
+ * They were at every depth, so that "three projects deep and needing Settings
+ * costs one click". THIS REVERSES THAT: from inside a project, Settings is two
+ * clicks — `← Estate`, then Settings — and ten permanent rows leave the sidebar
+ * in exchange. Settings is rare, the clutter was constant, and `← Estate` is a
+ * labelled affordance in a fixed place, not a hunt. Recorded as the fourth
+ * amendment in plan/design/ui.md rather than changed silently.
+ *
+ * `Dashboard`, `Projects`, `Machines`, `Services` and `Domains` are NOT in this
+ * list any more: they are the estate's own reading of the five scopable
+ * entries, which is level 0. One word, one meaning, one place.
  */
-export interface ProjectNavGap {
+export interface GatewayEntry {
+  label: string;
+  to:
+    | "/drift"
+    | "/dns"
+    | "/hosts"
+    | "/vpn"
+    | "/bans"
+    | "/checks"
+    | "/observability"
+    | "/ports"
+    | "/settings"
+    | "/account";
+  /** Why it cannot be scoped, for the title attribute and for the doc. */
+  why: string;
+}
+
+export const GATEWAY_NAV: GatewayEntry[] = [
+  { label: "Drift", to: "/drift", why: "Every instance hz knows about, across every project at once — the screen exists to compare them." },
+  { label: "DNS", to: "/dns", why: "A zone is the gateway's own record; nothing in it names a project." },
+  { label: "Hosts", to: "/hosts", why: "A host is an address other records resolve through. It carries no project." },
+  { label: "VPN Clients", to: "/vpn", why: "A client is `{Name, PublicKey, AllowedIPs}` and is not a machine record, so nothing links it to a segment or to a project." },
+  { label: "IP Bans", to: "/bans", why: "A ban's `Service` is free text written by whoever placed it, never checked against a declared service; enforcement is one gateway-wide `filter INPUT … DROP`." },
+  { label: "Checks", to: "/checks", why: "A health check is declared on a service's proxy, and the screen is the gateway's own history." },
+  { label: "Observability", to: "/observability", why: "Scrape targets and labels are the gateway's own configuration." },
+  { label: "Ports", to: "/ports", why: "A forwarded port is a fact about the gateway's edge." },
+  { label: "Settings", to: "/settings", why: "hz's own configuration. There is one." },
+  { label: "Account", to: "/account", why: "Who you are signed in as. Not a property of the estate." },
+];
+
+/**
+ * The two surfaces a project's menu would naturally list and hz cannot scope.
+ *
+ * THEY ARE NOT IN THE MENU, AND THAT IS NOT AN OMISSION. The previous
+ * amendment rendered them greyed, with a caption and two sentences of prose
+ * each, on the ground that "a missing entry is unaskable" — which is a rule
+ * about A FIELD ON A SCREEN, where the value matters and somebody may need to
+ * ask who can change it. A nav entry to a surface that does not exist at this
+ * scope is not a restricted field; it is a door to a room that is not there.
+ * Six of the sidebar's rejected forty lines were that apology.
+ *
+ * The explanation still exists, ONCE, on the project's Overview
+ * (`$project.index.tsx`), where it reads as a fact about the model and links to
+ * the estate screens that do hold the rows. `estate.md` Part C has the analysis
+ * of what each missing edge would cost.
+ */
+export interface GatewayWideSurface {
   label: string;
   /** The gateway route that holds these rows unscoped. */
   gatewayAt: "/bans" | "/vpn";
@@ -549,7 +637,7 @@ export interface ProjectNavGap {
   why: string;
 }
 
-export const PROJECT_NAV_GAPS: ProjectNavGap[] = [
+export const GATEWAY_WIDE_SURFACES: GatewayWideSurface[] = [
   {
     label: "IP Bans",
     gatewayAt: "/bans",
@@ -565,12 +653,12 @@ export const PROJECT_NAV_GAPS: ProjectNavGap[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// The sidebar's project zone — decided by the route, never by state
+// The way up, and the menu itself — decided by the route, never by state
 // ---------------------------------------------------------------------------
 
 /** Where "back" goes from a project, and what the link must be labelled. */
 export interface ProjectBack {
-  /** Rendered text. Names the DESTINATION — "← iodesystems", never "← Back". */
+  /** Rendered text. Names the DESTINATION — "← acme-co", never "← Back". */
   label: string;
   /** True when back leaves the tree entirely, for `/projects`. */
   toEstate: boolean;
@@ -578,6 +666,17 @@ export interface ProjectBack {
   param: string;
   meaning: string;
 }
+
+/**
+ * What the level above a root project is called, everywhere it is named.
+ *
+ * "Estate" rather than "All projects" because the level above a root project is
+ * not a list of projects — it is the same five surfaces over every row hz has,
+ * which is what level 0 of the menu renders. The word has to be the same in the
+ * up-link, in the caption over the five entries, and in the doc, or the operator
+ * is being told about two different places.
+ */
+export const ESTATE_LABEL = "Estate";
 
 /**
  * The link out of a project.
@@ -591,10 +690,10 @@ export function projectBack(index: ProjectIndex, route: ProjectRoute): ProjectBa
   const parent = route.parent ? index.byName.get(route.parent) : undefined;
   if (!parent) {
     return {
-      label: "← All projects",
+      label: `← ${ESTATE_LABEL}`,
       toEstate: true,
       param: "",
-      meaning: `${route.name} is a root project, so there is nothing above it but the estate itself.`,
+      meaning: `${route.name} is a root project, so the level above it is the estate itself — the same five screens over every row hz declares.`,
     };
   }
   return {
@@ -605,69 +704,194 @@ export function projectBack(index: ProjectIndex, route: ProjectRoute): ProjectBa
   };
 }
 
+// ---------------------------------------------------------------------------
+// THE MENU — ONE RECURSIVE MENU, WHOSE ROOT IS THE ESTATE
+// ---------------------------------------------------------------------------
+
 /**
- * What the sidebar's project zone shows, decided by the URL alone.
+ * One of the five entries, at the level the address is on.
+ *
+ * The label is the same at every level; only `to` and `param` change. Rendering
+ * the same five words in the same order in the same place, narrowing as you
+ * descend, is the entire mechanism by which the operator learns ONE menu.
+ */
+export interface MenuEntry {
+  label: string;
+  to: EstateNavTo | ProjectNavTo;
+  /** The `$project` parameter, or "" at the estate, where the route takes none. */
+  param: string;
+  blurb: string;
+}
+
+/**
+ * One node of the subtree block: a project you can enter, or peek inside.
+ *
+ * The block renders ONE LEVEL by default, and every node that has children
+ * carries a disclosure control. Expanding is peeking — it adds that node's
+ * children as rows under it, indented, each of them expandable in turn. It does
+ * NOT change where you are: `to` is still the project's own URL and clicking the
+ * label is still a navigation.
+ */
+export interface MenuNode {
+  route: ProjectRoute;
+  /** The `$project` parameter that reaches it, ambiguity-safe. */
+  param: string;
+  /** Indent relative to the block's first level. 0 for a direct child. */
+  indent: number;
+  hasChildren: boolean;
+  /** True when this node's children are rendered as rows below it. */
+  expanded: boolean;
+  /** What the disclosure control must say it will do. */
+  toggleLabel: string;
+}
+
+/**
+ * The subtree block, flattened to rows — one level, plus whatever is expanded.
+ *
+ * `open` is the set of project names the reader has peeked into. It is a
+ * DISCLOSURE control and not a location: see `SidebarMenu` for why it is allowed
+ * to be component state while nothing about which project or how deep may be.
+ */
+export function menuNodes(
+  index: ProjectIndex,
+  parents: ProjectRoute[],
+  open: ReadonlySet<string>,
+  indent = 0,
+): MenuNode[] {
+  const out: MenuNode[] = [];
+  for (const route of parents) {
+    const kids = route.children
+      .map((n) => index.byName.get(n))
+      .filter((r): r is ProjectRoute => r !== undefined);
+    const expanded = kids.length > 0 && open.has(route.name);
+    out.push({
+      route,
+      param: projectParam(index, route),
+      indent,
+      hasChildren: kids.length > 0,
+      expanded,
+      toggleLabel: expanded
+        ? `Hide what is under ${route.name}`
+        : `Show the ${kids.length} project${kids.length === 1 ? "" : "s"} under ${route.name}`,
+    });
+    if (expanded) out.push(...menuNodes(index, kids, open, indent + 1));
+  }
+  return out;
+}
+
+/**
+ * THE WHOLE MENU, DECIDED BY THE URL ALONE.
+ *
+ * One reading, one renderer, every level — the estate is level 0 of the same
+ * tree rather than a second zone beside it. What changes with depth is what the
+ * five entries point at, what the subtree block lists, and whether there is a
+ * level above; what does NOT change is the five labels, their order, and their
+ * position on screen.
  *
  * NOTHING HERE MAY BECOME `useState`. Which project you are in, how deep you
- * are, and which nav the sidebar is showing are all facts about the address:
- * a sidebar that morphs on component state cannot be linked, shared or
- * bookmarked, and "open the redline nav" would send two people to two different
- * screens. That argument is the spine of all three amendments, and this is the
- * function it has to hold in.
+ * are, and which entries the menu shows are all facts about the address: a menu
+ * that morphs on component state cannot be linked, shared or bookmarked, and
+ * "open the redline nav" would send two people to two different screens. That
+ * argument is the spine of all four amendments, and this is the function it has
+ * to hold in. (The one thing that is NOT decided here is which nodes are
+ * expanded — `open` is passed in, because a disclosure triangle is not a
+ * location.)
  */
-export type ProjectZone =
-  | {
-      kind: "estate";
-      headline: string;
-      meaning: string;
-    }
-  | {
-      kind: "project";
-      route: ProjectRoute;
-      back: ProjectBack;
-      /** Direct children, as routes, for the descend-one-level links. */
-      children: ProjectRoute[];
-      meaning: string;
-    }
-  | {
-      kind: "unresolved";
-      param: string;
-      headline: string;
-      meaning: string;
-    };
+export interface Menu {
+  /** `estate` is level 0; `unresolved` is a parameter naming no project. */
+  kind: "estate" | "project" | "unresolved";
+  /** 0 at the estate, then the project's own depth plus one. */
+  level: number;
+  /** What the five entries are scoped to: "Estate", or the project's name. */
+  scopeLabel: string;
+  /** The five, resolved to this level's addresses. */
+  entries: MenuEntry[];
+  /** The way up, labelled with its destination. `null` only at level 0. */
+  up: ProjectBack | null;
+  /** The caption over the subtree block. */
+  childCaption: string;
+  nodes: MenuNode[];
+  /** Said instead of the block when there is nothing below. Never a blank area. */
+  emptyNote: string;
+  /**
+   * True only at level 0. The gateway block is NOT repeated inside a project,
+   * not greyed there and not explained there — see `GATEWAY_NAV`.
+   */
+  showGateway: boolean;
+  /** The project you are in, or null at the estate. */
+  here: ProjectRoute | null;
+  meaning: string;
+  /** Set only when `kind` is "unresolved". */
+  headline: string;
+  param: string;
+}
 
-export function readProjectZone(index: ProjectIndex, param: string | undefined): ProjectZone {
-  if (param === undefined) {
-    return {
-      kind: "estate",
-      headline: "Projects",
-      meaning:
-        index.routes.length === 0
-          ? "hz declares no project yet. This is an empty tree, not a failed read."
-          : `Every project hz declares, nested. Entering one replaces this zone with that project's own navigation; the gateway entries below it never change.`,
-    };
-  }
+export function readMenu(
+  index: ProjectIndex,
+  param: string | undefined,
+  open: ReadonlySet<string> = new Set(),
+): Menu {
+  const roots = index.routes.filter((r) => r.depth === 0);
+  const estate = (extra: Partial<Menu>): Menu => ({
+    kind: "estate",
+    level: 0,
+    scopeLabel: ESTATE_LABEL,
+    entries: SCOPABLE_NAV.map((s) => ({ label: s.label, to: s.estateTo, param: "", blurb: s.blurb })),
+    up: null,
+    childCaption: "projects",
+    nodes: menuNodes(index, roots, open),
+    emptyNote: "hz declares no project yet. This is an empty tree, not a failed read.",
+    showGateway: true,
+    here: null,
+    meaning:
+      index.routes.length === 0
+        ? "hz declares no project yet, so the five screens above show every row hz has and nothing is narrowed."
+        : "The five screens above show every row hz declares. Entering a project narrows the same five to that project and everything below it.",
+    headline: "",
+    param: "",
+    ...extra,
+  });
+
+  if (param === undefined) return estate({});
+
   const resolution = resolveProjectParam(index, param);
   if (!resolution.found) {
-    return {
+    // The estate's own menu, plus a warning naming what was typed: the way out
+    // is the menu itself, so an unresolvable address is never a dead end.
+    return estate({
       kind: "unresolved",
       param,
       headline: resolution.ambiguous ? "More than one project" : "No such project",
       meaning: resolution.headline,
-    };
+    });
   }
+
   const route = resolution.route;
-  const children = route.children
+  const kids = route.children
     .map((name) => index.byName.get(name))
     .filter((r): r is ProjectRoute => r !== undefined);
+  const p = projectParam(index, route);
   return {
     kind: "project",
-    route,
-    back: projectBack(index, route),
-    children,
+    level: route.depth + 1,
+    scopeLabel: route.name,
+    entries: SCOPABLE_NAV.map((s) => ({
+      label: s.label,
+      to: s.projectTo,
+      param: p,
+      blurb: s.blurb,
+    })),
+    up: projectBack(index, route),
+    childCaption: "subprojects",
+    nodes: menuNodes(index, kids, open),
+    emptyNote: `${route.name} has none.`,
+    showGateway: false,
+    here: route,
     meaning:
-      children.length === 0
-        ? `${route.name} has no subprojects. These screens show its own rows and nothing below it, because there is nothing below it.`
-        : `${children.length} subproject${children.length === 1 ? "" : "s"} sit${children.length === 1 ? "s" : ""} under ${route.name}. Entering one narrows every screen above to that project's rows.`,
+      kids.length === 0
+        ? `${route.name} has no subprojects. These five screens show its own rows and nothing below it, because there is nothing below it.`
+        : `${kids.length} subproject${kids.length === 1 ? "" : "s"} sit${kids.length === 1 ? "s" : ""} under ${route.name}. Entering one narrows the same five screens to that project's rows.`,
+    headline: "",
+    param,
   };
 }
