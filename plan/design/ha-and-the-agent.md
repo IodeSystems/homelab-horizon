@@ -344,7 +344,16 @@ The peer-sync half of the checklist. It sits alongside
       writing the pages until step 5; both it and the payload render from
       `Config.MaintenancePages`. Note the checklist item above it was right
       that this must read "every file under the haproxy errors directory" — the
-      claim is on the DIRECTORY, listing both name shapes.
+      claim is on the DIRECTORY, listing both name shapes. It does **not** mean
+      claim every file in it: `Match: ["*.http"]` deletes the distribution's
+      400/403/500/502 pages, measured 2026-09-25.
+
+      **Proved byte-identical 2026-09-25**, which is the half that makes two
+      writers on one box safe rather than merely both present:
+      `internal/server/maintenance_pages_test.go` runs hz's writers and the
+      agent's payload over identically seeded directories and compares name,
+      bytes and mode, in either order and across a cleared page.
+      `privilege-audit.md` §7.B carries the positive controls.
 - [ ] **The three bypasses are each assigned** before `peer_id` is ever set
       again: `applyWGPeersFromConfig` (item 12 step 2), `pullCertFromPeer` (item
       12 step 3), `reapplyBans` (`handlers_ban`, `privilege-audit.md` §3 item 5).
