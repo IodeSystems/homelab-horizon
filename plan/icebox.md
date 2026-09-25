@@ -894,15 +894,6 @@ fixed here. Each names the section with the evidence.
   caller is the service-deploy token, which is also what reaches
   `handlers_ban.go`'s root `iptables` call.
 
-- **`reconcileIPTables` does not hold `banMu`, so a ban can be inserted twice.**
-  Since bans became expected rules (2026-09-22), two writers can install one:
-  `reapplyBans`/`banIP` under `banMu`, and `Reconcile`'s missing-expected add on
-  the 60s health tick. Both check-then-insert and neither deletes, so the worst
-  case is a duplicate `-s <ip>/32 -j DROP` in INPUT — harmless, classified
-  expected, never cleaned up. Fixing it means holding `banMu` across
-  `reconcileIPTables`, or making the ban writer single. Not worth doing before
-  the ban move decides which writer survives. `ha-and-the-agent.md` §4.
-
 ## ◻ Two machine lists, one word — and `hz cm` → `hz config` made it louder (2026-09-22)
 
 `hz config machines` and `hz machine ls` print different fleets. They are joined

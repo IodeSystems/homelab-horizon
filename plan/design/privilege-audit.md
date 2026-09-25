@@ -550,7 +550,7 @@ the agent's own tree.
 | `internal/server/peer_sync.go` | certs (`pullCertFromPeer`), `iptables -I INPUT` (ban sync), and `applyNewConfig` → hz's whole reconcile path, on a 30s timer |
 | ~~`internal/server/handlers_integration.go`~~ | ~~`/etc/prometheus`, `/etc/systemd/system`~~ — **wrong, corrected 2026-09-21** (`privilege-classification.md` §1.1). Same shape as the `handlers_ha.go` row: the paths are inside a bash script hz *serves* for a human to run on the Prometheus box. No write, no exec. |
 | `internal/server/handlers_api_system_fix.go` | ~~`/etc/apparmor.d/…`~~, ~~`/etc/systemd/journald.conf.d`~~ — **the journald drop-in is DECLARED since 2026-09-25** (§7 B, §3.1 #13): the file, the claim and the journald poke are in the payload (`internal/server/logretention.go`), hz still writes the same bytes from the same constants until step 5, and the two are compared byte for byte. ~~**13 POSTs + 1 GET**; `systemdRun` still has 5 callers, three of them shell strings.~~ **Corrected + reduced 2026-09-25:** the caller count was 5 by grep and **4 by shape** (one site was an inline `systemd-run … bash -c`, not a call to the helper), and all four were in the haproxy fix-logging handler. That handler and `wg/create-config` are **deleted**; `systemdRun` is **deleted**; `/etc/apparmor.d` is no longer written by hz at all. 11 POSTs + 1 GET, none of which builds a shell string (`shell_guard_test.go`). |
-| `internal/server/handlers_ban.go` | shells ~~`ip` and~~ `iptables` directly — **the `ip` half was wrong** (`privilege-classification.md` §1.4); the three exec sites are all `iptables`. **Four triggers, one of them a deploy token, not an admin.** |
+| `internal/server/handlers_ban.go` | shells ~~`ip` and~~ `iptables` directly — **the `ip` half was wrong** (`privilege-classification.md` §1.4); ~~the three exec sites are all `iptables`~~. **Reduced to ONE 2026-09-25** (§7 B's ban hand-over): `iptablesBan` and `iptablesCheckBan` are deleted and a ban is now a RECORD a reconciler installs; only `iptablesUnban`'s `iptables -D` remains, because a lifted ban classifies *unknown* and nothing else would ever remove it. **Four triggers, one of them a deploy token, not an admin.** |
 | `internal/server/handlers_api_iptables.go`, `reconcile_iptables.go` | `exec`. Includes `POST /iptables/remove`, whose table, chain and args come **from the request body** — the class §5.2 rule 2 names. |
 | ~~`internal/system/interfaces.go`~~ | ~~interface manipulation, `exec` + writes~~ — **wrong, corrected 2026-09-21** (`privilege-classification.md` §1.2). Those are Go *interface types* (`FileSystem`, `CommandRunner`), the test seam, not a caller. |
 | `internal/autoheal/autoheal.go` | `apt-get install`, `systemctl` — does not transfer (item 10). `Run` and the `auto_heal` key were DELETED 2026-09-22 (classification §3.5); `InstallMissing` behind the `install-deps` verb is all that is left. |
@@ -574,8 +574,9 @@ timer. Where it overlaps the agent the **bytes agree by construction** (one
 renderer, two callers), so it is a second *trigger*, not a second opinion. It is
 also **latent**: every loop is gated on `peer_id` being set in `config.json`,
 and there is no fleet today. The live exposure is three paths that bypass
-`syncServices` — cert pull, WG peer application, ban re-apply — which are
-already items 12.2, 12.3 and §3 item 5 below. Full analysis, overlap table and
+`syncServices` — cert pull, WG peer application and ~~ban re-apply~~ (**gone
+2026-09-25**: `reapplyBans` is deleted and the ban merge applies nothing) —
+which are already items 12.2 and 12.3 below. Full analysis, overlap table and
 item-12 checklist: `plan/design/ha-and-the-agent.md`.
 
 ## 3. Consequences for item 12
@@ -585,7 +586,7 @@ Ordered, replacing the handover list in `architecture.md`.
 > **Status re-checked 2026-09-22.** Items 1, 2 and 4 are done (item 1 with its
 > issuer changed — §1.1). Item 3's guard half is done and measured (§7.1); its
 > three named bypasses are not assigned. Item 5's document exists but its §2
-> table is incomplete (§7) and its §7 checklist stands at 8 of 33 (§8, re-counted 2026-09-25). Item 6
+> table is incomplete (§7) and its §7 checklist stands at **14 of 34** (re-derived 2026-09-25 by COUNTING the boxes in §7, not by recalling the number — it read "8 of 33" and was stale by four before the log-retention and ban hand-overs ticked two more and added one open line). Item 6
 > was answered by the classification — the right move is deletion, not a seam —
 > and `autoheal.Run` is still there. **The consolidated answer is §8.**
 > (`autoheal.Run` was deleted 2026-09-22, per §8.4 — see classification §3.5.)
@@ -647,8 +648,9 @@ Ordered, replacing the handover list in `architecture.md`.
 3. **Decide peer-sync** (not `handlers_ha.go` — see the correction in §2).
    Recommendation in `plan/design/ha-and-the-agent.md`: guard first (refuse to arm the
    agent while a fleet is configured, and re-check in `applyNewConfig`), then
-   route the three `syncServices` bypasses — cert pull, WG peer application, ban
-   re-apply — through whatever items 12.2/12.3 and §3 item 5 below decide. The
+   route the ~~three~~ **two** remaining `syncServices` bypasses — cert pull and
+   WG peer application — through whatever items 12.2/12.3 decide. (The third,
+   ban re-apply, was deleted outright 2026-09-25 rather than routed.) The
    checklist is §7 of that document; it is latent today, so this is a guard, not
    a redesign.
 4. ◐ **letsencrypt/acme split — DONE 2026-09-21; serving them is what is left.**
@@ -1087,11 +1089,14 @@ Concretely, still unhanded-over and still privileged in hz web:
    against the **iptables commands Reconcile issues** rather than against the
    classifier's verdict.
 
-   **Not changed, and deliberate:** bans have not moved. `cmd/hz-agent/install.go`
-   still never emits `--apply`, hz web is still the writer, and the desired
-   payload now merely *carries* the rules. **New residual:**
-   `reconcileIPTables` does not hold `banMu`, so a simultaneous insert could
-   leave a duplicate DROP — see `plan/icebox.md`.
+   ~~**Not changed, and deliberate:** bans have not moved.~~ — **they moved
+   2026-09-25** (§7 B). `cmd/hz-agent/install.go` still never emits `--apply`,
+   so hz's own `reconcileIPTables` is the installer until step 5; what changed
+   is that it is the ONLY one. ~~**New residual:** `reconcileIPTables` does not
+   hold `banMu`, so a simultaneous insert could leave a duplicate DROP~~ — that
+   residual is **closed by the same commit**, because the second installer is
+   gone. The icebox entry parking it said the ban move would decide which
+   writer survives; it did.
 3. **The 18 `rebuildWGChains` sites** decided. Armed-and-hz-still-calling is two
    writers on one chain; de-rooted-and-still-calling is a permission error on the
    MFA login path, 18 times over. Either way this is not a thing to discover
@@ -1147,7 +1152,7 @@ are reproduced verbatim below, because nothing else holds them:
   privileged verb becoming a general-purpose root helper. (Also condensed into
   the repo's root `CLAUDE.md`.)
 - **§7's item-12 readiness checklist** — the ONLY enumerated to-do list for
-  finishing the flip. §8 of this document scores against it (8 of 33 as of 2026-09-25); it
+  finishing the flip. §8 of this document scores against it (**14 of 34** as of 2026-09-25 — counted, and the "8 of 33" this line carried was four behind); it
   never reproduced it.
 - **§8's operator questions** — cross-referenced from §4 here, never restated.
 
@@ -1720,8 +1725,83 @@ status of each as of 2026-09-25. One at a time — several make the next moot.
       writes there only if it already exists. So the `mkdir` is a convenience,
       not a precondition — which is what makes one declared `File` sufficient.
       The mkdir stays in hz's fixer; the claim it made does not.
-- [ ] **Move bans** (§3.2). State the sync→async contract change in the service
-      API's docs: `{ok:true}` means recorded, not installed.
+- [x] **Move bans** (§3.2). State the sync→async contract change in the service
+      API's docs: `{ok:true}` means recorded, not installed. Done 2026-09-25.
+      `iptablesBan`, `iptablesCheckBan` and `reapplyBans` are **deleted**;
+      `banIP` records and the reconciler installs. The precondition landed
+      2026-09-22 (§8.3 blocker 2) and this is the move itself.
+
+      **THE CONTRACT, said at every boundary a caller meets it** —
+      `handleBanAPI`'s doc comment, `hzclient.BanAdd`, and what `hz-client ban`
+      prints. `{ok:true}` means RECORDED. The window is one reconcile pass, and
+      the honest order of the two numbers is worth stating because it is the
+      wrong way round: **up to 60s today** (hz's own `reconcileIPTables`, on the
+      health tick), **~5s once the agent applies** (`cmd/hz-agent`'s default
+      poll interval). hz web stops being root first and the thing that makes
+      the window short arrives later, so the interim is the slow one. A caller
+      that must not serve the address meanwhile has to refuse it itself.
+
+      **EXPIRY, decided.** Three halves, and only one of them moved:
+      - *Not re-installing an expired ban* was already declarative and needed
+        nothing — `activeBanIPs` filters it out of the set hz publishes, so no
+        pass installs the rule the 30s reap is on its way to removing.
+      - *Installing* is now declarative: recorded → declared → installed by a
+        reconciler.
+      - *Removing the live rule* is NOT, and could not be. Making a lifted ban
+        removable declaratively means making it **stale**, and stale is the one
+        class `Reconcile` deletes — the scope would become every
+        `-s <addr>/32 -j DROP` in INPUT, including the one an admin typed at a
+        shell. `TestReconcileLeavesAHandAddedInputDropAlone` is that rule and
+        it is green. So `unbanIP`'s `iptables -D` stays synchronous and stays
+        hz's, reached from the unban endpoints and from `startBanExpiry`'s reap.
+        **The hand-over is deliberately asymmetric, and that leaves exactly one
+        privileged iptables verb in hz web** — named as an open line below
+        rather than pretended away.
+
+      **The consequence to state loudly: a ban shorter than the reconcile
+      interval may never be installed at all.** It expires out of the declared
+      set before a pass gets to it — the call succeeds, the record appears and
+      disappears, and no packet is ever dropped. `hzclient.BanAdd` already
+      refused a sub-second timeout (a truncated 0 means PERMANENT); the floor
+      that matters now is the poll interval, documented there because the
+      interval belongs to the gateway and not to the client.
+
+      **`startBanExpiry` reaps once at startup**, which is the half of
+      `reapplyBans` that was not redundant: a ticker's first tick is 30 seconds
+      late, and a ban that ran out while hz was down should not outlive it.
+
+      **NOT FIXED, and not implied to be:** a global ban is `filter INPUT` and
+      does not cover the layer-4 port forwards, which traverse `filter FORWARD`.
+      That is `plan/plan.md`'s open defect (item 26). Moving the installer does
+      not move the rule.
+
+      **Measured, not assumed — eight positive controls, each reversed.**
+      Putting the in-request `iptables -I` back reddens three tests; `banIP`
+      recording nothing, the expiry filter going away, and `StaleRules` growing
+      bans (the widened delete) each redden their own; pointing the delete at
+      FORWARD, turning it into an insert, and rendering the declared ban as
+      ACCEPT all redden too — the last across both packages.
+
+      ⚠ **One control under-fired and the gap was real.** Removing
+      `unbanIP`'s CALL while leaving the function defined left **the whole tree
+      green**: every guard here was about not WIDENING the delete, and nothing
+      asserted the delete still happens. A lifted ban would have kept dropping
+      packets for ever, because nothing else will ever remove an *unknown*
+      rule. Closed in `TestTheBanRequestPathOnlyEverDeletes`, which now also
+      requires the call — and, after a second control walked past it, pins the
+      command's arguments **in order** against an independently spelled
+      expectation, because swapping `INPUT` for `FORWARD` left every individual
+      flag legal.
+
+- [ ] **Decide who runs `unbanIP`'s `iptables -D` after the flip** (§3.2) — the
+      one privileged verb the ban hand-over could not take with it, for the
+      reason recorded above. Three shapes, none free: a claim narrowed to hz's
+      own recorded bans (widens the delete, and the narrowing is the part that
+      has to be got right); a one-shot privileged verb (§5.2's three properties
+      apply); or telling the agent what to remove, which makes the payload a
+      reaction to a report rather than a projection of hz's records — the thing
+      `agent.Directory`'s doc comment argues against. Not urgent: today it is
+      one exec in a handler a human triggers.
 - [ ] **Stop calling `rebuildWGChains`/`syncMFAJailACL` from all 18 sites**
       (§3.7) — the largest-volume handover, and the one with a visible latency
       cost on the MFA login path. Decide whether that path gets a nudge (§4.6).

@@ -17,11 +17,18 @@ import (
 // Peer-sync is a 30-second config-replication pull. It is NOT a second writer
 // with its own opinion of the desired state — it is a second TRIGGER for hz's
 // one writer, and on every file where it overlaps the agent the bytes agree by
-// construction (§4). What it is not is harmless after item 12: three of its
-// paths bypass syncServices and write /etc directly — applyWGPeersFromConfig,
-// pullCertFromPeer and reapplyBans — so on a box where hz web has dropped to an
-// unprivileged user those become a permission error logged at Error and retried
-// every 30 seconds, forever, on a spare that quietly stops converging.
+// construction (§4). What it is not is harmless after item 12: ~~three~~ TWO of
+// its paths bypass syncServices and write /etc directly —
+// applyWGPeersFromConfig and pullCertFromPeer — so on a box where hz web has
+// dropped to an unprivileged user those become a permission error logged at
+// Error and retried every 30 seconds, forever, on a spare that quietly stops
+// converging.
+//
+// The third was reapplyBans, and it is GONE (2026-09-25, privilege-audit.md
+// §7 B's ban hand-over): the ban merge writes the record and applies nothing,
+// so the pull loop no longer runs iptables at all. That narrows what this
+// guard is protecting by one path and changes none of its reasoning — the two
+// that remain are items 12.2 and 12.3.
 //
 // # WHAT "REFUSE" MEANS HERE, AND WHY THIS ONE
 //

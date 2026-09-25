@@ -111,16 +111,33 @@ func (c *Client) MaintPageClear(ctx context.Context) (*MaintPageResponse, error)
 	return &out, nil
 }
 
-// BanAdd blocks an address with an iptables DROP rule that hz also persists.
+// BanAdd RECORDS a ban. It does not wait for the packet to stop.
 //
-// A zero timeout is PERMANENT, which is hz's rule and not one this package can
-// change. Because of that, a duration under a second is refused rather than
-// truncated to zero: `500*time.Millisecond` silently becoming a permanent ban
-// is exactly the class of bug a typed client is for.
+// A SUCCESSFUL RETURN MEANS RECORDED, NOT INSTALLED (changed 2026-09-25; hz's
+// internal/server/handlers_ban.go carries the reasoning). hz used to run
+// `iptables -I INPUT 1 -s <ip> -j DROP` inside the request; it now writes the
+// ban to its configuration and a reconciler installs the rule on its next
+// pass — up to 60 seconds on hz's own tick, one hz-agent poll interval (5s by
+// default) on a gateway whose agent applies. A caller that must not serve the
+// address in the meantime has to refuse it itself.
+//
+// TWO CONSEQUENCES FOR THE TIMEOUT, and they pull in opposite directions:
+//
+//   - A zero timeout is PERMANENT, which is hz's rule and not one this package
+//     can change. Because of that, a duration under a second is refused rather
+//     than truncated to zero: `500*time.Millisecond` silently becoming a
+//     permanent ban is exactly the class of bug a typed client is for.
+//   - A ban SHORTER THAN THE RECONCILE INTERVAL may never be installed at all.
+//     It expires out of hz's declared set before a pass gets to it, so the
+//     call succeeds, the record appears and disappears, and no packet is ever
+//     dropped. Nothing here can detect that — the interval belongs to the
+//     gateway, not to the client — so it is documented rather than validated.
+//     A ban worth making is worth minutes.
 //
 // Banning is idempotent — hz answers an already-banned address with a success —
 // and it refuses to ban hz's own addresses, which arrives as a 500 naming
-// self-lockout.
+// self-lockout. A ban is `filter INPUT` only: it does not cover a layer-4 port
+// forward, which traverses `filter FORWARD`.
 func (c *Client) BanAdd(ctx context.Context, ip string, timeout time.Duration, reason string) error {
 	if ip == "" {
 		return errors.New("hzclient: no IP to ban")
@@ -141,6 +158,11 @@ func (c *Client) BanAdd(ctx context.Context, ip string, timeout time.Duration, r
 
 // BanRemove lifts a ban. hz ignores an address that is not banned, so this is
 // idempotent too.
+//
+// UNLIKE BanAdd, THIS ONE IS STILL SYNCHRONOUS: hz removes the live rule in
+// the request. It has to be — a lifted ban classifies "unknown" to hz's
+// reconciler, and unknown is the bucket it never deletes, so nothing else
+// would ever take the rule out.
 func (c *Client) BanRemove(ctx context.Context, ip string) error {
 	if ip == "" {
 		return errors.New("hzclient: no IP to unban")
