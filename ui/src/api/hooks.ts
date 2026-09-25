@@ -1507,8 +1507,13 @@ export const useFixMasquerade = () => useSystemFix("system/fix/masquerade");
 export const useFixWGForwardChain = () => useSystemFix("system/fix/wg-forward-chain");
 export const useFixWGRules = () => useSystemFix("system/fix/wg-rules");
 export const useFixLogRetention = () => useSystemFix("system/fix/log-retention");
-export const useCreateWGConfig = () => useSystemFix("wg/create-config");
-export const useFixHAProxyLogging = () => useSystemFix("haproxy/fix-logging");
+// There is no useCreateWGConfig and no useFixHAProxyLogging. Both endpoints
+// are gone: each did its work by piping an hz-built shell string through
+// systemd-run to escape hz's own sandbox, and both moved to a CLI verb on the
+// binary that owns the file (plan/design/privilege-audit.md §7 A) —
+// `sudo hz-agent wg-create-config`, `sudo homelab-horizon fix-haproxy-logging`.
+// The health card still DIAGNOSES both and names the command, which is the same
+// shape the unit rows and the dependency rows already have.
 export const useWriteDNSMasqConfig = () => useSystemFix("dnsmasq/write-config");
 export const useReloadDNSMasq = () => useSystemFix("dnsmasq/reload");
 export const useStartDNSMasq = () => useSystemFix("dnsmasq/start");

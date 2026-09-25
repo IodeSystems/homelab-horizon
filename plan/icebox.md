@@ -782,9 +782,13 @@ changed no code. Each names the section with the evidence.
   the OLD server public key**, which is the mechanism the audit citation for
   this (`privilege-audit.md §1.4`) never actually contained; rescued here
   2026-09-24 when `privilege-classification.md` was deleted (`privilege-audit.md` §1.4 already records the
-  consequence). In `SystemHealthTab.tsx` it is a plain button. Whether or not it
-  becomes a CLI verb, a control with that blast radius needs a modal naming the
-  consequence. §3.1 #5.
+  consequence). ~~In `SystemHealthTab.tsx` it is a plain button.~~ ✅ **CLOSED
+  2026-09-25, and not with a modal.** The endpoint is gone and the button with
+  it: the work is `sudo hz-agent wg-create-config`, which **refuses** when
+  `wg0.conf` exists rather than confirming — asked twice, by a `stat` that
+  carries the explanation and by `O_EXCL` on the write. A refusal an operator
+  has to answer by moving the file aside leaves a backup; a modal they can click
+  through does not. §3.1 #5, §7 A.
 
 - **The static supervisor warns "dev mode" on a correct production host.**
   `static_supervisor.go:135` logs `static file server running in-process (not

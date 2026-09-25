@@ -75,6 +75,7 @@ func newRoot() *cobra.Command {
 		newVersionCmd(),
 		newInstallCmd(&opts),
 		newInstallDepsCmd(&opts),
+		newFixHAProxyLoggingCmd(&opts),
 		newCheckCmd(&opts),
 		newConfigTemplateCmd(),
 		newIAMPolicyCmd(),
@@ -132,6 +133,36 @@ func newInstallDepsCmd(opts *serveOpts) *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runInstallDeps(opts.configPath, opts.dryRun)
+		},
+	}
+}
+
+// newFixHAProxyLoggingCmd is where POST /api/v1/haproxy/fix-logging went.
+//
+// A sibling verb of install-deps for the same reason install-deps is one: it
+// changes the box in a way that bounces a daemon, so it is asked for by name
+// rather than happening as a side effect of an install or a web request. hz
+// still DIAGNOSES this on the System Health card — the card now names this
+// command where it used to have a button (plan/design/privilege-audit.md §7 A,
+// "Move /haproxy/fix-logging to provisioning; keep the diagnosis card").
+func newFixHAProxyLoggingCmd(opts *serveOpts) *cobra.Command {
+	return &cobra.Command{
+		Use:   "fix-haproxy-logging",
+		Short: "Repair the two reasons HAProxy's logs are silently dropped",
+		Long: "A chrooted haproxy logs over a unix socket that is, from inside the chroot,\n" +
+			"disconnected. Two things break it and neither shows up in haproxy's status:\n" +
+			"rsyslogd's apparmor profile has no attach_disconnected flag, and\n" +
+			"/var/log/haproxy.log does not exist (rsyslog drops privileges before it could\n" +
+			"create one).\n\n" +
+			"This diagnoses both and repairs only what is actually wrong, then restarts\n" +
+			"rsyslog. A box that is already correct is a no-op.\n\n" +
+			"hz will not do this from an HTTP request. It bounces a logging daemon on a\n" +
+			"live gateway, and the handler that used to do it built a shell string and ran\n" +
+			"it through systemd-run to escape hz's own sandbox. Use --dry-run to see what\n" +
+			"would change.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return runFixHAProxyLogging(opts.dryRun)
 		},
 	}
 }

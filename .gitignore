@@ -20,6 +20,7 @@ ui/*.tsbuildinfo
 ui/.rendercheck
 ui/.rendercheck-model
 ui/.rendercheck-edge
+ui/.rendercheck-health
 ui/.rendercheck-hosts
 ui/.rendercheck-routes
 docs/node_modules

@@ -22,8 +22,6 @@ import {
 } from "@mui/material";
 import {
   useAptAudit,
-  useCreateWGConfig,
-  useFixHAProxyLogging,
   useFixIPForwarding,
   useFixMasquerade,
   useFixWGForwardChain,
@@ -54,6 +52,16 @@ import { SystemMetricsCard } from "./SystemMetricsCard";
 // a provisioning script, can run.
 const INSTALL_DEPS_HINT = "sudo homelab-horizon install-deps";
 
+// Two more remedies hz reports but will not perform, for the same reason and in
+// the same shape. Both endpoints existed until 2026-09-25 and both worked by
+// piping an hz-built shell string through `systemd-run … bash -c` to escape
+// hz's own sandbox — a web process that can do that is not de-rooted, whatever
+// uid it holds (plan/design/privilege-audit.md §5.2 rules 1 and 3).
+//
+// The diagnosis stays exactly where it was. What changed is who acts on it.
+const CREATE_WG_CONFIG_HINT = "sudo hz-agent wg-create-config";
+const FIX_HAPROXY_LOGGING_HINT = "sudo homelab-horizon fix-haproxy-logging";
+
 // CheckRow renders one line: label + status chip + either a fix button or,
 // where hz deliberately has no button, the exact command that fixes it.
 // Keep the shape uniform across all component cards so the dashboard reads
@@ -63,27 +71,45 @@ const INSTALL_DEPS_HINT = "sudo homelab-horizon install-deps";
 // first. A check whose fix hz will not perform on its own behalf still has to
 // say what to do — a row that only reports a red chip is a dead end, and "the
 // button used to be here" is not something an operator can know.
+//
+// `unknown` is the THIRD state, and it is not a shade of failing. hz could not
+// measure the fact: not "it is wrong", not "it is fine". Rendering it as either
+// is this repo's founding bug (an empty value indistinguishable from an absent
+// one), so it gets its own chip, its own colour and its own hint — because what
+// an operator does about "I could not read it" is not what they do about "it is
+// broken".
 function CheckRow({
   label,
   ok,
+  unknown,
   failingLabel,
   okLabel = "OK",
+  unknownLabel = "Unknown",
   fix,
   fixLabel = "Fix",
   fixDisabled,
   fixRunning,
   runToFix,
+  unknownHint,
 }: {
   label: string;
   ok: boolean;
+  unknown?: boolean;
   failingLabel?: string;
   okLabel?: string;
+  unknownLabel?: string;
   fix?: () => void;
   fixLabel?: string;
   fixDisabled?: boolean;
   fixRunning?: boolean;
   runToFix?: string;
+  unknownHint?: string;
 }) {
+  // Unknown wins over ok: a caller that computed `ok` from facts it could not
+  // read must not render a green chip because the unreadable half defaulted.
+  const state: "ok" | "unknown" | "failing" = unknown ? "unknown" : ok ? "ok" : "failing";
+  const hint = state === "unknown" ? (unknownHint ?? runToFix) : runToFix;
+  const hintLead = state === "unknown" ? "Check it on this host:" : "Run on this host:";
   return (
     <Stack
       sx={{ py: 0.75, borderBottom: 1, borderColor: "divider" }}
@@ -94,11 +120,13 @@ function CheckRow({
         </Typography>
         <Chip
           size="small"
-          label={ok ? okLabel : (failingLabel ?? "Missing")}
-          color={ok ? "success" : "error"}
-          variant={ok ? "outlined" : "filled"}
+          label={
+            state === "ok" ? okLabel : state === "unknown" ? unknownLabel : (failingLabel ?? "Missing")
+          }
+          color={state === "ok" ? "success" : state === "unknown" ? "warning" : "error"}
+          variant={state === "ok" ? "outlined" : "filled"}
         />
-        {!ok && fix && (
+        {state === "failing" && fix && (
           <Button
             size="small"
             variant="contained"
@@ -109,11 +137,11 @@ function CheckRow({
           </Button>
         )}
       </Stack>
-      {!ok && runToFix && (
+      {state !== "ok" && hint && (
         <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
-          Run on this host:{" "}
+          {hintLead}{" "}
           <Box component="code" sx={{ fontFamily: "monospace", userSelect: "all" }}>
-            {runToFix}
+            {hint}
           </Box>
         </Typography>
       )}
@@ -326,9 +354,8 @@ function SystemLevelCard({ health }: { health: SystemHealth }) {
 // Fixer buttons share a standard shape: install → create-config → start →
 // enable. Disable downstream fixers when their prereq isn't met so the UI
 // nudges the admin through the right order.
-function WireGuardCard({ health }: { health: SystemHealth }) {
+export function WireGuardCard({ health }: { health: SystemHealth }) {
   const wg = byName(health, "wireguard");
-  const createConfig = useCreateWGConfig();
   const fixMasq = useFixMasquerade();
   const fixChain = useFixWGForwardChain();
   const fixRules = useFixWGRules();
@@ -342,13 +369,21 @@ function WireGuardCard({ health }: { health: SystemHealth }) {
         ok={wg.installed}
         runToFix={INSTALL_DEPS_HINT}
       />
+      {/*
+        No button, and this one is the most deliberate absence on the page.
+        wg0.conf holds the gateway's server private key: writing a new one
+        mints a new server identity and silently invalidates every client
+        config ever handed out — every phone, every laptop, every site-to-site
+        peer — including the tunnel whoever clicked it is probably on. That is
+        not a thing to put one click from a dashboard, and hz was doing it by
+        piping a shell string through systemd-run besides. The verb refuses
+        outright if the file is already there, which a button could not.
+      */}
       <CheckRow
         label="wg0.conf exists"
         ok={wg.config_exists}
-        fix={() => createConfig.mutate()}
-        fixDisabled={!wg.installed}
-        fixRunning={createConfig.isPending}
-        fixLabel="Create config"
+        failingLabel="Missing"
+        runToFix={CREATE_WG_CONFIG_HINT}
       />
       <CheckRow
         label="Interface up"
@@ -401,13 +436,20 @@ function WireGuardCard({ health }: { health: SystemHealth }) {
   );
 }
 
-function HAProxyCard({ health }: { health: SystemHealth }) {
+export function HAProxyCard({ health }: { health: SystemHealth }) {
   const hap = byName(health, "haproxy");
-  const fixLogging = useFixHAProxyLogging();
 
   if (!hap) return null;
   const extras = hap.extras ?? {};
-  const loggingOK = Boolean(extras.logging_apparmor_ok) && Boolean(extras.logging_file_exists);
+  // Four states per fact, not two booleans (internal/system/haproxylogging.go):
+  // ok / broken / unknown / not_applicable. The pair this replaced reported
+  // `logging_apparmor_ok: true` whenever hz could not READ the profile, so an
+  // unreadable host and a correct one rendered identically — and unreadable is
+  // the state hz is in the moment it stops running as root.
+  const apparmor = String(extras.logging_apparmor ?? "unknown");
+  const logFile = String(extras.logging_file ?? "unknown");
+  const loggingUnknown = apparmor === "unknown" || logFile === "unknown";
+  const loggingOK = !loggingUnknown && apparmor !== "broken" && logFile !== "broken";
 
   return (
     <ComponentCard title="HAProxy" component={hap}>
@@ -422,12 +464,12 @@ function HAProxyCard({ health }: { health: SystemHealth }) {
       <CheckRow
         label="Logging (apparmor attach_disconnected + /var/log/haproxy.log)"
         ok={loggingOK}
-        okLabel="OK"
+        unknown={loggingUnknown}
+        okLabel={apparmor === "not_applicable" ? "OK (rsyslogd unconfined)" : "OK"}
         failingLabel="Broken"
-        fix={() => fixLogging.mutate()}
-        fixDisabled={!hap.installed}
-        fixRunning={fixLogging.isPending}
-        fixLabel="Fix logging"
+        unknownLabel="Cannot tell"
+        runToFix={FIX_HAPROXY_LOGGING_HINT}
+        unknownHint={FIX_HAPROXY_LOGGING_HINT + " --dry-run"}
       />
       {hap.errors && hap.errors.length > 0 && (
         <Alert severity="warning" sx={{ mt: 2 }}>
