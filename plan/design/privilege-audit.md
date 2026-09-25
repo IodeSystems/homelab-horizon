@@ -344,8 +344,8 @@ server ready but DEGRADED — hz is serving, subsystems are not
 > ```
 > WARN subsystem not started  subsystem=wireguard
 >      reason="WireGuard is not configured: /etc/wireguard/wg0.conf does not exist.
->              Create it from Settings → System (\"Create WireGuard config\"), or
->              POST /api/v1/wg/create-config. Nothing is generated automatically
+>              Create it on this host with: sudo hz-agent wg-create-config.
+>              Nothing is generated automatically
 >              because that would replace the server key every client trusts."
 > ```
 >
@@ -368,9 +368,12 @@ a real one gets ignored.
 
 **Correction to the diagnosis, and fixed either way.** wg0.conf is not written
 by sync either — nothing writes it automatically. It is created only by the
-explicit `POST /api/v1/wg/create-config` fixer. So "started before its config
-is written" is the wrong description for WireGuard; the file is simply never
-there until an admin asks for it.
+explicit create-config fixer. So "started before its config is written" is the
+wrong description for WireGuard; the file is simply never there until an admin
+asks for it. (**That fixer is no longer an endpoint.** Since 2026-09-25 it is
+`sudo hz-agent wg-create-config`, run by a human at the box, and it refuses
+outright if `wg0.conf` is already there — §7 A. The message quoted above was
+updated with it.)
 
 - **WireGuard: do not start, and say so.** Rendering it at boot was rejected:
   wg0.conf carries the server private key, so generating one unprompted would
@@ -546,7 +549,7 @@ the agent's own tree.
 | ~~`internal/server/handlers_ha.go`~~ | ~~`/etc/dnsmasq.d/wg-*.conf`, `/etc/haproxy/haproxy.cfg`, `/etc/homelab-horizon`~~ — **wrong, corrected 2026-09-21** |
 | `internal/server/peer_sync.go` | certs (`pullCertFromPeer`), `iptables -I INPUT` (ban sync), and `applyNewConfig` → hz's whole reconcile path, on a 30s timer |
 | ~~`internal/server/handlers_integration.go`~~ | ~~`/etc/prometheus`, `/etc/systemd/system`~~ — **wrong, corrected 2026-09-21** (`privilege-classification.md` §1.1). Same shape as the `handlers_ha.go` row: the paths are inside a bash script hz *serves* for a human to run on the Prometheus box. No write, no exec. |
-| `internal/server/handlers_api_system_fix.go` | `/etc/apparmor.d/…`, `/etc/systemd/journald.conf.d`, `/etc/systemd/system/homelab…`. **13 POSTs + 1 GET, unchanged**; `systemdRun` still has 5 callers, three of them shell strings. |
+| `internal/server/handlers_api_system_fix.go` | ~~`/etc/apparmor.d/…`~~, `/etc/systemd/journald.conf.d`. ~~**13 POSTs + 1 GET**; `systemdRun` still has 5 callers, three of them shell strings.~~ **Corrected + reduced 2026-09-25:** the caller count was 5 by grep and **4 by shape** (one site was an inline `systemd-run … bash -c`, not a call to the helper), and all four were in the haproxy fix-logging handler. That handler and `wg/create-config` are **deleted**; `systemdRun` is **deleted**; `/etc/apparmor.d` is no longer written by hz at all. 11 POSTs + 1 GET, none of which builds a shell string (`shell_guard_test.go`). |
 | `internal/server/handlers_ban.go` | shells ~~`ip` and~~ `iptables` directly — **the `ip` half was wrong** (`privilege-classification.md` §1.4); the three exec sites are all `iptables`. **Four triggers, one of them a deploy token, not an admin.** |
 | `internal/server/handlers_api_iptables.go`, `reconcile_iptables.go` | `exec`. Includes `POST /iptables/remove`, whose table, chain and args come **from the request body** — the class §5.2 rule 2 names. |
 | ~~`internal/system/interfaces.go`~~ | ~~interface manipulation, `exec` + writes~~ — **wrong, corrected 2026-09-21** (`privilege-classification.md` §1.2). Those are Go *interface types* (`FileSystem`, `CommandRunner`), the test seam, not a caller. |
@@ -927,12 +930,15 @@ Added 2026-09-22, because that is the question this re-measurement exists to
 answer. `plan/design/privilege-classification.md` §7 and `plan/design/ha-and-the-agent.md` §7
 were both walked item by item against the tree at `f6e06bd`.
 
-**Score (re-counted 2026-09-25): 8 of 32 done, 2 partial. The original read
-"6 of 34" and was stale in BOTH directions — the denominator was never 34 (§7 as
-rescued is A=10, B=12, C=5, D=5 = 32), and section A carried four `[x]` items
-dated 2026-09-22, the same day it was scored "0 of 10". Most are in section B
-(hand over). Section A is 4 of 10, not 0. Section C (the flip
-itself) is 0 of 5 — and steps 4 and 5 ARE C1 and C2.**
+**Score (re-counted 2026-09-25, after the `systemdRun` retirement): 11 of 32
+done, 1 partial — A 7/10, B 4/12, C 0/5, D 0/5. It read "8 of 32, 2 partial"
+earlier the same day, and before that "6 of 34", which was stale in BOTH
+directions — the denominator was never 34 (§7 as rescued is A=10, B=12, C=5,
+D=5 = 32), and section A carried four `[x]` items dated 2026-09-22, the same day
+it was scored "0 of 10". **Section A moved 4 → 7** when `/haproxy/fix-logging`
+and `/wg/create-config` moved to CLI verbs and `systemdRun` was deleted with
+them (the third tick is that line, which had been `[◐]`). Section C (the flip
+itself) is still 0 of 5 — and steps 4 and 5 ARE C1 and C2.**
 
 ⚠ **That score is stale and its denominator does not match the rescued
 checklist.** §7 as it now stands is A=10, B=12, C=5, D=5 = **32** lines, not 34
@@ -1098,7 +1104,8 @@ Concretely, still unhanded-over and still privileged in hz web:
    file serving after the flip** (§3.6 — and note §1.5 above: the supervisor
    forks on every root gateway, not only ones with static sites), **whether the
    MFA unjail path gets a nudge** (§3.7 — a 2.5s mean delay on a login flow),
-   and **which binary owns `wg create-config`** (no CLI verb exists yet).
+   and ~~**which binary owns `wg create-config`**~~ — **answered and shipped
+   2026-09-25: `hz-agent wg-create-config`** (§7.1 #5).
 7. **§4's estate questions answered.** All of them are still open, and the first
    one — is `peer_id` set on the office gateway — decides whether the fleet
    guard is a formality or the thing keeping the box alive.
@@ -1150,7 +1157,16 @@ becoming a general-purpose root helper. State them as a rule, because
 `systemdRun` (§3.1) shows how fast one appears:
 
 1. **Never a shell string.** `systemd-run … bash -c "<hz-built string>"`
-   appears three times today. A verb takes typed arguments or nothing.
+   ~~appears three times today~~ — **it appeared FOUR times, and is gone from the
+   web process as of 2026-09-25.** The count was three because it was taken by
+   grepping the helper's name; the fourth was written inline as
+   `exec.Command("systemd-run", …, "bash", "-c", …)` in the same handler. A
+   verb takes typed arguments or nothing, and
+   `internal/server/shell_guard_test.go` now checks the SHAPE rather than the
+   name, across `internal/server`, `cmd/homelab-horizon` and `cmd/hz-agent`.
+   (`internal/wireguard/apply.go` and `internal/dnsmasq/unit.go` still build
+   them and are still reached from handlers — open §3.1 hand-over items, and
+   named as out of scope in that test.)
 2. **Never a subcommand from a request.** `POST /iptables/remove` (§3.3) takes
    its table, chain and arguments from the body. A privileged executor whose
    *verb* is caller-controlled cannot be narrowed by validation.
@@ -1273,8 +1289,26 @@ status of each as of 2026-09-25. One at a time — several make the next moot.
    *installing a binary is not arming it* and nothing else in the tree would
    have caught hz's install enabling the agent.
 
-   Unblocks deleting `systemdRun` once this and `haproxy/fix-logging` both
-   move — delete it in the commit that lands the second, not before.
+   ✅ **Shipped 2026-09-25 as `hz-agent wg-create-config`.** A flat verb rather
+   than a nested `wg create-config`: hz-agent's dispatcher is a flat switch and a
+   second dispatch level for one verb is more machinery than the verb is worth.
+   The decision was which BINARY owns it, and that is what shipped.
+
+   **Adding it does not arm the agent.** It writes when a human runs it and never
+   otherwise — nothing in `run`, `diff` or the unit reaches it, and
+   `cmd/hz-agent/install_test.go` is untouched: no `[Install]`, no `--apply`,
+   nothing enabled, nothing started.
+
+   It mints with `wgkey.Generate` (in-process, crypto/ecdh — what `internal/agent`
+   already uses for this box's segment keys) rather than
+   `wireguard.GenerateKeyPair`, which shells to `wg genkey`: this is a bootstrap
+   verb, and a gateway that has not installed wireguard-tools yet is exactly the
+   box that needs it.
+
+   **The sequencing note that was here — "delete `systemdRun` once this and
+   `haproxy/fix-logging` both move, not before" — rested on a miscount.**
+   `systemdRun`'s call sites were all three inside fix-logging; this endpoint
+   never called it. See the corrected §7 A line.
 
 **None of these blocks the first hand-over item** (`WriteMaintenancePageFiles`
 → `HAProxySection.Files`), which is why that one is marked *do it first*.
@@ -1294,21 +1328,96 @@ status of each as of 2026-09-25. One at a time — several make the next moot.
       its three side effects — done 2026-09-22. `requiredDirs` → `install`,
       `stopSystemDnsmasq` → `InstallMissing` (the `install-deps` path),
       `enableIPForwarding` → deleted outright as the third redundant copy.
-- [◐] **Delete `POST /system/install/package`** — ✅ done 2026-09-22 — **and the
-      `systemdRun` helper's last shell-string callers** (§3.1 #8, #12). Confirm
-      `systemdRun` has no callers left and delete it; §5.2 rule 1.
-      **STILL OPEN:** `systemdRun` survives because #5 (`wg/create-config`) and
-      #12 (`haproxy/fix-logging`) are the two remaining callers, and both are
-      *move* items below rather than deletes — #5 needs §8's "which binary owns
-      the CLI verb", #12 needs a provisioning home. Delete `systemdRun` in the
-      commit that lands the second of those, not before.
+- [x] ✅ **Delete `POST /system/install/package`** — done 2026-09-22 — **and the
+      `systemdRun` helper** (§3.1 #8, #12) — done 2026-09-25; §5.2 rule 1.
+
+      **THE LINE THAT WAS HERE WAS WRONG, and it is worth saying how.** It read:
+      *"`systemdRun` survives because #5 (`wg/create-config`) and #12
+      (`haproxy/fix-logging`) are the two remaining callers … delete it in the
+      commit that lands the second of those."* Measured 2026-09-25 before any
+      code moved: `systemdRun` had exactly **three** call sites and **all three
+      were in the fix-logging handler** (`handlers_api_system_fix.go:440,450,456`).
+      `handleAPIWGCreateConfig` never called it. So moving fix-logging ALONE
+      retired the helper, and the second-of-two sequencing this line prescribed
+      was sequencing against a dependency that did not exist.
+
+      **And there was a FOURTH site the helper's name does not find**: `:434`
+      built `exec.Command("systemd-run", …, "bash", "-c", fmt.Sprintf("cat > %s",
+      profilePath))` inline, in the same handler. Same rule-1 violation, different
+      spelling; a grep for `systemdRun` counts three and misses it. Both are gone.
+
+      Pinned by `internal/server/shell_guard_test.go`, which parses
+      `internal/server`, `cmd/homelab-horizon` and `cmd/hz-agent` and fails on a
+      shell name paired with `-c`, or on any literal naming a transient runner —
+      by SHAPE, so the inline fourth site is caught as readily as the helper.
+      Its own positive controls are in the same file, and one of them earned its
+      place: the first version of the checker looked only at `exec.Command` call
+      sites and caught **nothing** when `f.run("bash", "-c", …)` was planted in
+      the new CLI fixer, because that runs commands through a seam and the shell
+      string reaches exec one hop later. It checks every call now.
+      **It deliberately does NOT cover `internal/wireguard/apply.go` or
+      `internal/dnsmasq/unit.go`**, which still build shell strings and still run
+      them through systemd-run, and which hz's handlers still reach — those are
+      open hand-over items below, and a guard including them would have to be
+      born red. The scope is in the test's own doc comment, so widening it is the
+      commit that moves them.
 - [x] ✅ **Delete `/system/install/horizon-unit` and `/system/enable/horizon`**
       (§3.1 #6, #7) — done 2026-09-22. A web process that can rewrite its own
       unit is not de-rooted.
-- [ ] **Move `/wg/create-config` to a CLI verb** that refuses when `wg0.conf`
-      exists (§3.1 #5). Decide which binary owns it (§8).
-- [ ] **Move `/haproxy/fix-logging` to provisioning** (§3.1 #12); keep the
-      diagnosis card.
+- [x] ✅ **Move `/wg/create-config` to a CLI verb** that refuses when `wg0.conf`
+      exists (§3.1 #5) — done 2026-09-25. The binary is **`hz-agent`** (§7.1 #5,
+      the operator's "hz-agent owns it all"); the verb is
+      **`sudo hz-agent wg-create-config`** (`cmd/hz-agent/wgconfig.go`).
+
+      The refusal is hard, with **no `--force`**: moving the file aside is a
+      deliberate act that leaves a backup and a flag is not. It is asked twice —
+      a `stat` that carries the MESSAGE (what the consequence is, and `mv` as the
+      way to mean it) and `O_EXCL` on the write, which is the only thing that can
+      close the window between them. Both halves are independently pinned, and
+      the O_EXCL half had to be tested against `writeNewFile` DIRECTLY: through
+      `create()` the stat refuses first, so a control that swapped `O_EXCL` for
+      `O_TRUNC` reddened nothing — an invariant pinned exactly where something
+      else already enforced it.
+
+      Fixed on the way through: the handler derived the gateway's own VPN address
+      by string surgery (split on `/`, trim a trailing `.0`, append `.1`, emit
+      `/24` whatever the range said). `wireguard.ServerAddress` parses instead —
+      identical for the default `10.0.2.0/24`, correct for a `/16` and for a
+      range written from a host address.
+
+      Route deleted. `startup_plan.go`'s "how to create it" message names the
+      verb, and its test now pins the verb rather than the substring
+      `create-config`, which both spellings satisfied.
+- [x] ✅ **Move `/haproxy/fix-logging` to provisioning** (§3.1 #12); keep the
+      diagnosis card — done 2026-09-25.
+      **`sudo homelab-horizon fix-haproxy-logging`** (`cmd/homelab-horizon/fixlogging.go`),
+      a sibling verb of `install-deps` and for its exact argument: it bounces
+      rsyslog on a live gateway, so it is asked for BY NAME rather than happening
+      inside an install at a moment nobody chose. It diagnoses first and repairs
+      only what it measured wrong, so an already-correct box is a no-op with no
+      restart. No shell and no systemd-run: a root CLI has no sandbox to escape,
+      so the profile is an `os.WriteFile` and the two real commands
+      (`apparmor_parser -r`, `systemctl restart rsyslog`) take typed argument
+      slices of constants.
+
+      **The diagnosis stayed and got BETTER.** `internal/system/haproxylogging.go`
+      is read-only, needs no privilege, and reports **four** states per fact —
+      ok / broken / **unknown** / not_applicable. The `checkHAProxyApparmor` it
+      replaced returned `true` (healthy) for ANY read error, so a profile hz
+      could not read was indistinguishable from a correct one — §2's founding bug,
+      and the state hz is actually in the moment item 12 de-roots it. The card
+      renders an amber "Cannot tell" and names the verb's `--dry-run`; a
+      not-applicable host gets a green chip saying WHY ("rsyslogd unconfined")
+      rather than claiming a check it never ran.
+
+      Pinned at all three levels, because a control found the middle one empty:
+      `internal/system/haproxylogging_test.go`;
+      `internal/server/haproxy_logging_wire_test.go` — added *because* turning
+      unknown back into ok reddened `internal/system` and `cmd/homelab-horizon`
+      and left every test in `internal/server` green, so the shape the CARD reads
+      was pinned by nothing; and `ui/src/components/SystemHealthTab.selftest.tsx`
+      (`pnpm test:health`, the EdgeDiagnosis render-selftest pattern), which is
+      the first thing in this repo to assert anything about System Health's markup.
 - [ ] **Decide axes 4 and 5** of `reconcileIPTables` (§3.4) — delete, or one-shot
       verb. Needs §8's "has every box passed that version" answer.
 - [ ] **Delete the static supervisor, the static child and `sitedeploy`'s
@@ -1463,10 +1572,12 @@ several of these make the next moot.
    between passing MFA and the network working is the most user-visible cost of
    item 12. `architecture.md` item 11 rejected long-poll for service changes on
    good grounds; this is a different case.
-5. **Which binary owns `wg create-config`** (§3.1 #5) — `homelab-horizon` or
+5. ✅ **Which binary owns `wg create-config`** (§3.1 #5) — `homelab-horizon` or
    `hz-agent`? It writes a file the agent will own, which argues for `hz-agent`;
    it is needed at bootstrap before the agent is enrolled, which argues the
-   other way.
+   other way. **ANSWERED 2026-09-25: `hz-agent`.** The bootstrap objection is
+   dissolved — every `homelab-horizon install` now places the agent binary — and
+   the verb shipped as `hz-agent wg-create-config`. See §7.1 #5.
 
 **Facts about the estate:**
 
