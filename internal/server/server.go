@@ -234,6 +234,14 @@ type Server struct {
 	// machine running them. Empty means the default (static_unit.go).
 	unitDir string
 
+	// sysctlDir and ipForwardPath are the two paths hz's forwarding
+	// declaration names (ipforward.go). Fields for the same reason unitDir is
+	// one: a test that applies hz's payload with the real agent would
+	// otherwise rewrite /etc/sysctl.d and set the kernel's forwarding flag on
+	// the machine running the suite. Empty means the real ones.
+	sysctlDir     string
+	ipForwardPath string
+
 	adminToken    string
 	csrfSecret    string
 	dryRun        bool
