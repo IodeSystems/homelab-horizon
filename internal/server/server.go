@@ -224,7 +224,16 @@ type Server struct {
 	reconcileMu         sync.Mutex
 	lastRecordReconcile time.Time
 
-	configPath    string
+	configPath string
+
+	// unitDir is where the agent payload says a systemd unit hz DECLARES
+	// belongs. hz never writes into it — the agent does, once it is armed.
+	//
+	// A field rather than a constant because the tests that apply hz's payload
+	// with the real agent would otherwise write /etc/systemd/system on the
+	// machine running them. Empty means the default (static_unit.go).
+	unitDir string
+
 	adminToken    string
 	csrfSecret    string
 	dryRun        bool

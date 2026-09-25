@@ -386,7 +386,7 @@ func TestARemotePlanSaysWhatItCouldNotCompute(t *testing.T) {
 	}
 	for _, section := range []string{
 		agentSectionHAProxy, agentSectionDNSMasq, agentSectionWireGuard,
-		agentSectionIPTables, agentSectionCerts,
+		agentSectionIPTables, agentSectionCerts, agentSectionFiles,
 	} {
 		if !remote.Model.Unresolvable(section) {
 			t.Fatalf("section %q is absent from a remote payload with nothing saying why", section)
@@ -403,7 +403,7 @@ func TestARemotePlanSaysWhatItCouldNotCompute(t *testing.T) {
 	// did, the assertion above would pass for a build that marked every
 	// section unresolvable on every machine, which says nothing at all.
 	localModel := s.buildAgentDesired().Model
-	for _, section := range []string{agentSectionWireGuard, agentSectionCerts} {
+	for _, section := range []string{agentSectionWireGuard, agentSectionCerts, agentSectionFiles} {
 		if localModel.Unresolvable(section) {
 			t.Fatalf("the local box also reports %q unresolvable; the gaps are unconditional and mean nothing", section)
 		}
