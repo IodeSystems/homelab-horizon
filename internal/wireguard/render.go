@@ -167,6 +167,88 @@ func extractValue(line string) string {
 	return ""
 }
 
+// IP FORWARDING: ONE DECLARATION, TWO CONSUMERS.
+//
+// hz's own writer (EnableIPForwarding, apply.go) and the payload hz serves the
+// agent (internal/server/ipforward.go) have to put the same bytes in the same
+// two places, because BOTH run on the gateway until item 12 step 5
+// (plan/design/privilege-audit.md §7 B). So the names and the contents are
+// stated once, here, in the pure half — the same discipline
+// config.MaintenancePagePattern and haproxy.Error503Path follow, and for the
+// same reason: two spellings of one fact are two things free to disagree.
+//
+// TWO PLACES, BECAUSE FORWARDING HAS TWO LIFETIMES, and until this landed the
+// tree only ever wrote one of them (plan/icebox.md, "IP forwarding is never
+// persisted"):
+//
+//	/proc/sys/net/ipv4/ip_forward   the live kernel flag. Gone at reboot.
+//	/etc/sysctl.d/<drop-in>         what sets it again at the next boot.
+//
+// Writing only the first IS the reboot bug: a gateway whose distro default is
+// 0 stops routing when it restarts, and nothing says so until a human presses
+// the fixer button again.
+const (
+	// IPForwardRuntimePath is the live flag.
+	//
+	// NOT AN ORDINARY FILE. What that costs the agent — and why it is still
+	// modelled as an agent.File — is set out in internal/server/ipforward.go.
+	IPForwardRuntimePath = "/proc/sys/net/ipv4/ip_forward"
+
+	// IPForwardOn is the value, WITH ITS TRAILING NEWLINE, and the newline is
+	// load-bearing rather than cosmetic.
+	//
+	// procfs prints the flag back as "1\n". A desired value of "1" — which is
+	// what this package wrote until the hand-over — therefore never equals
+	// what a reconciler reads, so the agent would rewrite the kernel flag on
+	// every single pass and `hz-agent diff` would report drift forever on a
+	// machine that is already correct. Both writers take the value from here
+	// so neither can drop it.
+	IPForwardOn = "1\n"
+
+	// SysctlDropInDir is where the persistent half goes. A drop-in rather
+	// than an append to /etc/sysctl.conf, which is what the HA join script
+	// does (handlers_ha.go): an append is not idempotent, cannot be undone
+	// without editing a file hz does not own, and gives the agent nothing it
+	// can claim.
+	SysctlDropInDir = "/etc/sysctl.d"
+
+	// IPForwardDropInName is hz's file in it.
+	//
+	// 70- puts it after the distribution's own drop-ins (10-, 30-, 50-) and
+	// before 99-sysctl.conf, which on Debian is a symlink to /etc/sysctl.conf.
+	// SO IT DOES NOT BEAT AN ADMIN WHO HAS WRITTEN net.ipv4.ip_forward=0 IN
+	// /etc/sysctl.conf, deliberately: that is somebody turning forwarding off
+	// on purpose, and hz silently overriding it would be worse than hz not
+	// routing.
+	IPForwardDropInName = "70-hz-ip-forward.conf"
+
+	// IPForwardDropInMatch is the glob for "hz's own forwarding drop-in,
+	// whatever number it was written with" — the agent's directory claim
+	// (agent.Directory.Match) and the sweep in EnableIPForwardingAt, from one
+	// constant.
+	//
+	// NARROW ON PURPOSE. /etc/sysctl.d on a real box holds the
+	// distribution's files, and a "*.conf" claim would have the agent delete
+	// every one of them the first time it ran. That is the errors-directory
+	// lesson (privilege-audit.md §7 B) spelled here rather than re-learned.
+	IPForwardDropInMatch = "*-hz-ip-forward.conf"
+)
+
+// RenderIPForwardDropIn is the persistent half's contents.
+//
+// It names the live flag as well, because an admin who finds this file is
+// entitled to know that hz sets forwarding in two places and that editing only
+// this one leaves the running kernel where it was until a reboot.
+func RenderIPForwardDropIn() string {
+	return "# Managed by homelab-horizon. Edits are overwritten.\n" +
+		"#\n" +
+		"# This gateway routes between the WireGuard tunnel and the LAN, which\n" +
+		"# the kernel will not do with forwarding off. hz also sets the live\n" +
+		"# flag at " + IPForwardRuntimePath + "; this file is what sets it\n" +
+		"# again after a reboot.\n" +
+		"net.ipv4.ip_forward=1\n"
+}
+
 // RenderPeerBlock is the [Peer] stanza appended for a new peer. The leading
 // newline separates it from whatever the file already ended with.
 //

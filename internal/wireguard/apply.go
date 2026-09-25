@@ -1,9 +1,11 @@
 package wireguard
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/iodesystems/homelab-horizon/internal/iptables"
@@ -169,8 +171,84 @@ func (w *WGConfig) CheckSystem(vpnRange string) SystemStatus {
 	return status
 }
 
+// EnableIPForwarding turns IPv4 forwarding on NOW and makes it survive a
+// reboot, and the second half of that sentence is what was missing
+// (plan/icebox.md, "IP forwarding is never persisted"): this function wrote
+// only the live kernel flag, so a gateway whose distro default is 0 lost
+// forwarding at every restart and got it back when a human pressed the fixer
+// button again.
+//
+// It is hz's writer, and it stays until hz stops writing files at all (item 12
+// step 5). The agent declares the same two files from the same constants —
+// internal/server/ipforward.go — and ipforward_test.go runs both over
+// identically seeded directories and compares them byte for byte.
 func EnableIPForwarding() error {
-	return os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
+	return EnableIPForwardingAt(SysctlDropInDir, IPForwardRuntimePath)
+}
+
+// EnableIPForwardingAt is the same verb with its two paths as ARGUMENTS.
+//
+// Parameterised for the reason haproxy.New takes its config path: a test that
+// runs hz's REAL writer must be able to run it without rewriting the machine's
+// /etc/sysctl.d or poking the kernel of whatever box the suite is on. There is
+// no second implementation — EnableIPForwarding is this function with the
+// constants filled in.
+//
+// BOTH WRITES ARE ATTEMPTED AND BOTH FAILURES ARE REPORTED. They fail
+// independently and mean different things: the live flag failing means the box
+// is not routing now, the drop-in failing means it will stop routing at the
+// next reboot. Stopping at the first would hide whichever came second, which
+// is the exact silence the icebox entry is about.
+//
+// THE SWEEP IS THE SAME CLAIM THE AGENT MAKES, on hz's side of the seam and
+// from the same glob: hz's own forwarding drop-in under any other number is
+// removed, so a rename cannot leave two files setting one key and the two
+// writers cannot leave different directories. It takes nothing else —
+// IPForwardDropInMatch is hz's namespace and the distribution's files are not
+// in it — and it removes plain files only.
+func EnableIPForwardingAt(dropInDir, runtimePath string) error {
+	var errs []error
+
+	if dropInDir != "" {
+		if err := os.MkdirAll(dropInDir, 0755); err != nil {
+			errs = append(errs, fmt.Errorf("making IP forwarding survive a reboot: %w", err))
+		} else if err := os.WriteFile(
+			filepath.Join(dropInDir, IPForwardDropInName),
+			[]byte(RenderIPForwardDropIn()), 0644,
+		); err != nil {
+			errs = append(errs, fmt.Errorf("making IP forwarding survive a reboot: %w", err))
+		} else {
+			errs = append(errs, sweepIPForwardDropIns(dropInDir)...)
+		}
+	}
+
+	if err := os.WriteFile(runtimePath, []byte(IPForwardOn), 0644); err != nil {
+		errs = append(errs, fmt.Errorf("turning IP forwarding on now: %w", err))
+	}
+	return errors.Join(errs...)
+}
+
+// sweepIPForwardDropIns removes hz's forwarding drop-in written under any name
+// but the current one. Plain files only, and only names IPForwardDropInMatch
+// covers.
+func sweepIPForwardDropIns(dropInDir string) []error {
+	entries, err := os.ReadDir(dropInDir)
+	if err != nil {
+		return []error{fmt.Errorf("checking %s for stale forwarding drop-ins: %w", dropInDir, err)}
+	}
+	var errs []error
+	for _, e := range entries {
+		if !e.Type().IsRegular() || e.Name() == IPForwardDropInName {
+			continue
+		}
+		if ok, err := filepath.Match(IPForwardDropInMatch, e.Name()); err != nil || !ok {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dropInDir, e.Name())); err != nil {
+			errs = append(errs, fmt.Errorf("removing the stale forwarding drop-in %s: %w", e.Name(), err))
+		}
+	}
+	return errs
 }
 
 func AddMasqueradeRule(vpnRange string) error {
