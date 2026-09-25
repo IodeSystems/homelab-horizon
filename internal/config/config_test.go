@@ -629,11 +629,35 @@ func TestServiceFileCreatesItsStateDirectory(t *testing.T) {
 	if !strings.Contains(unit, "ProtectSystem=strict") {
 		t.Error("unit lost ProtectSystem=strict")
 	}
-	// systemd's default is 0755. db.Open creates this directory 0750 itself, so
-	// an unqualified StateDirectory would have WIDENED it on every install —
-	// a regression introduced by the fix, not by the bug.
-	if !strings.Contains(unit, "StateDirectoryMode=0750") {
-		t.Error("StateDirectory without an explicit 0750 mode widens the identity store directory to 0755")
+	// The mode is asserted as the PROPERTY it defends, not as a literal, because
+	// the literal changed once already and a test that only pins a string tells
+	// the next reader nothing about which digit mattered.
+	//
+	// o-r: systemd's 0755 default would make the identity store's directory
+	// world-listable on every install; db.Open creates it 0750 itself, so an
+	// unqualified StateDirectory would have WIDENED it.
+	// o+x: without it the static file server's unprivileged identity cannot
+	// traverse to its roots under StaticWebDir, and every static site answers
+	// 500. That shipped, on 2026-09-19, and ran for six days.
+	mode := ""
+	for _, line := range strings.Split(unit, "\n") {
+		if strings.HasPrefix(line, "StateDirectoryMode=") {
+			mode = strings.TrimPrefix(line, "StateDirectoryMode=")
+		}
+	}
+	if mode == "" {
+		t.Fatal("unit declares no StateDirectoryMode: systemd's 0755 default makes the identity store's directory world-listable")
+	}
+	if len(mode) != 4 {
+		t.Fatalf("StateDirectoryMode=%s is not a four-digit octal mode", mode)
+	}
+	switch other := mode[3]; {
+	case other == '0':
+		t.Errorf("StateDirectoryMode=%s denies o+x: the static server's identity cannot traverse to its roots, and every static site answers 500", mode)
+	case other&4 != 0:
+		t.Errorf("StateDirectoryMode=%s grants o+r: the identity store's directory becomes world-listable", mode)
+	case other&1 == 0:
+		t.Errorf("StateDirectoryMode=%s denies o+x", mode)
 	}
 	// The ExecStartPre mkdir that used to paper over this is gone from the state
 	// directory specifically. It still creates other paths, so check the line
