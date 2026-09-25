@@ -720,14 +720,23 @@ the recovery-recipient work that found it.
 From `plan/design/privilege-classification.md`. None fixed there — that investigation
 changed no code. Each names the section with the evidence.
 
-- **IP forwarding is never persisted.** Three places write
-  `/proc/sys/net/ipv4/ip_forward` (`autoheal.go:264`, `wireguard/apply.go:173`,
-  `main.go:479`) and nothing in the hz process writes `/etc/sysctl.d` or
-  `/etc/sysctl.conf`. The only code in-tree that makes it permanent is the join
-  script for a *new peer* (`handlers_ha.go:560`). So on a gateway whose distro
-  default is 0, forwarding is lost on reboot and restored only when a human
-  presses the fixer button again — and nothing says so. Free to fix as part of
-  §3.1 #1 (emit the sysctl.d file alongside the `/proc` write).
+- ~~**IP forwarding is never persisted.**~~ ✅ **FIXED** 2026-09-25, with the
+  §3.1 #1 hand-over (`privilege-audit.md` §7 B) — the two are one change,
+  because what was missing is a persistent FILE and a file is what the agent
+  owns. `wireguard.EnableIPForwarding` now writes
+  `/etc/sysctl.d/70-hz-ip-forward.conf` as well as the live flag, both halves
+  are attempted and both failures reported, and hz declares the same two files
+  to the agent from one set of constants (`internal/server/ipforward.go`).
+
+  **The entry's own evidence was stale, and only half of it in the way it
+  claimed.** It named three writers; there are TWO. `autoheal.go:264` is gone —
+  `autoheal.Run` was deleted in `e08f3dd` and nothing in `internal/autoheal`
+  has mentioned forwarding since. `main.go:479` is real but at `:399` now
+  (`checker.checkNetwork`, `homelab-horizon check --fix`). `apply.go:173` is
+  real and is the one the fixer button reaches. The join script is still at
+  `handlers_ha.go:582-583` and still appends to `/etc/sysctl.conf` — a
+  bootstrap a human runs on a NEW box, not hz's writer, so it is out of this
+  change and stays as it is.
 
 - ~~**`buildAgentDesired` has no no-default-route stand-down.**~~ ✅ **FIXED**
   in `iptablesSectionFor` (`internal/server/handlers_agent.go`): hz now sends

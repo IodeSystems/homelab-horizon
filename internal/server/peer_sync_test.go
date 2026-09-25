@@ -162,7 +162,13 @@ func newTestServer(t *testing.T, cfg *config.Config) *Server {
 		// Every test Server declares its units under its own t.TempDir(). A
 		// test that applied hz's payload with the real agent would otherwise
 		// write /etc/systemd/system on the machine running the suite.
-		unitDir:       filepath.Join(tmp, "systemd"),
+		unitDir: filepath.Join(tmp, "systemd"),
+		// Same rule, and here it is not only tidiness: without these, a test
+		// that applies hz's payload with the real agent writes the machine's
+		// /etc/sysctl.d and SETS THE KERNEL'S FORWARDING FLAG on whatever box
+		// is running the suite. See ipforward.go.
+		sysctlDir:     filepath.Join(tmp, "sysctl.d"),
+		ipForwardPath: filepath.Join(tmp, "proc-ip_forward"),
 		adminToken:    "test-admin",
 		csrfSecret:    "test-csrf",
 		monitor:       monitor.New(cfg),

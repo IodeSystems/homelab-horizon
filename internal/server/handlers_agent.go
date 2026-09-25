@@ -427,7 +427,13 @@ func (s *Server) desiredFor(machine string) *agent.Desired {
 	if err != nil {
 		exe = staticBinaryFallback
 	}
-	d.Files = staticFilesSection(cfg, exe, s.staticPaths())
+	// IP forwarding rides the same generic section (ipforward.go): the drop-in
+	// that survives a reboot, the live kernel flag, and a claim on
+	// /etc/sysctl.d narrowed to hz's own name. Composed here rather than
+	// inside staticFilesSection because they share one Files field and neither
+	// is the other's business — a second producer that RETURNED a section
+	// would drop the first one's unit.
+	d.Files = withIPForwarding(staticFilesSection(cfg, exe, s.staticPaths()), cfg, s.sysctlPaths())
 
 	_, expected, stale, blessed, currentIface, _ := s.buildClassifierInputs()
 	d.IPTables = iptablesSectionFor(expected, stale, blessed, currentIface, cfg.LastLocalIface)
