@@ -1167,20 +1167,39 @@ status of each as of 2026-09-25. One at a time — several make the next moot.
 2. ✅ **Does the agent report observed state back to hz?** **ANSWERED — yes**,
    and it shipped: `internal/agent/observed.go`,
    `internal/server/handlers_agent_observed.go`, rendered at `/drift`.
-3. ◻ **Static file serving after the flip** (§3.6): accept in-process, a
-   separate agent-managed unit, or let haproxy serve the roots? The
-   privilege-separation the supervisor provides today goes away either way;
-   the question is whether anything replaces it. **Blocks** "delete the static
+3. ✅ **Static file serving after the flip** (§3.6) — **ANSWERED 2026-09-25:
+   a separate agent-managed unit.** Follows from "hz-agent owns it all": hz
+   stops forking a privileged child, the agent declares and manages the unit,
+   and the privilege separation the supervisor provides today is preserved by
+   the unit boundary rather than by a fork. Unblocks "delete the static
    supervisor, the static child and `sitedeploy`'s chown" in A.
-4. ◻ **Does the MFA unjail path get a nudge?** (§3.7, §4.6) A poll-interval
+4. ◻ **Does the MFA unjail path get a nudge?** — **still open; "owns it all"
+   does not answer this one.** It is a latency question, not an ownership one:
+   whoever owns the path, the operator still chooses between a poll-interval
+   delay and a nudge. (§3.7, §4.6) A poll-interval
    delay between passing MFA and the network working is the most user-visible
    cost of the flip. `architecture.md` item 11 rejected long-poll for service
    changes on good grounds; this is a different case.
-5. ◻ **Which binary owns `wg create-config`** (§3.1 #5) — `homelab-horizon` or
-   `hz-agent`? It writes a file the agent will own, which argues for
-   `hz-agent`; it is needed at bootstrap before the agent is enrolled, which
-   argues the other way. **Blocks** deleting `systemdRun`, which survives only
-   for this caller and `haproxy/fix-logging`.
+5. ✅ **Which binary owns `wg create-config`** (§3.1 #5) — **ANSWERED
+   2026-09-25: `hz-agent`.** The operator's rule is "hz-agent owns it all", and
+   the file is one the agent will own anyway.
+
+   **The bootstrap objection is dissolved by a rule, not a flag.** The
+   operator, 2026-09-25: *"Any homelab horizon install also installs the
+   agent."* Not opt-in, not `--agent` — every install. So the agent binary is
+   on every box hz is on, before enrolment, and the verb lands on a binary
+   that is always present.
+
+   ⚠ **It does not do that today.** Measured 2026-09-25: `hz-agent` appears
+   nowhere in `cmd/homelab-horizon/` or the install path (positive-controlled
+   — the same grep finds it in `internal/haproxy` and `internal/dnsmasq`). The
+   binary IS already embedded under the `hzembed` tag
+   (`internal/server/hzbin`, served at `/admin/hz-agent/bin/<os>-<arch>`), so
+   install writing it out is cheap rather than new. **That is a prerequisite
+   for this decision, and it is its own work item.**
+
+   Unblocks deleting `systemdRun` once this and `haproxy/fix-logging` both
+   move — delete it in the commit that lands the second, not before.
 
 **None of these blocks the first hand-over item** (`WriteMaintenancePageFiles`
 → `HAProxySection.Files`), which is why that one is marked *do it first*.
