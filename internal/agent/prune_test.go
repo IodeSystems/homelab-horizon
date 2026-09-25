@@ -248,6 +248,55 @@ func TestPrunableRefusesEveryPathOutsideTheClaim(t *testing.T) {
 	}
 }
 
+// A CLAIM ON KERNEL STATE IS REFUSED WHATEVER IT SAYS.
+//
+// /proc and /sys hold things with a file's shape and none of a file's
+// semantics: they cannot be created, they cannot be removed, and "unlink it"
+// has no correct answer. That stopped being theoretical when hz began
+// declaring /proc/sys/net/ipv4/ip_forward as a File
+// (internal/server/ipforward.go) — the payload now names a path under /proc,
+// so the directory above it is one claim away from being somewhere this
+// function says yes about.
+//
+// The claim is refused at cleanDir, so the pattern cannot matter: the cases
+// below spell the claim as widely as a payload could and every one is a no.
+func TestAClaimOnKernelStateIsRefused(t *testing.T) {
+	for _, dir := range []Directory{
+		{Path: "/proc/sys/net/ipv4", Match: []string{"*"}},
+		{Path: "/proc/sys/net/ipv4/", Match: []string{"ip_forward"}},
+		{Path: "/proc", Match: []string{"*"}},
+		{Path: "/sys/class/net", Match: []string{"*"}},
+		{Path: "/etc/../proc/sys/net/ipv4", Match: []string{"*"}}, // cleans into /proc
+	} {
+		d := &Desired{Machine: "gw", Files: &FilesSection{Dirs: []Directory{dir}}}
+		if sub, ok := d.prunable(dir.Path + "/ip_forward"); ok {
+			t.Errorf("a claim on %s said yes for %s", dir.Path, sub)
+		}
+	}
+
+	// THE POSITIVE CONTROL. The same shape of claim on an ordinary directory
+	// must say yes, or the refusals above are indistinguishable from a
+	// function that stopped claiming anything at all.
+	ok := &Desired{Machine: "gw", Files: &FilesSection{
+		Dirs: []Directory{{Path: "/etc/sysctl.d", Match: []string{"*-hz-ip-forward.conf"}}},
+	}}
+	if sub, yes := ok.prunable("/etc/sysctl.d/60-hz-ip-forward.conf"); !yes || sub != SubsystemFiles {
+		t.Fatalf("an ordinary claim was refused (%s, %v)", sub, yes)
+	}
+
+	// And the planner SAYS SO rather than dropping the claim silently.
+	d := &Desired{Machine: "gw", Files: &FilesSection{
+		Dirs: []Directory{{Path: "/proc/sys/net/ipv4", Match: []string{"*"}}},
+	}}
+	changes := Compute(d, Observed{Files: map[string]FileState{}, Dirs: map[string]DirState{}}).Changes
+	if len(changes) != 1 || changes[0].Kind != KindUnknown {
+		t.Fatalf("the refused claim produced %+v, want one unknown line", changes)
+	}
+	if !strings.Contains(changes[0].Detail, "kernel state") {
+		t.Fatalf("the refusal said %q, which does not say why", changes[0].Detail)
+	}
+}
+
 // A claim that names no pattern claims NOTHING.
 //
 // Fail-closed is not a preference here. /etc/haproxy/errors on a real gateway

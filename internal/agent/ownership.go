@@ -100,7 +100,45 @@ func cleanDir(p string) (string, bool) {
 		// glob away from removal.
 		return "", false
 	}
+	if unclaimableDir(c) {
+		return "", false
+	}
 	return c, true
+}
+
+// kernelStateRoots are the trees a Directory may never name.
+//
+// /proc is the one this exists for, and it stopped being theoretical when hz
+// began declaring /proc/sys/net/ipv4/ip_forward as a File
+// (internal/server/ipforward.go): the payload now names a path under /proc, so
+// the directory above it is one claim away from being a place the agent
+// prunes. /sys is the same kind of thing — the other tree where a kernel knob
+// has a file's shape.
+//
+// A procfs or sysfs entry is kernel state wearing a file's name. It cannot be
+// created, it cannot be removed, and "unlink it" is not a question that can be
+// asked of it — so a claim there has no correct answer, only a damaging one.
+// /dev is deliberately NOT here: a device node really is removable, so
+// refusing it would need a different argument than this one and nothing in the
+// tree makes it yet.
+var kernelStateRoots = []string{"/proc", "/sys"}
+
+// unclaimableDir reports whether a directory path names kernel state.
+//
+// Takes the RAW path and cleans it itself, so the planner can use it to
+// explain a refusal without having to clean a path twice or import the
+// cleaner's rules.
+func unclaimableDir(p string) bool {
+	if !strings.HasPrefix(p, "/") {
+		return false
+	}
+	c := path.Clean(p)
+	for _, root := range kernelStateRoots {
+		if c == root || strings.HasPrefix(c, root+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // splitClean splits an absolute file path into its cleaned directory and its
