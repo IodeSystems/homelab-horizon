@@ -2885,11 +2885,24 @@ NotifyAccess=main
 # serving. Declaring it here is systemd's own answer and removes the mkdir that
 # was papering over it.
 StateDirectory=homelab-horizon
-# 0750, not systemd's 0755 default: db.Open creates this directory 0750 itself,
-# and letting the unit widen it would have made the identity store's directory
+# 0751, and every digit is load-bearing.
+#
+# NOT systemd's 0755 default: db.Open creates this directory 0750 itself, and
+# letting the unit widen it would have made the identity store's directory
 # world-listable on every install. The database file is 0600 regardless, but the
-# directory listing is not nothing.
-StateDirectoryMode=0750
+# directory listing is not nothing. That is what this mode defends and it still
+# does: o+r is absent, so the directory cannot be LISTED.
+#
+# NOT 0750 either, which is what it was until 2026-09-25. The static file server
+# runs as a separate unprivileged identity and its roots live under here
+# (StaticWebDir). Without o+x that identity cannot TRAVERSE to a known path, so
+# every hz-managed static site answered 500 — measured on the gateway, where two
+# public sites had been doing so for six days while the process logged
+# "static: cannot open root" and nothing escalated it.
+#
+# o+x without o+r is exactly the difference: reach a path you already know,
+# never enumerate what is here.
+StateDirectoryMode=0751
 
 # File system isolation. /var/lib/homelab-horizon holds static-site releases
 # (the only writable, non-sensitive place for served files under the sandbox).
