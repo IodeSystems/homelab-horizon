@@ -253,6 +253,16 @@ func (s *Server) desiredFor(machine string) *agent.Desired {
 		return d
 	}
 
+	// THE ROUTING-TABLE READ, ONCE, BEFORE ANY SECTION USES IT. Two sections
+	// depend on which interface this box routes out of — the firewall's rule
+	// sets and the wg0.conf MASQUERADE clause (wg_masquerade.go) — and a
+	// payload that read it twice could straddle a route flap and name one
+	// interface in its rules and another in its file, healing the box in two
+	// directions at once. The classifier inputs are a pure read of hz's own
+	// state plus this one fact, so hoisting them costs nothing and removes
+	// that possibility by construction.
+	_, expected, stale, blessed, currentIface, _ := s.buildClassifierInputs()
+
 	if cfg.HAProxyEnabled && s.haproxy != nil {
 		var ssl *haproxy.SSLConfig
 		if cfg.SSLEnabled {
@@ -365,6 +375,15 @@ func (s *Server) desiredFor(machine string) *agent.Desired {
 	// be an empty file. hz not being able to read wg0.conf is also the exact
 	// state an unprivileged hz web will be in (item 12 step 5), and saying
 	// nothing is the honest answer to it.
+	//
+	// THE CONTENTS ARE HEALED, not merely read back — privilege-audit.md §7 B's
+	// "move reconcileIPTables axes 2/3". PostUp is what reinstalls the
+	// gateway's MASQUERADE at the next interface up, so a file read back
+	// verbatim would hand the agent the OLD egress interface's NAT rule to
+	// write and keep writing, and `hz-agent diff` would report in sync while it
+	// did. declaredWGConfig points the clause at the interface this box routes
+	// out of now; hz heals the same file from the same function on its own tick
+	// until item 12 step 5, and wg_masquerade_test.go compares the two.
 	if cfg.WGInterface != "" && cfg.WGConfigPath != "" {
 		if b, err := os.ReadFile(cfg.WGConfigPath); err == nil {
 			d.WireGuard = &agent.WireGuardSection{
@@ -373,7 +392,7 @@ func (s *Server) desiredFor(machine string) *agent.Desired {
 				Files: []agent.File{{
 					Path:     cfg.WGConfigPath,
 					Mode:     0o600,
-					Contents: string(b),
+					Contents: declaredWGConfig(string(b), currentIface),
 					// Declared here AND forced by Desired.files(). The forcing
 					// is the one that counts — this line is a courtesy, and a
 					// test pins that removing it changes nothing.
@@ -444,7 +463,6 @@ func (s *Server) desiredFor(machine string) *agent.Desired {
 		cfg, s.journaldPaths(),
 	)
 
-	_, expected, stale, blessed, currentIface, _ := s.buildClassifierInputs()
 	d.IPTables = iptablesSectionFor(expected, stale, blessed, currentIface, cfg.LastLocalIface)
 	if d.IPTables != nil && d.IPTables.StoodDown {
 		// The stand-down is not silence. The projection carries it as a gap
