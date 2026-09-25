@@ -377,6 +377,67 @@ func renderInterfaceRules(current, postUp, postDown string) string {
 	return strings.Join(result, "\n")
 }
 
+// ServerInterface is the gateway's own [Interface] block: everything a fresh
+// wg0.conf needs and nothing it can look up for itself.
+//
+// Its private key is an INPUT, like every other key in this file. The verb that
+// mints one is `hz-agent wg-create-config` (cmd/hz-agent/wgconfig.go), which is
+// apply-side by construction and hands the result in here.
+type ServerInterface struct {
+	// PrivateKey is the server's own, base64 as `wg genkey` prints it.
+	PrivateKey string
+	// Address is the gateway's address ON the VPN, with its prefix length —
+	// what ServerAddress derives from a range.
+	Address string
+	// ListenPort is the UDP port wg listens on.
+	ListenPort int
+	// PostUp and PostDown are the firewall lines, from ExpectedPostUp and
+	// ExpectedPostDown. Arguments rather than a lookup because building them
+	// needs the default-route interface, which is a read of the machine.
+	PostUp   string
+	PostDown string
+}
+
+// RenderServerInterface renders a fresh wg0.conf with no peers in it.
+//
+// Peers are added later by the peer handlers, which append [Peer] blocks to
+// this file; a newly created interface has none, and that is the only state
+// this function can honestly render — it is called exactly once per gateway,
+// on a box where no wg0.conf exists.
+func RenderServerInterface(s ServerInterface) string {
+	return fmt.Sprintf(`[Interface]
+PrivateKey = %s
+Address = %s
+ListenPort = %d
+PostUp = %s
+PostDown = %s
+`, s.PrivateKey, s.Address, s.ListenPort, s.PostUp, s.PostDown)
+}
+
+// ServerAddress derives the gateway's own VPN address from the VPN range: the
+// network address plus one, carrying the range's real prefix length.
+//
+// The handler this replaced did it with string surgery — split on "/", trim a
+// trailing ".0", append ".1", and write "/24" whatever the range said. For the
+// default 10.0.2.0/24 the answer is identical; for a range written any other
+// way it was wrong in two directions at once (a /16 range got a /24 address,
+// and "10.0.2.5/24" became "10.0.2.5.1"). This parses instead.
+func ServerAddress(vpnRange string) (string, error) {
+	_, ipnet, err := net.ParseCIDR(vpnRange)
+	if err != nil {
+		return "", fmt.Errorf("vpn range %q: %w", vpnRange, err)
+	}
+	base := ipnet.IP.To4()
+	if base == nil {
+		return "", fmt.Errorf("vpn range %q is not IPv4", vpnRange)
+	}
+	if base[3] == 255 {
+		return "", fmt.Errorf("vpn range %q has no host address above its network address", vpnRange)
+	}
+	ones, _ := ipnet.Mask.Size()
+	return fmt.Sprintf("%s/%d", net.IPv4(base[0], base[1], base[2], base[3]+1), ones), nil
+}
+
 // NextIP picks the lowest free host address in vpnRange, as a /32.
 //
 // Allocation is a DECISION, not an observation, so the addresses already in use
