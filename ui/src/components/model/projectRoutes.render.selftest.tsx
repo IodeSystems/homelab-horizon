@@ -795,6 +795,17 @@ console.log("· /$project/machines is DERIVED, approved-only, and honest when em
     "and if it is named at all, it is named under that heading",
   );
 
+  // THE SUBPROJECT LABEL ON THE TABLE — the phrase the amendment asks for, and
+  // what makes a projection of a shared box readable as one.
+  check(
+    /<th[^>]*>Location<\/th>/.test(storefront.html),
+    "the derived list carries the Location column",
+  );
+  check(
+    /box-2[\s\S]{0,400}?storefront/.test(storefront.text),
+    "and each row names the project whose instance put it there",
+  );
+
   // gw-1 is on storefront AND on intern, carrying no project in either.
   const intern = await at("/acme-co.intern/machines");
   check(intern.text.includes("gw-1"), "the same box appears under another project it hosts");
@@ -841,6 +852,14 @@ console.log("· /$project/segments reads the endpoint nothing had ever called");
   check(storefront.text.includes("seg-shop"), "the project's own segment is listed");
   check(storefront.text.includes("10.10.0.0/24"), "with its range");
   check(!storefront.text.includes("seg-core"), "and another project's is not");
+  check(
+    /<th[^>]*>Location<\/th>/.test(storefront.html),
+    "the segment list carries the Location column too",
+  );
+  check(
+    /seg-shop[\s\S]{0,400}?storefront/.test(storefront.text),
+    "and the row names the project that owns the network",
+  );
 
   check(
     storefront.links.some((h) => h.endsWith("/machines/gw-1")),
