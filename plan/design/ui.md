@@ -1545,6 +1545,332 @@ Choices the amendment left to the build:
 - **`/$project/config` keeps its `useState` tabs** — unchanged behaviour, just
   relocated. Making them routed is a separate change.
 
+### Decision 1, amended again 2026-09-25 — the sidebar IS the tree; you ENTER a project and its nav replaces the sidebar
+
+> The two blocks above stay on the page. This one changes the **shape of the
+> navigation**, not the split: the classification of what carries a project is
+> untouched and reason 3 is untouched. What shipped on 2026-09-24 put the tree
+> in a **column beside the content**, which is a third column next to the
+> sidebar and the page, and that is the part being rejected.
+>
+> **The change in one line:** the sidebar renders the project tree; entering a
+> project replaces the project half of the sidebar with that project's nav and
+> a link back to its parent; the root project is the default, so today's
+> fourteen flat entries are read as the root's nav; descending swaps the
+> **contents** of services / machines / segments / bans / clients, not the
+> shape of the screen.
+
+#### What was asked for
+
+> *"projects should be a nested tree in the sidebar, you should be able to
+> enter the project, and the sidebar has a back, and its sidebar is replaced
+> with the project nav. How to interpret it, is that the default project is the
+> root project, and you can descend into subprojects that replace the root
+> services, bans, clients, network segments, machines for the project (with the
+> subproject label on the tables)"*
+
+#### The phrase that resolves reason 3: derived views, not ownership
+
+Reason 3 kills a project-first navigation that makes a project **own** a
+machine. `config.Machine` is `{Name, Segments, Note}`
+(`internal/config/machine.go:42`) and the comment above it states the absence
+as the model's shape (`internal/config/machine.go:15`): *"a Project field on a
+machine would be false for that row the day it was added, and every screen
+built on it would inherit the lie."* `TestAMachineCarriesNoProjectAndNoEnvironment`
+pins it. That is as true today as it was yesterday.
+
+*"…for the project … with the subproject label on the tables"* asks for
+something else. A project's machines are **the machines hosting that project's
+instances** — a query, not a field. `gw-1` appears under every project it hosts
+*and* under each of their ancestors, and carries no project in any of them. The
+label on the table is what keeps the two readable apart.
+
+**So the rule that keeps reason 3 intact, and it is the load-bearing sentence
+of this amendment:**
+
+> **A derived surface gets a LIST route and never a DETAIL route.**
+
+`/$project/machines` exists. `/$project/machines/$machine` **does not**, ever —
+its rows link to `/machines/$machine`. A detail route under a project would
+give `gw-1` one URL per project it hosts and its diff one home per URL, which
+is precisely the failure reason 3 names. The list is scoped; the thing has one
+page. Same rule for a VPN client and for a ban if it ever becomes scopable.
+
+#### Per surface — what "this project's X" is derived from
+
+Checked against the records, not intuition. "Live" means a screen could be
+built today with data the API already serves.
+
+| surface | "this project's X" is | derived from | live? |
+|---|---|---|---|
+| services | rows whose `Project` is in the subtree | `Service.Project` (`internal/config/config.go:1107`, `omitempty` — **optional and permanently so**) | ✅ built |
+| domains | the domains of those services | `Service.Domains` (`config.go:1110`); no record of its own | ✅ built |
+| config | registrations whose address starts with the project | `CMRegistrationResp.Project` (`internal/apitypes/types.go:2221`) | ✅ built |
+| environments | rows naming the project | `Environment.Project` (`config.go:715`, required) | ✅ built (inside `/$project`) |
+| **machines** | **distinct machine names over the project's instances** | `projection.Instance{Machine, Project, …}` (`internal/projection/projection.go:370`) — *"Project is CARRIED, not derived"* (`:365`); on the wire as `CMRegistrationResp{MachineName, Project}` (`types.go:2219`–`:2221`) | ⚠ derivable, **no screen, one trap** — below |
+| **network segments** | rows naming the project | `Segment.Project` (`internal/config/segment.go:74`) — **required**, enforced in `ValidateSegments` (`:242`) and `AddSegment` (`:429`); served by `GET /api/v1/segments` (`internal/server/handlers_api_segments.go:21`) as `SegmentResp` (`types.go:369`) | ⚠ record + endpoint exist, **the UI never calls it** |
+| **bans** | **nothing** | — | ❌ **model gap** |
+| **clients** | **nothing** | — | ❌ **the chain does not exist** |
+
+**machines, worked through.** A machine with instances from three projects
+appears in all three lists, and in the list of every ancestor of each — so
+`gw-1` is on `/iodesystems/machines` and on `/redline/machines` and on
+`/veliode/machines`, once each. Its row in each says **which of its instances
+put it there** (the project's own addresses, not all of them), which is the
+"subproject label on the tables" doing its job: the row is honest about being a
+projection of a shared box rather than a possession. Its name links to
+`/machines/$machine`, the one page, which lists every instance regardless of
+project — and that page is where the diff stays.
+
+**The trap, and it would ship silently.** `useCMRegistrations()`
+(`ui/src/api/hooks.ts:1920`) sends no `state` parameter and its query key says
+`"all"`, but the handler defaults an empty `state` to **pending**
+(`internal/server/handlers_configmgr.go:577`–`:579`) and rejects anything
+outside `pending|approved|denied` (`:581`–`:587`) — **there is no "all"**. A
+machines-per-project view built on the bare hook would list exactly the boxes
+whose registration has *not* been approved, and look plausible while doing it.
+It needs `approved` explicitly, and pending as a second read if the screen
+wants to show both.
+
+**And it renders empty on the live estate regardless.** [plan.md](../plan.md)
+Tier 0 records all seven `cm_*` tables on the gateway as empty (measured
+2026-09-23). There are no registrations, so there are no instances, so every
+project's machine list is correctly empty until Tier 0 lands. That is a reason
+to build it honestly ("no instance of this project runs on any box yet"), not a
+reason to defer it.
+
+**segments.** The record is the cleanest project-scoped thing in the config and
+nothing in the browser has ever asked for it: `grep -rn "/segments" ui/src/`
+returns **nothing**, against a positive control of `useVPNPeers` (1 hit in
+`hooks.ts`) proving the search reaches this kind of code. So `/$project/segments`
+is a new screen over an existing endpoint, not a new backend. **It is blocked
+on the open `seg:people` decision** — [example-projection.md](example-projection.md)
+§2 (`:115`, `:120`–`:134`) shows a segment with `NO PROJECT`, the code requires
+one, and both are defensible. A project-scoped segment list is *unaffected*
+(every declarable segment has an owner); what is blocked is the human-access
+VPN having anywhere to appear. Do not settle it here.
+
+**bans — a model gap, not a UI decision.** `config.IPBan` is
+`{IP, Timeout, CreatedAt, ExpiresAt, Reason, Service}`
+(`internal/config/config.go:964`–`:971`). `Service` is **attribution**: free
+text passed to `banIP(ip, timeout, reason, service)`
+(`internal/server/handlers_ban.go:102`, stored at `:131`), never validated
+against `Config.Services`, and the screen already renders it with a fallback
+label — `{ban.service || "admin"}` (`ui/src/routes/bans.tsx:180`). Enforcement
+is one `filter INPUT -s <ip>/32 -j DROP` (`internal/iptables/rules.go:388`,
+`:417`), gateway-wide, and LWW-replicated fleet-wide. The operator wants global
+bans **and** per-project bans, and
+[estate.md](estate.md) §8 has already worked out what that costs: two
+mechanisms with different guarantees (packet DROP vs. an HAProxy ACL that costs
+a full TLS handshake and cannot cover an L4 forward), with the recommendation
+being **two records**, and an explicit instruction that *"`Service` stays what
+it is — attribution — and must not be quietly promoted to scope."*
+
+So: **`/$project/bans` cannot be built.** Not "is hard" — there is no field to
+filter on, and the one that looks like it is the field estate.md forbids using.
+The nav entry does not appear under a project until the record gains scope.
+`/bans` stays gateway-level and stays the only bans screen.
+
+**clients — the chain is aspirational end to end.** `config.WGPeer` is
+`{Name, PublicKey, AllowedIPs}` (`config.go:593`–`:597`); `PeerResp` adds
+endpoint, traffic and MFA state and **still carries no segment and no project**
+(`types.go:978`–`:992`). Segment membership is machine-only on both sides:
+`SegmentMemberResp.Machine` (`types.go:389`) names a machine, and
+`internal/config/segment.go` never mentions a peer at all — `grep -n
+"WGPeer\|c\.Peers" internal/config/segment.go` returns nothing against a
+positive control of 63 hits for `Machine` in the same file. The
+clients → segments → projects chain has **neither of its two links**. `/vpn`
+stays gateway-level and unchanged, and `example-projection.md:148`–`:151` says
+why in the model's own terms: *"`laptops, phones` are not Machine records."*
+
+#### Where the operator's phrasing cannot be taken literally
+
+*"the default project is the root project"* reads as: the gateway level **is**
+the root project. Two things in the record stop that being true, and both are
+cheap to honour.
+
+1. **Nothing requires exactly one root.** `ValidateProjects`
+   (`config.go:648`) checks names unique, parents real, no cycles, and a
+   service's named project exists; a project with an empty `Parent` is skipped
+   (`:660`), never counted. Two roots are legal, and `flattenTree`
+   (`ui/src/components/model/model.ts:417`) keeps an orphan as a root as well.
+   "The root project" is a property of today's estate, not of the model.
+2. **A service may name no project, permanently.** `Service.Project` is
+   `omitempty` (`config.go:1107`) and `ValidateProjects`' own comment says so:
+   *"A service may name no project. That is the state every service is in
+   today."* No project-scoped view can render that row — including the root's.
+
+So the top of the sidebar is **the gateway**, and the root project is the first
+node *inside* it. The practical difference is exactly one row class (things
+assigned to nothing) plus every surface that has no owner to assign it to. The
+operator's reading survives in the part that matters: you do not pick a project
+before you can see anything, the top level shows the whole estate, and
+descending is the only thing that narrows it.
+
+#### Decision E — the URLs
+
+Entering a project is a **route**. Nothing about which project you are in, how
+deep you are, or which nav the sidebar is showing lives in `useState`. This is
+the previous amendment's strongest argument and it applies harder here, because
+now the *navigation itself* is what changes: a sidebar that morphs on component
+state cannot be linked, and two people told to "open the redline nav" would be
+looking at different things.
+
+```
+/                         → /dashboard                     (unchanged)
+/projects                 the estate index — every project, flat, linked
+/$project                 ENTER: the project's home
+/$project/services        ✅ shipped
+/$project/domains         ✅ shipped
+/$project/config          ✅ shipped
+/$project/machines        NEW — derived list; rows link to /machines/$machine
+/$project/segments        NEW — Segment.Project, direct
+/$project/environments/$env   named by the previous amendment, still unbuilt
+```
+
+`$project` stays **one parameter carrying the dotted path, resolved by lookup**
+— Decision A, plus the correction the build found (a dotted path can be
+ambiguous even when every name is unique; three answers, not two). Nothing here
+changes `resolveProjectParam`.
+
+**Back is a link, not history.** A `<Link>` to the parent project's route,
+labelled with the parent's **name** — `← iodesystems`, not `← Back`, because a
+generic Back does not say where it goes and the sidebar is the one place a
+wrong guess is expensive. At a root project it reads `← All projects` and goes
+to `/projects`. Browser/hardware Back keeps working independently, because
+every descent was a real navigation; the two are allowed to differ (Back-the-
+link goes *up*, Back-the-button goes *whence you came*) and the label is what
+makes that unambiguous.
+
+#### Decision F — the gateway surfaces live in a second, fixed sidebar zone
+
+Settings, Checks, Observability, Ports, DNS, Hosts, Drift, Dashboard, Machines,
+Account and MFA carry no project and cannot be derived into one — that is the
+seventeen-flat-routes table above, unchanged. Under "the sidebar is the project
+nav", they need a home that does not depend on where you are.
+
+**Decided: the sidebar has two zones, and only the first one changes.**
+
+```
+┌─ where you are ─────────────┐   ← replaced on entry
+│  ← iodesystems              │
+│  redline                    │     the project you are in
+│    Overview                 │
+│    Services · Domains       │     its nav (only the entries it can derive)
+│    Machines · Segments      │
+│    Config                   │
+│  ─ subprojects ─            │
+│    redline-ui               │     its children, as links; descending
+│    redline-api              │     replaces this whole zone again
+├─ the gateway ───────────────┤   ← never changes, at any depth
+│  Dashboard  Drift  Machines │
+│  Hosts  Services  Domains   │
+│  DNS  VPN Clients  IP Bans  │
+│  Checks  Observability      │
+│  Ports  Settings            │
+└─────────────────────────────┘
+```
+
+**Three projects deep and you need Settings: you click Settings.** One click,
+from anywhere, same position on screen every time. The alternatives both lose:
+Settings at the root only costs N clicks up and N back down and makes a
+gateway-wide fact feel like it belongs to one project; Settings appearing *only
+sometimes* is a sidebar that morphs, which is the thing this whole document is
+organised against.
+
+The gateway zone is **the fourteen entries that exist today**
+(`ui/src/components/AppLayout.tsx:51`–`:83` — counted from the array, fourteen,
+not the fifteen the previous amendment recorded before the `Config` entry was
+removed). Same entries, same order, at every depth. Their flat routes keep
+their jobs unchanged: `/services` remains the only place an unassigned service
+can appear, `/domains` the only place a gateway-wide domain collision is
+visible, `/machines` the only place `gw-1` has a page.
+
+#### Decision G — the root shows own + descendants, and that is what makes drilling mean something
+
+**Decision B holds, unchanged.** Entering a project shows its own rows *and*
+its descendants', with the Location column naming where each row actually
+lives, and `?scope=own` narrowing to just its own. Nothing in the operator's
+request contradicts it, and the request makes it *more* necessary rather than
+less: descending has to visibly change what you see, and it does — the child's
+page is a strict subset of the parent's, and the Location column is the before-
+and-after that proves it.
+
+**The Location cell is the in-table drill-in.** It already renders as a
+`ProjectLink` (`ui/src/components/model/ProjectBits.tsx:331`), so "this
+row lives in `redline-api`" and "take me into `redline-api`" are already the
+same click. No new affordance; the column stops being only a label.
+
+The two columns keep their two labels, which the code already separates:
+`LOCATION_COLUMN_LABEL = "Location"` on a project-scoped table (where the
+question is *where in this subtree*) and `PROJECT_COLUMN_LABEL = "Project"` on
+the flat gateway lists (where the question is *which project at all*)
+(`ProjectBits.tsx:366`, `:369`).
+
+#### Decision H — what shipped 2026-09-24, itemised
+
+| shipped | verdict | what happens to it |
+|---|---|---|
+| `/projects` | **kept, re-roled** | the estate index and the target of `← All projects`. Content unchanged. |
+| `/$project` layout route + `<Outlet/>` | **kept** | including the Outlet test, which stays the first check in `projectRoutes.render.selftest.tsx` |
+| `resolveProjectParam`, the dotted map, the ambiguity and no-such-project screens | **kept** | untouched; this amendment adds routes, not resolution |
+| **the 260px tree column inside `$project.tsx`** (`ui/src/routes/$project.tsx:245`–`:249`) | **DELETED** | this is the third column. `ProjectPickList` itself survives — it moves into the sidebar's project zone and stays in `NoSuchProject`/`AmbiguousProject` |
+| **`ProjectTabs`** (`$project.tsx:243`) | **DELETED** | the sidebar is the project's nav now; a tab strip that duplicates it is two controls for one job. The `tail`-of-pathname derivation that feeds it goes with it. |
+| the project switcher in `ProjectHeader` | **changed** | the sidebar tree is the switcher. Keep the header's project *identity* (name, dotted path, feed origin); drop the picker. |
+| `?scope=own` | **kept** | unchanged, still a search param, still never state |
+| the Location column + `LocationCell` | **kept, promoted** | now the drill-in link as well as the label |
+| the flat `/services` and `/domains` with a Project column | **kept** | they are the gateway zone's entries and the only home for unassigned rows |
+| `/config` → `/projects` redirect | **kept** | bookmarks |
+| `isMobile` branch in `$project.tsx` | **deleted with the column** | the sidebar is already a `Drawer` below `md` (`AppLayout.tsx:257`), so the project nav gets the responsive behaviour the shell already has, at both widths, with no per-page branch |
+
+**New, and in this order:** the sidebar's two zones; `/$project/machines`
+(derived, with the `approved` fix); `/$project/segments` (new screen, existing
+endpoint). `/$project/bans` and `/$project/clients` are **not** on the list —
+see the table.
+
+#### Checked, and found already done
+
+Stated because an agent was told this week to add something that existed.
+`/services` and `/domains` **already carry a Project column** and already link
+each row to its project (`ui/src/routes/services.tsx:1889`,
+`ui/src/routes/domains.tsx:207`, both via `LocationCell` with
+`PROJECT_COLUMN_LABEL`). The previous amendment's *"grep -ic project returns 0
+for each"* was true when written and is false now. Do not re-add it.
+
+#### Drifted line numbers in the two blocks above
+
+Recorded once rather than rewritten in place, because the amendments are
+history: `IPBan` is at `config.go:964` (cited as `:946`), `WGPeer` at `:593`
+(cited as `:575`), `Service` at `:1098` with `Project` at `:1107` and `Domains`
+at `:1110` (cited as `:1080`/`:1089`/`:1091`), `Project` at `:626` with
+`Parent` at `:628` (cited as `:608`/`:610`), `Environment.Project` at `:715`
+(cited as `:697`), `ValidateProjects` at `:648` (cited as `:630`), `AddSegment`
+at `segment.go:429` (cited as `:448`). Every *claim* those citations support
+re-verified true; only the offsets moved.
+
+#### Not decided here — the build task's judgement
+
+- **Whether the project zone shows the whole tree or the path plus children.**
+  Eight projects one level deep makes it moot today; at depth 4 it is a real
+  choice between an expanding tree and a breadcrumb-with-children. Decide it
+  against the estate that exists when you build it.
+- **What a project's Overview entry is called and what it shows.** Today's
+  `$project.index.tsx` (environments + services assigned here) is the obvious
+  content; whether "Overview" is the right label when the project has no
+  environment — three of eight — is a wording call.
+- **Whether `/$project/machines` shows pending registrations as well as
+  approved**, and how it labels a box that is enrolled for this project but has
+  never resolved. `nothing-to-report` already exists as a state on `/drift`.
+- **Whether the gateway zone collapses** once the project zone is deep. It must
+  stay reachable in one click; whether that click opens an accordion is a
+  layout decision, not a nav one.
+- **Everything about `seg:people`.** Still the operator's open decision, and
+  `/$project/segments` does not depend on it.
+- **Whether `IPBan` gains scope at all**, which record shape it takes, and
+  therefore whether `/$project/bans` ever exists. [estate.md](estate.md) §8 has
+  the analysis and the recommendation; the call is the operator's.
+- **Visual identity, the palette, Decisions 2 and 3.** Untouched, as before.
+
 ### Decision 2 — machines and instances are one surface, two lenses
 
 Not two top-level surfaces, and not one merged table.
@@ -2067,12 +2393,14 @@ What it proved about this document, rather than what it implemented:
 
 ### Next
 
-- **next:** land the nav change (`AppLayout.tsx` `navItems`) and the Overview
-  queue — they are the cheapest way to find out whether the ranking is right,
-  and they need no new backend record. The drift screen's `rankFleet` is
-  already the Overview's queue logic and should be reused, not rewritten.
-  Everything else waits on phase 2 (the environment record) and phase 4 item 13
-  (the machine record).
+- **next:** the nav change is now specified by *Decision 1, amended again
+  2026-09-25* — the sidebar's two zones, the tree in the project zone, the
+  `$project.tsx` column and tab strip deleted, plus `/$project/machines` and
+  `/$project/segments`. Land that and the Overview queue: they are the cheapest
+  way to find out whether the ranking is right, and they need no new backend
+  record. The drift screen's `rankFleet` is already the Overview's queue logic
+  and should be reused, not rewritten. Everything else waits on phase 2 (the
+  environment record) and phase 4 item 13 (the machine record).
 - **risks:** the Observation component is only as good as the timestamp behind
   it. `135b4ea` supplies a real one (`observed_at`, refreshed on every
   resolve) — but per *instance*, and only for instances that resolve config.

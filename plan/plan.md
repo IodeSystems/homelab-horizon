@@ -175,6 +175,7 @@ one sitting. Everything marked ✅ is on **`dev`** and **not deployed**.
 | 22 | Edge diagnosis — a failed check names the cause AND the device | ✅ landed; ◐ one follow-up in flight | [done.md](done.md#item-22--edge-diagnosis--a-failed-vantage-check-names-the-cause-and-the-device) |
 | 23 | hz declares its own machine | ✅ landed 2026-09-24. ⚠ **one test is the ONLY guard.** ❓ nothing expresses "this service fronts that machine" | [done.md](done.md#item-23--hz-declares-its-own-machine) |
 | 24 | Project-scoped URLs — `/$project/…` | ✅ **built and merged 2026-09-24** (`7ea78f1`) — this row said "doc only, no code touched" until today and was stale | [done.md](done.md#item-24--project-scoped-urls--project) · [design/ui.md](design/ui.md) Part 2 |
+| 26 | **Drill-in navigation — the sidebar IS the project tree** | ◻ doc only, no code touched. **Supersedes 24's SHAPE, not its split:** the tree column beside the content is rejected; the sidebar gets a project zone (tree · Back-to-parent · the project's nav) plus a fixed gateway zone, and `$project.tsx`'s 260px column and tab strip go. Adds `/$project/machines` (derived through instances) and `/$project/segments` (new screen, existing endpoint). ❌ `/$project/bans` and `/$project/clients` **cannot be built** — no field to scope on | [design/ui.md](design/ui.md) Part 2, *Decision 1, amended again 2026-09-25* |
 
 **Excluded from this release** and in [icebox.md](icebox.md) with a reason and a
 resume condition each: `Environment.Upstream` (18), the registry crossing (19),
