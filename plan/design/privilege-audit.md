@@ -1534,19 +1534,11 @@ status of each as of 2026-09-25. One at a time — several make the next moot.
             and an `[Install]` section, which is the commit that arms the agent
             (C, item 12 step 4). Removing it before then leaves nothing serving
             the roots; removing it after leaves two servers on one port.
-- [x] ✅ **Answer §7.1 #3b** — **MEASURED on the gateway 2026-09-25, and the
-      answer changed while being measured.** Before: `/var/lib/homelab-horizon`
-      was `root:root 0750`, `sudo -u nobody stat .../web` returned EACCES, and
-      **both hz-managed static sites had been answering 500 since 2026-09-19** —
-      578 "static: cannot open root" lines in 24h, unescalated. So the forked
-      uid-65534 child could not reach the roots it exists to serve, exactly as
-      the code-read predicted.
+- [ ] **Answer §7.1 #3b** — whether `nobody` can reach
+      `/var/lib/homelab-horizon/web` at all. It decides whether the unit above
+      can run as `nobody`, and it is a one-line check on the gateway.
 
-      After `StateDirectoryMode=0751` (ad308a2, deployed): `nobody` traverses,
-      the directory is still **not listable**, `hz.db` is still unreadable, and
-      both sites serve 200. **So yes — the declared unit can run as an
-      unprivileged identity**, and `hz-static.service`'s `DynamicUser=yes` is
-      viable as written. This no longer blocks the static item in A.
+### B. Hand over — each item independently verifiable by `hz-agent diff`
 
 - [x] **Widen `iptables.LiveRules`' INPUT scope** to admit ban rules (§3.2),
       with its pure test, **before** bans move. Done 2026-09-22: `scopeLiveRules`
