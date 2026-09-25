@@ -387,7 +387,11 @@ func (s *Server) banSyncOnce() {
 	}); err != nil {
 		slog.Warn("ban-sync: updateConfig", "err", err)
 	}
-	s.reapplyBans()
+	// NOTHING IS APPLIED HERE. The merge writes the record and stops; the
+	// next reconcile pass installs whatever rules the merged list is missing.
+	// This used to call reapplyBans, which shelled iptables from the pull loop
+	// — one of the three paths that bypassed syncServices and the reason the
+	// fleet guard exists (agent_fleet_guard.go). It is two paths now.
 	slog.Info("ban-sync: merged bans", "total", len(merged))
 }
 

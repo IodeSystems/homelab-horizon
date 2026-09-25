@@ -169,6 +169,11 @@ func newTestServer(t *testing.T, cfg *config.Config) *Server {
 		// is running the suite. See ipforward.go.
 		sysctlDir:     filepath.Join(tmp, "sysctl.d"),
 		ipForwardPath: filepath.Join(tmp, "proc-ip_forward"),
+		// And the same again for the journald drop-in: a test that applies
+		// hz's payload with the real agent would otherwise rewrite
+		// /etc/systemd/journald.conf.d and RESTART THE JOURNAL of the box
+		// running the suite. See logretention.go.
+		journaldDir:   filepath.Join(tmp, "journald.conf.d"),
 		adminToken:    "test-admin",
 		csrfSecret:    "test-csrf",
 		monitor:       monitor.New(cfg),

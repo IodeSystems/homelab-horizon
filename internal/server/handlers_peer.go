@@ -377,10 +377,12 @@ func (s *Server) applyNewConfig(newCfg *config.Config) error {
 	// CHECK 2 OF THE hz-agent / PEER-SYNC GUARD, and the one that matters.
 	//
 	// FIRST, BEFORE THE STORE. Everything below this line either writes the
-	// config to disk or writes /etc, and two of those writes are the bypasses
-	// the guard exists for (applyWGPeersFromConfig, and reapplyBans on the ban
-	// loop that shares this config). A refusal after the swap would be a machine
-	// already converted.
+	// config to disk or writes /etc, and one of those writes is a bypass the
+	// guard exists for (applyWGPeersFromConfig). It used to be two: the ban
+	// loop that shares this config called reapplyBans, which shelled iptables.
+	// That path is gone (2026-09-25 — handlers_ban.go's header), so the ban
+	// half of this config is now a record and nothing else. A refusal after
+	// the swap would be a machine already converted.
 	//
 	// Fleet topology is per-instance and never comes off the wire: a pulled
 	// config must not join this machine to a fleet, move it between fleets or
