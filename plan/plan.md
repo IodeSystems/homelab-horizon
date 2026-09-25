@@ -194,7 +194,8 @@ one sitting. Everything marked ✅ is on **`dev`** and **not deployed**.
 | 22 | Edge diagnosis — a failed check names the cause AND the device | ✅ landed; ◐ one follow-up in flight | [done.md](done.md#item-22--edge-diagnosis--a-failed-vantage-check-names-the-cause-and-the-device) |
 | 23 | hz declares its own machine | ✅ landed 2026-09-24. ⚠ **one test is the ONLY guard.** ❓ nothing expresses "this service fronts that machine" | [done.md](done.md#item-23--hz-declares-its-own-machine) |
 | 24 | Project-scoped URLs — `/$project/…` | ✅ **built and merged 2026-09-24** (`7ea78f1`) — this row said "doc only, no code touched" until today and was stale | [done.md](done.md#item-24--project-scoped-urls--project) · [design/ui.md](design/ui.md) Part 2 |
-| 26 | **Drill-in navigation — the sidebar IS the project tree** | ✅ **built 2026-09-25** on `feat/nav-drill-in`, not merged. Two sidebar zones (project · gateway), `/$project/machines` (derived, approved-only) and `/$project/segments`; the 260px column, the tab strip and the `isMobile` branch are gone. ❌ `/$project/bans` and `/$project/clients` stay unbuildable — no field to scope on. ⚠ at phone width the whole sidebar is behind the hamburger (drawer = portal), so the project header keeps the way up and the way down | [done.md](done.md#item-26--drill-in-navigation--the-sidebar-is-the-project-tree) · [design/ui.md](design/ui.md) Part 2, *Decision 1, amended again 2026-09-25* |
+| 26 | **Drill-in navigation — the sidebar IS the project tree** | ✅ built 2026-09-25, **superseded the same day**: the two-zone sidebar was rendered and rejected as cluttered (24 lines at the top level, 38 inside a project). Kept: `/$project/machines` (derived, approved-only), `/$project/segments`, the no-detail-route rule, the deleted column/tabs/`isMobile` branch | [done.md](done.md#item-26--drill-in-navigation--the-sidebar-is-the-project-tree) · [design/ui.md](design/ui.md) Part 2, *Decision 1, amended again 2026-09-25* |
+| 27 | **One recursive menu — the estate is level 0 of the tree** | ✅ **built 2026-09-25** on `feat/nav-recursive`, not merged. Five scopable entries identical at every level (Overview · Services · Domains · Machines · Network) + a one-level-expandable subtree + a labelled way up; the gateway block is **level 0 only** — which REVERSES Decision F's "Settings is one click from any depth" for ten fewer permanent rows. New `/segments` (Network at the estate). ❌ the greyed bans/clients block is deleted — the explanation lives once, on the project's Overview; Config folds there too. **11 lines at level 0, 11 inside a project, 10 two deep**, asserted by a render check that counts them | [below](#-one-recursive-menu--the-estate-is-level-0-of-the-tree) · [design/ui.md](design/ui.md) Part 2, *Decision 1, amended a fourth time* |
 
 **Excluded from this release** and in [icebox.md](icebox.md) with a reason and a
 resume condition each: `Environment.Upstream` (18), the registry crossing (19),
@@ -213,6 +214,32 @@ that ships config into the CDE is in scope however it is reached.
 ---
 
 # The items
+
+### ✅ One recursive menu — the estate is level 0 of the tree
+
+Built 2026-09-25 on `feat/nav-recursive`, on top of item 26. **The design is
+[design/ui.md](design/ui.md) Part 2, *Decision 1, amended a fourth time*** — it
+carries the shape, the five entries with both their addresses, the reversal of
+Decision F with its reason, and the rule that was misapplied (a greyed field on a
+screen is not the same thing as a nav entry to a surface that does not exist at
+this scope). This row is the pointer.
+
+**What is enforced, and where.** `readMenu` is pure and decides the whole menu
+from the `$project` parameter alone (`ui/src/components/model/projectRoutes.ts`);
+`projectRoutes.selftest.ts` proves the decisions and
+`projectRoutes.render.selftest.tsx` renders the real router and **counts the
+sidebar's lines**, asserting the totals AND the overhead verbatim — the check the
+rejected version did not have, because "is the entry present" passed on all 24 of
+them.
+
+⚠ **Expansion of a subtree node is `useState`** — the only piece of the nav that
+is not the route. The reasons are in Decision M; the default is closed, so two
+people opening one link see one screen.
+
+❓ **Not decided, and the operator's:** whether `IPBan` gains a scope field at all
+([design/estate.md](design/estate.md) Part C), and therefore whether
+`/$project/bans` ever exists. The bridge report on the new `/segments` screen
+needs a derivation hz does not serve.
 
 ### ◐ Config manager — registration, blessing, promotion
 
