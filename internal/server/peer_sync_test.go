@@ -158,7 +158,11 @@ func newTestServer(t *testing.T, cfg *config.Config) *Server {
 	}
 
 	s := &Server{
-		configPath:    cfgPath,
+		configPath: cfgPath,
+		// Every test Server declares its units under its own t.TempDir(). A
+		// test that applied hz's payload with the real agent would otherwise
+		// write /etc/systemd/system on the machine running the suite.
+		unitDir:       filepath.Join(tmp, "systemd"),
 		adminToken:    "test-admin",
 		csrfSecret:    "test-csrf",
 		monitor:       monitor.New(cfg),

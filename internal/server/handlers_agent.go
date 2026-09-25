@@ -415,6 +415,20 @@ func (s *Server) desiredFor(machine string) *agent.Desired {
 	// already emits them and the agent hands them straight to
 	// iptables.Reconcile. buildClassifierInputs also reads the live set, which
 	// the agent does not need and which is discarded here.
+	// The static file server, declared as a unit rather than forked (§7.1
+	// decision 3). The binary path is a READ — hz's own executable — so it is
+	// taken here, at the call site, and handed to the builder; the same
+	// discipline haproxy.CertStore and instancesForProjection follow.
+	//
+	// It is not the flip. Nothing writes these files and nothing starts the
+	// unit while the agent is inert; hz's own supervisor is still what serves
+	// the roots. static_unit.go says what happens when that stops being true.
+	exe, err := os.Executable()
+	if err != nil {
+		exe = staticBinaryFallback
+	}
+	d.Files = staticFilesSection(cfg, exe, s.staticPaths())
+
 	_, expected, stale, blessed, currentIface, _ := s.buildClassifierInputs()
 	d.IPTables = iptablesSectionFor(expected, stale, blessed, currentIface, cfg.LastLocalIface)
 	if d.IPTables != nil && d.IPTables.StoodDown {
@@ -683,9 +697,15 @@ func (s *Server) sealedConfigsForProjection(cfg *config.Config, instances []proj
 //     declaration. So hz has no basis for an opinion about another box's
 //     edge, rather than an opinion it cannot render.
 //
+// FILES JOINED THE LIST WHEN IT GAINED A PRODUCER. It used to be absent for
+// every machine, local included, so a nil said nothing about the machine. Now
+// the local box gets a static-serving unit and a site map (static_unit.go),
+// which means a nil for a remote machine has started meaning "hz manages no
+// files here" — a claim hz is not entitled to make, for exactly the reason the
+// other five are gapped.
+//
 // Deliberately NOT gapped: Forwards, which is empty because the rule's default
-// is deny (projection.MachineConfig.Forwards), and Files, which has no
-// producer at all yet and is therefore equally absent for the local box.
+// is deny (projection.MachineConfig.Forwards).
 func noteRemoteGaps(mc *projection.MachineConfig, cfg *config.Config) {
 	const item15 = " Rendering one instead needs a Segment record — a segment's CIDR, its interface, and this machine's address, key and peers on it — which is phase 4 item 15."
 
@@ -709,6 +729,16 @@ func noteRemoteGaps(mc *projection.MachineConfig, cfg *config.Config) {
 	for _, section := range []string{agentSectionHAProxy, agentSectionDNSMasq, agentSectionIPTables} {
 		mc.AddGapReason(section, projection.ReasonUnmodelled, edge)
 	}
+
+	// The generic section, for the same reason and by the same means: what hz
+	// puts in it today is the static file server's unit and the map of which
+	// host serves which document root, both derived from THIS hz process's
+	// service list. Nothing in the model says another machine serves anything
+	// static, so hz has no record to answer from rather than a render it
+	// cannot perform.
+	mc.AddGapReason(agentSectionFiles, projection.ReasonUnmodelled,
+		"hz's generic file section here is the static file server's unit and its host->root map, both derived from this hz process's own service list"+
+			" (Service.Proxy.StaticRoot). Nothing hz records says whether another machine serves static sites, so there is no basis for an opinion about this one.")
 }
 
 // The agent payload's section names, as projection Gap keys. They are the
@@ -720,6 +750,7 @@ const (
 	agentSectionWireGuard = string(agent.SubsystemWireGuard)
 	agentSectionIPTables  = string(agent.SubsystemIPTables)
 	agentSectionCerts     = string(agent.SubsystemCerts)
+	agentSectionFiles     = string(agent.SubsystemFiles)
 )
 
 // readCertBundles reads the served bundles out of the HAProxy certificate
