@@ -1,8 +1,17 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useProjects } from "../api/hooks";
+import { useEnvironments, useProjects } from "../api/hooks";
 import { buildProjectIndex, type ProjectIndex } from "../components/model/projectRoutes.ts";
 import { LocationCell, PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
+import { AssignDialog, RungCell } from "../components/model/AssignBits";
+import {
+  buildAssignIndex,
+  readPlacement,
+  readState,
+  worstState,
+  PLACEMENT_COLUMN_LABEL,
+  type AssignIndex,
+} from "../components/model/assign.ts";
 import {
   Alert,
   Box,
@@ -1830,15 +1839,19 @@ function PortMapDialog({
 function ServiceRow({
   service,
   projectIndex,
+  assignIndex,
   zones,
   onEdit,
   onDelete,
+  onAssign,
 }: {
   service: Service;
   projectIndex: ProjectIndex;
+  assignIndex: AssignIndex;
   zones: Zone[];
   onEdit: (svc: Service) => void;
   onDelete: (name: string) => void;
+  onAssign: (svc: Service) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [integrationOpen, setIntegrationOpen] = useState(false);
@@ -1874,6 +1887,14 @@ function ServiceRow({
             permanent — so the cell says so in words rather than going blank. */}
         <TableCell>
           <LocationCell index={projectIndex} project={service.project} />
+        </TableCell>
+        {/* Which rung it sits on, and the control that moves it. Unassigned is
+            not an error here: it gets the same control every other row gets. */}
+        <TableCell sx={{ minWidth: 240 }}>
+          <RungCell
+            reading={readPlacement(service.project, service.environment, assignIndex)}
+            onAssign={() => onAssign(service)}
+          />
         </TableCell>
         <TableCell>
           <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
@@ -1918,7 +1939,7 @@ function ServiceRow({
         </TableCell>
       </TableRow>
       <TableRow>
-        <TableCell sx={{ py: 0 }} colSpan={7}>
+        <TableCell sx={{ py: 0 }} colSpan={8}>
           <Collapse in={open} timeout="auto" unmountOnExit>
             <Box
               sx={{
@@ -2160,7 +2181,21 @@ interface SnackState {
 function ServicesPage() {
   const { data, isLoading, error } = useServices();
   const projects = useProjects();
+  const environments = useEnvironments();
   const projectIndex = useMemo(() => buildProjectIndex(projects.data ?? []), [projects.data]);
+  // What may be OFFERED, and whether hz has said yet. The two are one object on
+  // purpose: an empty offerable set and an unanswered one are different facts,
+  // and a control that cannot tell them apart offers nothing and calls it
+  // "no projects declared".
+  const assignIndex = useMemo(
+    () =>
+      buildAssignIndex(
+        projects.data,
+        environments.data,
+        worstState(readState(projects), readState(environments)),
+      ),
+    [projects, environments],
+  );
   const { data: settings } = useSettings();
   const { data: zonesData } = useZones();
   const addMutation = useAddService();
@@ -2175,6 +2210,10 @@ function ServicesPage() {
   const [portMapOpen, setPortMapOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Service | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  // The assign dialog reports its own refusals inline, so it deliberately does
+  // NOT feed the snackbar: hz's ordering refusals name the command that fixes
+  // them and a four-second toast truncates exactly that half.
+  const [assignTarget, setAssignTarget] = useState<Service | null>(null);
   const [snack, setSnack] = useState<SnackState>({ open: false, message: "", severity: "success" });
 
   const showSnack = (message: string, severity: "success" | "error") =>
@@ -2315,6 +2354,7 @@ function ServicesPage() {
               <TableCell sx={{ width: 40 }} />
               <TableCell>Name</TableCell>
               <TableCell>{PROJECT_COLUMN_LABEL}</TableCell>
+              <TableCell>{PLACEMENT_COLUMN_LABEL}</TableCell>
               <TableCell>Domains</TableCell>
               <TableCell align="center">Int DNS</TableCell>
               <TableCell align="center">Ext DNS</TableCell>
@@ -2324,7 +2364,7 @@ function ServicesPage() {
           <TableBody>
             {filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
                     {services.length === 0 ? "No services configured." : "No matching services."}
                   </Typography>
@@ -2336,9 +2376,11 @@ function ServicesPage() {
                   key={svc.name}
                   service={svc}
                   projectIndex={projectIndex}
+                  assignIndex={assignIndex}
                   zones={zones}
                   onEdit={setEditTarget}
                   onDelete={setDeleteTarget}
+                  onAssign={setAssignTarget}
                 />
               ))
             )}
@@ -2379,6 +2421,22 @@ function ServicesPage() {
           localInterface={localInterface}
           publicIP={publicIP}
           serviceName={editTarget.name}
+        />
+      )}
+
+      {/* Assign dialog — J8, the verb that had no UI. It offers only projects
+          and rungs hz declares, so there is no way to compose a placement
+          Save() is obliged to refuse, and it reports a refusal inline rather
+          than through the snackbar below. */}
+      {assignTarget && (
+        <AssignDialog
+          service={assignTarget.name}
+          current={{
+            project: assignTarget.project ?? "",
+            environment: assignTarget.environment ?? "",
+          }}
+          index={assignIndex}
+          onClose={() => setAssignTarget(null)}
         />
       )}
 

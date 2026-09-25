@@ -121,7 +121,7 @@ plan documents. Sixteen, in the order an estate meets them.
 | J5 | Keep the gateway's own house in order | **served**, scattered over four nav entries |
 | J6 | Move the gateway, or move a box | **half-served** — the screen that exists for it prints a command |
 | J7 | Declare the estate: projects, rungs, the tree | **CLI only** — the UI is read-only by design decision, not by constraint |
-| J8 | Put a service into the tree | **CLI only** |
+| J8 | Put a service into the tree | **served** — `/services` and `/domains` render the placement and assign it (was CLI only) |
 | J9 | Onboard a machine | **CLI only**, and it requires carrying an admin credential to the box |
 | J10 | Give a project a network (segments) | **CLI only** — zero UI, and the tunnel is not built |
 | J11 | Bless a version and get it onto a box | **half-built** — declared and projected; nothing installs it |
@@ -302,6 +302,15 @@ undeclared rung ([plan.md](../plan.md), *Deploy gate*). A UI that added assignme
 without the declaration screens would walk operators straight into it.
 
 **Verdict: CLI only.**
+
+> **SERVED, as of `feat/services-project-aware`.** `/services` and `/domains`
+> render project and rung per row and carry an assign control that posts to
+> `/api/v1/services/assign`. The ordering trap is closed by construction rather
+> than by a validation message: the control offers only projects and rungs hz
+> declares, so a placement `Save()` must reject cannot be composed — and when
+> the server refuses anyway, the refusal is rendered inline with the `hz project
+> add` / `hz env add` command it names, never through a snackbar that truncates
+> exactly that half. Declaration itself (J7) is still CLI-only.
 
 ### J9 — Onboard a machine
 
@@ -606,7 +615,7 @@ product. The seam is visible in the menu.
 | 4 | `machines` (index) | J9, J13 | **fragment** — read-only; no add/rm; no pending state in the record | yes |
 | 5 | `machines/$machine` | J14, J11 | whole (the projection + its gaps) | deep link, correct |
 | 6 | `hosts` | J6 | **fragment** — finds occurrences, prints the command, cannot adopt | arguable — see seam 4 |
-| 7 | `services` | J2, J8 | whole for J2, **absent** for J8 | yes |
+| 7 | `services` | J2, J8 | whole for J2, **whole for J8** since `feat/services-project-aware` | yes |
 | 8 | `domains` | J2 | whole (coverage gaps, drift banner) | arguable — it is a view of `Service.Domains` |
 | 9 | `dns` + `dns/$zone` | J2 | whole | yes |
 | 10 | `vpn` | J3 | whole for people; blind to J10 | yes |
@@ -696,6 +705,16 @@ control to a table that does not render the assignment.
 
 **Worst seam in the product**, because it is the cheapest to fix and the most
 visible: two columns and a link.
+
+> **CLOSED.** The counts above are a snapshot from when this was written and no
+> longer hold — re-measured on `dev` they are **12** for `services.tsx` and
+> **19** for `domains.tsx` (controls: 203 / 113). The Project column landed with
+> the project-scoped routes (`0436dd7`); the Environment column and the assign
+> control landed with `feat/services-project-aware`. Both screens now render
+> project *and* rung per row, keep "unassigned", "not answered yet" and "could
+> not be asked" as three distinct states, and offer an assign control that lists
+> only declared projects and rungs. Held by `ui/src/components/model/
+> assign.selftest.ts` and `assign.render.selftest.tsx`.
 
 #### Seam 2 — the model reaches exactly one screen
 
