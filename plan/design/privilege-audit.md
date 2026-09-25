@@ -1581,9 +1581,70 @@ status of each as of 2026-09-25. One at a time — several make the next moot.
       because a directory both writers converge on is still converged when they
       agree on the wrong set. It is a convergence test and says so; the set is
       `TestBothWritersLeaveTheSameErrorsDirectory`'s job.
-- [ ] **Move ip-forwarding** as two `File` entries — `/etc/sysctl.d/…` and
-      `/proc/sys/net/ipv4/ip_forward` (§3.1 #1). Also fixes the
-      lost-on-reboot bug in the icebox.
+- [x] **Move ip-forwarding** as two `File` entries —
+      `/etc/sysctl.d/70-hz-ip-forward.conf` and `/proc/sys/net/ipv4/ip_forward`
+      (§3.1 #1). Done 2026-09-25. **And it did fix the lost-on-reboot bug in
+      the icebox**, which is not a bonus: the bug is that nothing wrote a
+      persistent file, and a file is the only thing the agent can own, so
+      fixing it properly IS the hand-over. `internal/server/ipforward.go`
+      declares both; `wireguard.EnableIPForwarding` writes both; the names,
+      the contents and the claim glob come from one set of constants in
+      `internal/wireguard/render.go`.
+
+      **`/proc` stayed a `File`, and the three things that had to be checked
+      rather than assumed** (all in `ipforward.go`'s header):
+      *convergence is a newline* — procfs prints `"1\n"`, so the old `"1"`
+      would have had the agent rewrite the kernel flag on every pass and report
+      drift forever on a correct machine; *the mode is true and unenforceable*
+      — `os.WriteFile` applies a permission only when it creates the inode and
+      procfs refuses chmod, so `0644` is declared because that is what the node
+      already reports and must not be treated as a lever; *the write is the
+      shell's write* — `O_WRONLY|O_CREATE|O_TRUNC`, exactly `echo 1 >`, and
+      `writeIfChanged`'s `MkdirAll` is a no-op wherever procfs is mounted. A
+      typed sysctl section was considered and rejected: the apply semantics are
+      "these bytes at this path, poke nothing", which is the line
+      `Desired.Files` draws, and a sixth named section would add a branch on
+      both sides of a version boundary to write the same bytes to the same path.
+
+      **The claim is on `/etc/sysctl.d` only, and a claim reaching `/proc` is
+      now UNREPRESENTABLE** — `cleanDir` refuses `/proc` and `/sys`
+      (`internal/agent/ownership.go`, `kernelStateRoots`), and the planner says
+      *why* rather than dropping the claim silently. The claim's glob is
+      `*-hz-ip-forward.conf`, hz's own namespace: `/etc/sysctl.d` holds the
+      distribution's files and a `*.conf` claim would delete all of them.
+
+      **hz NEVER declares forwarding OFF.** Three states, and the middle one is
+      load-bearing: no section (a remote machine), the claim with no files (hz
+      is not routing here — no opinion), the claim with both files (routing).
+      The flag is kernel-wide and shared with docker and libvirt, so a `0`
+      would break them; a box that stops routing has hz's drop-in removed and
+      its live flag left alone.
+
+      **Measured, not assumed — six positive controls, each reversed.** A byte
+      disagreement on the runtime value reddens the compare AND the convergence
+      test, whose message is the real-box symptom ("the kernel flag being set
+      on every pass"); a **mode** disagreement reddens **only the compare**,
+      the same gap the maintenance pages found; widening the claim to `*.conf`
+      reddens the compare, the unmanaged-state test and hz's own sweep test;
+      emptying `kernelStateRoots` reddens both kernel-state tests;
+      claiming `/etc/sysctl.d` only while routing reddens the unmanaged-state
+      test; making hz stop writing the drop-in — the original bug — reddens
+      four tests across two packages.
+
+      ⚠ **One control found nothing, and that was the finding.** Rendering
+      `net.ipv4.ip_forward=0`, or misspelling the key, left the WHOLE TREE
+      GREEN: both writers take the bytes from one constant, so the compare
+      moves with it and nothing asserted what the file MEANS. That is the blind
+      spot "one definition, two consumers" buys — agreement becomes free and
+      correctness unchecked. Closed by
+      `TestTheDropInActuallyEnablesForwarding`, which reads the drop-in the way
+      `systemd-sysctl` does and checks the key, the value, and that the value
+      agrees with the one written to the live flag. Both controls redden it now.
+
+      ⚠ **`TestNeitherForwardingWriterUndoesTheOther` is blind to a widened
+      claim**, exactly as its maintenance-page counterpart is and for the same
+      reason: a directory both writers converge on is still converged when they
+      agree on the wrong set. The set is the compare's job.
 - [ ] **Move log-retention** (§3.1 #13) — the first fifth-section item, so it
       lands *after* the §4.3 decision.
 - [ ] **Move bans** (§3.2). State the sync→async contract change in the service

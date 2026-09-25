@@ -34,18 +34,22 @@ import (
 // to the whole HAProxy directory would only add files hz's maintenance-page
 // writer never had an opinion on.
 
-// errorsDirState is one directory, flattened to something comparable: name →
+// dirSnapshot is one directory, flattened to something comparable: name →
 // mode + contents. Read rather than derived, so what is asserted is the state
 // on disk and not a second rendering of the intent.
-type errorsDirState map[string]string
+//
+// Named for what it does rather than for this file, because the second
+// hand-over reuses it verbatim (ipforward_test.go): the compare is the same
+// compare wherever two writers share a directory.
+type dirSnapshot map[string]string
 
-func readErrorsDir(t *testing.T, dir string) errorsDirState {
+func snapshotDir(t *testing.T, dir string) dirSnapshot {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read %s: %v", dir, err)
 	}
-	out := errorsDirState{}
+	out := dirSnapshot{}
 	for _, e := range entries {
 		fi, err := e.Info()
 		if err != nil {
@@ -64,7 +68,7 @@ func readErrorsDir(t *testing.T, dir string) errorsDirState {
 	return out
 }
 
-func (s errorsDirState) names() []string {
+func (s dirSnapshot) names() []string {
 	out := make([]string, 0, len(s))
 	for n := range s {
 		out = append(out, n)
@@ -233,8 +237,8 @@ func TestBothWritersLeaveTheSameErrorsDirectory(t *testing.T) {
 		t.Fatal("both writers ran over the same directory; the comparison would be a tautology")
 	}
 
-	hzState := readErrorsDir(t, hzDir)
-	agentState := readErrorsDir(t, agentDir)
+	hzState := snapshotDir(t, hzDir)
+	agentState := snapshotDir(t, agentDir)
 
 	// THE COMPARISON IS ONLY WORTH ANYTHING IF THE DIRECTORY IS INTERESTING.
 	// Two empty directories are byte-identical, and so are two directories
@@ -301,7 +305,7 @@ func TestNeitherWriterUndoesTheOther(t *testing.T) {
 	s.config.Store(&cfg)
 
 	dir, _ := agentFillsTheErrorsDirectory(t, s)
-	afterAgent := readErrorsDir(t, dir)
+	afterAgent := snapshotDir(t, dir)
 
 	// hz's writers, second, over the agent's result.
 	if err := haproxy.New(cfg.HAProxyConfigPath, "/run/haproxy/admin.sock").
@@ -311,7 +315,7 @@ func TestNeitherWriterUndoesTheOther(t *testing.T) {
 	if err := s.cfg().WriteMaintenancePageFiles(); err != nil {
 		t.Fatal(err)
 	}
-	if after := readErrorsDir(t, dir); !stateEqual(after, afterAgent) {
+	if after := snapshotDir(t, dir); !stateEqual(after, afterAgent) {
 		t.Fatalf("hz's writers changed what the agent left:\n after %v\n was   %v", after, afterAgent)
 	}
 
@@ -326,7 +330,7 @@ func TestNeitherWriterUndoesTheOther(t *testing.T) {
 	if len(res.Removed) > 0 {
 		t.Fatalf("the agent removed %v on a converged directory", res.Removed)
 	}
-	if after := readErrorsDir(t, dir); !stateEqual(after, afterAgent) {
+	if after := snapshotDir(t, dir); !stateEqual(after, afterAgent) {
 		t.Fatalf("a second agent pass changed the directory:\n after %v\n was   %v", after, afterAgent)
 	}
 }
@@ -376,9 +380,9 @@ func TestClearingAPageRemovesTheFileByEitherPath(t *testing.T) {
 			t.Fatalf("clearing alpha took gamma's page in %s too: %v", dir, err)
 		}
 	}
-	if !stateEqual(readErrorsDir(t, agentDir), readErrorsDir(t, hzDir)) {
+	if !stateEqual(snapshotDir(t, agentDir), snapshotDir(t, hzDir)) {
 		t.Fatalf("the two writers diverge after a clear:\n agent %v\n hz    %v",
-			readErrorsDir(t, agentDir), readErrorsDir(t, hzDir))
+			snapshotDir(t, agentDir), snapshotDir(t, hzDir))
 	}
 }
 
@@ -394,7 +398,7 @@ func slicesEqualStr(a, b []string) bool {
 	return true
 }
 
-func stateEqual(a, b errorsDirState) bool {
+func stateEqual(a, b dirSnapshot) bool {
 	if len(a) != len(b) {
 		return false
 	}

@@ -350,11 +350,18 @@ func removals(d *Desired, obs Observed) []Change {
 	for _, od := range d.dirs() {
 		claimed, ok := cleanDir(od.Dir.Path)
 		if !ok {
+			detail := "not an absolute directory path, so nothing here is claimed"
+			if unclaimableDir(od.Dir.Path) {
+				// A refused claim is reported for what it is rather than as a
+				// malformed path: the payload's author meant something, and
+				// "this is kernel state" is the answer they need.
+				detail = "kernel state, not a directory anything can be removed from, so nothing here is claimed"
+			}
 			out = append(out, Change{
 				Subsystem: od.Subsystem,
 				Target:    od.Dir.Path,
 				Kind:      KindUnknown,
-				Detail:    "not an absolute directory path, so nothing here is claimed",
+				Detail:    detail,
 			})
 			continue
 		}

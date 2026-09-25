@@ -169,6 +169,11 @@ type File struct {
 //     first time it ran.
 //   - A file the payload also lists is never a removal candidate, so a
 //     directory cannot be claimed into deleting its own contents.
+//   - A claim under /proc or /sys is refused outright (ownership.go,
+//     kernelStateRoots). The payload names a path under /proc — the live
+//     forwarding flag, internal/server/ipforward.go — so the directory above
+//     it would otherwise be one claim away from a prune, and "unlink it" is
+//     not a question a kernel knob has an answer to.
 //
 // ownership.go holds the single function all of that lives in, and both the
 // planner and the applier ask it independently.
