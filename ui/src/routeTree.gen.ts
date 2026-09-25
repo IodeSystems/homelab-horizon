@@ -23,6 +23,7 @@ import { Route as MfaRouteImport } from './routes/mfa'
 import { Route as ObservabilityRouteImport } from './routes/observability'
 import { Route as PortsRouteImport } from './routes/ports'
 import { Route as ProjectsRouteImport } from './routes/projects'
+import { Route as SegmentsRouteImport } from './routes/segments'
 import { Route as ServicesRouteImport } from './routes/services'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as VpnRouteImport } from './routes/vpn'
@@ -107,6 +108,11 @@ const ProjectsRoute = ProjectsRouteImport.update({
   path: '/projects',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SegmentsRoute = SegmentsRouteImport.update({
+  id: '/segments',
+  path: '/segments',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ServicesRoute = ServicesRouteImport.update({
   id: '/services',
   path: '/services',
@@ -188,6 +194,7 @@ export interface FileRoutesByFullPath {
   '/observability': typeof ObservabilityRoute
   '/ports': typeof PortsRoute
   '/projects': typeof ProjectsRoute
+  '/segments': typeof SegmentsRoute
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
@@ -216,6 +223,7 @@ export interface FileRoutesByTo {
   '/observability': typeof ObservabilityRoute
   '/ports': typeof PortsRoute
   '/projects': typeof ProjectsRoute
+  '/segments': typeof SegmentsRoute
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
@@ -246,6 +254,7 @@ export interface FileRoutesById {
   '/observability': typeof ObservabilityRoute
   '/ports': typeof PortsRoute
   '/projects': typeof ProjectsRoute
+  '/segments': typeof SegmentsRoute
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
@@ -277,6 +286,7 @@ export interface FileRouteTypes {
     | '/observability'
     | '/ports'
     | '/projects'
+    | '/segments'
     | '/services'
     | '/settings'
     | '/vpn'
@@ -305,6 +315,7 @@ export interface FileRouteTypes {
     | '/observability'
     | '/ports'
     | '/projects'
+    | '/segments'
     | '/services'
     | '/settings'
     | '/vpn'
@@ -334,6 +345,7 @@ export interface FileRouteTypes {
     | '/observability'
     | '/ports'
     | '/projects'
+    | '/segments'
     | '/services'
     | '/settings'
     | '/vpn'
@@ -364,6 +376,7 @@ export interface RootRouteChildren {
   ObservabilityRoute: typeof ObservabilityRoute
   PortsRoute: typeof PortsRoute
   ProjectsRoute: typeof ProjectsRoute
+  SegmentsRoute: typeof SegmentsRoute
   ServicesRoute: typeof ServicesRoute
   SettingsRoute: typeof SettingsRoute
   VpnRoute: typeof VpnRoute
@@ -471,6 +484,13 @@ declare module '@tanstack/react-router' {
       path: '/projects'
       fullPath: '/projects'
       preLoaderRoute: typeof ProjectsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/segments': {
+      id: '/segments'
+      path: '/segments'
+      fullPath: '/segments'
+      preLoaderRoute: typeof SegmentsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/services': {
@@ -603,6 +623,7 @@ const rootRouteChildren: RootRouteChildren = {
   ObservabilityRoute: ObservabilityRoute,
   PortsRoute: PortsRoute,
   ProjectsRoute: ProjectsRoute,
+  SegmentsRoute: SegmentsRoute,
   ServicesRoute: ServicesRoute,
   SettingsRoute: SettingsRoute,
   VpnRoute: VpnRoute,
