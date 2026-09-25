@@ -89,10 +89,13 @@ func planWireGuard(o subsystemObservation) subsystemPlan {
 		// mint a new server identity and invalidate every client config that
 		// was ever handed out — on a boot where the real file was merely
 		// unreadable, that is a self-inflicted outage. Creating it stays an
-		// explicit admin action (POST /api/v1/wg/create-config).
+		// explicit act by a human at the box: `sudo hz-agent wg-create-config`,
+		// which refuses outright if the file is already there. hz will not do
+		// it from an HTTP request at all any more — the endpoint that used to
+		// is gone (plan/design/privilege-audit.md §7 A, §3.1 #5).
 		p.Skip = fmt.Sprintf("WireGuard is not configured: %s does not exist. "+
-			"Create it from Settings → System (\"Create WireGuard config\"), "+
-			"or POST /api/v1/wg/create-config. Nothing is generated automatically "+
+			"Create it on this host with: sudo hz-agent wg-create-config. "+
+			"Nothing is generated automatically "+
 			"because that would replace the server key every client trusts.", o.WGConfigPath)
 	case o.WGUp:
 		// Already up; nothing to do.

@@ -1268,8 +1268,19 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/system/fix/wg-forward-chain", s.handleAPISystemFixWGForwardChain)
 	s.handlePeerInstance(mux, "/api/v1/system/fix/wg-rules", s.handleAPISystemFixWGRules)
 	s.handlePeerInstance(mux, "/api/v1/system/fix/log-retention", s.handleAPISystemFixLogRetention)
-	s.handlePeerInstance(mux, "/api/v1/wg/create-config", s.handleAPIWGCreateConfig)
-	s.handlePeerInstance(mux, "/api/v1/haproxy/fix-logging", s.handleAPIHAProxyFixLogging)
+	// There is no /api/v1/wg/create-config and no /api/v1/haproxy/fix-logging.
+	// Both did their work by piping an hz-built shell string into
+	// `systemd-run … bash -c` to escape hz's own ProtectSystem=strict sandbox,
+	// which is §5.2 rules 1 and 3 at once, and between them they were the only
+	// reason the systemdRun helper existed. They moved to the binaries that own
+	// the files (plan/design/privilege-audit.md §7 A):
+	//
+	//   wg0.conf             sudo hz-agent wg-create-config     (refuses to replace one)
+	//   haproxy's logging    sudo homelab-horizon fix-haproxy-logging
+	//
+	// hz still DIAGNOSES both — /api/v1/system/health carries the verdict and
+	// the System Health card names the command, the same shape the unit rows
+	// and the dependency rows already have.
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/write-config", s.handleAPIDNSMasqWriteConfig)
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/reload", s.handleAPIDNSMasqReload)
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/start", s.handleAPIDNSMasqStart)
