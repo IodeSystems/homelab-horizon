@@ -247,9 +247,16 @@ export function SidebarProjectZone({ onNavigate }: { onNavigate?: () => void }) 
           unaskable: the operator cannot tell "this project has no bans" from
           "hz cannot say", and the support conversation has nowhere to start.
           Each names the gateway screen that does hold the rows. */}
-      <Typography variant="caption" sx={ZONE_CAPTION}>
-        cannot be scoped to a project
-      </Typography>
+      {/* The heading is conditional on there being entries under it. A caption
+          over nothing is the blank area the operator has to interpret — and it
+          is what a positive control found: deleting the entries left the
+          heading standing, which reads as "there are none" rather than "these
+          were removed". */}
+      {PROJECT_NAV_GAPS.length > 0 ? (
+        <Typography variant="caption" sx={ZONE_CAPTION}>
+          cannot be scoped to a project
+        </Typography>
+      ) : null}
       <List dense disablePadding>
         {PROJECT_NAV_GAPS.map((gap) => (
           <Tooltip key={gap.label} title={gap.why} placement="right">
