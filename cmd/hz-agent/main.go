@@ -51,6 +51,8 @@ COMMANDS
   install           Enroll, then write the systemd unit. Does not enable it,
                     does not start it.
   show-systemd      Print the unit that install would write
+  wg-create-config  Write a fresh wg0.conf on a gateway that has none.
+                    REFUSES if the file already exists. Needs root.
   version           Print version
 
 IT DOES NOTHING BY DEFAULT, ON PURPOSE
@@ -61,6 +63,11 @@ IT DOES NOTHING BY DEFAULT, ON PURPOSE
     install    writes the unit and stops. No enable, no start.
     run        computes the diff and logs it. It applies nothing.
     run --apply  is the only thing that writes, and it needs root.
+
+  wg-create-config is the exception that proves the rule: a one-off verb a
+  human runs by name, which writes once and is reachable from nothing —
+  not from run, not from diff, not from the unit. It is where
+  POST /api/v1/wg/create-config went.
 
   Turning it on is three explicit steps, and each one is somebody's decision:
     sudo systemctl enable --now hz-agent      # still only reports
@@ -155,6 +162,8 @@ func main() {
 		err = runInstall(args)
 	case "show-systemd":
 		err = runShowSystemd(args)
+	case "wg-create-config":
+		err = runWGCreateConfig(args)
 	case "version", "--version":
 		fmt.Printf("hz-agent %s (built %s)\n", Version, BuildTime)
 	case "help", "--help", "-h":
