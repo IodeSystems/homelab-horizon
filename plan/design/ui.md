@@ -1871,6 +1871,60 @@ re-verified true; only the offsets moved.
   the analysis and the recommendation; the call is the operator's.
 - **Visual identity, the palette, Decisions 2 and 3.** Untouched, as before.
 
+#### Built 2026-09-25 — what it shipped as, and the three things reading could not see
+
+The two zones shipped as written. `AppLayout`'s sidebar is a project zone
+(`ProjectNavZone.tsx`, drawn from `readProjectZone`) over the fourteen gateway
+entries, unchanged in content and order; `/$project/machines` and
+`/$project/segments` exist; the 260px tree column, `ProjectTabs`, the
+`pathname`-tail derivation that fed it and the `isMobile` branch are gone;
+`ProjectHeader` keeps identity and lost the picker. The no-detail-route rule is
+`PROJECT_NAV`'s `kind` field, and the check walks the router's real route table
+rather than trusting the file names.
+
+Choices the amendment left to the build:
+
+- **The project zone shows the WHOLE tree at the top level** and, once inside,
+  the project plus its direct children. Four projects deep in the render
+  fixture it still reads as one screenful; the expanding-tree question stays
+  open for an estate that has depth.
+- **`/$project/machines` lists APPROVED only**, with pending counted and named
+  in a panel of its own. hz declares a version for an approved address and none
+  for a pending one, so a pending row would be a box asking to be on the screen
+  rather than a box that is — and a box that can put itself on a screen by
+  booting has approved itself. The panel names the box and the address so the
+  omission is visible, not silent.
+- **The gateway zone does not collapse.** It is a caption and fourteen rows in
+  one scrolling sidebar; nothing about it changes with depth, which is the
+  property being bought.
+- **"Overview" kept its label**, unchanged content.
+
+Three things the build found that reading did not.
+
+1. **At phone width the project zone renders NOTHING, by construction.** Below
+   `md` the sidebar is a MUI `Drawer`, which renders through a portal — so a
+   closed drawer produces no markup at all under SSR, and on a real phone the
+   whole nav is behind the hamburger. The amendment's *"the project nav gets the
+   responsive behaviour the shell already has"* is true and has a consequence it
+   does not name: deleting the header's picker leaves a phone-width project
+   screen saying *"3 projects sit below it"* with no way to reach any of them.
+   So `ProjectHeader` keeps a `← parent` link and gains an *"enter a
+   subproject"* row — the way up and the way down, on the page, at both widths.
+   Not a picker: it reaches this project's parent and its own children, nothing
+   else. The hamburger became a labelled **Menu** button for the same reason.
+2. **`/$project/config` is not derived, and the first draft of `PROJECT_NAV`
+   said it was.** `CMRegistrationResp` carries `Project` directly, so config is
+   an owned surface like services; only `machines` is derived. The distinction
+   is load-bearing — it is what the no-detail-route check keys on — so getting
+   it wrong would have silently widened the rule to a screen that does not need
+   it, or narrowed it later by "fixing" the flag.
+3. **A check that a table is ABSENT proves nothing without its opposite.** The
+   empty-machine-list check (`no <th>Machine</th>`) passed identically on a
+   screen that rendered no table at all, for any reason. It is now paired with
+   the same assertion on the populated screen, so a regression that stopped
+   rendering the table everywhere reddens instead of reading as a good empty
+   state. Same shape as the "a passing lint proves nothing on its own" rule.
+
 ### Decision 2 — machines and instances are one surface, two lenses
 
 Not two top-level surfaces, and not one merged table.
