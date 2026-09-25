@@ -582,7 +582,7 @@ Ordered, replacing the handover list in `architecture.md`.
 > **Status re-checked 2026-09-22.** Items 1, 2 and 4 are done (item 1 with its
 > issuer changed — §1.1). Item 3's guard half is done and measured (§7.1); its
 > three named bypasses are not assigned. Item 5's document exists but its §2
-> table is incomplete (§7) and its §7 checklist stands at 6 of 34 (§8). Item 6
+> table is incomplete (§7) and its §7 checklist stands at 8 of 32 (§8, re-counted 2026-09-25). Item 6
 > was answered by the classification — the right move is deletion, not a seam —
 > and `autoheal.Run` is still there. **The consolidated answer is §8.**
 > (`autoheal.Run` was deleted 2026-09-22, per §8.4 — see classification §3.5.)
@@ -927,8 +927,11 @@ Added 2026-09-22, because that is the question this re-measurement exists to
 answer. `plan/design/privilege-classification.md` §7 and `plan/design/ha-and-the-agent.md` §7
 were both walked item by item against the tree at `f6e06bd`.
 
-**Score: 6 of 34 checklist items are done. Every one of them is in section B
-(hand over). Section A (decide, then delete) is 0 of 10. Section C (the flip
+**Score (re-counted 2026-09-25): 8 of 32 done, 2 partial. The original read
+"6 of 34" and was stale in BOTH directions — the denominator was never 34 (§7 as
+rescued is A=10, B=12, C=5, D=5 = 32), and section A carried four `[x]` items
+dated 2026-09-22, the same day it was scored "0 of 10". Most are in section B
+(hand over). Section A is 4 of 10, not 0. Section C (the flip
 itself) is 0 of 5 — and steps 4 and 5 ARE C1 and C2.**
 
 ⚠ **That score is stale and its denominator does not match the rescued
@@ -1132,7 +1135,7 @@ are reproduced verbatim below, because nothing else holds them:
   privileged verb becoming a general-purpose root helper. (Also condensed into
   the repo's root `CLAUDE.md`.)
 - **§7's item-12 readiness checklist** — the ONLY enumerated to-do list for
-  finishing the flip. §8 of this document scores against it ("6 of 34"); it
+  finishing the flip. §8 of this document scores against it (8 of 32 as of 2026-09-25); it
   never reproduced it.
 - **§8's operator questions** — cross-referenced from §4 here, never restated.
 
@@ -1171,6 +1174,50 @@ the flip itself, **D** is what proves it.
 This sits alongside `ha-and-the-agent.md` §7 (the peer-sync half) and
 `privilege-audit.md` §3 (the ordered consequences). It does not replace either.
 
+
+### 7.2 §3.10 — the maintenance pages, rescued
+
+Four live code comments cite `privilege-classification.md` §3.10. That file was
+deleted 2026-09-25 and the rescue carried §5.2, §7 and §8 — not this. Restored
+verbatim below so the citations resolve.
+
+**Read it with the correction the byte-identical proof added (2026-09-25):**
+its closing paragraph says the checklist item "must read *every file under the
+haproxy errors directory*". That widens the SENTENCE, never the `Match` claim.
+Setting `Match: ["*.http"]` makes the agent delete the distribution's
+400/403/500/502 pages while hz leaves them — measured by positive control, not
+reasoned. The claim already lists both name shapes hz writes, which is what the
+phrase means.
+
+### 3.10 ✅ SERVED 2026-09-21 — `Config.WriteMaintenancePageFiles`, AGENT-OWNED, and the audit never listed it
+
+The pages and the claim on that directory are in the payload (item 12 step 3).
+The writer stays until hz stops writing files at all (step 5); both it and
+`buildAgentDesired` now render from `Config.MaintenancePages`, so they cannot
+drift. What follows is the verdict as it was argued — and the one line in it
+that was wrong: "fits the agent's model today with no new capability at all"
+understated the prune. `[]File` says what should exist; nothing in it says what
+should NOT, which is §4.5 and is what `agent.Directory` had to add.
+
+
+`internal/config/derive.go:339`. Writes one `<service>_503.http` per service
+that sets `Proxy.MaintenancePage` into the HAProxy errors directory, 0644, and
+deletes the stale ones. Called from `handlers_services.go:674` and
+`handlers_haproxy.go:17`.
+
+It is pure render-to-file with content from config, variable in number,
+non-secret. **`HAProxySection.Files` is already a `[]File`** — it takes an
+arbitrary list — so this fits the agent's model today with no new capability at
+all. It is the cheapest thing in this document to move.
+
+It also **widens an existing checklist item**: `ha-and-the-agent.md` §7 says
+"`errors/503.http` has an owner … either add it to `HAProxySection.Files` or
+accept that it is provisioned once". That is the *static* 503 page that
+`haproxy.WriteConfig` writes (`haproxy/apply.go:66-69`). These are a *different*
+set of files in the same directory, written by a different caller, and they are
+**not** provisioned-once — they change whenever an admin edits a maintenance
+page. The checklist item must read "every file under the haproxy errors
+directory", not one filename.
 
 ### 7.1 What only the operator can answer
 
