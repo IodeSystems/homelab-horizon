@@ -204,8 +204,11 @@ func TestTheDeclaredStaticUnitDropsPrivilegeAndCannotWrite(t *testing.T) {
 	unit := fileNamed(t, staticFilesSection(cfg, "/usr/local/bin/homelab-horizon", declaredPaths()), declaredPaths().Unit)
 
 	for _, line := range []string{
-		"User=nobody",            // the uid drop the fork does today
-		"NoNewPrivileges=true",   // and it cannot be undone
+		// A non-root identity at least as narrow as the fork's uid 65534.
+		// DynamicUser is narrower: `nobody` is shared by every service that
+		// picks it, which is what systemd-analyze calls unsafe.
+		"DynamicUser=yes",
+		"NoNewPrivileges=true",   // and the drop cannot be undone
 		"CapabilityBoundingSet=", // no capability at all, empty on purpose
 		"ProtectSystem=strict",   // read-only filesystem: it serves, it does not write
 		"ProtectHome=read-only",
@@ -221,8 +224,14 @@ func TestTheDeclaredStaticUnitDropsPrivilegeAndCannotWrite(t *testing.T) {
 	if hasDirective(unit.Contents, "ReadWritePaths") {
 		t.Error("the declared unit grants a writable path: a static file server writes nothing")
 	}
-	if hasDirective(unit.Contents, "User=root") {
+	if hasDirective(unit.Contents, "User=root") || hasDirective(unit.Contents, "User=0") {
 		t.Error("the declared unit runs as root: that is strictly more privilege than the fork it replaces")
+	}
+	// A stable owner is what sitedeploy's chown used to require. If one comes
+	// back, the release tree has to be owned by it again — say so here rather
+	// than letting the two drift.
+	if hasDirective(unit.Contents, "User=") {
+		t.Error("the declared unit pins a static user; the release tree is readable by MODE now, and a pinned user reopens the question of who owns it")
 	}
 }
 
