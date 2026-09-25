@@ -597,7 +597,8 @@ func installService(configPath string, dryRun, withDeps bool) error {
 		fmt.Printf("Path: %s\n", servicePath)
 		fmt.Println("Content:")
 		fmt.Println(serviceContent)
-		return nil
+		fmt.Println()
+		return shipAgent(agentInstallDir, embeddedAgent, true, os.Stdout)
 	}
 
 	if os.Geteuid() != 0 {
@@ -651,6 +652,13 @@ func installService(configPath string, dryRun, withDeps bool) error {
 	fmt.Println("Reloading systemd...")
 	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
 		return fmt.Errorf("systemctl daemon-reload: %w", err)
+	}
+
+	// Every install ships the agent (agentbin.go). One file, no systemd: the
+	// agent stays inert and nothing here enables or starts it.
+	fmt.Println()
+	if err := shipAgent(agentInstallDir, embeddedAgent, false, os.Stdout); err != nil {
+		return err
 	}
 
 	// Post-install validation. The unit is installed; that is not the same as
