@@ -1105,3 +1105,60 @@ above:
   name at 15 characters; hz accepts any non-empty string (`segment.go:248-250`,
   `segment.go:458-460`). Harmless while names are short, a tunnel that will not
   come up once realm prefixes arrive. §4.1.
+
+
+# Part C — scoping bans and clients: the edge the records are missing
+
+**Stated by the operator 2026-09-25, after the nav amendment found both
+surfaces unbuildable:**
+
+> ip bans are for machines, and clients are for network segments. Both of these
+> can be scoped by project, or a part of a global pool (root project).
+
+That names the missing edge precisely, and it is the same shape twice:
+
+```
+IPBan   ->  Machine   ->  that machine's projects (via its instances)   or global
+WGPeer  ->  Segment   ->  Segment.Project                               or global
+```
+
+**Neither edge exists today. Measured 2026-09-25:**
+
+- `IPBan` is `{IP, Timeout, CreatedAt, ExpiresAt, Reason, Service}`
+  (`internal/config/config.go:946`). `Service` is **attribution, not scope** —
+  free text written by `banIP` (`internal/server/handlers_ban.go:102`), never
+  validated, rendered with a fallback. Enforcement is `filter INPUT`,
+  gateway-wide. That is *why* Part A forbids promoting `Service` to a scope:
+  the record would claim a narrowing the enforcement does not perform.
+- `WGPeer` is `{Name, PublicKey, AllowedIPs}` (`config.go:593`).
+  `internal/config/segment.go` mentions a peer **zero times**, against 63
+  mentions of `Machine` — positive-controlled. No link in either direction.
+
+## "Or global" is a third state, not an empty field
+
+`Service.Project` is permanently optional and an unassigned service is legal
+forever — so **"no project" already means *unassigned*, not *global***. If a
+ban or a client can be either owned by a project or pooled at the root, the
+record has to say which, or nobody can tell a deliberate global ban from one
+nobody has scoped yet.
+
+That is the founding bug's exact shape: absent and empty rendering the same.
+Whatever field carries this must have three values, not two.
+
+## The enforcement half is the harder one
+
+**Scoping a ban in the RECORD does not scope it in the KERNEL.**
+
+- **per-project** must be an HAProxy ACL on that project's backends —
+  per-request, after a TLS handshake, and it **cannot cover the L4 port
+  forwards**, which HAProxy never sees.
+- **global** is `filter INPUT`, which — separately, and already recorded as
+  plan item 26 — **does not cover the forwards either**.
+
+So global and per-project are **two mechanisms with different reach**, not one
+mechanism at two scopes. A UI rendering them as a single control with a scope
+dropdown would be lying about what happens to the packet.
+
+**Nothing in Part C is decided.** It is the operator's model written down with
+what each half costs, so the next pass starts from the measurement instead of
+rediscovering it.
