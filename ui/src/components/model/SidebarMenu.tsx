@@ -317,7 +317,18 @@ export function SidebarMenu({ onNavigate }: { onNavigate?: () => void }) {
           copied. */}
       <Typography
         variant="caption"
-        sx={{ ...CAPTION, fontFamily: menu.here ? "monospace" : undefined }}
+        data-menu-scope
+        sx={{
+          ...CAPTION,
+          // A PROJECT'S NAME IS AN IDENTIFIER AND MUST RENDER IN ITS OWN CASE.
+          // The caption style upper-cases, which is right for the three fixed
+          // words (`Estate`, `projects`, `the gateway`) and wrong for `acme-co`:
+          // "ACME-CO" is not the string the operator typed, cannot be searched
+          // for, and does not match the page header two inches to its right. The
+          // line dump in the render check reads the TEXT, so it cannot see a CSS
+          // transform — which is why this is asserted against the rule itself.
+          ...(menu.here ? { fontFamily: "monospace", textTransform: "none" } : {}),
+        }}
       >
         {menu.scopeLabel}
       </Typography>

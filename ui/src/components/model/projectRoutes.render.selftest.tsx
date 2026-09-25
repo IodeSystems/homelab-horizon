@@ -667,6 +667,30 @@ console.log("· ONE RECURSIVE MENU: the same five entries, narrowing as you desc
     "no 'in this project' caption over the name it duplicates",
   );
 
+  // --- THE SCOPE CAPTION IS NOT UPPER-CASED WHEN IT IS AN IDENTIFIER.
+  //     The line dump reads TEXT, so a CSS transform is invisible to it: the
+  //     sidebar would print "ACME-CO" for a project named `acme-co` and every
+  //     text assertion in this file would still pass. Asserted against the rule.
+  const scopeRule = (r: Rendered): string => {
+    const cls = /data-menu-scope[^>]*class="([^"]*)"|class="([^"]*)"[^>]*data-menu-scope/.exec(
+      menu(r).html,
+    );
+    const names = (cls?.[1] ?? cls?.[2] ?? "").split(/\s+/).filter((c) => c.startsWith("css-"));
+    const rules = names
+      .map((n) => new RegExp(`\\.${n}\\{([^}]*)\\}`).exec(r.html)?.[1] ?? "")
+      .join(";");
+    return rules;
+  };
+  check(scopeRule(entered) !== "", "the scope caption's own style rule was found");
+  check(
+    scopeRule(entered).includes("text-transform:none"),
+    `a project's name is rendered in its own case, not upper-cased: ${scopeRule(entered).slice(0, 120)}`,
+  );
+  check(
+    scopeRule(top).includes("text-transform:uppercase"),
+    "while the estate's caption keeps the caption style, because it is a word and not a name",
+  );
+
   // --- THE WAY UP IS A LINK AND IT NAMES ITS DESTINATION
   check(menuText(entered).includes("← acme-co"), "up names the parent by name");
   check(
