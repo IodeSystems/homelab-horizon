@@ -433,7 +433,16 @@ func (s *Server) desiredFor(machine string) *agent.Desired {
 	// inside staticFilesSection because they share one Files field and neither
 	// is the other's business — a second producer that RETURNED a section
 	// would drop the first one's unit.
-	d.Files = withIPForwarding(staticFilesSection(cfg, exe, s.staticPaths()), cfg, s.sysctlPaths())
+	//
+	// Log retention rides it too (logretention.go): the journald drop-in, a
+	// claim on /etc/systemd/journald.conf.d narrowed to hz's own name, and the
+	// journald restart that makes the drop-in mean something before the next
+	// reboot. Composed in the same chain and for the same reason — one Files
+	// field, three producers, none of which may replace the others' work.
+	d.Files = withLogRetention(
+		withIPForwarding(staticFilesSection(cfg, exe, s.staticPaths()), cfg, s.sysctlPaths()),
+		cfg, s.journaldPaths(),
+	)
 
 	_, expected, stale, blessed, currentIface, _ := s.buildClassifierInputs()
 	d.IPTables = iptablesSectionFor(expected, stale, blessed, currentIface, cfg.LastLocalIface)

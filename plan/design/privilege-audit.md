@@ -549,7 +549,7 @@ the agent's own tree.
 | ~~`internal/server/handlers_ha.go`~~ | ~~`/etc/dnsmasq.d/wg-*.conf`, `/etc/haproxy/haproxy.cfg`, `/etc/homelab-horizon`~~ — **wrong, corrected 2026-09-21** |
 | `internal/server/peer_sync.go` | certs (`pullCertFromPeer`), `iptables -I INPUT` (ban sync), and `applyNewConfig` → hz's whole reconcile path, on a 30s timer |
 | ~~`internal/server/handlers_integration.go`~~ | ~~`/etc/prometheus`, `/etc/systemd/system`~~ — **wrong, corrected 2026-09-21** (`privilege-classification.md` §1.1). Same shape as the `handlers_ha.go` row: the paths are inside a bash script hz *serves* for a human to run on the Prometheus box. No write, no exec. |
-| `internal/server/handlers_api_system_fix.go` | ~~`/etc/apparmor.d/…`~~, `/etc/systemd/journald.conf.d`. ~~**13 POSTs + 1 GET**; `systemdRun` still has 5 callers, three of them shell strings.~~ **Corrected + reduced 2026-09-25:** the caller count was 5 by grep and **4 by shape** (one site was an inline `systemd-run … bash -c`, not a call to the helper), and all four were in the haproxy fix-logging handler. That handler and `wg/create-config` are **deleted**; `systemdRun` is **deleted**; `/etc/apparmor.d` is no longer written by hz at all. 11 POSTs + 1 GET, none of which builds a shell string (`shell_guard_test.go`). |
+| `internal/server/handlers_api_system_fix.go` | ~~`/etc/apparmor.d/…`~~, ~~`/etc/systemd/journald.conf.d`~~ — **the journald drop-in is DECLARED since 2026-09-25** (§7 B, §3.1 #13): the file, the claim and the journald poke are in the payload (`internal/server/logretention.go`), hz still writes the same bytes from the same constants until step 5, and the two are compared byte for byte. ~~**13 POSTs + 1 GET**; `systemdRun` still has 5 callers, three of them shell strings.~~ **Corrected + reduced 2026-09-25:** the caller count was 5 by grep and **4 by shape** (one site was an inline `systemd-run … bash -c`, not a call to the helper), and all four were in the haproxy fix-logging handler. That handler and `wg/create-config` are **deleted**; `systemdRun` is **deleted**; `/etc/apparmor.d` is no longer written by hz at all. 11 POSTs + 1 GET, none of which builds a shell string (`shell_guard_test.go`). |
 | `internal/server/handlers_ban.go` | shells ~~`ip` and~~ `iptables` directly — **the `ip` half was wrong** (`privilege-classification.md` §1.4); the three exec sites are all `iptables`. **Four triggers, one of them a deploy token, not an admin.** |
 | `internal/server/handlers_api_iptables.go`, `reconcile_iptables.go` | `exec`. Includes `POST /iptables/remove`, whose table, chain and args come **from the request body** — the class §5.2 rule 2 names. |
 | ~~`internal/system/interfaces.go`~~ | ~~interface manipulation, `exec` + writes~~ — **wrong, corrected 2026-09-21** (`privilege-classification.md` §1.2). Those are Go *interface types* (`FileSystem`, `CommandRunner`), the test seam, not a caller. |
@@ -1184,7 +1184,10 @@ A fourth, weaker one, worth writing into the unit: after the flip, every
 says this) — the `+` prefix runs as root regardless of `User=`, and hz's unit has
 one today creating `/etc/letsencrypt`, `/etc/haproxy/certs` and
 `/etc/systemd/journald.conf.d` (`config.go:2802`). Two of those three are
-directories the **agent** should own after 12.3 and §3.1 #13.
+directories the **agent** should own after 12.3 and §3.1 #13 — and **§3.1 #13
+landed 2026-09-25**, so `/etc/systemd/journald.conf.d` is now a directory the
+agent creates and claims, and that `ExecStartPre=+` has one fewer reason to
+exist.
 
 ## 7. The item-12 readiness checklist
 
@@ -1645,8 +1648,78 @@ status of each as of 2026-09-25. One at a time — several make the next moot.
       claim**, exactly as its maintenance-page counterpart is and for the same
       reason: a directory both writers converge on is still converged when they
       agree on the wrong set. The set is the compare's job.
-- [ ] **Move log-retention** (§3.1 #13) — the first fifth-section item, so it
-      lands *after* the §4.3 decision.
+- [x] **Move log-retention** (§3.1 #13) — the first fifth-section item, so it
+      lands *after* the §4.3 decision. Done 2026-09-25.
+      `internal/server/logretention.go` declares the drop-in, the claim and the
+      journald poke; `writeJournalDropInAt` is hz's writer; the name, the
+      bytes, the sweep and the claim glob come from one set of constants, and
+      `logretention_test.go` runs both writers over identically seeded
+      directories and compares names, bytes and modes.
+
+      **IT NEEDED A RECORD, AND THAT IS THE WHOLE SHAPE OF THE MOVE.** hz had
+      been writing this file from a button since before anything in the config
+      said so, so hz could *write* it and could not *declare* it — and a
+      declaration is what the agent owns. `Config.JournalRetention` is that
+      record; the fixer sets it; `Server.adoptJournalRetention` sets it at boot
+      on a machine that already has hz's drop-in (first sighting adopts, never
+      acts — CLAUDE.md §11), which is the office gateway, where 10.5.1 already
+      reads met. Without adoption `hz-agent diff` would be in sync by
+      OMISSION, which is the failure §7 D's "in sync for every served section"
+      is worded against.
+
+      **hz emits NOTHING for journald when it has no record** — no file, no
+      claim, no unit. Unlike ip-forwarding there is no "claim with no files"
+      middle state, and there must not be: a claim with no file is an
+      instruction to DELETE the drop-in, and every machine whose operator
+      pressed the button before the field existed is in exactly that state. hz
+      has never had a way to ask for a SHORTER journal, so the state it would
+      express does not exist. Absence is the honest spelling of unknown here.
+
+      **The claim is `*-homelab-horizon.conf`, and the third time this trap was
+      set.** `/etc/systemd/journald.conf.d` holds other people's drop-ins — a
+      package's, an operator's, a config-management tool's — so `*.conf` would
+      have the agent delete every one. Measured, not reasoned: widening it to
+      `*.conf` reddens the compare.
+
+      **The unit poke is declared with the file**, because journald reads its
+      configuration at start: a drop-in nobody restarts takes effect at the
+      next reboot while the PCI card — which reads the configuration, not the
+      running journal — already reports the control met. `FilesSection.Units`
+      is section-wide, so on a machine where hz manages the journal a change to
+      the static site map also restarts journald. Cheap, lossless, fires only
+      when a file actually moved; per-file unit association is in
+      `plan/icebox.md`.
+
+      **Measured, not assumed — ten positive controls, each reversed.**
+      Widening the claim to `*.conf`, a **mode** disagreement (0644→0600 in the
+      payload) and hz's writer losing its sweep each redden the compare — and
+      the mode one reddens **nothing else**, the same gap the maintenance pages
+      and ip-forwarding both found. Dropping the `Units` entry reddens the poke
+      test; emitting the claim with the record off reddens the unmanaged-state
+      test; adoption stat-ing the directory instead of hz's own file reddens
+      the "does not invent an opinion" test.
+
+      ⚠ **Four controls redden ONLY the meaning test, and that is the finding
+      restated rather than a new one.** `Storage=volatile`, `MaxRetentionSec=1month`,
+      a misspelt key and a dropped `[Journal]` header all leave the byte-compare
+      and the convergence test GREEN, because both writers take the bytes from
+      one constant and the comparison moves with it. That is the ip-forwarding
+      lesson exactly. `TestTheDropInActuallyKeepsTwelveMonthsOfJournal` closes
+      it by reading the file the way its real consumer does — `journalPersistence`
+      and `parseSystemdDuration`, the two functions `readJournalState` feeds the
+      PCI control from — with `dirExists=false`, so the verdict comes from the
+      SETTING and not from a directory that happened to exist.
+
+      ⚠ **A wrong comment was corrected on the way through, and it decided
+      whether the hand-over is complete.** `handlers_api_system_fix.go` said
+      *"journald creates nothing itself: with Storage=persistent and no
+      directory it silently stays volatile"*, while `hostfacts.go`'s
+      `journalPersistence` says the opposite about the same value four lines of
+      comment apart. `systemd.journald.conf(5)` settles it: `persistent` stores
+      below `/var/log/journal`, **creating the directory if necessary**; `auto`
+      writes there only if it already exists. So the `mkdir` is a convenience,
+      not a precondition — which is what makes one declared `File` sufficient.
+      The mkdir stays in hz's fixer; the claim it made does not.
 - [ ] **Move bans** (§3.2). State the sync→async contract change in the service
       API's docs: `{ok:true}` means recorded, not installed.
 - [ ] **Stop calling `rebuildWGChains`/`syncMFAJailACL` from all 18 sites**
