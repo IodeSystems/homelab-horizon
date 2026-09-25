@@ -12,15 +12,19 @@
 import type { ProjectResp } from "../../api/generated-types";
 import {
   buildProjectIndex,
+  derivedProjectSurfaces,
   inScope,
   parseScope,
+  projectBack,
   projectRoutes,
   readLocation,
+  readProjectZone,
   readScope,
   resolveProjectParam,
   projectParam,
   projectReachable,
-  PROJECT_TABS,
+  PROJECT_NAV,
+  PROJECT_NAV_GAPS,
 } from "./projectRoutes.ts";
 import { ServiceSchema } from "../../api/schemas.ts";
 
@@ -355,29 +359,157 @@ console.log("· a row says where it lives, including on its own project's page")
 }
 
 // ---------------------------------------------------------------------------
-console.log("· four project-scoped screens, and only four");
+console.log("· the project's own nav — six screens, and why each is allowed");
 // ---------------------------------------------------------------------------
 {
-  check(PROJECT_TABS.length === 4, "four screens carry a project");
+  check(PROJECT_NAV.length === 6, "six screens a project can select rows for");
   check(
-    PROJECT_TABS.every((t) => t.to.startsWith("/$project")),
+    PROJECT_NAV.every((t) => t.to.startsWith("/$project")),
     "and every one of them is under the project parameter",
   );
-  const gateway = ["machines", "drift", "hosts", "dns", "vpn", "bans", "checks", "ports", "observability", "settings", "account", "mfa", "dashboard"];
+  // The gateway surfaces whose records carry no project AND cannot be derived
+  // into one. `machines` is NOT in this list any more — it is derivable through
+  // instances — which is the whole of what the third amendment changed.
+  const gateway = ["drift", "hosts", "dns", "vpn", "bans", "checks", "ports", "observability", "settings", "account", "mfa", "dashboard"];
   for (const g of gateway) {
     check(
-      !PROJECT_TABS.some((t) => t.to.includes(g)),
+      !PROJECT_NAV.some((t) => t.to.includes(g)),
       `${g} is gateway-scoped — its record carries no project and inventing one is the lie`,
     );
   }
   check(
-    PROJECT_TABS.every((t) => t.blurb.length > 30),
+    PROJECT_NAV.every((t) => t.blurb.length > 30),
     "each names the question it answers, rather than being a bare label",
   );
   check(
-    new Set(PROJECT_TABS.map((t) => t.to)).size === 4,
-    "no two tabs point at the same screen",
+    new Set(PROJECT_NAV.map((t) => t.to)).size === PROJECT_NAV.length,
+    "no two entries point at the same screen",
   );
+
+  // THE RULE. A derived surface's rows belong to something that has no project,
+  // so the thing itself has exactly one page and it is not under a project.
+  const derived = derivedProjectSurfaces();
+  check(derived.length === 1, "exactly one surface is derived today — machines");
+  check(derived[0]!.to === "/$project/machines", "and it is the machines list");
+  check(
+    derived.every((d) => d.detailAt !== "" && !d.detailAt.startsWith("/$project")),
+    "a derived surface names the ONE page its rows have, and that page is NOT under a project",
+  );
+  check(
+    derivedProjectSurfaces().every((d) => d.detailAt === "/machines/$machine"),
+    "which for a machine is /machines/$machine — one box, one page, every instance on it",
+  );
+  check(
+    PROJECT_NAV.filter((e) => e.kind === "owned").every((e) => e.detailAt === ""),
+    "an owned surface names no elsewhere-page: its rows belong to exactly one project",
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("· the surfaces the project nav shows and cannot answer");
+// ---------------------------------------------------------------------------
+{
+  check(PROJECT_NAV_GAPS.length === 2, "two surfaces are named and not linked: bans and clients");
+  const labels = PROJECT_NAV_GAPS.map((g) => g.label);
+  check(labels.includes("IP Bans") && labels.includes("VPN Clients"), "and they are those two");
+  check(
+    PROJECT_NAV_GAPS.every((g) => !PROJECT_NAV.some((n) => n.label === g.label)),
+    "neither is also a real entry — a gap and a screen are different things",
+  );
+  check(
+    PROJECT_NAV_GAPS.every((g) => g.why.length > 80),
+    "each says WHY hz cannot scope it, in the record's own terms — a greyed entry with no reason is unaskable",
+  );
+  check(
+    PROJECT_NAV_GAPS.every((g) => g.gatewayAt.startsWith("/") && !g.gatewayAt.includes("$project")),
+    "and each names the gateway screen that does hold the rows, unscoped",
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("· back is a link that names where it goes");
+// ---------------------------------------------------------------------------
+{
+  const idx = buildProjectIndex(EXAMPLE);
+  const root = idx.byName.get("acme-co")!;
+  const child = idx.byName.get("intern")!;
+
+  const fromRoot = projectBack(idx, root);
+  check(fromRoot.toEstate, "a root project's back leaves the tree");
+  check(fromRoot.label === "← All projects", "and says so — not '← Back'");
+
+  const fromChild = projectBack(idx, child);
+  check(!fromChild.toEstate, "a child's back goes up one level");
+  check(fromChild.label === "← acme-co", "and is labelled with the PARENT'S NAME, not 'Back'");
+  check(fromChild.param === "acme-co", "and addresses the parent by a parameter that resolves to it");
+  check(
+    fromRoot.label !== fromChild.label,
+    "the two are different sentences — a generic label would read identically from anywhere",
+  );
+  check(
+    !/^← Back$/.test(fromChild.label) && !/^Back$/.test(fromChild.label),
+    "nothing renders a bare 'Back': the sidebar is where a wrong guess is expensive",
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("· the sidebar's project zone is a function of the URL and nothing else");
+// ---------------------------------------------------------------------------
+{
+  const idx = buildProjectIndex(EXAMPLE);
+
+  const top = readProjectZone(idx, undefined);
+  check(top.kind === "estate", "no project in the address means the tree");
+
+  const entered = readProjectZone(idx, "acme-co");
+  check(entered.kind === "project", "a project in the address means that project's nav");
+  if (entered.kind === "project") {
+    check(entered.route.name === "acme-co", "and it is the project the URL named");
+    check(entered.children.length === 6, "its direct children are the descend-one-level links");
+    check(entered.back.toEstate, "with a back that leaves the tree, because it is a root");
+  }
+
+  const deeper = readProjectZone(idx, "acme-co.intern");
+  check(deeper.kind === "project", "a dotted path resolves the same way");
+  if (deeper.kind === "project") {
+    check(deeper.back.label === "← acme-co", "and its back names the parent");
+    check(deeper.children.length === 0, "a leaf has no subproject links");
+    check(
+      deeper.meaning.includes("no subprojects"),
+      "and says so rather than rendering an empty heading",
+    );
+  }
+
+  const nonsense = readProjectZone(idx, "setings");
+  check(nonsense.kind === "unresolved", "a parameter naming nothing is its own state");
+  if (nonsense.kind === "unresolved") {
+    check(nonsense.meaning.includes("setings"), "and names what was typed");
+  }
+
+  // EMPTY AND UNKNOWN ARE DIFFERENT. An empty tree at the top level is not the
+  // same reading as a project that could not be found.
+  const emptyIdx = buildProjectIndex([]);
+  const emptyTop = readProjectZone(emptyIdx, undefined);
+  check(emptyTop.kind === "estate", "an empty estate is still the estate");
+  check(
+    emptyTop.kind === "estate" && emptyTop.meaning.includes("no project"),
+    "and says hz declares none, rather than rendering a blank zone",
+  );
+  check(
+    emptyTop.kind === "estate" &&
+      readProjectZone(emptyIdx, "anything").kind === "unresolved",
+    "while a named project that is not there is unresolved, not empty",
+  );
+
+  // The four readings are four different sentences. A collapse into two would
+  // pass every type check.
+  const texts = [
+    top.kind === "estate" ? top.meaning : "",
+    entered.kind === "project" ? entered.meaning : "",
+    deeper.kind === "project" ? deeper.meaning : "",
+    nonsense.kind === "unresolved" ? nonsense.meaning : "",
+  ];
+  check(new Set(texts).size === 4, "the four zone readings are four different sentences");
 }
 
 // ---------------------------------------------------------------------------

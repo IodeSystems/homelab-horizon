@@ -29,6 +29,8 @@ import { Route as VpnRouteImport } from './routes/vpn'
 import { Route as ProjectIndexRouteImport } from './routes/$project.index'
 import { Route as ProjectConfigRouteImport } from './routes/$project.config'
 import { Route as ProjectDomainsRouteImport } from './routes/$project.domains'
+import { Route as ProjectMachinesRouteImport } from './routes/$project.machines'
+import { Route as ProjectSegmentsRouteImport } from './routes/$project.segments'
 import { Route as ProjectServicesRouteImport } from './routes/$project.services'
 import { Route as DnsIndexRouteImport } from './routes/dns.index'
 import { Route as DnsZoneRouteImport } from './routes/dns.$zone'
@@ -135,6 +137,16 @@ const ProjectDomainsRoute = ProjectDomainsRouteImport.update({
   path: '/domains',
   getParentRoute: () => ProjectRoute,
 } as any)
+const ProjectMachinesRoute = ProjectMachinesRouteImport.update({
+  id: '/machines',
+  path: '/machines',
+  getParentRoute: () => ProjectRoute,
+} as any)
+const ProjectSegmentsRoute = ProjectSegmentsRouteImport.update({
+  id: '/segments',
+  path: '/segments',
+  getParentRoute: () => ProjectRoute,
+} as any)
 const ProjectServicesRoute = ProjectServicesRouteImport.update({
   id: '/services',
   path: '/services',
@@ -181,6 +193,8 @@ export interface FileRoutesByFullPath {
   '/vpn': typeof VpnRoute
   '/$project/config': typeof ProjectConfigRoute
   '/$project/domains': typeof ProjectDomainsRoute
+  '/$project/machines': typeof ProjectMachinesRoute
+  '/$project/segments': typeof ProjectSegmentsRoute
   '/$project/services': typeof ProjectServicesRoute
   '/dns/$zone': typeof DnsZoneRoute
   '/machines/$machine': typeof MachinesMachineRoute
@@ -207,6 +221,8 @@ export interface FileRoutesByTo {
   '/vpn': typeof VpnRoute
   '/$project/config': typeof ProjectConfigRoute
   '/$project/domains': typeof ProjectDomainsRoute
+  '/$project/machines': typeof ProjectMachinesRoute
+  '/$project/segments': typeof ProjectSegmentsRoute
   '/$project/services': typeof ProjectServicesRoute
   '/dns/$zone': typeof DnsZoneRoute
   '/machines/$machine': typeof MachinesMachineRoute
@@ -235,6 +251,8 @@ export interface FileRoutesById {
   '/vpn': typeof VpnRoute
   '/$project/config': typeof ProjectConfigRoute
   '/$project/domains': typeof ProjectDomainsRoute
+  '/$project/machines': typeof ProjectMachinesRoute
+  '/$project/segments': typeof ProjectSegmentsRoute
   '/$project/services': typeof ProjectServicesRoute
   '/dns/$zone': typeof DnsZoneRoute
   '/machines/$machine': typeof MachinesMachineRoute
@@ -264,6 +282,8 @@ export interface FileRouteTypes {
     | '/vpn'
     | '/$project/config'
     | '/$project/domains'
+    | '/$project/machines'
+    | '/$project/segments'
     | '/$project/services'
     | '/dns/$zone'
     | '/machines/$machine'
@@ -290,6 +310,8 @@ export interface FileRouteTypes {
     | '/vpn'
     | '/$project/config'
     | '/$project/domains'
+    | '/$project/machines'
+    | '/$project/segments'
     | '/$project/services'
     | '/dns/$zone'
     | '/machines/$machine'
@@ -317,6 +339,8 @@ export interface FileRouteTypes {
     | '/vpn'
     | '/$project/config'
     | '/$project/domains'
+    | '/$project/machines'
+    | '/$project/segments'
     | '/$project/services'
     | '/dns/$zone'
     | '/machines/$machine'
@@ -491,6 +515,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectDomainsRouteImport
       parentRoute: typeof ProjectRoute
     }
+    '/$project/machines': {
+      id: '/$project/machines'
+      path: '/machines'
+      fullPath: '/$project/machines'
+      preLoaderRoute: typeof ProjectMachinesRouteImport
+      parentRoute: typeof ProjectRoute
+    }
+    '/$project/segments': {
+      id: '/$project/segments'
+      path: '/segments'
+      fullPath: '/$project/segments'
+      preLoaderRoute: typeof ProjectSegmentsRouteImport
+      parentRoute: typeof ProjectRoute
+    }
     '/$project/services': {
       id: '/$project/services'
       path: '/services'
@@ -532,6 +570,8 @@ declare module '@tanstack/react-router' {
 interface ProjectRouteChildren {
   ProjectConfigRoute: typeof ProjectConfigRoute
   ProjectDomainsRoute: typeof ProjectDomainsRoute
+  ProjectMachinesRoute: typeof ProjectMachinesRoute
+  ProjectSegmentsRoute: typeof ProjectSegmentsRoute
   ProjectServicesRoute: typeof ProjectServicesRoute
   ProjectIndexRoute: typeof ProjectIndexRoute
 }
@@ -539,6 +579,8 @@ interface ProjectRouteChildren {
 const ProjectRouteChildren: ProjectRouteChildren = {
   ProjectConfigRoute: ProjectConfigRoute,
   ProjectDomainsRoute: ProjectDomainsRoute,
+  ProjectMachinesRoute: ProjectMachinesRoute,
+  ProjectSegmentsRoute: ProjectSegmentsRoute,
   ProjectServicesRoute: ProjectServicesRoute,
   ProjectIndexRoute: ProjectIndexRoute,
 }

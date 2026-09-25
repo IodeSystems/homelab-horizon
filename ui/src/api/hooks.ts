@@ -13,6 +13,7 @@ import type {
   ProjectResp,
   EnvironmentResp,
   MachineResp,
+  SegmentResp,
   MachineProjectionResp,
   VersionDriftResponse,
   HostsViewResp,
@@ -142,6 +143,25 @@ export function useEnvironments() {
   return useQuery({
     queryKey: ["environments"],
     queryFn: () => apiFetch<EnvironmentResp[]>("/environments"),
+  });
+}
+
+/**
+ * The declared segments: the networks a project's machines sit on.
+ *
+ * `Segment.Project` is REQUIRED — enforced in `ValidateSegments` and again in
+ * `AddSegment` — which makes this the cleanest project-scoped record in the
+ * config, and until `/$project/segments` nothing in the browser had ever asked
+ * for it: `GET /api/v1/segments` has been served since the Segment record
+ * landed and `grep -rn "/segments" ui/src/` returned nothing.
+ *
+ * Not polled, for the reason the rest of this block is not: a segment is
+ * declared, not observed.
+ */
+export function useSegments() {
+  return useQuery({
+    queryKey: ["segments"],
+    queryFn: () => apiFetch<SegmentResp[]>("/segments"),
   });
 }
 
