@@ -25,7 +25,7 @@ a design question.
 
 | | | detail |
 |---|---|---|
-| ◻ | **Arm the agent** on one box — the gateway, which is the box you can walk to. Item 13 steps 4–5: add `[Install]` to the unit, put `--apply` in `ExecStart`, then stop hz applying and drop it to `User=hz`. | [design/privilege-audit.md](design/privilege-audit.md) §8 scores this **11 of 33** (counted from the checklist, not computed — the line has been wrong four times).go`. The enumerated checklist is §7 of that file; the decisions it depends on are §7.1, and three of the five are now answered by "hz-agent owns it all" |
+| ◻ | **Arm the agent** on one box — the gateway, which is the box you can walk to. Item 13 steps 4–5: add `[Install]` to the unit, put `--apply` in `ExecStart`, then stop hz applying and drop it to `User=hz`. | [design/privilege-audit.md](design/privilege-audit.md) §8 scores this **16 of 34** (top-level items of §7 A–D, counted with a tool — the method is stated there because the figure has disagreed with itself four times).go`. The enumerated checklist is §7 of that file; the decisions it depends on are §7.1, and three of the five are now answered by "hz-agent owns it all" |
 | ◻ | **Bless one real config** against the live store. All seven `cm_*` tables on the gateway are **empty** (measured 2026-09-23), so the whole blessing → generation → restart loop is whole in the tree and unproven on the estate. | [design/config-manager.md](design/config-manager.md); item 17 below |
 
 **Why Tier 0 is Tier 0:** everything in items 13, 17 and 20 is code with no

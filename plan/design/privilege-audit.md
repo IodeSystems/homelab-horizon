@@ -586,7 +586,7 @@ Ordered, replacing the handover list in `architecture.md`.
 > **Status re-checked 2026-09-22.** Items 1, 2 and 4 are done (item 1 with its
 > issuer changed — §1.1). Item 3's guard half is done and measured (§7.1); its
 > three named bypasses are not assigned. Item 5's document exists but its §2
-> table is incomplete (§7) and its §7 checklist stands at **17 of 37 ticked, 2 partial** (re-counted 2026-09-25 with `grep -c` over every `- [ ]`/`- [x]`/`- [◐]` in §7 at any indent, nested sub-items included. The line before this one said "14 of 34", itself a re-derivation the same day; counting by hand twice produced two different answers, which is the argument for counting with a tool. Item 5's document, whose §7 this sentence originally meant, was deleted 2026-09-24 — the checklist referred to is this document's §7). Item 6
+> table is incomplete (§7) and its §7 checklist stands at **16 of 34 ticked, 2 partial** (counted 2026-09-25 over the TOP-LEVEL `- [ ]`/`- [x]`/`- [◐]` items of §7 A–D only. There are 3 further nested sub-items (1 ticked) under the static-supervisor split; counting those too gives 17 of 37, which is why this line has now disagreed with itself four times — **top-level is canonical**, because a parent `[◐]` standing over its own sub-items counts the same work twice. Count it with a tool; two hand counts have already produced two answers). Item 6
 > was answered by the classification — the right move is deletion, not a seam —
 > and `autoheal.Run` is still there. **The consolidated answer is §8.**
 > (`autoheal.Run` was deleted 2026-09-22, per §8.4 — see classification §3.5.)
