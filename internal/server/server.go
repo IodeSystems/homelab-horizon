@@ -249,6 +249,22 @@ type Server struct {
 	// machine running the suite. Empty means the real one.
 	journaldDir string
 
+	// egressIface overrides the default-route read for tests. nil means the
+	// real one, config.DetectDefaultInterface.
+	//
+	// A field rather than a parameter because THREE places have to agree about
+	// which interface this box routes through — hz's own reconciler, the rule
+	// sets it serves, and the wg0.conf it declares (wg_masquerade.go). A test
+	// that could not pin it could only assert the heal against whatever
+	// interface the machine running the suite happens to have.
+	//
+	// A POINTER, NOT A STRING, because the empty answer is a real answer.
+	// "there is no default route" is the state both stand-downs fire on, and a
+	// plain string could not tell it from "no override" — so that case would
+	// be testable only on a machine that happens to have no route, i.e. never
+	// on a developer's box and unpredictably on a runner.
+	egressIface *string
+
 	adminToken    string
 	csrfSecret    string
 	dryRun        bool
@@ -525,6 +541,24 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 	s.initSyncedBaseline()
 
 	return s, nil
+}
+
+// defaultIface is "which interface does this box route out of", and it is the
+// ONE place hz asks.
+//
+// It is a privileged-ish READ (config.DetectDefaultInterface parses
+// /proc/net/route) and it is the fact three different answers are derived
+// from: the rule sets hz reconciles and serves, the stand-down decision when
+// there is no default route, and the wg0.conf MASQUERADE clause hz declares
+// (wg_masquerade.go). Asking three times means three answers, and during a
+// route flap they need not agree.
+//
+// The override is for tests; see Server.egressIface.
+func (s *Server) defaultIface() string {
+	if s.egressIface != nil {
+		return *s.egressIface
+	}
+	return config.DetectDefaultInterface()
 }
 
 // cfg returns the current live config. It is the only sanctioned way to read

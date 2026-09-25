@@ -396,6 +396,94 @@ func renderPeerRemoval(current, publicKey string) (string, bool) {
 	return strings.TrimRight(strings.Join(result, "\n"), "\n") + "\n", true
 }
 
+// masqIfaceRe matches the iface token in an iptables MASQUERADE clause embedded
+// in a wg0.conf PostUp/PostDown line.
+//
+// A regex rather than a comparison against ExpectedPostUp(old): the heal has to
+// work when hz does not know the old interface's name at all — the first
+// reconcile after an upgrade, or a box whose LastLocalIface never persisted —
+// and "find the `-o X -j MASQUERADE` and swap X" needs no X to start from.
+//
+// It is the ONLY definition of that shape. It used to live in
+// internal/server/reconcile_iptables.go, where hz's own writer was its only
+// caller; the agent's payload needs the same rewrite (see the package header of
+// internal/server/wg_masquerade.go), and two spellings of this regex is exactly
+// how the two writers would come to disagree about which interface the gateway
+// NATs through.
+var masqIfaceRe = regexp.MustCompile(`-o \S+ -j MASQUERADE`)
+
+// RetargetMasquerade points every `-o <iface> -j MASQUERADE` clause in one
+// PostUp/PostDown line at iface. A line with no such clause is returned
+// unchanged — including the empty string, which is what a config with no
+// PostUp parses to and must not be turned into a directive.
+func RetargetMasquerade(rule, iface string) string {
+	if rule == "" || iface == "" {
+		return rule
+	}
+	return masqIfaceRe.ReplaceAllString(rule, "-o "+iface+" -j MASQUERADE")
+}
+
+// HealMasqueradeIface is THE interface-change heal for wg0.conf, and it is pure:
+// config text in, config text out, plus whether anything moved.
+//
+// It is what keeps a reboot coming up correct after the gateway's egress
+// interface changes — the founding outage of this repo was a MASQUERADE left
+// bound to an interface that no longer existed. The live rule is healed by
+// iptables.Reconcile; this is the half that heals the FILE, so PostUp installs
+// the right rule next time wg-quick runs it rather than re-installing the
+// stale one for the reconciler to condemn all over again.
+//
+// # LINE-WISE, AND DELIBERATELY NOT renderInterfaceRules
+//
+// Three properties the rewrite has to have, and renderInterfaceRules has none
+// of them:
+//
+//  1. IT NEVER INTRODUCES A DIRECTIVE. renderInterfaceRules INSERTS PostUp and
+//     PostDown after ListenPort when they are absent. A config with a PostUp
+//     and no PostDown would grow an empty `PostDown = ` line, which wg-quick
+//     runs as a command.
+//  2. IT CHANGES ONE TOKEN. Everything else in the file — spacing around `=`,
+//     comments, unmodelled directives, the order of the [Peer] blocks — is
+//     returned byte-for-byte. A heal that reformats the file makes every
+//     comparison between the two writers a comparison of formatting.
+//  3. IT READS THE FILE, NOT A CACHE. hz's writer used to compose the new line
+//     from WGConfig's in-memory postUp, parsed whenever Load last ran, so a
+//     hand edit made since was silently reverted by the next heal.
+//
+// An empty iface returns the text unchanged: hz cannot name the egress
+// interface this instant, and rewriting the clause to `-o  -j MASQUERADE`
+// would be worse than leaving the stale name there. That is the same
+// stand-down iptablesSectionFor makes with the rule sets, for the same reason.
+func HealMasqueradeIface(current, iface string) (string, bool) {
+	if current == "" || iface == "" {
+		return current, false
+	}
+	lines := strings.Split(current, "\n")
+	inInterface := false
+	changed := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			inInterface = trimmed == "[Interface]"
+			continue
+		}
+		if !inInterface {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "PostUp") && !strings.HasPrefix(trimmed, "PostDown") {
+			continue
+		}
+		if healed := RetargetMasquerade(line, iface); healed != line {
+			lines[i] = healed
+			changed = true
+		}
+	}
+	if !changed {
+		return current, false
+	}
+	return strings.Join(lines, "\n"), true
+}
+
 // renderInterfaceRules rewrites PostUp and PostDown in the config text,
 // preserving everything else.
 //

@@ -313,6 +313,42 @@ func (w *WGConfig) UpdateInterfaceRules(postUp, postDown string) error {
 	return nil
 }
 
+// HealMasquerade points wg0.conf's PostUp/PostDown MASQUERADE clause at iface,
+// and reports whether the file actually moved.
+//
+// hz's HALF OF A HAND-OVER, and it stays until item 12 step 5. The bytes come
+// from HealMasqueradeIface in the pure half, which is also where the agent's
+// payload gets them (internal/server/wg_masquerade.go) — one definition of the
+// heal, two writers, so they cannot decide on different interfaces.
+//
+// Idempotent, and that is what makes it safe to call every pass instead of only
+// when hz noticed the interface change: a file that already NATs through iface
+// is not rewritten, so there is no write, no mtime churn and nothing for the
+// agent to see as drift. It is also why the caller no longer gates it on
+// "LastLocalIface differed this pass" — the question that matters is whether
+// the FILE names the current interface, and a persist that failed (updateConfig
+// only logs) used to leave the answer "no" for ever.
+func (w *WGConfig) HealMasquerade(iface string) (bool, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	data, err := os.ReadFile(w.path)
+	if err != nil {
+		return false, err
+	}
+	healed, changed := HealMasqueradeIface(string(data), iface)
+	if !changed {
+		return false, nil
+	}
+	if err := os.WriteFile(w.path, []byte(healed), 0600); err != nil {
+		return false, err
+	}
+	parsed, _ := ParseConfig([]byte(healed))
+	w.postUp = parsed.PostUp
+	w.postDown = parsed.PostDown
+	return true, nil
+}
+
 func (w *WGConfig) GetAddress() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
