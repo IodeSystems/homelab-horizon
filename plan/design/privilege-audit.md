@@ -537,7 +537,7 @@ the agent's own tree.
 | `internal/haproxy/apply.go` | config + MFA jail ACL + reload |
 | `internal/dnsmasq/apply.go`, `unit.go` | conf + records + reload + unit install |
 | `internal/iptables/reconcile.go` | reconcile over hz's own expected/stale rules |
-| `internal/wireguard/apply.go` | modelled and applied. ~~hz does not serve it~~ — **hz serves it since 2026-09-21** (`0fb08ac`, item 12 step 2): `desiredFor` carries `wg0.conf` as the file hz maintains, read back, and the admin path came off `handleAgentDesired` in the same commit because that file is the machine's private key. **Never exercised** — see §8.2. |
+| `internal/wireguard/apply.go` | modelled and applied. ~~hz does not serve it~~ — **hz serves it since 2026-09-21** (`0fb08ac`, item 12 step 2): `desiredFor` carries `wg0.conf` as the file hz maintains, ~~read back~~ **read back AND HEALED since 2026-09-25** (§7 B, axes 2/3): the served contents have the `PostUp`/`PostDown` MASQUERADE clause pointed at the interface this box routes out of now, so the agent owns the interface-change heal and not only the file. The admin path came off `handleAgentDesired` in the same 2026-09-21 commit because that file is the machine's private key. **Never exercised** — see §8.2. |
 
 **Not covered by anything**
 
@@ -551,7 +551,7 @@ the agent's own tree.
 | ~~`internal/server/handlers_integration.go`~~ | ~~`/etc/prometheus`, `/etc/systemd/system`~~ — **wrong, corrected 2026-09-21** (`privilege-classification.md` §1.1). Same shape as the `handlers_ha.go` row: the paths are inside a bash script hz *serves* for a human to run on the Prometheus box. No write, no exec. |
 | `internal/server/handlers_api_system_fix.go` | ~~`/etc/apparmor.d/…`~~, ~~`/etc/systemd/journald.conf.d`~~ — **the journald drop-in is DECLARED since 2026-09-25** (§7 B, §3.1 #13): the file, the claim and the journald poke are in the payload (`internal/server/logretention.go`), hz still writes the same bytes from the same constants until step 5, and the two are compared byte for byte. ~~**13 POSTs + 1 GET**; `systemdRun` still has 5 callers, three of them shell strings.~~ **Corrected + reduced 2026-09-25:** the caller count was 5 by grep and **4 by shape** (one site was an inline `systemd-run … bash -c`, not a call to the helper), and all four were in the haproxy fix-logging handler. That handler and `wg/create-config` are **deleted**; `systemdRun` is **deleted**; `/etc/apparmor.d` is no longer written by hz at all. 11 POSTs + 1 GET, none of which builds a shell string (`shell_guard_test.go`). |
 | `internal/server/handlers_ban.go` | shells ~~`ip` and~~ `iptables` directly — **the `ip` half was wrong** (`privilege-classification.md` §1.4); ~~the three exec sites are all `iptables`~~. **Reduced to ONE 2026-09-25** (§7 B's ban hand-over): `iptablesBan` and `iptablesCheckBan` are deleted and a ban is now a RECORD a reconciler installs; only `iptablesUnban`'s `iptables -D` remains, because a lifted ban classifies *unknown* and nothing else would ever remove it. **Four triggers, one of them a deploy token, not an admin.** |
-| `internal/server/handlers_api_iptables.go`, `reconcile_iptables.go` | `exec`. Includes `POST /iptables/remove`, whose table, chain and args come **from the request body** — the class §5.2 rule 2 names. |
+| `internal/server/handlers_api_iptables.go`, `reconcile_iptables.go` | `exec`. ~~Includes `POST /iptables/remove`, whose table, chain and args come **from the request body**~~ — that endpoint was **deleted 2026-09-22** (§7 A). What is left in `reconcile_iptables.go` is axes 4/5's direct `iptables -D` loops (§3.4A); axes 2/3 reach `iptables` only through `internal/iptables.Reconcile`, which the agent now calls with the same sets. |
 | ~~`internal/system/interfaces.go`~~ | ~~interface manipulation, `exec` + writes~~ — **wrong, corrected 2026-09-21** (`privilege-classification.md` §1.2). Those are Go *interface types* (`FileSystem`, `CommandRunner`), the test seam, not a caller. |
 | `internal/autoheal/autoheal.go` | `apt-get install`, `systemctl` — does not transfer (item 10). `Run` and the `auto_heal` key were DELETED 2026-09-22 (classification §3.5); `InstallMissing` behind the `install-deps` verb is all that is left. |
 | `internal/server/static_supervisor.go` | forks a privilege-dropped child — **on every root gateway, not only ones with static sites** (§1.5, measured). |
@@ -586,7 +586,7 @@ Ordered, replacing the handover list in `architecture.md`.
 > **Status re-checked 2026-09-22.** Items 1, 2 and 4 are done (item 1 with its
 > issuer changed — §1.1). Item 3's guard half is done and measured (§7.1); its
 > three named bypasses are not assigned. Item 5's document exists but its §2
-> table is incomplete (§7) and its §7 checklist stands at **14 of 34** (re-derived 2026-09-25 by COUNTING the boxes in §7, not by recalling the number — it read "8 of 33" and was stale by four before the log-retention and ban hand-overs ticked two more and added one open line). Item 6
+> table is incomplete (§7) and its §7 checklist stands at **17 of 37 ticked, 2 partial** (re-counted 2026-09-25 with `grep -c` over every `- [ ]`/`- [x]`/`- [◐]` in §7 at any indent, nested sub-items included. The line before this one said "14 of 34", itself a re-derivation the same day; counting by hand twice produced two different answers, which is the argument for counting with a tool. Item 5's document, whose §7 this sentence originally meant, was deleted 2026-09-24 — the checklist referred to is this document's §7). Item 6
 > was answered by the classification — the right move is deletion, not a seam —
 > and `autoheal.Run` is still there. **The consolidated answer is §8.**
 > (`autoheal.Run` was deleted 2026-09-22, per §8.4 — see classification §3.5.)
@@ -690,6 +690,63 @@ Ordered, replacing the handover list in `architecture.md`.
    `probe/agent` — §1 of that document); four operations the table below missed
    are classified there too, one of which runs on every MFA transition.
 6. `autoheal` needs its own `plan(observed) → []Action` seam.
+
+### 3.4A `reconcileIPTables` — the axes, RESCUED and CORRECTED 2026-09-25
+
+**Three checklist lines in this document cross-reference "§3.4" and none of them
+resolves.** §3.4 was a section of `plan/design/privilege-classification.md`,
+which was **deleted on 2026-09-24** (`d321b92`, "the code carries them, and code
+cannot drift from itself") — and the code did not carry this one, because what
+§3.4 held was a *numbering* and a *verdict*, neither of which is in the code.
+Worse, "§3.4" now reads as item 4 of the numbered list above, which is the
+letsencrypt/acme split. The three lines are §7 A's "decide axes 4 and 5", §7 B's
+"move axes 2/3", and §8's question 9. All three now point here.
+
+The rescued text is below with its errors corrected against the code as it
+stands. Where the old text and the code disagreed, the code won.
+
+| axis | what the code does | where |
+|---|---|---|
+| 1 | LocalInterface (the box's LAN **address**) drifts → `updateConfig` + `dns.WriteConfig` + `dns.Reload` | `reconcile_iptables.go`, "Axis 1" |
+| 2/3 | the egress **interface** or LAN **CIDR** drifts → (a) `ExpectedRules`+`StaleRules`+`LiveRules`+`Reconcile`; (b) persist `LastLocalIface`/`LastLanCIDR`; (c) heal wg0.conf's `PostUp`/`PostDown` MASQUERADE. Axis 3 is the first-run **inference** when `LastLocalIface` is empty, which lives inside `Reconcile` and comes back as `Report.InferredOld` — which is why 2 and 3 are one block and one wire section | "Axis 2 & 3" |
+| 4 | legacy bypass PostUp migration, plus a 16-iteration `iptables -D` loop | "Axis 4" |
+| 5 | WG-INPUT jump migration | "Axis 5" |
+
+**Corrections to the deleted §3.4, each measured against the file:**
+
+- It said *"Five axes, per its own doc comment at `:35`"*. The doc comment said
+  **four** and numbered them 1–4, while the code's own section headers said 1,
+  2&3, 4, 5. Two numberings for one function, disagreeing, is how "axes 2/3"
+  came to mean three different things in three documents. **The doc comment now
+  says five and matches its headers** (2026-09-25).
+- Every line number in it was stale (`:35`, `:90`, `:99-108`, `:116`,
+  `:196-207`), as is §8.3's table row `reconcile_iptables.go:82-140` — which
+  points at axes 4/5, not at "axes 2/3 and 4/5" as the row claims. **Line
+  numbers are not cited here.** They were wrong within a week every time.
+- It said *"Axes 2 and 3 are **AGENT-OWNED** and are already the agent's
+  `IPTablesSection` + `Reconcile`."* **True of 2/3(a) and of nothing else.**
+  Its own "what it actually does" bullet names (c) — *"then rewrite wg0.conf's
+  MASQUERADE clause by regex"* — and the category line then forgets it. (c) was
+  hz's alone until 2026-09-25 (§7 B), and it is the half that survives a
+  reboot: the live rule is healed every pass by whoever reconciles, while the
+  `PostUp` line is what re-installs the rule at the next `wg-quick up`.
+- It said axis 1 **SPLITS**, with hz keeping observe+persist. Correct, and the
+  reason given is the right one: hz's config is the input the agent's desired
+  state derives from. **But 2/3(b) is not covered by that sentence and must not
+  be read into it.** `StaleRules` derives the whole old-interface rule set from
+  `LastLocalIface`; `reconcileIPTables` heals FIRST and persists AFTER, in one
+  pass. Persisting without healing turns the old MASQUERADE from *stale* — the
+  one class `Reconcile` deletes — into *unknown*, which nothing ever removes.
+  So **2/3(b) moves out of `reconcileIPTables` with the heal at step 5**, and
+  whatever advances `LastLocalIface` afterwards must do it from evidence that
+  the old rules are gone. `TestPersistingLastLocalIfaceWithoutHealingBlindsTheStaleSet`
+  (`internal/server/wg_masquerade_test.go`) is that sentence as a test.
+  Axis 1's persist genuinely does stay: `LocalInterface` is an address hz's own
+  renderers read (`@self` follows a moved gateway through it) and it feeds no
+  delete.
+- Axes 4 and 5 are still **DELETE, on a deadline**, unchanged and still
+  blocked on §8 question 9. They are the only remaining reason this file
+  shells `iptables` directly.
 
 ## 4. What this audit cannot answer
 
@@ -1028,7 +1085,7 @@ Concretely, still unhanded-over and still privileged in hz web:
 |---|---|
 | every ban and unban, including the ones a deployed service triggers | `handlers_ban.go:22-38`, 4 triggers, one of them not an admin |
 | the MFA jail chain rebuild, **18 call sites**, on every MFA transition and on two timers | `rebuildWGChains` ×18, `syncMFAJailACL` ×2 |
-| `reconcileIPTables` axes 2/3 (drift heal) and 4/5 (legacy migrations) | `reconcile_iptables.go:82-140` |
+| ~~`reconcileIPTables` axes 2/3 (drift heal)~~ and 4/5 (legacy migrations) — **axes 2/3 are DECLARED since 2026-09-25** (§7 B): the rule sets were already the agent's, and the wg0.conf MASQUERADE heal now crosses too. hz keeps writing both until step 5. **Axis 2's `LastLocalIface` persist must stop WITH the heal** (§3.4A). Axes 4/5 still undecided | `reconcile_iptables.go`, sections "Axis 4"/"Axis 5" (the line range this row gave, `:82-140`, was both stale and mislabelled — it spans axes 4 and 5, not 2/3) |
 | backup restore's `wg0.conf` and cert writes | `handlers_backup.go:172,:201` |
 | every fixer button on `SystemHealthTab.tsx` and `PCITab.tsx` | still enabled buttons calling privileged mutations |
 | IP forwarding and log retention | `handlers_api_system_fix.go:44,:588` |
@@ -1519,7 +1576,8 @@ status of each as of 2026-09-25. One at a time — several make the next moot.
       was pinned by nothing; and `ui/src/components/SystemHealthTab.selftest.tsx`
       (`pnpm test:health`, the EdgeDiagnosis render-selftest pattern), which is
       the first thing in this repo to assert anything about System Health's markup.
-- [ ] **Decide axes 4 and 5** of `reconcileIPTables` (§3.4) — delete, or one-shot
+- [ ] **Decide axes 4 and 5** of `reconcileIPTables` (§3.4A — this said §3.4, a
+      section of a document deleted 2026-09-24) — delete, or one-shot
       verb. Needs §8's "has every box passed that version" answer.
 - [◐] **Delete the static supervisor, ~~the static child~~ and `sitedeploy`'s
       chown** (§3.6) — the §8 decision landed (§7.1 #3) and this split three ways:
@@ -1815,8 +1873,136 @@ status of each as of 2026-09-25. One at a time — several make the next moot.
 - [ ] **Stop calling `rebuildWGChains`/`syncMFAJailACL` from all 18 sites**
       (§3.7) — the largest-volume handover, and the one with a visible latency
       cost on the MFA login path. Decide whether that path gets a nudge (§4.6).
-- [ ] **Move `reconcileIPTables` axes 2/3** to the agent; keep axis 1's
-      observe+persist in hz (§3.4).
+- [x] **Move `reconcileIPTables` axes 2/3** to the agent; keep axis 1's
+      observe+persist in hz (§3.4A — this line said §3.4, a section of a
+      document deleted 2026-09-24). Done 2026-09-25.
+
+      **MOST OF IT WAS ALREADY MOVED, AND THE REST WAS THE HALF THAT MATTERS.**
+      Read out of the code rather than out of this line, axis 2/3 does three
+      things (§3.4A): (a) classify + heal the live rules, (b) persist
+      `LastLocalIface`/`LastLanCIDR`, (c) heal wg0.conf's `PostUp`/`PostDown`
+      MASQUERADE clause. (a) has been the agent's since the payload existed —
+      `iptablesSectionFor` serves expected, stale, blessed, the current
+      interface and `LastLocalIface`, and `agent.SystemReloader.IPTables` hands
+      all five to the same `iptables.Reconcile` hz calls. (b) is a write to
+      hz's own config that no agent can make. **(c) was never served**, and it
+      is the only one of the three that survives a reboot: the live rule is
+      re-healed on every pass by whoever is reconciling, while the `PostUp`
+      line is what re-installs it at the next `wg-quick up`.
+
+      Left behind, (c) makes step 5 produce a gateway that is correct until it
+      reboots — then comes up NATing through an interface that does not exist,
+      for up to a poll interval, every boot, for ever, with `hz-agent diff`
+      reporting **in sync** throughout because the payload is generated from
+      the same stale file it is compared against. That is the founding outage
+      with a timer on it, and **the box is about to be moved to wireless**.
+
+      `internal/wireguard/render.go` holds the heal (`HealMasqueradeIface`,
+      `RetargetMasquerade`) in the pure half; `WGConfig.HealMasquerade` is hz's
+      writer, reached from `reconcileIPTables` on the 60s tick;
+      `internal/server/wg_masquerade.go` declares the healed file into the
+      WireGuard section. One regex, one rewrite, two writers.
+      `wg_masquerade_test.go` runs both over identically seeded configs and
+      compares bytes and mode.
+
+      **THREE THINGS CHANGED IN HZ'S OWN HEAL, each a narrowing of a real
+      failure:**
+      - It is **no longer gated on `ifaceChanged`**. The question is whether
+        the FILE names the current interface, not whether hz noticed a change
+        this pass — and those differ whenever the persist failed
+        (`updateConfig` only warns), whenever hz restarted between the change
+        and the persist, and on any hand-edited wg0.conf. The call is
+        idempotent, so running it every pass costs nothing.
+      - It **reads the file, not `WGConfig`'s cache**. The old rewrite composed
+        the new line from the `postUp` parsed at `Load`, so an edit made since
+        was silently reverted.
+      - It is **line-wise, not `renderInterfaceRules`**. That writer INSERTS
+        `PostUp`/`PostDown` when absent, so a config with only a `PostUp` grew
+        an empty `PostDown = ` line for wg-quick to run as a command; and it
+        reformats directives hz does not own, which would make every
+        two-writer comparison a comparison of formatting.
+
+      **THE STAND-DOWN, and it is spelled differently here than for the rule
+      sets.** With no default route hz publishes the file **unchanged** rather
+      than withholding the section: the WireGuard section IS the file hz
+      maintains, so a nil would say "hz manages no tunnel here" — the mistake
+      `iptablesSectionFor`'s header is about — while blanking the clause would
+      write `-o  -j MASQUERADE`, which wg-quick cannot install at all. Both
+      stand-downs now fire off ONE routing-table read (`Server.defaultIface`,
+      taken once in `desiredFor`), so a payload cannot name one interface in
+      its rules and another in its file.
+
+      **THE UN-ARMED WINDOW, said plainly.** Nothing changes today: hz still
+      heals, and `cmd/hz-agent/install.go` still emits no `--apply`. Between
+      step 5 and step 4 there is no writer for this file at all, and that is
+      survivable — a stale `PostUp` only takes effect at the next interface
+      up, and the live rule is still condemned every pass. **What is not
+      survivable is stopping (c) while keeping (b)**; see §3.4A.
+
+      **THE MOVE IS NOW A TEST.** `plan/plan.md` records that
+      `enx00051b94b7cc`/`192.168.1.0/24` → `wlan0`/`192.168.5.0/24` was measured
+      by hand across two branches ("the same 2028 bytes") — and the measurement
+      was never committed, so nothing in the tree reproduced it.
+      `internal/iptables/move_test.go` does, on the real interface names,
+      asserting the **iptables commands in order** against a list written by
+      hand rather than captured.
+
+      **Measured, not assumed — twelve positive controls, each reversed by its
+      exact inverse edit.** Serving the file unhealed, healing toward
+      `LastLocalIface`, blanking the clause instead of standing down,
+      withholding the section instead of standing down, dropping the WG-INPUT
+      jump while moving the MASQUERADE, re-rendering through
+      `renderInterfaceRules`, ignoring the `[Interface]` boundary, `StaleRules`
+      ceasing to derive from `LastLocalIface`, `Reconcile` ceasing to delete
+      stale rules, and issuing the adds before the deletes — each reddens its
+      own tests.
+
+      ⚠ **One control under-fired, and it was the important one.** Replacing
+      `s.wg.HealMasquerade(newIface)` in `reconcileIPTables` with a hard-coded
+      "nothing changed" left the **whole tree green** — every test exercised
+      the heal by CALLING it, so none of them said hz's loop still reaches it.
+      Exactly the ban hand-over's lesson for the third time, and worse here:
+      with the agent inert, hz losing that call is not "two writers become
+      one", it is NO writer. Closed by
+      `TestReconcileIPTablesStillCallsTheHeal`, a source guard that requires
+      the call at the TOP LEVEL of the function body — a second control,
+      hiding it inside `if ifaceChanged`, walks past a whole-body walk and
+      reddens this. It is a source guard and not a drive because driving
+      `reconcileIPTables` runs `iptables` and restarts dnsmasq on whatever
+      machine runs the suite, and `internal/iptables`' command runner is
+      package-private, so there is no seam to swap from `internal/server`.
+
+      ⚠ **A second control found that the declared MODE is almost
+      unenforceable here.** Declaring wg0.conf `0644` reddened only the
+      payload-level test and left the on-disk compare green: `os.WriteFile`
+      applies a permission only when it CREATES the inode, and hz READS
+      wg0.conf to build the payload, so on the happy path the file always
+      already exists. The mode is load-bearing in exactly one case — the file
+      is absent when the agent writes it (a restored box, a wiped
+      `/etc/wireguard`) — which is also the only case in which getting it wrong
+      publishes the machine's private key to every account on the box. Driven
+      explicitly in `TestTheAgentCreatesAMissingWireGuardConfigAt0600`, which
+      removes the target between the poll and the apply. Same shape as `/proc`'s
+      unenforceable `0644` in `ipforward.go`, reached from the other direction.
+
+      ⚠ **The byte-compare is blind to what the PostUp MEANS**, exactly as the
+      ip-forwarding and log-retention compares were: both writers take the
+      rewrite from one function, so dropping the WG-INPUT jump from every
+      healed config leaves the compare green.
+      `TestTheDeclaredPostUpNATsThroughTheInterfaceTheBoxUses` closes it by
+      splitting the directive into the shell commands wg-quick runs, reading
+      the `-o` argument of the one that MASQUERADEs, and requiring every other
+      command to be byte-identical to the file's.
+
+      **Found on the way, and not fixed:** a move that re-addresses the LAN but
+      leaves a forward's backend on the old subnet removes that gateway's port
+      forwarding **entirely** — `forwardRules` is fail-closed on a backend
+      outside the LAN CIDR, the jumps are emitted only while a forward
+      survives, and the jumps are unconditionally stale, so the HZ-* chains are
+      flushed and deleted and nothing logs why. Correct (the rule could not
+      work) and a cliff. Pinned as
+      `TestAMoveThatStrandsABackendRemovesItsForwardEntirely` so it is a known
+      behaviour rather than a surprise at the far end of an office move.
 - [x] **Widen `ha-and-the-agent.md` §7's `errors/503.http` item** to "every file
       under the haproxy errors directory" (§3.10). Done 2026-09-21 in that
       document (§7, the "OTHER writer in that directory" item, which records the
@@ -1922,7 +2108,8 @@ several of these make the next moot.
    append-only record of every install-package press, with timestamp and source
    IP. It answers "is the install button used" exactly, with no guessing.
 9. **Has every box in the estate run an hz version newer than the legacy
-   PostUp templates?** (§3.4) Decides whether `reconcileIPTables` axes 4/5 can
+   PostUp templates?** (§3.4A — this said §3.4, a section of a document deleted
+   2026-09-24) Decides whether `reconcileIPTables` axes 4/5 can
    simply be deleted.
 10. **Has the backup-restore endpoint ever been used on this box?** (§3.8)
     Decides whether restore is a live constraint on 12.2/12.3 ordering or a

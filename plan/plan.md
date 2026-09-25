@@ -122,6 +122,25 @@ binary. It was **measured across both branches and is byte-identical** —
 2028 bytes, correctly condemning `stale nat|POSTROUTING|-o enx00051b94b7cc -j
 MASQUERADE`. So the heal is not an argument for either order.
 
+**That measurement is now a committed test** (2026-09-25):
+`internal/iptables/move_test.go` runs the same transition on the same interface
+names and asserts the `iptables` commands Reconcile issues, IN ORDER, against a
+list written by hand — the old-interface MASQUERADE off before the new one goes
+on. A by-hand measurement that nothing reproduces is one branch away from being
+a memory. Two things it turned up that the by-hand run did not:
+
+- **wg0.conf was not part of the heal it was being credited with.** The live
+  rule is re-healed every pass, but the `PostUp` line that re-installs it at
+  the next `wg-quick up` was only rewritten when hz noticed the change in the
+  same pass that persisted it. Now healed every pass from the file (not from a
+  cache), and declared to hz-agent — `plan/design/privilege-audit.md` §7 B,
+  axes 2/3.
+- **A forward whose backend stays on the old subnet loses its port forwarding
+  entirely**, silently: `forwardRules` is fail-closed outside the LAN CIDR, and
+  the jumps go with the last forward. If anything behind `192.168.1.x` is a
+  forward backend, re-address it in the same change as the LAN, or the
+  WebTransport forward comes back dark.
+
 What IS an argument: `reconcileIPTables` re-detects and persists
 `LocalInterface` on change (on both branches), but **nothing rewrites
 `Proxy.Backend` or `InternalDNS.IP`**. Move on today's binary and

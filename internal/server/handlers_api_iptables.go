@@ -23,7 +23,7 @@ func (s *Server) buildClassifierInputs() (
 	err error,
 ) {
 	cfg := s.cfg()
-	currentIface = config.DetectDefaultInterface()
+	currentIface = s.defaultIface()
 	lanCIDR := config.GetLocalNetworkCIDR(currentIface)
 
 	// Defensive: tests construct partial Servers without wg wired up.

@@ -4,7 +4,6 @@ import (
 	"log/slog"
 	"net"
 	"os/exec"
-	"regexp"
 	"strings"
 	"time"
 
@@ -13,15 +12,15 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/wireguard"
 )
 
-// masqIfaceRe matches the iface token in an iptables MASQUERADE clause embedded
-// in a wg0.conf PostUp/PostDown line. Used to rewrite wg0.conf when the
-// default-route iface changes — the regex approach works even when we don't
-// know the old iface name (first-reconcile bootstrap case).
-var masqIfaceRe = regexp.MustCompile(`-o \S+ -j MASQUERADE`)
-
-// masqPlaceholder stands in for the iface token when comparing two PostUp
-// lines that should differ only by which iface they NAT through.
-const masqPlaceholder = "-o IFACE -j MASQUERADE"
+// masqPlaceholderIface and masqPlaceholder stand in for the iface token when
+// comparing two PostUp lines that should differ only by which iface they NAT
+// through. The placeholder form is produced by the same rewrite that performs
+// the real heal (wireguard.RetargetMasquerade), so "these two lines differ only
+// by interface" is decided by one regex and not by a second copy of it.
+const (
+	masqPlaceholderIface = "IFACE"
+	masqPlaceholder      = "-o " + masqPlaceholderIface + " -j MASQUERADE"
+)
 
 // priorChainPostUp is the frozen PostUp template from the horizon version that
 // had WG-FORWARD but no WG-INPUT — i.e. the one whose MFA jail could be walked
@@ -35,28 +34,49 @@ const priorChainPostUp = "iptables -N WG-FORWARD 2>/dev/null || true; " +
 
 // reconcileIPTables is the single-entry self-heal for on-host state that drifts
 // when the LAN interface changes. It runs at startup and on every tick of
-// startHealthCheck (60s), and handles four independent drifts:
+// startHealthCheck (60s), and handles FIVE drifts — the count and the numbering
+// below are the ones the code's own section headers use, because a description
+// that disagrees with its headers is how "axes 2/3" came to mean three
+// different things in three documents:
 //
 //  1. LocalInterface IP (dnsmasq binds here + maps localhost services):
 //     on change, updateConfig + dns.WriteConfig + dns.Reload.
 //  2. Default-route iface name or LAN CIDR (iptables MASQUERADE + WG-FORWARD
-//     pin to these): on change, classify + auto-delete stale rules + auto-add
-//     missing expected rules, then persist LastLocalIface/LastLanCIDR. Also
-//     rewrite wg0.conf PostUp/PostDown so a reboot comes up clean.
+//     pin to these): classify + auto-delete stale rules + auto-add missing
+//     expected rules, then persist LastLocalIface/LastLanCIDR. Also heal
+//     wg0.conf's PostUp/PostDown MASQUERADE so a reboot comes up clean.
 //  3. First-run bootstrap (LastLocalIface empty): auto-infer the stale iface
 //     from a live `-o X -j MASQUERADE` where X isn't the current default, and
-//     proceed as if LastLocalIface were that X.
+//     proceed as if LastLocalIface were that X. Done inside iptables.Reconcile
+//     and reported back as Report.InferredOld, which is why axes 2 and 3 share
+//     one block here and one section on the wire.
 //  4. Legacy bypass PostUp: hosts upgraded from a horizon version that wrote
 //     `-I FORWARD 1 -i %i -j ACCEPT` in PostUp had per-peer policy silently
 //     bypassed. Detect that pattern in wg0.conf and migrate to the modern
 //     chain-based form, removing the live bypass rules in the same pass.
+//  5. WG-INPUT jump migration: hosts predating the INPUT-side jail get the
+//     current template re-emitted.
+//
+// WHAT IS ALREADY THE AGENT'S, AND WHAT IS NOT. Axes 2/3's rule work and its
+// wg0.conf heal are both DECLARED to hz-agent today — the rule sets as
+// IPTablesSection (handlers_agent.go) and the healed file as the WireGuard
+// section's contents (wg_masquerade.go) — and hz keeps doing both here until
+// item 12 step 5. Axis 1's observe+persist stays in hz for good. Axes 4 and 5
+// are one-shot migrations awaiting the "has every box passed that version"
+// answer (privilege-audit.md §8, question 9) and are the only reason this file
+// shells iptables directly.
+//
+// THE PERSIST IN AXIS 2 IS PART OF AXIS 2, not part of axis 1's observe+persist.
+// iptables.StaleRules derives the whole old-interface rule set from
+// LastLocalIface, so advancing it without healing turns the stale rules into
+// unknown ones and nothing ever deletes them. See wg_masquerade.go's header.
 //
 // Failures are logged but don't stop the loop — a transient iptables lock or
 // missing binary on first boot shouldn't prevent subsequent passes.
 func (s *Server) reconcileIPTables() {
 	cfg := s.cfg()
 
-	newIface := config.DetectDefaultInterface()
+	newIface := s.defaultIface()
 	if newIface == "" {
 		// No default route — link is probably down. Skip; next tick will
 		// try again once the link comes back.
@@ -192,21 +212,21 @@ func (s *Server) reconcileIPTables() {
 		}
 	}
 
-	// Rewrite wg0.conf PostUp/PostDown if the iface changed. Uses a regex
-	// on the MASQUERADE clause so it works even when we inferred the old
-	// iface (or don't know it at all) — we don't need the old name, just
-	// "find the -o X -j MASQUERADE and swap X for the new iface."
-	if ifaceChanged {
-		oldUp := s.wg.GetPostUp()
-		oldDown := s.wg.GetPostDown()
-		repl := "-o " + newIface + " -j MASQUERADE"
-		newUp := masqIfaceRe.ReplaceAllString(oldUp, repl)
-		newDown := masqIfaceRe.ReplaceAllString(oldDown, repl)
-		if newUp != oldUp || newDown != oldDown {
-			if err := s.wg.UpdateInterfaceRules(newUp, newDown); err != nil {
-				slog.Warn("iptables-sync: rewrite wg0.conf PostUp/Down failed", "err", err)
-			}
-		}
+	// Heal wg0.conf's MASQUERADE clause, so the rule PostUp installs at the
+	// next `wg-quick up` is the one this box actually needs. hz's half of the
+	// hand-over in wg_masquerade.go; the agent is served the same healed file
+	// and both take the rewrite from wireguard.HealMasqueradeIface.
+	//
+	// NOT GATED ON ifaceChanged any more. The question is whether the FILE
+	// names the current interface, not whether hz noticed a change on this
+	// pass — and the two are different whenever the persist above failed
+	// (updateConfig only warns), whenever hz restarted between the change and
+	// the persist, and on any box whose wg0.conf was edited by hand. The call
+	// is idempotent: a file that already agrees is not rewritten at all.
+	if healed, err := s.wg.HealMasquerade(newIface); err != nil {
+		slog.Warn("iptables-sync: heal wg0.conf MASQUERADE failed", "err", err)
+	} else if healed {
+		slog.Info("iptables-sync: wg0.conf now NATs through the current interface", "iface", newIface)
 	}
 }
 
@@ -232,5 +252,5 @@ func isPriorChainPostUp(postUp string) bool {
 	if strings.Contains(postUp, iptables.InputChainName) {
 		return false
 	}
-	return masqIfaceRe.ReplaceAllString(strings.TrimSpace(postUp), masqPlaceholder) == priorChainPostUp
+	return wireguard.RetargetMasquerade(strings.TrimSpace(postUp), masqPlaceholderIface) == priorChainPostUp
 }
