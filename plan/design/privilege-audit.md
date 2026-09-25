@@ -1155,11 +1155,43 @@ the flip itself, **D** is what proves it.
 This sits alongside `ha-and-the-agent.md` §7 (the peer-sync half) and
 `privilege-audit.md` §3 (the ordered consequences). It does not replace either.
 
+
+### 7.1 What only the operator can answer
+
+Rescued verbatim from the deleted `privilege-classification.md` §8, with the
+status of each as of 2026-09-25. One at a time — several make the next moot.
+
+1. ✅ **Generic section, or keep adding named subsystems?** **ANSWERED** — one
+   generic section, and the named ones stay (§4.3, decided 2026-09-21).
+   `Desired.Files *FilesSection` is in the tree.
+2. ✅ **Does the agent report observed state back to hz?** **ANSWERED — yes**,
+   and it shipped: `internal/agent/observed.go`,
+   `internal/server/handlers_agent_observed.go`, rendered at `/drift`.
+3. ◻ **Static file serving after the flip** (§3.6): accept in-process, a
+   separate agent-managed unit, or let haproxy serve the roots? The
+   privilege-separation the supervisor provides today goes away either way;
+   the question is whether anything replaces it. **Blocks** "delete the static
+   supervisor, the static child and `sitedeploy`'s chown" in A.
+4. ◻ **Does the MFA unjail path get a nudge?** (§3.7, §4.6) A poll-interval
+   delay between passing MFA and the network working is the most user-visible
+   cost of the flip. `architecture.md` item 11 rejected long-poll for service
+   changes on good grounds; this is a different case.
+5. ◻ **Which binary owns `wg create-config`** (§3.1 #5) — `homelab-horizon` or
+   `hz-agent`? It writes a file the agent will own, which argues for
+   `hz-agent`; it is needed at bootstrap before the agent is enrolled, which
+   argues the other way. **Blocks** deleting `systemdRun`, which survives only
+   for this caller and `haproxy/fix-logging`.
+
+**None of these blocks the first hand-over item** (`WriteMaintenancePageFiles`
+→ `HAProxySection.Files`), which is why that one is marked *do it first*.
+
 ### A. Decide, then delete — before anything moves
 
-- [ ] **Answer the three blocking decisions in §8** (generic section vs. named
-      subsystems; observed-state channel; static-serving separation). The first
-      one determines the shape of half the moves below.
+- [◐] **The blocking decisions** — rescued below as §7.1 when
+      `privilege-classification.md` was deleted 2026-09-25, because this line
+      pointed at that file's §8 and would otherwise name nothing. **Two of the
+      five are answered by work that shipped since**; three are still open and
+      are the operator's.
 - [x] ✅ **Delete `maybeSelfInstall`** (§3.9) — done 2026-09-22. It is in the
       boot path, it is root, and it is dead after the flip anyway.
 - [x] ✅ **Delete `POST /iptables/remove`** (§3.3) — done 2026-09-22.
