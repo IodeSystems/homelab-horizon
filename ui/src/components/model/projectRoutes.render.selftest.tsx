@@ -43,7 +43,7 @@ import type {
   VersionDriftResponse,
 } from "../../api/generated-types";
 import { routeTree } from "../../routeTree.gen";
-import { derivedProjectSurfaces } from "./projectRoutes.ts";
+import { derivedProjectSurfaces, PROJECT_NAV, PROJECT_NAV_GAPS } from "./projectRoutes.ts";
 
 let failures = 0;
 let checks = 0;
@@ -526,6 +526,204 @@ console.log("· /projects is a list that navigates, and holds no selection");
 }
 
 // ---------------------------------------------------------------------------
+console.log("· the sidebar is the tree, and entering a project replaces it");
+// ---------------------------------------------------------------------------
+{
+  // THE ZONE IS A REGION IN THE MARKUP, so every assertion below is scoped to
+  // it rather than to "somewhere on the page" — a link to a project appears in
+  // a table's Location cell too, and that would satisfy a loose search while
+  // the sidebar rendered nothing at all.
+  const zone = (r: Rendered): { kind: string; html: string } => {
+    const m = /<div[^>]*data-project-zone="([a-z]+)"[^>]*>([\s\S]*)$/.exec(r.html);
+    if (!m) return { kind: "(absent)", html: "" };
+    // Everything up to the gateway zone's list, which follows it.
+    const rest = m[2]!;
+    const end = rest.indexOf("data-gateway-zone");
+    return { kind: m[1]!, html: end === -1 ? rest : rest.slice(0, end) };
+  };
+  const zoneLinks = (r: Rendered) => [...zone(r).html.matchAll(/href="([^"]*)"/g)].map((m) => m[1]!);
+  const zoneText = (r: Rendered) =>
+    zone(r)
+      .html.replace(/<style[^>]*>[\s\S]*?<\/style>/g, " ")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/&#x27;/g, "'")
+      .replace(/\s+/g, " ");
+
+  // --- at the top level: the whole tree, nested
+  const top = await at("/dashboard");
+  check(zone(top).kind === "estate", "outside a project the sidebar's first zone is the estate tree");
+  for (const p of ["acme-co", "intern", "storefront"]) {
+    check(zoneText(top).includes(p), `${p} is in the sidebar tree (${p})`);
+  }
+  check(
+    zoneLinks(top).some((h) => h.endsWith("/acme-co.intern")),
+    "and every node is a link to that project's own URL",
+  );
+
+  // --- entered: the project's nav, and the tree is gone from the zone
+  const entered = await at("/acme-co.storefront");
+  check(zone(entered).kind === "project", "entering a project replaces the zone with its nav");
+  for (const entry of PROJECT_NAV) {
+    check(
+      zoneText(entered).includes(entry.label),
+      `the project nav carries ${entry.label}`,
+    );
+  }
+  check(
+    zoneLinks(entered).some((h) => h.endsWith("/acme-co.storefront/machines")),
+    "including the machines list, which is new",
+  );
+  check(
+    zoneLinks(entered).some((h) => h.endsWith("/acme-co.storefront/segments")),
+    "and the segments list, which is new",
+  );
+  check(
+    !zoneText(entered).includes("intern"),
+    "and the sibling projects are NOT in it — the zone is this project's nav, not the tree",
+  );
+
+  // --- BACK IS A LINK AND IT NAMES THE PARENT
+  check(zoneText(entered).includes("← acme-co"), "back names the parent by name");
+  check(
+    !/←\s*Back/.test(zoneText(entered)),
+    "and never reads a bare '← Back', which does not say where it goes",
+  );
+  check(
+    zoneLinks(entered).some((h) => h.endsWith("/acme-co")),
+    "and it is a real link to the parent's URL",
+  );
+
+  const atRoot = await at("/acme-co");
+  check(zoneText(atRoot).includes("← All projects"), "a ROOT project's back leaves the tree");
+  check(
+    zoneLinks(atRoot).some((h) => h.endsWith("/projects")),
+    "and goes to the estate index",
+  );
+  check(
+    !zoneText(atRoot).includes("← acme-co"),
+    "the two backs are different sentences, not one label",
+  );
+
+  // --- descending: a subproject is a link out of the parent's zone
+  check(
+    zoneLinks(atRoot).some((h) => h.endsWith("/acme-co.storefront")),
+    "a project's zone lists its own children, so descending is one click",
+  );
+  check(
+    zoneText(atRoot).toLowerCase().includes("subprojects"),
+    "under a heading that says what they are",
+  );
+  const leaf = await at("/acme-co.intern");
+  check(
+    zoneText(leaf).includes("has none"),
+    "a leaf says it has no subprojects rather than rendering an empty heading",
+  );
+
+  // --- TWO DEEP. The one depth the live estate cannot demonstrate.
+  const deep = await at("/acme-co.storefront.eu");
+  check(zone(deep).kind === "project", "a grandchild is entered like any other project");
+  check(zoneText(deep).includes("← storefront"), "and its back names ITS parent, not the root");
+  check(
+    !zoneText(deep).includes("← acme-co") && !zoneText(deep).includes("← All projects"),
+    "back goes up ONE level, never straight to the top",
+  );
+  check(
+    zoneLinks(deep).some((h) => h.endsWith("/acme-co.storefront")),
+    "and it is a link to the parent's own URL",
+  );
+  check(
+    zoneText(deep).includes("eu") && zoneText(deep).includes("acme-co.storefront.eu"),
+    "the zone names where you are, by name and by path",
+  );
+  for (const entry of PROJECT_NAV) {
+    check(zoneText(deep).includes(entry.label), `the same project nav is there two deep (${entry.label})`);
+  }
+
+  // --- the unbuildable surfaces are SHOWN, greyed, with the reason
+  for (const gap of PROJECT_NAV_GAPS) {
+    check(zoneText(entered).includes(gap.label), `${gap.label} is still on the project nav`);
+  }
+  check(
+    zoneText(entered).includes("cannot be scoped to a project"),
+    "under a heading naming why they are not links",
+  );
+  check(
+    zoneText(entered).includes("hz cannot select these by project"),
+    "and each says it in words — a removed entry is unaskable",
+  );
+  check(
+    zoneLinks(entered).some((h) => h.endsWith("/bans")) &&
+      zoneLinks(entered).some((h) => h.endsWith("/vpn")),
+    "with a link to the gateway screen that does hold the rows",
+  );
+  check(
+    !zoneLinks(entered).some((h) => /\/(bans|vpn)$/.test(h.replace("/acme-co.storefront", ""))
+      && h.includes("acme-co.storefront")),
+    "and NOT to a /$project/bans or /$project/clients that cannot answer",
+  );
+
+  // --- an unresolvable project still gets a zone with a way out
+  const miss = await at("/setings");
+  check(zone(miss).kind === "unresolved", "a parameter naming no project is its own zone state");
+  check(
+    zoneText(miss).includes("← All projects"),
+    "which still offers the way out, by name",
+  );
+  check(zoneText(miss).includes("acme-co"), "and lists the projects that do exist");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· the gateway zone is at every depth, unchanged");
+// ---------------------------------------------------------------------------
+{
+  const gateway = (r: Rendered) => {
+    const m = /data-gateway-zone[\s\S]*$/.exec(r.html);
+    const html = m?.[0] ?? "";
+    return {
+      links: [...html.matchAll(/href="([^"]*)"/g)].map((x) => x[1]!),
+      text: html.replace(/<style[^>]*>[\s\S]*?<\/style>/g, " ").replace(/<[^>]*>/g, " ").replace(/\s+/g, " "),
+    };
+  };
+  const EXPECTED = [
+    "/dashboard", "/drift", "/projects", "/machines", "/hosts", "/services", "/domains",
+    "/dns", "/vpn", "/bans", "/checks", "/observability", "/ports", "/settings",
+  ];
+
+  const depths: [string, Rendered][] = [
+    ["the dashboard", await at("/dashboard")],
+    ["a root project", await at("/acme-co")],
+    ["one level in", await at("/acme-co.storefront")],
+    ["a child screen of a project", await at("/acme-co.storefront/machines")],
+    ["a GRANDCHILD project's segments screen", await at("/acme-co.storefront.eu/segments")],
+    ["an unresolvable project", await at("/setings")],
+  ];
+  for (const [where, r] of depths) {
+    const g = gateway(r);
+    // Same entries, same order, every time. A zone that reorders is a zone
+    // that moved Settings, which is the click this decision is about.
+    const found = EXPECTED.filter((p) => g.links.some((h) => h.endsWith(p)));
+    check(
+      found.length === EXPECTED.length,
+      `every gateway entry is present at ${where} (${found.length}/${EXPECTED.length})`,
+    );
+    check(
+      g.links.some((h) => h.endsWith("/settings")),
+      `Settings is ONE CLICK from ${where} — no walking back up the tree`,
+    );
+  }
+
+  // The order, read out of the markup rather than assumed.
+  const order = (r: Rendered) =>
+    gateway(r)
+      .links.map((h) => EXPECTED.find((p) => h.endsWith(p)))
+      .filter((p): p is string => p !== undefined);
+  const a = order(depths[0]![1]).join(",");
+  const b = order(depths[3]![1]).join(",");
+  check(a === b, "and the entries are in the same order at depth as at the top");
+  check(a.startsWith("/dashboard,/drift,/projects,/machines"), "which is today's order, unchanged");
+}
+
+// ---------------------------------------------------------------------------
 console.log("· A DERIVED SURFACE HAS A LIST ROUTE AND NEVER A DETAIL ROUTE");
 // ---------------------------------------------------------------------------
 {
@@ -670,7 +868,7 @@ console.log("· /$project/segments reads the endpoint nothing had ever called");
 }
 
 // ---------------------------------------------------------------------------
-console.log("· the tree column is an accelerator on desktop, never the only path");
+console.log("· phone width: the same routes, the shell's own responsive behaviour");
 // ---------------------------------------------------------------------------
 {
   const desktop = await at("/acme-co.storefront");
@@ -678,19 +876,43 @@ console.log("· the tree column is an accelerator on desktop, never the only pat
 
   check(desktop.text.includes("Package feed"), "the project renders on desktop");
   check(phone.text.includes("Package feed"), "and renders the same content at phone width");
+
+  // BELOW `md` THE SIDEBAR IS A DRAWER, and a closed MUI Drawer renders through
+  // a portal — which produces NOTHING under SSR. So the project zone is absent
+  // from the phone markup by design, and that is exactly why the page itself
+  // must still carry the way up and the way down. A check that only looked for
+  // a link "somewhere" would pass on the desktop render and tell us nothing.
   check(
-    phone.links.some((h) => h.endsWith("/acme-co.intern")),
-    "the switcher reaches a sibling at phone width — the jump list is not the only way across",
+    !phone.html.includes('data-project-zone'),
+    "the sidebar is behind the hamburger at phone width — the shell's own behaviour, not a per-page branch",
   );
   check(
-    desktop.links.some((h) => h.endsWith("/acme-co.intern")),
-    "and on desktop as well",
+    phone.text.includes("← acme-co"),
+    "so the page's own header carries the way UP, labelled with the parent",
   );
-  // The switcher is on the PAGE. A control in the nav would imply the other
-  // fifteen entries follow it, and they do not.
   check(
-    !/Homelab Horizon[\s\S]{0,400}switch project/i.test(desktop.text),
-    "the project switcher is not in the gateway nav",
+    phone.links.some((h) => h.endsWith("/acme-co")),
+    "and it is a real link",
+  );
+
+  const parent = await at("/acme-co", { phone: true });
+  check(
+    parent.text.includes("enter a subproject"),
+    "and the way DOWN is on the page too, labelled",
+  );
+  check(
+    parent.links.some((h) => h.endsWith("/acme-co.storefront")),
+    "with each child a real link",
+  );
+  check(
+    parent.text.includes("Menu"),
+    "the drawer's button is labelled 'Menu', not an unlabelled hamburger",
+  );
+
+  // No per-page width branch is left: the same markup shape, minus the shell.
+  check(
+    phone.text.includes("storefront") && desktop.text.includes("storefront"),
+    "the project's identity renders at both widths",
   );
 }
 
