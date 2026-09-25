@@ -54,7 +54,7 @@ import {
 import {
   parseScope,
   projectParam,
-  PROJECT_TABS,
+  PROJECT_NAV,
   type ProjectIndex,
   type ProjectRoute,
   type ProjectScope,
@@ -72,11 +72,11 @@ interface ProjectSearch {
   scope?: ProjectScope;
 }
 
-/** The four screens, as tabs that are links. Never a `useState` tab index. */
+/** The project's screens, as tabs that are links. Never a `useState` tab index. */
 function ProjectTabs({ param, current }: { param: string; current: string }) {
   return (
     <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", mb: 2 }}>
-      {PROJECT_TABS.map((t) => {
+      {PROJECT_NAV.map((t) => {
         const active = t.to === current;
         return (
           <Link

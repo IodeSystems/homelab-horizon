@@ -36,6 +36,7 @@ import {
   readScope,
   resolveProjectParam,
   type ProjectIndex,
+  type ProjectNavTo,
   type ProjectResolution,
   type ProjectRoute,
   type ProjectScope,
@@ -287,7 +288,7 @@ export function ScopeControl({
 }: {
   reading: ScopeReading;
   /** The route this control switches within. */
-  to: "/$project" | "/$project/services" | "/$project/domains" | "/$project/config";
+  to: ProjectNavTo;
   param: string;
 }) {
   return (
