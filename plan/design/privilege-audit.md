@@ -931,6 +931,16 @@ were both walked item by item against the tree at `f6e06bd`.
 (hand over). Section A (decide, then delete) is 0 of 10. Section C (the flip
 itself) is 0 of 5 — and steps 4 and 5 ARE C1 and C2.**
 
+⚠ **That score is stale and its denominator does not match the rescued
+checklist.** §7 as it now stands is A=10, B=12, C=5, D=5 = **32** lines, not 34
+— the 34 was counted against `privilege-classification.md`'s own §7 before the
+rescue. The numerator is stale in both directions: section A carries four `[x]`
+items dated **2026-09-22**, the same day this was scored, so "A is 0 of 10" was
+already wrong when written; and B gained two more `[x]` on 2026-09-25 (the
+maintenance-page hand-over and its checklist widening). **Re-score against §7
+itself, once, rather than trusting this line** — and note that the shape of the
+answer does not move: section C is still 0, and C1/C2 are still steps 4 and 5.
+
 ### 8.1 What is genuinely done, and measured on a box
 
 Not read — run, on `hz-audit`, this pass:
@@ -962,9 +972,15 @@ to keep.
   payload carrying key material that has never been rendered once is not a
   verified step, it is a plan.
 - **The `agent.Directory` prune.** Measured only in the negative: the claim was
-  in the payload, and nothing was removed because nothing was removable. A
+  in the payload, and nothing was removed because nothing was removable. ~~A
   maintenance page created and then cleared, with the file observed
-  disappearing, is the test that has not been run.
+  disappearing, is the test that has not been run.~~ — **run offline 2026-09-25**
+  (`TestClearingAPageRemovesTheFileByEitherPath`, and the compare beside it):
+  real `Observe` → `Compute` → `Apply` over a real directory, the cleared page
+  gone and the distribution's pages untouched. **That is the code, not the
+  estate.** Nothing has yet removed a file on a box, so this row stays in §8.2
+  where it belongs; what changed is that the gap is now "never exercised on a
+  machine", not "never exercised".
 - **The generic `Units` poke and the whole `FilesSection`.** No producer exists
   (§7). First caller lands on an unexercised path.
 - **§1.3's systemd half.** Measured and found **not** working on this box (§1.3).
@@ -1239,9 +1255,38 @@ status of each as of 2026-09-25. One at a time — several make the next moot.
       NO section reads as "hz manages no firewall here" and yields a plan with no
       firewall lines, i.e. one that reports *in sync*. hz emits the section
       flagged `stood_down`, with no rule sets. See the correction under §3.3.
-- [ ] **Move `WriteMaintenancePageFiles` into `HAProxySection.Files`** (§3.10).
+- [x] **Move `WriteMaintenancePageFiles` into `HAProxySection.Files`** (§3.10).
       Cheapest item; fits today's model unchanged; **do it first** as the proof
       that a file-set move works end to end.
+
+      **The payload half shipped 2026-09-21** (`758e1fd`) and this line was
+      never ticked: `desiredFor` renders the pages from `Config.MaintenancePages`
+      and claims the directory (`handlers_agent.go:296-327`). What was missing
+      was the half that makes a hand-over *safe* rather than merely present —
+      **the byte-identical proof** — and every test in the tree checked one path
+      or the other. Landed 2026-09-25,
+      `internal/server/maintenance_pages_test.go`: both writers are run over
+      identically seeded directories and the results compared by **name, bytes
+      and mode**, plus convergence in either order and the clear-a-page case.
+      hz's writer stays until step 5; that is the point of comparing them.
+
+      **Measured, not assumed — three positive controls, each reversed:**
+      widening the claim to `*.http` reddens the compare and
+      `TestMaintenancePagesCrossAndTheStaleOnesAreRemoved`; a **mode**
+      disagreement (0644→0600 in the payload) reddens **only the new compare** —
+      nothing that existed before this change noticed, which is exactly the gap;
+      a **byte** disagreement reddens the compare and the convergence test.
+      The prune's two asks were controlled separately: removing the applier's
+      `prunable` re-check reddens `TestRemovalIsImpossibleOutsideAClaimedDirectory`
+      alone, removing the planner's reddens four tests including the compare —
+      so the two asks are independently pinned, which is what "asked twice"
+      has to mean.
+
+      ⚠ **One test is deliberately blind to a widened claim:**
+      `TestNeitherWriterUndoesTheOther` stayed green under the `*.http` control,
+      because a directory both writers converge on is still converged when they
+      agree on the wrong set. It is a convergence test and says so; the set is
+      `TestBothWritersLeaveTheSameErrorsDirectory`'s job.
 - [ ] **Move ip-forwarding** as two `File` entries — `/etc/sysctl.d/…` and
       `/proc/sys/net/ipv4/ip_forward` (§3.1 #1). Also fixes the
       lost-on-reboot bug in the icebox.
@@ -1254,8 +1299,21 @@ status of each as of 2026-09-25. One at a time — several make the next moot.
       cost on the MFA login path. Decide whether that path gets a nudge (§4.6).
 - [ ] **Move `reconcileIPTables` axes 2/3** to the agent; keep axis 1's
       observe+persist in hz (§3.4).
-- [ ] **Widen `ha-and-the-agent.md` §7's `errors/503.http` item** to "every file
-      under the haproxy errors directory" (§3.10).
+- [x] **Widen `ha-and-the-agent.md` §7's `errors/503.http` item** to "every file
+      under the haproxy errors directory" (§3.10). Done 2026-09-21 in that
+      document (§7, the "OTHER writer in that directory" item, which records the
+      widening in its own last sentence); ticked here 2026-09-25 when the
+      hand-over above was proved.
+
+      **It widens the CHECKLIST ITEM, never the claim.** "Every file under the
+      haproxy errors directory" means every file *hz writes* there — both name
+      shapes, which `HAProxySection.Dirs` already lists. A literal
+      whole-directory claim is the thing `agent.Directory`'s doc comment refuses
+      by design, and it was **measured**: `Match: ["*.http"]` makes the agent
+      delete the distribution's 400/403/500/502 pages while hz leaves them, and
+      the compare says so. Read as a claim-everything instruction this line
+      would have shipped the exact bug the type was built to make
+      unrepresentable.
 - [ ] **Route backup-restore's wg0.conf and cert writes** through 12.2 and 12.3
       (§3.8). Restore is *blocked on both*; it must not grow a private path.
 - [ ] Item 12 steps 2 and 3 as already written in `architecture.md` (WireGuard
