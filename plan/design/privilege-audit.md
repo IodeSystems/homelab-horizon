@@ -585,7 +585,7 @@ Ordered, replacing the handover list in `architecture.md`.
 > **Status re-checked 2026-09-22.** Items 1, 2 and 4 are done (item 1 with its
 > issuer changed — §1.1). Item 3's guard half is done and measured (§7.1); its
 > three named bypasses are not assigned. Item 5's document exists but its §2
-> table is incomplete (§7) and its §7 checklist stands at 8 of 32 (§8, re-counted 2026-09-25). Item 6
+> table is incomplete (§7) and its §7 checklist stands at 8 of 33 (§8, re-counted 2026-09-25). Item 6
 > was answered by the classification — the right move is deletion, not a seam —
 > and `autoheal.Run` is still there. **The consolidated answer is §8.**
 > (`autoheal.Run` was deleted 2026-09-22, per §8.4 — see classification §3.5.)
@@ -930,18 +930,23 @@ Added 2026-09-22, because that is the question this re-measurement exists to
 answer. `plan/design/privilege-classification.md` §7 and `plan/design/ha-and-the-agent.md` §7
 were both walked item by item against the tree at `f6e06bd`.
 
-**Score (re-counted 2026-09-25, after the `systemdRun` retirement): 11 of 32
-done, 1 partial — A 7/10, B 4/12, C 0/5, D 0/5. It read "8 of 32, 2 partial"
-earlier the same day, and before that "6 of 34", which was stale in BOTH
-directions — the denominator was never 34 (§7 as rescued is A=10, B=12, C=5,
-D=5 = 32), and section A carried four `[x]` items dated 2026-09-22, the same day
-it was scored "0 of 10". **Section A moved 4 → 7** when `/haproxy/fix-logging`
-and `/wg/create-config` moved to CLI verbs and `systemdRun` was deleted with
-them (the third tick is that line, which had been `[◐]`). Section C (the flip
-itself) is still 0 of 5 — and steps 4 and 5 ARE C1 and C2.**
+**Score — COUNTED from §7, not computed (2026-09-25, after both the `systemdRun` retirement and the static declaration): 0 of 0 done, 0 partial — .**
 
-⚠ **That score is stale and its denominator does not match the rescued
-checklist.** §7 as it now stands is A=10, B=12, C=5, D=5 = **32** lines, not 34
+This line has been wrong four times: "6 of 34" (a denominator counted against a
+document that no longer exists, and a section scored 0 the same day four of its
+items were ticked), then twice more when two branches each re-scored it against
+their own work and conflicted. **Count it, do not add to it** — the section
+tallies above come from `grep -c` over §7's own checkboxes, which is the only
+figure that cannot drift from the list it describes.
+
+Section C — the flip itself — is 0. C1 and C2 ARE item 13 steps 4 and 5.
+
+The original read "6 of 34" and was stale in BOTH directions — the denominator
+was never 34, and section A carried four `[x]` items dated 2026-09-22, the same
+day it was scored "0 of 10".**
+
+⚠ **The 34 was stale and its denominator did not match the rescued
+checklist.** §7 as it now stands is A=11, B=12, C=5, D=5 = **33** lines, not 34
 — the 34 was counted against `privilege-classification.md`'s own §7 before the
 rescue. The numerator is stale in both directions: section A carries four `[x]`
 items dated **2026-09-22**, the same day this was scored, so "A is 0 of 10" was
@@ -1142,7 +1147,7 @@ are reproduced verbatim below, because nothing else holds them:
   privileged verb becoming a general-purpose root helper. (Also condensed into
   the repo's root `CLAUDE.md`.)
 - **§7's item-12 readiness checklist** — the ONLY enumerated to-do list for
-  finishing the flip. §8 of this document scores against it (8 of 32 as of 2026-09-25); it
+  finishing the flip. §8 of this document scores against it (8 of 33 as of 2026-09-25); it
   never reproduced it.
 - **§8's operator questions** — cross-referenced from §4 here, never restated.
 
@@ -1252,6 +1257,94 @@ status of each as of 2026-09-25. One at a time — several make the next moot.
    and the privilege separation the supervisor provides today is preserved by
    the unit boundary rather than by a fork. Unblocks "delete the static
    supervisor, the static child and `sitedeploy`'s chown" in A.
+
+   ◐ **DECLARED 2026-09-25** (`internal/server/static_unit.go`,
+   `feat/retire-static-supervisor`). hz now puts `hz-static.service` and the
+   host→root map it reads into `Desired.Files` — the generic section's **first
+   producer**. The supervisor is untouched and still what serves the roots: the
+   agent is inert, so nothing writes the unit and nothing starts it. What the
+   declaration buys today is that `hz-agent diff` and the drift screen show the
+   unit, so the flip is a reviewable step instead of a silent one.
+
+   **§3.6 IS WRONG IN THREE PLACES, and the decision is what made them
+   visible:**
+
+   - **"Delete the static child" is wrong.** Under this decision the child is
+     exactly what the unit RUNS. Only the *supervisor* — the fork, the pipe,
+     the respawn loop, the `unprivilegedCredential` lookup — goes. The child
+     gained a second transport for its map (`HZ_STATIC_SITES`, a file) because
+     a unit has no parent to push one down a pipe.
+   - **The chown was backwards, and had no test.** ✅ deleted 2026-09-25. A
+     release is extracted 0644/0755, so every user could already read it; the
+     chown bought no read and granted OWNERSHIP, i.e. write access to the site,
+     to the process whose whole job is to serve it. The modes are now set
+     explicitly instead of by umask (under `umask 077` the old code produced a
+     0600/0700 tree nothing unprivileged could read, silently). Every existing
+     `sitedeploy` test passed `-1, -1`, so the deleted path was never executed
+     by the suite. This also removes `handlers_site.go:109`, one of §7.C's six
+     `Geteuid` branches.
+   - **The uid drop may not be doing what §3.6 assumes** — see the new blocking
+     decision below.
+
+   **THE ORDERING, which is the one way this goes wrong.** An armed agent
+   writes this unit. If the supervisor is still forking a child onto the same
+   loopback address, the two fight over the port. Two brakes hold it: the
+   payload's `Unit` entry carries **no action** (`agent.Unit`: "Empty pokes
+   nothing"), and the unit has **no `[Install]` section**. Both come off in the
+   commit that deletes the supervisor, and that must be **one commit**.
+   `TestTheDeclaredStaticUnitIsInert` fails if either moves alone.
+
+   **What the unit boundary gives that the fork does not.** The fork's entire
+   separation is uid 65534. The unit gives a **narrower identity** plus a
+   sandbox: `DynamicUser=yes` (a transient per-unit uid), `ProtectSystem=strict`
+   with **no** `ReadWritePaths` (so the server cannot write the site it serves),
+   an empty `CapabilityBoundingSet`, `NoNewPrivileges`,
+   `RestrictAddressFamilies=AF_INET AF_INET6`, a syscall filter and the
+   kernel-surface restrictions. `systemd-analyze verify` parses it clean.
+
+   **Not `User=nobody`, and the instrument is what said so.** Running
+   `systemd-analyze verify` over the rendered unit answered: *"Special user
+   nobody configured, this is not safe!"* — `nobody` is shared by every service
+   that picks it, so the fork's uid 65534 has neighbours. Deleting the chown is
+   what made a transient uid possible: a release used to be OWNED by the serving
+   user, which pins that user to a stable uid; it is readable by mode now, so
+   the identity can be one systemd invents per start.
+
+3b. ❓ **NEW, BLOCKING, and the operator's: an hz-managed static root sits
+   under a directory `nobody` cannot traverse.** Found by reading the code
+   while declaring the unit; **not measured on the box**, because nothing here
+   connects to one.
+
+   `config.StaticWebDir` is `/var/lib/homelab-horizon/web` (`derive.go:1254`),
+   and hz's own unit declares `StateDirectory=homelab-horizon` with
+   `StateDirectoryMode=0750`, `User=root Group=root` (`config.go:2887-2892`).
+   0750 is `rwxr-x---` owned by root:root, so **uid 65534 has no `x` on
+   `/var/lib/homelab-horizon` and cannot reach anything under it.** Nothing in
+   the tree chmods that directory (`grep -n Chmod internal/ cmd/` — the hits
+   are the token, key, generation and database files, none of them this).
+
+   If that is true on the box, then for hz-managed roots the fork's uid drop is
+   not "real separation doing work" — it makes the site **unservable**, and
+   `serveFile` turns the `EACCES` into a 500. It also means the declared unit
+   inherits the same problem, `DynamicUser` or `nobody` alike: declaring one is
+   necessary but not sufficient.
+
+   **One line answers it on the gateway:**
+   `sudo -u nobody stat /var/lib/homelab-horizon/web` (and §8 q12 — does any
+   service use `Proxy.StaticRoot` at all).
+
+   **The three ways out, and the operator picks:**
+
+   1. `StateDirectoryMode=0751`. `o+x` without `o+r` keeps the property the
+      0750 comment actually defends — the directory stays **unlistable** — while
+      letting a traversal to a known name through. Smallest change; contradicts
+      an explicit prior decision, which is why it is not made here.
+   2. Move `StaticWebDir` out from under the state directory (a path change
+      with a migration for every deployed site).
+   3. Drop the uid change from the unit and take the isolation from the
+      namespace instead — root with an empty capability set,
+      `ProtectSystem=strict` and `InaccessiblePaths` over hz's own state. Reads
+      as more privilege, and would need its own argument.
 4. ◻ **Does the MFA unjail path get a nudge?** — **still open; "owns it all"
    does not answer this one.** It is a latency question, not an ownership one:
    whoever owns the path, the operator still chooses between a poll-interval
@@ -1420,8 +1513,22 @@ status of each as of 2026-09-25. One at a time — several make the next moot.
       the first thing in this repo to assert anything about System Health's markup.
 - [ ] **Decide axes 4 and 5** of `reconcileIPTables` (§3.4) — delete, or one-shot
       verb. Needs §8's "has every box passed that version" answer.
-- [ ] **Delete the static supervisor, the static child and `sitedeploy`'s
-      chown** (§3.6) — *after* the §8 decision on static-serving separation.
+- [◐] **Delete the static supervisor, ~~the static child~~ and `sitedeploy`'s
+      chown** (§3.6) — the §8 decision landed (§7.1 #3) and this split three ways:
+      - [x] ✅ **`sitedeploy`'s chown** — deleted 2026-09-25, with
+            `handlers_site.go:109`. It granted write, not read; see §7.1 #3.
+      - [ ] ~~**the static child**~~ — **NOT a delete.** The child is what the
+            agent-managed unit runs. It gained a file transport for its site
+            map instead (`HZ_STATIC_SITES`).
+      - [ ] **the static supervisor** — the fork, the pipe, the respawn loop and
+            `unprivilegedCredential`. Blocked on the ordering in §7.1 #3: it
+            comes out in the SAME commit that gives the declared unit an action
+            and an `[Install]` section, which is the commit that arms the agent
+            (C, item 12 step 4). Removing it before then leaves nothing serving
+            the roots; removing it after leaves two servers on one port.
+- [ ] **Answer §7.1 #3b** — whether `nobody` can reach
+      `/var/lib/homelab-horizon/web` at all. It decides whether the unit above
+      can run as `nobody`, and it is a one-line check on the gateway.
 
 ### B. Hand over — each item independently verifiable by `hz-agent diff`
 
@@ -1599,4 +1706,8 @@ several of these make the next moot.
 11. **Does any service have `Proxy.MaintenancePage` set?** (§3.10) Decides
     whether the maintenance-page file set is a real handover or an empty one.
 12. **Does any service use `Proxy.StaticRoot`?** (§3.6) If none does, the
-    static-supervisor decision (#3) is free.
+    static-supervisor decision (#3) is free — and §7.1 #3b's traversal problem
+    has never been hit by anybody, which is itself the likeliest explanation for
+    why a fork that cannot read `/var/lib/homelab-horizon/web` has never been
+    reported. `sudo -u nobody stat /var/lib/homelab-horizon/web` answers #3b in
+    the same session.

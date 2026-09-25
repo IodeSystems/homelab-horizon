@@ -24,13 +24,18 @@ var (
 const servicePath = "/etc/systemd/system/homelab-horizon.service"
 
 func main() {
-	// Unprivileged static-file-server child mode. hz re-execs itself with this
-	// env set (dropped to an unprivileged user) and feeds the host->site map
-	// over stdin. Handle it before flag parsing and the MCP stdin-pipe probe,
-	// which would otherwise mistake our control pipe for an MCP client.
+	// Static-file-server mode. Two ways in, one job: hz re-execs itself with
+	// this env set (dropped to an unprivileged user, map pushed over stdin), or
+	// systemd starts the agent-managed hz-static unit with it (map read from
+	// the file named by StaticServerEnvSites). Handle it before flag parsing
+	// and the MCP stdin-pipe probe, which would otherwise mistake the forked
+	// control pipe for an MCP client.
 	if addr := os.Getenv(server.StaticServerEnvAddr); addr != "" {
 		hzlog.Setup()
-		server.RunStaticServerChild(addr)
+		if err := server.RunStaticServerChild(addr, os.Getenv(server.StaticServerEnvSites)); err != nil {
+			slog.Error("static file server stopped", "err", err)
+			os.Exit(1)
+		}
 		return
 	}
 
