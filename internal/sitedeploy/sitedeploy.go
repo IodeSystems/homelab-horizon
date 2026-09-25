@@ -8,6 +8,20 @@
 // Uploads are untrusted input handled by the root process, so extraction is
 // deliberately strict: path traversal, absolute paths, and non-regular entries
 // (symlinks, devices) are rejected, and total size / file count are capped.
+//
+// WHAT A RELEASE IS OWNED BY, AND WHY IT IS NOT THE FILE SERVER.
+//
+// Extraction used to chown the whole tree to the unprivileged user hz forked
+// its static child as. That granted the wrong thing in both directions: files
+// are written 0644 and directories 0755, so any user could already READ them —
+// and making that user the OWNER of a 0644 file is what let the file server
+// write the site it serves. A file server writes nothing.
+//
+// So ownership stays with the process that extracted the upload, and the modes
+// are set EXPLICITLY (0644 / 0755) rather than left to the ambient umask —
+// because with the chown gone, readability is the whole of the contract and a
+// umask is not a place to keep a contract. The isolation the static server
+// relies on is os.Root confinement (internal/server/static.go), not the uid.
 package sitedeploy
 
 import (
@@ -15,7 +29,6 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -36,7 +49,6 @@ type Manager struct {
 	live     string // the served symlink path (== static_root)
 	releases string // sibling directory holding release dirs
 	keep     int    // releases to retain (including current)
-	uid, gid int    // chown extracted files to this owner; <0 disables
 }
 
 // Result summarizes a deploy.
@@ -54,10 +66,11 @@ type Release struct {
 }
 
 // New returns a Manager for the given served path. keep is the number of
-// releases to retain (minimum 1). uid/gid, when >= 0, are applied to every
-// extracted file so an unprivileged file-server process can read them; pass -1
-// to skip chown (e.g. when not running as root).
-func New(staticRoot string, keep, uid, gid int) *Manager {
+// releases to retain (minimum 1).
+//
+// There is no owner argument. A release is readable because of its mode, not
+// because of who owns it — see the package doc.
+func New(staticRoot string, keep int) *Manager {
 	if keep < 1 {
 		keep = 1
 	}
@@ -66,8 +79,6 @@ func New(staticRoot string, keep, uid, gid int) *Manager {
 		live:     clean,
 		releases: clean + "-releases",
 		keep:     keep,
-		uid:      uid,
-		gid:      gid,
 	}
 }
 
@@ -78,8 +89,11 @@ func (m *Manager) Deploy(r io.Reader, id string, dryRun bool, lim Limits) (*Resu
 	if err := validateID(id); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(m.releases, 0755); err != nil {
+	if err := os.MkdirAll(m.releases, dirMode); err != nil {
 		return nil, fmt.Errorf("create releases dir: %w", err)
+	}
+	if err := os.Chmod(m.releases, dirMode); err != nil {
+		return nil, fmt.Errorf("make the releases dir readable: %w", err)
 	}
 
 	dest := filepath.Join(m.releases, id)
@@ -88,8 +102,11 @@ func (m *Manager) Deploy(r io.Reader, id string, dryRun bool, lim Limits) (*Resu
 	}
 	tmp := dest + ".incoming"
 	_ = os.RemoveAll(tmp)
-	if err := os.MkdirAll(tmp, 0755); err != nil {
+	if err := os.MkdirAll(tmp, dirMode); err != nil {
 		return nil, fmt.Errorf("create staging dir: %w", err)
+	}
+	if err := os.Chmod(tmp, dirMode); err != nil {
+		return nil, fmt.Errorf("make the staging dir readable: %w", err)
 	}
 
 	files, bytes, err := extractTarGz(r, tmp, lim)
@@ -97,13 +114,6 @@ func (m *Manager) Deploy(r io.Reader, id string, dryRun bool, lim Limits) (*Resu
 		_ = os.RemoveAll(tmp)
 		return nil, err
 	}
-	if m.uid >= 0 && m.gid >= 0 {
-		if err := chownTree(tmp, m.uid, m.gid); err != nil {
-			_ = os.RemoveAll(tmp)
-			return nil, fmt.Errorf("chown release: %w", err)
-		}
-	}
-
 	if dryRun {
 		_ = os.RemoveAll(tmp)
 		return &Result{Release: id, Files: files, Bytes: bytes, Swapped: false}, nil
@@ -271,7 +281,13 @@ func extractTarGz(r io.Reader, dest string, lim Limits) (int, int64, error) {
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0755); err != nil {
+			if err := os.MkdirAll(target, dirMode); err != nil {
+				return 0, 0, err
+			}
+			// MkdirAll applies the process umask, and the mode is the whole
+			// reason an unprivileged file server can read this tree now that
+			// nothing chowns it. Say it outright.
+			if err := os.Chmod(target, dirMode); err != nil {
 				return 0, 0, err
 			}
 		case tar.TypeReg:
@@ -279,7 +295,7 @@ func extractTarGz(r io.Reader, dest string, lim Limits) (int, int64, error) {
 			if files > lim.MaxFiles {
 				return 0, 0, fmt.Errorf("archive exceeds %d files", lim.MaxFiles)
 			}
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			if err := mkdirAllReadable(filepath.Dir(target), dest); err != nil {
 				return 0, 0, err
 			}
 			n, err := writeFileLimited(target, tr, lim.MaxBytes-total)
@@ -296,15 +312,43 @@ func extractTarGz(r io.Reader, dest string, lim Limits) (int, int64, error) {
 	return files, total, nil
 }
 
+// dirMode and fileMode are what a release is left as: world-readable, and
+// world-traversable for directories. They are what makes an unprivileged file
+// server able to serve the tree, now that nothing chowns it to that user.
+const (
+	dirMode  = 0o755
+	fileMode = 0o644
+)
+
+// mkdirAllReadable is os.MkdirAll with the modes re-applied, because MkdirAll
+// narrows by the umask and stops at the first directory that already exists —
+// so a parent created by an earlier entry keeps whatever it got.
+func mkdirAllReadable(path, stopAt string) error {
+	if err := os.MkdirAll(path, dirMode); err != nil {
+		return err
+	}
+	for p := path; strings.HasPrefix(p, stopAt) && len(p) > len(stopAt); p = filepath.Dir(p) {
+		if err := os.Chmod(p, dirMode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // writeFileLimited copies at most budget bytes from r into a new file at path,
-// erroring if the source is larger. Files are written 0644 so an unprivileged
-// reader can serve them.
+// erroring if the source is larger. Files are left world-readable (fileMode),
+// explicitly rather than by umask, so an unprivileged server can serve them
+// without owning them.
 func writeFileLimited(path string, r io.Reader, budget int64) (int64, error) {
 	if budget <= 0 {
 		return 0, fmt.Errorf("archive exceeds size limit")
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileMode)
 	if err != nil {
+		return 0, err
+	}
+	if err := f.Chmod(fileMode); err != nil {
+		_ = f.Close()
 		return 0, err
 	}
 	defer func() { _ = f.Close() }()
@@ -320,16 +364,6 @@ func writeFileLimited(path string, r io.Reader, budget int64) (int64, error) {
 		return n, fmt.Errorf("archive exceeds size limit")
 	}
 	return n, nil
-}
-
-// chownTree recursively sets ownership of root and everything under it.
-func chownTree(root string, uid, gid int) error {
-	return filepath.WalkDir(root, func(p string, _ fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		return os.Lchown(p, uid, gid)
-	})
 }
 
 // validateID guards the release identifier used as a directory name.
