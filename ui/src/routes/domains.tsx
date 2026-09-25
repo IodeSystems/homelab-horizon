@@ -2,6 +2,16 @@ import { useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { buildProjectIndex, type ProjectIndex } from "../components/model/projectRoutes.ts";
 import { LocationCell, PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
+import { AssignDialog, RungCell } from "../components/model/AssignBits";
+import {
+  buildAssignIndex,
+  readPlacement,
+  readState,
+  worstState,
+  PLACEMENT_COLUMN_LABEL,
+  type AssignIndex,
+  type Placement,
+} from "../components/model/assign.ts";
 import {
   Alert,
   Box,
@@ -37,6 +47,7 @@ import {
   useRemoveDomainSSL,
   useDNSDriftStatus,
   useClearDNSDrift,
+  useEnvironments,
   useProjects,
   useServices,
 } from "../api/hooks";
@@ -109,13 +120,26 @@ interface SnackState {
 function DomainRow({
   domain,
   projectIndex,
+  assignIndex,
   project,
+  environment,
+  onAssign,
   onSnack,
 }: {
   domain: DomainAnalysis;
   projectIndex: ProjectIndex;
+  assignIndex: AssignIndex;
   /** The project of the service this domain belongs to, if hz lists one. */
   project: string | undefined;
+  /** The rung of that service. Independent of the project — a service can have one and not the other. */
+  environment: string | undefined;
+  /**
+   * Assign the SERVICE this domain belongs to. A domain has no placement of
+   * its own, so this edits the service — which is why it is only offered when
+   * hz actually lists one, and why the dialog names the service, not the
+   * domain.
+   */
+  onAssign: (() => void) | undefined;
   onSnack: (message: string, severity: "success" | "error") => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -182,6 +206,24 @@ function DomainRow({
         <TableCell>
           <LocationCell index={projectIndex} project={project} />
         </TableCell>
+        {/* The rung, and the control that moves it. Editing here edits the
+            SERVICE — the domain has no placement of its own — so the button is
+            absent for a domain hz lists no service for, and the cell says why
+            rather than showing a control that would have nothing to write to. */}
+        <TableCell sx={{ minWidth: 240 }}>
+          {domain.hasService ? (
+            <RungCell
+              reading={readPlacement(project, environment, assignIndex)}
+              onAssign={onAssign}
+            />
+          ) : (
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+              hz lists no service for this domain, and a domain has no project of its own — it is
+              scoped through the service that serves it. There is nothing here to assign until one
+              does.
+            </Typography>
+          )}
+        </TableCell>
         <TableCell align="center">
           <StatusDot
             configured={domain.hasInternalDNS}
@@ -227,7 +269,7 @@ function DomainRow({
         </TableCell>
       </TableRow>
       <TableRow>
-        <TableCell sx={{ py: 0 }} colSpan={8}>
+        <TableCell sx={{ py: 0 }} colSpan={9}>
           <Collapse in={open} timeout="auto" unmountOnExit>
             <Box
               sx={{
@@ -450,16 +492,34 @@ function DriftBanner({ detail }: { detail: DNSDriftInfoResp }) {
 function DomainsPage() {
   const { data, isLoading, error } = useDomains();
   const projects = useProjects();
+  const environments = useEnvironments();
   const servicesQuery = useServices();
   const driftQuery = useDNSDriftStatus();
   const projectIndex = buildProjectIndex(projects.data ?? []);
-  // serviceName → project. A domain whose service hz does not list falls
-  // through as unowned rather than silently borrowing somebody's project.
-  const projectOf = new Map<string, string | undefined>();
-  for (const svc of servicesQuery.data ?? []) projectOf.set(svc.name, svc.project);
+  // What may be OFFERED, and whether hz has said yet. `services` is in the
+  // worst-state too: a domain's placement is read off its service, so a domains
+  // screen that has no service list knows nothing about placement either.
+  const assignIndex = buildAssignIndex(
+    projects.data,
+    environments.data,
+    worstState(
+      worstState(readState(projects), readState(environments)),
+      readState(servicesQuery),
+    ),
+  );
+  // serviceName → where that service sits. A domain whose service hz does not
+  // list falls through as unowned rather than silently borrowing somebody's
+  // project.
+  const placementOf = new Map<string, Placement>();
+  for (const svc of servicesQuery.data ?? []) {
+    placementOf.set(svc.name, { project: svc.project ?? "", environment: svc.environment ?? "" });
+  }
   const addSSLMutation = useAddDomainSSL();
   const [addOpen, setAddOpen] = useState(false);
   const [addDomain, setAddDomain] = useState("");
+  // The service whose placement is being edited, not the domain — a domain has
+  // no placement of its own. Two domains on one service open the same dialog.
+  const [assignService, setAssignService] = useState<string | null>(null);
   const [snack, setSnack] = useState<SnackState>({ open: false, message: "", severity: "success" });
 
   const showSnack = (message: string, severity: "success" | "error") =>
@@ -602,6 +662,7 @@ function DomainsPage() {
                     <TableCell sx={{ width: 40 }} />
                     <TableCell>Domain</TableCell>
                     <TableCell>{PROJECT_COLUMN_LABEL}</TableCell>
+                    <TableCell>{PLACEMENT_COLUMN_LABEL}</TableCell>
                     <TableCell align="center">Int DNS</TableCell>
                     <TableCell align="center">Ext DNS</TableCell>
                     <TableCell align="center">Proxy</TableCell>
@@ -615,7 +676,14 @@ function DomainsPage() {
                       key={d.domain}
                       domain={d}
                       projectIndex={projectIndex}
-                      project={projectOf.get(d.serviceName)}
+                      assignIndex={assignIndex}
+                      project={placementOf.get(d.serviceName)?.project}
+                      environment={placementOf.get(d.serviceName)?.environment}
+                      onAssign={
+                        d.hasService && d.serviceName
+                          ? () => setAssignService(d.serviceName)
+                          : undefined
+                      }
                       onSnack={showSnack}
                     />
                   ))}
@@ -631,7 +699,7 @@ function DomainsPage() {
           <Table>
             <TableBody>
               <TableRow>
-                <TableCell colSpan={8} align="center">
+                <TableCell colSpan={9} align="center">
                   <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
                     No domains found.
                   </Typography>
@@ -650,6 +718,18 @@ function DomainsPage() {
           Manage DNS records
         </Button>
       </Box>
+
+      {/* Assign dialog — the SERVICE behind the row, not the domain. It offers
+          only projects and rungs hz declares, and reports a refusal inline
+          rather than through the snackbar below. */}
+      {assignService && (
+        <AssignDialog
+          service={assignService}
+          current={placementOf.get(assignService) ?? { project: "", environment: "" }}
+          index={assignIndex}
+          onClose={() => setAssignService(null)}
+        />
+      )}
 
       {/* Add Domain dialog */}
       <Dialog open={addOpen} onClose={() => setAddOpen(false)} maxWidth="sm" fullWidth>
