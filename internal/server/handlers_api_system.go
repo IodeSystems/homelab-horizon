@@ -14,6 +14,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
 	"github.com/iodesystems/homelab-horizon/internal/letsencrypt"
+	"github.com/iodesystems/homelab-horizon/internal/system"
 )
 
 // handleAPISystemHealth returns per-component facts about the on-host software
@@ -120,22 +121,25 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 	if hapStatus.Error != "" {
 		hap.Errors = append(hap.Errors, hapStatus.Error)
 	}
-	// Logging sub-check: chrooted haproxy can't reach syslog if rsyslogd's
-	// apparmor profile lacks `attach_disconnected` or /var/log/haproxy.log
-	// doesn't exist. Both are fixable via /api/v1/haproxy/fix-logging.
+	// Logging sub-check: a chrooted haproxy cannot reach syslog if rsyslogd's
+	// apparmor profile lacks `attach_disconnected`, or if /var/log/haproxy.log
+	// does not exist.
+	//
+	// hz READS this and does not repair it. POST /api/v1/haproxy/fix-logging
+	// used to, by piping an hz-built shell string through systemd-run to escape
+	// hz's own sandbox; it moved to `sudo homelab-horizon fix-haproxy-logging`
+	// and the card names that command (plan/design/privilege-audit.md §7 A,
+	// "keep the diagnosis card").
+	//
+	// FOUR states cross the wire, not two booleans. The old pair reported
+	// `logging_apparmor_ok: true` for any read error — so a profile hz could
+	// not read looked identical to one that was correct, which is this repo's
+	// founding bug (CLAUDE.md §2) in miniature and is the state hz will
+	// actually be in after item 12 de-roots it.
 	if hap.Installed {
-		apparmorOK, apparmorReason := checkHAProxyApparmor()
-		logFileOK := fileExists("/var/log/haproxy.log")
-		hap.Extras = map[string]any{
-			"logging_apparmor_ok": apparmorOK,
-			"logging_file_exists": logFileOK,
-		}
-		if !apparmorOK {
-			hap.Errors = append(hap.Errors, "logging: "+apparmorReason)
-		}
-		if !logFileOK {
-			hap.Errors = append(hap.Errors, "logging: /var/log/haproxy.log missing (rsyslog drops privileges before it can create it)")
-		}
+		extras, errs := haproxyLoggingWire(system.DiagnoseHAProxyLoggingHere())
+		hap.Extras = extras
+		hap.Errors = append(hap.Errors, errs...)
 	}
 	resp.Components = append(resp.Components, hap)
 
@@ -390,11 +394,6 @@ func systemdIsEnabled(unit string) bool {
 	return strings.TrimSpace(string(out)) == "enabled"
 }
 
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
 // leDomainFromStatus rebuilds the DomainConfig that produced a DomainStatus —
 // the status struct doesn't carry enough to call NeedsRenewal, so we re-look
 // it up from the derived domain list. Returns zero value if no match.
@@ -407,22 +406,41 @@ func leDomainFromStatus(ds letsencrypt.DomainStatus, cfg *config.Config) letsenc
 	return letsencrypt.DomainConfig{}
 }
 
-// checkHAProxyApparmor detects whether the rsyslogd apparmor profile has the
-// `attach_disconnected` flag — without it, rsyslog denies messages from the
-// chrooted HAProxy because the kernel presents the socket as a disconnected
-// path and the logs are silently dropped. Returns (true, "") on hosts with no
-// apparmor profile (not applicable).
-func checkHAProxyApparmor() (bool, string) {
-	const profilePath = "/etc/apparmor.d/usr.sbin.rsyslogd"
-	data, err := os.ReadFile(profilePath)
-	if err != nil {
-		// No apparmor profile → not applicable to this host.
-		return true, ""
+// haproxyLoggingWire turns the diagnosis into what the card reads.
+//
+// A FUNCTION, not four lines inline in the handler, because it is the only part
+// of this that can be tested without the host: DiagnoseHAProxyLoggingHere reads
+// /etc/apparmor.d, so the handler itself measures whatever box the test runs on.
+// Extracting it is what lets "unknown does not render as fine" be pinned — it
+// was NOT, and a control that turned the unknown state back into LogOK reddened
+// two tests in other packages while every test in this one stayed green.
+//
+// The states reach the UI as strings, not booleans. The pair this replaced —
+// logging_apparmor_ok / logging_file_exists — had no way to say "I could not
+// read it", so it said "true".
+func haproxyLoggingWire(d system.HAProxyLogging) (map[string]any, []string) {
+	extras := map[string]any{
+		"logging_apparmor":    string(d.AppArmor),
+		"logging_file":        string(d.LogFile),
+		"logging_fix_command": system.FixHAProxyLoggingCommand,
 	}
-	if strings.Contains(string(data), "attach_disconnected") {
-		return true, ""
+	// Only the two states that are actually a problem become errors.
+	// LogNotApplicable carries a sentence too ("nothing confines rsyslogd on
+	// this host"), and that is an explanation rather than a fault — it travels
+	// in Extras and must not redden the card.
+	var errs []string
+	for _, f := range []struct {
+		state  system.LogCheck
+		detail string
+	}{
+		{d.AppArmor, d.AppArmorDetail},
+		{d.LogFile, d.LogFileDetail},
+	} {
+		if f.state == system.LogBroken || f.state == system.LogUnknown {
+			errs = append(errs, "logging: "+f.detail)
+		}
 	}
-	return false, "rsyslogd apparmor profile is missing attach_disconnected flag — HAProxy logs are silently dropped"
+	return extras, errs
 }
 
 // servedDomains is every name dnsmasq answers from hz's own config. The
