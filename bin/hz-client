@@ -37,7 +37,7 @@ OPTIONS
 COMMANDS
   IP banning:
     bans                                        List all active bans
-    ban <ip> [--timeout SEC] [--reason "..."]   Ban an IP address
+    ban <ip> [--timeout SEC] [--reason "..."]   Record a ban (rule lands within a minute)
     unban <ip>                                  Unban an IP address
 
   Rolling deploy:
@@ -511,13 +511,16 @@ case "$CMD" in
       esac
     done
 
-    echo "Banning $IP..."
+    echo "Recording a ban for $IP..."
     # Build JSON payload safely via python3 (handles quoting)
     PAYLOAD=$(python3 -c "
 import json, sys
 print(json.dumps({'ip': sys.argv[1], 'timeout': int(sys.argv[2]), 'reason': sys.argv[3]}))
 " "$IP" "$BAN_TIMEOUT" "$BAN_REASON")
     ban_post "ban" "$PAYLOAD"
+    echo "Recorded. hz installs the DROP rule on its next reconcile pass -"
+    echo "within a minute - not inside this request. Until then the address"
+    echo "still reaches your service."
     ;;
 
   unban)

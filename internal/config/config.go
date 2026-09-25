@@ -401,6 +401,24 @@ type Config struct {
 	// the requirements that level actually asks about — see SAQNone.
 	PCISAQLevel string `json:"pci_saq_level,omitempty"`
 
+	// JournalRetention is hz saying "I keep this machine's journal", and it is
+	// the RECORD the log-retention hand-over needed (privilege-audit.md §7 B,
+	// §3.1 #13). Until it existed, the only trace of an operator asking for
+	// twelve months of audit history was the drop-in file itself — so hz could
+	// write that file from a button but could never DECLARE it, and a
+	// declaration is what the agent owns.
+	//
+	// Off is not "hz wants a short journal": it is hz having no opinion about
+	// this machine's journal at all, and hz emits nothing for journald in that
+	// state. There is deliberately no way to express "keep less" — hz has
+	// never had one, and inventing it here would mean claiming a directory in
+	// order to take something away.
+	//
+	// Set by the log_persistence fixer (PCI DSS 10.5.1), and ADOPTED at boot on
+	// a machine whose drop-in predates this field — see
+	// Server.adoptJournalRetention.
+	JournalRetention bool `json:"journal_retention,omitempty"`
+
 	// Passkeys, an alternative second factor to TOTP. A peer may hold several
 	// (laptop platform authenticator, a hardware key as backup); any one of
 	// them opens a session, and either factor satisfies the jail.

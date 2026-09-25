@@ -89,9 +89,15 @@ directly, bypassing `syncServices`.
 
 Runs on **all** fleet members, primary included. Every 30s, `GET
 /api/peer/state` from each peer, last-write-wins merge per IP by `CreatedAt`
-(:396), then `updateConfig` + `reapplyBans` (:390). `reapplyBans`
-(`handlers_ban.go:122`) shells `iptables -I INPUT 1 -s <ip> -j DROP`
-(`handlers_ban.go:22`).
+(:396), then `updateConfig` and **nothing else**.
+
+**Corrected 2026-09-25 — this used to be a privileged path and is not one any
+more.** It read: "then `updateConfig` + `reapplyBans` (:390); `reapplyBans`
+(`handlers_ban.go:122`) shells `iptables -I INPUT 1 -s <ip> -j DROP`". The ban
+hand-over (`privilege-audit.md` §7 B) deleted `reapplyBans` outright: the merge
+writes the RECORD, and the reconciler installs whatever rule that record
+implies on its next pass. So ban sync no longer runs iptables at all, and the
+three `syncServices` bypasses this document is largely about are now **two**.
 
 ### 2.3 Cert pull (`certRenewalSweep`, `server.go:1554`)
 
@@ -152,7 +158,7 @@ output once.
 | `cfg.DNSMasqHostsPath` | `syncServices` → `dns.SetRecords(cfg.DeriveDNSRecords())` (`handlers_services.go:36`) | yes (`handlers_agent.go:122`) | **yes.** `SetRecords` → `renderRecordsLocked` (`dnsmasq/apply.go:62`); the agent gets `GenerateRecords` → the same `renderRecordsLocked` (`dnsmasq/dnsmasq.go:107`). |
 | `cfg.DNSMasqConfigPath` (`dnsmasq.conf`) | **not on this path** — `syncServices` never calls `dns.WriteConfig` | yes (`handlers_agent.go:121`) | n/a. Agent-only here; both would render `renderConfigLocked` anyway. |
 | iptables `WG-FORWARD` / `WG-INPUT` | `applyWGPeersFromConfig` → `rebuildWGChains` → `wireguard.RebuildForwardChain` / `RebuildInputChain` | yes, `iptables.Reconcile`'s owned-chain rebuild (`iptables/reconcile.go:213`) | **yes.** `wireguard.rebuildChain` (`wireguard/apply.go:280`) populates the chain **from `iptables.ExpectedRules`** (:285) — the file's own comment records the drift bug that made them collapse this to one generator. The two input structs differ (`ForwardChainOpts` omits `Forwards`/`ReservedPorts`), but `rebuildChain` filters by chain and those produce `HZ-*` rules only, so the omission cannot change these two chains. |
-| iptables ban rules (`INPUT -s <ip> -j DROP`) | `banSyncOnce` → `reapplyBans` (`peer_sync.go:390`) | **yes, in the desired set since 2026-09-22** — `ExpectedRules` emits one rule per address in `Inputs.BannedIPs`, fed from `cfg.IPBans` at both call sites. The agent still applies nothing (`cmd/hz-agent/install.go` never emits `--apply`), so this is the precondition for the move, not the move. | **Yes, by construction, and they still cannot fight.** One rule per address, emitted in readback form (`-s <ip>/32 -j DROP`) so the live rule matches; both writers check-then-insert at position 1. `Reconcile` **adds** a ban whose rule is missing and **never deletes** one: removing a ban from `cfg.IPBans` makes the live rule *unknown*, not stale, and unknown is left alone — `unbanIP` stays the thing that removes it. Residual: `reconcileIPTables` does not hold `banMu`, so a simultaneous insert could leave a duplicate DROP — harmless, self-consistent, not cleaned up. `plan/icebox.md`. |
+| iptables ban rules (`INPUT -s <ip> -j DROP`) | ~~`banSyncOnce` → `reapplyBans`~~ — **NOBODY, since 2026-09-25.** The merge writes `cfg.IPBans` and stops. | **yes, in the desired set since 2026-09-22** — `ExpectedRules` emits one rule per address in `Inputs.BannedIPs`, fed from `cfg.IPBans` at both call sites. The agent still applies nothing (`cmd/hz-agent/install.go` never emits `--apply`), so hz's own `reconcileIPTables` is the installer until step 5. | **Not an overlap any more: there is ONE installer.** The hand-over (`privilege-audit.md` §7 B) deleted `iptablesBan`, `iptablesCheckBan` and `reapplyBans`; a ban is recorded and a reconciler installs it. `Reconcile` **adds** a ban whose rule is missing and **never deletes** one: removing a ban from `cfg.IPBans` makes the live rule *unknown*, not stale, and unknown is left alone — `unbanIP` stays the thing that removes it, synchronously, and is now the only iptables verb hz web runs. ~~Residual: `reconcileIPTables` does not hold `banMu`, so a simultaneous insert could leave a duplicate DROP~~ — **gone with the second installer**; the icebox entry that parked it said the ban move would decide which writer survives, and it did. |
 | `<SSLCertDir>/live/<d>/*.pem`, `<SSLHAProxyCertDir>/<d>.pem` | `pullCertFromPeer` (`peer_sync.go:466,469,480`) | **`<SSLHAProxyCertDir>/<d>.pem` only, since 2026-09-21** (item 12 step 3) — `CertSection`, forced `Secret`. `live/**` does NOT cross: issuance record, not served bundle. | **An overlap now**, and the reason the cert section carries no directory claim: hz would otherwise be telling the agent to delete a bundle peer-sync had just written. The agent writes what hz lists and prunes nothing here; whether this writer survives at all is §10.5, untouched. |
 | `/etc/wireguard/wg0.conf` | `applyWGPeersFromConfig` → `s.wg.*` + `Reload` | **yes, since 2026-09-21** (item 12 step 2) — `WireGuardSection.Files[0]`, contents = the file hz maintains, read back. | **Agreeing by construction, not by luck**: hz serves the same bytes it keeps, so an agent polling a box hz has written finds `unchanged`. It is still the *overlap* row — once the agent applies, two writers touch one file on independent clocks — but content cannot diverge while hz is the only producer. The guard in §7 still applies. |
 | `/etc/homelab-horizon/config.json` | `config.Save` (`handlers_peer.go:346`), `updateConfig` | **no** | n/a. Must stay writable by hz's user after the flip — true of all of hz, not peer-sync's problem. |
@@ -174,9 +180,9 @@ and it stops mattering entirely once item 12 step 5 makes `syncServices` render
 and stop.
 
 **The real exposure is the rows where peer-sync writes and the agent does
-not**: certs and bans (`wg0.conf` left this list on 2026-09-21). Those are exactly the three things item 12
-already names as not-yet-owned (steps 2 and 3, plus `handlers_ban` in §2's
-uncovered list). Peer-sync does not add a fourth problem. **It attaches a
+not**: ~~certs and bans~~ **certs** (`wg0.conf` left this list on 2026-09-21;
+**bans left it on 2026-09-25**, when peer-sync stopped applying them at all).
+What is left is item 12 step 3 with one more caller. Peer-sync does not add a fourth problem. **It attaches a
 30-second timer to problems that today only fire when a human clicks
 something.** That is the difference it makes, and it is the reason it has to be
 disarmed on the same day rather than scheduled separately: after the flip, hz
@@ -204,8 +210,15 @@ The three exceptions in §4 are exceptions because they bypass
 ### A. Route peer-sync's writes through the same desired state
 Mostly **already true** (§5). The remaining work is only the three bypasses:
 route `applyWGPeersFromConfig` through the agent's WireGuard section, fold the
-cert pull into whatever item 12 step 3 does with letsencrypt, and decide whether
-bans belong to the agent or to a minimal privileged helper.
+cert pull into whatever item 12 step 3 does with letsencrypt, and ~~decide
+whether bans belong to the agent or to a minimal privileged helper~~ —
+**decided and done 2026-09-25**: the ban INSTALL belongs to the agent (it is
+already an expected rule; hz records and the reconciler installs), and the ban
+REMOVAL could not go with it, because making a lifted ban removable
+declaratively means making it *stale*, which is the one class `Reconcile`
+deletes. So `unbanIP`'s `iptables -D` is the minimal privileged verb that is
+left, and naming who runs it after the flip is an open §7 B line rather than a
+question this document still has to ask.
 
 - **Cost:** none of it is peer-sync work. It is items 12.2 and 12.3 with one
   extra caller each. The only peer-sync-specific change is deleting
@@ -249,8 +262,9 @@ Ship the guard with item 12 step 4 (arming the unit), because that is the change
 that makes the combination possible for the first time. The guard is a few lines,
 testable with no machine, and it converts an unproven interaction into a refused
 one. Then do A, which is not really separate: two of its three parts are item
-12 steps 2 and 3 with one more caller, and the third (bans) is already on §2's
-uncovered list with or without peer-sync.
+12 steps 2 and 3 with one more caller, and the third (bans) ~~is already on
+§2's uncovered list with or without peer-sync~~ — **done 2026-09-25**; peer-sync
+no longer touches iptables on that path.
 
 **B landed 2026-09-21, ahead of step 4 rather than with it**
 (`internal/server/agent_fleet_guard.go`; what "refuse" means, where it is
@@ -354,11 +368,15 @@ The peer-sync half of the checklist. It sits alongside
       agent's payload over identically seeded directories and compares name,
       bytes and mode, in either order and across a cleared page.
       `privilege-audit.md` §7.B carries the positive controls.
-- [ ] **The three bypasses are each assigned** before `peer_id` is ever set
-      again: `applyWGPeersFromConfig` (item 12 step 2), `pullCertFromPeer` (item
-      12 step 3), `reapplyBans` (`handlers_ban`, `privilege-audit.md` §3 item 5).
-      An unassigned bypass after the flip is a permission error retried every 30s
-      on a spare that stops converging.
+- [◐] **The ~~three~~ TWO bypasses are each assigned** before `peer_id` is ever
+      set again: `applyWGPeersFromConfig` (item 12 step 2) and `pullCertFromPeer`
+      (item 12 step 3). An unassigned bypass after the flip is a permission error
+      retried every 30s on a spare that stops converging.
+      - [x] ✅ **`reapplyBans`** — **deleted 2026-09-25**, not assigned. It was
+            the reconciler's missing-expected add done a second time by the web
+            process; the reconciler already heals a wiped ban
+            (`TestReconcileInstallsAMissingBan`). Ban sync now writes the record
+            and applies nothing.
 - [ ] **`config.Save` still works as the unprivileged user** —
       `/etc/homelab-horizon/config.json` and its directory. Not peer-sync's
       problem alone, but peer-sync is the path that writes it on a timer rather

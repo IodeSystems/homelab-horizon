@@ -861,9 +861,25 @@ fixed here. Each names the section with the evidence.
   "Never a shell string / never a subcommand from a request / never reachable
   from the web process" are all satisfied by the agent's new `Units` poke, which
   nonetheless lets hz name which systemd unit gets restarted. A fourth property
-  belongs there before anything produces a `Units` entry — and nothing does yet,
-  so the first caller will land on a path no production payload has exercised.
-  `privilege-audit.md` §7.
+  belongs there before anything produces a `Units` entry — ~~and nothing does
+  yet~~. **Corrected 2026-09-25: two things do now**, and the second of them
+  acts. `staticFilesSection` names `hz-static.service` with NO action (the
+  brake, deliberately), and the log-retention hand-over names
+  `systemd-journald` with `restart` — the first payload that pokes anything.
+  Both targets are constants in hz's own tree and neither comes from a request,
+  so the three properties still hold; what is missing is the property that says
+  so out loud. `privilege-audit.md` §7.
+
+- **`FilesSection.Units` is section-wide, so a poke fires for the wrong file.**
+  The generic section has one `Units` list and one `touched[SubsystemFiles]`
+  flag, so on a machine where hz manages the journal, changing the static site
+  map restarts `systemd-journald` (`internal/server/logretention.go`). Cheap
+  and lossless — a socket-activated log daemon, poked only when some file in
+  the section actually moved — but it is a restart for a reason that has
+  nothing to do with the unit. The fix is associating a unit with the file that
+  needs it, which is a wire change on both sides of a version boundary; not
+  worth it for one over-poke, and worth it the moment a third acting unit
+  lands.
 
 - **`<config>.observed` is missing from item 12's chown line.**
   `privilege-classification.md` §7.C names `config.json`, its directory,
@@ -877,15 +893,6 @@ fixed here. Each names the section with the evidence.
   since September. Not privileged paths, so not flip blockers — but row 1's
   caller is the service-deploy token, which is also what reaches
   `handlers_ban.go`'s root `iptables` call.
-
-- **`reconcileIPTables` does not hold `banMu`, so a ban can be inserted twice.**
-  Since bans became expected rules (2026-09-22), two writers can install one:
-  `reapplyBans`/`banIP` under `banMu`, and `Reconcile`'s missing-expected add on
-  the 60s health tick. Both check-then-insert and neither deletes, so the worst
-  case is a duplicate `-s <ip>/32 -j DROP` in INPUT — harmless, classified
-  expected, never cleaned up. Fixing it means holding `banMu` across
-  `reconcileIPTables`, or making the ban writer single. Not worth doing before
-  the ban move decides which writer survives. `ha-and-the-agent.md` §4.
 
 ## ◻ Two machine lists, one word — and `hz cm` → `hz config` made it louder (2026-09-22)
 

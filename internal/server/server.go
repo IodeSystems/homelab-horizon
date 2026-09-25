@@ -242,6 +242,13 @@ type Server struct {
 	sysctlDir     string
 	ipForwardPath string
 
+	// journaldDir is the drop-in directory hz's log-retention declaration
+	// names (logretention.go). A field for the same reason the two above are:
+	// a test that applies hz's payload with the real agent would otherwise
+	// rewrite /etc/systemd/journald.conf.d and restart the journal of the
+	// machine running the suite. Empty means the real one.
+	journaldDir string
+
 	adminToken    string
 	csrfSecret    string
 	dryRun        bool
@@ -1895,11 +1902,20 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	// not three lines in a journal nobody reads.
 	s.monitor.SetSubsystems(s.subsystems.names(), s.probeSubsystem)
 
+	// A machine that already has hz's journald drop-in says so, once, before
+	// anything serves a payload. First sighting ADOPTS, never acts
+	// (logretention.go; CLAUDE.md §11).
+	s.adoptJournalRetention()
+
 	// Start background health check (every 60 seconds)
 	s.startHealthCheck()
 
-	// Reapply IP bans and start expiry goroutine
-	s.reapplyBans()
+	// Expire the bans that ran out while hz was down, then keep expiring them.
+	//
+	// Nothing re-INSTALLS a ban here any more: cfg.IPBans is the declaration
+	// and reconcileIPTables (above, on the 60s health tick) is what installs
+	// a rule that is missing. The ban path stopped running iptables in 2026-09
+	// — handlers_ban.go's header.
 	go s.startBanExpiry()
 
 	// Start Route53 background sync for dynamic IP records

@@ -354,6 +354,14 @@ func (s *Server) handleAPIDNSMasqStart(w http.ResponseWriter, r *http.Request) {
 // POST /api/v1/system/fix/log-retention — make the journal survive reboots and
 // keep a year of it (PCI DSS 10.5.1).
 //
+// HANDED OVER 2026-09-25 (privilege-audit.md §7 B, §3.1 #13). The bytes, the
+// file name, the sweep and the claim glob now live in ONE place,
+// internal/server/logretention.go, and the agent declares the same file from
+// the same constants. This handler is hz's writer and stays until hz stops
+// writing files at all (item 12 step 5); what it gained is that it also
+// RECORDS the decision (Config.JournalRetention), because a file on disk is
+// not something hz can declare and a declaration is what the agent owns.
+//
 // Written as a drop-in rather than an edit to journald.conf: the main file is
 // a package-managed default full of commented examples, and rewriting it means
 // owning a merge with every future upgrade. A drop-in is additive, obvious in
@@ -368,36 +376,39 @@ func (s *Server) handleAPISystemFixLogRetention(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// journald creates nothing itself: with Storage=persistent and no
-	// directory it silently stays volatile, so the directory comes first.
+	// /var/log/journal, and the comment that used to be here was WRONG.
+	//
+	// It read "journald creates nothing itself: with Storage=persistent and no
+	// directory it silently stays volatile". That is the rule for Storage=auto
+	// — and hostfacts.go's journalPersistence says the opposite about
+	// persistent, four lines of comment apart, so the two could not both be
+	// true. systemd.journald.conf(5) settles it: "persistent" stores below
+	// /var/log/journal, *creating the directory if necessary*; "auto" writes
+	// there only if it already exists.
+	//
+	// The mkdir stays because it is free and makes the transition visible
+	// immediately rather than at journald's next start — but it is NOT a
+	// precondition, and that is what makes the hand-over complete: the agent
+	// needs to place one file, not create a directory nothing declares.
 	if err := s.fs.MkdirAll("/var/log/journal", 0o755); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "could not create /var/log/journal: "+err.Error())
 		return
 	}
 
-	const dropInDir = "/etc/systemd/journald.conf.d"
-	if err := s.fs.MkdirAll(dropInDir, 0o755); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "could not create "+dropInDir+": "+err.Error())
-		return
-	}
-
-	// SystemMaxUse is set alongside retention because the two bounds are
-	// independent: without a size cap a year of logs can fill the disk, and
-	// filling the disk on a gateway takes far more than logging with it.
-	const conf = `# Written by homelab-horizon for PCI DSS 10.5.1.
-# Twelve months of audit history, with a size cap so a year of logs cannot
-# fill the disk this gateway runs on.
-[Journal]
-Storage=persistent
-MaxRetentionSec=1year
-SystemMaxUse=2G
-`
-	if err := s.fs.WriteFile(dropInDir+"/99-homelab-horizon.conf", []byte(conf), 0o644); err != nil {
+	if err := writeJournalDropInAt(s.journaldPaths().DropInDir); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "could not write the drop-in: "+err.Error())
 		return
 	}
 
-	if err := s.runner.Run(r.Context(), "systemctl", "restart", "systemd-journald"); err != nil {
+	// THE RECORD, and it is the hand-over. Without it the only trace of this
+	// request is the file itself, which hz can write but cannot declare.
+	if err := s.updateConfig(func(c *config.Config) { c.JournalRetention = true }); err != nil {
+		writeJSONError(w, http.StatusInternalServerError,
+			"the drop-in is written, but hz could not record that it manages this machine's journal: "+err.Error())
+		return
+	}
+
+	if err := s.runner.Run(r.Context(), "systemctl", "restart", journaldUnit); err != nil {
 		writeJSONError(w, http.StatusInternalServerError,
 			"config written, but journald did not restart: "+err.Error())
 		return
