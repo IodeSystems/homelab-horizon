@@ -1,5 +1,9 @@
 /**
- * `/$project/segments` — the networks this project declares.
+ * `/$project/segments` — Network, inside one project: the segments it declares.
+ *
+ * The heading matches the MENU WORD (`Network`), because the entry the operator
+ * clicked and the screen they land on have to be recognisably the same thing.
+ * What a network is here — a segment, owned by a project — is the first sentence.
  *
  * The cleanest project-scoped record in the config and the last one with no
  * screen: `Segment.Project` is REQUIRED, enforced in `ValidateSegments` and
@@ -44,7 +48,7 @@ function ProjectSegments() {
   return (
     <Box>
       <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5 }}>
-        Network segments in {route.name}
+        Network in {route.name}
       </Typography>
       <Typography variant="body2" sx={{ color: "text.secondary", mb: 2 }}>
         Every segment whose record names this project. A segment must name one — it is the owner
