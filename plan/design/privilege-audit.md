@@ -1253,13 +1253,25 @@ status of each as of 2026-09-25. One at a time — several make the next moot.
    on every box hz is on, before enrolment, and the verb lands on a binary
    that is always present.
 
-   ⚠ **It does not do that today.** Measured 2026-09-25: `hz-agent` appears
-   nowhere in `cmd/homelab-horizon/` or the install path (positive-controlled
-   — the same grep finds it in `internal/haproxy` and `internal/dnsmasq`). The
-   binary IS already embedded under the `hzembed` tag
-   (`internal/server/hzbin`, served at `/admin/hz-agent/bin/<os>-<arch>`), so
-   install writing it out is cheap rather than new. **That is a prerequisite
-   for this decision, and it is its own work item.**
+   ✅ **It does that now** (`cmd/homelab-horizon/agentbin.go`, 2026-09-25).
+   It did not when this was written: `hz-agent` appeared nowhere in
+   `cmd/homelab-horizon/` or the install path (positive-controlled — the same
+   grep found it in `internal/haproxy` and `internal/dnsmasq`). The binary was
+   already embedded under the `hzembed` tag (`internal/server/hzbin`, served at
+   `/admin/hz-agent/bin/<os>-<arch>`), so install writing it out was cheap
+   rather than new. `install` now writes **one file** — its own
+   GOOS/GOARCH agent to `/usr/local/bin/hz-agent`, root-owned 0755, by
+   write-temp-and-rename so it can replace a running agent's binary — and
+   **runs no command**: no unit, no daemon-reload, no enable, no start, no
+   restart of an agent it replaced. The unit and the enrolment stay with
+   `hz-agent install`, because two writers of one unit is a drift source and
+   hz cannot render an ExecStart that comes from the agent's own
+   `os.Executable()`. An hz built without `hzembed` (CI, a plain `go build`)
+   says it carries no agent and why, and does not fail the install.
+   Guarded by `cmd/homelab-horizon/agentbin_test.go` — including a structural
+   one that fails if that file ever imports `os/exec` or names systemd, since
+   *installing a binary is not arming it* and nothing else in the tree would
+   have caught hz's install enabling the agent.
 
    Unblocks deleting `systemdRun` once this and `haproxy/fix-logging` both
    move — delete it in the commit that lands the second, not before.
