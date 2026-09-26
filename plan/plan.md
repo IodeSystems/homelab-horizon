@@ -73,7 +73,7 @@ built meanwhile gates one authority against itself.
 | | | detail |
 |---|---|---|
 | ◐ | **project/env on `/services` + `/domains`.** The Location column and the four `/$project/…` routes **shipped 2026-09-24** (`7ea78f1`). What is still missing is the **assign control** — a dialog against `/api/v1/services/assign`. | item 24; [design/ui.md](design/ui.md) Part 2 |
-| ◻ | **UI for the unreachable endpoints.** Fourteen registered, admin-gated, tested write paths have **zero UI callers** — verified 2026-09-24 against a positive control (`/bans/add`, 1 hit): `projects/{add,rm}`, `environments/{add,set,rm}`, `machines/{add,rm}`, `segments/{add,set,rm}`, `import`, `topology/hosts/adopt`, `services/{assign,unassign}`. | [design/ui.md](design/ui.md) Part 1 §6, §7.4 |
+| ◻ | **UI for the unreachable endpoints.** Eleven registered, admin-gated, tested write paths have **zero UI callers** — measured 2026-09-26 against a positive control (`/bans/add`, 1 hit): `environments/{add,set,rm}`, `machines/{add,rm}`, `segments/{add,set,rm}`, `import`, `topology/hosts/adopt`, `services/unassign`. It was fourteen on 2026-09-24; `services/assign` gained a caller with item 24 and `projects/{add,rm}` with the tree's `+` and remove (`feat/nav-tabs`). | [design/ui.md](design/ui.md) Part 1 §6, §7.4 |
 | ◻ | **Dashboard → the ranked queue.** Needs no new backend record: `rankFleet` in the drift screen already implements the ordering. The current Dashboard is four numbers that never change and never need you. | [design/ui.md](design/ui.md) Part 2, Decision 3 |
 | ◻ | **`hz host adopt self`** on the gateway. Built and proven byte-identical against a pre-reference golden; ⚠ **needs the new binary on the box first.** | item 21 |
 
@@ -184,6 +184,9 @@ warning onto the peer-config download path.
 ---
 
 # Active work
+
+✅ **Nav + route hierarchy (amendment 5) built 2026-09-26** on `feat/nav-tabs`,
+not merged, not deployed → [done.md](done.md#nav--route-hierarchy-amendment-5-2026-09-26).
 
 One row per item. **The detail is in the linked document** — the landed
 narratives moved to [done.md](done.md) 2026-09-24 so this file stays readable in

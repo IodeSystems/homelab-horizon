@@ -4,6 +4,18 @@ Completed trees moved out of [plan.md](plan.md) as they finished. Kept for the
 reasoning, not the status: several of these record *why* a thing is shaped the
 way it is, which the code alone doesn't say.
 
+## Nav + route hierarchy, amendment 5 (2026-09-26)
+
+✅ Built on `feat/nav-tabs`; not merged to `dev`, not deployed. The sidebar is
+WHERE (the project tree, no named root, plus a fixed gateway group, the same at
+every scope); six tabs over the page are WHAT; a project lives at
+`/p/<bare name>/<tab>`. Operator calls: the unscoped Config tab gets a project
+picker; project add/remove is on the tree. Design, decisions reversed (J, L)
+and what the build found: [design/ui.md](design/ui.md), Decision 1,
+amendment 5. Verified: all 12 UI selftest suites green (render check 211/211,
+decisions 188/188), `tsc -b` clean, and a hermetic container walked through
+every tab, the legacy redirect, add and remove.
+
 ## Peer-API access control (2026-09-21)
 
 ### ✅ An empty peer list now admits nobody
