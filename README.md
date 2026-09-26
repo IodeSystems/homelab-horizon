@@ -1030,9 +1030,13 @@ Alternatively, pass the full config as JSON via the `HZ_CONFIG` environment vari
 
 | Page | Description |
 |------|-------------|
-| `/app/dashboard` | Overview dashboard |
+| `/app/` | Overview dashboard |
 | `/app/services` | Service management — domains, DNS, proxy, health status |
 | `/app/domains` | Every domain's DNS/proxy/HTTPS state, SSL gaps, and zone records |
+| `/app/machines` | Declared machines; `/app/machines/<name>` is one box's page |
+| `/app/network` | Every network segment and its members |
+| `/app/config` | Config-manager registrations, blessed configs and promotion |
+| `/app/p/<project>/…` | The same six tabs (Overview, Services, Domains, Machines, Network, Config) narrowed to one project |
 | `/app/vpn` | VPN client management — create clients, QR codes, invites |
 | `/app/bans` | IP ban management |
 | `/app/checks` | Health check status and notifications |
