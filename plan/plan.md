@@ -25,7 +25,7 @@ a design question.
 
 | | | detail |
 |---|---|---|
-| ◻ | **Arm the agent** on one box — the gateway, which is the box you can walk to. Item 13 steps 4–5: add `[Install]` to the unit, put `--apply` in `ExecStart`, then stop hz applying and drop it to `User=hz`. | [design/privilege-audit.md](design/privilege-audit.md) §8 scores this **16 of 34** (top-level items of §7 A–D, counted with a tool — the method is stated there because the figure has disagreed with itself four times).go`. The enumerated checklist is §7 of that file; the decisions it depends on are §7.1, and three of the five are now answered by "hz-agent owns it all" |
+| ◻ | **Arm the agent** on one box — the gateway, which is the box you can walk to. Item 13 steps 4–5: add `[Install]` to the unit, put `--apply` in `ExecStart`, then stop hz applying and drop it to `User=hz`. | [design/privilege-audit.md](design/privilege-audit.md) §8 scores this **16 of 34** (top-level items of §7 A–D, counted with a tool — the method is stated there because the figure has disagreed with itself four times): A 8/11, B 8/13, C 0/5, D 0/5 (2026-09-26). The enumerated checklist is §7 of that file; the decisions it depends on are §7.1, and three of the five are now answered by "hz-agent owns it all" |
 | ◻ | **Bless one real config** against the live store. All seven `cm_*` tables on the gateway are **empty** (measured 2026-09-23), so the whole blessing → generation → restart loop is whole in the tree and unproven on the estate. | [design/config-manager.md](design/config-manager.md); item 17 below |
 
 **Why Tier 0 is Tier 0:** everything in items 13, 17 and 20 is code with no
@@ -36,6 +36,17 @@ is the most exposed thing on the network and is currently `User=root`.
 ⚠ **`hz-agent diff` on the live gateway must report *in sync* for every served
 section before the flip.** A section reporting *changed* is evidence a plan doc
 is stale, not a routine diff.
+
+**▶ Next step (2026-09-26):** run `sudo hz-agent diff` on the live gateway —
+read-only, and §7 D's first line. Eight hand-overs landed 2026-09-25, each
+proven byte-identical against a fixture in tests; none is checked against the
+real box yet. The diff confirms all of them or names the one that disagrees.
+
+**Still the operator's, before the flip / the move:**
+- **Does the MFA unjail path get a nudge?** Blocks the last large §7 B item —
+  [design/privilege-audit.md](design/privilege-audit.md) §7.1 question 4.
+- **Before moving the gateway to wireless:** a port-forward backend left on the
+  old subnet silently loses ALL forwarding — see *Current state* below.
 
 ## Tier 1 — makes the mission true
 
@@ -90,12 +101,13 @@ already drawn that line and the UI can inherit it.
 ### ⚠ `dev` is the integration branch — read this before deploying anything
 
 The new model lands on **`dev`**, not `main`, because it will break and churn
-before it is release-ready and **the gateway is serving real traffic**. Nothing
-on `dev` has been deployed or pushed.
+before it is release-ready and **the gateway is serving real traffic**. **`dev`
+is deployed to the gateway (2026-09-26, `9932e2d`) but not pushed** — 189 commits
+ahead of `origin/dev`.
 
-#### ⚠ The deploy gap is now the largest single risk in this project
+#### ✅ The deploy gap below was paid down 2026-09-26 — kept for the move warnings
 
-**`dev` is 167 commits ahead of `origin/main` and no longer behind it** (2026-09-23, measured — an earlier edit of this line said 115 and understated the risk it exists to convey). The three-commit regression the release audit found (oauth2, go-webauthn, sqlite — two of them auth dependencies) is merged and green.
+**`dev` was 167 commits ahead of `origin/main` and no longer behind it** (2026-09-23, measured — an earlier edit of this line said 115 and understated the risk it exists to convey). The three-commit regression the release audit found (oauth2, go-webauthn, sqlite — two of them auth dependencies) is merged and green.
 Items 1 and 3 are separately marked "code done, not deployed"; the gateway runs
 a build from before the entire project/environment/machine model. The gap grew
 by four merges today and has never been paid down.
@@ -175,7 +187,9 @@ warning onto the peer-config download path.
 
 One row per item. **The detail is in the linked document** — the landed
 narratives moved to [done.md](done.md) 2026-09-24 so this file stays readable in
-one sitting. Everything marked ✅ is on **`dev`** and **not deployed**.
+one sitting. **`dev` @ `9932e2d` is deployed to the gateway** (2026-09-26,
+`v0.4.0-268-g9932e2d`, active, 0 restarts, 0 ERRORs) and **not pushed**. Rows
+below that say "not deployed" predate that deploy — re-check before trusting.
 
 | | Item | Status | Detail |
 |---|---|---|---|
@@ -195,7 +209,7 @@ one sitting. Everything marked ✅ is on **`dev`** and **not deployed**.
 | 23 | hz declares its own machine | ✅ landed 2026-09-24. ⚠ **one test is the ONLY guard.** ❓ nothing expresses "this service fronts that machine" | [done.md](done.md#item-23--hz-declares-its-own-machine) |
 | 24 | Project-scoped URLs — `/$project/…` | ✅ **built and merged 2026-09-24** (`7ea78f1`) — this row said "doc only, no code touched" until today and was stale | [done.md](done.md#item-24--project-scoped-urls--project) · [design/ui.md](design/ui.md) Part 2 |
 | 26 | **Drill-in navigation — the sidebar IS the project tree** | ✅ built 2026-09-25, **superseded the same day**: the two-zone sidebar was rendered and rejected as cluttered (24 lines at the top level, 38 inside a project). Kept: `/$project/machines` (derived, approved-only), `/$project/segments`, the no-detail-route rule, the deleted column/tabs/`isMobile` branch | [done.md](done.md#item-26--drill-in-navigation--the-sidebar-is-the-project-tree) · [design/ui.md](design/ui.md) Part 2, *Decision 1, amended again 2026-09-25* |
-| 27 | **One recursive menu — the estate is level 0 of the tree** | ✅ **built 2026-09-25** on `feat/nav-recursive`, not merged. Five scopable entries identical at every level (Overview · Services · Domains · Machines · Network) + a one-level-expandable subtree + a labelled way up; the gateway block is **level 0 only** — which REVERSES Decision F's "Settings is one click from any depth" for ten fewer permanent rows. New `/segments` (Network at the estate). ❌ the greyed bans/clients block is deleted — the explanation lives once, on the project's Overview; Config folds there too. **11 lines at level 0, 11 inside a project, 10 two deep**, asserted by a render check that counts them | [below](#-one-recursive-menu--the-estate-is-level-0-of-the-tree) · [design/ui.md](design/ui.md) Part 2, *Decision 1, amended a fourth time* |
+| 27 | **One recursive menu — the estate is level 0 of the tree** | ✅ **built 2026-09-25**, merged `9932e2d`, deployed 2026-09-26. Five scopable entries identical at every level (Overview · Services · Domains · Machines · Network) + a one-level-expandable subtree + a labelled way up; the gateway block is **level 0 only** — which REVERSES Decision F's "Settings is one click from any depth" for ten fewer permanent rows. New `/segments` (Network at the estate). ❌ the greyed bans/clients block is deleted — the explanation lives once, on the project's Overview; Config folds there too. **11 lines at level 0, 11 inside a project, 10 two deep**, asserted by a render check that counts them | [below](#-one-recursive-menu--the-estate-is-level-0-of-the-tree) · [design/ui.md](design/ui.md) Part 2, *Decision 1, amended a fourth time* |
 
 **Excluded from this release** and in [icebox.md](icebox.md) with a reason and a
 resume condition each: `Environment.Upstream` (18), the registry crossing (19),
