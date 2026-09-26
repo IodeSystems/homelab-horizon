@@ -121,7 +121,7 @@ function ProjectMachines() {
         machine's own page, which is the only page it has and lists every instance on it.
       </Typography>
 
-      <ScopeControl reading={reading} to="/$project/machines" param={param} />
+      <ScopeControl reading={reading} to="/p/$project/machines" param={param} />
 
       {/* Error BEFORE loading: a failed query holding no data is reset to
           pending on mount by React Query's retryOnMount, so checking isLoading
@@ -205,13 +205,13 @@ function ProjectMachines() {
           {waiting.length === 0
             ? "No box has asked to run anything of this project's without being granted it. The list above is every approved instance and nothing is held back from it."
             : `${waiting.map((r) => `${r.machineName || "an unnamed box"} has asked to run ${address(r)}`).join("; ")} — and nobody has granted it. Those boxes are NOT on the list above: hz declares no version for an address nobody approved, and a box that could put itself on a screen by booting is a box that has approved itself.`}{" "}
-          Approvals are on this project's <Link to="/$project/config" params={{ project: param }} search={{}}>Config</Link> screen.
+          Approvals are on this project's <Link to="/p/$project/config" params={{ project: param }} search={{}}>Config</Link> screen.
         </Typography>
       </Paper>
     </Box>
   );
 }
 
-export const Route = createFileRoute("/$project/machines")({
+export const Route = createFileRoute("/p/$project/machines")({
   component: ProjectMachines,
 });

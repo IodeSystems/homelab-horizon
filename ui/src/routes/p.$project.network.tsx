@@ -1,7 +1,7 @@
 /**
- * `/$project/segments` — Network, inside one project: the segments it declares.
+ * `/p/$project/network` — Network, inside one project: the segments it declares.
  *
- * The heading matches the MENU WORD (`Network`), because the entry the operator
+ * The heading matches the TAB WORD (`Network`), because the tab the operator
  * clicked and the screen they land on have to be recognisably the same thing.
  * What a network is here — a segment, owned by a project — is the first sentence.
  *
@@ -14,10 +14,10 @@
  * positive control of `useVPNPeers`). So this is a new screen over an existing
  * endpoint, not a new backend.
  *
- * # THE TABLE IS SHARED WITH `/segments`, THE ESTATE'S OWN NETWORK SCREEN
+ * # THE TABLE IS SHARED WITH `/network`, THE UNSCOPED NETWORK SCREEN
  *
- * `Network` is one of the five entries that are identical at every level of the
- * menu, so the same surface exists at the estate and inside every project. The
+ * `Network` is one of the six tabs that are identical at every scope, so the
+ * same surface exists with no project selected and inside every project. The
  * table, the crossing rule and the unaddressed column live in
  * `components/model/SegmentBits.tsx`; this screen is the SELECTION — which rows
  * are in scope — and the sentences that only make sense inside a project.
@@ -57,7 +57,7 @@ function ProjectSegments() {
         project's box on this network is a crossing rather than a mistake.
       </Typography>
 
-      <ScopeControl reading={reading} to="/$project/segments" param={param} />
+      <ScopeControl reading={reading} to="/p/$project/network" param={param} />
 
       {/* Error first: an errored query holding no data is reset to pending on
           mount, so an isLoading check in front of it shows a spinner forever. */}
@@ -78,7 +78,7 @@ function ProjectSegments() {
           {reading.scope === "own" ? route.name : `${route.name} or anything below it`}. That is an
           ordinary state — a project is declared before it has a network — and it is not the same as
           hz having none: it declares {all.length} in total, every one of them owned by some project —{" "}
-          <Link to="/segments">Network at the estate</Link> lists them all.
+          the unscoped <Link to="/network">Network</Link> tab lists them all.
         </Alert>
       ) : (
         <SegmentsTable segments={mine} index={index} ownerLabel={LOCATION_COLUMN_LABEL} />
@@ -89,6 +89,6 @@ function ProjectSegments() {
   );
 }
 
-export const Route = createFileRoute("/$project/segments")({
+export const Route = createFileRoute("/p/$project/network")({
   component: ProjectSegments,
 });

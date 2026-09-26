@@ -1,62 +1,43 @@
 /**
- * THE SIDEBAR — ONE RECURSIVE MENU, WHOSE ROOT IS THE ESTATE.
+ * THE SIDEBAR — WHERE YOU ARE. The project tree, then the gateway group.
  *
- * (plan/design/ui.md, Decision 1, amended a fourth time.) What shipped before
- * this was TWO ZONES: a project tree over fourteen fixed gateway entries, with
- * `Machines`, `Services` and `Domains` appearing in both halves — the same words
- * twice, two meanings, both on screen — plus six lines apologising for two
- * surfaces a project cannot scope. Twenty-four rows at the top level and thirty-
- * eight inside a project. It was rendered and rejected as cluttered.
+ * (plan/design/ui.md, Decision 1, amendment 5.) The sidebar is the SAME at
+ * every scope. What changes when you move is which tree node is highlighted
+ * and which nodes are open; nothing appears, disappears or is renamed. The six
+ * tabs over the page (`ScopeBar`) are WHAT you are looking at.
  *
- * The shape now:
+ *   [+] projects
+ *   ▾ acme-co
+ *       intern
+ *     ▸ storefront        ← highlighted when the address is /p/storefront/…
+ *   ▸ redline
+ *   gateway
+ *   Drift
+ *   DNS
+ *   …
  *
- *   LEVEL 0 — the estate            LEVEL 1 — acme-co
- *     Overview                        ← Estate
- *     Services                        Overview
- *     Domains                         Services
- *     Machines                        Domains
- *     Network                         Machines
- *     ── projects ──                  Network
- *     acme-co              ▸          ── subprojects ──
- *     ── the gateway ──               intern            ▸
- *     Drift · DNS · Hosts · …         storefront        ▸
+ * The tree has NO named root. With no project selected, no node is
+ * highlighted; the wordmark and the breadcrumb's clear control lead there.
  *
- * Five scopable entries, the same five words in the same order at every level,
- * narrowing as you descend. One subtree block, ONE LEVEL deep by default, every
- * node with children expandable in place. The way up labelled with where it
- * goes. The ten gateway surfaces at level 0 and nowhere else.
+ * # A NODE KEEPS THE TAB
  *
- * # THE TRADE, WRITTEN DOWN
+ * On `/p/storefront/domains`, the `redline` node links to
+ * `/p/redline/domains`. The tree changes WHERE; the tab is WHAT, and moving
+ * sideways should not throw away what you were looking at. On a gateway
+ * screen there is no tab, and a node links to the project's Overview.
  *
- * The previous amendment put the gateway entries at every depth so that "three
- * projects deep and needing Settings costs one click". This reverses it:
- * Settings from inside a project is two clicks (`← Estate`, then Settings) and
- * ten permanent rows leave the sidebar. Settings is rare; the clutter was
- * constant; `← Estate` is a labelled affordance in a fixed place.
+ * # WHAT MAY BE STATE
  *
- * # WHERE EACH LINE COMES FROM, AND WHAT MAY BE STATE
+ * The highlighted node and the default expansion — open along the path to it —
+ * come from the ADDRESS, so two people opening one link see one sidebar. Which
+ * nodes the reader has flipped away from that default is `useState`: a
+ * disclosure triangle is not a location (Decision M), and the sidebar renders
+ * on every route, so a search param would have to survive every `<Link>` in
+ * the app.
  *
- * `readMenu` (`projectRoutes.ts`) decides the whole menu from the `$project`
- * parameter alone; this file draws what it decided. Which project you are in and
- * how deep you are are facts about the ADDRESS — a nav that morphs on component
- * state cannot be linked, and "open the redline nav" would mean two different
- * screens to two people.
- *
- * WHICH NODES ARE EXPANDED IS THE ONE EXCEPTION, AND IT IS DELIBERATE. A
- * disclosure triangle is not a location: the page does not change, the rows in
- * scope do not change, and nothing about what the reader is looking at is
- * different — they are peeking at what is under a sibling before deciding
- * whether to go there. It is `useState` here rather than a search param for two
- * reasons beyond that: the menu renders on EVERY route, so a search param would
- * have to be declared on the root route and preserved by every `<Link>` in the
- * app — one link that dropped it would silently collapse the tree — and it would
- * put one reader's fiddling into the URL they send somebody else. The default is
- * closed, which is a pure function of nothing at all, so a fresh load of any URL
- * renders exactly one level for everybody.
- *
- * It lives beside `ProjectBits.tsx` rather than in it because it renders in the
- * SHELL, on every screen, and must not depend on `useProjectContext` — that hook
- * reads `useParams({ from: "/$project" })` and throws anywhere else.
+ * It renders in the SHELL, on every screen, so it must not depend on
+ * `useProjectContext` — that hook reads `useParams({ from: "/p/$project" })`
+ * and throws anywhere else. It reads the pathname instead.
  */
 import { useMemo, useState } from "react";
 import {
@@ -67,42 +48,29 @@ import {
   ListItemText,
   Typography,
 } from "@mui/material";
+import AddIcon from "@mui/icons-material/Add";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useProjects } from "../../api/hooks";
 import {
   buildProjectIndex,
-  readMenu,
+  projectOfPath,
+  SCOPE_TABS,
+  tabOfPath,
+  tabTarget,
+  treeRows,
   GATEWAY_NAV,
-  type EstateNavTo,
-  type MenuEntry,
-  type MenuNode,
-  type ProjectNavTo,
+  type ScopeTab,
+  type TreeRow,
 } from "./projectRoutes.ts";
+import { AddProjectDialog, RemoveProjectDialog } from "./ProjectDialogs";
 
-/**
- * The `$project` parameter the ADDRESS carries, from anywhere in the app.
- *
- * `useProjectContext` cannot be used outside `/$project` — `useParams({from})`
- * throws there — and the sidebar renders on every screen, so it reads the match
- * list instead. THE ROUTE IS THE ONLY SOURCE. Nothing about which project the
- * menu is showing may come from `useState`: a nav that morphs on component
- * state cannot be linked, and "open the redline nav" would mean two different
- * screens to two people.
- */
-export function useProjectParam(): string | undefined {
-  return useRouterState({
-    select: (s) => {
-      const match = s.matches.find((m) => m.routeId === "/$project");
-      return (match?.params as { project?: string } | undefined)?.project;
-    },
-  });
-}
-
-/** Which entries the current address is inside, as the router sees it. */
-function useMatchedRouteIds(): string[] {
-  return useRouterState({ select: (s) => s.matches.map((m) => m.routeId as string) });
+/** Where the address says you are: which project (or none), which tab (or none). */
+export function useScopeLocation(): { pathname: string; project: string | null; tab: ScopeTab | null } {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  return { pathname, project: projectOfPath(pathname), tab: tabOfPath(pathname) };
 }
 
 const CAPTION = {
@@ -110,9 +78,6 @@ const CAPTION = {
   letterSpacing: 0.6,
   fontSize: "0.65rem",
   color: "text.secondary",
-  px: 2,
-  pt: 1.5,
-  pb: 0.5,
   display: "block",
 };
 
@@ -123,162 +88,132 @@ const SELECTED = {
   },
 };
 
-/** One row of the menu, always a real link so it can be middle-clicked. */
-function MenuRow({
-  to,
-  param,
-  label,
-  title,
-  indent = 0,
-  selected = false,
-  bold = false,
-  trailing,
-  onNavigate,
-}: {
-  to: EstateNavTo | ProjectNavTo | "/projects";
-  param?: string;
-  label: string;
-  title?: string;
-  indent?: number;
-  selected?: boolean;
-  bold?: boolean;
-  /** The disclosure control, when this row has children to peek at. */
-  trailing?: React.ReactNode;
-  onNavigate?: () => void;
-}) {
+/** A caption with an optional control at its right edge. */
+function GroupHeading({ label, action }: { label: string; action?: React.ReactNode }) {
   return (
-    <Box sx={{ display: "flex", alignItems: "center", pr: trailing ? 0.5 : 0 }}>
-      <Link
-        to={to as "/projects"}
-        params={(param ? { project: param } : undefined) as never}
-        search={{} as never}
-        style={{ textDecoration: "none", color: "inherit", flex: 1, minWidth: 0 }}
-        onClick={onNavigate}
-        title={title}
-      >
-        <ListItemButton
-          selected={selected}
-          sx={{ borderRadius: 1, mx: 1, pl: 1 + indent * 1.5, py: 0.4, ...SELECTED }}
-        >
-          <ListItemText
-            primary={label}
-            slotProps={{ primary: { sx: { fontWeight: bold ? 700 : 400, fontSize: "0.88rem" } } }}
-          />
-        </ListItemButton>
-      </Link>
-      {trailing}
+    <Box sx={{ display: "flex", alignItems: "center", px: 2, pt: 1.5, pb: 0.5, minHeight: 32 }}>
+      <Typography variant="caption" sx={{ ...CAPTION, flex: 1 }}>
+        {label}
+      </Typography>
+      {action}
     </Box>
   );
 }
 
 /**
- * The subtree block: one level, and a control on every node that has more.
- *
- * The label is a link (going there is a navigation) and the triangle is a button
- * (peeking is not). Two jobs, two controls, both visible — a row that did both
- * on one click would make "look inside" and "go inside" the same gesture, and
- * the operator cannot undo the one they did not mean.
+ * One tree node. The label is a link (going there) and the triangle is a
+ * button (peeking): two jobs, two controls, so neither can be done by accident.
  */
-function SubtreeBlock({
-  nodes,
-  open,
+function TreeNode({
+  row,
+  tab,
   toggle,
+  onRemove,
   onNavigate,
 }: {
-  nodes: MenuNode[];
-  open: ReadonlySet<string>;
+  row: TreeRow;
+  tab: ScopeTab;
   toggle: (name: string) => void;
+  onRemove: (name: string) => void;
   onNavigate?: () => void;
 }) {
+  const target = tabTarget(tab, row.route.name);
   return (
-    <List dense disablePadding>
-      {nodes.map((n) => (
-        <MenuRow
-          key={n.route.name}
-          to="/$project"
-          param={n.param}
-          label={n.route.name}
-          indent={n.indent}
-          onNavigate={onNavigate}
-          trailing={
-            n.hasChildren ? (
-              <IconButton
-                size="small"
-                aria-label={n.toggleLabel}
-                title={n.toggleLabel}
-                aria-expanded={open.has(n.route.name)}
-                onClick={() => toggle(n.route.name)}
-                sx={{ color: "text.secondary" }}
-              >
-                {open.has(n.route.name) ? (
-                  <ExpandMoreIcon fontSize="small" />
-                ) : (
-                  <ChevronRightIcon fontSize="small" />
-                )}
-              </IconButton>
-            ) : undefined
-          }
-        />
-      ))}
+    <Box sx={{ display: "flex", alignItems: "center", pr: 0.5 }} data-tree-node={row.route.name}>
+      <Box sx={{ width: 28, flexShrink: 0, pl: 1 + row.depth * 1.5, boxSizing: "content-box" }}>
+        {row.hasChildren ? (
+          <IconButton
+            size="small"
+            aria-label={row.toggleLabel}
+            title={row.toggleLabel}
+            aria-expanded={row.expanded}
+            onClick={() => toggle(row.route.name)}
+            sx={{ color: "text.secondary", p: 0.25 }}
+          >
+            {row.expanded ? <ExpandMoreIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
+          </IconButton>
+        ) : null}
+      </Box>
+      <Link
+        to={target.to as "/p/$project"}
+        params={target.params as never}
+        search={{} as never}
+        style={{ textDecoration: "none", color: "inherit", flex: 1, minWidth: 0 }}
+        onClick={onNavigate}
+        title={`${row.route.name} — ${tab.label}`}
+      >
+        <ListItemButton selected={row.current} sx={{ borderRadius: 1, py: 0.3, pl: 0.5, ...SELECTED }}>
+          <ListItemText
+            primary={row.route.name}
+            slotProps={{
+              primary: {
+                sx: {
+                  fontFamily: "monospace",
+                  fontSize: "0.85rem",
+                  fontWeight: row.current ? 700 : 400,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                },
+              },
+            }}
+          />
+        </ListItemButton>
+      </Link>
+      {/* Remove is offered on the node you are ON, and nowhere else: a
+          destructive control on every row is one mis-click from the wrong
+          project. The dialog is a dry run until confirmed. */}
+      {row.current ? (
+        <IconButton
+          size="small"
+          aria-label={`Remove ${row.route.name}…`}
+          title={`Remove ${row.route.name}… (shows what it would take first)`}
+          onClick={() => onRemove(row.route.name)}
+          sx={{ color: "text.secondary", p: 0.25 }}
+        >
+          <DeleteOutlineIcon fontSize="small" />
+        </IconButton>
+      ) : null}
+    </Box>
+  );
+}
+
+/** The gateway group: one real row per surface, the same at every depth. */
+function GatewayGroup({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
+  return (
+    <List dense disablePadding data-gateway-zone>
+      {GATEWAY_NAV.map((g) => {
+        const selected = pathname === g.to || pathname.startsWith(`${g.to}/`);
+        return (
+          <Link
+            key={g.to}
+            to={g.to}
+            title={g.why}
+            onClick={onNavigate}
+            style={{ textDecoration: "none", color: "inherit", display: "block" }}
+          >
+            <ListItemButton selected={selected} sx={{ borderRadius: 1, mx: 1, py: 0.3, ...SELECTED }}>
+              <ListItemText
+                primary={g.label}
+                slotProps={{ primary: { sx: { fontSize: "0.85rem", fontWeight: selected ? 700 : 400 } } }}
+              />
+            </ListItemButton>
+          </Link>
+        );
+      })}
     </List>
   );
 }
 
-/**
- * The gateway block — LEVEL 0 ONLY.
- *
- * Ten links in a wrapped flow rather than ten rows, which is what makes level 0
- * fit on a screen with the five entries and the project tree. They are still
- * real links with real hrefs: middle-clickable, copyable, and readable out of
- * the markup.
- */
-function GatewayBlock({
-  currentPath,
-  onNavigate,
-}: {
-  currentPath: string;
-  onNavigate?: () => void;
-}) {
-  // ONE BLOCK, INLINE — not ten rows and not ten wrapper divs. Ten rows is what
-  // made the old sidebar twenty-four lines long; the flow wraps to about three
-  // lines in a 260px column and is one block in the markup, which is also what
-  // lets the line-count check in the render selftest measure what a reader sees.
-  return (
-    <Box data-gateway-zone sx={{ px: 2, pb: 2, fontSize: "0.8rem", lineHeight: 1.9 }}>
-      {GATEWAY_NAV.map((g, i) => (
-        <span key={g.to}>
-          {i > 0 ? <span style={{ color: "#5a6478" }}> · </span> : null}
-          <Link
-            to={g.to}
-            title={g.why}
-            onClick={onNavigate}
-            style={{
-              color: currentPath === g.to ? "#e94560" : "#b9c2d0",
-              fontWeight: currentPath === g.to ? 700 : 400,
-              whiteSpace: "nowrap",
-            }}
-          >
-            {g.label}
-          </Link>
-        </span>
-      ))}
-    </Box>
-  );
-}
-
-/**
- * The whole menu. One reading, one renderer, every level.
- */
 export function SidebarMenu({ onNavigate }: { onNavigate?: () => void }) {
   const projects = useProjects();
-  const param = useProjectParam();
-  const matched = useMatchedRouteIds();
-  const currentPath = useRouterState({ select: (s) => s.location.pathname });
-  // The ONE piece of component state in the nav, and it is a disclosure control:
-  // see the file header for why an expanded node is not a location.
-  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set<string>());
+  const { pathname, project, tab } = useScopeLocation();
+  // Nodes flipped away from the default (open along the path to `project`).
+  const [toggled, setToggled] = useState<ReadonlySet<string>>(() => new Set<string>());
+  const [adding, setAdding] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
   const toggle = (name: string) =>
-    setOpen((prev) => {
+    setToggled((prev) => {
       const next = new Set(prev);
       if (next.has(name)) next.delete(name);
       else next.add(name);
@@ -286,79 +221,26 @@ export function SidebarMenu({ onNavigate }: { onNavigate?: () => void }) {
     });
 
   const index = useMemo(() => buildProjectIndex(projects.data ?? []), [projects.data]);
-  const menu = readMenu(index, param, open);
-
-  const isSelected = (entry: MenuEntry) =>
-    menu.kind === "project"
-      ? matched.includes(entry.to === "/$project" ? "/$project/" : entry.to)
-      : currentPath === entry.to;
+  const rows = treeRows(index, project, toggled);
+  // On a gateway screen there is no tab to keep, so a node goes to Overview.
+  const nodeTab = tab ?? SCOPE_TABS[0]!;
 
   return (
-    <Box data-menu-level={menu.level} data-menu-kind={menu.kind}>
-      {/* THE WAY UP, LABELLED WITH ITS DESTINATION. Absent at level 0, because
-          there is nothing above the estate. */}
-      {menu.up ? (
-        <List dense disablePadding>
-          <MenuRow
-            to={menu.up.toEstate ? "/projects" : "/$project"}
-            param={menu.up.toEstate ? undefined : menu.up.param}
-            label={menu.up.label}
-            title={menu.up.meaning}
-            bold
-            onNavigate={onNavigate}
-          />
-        </List>
-      ) : null}
-
-      {/* THE SCOPE THE FIVE ENTRIES BELOW APPLY TO — "Estate", or this project's
-          name. One line, not three: the rejected version printed "in this
-          project", the name, and the dotted path, which is the name twice. The
-          dotted path is on the page's own header, where it can be read and
-          copied. */}
-      <Typography
-        variant="caption"
-        data-menu-scope
-        sx={{
-          ...CAPTION,
-          // A PROJECT'S NAME IS AN IDENTIFIER AND MUST RENDER IN ITS OWN CASE.
-          // The caption style upper-cases, which is right for the three fixed
-          // words (`Estate`, `projects`, `the gateway`) and wrong for `acme-co`:
-          // "ACME-CO" is not the string the operator typed, cannot be searched
-          // for, and does not match the page header two inches to its right. The
-          // line dump in the render check reads the TEXT, so it cannot see a CSS
-          // transform — which is why this is asserted against the rule itself.
-          ...(menu.here ? { fontFamily: "monospace", textTransform: "none" } : {}),
-        }}
-      >
-        {menu.scopeLabel}
-      </Typography>
-
-      {menu.kind === "unresolved" ? (
-        <Typography
-          variant="caption"
-          sx={{ px: 2, pb: 1, color: "warning.main", display: "block" }}
-        >
-          {menu.meaning} These five screens show the whole estate; pick a project below.
-        </Typography>
-      ) : null}
-
-      <List dense disablePadding data-menu-entries>
-        {menu.entries.map((entry) => (
-          <MenuRow
-            key={entry.label}
-            to={entry.to}
-            param={entry.param || undefined}
-            label={entry.label}
-            title={entry.blurb}
-            selected={isSelected(entry)}
-            onNavigate={onNavigate}
-          />
-        ))}
-      </List>
-
-      <Typography variant="caption" sx={CAPTION}>
-        {menu.childCaption}
-      </Typography>
+    <Box data-sidebar>
+      <GroupHeading
+        label="projects"
+        action={
+          <IconButton
+            size="small"
+            aria-label="Add a project"
+            title={project ? `Add a project (under ${project} by default)` : "Add a project"}
+            onClick={() => setAdding(true)}
+            sx={{ color: "text.secondary", p: 0.25 }}
+          >
+            <AddIcon fontSize="small" />
+          </IconButton>
+        }
+      />
       {projects.isLoading ? (
         <Typography variant="caption" sx={{ px: 2, color: "text.secondary", display: "block" }}>
           Asking hz which projects it declares…
@@ -368,26 +250,36 @@ export function SidebarMenu({ onNavigate }: { onNavigate?: () => void }) {
           hz could not be asked which projects it declares. This list is empty because the read
           failed, not because there are none.
         </Typography>
-      ) : menu.nodes.length === 0 ? (
+      ) : rows.length === 0 ? (
         <Typography variant="caption" sx={{ px: 2, color: "text.secondary", display: "block" }}>
-          {menu.emptyNote}
+          hz declares no project yet. This is an empty tree, not a failed read.
         </Typography>
       ) : (
-        <SubtreeBlock nodes={menu.nodes} open={open} toggle={toggle} onNavigate={onNavigate} />
+        <List dense disablePadding data-tree>
+          {rows.map((row) => (
+            <TreeNode
+              key={row.route.name}
+              row={row}
+              tab={nodeTab}
+              toggle={toggle}
+              onRemove={setRemoving}
+              onNavigate={onNavigate}
+            />
+          ))}
+        </List>
       )}
 
-      {/* THE GATEWAY BLOCK, AT LEVEL 0 AND NOWHERE ELSE. Not duplicated into a
-          project, not greyed there, not explained there: a nav entry to a
-          surface that does not exist at this scope is a door to a room that is
-          not there, and `← Estate` above is the way to the rooms that do. */}
-      {menu.showGateway ? (
-        <>
-          <Typography variant="caption" sx={CAPTION}>
-            the gateway
-          </Typography>
-          <GatewayBlock currentPath={currentPath} onNavigate={onNavigate} />
-        </>
-      ) : null}
+      <GroupHeading label="gateway" />
+      <GatewayGroup pathname={pathname} onNavigate={onNavigate} />
+      <Box sx={{ pb: 2 }} />
+
+      <AddProjectDialog
+        open={adding}
+        index={index}
+        defaultParent={project ?? ""}
+        onClose={() => setAdding(false)}
+      />
+      <RemoveProjectDialog name={removing} onClose={() => setRemoving(null)} />
     </Box>
   );
 }

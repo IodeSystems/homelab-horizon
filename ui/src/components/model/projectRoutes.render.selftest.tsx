@@ -29,7 +29,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createRouter, createMemoryHistory, isRedirect } from "@tanstack/react-router";
-import { Route as ConfigRoute } from "../../routes/config";
+import { Route as DashboardRoute } from "../../routes/dashboard";
+import { Route as ProjectsRoute } from "../../routes/projects";
+import { Route as SegmentsRoute } from "../../routes/segments";
 import { ThemeProvider, createTheme } from "@mui/material/styles";
 import baseTheme from "../../theme";
 import type {
@@ -46,8 +48,10 @@ import { routeTree } from "../../routeTree.gen";
 import {
   buildProjectIndex,
   derivedProjectSurfaces,
-  readMenu,
+  treeRows,
+  GATEWAY_NAV,
   GATEWAY_WIDE_SURFACES,
+  SCOPE_TABS,
 } from "./projectRoutes.ts";
 
 let failures = 0;
@@ -62,7 +66,7 @@ function check(ok: boolean, what: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// The estate every render below is against
+// The projects every render below is against
 // ---------------------------------------------------------------------------
 
 const PROJECTS: ProjectResp[] = [
@@ -368,7 +372,7 @@ console.log("· THE OUTLET: a child route renders its own screen, not its parent
   // The check this whole file exists for. $project.domains.tsx is a CHILD of
   // $project.tsx. Drop the <Outlet/> from the layout and this goes red while
   // tsc, vite and every decision check stay green.
-  const child = await at("/acme-co.storefront/domains");
+  const child = await at("/p/storefront/domains");
   check(
     child.text.includes("Domains in storefront"),
     "/<project>/domains renders the DOMAINS screen",
@@ -378,7 +382,7 @@ console.log("· THE OUTLET: a child route renders its own screen, not its parent
     "and NOT the project overview — a layout with no Outlet shows the parent and looks fine",
   );
 
-  const services = await at("/acme-co.storefront/services");
+  const services = await at("/p/storefront/services");
   check(
     services.text.includes("Services in storefront"),
     "/<project>/services renders the services screen",
@@ -388,18 +392,18 @@ console.log("· THE OUTLET: a child route renders its own screen, not its parent
     "the two children of one layout do not render the same page",
   );
 
-  const overview = await at("/acme-co.storefront");
+  const overview = await at("/p/storefront");
   check(overview.text.includes("Package feed"), "/<project> itself renders the overview");
   check(
     !overview.text.includes("Domains in storefront"),
     "and the index child is not the domains child",
   );
 
-  // The layout's own chrome is on all three — that is what makes it a layout.
+  // The scope bar is on all three — the breadcrumb names where each one is.
   for (const [name, r] of [["overview", overview], ["services", services], ["domains", child]] as const) {
     check(
-      r.text.includes("acme-co.storefront"),
-      `the ${name} screen carries the project's path from the layout above it`,
+      /data-breadcrumb[\s\S]*?acme-co[\s\S]*?storefront/.test(r.html),
+      `the ${name} screen carries the project's ancestry in the breadcrumb`,
     );
   }
 }
@@ -413,37 +417,54 @@ console.log("· the tree the router actually built");
     const r = router.routesById[id as never] as { parentRoute?: { id: string } } | undefined;
     return r?.parentRoute?.id ?? "(missing)";
   };
-  check(parentOf("/$project") === "__root__", "the project layout hangs off the root");
+  check(parentOf("/p/$project") === "__root__", "the project layout hangs off the root");
   for (const child of [
-    "/$project/",
-    "/$project/services",
-    "/$project/domains",
-    "/$project/machines",
-    "/$project/segments",
-    "/$project/config",
+    "/p/$project/",
+    "/p/$project/services",
+    "/p/$project/domains",
+    "/p/$project/machines",
+    "/p/$project/network",
+    "/p/$project/config",
   ]) {
-    check(parentOf(child) === "/$project", `${child} is a CHILD of /$project, by filename`);
+    check(parentOf(child) === "/p/$project", `${child} is a CHILD of /p/$project, by filename`);
   }
-  // Seventeen gateway routes must NOT have been pulled under the project.
+  // Every tab's project address is a real route, so a tab cannot point at a
+  // screen that was never built.
+  for (const t of SCOPE_TABS) {
+    const id = t.projectTo === "/p/$project" ? "/p/$project/" : t.projectTo;
+    check(id in router.routesById, `the ${t.label} tab's project route exists (${id})`);
+    // `/machines` is a directory of routes, so its list is the index child.
+    const un = t.unscopedTo === "/machines" ? "/machines/" : t.unscopedTo;
+    check(un in router.routesById, `and its unscoped route exists (${un})`);
+  }
+  // The gateway and unscoped routes must NOT have been pulled under a project.
   for (const flat of [
     "/settings", "/machines/", "/machines/$machine", "/drift", "/hosts", "/dns/", "/dns/$zone",
-    "/vpn", "/bans", "/checks", "/ports", "/observability", "/account", "/mfa", "/dashboard",
-    "/", "/projects", "/services", "/domains", "/config",
+    "/vpn", "/bans", "/checks", "/ports", "/observability", "/account", "/mfa",
+    "/", "/services", "/domains", "/network", "/config", "/$",
   ]) {
     check(parentOf(flat) === "__root__", `${flat} still parents to root — it carries no project`);
   }
+  check(!("/$project" in router.routesById), "nothing is routed at /$project any more — projects live under /p/");
 }
 
 // ---------------------------------------------------------------------------
-console.log("· a static route still beats the project parameter");
+console.log("· a gateway route is never read as a project, and /p/ is never a gateway route");
 // ---------------------------------------------------------------------------
 {
   const settings = await at("/settings");
-  check(!settings.text.includes("There is no project named"), "/settings is Settings, not a project");
+  check(!settings.text.includes("There is no"), "/settings is Settings");
   const machines = await at("/machines");
-  check(!machines.text.includes("There is no project named"), "/machines is Machines");
+  check(!machines.text.includes("There is no"), "/machines is Machines");
   const drift = await at("/drift");
-  check(!drift.text.includes("There is no project named"), "/drift is Drift");
+  check(!drift.text.includes("There is no"), "/drift is Drift");
+  // The /p/ prefix is what ends the collision amendment 4 had: a project may be
+  // named `settings` without shadowing the Settings screen, and vice versa.
+  const pSettings = await at("/p/settings");
+  check(
+    pSettings.text.includes('There is no project named "settings"'),
+    "/p/settings asks for a PROJECT named settings, and says there is none",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -451,36 +472,39 @@ console.log("· an unmatched path is an answer with a way back, not a 404");
 // ---------------------------------------------------------------------------
 {
   const miss = await at("/setings");
-  check(miss.text.includes("There is no project named"), "a mistyped path says so in words");
+  check(miss.text.includes("There is no page at"), "a mistyped path says so in words");
   check(miss.text.includes("setings"), "and names what was typed");
   check(!miss.text.toLowerCase().includes("not found"), "it is not the router's generic not-found");
-  check(miss.text.trim().length > 200, "and it is not a blank area either");
   for (const p of ["acme-co", "intern", "storefront"]) {
     check(miss.text.includes(p), `every real project is listed as a way back (${p})`);
   }
   check(
-    miss.links.some((h) => h.endsWith("/projects")),
-    "with an explicit link back to the project list",
+    miss.links.some((h) => h.endsWith("/p/intern")),
+    "each by its /p/<name> address",
   );
 
-  // A child path under a name that does not resolve must not render the child
-  // against a project that does not exist.
-  const deepMiss = await at("/setings/services");
+  const deepMiss = await at("/p/nosuch/services");
   check(
-    deepMiss.text.includes("There is no project named"),
-    "/<nonsense>/services says the project is missing rather than listing nothing",
+    deepMiss.text.includes('There is no project named "nosuch"'),
+    "/p/<nonsense>/services says the project is missing rather than listing nothing",
   );
   check(
     !deepMiss.text.includes("Services in"),
     "and does not render a service list scoped to a project that is not there",
   );
+
+  // An amendment-4 link is FOLLOWED, not refused. `legacyTarget` decides where
+  // (projectRoutes.selftest.ts); here it is enough that the old address is not
+  // answered with "there is no page".
+  const old = await at("/acme-co.storefront/segments");
+  check(!old.text.includes("There is no page at"), "an old dotted project link is not a dead end");
 }
 
 // ---------------------------------------------------------------------------
 console.log("· the Location column names the row's own project, always");
 // ---------------------------------------------------------------------------
 {
-  const root = await at("/acme-co/services");
+  const root = await at("/p/acme-co/services");
   check(root.text.includes("Location"), "the column exists and is labelled");
   check(root.text.includes("billing"), "the root's own service is listed");
   check(root.text.includes("git") && root.text.includes("web"), "and so are its descendants'");
@@ -503,8 +527,8 @@ console.log("· the Location column names the row's own project, always");
 console.log("· scope is in the URL, so the two scopes are two pages");
 // ---------------------------------------------------------------------------
 {
-  const all = await at("/acme-co/services");
-  const own = await at("/acme-co/services?scope=own");
+  const all = await at("/p/acme-co/services");
+  const own = await at("/p/acme-co/services?scope=own");
 
   check(all.text.includes("git"), "the default scope includes a subproject's rows");
   check(!own.text.includes("git"), "?scope=own excludes them");
@@ -527,12 +551,12 @@ console.log("· scope is in the URL, so the two scopes are two pages");
     "the scope control is a link carrying the scope in the URL",
   );
   check(
-    controlLinks(own).some((h) => !h.includes("scope=") && h.includes("/acme-co/services")),
+    controlLinks(own).some((h) => !h.includes("scope=") && h.includes("/p/acme-co/services")),
     "and the way back out of it is a link too, not a reset button",
   );
   check(controlLinks(all).length > 0, "the control region was actually found in the markup");
 
-  const leaf = await at("/acme-co.intern/services");
+  const leaf = await at("/p/intern/services");
   check(
     leaf.text.includes("Nothing sits under it"),
     "a project with no subprojects says the scope control would change nothing",
@@ -540,323 +564,190 @@ console.log("· scope is in the URL, so the two scopes are two pages");
 }
 
 // ---------------------------------------------------------------------------
-console.log("· /projects is a list that navigates, and holds no selection");
+console.log("· the retired addresses redirect to where their screens went");
 // ---------------------------------------------------------------------------
 {
-  const list = await at("/projects");
-  for (const p of ["acme-co", "intern", "storefront"]) {
-    check(list.text.includes(p), `${p} is on the index`);
-  }
-  check(
-    list.links.some((h) => h.endsWith("/acme-co.intern")),
-    "each row is a link to that project's own URL, by its dotted path",
-  );
-  check(
-    !list.text.includes("Package feed"),
-    "the index does not render one project's detail — selecting is a navigation, not a state change",
-  );
-  check(
-    list.text.includes("no project"),
-    "and it still says what happens to a service that names no project",
-  );
-
-  // Phone width: the same route, the same list. If the index only worked by
-  // sitting beside a detail panel this would differ.
-  const phone = await at("/projects", { phone: true });
-  for (const p of ["acme-co", "intern", "storefront"]) {
-    check(phone.text.includes(p), `${p} is on the index at phone width too`);
-  }
-  check(
-    phone.links.some((h) => h.endsWith("/acme-co.intern")),
-    "and tapping a row is still a navigation",
-  );
-}
-
-// ---------------------------------------------------------------------------
-console.log("· ONE RECURSIVE MENU: the same five entries, narrowing as you descend");
-// ---------------------------------------------------------------------------
-{
-  // THE MENU IS A REGION IN THE MARKUP, so every assertion below is scoped to
-  // it rather than to "somewhere on the page" — a link to a project appears in
-  // a table's Location cell too, and that would satisfy a loose search while
-  // the sidebar rendered nothing at all.
-  const menu = (r: Rendered): { level: string; kind: string; html: string } => {
-    const m = /<div[^>]*data-menu-level="(\d+)" data-menu-kind="([a-z]+)"[^>]*>([\s\S]*?)<\/nav>/.exec(
-      r.html,
-    );
-    if (!m) return { level: "(absent)", kind: "(absent)", html: "" };
-    return { level: m[1]!, kind: m[2]!, html: m[3]! };
-  };
-  const strip = (html: string) =>
-    html
-      .replace(/<style[^>]*>[\s\S]*?<\/style>/g, " ")
-      .replace(/<[^>]*>/g, " ")
-      .replace(/&#x27;/g, "'")
-      .replace(/\s+/g, " ");
-  const menuLinks = (r: Rendered) => [...menu(r).html.matchAll(/href="([^"]*)"/g)].map((m) => m[1]!);
-  const menuText = (r: Rendered) => strip(menu(r).html);
-  /** The five scopable rows only, as [label, href] in render order. */
-  const entryRows = (r: Rendered): [string, string][] => {
-    // Emotion inlines a <style> block at each rule's first use, and its CSS
-    // text contains the very class names this reads — so the first row parsed
-    // as an empty label until the style blocks came out. Strip them first.
-    const region = /data-menu-entries[^>]*>([\s\S]*?)<\/ul>/.exec(
-      menu(r).html.replace(/<style[^>]*>[\s\S]*?<\/style>/g, " "),
-    );
-    const html = region?.[1] ?? "";
-    return [...html.matchAll(/href="([^"]*)"[\s\S]*?MuiListItemText-primary[^>]*>([^<]*)</g)].map(
-      (m) => [m[2]!.trim(), m[1]!],
-    );
-  };
-
-  // --- LEVEL 0: the estate is the root of the tree, not a second zone
-  const top = await at("/dashboard");
-  check(menu(top).level === "0", "outside a project the menu is at LEVEL 0 — the estate");
-  check(menu(top).kind === "estate", "and says so in the markup");
-  const topRows = entryRows(top);
-  check(
-    topRows.map(([l]) => l).join(",") === "Overview,Services,Domains,Machines,Network",
-    `the five scopable entries, in order (got ${topRows.map(([l]) => l).join(",") || "nothing"})`,
-  );
-  check(
-    topRows.map(([, h]) => h.replace("/app", "")).join(",") ===
-      "/dashboard,/services,/domains,/machines,/segments",
-    "each pointing at the ESTATE's own screen for that surface",
-  );
-  check(menuText(top).includes("Estate"), "captioned with what they are scoped to");
-  check(
-    menuLinks(top).some((h) => h.endsWith("/acme-co")),
-    "the projects block lists the root as a link to its own URL",
-  );
-
-  // --- INSIDE A PROJECT: the same five words, pointing one level in
-  const entered = await at("/acme-co.storefront");
-  check(menu(entered).level === "2", "inside a child project the menu is two levels down");
-  check(menu(entered).kind === "project", "and is a project level of the same menu");
-  const inRows = entryRows(entered);
-  check(
-    inRows.map(([l]) => l).join(",") === topRows.map(([l]) => l).join(","),
-    "THE SAME FIVE WORDS, in the same order — one menu to learn",
-  );
-  check(
-    inRows.every(([, h]) => h.includes("/acme-co.storefront")),
-    "every one of them now addresses this project",
-  );
-  check(
-    inRows.map(([, h]) => h.replace("/app", "")).join(",") ===
-      "/acme-co.storefront,/acme-co.storefront/services,/acme-co.storefront/domains,/acme-co.storefront/machines,/acme-co.storefront/segments",
-    "so the same five surfaces are the project's own",
-  );
-  check(
-    !menuText(entered).includes("intern"),
-    "and a sibling project is NOT in the menu — the block is this project's subtree",
-  );
-
-  // --- THE NAME IS RENDERED ONCE. The rejected version printed "in this
-  //     project", then the name, then the dotted path: the name twice.
-  check(
-    (menuText(entered).match(/storefront/g) ?? []).length === 1,
-    `the project's name appears ONCE in the menu (got ${(menuText(entered).match(/storefront/g) ?? []).length})`,
-  );
-  check(
-    !menuText(entered).includes("acme-co.storefront"),
-    "and the dotted path is not repeated in the sidebar — it is on the page's own header",
-  );
-  check(
-    !menuText(entered).includes("in this project"),
-    "no 'in this project' caption over the name it duplicates",
-  );
-
-  // --- THE SCOPE CAPTION IS NOT UPPER-CASED WHEN IT IS AN IDENTIFIER.
-  //     The line dump reads TEXT, so a CSS transform is invisible to it: the
-  //     sidebar would print "ACME-CO" for a project named `acme-co` and every
-  //     text assertion in this file would still pass. Asserted against the rule.
-  const scopeRule = (r: Rendered): string => {
-    const cls = /data-menu-scope[^>]*class="([^"]*)"|class="([^"]*)"[^>]*data-menu-scope/.exec(
-      menu(r).html,
-    );
-    const names = (cls?.[1] ?? cls?.[2] ?? "").split(/\s+/).filter((c) => c.startsWith("css-"));
-    const rules = names
-      .map((n) => new RegExp(`\\.${n}\\{([^}]*)\\}`).exec(r.html)?.[1] ?? "")
-      .join(";");
-    return rules;
-  };
-  check(scopeRule(entered) !== "", "the scope caption's own style rule was found");
-  check(
-    scopeRule(entered).includes("text-transform:none"),
-    `a project's name is rendered in its own case, not upper-cased: ${scopeRule(entered).slice(0, 120)}`,
-  );
-  check(
-    scopeRule(top).includes("text-transform:uppercase"),
-    "while the estate's caption keeps the caption style, because it is a word and not a name",
-  );
-
-  // --- THE WAY UP IS A LINK AND IT NAMES ITS DESTINATION
-  check(menuText(entered).includes("← acme-co"), "up names the parent by name");
-  check(
-    !/←\s*Back/.test(menuText(entered)),
-    "and never reads a bare '← Back', which does not say where it goes",
-  );
-  check(
-    menuLinks(entered).some((h) => h.endsWith("/acme-co")),
-    "and it is a real link to the parent's URL",
-  );
-
-  const atRoot = await at("/acme-co");
-  check(menu(atRoot).level === "1", "a root project is level 1");
-  check(menuText(atRoot).includes("← Estate"), "whose way up is the ESTATE, named");
-  check(
-    !menuText(atRoot).includes("All projects"),
-    "not 'All projects' — the level above is five screens over everything, not a list",
-  );
-  check(
-    menuLinks(atRoot).some((h) => h.endsWith("/projects")),
-    "and it is a real link to the estate's own index",
-  );
-  check(
-    !menuText(atRoot).includes("← acme-co"),
-    "the two ways up are different sentences, not one label",
-  );
-
-  // --- ONE LEVEL BY DEFAULT, and the subtree block is a block with a caption
-  check(
-    menuLinks(atRoot).some((h) => h.endsWith("/acme-co.storefront")),
-    "a project's menu lists its own children, so descending is one click",
-  );
-  check(
-    menuText(atRoot).toLowerCase().includes("subprojects"),
-    "under a caption that says what they are",
-  );
-  check(
-    !/(^| )eu( |$)/.test(menuText(atRoot)),
-    "and NOT the grandchild — the subtree renders ONE LEVEL until a node is expanded",
-  );
-  check(
-    /aria-expanded="false"/.test(menu(atRoot).html),
-    "the node that has children carries a disclosure control, closed",
-  );
-  check(
-    /Show the 1 project under storefront/.test(menu(atRoot).html),
-    "labelled with what it will do and how many — not a bare triangle",
-  );
-  check(
-    !menuLinks(atRoot).some((h) => h.includes("open=")),
-    "and expanding is not in the URL: no link carries an open= parameter",
-  );
-  const leaf = await at("/acme-co.intern");
-  check(
-    menuText(leaf).includes("has none"),
-    "a leaf says it has no subprojects rather than rendering an empty caption",
-  );
-  check(
-    !/aria-expanded/.test(menu(leaf).html),
-    "and a node with no children gets no disclosure control at all, rather than a dead triangle",
-  );
-
-  // --- TWO DEEP. The one depth the live estate cannot demonstrate.
-  const deep = await at("/acme-co.storefront.eu");
-  check(menu(deep).level === "3", "a grandchild is a third level of the same menu");
-  check(menuText(deep).includes("← storefront"), "and its way up names ITS parent, not the root");
-  check(
-    !menuText(deep).includes("← acme-co") && !menuText(deep).includes("← Estate"),
-    "up goes ONE level, never straight to the top",
-  );
-  check(
-    menuLinks(deep).some((h) => h.endsWith("/acme-co.storefront")),
-    "and it is a link to the parent's own URL",
-  );
-  check(
-    entryRows(deep).map(([l]) => l).join(",") === topRows.map(([l]) => l).join(","),
-    "the same five words, three levels down",
-  );
-
-  // --- THE GATEWAY BLOCK IS LEVEL 0's AND NOWHERE ELSE
-  const GATEWAY = ["/drift", "/dns", "/hosts", "/vpn", "/bans", "/checks", "/observability", "/ports", "/settings", "/account"];
-  const found = GATEWAY.filter((g) => menuLinks(top).some((h) => h.endsWith(g)));
-  check(found.length === 10, `all ten gateway surfaces are in the estate's menu (${found.length}/10)`);
-  check(menuText(top).includes("the gateway"), "under a caption naming the block");
-  for (const [where, r] of [["a root project", atRoot], ["one deeper", entered], ["a grandchild", deep]] as const) {
-    const leaked = GATEWAY.filter((g) => menuLinks(r).some((h) => h.endsWith(g)));
-    check(leaked.length === 0, `NO gateway entry is repeated at ${where} (found ${leaked.join(", ") || "none"})`);
-    check(!menuText(r).includes("the gateway"), `and no gateway caption standing over nothing at ${where}`);
-  }
-  // THE TRADE, CHECKED: Settings from inside a project is TWO clicks — the
-  // labelled way up, then Settings at the estate — and not a hunt.
-  check(
-    menuLinks(deep).some((h) => h.endsWith("/acme-co.storefront")),
-    "so Settings from three levels down is: the way up (click 1)…",
-  );
-  check(
-    menuLinks(top).some((h) => h.endsWith("/settings")),
-    "…then Settings at the estate (click 2)",
-  );
-
-  // --- BANS AND CLIENTS ARE NOT IN THE MENU, AT ANY DEPTH
-  for (const [where, r] of [["a root project", atRoot], ["one deeper", entered], ["a grandchild", deep]] as const) {
-    check(
-      !menuText(r).includes("cannot be scoped to a project"),
-      `the apology caption is gone from ${where}`,
-    );
-    check(!menuText(r).includes("not scopable"), `and the greyed rows with it at ${where}`);
-    check(
-      !menuText(r).includes("hz cannot select these by project"),
-      `and the prose under them at ${where}`,
-    );
-    for (const gap of GATEWAY_WIDE_SURFACES) {
-      check(
-        !menuText(r).includes(gap.label),
-        `${gap.label} is not a row in the menu at ${where} — a door to a room that is not there`,
-      );
+  // Asserted at the ROUTE, not at the render: `router.load()` off a browser
+  // does not follow a `throw redirect(...)` — it drops the match and reports
+  // nothing — so a rendered check would pass on a blank page and prove nothing.
+  const target = async (route: { options: { beforeLoad?: unknown } }): Promise<string> => {
+    try {
+      await (route.options.beforeLoad as (ctx: never) => unknown)?.({} as never);
+    } catch (e) {
+      return isRedirect(e) ? ((e as { options?: { to?: string } }).options?.to ?? "(no to)") : "(error)";
     }
-  }
-  // A CONTROL THAT REDDENS FEWER THINGS THAN EXPECTED IS A FINDING: deleting
-  // the greyed entries once left their caption standing over nothing, so both
-  // halves are asserted — the labels AND the caption, at every depth.
-  check(
-    !menuText(entered).includes("IP Bans") && !menuText(entered).includes("VPN Clients"),
-    "neither label survives anywhere in a project's menu",
-  );
-
-  // --- an unresolvable project falls back to the estate's own menu
-  const miss = await at("/setings");
-  check(menu(miss).kind === "unresolved", "a parameter naming no project is its own menu state");
-  check(menu(miss).level === "0", "which falls back to LEVEL 0, so the whole estate is one click away");
-  check(menuText(miss).includes("setings"), "and says what was typed");
-  check(menuText(miss).includes("acme-co"), "while still listing the projects that do exist");
-  check(
-    GATEWAY.every((g) => menuLinks(miss).some((h) => h.endsWith(g))),
-    "with the gateway block, because the address is not inside a project",
-  );
+    return "(no redirect)";
+  };
+  check((await target(DashboardRoute)) === "/", "/dashboard → / (the Overview tab)");
+  check((await target(ProjectsRoute)) === "/", "/projects → / (the tree is the project index now)");
+  check((await target(SegmentsRoute)) === "/network", "/segments → /network (label and URL are one word)");
 }
 
 // ---------------------------------------------------------------------------
-console.log("· Config is off the menu and ON the Overview, with a labelled button");
+console.log("· THE SIDEBAR IS WHERE: the same rows at every scope, only the highlight moves");
 // ---------------------------------------------------------------------------
 {
-  const overview = await at("/acme-co.intern");
-  check(overview.text.includes("Config"), "the project's Overview names the config surface");
+  // Scoped to the <nav> region: a link to a project also appears in a table's
+  // Location cell, and that would satisfy a page-wide search while the sidebar
+  // rendered nothing at all.
+  const nav = (r: Rendered) =>
+    (/<nav[^>]*>([\s\S]*?)<\/nav>/.exec(r.html.replace(/<style[^>]*>[\s\S]*?<\/style>/g, " "))?.[1] ?? "");
+  /** Each tree node's own markup, from its marker to the next node's. */
+  const nodeChunks = (r: Rendered): [string, string][] => {
+    const tree = /data-tree[^>]*>([\s\S]*?)<\/ul>/.exec(nav(r))?.[1] ?? "";
+    return tree
+      .split(/(?=<div[^>]*data-tree-node=)/)
+      .map((c) => [/data-tree-node="([^"]*)"/.exec(c)?.[1] ?? "", c] as [string, string])
+      .filter(([n]) => n !== "");
+  };
+  const treeNodes = (r: Rendered) => nodeChunks(r).map(([n]) => n);
+  const nodeHref = (r: Rendered, name: string) =>
+    /href="([^"]*)"/.exec(nodeChunks(r).find(([n]) => n === name)?.[1] ?? "")?.[1] ?? "";
+  const gatewayHrefs = (r: Rendered) => {
+    const zone = /data-gateway-zone[^>]*>([\s\S]*?)<\/ul>/.exec(nav(r))?.[1] ?? "";
+    return [...zone.matchAll(/href="([^"]*)"/g)].map((m) => m[1]!);
+  };
+  const selectedNode = (r: Rendered) =>
+    nodeChunks(r).filter(([, c]) => c.includes("Mui-selected")).map(([n]) => n);
+
+  const root = await at("/");
+  const acme = await at("/p/acme-co");
+  const shop = await at("/p/storefront/domains");
+  const eu = await at("/p/eu");
+  const gw = await at("/settings");
+
+  check(treeNodes(root).join(",") === "acme-co", `with no project, the tree renders the roots (got ${treeNodes(root).join(",")})`);
+  check(selectedNode(root).length === 0, "and highlights nothing — no project is a scope with no node");
+  check(treeNodes(acme).join(",") === "acme-co", "at a root project the tree is the same rows: its own children are not opened for you");
+  check(selectedNode(acme).join() === "acme-co", "and that project is highlighted");
   check(
-    overview.links.some((h) => h.endsWith("/acme-co.intern/config")),
-    "and links to it at this project's own address",
+    treeNodes(shop).join(",") === "acme-co,intern,storefront",
+    `at storefront, the path TO it is open and nothing else (got ${treeNodes(shop).join(",")})`,
+  );
+  check(selectedNode(shop).join() === "storefront", "and storefront is the one highlighted");
+  check(
+    treeNodes(eu).join(",") === "acme-co,intern,storefront,eu",
+    `a grandchild is visible in place, two deep (got ${treeNodes(eu).join(",")})`,
+  );
+  check(treeNodes(gw).join(",") === treeNodes(root).join(","), "a gateway screen shows the same tree as no project");
+
+  // THE GATEWAY GROUP IS THE SAME, IN THE SAME ORDER, EVERYWHERE — the thing
+  // amendment 4 took away inside a project.
+  const g0 = gatewayHrefs(root).join(",");
+  check(gatewayHrefs(root).length === GATEWAY_NAV.length, `the gateway group has ${GATEWAY_NAV.length} rows`);
+  for (const [where, r] of [["a root project", acme], ["a child's tab", shop], ["a grandchild", eu], ["a gateway screen", gw]] as const) {
+    check(gatewayHrefs(r).join(",") === g0, `and it is the same ${GATEWAY_NAV.length} rows at ${where}`);
+  }
+  check(
+    GATEWAY_NAV.every((g) => gatewayHrefs(root).some((h) => h.endsWith(g.to))),
+    "each gateway row is a real link to its screen",
   );
   check(
-    /Open intern[\s\S]{0,20}s config/.test(overview.text),
-    "with a labelled button naming the project, not a bare icon",
+    !nav(root).includes('href="/account"') && !nav(eu).includes('href="/account"'),
+    "Account is not in the sidebar — it is in the user menu",
   );
 
-  // And the reason it is not a sixth nav entry: there is no estate-wide config
-  // screen for one to point at. /config redirects, which a nav entry must not.
-  const menuHtml = /data-menu-entries[^>]*>([\s\S]*?)<\/ul>/.exec(overview.html)?.[1] ?? "";
-  check(menuHtml !== "", "the menu's five-entry region was found");
-  check(!menuHtml.includes("/config"), "no menu entry points at a config screen");
-  check(!/>\s*Config\s*</.test(menuHtml), "and there is no sixth entry labelled Config");
+  // A NODE KEEPS THE TAB: the tree changes WHERE, the tab is WHAT.
+  check(nodeHref(shop, "acme-co").endsWith("/p/acme-co/domains"), "on storefront's Domains, acme-co links to acme-co's Domains");
+  check(nodeHref(shop, "intern").endsWith("/p/intern/domains"), "and a sibling links to its own Domains");
+  check(nodeHref(await at("/network"), "acme-co").endsWith("/p/acme-co/network"), "with no project, a node links to the same tab in that project");
+  check(nodeHref(gw, "acme-co").endsWith("/p/acme-co"), "on a gateway screen there is no tab, so a node goes to the Overview");
+
+  // No named root, anywhere: the word the operator rejected is gone from the
+  // sidebar and from the scope bar.
+  for (const [where, r] of [["no project", root], ["a project", acme], ["a gateway screen", gw]] as const) {
+    check(!/\bEstate\b/i.test(r.text), `the word "estate" is not on the screen at ${where}`);
+  }
+
+  // The two controls a tree node can carry: a disclosure button that says what
+  // it will do, and — only on the node you are ON — remove.
+  check(/aria-label="Show the 2 projects under acme-co"/.test(nav(root)), "a closed node's control offers to show, with the count");
+  check(/aria-label="Hide what is under acme-co"/.test(nav(shop)), "an open ancestor's control offers to hide, naming the project");
+  check(/aria-label="Remove storefront…"/.test(nav(shop)), "the current node carries remove");
+  check(!/aria-label="Remove intern…"/.test(nav(shop)), "and no other node does — one mis-click from the wrong project");
+  check(/aria-label="Add a project"/.test(nav(root)) && /aria-label="Add a project"/.test(nav(eu)), "the + is on the tree at every scope");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· THE TABS ARE WHAT: the same six at every scope, with a breadcrumb over them");
+// ---------------------------------------------------------------------------
+{
+  const bar = (r: Rendered) =>
+    (/data-scope-bar[^>]*>([\s\S]*)$/.exec(r.html.replace(/<style[^>]*>[\s\S]*?<\/style>/g, " "))?.[1] ?? "");
+  const tabs = (r: Rendered): [string, string][] => {
+    const region = /role="tablist"[^>]*>([\s\S]*?)<\/div><\/div>/.exec(bar(r))?.[1] ?? "";
+    return [...region.matchAll(/href="([^"]*)"[^>]*>([^<]*)<\/a>/g)].map((m) => [m[2]!.trim(), m[1]!]);
+  };
+  const selectedTab = (r: Rendered) =>
+    /aria-selected="true"[\s\S]*?href="[^"]*"[^>]*>([^<]*)<\/a>/.exec(bar(r))?.[1]?.trim() ?? "(none)";
+  const crumbs = (r: Rendered) => {
+    const region = /data-breadcrumb[^>]*>([\s\S]*?)<\/nav>/.exec(bar(r))?.[1] ?? "";
+    return region.replace(/<li[^>]*aria-hidden[^>]*>[\s\S]*?<\/li>/g, "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  };
+
+  const root = await at("/");
+  const shop = await at("/p/storefront/services");
+  const eu = await at("/p/eu/network");
+
+  const labels = (r: Rendered) => tabs(r).map(([l]) => l).join(",");
+  check(labels(root) === "Overview,Services,Domains,Machines,Network,Config", `six tabs with no project (got ${labels(root) || "nothing"})`);
+  check(labels(shop) === labels(root), "the same six in a project");
+  check(labels(eu) === labels(root), "and two deep");
+  check(
+    tabs(root).map(([, h]) => h).join(",") === "/,/services,/domains,/machines,/network,/config",
+    `with no project they point at the unscoped screens (got ${tabs(root).map(([, h]) => h).join(",")})`,
+  );
+  check(
+    tabs(shop).every(([, h]) => h.startsWith("/p/storefront")),
+    "in a project every tab points under /p/<that project>",
+  );
+  check(selectedTab(shop) === "Services", `the tab the address is on is selected (got ${selectedTab(shop)})`);
+  check(selectedTab(eu) === "Network", "at every depth");
+  check(selectedTab(await at("/machines/gw-1")) === "Machines", "a machine's one page sits under the Machines tab");
+
+  check(/data-scope-bar/.test(root.html), "the bar renders with no project");
+  check(!/data-scope-bar/.test((await at("/settings")).html), "and NOT on a gateway screen, which has no tab");
+  check(!/data-breadcrumb/.test(root.html), "with no project there is no breadcrumb — no named root to print");
+
+  check(crumbs(eu) === "acme-co storefront eu", `the breadcrumb is the ancestry, root first (got ${crumbs(eu)})`);
+  check(/data-breadcrumb[\s\S]*?href="\/p\/acme-co\/network"/.test(bar(eu)), "every ancestor crumb keeps the tab");
+  check(!/data-breadcrumb[\s\S]*?href="\/p\/eu\/network"[\s\S]*?<\/nav>/.test(bar(eu)), "and the last crumb is where you are, not a link to it");
+  check(/aria-label="Network across every project"[^>]*href="\/network"|href="\/network"[^>]*aria-label="Network across every project"/.test(bar(eu)), "the clear control goes to the same tab with no project");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· Config is a tab at every scope, and the unscoped one has a project picker");
+// ---------------------------------------------------------------------------
+{
+  // Amendment 5 reverses Decision L: the registrations list exists unscoped,
+  // so a Config tab is not blank with no project selected.
+  const cfg = await at("/config");
+  check(cfg.text.includes("Approval queue"), "/config renders the config surface, not a redirect");
+  check(!cfg.text.includes("Scoped to"), "and its queue is NOT filtered — every project's registrations");
+  check(cfg.text.includes("Which project"), "the address panels are introduced by the project picker");
+  check(/<label[^>]*>Project<\/label>/.test(cfg.html), "which is a labelled field");
+
+  const picked = await at("/config?project=intern");
+  check(picked.text !== cfg.text, "?project= is a different page — the pick has an address");
+  check(/value="intern"/.test(picked.html), "and the pick is carried into the picker");
+
+  const scoped = await at("/p/intern/config");
+  check(scoped.text.includes("Approval queue"), "the config surface is at the project too");
+  check(scoped.text.includes("Scoped to"), "where the queue says it is filtered");
+  check(!scoped.text.includes("Which project"), "and there is no picker — the URL already picked");
+
+  const overview = await at("/p/intern");
+  check(
+    !/Open intern[\s\S]{0,20}s config/.test(overview.text),
+    "the Overview no longer carries a config button — the tab is the way there",
+  );
 }
 
 // ---------------------------------------------------------------------------
 console.log("· the bans/clients explanation lives ONCE, on the project's Overview");
 // ---------------------------------------------------------------------------
 {
-  const overview = await at("/acme-co.storefront");
+  const overview = await at("/p/storefront");
   for (const gap of GATEWAY_WIDE_SURFACES) {
     check(overview.text.includes(gap.gatewayLabel), `${gap.label} is named on the Overview`);
     check(
@@ -865,7 +756,7 @@ console.log("· the bans/clients explanation lives ONCE, on the project's Overvi
     );
     check(
       overview.links.some((h) => h.endsWith(gap.gatewayAt)),
-      `and a link to the estate screen that holds the rows (${gap.gatewayAt})`,
+      `and a link to the gateway screen that holds the rows (${gap.gatewayAt})`,
     );
   }
   check(
@@ -874,10 +765,10 @@ console.log("· the bans/clients explanation lives ONCE, on the project's Overvi
   );
   check(
     !overview.links.some((h) => h.includes("storefront/bans") || h.includes("storefront/vpn")),
-    "and nothing links to a /$project/bans or /$project/clients that cannot answer",
+    "and nothing links to a /p/$project/bans or /p/$project/clients that cannot answer",
   );
   // It is on the Overview and NOT on every screen: one explanation, one place.
-  const services = await at("/acme-co.storefront/services");
+  const services = await at("/p/storefront/services");
   check(
     !services.text.includes("Gateway-wide, not scoped to"),
     "the explanation is not repeated on the project's other screens",
@@ -885,24 +776,24 @@ console.log("· the bans/clients explanation lives ONCE, on the project's Overvi
 }
 
 // ---------------------------------------------------------------------------
-console.log("· /segments is Network at the estate — the same surface, every row");
+console.log("· /network is the Network tab with no project — the same surface, every row");
 // ---------------------------------------------------------------------------
 {
-  const estate = await at("/segments");
-  check(estate.text.includes("Network"), "the estate's Network screen renders");
+  const unscoped = await at("/network");
+  check(unscoped.text.includes("Network"), "the unscoped Network screen renders");
   check(
-    estate.text.includes("seg-shop") && estate.text.includes("seg-core"),
+    unscoped.text.includes("seg-shop") && unscoped.text.includes("seg-core"),
     "with every segment, whoever owns it — two projects' networks on one screen",
   );
-  check(/<th[^>]*>Project<\/th>/.test(estate.html), "under a Project column, not a Location one");
+  check(/<th[^>]*>Project<\/th>/.test(unscoped.html), "under a Project column, not a Location one");
   check(
-    estate.links.some((h) => h.endsWith("/machines/gw-1")),
+    unscoped.links.some((h) => h.endsWith("/machines/gw-1")),
     "a member still links to the machine's one page",
   );
 
   // The project's own Network screen is the same surface, narrowed. If these
   // rendered different tables, "one menu" would be a claim about labels only.
-  const scoped = await at("/acme-co.storefront/segments");
+  const scoped = await at("/p/storefront/network");
   check(scoped.text.includes("seg-shop"), "the project's Network screen shows its own segment");
   check(!scoped.text.includes("seg-core"), "and not another project's");
   check(
@@ -910,7 +801,7 @@ console.log("· /segments is Network at the estate — the same surface, every r
     "with the Location column, which asks a different question inside a subtree",
   );
   check(
-    estate.text.includes("half declared") === scoped.text.includes("half declared"),
+    unscoped.text.includes("half declared") === scoped.text.includes("half declared"),
     "and the unaddressed state reads the same on both, because it is one table",
   );
 }
@@ -943,14 +834,14 @@ console.log("· A DERIVED SURFACE HAS A LIST ROUTE AND NEVER A DETAIL ROUTE");
 
   // Said the other way as well, so a renamed surface cannot slip past: no route
   // under /$project may take a second parameter.
-  const twoParams = ids.filter((id) => id.startsWith("/$project/") && id.includes("$", 10));
+  const twoParams = ids.filter((id) => id.startsWith("/p/$project/") && id.includes("$", 12));
   check(
     twoParams.length === 0,
-    `no route under /$project takes a second parameter — found ${twoParams.join(", ") || "none"}`,
+    `no route under /p/$project takes a second parameter — found ${twoParams.join(", ") || "none"}`,
   );
 
   // And the rows really do link OUT to that one page.
-  const machines = await at("/acme-co.storefront/machines");
+  const machines = await at("/p/storefront/machines");
   check(
     machines.links.some((h) => h.endsWith("/machines/gw-1")),
     "a machine row links to /machines/$machine, the box's one page",
@@ -962,10 +853,10 @@ console.log("· A DERIVED SURFACE HAS A LIST ROUTE AND NEVER A DETAIL ROUTE");
 }
 
 // ---------------------------------------------------------------------------
-console.log("· /$project/machines is DERIVED, approved-only, and honest when empty");
+console.log("· /p/$project/machines is DERIVED, approved-only, and honest when empty");
 // ---------------------------------------------------------------------------
 {
-  const storefront = await at("/acme-co.storefront/machines");
+  const storefront = await at("/p/storefront/machines");
   check(storefront.text.includes("Machines running storefront"), "the screen renders under the project");
   check(storefront.text.includes("gw-1"), "the shared box is listed");
   check(storefront.text.includes("box-2"), "and so is the project's own box");
@@ -999,7 +890,7 @@ console.log("· /$project/machines is DERIVED, approved-only, and honest when em
   );
 
   // gw-1 is on storefront AND on intern, carrying no project in either.
-  const intern = await at("/acme-co.intern/machines");
+  const intern = await at("/p/intern/machines");
   check(intern.text.includes("gw-1"), "the same box appears under another project it hosts");
   check(
     !intern.text.includes("box-2"),
@@ -1016,7 +907,7 @@ console.log("· /$project/machines is DERIVED, approved-only, and honest when em
 
   // Empty, which is the state the live gateway is in today: all seven cm_*
   // tables are empty, so every project's list here is correctly empty.
-  const empty = await at("/acme-co/machines?scope=own");
+  const empty = await at("/p/acme-co/machines?scope=own");
   check(
     empty.text.includes("runs on any box yet"),
     "a project with no instance of its own says so in words",
@@ -1036,10 +927,10 @@ console.log("· /$project/machines is DERIVED, approved-only, and honest when em
 }
 
 // ---------------------------------------------------------------------------
-console.log("· /$project/segments reads the endpoint nothing had ever called");
+console.log("· /p/$project/network reads the endpoint nothing had ever called");
 // ---------------------------------------------------------------------------
 {
-  const storefront = await at("/acme-co.storefront/segments");
+  const storefront = await at("/p/storefront/network");
   check(storefront.text.includes("Network in storefront"), "the screen renders");
   check(
     !storefront.text.includes("Network segments in storefront"),
@@ -1068,14 +959,14 @@ console.log("· /$project/segments reads the endpoint nothing had ever called");
     "and is called what it is, rather than being counted as absent",
   );
 
-  const root = await at("/acme-co/segments?scope=own");
+  const root = await at("/p/acme-co/network?scope=own");
   check(root.text.includes("seg-core"), "the root's own segment is on its own screen");
   check(
     root.text.includes("no machine is addressed on this network yet"),
     "a segment with no member says so rather than rendering a blank cell",
   );
 
-  const leaf = await at("/acme-co.intern/segments");
+  const leaf = await at("/p/intern/network");
   check(
     leaf.text.includes("No segment names intern"),
     "a project with no segment says so, and says hz has others",
@@ -1086,83 +977,26 @@ console.log("· /$project/segments reads the endpoint nothing had ever called");
 console.log("· phone width: the same routes, the shell's own responsive behaviour");
 // ---------------------------------------------------------------------------
 {
-  const desktop = await at("/acme-co.storefront");
-  const phone = await at("/acme-co.storefront", { phone: true });
+  const desktop = await at("/p/storefront");
+  const phone = await at("/p/storefront", { phone: true });
 
   check(desktop.text.includes("Package feed"), "the project renders on desktop");
   check(phone.text.includes("Package feed"), "and renders the same content at phone width");
 
   // BELOW `md` THE SIDEBAR IS A DRAWER, and a closed MUI Drawer renders through
-  // a portal — which produces NOTHING under SSR. So the project zone is absent
-  // from the phone markup by design, and that is exactly why the page itself
-  // must still carry the way up and the way down. A check that only looked for
-  // a link "somewhere" would pass on the desktop render and tell us nothing.
-  check(
-    !phone.html.includes('data-project-zone'),
-    "the sidebar is behind the hamburger at phone width — the shell's own behaviour, not a per-page branch",
-  );
-  check(
-    phone.text.includes("← acme-co"),
-    "so the page's own header carries the way UP, labelled with the parent",
-  );
-  check(
-    phone.links.some((h) => h.endsWith("/acme-co")),
-    "and it is a real link",
-  );
+  // a portal — which produces NOTHING under SSR. The scope bar is in the page,
+  // not the sidebar, so the way up (the breadcrumb) and the tabs survive.
+  // Checked by the sidebar's own marker: the breadcrumb is a <nav> too, so
+  // "no <nav> on the page" would be false for the right reason.
+  check(!/data-sidebar/.test(phone.html), "the sidebar is behind the Menu button at phone width");
+  check(/data-breadcrumb/.test(phone.html), "the breadcrumb is on the page, so the way UP is visible");
+  check(phone.links.some((h) => h.endsWith("/p/acme-co")), "and the parent crumb is a real link");
+  check(/role="tablist"/.test(phone.html), "the tabs are on the page too");
+  check(phone.text.includes("Menu"), "the drawer's button is labelled 'Menu', not an unlabelled hamburger");
 
-  const parent = await at("/acme-co", { phone: true });
-  check(
-    parent.text.includes("enter a subproject"),
-    "and the way DOWN is on the page too, labelled",
-  );
-  check(
-    parent.links.some((h) => h.endsWith("/acme-co.storefront")),
-    "with each child a real link",
-  );
-  check(
-    parent.text.includes("Menu"),
-    "the drawer's button is labelled 'Menu', not an unlabelled hamburger",
-  );
-
-  // No per-page width branch is left: the same markup shape, minus the shell.
-  check(
-    phone.text.includes("storefront") && desktop.text.includes("storefront"),
-    "the project's identity renders at both widths",
-  );
-}
-
-// ---------------------------------------------------------------------------
-console.log("· /config keeps working and lands somewhere true");
-// ---------------------------------------------------------------------------
-{
-  // The redirect is asserted at the ROUTE, not at the render: `router.load()`
-  // off a browser does not follow a `throw redirect(...)` — it drops the match
-  // and reports nothing — so a rendered check here would pass on a blank page
-  // and prove nothing. Calling beforeLoad and inspecting what it throws is the
-  // same fact, checked where it is actually decided.
-  let thrown: unknown;
-  try {
-    await ConfigRoute.options.beforeLoad?.({} as never);
-  } catch (e) {
-    thrown = e;
-  }
-  check(thrown !== undefined, "/config refuses to render and redirects instead");
-  check(isRedirect(thrown), "and what it throws is a router redirect, not an error");
-  check(
-    isRedirect(thrown) && (thrown as { options?: { to?: string } }).options?.to === "/projects",
-    "an old /config bookmark is sent to the project list, which is where its contents went",
-  );
-
-  const cfg = await at("/config");
-  check(!cfg.text.includes("Approval queue"), "the five-tab shell is no longer at /config");
-
-  const scoped = await at("/acme-co.intern/config");
-  check(scoped.text.includes("Approval queue"), "the config surface is at the project that owns it");
-  check(scoped.text.includes("intern"), "and says which project it is scoped to");
-  check(
-    scoped.text.includes("Scoped to"),
-    "and the queue says it is filtered — a filtered queue that does not say so hides a waiting box",
-  );
+  const parent = await at("/p/acme-co", { phone: true });
+  check(parent.text.includes("subprojects:"), "the way DOWN is on the Overview, labelled");
+  check(parent.links.some((h) => h.endsWith("/p/storefront")), "with each child a real link");
 }
 
 // ---------------------------------------------------------------------------
@@ -1181,7 +1015,7 @@ console.log("· the flat lists survive and gained the project they were blind to
     "which is the row a project-scoped screen structurally cannot render, said in words",
   );
   check(
-    services.links.some((h) => h.endsWith("/acme-co.intern")),
+    services.links.some((h) => h.endsWith("/p/intern")),
     "an assigned row links to its project",
   );
 
@@ -1196,7 +1030,7 @@ console.log("· the flat lists survive and gained the project they were blind to
     "and that domain's cell says so rather than borrowing a project from nowhere",
   );
   check(
-    domains.links.some((h) => h.endsWith("/acme-co.storefront")),
+    domains.links.some((h) => h.endsWith("/p/storefront")),
     "while a domain served by an assigned service links to that service's project",
   );
 }
@@ -1205,32 +1039,24 @@ console.log("· the flat lists survive and gained the project they were blind to
 console.log("· THE SIDEBAR, RENDERED AND COUNTED");
 // ---------------------------------------------------------------------------
 {
-  const level0 = dumpSidebar("level 0 — the estate", await at("/dashboard"));
-  const level1 = dumpSidebar("level 1 — inside acme-co", await at("/acme-co"));
-  const level2 = dumpSidebar("level 2 — inside acme-co.storefront", await at("/acme-co.storefront"));
+  const none = dumpSidebar("no project", await at("/"));
+  const root = dumpSidebar("inside acme-co", await at("/p/acme-co"));
+  const deep = dumpSidebar("inside eu (two deep)", await at("/p/eu"));
+  const gate = dumpSidebar("on Settings", await at("/settings"));
 
-  // THE BUDGET. The rejected sidebar was 24 lines at the top level and 38
-  // inside a project. These numbers are asserted, not merely printed: a nav
-  // that grows another caption or another apology reddens here, which is the
-  // only check that could have caught what the operator caught by looking.
-  //
-  // The gateway flow is ONE line of markup and wraps to about three in a 260px
-  // column, so level 0 reads as ~13 lines on screen against the 11 counted.
-  check(level0 <= 12, `level 0 is at most 12 lines (was 24) — got ${level0}`);
-  check(level1 <= 12, `inside a project is at most 12 (was 38) — got ${level1}`);
-  check(level1 <= level0 + 1, "and a project is no longer than the estate, rather than half again");
-  check(level2 <= level1, `deeper is not longer: level 2 = ${level2} vs level 1 = ${level1}`);
+  // THE BUDGET. Every line is the wordmark, a caption or a row: 1 + 2 captions
+  // + the visible tree nodes + the gateway rows. Nothing else — no prose, no
+  // scope label, no way up, because the tree and the breadcrumb already say
+  // where you are.
+  const expected = (nodes: number) => 3 + nodes + GATEWAY_NAV.length;
+  check(none === expected(1), `no project: wordmark, 2 captions, 1 root, ${GATEWAY_NAV.length} gateway rows — got ${none}`);
+  check(root === expected(1), `inside a root, the same count — its children are not opened for you — got ${root}`);
+  check(deep === expected(4), `two deep: the path to eu is open (4 nodes) — got ${deep}`);
+  check(gate === none, "a gateway screen is the same sidebar as no project");
 
-  // WHAT A TOTAL CANNOT SEE, found by a positive control: adding one more
-  // caption line left every count inside its budget, because a budget has
-  // slack and a fixture with one more project would need it. So the OVERHEAD is
-  // counted separately — every line that is not a nav row — and it is the thing
-  // that actually went wrong last time: three captions at the estate (the
-  // scope, the projects, the gateway), two inside a project, and NO prose.
+  // WHAT A TOTAL CANNOT SEE: the overhead, every line that is not a row you can
+  // click. Two captions, at every scope, and nothing else.
   const overhead = (r: Rendered): string[] => {
-    // Style blocks out FIRST: emotion inlines a rule at its first use, and that
-    // use is inside the first <a>, so its text would read as CSS and the row
-    // would count as overhead.
     const nav = /<nav[^>]*>([\s\S]*?)<\/nav>/
       .exec(r.html.replace(/<style[^>]*>[\s\S]*?<\/style>/g, " "))?.[1] ?? "";
     const linkText = new Set(
@@ -1238,81 +1064,30 @@ console.log("· THE SIDEBAR, RENDERED AND COUNTED");
         m[1]!.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim(),
       ),
     );
-    // Everything the reader sees that is NOT a row they can click, and not the
-    // gateway's one wrapped flow: captions, and any sentence.
-    return sidebarLines(r).filter((l) => !linkText.has(l) && !l.includes("·"));
+    return sidebarLines(r).filter((l) => !linkText.has(l));
   };
-  check(
-    overhead(await at("/dashboard")).join(" | ") === "Estate | projects | the gateway",
-    `the estate's menu carries three captions and nothing else: ${overhead(await at("/dashboard")).join(" | ")}`,
-  );
-  check(
-    overhead(await at("/acme-co")).join(" | ") === "acme-co | subprojects",
-    `inside a project, two — the scope and the block: ${overhead(await at("/acme-co")).join(" | ")}`,
-  );
-  check(
-    overhead(await at("/acme-co.intern")).length === 3,
-    "a leaf adds exactly one sentence, saying it has nothing below",
-  );
-  // The prose guard. Eight of the rejected forty lines were sentences; a nav row
-  // is one to three words, so anything longer in the menu is prose or a count
-  // masquerading as a label ("3 below").
-  for (const [where, path] of [["the estate", "/dashboard"], ["a project", "/acme-co"], ["a leaf", "/acme-co.intern"]] as const) {
-    const prose = sidebarLines(await at(path)).filter(
-      (l) => l.split(" ").length > 4 && !l.includes("·"),
-    );
-    check(
-      prose.length <= 1,
-      `at most one sentence in the menu at ${where} — the leaf's "has none" — got ${prose.length}: ${prose.join(" / ")}`,
-    );
+  for (const [where, path] of [["no project", "/"], ["a root", "/p/acme-co"], ["two deep", "/p/eu"], ["a gateway screen", "/settings"]] as const) {
+    const o = overhead(await at(path)).join(" | ");
+    check(o === "projects | gateway", `at ${where} the sidebar's only non-rows are its two captions — got: ${o}`);
   }
-  console.log(`\n    counts: level 0 = ${level0}, level 1 = ${level1}, level 2 = ${level2}`);
+  console.log(`\n    counts: no project = ${none}, acme-co = ${root}, eu = ${deep}, settings = ${gate}`);
 
-  // WITH A NODE EXPANDED. Expansion is component state by design (see
-  // SidebarMenu's header), and `renderToStaticMarkup` renders the INITIAL state
-  // — which is closed, deliberately, so a fresh load of any URL shows one level
-  // to everybody. The three renders above are that state. What the rows become
-  // when the reader opens one is the decision layer's answer, printed here in
-  // the form the renderer maps one-to-one onto lines.
+  // WITH A NODE TOGGLED. Toggling is component state, and `renderToStaticMarkup`
+  // renders the initial state — the address's default. What the rows become
+  // when the reader opens one is the decision layer's answer.
   const idx = buildProjectIndex(PROJECTS);
-  const expanded = readMenu(idx, "acme-co", new Set(["storefront"]));
-  console.log("\n    ── level 1 — inside acme-co, storefront expanded (decision rows) ──");
-  console.log("    | ← Estate");
-  console.log("    | acme-co");
-  for (const e of expanded.entries) console.log(`    | ${e.label}`);
-  console.log(`    | ${expanded.childCaption}`);
-  for (const n of expanded.nodes) {
-    console.log(`    | ${"  ".repeat(n.indent)}${n.route.name}${n.hasChildren ? (n.expanded ? " ▾" : " ▸") : ""}`);
+  const opened = treeRows(idx, null, new Set(["acme-co"]));
+  console.log("\n    ── no project, acme-co opened (decision rows) ──");
+  for (const n of opened) {
+    console.log(`    | ${"  ".repeat(n.depth)}${n.route.name}${n.hasChildren ? (n.expanded ? " ▾" : " ▸") : ""}`);
   }
-  check(expanded.nodes.length === 3, "expanding storefront adds one row: intern, storefront, eu");
   check(
-    expanded.nodes.map((n) => `${n.indent}:${n.route.name}`).join(",") ===
-      "0:intern,0:storefront,1:eu",
-    "with the grandchild indented under it, and the sibling untouched",
+    opened.map((n) => `${n.depth}:${n.route.name}`).join(",") === "0:acme-co,1:intern,1:storefront",
+    "opening the root adds its children one level down, and no deeper",
   );
-  check(
-    expanded.entries.length === 5 && expanded.up !== null,
-    "and the five entries and the way up are exactly as they were — expansion is disclosure",
-  );
-
-  // PHONE WIDTH. Below `md` the sidebar is a closed MUI Drawer, which is a
-  // portal and renders NOTHING under SSR — so the menu is absent by
-  // construction and the page's own header has to carry the way up and down.
-  const phone = await at("/acme-co", { phone: true });
-  const phoneLines = sidebarLines(phone);
-  console.log(`\n    ── phone width (below md) — sidebar renders ${phoneLines.length} lines ──`);
-  console.log("    | (the Drawer is closed: a portal renders nothing until it is opened)");
-  console.log(`    | the labelled button that opens it: ${phone.text.includes("Menu") ? "Menu" : "(MISSING)"}`);
-  console.log(`    | the page's own way up: ${/← acme-co|← Estate/.exec(phone.text)?.[0] ?? "(MISSING)"}`);
-  console.log(
-    `    | the page's own way down: ${phone.text.includes("enter a subproject") ? "enter a subproject: intern · storefront" : "(MISSING)"}`,
-  );
-  check(phoneLines.length === 0, "the menu is behind the hamburger at phone width, as the shell decides");
-  check(phone.text.includes("Menu"), "with a LABELLED button to open it, not a bare hamburger");
-  check(phone.text.includes("← Estate"), "and the page's header carries the way up");
-  check(phone.text.includes("enter a subproject"), "and the way down");
 }
 
+// ---------------------------------------------------------------------------
 console.log(`\n${checks - failures}/${checks} checks passed`);
 if (failures > 0) {
   throw new Error(`${failures} project-route render check(s) failed`);

@@ -58,7 +58,7 @@ function ProjectServices() {
         itself, which is why this screen exists at this URL rather than as a filter on the flat list.
       </Typography>
 
-      <ScopeControl reading={reading} to="/$project/services" param={param} />
+      <ScopeControl reading={reading} to="/p/$project/services" param={param} />
 
       {services.isLoading ? (
         <Box sx={{ display: "flex", alignItems: "center", gap: 2, p: 3 }}>
@@ -135,6 +135,6 @@ function ProjectServices() {
   );
 }
 
-export const Route = createFileRoute("/$project/services")({
+export const Route = createFileRoute("/p/$project/services")({
   component: ProjectServices,
 });
