@@ -11,6 +11,9 @@ import type {
   CMCurrentKeyResp,
   AgentObservedResponse,
   ProjectResp,
+  ProjectAddReq,
+  ProjectRmReq,
+  RemovalResp,
   EnvironmentResp,
   MachineResp,
   SegmentResp,
@@ -138,6 +141,43 @@ export function useProjects() {
   });
 }
 
+/**
+ * Declare a project. Reversible and renders nothing, which is why it is in the
+ * UI at all (plan/design/ui.md Part 1 §8 A: write in the UI for the reversible
+ * acts). The server validates the whole next config before it stores it.
+ */
+export function useAddProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: ProjectAddReq) =>
+      apiFetch<ProjectResp>("/projects/add", { method: "POST", body: JSON.stringify(req) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      qc.invalidateQueries({ queryKey: ["pending"] });
+    },
+  });
+}
+
+/**
+ * Remove a project — or, without `confirm`, ask what that would take. The dry
+ * run writes nothing and answers 200 with the dependants as a list; a blocked
+ * removal answers the same way with `blocked` set.
+ */
+export function useRemoveProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: ProjectRmReq) =>
+      apiFetch<RemovalResp>("/projects/rm", { method: "POST", body: JSON.stringify(req) }),
+    onSuccess: (_resp, req) => {
+      if (!req.confirm) return;
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      qc.invalidateQueries({ queryKey: ["environments"] });
+      qc.invalidateQueries({ queryKey: ["services"] });
+      qc.invalidateQueries({ queryKey: ["pending"] });
+    },
+  });
+}
+
 /** Every declared rung, across every project. Name and posture are separate. */
 export function useEnvironments() {
   return useQuery({
@@ -151,7 +191,7 @@ export function useEnvironments() {
  *
  * `Segment.Project` is REQUIRED — enforced in `ValidateSegments` and again in
  * `AddSegment` — which makes this the cleanest project-scoped record in the
- * config, and until `/$project/segments` nothing in the browser had ever asked
+ * config, and until `/p/$project/network` nothing in the browser had ever asked
  * for it: `GET /api/v1/segments` has been served since the Segment record
  * landed and `grep -rn "/segments" ui/src/` returned nothing.
  *
