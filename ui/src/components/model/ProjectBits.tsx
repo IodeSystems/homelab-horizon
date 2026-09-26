@@ -34,7 +34,7 @@ import {
   projectReachable,
   readLocation,
   readScope,
-  resolveProjectParam,
+  resolveProjectName,
   type ProjectIndex,
   type ProjectNavTo,
   type ProjectResolution,
@@ -62,10 +62,10 @@ export interface ProjectContext {
  */
 export function useProjectContext(): ProjectContext {
   const projects = useProjects();
-  const { project: param } = useParams({ from: "/$project" });
-  const search = useSearch({ from: "/$project" });
+  const { project: param } = useParams({ from: "/p/$project" });
+  const search = useSearch({ from: "/p/$project" });
   const index = useMemo(() => buildProjectIndex(projects.data ?? []), [projects.data]);
-  const resolution = useMemo(() => resolveProjectParam(index, param), [index, param]);
+  const resolution = useMemo(() => resolveProjectName(index, param), [index, param]);
   return { projects, param, index, resolution, scope: parseScope(search.scope) };
 }
 
@@ -90,7 +90,7 @@ export function ProjectLink({
 }) {
   return (
     <Link
-      to="/$project"
+      to="/p/$project"
       params={{ project: projectParam(index, route) }}
       search={{}}
       style={{ color: "inherit" }}
@@ -107,11 +107,10 @@ export function ProjectLink({
 /**
  * A path that names no project.
  *
- * NOT A 404, deliberately. A root-level `$project` swallows every path the
- * seventeen static routes do not claim, so `/setings` arrives here — and the
- * useful answer is "that is not a project, here are the ones that are", with
- * every one of them a link. The router's generic not-found would say less and
- * offer nothing.
+ * NOT A 404, deliberately. `/p/nosuch` — or any path no route claims, via the
+ * splat route — arrives here, and the useful answer is "that is not a project,
+ * here are the ones that are", with every one of them a link. The router's
+ * generic not-found would say less and offer nothing.
  */
 export function NoSuchProject({
   index,
@@ -130,7 +129,7 @@ export function NoSuchProject({
       </Alert>
       <ProjectPickList index={index} title="The projects hz declares" />
       <Box sx={{ mt: 2 }}>
-        <Link to="/projects">Back to all projects</Link>
+        <Link to="/">Back to the overview</Link>
       </Box>
     </Box>
   );
@@ -169,7 +168,7 @@ export function AmbiguousProject({
           {candidates.map((c) => (
             <Link
               key={c.name}
-              to="/$project"
+              to="/p/$project"
               params={{ project: projectParam(index, c) }}
               search={{}}
               style={{ textDecoration: "none", color: "inherit" }}
@@ -234,7 +233,7 @@ export function ProjectPickList({
         {index.routes.map((r) => (
           <Link
             key={r.name}
-            to="/$project"
+            to="/p/$project"
             params={{ project: projectParam(index, r) }}
             search={{}}
             style={{ textDecoration: "none", color: "inherit" }}

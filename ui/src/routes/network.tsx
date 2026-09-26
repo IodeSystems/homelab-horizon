@@ -1,12 +1,11 @@
 /**
- * `/segments` — Network, at the estate. Every segment hz declares.
+ * `/network` — the Network tab with no project selected. Every segment hz
+ * declares.
  *
- * The estate's reading of the `Network` entry, and the reason the entry can be
- * one of the five that are identical at every level (plan/design/ui.md,
- * Decision 1 amended a fourth time): the menu promises that a word means the
- * same thing wherever it appears, which it cannot do if the surface only exists
- * inside a project. Level 0 shows every row and narrows as you descend; this is
- * level 0 for segments.
+ * `Network` is one of the six tabs that exist at every scope (plan/design/ui.md,
+ * Decision 1, amendment 5): the tab promises that a word means the same thing
+ * wherever it appears, which it cannot do if the surface only exists inside a
+ * project. Unscoped shows every row; a project narrows them.
  *
  * It is also the screen `plan/design/ui.md` already specified as *"Network —
  * who can reach what?"*: the segment table, gateway-wide, with the owner on
@@ -27,7 +26,7 @@ import { PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
 import { ClientsNotHere, SegmentsTable } from "../components/model/SegmentBits";
 import { ScreenHeading } from "../components/model/ModelBits";
 
-function EstateSegments() {
+function UnscopedNetwork() {
   const segments = useSegments();
   const projects = useProjects();
   const index = buildProjectIndex(projects.data ?? []);
@@ -68,6 +67,6 @@ function EstateSegments() {
   );
 }
 
-export const Route = createFileRoute("/segments")({
-  component: EstateSegments,
+export const Route = createFileRoute("/network")({
+  component: UnscopedNetwork,
 });

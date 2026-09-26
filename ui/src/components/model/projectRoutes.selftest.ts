@@ -14,20 +14,24 @@ import {
   buildProjectIndex,
   derivedProjectSurfaces,
   inScope,
-  menuNodes,
+  ancestry,
+  legacyTarget,
   parseScope,
-  projectBack,
+  projectOfPath,
   projectRoutes,
   readLocation,
-  readMenu,
   readScope,
+  resolveProjectName,
   resolveProjectParam,
   projectParam,
   projectReachable,
+  tabOfPath,
+  tabTarget,
+  treeRows,
   CONFIG_AT,
   GATEWAY_NAV,
   GATEWAY_WIDE_SURFACES,
-  SCOPABLE_NAV,
+  SCOPE_TABS,
 } from "./projectRoutes.ts";
 import { ServiceSchema } from "../../api/schemas.ts";
 
@@ -225,6 +229,17 @@ console.log("· two projects CAN share a path, and the amendment says they canno
     projectReachable(unreachable, unreachable.byName.get("a")!),
     "the collision is local — every other project is unaffected",
   );
+  // WHY THE ADDRESS IS THE BARE NAME NOW (amendment 5). The same project that
+  // no dotted-or-name parameter could reach resolves by name, because names are
+  // unique and a name lookup never consults a path.
+  const byName = resolveProjectName(unreachable, "a.b");
+  check(
+    byName.found && byName.route === shadowed,
+    "/p/a.b reaches the project NAMED a.b — the corner the dotted address could not",
+  );
+  const bName = resolveProjectName(unreachable, "b");
+  check(bName.found && bName.route.parent === "a", "and /p/b reaches b, whatever its path is");
+  check(!resolveProjectName(unreachable, "a.b.c").found, "a path is not a name: /p/a.b.c resolves nothing");
 }
 
 // ---------------------------------------------------------------------------
@@ -330,7 +345,7 @@ console.log("· a row says where it lives, including on its own project's page")
     );
   }
   check(here.linkTo === "acme-co", "the cell links to the project it names");
-  check(there.linkTo === "acme-co.intern", "and it links by the dotted path, not the bare name");
+  check(there.linkTo === "intern", "and it links by the bare name, which is the address (/p/<name>)");
 
   const none = readLocation("", index);
   check(!none.assigned, "a service naming no project is unassigned");
@@ -362,114 +377,100 @@ console.log("· a row says where it lives, including on its own project's page")
 }
 
 // ---------------------------------------------------------------------------
-console.log("· the five scopable surfaces, identical at every level");
+console.log("· the six tabs, identical at every scope");
 // ---------------------------------------------------------------------------
 {
-  check(SCOPABLE_NAV.length === 5, "five surfaces a scope can select rows for");
+  check(SCOPE_TABS.length === 6, "six surfaces a scope can select rows for");
   check(
-    SCOPABLE_NAV.map((s) => s.label).join(",") === "Overview,Services,Domains,Machines,Network",
-    "in that order — the operator learns one menu, so the order is part of the contract",
+    SCOPE_TABS.map((s) => s.label).join(",") === "Overview,Services,Domains,Machines,Network,Config",
+    "in that order — the operator learns one tab strip, so the order is part of the contract",
   );
-  // THE POINT OF THE FOURTH AMENDMENT. Each surface has BOTH addresses, so the
-  // same word means the same thing at the estate and inside a project. A
-  // surface that existed at only one level would break the promise silently.
+  // Each tab has BOTH addresses, so the same word means the same thing with no
+  // project and inside one. A tab that existed at only one scope would break
+  // the promise silently.
   check(
-    SCOPABLE_NAV.every((s) => s.estateTo.startsWith("/") && !s.estateTo.includes("$project")),
-    "every one has an ESTATE address that takes no project parameter",
-  );
-  check(
-    SCOPABLE_NAV.every((s) => s.projectTo.startsWith("/$project")),
-    "and a PROJECT address under the project parameter",
+    SCOPE_TABS.every((s) => s.unscopedTo.startsWith("/") && !s.unscopedTo.includes("$project")),
+    "every one has an UNSCOPED address that takes no project parameter",
   );
   check(
-    new Set(SCOPABLE_NAV.map((s) => s.estateTo)).size === 5 &&
-      new Set(SCOPABLE_NAV.map((s) => s.projectTo)).size === 5,
-    "no two entries point at the same screen at either level",
+    SCOPE_TABS.every((s) => s.projectTo.startsWith("/p/$project")),
+    "and a PROJECT address under /p/$project",
   );
-  // Services and Domains stay separate: a domain conflict is a different
-  // question from a service's backend, and merging them puts a tab inside a
-  // nav entry.
-  const labels = SCOPABLE_NAV.map((s) => s.label);
   check(
-    labels.includes("Services") && labels.includes("Domains"),
-    "Services and Domains are two entries, not one merged surface",
+    new Set(SCOPE_TABS.map((s) => s.unscopedTo)).size === 6 &&
+      new Set(SCOPE_TABS.map((s) => s.projectTo)).size === 6,
+    "no two tabs point at the same screen at either scope",
   );
+  check(
+    SCOPE_TABS.every((s) => s.key === "" ? s.projectTo === "/p/$project" : s.projectTo.endsWith(`/${s.key}`)),
+    "a tab's key is the last segment of its project address — the pathname reader depends on it",
+  );
+  check(
+    SCOPE_TABS.every((s) => s.key === "" ? s.unscopedTo === "/" : s.unscopedTo === `/${s.key}`),
+    "and the whole of its unscoped address — so the label, the key and the URL are one word",
+  );
+  const labels = SCOPE_TABS.map((s) => s.label);
   check(
     labels.includes("Network") && !labels.includes("Network segments"),
-    "the segments surface is labelled Network — one word, at every level",
+    "the segments surface is Network, and its URL says network, not segments",
   );
 
-  // The gateway surfaces whose records carry no project AND cannot be derived
-  // into one. `machines` is NOT in this list — it is derivable through
-  // instances — which is what the third amendment changed.
   for (const g of ["drift", "hosts", "dns", "vpn", "bans", "checks", "ports", "observability", "settings", "account", "mfa"]) {
     check(
-      !SCOPABLE_NAV.some((t) => t.projectTo.includes(g)),
-      `${g} is gateway-only — its record carries no project and inventing one is the lie`,
+      !SCOPE_TABS.some((t) => t.projectTo.includes(g)),
+      `${g} is not a tab — its record carries no project and inventing one is the lie`,
     );
   }
   check(
-    SCOPABLE_NAV.every((t) => t.blurb.length > 30),
+    SCOPE_TABS.every((t) => t.blurb.length > 30),
     "each names the question it answers, rather than being a bare label",
   );
 
-  // CONFIG IS NOT A SIXTH ENTRY, AND IT IS STILL REACHABLE. There is no
-  // estate-wide config screen to put under a level-0 `Config` — /config is a
-  // redirect — so a sixth entry would be blank at level 0 or point at a
-  // redirect. It hangs off the project's Overview instead.
-  check(CONFIG_AT === "/$project/config", "config keeps its project-scoped route");
+  // CONFIG IS A TAB NOW (amendment 5 reverses Decision L): the unscoped
+  // registrations list exists, so the tab is not blank at either scope.
+  check(CONFIG_AT === "/p/$project/config", "config keeps its project-scoped route");
   check(
-    !SCOPABLE_NAV.some((s) => s.projectTo === CONFIG_AT),
-    "and is not one of the five, because the five must exist at every level",
+    SCOPE_TABS.some((s) => s.projectTo === CONFIG_AT && s.unscopedTo === "/config"),
+    "and is one of the six, with an unscoped address of its own",
   );
 
   // THE RULE. A derived surface's rows belong to something that has no project,
   // so the thing itself has exactly one page and it is not under a project.
   const derived = derivedProjectSurfaces();
   check(derived.length === 1, "exactly one surface is derived today — machines");
-  check(derived[0]!.projectTo === "/$project/machines", "and it is the machines list");
+  check(derived[0]!.projectTo === "/p/$project/machines", "and it is the machines list");
   check(
-    derived.every((d) => d.detailAt !== "" && !d.detailAt.startsWith("/$project")),
+    derived.every((d) => d.detailAt !== "" && !d.detailAt.includes("$project")),
     "a derived surface names the ONE page its rows have, and that page is NOT under a project",
   );
   check(
-    derived.every((d) => d.detailAt === "/machines/$machine"),
-    "which for a machine is /machines/$machine — one box, one page, every instance on it",
+    derived.every((d) => d.detailAt === d.unscopedTo + "/$machine"),
+    "which is the UNSCOPED list's own detail route — one box, one page",
   );
   check(
-    derived.every((d) => d.detailAt === d.estateTo + "/$machine"),
-    "and it is the ESTATE list's own detail route, which is the only level a box has one at",
-  );
-  check(
-    SCOPABLE_NAV.filter((e) => e.kind === "owned").every((e) => e.detailAt === ""),
+    SCOPE_TABS.filter((e) => e.kind === "owned").every((e) => e.detailAt === ""),
     "an owned surface names no elsewhere-page: its rows belong to exactly one project",
   );
 }
 
 // ---------------------------------------------------------------------------
-console.log("· the gateway block is level 0's own, and duplicates none of the five");
+console.log("· the gateway group is never scoped, and duplicates no tab");
 // ---------------------------------------------------------------------------
 {
-  check(GATEWAY_NAV.length === 10, "ten gateway surfaces");
-  // THE DUPLICATION THAT WAS REJECTED. Machines, Services, Domains appeared in
-  // the gateway list AND inside a project — the same words, two meanings, both
-  // on screen. The estate's reading of the five IS the gateway version now.
-  for (const s of SCOPABLE_NAV) {
+  check(GATEWAY_NAV.length === 9, "nine gateway surfaces");
+  for (const s of SCOPE_TABS) {
     check(
       !GATEWAY_NAV.some((g) => g.label === s.label),
       `${s.label} is NOT also a gateway entry — one word, one meaning`,
     );
-    // The two unions have no member in common, which tsc can see — so the cast
-    // is what lets the check run at all. Kept as a runtime check anyway: the
-    // type-level proof disappears the moment somebody widens either union.
     check(
-      !GATEWAY_NAV.some((g) => (g.to as string) === (s.estateTo as string)),
-      `and nothing in the gateway block points at ${s.estateTo}, which is ${s.label} at level 0`,
+      !GATEWAY_NAV.some((g) => (g.to as string) === (s.unscopedTo as string)),
+      `and nothing in the gateway group points at ${s.unscopedTo}`,
     );
   }
   check(
-    !GATEWAY_NAV.some((g) => (g.to as string) === "/projects"),
-    "and `Projects` is gone from it too — the subtree block IS the project list",
+    !GATEWAY_NAV.some((g) => (g.to as string) === "/account" || g.label === "Account"),
+    "Account is not in the sidebar — it is in the user menu, and one place is enough",
   );
   check(
     new Set(GATEWAY_NAV.map((g) => g.to)).size === GATEWAY_NAV.length,
@@ -479,237 +480,151 @@ console.log("· the gateway block is level 0's own, and duplicates none of the f
     GATEWAY_NAV.every((g) => g.why.length > 30),
     "each says why it carries no project, for its title and for the doc",
   );
+  check(
+    GATEWAY_NAV.every((g) => tabOfPath(g.to) === null),
+    "and no gateway address reads as a tab, so the scope bar does not draw over one",
+  );
 }
 
 // ---------------------------------------------------------------------------
-console.log("· bans and clients are explained ONCE, and not in the menu");
+console.log("· bans and clients are explained ONCE, and are not tabs");
 // ---------------------------------------------------------------------------
 {
   check(GATEWAY_WIDE_SURFACES.length === 2, "two surfaces hz cannot scope: bans and clients");
   const labels = GATEWAY_WIDE_SURFACES.map((g) => g.label);
   check(labels.includes("IP Bans") && labels.includes("VPN Clients"), "and they are those two");
-  // NOT IN THE MENU AT ALL — not as an entry, not greyed with a caption. The
-  // greyed rows and their six lines of prose are what the operator rejected:
-  // a nav entry to a surface that does not exist at this scope is a door to a
-  // room that is not there, not a restricted field.
   check(
-    GATEWAY_WIDE_SURFACES.every((g) => !SCOPABLE_NAV.some((n) => n.label === g.label)),
-    "neither is one of the five",
+    GATEWAY_WIDE_SURFACES.every((g) => !SCOPE_TABS.some((n) => n.label === g.label)),
+    "neither is a tab",
   );
   check(
     GATEWAY_WIDE_SURFACES.every((g) => GATEWAY_NAV.some((n) => n.to === g.gatewayAt)),
-    "each IS in the gateway block, which is where its rows actually live",
+    "each IS in the gateway group, which is where its rows actually live",
   );
   check(
     GATEWAY_WIDE_SURFACES.every((g) => g.why.length > 80),
     "each says WHY hz cannot scope it, in the record's own terms — for the Overview that renders it",
   );
-  check(
-    GATEWAY_WIDE_SURFACES.every((g) => g.gatewayAt.startsWith("/") && !g.gatewayAt.includes("$project")),
-    "and names the gateway screen that does hold the rows, unscoped",
-  );
 }
 
 // ---------------------------------------------------------------------------
-console.log("· back is a link that names where it goes");
+console.log("· the address alone says which project and which tab");
+// ---------------------------------------------------------------------------
+{
+  check(projectOfPath("/") === null, "/ is no project");
+  check(projectOfPath("/services") === null, "/services is no project");
+  check(projectOfPath("/p/storefront") === "storefront", "/p/storefront is storefront");
+  check(projectOfPath("/p/storefront/domains") === "storefront", "and so is its domains tab");
+  check(projectOfPath("/p/a.b/network") === "a.b", "a dotted NAME is one segment, never split");
+  check(projectOfPath("/p/caf%C3%A9") === "café", "and a percent-encoded name is decoded");
+  check(projectOfPath("/p/") === null, "/p/ with no name is no project");
+  check(projectOfPath("/projects") === null, "/projects is not /p/…");
+
+  const key = (path: string) => tabOfPath(path)?.label ?? "(none)";
+  check(key("/") === "Overview", "/ is the Overview tab");
+  check(key("/services") === "Services", "/services is Services");
+  check(key("/network") === "Network", "/network is Network");
+  check(key("/config") === "Config", "/config is Config");
+  check(key("/machines/gw-1") === "Machines", "a machine's own page sits under the Machines tab");
+  check(key("/p/storefront") === "Overview", "/p/storefront is the project's Overview");
+  check(key("/p/storefront/") === "Overview", "with or without the trailing slash");
+  check(key("/p/storefront/domains") === "Domains", "/p/storefront/domains is Domains");
+  check(key("/p/storefront/network") === "Network", "/p/storefront/network is Network");
+  check(key("/p/services") === "Overview", "a project NAMED services is that project, not the tab");
+  check(key("/settings") === "(none)", "a gateway screen has no tab");
+  check(key("/dns/example.net") === "(none)", "nor does a gateway screen's child");
+  check(key("/segments") === "(none)", "the old /segments is not a tab (it redirects)");
+
+  const services = SCOPE_TABS.find((t) => t.key === "services")!;
+  const at = tabTarget(services, "storefront");
+  check(at.to === "/p/$project/services" && at.params?.project === "storefront", "a tab at a project");
+  const un = tabTarget(services, null);
+  check(un.to === "/services" && un.params === undefined, "the same tab with no project");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· an amendment-4 link is followed to where it lives now");
 // ---------------------------------------------------------------------------
 {
   const idx = buildProjectIndex(EXAMPLE);
-  const root = idx.byName.get("acme-co")!;
-  const child = idx.byName.get("intern")!;
-
-  const fromRoot = projectBack(idx, root);
-  check(fromRoot.toEstate, "a root project's back leaves the tree");
-  // "Estate", not "All projects": the level above a root project is not a list
-  // of projects, it is the same five screens over every row hz has. The word
-  // has to match the caption the menu renders at level 0.
-  check(fromRoot.label === "← Estate", "and names the ESTATE — not '← Back', not 'All projects'");
-
-  const fromChild = projectBack(idx, child);
-  check(!fromChild.toEstate, "a child's back goes up one level");
-  check(fromChild.label === "← acme-co", "and is labelled with the PARENT'S NAME, not 'Back'");
-  check(fromChild.param === "acme-co", "and addresses the parent by a parameter that resolves to it");
-  check(
-    fromRoot.label !== fromChild.label,
-    "the two are different sentences — a generic label would read identically from anywhere",
-  );
-  check(
-    !/^← Back$/.test(fromChild.label) && !/^Back$/.test(fromChild.label),
-    "nothing renders a bare 'Back': the sidebar is where a wrong guess is expensive",
-  );
+  const go = (splat: string) => {
+    const t = legacyTarget(idx, splat);
+    return t ? `${t.project}/${t.tab.key}` : "(none)";
+  };
+  check(go("acme-co.storefront") === "storefront/", "a dotted path goes to the project's Overview");
+  check(go("acme-co.storefront/services") === "storefront/services", "and keeps its tab");
+  check(go("acme-co.storefront/segments") === "storefront/network", "segments is renamed network");
+  check(go("intern/config") === "intern/config", "a bare-name link is followed too");
+  check(go("acme-co.intern/network") === "(none)", "an old link never said network, so that is not one");
+  check(go("setings") === "(none)", "a typo is not an old link");
+  check(go("acme-co/services/extra") === "(none)", "nor is anything deeper than a tab");
+  check(go("") === "(none)", "and the empty path is not a project");
 }
 
 // ---------------------------------------------------------------------------
-console.log("· the menu is one recursive menu, and a function of the URL alone");
+console.log("· the breadcrumb is the project's ancestry, root first");
 // ---------------------------------------------------------------------------
 {
-  const idx = buildProjectIndex(EXAMPLE);
-
-  const top = readMenu(idx, undefined);
-  check(top.kind === "estate", "no project in the address is LEVEL 0, the estate");
-  check(top.level === 0, "and its level is 0, not 1 — the estate is the root of the tree");
-  check(top.up === null, "there is nothing above the estate, so there is no up-link");
-  check(top.showGateway, "and the gateway block is here");
-  check(top.scopeLabel === "Estate", "the five entries are captioned with what they are scoped to");
-  check(top.childCaption === "projects", "and the block below them is the projects");
-  check(top.nodes.length === 1, "which renders the ROOTS, one level — not the whole tree");
-
-  const entered = readMenu(idx, "acme-co");
-  check(entered.kind === "project", "a project in the address is a level of the same menu");
-  check(entered.level === 1, "one deeper than the estate");
-  check(entered.scopeLabel === "acme-co", "captioned with the project, and with nothing repeated");
-  check(entered.childCaption === "subprojects", "the block below is its subprojects");
-  check(entered.nodes.length === 6, "its direct children, one level");
-  check(entered.up !== null && entered.up.toEstate, "with a way up that leaves the tree");
-  check(!entered.showGateway, "AND NO GATEWAY BLOCK — that is the trade, level 0 only");
-  check(entered.here !== null && entered.here.name === "acme-co", "it knows where it is");
-
-  // THE SAME FIVE LABELS, IN THE SAME ORDER, AT BOTH LEVELS. This is the whole
-  // claim of the amendment, and it is one line to check.
-  check(
-    top.entries.map((e) => e.label).join(",") === entered.entries.map((e) => e.label).join(","),
-    "the five entries are the same five words in the same order at both levels",
-  );
-  check(
-    top.entries.every((e, i) => e.to !== entered.entries[i]!.to),
-    "and every one of them points somewhere DIFFERENT — same word, narrower rows",
-  );
-  check(
-    top.entries.every((e) => e.param === ""),
-    "the estate's entries carry no project parameter",
-  );
-  check(
-    entered.entries.every((e) => e.param === "acme-co"),
-    "and a project's entries all carry that project's",
-  );
-
-  const deeper = readMenu(idx, "acme-co.intern");
-  check(deeper.kind === "project", "a dotted path resolves the same way");
-  check(deeper.level === 2, "and is a level deeper again");
-  check(deeper.up !== null && deeper.up.label === "← acme-co", "its way up names the parent");
-  check(deeper.nodes.length === 0, "a leaf has no subproject rows");
-  check(
-    deeper.emptyNote.includes("has none"),
-    "and says so rather than rendering an empty heading",
-  );
-  check(
-    deeper.entries.map((e) => e.label).join(",") === top.entries.map((e) => e.label).join(","),
-    "the same five, two deep",
-  );
-  check(!deeper.showGateway, "and still no gateway block");
-
-  const nonsense = readMenu(idx, "setings");
-  check(nonsense.kind === "unresolved", "a parameter naming nothing is its own state");
-  check(nonsense.meaning.includes("setings"), "and names what was typed");
-  // The way out of an unresolvable address is the menu itself: it falls back to
-  // level 0, so the five estate screens and every project are one click away.
-  check(nonsense.level === 0, "it falls back to the estate's own menu");
-  check(nonsense.showGateway, "gateway block included — the address is not inside a project");
-  check(nonsense.nodes.length === top.nodes.length, "and the projects that DO exist are listed");
-
-  // EMPTY AND UNKNOWN ARE DIFFERENT. An empty tree at the top level is not the
-  // same reading as a project that could not be found.
-  const emptyIdx = buildProjectIndex([]);
-  const emptyTop = readMenu(emptyIdx, undefined);
-  check(emptyTop.kind === "estate", "an empty estate is still the estate");
-  check(emptyTop.nodes.length === 0, "with no project rows");
-  check(
-    emptyTop.emptyNote.includes("empty tree"),
-    "and says hz declares none, rather than rendering a blank block",
-  );
-  check(
-    emptyTop.entries.length === 5,
-    "and the five screens are still there — an estate with no project still has rows",
-  );
-  check(
-    readMenu(emptyIdx, "anything").kind === "unresolved",
-    "while a named project that is not there is unresolved, not empty",
-  );
-
-  // The four readings are four different sentences. A collapse into two would
-  // pass every type check.
-  check(
-    new Set([top.meaning, entered.meaning, deeper.meaning, nonsense.meaning]).size === 4,
-    "the four menu readings are four different sentences",
-  );
+  const idx = buildProjectIndex([...EXAMPLE, p("eu", "client-a")]);
+  const names = (n: string) => ancestry(idx, idx.byName.get(n)!).map((r) => r.name).join(" › ");
+  check(names("acme-co") === "acme-co", "a root is one crumb");
+  check(names("client-a") === "acme-co › client-a", "a child is two");
+  check(names("eu") === "acme-co › client-a › eu", "a grandchild is three, root first");
 }
 
 // ---------------------------------------------------------------------------
-console.log("· the subtree renders ONE LEVEL, and a node expands in place");
+console.log("· the tree opens along the path to where you are, and nowhere else");
 // ---------------------------------------------------------------------------
 {
-  // Depth 3, which the live estate does not have: acme-co > client-a > eu > fr.
-  const idx = buildProjectIndex([...EXAMPLE, p("eu", "client-a"), p("fr", "eu")]);
+  // Depth 3, which the live projects do not have: acme-co > client-a > eu > fr.
+  const idx = buildProjectIndex([...EXAMPLE, p("eu", "client-a"), p("fr", "eu"), p("redline")]);
+  const shown = (here: string | null, toggled: string[] = []) =>
+    treeRows(idx, here, new Set(toggled)).map((r) => r.route.name);
 
-  const closed = readMenu(idx, undefined);
-  check(closed.nodes.length === 1, "level 0 closed renders ONE row — the single root");
-  check(closed.nodes[0]!.route.name === "acme-co", "which is the root");
-  check(closed.nodes[0]!.hasChildren, "it is marked as having children");
-  check(!closed.nodes[0]!.expanded, "and it is not expanded by default");
+  const none = treeRows(idx, null, new Set());
   check(
-    closed.nodes[0]!.toggleLabel.includes("Show") && closed.nodes[0]!.toggleLabel.includes("acme-co"),
-    "the disclosure control says what it will do, naming the project",
+    none.map((r) => r.route.name).join(",") === "acme-co,redline",
+    "with no project, the tree renders the ROOTS and nothing below them",
   );
+  check(none.every((r) => !r.current), "and highlights nothing");
+  check(none.every((r) => r.depth === 0), "at depth 0");
+  check(
+    none[0]!.hasChildren && !none[0]!.expanded && none[0]!.toggleLabel.includes("Show"),
+    "a closed node with children offers to show them, naming the project",
+  );
+  check(!none[1]!.hasChildren, "a childless root has no control");
 
-  const open1 = readMenu(idx, undefined, new Set(["acme-co"]));
-  check(open1.nodes.length === 7, "expanding the root adds its six children as rows");
-  check(open1.nodes[0]!.expanded, "the expanded node says it is");
+  const atEu = treeRows(idx, "eu", new Set());
   check(
-    open1.nodes[0]!.toggleLabel.startsWith("Hide"),
-    "and its control now offers the opposite — a toggle that does not say which way it goes is a guess",
+    atEu.map((r) => r.route.name).join(",") ===
+      "acme-co,analytics,client-a,eu,client-b,client-c,intern,storefront,redline",
+    "at eu, every ancestor is open (children in flattenTree's name order), so eu is visible in place — and eu's own children are not",
   );
+  check(atEu.filter((r) => r.current).map((r) => r.route.name).join() === "eu", "exactly eu is current");
+  check(atEu.find((r) => r.route.name === "eu")!.depth === 2, "at the depth it sits");
   check(
-    open1.nodes.slice(1).every((n) => n.indent === 1),
-    "and the children are indented one level, not flattened into the same rank",
-  );
-  check(
-    open1.nodes.filter((n) => n.route.name === "eu").length === 0,
-    "ONE LEVEL AT A TIME: expanding the root does not expand its children too",
-  );
-
-  const open2 = readMenu(idx, undefined, new Set(["acme-co", "client-a"]));
-  const eu = open2.nodes.find((n) => n.route.name === "eu");
-  check(eu !== undefined, "expanding a child adds ITS children, at the depth they sit");
-  check(eu!.indent === 2, "indented two levels");
-  check(eu!.hasChildren && !eu!.expanded, "and itself expandable, recursively");
-  check(
-    open2.nodes.find((n) => n.route.name === "fr") === undefined,
-    "and `fr` stays hidden until `eu` is opened too",
+    atEu.find((r) => r.route.name === "eu")!.hasChildren &&
+      !atEu.find((r) => r.route.name === "eu")!.expanded,
+    "the current node is not opened for you — only the path TO it is",
   );
 
-  // Expanding a node NEVER changes where you are, which is why it may be state.
+  // THE SIDEBAR DOES NOT CHANGE SHAPE: moving between siblings changes the
+  // highlight, not the rows.
   check(
-    open2.nodes.every((n) => n.param !== ""),
-    "every node still carries the parameter that navigates to it",
-  );
-  check(
-    readMenu(idx, "acme-co", new Set(["acme-co"])).level ===
-      readMenu(idx, "acme-co", new Set()).level,
-    "and the level — where you actually are — does not depend on what is expanded",
-  );
-  check(
-    readMenu(idx, "acme-co").entries.map((e) => e.to).join(",") ===
-      readMenu(idx, "acme-co", new Set(["client-a", "eu"])).entries.map((e) => e.to).join(","),
-    "nor do the five entries: expansion is disclosure, not location",
+    shown("client-b").join() === shown("storefront").join() &&
+      shown("intern").join() === shown("storefront").join(),
+    "moving between siblings changes the highlight, not the rows",
   );
 
-  // A node with no children gets no control at all, rather than a dead triangle.
-  const leafNode = readMenu(idx, "acme-co").nodes.find((n) => n.route.name === "intern")!;
-  check(!leafNode.hasChildren, "a leaf node reports no children");
-  check(!leafNode.expanded, "and cannot be expanded");
+  // Toggling flips a node away from the default, in either direction.
+  check(!shown("eu", ["acme-co"]).includes("intern"), "closing an open ancestor hides its children");
+  check(shown(null, ["acme-co"]).includes("intern"), "opening a closed node shows its children");
+  check(!shown(null, ["acme-co"]).includes("eu"), "ONE LEVEL AT A TIME: grandchildren stay closed");
+  check(shown("eu", ["eu"]).includes("fr"), "and the current node opens when asked");
 
-  // Inside a project the block is that project's subtree, at the same one level.
-  const inA = readMenu(idx, "client-a");
-  check(inA.nodes.length === 1 && inA.nodes[0]!.route.name === "eu", "one level, from wherever you are");
-  check(inA.nodes[0]!.indent === 0, "the block's first level is always indent 0, whatever the depth");
-  const inAOpen = readMenu(idx, "client-a", new Set(["eu"]));
-  check(inAOpen.nodes.length === 2, "and it expands the same way inside a project");
-
-  // menuNodes on its own: the same answers, so the recursion is testable apart
-  // from the menu that calls it.
-  const roots = idx.routes.filter((r) => r.depth === 0);
-  check(menuNodes(idx, roots, new Set()).length === 1, "menuNodes renders one level by default");
-  check(menuNodes(idx, roots, new Set(["acme-co"])).length === 7, "and one more per expanded node");
+  const empty = treeRows(buildProjectIndex([]), null, new Set());
+  check(empty.length === 0, "no projects is no rows — the sidebar says so in a sentence");
+  check(treeRows(idx, "nosuch", new Set()).every((r) => !r.current), "an unknown name highlights nothing");
 }
 
 // ---------------------------------------------------------------------------

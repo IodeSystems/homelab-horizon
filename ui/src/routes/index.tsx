@@ -163,7 +163,7 @@ function DashboardPage() {
   return (
     <Box>
       <Typography variant="h5" sx={{ mb: 3, fontWeight: 600 }}>
-        Dashboard
+        Overview
       </Typography>
 
       <Box
@@ -316,6 +316,6 @@ function DashboardPage() {
   );
 }
 
-export const Route = createFileRoute("/dashboard")({
+export const Route = createFileRoute("/")({
   component: DashboardPage,
 });

@@ -20,23 +20,18 @@ import LogoutIcon from "@mui/icons-material/Logout";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useAuthStatus, useLogout } from "../api/auth";
 import { SidebarMenu } from "./model/SidebarMenu";
+import { ScopeBar } from "./model/ScopeBar";
 
 const SIDEBAR_WIDTH = 260;
 
 /**
- * THE SIDEBAR IS ONE RECURSIVE MENU AND THIS FILE NO LONGER HOLDS A LIST.
+ * THE SHELL: wordmark, sidebar, who is signed in, the scope bar, the page.
  *
- * It used to own fourteen gateway entries as an array here, rendered below a
- * project zone — two zones, with `Machines`, `Services` and `Domains` in both of
- * them. All of it now lives in `SidebarMenu` over `readMenu`
- * (`model/projectRoutes.ts`): the five scopable entries at every level, the
- * subtree block, and the ten gateway surfaces AT LEVEL 0 ONLY. The shell keeps
- * what is genuinely the shell's — the wordmark, who is signed in, the read-only
- * banner, and the drawer below `md`.
- *
- * plan/design/ui.md, Decision 1, amended a fourth time, has the trade: Settings
- * from three projects deep is two clicks now instead of one, and the sidebar is
- * twelve lines instead of twenty-four.
+ * plan/design/ui.md, Decision 1, amendment 5. The sidebar (`SidebarMenu`) is
+ * WHERE — the project tree and the gateway group, the same at every scope. The
+ * scope bar (`ScopeBar`) is WHAT — a breadcrumb over the six tabs, drawn here
+ * so the unscoped screens and the project screens carry the same bar. Account
+ * is in the user menu at top right, and only there.
  */
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   return (
@@ -49,7 +44,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       }}
     >
       <Box sx={{ p: 2, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-        <Link to="/dashboard" style={{ textDecoration: "none" }} onClick={onNavigate}>
+        <Link to="/" style={{ textDecoration: "none" }} onClick={onNavigate}>
           <Typography variant="h6" sx={{ fontWeight: 700, color: "#fff", cursor: "pointer" }}>
             Homelab Horizon
           </Typography>
@@ -206,7 +201,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             </Button>
             <Typography
               variant="h6"
-              onClick={() => navigate({ to: "/dashboard" })}
+              onClick={() => navigate({ to: "/" })}
               sx={{ fontWeight: 700, color: "#fff", cursor: "pointer" }}
             >
               Homelab Horizon
@@ -214,6 +209,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           </Box>
         )}
         <ReadOnlyBanner />
+        <ScopeBar />
         {children}
       </Box>
     </Box>

@@ -68,7 +68,7 @@ function ProjectDomains() {
         names.
       </Typography>
 
-      <ScopeControl reading={reading} to="/$project/domains" param={param} />
+      <ScopeControl reading={reading} to="/p/$project/domains" param={param} />
 
       {loading ? (
         <Box sx={{ display: "flex", alignItems: "center", gap: 2, p: 3 }}>
@@ -143,6 +143,6 @@ function ProjectDomains() {
   );
 }
 
-export const Route = createFileRoute("/$project/domains")({
+export const Route = createFileRoute("/p/$project/domains")({
   component: ProjectDomains,
 });

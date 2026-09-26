@@ -1,5 +1,5 @@
 /**
- * `/$project` — what one project declares.
+ * `/p/$project` — what one project declares. Its Overview tab.
  *
  * The overview that `/projects` used to render into a detail panel beside a
  * picker held in `useState`. It is a route now, so "the storefront project" has
@@ -19,7 +19,7 @@
  * a project is declared before anything moves into it.
  */
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Alert, Box, Button, Divider, Paper, Typography } from "@mui/material";
+import { Alert, Box, Chip, Divider, Paper, Typography } from "@mui/material";
 import { useEnvironments, useServices, useVersionDrift } from "../api/hooks";
 import type { EnvironmentResp, InstanceVersion } from "../api/generated-types";
 import {
@@ -32,6 +32,8 @@ import {
   inScope,
   CONFIG_AT,
   GATEWAY_WIDE_SURFACES,
+  type ProjectIndex,
+  type ProjectRoute,
 } from "../components/model/projectRoutes.ts";
 import {
   CannotAskBanner,
@@ -40,6 +42,7 @@ import {
 } from "../components/model/ModelBits";
 import {
   LocationCell,
+  ProjectLink,
   ScopeControl,
   scopeOf,
   useProjectContext,
@@ -132,6 +135,61 @@ function Rung({
   );
 }
 
+/**
+ * What this project is: where it sits, what it inherits, what sits below.
+ *
+ * The breadcrumb above the tabs already names the project and its ancestors;
+ * this is the sentence that says what that position MEANS. The subproject
+ * chips are the way down on the page itself, because below `md` the tree is in
+ * a drawer.
+ */
+function ProjectHeader({ route, index }: { route: ProjectRoute; index: ProjectIndex }) {
+  const children = route.children
+    .map((name) => index.byName.get(name))
+    .filter((r): r is ProjectRoute => r !== undefined);
+  const parent = route.parent ? index.byName.get(route.parent) : undefined;
+  return (
+    <Paper sx={{ p: 2, mb: 2 }}>
+      <Typography variant="body2" sx={{ color: "text.secondary" }}>
+        {parent ? (
+          <>
+            A child of <ProjectLink index={index} route={parent} />. It inherits the package feed
+            and nothing else — not a version, not a machine, not a service.
+          </>
+        ) : (
+          "A root project. It inherits nothing; what it declares cascades down."
+        )}
+        {route.descendants.length > 0
+          ? ` ${route.descendants.length} project${route.descendants.length === 1 ? "" : "s"} sit${route.descendants.length === 1 ? "s" : ""} below it.`
+          : " Nothing sits below it."}
+      </Typography>
+      {children.length > 0 ? (
+        <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", mt: 1, alignItems: "center" }}>
+          <Typography variant="caption" sx={{ color: "text.secondary" }}>
+            subprojects:
+          </Typography>
+          {children.map((c) => (
+            <Link
+              key={c.name}
+              to="/p/$project"
+              params={{ project: c.name }}
+              search={{}}
+              style={{ textDecoration: "none" }}
+            >
+              <Chip
+                size="small"
+                variant="outlined"
+                label={c.name}
+                sx={{ fontFamily: "monospace", cursor: "pointer" }}
+              />
+            </Link>
+          ))}
+        </Box>
+      ) : null}
+    </Paper>
+  );
+}
+
 function ProjectOverview() {
   const { index, resolution, scope, param } = useProjectContext();
   const environments = useEnvironments();
@@ -161,7 +219,8 @@ function ProjectOverview() {
 
   return (
     <Box>
-      <ScopeControl reading={reading} to="/$project" param={param} />
+      <ProjectHeader route={route} index={index} />
+      <ScopeControl reading={reading} to="/p/$project" param={param} />
 
       {source.known ? null : <CannotAskBanner what={source.what} detail={source.detail} />}
 
@@ -267,35 +326,10 @@ function ProjectOverview() {
         )}
       </Paper>
 
-      {/* CONFIG IS HERE, AND NOT A SIXTH NAV ENTRY. The five entries in the menu
-          are the five that exist at every level of it; there is no estate-wide
-          config screen for a level-0 `Config` to point at, and a label that
-          points at a redirect is a support ticket. So it is a named section with
-          a labelled button, next to the pending count that is the reason anyone
-          opens it. See CONFIG_AT. */}
-      <Paper sx={{ p: 2, mt: 2 }}>
-        <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5 }}>
-          Config
-        </Typography>
-        <Typography variant="body2" sx={{ color: "text.secondary", mb: 1.5 }}>
-          Registrations, blessed configs and promotion at this project&apos;s addresses — metadata
-          only, hz holds no key. A machine that has asked to join one of this project&apos;s
-          addresses is waiting there until an admin approves it.
-        </Typography>
-        <Link to={CONFIG_AT} params={{ project: param }} search={{}} style={{ textDecoration: "none" }}>
-          <Button variant="outlined" size="small">
-            Open {route.name}&apos;s config
-          </Button>
-        </Link>
-      </Paper>
-
       {/* WHERE THE BANS-AND-CLIENTS EXPLANATION LIVES: ONCE, HERE.
-          It used to be six lines in the sidebar — two greyed nav entries under a
-          caption, each with a sentence of apology, at every project and every
-          depth. A nav entry to a surface that does not exist at this scope is a
-          door to a room that is not there, so the entries are gone; the fact
-          they were explaining is real, so the explanation stays, on the screen
-          you are on when you wonder, with a link to the rows. */}
+          A tab is a surface that exists at every scope, and these two do not,
+          so they are not tabs; the fact is real, so it is explained here, on
+          the screen you are on when you wonder, with a link to the rows. */}
       <Paper variant="outlined" sx={{ p: 2, mt: 2, bgcolor: "transparent" }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
           Gateway-wide, not scoped to {route.name}
@@ -303,7 +337,7 @@ function ProjectOverview() {
         <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
           Two surfaces hz cannot narrow to a project, because the record has no link to follow.
           They are not missing from this project — they are not per-project at all, and every one of
-          them is on its own estate screen.
+          them is in the Gateway group of the sidebar.
         </Typography>
         {GATEWAY_WIDE_SURFACES.map((g) => (
           <Box key={g.label} sx={{ mb: 1 }}>
@@ -318,6 +352,6 @@ function ProjectOverview() {
   );
 }
 
-export const Route = createFileRoute("/$project/")({
+export const Route = createFileRoute("/p/$project/")({
   component: ProjectOverview,
 });

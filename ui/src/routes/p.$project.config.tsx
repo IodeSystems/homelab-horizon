@@ -51,7 +51,7 @@ function ProjectConfig() {
         hz cannot read them — use <code>hz config</code> to decrypt or to approve.
       </Typography>
 
-      <ScopeControl reading={reading} to="/$project/config" param={param} />
+      <ScopeControl reading={reading} to="/p/$project/config" param={param} />
 
       {/* The two panels that LIST registrations are scoped to the projects the
           URL selects. The three that take an address are prefilled with this
@@ -66,6 +66,6 @@ function ProjectConfig() {
   );
 }
 
-export const Route = createFileRoute("/$project/config")({
+export const Route = createFileRoute("/p/$project/config")({
   component: ProjectConfig,
 });
