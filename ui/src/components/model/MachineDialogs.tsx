@@ -125,18 +125,8 @@ export function AddMachineDialog({
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
-      <DialogTitle>Add a machine</DialogTitle>
-      <DialogContent>
-        <Typography variant="body2" sx={{ color: "text.secondary", mb: 1.5 }}>
-          Declaring a machine records identity, owner and segment membership only — no
-          environment, no observed version. Those are coordinates of an instance, and this box may
-          host several at once, from several projects, whatever it is owned by. Declaring it is not
-          enrolling it: hz issues an agent credential separately, once this record exists.
-        </Typography>
-        <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 2 }}>
-          Declaring the box hz itself runs on is <code>hz machine add --self</code>, in the CLI
-          only — only hz knows its own hostname, so this dialog does not offer it.
-        </Typography>
+      <DialogTitle>{project ? `Add machine to ${project}` : "Add machine"}</DialogTitle>
+      <DialogContent sx={{ pt: "8px !important" }}>
         <TextField
           autoFocus
           fullWidth
@@ -146,7 +136,7 @@ export function AddMachineDialog({
           onKeyDown={(e) => {
             if (e.key === "Enter" && canSubmit) submit();
           }}
-          helperText="What the box calls itself, and what its agent credential is keyed by."
+          helperText="The box's hostname. The box hz runs on is `hz machine add --self` in the CLI."
           sx={{ mb: 2 }}
           slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
         />
@@ -156,7 +146,7 @@ export function AddMachineDialog({
           label="Owner"
           value={owner}
           onChange={(e) => setOwner(e.target.value)}
-          helperText="The project responsible for this machine — global, or one project. Responsibility, not placement: the box may still host instances of others, which show as crossings on their tabs."
+          helperText="Who is responsible for it. It can still run other projects' instances."
           sx={{ mb: 2 }}
         >
           <MenuItem value="">global</MenuItem>
@@ -180,8 +170,8 @@ export function AddMachineDialog({
           }}
           helperText={
             declared.length === 0
-              ? "hz declares no segment yet. Left empty, this box's membership is a label naming nothing — that is legal, and different from an unresolved one."
-              : "Usually one. More than one is legal — the case this model exists to make visible, such as a CI runner that deploys two projects."
+              ? "No segments declared yet — optional."
+              : "Usually one. More than one needs a note."
           }
           sx={{ mb: 2 }}
         >
@@ -200,8 +190,8 @@ export function AddMachineDialog({
           onChange={(e) => setNote(e.target.value)}
           helperText={
             noteRequired
-              ? "Required with more than one segment: forwarding between a machine's own segment interfaces is denied by default, so a box that bridges them is a declared exception and has to say why."
-              : "Optional on a single-segment machine — there is nothing to explain."
+              ? "Why this box bridges segments — required."
+              : "Optional."
           }
           sx={{ mb: 2 }}
         />
@@ -274,7 +264,7 @@ export function EditMachineDialog({
           label="Owner"
           value={owner}
           onChange={(e) => setOwner(e.target.value)}
-          helperText="Responsibility, not placement — changing it moves no rendered artifact and no projection. Instances of other projects already placed here keep running, and read as crossings."
+          helperText="Who is responsible for it. Changing it moves nothing that runs."
           sx={{ mb: 2, mt: 1 }}
         >
           <MenuItem value="">global</MenuItem>
