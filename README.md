@@ -1412,6 +1412,15 @@ instruction.
 Re-running the install command does the same thing immediately, and
 `--no-auto-update` skips the timer.
 
+**When hz itself is down.** In push mode hz is the only notifier, so an
+outage that takes out the whole gateway tells nobody. Give the vantage an ntfy
+topic of its own: write the topic URL to `/etc/hz-probe/ntfy-url` (root, 0600
+— the topic is a capability, treat it like the token) and re-run
+`sudo hz-probe install`, which passes it as a systemd credential. After
+`--ntfy-after` consecutive failed reports (default 3) it posts one alert, and
+one recovery notice when a report succeeds again. No file means off. Pull mode
+ignores it: the agent never dials hz there, so it cannot see hz down.
+
 The Checks page lists each vantage with its own state, which the check rows
 cannot carry: a vantage hz has never reached produces no rows at all, and that
 reads identically to one nobody configured.
