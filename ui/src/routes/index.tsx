@@ -1,23 +1,55 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import {
-  Alert,
-  Box,
-  CircularProgress,
-  Paper,
-  Typography,
-} from "@mui/material";
-import DnsIcon from "@mui/icons-material/Dns";
-import LanguageIcon from "@mui/icons-material/Language";
-import PublicIcon from "@mui/icons-material/Public";
-import PeopleIcon from "@mui/icons-material/People";
-import MonitorHeartIcon from "@mui/icons-material/MonitorHeart";
+/**
+ * Overview — "is anything waiting on me?" (plan/design/ui.md, "The screens").
+ *
+ * plan/plan.md, Tier 2: "Dashboard → the ranked queue. Needs no new backend
+ * record: `rankFleet` in the drift screen already implements the ordering.
+ * The current Dashboard is four numbers that never change and never need
+ * you." This route is that replacement.
+ *
+ * Five reads hz already serves are merged into one ranked queue
+ * (`../components/overview/queue.ts`):
+ *
+ *   - the fleet's own report (`useAgentObserved`, via `rankFleet` — unchanged
+ *     from the drift screen)
+ *   - registrations nobody has approved or denied yet (`useCMRegistrations`)
+ *   - a halted DNS sync (`useDNSDriftStatus`)
+ *   - a failing or warning health check (`useChecks`)
+ *   - an edit that has not been through Sync yet (`usePendingChanges`)
+ *
+ * CLAUDE.md #2 governs the whole page: each of the five is asked
+ * independently, and "hz has not answered yet" is never presented as "hz
+ * answered and found nothing" — see `queue.ts`'s `Answer<T>` and
+ * `overviewHeadline`, which refuses to say "nothing is waiting" while any
+ * source is still unknown.
+ *
+ * What used to be here — four inventory counts (services, domains, zones,
+ * VPN peers) and a checks progress bar — is gone rather than demoted. They
+ * counted things that do not change on their own and are one click away on
+ * their own screens; the checks bar in particular is now redundant with the
+ * "reporting a fault" tier above, which names the failing check instead of a
+ * fraction. What stayed, demoted below the queue: HAProxy/SSL, because a
+ * proxy that stopped running is a live fault on THIS box, and the peer-sync
+ * tile, because it already carries its own age (last attempt / last success)
+ * rather than a count.
+ */
+import { createFileRoute } from "@tanstack/react-router";
+import { Alert, Box, Paper, Typography } from "@mui/material";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 import InfoIcon from "@mui/icons-material/Info";
 import SyncIcon from "@mui/icons-material/Sync";
 import SyncProblemIcon from "@mui/icons-material/SyncProblem";
-import { useDashboard } from "../api/hooks";
+import {
+  useAgentObserved,
+  useChecks,
+  useCMRegistrations,
+  useDashboard,
+  useDNSDriftStatus,
+  usePendingChanges,
+} from "../api/hooks";
 import type { PeerSyncStatus } from "../api/generated-types";
+import { answerFrom, buildOverview } from "../components/overview/queue";
+import { OverviewQueue } from "../components/overview/OverviewQueue";
 
 function StatusDot({ active }: { active: boolean }) {
   return (
@@ -97,135 +129,45 @@ function PeerSyncTile({ status }: { status: PeerSyncStatus }) {
   );
 }
 
-const cardLinkStyle: React.CSSProperties = {
-  textDecoration: "none",
-  color: "inherit",
-  display: "block",
-  height: "100%",
-};
-
-function StatCard({
-  icon,
-  value,
-  label,
-  clickable,
-}: {
-  icon: React.ReactNode;
-  value: number | string;
-  label: string;
-  clickable?: boolean;
-}) {
-  return (
-    <Paper
-      sx={{
-        p: 3,
-        height: "100%",
-        display: "flex",
-        alignItems: "center",
-        gap: 2,
-        ...(clickable && {
-          cursor: "pointer",
-          transition: "box-shadow 0.2s",
-          "&:hover": { boxShadow: 6 },
-        }),
-      }}
-    >
-      <Box sx={{ color: "primary.main", display: "flex" }}>{icon}</Box>
-      <Box>
-        <Typography variant="h4" sx={{ fontWeight: 700, lineHeight: 1 }}>
-          {value}
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          {label}
-        </Typography>
-      </Box>
-    </Paper>
-  );
-}
-
-function DashboardPage() {
+/**
+ * HAProxy/SSL/version — hz's own live status, demoted under the queue rather
+ * than cut outright. Unlike the inventory counts this replaced, a stopped
+ * HAProxy is a fault on THIS box today, not a count that never moves; it
+ * stays small because it is not part of the five merged sources above (no
+ * hook here answers "who does this affect" the way the queue's rows do).
+ */
+function GatewayStatusStrip() {
   const { data, isLoading, error } = useDashboard();
 
-  if (isLoading) {
+  if (isLoading || error || !data) {
+    // Not part of the ranked queue's own unknown/empty/items contract — this
+    // strip is a demoted extra, so its own failure is a quiet line, not a
+    // banner competing with the queue above for attention.
     return (
-      <Box sx={{ display: "flex", justifyContent: "center", pt: 8 }}>
-        <CircularProgress />
-      </Box>
+      <Typography variant="caption" sx={{ color: "text.secondary" }}>
+        {error ? "hz's own status could not be read." : "Reading hz's own status…"}
+      </Typography>
     );
   }
 
-  if (error) {
-    return <Alert severity="error">Failed to load dashboard: {error.message}</Alert>;
-  }
-
-  if (!data) return null;
-
   return (
     <Box>
-      <Typography variant="h5" sx={{ mb: 3, fontWeight: 600 }}>
-        Overview
-      </Typography>
-
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr", lg: "repeat(4, 1fr)" },
-          gap: 2,
-          mb: 3,
-        }}
-      >
-        <Link to="/services" style={cardLinkStyle}>
-          <StatCard
-            icon={<DnsIcon sx={{ fontSize: 36 }} />}
-            value={data.serviceCount}
-            label="Services"
-            clickable
-          />
-        </Link>
-        <Link to="/domains" style={cardLinkStyle}>
-          <StatCard
-            icon={<LanguageIcon sx={{ fontSize: 36 }} />}
-            value={data.domainCount}
-            label="Domains"
-            clickable
-          />
-        </Link>
-        <Link to="/domains" style={cardLinkStyle}>
-          <StatCard
-            icon={<PublicIcon sx={{ fontSize: 36 }} />}
-            value={data.zoneCount}
-            label="Zones"
-            clickable
-          />
-        </Link>
-        <Link to="/vpn" style={cardLinkStyle}>
-          <StatCard
-            icon={<PeopleIcon sx={{ fontSize: 36 }} />}
-            value={data.peerCount}
-            label="VPN Peers"
-            clickable
-          />
-        </Link>
-      </Box>
-
-      {data.peerSync && <PeerSyncTile status={data.peerSync} />}
-
       <Box
         sx={{
           display: "grid",
           gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" },
           gap: 2,
-          mb: 3,
+          mb: 2,
         }}
       >
-        <Paper sx={{ p: 3, display: "flex", alignItems: "center", gap: 2 }}>
+        <Paper sx={{ p: 2, display: "flex", alignItems: "center", gap: 2 }}>
           {data.haproxyRunning ? (
-            <CheckCircleIcon sx={{ fontSize: 28, color: "success.main" }} />
+            <CheckCircleIcon sx={{ fontSize: 24, color: "success.main" }} />
           ) : (
-            <CancelIcon sx={{ fontSize: 28, color: "error.main" }} />
+            <CancelIcon sx={{ fontSize: 24, color: "error.main" }} />
           )}
           <Box>
-            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
               HAProxy
             </Typography>
             <Typography variant="body2" color="text.secondary">
@@ -235,14 +177,14 @@ function DashboardPage() {
           </Box>
         </Paper>
 
-        <Paper sx={{ p: 3, display: "flex", alignItems: "center", gap: 2 }}>
+        <Paper sx={{ p: 2, display: "flex", alignItems: "center", gap: 2 }}>
           {data.sslEnabled ? (
-            <CheckCircleIcon sx={{ fontSize: 28, color: "success.main" }} />
+            <CheckCircleIcon sx={{ fontSize: 24, color: "success.main" }} />
           ) : (
-            <CancelIcon sx={{ fontSize: 28, color: "error.main" }} />
+            <CancelIcon sx={{ fontSize: 24, color: "error.main" }} />
           )}
           <Box>
-            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
               SSL / HTTPS
             </Typography>
             <Typography variant="body2" color="text.secondary">
@@ -253,69 +195,58 @@ function DashboardPage() {
         </Paper>
       </Box>
 
-      {data.checksTotal > 0 && (
-        <Link to="/checks" style={{ ...cardLinkStyle, height: "auto", marginBottom: 24 }}>
-        <Paper
-          sx={{
-            p: 3,
-            cursor: "pointer",
-            transition: "box-shadow 0.2s",
-            "&:hover": { boxShadow: 6 },
-          }}
-        >
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1.5 }}>
-            <MonitorHeartIcon sx={{ color: "primary.main" }} />
-            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-              Health Checks
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ ml: "auto" }}>
-              {data.checksHealthy} healthy / {data.checksFailed} failed / {data.checksTotal} total
-            </Typography>
-          </Box>
-          <Box
-            sx={{
-              display: "flex",
-              height: 12,
-              borderRadius: 1,
-              overflow: "hidden",
-              bgcolor: "action.hover",
-            }}
-          >
-            {data.checksHealthy > 0 && (
-              <Box
-                sx={{
-                  width: `${(data.checksHealthy / data.checksTotal) * 100}%`,
-                  bgcolor: "success.main",
-                  transition: "width 0.3s",
-                }}
-              />
-            )}
-            {data.checksFailed > 0 && (
-              <Box
-                sx={{
-                  width: `${(data.checksFailed / data.checksTotal) * 100}%`,
-                  bgcolor: "error.main",
-                  transition: "width 0.3s",
-                }}
-              />
-            )}
-          </Box>
-        </Paper>
-        </Link>
-      )}
+      {data.peerSync && <PeerSyncTile status={data.peerSync} />}
 
-      <Paper sx={{ p: 3 }}>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <InfoIcon sx={{ color: "text.secondary" }} />
-          <Typography variant="body2" color="text.secondary">
-            Version: {data.version || "unknown"}
-          </Typography>
-        </Box>
-      </Paper>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        <InfoIcon fontSize="small" sx={{ color: "text.secondary" }} />
+        <Typography variant="body2" color="text.secondary">
+          Version: {data.version || "unknown"}
+        </Typography>
+      </Box>
+    </Box>
+  );
+}
+
+function OverviewPage() {
+  const fleet = useAgentObserved();
+  const cmPending = useCMRegistrations("pending");
+  const dnsDrift = useDNSDriftStatus();
+  const checks = useChecks();
+  const pendingChanges = usePendingChanges();
+
+  const result = buildOverview({
+    // useAgentObserved answers the whole envelope (machines + hz's clock);
+    // the queue only ranks the rows, so the envelope is unwrapped here rather
+    // than teaching queue.ts hz's transport shape.
+    fleet: answerFrom(
+      { ...fleet, data: fleet.data?.machines },
+      "the fleet",
+    ),
+    cmPending: answerFrom(cmPending, "pending registrations"),
+    dnsDrift: answerFrom(dnsDrift, "DNS drift"),
+    checks: answerFrom(checks, "health checks"),
+    pendingChanges: answerFrom(pendingChanges, "pending changes"),
+  });
+
+  return (
+    <Box>
+      <Typography variant="h5" sx={{ mb: 3, fontWeight: 600 }}>
+        Overview
+      </Typography>
+
+      <OverviewQueue result={result} />
+
+      <Typography
+        variant="overline"
+        sx={{ display: "block", color: "text.secondary", mt: 4, mb: 1 }}
+      >
+        hz's own status
+      </Typography>
+      <GatewayStatusStrip />
     </Box>
   );
 }
 
 export const Route = createFileRoute("/")({
-  component: DashboardPage,
+  component: OverviewPage,
 });
