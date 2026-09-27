@@ -39,6 +39,7 @@ import type {
   DomainResp,
   DomainsResponse,
   EnvironmentResp,
+  MachineResp,
   ProjectResp,
   SegmentResp,
   ServiceResp,
@@ -224,6 +225,11 @@ const PENDING: CMRegistrationResp[] = [
   reg("r9", "unapproved-box", "storefront", "staging", "web", "pending"),
 ];
 
+const MACHINES: MachineResp[] = [
+  { name: "gw-1", segments: ["seg-shop", "seg-core"], note: "gateway bridges the two segments", multiHomed: true, enrolled: true, enrolledAt: 1758844800 },
+  { name: "box-2", segments: ["seg-shop"], enrolled: false },
+];
+
 const SEGMENTS: SegmentResp[] = [
   {
     name: "seg-shop",
@@ -264,6 +270,17 @@ function seeded(): QueryClient {
   qc.setQueryData(["cm-registrations", "approved"], APPROVED);
   qc.setQueryData(["cm-registrations", "denied"], []);
   qc.setQueryData(["segments"], SEGMENTS);
+  qc.setQueryData(["machines"], MACHINES);
+  qc.setQueryData(["machines", "projection", "gw-1"], {
+    machine: "gw-1",
+    serial: 0,
+    segments: [],
+    forwards: [],
+    hosts: [],
+    packages: [],
+    feeds: [],
+    units: [],
+  });
   return qc;
 }
 
@@ -452,12 +469,17 @@ console.log("· the tree the router actually built");
 console.log("· a gateway route is never read as a project, and /p/ is never a gateway route");
 // ---------------------------------------------------------------------------
 {
+  // Narrowed to the actual not-found phrasings ("There is no page at…", "There
+  // is no project named…") rather than the bare substring "There is no":
+  // /machines' own content legitimately says "There is no Segment record" once
+  // its query is seeded, and that is the screen, not a missed route.
+  const notFound = (r: Rendered) => r.text.includes("There is no page at") || /There is no project named/.test(r.text);
   const settings = await at("/settings");
-  check(!settings.text.includes("There is no"), "/settings is Settings");
+  check(!notFound(settings), "/settings is Settings");
   const machines = await at("/machines");
-  check(!machines.text.includes("There is no"), "/machines is Machines");
+  check(!notFound(machines), "/machines is Machines");
   const drift = await at("/drift");
-  check(!drift.text.includes("There is no"), "/drift is Drift");
+  check(!notFound(drift), "/drift is Drift");
   // The /p/ prefix is what ends the collision amendment 4 had: a project may be
   // named `settings` without shadowing the Settings screen, and vice versa.
   const pSettings = await at("/p/settings");
@@ -1084,6 +1106,67 @@ console.log("· THE SIDEBAR, RENDERED AND COUNTED");
   check(
     opened.map((n) => `${n.depth}:${n.route.name}`).join(",") === "0:acme-co,1:intern,1:storefront",
     "opening the root adds its children one level down, and no deeper",
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("· MACHINE ADD/RM — the two writes that had no UI caller");
+// ---------------------------------------------------------------------------
+{
+  // ADD belongs on the UNSCOPED screen only. A machine carries no project
+  // (CLAUDE.md invariant 6), so "declaring one inside a project" must not
+  // exist as a control anywhere under /p/.
+  const unscoped = await at("/machines");
+  check(
+    /aria-label="Add a machine"/.test(unscoped.html),
+    "Add is on the unscoped /machines screen",
+  );
+
+  const scoped = await at("/p/storefront/machines");
+  check(
+    !/aria-label="Add a machine"/.test(scoped.html),
+    "and NOT on /p/storefront/machines — that list is derived, not a place to declare one",
+  );
+
+  // SSR renders the dialog CLOSED. MUI's Dialog does not mount its content
+  // when `open` is false, so a phrase that only exists inside the dialog body
+  // is the assertion that it is not sitting open in the initial HTML.
+  check(
+    !unscoped.text.includes("Declaring a machine records identity"),
+    "the add dialog is closed on first render — its body is not in the SSR output",
+  );
+  check(
+    !unscoped.text.includes("hz machine add --self"),
+    "including the --self helper line, which only renders inside the (closed) dialog",
+  );
+
+  // REMOVE belongs on the machine's one page.
+  const detail = await at("/machines/gw-1");
+  check(
+    /aria-label="Remove machine"/.test(detail.html),
+    "Remove is on /machines/$machine",
+  );
+  check(
+    !/aria-label="Remove machine"/.test(scoped.html) && !/aria-label="Remove machine"/.test(unscoped.html),
+    "and nowhere else",
+  );
+  check(
+    !detail.text.includes("Asking hz what this would take"),
+    "the remove dialog is closed on first render too — no dry run has been asked for",
+  );
+  check(
+    !detail.text.includes("also revoke this machine's agent credential"),
+    "and the cascade-revokes-the-credential sentence is not sitting open in the SSR output",
+  );
+
+  // Still no route under /p/$project/machines/, said again here so a change
+  // to this feature specifically cannot reintroduce Decision 1's reason 3 —
+  // the section above already pins it for every derived surface.
+  const router = createRouter({ routeTree, history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const ids = Object.keys(router.routesById) as string[];
+  check(
+    !ids.some((id) => id.startsWith("/p/$project/machines/")),
+    "no route exists under /p/$project/machines/ — a machine still has exactly one page",
   );
 }
 
