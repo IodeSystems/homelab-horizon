@@ -27,6 +27,7 @@ import { Link } from "@tanstack/react-router";
 import {
   Box,
   Chip,
+  IconButton,
   Paper,
   Table,
   TableBody,
@@ -34,8 +35,11 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  Tooltip,
   Typography,
 } from "@mui/material";
+import EditIcon from "@mui/icons-material/Edit";
+import DeleteIcon from "@mui/icons-material/Delete";
 import type { SegmentResp } from "../../api/generated-types";
 import type { ProjectIndex } from "./projectRoutes.ts";
 import { LocationCell } from "./ProjectBits";
@@ -44,12 +48,19 @@ export function SegmentsTable({
   segments,
   index,
   ownerLabel,
+  onEdit,
+  onRemove,
 }: {
   segments: SegmentResp[];
   index: ProjectIndex;
   /** "Location" inside a subtree, "Project" on the estate-wide list. */
   ownerLabel: string;
+  /** Present on both Network screens; omitted only where a caller has no
+   * write path at all, so the column itself never appears half-wired. */
+  onEdit?: (s: SegmentResp) => void;
+  onRemove?: (name: string) => void;
 }) {
+  const writable = onEdit !== undefined || onRemove !== undefined;
   return (
     <TableContainer component={Paper}>
       <Table size="small">
@@ -60,6 +71,7 @@ export function SegmentsTable({
             <TableCell>Range</TableCell>
             <TableCell>Members</TableCell>
             <TableCell>Named it, not addressed</TableCell>
+            {writable ? <TableCell align="right">Actions</TableCell> : null}
           </TableRow>
         </TableHead>
         <TableBody>
@@ -129,6 +141,29 @@ export function SegmentsTable({
                   </>
                 )}
               </TableCell>
+              {writable ? (
+                <TableCell align="right">
+                  {onEdit ? (
+                    <Tooltip title={`Edit ${s.name}`}>
+                      <IconButton size="small" aria-label={`Edit ${s.name}`} onClick={() => onEdit(s)}>
+                        <EditIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  ) : null}
+                  {onRemove ? (
+                    <Tooltip title={`Remove ${s.name}`}>
+                      <IconButton
+                        size="small"
+                        color="error"
+                        aria-label={`Remove ${s.name}`}
+                        onClick={() => onRemove(s.name)}
+                      >
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  ) : null}
+                </TableCell>
+              ) : null}
             </TableRow>
           ))}
         </TableBody>
