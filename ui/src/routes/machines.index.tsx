@@ -19,6 +19,7 @@
  *   nothing.
  *   A segment membership hz cannot resolve is not a machine with no network.
  */
+import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   Alert,
@@ -32,6 +33,7 @@ import {
 import { useMachines, useVersionDrift } from "../api/hooks";
 import type { InstanceVersion, MachineResp } from "../api/generated-types";
 import { readHosting, readInstanceSource, readMultiHomed } from "../components/model/model";
+import { AddMachineDialog } from "../components/model/MachineDialogs";
 import {
   CannotAskBanner,
   Declared,
@@ -167,6 +169,7 @@ function MachineCard({
 function MachinesScreen() {
   const machines = useMachines();
   const drift = useVersionDrift();
+  const [adding, setAdding] = useState(false);
 
   if (machines.isLoading) {
     return (
@@ -202,7 +205,13 @@ function MachinesScreen() {
       <ScreenHeading
         title="Machines"
         blurb="Every box hz declares, its segment memberships, and the instances placed on it. There is no project column: a machine carries no project and no environment — an instance's four-part address carries both, and one machine routinely hosts instances from two projects."
+        right={
+          <Button aria-label="Add a machine" variant="contained" size="small" onClick={() => setAdding(true)}>
+            + Add machine
+          </Button>
+        }
       />
+      <AddMachineDialog open={adding} onClose={() => setAdding(false)} />
 
       {source.known ? null : <CannotAskBanner what={source.what} detail={source.detail} />}
 
