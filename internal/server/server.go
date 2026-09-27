@@ -1163,6 +1163,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// (plan/design/architecture.md, "Instance, not machine, carries the environment").
 	mux.HandleFunc("/api/v1/machines", s.handleAPIMachines)
 	mux.HandleFunc("/api/v1/machines/add", s.handleAPIMachineAdd)
+	mux.HandleFunc("/api/v1/machines/set", s.handleAPIMachineSet)
 	mux.HandleFunc("/api/v1/machines/rm", s.handleAPIMachineRm)
 	// The segments: what a machine's segment NAME resolves to — a project, a
 	// range, an interface and the addressed members on it.

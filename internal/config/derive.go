@@ -623,6 +623,11 @@ type HostPortEntry struct {
 	// Forward marks a reservation made by a layer-4 port forward (the public
 	// port on the gateway, or the backend it points at).
 	Forward bool `json:"forward,omitempty"`
+	// Project is the owning service's Project, copied in at derive time — the
+	// map is rebuilt on every read, so this is a view, never a stored second
+	// answer. "" for infra (haproxy, wireguard, dnsmasq, hz) and for a service
+	// with no project. Allocation ignores it.
+	Project string `json:"project,omitempty"`
 }
 
 // HostPortMap represents all port reservations grouped by host IP
@@ -661,6 +666,7 @@ func (c *Config) DeriveHostPortMap() HostPortMap {
 			Proto:   "tcp",
 			Service: svc.Name,
 			Domain:  svc.PrimaryDomain(),
+			Project: svc.Project,
 		})
 
 		// Blue-green deploy reserves a second "next" backend port for the
@@ -680,6 +686,7 @@ func (c *Config) DeriveHostPortMap() HostPortMap {
 					Proto:   "tcp",
 					Service: svc.Name + " (deploy-next)",
 					Domain:  svc.PrimaryDomain(),
+					Project: svc.Project,
 				})
 			}
 		}
@@ -701,6 +708,7 @@ func (c *Config) DeriveHostPortMap() HostPortMap {
 				Service: svc.Name + " (forward)",
 				Domain:  svc.PrimaryDomain(),
 				Forward: true,
+				Project: svc.Project,
 			})
 			// The gateway half above is reserved whatever the backend says; only
 			// the target half needs an address, so only it resolves.
@@ -711,6 +719,7 @@ func (c *Config) DeriveHostPortMap() HostPortMap {
 					Service: svc.Name + " (forward target)",
 					Domain:  svc.PrimaryDomain(),
 					Forward: true,
+					Project: svc.Project,
 				})
 			}
 		}

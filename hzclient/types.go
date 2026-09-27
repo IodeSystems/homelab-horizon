@@ -90,6 +90,9 @@ type BanRequest struct {
 	IP      string `json:"ip"`
 	Timeout int    `json:"timeout,omitempty"`
 	Reason  string `json:"reason,omitempty"`
+	// Project is honoured on the admin path only; the service-token path this
+	// client uses ignores it, and a service's ban is global.
+	Project string `json:"project,omitempty"`
 }
 
 // UnbanRequest lifts one ban.
@@ -115,6 +118,7 @@ type BanEntry struct {
 	ExpiresAt int64  `json:"expiresAt,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 	Service   string `json:"service,omitempty"`
+	Project   string `json:"project"` // "" is global
 }
 
 // Created reports the moment the ban was placed. Zero means hz sent no
