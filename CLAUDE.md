@@ -92,12 +92,22 @@ Enforced: `configmgr/client_test.go:443 TestCachedBootIsLoud`, `:693
 TestCacheNeverGoesStale` (backdates the cache 3 years with `os.Chtimes`),
 `:470 TestNoCacheAndNoAnswer`, `:487 TestSequenceFloor`.
 
-## 6 · A machine carries no project.
+## 6 · A machine carries no environment.
 
 An environment is a coordinate of an **instance**, never of a box.
-`config.Machine` is exactly `{Name, Segments, Note}`
-(`internal/config/machine.go:42-67`). Enforced:
-`internal/config/machine_test.go:21`, `:40`.
+`config.Machine` is exactly `{Name, Project, Segments, Note}`
+(`internal/config/machine.go:48-78`). Enforced:
+`internal/config/machine_test.go:27 TestAMachineCarriesNoEnvironment` (the
+exact field list, and no environment field under any spelling), `:58`.
+
+**A machine MAY name an owning project — responsibility, not placement.**
+Amended 2026-09-26 (`plan/design/ui.md`, Decision 1 amendment 6). `""` is
+global. A machine owned by one project may host instances of others, and those
+read as crossings. A named owner must be declared (`internal/config/config.go:708`,
+enforced `internal/config/attribution_test.go:34`); removing the project
+re-attributes the machine to global, never deletes it (`attribution_test.go:197`).
+Attribution changes no rendered artifact and no projection:
+`internal/server/attribution_render_test.go TestAttributionChangesNoRenderedArtifact`.
 
 ❓ **Live contradiction, unsettled, the operator's call:** `Segment.Project` is
 REQUIRED (`internal/config/segment.go:68-74`, enforced `:241` and `:448`) while
