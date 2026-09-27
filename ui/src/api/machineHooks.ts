@@ -16,18 +16,9 @@
  * one, and neither mutation invalidates `["projects"]` or anything scoped to a
  * project.
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
 import type { MachineAddReq, MachineResp, MachineRmReq, RemovalResp } from "./generated-types";
-
-/** The declared machines. Same read `useMachines` in `hooks.ts` performs — kept
- * here too so this file has no import back into `hooks.ts` for one query key. */
-export function useMachinesList() {
-  return useQuery({
-    queryKey: ["machines"],
-    queryFn: () => apiFetch<MachineResp[]>("/machines"),
-  });
-}
 
 /**
  * Declare a machine. `self` is never sent from here — CLAUDE.md invariant 7:
