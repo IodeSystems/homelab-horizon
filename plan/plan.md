@@ -407,6 +407,15 @@ collisions, token write-only-ness, and one end-to-end test that runs the real
 poll loop against a live agent and asserts hz's targets arrive without anyone
 pushing them.
 
+**Vantage alert** (merged 2026-09-27, `38eb058`, operator-approved): a push-mode
+vantage that cannot reach hz posts to its OWN ntfy topic after N consecutive
+failed reports (`--ntfy-after`, default 3) and once on recovery — closing the
+gap where a whole-gateway outage notified nobody, because hz is the only other
+notifier. The topic URL is a secret, passed as a systemd credential
+(`/etc/hz-probe/ntfy-url` → `LoadCredential`), never on the command line or in
+logs. Pull mode unchanged (it never dials hz, so cannot see it down).
+**next:** install the new `hz-probe` on the `gcp-usw1` host with the ntfy file.
+
 Two decisions worth keeping:
 
 - **The vantage token is write-only across the API.** `hasToken` says one is
