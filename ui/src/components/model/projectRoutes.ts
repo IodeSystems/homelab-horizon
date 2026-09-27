@@ -442,14 +442,28 @@ export type ProjectNavTo =
   | "/p/$project/domains"
   | "/p/$project/machines"
   | "/p/$project/network"
+  | "/p/$project/vpn"
+  | "/p/$project/checks"
+  | "/p/$project/ports"
+  | "/p/$project/bans"
   | "/p/$project/config";
 
 /** The same six surfaces with no project scope — every row hz has. */
-export type UnscopedNavTo = "/" | "/services" | "/domains" | "/machines" | "/network" | "/config";
+export type UnscopedNavTo =
+  | "/"
+  | "/services"
+  | "/domains"
+  | "/machines"
+  | "/network"
+  | "/vpn"
+  | "/checks"
+  | "/ports"
+  | "/bans"
+  | "/config";
 
 export interface ScopeTab {
   /** The path segment after the scope prefix: "" for Overview. */
-  key: "" | "services" | "domains" | "machines" | "network" | "config";
+  key: "" | "services" | "domains" | "machines" | "network" | "vpn" | "checks" | "ports" | "bans" | "config";
   label: string;
   /** Where this surface lives with no project scope. */
   unscopedTo: UnscopedNavTo;
@@ -540,6 +554,42 @@ export const SCOPE_TABS: ScopeTab[] = [
     projectTo: "/p/$project/network",
     blurb:
       "The segments in scope. A segment carries its project on the record and it is required — a segment owned by nobody is a network nobody is responsible for.",
+    kind: "owned",
+    detailAt: "",
+  },
+  {
+    key: "vpn",
+    label: "VPN",
+    unscopedTo: "/vpn",
+    projectTo: "/p/$project/vpn",
+    blurb: "VPN clients attributed to this scope. Attribution is organisational: every client is in the one wg0.conf.",
+    kind: "owned",
+    detailAt: "",
+  },
+  {
+    key: "checks",
+    label: "Checks",
+    unscopedTo: "/checks",
+    projectTo: "/p/$project/checks",
+    blurb: "Health checks in scope — a service's checks follow the service; a standalone check names its project.",
+    kind: "owned",
+    detailAt: "",
+  },
+  {
+    key: "ports",
+    label: "Ports",
+    unscopedTo: "/ports",
+    projectTo: "/p/$project/ports",
+    blurb: "Ports reserved by this scope's services, and the port exclusions attributed to it.",
+    kind: "owned",
+    detailAt: "",
+  },
+  {
+    key: "bans",
+    label: "Bans",
+    unscopedTo: "/bans",
+    projectTo: "/p/$project/bans",
+    blurb: "IP bans attributed to this scope. Enforcement is gateway-wide: a ban drops the address everywhere.",
     kind: "owned",
     detailAt: "",
   },
@@ -749,7 +799,9 @@ export function treeRows(
 // ---------------------------------------------------------------------------
 
 /**
- * Nine surfaces whose records carry no project and cannot be derived into one.
+ * Five surfaces whose records carry no project and cannot be derived into one.
+ * VPN clients, IP bans, checks and ports left this group in amendment 6: they
+ * are attributable now, so they are tabs.
  *
  * ONE FIXED GROUP IN THE SIDEBAR, AT EVERY DEPTH. Amendment 4 hid it inside a
  * project so the project menu would not repeat it; amendment 5 has no project
@@ -761,16 +813,7 @@ export function treeRows(
  */
 export interface GatewayEntry {
   label: string;
-  to:
-    | "/drift"
-    | "/dns"
-    | "/hosts"
-    | "/vpn"
-    | "/bans"
-    | "/checks"
-    | "/observability"
-    | "/ports"
-    | "/settings";
+  to: "/drift" | "/dns" | "/hosts" | "/observability" | "/settings";
   /** Why it cannot be scoped, for the title attribute and for the doc. */
   why: string;
 }
@@ -779,42 +822,7 @@ export const GATEWAY_NAV: GatewayEntry[] = [
   { label: "Drift", to: "/drift", why: "Every instance hz knows about, across every project at once — the screen exists to compare them." },
   { label: "DNS", to: "/dns", why: "A zone is the gateway's own record; nothing in it names a project." },
   { label: "Hosts", to: "/hosts", why: "A host is an address other records resolve through. It carries no project." },
-  { label: "VPN Clients", to: "/vpn", why: "A client is `{Name, PublicKey, AllowedIPs}` and is not a machine record, so nothing links it to a segment or to a project." },
-  { label: "IP Bans", to: "/bans", why: "A ban's `Service` is free text written by whoever placed it, never checked against a declared service; enforcement is one gateway-wide `filter INPUT … DROP`." },
-  { label: "Checks", to: "/checks", why: "A health check is declared on a service's proxy, and the screen is the gateway's own history." },
   { label: "Observability", to: "/observability", why: "Scrape targets and labels are the gateway's own configuration." },
-  { label: "Ports", to: "/ports", why: "A forwarded port is a fact about the gateway's edge." },
   { label: "Settings", to: "/settings", why: "hz's own configuration. There is one." },
 ];
 
-/**
- * The two surfaces a project would naturally have and hz cannot scope.
- *
- * Not tabs: a tab is a surface that exists at every scope. The explanation
- * lives ONCE, on the project's Overview (`p.$project.index.tsx`), with a link
- * to the gateway screen that holds the rows. `estate.md` Part C has the
- * analysis of what each missing edge would cost.
- */
-export interface GatewayWideSurface {
-  label: string;
-  /** The gateway route that holds these rows unscoped. */
-  gatewayAt: "/bans" | "/vpn";
-  gatewayLabel: string;
-  /** Why hz cannot scope it, in the record's own terms. */
-  why: string;
-}
-
-export const GATEWAY_WIDE_SURFACES: GatewayWideSurface[] = [
-  {
-    label: "IP Bans",
-    gatewayAt: "/bans",
-    gatewayLabel: "IP Bans",
-    why: "A ban is `{IP, Timeout, CreatedAt, ExpiresAt, Reason, Service}` and its Service is free text passed in by whoever placed the ban — never checked against a declared service, so it cannot be followed to a project. Enforcement is one gateway-wide `filter INPUT … DROP`, which is not per-project either. Scoping this needs a second record with a different guarantee, not a filter on this screen.",
-  },
-  {
-    label: "VPN Clients",
-    gatewayAt: "/vpn",
-    gatewayLabel: "VPN Clients",
-    why: "A client is `{Name, PublicKey, AllowedIPs}`. Segment membership names a MACHINE on both sides and a peer is not a machine record, so there is no link from a client to a segment and none from there to a project. The chain has neither of its two links yet.",
-  },
-];

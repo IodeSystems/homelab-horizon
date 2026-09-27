@@ -693,7 +693,7 @@ console.log("· THE SIDEBAR IS WHERE: the same rows at every scope, only the hig
 }
 
 // ---------------------------------------------------------------------------
-console.log("· THE TABS ARE WHAT: the same six at every scope, with a breadcrumb over them");
+console.log("· THE TABS ARE WHAT: the same ten at every scope, with a breadcrumb over them");
 // ---------------------------------------------------------------------------
 {
   const bar = (r: Rendered) =>
@@ -714,11 +714,15 @@ console.log("· THE TABS ARE WHAT: the same six at every scope, with a breadcrum
   const eu = await at("/p/eu/network");
 
   const labels = (r: Rendered) => tabs(r).map(([l]) => l).join(",");
-  check(labels(root) === "Overview,Services,Domains,Machines,Network,Config", `six tabs with no project (got ${labels(root) || "nothing"})`);
+  check(
+    labels(root) === "Overview,Services,Domains,Machines,Network,VPN,Checks,Ports,Bans,Config",
+    `ten tabs with no project (got ${labels(root) || "nothing"})`,
+  );
   check(labels(shop) === labels(root), "the same six in a project");
   check(labels(eu) === labels(root), "and two deep");
   check(
-    tabs(root).map(([, h]) => h).join(",") === "/,/services,/domains,/machines,/network,/config",
+    tabs(root).map(([, h]) => h).join(",") ===
+      "/,/services,/domains,/machines,/network,/vpn,/checks,/ports,/bans,/config",
     `with no project they point at the unscoped screens (got ${tabs(root).map(([, h]) => h).join(",")})`,
   );
   check(
