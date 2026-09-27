@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "pnpm run test:logic && pnpm run test:render && pnpm run test:model && pnpm run test:model-render && pnpm run test:routes && pnpm run test:routes-render && pnpm run test:edge && pnpm run test:health && pnpm run test:hosts && pnpm run test:hosts-render && pnpm run test:assign && pnpm run test:assign-render && pnpm run test:overview && pnpm run test:overview-render && pnpm run test:segments-render && pnpm run test:bans-render && pnpm run test:checks-render && pnpm run test:vpn-render",
+    "test": "pnpm run test:logic && pnpm run test:render && pnpm run test:model && pnpm run test:model-render && pnpm run test:routes && pnpm run test:routes-render && pnpm run test:edge && pnpm run test:health && pnpm run test:hosts && pnpm run test:hosts-render && pnpm run test:assign && pnpm run test:assign-render && pnpm run test:overview && pnpm run test:overview-render && pnpm run test:segments-render && pnpm run test:bans-render && pnpm run test:checks-render && pnpm run test:vpn-render && pnpm run test:ports-render",
     "test:logic": "node src/components/drift/observation.selftest.ts",
     "test:render": "vite build --ssr src/components/drift/render.selftest.tsx --outDir .rendercheck --logLevel warn && node .rendercheck/render.selftest.js",
     "test:model": "node src/components/model/model.selftest.ts",
@@ -25,7 +25,8 @@
     "test:segments-render": "vite build --ssr src/components/model/SegmentDialogs.render.selftest.tsx --outDir .rendercheck-segments --logLevel warn && node .rendercheck-segments/SegmentDialogs.render.selftest.js",
     "test:bans-render": "vite build --ssr src/components/bans.render.selftest.tsx --outDir .rendercheck-bans --logLevel warn && node .rendercheck-bans/bans.render.selftest.js",
     "test:checks-render": "vite build --ssr src/components/checks.render.selftest.tsx --outDir .rendercheck-checks --logLevel warn && node .rendercheck-checks/checks.render.selftest.js",
-    "test:vpn-render": "vite build --ssr src/components/vpn.render.selftest.tsx --outDir .rendercheck-vpn --logLevel warn && node .rendercheck-vpn/vpn.render.selftest.js"
+    "test:vpn-render": "vite build --ssr src/components/vpn.render.selftest.tsx --outDir .rendercheck-vpn --logLevel warn && node .rendercheck-vpn/vpn.render.selftest.js",
+    "test:ports-render": "vite build --ssr src/components/ports.render.selftest.tsx --outDir .rendercheck-ports --logLevel warn && node .rendercheck-ports/ports.render.selftest.js"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
