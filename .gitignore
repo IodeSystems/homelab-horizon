@@ -26,6 +26,7 @@ ui/.rendercheck-routes
 ui/.rendercheck-assign
 ui/.rendercheck-overview
 ui/.rendercheck-segments
+ui/.rendercheck-bans
 docs/node_modules
 docs/package-lock.json
 homelab-horizon-linux
