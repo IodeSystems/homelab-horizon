@@ -77,7 +77,7 @@ minted client-side (`configmgr/crypto.go:283`), segment keys on the box
 key (`internal/acme/acme.go:28-41`), issued TLS private keys
 (`internal/letsencrypt/apply.go:98`), and — in the legacy human-VPN path — both
 halves of a client's WireGuard key, momentarily, to render a config and a QR
-code (`internal/server/handlers_api_vpn.go:49,93-97`).
+code (`internal/server/handlers_api_vpn.go:52,97-101`).
 
 ## 5 · Nothing in the boot path may depend on freshness.
 
@@ -107,7 +107,7 @@ read as crossings. A named owner must be declared (`internal/config/config.go:70
 enforced `internal/config/attribution_test.go:34`); removing the project
 re-attributes the machine to global, never deletes it (`attribution_test.go:197`).
 Attribution changes no rendered artifact and no projection:
-`internal/server/attribution_render_test.go TestAttributionChangesNoRenderedArtifact`.
+`internal/server/attribution_render_test.go:250 TestAttributionChangesNoRenderedArtifact`.
 
 ❓ **Live contradiction, unsettled, the operator's call:** `Segment.Project` is
 REQUIRED (`internal/config/segment.go:68-74`, enforced `:241` and `:448`) while
@@ -116,7 +116,7 @@ cannot be true. It blocks "the VPN becomes a segment row".
 
 ## 7 · Declare, then enrol. A box cannot declare itself.
 
-Enrolment **refuses an undeclared machine** (`handlers_api_machines.go:228-238`)
+Enrolment **refuses an undeclared machine** (`handlers_api_machines.go:263-273`)
 — a box that could declare itself could write itself into the model and then ask
 for a credential, inverting the trust direction. `AddMachine` has exactly one
 production caller (`:120`).
@@ -139,15 +139,15 @@ TestMovingTheHubRewiresEveryPeerSetAndSaysSo` — *"the report is not a second
 answer"*.
 
 ⚠ **False for the legacy human-VPN path**, which does store them:
-`Config.WGPeers` (`internal/config/config.go:429`) and `WGPeer.AllowedIPs`
-(`:572-579`), snapshotted from `wg0.conf` so HA peer-sync can replicate it.
+`Config.WGPeers` (`internal/config/config.go:457`) and `WGPeer.AllowedIPs`
+(`:603-607`), snapshotted from `wg0.conf` so HA peer-sync can replicate it.
 Different subsystem; `architecture.md`'s own "Not true yet" table admits it.
 
 ## 9 · Posture is ordered, and the order is not the name.
 
-`PostureRank` (`internal/config/config.go:669-683`) is the only legal
+`PostureRank` (`internal/config/config.go:735-749`) is the only legal
 comparison. String order sorts `dev < prod < staging`, which would read a
-promotion to prod as a **demotion**. Gate: `CheckPromotion` (`:789-808`).
+promotion to prod as a **demotion**. Gate: `CheckPromotion` (`:856-874`).
 Enforced: `environments_test.go:190`, `promotion_test.go:63`.
 
 ⚠ **Convention, not type.** `Posture` is a plain `string`; nothing stops
@@ -157,8 +157,8 @@ through `PostureRank`.
 ## 10 · A crossing is a declared exception with a reason.
 
 *A reason nobody is obliged to give is a reason nobody gives.* A multi-homed
-machine is **refused without a `Note`** (`internal/config/machine.go:58-66`,
-enforced `:119-122` and `:170-173`; `machine_test.go:91`,
+machine is **refused without a `Note`** (`internal/config/machine.go:69-77`,
+enforced `:130-133` and `:182-185`; `machine_test.go:109`,
 `handlers_api_machines_test.go:99`), and a segment must name its owning project
 (`segment.go:449`) — the owner is what makes another project's machine on it
 read as a crossing.
@@ -217,6 +217,7 @@ when a *rule* breaks rather than a behaviour:
 | `cmd/hz/config_alias_test.go:45,66,89` | `hz config` and the deprecated `hz cm` alias diverging |
 | `internal/server/handlers_api_assign_test.go:209` | a placement-free edit silently unassigning a service |
 | `internal/server/hz_client_script_test.go:13` | `bin/hz-client` drifting from its embedded copy |
+| `internal/server/attribution_render_test.go:250 TestAttributionChangesNoRenderedArtifact` | a project attribution (machine, VPN client, check, ban, port exclusion) changing any rendered artifact or machine projection |
 | `internal/agent/ownership.go` + `TestRemovalIsImpossibleOutsideAClaimedDirectory` | the agent deleting outside a claimed directory — the bound is re-asked immediately before each unlink, never trusted from the plan |
 
 ## 15 · Validate the instrument before trusting silence.
