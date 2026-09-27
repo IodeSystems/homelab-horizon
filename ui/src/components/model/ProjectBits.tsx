@@ -276,9 +276,9 @@ export function ProjectPickList({
  * the whole amendment rests on, applied to the one control that would most
  * obviously have been a toggle.
  *
- * It renders even for a project with no descendants, saying so, rather than
- * disappearing: a control that is sometimes absent teaches the operator that
- * the screen is unpredictable.
+ * One line (amendment 6: flows over prose): what is shown, and — only when
+ * there is something below this project to include or leave out — the link to
+ * the other scope. The sentence explaining it is the chip's title.
  */
 export function ScopeControl({
   reading,
@@ -294,25 +294,19 @@ export function ScopeControl({
     // data-scope-control marks this region so the render check can assert the
     // control ITSELF is a link, rather than being satisfied by some other link
     // to the same URL elsewhere on the page.
-    <Paper data-scope-control variant="outlined" sx={{ p: 1.5, mb: 2, bgcolor: "transparent" }}>
-      <Box sx={{ display: "flex", gap: 1.5, alignItems: "center", flexWrap: "wrap" }}>
-        <Typography variant="caption" sx={{ textTransform: "uppercase", letterSpacing: 0.5, color: "text.secondary" }}>
-          showing
-        </Typography>
-        <Chip size="small" label={reading.headline} sx={{ fontWeight: 700 }} />
+    <Box data-scope-control sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap", mb: 2 }}>
+      <Chip size="small" label={reading.headline} title={reading.meaning} />
+      {reading.sameEitherWay ? null : (
         <Link
           to={to}
           params={{ project: param }}
           search={reading.other === "own" ? { scope: "own" as const } : {}}
-          style={{ color: "inherit" }}
+          style={{ color: "inherit", fontSize: "0.85rem" }}
         >
           {reading.otherLabel}
         </Link>
-      </Box>
-      <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mt: 0.5 }}>
-        {reading.meaning}
-      </Typography>
-    </Paper>
+      )}
+    </Box>
   );
 }
 
