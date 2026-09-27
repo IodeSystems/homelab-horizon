@@ -1293,7 +1293,9 @@ export function useBans() {
 export function useBanIP() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { ip: string; timeout?: number; reason?: string }) =>
+    // project attributes the ban (plan/design/ui.md, Decision 1 amendment 6);
+    // omitted or "" is global. BanRequest.project on the wire.
+    mutationFn: (input: { ip: string; timeout?: number; reason?: string; project?: string }) =>
       apiFetch("/bans/add", {
         method: "POST",
         body: JSON.stringify(input),
