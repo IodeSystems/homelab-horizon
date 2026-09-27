@@ -21,9 +21,17 @@
  * table, the crossing rule and the unaddressed column live in
  * `components/model/SegmentBits.tsx`; this screen is the SELECTION — which rows
  * are in scope — and the sentences that only make sense inside a project.
+ *
+ * ADD defaults its owner to THIS project — the node the operator clicked "+"
+ * from — but the select still lists every declared project: `AddSegment`
+ * accepts any of them (`internal/config/segment.go:452`), not a descendant of
+ * where you are, so restricting the choice here would be a UI rule the server
+ * does not have.
  */
+import { useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Alert, Box, CircularProgress, Typography } from "@mui/material";
+import { Alert, Box, Button, CircularProgress, Typography } from "@mui/material";
+import AddIcon from "@mui/icons-material/Add";
 import { useSegments } from "../api/hooks";
 import { inScope } from "../components/model/projectRoutes.ts";
 import {
@@ -33,10 +41,16 @@ import {
   useProjectContext,
 } from "../components/model/ProjectBits";
 import { ClientsNotHere, SegmentsTable } from "../components/model/SegmentBits";
+import { AddSegmentDialog, EditSegmentDialog, RemoveSegmentDialog } from "../components/model/SegmentDialogs";
+import type { SegmentResp } from "../api/generated-types";
 
 function ProjectSegments() {
   const { index, resolution, scope, param } = useProjectContext();
   const segments = useSegments();
+
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<SegmentResp | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
 
   if (!resolution.found) return null;
   const route = resolution.route;
@@ -47,9 +61,14 @@ function ProjectSegments() {
 
   return (
     <Box>
-      <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5 }}>
-        Network in {route.name}
-      </Typography>
+      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 2, mb: 0.5 }}>
+        <Typography variant="h6" sx={{ fontWeight: 700 }}>
+          Network in {route.name}
+        </Typography>
+        <Button variant="contained" size="small" startIcon={<AddIcon />} onClick={() => setAdding(true)}>
+          Add segment
+        </Button>
+      </Box>
       <Typography variant="body2" sx={{ color: "text.secondary", mb: 2 }}>
         Every segment whose record names this project. A segment must name one — it is the owner
         who is responsible for the network — which is why this screen selects rows directly rather
@@ -81,10 +100,20 @@ function ProjectSegments() {
           the unscoped <Link to="/network">Network</Link> tab lists them all.
         </Alert>
       ) : (
-        <SegmentsTable segments={mine} index={index} ownerLabel={LOCATION_COLUMN_LABEL} />
+        <SegmentsTable
+          segments={mine}
+          index={index}
+          ownerLabel={LOCATION_COLUMN_LABEL}
+          onEdit={setEditing}
+          onRemove={setRemoving}
+        />
       )}
 
       <ClientsNotHere />
+
+      <AddSegmentDialog open={adding} index={index} defaultProject={route.name} onClose={() => setAdding(false)} />
+      <EditSegmentDialog segment={editing} index={index} onClose={() => setEditing(null)} />
+      <RemoveSegmentDialog name={removing} onClose={() => setRemoving(null)} />
     </Box>
   );
 }
