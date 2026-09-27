@@ -14,8 +14,8 @@ const flow = keyframes`
   100% { background-position: 200% 50%; }
 `;
 
-// SyncButton is the single Sync control shared by the Services and Domains
-// pages. When the live config has diverged from the last sync it wraps the
+// SyncButton is the single Sync control, in the app bar on every screen. When
+// the live config has diverged from the last sync it wraps the
 // button in a flowing gradient ring and badges the change count, so either
 // admin can see at a glance that a Sync is due.
 export default function SyncButton() {

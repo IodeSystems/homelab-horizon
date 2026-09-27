@@ -51,7 +51,6 @@ import {
   useProjects,
   useServices,
 } from "../api/hooks";
-import SyncButton from "../components/SyncButton";
 import type { DomainAnalysis, DNSDriftInfoResp } from "../api/types";
 
 /**
@@ -562,7 +561,6 @@ function DomainsPage() {
           Domains
         </Typography>
         <Box sx={{ display: "flex", gap: 1 }}>
-          <SyncButton />
           <Button
             variant="contained"
             startIcon={<AddIcon />}

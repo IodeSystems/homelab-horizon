@@ -1162,6 +1162,25 @@ console.log("· the flat lists survive and gained the project they were blind to
 }
 
 // ---------------------------------------------------------------------------
+console.log("· Sync is in the app bar, on every screen");
+// ---------------------------------------------------------------------------
+{
+  // The operator's report: the Sync button was "VERY hard to find" — it sat on
+  // the unscoped Services, Domains and DNS screens and nowhere else.
+  for (const path of ["/", "/p/storefront", "/p/storefront/machines", "/settings", "/drift"]) {
+    const r = await at(path);
+    // In the app bar = in the same row as the signed-in user button, just
+    // before it: the Sync label appears, and the user button follows it before
+    // any page content does.
+    const sync = r.html.indexOf(">Sync<");
+    const user = r.html.indexOf('aria-label="Signed in as');
+    const pageStart = r.html.indexOf("data-scope-bar") > 0 ? r.html.indexOf("data-scope-bar") : r.html.indexOf("<h", user);
+    check(sync > 0 && user > sync && (pageStart < 0 || pageStart > user), `${path} has the Sync button in its app bar`);
+    check((r.html.match(/>Sync</g) ?? []).length === 1, `${path} has exactly one Sync button`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 console.log("· THE SIDEBAR, RENDERED AND COUNTED");
 // ---------------------------------------------------------------------------
 {
