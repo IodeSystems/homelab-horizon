@@ -1,6 +1,7 @@
 /**
- * Declaring and removing a machine, from `/machines` (add) and
- * `/machines/$machine` (remove) — the two writes `POST /api/v1/machines/{add,rm}`
+ * Declaring, editing and removing a machine, from `/machines` (add),
+ * `/p/$project/machines` (add, owner prefilled) and `/machines/$machine`
+ * (edit owner/note, remove) — the writes `POST /api/v1/machines/{add,set,rm}`
  * had no UI caller for.
  *
  * In its own file rather than folded into `hooks.ts`, alongside `MachineDialogs.tsx`
@@ -12,13 +13,21 @@
  * and writes nothing, so the dialog can show the server's own answer before
  * offering the button that acts on it.
  *
- * A machine carries no project (CLAUDE.md invariant 6), so nothing here takes
- * one, and neither mutation invalidates `["projects"]` or anything scoped to a
- * project.
+ * A machine carries no ENVIRONMENT (CLAUDE.md invariant 6) but MAY carry an
+ * owning project — responsibility, not placement, amended 2026-09-26 — so
+ * `useAddMachine` and `useSetMachine` do take one. Neither invalidates
+ * `["projects"]`: attribution changes no project record, only the machine's
+ * own.
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
-import type { MachineAddReq, MachineResp, MachineRmReq, RemovalResp } from "./generated-types";
+import type {
+  MachineAddReq,
+  MachineResp,
+  MachineRmReq,
+  MachineSetReq,
+  RemovalResp,
+} from "./generated-types";
 
 /**
  * Declare a machine. `self` is never sent from here — CLAUDE.md invariant 7:
@@ -35,6 +44,24 @@ export function useAddMachine() {
       qc.invalidateQueries({ queryKey: ["machines"] });
       qc.invalidateQueries({ queryKey: ["segments"] });
       qc.invalidateQueries({ queryKey: ["pending"] });
+    },
+  });
+}
+
+/**
+ * Edit a declared machine's owner and/or note in place — `machines/set`,
+ * which exists so an owner can change without remove-and-re-add (which would
+ * cost the box its agent credential). `project: ""` clears the owner to
+ * global; the server refuses clearing the note of a multi-homed machine
+ * (`internal/config/machine.go`), surfaced verbatim on error.
+ */
+export function useSetMachine() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: MachineSetReq) =>
+      apiFetch<MachineResp>("/machines/set", { method: "POST", body: JSON.stringify(req) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["machines"] });
     },
   });
 }

@@ -225,9 +225,14 @@ const PENDING: CMRegistrationResp[] = [
   reg("r9", "unapproved-box", "storefront", "staging", "web", "pending"),
 ];
 
+// gw-1 stays global — a machine two projects' instances run on, owned by
+// neither, per invariant 6's own example. box-2 is now OWNED by storefront
+// (invariant 6, amended: a machine may name a responsible project), which is
+// the fixture's one "owned" row; gw-1 at storefront and intern is the
+// "crossing" one — hosts an in-scope instance, owned elsewhere (here, global).
 const MACHINES: MachineResp[] = [
   { name: "gw-1", project: "", segments: ["seg-shop", "seg-core"], note: "gateway bridges the two segments", multiHomed: true, enrolled: true, enrolledAt: 1758844800 },
-  { name: "box-2", project: "", segments: ["seg-shop"], enrolled: false },
+  { name: "box-2", project: "storefront", segments: ["seg-shop"], enrolled: false },
 ];
 
 const SEGMENTS: SegmentResp[] = [
@@ -932,21 +937,33 @@ console.log("· A DERIVED SURFACE HAS A LIST ROUTE AND NEVER A DETAIL ROUTE");
   );
 }
 
+/** The single `<tr>...</tr>` naming `marker`, so a check about one row cannot
+ * be satisfied by the row after it — rows are short and "storefront and
+ * hosts…" fits inside a loose character window that also reaches the next
+ * `<tr>`. */
+function rowHtml(html: string, marker: string): string {
+  const at = html.indexOf(marker);
+  if (at < 0) return "";
+  const start = html.lastIndexOf("<tr", at);
+  const end = html.indexOf("</tr>", at);
+  return start < 0 || end < 0 ? "" : html.slice(start, end);
+}
+
 // ---------------------------------------------------------------------------
-console.log("· /p/$project/machines is DERIVED, approved-only, and honest when empty");
+console.log("· /p/$project/machines: OWNED, plus CROSSING, approved-only");
 // ---------------------------------------------------------------------------
 {
   const storefront = await at("/p/storefront/machines");
-  check(storefront.text.includes("Machines running storefront"), "the screen renders under the project");
-  check(storefront.text.includes("gw-1"), "the shared box is listed");
-  check(storefront.text.includes("box-2"), "and so is the project's own box");
+  check(storefront.text.includes("Machines in storefront"), "the screen renders under the project");
+  check(storefront.text.includes("gw-1"), "the crossing box (global, hosts a storefront instance) is listed");
+  check(storefront.text.includes("box-2"), "and so is the project's own — OWNED — box");
 
   // THE TRAP. `useCMRegistrations()` with no argument asks for PENDING and
   // keys itself "all". `unapproved-box` exists only in the pending list; if it
   // is on this screen, the screen is listing exactly the boxes nobody approved.
   check(
     !/Machine[\s\S]*?unapproved-box[\s\S]*?Waiting for approval/.test(storefront.text),
-    "a box whose registration is PENDING is not in the derived list",
+    "a box whose registration is PENDING is not on the list",
   );
   check(
     storefront.text.includes("Waiting for approval"),
@@ -958,40 +975,60 @@ console.log("· /p/$project/machines is DERIVED, approved-only, and honest when 
     "and if it is named at all, it is named under that heading",
   );
 
-  // THE SUBPROJECT LABEL ON THE TABLE — the phrase the amendment asks for, and
-  // what makes a projection of a shared box readable as one.
+  // OWNER, NOT LOCATION — a machine is attributed responsibility, and the
+  // column says so in its own word.
   check(
-    /<th[^>]*>Location<\/th>/.test(storefront.html),
-    "the derived list carries the Location column",
+    /<th[^>]*>Owner<\/th>/.test(storefront.html),
+    "the list carries an Owner column",
   );
   check(
-    /box-2[\s\S]{0,400}?storefront/.test(storefront.text),
-    "and each row names the project whose instance put it there",
+    !/<th[^>]*>Location<\/th>/.test(storefront.html),
+    "not a Location one — a machine is owned, not placed",
+  );
+  const box2Row = rowHtml(storefront.html, ">box-2<");
+  check(box2Row.includes("storefront"), "box-2's own row names its owner");
+  check(!/crossing/i.test(box2Row), "and is NOT flagged a crossing — storefront owns it");
+
+  // gw-1 IS a crossing here: owned globally, not by storefront, and on the
+  // list only because it hosts storefront's own instance.
+  const gw1AtStorefront = rowHtml(storefront.html, ">gw-1<");
+  check(/global/.test(gw1AtStorefront), "gw-1's row names its real owner — global — not storefront");
+  check(/crossing/i.test(gw1AtStorefront), "and IS flagged a crossing: owned elsewhere, hosting this project's instance anyway");
+  check(
+    /hosts storefront\/staging\/web/.test(gw1AtStorefront),
+    "and names WHICH of this project's addresses put it here",
+  );
+  check(
+    !/hosts intern\/prod\/git/.test(gw1AtStorefront),
+    "and not another project's address, which would be the shared box leaking across",
   );
 
-  // gw-1 is on storefront AND on intern, carrying no project in either.
+  // gw-1 is a crossing on intern too — same box, a different project's reason.
   const intern = await at("/p/intern/machines");
   check(intern.text.includes("gw-1"), "the same box appears under another project it hosts");
   check(
     !intern.text.includes("box-2"),
-    "and a box with nothing of this project's on it does not",
+    "and a box neither owned by intern nor hosting anything of intern's does not",
   );
+  const gw1AtIntern = rowHtml(intern.html, ">gw-1<");
   check(
-    /gw-1[\s\S]{0,600}intern\/prod\/git/.test(intern.text),
+    /hosts intern\/prod\/git/.test(gw1AtIntern),
     "each row says WHICH of its instances put it there — this project's addresses, not all of them",
   );
   check(
-    !/gw-1[\s\S]{0,600}storefront\/staging\/web/.test(intern.text),
+    !/hosts storefront\/staging\/web/.test(gw1AtIntern),
     "and not the other project's, which would be the shared box leaking across",
   );
 
-  // Empty, which is the state the live gateway is in today: all seven cm_*
-  // tables are empty, so every project's list here is correctly empty.
+  // Empty: acme-co owns nothing (box-2 is storefront's, gw-1 is global) and
+  // nothing of acme-co's OWN runs anywhere, so its own-scope tab is the
+  // flows-over-prose empty state, not a table.
   const empty = await at("/p/acme-co/machines?scope=own");
   check(
-    empty.text.includes("runs on any box yet"),
-    "a project with no instance of its own says so in words",
+    empty.text.includes("No machines attributed to acme-co."),
+    "a project attributed nothing says so in exactly the operator's own words",
   );
+  check(/data-empty-row/.test(empty.html), "as the one-line EmptyRow, not a paragraph");
   check(
     !/<th[^>]*>Machine<\/th>/.test(empty.html),
     "rather than rendering an empty table the operator has to interpret",
@@ -1001,8 +1038,17 @@ console.log("· /p/$project/machines is DERIVED, approved-only, and honest when 
     "— and the table IS rendered when there are rows, so that check can fail",
   );
   check(
-    empty.links.some((h) => h.endsWith("/machines")),
-    "and points at the machines hz does declare",
+    /data-empty-row[\s\S]*?Add machine/.test(empty.html),
+    "and the empty row carries the Add action — the operator's own flow",
+  );
+
+  // ADD IS NOW ON THE SCOPED TAB TOO (amendment 6 reverses this from before
+  // machines could be owned): the row is prefilled with the project you're
+  // on, never assumed silently — see MACHINE ADD/RM below for the prefill
+  // itself, which only a look at the dialog's `project` prop can show.
+  check(
+    storefront.text.includes("Add machine"),
+    "Add is offered on a project's own Machines tab now that a machine can be owned by one",
   );
 }
 
@@ -1168,12 +1214,14 @@ console.log("· THE SIDEBAR, RENDERED AND COUNTED");
 }
 
 // ---------------------------------------------------------------------------
-console.log("· MACHINE ADD/RM — the two writes that had no UI caller");
+console.log("· MACHINE ADD/SET/RM — the writes that had no UI caller");
 // ---------------------------------------------------------------------------
 {
-  // ADD belongs on the UNSCOPED screen only. A machine carries no project
-  // (CLAUDE.md invariant 6), so "declaring one inside a project" must not
-  // exist as a control anywhere under /p/.
+  // ADD is on BOTH the unscoped screen and a project's own tab now (amendment
+  // 6: a machine may name an owning project) — checked by visible text, the
+  // same way every other `AddButton`-driven tab is (`FlowBits.tsx`'s
+  // `AddButton` carries no `aria-label` unless a caller passes one, and none
+  // here do, matching `network.tsx`/`domains.tsx`/`services.tsx`).
   const unscoped = await at("/machines");
   check(
     /aria-label="Add a machine"/.test(unscoped.html),
@@ -1182,8 +1230,8 @@ console.log("· MACHINE ADD/RM — the two writes that had no UI caller");
 
   const scoped = await at("/p/storefront/machines");
   check(
-    !/aria-label="Add a machine"/.test(scoped.html),
-    "and NOT on /p/storefront/machines — that list is derived, not a place to declare one",
+    scoped.text.includes("Add machine"),
+    "and ALSO on /p/storefront/machines now that a machine can be owned by one",
   );
 
   // SSR renders the dialog CLOSED. MUI's Dialog does not mount its content
@@ -1197,16 +1245,28 @@ console.log("· MACHINE ADD/RM — the two writes that had no UI caller");
     !unscoped.text.includes("hz machine add --self"),
     "including the --self helper line, which only renders inside the (closed) dialog",
   );
+  check(
+    !scoped.text.includes("Declaring a machine records identity"),
+    "closed on the scoped tab too",
+  );
 
-  // REMOVE belongs on the machine's one page.
+  // REMOVE and EDIT (owner + note) belong on the machine's one page.
   const detail = await at("/machines/gw-1");
   check(
     /aria-label="Remove machine"/.test(detail.html),
     "Remove is on /machines/$machine",
   );
   check(
+    /aria-label="Edit owner"/.test(detail.html),
+    "so is the owner edit control",
+  );
+  check(
     !/aria-label="Remove machine"/.test(scoped.html) && !/aria-label="Remove machine"/.test(unscoped.html),
-    "and nowhere else",
+    "Remove is nowhere else",
+  );
+  check(
+    !/aria-label="Edit owner"/.test(scoped.html) && !/aria-label="Edit owner"/.test(unscoped.html),
+    "and neither is Edit — both live on the one page a machine has",
   );
   check(
     !detail.text.includes("Asking hz what this would take"),
@@ -1215,6 +1275,10 @@ console.log("· MACHINE ADD/RM — the two writes that had no UI caller");
   check(
     !detail.text.includes("also revoke this machine's agent credential"),
     "and the cascade-revokes-the-credential sentence is not sitting open in the SSR output",
+  );
+  check(
+    !detail.text.includes("Responsibility, not placement"),
+    "the edit dialog's own body is closed too — its helper text is not in the SSR output",
   );
 
   // Still no route under /p/$project/machines/, said again here so a change

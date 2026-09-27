@@ -361,3 +361,49 @@ export const LOCATION_COLUMN_LABEL = "Location";
 
 /** The header the two FLAT lists use — they name a project, not a location. */
 export const PROJECT_COLUMN_LABEL = "Project";
+
+// ---------------------------------------------------------------------------
+// Owner (a MACHINE's attribution — responsibility, not placement)
+// ---------------------------------------------------------------------------
+
+/**
+ * Which project a MACHINE is owned by. Not `LocationCell`: `readLocation`'s
+ * empty case means "this row predates attribution" (a `Service` with no
+ * `Project` field at all) and says "not assigned to any project" —
+ * `Machine.Project` is never absent, it DEFAULTS to `""`, and `""` is global:
+ * a deliberate, permanent value (CLAUDE.md invariant 6, amended 2026-09-26 —
+ * "responsibility, not placement"). Rendering a global machine through
+ * `LocationCell` would report the operator's own choice as an oversight.
+ */
+export function OwnerCell({
+  index,
+  project,
+}: {
+  index: ProjectIndex;
+  project: string | undefined | null;
+}) {
+  const name = (project ?? "").trim();
+  if (name === "") {
+    return (
+      <Typography variant="body2" sx={{ fontFamily: "monospace", color: "text.secondary" }}>
+        global
+      </Typography>
+    );
+  }
+  const route = index.byName.get(name);
+  return (
+    <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+      {route ? (
+        <ProjectLink index={index} route={route} />
+      ) : (
+        <Box component="span" sx={{ color: "warning.main" }}>
+          {name}
+        </Box>
+      )}
+    </Typography>
+  );
+}
+
+/** The header a machine's owner column uses — "Owner", never "Location": a
+ * machine is attributed responsibility, not placed somewhere. */
+export const OWNER_COLUMN_LABEL = "Owner";
