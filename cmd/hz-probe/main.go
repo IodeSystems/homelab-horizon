@@ -63,6 +63,12 @@ SERVE FLAGS
   --state PATH          target cache, so a restart keeps probing while hz is down
   --tls-cert PATH       TLS certificate (default /etc/hz-probe/cert.pem)
   --tls-key PATH        TLS key (default /etc/hz-probe/key.pem)
+  --ntfy-url-file PATH  ntfy topic URL to alert when this host cannot reach
+                        hz (default /etc/hz-probe/ntfy-url; absent = off).
+                        Push mode only: in pull mode the agent never dials hz
+                        and cannot see it down.
+  --ntfy-url URL        the URL inline; prefer --ntfy-url-file or HZ_PROBE_NTFY_URL
+  --ntfy-after N        consecutive failed reports before alerting (default 3)
 
 INSTALL FLAGS
   the serve flags, plus:
@@ -89,6 +95,13 @@ THE TOKEN
   Resolved in order: --token-file, HZ_PROBE_TOKEN, --token. A file and the
   environment both keep it off the process list. 'install' mints one if the
   file does not exist.
+
+VANTAGE-SIDE ALERTING
+  In push mode hz is the only notifier, so an outage that takes hz down
+  tells nobody. With an ntfy topic URL (resolved like the token: file,
+  HZ_PROBE_NTFY_URL, --ntfy-url) the agent posts once after --ntfy-after
+  failed reports, and once more when a report succeeds again. The URL is a
+  secret; install passes it as a systemd credential when the file exists.
 
 SERVE TLS
   The token crosses the public internet on every poll. With a domain, use a

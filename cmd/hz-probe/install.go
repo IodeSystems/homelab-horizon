@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -117,6 +118,18 @@ func generateUnit(f *serveFlags, execPath string) string {
 	// agent is reachable, which is the confusion this mode exists to remove.
 	if f.pushMode() {
 		args = append(args, "--push-to", f.pushTo)
+		// The ntfy URL is a secret like the token, so it travels the same
+		// way: a credential, never the command line. Only when the file is
+		// there — a LoadCredential naming a missing file stops the service
+		// starting. Otherwise it is disabled explicitly, so a file created
+		// later (root-owned, unreadable to the DynamicUser) cannot turn a
+		// working agent into one that fails to start.
+		if fileExists(f.ntfyFile) {
+			creds = append(creds, "LoadCredential=ntfy-url:"+f.ntfyFile)
+			args = append(args, "--ntfy-url-file", "%d/ntfy-url", "--ntfy-after", strconv.Itoa(f.ntfyAfter))
+		} else {
+			args = append(args, "--ntfy-url-file=")
+		}
 		return render(args, creds, execPath)
 	}
 
@@ -186,6 +199,13 @@ func runInstall(args []string) error {
 	if *dryRun {
 		fmt.Println("DRY RUN: no changes made.")
 		fmt.Printf("Would mint a token at %s if absent\n", f.tokenFile)
+		if f.pushMode() {
+			if fileExists(f.ntfyFile) {
+				fmt.Printf("Would pass the ntfy URL in %s as a credential (alert after %d failed reports)\n", f.ntfyFile, f.ntfyAfter)
+			} else {
+				fmt.Printf("No ntfy URL at %s: no alert if this host cannot reach hz\n", f.ntfyFile)
+			}
+		}
 		fmt.Printf("Would write %s:\n\n%s", unitPath, unit)
 		return nil
 	}
