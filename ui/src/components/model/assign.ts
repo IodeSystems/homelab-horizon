@@ -251,7 +251,7 @@ export function readPlacement(
       state: "unassigned",
       project: "",
       rung: e,
-      rungLabel: orphanRung ? `names the rung "${e}" with no project` : "no project, no rung",
+      rungLabel: orphanRung ? `names the rung "${e}" with no project` : "global",
       meaning: orphanRung
         ? `This service names the rung "${e}" and no project. An environment name is unique per project, so that rung resolves against nothing — assign it a project, or clear the rung.`
         : "This service names no project at all. That is explicitly legal and permanent — every service in a config that predates the tree is in that state — and it is why the flat list exists: a project-scoped screen structurally cannot render it. Assign it whenever you want it on the tree.",
@@ -353,7 +353,7 @@ export function samePlacement(a: Placement, b: Placement): boolean {
 export function placementLabel(p: Placement): string {
   const project = p.project.trim();
   const env = p.environment.trim();
-  if (project === "") return "no project";
+  if (project === "") return "global";
   return env === "" ? project : `${project}/${env}`;
 }
 

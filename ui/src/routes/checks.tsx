@@ -44,7 +44,8 @@ import { ChecksHistory } from "../components/ChecksHistory";
 import { RemoteVantages } from "../components/RemoteVantages";
 import { EdgeDiagnosis, deviceLabel } from "../components/EdgeDiagnosis";
 import { buildProjectIndex } from "../components/model/projectRoutes.ts";
-import { PROJECT_COLUMN_LABEL, ProjectLink } from "../components/model/ProjectBits";
+import { PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
+import { LocationCell } from "../components/model/ProjectBits";
 
 function relativeTime(isoStr: string): string {
   if (!isoStr) return "Never";
@@ -184,7 +185,7 @@ function CheckRow({
           )}
         </TableCell>
         <TableCell>
-          <ProjectCell project={check.project} index={projectIndex} />
+          <LocationCell project={check.project} index={projectIndex} />
         </TableCell>
         <TableCell>
           <Typography variant="body2" color="text.secondary">
@@ -236,46 +237,6 @@ function CheckRow({
         </TableCell>
       </TableRow>
     </>
-  );
-}
-
-/**
- * Which project an unscoped row lives in — "global" for `""`, always (plan/design/ui.md,
- * Decision 1, amendment 6: "Global is "", always labelled "global", never blank").
- * Not `LocationCell`: that component's blank case means "no project ever declared for
- * this record" (a legacy service), a different fact from a check's `""`, which means
- * "attributed to the root, on purpose".
- */
-function ProjectCell({
-  project,
-  index,
-}: {
-  project: string;
-  index: ReturnType<typeof buildProjectIndex>;
-}) {
-  if (!project) {
-    return (
-      <Chip
-        label="global"
-        size="small"
-        variant="outlined"
-        title="Not attributed to any project — the root."
-      />
-    );
-  }
-  const route = index.byName.get(project);
-  return route ? (
-    <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-      <ProjectLink index={index} route={route} />
-    </Typography>
-  ) : (
-    <Typography
-      variant="body2"
-      sx={{ fontFamily: "monospace", color: "warning.main" }}
-      title={`Attributed to "${project}", which hz's project tree does not contain.`}
-    >
-      {project}
-    </Typography>
   );
 }
 

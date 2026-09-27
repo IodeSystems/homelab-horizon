@@ -387,9 +387,9 @@ export function readLocation(
   if (name === "") {
     return {
       assigned: false,
-      label: "no project",
+      label: "global",
       meaning:
-        "This row names no project at all. That is explicitly legal and permanent — every service in a config that predates the tree is in that state — and it is the reason the flat list exists: a project-scoped screen structurally cannot render a row with no project.",
+        "Global: attributed to no project. That is legal and permanent — it is part of the gateway as a whole, and it is listed on the unscoped tab beside every project's rows.",
       linkTo: "",
       tone: "neutral",
     };

@@ -58,8 +58,9 @@ import {
   useVPNPeers,
 } from "../api/hooks";
 import type { AddPeerResponse, RekeyPeerResponse, VPNPeer } from "../api/types";
-import { buildProjectIndex, type ProjectIndex } from "../components/model/projectRoutes.ts";
-import { PROJECT_COLUMN_LABEL, ProjectLink } from "../components/model/ProjectBits";
+import { buildProjectIndex } from "../components/model/projectRoutes.ts";
+import { PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
+import { LocationCell } from "../components/model/ProjectBits";
 
 function StatusDot({ active }: { active: boolean }) {
   return (
@@ -75,32 +76,6 @@ function StatusDot({ active }: { active: boolean }) {
         mr: 1,
       }}
     />
-  );
-}
-
-/**
- * Where a client is attributed, on the unscoped `/vpn` screen. `""` is
- * GLOBAL, not unassigned (plan/design/ui.md, Decision 1, amendment 6:
- * *"Global is "", always labelled 'global', never blank"*) — every peer is
- * sent with a `project` field, so there is no third, legacy-unset state to
- * confuse it with here.
- */
-function VpnProjectCell({ index, project }: { index: ProjectIndex; project: string }) {
-  if (!project) {
-    return (
-      <Typography
-        variant="body2"
-        sx={{ fontFamily: "monospace", color: "text.secondary", fontStyle: "italic" }}
-      >
-        global
-      </Typography>
-    );
-  }
-  const route = index.byName.get(project);
-  return (
-    <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-      {route ? <ProjectLink index={index} route={route} /> : project}
-    </Typography>
   );
 }
 
@@ -879,7 +854,7 @@ function VPNPage() {
                     </Box>
                   </TableCell>
                   <TableCell>
-                    <VpnProjectCell index={index} project={peer.project} />
+                    <LocationCell index={index} project={peer.project} />
                   </TableCell>
                   <TableCell>
                     <Tooltip title="Click to cycle profile">
