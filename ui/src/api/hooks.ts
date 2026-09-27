@@ -302,6 +302,11 @@ export function useServiceIntegration(name: string) {
 export interface ServiceMutationInput {
   originalName?: string;
   name: string;
+  // Sent only on ADD from a project's Services tab. Omitted everywhere else on
+  // purpose: `/services/edit` is full-replace and treats an absent project as
+  // "leave it alone" (ServiceRequest.Project is a pointer), which is what keeps
+  // an edit from silently unassigning the service.
+  project?: string;
   domains: string[];
   // Round-tripped on every edit: the server assigns this from the request,
   // so omitting it would quietly un-park a reserved slot.
