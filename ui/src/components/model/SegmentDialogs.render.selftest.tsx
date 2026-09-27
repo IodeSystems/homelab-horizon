@@ -55,8 +55,8 @@ const PROJECTS: ProjectResp[] = [
 ];
 
 const MACHINES: MachineResp[] = [
-  { name: "gw-1", segments: ["seg-shop"], note: "the shared gateway box" },
-  { name: "box-2", segments: ["seg-shop"] },
+  { name: "gw-1", project: "", segments: ["seg-shop"], note: "the shared gateway box" },
+  { name: "box-2", project: "", segments: ["seg-shop"] },
 ];
 
 const SEGMENTS: SegmentResp[] = [

@@ -383,7 +383,7 @@ func (s *Server) banSyncOnce() {
 	}
 
 	if err := s.updateConfig(func(c *config.Config) {
-		c.IPBans = merged
+		c.IPBans = unattributeUndeclared(c, merged)
 	}); err != nil {
 		slog.Warn("ban-sync: updateConfig", "err", err)
 	}
@@ -395,8 +395,37 @@ func (s *Server) banSyncOnce() {
 	slog.Info("ban-sync: merged bans", "total", len(merged))
 }
 
+// unattributeUndeclared makes global any merged ban whose project this peer
+// does not declare.
+//
+// A ban's project is attribution only, and Save refuses a config naming an
+// undeclared project. Projects arrive by the config pull and bans by this
+// faster loop, so a peer can see a ban attributed to a project its config does
+// not have yet — and without this, that one label would fail the whole write
+// and stop EVERY ban from propagating. Enforcement must not wait on
+// organisation. The label is not lost for good: the primary's config pull
+// replaces IPBans wholesale (mergeRemoteIntoLocal) with the attributed copy.
+func unattributeUndeclared(cfg *config.Config, bans []config.IPBan) []config.IPBan {
+	out := bans
+	copied := false
+	for i, b := range bans {
+		if b.Project == "" || cfg.CheckProjectRef(b.Project) == nil {
+			continue
+		}
+		if !copied {
+			out = append([]config.IPBan(nil), bans...)
+			copied = true
+		}
+		slog.Warn("ban-sync: ban names a project this peer does not declare; recording it as global",
+			"ip", b.IP, "project", b.Project)
+		out[i].Project = ""
+	}
+	return out
+}
+
 // mergeBansLWW merges two ban lists using last-write-wins per IP.
-// For each IP, the ban with the highest CreatedAt wins.
+// For each IP, the ban with the highest CreatedAt wins. The whole record
+// travels, so a ban's Project is carried with it.
 func mergeBansLWW(local, remote []config.IPBan) []config.IPBan {
 	byIP := make(map[string]config.IPBan)
 	for _, b := range local {

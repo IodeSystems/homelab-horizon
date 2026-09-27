@@ -227,8 +227,8 @@ const PENDING: CMRegistrationResp[] = [
 ];
 
 const MACHINES: MachineResp[] = [
-  { name: "gw-1", segments: ["seg-shop", "seg-core"], note: "gateway bridges the two segments", multiHomed: true, enrolled: true, enrolledAt: 1758844800 },
-  { name: "box-2", segments: ["seg-shop"], enrolled: false },
+  { name: "gw-1", project: "", segments: ["seg-shop", "seg-core"], note: "gateway bridges the two segments", multiHomed: true, enrolled: true, enrolledAt: 1758844800 },
+  { name: "box-2", project: "", segments: ["seg-shop"], enrolled: false },
 ];
 
 const SEGMENTS: SegmentResp[] = [

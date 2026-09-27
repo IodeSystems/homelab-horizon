@@ -18,13 +18,14 @@ import (
 // lists what it will take before it takes it.
 //
 // WHAT A MACHINE IS NOT, said here because the listing is where somebody would
-// look for it: it has no project and no environment. Those are coordinates of
-// an INSTANCE — the gateway hosts instances from two projects at once — so a
-// project column on this table would be wrong for the most important row in the
-// fleet (plan/design/architecture.md, "Instance, not machine, carries the
-// environment"). It has no observed version either: that belongs to an
-// instance, and several instances share a box, so a machine-level version would
-// report a half-finished rollout as finished.
+// look for it: it has no environment. That is a coordinate of an INSTANCE
+// (plan/design/architecture.md, "Instance, not machine, carries the
+// environment"). It MAY name an owning project (--project) — who answers for
+// the box, not what runs on it: the gateway hosts instances from two projects
+// whatever its owner is (CLAUDE.md invariant 6, amended). It has no observed
+// version either: that belongs to an instance, and several instances share a
+// box, so a machine-level version would report a half-finished rollout as
+// finished.
 //
 // WHAT IT DOES SHOW LOUDLY: a machine in more than one segment. Its blast
 // radius is the UNION of its segments, which is only a useful sentence if the
@@ -58,12 +59,13 @@ func fetchMachines(c *client) ([]apitypes.MachineResp, error) {
 	return out, nil
 }
 
-const machineAddUsage = `usage: hz machine add <name> [--segment S]... [--note "why"]
-       hz machine add --self [--segment S]... [--note "why"]
+const machineAddUsage = `usage: hz machine add <name> [--project P] [--segment S]... [--note "why"]
+       hz machine add --self [--project P] [--segment S]... [--note "why"]
 
-Declares a machine: its identity and which network segments it is in. A machine
-has NO project and NO environment — those belong to an INSTANCE, and one box
-hosts instances from several projects, so there is nothing here to put them on.
+Declares a machine: its identity, its owner and which network segments it is
+in. A machine has NO environment — that belongs to an INSTANCE. --project names
+the project RESPONSIBLE for the box; it is not placement, and one box may host
+instances of several projects whatever its owner is. Omit it for global.
 
 Writes immediately. A declared machine renders nothing — no DNS record, no
 HAProxy backend, no apt source. What it confers is the right to ENROL: hz issues
@@ -76,6 +78,8 @@ an agent credential only for a machine it has been told about.
                and only because it is already running on it: every other box is
                still something an operator asserts exists. Running it twice says
                "already declared" and writes nothing. Cannot be given with a name.
+  --project P  the owning project. Must be declared ("hz project ls"). Omitted
+               means global.
   --segment S  a network segment this machine is a member of. Repeatable.
                Usually one. More than one is legal and is flagged everywhere it
                appears: blast radius is the UNION of a machine's segments.
@@ -107,6 +111,7 @@ func machineAdd(c *client, args []string) error {
 	var segments repeatedFlag
 	fs.Var(&segments, "segment", "a network segment this machine is in (repeatable)")
 	note := fs.String("note", "", "why this machine is in more than one segment")
+	project := fs.String("project", "", "the owning project; omit for global")
 	self := fs.Bool("self", false, "declare the box hz is running on; hz supplies the name")
 
 	name, rest := splitCMPositional(args)
@@ -129,7 +134,7 @@ func machineAdd(c *client, args []string) error {
 	// THE NAME IS NOT SENT for --self. hz runs on the gateway and this CLI runs
 	// wherever the operator is, so a hostname resolved here would be the
 	// operator's laptop. The server answers with the name it used.
-	req := apitypes.MachineAddReq{Name: name, Segments: segments, Note: *note, Self: *self}
+	req := apitypes.MachineAddReq{Name: name, Project: *project, Segments: segments, Note: *note, Self: *self}
 	if err := c.do(http.MethodPost, "/api/v1/machines/add", req, &out); err != nil {
 		return err
 	}
@@ -313,6 +318,11 @@ func machineShow(c *client, args []string) error {
 // printMachine renders one machine the way show does, so a write and a read of
 // the same record look the same — the convention printEnvironment sets.
 func printMachine(m apitypes.MachineResp, prefix string) {
+	owner := m.Project
+	if owner == "" {
+		owner = "global" // never blank: blank reads as unknown
+	}
+	fmt.Printf("%sproject          %s\n", prefix, owner)
 	fmt.Printf("%ssegments         %s\n", prefix, machineSegments(m))
 	fmt.Printf("%senrolled         %s\n", prefix, yesNo(m.Enrolled))
 	if m.MultiHomed {

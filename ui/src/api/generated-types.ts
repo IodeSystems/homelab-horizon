@@ -947,11 +947,13 @@ export interface EnvironmentRmReq {
   confirm?: boolean;
 }
 /**
- * MachineResp is one declared machine: identity and segment membership.
- * IT CARRIES NO PROJECT AND NO ENVIRONMENT, and that is the model rather than
- * an omission — an environment is a coordinate of an INSTANCE, and one machine
- * hosts instances from several projects (plan/design/architecture.md, "Instance, not
- * machine, carries the environment"). It carries no observed version either:
+ * MachineResp is one declared machine: identity, owner and segment membership.
+ * IT CARRIES NO ENVIRONMENT, and that is the model rather than an omission —
+ * an environment is a coordinate of an INSTANCE (plan/design/architecture.md,
+ * "Instance, not machine, carries the environment"). Project is the OWNER,
+ * always present, "" meaning global: responsibility, not placement — one
+ * machine hosts instances from several projects whatever its owner is
+ * (CLAUDE.md invariant 6, amended). It carries no observed version either:
  * that belongs to an instance and several instances share a box, so a
  * machine-level version would report a half-finished rollout as finished.
  * MultiHomed is derived server-side rather than left to a client counting
@@ -964,6 +966,7 @@ export interface EnvironmentRmReq {
  */
 export interface MachineResp {
   name: string;
+  project: string;
   segments?: string[];
   note?: string;
   multiHomed?: boolean;
@@ -990,6 +993,10 @@ export interface MachineResp {
  */
 export interface MachineAddReq {
   name: string;
+  /**
+   * Project is the owning project; empty is global. Must be declared.
+   */
+  project?: string;
   segments?: string[];
   note?: string;
   /**
@@ -1009,6 +1016,19 @@ export interface MachineAddReq {
    * exists.
    */
   self?: boolean;
+}
+/**
+ * MachineSetReq edits a declared machine in place, so its owner can change
+ * without remove and re-add (which would cost the box its agent credential).
+ * Pointer fields, as on EnvironmentSetReq: nil leaves the field alone, a
+ * non-nil "" clears it — for Project, that makes the machine global. Clearing
+ * the note of a multi-homed machine is refused. Segments are not here:
+ * membership is edited through the segment endpoints.
+ */
+export interface MachineSetReq {
+  name: string;
+  project?: string;
+  note?: string;
 }
 /**
  * MachineRmReq removes a machine. Confirm and Cascade mean what they mean on
@@ -1691,9 +1711,36 @@ export interface PeerResp {
   online: boolean;
   isAdmin: boolean;
   profile: string;
+  /**
+   * Project the client is attributed to; "" is global. Attribution only —
+   * the client's config, routes and firewall rules do not depend on it.
+   */
+  project: string;
   mfaEnrolled: boolean;
   mfaSessionActive: boolean;
   mfaSessionExpiry?: string;
+}
+/**
+ * PeerAddReq creates a VPN client. Project is optional; empty is global, and
+ * a named project must be declared (refused before the peer is created).
+ */
+export interface PeerAddReq {
+  name: string;
+  extraIPs: string;
+  profile: string;
+  project?: string;
+}
+/**
+ * PeerEditReq edits a VPN client. Name, ExtraIPs and Profile are whole-value
+ * as they always were. Project is a pointer: nil leaves the attribution alone
+ * (a rename carries it), a non-nil "" makes the client global.
+ */
+export interface PeerEditReq {
+  publicKey: string;
+  name: string;
+  extraIPs: string;
+  profile: string;
+  project?: string;
 }
 export interface MFAStatusResponse {
   /**
@@ -1875,10 +1922,27 @@ export interface CheckStatusResp {
   enabled: boolean;
   auto_gen: boolean;
   /**
+   * Project the check is attributed to; "" is global. DERIVED at response
+   * time for a svc:* check (its service's project), stored for a standalone
+   * check (ServiceCheck.Project). Other generated checks are global.
+   */
+  project: string;
+  /**
    * Vantage names the remote hz-probe agent this result came from. Empty
    * means the check ran on hz itself.
    */
   vantage?: string;
+}
+/**
+ * CheckAddReq declares a standalone check. Project is optional; empty is
+ * global, and a named project must be declared.
+ */
+export interface CheckAddReq {
+  name: string;
+  type: string;
+  target: string;
+  interval: number /* int */;
+  project?: string;
 }
 /**
  * RemoteProbeResp is one configured outside-in vantage, plus what hz has
@@ -2364,6 +2428,13 @@ export interface BanRequest {
   ip: string;
   timeout?: number /* int */; // seconds, 0 = permanent
   reason?: string;
+  /**
+   * Project attributes the ban (admin path, /api/v1/bans/add, only); empty
+   * is global. Enforcement is gateway-wide whatever it says. The service
+   * token path (/api/ban/ban) ignores it: a service's ban is global and
+   * names the service in BanEntry.Service.
+   */
+  project?: string;
 }
 export interface UnbanRequest {
   ip: string;
@@ -2375,6 +2446,10 @@ export interface BanEntry {
   expiresAt?: number /* int64 */;
   reason?: string;
   service?: string;
+  /**
+   * Project the ban is attributed to; "" is global. Attribution only.
+   */
+  project: string;
 }
 export interface BanListResponse {
   bans: BanEntry[];
@@ -2447,6 +2522,11 @@ export interface HostPortEntry {
    * these as taken for every protocol, not just their own.
    */
   forward?: boolean;
+  /**
+   * Project is the owning service's project, DERIVED at response time and
+   * never stored; "" is global (infra ports, and services with no project).
+   */
+  project: string;
 }
 export interface HostPortMapResponse {
   hosts: { [key: string]: HostPortEntry[]};
@@ -2459,6 +2539,12 @@ export interface PortRange {
   from: number /* int */;
   to?: number /* int */;
   note?: string;
+  /**
+   * Project attributes a custom exclusion; empty (omitted) is global, and
+   * every built-in range is global. Allocation ignores it: an exclusion
+   * denies the port to every project.
+   */
+  project?: string;
 }
 /**
  * PortExclusionsResp carries the allocation denylist: Builtin is the read-only

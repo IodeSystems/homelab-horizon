@@ -164,7 +164,7 @@ func TestABanIsRecordedAndThenDeclared(t *testing.T) {
 	s, _ := agentTestServer(t)
 	const abuser = "198.51.100.7"
 
-	if err := s.banIP(abuser, 0, "brute force", "login"); err != nil {
+	if err := s.banIP(abuser, 0, "brute force", "login", ""); err != nil {
 		t.Fatalf("banIP: %v", err)
 	}
 
@@ -248,10 +248,10 @@ func TestAnExpiredBanIsNotDeclared(t *testing.T) {
 func TestTheServedStaleSetNeverCarriesABan(t *testing.T) {
 	s, _ := agentTestServer(t)
 
-	if err := s.banIP("198.51.100.7", 0, "brute force", "login"); err != nil {
+	if err := s.banIP("198.51.100.7", 0, "brute force", "login", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.banIP("203.0.113.9", 0, "scanner", "login"); err != nil {
+	if err := s.banIP("203.0.113.9", 0, "scanner", "login", ""); err != nil {
 		t.Fatal(err)
 	}
 	// Lift the second one. unbanIP's `iptables -D` is expected to fail on a
