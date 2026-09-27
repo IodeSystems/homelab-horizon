@@ -6,7 +6,7 @@ way it is, which the code alone doesn't say.
 
 ## UI write surface and the ranked Overview (2026-09-26)
 
-✅ Merged to `dev`; not deployed. Built by four sub-agents on worktrees in
+✅ Merged to `dev` and deployed 2026-09-26 (`7a8bb6b`). Built by four sub-agents on worktrees in
 parallel, each reviewed and merged by the parent session.
 
 - **Environments** — `+`, edit and remove on the project Overview's rungs. Add
@@ -42,7 +42,7 @@ and the machine page a text Remove button.
 
 ## Nav + route hierarchy, amendment 5 (2026-09-26)
 
-✅ Built on `feat/nav-tabs`; not merged to `dev`, not deployed. The sidebar is
+✅ Built on `feat/nav-tabs`, merged to `dev` (`e861662`), deployed 2026-09-26 (`7a8bb6b`). The sidebar is
 WHERE (the project tree, no named root, plus a fixed gateway group, the same at
 every scope); six tabs over the page are WHAT; a project lives at
 `/p/<bare name>/<tab>`. Operator calls: the unscoped Config tab gets a project
