@@ -24,6 +24,10 @@ const pushBatchLimit = 500
 // away the public address, the inbound rule, the self-signed certificate and
 // the pinning, because hz's endpoint has an ordinary CA certificate that
 // verifies normally.
+//
+// The vantage may also hold a notification URL of its own (Alert), which is
+// not an hz credential: it is how the vantage says "hz is down" when hz,
+// the only other notifier, is the thing that is down.
 type Pusher struct {
 	// URL is hz's base, e.g. https://kiosk.vpn.example.com.
 	URL string
@@ -34,6 +38,11 @@ type Pusher struct {
 
 	// Timeout bounds one report. Zero means 30 seconds.
 	Timeout time.Duration
+
+	// Alert, when set, notifies a human after consecutive failed reports and
+	// again on recovery. Nil is off. It never affects what is reported or
+	// acknowledged.
+	Alert *Alerter
 
 	http *http.Client
 }
@@ -116,7 +125,9 @@ func (a *Agent) PushLoop(ctx context.Context, p *Pusher, interval time.Duration)
 			// Keep the watermark where it is; the batch goes again next time.
 			slog.Warn("probe: could not report to hz",
 				"error", err, "buffered", len(results))
+			p.Alert.Failed(ctx, err)
 		default:
+			p.Alert.Succeeded(ctx)
 			if resp.Targets != nil {
 				a.SetTargets(*resp.Targets)
 				slog.Info("probe: hz sent a new target set",
