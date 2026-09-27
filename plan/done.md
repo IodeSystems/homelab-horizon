@@ -4,6 +4,42 @@ Completed trees moved out of [plan.md](plan.md) as they finished. Kept for the
 reasoning, not the status: several of these record *why* a thing is shaped the
 way it is, which the code alone doesn't say.
 
+## UI write surface and the ranked Overview (2026-09-26)
+
+✅ Merged to `dev`; not deployed. Built by four sub-agents on worktrees in
+parallel, each reviewed and merged by the parent session.
+
+- **Environments** — `+`, edit and remove on the project Overview's rungs. Add
+  goes into the page's own project; edit/remove act on the rung's OWN project
+  (a descendant's rung can be on screen under the own+descendants scope). Set
+  sends only changed fields; an empty string clears `from`/`version`.
+- **Segments** — Add on both Network tabs; edit and remove per row. Add takes
+  no members: `SegmentAddReq.Members` requires the machine to already name the
+  segment. Membership is addressed afterwards from the row's `unaddressed`
+  list, one immediate action per row; only a CIDR change can strand a member,
+  so only that path goes blocked → cascade → confirm.
+- **Machines** — Add on unscoped `/machines` only (a machine carries no
+  project); remove on `/machines/<name>`, with cascade stated as revoking the
+  agent credential. No `--self` in the browser (invariant 7).
+- **Ranked Overview** — `/` is the "is anything waiting on me?" queue:
+  `rankFleet` over agent observations, pending registrations, DNS drift,
+  failing/warning checks, pending changes. An unanswered source is never read
+  as empty; the headline cannot say "nothing is waiting" while one is unknown.
+  Stat cards cut; HAProxy/SSL/peer-sync kept below the queue.
+
+Every remove is the server's dry run first. Verified: 15 UI suites green on
+`dev`; the hermetic container took one real write per feature (environment,
+machine and segment all landed in `config.json`) and each dialog was looked at.
+
+**⚠ Setup finding:** the agents' worktrees were cut from `origin/main`
+(`36ca2bb`), not `dev`. Three renovate bumps on `main` (#68, #71, #73) rode
+along on two branches; they were cherry-picked AROUND, so `dev` does not have
+them. Bringing `main`'s dependency bumps into `dev` is a separate decision.
+
+**Open, found in the live pass (cosmetic):** the row controls are not one
+style — segment rows use filled red icons, rungs and tree nodes outlined grey,
+and the machine page a text Remove button.
+
 ## Nav + route hierarchy, amendment 5 (2026-09-26)
 
 ✅ Built on `feat/nav-tabs`; not merged to `dev`, not deployed. The sidebar is
