@@ -53,6 +53,7 @@ import {
   GATEWAY_WIDE_SURFACES,
   SCOPE_TABS,
 } from "./projectRoutes.ts";
+import { POSTURES } from "./model.ts";
 
 let failures = 0;
 let checks = 0;
@@ -772,6 +773,68 @@ console.log("· the bans/clients explanation lives ONCE, on the project's Overvi
   check(
     !services.text.includes("Gateway-wide, not scoped to"),
     "the explanation is not repeated on the project's other screens",
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("· the Environments panel: add targets the PAGE's project, edit/remove the RUNG's");
+// ---------------------------------------------------------------------------
+{
+  // acme-co's Overview, at the DEFAULT scope (own+descendants — readScope's
+  // "all"), so every rung under it is on the page at once: its own, intern's,
+  // and both of storefront's. This is the render that can tell "add" and
+  // "edit/remove" apart — a single-rung page can't, because the page's own
+  // project and the rung's own project would happen to be the same string.
+  const acme = await at("/p/acme-co");
+  check(
+    /aria-label="Add an environment to acme-co"/.test(acme.html),
+    "the + on the Environments panel is on the Overview, addressed to THIS page's project",
+  );
+  check(
+    !/Add an environment to intern/.test(acme.html) && !/Add an environment to storefront/.test(acme.html),
+    "and never to a descendant merely visible under the own+descendants scope",
+  );
+
+  const rungs: [string, string][] = [
+    ["acme-co", "prod"],
+    ["intern", "prod"],
+    ["storefront", "staging"],
+    ["storefront", "prod"],
+  ];
+  for (const [proj, name] of rungs) {
+    check(
+      new RegExp(`aria-label="Edit ${proj}/${name}…"`).test(acme.html),
+      `${proj}/${name} carries an edit control naming its OWN project`,
+    );
+    check(
+      new RegExp(`aria-label="Remove ${proj}/${name}…"`).test(acme.html),
+      `${proj}/${name} carries a remove control naming its OWN project`,
+    );
+  }
+  check(
+    !/Edit acme-co\/staging…/.test(acme.html) && !/Remove acme-co\/staging…/.test(acme.html),
+    "a descendant's rung never borrows the PAGE's project on its own edit/remove control",
+  );
+
+  // storefront's own Overview: the + names storefront, not its ancestor.
+  const shop = await at("/p/storefront");
+  check(
+    /aria-label="Add an environment to storefront"/.test(shop.html),
+    "on storefront's own Overview the + names storefront",
+  );
+
+  // THE POSTURE SELECT IS INSIDE A DIALOG, WHICH `renderToStaticMarkup` CANNOT
+  // SEE AT ALL. MUI's Dialog mounts its content through a React portal, and a
+  // portal target is a real DOM node — something a Node-side render to a
+  // string never has, open or closed. So "the posture control offers exactly
+  // dev/staging/prod" is checked at its SOURCE instead of through the page:
+  // `POSTURES` is the literal list both `AddEnvironmentDialog` and
+  // `EditEnvironmentDialog` map with no filtering and no reordering
+  // (`EnvironmentDialogs.tsx`), so asserting the constant IS asserting what the
+  // select would offer.
+  check(
+    JSON.stringify(POSTURES) === JSON.stringify(["dev", "staging", "prod"]),
+    "the posture control's source is closed to exactly dev, staging and prod, in ladder order",
   );
 }
 
