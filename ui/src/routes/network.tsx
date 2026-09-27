@@ -17,14 +17,23 @@
  * project, and the code already has two labels for that: `PROJECT_COLUMN_LABEL`
  * ("which project at all") on a gateway-wide list, `LOCATION_COLUMN_LABEL`
  * ("where in this subtree") on a scoped one.
+ *
+ * ADD/EDIT/REMOVE landed here alongside the read (`plan/design/ui.md`'s own
+ * "unreachable endpoints" list named `/segments/{add,set,rm}`): the same
+ * finding `ProjectDialogs.tsx` made for `/projects/{add,rm}`, and the same
+ * reference pattern applied — `SegmentDialogs.tsx`.
  */
+import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Alert, Box, CircularProgress, Typography } from "@mui/material";
+import { Alert, Box, Button, CircularProgress, Typography } from "@mui/material";
+import AddIcon from "@mui/icons-material/Add";
 import { useProjects, useSegments } from "../api/hooks";
 import { buildProjectIndex } from "../components/model/projectRoutes.ts";
 import { PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
 import { ClientsNotHere, SegmentsTable } from "../components/model/SegmentBits";
+import { AddSegmentDialog, EditSegmentDialog, RemoveSegmentDialog } from "../components/model/SegmentDialogs";
 import { ScreenHeading } from "../components/model/ModelBits";
+import type { SegmentResp } from "../api/generated-types";
 
 function UnscopedNetwork() {
   const segments = useSegments();
@@ -32,11 +41,20 @@ function UnscopedNetwork() {
   const index = buildProjectIndex(projects.data ?? []);
   const all = segments.data ?? [];
 
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<SegmentResp | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
+
   return (
     <Box>
       <ScreenHeading
         title="Network"
-        blurb="Every segment hz declares, whoever owns it. A segment must name a project — the owner is who is responsible for the network — so this list is the same rows as every project's Network screen added together, with the owner on each row. Nothing here is editable; this is hz's own record, read back."
+        blurb="Every segment hz declares, whoever owns it. A segment must name a project — the owner is who is responsible for the network — so this list is the same rows as every project's Network screen added together, with the owner on each row."
+        right={
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setAdding(true)}>
+            Add segment
+          </Button>
+        }
       />
 
       {/* Error first: an errored query holding no data is reset to pending on
@@ -59,10 +77,20 @@ function UnscopedNetwork() {
           scope.
         </Alert>
       ) : (
-        <SegmentsTable segments={all} index={index} ownerLabel={PROJECT_COLUMN_LABEL} />
+        <SegmentsTable
+          segments={all}
+          index={index}
+          ownerLabel={PROJECT_COLUMN_LABEL}
+          onEdit={setEditing}
+          onRemove={setRemoving}
+        />
       )}
 
       <ClientsNotHere />
+
+      <AddSegmentDialog open={adding} index={index} defaultProject="" onClose={() => setAdding(false)} />
+      <EditSegmentDialog segment={editing} index={index} onClose={() => setEditing(null)} />
+      <RemoveSegmentDialog name={removing} onClose={() => setRemoving(null)} />
     </Box>
   );
 }
