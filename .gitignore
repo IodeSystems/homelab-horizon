@@ -49,3 +49,4 @@ bin/deploy-doc
 # Cross-compiled hz binaries embedded into the server (make hz-embed)
 internal/server/hzbin/bin/
 internal/server/uiembed/dist/
+ui/.rendercheck-checks
