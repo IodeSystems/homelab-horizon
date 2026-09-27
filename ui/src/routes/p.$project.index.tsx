@@ -18,8 +18,12 @@
  * Three of the eight live projects are in that state and it is not an error —
  * a project is declared before anything moves into it.
  */
+import { useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Alert, Box, Chip, Divider, Paper, Typography } from "@mui/material";
+import { Alert, Box, Chip, Divider, IconButton, Paper, Typography } from "@mui/material";
+import AddIcon from "@mui/icons-material/Add";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import { useEnvironments, useServices, useVersionDrift } from "../api/hooks";
 import type { EnvironmentResp, InstanceVersion } from "../api/generated-types";
 import {
@@ -47,6 +51,11 @@ import {
   scopeOf,
   useProjectContext,
 } from "../components/model/ProjectBits";
+import {
+  AddEnvironmentDialog,
+  EditEnvironmentDialog,
+  RemoveEnvironmentDialog,
+} from "../components/model/EnvironmentDialogs";
 
 /** Posture colours the ladder, never the name. The name is plain text. */
 function postureTone(posture: string) {
@@ -70,11 +79,16 @@ function Rung({
   env,
   instances,
   showProject,
+  onEdit,
+  onRemove,
 }: {
   env: EnvironmentResp;
   instances: InstanceVersion[] | null;
   /** The rung's own project, rendered because the list may span the subtree. */
   showProject: React.ReactNode;
+  /** Both act on `env.project` — the rung's OWN project, never the page's. */
+  onEdit: (env: EnvironmentResp) => void;
+  onRemove: (env: EnvironmentResp) => void;
 }) {
   const rung = readRung(env);
   const placement = readPlacement(env, instances);
@@ -92,6 +106,25 @@ function Rung({
             into it reads as upward.
           </Typography>
         ) : null}
+        <Box sx={{ flex: 1 }} />
+        <IconButton
+          size="small"
+          aria-label={`Edit ${env.project}/${env.name}…`}
+          title={`Edit ${env.project}/${env.name}…`}
+          onClick={() => onEdit(env)}
+          sx={{ color: "text.secondary", p: 0.25 }}
+        >
+          <EditOutlinedIcon fontSize="small" />
+        </IconButton>
+        <IconButton
+          size="small"
+          aria-label={`Remove ${env.project}/${env.name}…`}
+          title={`Remove ${env.project}/${env.name}… (shows what it would take first)`}
+          onClick={() => onRemove(env)}
+          sx={{ color: "text.secondary", p: 0.25 }}
+        >
+          <DeleteOutlineIcon fontSize="small" />
+        </IconButton>
       </Box>
       <Typography variant="body2" sx={{ color: "text.secondary", mb: 1.5 }}>
         {rung.nameNote}
@@ -195,6 +228,12 @@ function ProjectOverview() {
   const environments = useEnvironments();
   const services = useServices();
   const drift = useVersionDrift();
+  // "+" always declares into THIS page's own project (never a descendant
+  // merely visible under the own+descendants scope); edit/remove act on
+  // whichever project the targeted rung actually belongs to.
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<EnvironmentResp | null>(null);
+  const [removing, setRemoving] = useState<EnvironmentResp | null>(null);
 
   // The layout above renders the no-such-project screen and no <Outlet/>, so
   // this component only ever runs with a resolved project. The guard is here
@@ -204,6 +243,8 @@ function ProjectOverview() {
   const reading = scopeOf(route, scope);
 
   const rungs = (environments.data ?? []).filter((e) => inScope(reading.names, e.project));
+  const ownRungs = (environments.data ?? []).filter((e) => e.project === route.name);
+  const editingSiblings = (environments.data ?? []).filter((e) => e.project === editing?.project);
   const mine = (services.data ?? []).filter((s) => inScope(reading.names, s.project));
 
   // null, deliberately, and not []: hz has not answered, which is a different
@@ -262,9 +303,20 @@ function ProjectOverview() {
       </Paper>
 
       <Paper sx={{ p: 2, mb: 2 }}>
-        <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5 }}>
-          Environments
-        </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
+          <Typography variant="h6" sx={{ fontWeight: 700, flex: 1 }}>
+            Environments
+          </Typography>
+          <IconButton
+            size="small"
+            aria-label={`Add an environment to ${route.name}`}
+            title={`Add an environment to ${route.name}`}
+            onClick={() => setAdding(true)}
+            sx={{ color: "text.secondary", p: 0.25 }}
+          >
+            <AddIcon fontSize="small" />
+          </IconButton>
+        </Box>
         {environments.isLoading ? (
           <Typography variant="body2" sx={{ color: "text.secondary" }}>
             Asking hz what rungs it declares…
@@ -290,6 +342,8 @@ function ProjectOverview() {
                   env={e}
                   instances={instances}
                   showProject={<LocationCell index={index} project={e.project} />}
+                  onEdit={setEditing}
+                  onRemove={setRemoving}
                 />
               ))}
           </>
@@ -348,6 +402,22 @@ function ProjectOverview() {
           </Box>
         ))}
       </Paper>
+
+      <AddEnvironmentDialog
+        open={adding}
+        project={route.name}
+        siblings={ownRungs}
+        onClose={() => setAdding(false)}
+      />
+      <EditEnvironmentDialog
+        env={editing}
+        siblings={editingSiblings}
+        onClose={() => setEditing(null)}
+      />
+      <RemoveEnvironmentDialog
+        target={removing}
+        onClose={() => setRemoving(null)}
+      />
     </Box>
   );
 }
