@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -20,6 +21,7 @@ import (
 // takes every default never types a path.
 const (
 	defaultTokenFile = "/etc/hz-probe/token"
+	defaultNtfyFile  = "/etc/hz-probe/ntfy-url"
 	defaultStatePath = "/var/lib/hz-probe/state.json"
 	defaultCertPath  = "/etc/hz-probe/cert.pem"
 	defaultKeyPath   = "/etc/hz-probe/key.pem"
@@ -37,6 +39,10 @@ type serveFlags struct {
 	tlsCert   string
 	tlsKey    string
 	pushTo    string
+
+	ntfyURL   string
+	ntfyFile  string
+	ntfyAfter int
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
@@ -48,6 +54,9 @@ func (f *serveFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.tlsCert, "tls-cert", defaultCertPath, "TLS certificate file")
 	fs.StringVar(&f.tlsKey, "tls-key", defaultKeyPath, "TLS key file")
 	fs.StringVar(&f.pushTo, "push-to", "", "hz base URL to report results to; when set, the agent reports rather than listening")
+	fs.StringVar(&f.ntfyURL, "ntfy-url", "", "ntfy topic URL to alert when hz is unreachable (prefer --ntfy-url-file); push mode only — in pull mode the agent never dials hz, so it cannot see hz down")
+	fs.StringVar(&f.ntfyFile, "ntfy-url-file", defaultNtfyFile, "file holding the ntfy topic URL; absent means no vantage-side alerting. Push mode only")
+	fs.IntVar(&f.ntfyAfter, "ntfy-after", 3, "consecutive failed reports to hz before alerting ntfy. Push mode only")
 }
 
 // pushMode reports whether the agent reports to hz instead of waiting to be
@@ -92,12 +101,30 @@ func runServe(args []string) error {
 	// address to keep stable.
 	if f.pushMode() {
 		pusher := &probe.Pusher{URL: f.pushTo, Token: tok}
+		ntfy, err := resolveNtfyURL(f.ntfyURL, f.ntfyFile)
+		if err != nil {
+			return err
+		}
+		if ntfy != "" {
+			if f.ntfyAfter < 1 {
+				return fmt.Errorf("--ntfy-after must be at least 1, got %d", f.ntfyAfter)
+			}
+			pusher.Alert = &probe.Alerter{URL: ntfy, Vantage: f.vantageName(), Threshold: f.ntfyAfter}
+			// The URL is a capability; log that it is set, never what it is.
+			slog.Info("hz-probe will alert ntfy if hz is unreachable",
+				"after_failures", f.ntfyAfter)
+		}
 		held := agent.Targets()
 		slog.Info("hz-probe reporting to hz",
 			"hz", f.pushTo, "vantage", f.vantageName(), "version", Version,
 			"targets", len(held.Targets), "targets_version", held.Version)
 		agent.PushLoop(ctx, pusher, 0)
 		return nil
+	}
+
+	if strings.TrimSpace(f.ntfyURL) != "" || os.Getenv("HZ_PROBE_NTFY_URL") != "" {
+		slog.Warn("hz-probe: an ntfy URL is set but this agent is in pull mode, where it never dials hz " +
+			"and cannot tell hz is down; it is ignored")
 	}
 
 	srv := &http.Server{
@@ -170,4 +197,41 @@ func resolveToken(tokenFlag, tokenFile string) (string, error) {
 		return tok, nil
 	}
 	return "", fmt.Errorf("no token: run 'hz-probe install' to mint one, set HZ_PROBE_TOKEN, or pass --token")
+}
+
+// resolveNtfyURL reads the optional ntfy topic URL the way resolveToken reads
+// the token: file, then HZ_PROBE_NTFY_URL, then the flag. Unlike the token,
+// finding none is not an error — it is the feature switched off. A file that
+// exists but is empty or unreadable IS an error: that is somebody's intent
+// gone wrong, and silently running without the alert they asked for is the
+// failure this feature exists to prevent.
+func resolveNtfyURL(urlFlag, file string) (string, error) {
+	raw := ""
+	if file != "" {
+		b, err := os.ReadFile(file)
+		switch {
+		case err == nil:
+			raw = strings.TrimSpace(string(b))
+			if raw == "" {
+				return "", fmt.Errorf("ntfy URL file %s is empty", file)
+			}
+		case !os.IsNotExist(err):
+			return "", fmt.Errorf("could not read ntfy URL file: %w", err)
+		}
+	}
+	if raw == "" {
+		raw = strings.TrimSpace(os.Getenv("HZ_PROBE_NTFY_URL"))
+	}
+	if raw == "" {
+		raw = strings.TrimSpace(urlFlag)
+	}
+	if raw == "" {
+		return "", nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		// Not echoing the value: it is a secret.
+		return "", fmt.Errorf("the ntfy URL is not an http(s) URL with a host")
+	}
+	return raw, nil
 }
