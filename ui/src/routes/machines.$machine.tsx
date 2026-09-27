@@ -29,7 +29,7 @@
  * (prose naming what would close it). Both render: a kind with no next step is
  * a dead end, and a next step with no kind hides whose problem it is.
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   Alert,
@@ -45,7 +45,7 @@ import {
   TableRow,
   Typography,
 } from "@mui/material";
-import { useMachineProjection } from "../api/hooks";
+import { useMachineProjection, useMachines, useProjects } from "../api/hooks";
 import type { MachineProjectionResp } from "../api/generated-types";
 import {
   gapsFor,
@@ -53,7 +53,9 @@ import {
   readSection,
   readSegment,
 } from "../components/model/model";
-import { RemoveMachineDialog } from "../components/model/MachineDialogs";
+import { buildProjectIndex } from "../components/model/projectRoutes.ts";
+import { EditMachineDialog, RemoveMachineDialog } from "../components/model/MachineDialogs";
+import { OwnerCell } from "../components/model/ProjectBits";
 import {
   GapNote,
   ScreenHeading,
@@ -365,7 +367,15 @@ function MachineProjectionScreen() {
   const { machine } = Route.useParams();
   const navigate = useNavigate();
   const { data, isLoading, error } = useMachineProjection(machine);
+  const machines = useMachines();
+  const projects = useProjects();
+  const index = useMemo(() => buildProjectIndex(projects.data ?? []), [projects.data]);
+  // The RECORD, not the projection: `MachineProjectionResp` is the pure
+  // computed config and carries no owner or note (`generated-types.ts`) —
+  // those live on `MachineResp`, from the same list `/machines` renders.
+  const record = machines.data?.find((m) => m.name === machine) ?? null;
   const [removing, setRemoving] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   if (isLoading) {
     return (
@@ -414,7 +424,23 @@ function MachineProjectionScreen() {
           </>
         }
       />
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 2 }}>
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          Owner
+        </Typography>
+        <OwnerCell index={index} project={record?.project} />
+        <Button
+          aria-label="Edit owner"
+          onClick={() => setEditing(true)}
+          variant="outlined"
+          size="small"
+          disabled={record === null}
+        >
+          Edit
+        </Button>
+      </Box>
       <RemoveMachineDialog name={removing ? machine : null} onClose={() => setRemoving(false)} />
+      <EditMachineDialog machine={editing ? record : null} onClose={() => setEditing(false)} />
       <Legend />
       {data ? <Projection mc={data} /> : null}
     </Box>

@@ -1,14 +1,16 @@
 /**
- * Machines — what boxes there are, what segments they are in, what they host.
+ * Machines — what boxes there are, who owns them, what they host.
  *
- * Read-only. Sorted by IDENTITY, not by status: a fleet this size is read as a
- * list, and a table that reorders itself under the operator is unreadable.
- * What needs attention has a ranked home on /drift.
+ * Read-only except for Owner. Sorted by IDENTITY, not by status: a fleet this
+ * size is read as a list, and a table that reorders itself under the operator
+ * is unreadable. What needs attention has a ranked home on /drift.
  *
- * THERE IS NO PROJECT COLUMN and the lede says why. A machine carries no
- * project and no environment — those are coordinates of an INSTANCE, and the
- * most important machine hosts two projects at once. Putting a project on a
- * machine row would force a choice the model refuses to make.
+ * THE OWNER COLUMN IS RESPONSIBILITY, NOT PLACEMENT (CLAUDE.md invariant 6,
+ * amended 2026-09-26). A machine still carries no ENVIRONMENT — that is a
+ * coordinate of an INSTANCE, and the most important machine hosts two
+ * projects' instances at once regardless of who owns the box. `""` is global,
+ * rendered "global" and never blank — `OwnerCell`, not `LocationCell`: see
+ * `ProjectBits.tsx` for why the empty case is not "unassigned".
  *
  * Three states this screen must not flatten (plan/design/example-projection.md §4):
  *
@@ -19,7 +21,7 @@
  *   nothing.
  *   A segment membership hz cannot resolve is not a machine with no network.
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   Alert,
@@ -30,10 +32,12 @@ import {
   Paper,
   Typography,
 } from "@mui/material";
-import { useMachines, useVersionDrift } from "../api/hooks";
+import { useMachines, useProjects, useVersionDrift } from "../api/hooks";
 import type { InstanceVersion, MachineResp } from "../api/generated-types";
 import { readHosting, readInstanceSource, readMultiHomed } from "../components/model/model";
+import { buildProjectIndex, type ProjectIndex } from "../components/model/projectRoutes.ts";
 import { AddMachineDialog } from "../components/model/MachineDialogs";
+import { OWNER_COLUMN_LABEL, OwnerCell } from "../components/model/ProjectBits";
 import {
   CannotAskBanner,
   Declared,
@@ -85,9 +89,11 @@ function InstanceRow({ row }: { row: InstanceVersion }) {
 function MachineCard({
   machine,
   instances,
+  index,
 }: {
   machine: MachineResp;
   instances: InstanceVersion[] | null;
+  index: ProjectIndex;
 }) {
   const navigate = useNavigate();
   const segments = machine.segments ?? [];
@@ -100,6 +106,12 @@ function MachineCard({
         <Typography variant="h6" sx={{ fontWeight: 700, fontFamily: "monospace" }}>
           {machine.name}
         </Typography>
+        <Box sx={{ display: "flex", alignItems: "baseline", gap: 0.5 }}>
+          <Typography variant="caption" sx={{ color: "text.secondary" }}>
+            {OWNER_COLUMN_LABEL.toLowerCase()}
+          </Typography>
+          <OwnerCell index={index} project={machine.project} />
+        </Box>
         {bridge.multiHomed ? <ToneChip label={bridge.headline} tone={bridge.tone} /> : null}
         <ToneChip
           label={machine.enrolled ? "agent credential issued" : "no agent credential"}
@@ -169,6 +181,8 @@ function MachineCard({
 function MachinesScreen() {
   const machines = useMachines();
   const drift = useVersionDrift();
+  const projects = useProjects();
+  const index = useMemo(() => buildProjectIndex(projects.data ?? []), [projects.data]);
   const [adding, setAdding] = useState(false);
 
   if (machines.isLoading) {
@@ -204,7 +218,7 @@ function MachinesScreen() {
     <Box sx={{ p: 3 }}>
       <ScreenHeading
         title="Machines"
-        blurb="Every box hz declares, its segment memberships, and the instances placed on it. There is no project column: a machine carries no project and no environment — an instance's four-part address carries both, and one machine routinely hosts instances from two projects."
+        blurb="Every box hz declares, who owns it, its segment memberships, and the instances placed on it. Owner is responsibility, not placement: a machine still carries no environment — an instance's four-part address carries that, and one machine routinely hosts instances from two projects regardless of who owns it."
         right={
           <Button aria-label="Add a machine" variant="contained" size="small" onClick={() => setAdding(true)}>
             + Add machine
@@ -230,7 +244,7 @@ function MachinesScreen() {
           and hz issues an agent credential only for a machine it has been told about.
         </Alert>
       ) : (
-        rows.map((m) => <MachineCard key={m.name} machine={m} instances={instances} />)
+        rows.map((m) => <MachineCard key={m.name} machine={m} instances={instances} index={index} />)
       )}
     </Box>
   );

@@ -205,7 +205,7 @@ export function useSegments() {
   });
 }
 
-/** The declared machines: identity and segment membership. No project. */
+/** The declared machines: identity, owner (`""` is global) and segment membership. */
 export function useMachines() {
   return useQuery({
     queryKey: ["machines"],
