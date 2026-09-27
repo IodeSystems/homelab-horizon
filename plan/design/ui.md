@@ -11,7 +11,9 @@
 >   2026-09-24. Decision 1 has been amended **four** times since; the last one
 >   (*ONE RECURSIVE MENU, whose root is the estate*) is the shape that is built,
 >   and it REVERSES Decision F. Read the amendments in order — they are history,
->   and each says what it changed.
+>   and each says what it changed. **Amendment 5 (tree left, tabs top,
+>   `/p/<name>`, no "estate" in the UI) was approved and BUILT 2026-09-26** —
+>   it is the shape that is built now, and it reverses Decisions J and L.
 >
 > **Jobs first is the point.** Part 2 was derived from a data-type inventory,
 > which is how the current shape happened; Part 1 is what it should have been
@@ -2130,6 +2132,182 @@ project under storefront"*).
 - **The bridge report** on the new `/segments` screen, which needs a derivation hz
   does not serve.
 - **Visual identity, the palette, Decisions 2 and 3.** Untouched, as before.
+
+### Decision 1, amendment 5 — ✅ approved and built 2026-09-26 — tree on the left, tabs on top
+
+> **Built on `feat/nav-tabs`, 2026-09-26.** Shape and URL grammar were picked by
+> the operator from three options each; the two open calls below were answered
+> *"project picker, and + on the tree. approved, build it"*. What the build
+> found is at the end of this section. The
+> operator rejected amendment 4 on sight ("I STILL don't like it") without naming
+> a specific defect, so the defects below are this write-up's reading and not
+> quoted from the operator.
+
+**The change in one line:** the sidebar shows **where** you are (the project tree,
+with no named root, plus a fixed Gateway group) and never changes shape when you
+move. The tabs across the page show **what** you are looking at (the same six
+sections at every scope). A project's URL is `/p/<bare name>/…`.
+
+#### What amendment 4 gets wrong, as read 2026-09-26
+
+1. **Moving changes the sidebar.** When you enter a project, the whole menu is
+   replaced (`readMenu`, `ui/src/components/model/projectRoutes.ts:839,879`).
+   The gateway block disappears and the tree turns into a "subprojects" list.
+   After every drill-in, the operator has to find their position again.
+2. **"Where" and "what" share one column.** The scope (tree) and the section
+   (Services, Domains…) are rows in one list, so they compete for space. That
+   crowding is where the 24/38-line count came from, and it is why the gateway
+   block had to become a wrapped flow.
+3. **The URLs do not match the labels.** Overview is `/dashboard` unscoped
+   and `/$project` in a project (`projectRoutes.ts:502-503`). Network is
+   `/segments` (`:538`).
+4. **`/$project` sits at the URL root**, so a project name competes with every
+   gateway route. That is why `/setings` falls through to a project lookup.
+5. **Dotted paths need a lookup, and the lookup can still be ambiguous**
+   (`resolveProjectParam`, Decision A). But project names are already unique
+   across the config (`internal/config/config.go:654`), so a bare name
+   addresses exactly one project without any path.
+
+#### The shape
+
+```
+┌─────────────────┬────────────────────────────────────────────────────┐
+│ Homelab Horizon │ acme-co › storefront                       [user ▾]│
+│                 │ Overview  Services  Domains  Machines  Network  Config
+│ ▾ acme-co       │ ────────  ═══════                                  │
+│     intern      │  services in storefront (+ descendants, Decision G)│
+│   ▸ storefront  │                                                    │
+│ ▸ redline       │                                                    │
+│                 │                                                    │
+│                 │                                                    │
+│ Gateway         │                                                    │
+│   Drift         │                                                    │
+│   DNS           │                                                    │
+│   Hosts         │                                                    │
+│   VPN Clients   │                                                    │
+│   IP Bans       │                                                    │
+│   Checks        │                                                    │
+│   Observability │                                                    │
+│   Ports         │                                                    │
+│   Settings      │                                                    │
+└─────────────────┴────────────────────────────────────────────────────┘
+```
+
+- **No named root.** The word *estate* is dropped from the UI (operator,
+  2026-09-26: *"it doesn't need to be named"*). The tree lists root projects
+  directly. The unscoped view (every project) is reached by the wordmark
+  `Homelab Horizon`, and there the breadcrumb is empty and the tabs stand
+  alone. **In code** the scope is `projectScope`: `null` means unscoped, a name
+  means that project. `ESTATE_LABEL`, `estateTo` and similar identifiers get
+  renamed at build time.
+- **Tree.** By default the tree opens along the path
+  to the current location, and everything else is closed. A label is a link and
+  a triangle is a button (Decision M holds). Clicking a node **keeps the current
+  tab**: on `storefront/Domains`, clicking `redline` goes to `redline/Domains`.
+- **Tabs.** Overview · Services · Domains · Machines · Network · Config. The
+  same six at every scope, including unscoped. Each tab is a route, not
+  component state (Seam 7).
+- **Gateway group.** Always visible, at every depth, as a real list with one
+  row per surface, not a wrapped flow. It is never scoped. This reverses
+  Decision J again, but for a different reason: the old cost was the group being
+  *repeated inside the project menu*. Here it is one fixed group that does not
+  move.
+- **Account** is removed from the sidebar. It is already in the user menu at
+  top right (`AppLayout.tsx` `UserMenu`).
+- **Breadcrumb** at the top of the page is the only place the hierarchy is
+  written out. Each crumb is a link to that scope with the same tab.
+- **Mobile (< md).** The drawer holds the tree and the Gateway group. The tabs
+  become a horizontally scrolling strip (MUI `variant="scrollable"`).
+
+#### URLs
+
+| screen | unscoped | project |
+|---|---|---|
+| Overview | `/` | `/p/$name` |
+| Services | `/services` | `/p/$name/services` |
+| Domains | `/domains` | `/p/$name/domains` |
+| Machines | `/machines` | `/p/$name/machines` |
+| Network | `/network` | `/p/$name/network` |
+| Config | `/config` | `/p/$name/config` |
+| machine detail | `/machines/$machine` | — (a machine has no project, invariant 6) |
+| gateway surfaces | `/drift`, `/dns`, `/hosts`, `/vpn`, `/bans`, `/checks`, `/observability`, `/ports`, `/settings` — **unchanged** (operator's pick) | — |
+
+Redirects, kept for bookmarks: `/dashboard → /`, `/segments → /network`,
+`/projects → /`, and `/<anything>/…` that resolves as a legacy dotted or bare
+project param → `/p/<name>/…`. The redirect is the only remaining use of
+`resolveProjectParam`.
+
+**What the bare name buys:** the URL stays the same when a project is
+reparented. The dotted-path ambiguity no longer exists. Decision A's
+blocking question (the name guard) no longer blocks routing. It still blocks
+config-manager addressing (`configmgr/keystore.go:86`), which is a separate
+defect.
+
+#### Consequences that need checking before build
+
+- **Unscoped Config tab (reverses Decision L).** `/api/v1/cm/registrations`
+  already returns all projects (filtered only by `state`,
+  `internal/server/handlers_configmgr.go:577`), and `$project.config.tsx:60-61`
+  filters on the client by `reading.names`. The unscoped reading passes every
+  name. The resolve/promote panel needs a project, so unscoped it is
+  either omitted or given a project picker. **Answered: a picker** — a
+  `?project=` search param on `/config`, so the prefilled screen has an address.
+- **`/projects` goes away as a screen.** The tree is the index. Its
+  add/remove controls (§6, "unreachable endpoints") need a place to live: the
+  unscoped Overview, or a `+` on the tree. **Answered: `+` on the tree.** Add
+  is the `+` beside the `projects` caption (parent defaults to where you are);
+  remove is a control on the CURRENT node only, and its dialog is the server's
+  dry run until confirmed.
+- **`ScopeControl`** (own vs own + descendants, `ProjectBits.tsx:284`) stays
+  on each tab's page. It is not moved into the nav.
+- **The render check `projectRoutes.render.selftest.tsx`** asserts amendment
+  4's shape (for example, that no gateway row appears inside a project). It
+  gets rewritten, not deleted: its new job is to assert the sidebar is
+  **byte-identical** across every scope except for the tree's open state and
+  its highlight.
+- **Drift** stays in Gateway. It is fleet-wide and project-blind today
+  (`grep -c -i project ui/src/routes/drift.tsx` → 0). Making it a seventh
+  scoped tab is an optional extension, not part of this amendment.
+
+#### Line count
+
+The sidebar is 1 wordmark + visible tree nodes + 1 caption + 9 gateway
+rows. On the example projection with everything closed, that is **about 13 lines at
+every depth**. The number does not change when you enter a project, and that
+constancy is the point of the design.
+
+#### Built 2026-09-26 — what it shipped as, and what reading could not see
+
+- **Where the code is.** `projectRoutes.ts` decides (`SCOPE_TABS`,
+  `tabOfPath`, `projectOfPath`, `tabTarget`, `treeRows`, `ancestry`,
+  `legacyTarget`, `resolveProjectName`); `SidebarMenu.tsx` draws the tree and
+  the gateway group; `ScopeBar.tsx` draws the breadcrumb and the tabs in the
+  shell; `ProjectDialogs.tsx` is add/remove. The routes are
+  `routes/p.$project.*.tsx`, `network.tsx`, `config.tsx`, and `$.tsx` (the
+  catch-all). `/dashboard`, `/projects` and `/segments` are redirects.
+- **The tree's default is open along the path to where you are**, and a
+  toggle flips a node away from that default in either direction. The current
+  node itself is not opened for you.
+- **Leaving a project keeps the tab too**: the breadcrumb's leading control
+  (an icon, no label — there is no root to name) goes to the same tab with no
+  project. The wordmark goes to `/`.
+- **The Overview lost its Config button**; the tab is the way there. The
+  project header (parent, what it inherits, subproject chips) moved from the
+  layout onto the Overview, because the breadcrumb now names the project on
+  every tab.
+- **A project name that the config manager cannot address is WARNED, not
+  refused**, in the add dialog. The name guard is still the operator's call
+  (plan.md, "A project can become unaddressable"); the bare-name URL removes
+  only its routing half — `/p/a.b` reaches the project named `a.b`.
+- **MUI `Breadcrumbs` is a `<nav>`.** The render check read "the sidebar" as
+  the first `<nav>` on the page, which on a phone (sidebar in a closed drawer)
+  is the breadcrumb. It now keys on `data-sidebar`.
+- **Old dotted links are followed, not refused**: `/acme-co.storefront/segments`
+  → `/p/storefront/network`, checked live in a hermetic container.
+- **Measured**: the sidebar is 13 lines with no project and at a root, 16 two
+  deep (the path to the node is open), and its only non-link lines are the two
+  captions at every scope. Positive control: hiding the gateway group inside a
+  project and dropping the kept tab each reddened the render check (8 fails).
 
 ### Decision 2 — machines and instances are one surface, two lenses
 
