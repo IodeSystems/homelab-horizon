@@ -113,6 +113,39 @@ var settingsExcluded = map[string]bool{
 	"peer_id":                true, // fleet identity, local
 	"config_primary":         true, // fleet identity, local
 	"peers":                  true, // fleet membership, local
+	"vpn_projects":           true, // attribution only — see stripAttribution
+}
+
+// attributionOnly lists the per-element keys that are ATTRIBUTION: which
+// project a record belongs to. Amendment 6 (plan/design/ui.md) pins that
+// attribution changes no rendered artifact
+// (TestAttributionChangesNoRenderedArtifact), so a Sync has nothing to publish
+// for it, and counting it as pending told the operator to Sync for nothing —
+// the operator's own report: "aw4 modified since the last Sync" for an edit
+// that was only `project: → iode, environment: → dev`.
+var attributionOnly = map[string][]string{
+	"services":        {"project", "environment"},
+	"machines":        {"project"},
+	"service_checks":  {"project"},
+	"port_exclusions": {"project"},
+}
+
+// stripAttribution removes the attribution keys from one marshalled element of
+// `list` (a top-level config key), leaving everything a Sync can publish.
+func stripAttribution(list string, elem []byte) []byte {
+	keys := attributionOnly[list]
+	if len(keys) == 0 {
+		return elem
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(elem, &m); err != nil {
+		return elem
+	}
+	for _, k := range keys {
+		delete(m, k)
+	}
+	out, _ := json.Marshal(m)
+	return out
 }
 
 // diffConfig reports added/removed/modified services and zones plus a single
@@ -144,6 +177,16 @@ func settingsObject(c *config.Config) []byte {
 	for k := range m {
 		if settingsExcluded[k] {
 			delete(m, k)
+			continue
+		}
+		if _, ok := attributionOnly[k]; ok {
+			var elems []json.RawMessage
+			if json.Unmarshal(m[k], &elems) == nil {
+				for i := range elems {
+					elems[i] = stripAttribution(k, elems[i])
+				}
+				m[k], _ = json.Marshal(elems)
+			}
 		}
 	}
 	out, _ := json.Marshal(m)
@@ -154,7 +197,7 @@ func marshalServices(c *config.Config) map[string][]byte {
 	m := make(map[string][]byte, len(c.Services))
 	for i := range c.Services {
 		b, _ := json.Marshal(c.Services[i])
-		m[c.Services[i].Name] = b
+		m[c.Services[i].Name] = stripAttribution("services", b)
 	}
 	return m
 }

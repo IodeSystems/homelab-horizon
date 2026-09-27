@@ -131,6 +131,10 @@ export interface QueueItem {
    * that governs it (silence hatched not red, reading order reversed once a
    * value is a memory) applies here without restating it. */
   presentation?: ObservationPresentation;
+  /** Pending-change rows only: WHAT changed, field by field, as the server
+   * diffed it (`PendingItem.fields`). The operator's report: a row naming
+   * only the record did not say what a Sync would publish. */
+  changes?: { path: string; before: string; after: string }[];
 }
 
 export interface TierGroup {
@@ -257,10 +261,11 @@ function pendingChangeItems(pending: PendingChanges): QueueItem[] {
     id: `pending-changes:${it.kind}:${it.name}:${i}`,
     tier: "waiting",
     source: "pending-changes",
-    headline: `${it.name} ${it.change} since the last Sync`,
-    meaning:
-      "Live config already reflects this. External DNS and certificates will not until an admin runs Sync.",
-    to: it.kind === "zone" ? "/dns" : "/services",
+    headline:
+      it.kind === "settings" ? "Settings changed since the last Sync" : `${it.kind} ${it.name} ${it.change} since the last Sync`,
+    meaning: "Applied locally. External DNS and certificates update when an admin runs Sync.",
+    to: it.kind === "zone" ? "/dns" : it.kind === "settings" ? "/settings" : "/services",
+    changes: (it.fields ?? []).map((f) => ({ path: f.path, before: f.before ?? "", after: f.after ?? "" })),
   }));
 }
 
