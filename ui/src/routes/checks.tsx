@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -35,6 +35,7 @@ import {
   useChecks,
   useDeleteCheck,
   useProbeDiagnosis,
+  useProjects,
   useRunCheck,
   useToggleCheck,
 } from "../api/hooks";
@@ -42,6 +43,8 @@ import type { CheckStatus, ProbeDiagnosis } from "../api/types";
 import { ChecksHistory } from "../components/ChecksHistory";
 import { RemoteVantages } from "../components/RemoteVantages";
 import { EdgeDiagnosis, deviceLabel } from "../components/EdgeDiagnosis";
+import { buildProjectIndex } from "../components/model/projectRoutes.ts";
+import { PROJECT_COLUMN_LABEL, ProjectLink } from "../components/model/ProjectBits";
 
 function relativeTime(isoStr: string): string {
   if (!isoStr) return "Never";
@@ -58,7 +61,7 @@ function relativeTime(isoStr: string): string {
   return `${days}d ago`;
 }
 
-function StatusDot({ status }: { status: string }) {
+export function StatusDot({ status }: { status: string }) {
   const color =
     status === "ok"
       ? "success.main"
@@ -84,14 +87,33 @@ function StatusDot({ status }: { status: string }) {
 // top of the page now carries the history signal (up/down ribbon + latency
 // stacked). Expanding each row to see its own sparkline was redundant.
 
+/**
+ * For a `svc:<name>` check, the service it follows; null for anything else.
+ * Its project is DERIVED from that service at response time, never stored on
+ * the check (`checkProjects`, `internal/server/handlers_api_settings.go`), so
+ * a row like this never carries its own project attribution.
+ */
+export function svcFollows(name: string): string | null {
+  return name.startsWith("svc:") ? name.slice(4) : null;
+}
+
 // A remote check row carries the cause of its own failure, when the edge
 // diagnosis has one for it. The row says a probe failed; the cause says on
 // whose device, and an operator scanning the table should not have to work out
 // that the panel above is about this line.
-function CheckRow({ check, cause }: { check: CheckStatus; cause?: ProbeDiagnosis }) {
+function CheckRow({
+  check,
+  cause,
+  projectIndex,
+}: {
+  check: CheckStatus;
+  cause?: ProbeDiagnosis;
+  projectIndex: ReturnType<typeof buildProjectIndex>;
+}) {
   const toggleCheck = useToggleCheck();
   const deleteCheck = useDeleteCheck();
   const runCheck = useRunCheck();
+  const follows = svcFollows(check.name);
 
   return (
     <>
@@ -110,6 +132,16 @@ function CheckRow({ check, cause }: { check: CheckStatus; cause?: ProbeDiagnosis
                   label={check.vantage}
                   size="small"
                   color="info"
+                  variant="outlined"
+                  sx={{ ml: 0.5, height: 20, fontSize: "0.7rem" }}
+                />
+              </Tooltip>
+            )}
+            {follows && (
+              <Tooltip title={`Follows service ${follows} — its project is the service's, not its own.`}>
+                <Chip
+                  label={`follows ${follows}`}
+                  size="small"
                   variant="outlined"
                   sx={{ ml: 0.5, height: 20, fontSize: "0.7rem" }}
                 />
@@ -150,6 +182,9 @@ function CheckRow({ check, cause }: { check: CheckStatus; cause?: ProbeDiagnosis
               />
             </Tooltip>
           )}
+        </TableCell>
+        <TableCell>
+          <ProjectCell project={check.project} index={projectIndex} />
         </TableCell>
         <TableCell>
           <Typography variant="body2" color="text.secondary">
@@ -204,20 +239,179 @@ function CheckRow({ check, cause }: { check: CheckStatus; cause?: ProbeDiagnosis
   );
 }
 
-function ChecksPage() {
-  const { data: checks, isLoading, error } = useChecks();
-  const { data: allHistory } = useAllCheckHistory();
-  // Same query key the panel uses, so this costs no extra request.
-  const { data: diagnosis } = useProbeDiagnosis();
-  const [addOpen, setAddOpen] = useState(false);
-  const [snack, setSnack] = useState("");
+/**
+ * Which project an unscoped row lives in — "global" for `""`, always (plan/design/ui.md,
+ * Decision 1, amendment 6: "Global is "", always labelled "global", never blank").
+ * Not `LocationCell`: that component's blank case means "no project ever declared for
+ * this record" (a legacy service), a different fact from a check's `""`, which means
+ * "attributed to the root, on purpose".
+ */
+function ProjectCell({
+  project,
+  index,
+}: {
+  project: string;
+  index: ReturnType<typeof buildProjectIndex>;
+}) {
+  if (!project) {
+    return (
+      <Chip
+        label="global"
+        size="small"
+        variant="outlined"
+        title="Not attributed to any project — the root."
+      />
+    );
+  }
+  const route = index.byName.get(project);
+  return route ? (
+    <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+      <ProjectLink index={index} route={route} />
+    </Typography>
+  ) : (
+    <Typography
+      variant="body2"
+      sx={{ fontFamily: "monospace", color: "warning.main" }}
+      title={`Attributed to "${project}", which hz's project tree does not contain.`}
+    >
+      {project}
+    </Typography>
+  );
+}
+
+/**
+ * The Add Check dialog, shared by `/checks` (unscoped) and a project's Checks
+ * tab (amendment 6: the empty tab offers [Add check] and the modal does the
+ * rest). `project` fixes the attribution and hides the picker when the caller
+ * already knows it — the project tab always passes it; the unscoped screen
+ * does not, and offers the picker instead, defaulting to global.
+ */
+export function AddCheckDialog({
+  project,
+  onClose,
+}: {
+  project?: string;
+  onClose: () => void;
+}) {
   const addCheck = useAddCheck();
+  const projectsQuery = useProjects();
+  const [snack, setSnack] = useState("");
   const [form, setForm] = useState({
     name: "",
     type: "ping",
     target: "",
     interval: 300,
+    project: project ?? "",
   });
+
+  const fixed = project !== undefined;
+  const submit = () => {
+    addCheck.mutate(
+      {
+        name: form.name,
+        type: form.type,
+        target: form.target,
+        interval: form.interval,
+        project: (fixed ? project : form.project) || undefined,
+      },
+      {
+        onSuccess: onClose,
+        onError: (err) => setSnack(err.message),
+      },
+    );
+  };
+
+  return (
+    <>
+      <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          {fixed ? `Add check to ${project || "global"}` : "Add Health Check"}
+        </DialogTitle>
+        <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: "8px !important" }}>
+          <TextField
+            label="Name"
+            size="small"
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+          />
+          <TextField
+            label="Type"
+            size="small"
+            select
+            value={form.type}
+            onChange={(e) => setForm({ ...form, type: e.target.value })}
+          >
+            <MenuItem value="ping">Ping (TCP)</MenuItem>
+            <MenuItem value="http">HTTP GET</MenuItem>
+          </TextField>
+          <TextField
+            label="Target"
+            size="small"
+            placeholder={form.type === "http" ? "http://host:port/path" : "hostname-or-ip"}
+            value={form.target}
+            onChange={(e) => setForm({ ...form, target: e.target.value })}
+          />
+          <TextField
+            label="Interval (seconds)"
+            size="small"
+            type="number"
+            value={form.interval}
+            onChange={(e) =>
+              setForm({ ...form, interval: parseInt(e.target.value) || 300 })
+            }
+          />
+          {!fixed && (
+            <TextField
+              label="Project"
+              size="small"
+              select
+              value={form.project}
+              onChange={(e) => setForm({ ...form, project: e.target.value })}
+              helperText="Declared projects only. Global is the default — attributed to no project."
+            >
+              <MenuItem value="">
+                <em>global</em>
+              </MenuItem>
+              {(projectsQuery.data ?? []).map((p) => (
+                <MenuItem key={p.name} value={p.name}>
+                  {p.name}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={!form.name || !form.target || addCheck.isPending}
+            onClick={submit}
+          >
+            {addCheck.isPending ? <CircularProgress size={20} /> : "Add"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Snackbar
+        open={!!snack}
+        autoHideDuration={8000}
+        onClose={() => setSnack("")}
+        message={snack}
+      />
+    </>
+  );
+}
+
+function ChecksPage() {
+  const { data: checks, isLoading, error } = useChecks();
+  const { data: allHistory } = useAllCheckHistory();
+  // Same query key the panel uses, so this costs no extra request.
+  const { data: diagnosis } = useProbeDiagnosis();
+  const projectsQuery = useProjects();
+  const projectIndex = useMemo(
+    () => buildProjectIndex(projectsQuery.data ?? []),
+    [projectsQuery.data],
+  );
+  const [addOpen, setAddOpen] = useState(false);
 
   if (isLoading) {
     return (
@@ -268,6 +462,8 @@ function ChecksPage() {
         </Button>
       </Box>
 
+      {addOpen && <AddCheckDialog onClose={() => setAddOpen(false)} />}
+
       <ChecksHistory data={allHistory} />
 
       {/* Causes before statuses. The table below says which probes failed;
@@ -285,6 +481,7 @@ function ChecksPage() {
               <TableCell>Type</TableCell>
               <TableCell>Target</TableCell>
               <TableCell>Status</TableCell>
+              <TableCell>{PROJECT_COLUMN_LABEL}</TableCell>
               <TableCell>Last Check</TableCell>
               <TableCell>Interval</TableCell>
               <TableCell>Actions</TableCell>
@@ -300,11 +497,12 @@ function ChecksPage() {
                     ? causeFor.get(`${check.vantage}:${check.target}`)
                     : undefined
                 }
+                projectIndex={projectIndex}
               />
             ))}
             {checksList.length === 0 && (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
                     No health checks configured
                   </Typography>
@@ -314,70 +512,6 @@ function ChecksPage() {
           </TableBody>
         </Table>
       </TableContainer>
-
-      <Dialog open={addOpen} onClose={() => setAddOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Add Health Check</DialogTitle>
-        <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: "8px !important" }}>
-          <TextField
-            label="Name"
-            size="small"
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-          />
-          <TextField
-            label="Type"
-            size="small"
-            select
-            value={form.type}
-            onChange={(e) => setForm({ ...form, type: e.target.value })}
-          >
-            <MenuItem value="ping">Ping (TCP)</MenuItem>
-            <MenuItem value="http">HTTP GET</MenuItem>
-          </TextField>
-          <TextField
-            label="Target"
-            size="small"
-            placeholder={form.type === "http" ? "http://host:port/path" : "hostname-or-ip"}
-            value={form.target}
-            onChange={(e) => setForm({ ...form, target: e.target.value })}
-          />
-          <TextField
-            label="Interval (seconds)"
-            size="small"
-            type="number"
-            value={form.interval}
-            onChange={(e) =>
-              setForm({ ...form, interval: parseInt(e.target.value) || 300 })
-            }
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setAddOpen(false)}>Cancel</Button>
-          <Button
-            variant="contained"
-            disabled={!form.name || !form.target}
-            onClick={() => {
-              addCheck.mutate(form, {
-                onSuccess: () => {
-                  setAddOpen(false);
-                  setForm({ name: "", type: "ping", target: "", interval: 300 });
-                  setSnack("Check added");
-                },
-                onError: (err) => setSnack(err.message),
-              });
-            }}
-          >
-            Add
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Snackbar
-        open={!!snack}
-        autoHideDuration={3000}
-        onClose={() => setSnack("")}
-        message={snack}
-      />
     </Box>
   );
 }

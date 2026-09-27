@@ -1080,6 +1080,8 @@ export function useAddCheck() {
       type: string;
       target: string;
       interval: number;
+      // Attributed project (CheckAddReq.project); omitted or "" is global.
+      project?: string;
     }) =>
       apiFetch("/checks/add", {
         method: "POST",
