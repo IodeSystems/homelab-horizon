@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -50,6 +50,7 @@ import {
   useMFAReset,
   useMFARevokeSession,
   useMFASettings,
+  useProjects,
   useRekeyPeer,
   useReloadWG,
   useSetPeerProfile,
@@ -57,6 +58,8 @@ import {
   useVPNPeers,
 } from "../api/hooks";
 import type { AddPeerResponse, RekeyPeerResponse, VPNPeer } from "../api/types";
+import { buildProjectIndex, type ProjectIndex } from "../components/model/projectRoutes.ts";
+import { PROJECT_COLUMN_LABEL, ProjectLink } from "../components/model/ProjectBits";
 
 function StatusDot({ active }: { active: boolean }) {
   return (
@@ -75,29 +78,77 @@ function StatusDot({ active }: { active: boolean }) {
   );
 }
 
-function AddPeerDialog({
+/**
+ * Where a client is attributed, on the unscoped `/vpn` screen. `""` is
+ * GLOBAL, not unassigned (plan/design/ui.md, Decision 1, amendment 6:
+ * *"Global is "", always labelled 'global', never blank"*) — every peer is
+ * sent with a `project` field, so there is no third, legacy-unset state to
+ * confuse it with here.
+ */
+function VpnProjectCell({ index, project }: { index: ProjectIndex; project: string }) {
+  if (!project) {
+    return (
+      <Typography
+        variant="body2"
+        sx={{ fontFamily: "monospace", color: "text.secondary", fontStyle: "italic" }}
+      >
+        global
+      </Typography>
+    );
+  }
+  const route = index.byName.get(project);
+  return (
+    <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+      {route ? <ProjectLink index={index} route={route} /> : project}
+    </Typography>
+  );
+}
+
+/**
+ * Add a VPN client. Reused from both `/vpn` (no `project`: a select offers
+ * every declared project, defaulting to global) and a project's own tab
+ * (`project` fixed — the same pattern `AddServiceDialog` uses in
+ * `services.tsx`: no select, the title names where it lands).
+ */
+export function AddPeerDialog({
   open,
   onClose,
   onResult,
+  project,
 }: {
   open: boolean;
   onClose: () => void;
   onResult: (result: AddPeerResponse, name: string) => void;
+  /** Fixed to one project when given. Omit to show the project select. */
+  project?: string;
 }) {
+  const fixedProject = project;
   const [name, setName] = useState("");
   const [extraIPs, setExtraIPs] = useState("");
   const [profile, setProfile] = useState("lan-access");
+  const [pickedProject, setPickedProject] = useState("");
+  const projectsQuery = useProjects();
+  const index = useMemo(
+    () => buildProjectIndex(projectsQuery.data ?? []),
+    [projectsQuery.data],
+  );
   const addPeer = useAddPeer();
 
   const handleSubmit = () => {
     addPeer.mutate(
-      { name: name.trim(), extraIPs: extraIPs.trim(), profile },
+      {
+        name: name.trim(),
+        extraIPs: extraIPs.trim(),
+        profile,
+        project: fixedProject !== undefined ? fixedProject : pickedProject,
+      },
       {
         onSuccess: (data) => {
           onResult(data, name.trim());
           setName("");
           setExtraIPs("");
           setProfile("lan-access");
+          setPickedProject("");
         },
       },
     );
@@ -105,7 +156,9 @@ function AddPeerDialog({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Add VPN Client</DialogTitle>
+      <DialogTitle>
+        {fixedProject !== undefined ? `Add VPN client to ${fixedProject}` : "Add VPN Client"}
+      </DialogTitle>
       <DialogContent>
         <TextField
           autoFocus
@@ -115,6 +168,30 @@ function AddPeerDialog({
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
+        {fixedProject === undefined && (
+          <TextField
+            select
+            label="Project"
+            fullWidth
+            margin="normal"
+            value={pickedProject}
+            onChange={(e) => setPickedProject(e.target.value)}
+            helperText="Attribution only — every client is in the one wg0.conf regardless."
+          >
+            <MenuItem value="">
+              <em>global</em>
+            </MenuItem>
+            {index.routes.map((r) => (
+              <MenuItem
+                key={r.name}
+                value={r.name}
+                sx={{ fontFamily: "monospace", pl: 2 + r.depth * 2 }}
+              >
+                {r.name}
+              </MenuItem>
+            ))}
+          </TextField>
+        )}
         <FormControl fullWidth margin="normal">
           <InputLabel>Routing Profile</InputLabel>
           <Select
@@ -156,7 +233,10 @@ function AddPeerDialog({
   );
 }
 
-function PeerResultDialog({
+/** The post-create result — QR code and config — shown from both `/vpn` and
+ * a project's own VPN tab, so a client added from either place gets the same
+ * follow-up. */
+export function PeerResultDialog({
   open,
   onClose,
   result,
@@ -252,7 +332,13 @@ function EditPeerDialog({
   const [name, setName] = useState("");
   const [extraIPs, setExtraIPs] = useState("");
   const [profile, setProfile] = useState("lan-access");
+  const [project, setProject] = useState("");
   const editPeer = useEditPeer();
+  const projectsQuery = useProjects();
+  const index = useMemo(
+    () => buildProjectIndex(projectsQuery.data ?? []),
+    [projectsQuery.data],
+  );
 
   // Sync state when peer changes
   const [lastPeerKey, setLastPeerKey] = useState("");
@@ -260,6 +346,7 @@ function EditPeerDialog({
     setLastPeerKey(peer.publicKey);
     setName(peer.name);
     setProfile(peer.profile || "lan-access");
+    setProject(peer.project);
     // Extract extra IPs (everything after the first /32 entry)
     const parts = peer.allowedIPs.split(",").map((s) => s.trim());
     const extra = parts.filter((p) => !p.endsWith("/32"));
@@ -269,7 +356,7 @@ function EditPeerDialog({
   const handleSubmit = () => {
     if (!peer) return;
     editPeer.mutate(
-      { publicKey: peer.publicKey, name: name.trim(), extraIPs: extraIPs.trim(), profile },
+      { publicKey: peer.publicKey, name: name.trim(), extraIPs: extraIPs.trim(), profile, project },
       { onSuccess: () => onClose() },
     );
   };
@@ -286,6 +373,28 @@ function EditPeerDialog({
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
+        <TextField
+          select
+          label="Project"
+          fullWidth
+          margin="normal"
+          value={project}
+          onChange={(e) => setProject(e.target.value)}
+          helperText="Attribution only — re-attributing changes no rendered artifact."
+        >
+          <MenuItem value="">
+            <em>global</em>
+          </MenuItem>
+          {index.routes.map((r) => (
+            <MenuItem
+              key={r.name}
+              value={r.name}
+              sx={{ fontFamily: "monospace", pl: 2 + r.depth * 2 }}
+            >
+              {r.name}
+            </MenuItem>
+          ))}
+        </TextField>
         <FormControl fullWidth margin="normal">
           <InputLabel>Routing Profile</InputLabel>
           <Select
@@ -637,6 +746,11 @@ function PeerConfigDialog({
 
 function VPNPage() {
   const { data, isLoading, error } = useVPNPeers();
+  const projectsQuery = useProjects();
+  const index = useMemo(
+    () => buildProjectIndex(projectsQuery.data ?? []),
+    [projectsQuery.data],
+  );
   const invitesQuery = useInvites();
   const toggleAdmin = useToggleAdmin();
   const setPeerProfile = useSetPeerProfile();
@@ -720,6 +834,7 @@ function VPNPage() {
           <TableHead>
             <TableRow>
               <TableCell>Name</TableCell>
+              <TableCell>{PROJECT_COLUMN_LABEL}</TableCell>
               <TableCell>Profile</TableCell>
               {mfaSettings.data?.enabled && <TableCell>MFA</TableCell>}
               <TableCell>Status</TableCell>
@@ -733,7 +848,7 @@ function VPNPage() {
           <TableBody>
             {peers.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={mfaSettings.data?.enabled ? 9 : 8} align="center">
+                <TableCell colSpan={mfaSettings.data?.enabled ? 10 : 9} align="center">
                   <Typography
                     variant="body2"
                     color="text.secondary"
@@ -762,6 +877,9 @@ function VPNPage() {
                         />
                       )}
                     </Box>
+                  </TableCell>
+                  <TableCell>
+                    <VpnProjectCell index={index} project={peer.project} />
                   </TableCell>
                   <TableCell>
                     <Tooltip title="Click to cycle profile">

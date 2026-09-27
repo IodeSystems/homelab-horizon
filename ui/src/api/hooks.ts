@@ -642,7 +642,9 @@ export function useTriggerSync() {
 export function useAddPeer() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { name: string; extraIPs: string; profile: string }) =>
+    // project omitted is global, exactly like a service added with no project
+    // — the server defaults `PeerAddReq.Project` to "".
+    mutationFn: (input: { name: string; extraIPs: string; profile: string; project?: string }) =>
       apiFetch<AddPeerResponse>("/vpn/peers/add", {
         method: "POST",
         body: JSON.stringify(input),
@@ -662,6 +664,10 @@ export function useEditPeer() {
       name: string;
       extraIPs: string;
       profile: string;
+      // A pointer server-side: omitted leaves attribution alone, "" makes the
+      // client global. The edit form always shows and sends the current
+      // selection, so callers here always pass it explicitly.
+      project?: string;
     }) =>
       apiFetch("/vpn/peers/edit", {
         method: "POST",
