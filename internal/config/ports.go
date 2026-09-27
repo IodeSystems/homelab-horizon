@@ -1,5 +1,7 @@
 package config
 
+import "strconv"
+
 // Port-allocation exclusions. hz's `ports next`/`ports list` (and any client that
 // reads /api/v1/ports) must never hand out a port that a database, dev tool, or
 // well-known service expects to own. The denylist has two layers:
@@ -12,11 +14,14 @@ package config
 // excluded port is never evicted (callers flag it as grandfathered).
 
 // PortRange is an inclusive [From, To] port span. A single port sets To==0 (or
-// To==From). Note is an optional human label shown in the UI.
+// To==From). Note is an optional human label shown in the UI. Project
+// attributes an operator exclusion ("" is global); allocation ignores it —
+// an exclusion denies the port to every project.
 type PortRange struct {
-	From int    `json:"from"`
-	To   int    `json:"to,omitempty"`
-	Note string `json:"note,omitempty"`
+	From    int    `json:"from"`
+	To      int    `json:"to,omitempty"`
+	Note    string `json:"note,omitempty"`
+	Project string `json:"project,omitempty"`
 }
 
 // Contains reports whether p falls in the range (single port when To<=From).
@@ -90,4 +95,13 @@ func BuiltinPortExclusions() []PortRange {
 	out := make([]PortRange, len(builtinPortRanges))
 	copy(out, builtinPortRanges)
 	return out
+}
+
+// Label is the range as an operator writes it: "8443" or "8000-8099". It is
+// how a removal or a validation error names an exclusion, which has no name.
+func (r PortRange) Label() string {
+	if r.To > r.From {
+		return strconv.Itoa(r.From) + "-" + strconv.Itoa(r.To)
+	}
+	return strconv.Itoa(r.From)
 }
