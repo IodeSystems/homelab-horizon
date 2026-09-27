@@ -2178,6 +2178,48 @@ interface SnackState {
 
 // --- Main page ---
 
+/**
+ * The Add Service dialog, for a project's Services tab (amendment 6: the empty
+ * tab offers [Add service] and the modal does the rest). The same form as
+ * `/services`, with the new service placed in `project` on create — the server
+ * validates the project, and its refusal is shown as sent.
+ */
+export function AddServiceDialog({
+  project,
+  onClose,
+}: {
+  project: string;
+  onClose: () => void;
+}) {
+  const addMutation = useAddService();
+  const { data: settings } = useSettings();
+  const [error, setError] = useState("");
+  return (
+    <>
+      <ServiceFormDialog
+        open
+        title={`Add service to ${project}`}
+        initialValues={emptyForm}
+        onClose={onClose}
+        onSubmit={(form) =>
+          addMutation.mutate(
+            { ...formToInput(form), project },
+            { onSuccess: onClose, onError: (err) => setError(err.message) },
+          )
+        }
+        isSubmitting={addMutation.isPending}
+        localInterface={settings?.config?.localInterface ?? ""}
+        publicIP={settings?.config?.publicIP ?? ""}
+      />
+      <Snackbar open={error !== ""} autoHideDuration={8000} onClose={() => setError("")}>
+        <Alert severity="error" onClose={() => setError("")}>
+          {error}
+        </Alert>
+      </Snackbar>
+    </>
+  );
+}
+
 function ServicesPage() {
   const { data, isLoading, error } = useServices();
   const projects = useProjects();

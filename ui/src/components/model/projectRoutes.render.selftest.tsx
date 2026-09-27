@@ -51,7 +51,6 @@ import {
   derivedProjectSurfaces,
   treeRows,
   GATEWAY_NAV,
-  GATEWAY_WIDE_SURFACES,
   SCOPE_TABS,
 } from "./projectRoutes.ts";
 import { POSTURES } from "./model.ts";
@@ -556,9 +555,11 @@ console.log("· scope is in the URL, so the two scopes are two pages");
   check(all.text.includes("git"), "the default scope includes a subproject's rows");
   check(!own.text.includes("git"), "?scope=own excludes them");
   check(all.text !== own.text, "the two URLs are two different pages");
+  // One line now (amendment 6): the sentence saying what is hidden is the
+  // chip's title — still in the markup, no longer a paragraph.
   check(
-    own.text.includes("excluded") || own.text.includes("not shown"),
-    "and the narrowed one says what it is hiding rather than hiding silently",
+    /title="[^"]*excluded/.test(own.html),
+    "and the narrowed one still says what it is hiding, in the chip's title",
   );
 
   // The control must be a LINK, and it must be THE control — a plain search
@@ -581,8 +582,8 @@ console.log("· scope is in the URL, so the two scopes are two pages");
 
   const leaf = await at("/p/intern/services");
   check(
-    leaf.text.includes("Nothing sits under it"),
-    "a project with no subprojects says the scope control would change nothing",
+    /data-scope-control/.test(leaf.html) && controlLinks(leaf).length === 0,
+    "a project with no subprojects shows what is in scope and offers no toggle that would change nothing",
   );
 }
 
@@ -767,35 +768,25 @@ console.log("· Config is a tab at every scope, and the unscoped one has a proje
 }
 
 // ---------------------------------------------------------------------------
-console.log("· the bans/clients explanation lives ONCE, on the project's Overview");
+console.log("· FLOWS OVER PROSE: no screen explains what it cannot scope");
 // ---------------------------------------------------------------------------
 {
-  const overview = await at("/p/storefront");
-  for (const gap of GATEWAY_WIDE_SURFACES) {
-    check(overview.text.includes(gap.gatewayLabel), `${gap.label} is named on the Overview`);
-    check(
-      overview.text.includes(gap.why.slice(0, 60)),
-      `with the reason hz cannot scope it, in the record's own terms (${gap.label})`,
-    );
-    check(
-      overview.links.some((h) => h.endsWith(gap.gatewayAt)),
-      `and a link to the gateway screen that holds the rows (${gap.gatewayAt})`,
-    );
+  // Amendment 6 reverses Decision K: the operator read the explanation panels
+  // as "too much explanation of poor organization". Every tab is a table or a
+  // one-line empty state with its Add button, and nothing else.
+  for (const path of ["/p/storefront", "/p/storefront/services", "/p/storefront/domains", "/p/storefront/network"]) {
+    const r = await at(path);
+    check(!r.text.includes("Gateway-wide, not scoped"), `${path} carries no "gateway-wide" explainer`);
+    check(!r.text.includes("are not on this screen"), `${path} carries no "not on this screen" explainer`);
+    check(!r.text.includes("Conflicts are not visible here"), `${path} carries no conflicts explainer`);
+    check(!r.text.includes("Services with no project"), `${path} carries no unassigned-services explainer`);
   }
-  check(
-    overview.text.includes("Gateway-wide, not scoped to storefront"),
-    "under a heading that names this project, so the sentence is about something",
-  );
-  check(
-    !overview.links.some((h) => h.includes("storefront/bans") || h.includes("storefront/vpn")),
-    "and nothing links to a /p/$project/bans or /p/$project/clients that cannot answer",
-  );
-  // It is on the Overview and NOT on every screen: one explanation, one place.
-  const services = await at("/p/storefront/services");
-  check(
-    !services.text.includes("Gateway-wide, not scoped to"),
-    "the explanation is not repeated on the project's other screens",
-  );
+  const shop = await at("/p/storefront/services");
+  check(/Add service/.test(shop.text), "a project's Services tab has an Add service button");
+  const empty = await at("/p/eu/services");
+  check(/data-empty-row/.test(empty.html), "an empty tab renders the one-line empty row");
+  check(empty.text.includes("No services in eu."), "which says what is missing, in one sentence");
+  check(/data-empty-row[\s\S]*?Add service/.test(empty.html), "with the Add button inside it");
 }
 
 // ---------------------------------------------------------------------------
@@ -1053,8 +1044,8 @@ console.log("· /p/$project/network reads the endpoint nothing had ever called")
 
   const leaf = await at("/p/intern/network");
   check(
-    leaf.text.includes("No segment names intern"),
-    "a project with no segment says so, and says hz has others",
+    leaf.text.includes("No network segments in intern.") && /data-empty-row[\s\S]*?Add segment/.test(leaf.html),
+    "a project with no segment says so in one line, with Add segment beside it",
   );
 }
 
