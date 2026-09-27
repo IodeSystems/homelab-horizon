@@ -1146,7 +1146,7 @@ than an omission (`internal/config/machine.go:15`):
 > that row the day it was added, and every screen built on it would inherit the
 > lie."*
 
-`TestAMachineCarriesNoProjectAndNoEnvironment` pins it. So `/machines`,
+`TestAMachineCarriesNoEnvironment` pins it. So `/machines`,
 `/machines/$machine` and `/drift` cannot move under `/$project/…` — there is no
 value to put in the parameter, and inventing one is exactly the lie the record
 comment refuses.
@@ -1581,7 +1581,7 @@ machine. `config.Machine` is `{Name, Segments, Note}`
 (`internal/config/machine.go:42`) and the comment above it states the absence
 as the model's shape (`internal/config/machine.go:15`): *"a Project field on a
 machine would be false for that row the day it was added, and every screen
-built on it would inherit the lie."* `TestAMachineCarriesNoProjectAndNoEnvironment`
+built on it would inherit the lie."* `TestAMachineCarriesNoEnvironment`
 pins it. That is as true today as it was yesterday.
 
 *"…for the project … with the subproject label on the tables"* asks for
