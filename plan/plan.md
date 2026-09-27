@@ -184,6 +184,12 @@ warning onto the peer-config download path.
 
 # Active work
 
+◐ **Attribution — every section belongs to a project or is global** (amendment 6,
+approved 2026-09-26). **next:** backend model + API (agent, worktree) ∥ UI
+empty-state/prose cleanup (parent); then the four new tabs. **risks:** WGPeer
+re-snapshot dropping the field; LWW ban merge; a rendered artifact changing.
+→ [design/ui.md](design/ui.md) Decision 1, amendment 6.
+
 ✅ **Nav + route hierarchy (amendment 5), the ranked Overview, and add/edit/remove
 for environments, segments and machines** — merged to `dev` and **deployed** 2026-09-26
 (`7a8bb6b`), **not pushed** → [done.md](done.md#ui-write-surface-and-the-ranked-overview-2026-09-26).

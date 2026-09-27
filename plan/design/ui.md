@@ -2309,6 +2309,48 @@ constancy is the point of the design.
   captions at every scope. Positive control: hiding the gateway group inside a
   project and dropping the kept tab each reddened the render check (8 fails).
 
+### Decision 1, amendment 6 — ◐ approved 2026-09-26, building — every section is attributed to a project, or global
+
+> **The operator's brief, verbatim:** *"sections of the system, like ports,
+> checks, ip bans, machines, vpn clients, network segments, would be attributed
+> to a project or considered global (root project). Right now, the dashboards
+> for the project are confusing as well. There's too much explanation of poor
+> organization, and not enough clear flows — if there's no machines, just have a
+> table that says: 'no machines attributed to this project, [add a machine]' and
+> have the add modal do the rest."* And on rendering: *"these attributed projects
+> get built into separated global and machine configs. A machine can be shared
+> by several projects, so a SYNC is a combination of all machines and global
+> entities (dns)."*
+
+**Decisions (operator, 2026-09-26):**
+
+| record | attribution | where it is stored |
+|---|---|---|
+| Service, Domain, port forward, port reservation | already — via the service | `Service.Project` |
+| Segment | already, required | `Segment.Project` |
+| **Machine** | **owner**, optional; `""` = global | `Machine.Project` — **amends invariant 6** to "a machine carries no ENVIRONMENT" |
+| VPN client | optional | a map keyed by peer name (like `VPNProfiles`) — `WGPeers` is re-snapshotted from `wg0.conf` on every write and would drop a field |
+| Standalone check | optional | `ServiceCheck.Project`; `svc:*` checks follow their service |
+| IP ban | optional, **attribution only** — enforcement stays one gateway-wide `INPUT DROP` | `IPBan.Project`, carried by the LWW merge |
+| Port exclusion | optional | `PortRange.Project` |
+
+- **Global is `""`, always labelled "global"**, never blank. The unscoped view lists
+  global rows beside everyone's.
+- **Attribution is organisational and changes NO rendered artifact.** Every
+  gateway-wide render (DNS, HAProxy, iptables, bans, wg0.conf) and every
+  machine's projection is built from all records regardless of project, and a
+  sync combines them all. A test pins this byte-for-byte.
+- **Removing a project**: attributed records are dependants; `cascade` moves
+  them to global. It never deletes a machine, a client, a check or a ban.
+- **Ten tabs**: Overview · Services · Domains · Machines · Network · VPN · Checks
+  · Ports · Bans · Config. The gateway group shrinks to Drift · DNS · Hosts ·
+  Observability · Settings.
+- **Flows over prose**: an empty tab is one line — *"No machines attributed to
+  storefront."* — and an **[Add]** button whose modal is prefilled with the
+  project. The explanation panels about what cannot be scoped are deleted;
+  Decision K's "explain once on the Overview" is reversed because there is
+  nothing left to explain.
+
 ### Decision 2 — machines and instances are one surface, two lenses
 
 Not two top-level surfaces, and not one merged table.
