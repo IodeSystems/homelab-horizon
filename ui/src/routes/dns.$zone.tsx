@@ -1,7 +1,6 @@
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { Alert, Box, Breadcrumbs, CircularProgress, Typography } from "@mui/material";
 import { ZoneRecordsTable } from "../components/ZoneRecords";
-import SyncButton from "../components/SyncButton";
 import { useZones } from "../api/hooks";
 
 export const Route = createFileRoute("/dns/$zone")({
@@ -35,7 +34,6 @@ function DNSZonePage() {
         <Typography variant="h4" sx={{ flexGrow: 1 }}>
           {zone}
         </Typography>
-        <SyncButton />
       </Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
         Every record live at the provider, labelled by who owns it. hz only

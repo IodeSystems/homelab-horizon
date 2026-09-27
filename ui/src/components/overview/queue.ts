@@ -263,7 +263,7 @@ function pendingChangeItems(pending: PendingChanges): QueueItem[] {
     source: "pending-changes",
     headline:
       it.kind === "settings" ? "Settings changed since the last Sync" : `${it.kind} ${it.name} ${it.change} since the last Sync`,
-    meaning: "Applied locally. External DNS and certificates update when an admin runs Sync.",
+    meaning: "Applied locally. Sync (top right) publishes it to external DNS and certificates.",
     to: it.kind === "zone" ? "/dns" : it.kind === "settings" ? "/settings" : "/services",
     changes: (it.fields ?? []).map((f) => ({ path: f.path, before: f.before ?? "", after: f.after ?? "" })),
   }));
