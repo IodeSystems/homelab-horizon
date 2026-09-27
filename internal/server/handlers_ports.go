@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
@@ -12,7 +13,7 @@ import (
 func toAPIRanges(rs []config.PortRange) []apitypes.PortRange {
 	out := make([]apitypes.PortRange, len(rs))
 	for i, r := range rs {
-		out[i] = apitypes.PortRange{From: r.From, To: r.To, Note: r.Note}
+		out[i] = apitypes.PortRange{From: r.From, To: r.To, Note: r.Note, Project: r.Project}
 	}
 	return out
 }
@@ -43,7 +44,8 @@ func (s *Server) handleAPIPorts(w http.ResponseWriter, r *http.Request) {
 	for host, entries := range pm.Hosts {
 		out := make([]apitypes.HostPortEntry, len(entries))
 		for i, e := range entries {
-			out[i] = apitypes.HostPortEntry{Port: e.Port, Proto: e.Proto, Service: e.Service, Domain: e.Domain, Forward: e.Forward}
+			out[i] = apitypes.HostPortEntry{Port: e.Port, Proto: e.Proto, Service: e.Service, Domain: e.Domain, Forward: e.Forward,
+				Project: e.Project}
 		}
 		resp.Hosts[host] = out
 	}
@@ -72,7 +74,12 @@ func (s *Server) handleAPIPortExclusions(w http.ResponseWriter, r *http.Request)
 			writeJSONError(w, http.StatusBadRequest, "each exclusion needs a valid from (1-65535) and optional to >= from")
 			return
 		}
-		custom = append(custom, config.PortRange{From: r.From, To: r.To, Note: r.Note})
+		project := strings.TrimSpace(r.Project)
+		if err := s.cfg().CheckProjectRef(project); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "exclusion "+config.PortRange{From: r.From, To: r.To}.Label()+": "+err.Error())
+			return
+		}
+		custom = append(custom, config.PortRange{From: r.From, To: r.To, Note: r.Note, Project: project})
 	}
 	if err := s.updateConfig(func(cfg *config.Config) { cfg.PortExclusions = custom }); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())

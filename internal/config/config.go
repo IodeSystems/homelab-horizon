@@ -377,6 +377,16 @@ type Config struct {
 	// Per-peer routing profiles: "lan-access" (default), "full-tunnel", "vpn-only"
 	VPNProfiles map[string]string `json:"vpn_profiles,omitempty"`
 
+	// VPNProjects attributes a VPN client to a project: peer name -> project.
+	// Absent means global. ATTRIBUTION ONLY — no renderer reads it; wg0.conf,
+	// the WG-FORWARD/WG-INPUT chains and the peer's client config are the same
+	// for every value (TestAttributionChangesNoRenderedArtifact).
+	//
+	// A map keyed by peer name, like VPNProfiles, and NOT a field on WGPeer:
+	// WGPeers is rebuilt from wg0.conf on every peer write
+	// (internal/server/handlers_peer.go snapshotWGPeers), which would drop it.
+	VPNProjects map[string]string `json:"vpn_projects,omitempty"`
+
 	// WireGuard MFA (TOTP or passkey, per-connect)
 	VPNMFAEnabled   bool              `json:"vpn_mfa_enabled,omitempty"`
 	VPNMFADurations []string          `json:"vpn_mfa_durations,omitempty"` // e.g. ["2h","4h","8h","forever"]
@@ -682,6 +692,43 @@ func (c *Config) ValidateProjects() error {
 			return fmt.Errorf("service %q names project %q, which does not exist", svc.Name, svc.Project)
 		}
 	}
+	// Attribution (plan/design/ui.md, Decision 1 amendment 6). Every one of
+	// these is optional and "" means global; a NAMED project has to exist, or
+	// the record reads as global on every screen while claiming an owner.
+	attributed := func(kind, name, project string) error {
+		if project == "" {
+			return nil
+		}
+		if _, ok := byName[project]; !ok {
+			return fmt.Errorf("%s %q names project %q, which does not exist", kind, name, project)
+		}
+		return nil
+	}
+	for _, m := range c.Machines {
+		if err := attributed("machine", m.Name, m.Project); err != nil {
+			return err
+		}
+	}
+	for _, peer := range sortedKeys(c.VPNProjects) {
+		if err := attributed("VPN client", peer, c.VPNProjects[peer]); err != nil {
+			return err
+		}
+	}
+	for _, chk := range c.ServiceChecks {
+		if err := attributed("check", chk.Name, chk.Project); err != nil {
+			return err
+		}
+	}
+	for _, b := range c.IPBans {
+		if err := attributed("ban", b.IP, b.Project); err != nil {
+			return err
+		}
+	}
+	for _, r := range c.PortExclusions {
+		if err := attributed("port exclusion", r.Label(), r.Project); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -968,6 +1015,11 @@ type IPBan struct {
 	ExpiresAt int64  `json:"expires_at,omitempty"` // unix timestamp, 0 = never
 	Reason    string `json:"reason,omitempty"`
 	Service   string `json:"service,omitempty"` // which service banned it
+
+	// Project attributes the ban; "" is global. ATTRIBUTION ONLY: enforcement
+	// is one gateway-wide INPUT DROP whatever this says, and the ban-sync LWW
+	// merge carries it with the rest of the record.
+	Project string `json:"project,omitempty"`
 }
 
 // Zone represents a DNS zone with shared configuration for DNS provider and SSL
@@ -1343,6 +1395,11 @@ type ServiceCheck struct {
 	Target   string `json:"target"`             // IP/hostname for ping, URL for http
 	Interval int    `json:"interval,omitempty"` // Check interval in seconds (default 300)
 	Enabled  bool   `json:"enabled"`            // Whether check is active (false = ignored)
+
+	// Project attributes a standalone check; "" is global. Never set on the
+	// svc:* checks the monitor derives from a service — those follow the
+	// service's own Project and are not stored.
+	Project string `json:"project,omitempty"`
 }
 
 // RemoteProbe is an hz-probe agent hz polls for an outside-in view.
@@ -1810,6 +1867,63 @@ func (c *Config) DeletePeerProfile(name string) {
 	if c.VPNProfiles != nil {
 		delete(c.VPNProfiles, name)
 	}
+}
+
+// PeerProject is the project a VPN client is attributed to; "" is global.
+func (c *Config) PeerProject(name string) string {
+	return c.VPNProjects[name]
+}
+
+// SetPeerProject attributes a VPN client, or with "" makes it global. The
+// name is not checked here — ValidateProjects checks it on Save, and a caller
+// that must refuse before a side effect (creating the wg0.conf peer) calls
+// CheckProjectRef first.
+//
+// COPY ON WRITE: a Config is copied shallowly by updateConfig, so writing into
+// the existing map would change the config another goroutine is serving.
+func (c *Config) SetPeerProject(name, project string) {
+	next := make(map[string]string, len(c.VPNProjects)+1)
+	for k, v := range c.VPNProjects {
+		next[k] = v
+	}
+	if project == "" {
+		delete(next, name)
+	} else {
+		next[name] = project
+	}
+	if len(next) == 0 {
+		next = nil
+	}
+	c.VPNProjects = next
+}
+
+// RenamePeerProject carries a client's attribution across a rename. Without it
+// a renamed client silently becomes global.
+func (c *Config) RenamePeerProject(oldName, newName string) {
+	p, ok := c.VPNProjects[oldName]
+	if !ok || oldName == newName {
+		return
+	}
+	c.SetPeerProject(oldName, "")
+	c.SetPeerProject(newName, p)
+}
+
+// DeletePeerProject clears a deleted client's attribution, so a later client
+// reusing the name does not inherit an owner nobody gave it.
+func (c *Config) DeletePeerProject(name string) {
+	if _, ok := c.VPNProjects[name]; ok {
+		c.SetPeerProject(name, "")
+	}
+}
+
+// CheckProjectRef refuses a non-empty project that is not declared, naming the
+// ones that are. "" is legal and means global. For handlers that must refuse
+// before a side effect Save cannot undo.
+func (c *Config) CheckProjectRef(project string) error {
+	if project == "" || c.hasProject(project) {
+		return nil
+	}
+	return fmt.Errorf("no project %q — attribute to a declared project, or leave it empty for global%s", project, c.projectHint())
 }
 
 // IsPeerMFAJailed returns true if MFA is enabled, the peer has no active session,
