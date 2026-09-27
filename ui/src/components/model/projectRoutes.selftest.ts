@@ -30,7 +30,6 @@ import {
   treeRows,
   CONFIG_AT,
   GATEWAY_NAV,
-  GATEWAY_WIDE_SURFACES,
   SCOPE_TABS,
 } from "./projectRoutes.ts";
 import { ServiceSchema } from "../../api/schemas.ts";
@@ -377,12 +376,13 @@ console.log("· a row says where it lives, including on its own project's page")
 }
 
 // ---------------------------------------------------------------------------
-console.log("· the six tabs, identical at every scope");
+console.log("· the ten tabs, identical at every scope");
 // ---------------------------------------------------------------------------
 {
-  check(SCOPE_TABS.length === 6, "six surfaces a scope can select rows for");
+  check(SCOPE_TABS.length === 10, "ten surfaces a scope can select rows for (amendment 6)");
   check(
-    SCOPE_TABS.map((s) => s.label).join(",") === "Overview,Services,Domains,Machines,Network,Config",
+    SCOPE_TABS.map((s) => s.label).join(",") ===
+      "Overview,Services,Domains,Machines,Network,VPN,Checks,Ports,Bans,Config",
     "in that order — the operator learns one tab strip, so the order is part of the contract",
   );
   // Each tab has BOTH addresses, so the same word means the same thing with no
@@ -397,8 +397,8 @@ console.log("· the six tabs, identical at every scope");
     "and a PROJECT address under /p/$project",
   );
   check(
-    new Set(SCOPE_TABS.map((s) => s.unscopedTo)).size === 6 &&
-      new Set(SCOPE_TABS.map((s) => s.projectTo)).size === 6,
+    new Set(SCOPE_TABS.map((s) => s.unscopedTo)).size === SCOPE_TABS.length &&
+      new Set(SCOPE_TABS.map((s) => s.projectTo)).size === SCOPE_TABS.length,
     "no two tabs point at the same screen at either scope",
   );
   check(
@@ -415,7 +415,7 @@ console.log("· the six tabs, identical at every scope");
     "the segments surface is Network, and its URL says network, not segments",
   );
 
-  for (const g of ["drift", "hosts", "dns", "vpn", "bans", "checks", "ports", "observability", "settings", "account", "mfa"]) {
+  for (const g of ["drift", "hosts", "dns", "observability", "settings", "account", "mfa"]) {
     check(
       !SCOPE_TABS.some((t) => t.projectTo.includes(g)),
       `${g} is not a tab — its record carries no project and inventing one is the lie`,
@@ -431,7 +431,7 @@ console.log("· the six tabs, identical at every scope");
   check(CONFIG_AT === "/p/$project/config", "config keeps its project-scoped route");
   check(
     SCOPE_TABS.some((s) => s.projectTo === CONFIG_AT && s.unscopedTo === "/config"),
-    "and is one of the six, with an unscoped address of its own",
+    "and is one of the tabs, with an unscoped address of its own",
   );
 
   // THE RULE. A derived surface's rows belong to something that has no project,
@@ -457,7 +457,7 @@ console.log("· the six tabs, identical at every scope");
 console.log("· the gateway group is never scoped, and duplicates no tab");
 // ---------------------------------------------------------------------------
 {
-  check(GATEWAY_NAV.length === 9, "nine gateway surfaces");
+  check(GATEWAY_NAV.length === 5, "five gateway surfaces — VPN, checks, ports and bans became tabs");
   for (const s of SCOPE_TABS) {
     check(
       !GATEWAY_NAV.some((g) => g.label === s.label),
@@ -483,27 +483,6 @@ console.log("· the gateway group is never scoped, and duplicates no tab");
   check(
     GATEWAY_NAV.every((g) => tabOfPath(g.to) === null),
     "and no gateway address reads as a tab, so the scope bar does not draw over one",
-  );
-}
-
-// ---------------------------------------------------------------------------
-console.log("· bans and clients are explained ONCE, and are not tabs");
-// ---------------------------------------------------------------------------
-{
-  check(GATEWAY_WIDE_SURFACES.length === 2, "two surfaces hz cannot scope: bans and clients");
-  const labels = GATEWAY_WIDE_SURFACES.map((g) => g.label);
-  check(labels.includes("IP Bans") && labels.includes("VPN Clients"), "and they are those two");
-  check(
-    GATEWAY_WIDE_SURFACES.every((g) => !SCOPE_TABS.some((n) => n.label === g.label)),
-    "neither is a tab",
-  );
-  check(
-    GATEWAY_WIDE_SURFACES.every((g) => GATEWAY_NAV.some((n) => n.to === g.gatewayAt)),
-    "each IS in the gateway group, which is where its rows actually live",
-  );
-  check(
-    GATEWAY_WIDE_SURFACES.every((g) => g.why.length > 80),
-    "each says WHY hz cannot scope it, in the record's own terms — for the Overview that renders it",
   );
 }
 
