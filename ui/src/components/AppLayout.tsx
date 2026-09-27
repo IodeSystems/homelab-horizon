@@ -87,9 +87,31 @@ function UserMenu() {
             <AccountCircleIcon />
           )
         }
-        sx={{ textTransform: "none", color: "text.secondary" }}
+        // The name is the first thing to go on a narrow screen: the avatar is
+        // still the control, and the name is in its title and in the menu it
+        // opens. Without this the app bar wraps to two lines on a phone.
+        title={name}
+        aria-label={`Signed in as ${name}`}
+        sx={{
+          textTransform: "none",
+          color: "text.secondary",
+          minWidth: 0,
+          flexShrink: 0,
+          "& .MuiButton-startIcon": { mr: { xs: 0, sm: 1 } },
+        }}
       >
-        {name}
+        <Box
+          component="span"
+          sx={{
+            display: { xs: "none", sm: "inline" },
+            maxWidth: 220,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {name}
+        </Box>
       </Button>
       <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>
         <MenuItem disabled sx={{ opacity: "1 !important" }}>
@@ -183,31 +205,37 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           minWidth: 0,
         }}
       >
-        <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1 }}>
+        {/* THE APP BAR: ONE ROW, NEVER WRAPPED. It was two — the user menu on
+            its own line, then Menu and the wordmark under it — and on a phone a
+            long account name pushed it further. Now the wordmark gives way
+            (ellipsis) and the user button drops to its avatar below `sm`. */}
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2, flexWrap: "nowrap", minWidth: 0 }}>
+          {isMobile ? (
+            <>
+              {/* LABELLED, not an icon alone. Below `md` this button is the
+                  only way to the project tree and the gateway entries, so
+                  "Menu" is spelled out rather than left to a hamburger the
+                  operator has to recognise. */}
+              <Button
+                onClick={() => setDrawerOpen(true)}
+                startIcon={<MenuIcon />}
+                sx={{ textTransform: "none", flexShrink: 0 }}
+              >
+                Menu
+              </Button>
+              <Typography
+                variant="h6"
+                noWrap
+                onClick={() => navigate({ to: "/" })}
+                sx={{ fontWeight: 700, color: "#fff", cursor: "pointer", minWidth: 0 }}
+              >
+                Homelab Horizon
+              </Typography>
+            </>
+          ) : null}
+          <Box sx={{ flex: 1 }} />
           <UserMenu />
         </Box>
-        {isMobile && (
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
-            {/* LABELLED, not an icon alone. Below `md` this button is the only
-                way to the project tree and the gateway entries, so "Menu" is
-                spelled out rather than left to a hamburger the operator has to
-                recognise. */}
-            <Button
-              onClick={() => setDrawerOpen(true)}
-              startIcon={<MenuIcon />}
-              sx={{ textTransform: "none" }}
-            >
-              Menu
-            </Button>
-            <Typography
-              variant="h6"
-              onClick={() => navigate({ to: "/" })}
-              sx={{ fontWeight: 700, color: "#fff", cursor: "pointer" }}
-            >
-              Homelab Horizon
-            </Typography>
-          </Box>
-        )}
         <ReadOnlyBanner />
         <ScopeBar />
         {children}
