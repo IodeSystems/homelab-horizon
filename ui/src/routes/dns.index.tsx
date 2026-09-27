@@ -21,7 +21,6 @@ import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
 import { useZones, useDNSDriftStatus, useClearDNSDrift, useDeleteZone } from "../api/hooks";
-import SyncButton from "../components/SyncButton";
 import { AddZoneDialog, EditZoneDialog, ZoneCertChip } from "../components/ZoneDialogs";
 import LocalDNSSection from "../components/LocalDNSSection";
 import type { Zone } from "../api/types";
@@ -56,7 +55,6 @@ function DNSZonesPage() {
         >
           Add Zone
         </Button>
-        <SyncButton />
       </Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
         Zones hz publishes to. Open one to view and edit its records.

@@ -21,6 +21,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useAuthStatus, useLogout } from "../api/auth";
 import { SidebarMenu } from "./model/SidebarMenu";
 import { ScopeBar } from "./model/ScopeBar";
+import SyncButton from "./SyncButton";
 
 const SIDEBAR_WIDTH = 260;
 
@@ -234,6 +235,12 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             </>
           ) : null}
           <Box sx={{ flex: 1 }} />
+          {/* SYNC IS IN THE APP BAR, on every screen. It used to be on the
+              unscoped Services, Domains and DNS screens only, and none of the
+              project tabs — the operator reported it "VERY hard to find". Its
+              badge is the pending count, so a Sync that is due is visible
+              from anywhere. */}
+          <SyncButton />
           <UserMenu />
         </Box>
         <ReadOnlyBanner />

@@ -65,7 +65,6 @@ import {
   useRemoveDomainSSL,
   useScanServiceMetrics,
 } from "../api/hooks";
-import SyncButton from "../components/SyncButton";
 import type {
   Service,
   ServiceForward,
@@ -2360,7 +2359,6 @@ function ServicesPage() {
           >
             Port Map
           </Button>
-          <SyncButton />
           <Button
             variant="contained"
             startIcon={<AddIcon />}
