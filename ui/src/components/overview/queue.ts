@@ -328,5 +328,7 @@ export function overviewHeadline(result: OverviewResult): string {
   }
   const nonEmpty = result.tiers.filter((t) => t.items.length > 0);
   const parts = nonEmpty.map((t) => `${t.items.length} ${t.def.title.toLowerCase()}`);
-  return `${result.items.length} ${result.items.length === 1 ? "thing" : "things"} waiting on you: ${parts.join(", ")}.`;
+  // "N need attention", not "N waiting on you": tier 1 is itself titled
+  // "Waiting on you", and the breakdown would repeat it.
+  return `${result.items.length} ${result.items.length === 1 ? "thing needs" : "things need"} attention: ${parts.join(", ")}.`;
 }
