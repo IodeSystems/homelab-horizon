@@ -35,11 +35,15 @@ import { Route as MachinesMachineRouteImport } from './routes/machines.$machine'
 import { Route as PIndexRouteImport } from './routes/p.index'
 import { Route as PProjectRouteImport } from './routes/p.$project'
 import { Route as PProjectIndexRouteImport } from './routes/p.$project.index'
+import { Route as PProjectBansRouteImport } from './routes/p.$project.bans'
+import { Route as PProjectChecksRouteImport } from './routes/p.$project.checks'
 import { Route as PProjectConfigRouteImport } from './routes/p.$project.config'
 import { Route as PProjectDomainsRouteImport } from './routes/p.$project.domains'
 import { Route as PProjectMachinesRouteImport } from './routes/p.$project.machines'
 import { Route as PProjectNetworkRouteImport } from './routes/p.$project.network'
+import { Route as PProjectPortsRouteImport } from './routes/p.$project.ports'
 import { Route as PProjectServicesRouteImport } from './routes/p.$project.services'
+import { Route as PProjectVpnRouteImport } from './routes/p.$project.vpn'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -171,6 +175,16 @@ const PProjectIndexRoute = PProjectIndexRouteImport.update({
   path: '/',
   getParentRoute: () => PProjectRoute,
 } as any)
+const PProjectBansRoute = PProjectBansRouteImport.update({
+  id: '/bans',
+  path: '/bans',
+  getParentRoute: () => PProjectRoute,
+} as any)
+const PProjectChecksRoute = PProjectChecksRouteImport.update({
+  id: '/checks',
+  path: '/checks',
+  getParentRoute: () => PProjectRoute,
+} as any)
 const PProjectConfigRoute = PProjectConfigRouteImport.update({
   id: '/config',
   path: '/config',
@@ -191,9 +205,19 @@ const PProjectNetworkRoute = PProjectNetworkRouteImport.update({
   path: '/network',
   getParentRoute: () => PProjectRoute,
 } as any)
+const PProjectPortsRoute = PProjectPortsRouteImport.update({
+  id: '/ports',
+  path: '/ports',
+  getParentRoute: () => PProjectRoute,
+} as any)
 const PProjectServicesRoute = PProjectServicesRouteImport.update({
   id: '/services',
   path: '/services',
+  getParentRoute: () => PProjectRoute,
+} as any)
+const PProjectVpnRoute = PProjectVpnRouteImport.update({
+  id: '/vpn',
+  path: '/vpn',
   getParentRoute: () => PProjectRoute,
 } as any)
 
@@ -223,11 +247,15 @@ export interface FileRoutesByFullPath {
   '/dns/': typeof DnsIndexRoute
   '/machines/': typeof MachinesIndexRoute
   '/p/': typeof PIndexRoute
+  '/p/$project/bans': typeof PProjectBansRoute
+  '/p/$project/checks': typeof PProjectChecksRoute
   '/p/$project/config': typeof PProjectConfigRoute
   '/p/$project/domains': typeof PProjectDomainsRoute
   '/p/$project/machines': typeof PProjectMachinesRoute
   '/p/$project/network': typeof PProjectNetworkRoute
+  '/p/$project/ports': typeof PProjectPortsRoute
   '/p/$project/services': typeof PProjectServicesRoute
+  '/p/$project/vpn': typeof PProjectVpnRoute
   '/p/$project/': typeof PProjectIndexRoute
 }
 export interface FileRoutesByTo {
@@ -255,11 +283,15 @@ export interface FileRoutesByTo {
   '/dns': typeof DnsIndexRoute
   '/machines': typeof MachinesIndexRoute
   '/p': typeof PIndexRoute
+  '/p/$project/bans': typeof PProjectBansRoute
+  '/p/$project/checks': typeof PProjectChecksRoute
   '/p/$project/config': typeof PProjectConfigRoute
   '/p/$project/domains': typeof PProjectDomainsRoute
   '/p/$project/machines': typeof PProjectMachinesRoute
   '/p/$project/network': typeof PProjectNetworkRoute
+  '/p/$project/ports': typeof PProjectPortsRoute
   '/p/$project/services': typeof PProjectServicesRoute
+  '/p/$project/vpn': typeof PProjectVpnRoute
   '/p/$project': typeof PProjectIndexRoute
 }
 export interface FileRoutesById {
@@ -289,11 +321,15 @@ export interface FileRoutesById {
   '/dns/': typeof DnsIndexRoute
   '/machines/': typeof MachinesIndexRoute
   '/p/': typeof PIndexRoute
+  '/p/$project/bans': typeof PProjectBansRoute
+  '/p/$project/checks': typeof PProjectChecksRoute
   '/p/$project/config': typeof PProjectConfigRoute
   '/p/$project/domains': typeof PProjectDomainsRoute
   '/p/$project/machines': typeof PProjectMachinesRoute
   '/p/$project/network': typeof PProjectNetworkRoute
+  '/p/$project/ports': typeof PProjectPortsRoute
   '/p/$project/services': typeof PProjectServicesRoute
+  '/p/$project/vpn': typeof PProjectVpnRoute
   '/p/$project/': typeof PProjectIndexRoute
 }
 export interface FileRouteTypes {
@@ -324,11 +360,15 @@ export interface FileRouteTypes {
     | '/dns/'
     | '/machines/'
     | '/p/'
+    | '/p/$project/bans'
+    | '/p/$project/checks'
     | '/p/$project/config'
     | '/p/$project/domains'
     | '/p/$project/machines'
     | '/p/$project/network'
+    | '/p/$project/ports'
     | '/p/$project/services'
+    | '/p/$project/vpn'
     | '/p/$project/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -356,11 +396,15 @@ export interface FileRouteTypes {
     | '/dns'
     | '/machines'
     | '/p'
+    | '/p/$project/bans'
+    | '/p/$project/checks'
     | '/p/$project/config'
     | '/p/$project/domains'
     | '/p/$project/machines'
     | '/p/$project/network'
+    | '/p/$project/ports'
     | '/p/$project/services'
+    | '/p/$project/vpn'
     | '/p/$project'
   id:
     | '__root__'
@@ -389,11 +433,15 @@ export interface FileRouteTypes {
     | '/dns/'
     | '/machines/'
     | '/p/'
+    | '/p/$project/bans'
+    | '/p/$project/checks'
     | '/p/$project/config'
     | '/p/$project/domains'
     | '/p/$project/machines'
     | '/p/$project/network'
+    | '/p/$project/ports'
     | '/p/$project/services'
+    | '/p/$project/vpn'
     | '/p/$project/'
   fileRoutesById: FileRoutesById
 }
@@ -609,6 +657,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PProjectIndexRouteImport
       parentRoute: typeof PProjectRoute
     }
+    '/p/$project/bans': {
+      id: '/p/$project/bans'
+      path: '/bans'
+      fullPath: '/p/$project/bans'
+      preLoaderRoute: typeof PProjectBansRouteImport
+      parentRoute: typeof PProjectRoute
+    }
+    '/p/$project/checks': {
+      id: '/p/$project/checks'
+      path: '/checks'
+      fullPath: '/p/$project/checks'
+      preLoaderRoute: typeof PProjectChecksRouteImport
+      parentRoute: typeof PProjectRoute
+    }
     '/p/$project/config': {
       id: '/p/$project/config'
       path: '/config'
@@ -637,6 +699,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PProjectNetworkRouteImport
       parentRoute: typeof PProjectRoute
     }
+    '/p/$project/ports': {
+      id: '/p/$project/ports'
+      path: '/ports'
+      fullPath: '/p/$project/ports'
+      preLoaderRoute: typeof PProjectPortsRouteImport
+      parentRoute: typeof PProjectRoute
+    }
     '/p/$project/services': {
       id: '/p/$project/services'
       path: '/services'
@@ -644,24 +713,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PProjectServicesRouteImport
       parentRoute: typeof PProjectRoute
     }
+    '/p/$project/vpn': {
+      id: '/p/$project/vpn'
+      path: '/vpn'
+      fullPath: '/p/$project/vpn'
+      preLoaderRoute: typeof PProjectVpnRouteImport
+      parentRoute: typeof PProjectRoute
+    }
   }
 }
 
 interface PProjectRouteChildren {
+  PProjectBansRoute: typeof PProjectBansRoute
+  PProjectChecksRoute: typeof PProjectChecksRoute
   PProjectConfigRoute: typeof PProjectConfigRoute
   PProjectDomainsRoute: typeof PProjectDomainsRoute
   PProjectMachinesRoute: typeof PProjectMachinesRoute
   PProjectNetworkRoute: typeof PProjectNetworkRoute
+  PProjectPortsRoute: typeof PProjectPortsRoute
   PProjectServicesRoute: typeof PProjectServicesRoute
+  PProjectVpnRoute: typeof PProjectVpnRoute
   PProjectIndexRoute: typeof PProjectIndexRoute
 }
 
 const PProjectRouteChildren: PProjectRouteChildren = {
+  PProjectBansRoute: PProjectBansRoute,
+  PProjectChecksRoute: PProjectChecksRoute,
   PProjectConfigRoute: PProjectConfigRoute,
   PProjectDomainsRoute: PProjectDomainsRoute,
   PProjectMachinesRoute: PProjectMachinesRoute,
   PProjectNetworkRoute: PProjectNetworkRoute,
+  PProjectPortsRoute: PProjectPortsRoute,
   PProjectServicesRoute: PProjectServicesRoute,
+  PProjectVpnRoute: PProjectVpnRoute,
   PProjectIndexRoute: PProjectIndexRoute,
 }
 
