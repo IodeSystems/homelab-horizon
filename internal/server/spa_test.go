@@ -83,6 +83,19 @@ func TestSPAFallbackForUnknownPaths(t *testing.T) {
 	}
 }
 
+// A client route typed with a trailing slash is the same route. fs.ValidPath
+// rejects the empty last element, which 404'd `/app/services/` and
+// `/app/p/storefront/` instead of handing them to the router.
+func TestSPAFallbackForATrailingSlash(t *testing.T) {
+	s, _ := spaServer(t, map[string]string{"index.html": "SHELL"})
+	for _, path := range []string{"/app/services/", "/app/p/storefront/", "/app/p/storefront/machines/"} {
+		w := get(s, path)
+		if w.Code != 200 || w.Body.String() != "SHELL" {
+			t.Errorf("%s: %d %q, want the shell", path, w.Code, w.Body.String())
+		}
+	}
+}
+
 // The embedded FS could not be walked out of; a directory on disk can. This is
 // the vulnerability un-embedding introduces if the path is trusted.
 func TestSPARefusesPathTraversal(t *testing.T) {

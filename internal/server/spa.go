@@ -97,6 +97,10 @@ func (s *Server) setupSPA(mux *http.ServeMux) {
 
 		// Strip /app/ to get the path within the UI.
 		rel := strings.TrimPrefix(r.URL.Path, "/app/")
+		// A client route typed with a trailing slash (`/app/services/`) is the
+		// same route. fs.ValidPath rejects the empty last element, so without
+		// this the handler 404'd it instead of serving index.html.
+		rel = strings.TrimSuffix(rel, "/")
 		if rel == "" {
 			rel = "index.html"
 		}
