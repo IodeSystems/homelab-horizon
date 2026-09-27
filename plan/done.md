@@ -4,6 +4,39 @@ Completed trees moved out of [plan.md](plan.md) as they finished. Kept for the
 reasoning, not the status: several of these record *why* a thing is shaped the
 way it is, which the code alone doesn't say.
 
+## Attribution — amendment 6 (2026-09-26)
+
+✅ Merged to `dev`; not deployed. Every section is attributed to a project or
+is global (`""`, always labelled "global"). Design and decisions:
+[design/ui.md](design/ui.md) Decision 1, amendment 6.
+
+- **Backend** (one agent, Opus): `project` on machines (owner — invariant 6
+  amended to "a machine carries no environment"), VPN clients (a
+  `vpn_projects` map, because `WGPeers` is re-snapshotted from wg0.conf),
+  standalone checks, IP bans, port exclusions; `svc:*` checks and port
+  reservations derive theirs from the service. New `POST /api/v1/machines/set`.
+  Removing a project re-attributes its records to global, never deletes them.
+  `TestAttributionChangesNoRenderedArtifact` renders every gateway artifact and
+  every machine projection with and without attribution: byte-identical.
+- **UI** (parent + five tab agents, Sonnet): ten tabs; each is a table or
+  "No X in <project>." with its Add button, the modal prefilled with the
+  project. Explanation panels deleted (reverses Decision K). One shared
+  reading of `""` as "global" (four agents had each written their own).
+- **Live pass** (hermetic container): one real add per tab from inside a
+  project — machine, check, ban, port exclusion, VPN client (after installing
+  wireguard-tools and a wg0.conf in the container) — each landed in
+  `config.json` attributed to `storefront`.
+- **Found and fixed in the pass:** `/app/<route>/` with a trailing slash 404'd
+  (`fs.ValidPath`, `internal/server/spa.go`) — predates this work; the Add
+  machine dialog was still paragraphs.
+
+Verified: Go 2779 tests + `go vet` + generated types; 20 UI suites green.
+
+**Open (operator):** the ban-sync fallback (a backup gateway records a ban
+naming a project it does not know yet as global, logged, until the config
+pull); no edit endpoint for checks or bans; service-placed bans are always
+global. Ports screen tabs became two always-visible sections (agent's call).
+
 ## UI write surface and the ranked Overview (2026-09-26)
 
 ✅ Merged to `dev` and deployed 2026-09-26 (`7a8bb6b`). Built by four sub-agents on worktrees in

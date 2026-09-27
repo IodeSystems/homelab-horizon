@@ -184,17 +184,11 @@ warning onto the peer-config download path.
 
 # Active work
 
-◐ **Attribution — every section belongs to a project or is global** (amendment 6,
-approved 2026-09-26). ✅ backend (`project` on machines, VPN clients, checks,
-bans, port exclusions; `machines/set`; removal re-attributes to global; render
-guard), ✅ flows-over-prose on the project tabs, ✅ ten-tab scaffold — all on
-`dev`, not deployed. **next:** five tab agents (VPN, Checks, Ports, Bans,
-Machines owner) → review/merge → live pass → deploy on the operator's word.
-**risks:** ban-sync records an undeclared project as global (logged) until the
-config pull restores it; no edit endpoint for checks or bans (delete + re-add).
+✅ **Attribution — every section belongs to a project or is global** (amendment 6)
+— built and merged to `dev` 2026-09-26, **not deployed** →
+[done.md](done.md#attribution--amendment-6-2026-09-26).
 **blocking decisions (operator):** accept the ban-sync fallback; `/checks/set`
 and `/bans/set` wanted?; derive a service-placed ban's project from its service?
-→ [design/ui.md](design/ui.md) Decision 1, amendment 6.
 
 ✅ **Nav + route hierarchy (amendment 5), the ranked Overview, and add/edit/remove
 for environments, segments and machines** — merged to `dev` and **deployed** 2026-09-26
