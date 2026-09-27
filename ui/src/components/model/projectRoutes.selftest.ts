@@ -349,6 +349,7 @@ console.log("· a row says where it lives, including on its own project's page")
   const none = readLocation("", index);
   check(!none.assigned, "a service naming no project is unassigned");
   check(none.label.trim() !== "", "and it still renders a sentence rather than an empty cell");
+  check(none.label === "global", "and it reads \"global\" — amendment 6: empty is global, labelled");
   check(
     none.meaning.includes("legal and permanent"),
     "which says the state is legal rather than implying a misconfiguration",

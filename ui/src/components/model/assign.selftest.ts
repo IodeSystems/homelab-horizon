@@ -270,7 +270,7 @@ console.log("· the consequence is named before it happens");
   const placed = { project: "storefront", environment: "prod" };
   const moved = { project: "intern", environment: "" };
 
-  check(placementLabel(nowhere) === "no project", "nowhere has a name, and it is not ''");
+  check(placementLabel(nowhere) === "global", "nowhere has a name — global — and it is not ''");
   check(placementLabel(moved) === "intern", "a project with no rung labels as the project");
   check(placementLabel(placed) === "storefront/prod", "a full placement labels as project/rung");
 

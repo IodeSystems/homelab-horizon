@@ -1137,8 +1137,8 @@ console.log("· the flat lists survive and gained the project they were blind to
   check(isHeader(services), "/services has a Project column header");
   check(services.text.includes("legacy-mail"), "and still lists the unassigned service");
   check(
-    services.text.includes("not assigned to any project"),
-    "which is the row a project-scoped screen structurally cannot render, said in words",
+    /legacy-mail[\s\S]{0,300}?global/.test(services.text),
+    "and its project cell reads \"global\" (amendment 6), not blank",
   );
   check(
     services.links.some((h) => h.endsWith("/p/intern")),
@@ -1152,7 +1152,7 @@ console.log("· the flat lists survive and gained the project they were blind to
     "and lists a domain whose service names no project — uniqueness is gateway-wide",
   );
   check(
-    domains.text.includes("not assigned to any project"),
+    /mail\.example\.net[\s\S]{0,300}?global/.test(domains.text),
     "and that domain's cell says so rather than borrowing a project from nowhere",
   );
   check(

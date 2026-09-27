@@ -46,7 +46,8 @@ import { useBanIP, useBans, useProjects, useUnbanIP } from "../api/hooks";
 import type { BanEntry } from "../api/types";
 import { buildProjectIndex } from "../components/model/projectRoutes.ts";
 import { AddButton, EmptyRow, TabHeader } from "../components/model/FlowBits";
-import { PROJECT_COLUMN_LABEL, ProjectLink } from "../components/model/ProjectBits";
+import { PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
+import { LocationCell } from "../components/model/ProjectBits";
 
 export function relativeTime(epochSeconds: number): string {
   if (epochSeconds === 0) return "Never";
@@ -258,23 +259,12 @@ function BansPage() {
             <TableBody>
               {bans.map((ban) => {
                 const expired = isExpired(ban);
-                const route = ban.project ? index.byName.get(ban.project) : undefined;
                 return (
                   <TableRow key={ban.ip} hover sx={expired ? { opacity: 0.5 } : undefined}>
                     <TableCell sx={{ fontFamily: "monospace" }}>{ban.ip}</TableCell>
                     <TableCell>{ban.reason || "—"}</TableCell>
                     <TableCell sx={{ fontFamily: "monospace" }}>
-                      {!ban.project ? (
-                        <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace" }}>
-                          global
-                        </Typography>
-                      ) : route ? (
-                        <ProjectLink index={index} route={route} />
-                      ) : (
-                        <Typography variant="body2" color="warning.main" sx={{ fontFamily: "monospace" }}>
-                          {ban.project}
-                        </Typography>
-                      )}
+                      <LocationCell index={index} project={ban.project} />
                     </TableCell>
                     <TableCell>{ban.service || "admin"}</TableCell>
                     <TableCell>{relativeTime(ban.createdAt)}</TableCell>

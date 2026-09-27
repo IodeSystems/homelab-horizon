@@ -275,8 +275,8 @@ console.log("· /services renders BOTH halves of a placement, per row");
     "the unassigned service is listed — the flat list is the only screen that can show it",
   );
   check(
-    s.text.includes("no project"),
-    "…and it says 'no project' in words rather than leaving a blank cell",
+    s.text.includes("global"),
+    "…and it says 'global' in words rather than leaving a blank cell",
   );
   check(
     s.text.includes("legal and permanent"),
@@ -291,7 +291,7 @@ console.log("· /services renders BOTH halves of a placement, per row");
   // caption alone still reads as a filled row at a glance, which is the shape
   // of the failure: a cell that looks populated and says nothing.
   check(
-    s.text.includes("no project, no rung"),
+    s.text.includes("global"),
     "the unassigned row's rung chip carries words, never an empty chip",
   );
   check(
@@ -476,8 +476,8 @@ console.log("· the dialog names the consequence and offers a visible way out");
   // consequence sentences need a selection change, which SSR has no events for;
   // `assign.selftest.ts` holds all four and that they stay four.
   check(
-    joining.text.includes("already at no project"),
-    "an unassigned service's dialog opens saying it is at no project",
+    joining.text.includes("already at global"),
+    "an unassigned service's dialog opens saying it is at global",
   );
   check(
     joining.text.includes("would change nothing"),

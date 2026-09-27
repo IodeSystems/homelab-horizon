@@ -38,7 +38,8 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import { usePorts, useProjects, useSaveCustomExclusions } from "../api/hooks";
 import type { HostPortEntry, PortRange } from "../api/types";
 import { buildProjectIndex, type ProjectIndex } from "../components/model/projectRoutes.ts";
-import { ProjectLink, PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
+import { PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
+import { LocationCell } from "../components/model/ProjectBits";
 
 // --- Shared bits ---
 
@@ -50,30 +51,6 @@ interface SnackState {
 
 function rangeLabel(r: PortRange): string {
   return r.to && r.to > r.from ? `${r.from}–${r.to}` : `${r.from}`;
-}
-
-/**
- * Which project owns a row, whoever it is. `""` is always "global" — never
- * blank, per amendment 6 — and a known project is a link out to it.
- */
-function ProjectCell({ project, index }: { project: string; index: ProjectIndex }) {
-  if (!project) {
-    return (
-      <Typography variant="body2" color="text.secondary" sx={{ fontStyle: "italic" }}>
-        global
-      </Typography>
-    );
-  }
-  const route = index.byName.get(project);
-  return route ? (
-    <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-      <ProjectLink index={index} route={route} />
-    </Typography>
-  ) : (
-    <Typography variant="body2" sx={{ fontFamily: "monospace", color: "warning.main" }}>
-      {project}
-    </Typography>
-  );
 }
 
 // --- Reservations tab ---
@@ -134,7 +111,7 @@ function HostReservationsCard({
                   </Typography>
                 </TableCell>
                 <TableCell>
-                  <ProjectCell project={e.project} index={index} />
+                  <LocationCell project={e.project} index={index} />
                 </TableCell>
               </TableRow>
             ))}
@@ -468,7 +445,7 @@ function CustomExclusionsTable({
                     </Typography>
                   </TableCell>
                   <TableCell>
-                    <ProjectCell project={r.project ?? ""} index={index} />
+                    <LocationCell project={r.project ?? ""} index={index} />
                   </TableCell>
                   <TableCell align="right">
                     <IconButton size="small" onClick={() => onEdit(i)}>
