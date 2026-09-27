@@ -215,6 +215,39 @@ console.log("· a pending registration is ranked 'waiting on you' and links into
 }
 
 // ---------------------------------------------------------------------------
+console.log("· a pending change says WHAT changed, field by field");
+// ---------------------------------------------------------------------------
+{
+  // The operator's report: "aw4 modified since the last Sync" named the
+  // record and nothing about the edit.
+  const qc = base();
+  quiet(qc);
+  qc.setQueryData(["pending"], {
+    hasPending: true,
+    count: 1,
+    items: [
+      {
+        kind: "service",
+        name: "aw4",
+        change: "modified",
+        fields: [
+          { path: "domains", before: '["aw4.example.com"]', after: '["aw4.example.net"]' },
+          { path: "proxy.backend", after: "10.0.0.9:8080" },
+        ],
+      },
+    ],
+  } satisfies PendingChanges);
+  const r = await at(qc);
+  check(r.text.includes("service aw4 modified since the last Sync"), "the row names the record and its kind");
+  check(/data-pending-fields/.test(r.html), "and lists its changed fields");
+  check(
+    r.text.includes('domains: ["aw4.example.com"] → ["aw4.example.net"]'),
+    "each as path: before → after",
+  );
+  check(r.text.includes("proxy.backend: (unset) → 10.0.0.9:8080"), "an unset side reads (unset), never blank");
+}
+
+// ---------------------------------------------------------------------------
 console.log("· a failing check ranks as a fault and links to /checks");
 // ---------------------------------------------------------------------------
 {

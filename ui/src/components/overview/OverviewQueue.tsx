@@ -62,11 +62,35 @@ function QueueRow({ item }: { item: QueueItem }) {
           item.ageSeconds !== undefined && <PlainAge ageSeconds={item.ageSeconds} />
         )}
       </Box>
+      {item.changes && item.changes.length > 0 ? (
+        <Box component="ul" data-pending-fields sx={{ m: 0, pl: 2.5 }}>
+          {item.changes.map((c) => (
+            <Typography
+              key={c.path}
+              component="li"
+              variant="body2"
+              sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}
+              title={`${c.path}: ${c.before || "(unset)"} → ${c.after || "(unset)"}`}
+            >
+              {c.path}: <Box component="span" sx={{ color: "text.secondary" }}>{short(c.before)}</Box>
+              {" → "}
+              {short(c.after)}
+            </Typography>
+          ))}
+        </Box>
+      ) : null}
       <Typography variant="body2" sx={{ color: "text.secondary" }}>
         {item.meaning}
       </Typography>
     </Paper>
   );
+}
+
+/** A changed value, bounded: array/object settings stringify long. Empty is
+ * "(unset)", never blank — invariant 2, a missing value is not an empty one. */
+function short(v: string): string {
+  if (v === "") return "(unset)";
+  return v.length > 80 ? `${v.slice(0, 77)}…` : v;
 }
 
 /** One tier's section, rendered even with zero rows — the drift screen's own rule. */

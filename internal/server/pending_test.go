@@ -117,3 +117,34 @@ func TestDiffConfig_ExcludesRuntimeNoise(t *testing.T) {
 		t.Errorf("runtime public-IP fields should be excluded, got %+v", items)
 	}
 }
+
+// The operator's report, 2026-09-27: assigning aw4 to iode/dev showed "aw4
+// modified since the last Sync" — but attribution changes no rendered
+// artifact, so a Sync would publish nothing. Attribution is not pending; a
+// real change beside it still is.
+func TestDiffConfig_AttributionIsNotPending(t *testing.T) {
+	base := &config.Config{
+		Services:       []config.Service{{Name: "aw4", Domains: []string{"aw4.example.com"}}},
+		Machines:       []config.Machine{{Name: "box-1"}},
+		ServiceChecks:  []config.ServiceCheck{{Name: "ping", Type: "ping", Target: "192.0.2.1"}},
+		PortExclusions: []config.PortRange{{From: 9000}},
+	}
+	cur := &config.Config{
+		Services:       []config.Service{{Name: "aw4", Domains: []string{"aw4.example.com"}, Project: "iode", Environment: "dev"}},
+		Machines:       []config.Machine{{Name: "box-1", Project: "iode"}},
+		ServiceChecks:  []config.ServiceCheck{{Name: "ping", Type: "ping", Target: "192.0.2.1", Project: "iode"}},
+		PortExclusions: []config.PortRange{{From: 9000, Project: "iode"}},
+		VPNProjects:    map[string]string{"laptop": "iode"},
+	}
+	if items := diffConfig(base, cur); len(items) != 0 {
+		t.Fatalf("attribution alone reported as pending: %+v", items)
+	}
+
+	// Positive control: a real change beside the attribution is still pending,
+	// and names the field — so the empty result above is not a blind diff.
+	cur.Services[0].Domains = []string{"aw4.example.net"}
+	items := diffConfig(base, cur)
+	if len(items) != 1 || items[0].Name != "aw4" || len(items[0].Fields) != 1 || items[0].Fields[0].Path != "domains" {
+		t.Fatalf("a domain change beside attribution: %+v", items)
+	}
+}
