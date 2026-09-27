@@ -29,6 +29,7 @@
  * (prose naming what would close it). Both render: a kind with no next step is
  * a dead end, and a next step with no kind hides whose problem it is.
  */
+import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   Alert,
@@ -52,6 +53,7 @@ import {
   readSection,
   readSegment,
 } from "../components/model/model";
+import { RemoveMachineDialog } from "../components/model/MachineDialogs";
 import {
   GapNote,
   ScreenHeading,
@@ -363,6 +365,7 @@ function MachineProjectionScreen() {
   const { machine } = Route.useParams();
   const navigate = useNavigate();
   const { data, isLoading, error } = useMachineProjection(machine);
+  const [removing, setRemoving] = useState(false);
 
   if (isLoading) {
     return (
@@ -395,11 +398,23 @@ function MachineProjectionScreen() {
         title={machine}
         blurb="What hz says this machine should look like, computed from hz's own records alone. Nothing here is a reading from the machine — no value on this page has an age, because none of them came from the box. Nothing here applies anything either: hz publishes and the agent collects on its own poll."
         right={
-          <Button onClick={() => navigate({ to: "/machines" })} variant="outlined" size="small">
-            Back to machines
-          </Button>
+          <>
+            <Button onClick={() => navigate({ to: "/machines" })} variant="outlined" size="small">
+              Back to machines
+            </Button>
+            <Button
+              aria-label="Remove machine"
+              onClick={() => setRemoving(true)}
+              variant="outlined"
+              color="error"
+              size="small"
+            >
+              Remove
+            </Button>
+          </>
         }
       />
+      <RemoveMachineDialog name={removing ? machine : null} onClose={() => setRemoving(false)} />
       <Legend />
       {data ? <Projection mc={data} /> : null}
     </Box>
