@@ -52,3 +52,4 @@ bin/deploy-doc
 internal/server/hzbin/bin/
 internal/server/uiembed/dist/
 ui/.rendercheck-checks
+ui/.rendercheck-machines
