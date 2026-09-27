@@ -6,7 +6,7 @@ way it is, which the code alone doesn't say.
 
 ## Attribution — amendment 6 (2026-09-26)
 
-✅ Merged to `dev`; not deployed. Every section is attributed to a project or
+✅ Merged to `dev`; deployed 2026-09-27 (`2075979`). Every section is attributed to a project or
 is global (`""`, always labelled "global"). Design and decisions:
 [design/ui.md](design/ui.md) Decision 1, amendment 6.
 

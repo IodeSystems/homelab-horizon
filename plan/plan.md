@@ -101,7 +101,7 @@ already drawn that line and the UI can inherit it.
 
 The new model lands on **`dev`**, not `main`, because it will break and churn
 before it is release-ready and **the gateway is serving real traffic**. **`dev`
-is deployed to the gateway (2026-09-26, `7a8bb6b`) but not pushed** — 189 commits
+is deployed to the gateway (2026-09-27, `2075979`) but not pushed** — 189 commits
 ahead of `origin/dev`.
 
 #### ✅ The deploy gap below was paid down 2026-09-26 — kept for the move warnings
@@ -185,7 +185,7 @@ warning onto the peer-config download path.
 # Active work
 
 ✅ **Attribution — every section belongs to a project or is global** (amendment 6)
-— built and merged to `dev` 2026-09-26, **not deployed** →
+— built and merged to `dev` 2026-09-26, **deployed 2026-09-27** (`2075979`) →
 [done.md](done.md#attribution--amendment-6-2026-09-26).
 **blocking decisions (operator):** accept the ban-sync fallback; `/checks/set`
 and `/bans/set` wanted?; derive a service-placed ban's project from its service?
@@ -196,8 +196,8 @@ for environments, segments and machines** — merged to `dev` and **deployed** 2
 
 One row per item. **The detail is in the linked document** — the landed
 narratives moved to [done.md](done.md) 2026-09-24 so this file stays readable in
-one sitting. **`dev` @ `7a8bb6b` is deployed to the gateway** (2026-09-26 18:30,
-`v0.4.0-284-g7a8bb6b`, active, 0 restarts, 0 ERRORs, UI bundle matches the local build) and **not pushed**. Rows
+one sitting. **`dev` @ `2075979` is deployed to the gateway** (2026-09-27 11:16,
+`v0.4.0-313-g2075979`, active, 0 restarts, 0 ERRORs, UI bundle matches the local build) and **not pushed**. Rows
 below that say "not deployed" predate that deploy — re-check before trusting.
 
 | | Item | Status | Detail |
