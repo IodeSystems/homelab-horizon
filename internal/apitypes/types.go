@@ -277,12 +277,14 @@ type EnvironmentRmReq struct {
 	Confirm bool   `json:"confirm,omitempty"`
 }
 
-// MachineResp is one declared machine: identity and segment membership.
+// MachineResp is one declared machine: identity, owner and segment membership.
 //
-// IT CARRIES NO PROJECT AND NO ENVIRONMENT, and that is the model rather than
-// an omission — an environment is a coordinate of an INSTANCE, and one machine
-// hosts instances from several projects (plan/design/architecture.md, "Instance, not
-// machine, carries the environment"). It carries no observed version either:
+// IT CARRIES NO ENVIRONMENT, and that is the model rather than an omission —
+// an environment is a coordinate of an INSTANCE (plan/design/architecture.md,
+// "Instance, not machine, carries the environment"). Project is the OWNER,
+// always present, "" meaning global: responsibility, not placement — one
+// machine hosts instances from several projects whatever its owner is
+// (CLAUDE.md invariant 6, amended). It carries no observed version either:
 // that belongs to an instance and several instances share a box, so a
 // machine-level version would report a half-finished rollout as finished.
 //
@@ -296,6 +298,7 @@ type EnvironmentRmReq struct {
 // a machine that lives beside the config rather than in it.
 type MachineResp struct {
 	Name       string   `json:"name"`
+	Project    string   `json:"project"`
 	Segments   []string `json:"segments,omitempty"`
 	Note       string   `json:"note,omitempty"`
 	MultiHomed bool     `json:"multiHomed,omitempty"`
@@ -320,7 +323,9 @@ type MachineResp struct {
 // machine's own segment interfaces is denied by default and a machine that
 // bridges them is a declared exception with a reason, not a default.
 type MachineAddReq struct {
-	Name     string   `json:"name"`
+	Name string `json:"name"`
+	// Project is the owning project; empty is global. Must be declared.
+	Project  string   `json:"project,omitempty"`
 	Segments []string `json:"segments,omitempty"`
 	Note     string   `json:"note,omitempty"`
 
@@ -341,6 +346,18 @@ type MachineAddReq struct {
 	// business asking about one box: whether the machine it is running on
 	// exists.
 	Self bool `json:"self,omitempty"`
+}
+
+// MachineSetReq edits a declared machine in place, so its owner can change
+// without remove and re-add (which would cost the box its agent credential).
+// Pointer fields, as on EnvironmentSetReq: nil leaves the field alone, a
+// non-nil "" clears it — for Project, that makes the machine global. Clearing
+// the note of a multi-homed machine is refused. Segments are not here:
+// membership is edited through the segment endpoints.
+type MachineSetReq struct {
+	Name    string  `json:"name"`
+	Project *string `json:"project,omitempty"`
+	Note    *string `json:"note,omitempty"`
 }
 
 // MachineRmReq removes a machine. Confirm and Cascade mean what they mean on
@@ -976,19 +993,42 @@ type DomainsResponse struct {
 // VPN Peers
 
 type PeerResp struct {
-	Name             string `json:"name"`
-	PublicKey        string `json:"publicKey"`
-	AllowedIPs       string `json:"allowedIPs"`
-	Endpoint         string `json:"endpoint,omitempty"`
-	LatestHandshake  string `json:"latestHandshake,omitempty"`
-	TransferRx       string `json:"transferRx,omitempty"`
-	TransferTx       string `json:"transferTx,omitempty"`
-	Online           bool   `json:"online"`
-	IsAdmin          bool   `json:"isAdmin"`
-	Profile          string `json:"profile"`
+	Name            string `json:"name"`
+	PublicKey       string `json:"publicKey"`
+	AllowedIPs      string `json:"allowedIPs"`
+	Endpoint        string `json:"endpoint,omitempty"`
+	LatestHandshake string `json:"latestHandshake,omitempty"`
+	TransferRx      string `json:"transferRx,omitempty"`
+	TransferTx      string `json:"transferTx,omitempty"`
+	Online          bool   `json:"online"`
+	IsAdmin         bool   `json:"isAdmin"`
+	Profile         string `json:"profile"`
+	// Project the client is attributed to; "" is global. Attribution only —
+	// the client's config, routes and firewall rules do not depend on it.
+	Project          string `json:"project"`
 	MFAEnrolled      bool   `json:"mfaEnrolled"`
 	MFASessionActive bool   `json:"mfaSessionActive"`
 	MFASessionExpiry string `json:"mfaSessionExpiry,omitempty"`
+}
+
+// PeerAddReq creates a VPN client. Project is optional; empty is global, and
+// a named project must be declared (refused before the peer is created).
+type PeerAddReq struct {
+	Name     string `json:"name"`
+	ExtraIPs string `json:"extraIPs"`
+	Profile  string `json:"profile"`
+	Project  string `json:"project,omitempty"`
+}
+
+// PeerEditReq edits a VPN client. Name, ExtraIPs and Profile are whole-value
+// as they always were. Project is a pointer: nil leaves the attribution alone
+// (a rename carries it), a non-nil "" makes the client global.
+type PeerEditReq struct {
+	PublicKey string  `json:"publicKey"`
+	Name      string  `json:"name"`
+	ExtraIPs  string  `json:"extraIPs"`
+	Profile   string  `json:"profile"`
+	Project   *string `json:"project,omitempty"`
 }
 
 // MFA types
@@ -1175,9 +1215,23 @@ type CheckStatusResp struct {
 	Interval  int       `json:"interval"`
 	Enabled   bool      `json:"enabled"`
 	AutoGen   bool      `json:"auto_gen"`
+	// Project the check is attributed to; "" is global. DERIVED at response
+	// time for a svc:* check (its service's project), stored for a standalone
+	// check (ServiceCheck.Project). Other generated checks are global.
+	Project string `json:"project"`
 	// Vantage names the remote hz-probe agent this result came from. Empty
 	// means the check ran on hz itself.
 	Vantage string `json:"vantage,omitempty"`
+}
+
+// CheckAddReq declares a standalone check. Project is optional; empty is
+// global, and a named project must be declared.
+type CheckAddReq struct {
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Target   string `json:"target"`
+	Interval int    `json:"interval"`
+	Project  string `json:"project,omitempty"`
 }
 
 // RemoteProbeResp is one configured outside-in vantage, plus what hz has
@@ -1665,6 +1719,11 @@ type BanRequest struct {
 	IP      string `json:"ip"`
 	Timeout int    `json:"timeout,omitempty"` // seconds, 0 = permanent
 	Reason  string `json:"reason,omitempty"`
+	// Project attributes the ban (admin path, /api/v1/bans/add, only); empty
+	// is global. Enforcement is gateway-wide whatever it says. The service
+	// token path (/api/ban/ban) ignores it: a service's ban is global and
+	// names the service in BanEntry.Service.
+	Project string `json:"project,omitempty"`
 }
 
 type UnbanRequest struct {
@@ -1678,6 +1737,8 @@ type BanEntry struct {
 	ExpiresAt int64  `json:"expiresAt,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 	Service   string `json:"service,omitempty"`
+	// Project the ban is attributed to; "" is global. Attribution only.
+	Project string `json:"project"`
 }
 
 type BanListResponse struct {
@@ -1756,6 +1817,9 @@ type HostPortEntry struct {
 	// Forward marks a layer-4 port forward's reservation. hz ports next treats
 	// these as taken for every protocol, not just their own.
 	Forward bool `json:"forward,omitempty"`
+	// Project is the owning service's project, DERIVED at response time and
+	// never stored; "" is global (infra ports, and services with no project).
+	Project string `json:"project"`
 }
 
 type HostPortMapResponse struct {
@@ -1768,6 +1832,10 @@ type PortRange struct {
 	From int    `json:"from"`
 	To   int    `json:"to,omitempty"`
 	Note string `json:"note,omitempty"`
+	// Project attributes a custom exclusion; empty (omitted) is global, and
+	// every built-in range is global. Allocation ignores it: an exclusion
+	// denies the port to every project.
+	Project string `json:"project,omitempty"`
 }
 
 // PortExclusionsResp carries the allocation denylist: Builtin is the read-only

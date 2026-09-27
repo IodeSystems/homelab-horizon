@@ -25,11 +25,7 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Name     string `json:"name"`
-		ExtraIPs string `json:"extraIPs"`
-		Profile  string `json:"profile"`
-	}
+	var req apitypes.PeerAddReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
 		return
@@ -38,6 +34,13 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		writeJSONError(w, http.StatusBadRequest, "Name required")
+		return
+	}
+	// Before the peer exists: wg0.conf is written by AddPeer below, and a
+	// refusal from Save after it would leave a client nobody attributed.
+	project := strings.TrimSpace(req.Project)
+	if err := s.cfg().CheckProjectRef(project); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	extraIPs := strings.TrimSpace(req.ExtraIPs)
@@ -71,6 +74,7 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 	wgPeers := s.snapshotWGPeers()
 	if err := s.updateConfig(func(cfg *config.Config) {
 		cfg.SetPeerProfile(name, profile)
+		cfg.SetPeerProject(name, project)
 		cfg.WGPeers = wgPeers
 	}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
@@ -114,12 +118,7 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		PublicKey string `json:"publicKey"`
-		Name      string `json:"name"`
-		ExtraIPs  string `json:"extraIPs"`
-		Profile   string `json:"profile"`
-	}
+	var req apitypes.PeerEditReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
 		return
@@ -134,6 +133,16 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		writeJSONError(w, http.StatusBadRequest, "Name required")
 		return
+	}
+	// nil leaves the attribution alone; checked before wg0.conf is touched.
+	var project *string
+	if req.Project != nil {
+		p := strings.TrimSpace(*req.Project)
+		if err := s.cfg().CheckProjectRef(p); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		project = &p
 	}
 
 	peer := s.wg.GetPeerByPublicKey(pubkey)
@@ -182,9 +191,13 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			cfg.RenamePeerProfile(oldName, name)
+			cfg.RenamePeerProject(oldName, name)
 			cfg.RenameMFAPeer(oldName, name)
 		}
 		cfg.SetPeerProfile(name, profile)
+		if project != nil {
+			cfg.SetPeerProject(name, *project)
+		}
 		cfg.WGPeers = wgPeers
 	}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
@@ -239,6 +252,7 @@ func (s *Server) handleAPIDeletePeer(w http.ResponseWriter, r *http.Request) {
 	if err := s.updateConfig(func(cfg *config.Config) {
 		if peerName != "" {
 			cfg.DeletePeerProfile(peerName)
+			cfg.DeletePeerProject(peerName)
 			cfg.DeleteMFAPeer(peerName)
 		}
 		cfg.WGPeers = wgPeers

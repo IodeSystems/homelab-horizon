@@ -8,29 +8,47 @@ import (
 
 // THE FOUR THINGS THAT MUST BE TRUE ABOUT A MACHINE.
 //
-// The first two are absences, and an absence is the hardest thing to keep: a
+// The first two are about shape, and shape is the hardest thing to keep: a
 // field nobody added is indistinguishable from a field somebody removed, and a
-// year from now "why has a machine no project?" is a reasonable question with a
-// wrong obvious answer. So they are asserted by reflection over the struct
-// rather than left to the comment that explains them.
+// year from now "why has a machine no environment?" is a reasonable question
+// with a wrong obvious answer. So they are asserted by reflection over the
+// struct rather than left to the comment that explains them.
 
-// A machine has no project and no environment. plan/design/architecture.md: "an
-// environment never modifies a machine; it is a coordinate of an instance." The
-// gateway in plan/design/example-projection.md §3 hosts instances from two projects, so
-// a Project field would be false for that row on the day it was added.
-func TestAMachineCarriesNoProjectAndNoEnvironment(t *testing.T) {
-	forbidden := []string{"project", "environment", "env", "posture", "rung"}
+// A machine has no environment, and its fields are exactly {Name, Project,
+// Segments, Note}. plan/design/architecture.md: "an environment never modifies
+// a machine; it is a coordinate of an instance."
+//
+// Project is PRESENT since CLAUDE.md invariant 6 was amended (plan/design/ui.md,
+// Decision 1 amendment 6): it is the OWNER — responsibility, not placement. The
+// gateway in plan/design/example-projection.md §3 still hosts instances from two
+// projects whatever its owner is. The exact field list is pinned so that the
+// next field — an environment spelled some new way, a placement — is a
+// decision somebody has to make here, not a line that slips in.
+func TestAMachineCarriesNoEnvironment(t *testing.T) {
+	forbidden := []string{"environment", "env", "posture", "rung", "environments", "envs"}
 	tp := reflect.TypeOf(Machine{})
+	var fields []string
 	for i := 0; i < tp.NumField(); i++ {
+		fields = append(fields, tp.Field(i).Name)
 		name := strings.ToLower(tp.Field(i).Name)
 		for _, bad := range forbidden {
 			if name == bad {
 				t.Fatalf("Machine has a %s field. An environment is a coordinate of an INSTANCE; "+
-					"one machine hosts instances from several projects, so this field is false for the gateway "+
+					"one machine hosts instances from several rungs of several projects, so this field is false for the gateway "+
 					"the moment it exists (plan/design/architecture.md, \"Instance, not machine, carries the environment\")",
 					tp.Field(i).Name)
 			}
 		}
+	}
+	if got, want := strings.Join(fields, ","), "Name,Project,Segments,Note"; got != want {
+		t.Fatalf("Machine's fields are %s, want exactly %s. A new field on the machine record is a model decision "+
+			"(CLAUDE.md invariant 6) — make it there, then change this list", got, want)
+	}
+	// Project is the owner and is optional: "" is global, and must stay
+	// omittable on the wire so a config written before amendment 6 is unchanged.
+	f, _ := tp.FieldByName("Project")
+	if tag := f.Tag.Get("json"); tag != "project,omitempty" {
+		t.Fatalf("Machine.Project's json tag is %q, want \"project,omitempty\"", tag)
 	}
 }
 

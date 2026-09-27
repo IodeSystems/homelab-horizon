@@ -60,6 +60,7 @@ func (s *Server) handleAPISettings(w http.ResponseWriter, r *http.Request) {
 
 	// Checks
 	monitorChecks := s.monitor.GetStatuses()
+	checkProject := checkProjects(s.cfg())
 	checks := make([]apitypes.CheckStatusResp, 0, len(monitorChecks))
 	for _, c := range monitorChecks {
 		checks = append(checks, apitypes.CheckStatusResp{
@@ -72,6 +73,7 @@ func (s *Server) handleAPISettings(w http.ResponseWriter, r *http.Request) {
 			Interval:  c.Interval,
 			Enabled:   c.Enabled,
 			AutoGen:   c.AutoGen,
+			Project:   checkProject(c.Name),
 			Vantage:   c.Vantage,
 		})
 	}
@@ -384,6 +386,7 @@ func (s *Server) handleAPIChecks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	monitorChecks := s.monitor.GetStatuses()
+	checkProject := checkProjects(s.cfg())
 	checks := make([]apitypes.CheckStatusResp, 0, len(monitorChecks))
 	for _, c := range monitorChecks {
 		checks = append(checks, apitypes.CheckStatusResp{
@@ -396,12 +399,41 @@ func (s *Server) handleAPIChecks(w http.ResponseWriter, r *http.Request) {
 			Interval:  c.Interval,
 			Enabled:   c.Enabled,
 			AutoGen:   c.AutoGen,
+			Project:   checkProject(c.Name),
 			Vantage:   c.Vantage,
 		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(checks)
+}
+
+// checkProjects answers which project a check is attributed to, by name.
+//
+// A standalone check carries its own (ServiceCheck.Project). A svc:<name>
+// check is DERIVED from a service and follows it — the service's Project, read
+// now, never copied onto the check — so moving a service moves its check.
+// Everything else the monitor generates (tls:, sys:, remote vantages) is
+// global. The stored check wins a name collision, which is the monitor's own
+// rule: a manual check named svc:<name> suppresses the generated one.
+func checkProjects(cfg *config.Config) func(name string) string {
+	stored := make(map[string]string, len(cfg.ServiceChecks))
+	for _, c := range cfg.ServiceChecks {
+		stored[c.Name] = c.Project
+	}
+	services := make(map[string]string, len(cfg.Services))
+	for _, svc := range cfg.Services {
+		services[svc.Name] = svc.Project
+	}
+	return func(name string) string {
+		if p, ok := stored[name]; ok {
+			return p
+		}
+		if svc, ok := strings.CutPrefix(name, "svc:"); ok {
+			return services[svc]
+		}
+		return ""
+	}
 }
 
 // handleAPIAllCheckHistory returns every check's history in one response,
@@ -496,14 +528,14 @@ func (s *Server) handleAPIAddCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Name     string `json:"name"`
-		Type     string `json:"type"`
-		Target   string `json:"target"`
-		Interval int    `json:"interval"`
-	}
+	var req apitypes.CheckAddReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+	project := strings.TrimSpace(req.Project)
+	if err := s.cfg().CheckProjectRef(project); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -534,6 +566,7 @@ func (s *Server) handleAPIAddCheck(w http.ResponseWriter, r *http.Request) {
 		Target:   target,
 		Interval: interval,
 		Enabled:  true,
+		Project:  project,
 	}
 
 	if err := s.updateConfig(func(cfg *config.Config) {

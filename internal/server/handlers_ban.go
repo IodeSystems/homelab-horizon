@@ -99,7 +99,7 @@ func iptablesUnban(ip string) error {
 // Everything it still does is a decision only hz can make: normalising the
 // address, refusing to ban the gateway's own addresses, and keeping the list
 // idempotent. What it no longer does is run iptables.
-func (s *Server) banIP(ip string, timeout int, reason, service string) error {
+func (s *Server) banIP(ip string, timeout int, reason, service, project string) error {
 	banMu.Lock()
 	defer banMu.Unlock()
 
@@ -129,6 +129,7 @@ func (s *Server) banIP(ip string, timeout int, reason, service string) error {
 		CreatedAt: now,
 		Reason:    reason,
 		Service:   service,
+		Project:   project,
 	}
 	if timeout > 0 {
 		ban.ExpiresAt = now + int64(timeout)
@@ -265,6 +266,7 @@ func banListEntries(bans []config.IPBan) []apitypes.BanEntry {
 			ExpiresAt: b.ExpiresAt,
 			Reason:    b.Reason,
 			Service:   b.Service,
+			Project:   b.Project,
 		}
 	}
 	return entries
@@ -326,7 +328,9 @@ func (s *Server) handleBanAPI(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusBadRequest, "ip is required")
 			return
 		}
-		if err := s.banIP(req.IP, req.Timeout, req.Reason, service); err != nil {
+		// req.Project is ignored here: a service's ban is global, and the
+		// service it came from is already on the record.
+		if err := s.banIP(req.IP, req.Timeout, req.Reason, service, ""); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -400,7 +404,12 @@ func (s *Server) handleAPIBanAdd(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "ip is required")
 		return
 	}
-	if err := s.banIP(req.IP, req.Timeout, req.Reason, "admin"); err != nil {
+	project := strings.TrimSpace(req.Project)
+	if err := s.cfg().CheckProjectRef(project); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.banIP(req.IP, req.Timeout, req.Reason, "admin", project); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

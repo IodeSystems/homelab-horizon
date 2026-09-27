@@ -214,6 +214,8 @@ export const VPNPeerSchema = z.object({
   online: z.boolean(),
   isAdmin: z.boolean(),
   profile: z.string(),
+  // Attributed project; "" is global (always sent).
+  project: z.string(),
   mfaEnrolled: z.boolean(),
   mfaSessionActive: z.boolean(),
   mfaSessionExpiry: z.string().optional(),
@@ -330,6 +332,8 @@ export const CheckStatusSchema = z.object({
   interval: z.number(),
   enabled: z.boolean(),
   auto_gen: z.boolean(),
+  // Attributed project; "" is global (always sent).
+  project: z.string(),
   // Set when the result came from a remote hz-probe agent rather than hz.
   vantage: z.string().optional(),
 });
@@ -460,6 +464,8 @@ export const BanEntrySchema = z.object({
   expiresAt: z.number(),
   reason: z.string(),
   service: z.string(),
+  // Attributed project; "" is global (always sent).
+  project: z.string(),
 });
 
 export const BanListResponseSchema = z.object({
@@ -564,12 +570,16 @@ export const HostPortEntrySchema = z.object({
   proto: z.string(),
   service: z.string(),
   domain: z.string().optional(),
+  // The owning service's project; "" is global (always sent).
+  project: z.string(),
 });
 
 export const PortRangeSchema = z.object({
   from: z.number(),
   to: z.number().optional(),
   note: z.string().optional(),
+  // Attributed project; absent is global.
+  project: z.string().optional(),
 });
 
 export const PortExclusionsRespSchema = z.object({

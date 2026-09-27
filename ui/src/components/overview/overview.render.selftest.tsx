@@ -92,6 +92,7 @@ function check_(over: Partial<CheckStatus>): CheckStatus {
     interval: 60,
     enabled: true,
     auto_gen: false,
+    project: "",
     ...over,
   };
 }

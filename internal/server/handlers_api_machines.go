@@ -117,7 +117,7 @@ func (s *Server) handleAPIMachineAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	next := *s.cfg()
-	if err := next.AddMachine(config.Machine{Name: name, Segments: req.Segments, Note: req.Note}); err != nil {
+	if err := next.AddMachine(config.Machine{Name: name, Project: req.Project, Segments: req.Segments, Note: req.Note}); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -126,6 +126,41 @@ func (s *Server) handleAPIMachineAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m, _ := next.FindMachine(name)
+	writeJSON(w, s.machineResp(m))
+}
+
+// handleAPIMachineSet edits a declared machine's owner and note in place.
+//
+// It exists so the owner can change without remove and re-add: removing an
+// enrolled machine revokes its agent credential, and re-attributing a box is
+// not a reason to make it re-enrol. Attribution renders nothing, so this
+// writes immediately like machines/add.
+// POST /api/v1/machines/set
+func (s *Server) handleAPIMachineSet(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	var req apitypes.MachineSetReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+
+	next := *s.cfg()
+	m, err := next.SetMachine(req.Name, config.MachinePatch{Project: req.Project, Note: req.Note})
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.updateConfig(func(cfg *config.Config) { *cfg = next }); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
+		return
+	}
 	writeJSON(w, s.machineResp(m))
 }
 
@@ -402,6 +437,7 @@ func keyPrefix(key string) string {
 func (s *Server) machineResp(m config.Machine) apitypes.MachineResp {
 	out := apitypes.MachineResp{
 		Name:       m.Name,
+		Project:    m.Project,
 		Segments:   m.Segments,
 		Note:       m.Note,
 		MultiHomed: m.MultiHomed(),

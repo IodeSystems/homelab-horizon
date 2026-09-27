@@ -33,12 +33,13 @@ import (
 // it is in the way. A removal that said only "3 things depend on this" would
 // leave them to find out which.
 type Dependant struct {
-	// Kind is "project", "environment", "service", "segment", "machine" or
-	// "credential".
+	// Kind is "project", "environment", "service", "segment", "machine",
+	// "credential", "vpn-client", "check", "ban" or "port-exclusion".
 	Kind string `json:"kind"`
 	// Name identifies the record: a project name, "<project>/<environment>",
-	// a segment name, a machine name, a service name, or the machine a
-	// credential belongs to.
+	// a segment name, a machine name, a service name, the machine a
+	// credential belongs to, a VPN client's peer name, a check name, a banned
+	// IP, or a port exclusion's range ("8443", "8000-8099").
 	Name string `json:"name"`
 	// How says what the relationship is, in a sentence.
 	How string `json:"how"`
@@ -51,9 +52,14 @@ func (d Dependant) String() string { return d.Kind + " " + d.Name + " — " + d.
 // what sits on them — with machines and the credentials keyed to them after
 // the tree, because a machine is not in it (it has no project by design).
 // Segments sit between: a segment IS owned by a project, and the machines on it
-// are not.
+// are not. The attribution-only records (amendment 6) come last: a machine,
+// client, check, ban or exclusion attributed to a project is organisational,
+// and removing the project re-attributes it rather than removing it.
 func sortDependants(list []Dependant) {
-	rank := map[string]int{"project": 0, "environment": 1, "service": 2, "segment": 3, "machine": 4, "credential": 5}
+	rank := map[string]int{
+		"project": 0, "environment": 1, "service": 2, "segment": 3, "machine": 4, "credential": 5,
+		"vpn-client": 6, "check": 7, "ban": 8, "port-exclusion": 9,
+	}
 	sort.SliceStable(list, func(i, j int) bool {
 		if rank[list[i].Kind] != rank[list[j].Kind] {
 			return rank[list[i].Kind] < rank[list[j].Kind]
@@ -107,6 +113,12 @@ func (c *Config) AddProject(name, parent string) error {
 // subtree, every rung under it, and every service that would be UNASSIGNED
 // (which is legal and keeps the service working, but is still a change to a
 // record the operator did not name, so it is listed).
+//
+// ATTRIBUTED RECORDS — machines, VPN clients, checks, bans and port exclusions
+// naming a doomed project (plan/design/ui.md, Decision 1 amendment 6) — are
+// dependants too, and block without cascade like everything else. With cascade
+// they are RE-ATTRIBUTED TO GLOBAL, never deleted: attribution is organisational,
+// and removing a project must not take a machine, a client or a ban with it.
 func (c *Config) ProjectRemoval(name string, cascade bool) (removes, blocked []Dependant, err error) {
 	if !c.hasProject(name) {
 		return nil, nil, fmt.Errorf("no project %q — `hz project ls` lists what exists%s", name, c.projectHint())
@@ -174,13 +186,40 @@ func (c *Config) ProjectRemoval(name string, cascade bool) (removes, blocked []D
 		}
 		add(d)
 	}
+	attributed := func(kind, recName, project string) {
+		if project == "" || !doomed[project] {
+			return
+		}
+		d := Dependant{Kind: kind, Name: recName, How: "is attributed to " + project}
+		if cascade {
+			d.How += " and would be RE-ATTRIBUTED TO GLOBAL — kept, not deleted"
+		}
+		add(d)
+	}
+	for _, m := range c.Machines {
+		attributed("machine", m.Name, m.Project)
+	}
+	for _, peer := range sortedKeys(c.VPNProjects) {
+		attributed("vpn-client", peer, c.VPNProjects[peer])
+	}
+	for _, chk := range c.ServiceChecks {
+		attributed("check", chk.Name, chk.Project)
+	}
+	for _, b := range c.IPBans {
+		attributed("ban", b.IP, b.Project)
+	}
+	for _, r := range c.PortExclusions {
+		attributed("port-exclusion", r.Label(), r.Project)
+	}
 	sortDependants(blocked)
 	sortDependants(removes[1:])
 	return removes, blocked, nil
 }
 
 // RemoveProject removes a project, and with cascade its descendants and their
-// rungs, unassigning every service that named one. It refuses while anything
+// rungs, unassigning every service that named one and re-attributing every
+// machine, VPN client, check, ban and port exclusion that named one to global.
+// It refuses while anything
 // depends on it and cascade is off, naming what.
 func (c *Config) RemoveProject(name string, cascade bool) ([]Dependant, error) {
 	removes, blocked, err := c.ProjectRemoval(name, cascade)
@@ -215,6 +254,31 @@ func (c *Config) RemoveProject(name string, cascade bool) ([]Dependant, error) {
 		if doomed[next.Services[i].Project] {
 			next.Services[i].Project = ""
 			next.Services[i].Environment = ""
+		}
+	}
+	for i := range next.Machines {
+		if doomed[next.Machines[i].Project] {
+			next.Machines[i].Project = ""
+		}
+	}
+	for _, peer := range sortedKeys(next.VPNProjects) {
+		if doomed[next.VPNProjects[peer]] {
+			next.SetPeerProject(peer, "")
+		}
+	}
+	for i := range next.ServiceChecks {
+		if doomed[next.ServiceChecks[i].Project] {
+			next.ServiceChecks[i].Project = ""
+		}
+	}
+	for i := range next.IPBans {
+		if doomed[next.IPBans[i].Project] {
+			next.IPBans[i].Project = ""
+		}
+	}
+	for i := range next.PortExclusions {
+		if doomed[next.PortExclusions[i].Project] {
+			next.PortExclusions[i].Project = ""
 		}
 	}
 	next.Projects, next.Environments = projects, environments
@@ -495,9 +559,12 @@ func (c *Config) validateModel() error {
 }
 
 // copyForWrite returns a config with fresh Projects/Environments/Services/
-// Machines/Segments slices, for the reason ApplyImport gives: a Config is copied
-// shallowly in several places, so writing through the existing backing array
-// would mutate the config another goroutine is still serving.
+// Machines/Segments slices — and the attributed ServiceChecks/IPBans/
+// PortExclusions, which RemoveProject rewrites — for the reason ApplyImport
+// gives: a Config is copied shallowly in several places, so writing through
+// the existing backing array would mutate the config another goroutine is
+// still serving. VPNProjects is a map and is never written in place
+// (SetPeerProject copies on write).
 func (c *Config) copyForWrite() *Config {
 	next := *c
 	next.Projects = append([]Project(nil), c.Projects...)
@@ -505,7 +572,19 @@ func (c *Config) copyForWrite() *Config {
 	next.Services = append([]Service(nil), c.Services...)
 	next.Machines = append([]Machine(nil), c.Machines...)
 	next.Segments = append([]Segment(nil), c.Segments...)
+	next.ServiceChecks = cloneNonNil(c.ServiceChecks)
+	next.IPBans = cloneNonNil(c.IPBans)
+	next.PortExclusions = cloneNonNil(c.PortExclusions)
 	return &next
+}
+
+// cloneNonNil copies a slice and keeps nil as nil, so a config with no checks
+// round-trips through copyForWrite without growing an empty list.
+func cloneNonNil[T any](in []T) []T {
+	if in == nil {
+		return nil
+	}
+	return append([]T(nil), in...)
 }
 
 // adopt publishes a validated copy's slices onto the receiver. Only after
@@ -513,6 +592,8 @@ func (c *Config) copyForWrite() *Config {
 func (c *Config) adopt(next *Config) {
 	c.Projects, c.Environments, c.Services = next.Projects, next.Environments, next.Services
 	c.Machines, c.Segments = next.Machines, next.Segments
+	c.ServiceChecks, c.IPBans, c.PortExclusions = next.ServiceChecks, next.IPBans, next.PortExclusions
+	c.VPNProjects = next.VPNProjects
 }
 
 func (c *Config) hasProject(name string) bool {

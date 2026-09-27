@@ -7,19 +7,25 @@ import (
 	"strings"
 )
 
-// The Machine record: identity and segment membership, and nothing else.
+// The Machine record: identity, an optional owner, and segment membership.
 //
 // WHAT IS DELIBERATELY ABSENT, because each absence is the model's shape rather
 // than a field nobody got round to:
 //
-//   - NO PROJECT AND NO ENVIRONMENT. plan/design/architecture.md, "Instance, not
-//     machine, carries the environment": *an environment never modifies a
-//     machine; it is a coordinate of an instance*. The gateway in
-//     plan/design/example-projection.md §3 hosts instances from two projects at once,
-//     so a Project field on a machine would be false for that row the day it
-//     was added, and every screen built on it would inherit the lie. The
-//     instance carries (project, environment, app, role); this record carries
-//     who the box is. TestAMachineCarriesNoProjectAndNoEnvironment pins it.
+//   - NO ENVIRONMENT. plan/design/architecture.md, "Instance, not machine,
+//     carries the environment": *an environment never modifies a machine; it
+//     is a coordinate of an instance*. The instance carries (project,
+//     environment, app, role); this record carries who the box is.
+//     TestAMachineCarriesNoEnvironment pins it, and pins the exact field set.
+//
+//   - Project IS PRESENT, and it is NOT placement (plan/design/ui.md, Decision
+//     1 amendment 6, which amended CLAUDE.md invariant 6). It names the project
+//     RESPONSIBLE for the box — who answers for it — and "" is global. It says
+//     nothing about what the box hosts: the gateway in
+//     plan/design/example-projection.md §3 hosts instances from two projects
+//     whatever its owner is, and an instance of another project on an owned
+//     machine reads as a crossing. No renderer and no projection reads it
+//     (TestAttributionChangesNoRenderedArtifact, internal/server).
 //
 //   - NO OBSERVED VERSION. It settled onto the registration in migration 0011
 //     because it belongs to an INSTANCE, and several instances share a box: a
@@ -43,6 +49,11 @@ type Machine struct {
 	// Name is the identity: what the box calls itself and what its agent
 	// credential is keyed by. Unique across the config.
 	Name string `json:"name"`
+
+	// Project is the owning project, or "" for global. Responsibility, not
+	// placement — see the header. A non-empty name must be a declared project
+	// (ValidateProjects).
+	Project string `json:"project,omitempty"`
 
 	// Segments are the network segments this machine is a member of, by name.
 	// Usually one. More than one is legal and is the case the model exists to
@@ -158,6 +169,7 @@ func (c *Config) MultiSegmentMachines() []Machine {
 // deliberate admin act rather than something a box can do for itself.
 func (c *Config) AddMachine(m Machine) error {
 	m.Name = strings.TrimSpace(m.Name)
+	m.Project = strings.TrimSpace(m.Project)
 	m.Note = strings.TrimSpace(m.Note)
 	m.Segments = normalizeSegments(m.Segments)
 
@@ -179,6 +191,55 @@ func (c *Config) AddMachine(m Machine) error {
 	}
 	c.adopt(next)
 	return nil
+}
+
+// MachinePatch is a partial edit of a machine. nil means leave the field
+// alone; a non-nil "" clears it (for Project: makes the machine global).
+// Segments are not here: membership is edited through the segment surface.
+type MachinePatch struct {
+	Project *string
+	Note    *string
+}
+
+// Empty reports a patch that would change nothing.
+func (p MachinePatch) Empty() bool { return p.Project == nil && p.Note == nil }
+
+// SetMachine edits a declared machine's owner and note in place, so an owner
+// can change without remove and re-add — which would cost the box its agent
+// credential. It validates the whole model, so clearing the note of a
+// multi-homed machine is refused here, naming the machine.
+func (c *Config) SetMachine(name string, patch MachinePatch) (Machine, error) {
+	if patch.Empty() {
+		return Machine{}, fmt.Errorf("nothing to change on machine %q — give a project or a note", name)
+	}
+	idx := -1
+	for i, m := range c.Machines {
+		if m.Name == name {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return Machine{}, fmt.Errorf("no machine %q — `hz machine ls` lists what exists%s", name, c.machineHint())
+	}
+
+	next := c.copyForWrite()
+	m := next.Machines[idx]
+	if patch.Project != nil {
+		m.Project = strings.TrimSpace(*patch.Project)
+		if err := c.CheckProjectRef(m.Project); err != nil {
+			return Machine{}, err
+		}
+	}
+	if patch.Note != nil {
+		m.Note = strings.TrimSpace(*patch.Note)
+	}
+	next.Machines[idx] = m
+	if err := next.validateModel(); err != nil {
+		return Machine{}, err
+	}
+	c.adopt(next)
+	return m, nil
 }
 
 // MachineRemoval reports what removing a machine would take (`removes`, which
