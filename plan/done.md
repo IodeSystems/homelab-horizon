@@ -32,6 +32,8 @@ is global (`""`, always labelled "global"). Design and decisions:
 
 Verified: Go 2779 tests + `go vet` + generated types; 20 UI suites green.
 
+**Follow-up, deployed `b4b0fb2`:** pending changes list what changed (`path: before → after`) and no longer count attribution — the operator's report was `aw4 modified since the last Sync` for an edit that was only `project → iode, environment → dev`.
+
 **Open (operator):** the ban-sync fallback (a backup gateway records a ban
 naming a project it does not know yet as global, logged, until the config
 pull); no edit endpoint for checks or bans; service-placed bans are always
