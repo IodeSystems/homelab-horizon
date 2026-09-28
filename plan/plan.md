@@ -101,7 +101,7 @@ already drawn that line and the UI can inherit it.
 
 The new model lands on **`dev`**, not `main`, because it will break and churn
 before it is release-ready and **the gateway is serving real traffic**. **`dev`
-is deployed to the gateway (2026-09-27, `b4b0fb2`) but not pushed** — 189 commits
+is deployed to the gateway (2026-09-27, `e92ffe0`) but not pushed** — 189 commits
 ahead of `origin/dev`.
 
 #### ✅ The deploy gap below was paid down 2026-09-26 — kept for the move warnings
@@ -196,8 +196,8 @@ for environments, segments and machines** — merged to `dev` and **deployed** 2
 
 One row per item. **The detail is in the linked document** — the landed
 narratives moved to [done.md](done.md) 2026-09-24 so this file stays readable in
-one sitting. **`dev` @ `b4b0fb2` is deployed to the gateway** (2026-09-27 15:39,
-`v0.4.0-316-gb4b0fb2`, active, 0 restarts, 0 ERRORs, UI bundle matches the local build) and **not pushed**. Rows
+one sitting. **`dev` @ `e92ffe0` is deployed to the gateway** (2026-09-27 17:26,
+`v0.4.0-323-ge92ffe0`, active, 0 restarts, 0 ERRORs, UI bundle matches the local build) and **not pushed**. Rows
 below that say "not deployed" predate that deploy — re-check before trusting.
 
 | | Item | Status | Detail |
@@ -414,7 +414,7 @@ gap where a whole-gateway outage notified nobody, because hz is the only other
 notifier. The topic URL is a secret, passed as a systemd credential
 (`/etc/hz-probe/ntfy-url` → `LoadCredential`), never on the command line or in
 logs. Pull mode unchanged (it never dials hz, so cannot see it down).
-**next:** install the new `hz-probe` on the `gcp-usw1` host with the ntfy file.
+Gateway deployed at `e92ffe0`. **next:** install the new `hz-probe` on the `gcp-usw1` host with the ntfy file — the vantage host still runs the old build until then.
 
 Two decisions worth keeping:
 
