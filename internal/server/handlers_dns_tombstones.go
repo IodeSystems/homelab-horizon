@@ -37,7 +37,7 @@ func (s *Server) retractTombstones(run *dnsSyncRun) (retracted, failed int, err 
 			failed += len(zone.Tombstones)
 			continue
 		}
-		provider, perr := dns.NewProvider(providerCfg)
+		provider, perr := s.dnsProvider(providerCfg)
 		if perr != nil {
 			slog.Error("tombstone provider error", "zone", zone.Name, "err", perr)
 			failed += len(zone.Tombstones)
@@ -183,7 +183,7 @@ func (s *Server) ingestObservedRecords(run *dnsSyncRun) (ingested int, err error
 		if providerCfg == nil {
 			continue
 		}
-		provider, perr := dns.NewProvider(providerCfg)
+		provider, perr := s.dnsProvider(providerCfg)
 		if perr != nil {
 			slog.Warn("ingest provider error", "zone", zone.Name, "err", perr)
 			continue

@@ -47,7 +47,7 @@ func (s *Server) handleAPIZoneRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	provider, err := dns.NewProvider(providerCfg)
+	provider, err := s.dnsProvider(providerCfg)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "Provider error: "+err.Error())
 		return
@@ -63,12 +63,35 @@ func (s *Server) handleAPIZoneRecords(w http.ResponseWriter, r *http.Request) {
 	resp := apitypes.ZoneRecordsResponse{Zone: zone.Name}
 	for _, rec := range live {
 		name := strings.TrimSuffix(rec.Name, ".")
-		resp.Records = append(resp.Records, apitypes.DNSRecordResp{
+		owner := cfg.ClassifyRecord(zone.Name, name, rec.Type, rec.Value)
+		r := apitypes.DNSRecordResp{
 			Name:  rec.Name,
 			Type:  rec.Type,
 			Value: rec.Value,
 			TTL:   rec.TTL,
-			Owner: cfg.ClassifyRecord(zone.Name, name, rec.Type, rec.Value),
+			Owner: owner,
+		}
+		if owner == config.RecordOwnerDeclared {
+			if d := findDeclared(*zone, name, rec.Type, rec.Value); d != nil {
+				r.Note = d.Note
+			}
+		}
+		resp.Records = append(resp.Records, r)
+	}
+	for _, d := range zone.Records {
+		fqdn := zone.Qualify(d.Name)
+		typ := d.NormalizedType()
+		val := config.CanonicalRecordValue(typ, d.Value)
+		isLive := false
+		for _, rec := range live {
+			if strings.EqualFold(strings.TrimSuffix(rec.Name, "."), fqdn) &&
+				strings.EqualFold(rec.Type, typ) && rec.Value == val {
+				isLive = true
+				break
+			}
+		}
+		resp.Declared = append(resp.Declared, apitypes.DeclaredDNSRecordResp{
+			Name: fqdn, Type: typ, Value: val, TTL: d.EffectiveTTL(), Note: d.Note, Live: isLive,
 		})
 	}
 
@@ -156,12 +179,20 @@ func (s *Server) applyRecordMutation(w http.ResponseWriter, r *http.Request, op 
 
 	name := strings.TrimSuffix(strings.TrimSpace(req.Name), ".")
 	recType := strings.ToUpper(strings.TrimSpace(req.Type))
-	value := strings.TrimSpace(req.Value)
-	oldValue := strings.TrimSpace(req.OldValue)
+	value := config.CanonicalRecordValue(recType, req.Value)
+	oldValue := config.CanonicalRecordValue(recType, req.OldValue)
 
-	if req.Zone == "" || name == "" || recType == "" {
-		writeJSONError(w, http.StatusBadRequest, "zone, name and type are required")
+	if name == "" || recType == "" {
+		writeJSONError(w, http.StatusBadRequest, "name and type are required")
 		return
+	}
+	if req.Zone == "" {
+		z := s.cfg().GetZoneForDomain(name)
+		if z == nil {
+			writeJSONError(w, http.StatusBadRequest, "no managed zone contains "+name)
+			return
+		}
+		req.Zone = z.Name
 	}
 	if op != recordOpDelete && value == "" {
 		writeJSONError(w, http.StatusBadRequest, "value is required")
@@ -185,7 +216,7 @@ func (s *Server) applyRecordMutation(w http.ResponseWriter, r *http.Request, op 
 		writeJSONError(w, http.StatusBadRequest, "No DNS provider configured for zone")
 		return
 	}
-	provider, err := dns.NewProvider(providerCfg)
+	provider, err := s.dnsProvider(providerCfg)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "Provider error: "+err.Error())
 		return
@@ -208,7 +239,7 @@ func (s *Server) applyRecordMutation(w http.ResponseWriter, r *http.Request, op 
 	}
 
 	// Drift guard: what we're about to change must match what the client saw.
-	if !valueSetsEqual(liveValues, req.ExpectedFrom) {
+	if !valueSetsEqual(liveValues, canonicalValues(recType, req.ExpectedFrom)) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -217,6 +248,24 @@ func (s *Server) applyRecordMutation(w http.ResponseWriter, r *http.Request, op 
 			"error": "record set changed at the provider since it was loaded; refresh and retry",
 			"live":  liveValues,
 		})
+		return
+	}
+
+	// A declaration whose value never reached the provider (a failed publish,
+	// a drift block) has nothing live to delete. Dropping the declaration is
+	// the whole deletion; a tombstone would retract a value that is not there.
+	if op == recordOpDelete && !containsValue(liveValues, value) && findDeclared(*zone, name, recType, value) != nil {
+		if err := s.updateConfig(func(cfg *config.Config) {
+			for i := range cfg.Zones {
+				if cfg.Zones[i].Name == zone.Name {
+					cfg.Zones[i].Records = applyRecordToConfig(cfg.Zones[i].Records, op, name, recType, value, oldValue, req.TTL)
+				}
+			}
+		}); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "values": liveValues})
 		return
 	}
 
@@ -285,7 +334,50 @@ func (s *Server) applyRecordMutation(w http.ResponseWriter, r *http.Request, op 
 	for i, rec := range desired {
 		desiredValues[i] = rec.Value
 	}
+	// Record what was just written as the baseline. Without it the next sync
+	// compares against whatever was there before this edit: a delete followed
+	// by a re-declare read as live {} != last-published {old} and halted all
+	// DNS as drift.
+	s.setLastPublished(driftKey(zone.Name, name, recType), desiredValues)
 	writeJSON(w, map[string]any{"ok": true, "values": desiredValues})
+}
+
+// dnsProvider builds the provider client for a zone (see Server.newDNSProvider).
+func (s *Server) dnsProvider(cfg *config.DNSProviderConfig) (dns.Provider, error) {
+	if s.newDNSProvider != nil {
+		return s.newDNSProvider(cfg)
+	}
+	return dns.NewProvider(cfg)
+}
+
+// findDeclared returns the zone's declaration of this exact value, or nil.
+func findDeclared(zone config.Zone, name, recType, value string) *config.DNSRecord {
+	for i := range zone.Records {
+		d := zone.Records[i]
+		if strings.EqualFold(zone.Qualify(d.Name), strings.TrimSuffix(name, ".")) &&
+			d.NormalizedType() == strings.ToUpper(recType) &&
+			config.CanonicalRecordValue(recType, d.Value) == config.CanonicalRecordValue(recType, value) {
+			return &zone.Records[i]
+		}
+	}
+	return nil
+}
+
+func canonicalValues(recType string, vs []string) []string {
+	out := make([]string, len(vs))
+	for i, v := range vs {
+		out[i] = config.CanonicalRecordValue(recType, v)
+	}
+	return out
+}
+
+func containsValue(vs []string, v string) bool {
+	for _, x := range vs {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 // mutateRecordSet applies op to the live base set and returns the desired set.
@@ -365,7 +457,8 @@ func applyRecordToConfig(records []config.DNSRecord, op, name, recType, value, o
 
 func recordMatches(rec config.DNSRecord, name, recType, value string) bool {
 	return strings.TrimSuffix(rec.Name, ".") == name &&
-		rec.NormalizedType() == recType && rec.Value == value
+		rec.NormalizedType() == recType &&
+		config.CanonicalRecordValue(recType, rec.Value) == config.CanonicalRecordValue(recType, value)
 }
 
 // valueSetsEqual reports whether two value slices contain the same values
@@ -405,14 +498,17 @@ func buildZoneRecordSets(zone config.Zone) (sets []zoneRecordSet, errs []error) 
 			errs = append(errs, err)
 			continue
 		}
+		// Qualified here, not only at publish: a name declared relative to
+		// the zone ("_dmarc") compared against the provider's FQDN never
+		// matched, so its first publish read as a takeover of its own name.
 		dnsRec := dns.Record{
-			Name:   rec.Name,
+			Name:   zone.Qualify(rec.Name),
 			Type:   rec.NormalizedType(),
-			Value:  rec.Value,
+			Value:  config.CanonicalRecordValue(rec.Type, rec.Value),
 			TTL:    rec.EffectiveTTL(),
 			ZoneID: zone.ZoneID,
 		}
-		key := rec.Name + "|" + dnsRec.Type
+		key := strings.ToLower(dnsRec.Name) + "|" + dnsRec.Type
 		if i, ok := index[key]; ok {
 			sets[i].Records = append(sets[i].Records, dnsRec)
 		} else {
@@ -449,7 +545,7 @@ func (s *Server) syncZoneRecords(run *dnsSyncRun) (updated, failed int, err erro
 			continue
 		}
 
-		provider, perr := dns.NewProvider(providerCfg)
+		provider, perr := s.dnsProvider(providerCfg)
 		if perr != nil {
 			slog.Error("zone DNS provider error", "zone", zone.Name, "err", perr)
 			failed += len(sets)

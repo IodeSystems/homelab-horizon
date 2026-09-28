@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/libdns/libdns"
+
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
 // LibdnsProvider is the interface that libdns providers must implement
@@ -135,7 +138,7 @@ func (p *LibdnsAdapter) GetRecord(zoneID, name, recordType string) (*Record, err
 			return &Record{
 				Name:   name,
 				Type:   rr.Type,
-				Value:  rr.Data,
+				Value:  config.CanonicalRecordValue(rr.Type, rr.Data),
 				TTL:    int(rr.TTL.Seconds()),
 				ZoneID: zoneID,
 			}, nil
@@ -161,7 +164,7 @@ func (p *LibdnsAdapter) ListRecords(zoneID string) ([]Record, error) {
 		out = append(out, Record{
 			Name:   p.toFQDN(rr.Name),
 			Type:   rr.Type,
-			Value:  rr.Data,
+			Value:  config.CanonicalRecordValue(rr.Type, rr.Data),
 			TTL:    int(rr.TTL.Seconds()),
 			ZoneID: zoneID,
 		})
@@ -261,7 +264,7 @@ func (p *LibdnsAdapter) SyncRecord(zoneID string, record Record) (changed bool, 
 	// value would leave a stale TTL in place until the address next changed —
 	// precisely the moment it is too late to shorten anything. A caller that
 	// leaves TTL unset is not asking for one, so it is not churned.
-	if currentRecord.Value == record.Value &&
+	if currentRecord.Value == config.CanonicalRecordValue(record.Type, record.Value) &&
 		(record.TTL <= 0 || currentRecord.TTL == record.TTL) {
 		p.log(fmt.Sprintf("%s already set to %s (ttl %ds)", record.Name, record.Value, currentRecord.TTL))
 		return false, nil
@@ -277,10 +280,6 @@ func (p *LibdnsAdapter) SyncRecord(zoneID string, record Record) (changed bool, 
 func (p *LibdnsAdapter) SyncRecordSet(zoneID string, records []Record) (changed bool, err error) {
 	if len(records) == 0 {
 		return false, nil
-	}
-	// Single record: delegate to SyncRecord
-	if len(records) == 1 {
-		return p.SyncRecord(zoneID, records[0])
 	}
 
 	name := records[0].Name
@@ -302,14 +301,22 @@ func (p *LibdnsAdapter) SyncRecordSet(zoneID string, records []Record) (changed 
 	for _, r := range existing {
 		rr := r.RR()
 		if rr.Name == relName && rr.Type == recordType {
-			existingValues = append(existingValues, rr.Data)
+			existingValues = append(existingValues, config.CanonicalRecordValue(rr.Type, rr.Data))
 		}
+	}
+
+	// One value replacing at most one: delegate to SyncRecord, which also
+	// compares the TTL. With more than one live it would compare only the
+	// first it finds, call a {a, b} -> {a} change a no-op, and leave b
+	// published.
+	if len(records) == 1 && len(existingValues) <= 1 {
+		return p.SyncRecord(zoneID, records[0])
 	}
 
 	// Check if values match (order-independent)
 	newValues := make([]string, len(records))
 	for i, r := range records {
-		newValues[i] = r.Value
+		newValues[i] = config.CanonicalRecordValue(r.Type, r.Value)
 	}
 	if stringSlicesEqual(existingValues, newValues) {
 		p.log(fmt.Sprintf("%s already set to %v", name, newValues))
@@ -431,6 +438,28 @@ func (p *LibdnsAdapter) toLibdnsRecord(record Record) (libdns.Record, error) {
 			Name: relName,
 			TTL:  ttl,
 			Text: record.Value,
+		}, nil
+
+	case "MX":
+		// "<preference> <host>"; the host is written fully qualified, the same
+		// as a CNAME target, and compared without the dot (CanonicalRecordValue).
+		fields := strings.Fields(record.Value)
+		if len(fields) != 2 {
+			return nil, fmt.Errorf("invalid MX value %q: want \"<preference> <host>\"", record.Value)
+		}
+		pref, err := strconv.ParseUint(fields[0], 10, 16)
+		if err != nil {
+			return nil, fmt.Errorf("invalid MX preference %q: %w", fields[0], err)
+		}
+		target := fields[1]
+		if !strings.HasSuffix(target, ".") {
+			target += "."
+		}
+		return libdns.MX{
+			Name:       relName,
+			TTL:        ttl,
+			Preference: uint16(pref),
+			Target:     target,
 		}, nil
 
 	default:

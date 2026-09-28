@@ -103,6 +103,7 @@ var settingsExcluded = map[string]bool{
 	"admin_token":            true, // runtime secret, pinned per-instance
 	"public_ip":              true, // runtime auto-detection cache
 	"public_ip_last_checked": true, // runtime auto-detection cache
+	"last_published_records": true, // DNS publish baseline, written by every publish, not an edit
 	"last_local_iface":       true, // runtime interface-reconcile state
 	"last_lan_cidr":          true, // runtime interface-reconcile state
 	"blessed_iptables_rules": true, // local admin state, own UI, not sync-published

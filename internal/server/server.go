@@ -28,6 +28,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/autoheal"
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/db"
+	"github.com/iodesystems/homelab-horizon/internal/dns"
 	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
 	"github.com/iodesystems/homelab-horizon/internal/haproxy"
 	"github.com/iodesystems/homelab-horizon/internal/integration"
@@ -225,6 +226,11 @@ type Server struct {
 	lastRecordReconcile time.Time
 
 	configPath string
+
+	// newDNSProvider builds the provider client for a zone. Nil means
+	// dns.NewProvider; a test sets it to hand the record handlers a fake, since
+	// they otherwise build a real Route53 client from the zone's config.
+	newDNSProvider func(*config.DNSProviderConfig) (dns.Provider, error)
 
 	// unitDir is where the agent payload says a systemd unit hz DECLARES
 	// belongs. hz never writes into it — the agent does, once it is armed.
@@ -1224,6 +1230,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/zones/records/add", s.handleAPIRecordAdd)
 	mux.HandleFunc("/api/v1/zones/records/edit", s.handleAPIRecordEdit)
 	mux.HandleFunc("/api/v1/zones/records/delete", s.handleAPIRecordDelete)
+	mux.HandleFunc("/api/v1/zones/records/set", s.handleAPIRecordSet)
 	mux.HandleFunc("/api/v1/zones/tombstones/cancel", s.handleAPITombstoneCancel)
 	mux.HandleFunc("/api/v1/zones/subzone", s.handleAPIAddSubZone)
 	mux.HandleFunc("/api/v1/ssl/request-cert", s.handleAPIRequestCert)
