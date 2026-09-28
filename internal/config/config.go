@@ -1071,9 +1071,14 @@ type DNSTombstone struct {
 // TXT records used for SSL are at distinct names and are unaffected.
 type DNSRecord struct {
 	Name  string `json:"name"`          // FQDN ("foo.example.com"), zone apex (the zone name or "@"), or a label relative to the zone
-	Type  string `json:"type"`          // A, AAAA, CNAME, TXT
-	Value string `json:"value"`         // record value (e.g. "google-site-verification=...")
+	Type  string `json:"type"`          // A, AAAA, CNAME, TXT, MX
+	Value string `json:"value"`         // record value (e.g. "google-site-verification=...", MX "10 mail.example.com")
 	TTL   int    `json:"ttl,omitempty"` // seconds; defaults to 300
+	// Note says why the record exists ("SES DKIM for iodesystems.com"). A
+	// verification CNAME is an opaque token; six months on, nobody can tell
+	// which service asked for it, and a record nobody can explain is a record
+	// nobody dares remove.
+	Note string `json:"note,omitempty"`
 }
 
 // DNSDriftInfo records an out-of-band change detected at a DNS provider: the
@@ -1114,7 +1119,9 @@ func (r DNSRecord) EffectiveTTL() int {
 	return 300
 }
 
-// Validate checks the record has the required fields.
+// Validate checks the record has the required fields and a value its type can
+// carry. Set-level rules (a CNAME has one value and no siblings) need every
+// record at the name and live in Zone.ValidateRecords.
 func (r DNSRecord) Validate() error {
 	if strings.TrimSpace(r.Name) == "" {
 		return errors.New("dns record requires a name")
@@ -1125,7 +1132,7 @@ func (r DNSRecord) Validate() error {
 	if strings.TrimSpace(r.Value) == "" {
 		return fmt.Errorf("dns record %s (%s) requires a value", r.Name, r.NormalizedType())
 	}
-	return nil
+	return validateRecordValue(r.NormalizedType(), strings.TrimSpace(r.Value))
 }
 
 // GetDNSProvider returns the DNS provider config with zone name populated

@@ -1765,6 +1765,8 @@ type DNSRecordResp struct {
 	// bool that was computed from Zone.Records alone and so reported every
 	// service-derived record as un-owned.
 	Owner string `json:"owner"`
+	// Note is the declared record's note, when Owner is "declared".
+	Note string `json:"note,omitempty"`
 }
 
 // DNSTombstoneResp is a deletion hz has been told to make and not yet confirmed
@@ -1785,6 +1787,49 @@ type ZoneRecordsResponse struct {
 	Zone       string             `json:"zone"`
 	Records    []DNSRecordResp    `json:"records"`
 	Tombstones []DNSTombstoneResp `json:"tombstones,omitempty"`
+	// Declared is the zone's Zone.Records — what hz has been told to own —
+	// whether or not it is live yet. Records above only shows what the
+	// provider holds, so a declaration that has not published (a failed sync,
+	// a drift block) was invisible there.
+	Declared []DeclaredDNSRecordResp `json:"declared,omitempty"`
+}
+
+// DeclaredDNSRecordResp is one value hz has been told to publish.
+type DeclaredDNSRecordResp struct {
+	Name  string `json:"name"` // FQDN
+	Type  string `json:"type"`
+	Value string `json:"value"`
+	TTL   int    `json:"ttl"`
+	Note  string `json:"note,omitempty"`
+	// Live is true when the provider holds exactly this value at this name.
+	Live bool `json:"live"`
+}
+
+// DNSRecordSetRequest declares the complete value set hz owns at one
+// (name, type), and publishes it: POST /api/v1/zones/records/set.
+//
+// Refused (409) when the provider holds a value at that (name, type) that hz
+// did not publish and the request does not list — hz replaces whole record
+// sets, so writing would delete someone else's record. List the value to adopt
+// it. ExpectedFrom is the value set the caller saw live; a mismatch is refused
+// (409, drift) rather than overwriting a change made since.
+type DNSRecordSetRequest struct {
+	Zone         string   `json:"zone,omitempty"` // derived from Name when empty
+	Name         string   `json:"name"`
+	Type         string   `json:"type"` // A, AAAA, CNAME, TXT, MX
+	Values       []string `json:"values"`
+	TTL          int      `json:"ttl,omitempty"` // seconds; 0 keeps the declared TTL, else 300
+	Note         string   `json:"note,omitempty"`
+	ExpectedFrom []string `json:"expectedFrom"`
+}
+
+type DNSRecordSetResponse struct {
+	OK      bool     `json:"ok"`
+	Zone    string   `json:"zone"`
+	Name    string   `json:"name"`
+	Type    string   `json:"type"`
+	Values  []string `json:"values"`
+	Changed bool     `json:"changed"` // false when the provider already held exactly this set
 }
 
 // DNSDriftInfoResp describes an out-of-band change detected at a DNS provider

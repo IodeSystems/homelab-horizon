@@ -2471,6 +2471,10 @@ export interface DNSRecordResp {
    * service-derived record as un-owned.
    */
   owner: string;
+  /**
+   * Note is the declared record's note, when Owner is "declared".
+   */
+  note?: string;
 }
 /**
  * DNSTombstoneResp is a deletion hz has been told to make and not yet confirmed
@@ -2493,6 +2497,53 @@ export interface ZoneRecordsResponse {
   zone: string;
   records: DNSRecordResp[];
   tombstones?: DNSTombstoneResp[];
+  /**
+   * Declared is the zone's Zone.Records — what hz has been told to own —
+   * whether or not it is live yet. Records above only shows what the
+   * provider holds, so a declaration that has not published (a failed sync,
+   * a drift block) was invisible there.
+   */
+  declared?: DeclaredDNSRecordResp[];
+}
+/**
+ * DeclaredDNSRecordResp is one value hz has been told to publish.
+ */
+export interface DeclaredDNSRecordResp {
+  name: string; // FQDN
+  type: string;
+  value: string;
+  ttl: number /* int */;
+  note?: string;
+  /**
+   * Live is true when the provider holds exactly this value at this name.
+   */
+  live: boolean;
+}
+/**
+ * DNSRecordSetRequest declares the complete value set hz owns at one
+ * (name, type), and publishes it: POST /api/v1/zones/records/set.
+ * Refused (409) when the provider holds a value at that (name, type) that hz
+ * did not publish and the request does not list — hz replaces whole record
+ * sets, so writing would delete someone else's record. List the value to adopt
+ * it. ExpectedFrom is the value set the caller saw live; a mismatch is refused
+ * (409, drift) rather than overwriting a change made since.
+ */
+export interface DNSRecordSetRequest {
+  zone?: string; // derived from Name when empty
+  name: string;
+  type: string; // A, AAAA, CNAME, TXT, MX
+  values: string[];
+  ttl?: number /* int */; // seconds; 0 keeps the declared TTL, else 300
+  note?: string;
+  expectedFrom: string[];
+}
+export interface DNSRecordSetResponse {
+  ok: boolean;
+  zone: string;
+  name: string;
+  type: string;
+  values: string[];
+  changed: boolean; // false when the provider already held exactly this set
 }
 /**
  * DNSDriftInfoResp describes an out-of-band change detected at a DNS provider

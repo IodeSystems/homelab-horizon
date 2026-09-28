@@ -32,7 +32,7 @@ func normalizeRecordKey(name, recType string) (string, string) {
 func (t DNSTombstone) Matches(name, recType, value string) bool {
 	tn, tt := normalizeRecordKey(t.Name, t.Type)
 	rn, rt := normalizeRecordKey(name, recType)
-	return tn == rn && tt == rt && t.Value == value
+	return tn == rn && tt == rt && CanonicalRecordValue(tt, t.Value) == CanonicalRecordValue(rt, value)
 }
 
 // MatchesSet reports whether the tombstone targets this (name, type), ignoring
@@ -196,7 +196,7 @@ func (c *Config) ClassifyRecord(zoneName, name, recType, value string) string {
 		}
 		for _, rec := range c.Zones[i].Records {
 			cn, ct := normalizeRecordKey(c.Zones[i].qualify(rec.Name), rec.Type)
-			if cn == rn && ct == rt && rec.Value == value {
+			if cn == rn && ct == rt && CanonicalRecordValue(ct, rec.Value) == CanonicalRecordValue(rt, value) {
 				return RecordOwnerDeclared
 			}
 		}
