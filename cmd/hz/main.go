@@ -76,6 +76,23 @@ COMMANDS
   domain ssl add <domain>...         Give domains HTTPS (adds the SubZone that covers them)
   domain ssl rm <domain>... --confirm
                                      Drop HTTPS from domains (back to plain HTTP)
+  dns record list [--zone Z] [--all] [--json]
+                                     Records hz owns on its zones (DKIM, SPF, verification)
+                                     and whether each is live. --all: every record at the
+                                     provider, with its owner (declared/derived/observed)
+  dns record add --name N --type A|AAAA|CNAME|TXT|MX --value V [--value V2]
+                 [--ttl SEC] [--note "why"] [--zone Z]
+                                     Declare values hz owns at (name, type) and publish them.
+                                     The zone is the managed zone the name is in; a name in
+                                     none is refused. TXT unquoted; MX "10 host". A value
+                                     already live that hz did not publish must be named to
+                                     be adopted — hz refuses a write that would delete it
+  dns record edit <name> --type T [--value V ...] [--ttl SEC] [--note "why"]
+                                     Replace the declared values (or only TTL/note)
+  dns record rm <name> --type T [--value V] [--confirm]
+                                     Remove declared values. Deletes at the provider only a
+                                     value hz declared that is live as declared; others at
+                                     the name are left alone. Dry run without --confirm
   host list                          List declared hosts (table)
   host show <name>                   One host and EVERY record that resolves through it
                                      ('self' = this gateway's own address, @self)
@@ -423,6 +440,8 @@ func dispatch(c *client, cmd string, rest []string) error {
 		err = runPorts(c, rest)
 	case "domain":
 		err = runDomain(c, rest)
+	case "dns":
+		err = runDNS(c, rest)
 	case "host":
 		err = runHost(c, rest)
 	case "exporter":
