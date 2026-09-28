@@ -348,3 +348,51 @@ func TestZoneRecordsListsDeclared(t *testing.T) {
 		}
 	}
 }
+
+// The SES us-west-2 set for iodesystems.com, published beside the zone's
+// existing foreign records: those survive untouched, a sync afterwards writes
+// nothing and does not block, and an attempt to declare SPF over the foreign
+// apex TXT set is refused rather than upserted.
+func TestRecordSetSESBesideForeignRecords(t *testing.T) {
+	apexSPF := dns.Record{Name: sesZone, Type: "TXT", Value: "v=spf1 include:spf.messagingengine.com ?all", ZoneID: "Z1"}
+	dmarc := dns.Record{Name: "_dmarc.iodesystems.com", Type: "TXT", Value: "v=DMARC1; p=none;", ZoneID: "Z1"}
+	s, fp := recordServer(t, apexSPF, dmarc)
+
+	for _, tok := range []string{"ozh6vxsiyhkdbinnzbevshxnnmlahivr", "ztro3ohpdebedhii4jcqgtvv222baryh", "eeoviqjcazm7kgpmo2rdmzfhhdmedbsv"} {
+		if w := setRecords(t, s, apitypes.DNSRecordSetRequest{
+			Name: tok + "._domainkey.iodesystems.com", Type: "CNAME", Values: []string{tok + ".dkim.amazonses.com"}, Note: "SES DKIM us-west-2",
+		}); w.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", tok, w.Code, w.Body.String())
+		}
+	}
+	if w := setRecords(t, s, apitypes.DNSRecordSetRequest{Name: "bounce.iodesystems.com", Type: "MX", Values: []string{"10 feedback-smtp.us-west-2.amazonses.com"}}); w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	if w := setRecords(t, s, apitypes.DNSRecordSetRequest{Name: "bounce.iodesystems.com", Type: "TXT", Values: []string{"v=spf1 include:amazonses.com ~all"}}); w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+
+	if w := setRecords(t, s, apitypes.DNSRecordSetRequest{
+		Name: sesZone, Type: "TXT", Values: []string{"v=spf1 include:amazonses.com ~all"}, ExpectedFrom: []string{apexSPF.Value},
+	}); w.Code != http.StatusConflict {
+		t.Fatalf("SPF over the foreign apex TXT set: %d %s", w.Code, w.Body.String())
+	}
+
+	if got := liveValues(fp.fakeProvider, sesZone, "TXT"); len(got) != 1 || got[0] != apexSPF.Value {
+		t.Fatalf("apex TXT = %v", got)
+	}
+	if got := liveValues(fp.fakeProvider, "_dmarc.iodesystems.com", "TXT"); len(got) != 1 || got[0] != dmarc.Value {
+		t.Fatalf("_dmarc = %v", got)
+	}
+	if n := len(s.cfg().Zones[0].Records); n != 5 {
+		t.Fatalf("declared %d records, want 5", n)
+	}
+
+	before := fp.writes
+	if _, failed, err := s.syncZoneRecords(s.newDNSSyncRun()); err != nil || failed != 0 || s.dnsSyncBlocked() {
+		t.Fatalf("sync: failed=%d err=%v blocked=%v", failed, err, s.dnsSyncBlocked())
+	}
+	if fp.writes != before {
+		t.Fatalf("sync rewrote %d set(s) it had just published", fp.writes-before)
+	}
+}
