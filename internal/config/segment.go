@@ -53,9 +53,10 @@ import (
 //   - NO AllowedIPs. It is derivable from CIDR + Members + Hub (a spoke routes
 //     the whole CIDR to the hub; the hub routes each spoke its own /32) and a
 //     stored copy is a second answer free to disagree — the founding bug in
-//     plan/design/architecture.md's goal property 6. The projection derives it when it
-//     is wired to (item 15's follow-up); nothing derives it here because
-//     nothing here would call it.
+//     plan/design/architecture.md's goal property 6. internal/projection
+//     derives it (allowedIPs) on every projection;
+//     TestASegmentMemberHasNowhereToStoreAllowedIPs pins that no field here
+//     can hold one.
 //
 //   - NO POSTURE, NO VERSION, NO SERVICES. A segment is a network, not a rung.
 //     It names a project because a project's machines form a segment; it does
@@ -131,6 +132,13 @@ type SegmentMember struct {
 	// and reports the public half (internal/agent/segmentkey.go), and the
 	// enrolment handler writes it here. An operator can still set it by hand
 	// (`hz segment set --member machine=M,key=K`) for a peer that runs no agent.
+	//
+	// STORED, AND THAT IS CORRECT HERE, unlike AllowedIPs or the peer set.
+	// Those are derivations of other fields on this record (CIDR, Address,
+	// Hub), so a stored copy is a second answer that can disagree with the
+	// first (CLAUDE.md invariant 8). A public key derives from nothing hz
+	// holds: it is a FACT the box reports about a private key only the box
+	// has. Recording it is the only way hz can know it at all.
 	//
 	// VALIDATED AS A KEY when it is set — 32 Curve25519 bytes in canonical
 	// base64, ValidateSegments below. A string that is not a key renders a

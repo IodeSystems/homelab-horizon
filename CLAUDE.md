@@ -33,13 +33,13 @@ off-box to **read**; it has never *executed* on a box it is not.
 The founding bug: an empty `BACKUP_BUCKET` selecting the production bucket,
 because absent and empty were indistinguishable.
 
-`projection.Gap` (`internal/projection/projection.go:282-297`, reasons
+`projection.Gap` (`internal/projection/projection.go:339-354`, reasons
 `Unmodelled` / `Unreadable` / `StoodDown`); `MachineConfig.Unresolved` (`:155-162`
 — *"an empty section with a gap is hz saying 'I have no opinion'"*);
-`Segment.Resolved` (`:167-205`). UI: `readSegment`
+`Segment.Resolved` (`:167-210`). UI: `readSegment`
 (`ui/src/components/model/model.ts:167-201`) refuses to render a blank field for
 an unresolved membership.
-Enforced: `internal/projection/segments_test.go:241`, `:281`;
+Enforced: `internal/projection/segments_test.go:276`, `:316`;
 `ui/src/components/model/model.selftest.ts:161`.
 
 ## 3 · Two channels. The agent never holds an environment key.
@@ -49,8 +49,8 @@ hz → agent   machine config   network, units, desired version   non-secret
 hz → app     sealed config    (project, env, app, role)         the APP holds the key
 ```
 
-`internal/agent/desired.go:79-131` — the type **has no field** for a key or a
-decrypted value. `projection.Unit.ConfigGeneration` (`projection.go:260-280`) is
+`internal/agent/desired.go:97-164` — the type **has no field** for a key or a
+decrypted value. `projection.Unit.ConfigGeneration` (`projection.go:317-337`) is
 a sha256 digest, which is how a blessed config triggers a restart without
 disclosing itself. `internal/server/handlers_configmgr.go` never constructs an
 `*ecdh.PrivateKey` and never calls `Open`/`UnwrapEnvKey` — it parses public keys
@@ -110,13 +110,13 @@ Attribution changes no rendered artifact and no projection:
 `internal/server/attribution_render_test.go:250 TestAttributionChangesNoRenderedArtifact`.
 
 ❓ **Live contradiction, unsettled, the operator's call:** `Segment.Project` is
-REQUIRED (`internal/config/segment.go:68-74`, enforced `:241` and `:448`) while
+REQUIRED (`internal/config/segment.go:69-75`, enforced `:249` and `:456`) while
 `plan/design/example-projection.md:114` asserts `seg:people` has none. Both
 cannot be true. It blocks "the VPN becomes a segment row".
 
 ## 7 · Declare, then enrol. A box cannot declare itself.
 
-Enrolment **refuses an undeclared machine** (`handlers_api_machines.go:263-273`)
+Enrolment **refuses an undeclared machine** (`handlers_api_machines.go:268-278`)
 — a box that could declare itself could write itself into the model and then ask
 for a credential, inverting the trust direction. `AddMachine` has exactly one
 production caller (`:120`).
@@ -132,7 +132,7 @@ kernel's — so agreeing on `"unknown"` also fails.
 
 A stored derivation is a second answer free to disagree with the thing it is a
 view of. WireGuard `Peers` derive from hub/spoke (`Segment.PeersOf`,
-`internal/config/segment.go:187-202`); `AllowedIPs` derives from CIDR.
+`internal/config/segment.go:195-210`); `AllowedIPs` derives from CIDR.
 `SegmentMember` has **no such field**, so storing one is unrepresentable.
 Enforced: `segment_test.go:617
 TestMovingTheHubRewiresEveryPeerSetAndSaysSo` — *"the report is not a second
@@ -160,29 +160,29 @@ through `PostureRank`.
 machine is **refused without a `Note`** (`internal/config/machine.go:69-77`,
 enforced `:130-133` and `:182-185`; `machine_test.go:109`,
 `handlers_api_machines_test.go:99`), and a segment must name its owning project
-(`segment.go:449`) — the owner is what makes another project's machine on it
+(`segment.go:457`) — the owner is what makes another project's machine on it
 read as a crossing.
 
 ⚠ **The traffic half is designed, not built.** `projection.Forward{From, To,
-Reason}` (`projection.go:208-219`) has no producer; `MachineConfig.Forwards` is
-hardcoded `[]Forward{}` (`:513`). Deny-by-default between a machine's own
+Reason}` (`projection.go:265-276`) has no producer; `MachineConfig.Forwards` is
+hardcoded `[]Forward{}` (`:570`). Deny-by-default between a machine's own
 interfaces is what is live. Do not cite this invariant as one finished
 mechanism.
 
 ## 11 · First sighting adopts, never acts.
 
 The rule that stops a fleet-wide bounce the first time config generations
-appear. `internal/agent/plan.go:249-250` puts an unseen unit in a separate
-`Adopted` list, never `Restarts` (`:252`). `GenerationStore.Load` returns an
+appear. `internal/agent/plan.go:250-251` puts an unseen unit in a separate
+`Adopted` list, never `Restarts` (`:253`). `GenerationStore.Load` returns an
 empty record with **no error** on first run (`generations.go:76-79,100-118`) —
 and unreadable is NOT missing (`:110-116`). Enforced:
 `config_restart_test.go:99`, `:126`, `:145`.
 
 ## 12 · The pure/privileged seam: decide in `plan.go`, act in `apply.go`.
 
-`internal/agent/seam_test.go:31 TestPureHalfStaysPure` parses the pure files
+`internal/agent/seam_test.go:34 TestPureHalfStaysPure` parses the pure files
 with `go/parser` and fails on an import of `os`, `os/exec`, `net`, `net/http`,
-`time`, `math/rand`, `crypto/rand` or `path/filepath`; `:60
+`time`, `math/rand`, `crypto/rand` or `path/filepath`; `:63
 TestPureHalfCannotApply` walks every `ast.CallExpr` for `Apply` /
 `writeIfChanged` / `Observe`. The same guard sits in `internal/`{`haproxy`,
 `dnsmasq`, `iptables`, `wireguard`, `letsencrypt`, `acme`, `projection`}.
