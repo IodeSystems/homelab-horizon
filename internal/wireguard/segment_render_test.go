@@ -57,8 +57,15 @@ func TestTheSpokeConfigMatchesItsGoldenByteForByte(t *testing.T) {
 // be a shell string run as root on a remote box; a Table or 0.0.0.0/0 would be
 // a route beyond the segment.
 func TestASegmentConfigCarriesNoPrivateKeyAndNoShell(t *testing.T) {
-	for _, name := range []string{"segment_hub.golden", "segment_spoke.golden"} {
-		body := golden(t, name)
+	rendered := map[string]string{
+		"hub": RenderSegmentConfig(SegmentInterface{Segment: "iode-net", ListenPort: 51820, Peers: []SegmentPeer{
+			{Name: "app-1", PublicKey: goldSpoke1Key, AllowedIPs: []string{"10.42.0.11/32"}},
+		}}),
+		"spoke": RenderSegmentConfig(SegmentInterface{Segment: "iode-net", Peers: []SegmentPeer{
+			{Name: "gw-1", PublicKey: goldHubKey, AllowedIPs: []string{"10.42.0.0/24"}, Endpoint: "gw.example.invalid:51820", PersistentKeepalive: 25},
+		}}),
+	}
+	for name, body := range rendered {
 		for _, banned := range []string{"PrivateKey =", "PostUp", "PostDown", "PreUp", "Table", "SaveConfig", "DNS =", "Address =", "0.0.0.0/0", "::/0"} {
 			if strings.Contains(body, banned) {
 				t.Errorf("%s contains %q", name, banned)

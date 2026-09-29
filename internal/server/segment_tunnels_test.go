@@ -135,6 +135,9 @@ func TestNoPrivateKeyIsInAnythingHZServesForASegment(t *testing.T) {
 			t.Fatal(err)
 		}
 		served = append(served, string(b))
+		if d.Segments == nil {
+			t.Fatalf("precondition: %s got no segment tunnel, so its file cannot be checked", m)
+		}
 		for _, tun := range d.Segments.Tunnels {
 			if strings.Contains(tun.File.Contents, "PrivateKey") {
 				t.Errorf("%s's tunnel file has a PrivateKey line:\n%s", m, tun.File.Contents)
