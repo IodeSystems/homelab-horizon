@@ -176,9 +176,10 @@ console.log("· a fully quiet fleet renders the plain sentence, no source unknow
   check(r.text.includes("Overview"), "the page renders under its own heading");
   check(r.text.includes("Nothing is waiting on you."), "and says so in exactly those words");
   check(!r.text.includes("could not be asked"), "with no unknown-source banner");
-  // Every tier still renders, empty, per the drift screen's own rule.
+  // An EMPTY tier does not render (operator, 2026-09-29: "These nothings are
+  // annoying"). The one sentence above is the whole answer on a quiet day.
   for (const title of ["Waiting on you", "Not known", "Reporting a fault", "Undelivered", "Drifting", "Informational"]) {
-    check(r.text.includes(title), `the ${title} tier heading is on the page even with nothing in it`);
+    check(!r.text.includes(title), `the empty ${title} tier is not on the page`);
   }
 }
 
@@ -312,6 +313,24 @@ console.log("· hz's own status renders demoted, below the queue");
   check(r.text.includes("hz's own status"), "the demoted section is labelled");
   check(r.text.includes("Running") && r.text.includes("Enabled"), "and shows HAProxy/SSL");
   check(r.text.indexOf("own status") > r.text.indexOf("Nothing is waiting on you."), "strictly after the queue, in document order");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· one service failing from two viewpoints renders as one row");
+// ---------------------------------------------------------------------------
+{
+  const qc = base();
+  quiet(qc);
+  qc.setQueryData(["services"], [{ name: "sprink", domains: ["sprink.iodesystems.com"], status: { internalDNSUp: true, externalDNSUp: true, proxyUp: true } }]);
+  qc.setQueryData(["checks"], [
+    check_({ name: "svc:sprink", type: "tcp", target: "192.168.1.76:20200", status: "failed", last_error: "host unreachable: 192.168.1.76:20200" }),
+    check_({ name: "ext:gcp-usw1:https:sprink.iodesystems.com", type: "https", target: "sprink.iodesystems.com", vantage: "gcp-usw1", status: "failed", last_error: "HTTP 503" }),
+  ]);
+  const r = await at(qc);
+  check(r.text.includes("sprink: 2 checks failing"), "one row, headed by the service");
+  check(!r.text.includes("svc:sprink is failed"), "not the two separate rows");
+  check(/data-group-details/.test(r.html), "its viewpoints are listed under it");
+  check(r.text.includes("from gcp-usw1") && r.text.includes("HTTP 503") && r.text.includes("host unreachable"), "each with what it saw");
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

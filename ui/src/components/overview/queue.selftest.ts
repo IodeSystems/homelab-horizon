@@ -332,6 +332,45 @@ console.log("· ages travel with a reading, and a declared fact carries none");
   check(pendingItem.ageSeconds === undefined, "a pending edit is declared, not observed — no fabricated age");
 }
 
+// ---------------------------------------------------------------------------
+console.log("· one service failing from two places is ONE row (operator, 2026-09-29)");
+// ---------------------------------------------------------------------------
+{
+  const inputs = quietInputs();
+  inputs.services = [{ name: "sprink", domains: ["sprink.iodesystems.com"] }];
+  inputs.checks = {
+    kind: "answered",
+    value: [
+      check_({ name: "svc:sprink", type: "tcp", target: "192.168.1.76:20200", status: "failed", last_error: "host unreachable: 192.168.1.76:20200" }),
+      check_({ name: "ext:gcp-usw1:https:sprink.iodesystems.com", type: "https", target: "sprink.iodesystems.com", vantage: "gcp-usw1", status: "failed", last_error: "HTTP 503" }),
+      check_({ name: "backup-age", type: "custom", target: "nas", status: "failed", last_error: "stale" }),
+    ],
+  };
+  const faults = buildOverview(inputs).items.filter((i) => i.source === "checks");
+  const sprink = faults.filter((i) => i.headline.startsWith("sprink"));
+  check(sprink.length === 1, `the two sprink checks are one row (got ${faults.map((i) => i.headline).join(" | ")})`);
+  check(sprink[0]?.headline === "sprink: 2 checks failing", "headed by the service, with the count");
+  check(
+    (sprink[0]?.details ?? []).some((d) => d.includes("from hz") && d.includes("host unreachable")) &&
+      (sprink[0]?.details ?? []).some((d) => d.includes("from gcp-usw1") && d.includes("HTTP 503")),
+    "with one line per viewpoint, each saying where it was seen from",
+  );
+  check(faults.some((i) => i.headline === "backup-age is failed"), "a check naming no service stays its own row");
+  check(faults.length === 2, "and nothing else is merged or dropped");
+
+  // Without services the grouping still works for svc: but not for ext:
+  // (the domain cannot be mapped) — each stays its own row, never lost.
+  const bare = quietInputs();
+  bare.checks = inputs.checks;
+  check(buildOverview(bare).items.filter((i) => i.source === "checks").length === 3, "with no service list, nothing is lost: three rows");
+
+  // A single failing check of a service keeps today's row shape.
+  const solo = quietInputs();
+  solo.services = inputs.services;
+  solo.checks = { kind: "answered", value: [check_({ name: "svc:sprink", status: "failed", last_error: "x" })] };
+  check(buildOverview(solo).items[0]?.headline === "svc:sprink is failed", "one check of a service is the ordinary row");
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`);
 if (failures > 0) {
   throw new Error(`${failures} overview queue check(s) failed`);
