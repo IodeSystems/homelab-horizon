@@ -93,11 +93,20 @@ func machineProjectionResp(mc projection.MachineConfig) apitypes.MachineProjecti
 		Unresolved: make([]apitypes.ProjectionGap, 0, len(mc.Unresolved)),
 	}
 	for _, seg := range mc.Segments {
+		var peers []apitypes.ProjectionPeer
+		for _, p := range seg.Peers {
+			peers = append(peers, apitypes.ProjectionPeer{
+				Name:       p.Name,
+				PublicKey:  p.PublicKey,
+				AllowedIPs: append([]string{}, p.AllowedIPs...),
+				Endpoint:   p.Endpoint,
+			})
+		}
 		out.Segments = append(out.Segments, apitypes.ProjectionSegment{
 			Name:      seg.Name,
 			Interface: seg.Interface,
 			Address:   seg.Address,
-			Peers:     seg.Peers,
+			Peers:     peers,
 			Resolved:  seg.Resolved,
 		})
 	}

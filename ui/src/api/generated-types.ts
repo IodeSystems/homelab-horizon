@@ -662,18 +662,31 @@ export interface MachineProjectionResp {
  * the name, or the record has no member entry for this machine (UNADDRESSED —
  * legal, and what `hz machine add --segment` leaves; the interface is the
  * segment's and IS known there).
- * Resolved: true is not a tunnel. Peers is who this machine talks to on the
- * segment, by machine name. Nothing holds a peer's WireGuard public key, so hz
- * cannot emit a `[Peer]` block for one, and a `segments` gap says so beside a
- * resolved membership. A screen that renders Peers as "configured peers" is
- * claiming something hz did not say.
+ * Resolved: true means Interface and Address are computed. Peers holds only
+ * the peers hz has a public key for — each one a `[Peer]` block's facts. A
+ * peer hz can name and holds no key for is NOT in Peers; a `segments` gap
+ * (reason unreadable) names it. So a screen must render the gap beside Peers:
+ * Peers alone does not say who is missing.
  */
 export interface ProjectionSegment {
   name: string;
   interface?: string;
   address?: string;
-  peers?: string[];
+  peers?: ProjectionPeer[];
   resolved: boolean;
+}
+/**
+ * ProjectionPeer is one WireGuard peer of one membership. AllowedIPs is
+ * DERIVED by hz from the segment's CIDR and hub (a spoke routes the whole
+ * range to the hub; the hub routes each spoke its own /32) and is never stored
+ * on a record. PublicKey is never empty — a peer with no key is a gap, not a
+ * peer.
+ */
+export interface ProjectionPeer {
+  name: string;
+  public_key: string;
+  allowed_ips: string[];
+  endpoint?: string;
 }
 /**
  * ProjectionForward is one declared crossing between two of a machine's own
