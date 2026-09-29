@@ -11,6 +11,7 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
+  FormHelperText,
   IconButton,
   InputLabel,
   MenuItem,
@@ -76,6 +77,46 @@ function StatusDot({ active }: { active: boolean }) {
         mr: 1,
       }}
     />
+  );
+}
+
+/**
+ * The routing profiles, each with the one line that says what it reaches.
+ * `upstream` is a nested hz's client (plan/plan.md Tier 1b, N1b): the parent
+ * hz's API port on the gateway's WG address and nothing else
+ * (`internal/iptables/rules.go` upstreamRules). It is offered here so an
+ * existing client can be seen and chosen, but the usual way in is "Declare a
+ * nested instance", which creates and links one.
+ */
+export const PEER_PROFILES: { value: string; label: string; line: string }[] = [
+  { value: "lan-access", label: "LAN Access (VPN + LAN)", line: "Other VPN clients and the LAN." },
+  { value: "full-tunnel", label: "Full Tunnel (all traffic)", line: "Everything, the internet included, through the gateway." },
+  { value: "vpn-only", label: "VPN Only (restricted)", line: "Other VPN clients only." },
+  { value: "upstream", label: "Upstream (parent hz API only)", line: "Only the parent hz's API. For a nested hz." },
+];
+
+/** The cycle the table's profile chip steps through. `upstream` is not in it:
+ * one click must never widen a nested hz's client to the LAN, and the server
+ * refuses that while the client is linked anyway. */
+const CYCLE_PROFILES = ["lan-access", "full-tunnel", "vpn-only"];
+
+/** The profile select with the chosen profile's line under it — apart from
+ * the dialogs so a render check can draw it (a Dialog renders nothing under
+ * SSR). */
+export function PeerProfileSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const line = PEER_PROFILES.find((p) => p.value === value)?.line ?? "";
+  return (
+    <FormControl fullWidth margin="normal">
+      <InputLabel>Routing Profile</InputLabel>
+      <Select value={value} label="Routing Profile" onChange={(e) => onChange(e.target.value)}>
+        {PEER_PROFILES.map((p) => (
+          <MenuItem key={p.value} value={p.value}>
+            {p.label}
+          </MenuItem>
+        ))}
+      </Select>
+      <FormHelperText data-profile-line>{line}</FormHelperText>
+    </FormControl>
   );
 }
 
@@ -167,18 +208,7 @@ export function AddPeerDialog({
             ))}
           </TextField>
         )}
-        <FormControl fullWidth margin="normal">
-          <InputLabel>Routing Profile</InputLabel>
-          <Select
-            value={profile}
-            label="Routing Profile"
-            onChange={(e) => setProfile(e.target.value)}
-          >
-            <MenuItem value="lan-access">LAN Access (VPN + LAN)</MenuItem>
-            <MenuItem value="full-tunnel">Full Tunnel (all traffic)</MenuItem>
-            <MenuItem value="vpn-only">VPN Only (restricted)</MenuItem>
-          </Select>
-        </FormControl>
+        <PeerProfileSelect value={profile} onChange={setProfile} />
         <TextField
           label="Extra Allowed IPs (optional)"
           fullWidth
@@ -222,15 +252,7 @@ export function PeerResultDialog({
   result: AddPeerResponse | null;
   name: string;
 }) {
-  const [copied, setCopied] = useState(false);
-
   if (!result) return null;
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(result.config);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   const handleDownload = () => {
     const blob = new Blob([result.config], { type: "text/plain" });
@@ -246,42 +268,7 @@ export function PeerResultDialog({
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle>Client Created: {name}</DialogTitle>
       <DialogContent>
-        <Typography variant="subtitle2" sx={{ mb: 1 }}>
-          QR Code
-        </Typography>
-        <Box
-          sx={{ display: "flex", justifyContent: "center", mb: 2 }}
-          dangerouslySetInnerHTML={{ __html: result.qrCode }}
-        />
-        <Typography variant="subtitle2" sx={{ mb: 1 }}>
-          WireGuard Config
-        </Typography>
-        <Box sx={{ position: "relative" }}>
-          <pre
-            style={{
-              background: "#1e1e1e",
-              color: "#d4d4d4",
-              padding: 16,
-              borderRadius: 4,
-              overflow: "auto",
-              fontSize: 12,
-            }}
-          >
-            {result.config}
-          </pre>
-          <IconButton
-            size="small"
-            onClick={handleCopy}
-            sx={{ position: "absolute", top: 4, right: 4, color: "#aaa" }}
-          >
-            <CopyIcon fontSize="small" />
-          </IconButton>
-        </Box>
-        {copied && (
-          <Typography variant="caption" color="success.main">
-            Copied to clipboard
-          </Typography>
-        )}
+        <PeerResultBody result={result} />
       </DialogContent>
       <DialogActions>
         <Button startIcon={<DownloadIcon />} onClick={handleDownload}>
@@ -292,6 +279,66 @@ export function PeerResultDialog({
         </Button>
       </DialogActions>
     </Dialog>
+  );
+}
+
+/** What `PeerResultDialog` shows, apart from the Dialog so a render check can
+ * draw it. For an `upstream` client (a nested hz) it leads with the parent URL
+ * the child must use — the exact address the upstream rules admit — because
+ * the config alone does not say where hz's API is. */
+export function PeerResultBody({ result }: { result: AddPeerResponse }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(result.config);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <>
+      {result.parentUrl ? (
+        <Alert severity="info" sx={{ mb: 2 }} data-parent-url>
+          Install this config on the nested hz, then point it at its parent:{" "}
+          <code>{result.parentUrl}</code>. That is the only address this client can reach — the parent hz&apos;s
+          API, over the tunnel. It has no DNS and no route to the LAN.
+        </Alert>
+      ) : null}
+      <Typography variant="subtitle2" sx={{ mb: 1 }}>
+        QR Code
+      </Typography>
+      <Box
+        sx={{ display: "flex", justifyContent: "center", mb: 2 }}
+        dangerouslySetInnerHTML={{ __html: result.qrCode }}
+      />
+      <Typography variant="subtitle2" sx={{ mb: 1 }}>
+        WireGuard Config
+      </Typography>
+      <Box sx={{ position: "relative" }}>
+        <pre
+          style={{
+            background: "#1e1e1e",
+            color: "#d4d4d4",
+            padding: 16,
+            borderRadius: 4,
+            overflow: "auto",
+            fontSize: 12,
+          }}
+        >
+          {result.config}
+        </pre>
+        <IconButton
+          size="small"
+          onClick={handleCopy}
+          sx={{ position: "absolute", top: 4, right: 4, color: "#aaa" }}
+        >
+          <CopyIcon fontSize="small" />
+        </IconButton>
+      </Box>
+      {copied && (
+        <Typography variant="caption" color="success.main">
+          Copied to clipboard
+        </Typography>
+      )}
+    </>
   );
 }
 
@@ -370,18 +417,7 @@ function EditPeerDialog({
             </MenuItem>
           ))}
         </TextField>
-        <FormControl fullWidth margin="normal">
-          <InputLabel>Routing Profile</InputLabel>
-          <Select
-            value={profile}
-            label="Routing Profile"
-            onChange={(e) => setProfile(e.target.value)}
-          >
-            <MenuItem value="lan-access">LAN Access (VPN + LAN)</MenuItem>
-            <MenuItem value="full-tunnel">Full Tunnel (all traffic)</MenuItem>
-            <MenuItem value="vpn-only">VPN Only (restricted)</MenuItem>
-          </Select>
-        </FormControl>
+        <PeerProfileSelect value={profile} onChange={setProfile} />
         <TextField
           label="Extra Allowed IPs"
           fullWidth
@@ -857,19 +893,25 @@ function VPNPage() {
                     <LocationCell index={index} project={peer.project} />
                   </TableCell>
                   <TableCell>
-                    <Tooltip title="Click to cycle profile">
+                    <Tooltip
+                      title={
+                        peer.profile === "upstream"
+                          ? "Only the parent hz's API. For a nested hz. Changed from Edit, never by a click."
+                          : "Click to cycle profile"
+                      }
+                    >
                       <Chip
                         label={peer.profile || "lan-access"}
                         size="small"
                         color={
                           peer.profile === "full-tunnel"
                             ? "warning"
-                            : peer.profile === "vpn-only"
+                            : peer.profile === "vpn-only" || peer.profile === "upstream"
                               ? "info"
                               : "default"
                         }
-                        onClick={() => {
-                          const profiles = ["lan-access", "full-tunnel", "vpn-only"];
+                        onClick={peer.profile === "upstream" ? undefined : () => {
+                          const profiles = CYCLE_PROFILES;
                           const current = peer.profile || "lan-access";
                           const idx = profiles.indexOf(current);
                           const next = profiles[(idx + 1) % profiles.length] ?? "lan-access";
@@ -881,14 +923,18 @@ function VPNPage() {
                             },
                           );
                         }}
-                        sx={{ cursor: "pointer" }}
+                        sx={{ cursor: peer.profile === "upstream" ? "default" : "pointer" }}
                       />
                     </Tooltip>
                   </TableCell>
                   {mfaSettings.data?.enabled && (
                     <TableCell>
                       <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexWrap: "wrap" }}>
-                        {peer.isAdmin ? (
+                        {peer.profile === "upstream" ? (
+                          <Tooltip title="Never jailed: it reaches only hz's API, which authenticates it by enrolment.">
+                            <Chip label="exempt" size="small" color="default" />
+                          </Tooltip>
+                        ) : peer.isAdmin ? (
                           <Chip label="bypass" size="small" color="default" />
                         ) : peer.mfaSessionActive ? (
                           <Tooltip title={peer.mfaSessionExpiry ? `Expires: ${new Date(peer.mfaSessionExpiry).toLocaleString()}` : "Permanent session"}>
@@ -904,7 +950,7 @@ function VPNPage() {
                         ) : (
                           <Chip label="not enrolled" size="small" color="warning" variant="outlined" />
                         )}
-                        {!peer.isAdmin && (
+                        {!peer.isAdmin && peer.profile !== "upstream" && (
                           <Box sx={{ display: "flex", gap: 0.25 }}>
                             {peer.mfaEnrolled && (
                               <Tooltip title="Reset TOTP (force re-enrollment)">
