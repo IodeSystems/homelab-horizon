@@ -159,7 +159,7 @@ func (f *agentFlags) segmentKeys() agent.SegmentKeyStore {
 // observer reads the machine, including this agent's own record of what it
 // last applied.
 func (f *agentFlags) observer() *agent.SystemObserver {
-	return agent.NewSystemObserver().WithGenerations(f.generations())
+	return agent.NewSystemObserver().WithGenerations(f.generations()).WithSegmentKeys(f.segmentKeys())
 }
 
 // reloader is the privileged half that reloads services and restarts units.
@@ -167,7 +167,7 @@ func (f *agentFlags) reloader() agent.Reloader {
 	if f.testReloader != nil {
 		return f.testReloader
 	}
-	return agent.SystemReloader{}
+	return agent.SystemReloader{SegmentKeys: f.segmentKeys()}
 }
 
 // reporter is where this agent tells hz what it found, or nil.

@@ -3,6 +3,7 @@ package agent
 import (
 	"errors"
 	"io/fs"
+	"net"
 	"os"
 
 	"github.com/iodesystems/homelab-horizon/internal/iptables"
@@ -146,6 +147,21 @@ type SystemObserver struct {
 	// an agent that cannot keep a record cannot tell a moved generation from
 	// a first sighting, and must say so rather than adopt silently forever.
 	generations GenerationStore
+
+	// segmentKeys is where this box keeps its per-segment private keys. Nil
+	// is reported per tunnel as unreadable — an observer that cannot look for
+	// a key must not read as "no key".
+	segmentKeys *SegmentKeyStore
+
+	// links is seamed for tests; nil uses readLinks.
+	links func(names []string) map[string]LinkState
+}
+
+// WithSegmentKeys attaches the store holding this box's segment private keys.
+// The observer checks each key file EXISTS; it never reads one.
+func (o *SystemObserver) WithSegmentKeys(s SegmentKeyStore) *SystemObserver {
+	o.segmentKeys = &s
+	return o
 }
 
 // NewSystemObserver reads files and, when root, the live firewall.
@@ -198,6 +214,10 @@ func (o *SystemObserver) Observe(d *Desired) Observed {
 		obs.ConfigGenerations, obs.GenerationsErr = o.readGenerations()
 	}
 
+	if d.Segments != nil && len(d.Segments.Tunnels) > 0 {
+		o.observeTunnels(d.Segments, &obs)
+	}
+
 	if d.IPTables == nil {
 		return obs
 	}
@@ -217,6 +237,73 @@ func (o *SystemObserver) Observe(d *Desired) Observed {
 	obs.IPTablesReadable = true
 	obs.LiveRules = live
 	return obs
+}
+
+// observeTunnels looks up each segment interface and checks for this box's
+// key file per segment. Both are reads: an interface lookup needs no
+// privilege, and a key file is stat'ed, never opened.
+func (o *SystemObserver) observeTunnels(sec *SegmentsSection, obs *Observed) {
+	names := make([]string, 0, len(sec.Tunnels))
+	for _, t := range sec.Tunnels {
+		names = append(names, t.Interface)
+	}
+	read := o.links
+	if read == nil {
+		read = readLinks
+	}
+	obs.Links = read(names)
+
+	obs.SegmentKeys = map[string]KeyState{}
+	for _, t := range sec.Tunnels {
+		if o.segmentKeys == nil || o.segmentKeys.Dir == "" {
+			obs.SegmentKeys[t.Segment] = KeyState{ReadErr: "this agent was given no segment key store"}
+			continue
+		}
+		_, err := os.Stat(o.segmentKeys.Path(t.Segment))
+		switch {
+		case err == nil:
+			obs.SegmentKeys[t.Segment] = KeyState{Exists: true}
+		case errors.Is(err, fs.ErrNotExist):
+			obs.SegmentKeys[t.Segment] = KeyState{}
+		default:
+			obs.SegmentKeys[t.Segment] = KeyState{ReadErr: err.Error()}
+		}
+	}
+}
+
+// readLinks reports each named interface as the kernel lists it. One listing
+// for all of them, and a name that is not in it is ABSENT rather than an
+// error — the listing succeeded, the interface is not there.
+func readLinks(names []string) map[string]LinkState {
+	out := make(map[string]LinkState, len(names))
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		for _, n := range names {
+			out[n] = LinkState{ReadErr: err.Error()}
+		}
+		return out
+	}
+	byName := make(map[string]net.Interface, len(ifaces))
+	for _, i := range ifaces {
+		byName[i.Name] = i
+	}
+	for _, n := range names {
+		i, ok := byName[n]
+		if !ok {
+			out[n] = LinkState{}
+			continue
+		}
+		st := LinkState{Exists: true, Up: i.Flags&net.FlagUp != 0}
+		addrs, err := i.Addrs()
+		if err != nil {
+			st.ReadErr = err.Error()
+		}
+		for _, a := range addrs {
+			st.Addrs = append(st.Addrs, a.String())
+		}
+		out[n] = st
+	}
+	return out
 }
 
 // readGenerations reads the agent's own record of what it last applied.

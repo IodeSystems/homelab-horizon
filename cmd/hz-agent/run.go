@@ -143,7 +143,8 @@ func onePass(ctx context.Context, f *agentFlags, src agent.Source, obs agent.Obs
 	// restarted twenty units.
 	slog.Info("applied", "generation", short(res.Generation),
 		"wrote", res.Wrote, "reloaded", res.Reloaded,
-		"restarted", res.Restarted, "adopted", res.Adopted)
+		"restarted", res.Restarted, "adopted", res.Adopted,
+		"tunnels", res.Tunnels, "adopted_tunnels", res.AdoptedTunnels)
 	return newETag
 }
 
