@@ -1021,9 +1021,21 @@ function HzCliTab() {
 
 // --- Main Settings Page ---
 
+/**
+ * `?tab=ha-fleet` opens the HA Fleet tab, so /instances' [Add instance] lands
+ * on the join flow instead of rebuilding it. Only that tab is addressable;
+ * anything else opens System, as before.
+ */
+export interface SettingsSearch {
+  tab?: "ha-fleet";
+}
+
+const HA_FLEET_TAB = 3;
+
 function SettingsPage() {
   const { data, isLoading, error } = useSettings();
-  const [tab, setTab] = useState(0);
+  const search = Route.useSearch();
+  const [tab, setTab] = useState(search.tab === "ha-fleet" ? HA_FLEET_TAB : 0);
 
   if (isLoading) {
     return (
@@ -1092,7 +1104,7 @@ function SettingsPage() {
         />
       )}
       {tab === 2 && <VPNMFATab />}
-      {tab === 3 && <HAFleetTab />}
+      {tab === HA_FLEET_TAB && <HAFleetTab />}
       {tab === 4 && <IPTablesTab />}
       {tab === 5 && <UsersTab />}
       {tab === 6 && <PCITab />}
@@ -1103,4 +1115,6 @@ function SettingsPage() {
 
 export const Route = createFileRoute("/settings")({
   component: SettingsPage,
+  validateSearch: (search: Record<string, unknown>): SettingsSearch =>
+    search.tab === "ha-fleet" ? { tab: "ha-fleet" } : {},
 });
