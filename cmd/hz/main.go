@@ -410,13 +410,23 @@ func main() {
 	// any subcommand work without a config present.
 	c := newClient(cfgHost, cfgToken)
 
-	err := dispatch(c, cmd, rest)
+	err := run(c, cmd, rest, os.Stderr)
 	if errors.Is(err, flag.ErrHelp) {
 		return // flag already printed usage to stderr
 	}
 	if err != nil {
 		fatal(err)
 	}
+}
+
+// run dispatches a command and, when it changed something, ends by reporting
+// what is still waiting on a sync (to stderr, so stdout stays the command's).
+func run(c *client, cmd string, rest []string, stderr io.Writer) error {
+	err := dispatch(c, cmd, rest)
+	if err == nil {
+		reportPending(c, cmd, stderr)
+	}
+	return err
 }
 
 // dispatch maps a top-level command word onto its runner.
@@ -532,6 +542,13 @@ type client struct {
 	token     string
 	http      *http.Client
 	loggedn   bool
+
+	// mutated is set by a successful non-GET request, so the command can end
+	// by saying what is still waiting on a sync (reportPending).
+	mutated bool
+	// syncRunning is set when a sync was started and not waited for: the
+	// pending list is then mid-change and reporting it would mislead.
+	syncRunning bool
 }
 
 func newClient(flagHost, flagToken string) *client {
@@ -659,6 +676,9 @@ func (c *client) do(method, path string, body, out interface{}) error {
 			Code: resp.StatusCode,
 			Msg:  fmt.Sprintf("%s %s -> %d: %s", method, path, resp.StatusCode, apiError(raw)),
 		}
+	}
+	if method != http.MethodGet && !strings.HasSuffix(strings.SplitN(path, "?", 2)[0], "/preview") {
+		c.mutated = true
 	}
 	if out != nil && len(raw) > 0 {
 		if err := json.Unmarshal(raw, out); err != nil {
