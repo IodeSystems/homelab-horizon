@@ -18,9 +18,9 @@ import (
 // or os.Hostname in here would silently make every remote machine's projection
 // a statement about the gateway instead.
 //
-// projection.go is the whole pure half. There is no impure half in this
+// projection.go and rung.go are the whole pure half. There is no impure half in this
 // package at all: the file reads and the database live at the call site.
-var pureFiles = []string{"projection.go"}
+var pureFiles = []string{"projection.go", "rung.go"}
 
 func TestProjectionStaysPure(t *testing.T) {
 	banned := map[string]string{

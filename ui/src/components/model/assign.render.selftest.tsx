@@ -66,10 +66,13 @@ const PROJECTS: ProjectResp[] = [
   { name: "storefront", parent: "acme-co", services: ["web"] },
 ];
 
+/** The server always sends a placement; these rungs are placed here. */
+const HERE = { state: "here", statement: "placed here" };
+
 const ENVIRONMENTS: EnvironmentResp[] = [
-  { project: "acme-co", name: "prod", posture: "prod" },
-  { project: "storefront", name: "staging", posture: "staging" },
-  { project: "storefront", name: "prod", posture: "prod" },
+  { project: "acme-co", name: "prod", posture: "prod", placement: HERE },
+  { project: "storefront", name: "staging", posture: "staging", placement: HERE },
+  { project: "storefront", name: "prod", posture: "prod", placement: HERE },
 ];
 
 function service(name: string, project: string, environment: string, domain: string): ServiceResp {

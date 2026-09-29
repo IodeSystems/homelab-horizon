@@ -15,7 +15,7 @@ import (
 // struct rather than left to the comment that explains them.
 
 // A machine has no environment, and its fields are exactly {Name, Project,
-// Segments, Note}. plan/design/architecture.md: "an environment never modifies
+// Segments, Note, HZ}. plan/design/architecture.md: "an environment never modifies
 // a machine; it is a coordinate of an instance."
 //
 // Project is PRESENT since CLAUDE.md invariant 6 was amended (plan/design/ui.md,
@@ -24,6 +24,11 @@ import (
 // projects whatever its owner is. The exact field list is pinned so that the
 // next field — an environment spelled some new way, a placement — is a
 // decision somebody has to make here, not a line that slips in.
+//
+// HZ is PRESENT since plan/plan.md Tier 1b (decided 2026-09-29): a nested hz is
+// a Machine that runs hz, marked with its URL. It says what the box RUNS, not
+// which rung it is — Environment.Upstream points at the machine, never the
+// other way round.
 func TestAMachineCarriesNoEnvironment(t *testing.T) {
 	forbidden := []string{"environment", "env", "posture", "rung", "environments", "envs"}
 	tp := reflect.TypeOf(Machine{})
@@ -40,7 +45,7 @@ func TestAMachineCarriesNoEnvironment(t *testing.T) {
 			}
 		}
 	}
-	if got, want := strings.Join(fields, ","), "Name,Project,Segments,Note"; got != want {
+	if got, want := strings.Join(fields, ","), "Name,Project,Segments,Note,HZ"; got != want {
 		t.Fatalf("Machine's fields are %s, want exactly %s. A new field on the machine record is a model decision "+
 			"(CLAUDE.md invariant 6) — make it there, then change this list", got, want)
 	}
@@ -49,6 +54,12 @@ func TestAMachineCarriesNoEnvironment(t *testing.T) {
 	f, _ := tp.FieldByName("Project")
 	if tag := f.Tag.Get("json"); tag != "project,omitempty" {
 		t.Fatalf("Machine.Project's json tag is %q, want \"project,omitempty\"", tag)
+	}
+	// HZ is optional for the same reason: a config written before the marker
+	// existed must read unchanged.
+	h, _ := tp.FieldByName("HZ")
+	if tag := h.Tag.Get("json"); tag != "hz,omitempty" {
+		t.Fatalf("Machine.HZ's json tag is %q, want \"hz,omitempty\"", tag)
 	}
 }
 

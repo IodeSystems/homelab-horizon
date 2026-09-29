@@ -46,13 +46,16 @@ const PROJECTS: ProjectResp[] = [
   { name: "storefront", parent: "acme-co" },
 ];
 
+/** The server always sends a placement; these rungs are placed here. */
+const HERE = { state: "here", statement: "placed here" };
+
 const ENVIRONMENTS: EnvironmentResp[] = [
-  { project: "acme-co", name: "prod", posture: "prod" },
-  { project: "storefront", name: "staging", posture: "staging" },
-  { project: "storefront", name: "prod", posture: "prod" },
+  { project: "acme-co", name: "prod", posture: "prod", placement: HERE },
+  { project: "storefront", name: "staging", posture: "staging", placement: HERE },
+  { project: "storefront", name: "prod", posture: "prod", placement: HERE },
   // A rung naming a project nobody declares. hz's own config cannot hold this,
   // but the two reads are independent requests and can disagree mid-flight.
-  { project: "ghost", name: "prod", posture: "prod" },
+  { project: "ghost", name: "prod", posture: "prod", placement: HERE },
 ];
 
 const READY = buildAssignIndex(PROJECTS, ENVIRONMENTS, "ready");
