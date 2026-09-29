@@ -44,6 +44,7 @@ import { SystemHealthTab } from "../components/SystemHealthTab";
 import UsersTab from "../components/UsersTab";
 import PCITab from "../components/PCITab";
 import { IPTablesTab } from "../components/IPTablesTab";
+import NtfyCard from "../components/NtfyCard";
 
 // --- Zone Tab ---
 
@@ -1092,6 +1093,7 @@ function SettingsPage() {
           zones={data.zones}
         />
       )}
+      {tab === 0 && <NtfyCard />}
       {tab === 0 && <AdminAccessSection vpnAdmins={data.config.vpnAdmins} />}
       {tab === 1 && (
         <HAProxyTab
