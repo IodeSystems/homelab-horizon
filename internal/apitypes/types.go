@@ -353,6 +353,10 @@ type MachineResp struct {
 // contacts it.
 type MachineHZResp struct {
 	URL string `json:"url"`
+	// VPNClient is the `upstream` VPN client that hz reaches this one
+	// through, by name; empty is no link. Set on add; an edit that omits it
+	// keeps the existing one.
+	VPNClient string `json:"vpnClient,omitempty"`
 }
 
 // MachineAddReq declares a machine. Segments are names; there is no Segment
@@ -1191,6 +1195,12 @@ type AddPeerResponse struct {
 	OK     bool   `json:"ok"`
 	Config string `json:"config"`
 	QRCode string `json:"qrCode"`
+	// PublicKey is the new client's public key — what delete takes, so a flow
+	// that must undo the add (the nested-instance declaration) can.
+	PublicKey string `json:"publicKey,omitempty"`
+	// ParentURL is set for an `upstream` client only: the address the nested
+	// hz reaches this hz's API on — the one the upstream rules admit.
+	ParentURL string `json:"parentUrl,omitempty"`
 }
 
 type PeerConfigResponse struct {
