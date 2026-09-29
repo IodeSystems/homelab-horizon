@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
@@ -9,7 +10,8 @@ import (
 )
 
 // handleAPIInstances lists the hz instances: this one first, then every HA
-// peer in config.Peers, in config order.
+// peer in config.Peers, in config order, then every declared machine with an
+// hz marker (a nested hz), by name.
 //
 // It is a read of what hz already holds. It does NOT contact a peer (CLAUDE.md
 // invariant 1 — hz reaches off-box to read only through the subsystems that
@@ -94,5 +96,23 @@ func instancesFrom(cfg *config.Config, selfName, version string, snap PeerSyncSt
 		join(&row)
 		out = append(out, row)
 	}
-	return out
+	// Nested hz: a separate config layer, declared here as a Machine. It is a
+	// statement from the records only — the URL is never dialled (invariant
+	// 1) — so it carries no version, no sync, no peer or primary ID: those are
+	// facts about THIS instance's cluster and a nested hz is not in it.
+	nested := make([]apitypes.InstanceResp, 0)
+	for _, m := range cfg.Machines {
+		if m.HZ == nil {
+			continue
+		}
+		nested = append(nested, apitypes.InstanceResp{
+			Name:     m.Name,
+			Address:  m.HZ.URL,
+			Role:     apitypes.InstanceRoleNested,
+			Project:  m.Project,
+			Declared: true,
+		})
+	}
+	sort.Slice(nested, func(i, j int) bool { return nested[i].Name < nested[j].Name })
+	return append(out, nested...)
 }

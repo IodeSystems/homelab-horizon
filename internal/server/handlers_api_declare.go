@@ -6,6 +6,7 @@ import (
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/projection"
 )
 
 // The write half of the project tree.
@@ -126,7 +127,7 @@ func (s *Server) handleAPIEnvironmentAdd(w http.ResponseWriter, r *http.Request)
 	next := *s.cfg()
 	env := config.Environment{
 		Project: req.Project, Name: req.Name, Posture: req.Posture,
-		From: req.From, Version: req.Version,
+		From: req.From, Version: req.Version, Upstream: req.Upstream,
 	}
 	if err := next.AddEnvironment(env); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -158,7 +159,7 @@ func (s *Server) handleAPIEnvironmentSet(w http.ResponseWriter, r *http.Request)
 	}
 
 	next := *s.cfg()
-	patch := config.EnvironmentPatch{Posture: req.Posture, From: req.From, Version: req.Version}
+	patch := config.EnvironmentPatch{Posture: req.Posture, From: req.From, Version: req.Version, Upstream: req.Upstream}
 	if _, err := next.SetEnvironment(req.Project, req.Name, patch); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
@@ -279,13 +280,25 @@ func projectResp(cfg *config.Config, name string) apitypes.ProjectResp {
 func environmentResp(cfg *config.Config, project, name string) apitypes.EnvironmentResp {
 	for _, e := range cfg.Environments {
 		if e.Project == project && e.Name == name {
-			return apitypes.EnvironmentResp{
-				Project: e.Project, Name: e.Name, Posture: e.Posture,
-				From: e.From, Version: e.Version,
-			}
+			return environmentRespOf(cfg, e)
 		}
 	}
 	return apitypes.EnvironmentResp{Project: project, Name: name}
+}
+
+// environmentRespOf is the one conversion of a rung for the wire, so the list
+// and the add/set replies cannot drift. Placement is projection.PlaceRung's.
+func environmentRespOf(cfg *config.Config, e config.Environment) apitypes.EnvironmentResp {
+	p := projection.PlaceRung(cfg, e)
+	placement := apitypes.RungPlacementResp{State: p.State, Upstream: p.Upstream, URL: p.URL, Statement: p.Statement}
+	for _, g := range p.Unresolved {
+		placement.Unresolved = append(placement.Unresolved, apitypes.ProjectionGap{Section: g.Section, Reason: g.Reason, Why: g.Why})
+	}
+	return apitypes.EnvironmentResp{
+		Project: e.Project, Name: e.Name, Posture: e.Posture,
+		From: e.From, Version: e.Version, Upstream: e.Upstream,
+		Placement: placement,
+	}
 }
 
 // dependantsResp converts the config records for the wire, one field per field,
