@@ -158,8 +158,9 @@ type Desired struct {
 	// it (CLAUDE.md invariant 3).
 	//
 	// nil means hz renders no tunnel for this machine. It does NOT mean "tear
-	// the tunnels down": the agent removes nothing on this section (a segment
-	// dropped from a machine leaves its interface as it was).
+	// the tunnels down", and neither does a tunnel missing from the list: the
+	// agent tears an interface down only when it created it AND Model says the
+	// machine left its segment (tunnel_plan.go, DecideTeardowns).
 	Segments *SegmentsSection `json:"segments,omitempty"`
 }
 

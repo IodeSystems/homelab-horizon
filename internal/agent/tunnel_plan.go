@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/iodesystems/homelab-horizon/internal/projection"
 )
 
 // The PURE half of the segment tunnels: payload plus observed in, one decision
@@ -42,6 +44,19 @@ const (
 	// TunnelUnknown — one side could not be read, or this box holds no
 	// private key for the segment. No verdict and no action.
 	TunnelUnknown TunnelAction = "unknown"
+
+	// TunnelRemove — the machine has LEFT the segment (hz's model says so,
+	// affirmatively: see leftSegment) and this interface is one the agent
+	// itself created (TunnelRecord.Created). Delete the interface. Never
+	// decided for an adopted interface: the agent did not make it, so it is
+	// not the agent's to remove.
+	TunnelRemove TunnelAction = "remove"
+
+	// TunnelForget — the same, but the interface is already gone. Nothing
+	// is run; the agent drops it from its record of what it created, so a
+	// hand-made interface that later takes the name is not torn down as if
+	// it were the agent's.
+	TunnelForget TunnelAction = "forget"
 )
 
 // TunnelDecision is the answer for one tunnel.
@@ -60,7 +75,7 @@ type TunnelDecision struct {
 
 // Acts reports whether this decision changes the live interface.
 func (t TunnelDecision) Acts() bool {
-	return t.Action == TunnelCreate || t.Action == TunnelSync
+	return t.Action == TunnelCreate || t.Action == TunnelSync || t.Action == TunnelRemove
 }
 
 // DecideTunnels is the whole decision, in payload order.
@@ -148,9 +163,23 @@ func decideTunnel(t SegmentTunnel, obs Observed) TunnelDecision {
 // KindCreate for the reason configChanges gives: Apply runs only when a plan
 // has something pending, and the record the adoption writes is the thing that
 // makes the next pass a comparison rather than another first sighting.
+//
+// A teardown is a KindRemove, and so is a forget: a forget changes nothing
+// live, but it is pending in the same sense an adoption is — Apply has to run
+// for the record to stop naming an interface that is gone. apply.go's prune
+// skips every segments line: an interface is not a file, and the teardown is
+// re-derived from the payload (applyTunnels), never read off a Change.
 func tunnelChanges(d *Desired, obs Observed) []Change {
-	decs := DecideTunnels(d, obs)
-	out := make([]Change, 0, len(decs))
+	decs := append(DecideTunnels(d, obs), DecideTeardowns(d, obs)...)
+	out := make([]Change, 0, len(decs)+1)
+	if d != nil && d.Model != nil && obs.TunnelRecordErr != "" {
+		out = append(out, Change{
+			Subsystem: SubsystemSegments,
+			Target:    "segment tunnel record",
+			Kind:      KindUnknown,
+			Detail:    obs.TunnelRecordErr + " — no segment interface will be torn down until this is readable",
+		})
+	}
 	for _, dec := range decs {
 		c := Change{Subsystem: SubsystemSegments, Target: dec.Tunnel.Interface, Detail: dec.Why}
 		switch dec.Action {
@@ -158,6 +187,8 @@ func tunnelChanges(d *Desired, obs Observed) []Change {
 			c.Kind = KindCreate
 		case TunnelSync:
 			c.Kind = KindUpdate
+		case TunnelRemove, TunnelForget:
+			c.Kind = KindRemove
 		case TunnelUnchanged:
 			c.Kind = KindUnchanged
 		default:
@@ -166,6 +197,213 @@ func tunnelChanges(d *Desired, obs Observed) []Change {
 		out = append(out, c)
 	}
 	return out
+}
+
+// TunnelRecord is the agent's last-known-good for its segment tunnels, kept
+// on disk (tunnel_state.go) so the tunnels come back after a reboot WITHOUT a
+// poll of hz (CLAUDE.md invariant 5). A box that reaches hz through one of
+// these tunnels could otherwise never ask.
+//
+// ONLY THE SEGMENTS SECTION, not the whole Desired. It is the one section
+// whose live state is kernel-only: every other section's files are already on
+// disk and their services read them at boot, and the rest of a payload holds
+// wg0.conf and served TLS bundles — private keys a second copy would only
+// spread further. A SegmentTunnel carries public keys, an address and a file
+// body that is already written 0600; nothing here is a secret the box does
+// not already hold.
+type TunnelRecord struct {
+	// Machine is who the payload was for, so a booted Desired is addressed.
+	Machine string `json:"machine"`
+
+	// Fingerprint is the fingerprint of the last payload applied into this
+	// record. For the boot log line — "which payload am I running" — and
+	// NOTHING ELSE. It is a content hash, so it cannot order two payloads:
+	// Desired carries no sequence, and a rollback floor needs one. There is
+	// no floor here, deliberately, rather than a clock rule standing in for
+	// one.
+	Fingerprint string `json:"fingerprint"`
+
+	// AppliedAt is when that was, RFC 3339. Printed, never compared: a
+	// three-year-old record is a valid record (invariant 5).
+	AppliedAt string `json:"applied_at"`
+
+	// Segments is every tunnel this box runs, as the agent last applied it —
+	// what the boot path brings up.
+	Segments *SegmentsSection `json:"segments,omitempty"`
+
+	// Created is interface -> segment for every interface THIS AGENT created
+	// (a TunnelCreate that succeeded). The only interfaces a teardown may
+	// ever touch. An adopted interface is never in it.
+	Created map[string]string `json:"created,omitempty"`
+}
+
+// Desired is the record as a payload the ordinary plan/apply path takes: the
+// boot path is Compute and Apply over this, not a second implementation. No
+// Model, so nothing in it can decide a teardown or a restart.
+func (r TunnelRecord) Desired() *Desired {
+	return &Desired{Machine: r.Machine, Segments: r.Segments}
+}
+
+// leftSegment reports whether hz's model says, AFFIRMATIVELY, that this
+// machine is not a member of seg.
+//
+// EMPTY AND UNKNOWN ARE DIFFERENT STATES (CLAUDE.md invariant 2). A tunnel
+// missing from Desired.Segments proves nothing — hz omits one it could not
+// render (with a gap) and serves nil for a machine with none — so absence
+// from the tunnel list is never the test. The test is the MODEL: hz projected
+// this machine, has no gap about its machine record or its segments, and does
+// not list seg among its memberships. Anything short of that is no opinion.
+func leftSegment(d *Desired, seg string) bool {
+	if d == nil || d.Model == nil {
+		return false
+	}
+	for _, g := range d.Model.Unresolved {
+		if g.Section == projection.SectionSegments || g.Section == projection.SectionMachine {
+			return false
+		}
+	}
+	for _, s := range d.Model.Segments {
+		if s.Name == seg {
+			return false
+		}
+	}
+	return true
+}
+
+// DecideTeardowns is what leaving a segment does: remove each interface the
+// agent created for a segment the machine has left, and forget each one that
+// is already gone. Sorted by interface name.
+//
+// Three bounds, all of which must hold:
+//
+//   - the interface is in the agent's own record of what it CREATED — never
+//     an adopted or hand-made one (the claimed rule, ownership.go's shape);
+//   - hz does not serve it in this payload;
+//   - hz's model says the machine left its segment (leftSegment).
+//
+// An unreadable record decides nothing.
+func DecideTeardowns(d *Desired, obs Observed) []TunnelDecision {
+	if d == nil || obs.TunnelRecordErr != "" || len(obs.CreatedTunnels) == 0 {
+		return nil
+	}
+	served := servedInterfaces(d)
+	ifaces := make([]string, 0, len(obs.CreatedTunnels))
+	for iface := range obs.CreatedTunnels {
+		ifaces = append(ifaces, iface)
+	}
+	sort.Strings(ifaces)
+
+	var out []TunnelDecision
+	for _, iface := range ifaces {
+		seg := obs.CreatedTunnels[iface]
+		if served[iface] || !leftSegment(d, seg) {
+			continue
+		}
+		dec := TunnelDecision{Tunnel: SegmentTunnel{Segment: seg, Interface: iface}}
+		link, looked := obs.Links[iface]
+		switch {
+		case !looked:
+			dec.Action, dec.Why = TunnelUnknown, "the agent did not look up the interface, so it will not tear it down"
+		case link.ReadErr != "":
+			dec.Action, dec.Why = TunnelUnknown, "cannot look up the interface: "+link.ReadErr
+		case !link.Exists:
+			dec.Action = TunnelForget
+			dec.Why = "this machine left segment " + seg + " and " + iface + " is already gone; the agent drops it from its record"
+		default:
+			dec.Action = TunnelRemove
+			dec.Why = "this machine left segment " + seg + "; hz-agent created " + iface + " and will delete it"
+		}
+		out = append(out, dec)
+	}
+	return out
+}
+
+func servedInterfaces(d *Desired) map[string]bool {
+	out := map[string]bool{}
+	if d != nil && d.Segments != nil {
+		for _, t := range d.Segments.Tunnels {
+			out[t.Interface] = true
+		}
+	}
+	return out
+}
+
+// NextTunnelRecord is the record after a pass over d.
+//
+// applied says whether the pass succeeded (or found nothing to do). Only then
+// does d become the last-known-good. A FAILED pass does not replace it — but
+// what it did to interfaces is still recorded, because those are facts about
+// the box, not about hz: an interface it created is the agent's to remove
+// later, and one it tore down must not be booted again.
+//
+// Which tunnels are in the record after a successful pass:
+//
+//	served by d                               d's version
+//	not served, machine affirmatively left    dropped (torn down, or not ours)
+//	not served, anything else (a gap, nil)    the previous version — the live
+//	                                          interface was left as it was, so
+//	                                          that is what it is running
+//
+// AppliedAt is left to the caller: this half does not read the clock.
+func NextTunnelRecord(prev TunnelRecord, d *Desired, res Result, applied bool) TunnelRecord {
+	next := TunnelRecord{
+		Machine:     prev.Machine,
+		Fingerprint: prev.Fingerprint,
+		AppliedAt:   prev.AppliedAt,
+		Created:     map[string]string{},
+	}
+	for iface, seg := range prev.Created {
+		next.Created[iface] = seg
+	}
+	segOf := map[string]string{}
+	if d != nil && d.Segments != nil {
+		for _, t := range d.Segments.Tunnels {
+			segOf[t.Interface] = t.Segment
+		}
+	}
+	for _, iface := range res.CreatedTunnels {
+		if seg, ok := segOf[iface]; ok {
+			next.Created[iface] = seg
+		}
+	}
+	gone := map[string]bool{}
+	for _, iface := range res.TornDown {
+		gone[iface] = true
+		delete(next.Created, iface)
+	}
+	if len(next.Created) == 0 {
+		next.Created = nil
+	}
+
+	var tunnels []SegmentTunnel
+	if !applied || d == nil {
+		if prev.Segments != nil {
+			for _, t := range prev.Segments.Tunnels {
+				if !gone[t.Interface] {
+					tunnels = append(tunnels, t)
+				}
+			}
+		}
+	} else {
+		next.Machine = d.Machine
+		next.Fingerprint = d.Fingerprint()
+		served := servedInterfaces(d)
+		if d.Segments != nil {
+			tunnels = append(tunnels, d.Segments.Tunnels...)
+		}
+		if prev.Segments != nil {
+			for _, t := range prev.Segments.Tunnels {
+				if served[t.Interface] || gone[t.Interface] || leftSegment(d, t.Segment) {
+					continue
+				}
+				tunnels = append(tunnels, t)
+			}
+		}
+	}
+	if len(tunnels) > 0 {
+		next.Segments = &SegmentsSection{Tunnels: tunnels}
+	}
+	return next
 }
 
 func peerCount(t SegmentTunnel) string {

@@ -50,12 +50,23 @@ func runAgent(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	src := f.source()
-	obs := f.observer()
+	return runLoop(ctx, &f, f.source(), f.observer())
+}
 
+// runLoop is the daemon after its flags are checked: the boot pass, then
+// poll after poll.
+//
+// THE BOOT PASS COMES FIRST AND ASKS hz NOTHING (CLAUDE.md invariant 5). A box
+// that reaches hz through a segment tunnel cannot poll until the tunnel is
+// up, so the tunnels come up from the last-known-good before the first
+// Fetch, whatever that Fetch would have said.
+func runLoop(ctx context.Context, f *agentFlags, src agent.Source, obs agent.Observer) error {
+	if f.apply {
+		f.bootTunnels(obs)
+	}
 	var etag string
 	for {
-		etag = onePass(ctx, &f, src, obs, etag)
+		etag = onePass(ctx, f, src, obs, etag)
 		if f.once {
 			return nil
 		}
@@ -104,6 +115,11 @@ func onePass(ctx context.Context, f *agentFlags, src agent.Source, obs agent.Obs
 
 	if !plan.Changed() {
 		slog.Info("in sync", "generation", short(plan.Generation), "unknown", len(plan.Unknown()))
+		// In sync is known-good too: a box whose tunnels were already up when
+		// this agent started must still have a record to boot from.
+		if f.apply {
+			f.recordTunnels(d, agent.Result{}, true)
+		}
 		return newETag
 	}
 
@@ -128,6 +144,9 @@ func onePass(ctx context.Context, f *agentFlags, src agent.Source, obs agent.Obs
 	}
 
 	res, err := agent.Apply(d, plan, obs.Observe(d), f.reloader(), f.generations())
+	// A failed apply does not become the last-known-good; the interfaces it
+	// created or tore down are recorded either way (agent.NextTunnelRecord).
+	f.recordTunnels(d, res, err == nil)
 	if err != nil {
 		wait := f.hold.fail(plan.Generation, time.Now(), f.interval)
 		slog.Error("apply failed", "err", err, "errors", res.Errors,
@@ -144,8 +163,40 @@ func onePass(ctx context.Context, f *agentFlags, src agent.Source, obs agent.Obs
 	slog.Info("applied", "generation", short(res.Generation),
 		"wrote", res.Wrote, "reloaded", res.Reloaded,
 		"restarted", res.Restarted, "adopted", res.Adopted,
-		"tunnels", res.Tunnels, "adopted_tunnels", res.AdoptedTunnels)
+		"tunnels", res.Tunnels, "adopted_tunnels", res.AdoptedTunnels, "torn_down", res.TornDown)
 	return newETag
+}
+
+// bootTunnels brings the segment tunnels up from the last-known-good, before
+// the first poll. Armed only; the caller checks.
+//
+// Every outcome is logged and none is fatal: an agent that exited here would
+// never reach the poll that could repair it.
+func (f *agentFlags) bootTunnels(obs agent.Observer) {
+	rep, err := agent.BootTunnels(f.tunnelStore(), obs, f.reloader())
+	if !rep.Booted && err != nil {
+		slog.Error("LOUD: cannot read the segment tunnel last-known-good; tunnels wait for hz", "err", err)
+		return
+	}
+	if !rep.Booted {
+		slog.Info("no segment tunnel last-known-good; tunnels wait for hz")
+		return
+	}
+	slog.Warn(fmt.Sprintf("LOUD: booting segment tunnels from last-known-good, fingerprint %s, applied at %s — hz not yet asked",
+		short(rep.Record.Fingerprint), rep.Record.AppliedAt),
+		"tunnels", len(rep.Record.Segments.Tunnels),
+		"brought_up", rep.Result.Tunnels, "adopted", rep.Result.AdoptedTunnels)
+	if err != nil {
+		slog.Error("LOUD: segment tunnel boot finished with errors", "err", err, "errors", rep.Result.Errors)
+	}
+}
+
+// recordTunnels keeps the last-known-good current. A failure is logged, not
+// fatal: the box is as it was, only the next boot is worse off.
+func (f *agentFlags) recordTunnels(d *agent.Desired, res agent.Result, applied bool) {
+	if err := agent.RecordTunnels(f.tunnelStore(), d, res, applied, time.Now()); err != nil {
+		slog.Error("LOUD: could not write the segment tunnel last-known-good; the next boot waits for hz", "err", err)
+	}
 }
 
 // heartbeat re-observes the machine and reports, when one is due.
