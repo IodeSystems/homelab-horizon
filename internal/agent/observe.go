@@ -91,6 +91,39 @@ type Observed struct {
 	// lead to different actions. An unreadable record produces a KindUnknown
 	// line, no restarts, and no write over the file that could not be read.
 	GenerationsErr string
+
+	// Links is the live state of each segment interface the payload names,
+	// keyed by interface name. Read with an unprivileged interface lookup.
+	Links map[string]LinkState
+
+	// SegmentKeys is whether this box holds its private key for each segment
+	// the payload names, keyed by segment. EXISTENCE ONLY: the key is never
+	// read into Observed. The agent loads it straight from its file into the
+	// interface at apply time (apply.go), so no struct in this package ever
+	// carries a private key.
+	SegmentKeys map[string]KeyState
+}
+
+// LinkState is one network interface as the kernel reports it.
+type LinkState struct {
+	Exists bool
+	Up     bool
+
+	// Addrs is every address on the interface, in CIDR form (10.42.0.2/24).
+	Addrs []string
+
+	// ReadErr is set when the lookup failed for a reason other than "no such
+	// interface". Distinct from !Exists, for the reason FileState.ReadErr is.
+	ReadErr string
+}
+
+// KeyState is whether one segment's private key file is on this box.
+type KeyState struct {
+	Exists bool
+
+	// ReadErr is set when the agent could not look — usually a non-root
+	// `hz-agent diff`, since the key directory is 0700 root.
+	ReadErr string
 }
 
 // Observer reads the machine. The interface exists so Compute can be exercised
