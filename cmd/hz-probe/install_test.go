@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,6 +126,123 @@ func TestResolveNtfyURL(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "secret-topic") {
 		t.Fatal("the error must not echo the secret")
+	}
+}
+
+// The ntfy token travels exactly like the URL: a credential when the file
+// exists, an explicit empty --ntfy-token-file= when it does not, and never
+// its value on the command line.
+func TestPushUnitCarriesNtfyTokenAsACredential(t *testing.T) {
+	dir := t.TempDir()
+	tokFile := filepath.Join(dir, "ntfy-token")
+	secret := "tk_unit_secret_9c1"
+	if err := os.WriteFile(tokFile, []byte(secret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &serveFlags{
+		pushTo: "https://kiosk.example.com", vantage: "v",
+		tokenFile: "/etc/hz-probe/token", statePath: "/var/lib/hz-probe/state.json",
+		ntfyFile: filepath.Join(dir, "no-url"), ntfyAfter: 3,
+		ntfyTokenFile: tokFile,
+	}
+	unit := generateUnit(f, "/usr/local/bin/hz-probe")
+	if !strings.Contains(unit, "LoadCredential=ntfy-token:"+tokFile) {
+		t.Fatalf("the ntfy token file should be a credential:\n%s", unit)
+	}
+	if !strings.Contains(unit, "--ntfy-token-file %d/ntfy-token") {
+		t.Fatalf("serve should read the ntfy token from the credentials directory:\n%s", unit)
+	}
+	if strings.Contains(unit, secret) || strings.Contains(unit, "--ntfy-token ") {
+		t.Fatal("the ntfy token itself must never be in the unit")
+	}
+
+	f.ntfyTokenFile = filepath.Join(dir, "absent")
+	unit = generateUnit(f, "/usr/local/bin/hz-probe")
+	if strings.Contains(unit, "LoadCredential=ntfy-token") || strings.Contains(unit, "%d/ntfy-token") {
+		t.Fatalf("a missing token file must not become a credential:\n%s", unit)
+	}
+	if !strings.Contains(unit, "--ntfy-token-file=") {
+		t.Fatalf("without a file the unit should disable the token explicitly:\n%s", unit)
+	}
+
+	f.pushTo, f.listen, f.ntfyTokenFile = "", ":8443", tokFile
+	if unit = generateUnit(f, "/usr/local/bin/hz-probe"); strings.Contains(unit, "ntfy") {
+		t.Fatal("a pull unit should carry nothing about ntfy")
+	}
+}
+
+func TestResolveNtfyToken(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HZ_PROBE_NTFY_TOKEN", "")
+
+	if got, err := resolveNtfyToken("", filepath.Join(dir, "absent"), true); err != nil || got != "" {
+		t.Fatalf("unset should mean no token: %q, %v", got, err)
+	}
+	empty := filepath.Join(dir, "empty")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveNtfyToken("", empty, true); err == nil {
+		t.Fatal("an empty NAMED token file is intent gone wrong, not off")
+	}
+	good := filepath.Join(dir, "good")
+	if err := os.WriteFile(good, []byte(" tk_file \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HZ_PROBE_NTFY_TOKEN", "tk_env")
+	if got, _ := resolveNtfyToken("tk_flag", good, true); got != "tk_file" {
+		t.Fatalf("the file wins: %q", got)
+	}
+	if got, _ := resolveNtfyToken("tk_flag", "", false); got != "tk_env" {
+		t.Fatalf("the environment beats the flag: %q", got)
+	}
+	t.Setenv("HZ_PROBE_NTFY_TOKEN", "")
+	if got, _ := resolveNtfyToken("tk_flag", "", false); got != "tk_flag" {
+		t.Fatalf("the flag is the last resort: %q", got)
+	}
+}
+
+// The 2026-09-28 rule, for the token: an unreadable DEFAULT token file warns
+// and carries on without a token; it never stops the agent. A NAMED one that
+// cannot be read is still an error. The warning never carries the value.
+func TestResolveNtfyTokenDefaultPathNeverStopsTheAgent(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 directory, so EACCES cannot be produced")
+	}
+	t.Setenv("HZ_PROBE_NTFY_TOKEN", "")
+	dir := t.TempDir()
+	locked := filepath.Join(dir, "locked")
+	if err := os.Mkdir(locked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(locked, "ntfy-token")
+	if err := os.WriteFile(file, []byte("tk_locked_value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+
+	// Positive control: the instrument really produces EACCES here.
+	if _, err := os.ReadFile(file); err == nil || os.IsNotExist(err) {
+		t.Fatalf("expected a permission error, got %v", err)
+	}
+
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	got, err := resolveNtfyToken("", file, false)
+	if err != nil || got != "" {
+		t.Fatalf("default path unreadable: got %q, %v — want no token, no error", got, err)
+	}
+	if !strings.Contains(logs.String(), "ntfy token file cannot be read") {
+		t.Fatalf("an unreadable default token file should warn:\n%s", logs.String())
+	}
+	if _, err := resolveNtfyToken("", file, true); err == nil {
+		t.Fatal("a NAMED token file that cannot be read must still be an error")
 	}
 }
 

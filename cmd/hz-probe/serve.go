@@ -22,6 +22,7 @@ import (
 const (
 	defaultTokenFile = "/etc/hz-probe/token"
 	defaultNtfyFile  = "/etc/hz-probe/ntfy-url"
+	defaultNtfyToken = "/etc/hz-probe/ntfy-token"
 	defaultStatePath = "/var/lib/hz-probe/state.json"
 	defaultCertPath  = "/etc/hz-probe/cert.pem"
 	defaultKeyPath   = "/etc/hz-probe/key.pem"
@@ -40,9 +41,11 @@ type serveFlags struct {
 	tlsKey    string
 	pushTo    string
 
-	ntfyURL   string
-	ntfyFile  string
-	ntfyAfter int
+	ntfyURL       string
+	ntfyFile      string
+	ntfyAfter     int
+	ntfyToken     string
+	ntfyTokenFile string
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
@@ -57,6 +60,8 @@ func (f *serveFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.ntfyURL, "ntfy-url", "", "ntfy topic URL to alert when hz is unreachable (prefer --ntfy-url-file); push mode only — in pull mode the agent never dials hz, so it cannot see hz down")
 	fs.StringVar(&f.ntfyFile, "ntfy-url-file", defaultNtfyFile, "file holding the ntfy topic URL; absent means no vantage-side alerting. Push mode only")
 	fs.IntVar(&f.ntfyAfter, "ntfy-after", 3, "consecutive failed reports to hz before alerting ntfy. Push mode only")
+	fs.StringVar(&f.ntfyToken, "ntfy-token", "", "ntfy access token, sent as a Bearer header (prefer --ntfy-token-file). Push mode only")
+	fs.StringVar(&f.ntfyTokenFile, "ntfy-token-file", defaultNtfyToken, "file holding the ntfy access token; absent means ntfy is posted to without one. Push mode only")
 }
 
 // pushMode reports whether the agent reports to hz instead of waiting to be
@@ -101,13 +106,20 @@ func runServe(args []string) error {
 	// address to keep stable.
 	if f.pushMode() {
 		pusher := &probe.Pusher{URL: f.pushTo, Token: tok}
-		fileSet := false
+		fileSet, tokenFileSet := false, false
 		fs.Visit(func(fl *flag.Flag) {
-			if fl.Name == "ntfy-url-file" {
+			switch fl.Name {
+			case "ntfy-url-file":
 				fileSet = true
+			case "ntfy-token-file":
+				tokenFileSet = true
 			}
 		})
 		ntfy, err := resolveNtfyURL(f.ntfyURL, f.ntfyFile, fileSet)
+		if err != nil {
+			return err
+		}
+		ntfyToken, err := resolveNtfyToken(f.ntfyToken, f.ntfyTokenFile, tokenFileSet)
 		if err != nil {
 			return err
 		}
@@ -115,10 +127,13 @@ func runServe(args []string) error {
 			if f.ntfyAfter < 1 {
 				return fmt.Errorf("--ntfy-after must be at least 1, got %d", f.ntfyAfter)
 			}
-			pusher.Alert = &probe.Alerter{URL: ntfy, Vantage: f.vantageName(), Threshold: f.ntfyAfter}
-			// The URL is a capability; log that it is set, never what it is.
-			slog.Info("hz-probe will alert ntfy if hz is unreachable",
-				"after_failures", f.ntfyAfter)
+			pusher.Alert = &probe.Alerter{URL: ntfy, Token: ntfyToken, Vantage: f.vantageName(), Threshold: f.ntfyAfter}
+			// The URL and the token are secrets; log that they are set,
+			// never what they are.
+			slog.Info("hz-probe will alert ntfy if hz is unreachable or rejects this vantage",
+				"after_failures", f.ntfyAfter, "ntfy_token", ntfyToken != "")
+		} else if ntfyToken != "" {
+			slog.Warn("hz-probe: an ntfy token is set but no ntfy URL; vantage-side alerting is off")
 		}
 		held := agent.Targets()
 		slog.Info("hz-probe reporting to hz",
@@ -220,6 +235,34 @@ func resolveToken(tokenFlag, tokenFile string) (string, error) {
 // got EACCES, not ENOENT, the agent exited, and it crash-looped 16,446 times.
 // An old unit plus a new binary is exactly what self-update produces.
 func resolveNtfyURL(urlFlag, file string, fileSet bool) (string, error) {
+	raw, err := resolveOptional("ntfy URL", "vantage-side alerting is off",
+		urlFlag, "HZ_PROBE_NTFY_URL", file, fileSet)
+	if err != nil || raw == "" {
+		return "", err
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		// Not echoing the value: it is a secret.
+		return "", fmt.Errorf("the ntfy URL is not an http(s) URL with a host")
+	}
+	return raw, nil
+}
+
+// resolveNtfyToken reads the optional ntfy access token by exactly the rules
+// of resolveNtfyURL: --ntfy-token-file, then HZ_PROBE_NTFY_TOKEN, then
+// --ntfy-token. None is not an error — the topic is posted to without
+// authentication, as before tokens existed. The same 2026-09-28 rule
+// applies: an old unit on a new binary names no --ntfy-token-file, so an
+// unreadable DEFAULT path must warn and carry on, never stop the agent.
+func resolveNtfyToken(tokenFlag, file string, fileSet bool) (string, error) {
+	return resolveOptional("ntfy token", "ntfy is posted to without a token",
+		tokenFlag, "HZ_PROBE_NTFY_TOKEN", file, fileSet)
+}
+
+// resolveOptional is the shared file → environment → flag resolution for an
+// optional secret. `what` names it in errors and `off` says in the warning
+// what running without it means. The value itself is never in a message.
+func resolveOptional(what, off, flagVal, env, file string, fileSet bool) (string, error) {
 	raw := ""
 	if file != "" {
 		b, err := os.ReadFile(file)
@@ -227,29 +270,21 @@ func resolveNtfyURL(urlFlag, file string, fileSet bool) (string, error) {
 		case err == nil:
 			raw = strings.TrimSpace(string(b))
 			if raw == "" && fileSet {
-				return "", fmt.Errorf("ntfy URL file %s is empty", file)
+				return "", fmt.Errorf("%s file %s is empty", what, file)
 			}
 		case os.IsNotExist(err):
 		case fileSet:
-			return "", fmt.Errorf("could not read ntfy URL file: %w", err)
+			return "", fmt.Errorf("could not read %s file: %w", what, err)
 		default:
-			slog.Warn("probe: the default ntfy URL file cannot be read; vantage-side alerting is off",
+			slog.Warn("probe: the default "+what+" file cannot be read; "+off,
 				"path", file, "error", err)
 		}
 	}
 	if raw == "" {
-		raw = strings.TrimSpace(os.Getenv("HZ_PROBE_NTFY_URL"))
+		raw = strings.TrimSpace(os.Getenv(env))
 	}
 	if raw == "" {
-		raw = strings.TrimSpace(urlFlag)
-	}
-	if raw == "" {
-		return "", nil
-	}
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		// Not echoing the value: it is a secret.
-		return "", fmt.Errorf("the ntfy URL is not an http(s) URL with a host")
+		raw = strings.TrimSpace(flagVal)
 	}
 	return raw, nil
 }
