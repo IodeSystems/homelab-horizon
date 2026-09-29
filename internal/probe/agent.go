@@ -34,6 +34,11 @@ type Agent struct {
 	targets TargetSet
 	results []Result
 
+	// alert is the ntfy channel hz last handed this vantage, nil when hz set
+	// none. Cached with the targets, because it exists for the time hz is
+	// unreachable — including a restart during that time.
+	alert *AlertChannel
+
 	// wake nudges the probe loop when a new target set lands, so a fresh
 	// agent produces its first results immediately rather than one interval
 	// after hz finished configuring it.
@@ -46,12 +51,18 @@ type Agent struct {
 	probed chan struct{}
 }
 
-// persisted is the agent's on-disk state: the target set, and nothing about
-// hz. It exists so an agent that restarts while hz is unreachable keeps
-// probing the right names instead of idling until hz comes back — which is
-// exactly the window the agent was deployed to observe.
+// persisted is the agent's on-disk state: the target set and the alert
+// channel hz handed it. It exists so an agent that restarts while hz is
+// unreachable keeps probing the right names, and can still say hz is down,
+// instead of idling until hz comes back — which is exactly the window the
+// agent was deployed to observe.
+//
+// Nothing here expires. A cache written three years ago is still the right
+// answer while hz is not answering (CLAUDE.md #5); only a reply from hz
+// replaces it.
 type persisted struct {
-	Targets TargetSet `json:"targets"`
+	Targets TargetSet     `json:"targets"`
+	Alert   *AlertChannel `json:"alert,omitempty"`
 }
 
 // NewAgent builds an agent. statePath may be empty, which disables the target
@@ -85,17 +96,26 @@ func (a *Agent) loadState() {
 		return
 	}
 	a.targets = p.Targets
+	if p.Alert != nil && ValidAlertURL(p.Alert.URL) {
+		a.alert = p.Alert
+	}
+	// The channel is a secret: say whether one was restored, never what it is.
 	slog.Info("probe: restored targets from cache",
-		"path", a.statePath, "version", p.Targets.Version, "targets", len(p.Targets.Targets))
+		"path", a.statePath, "version", p.Targets.Version, "targets", len(p.Targets.Targets),
+		"alert_channel", a.alert != nil)
 }
 
-// saveState writes the target cache. Failure is logged, not fatal: the agent
-// still works, it just forgets its targets across a restart.
-func (a *Agent) saveState(ts TargetSet) {
+// saveState writes the cache: the current targets and alert channel. Failure
+// is logged, not fatal: the agent still works, it just forgets them across a
+// restart. The file is 0600 — it holds the alert channel, which is a secret.
+func (a *Agent) saveState() {
 	if a.statePath == "" {
 		return
 	}
-	b, err := json.MarshalIndent(persisted{Targets: ts}, "", "  ")
+	a.mu.Lock()
+	p := persisted{Targets: a.targets, Alert: a.alert}
+	a.mu.Unlock()
+	b, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return
 	}
@@ -121,11 +141,42 @@ func (a *Agent) SetTargets(ts TargetSet) {
 	a.mu.Lock()
 	a.targets = ts
 	a.mu.Unlock()
-	a.saveState(ts)
+	a.saveState()
 	select {
 	case a.wake <- struct{}{}:
 	default:
 	}
+}
+
+// SetAlertChannel records the channel hz handed this vantage; nil clears it.
+// It reports whether that changed anything, and writes the cache only then.
+func (a *Agent) SetAlertChannel(ch *AlertChannel) bool {
+	if ch != nil {
+		c := *ch
+		ch = &c
+	}
+	a.mu.Lock()
+	same := (a.alert == nil && ch == nil) ||
+		(a.alert != nil && ch != nil && *a.alert == *ch)
+	if !same {
+		a.alert = ch
+	}
+	a.mu.Unlock()
+	if !same {
+		a.saveState()
+	}
+	return !same
+}
+
+// AlertChannel returns the channel hz last handed this vantage, or nil.
+func (a *Agent) AlertChannel() *AlertChannel {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.alert == nil {
+		return nil
+	}
+	c := *a.alert
+	return &c
 }
 
 // Targets returns the installed set.

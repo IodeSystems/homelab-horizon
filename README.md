@@ -1414,12 +1414,23 @@ Re-running the install command does the same thing immediately, and
 
 **When hz itself is down.** In push mode hz is the only notifier, so an
 outage that takes out the whole gateway tells nobody. Give the vantage an ntfy
-topic of its own: write the topic URL to `/etc/hz-probe/ntfy-url` (root, 0600
+topic of its own. The usual way: edit the vantage in Checks → Outside vantages
+and set **Alert topic (ntfy URL)** and, for a protected topic, **ntfy token**.
+Both are write-only (the page shows "set" / "not set" and a clear control). hz
+hands them to that vantage — only that one — in the reply to its next report;
+the vantage caches them in its state file (`/var/lib/hz-probe/state.json`,
+0600), so it still alerts while hz is down and after a restart. Clearing the
+topic in hz clears the vantage's copy on its next accepted report; a failed
+report never changes it.
+
+Or on the host: write the topic URL to `/etc/hz-probe/ntfy-url` (root, 0600
 — the topic is a capability, treat it like the token) and re-run
-`sudo hz-probe install`, which passes it as a systemd credential. After
+`sudo hz-probe install`, which passes it as a systemd credential. **A topic on
+the host (file, `HZ_PROBE_NTFY_URL` or `--ntfy-url`) wins over the one set in
+hz**; the startup log line names the source. After
 `--ntfy-after` consecutive failed reports (default 3) it posts one alert, and
-one recovery notice when a report succeeds again. No file means off. Pull mode
-ignores it: the agent never dials hz there, so it cannot see hz down.
+one recovery notice when a report succeeds again. Neither set means off. Pull mode
+ignores both: the agent never dials hz there, so it cannot see hz down.
 
 A report hz answers with **401 or 403** is a different fault — the vantage's
 token was rotated, or the vantage was removed from hz — so it is its own alert,
@@ -1432,6 +1443,7 @@ For a protected ntfy topic, write an ntfy access token to
 `/etc/hz-probe/ntfy-token` (root, 0600) and re-run `sudo hz-probe install`; it
 becomes a second credential and is sent as `Authorization: Bearer <token>`.
 Also `HZ_PROBE_NTFY_TOKEN` or `--ntfy-token`. No file means no auth header.
+A host token pairs only with a host topic; a topic set in hz carries its own.
 
 The Checks page lists each vantage with its own state, which the check rows
 cannot carry: a vantage hz has never reached produces no rows at all, and that
