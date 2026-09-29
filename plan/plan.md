@@ -414,7 +414,14 @@ gap where a whole-gateway outage notified nobody, because hz is the only other
 notifier. The topic URL is a secret, passed as a systemd credential
 (`/etc/hz-probe/ntfy-url` → `LoadCredential`), never on the command line or in
 logs. Pull mode unchanged (it never dials hz, so cannot see it down).
-Gateway deployed at `e92ffe0`. **next:** install the new `hz-probe` on the `gcp-usw1` host with the ntfy file — the vantage host still runs the old build until then.
+⚠ **Incident 2026-09-28:** `gcp-usw1` (GCE `hz-vantage`, us-west1-b) self-updated
+to `e92ffe0` under its old unit and crash-looped (16,446 restarts): the default
+`/etc/hz-probe/ntfy-url` is in a root-only dir, EACCES was treated as fatal.
+Restored by re-running `hz-probe install` (unit now passes `--ntfy-url-file=`);
+the binary fix — an unreadable DEFAULT file only warns — is `0fbda23` on `dev`,
+**not deployed** (the gateway runs `59a21e7` from another session).
+**next:** pick the ntfy topic, write `/etc/hz-probe/ntfy-url` on `hz-vantage`,
+re-run install; deploy `0fbda23` so other self-updating vantages cannot hit it.
 
 Two decisions worth keeping:
 
