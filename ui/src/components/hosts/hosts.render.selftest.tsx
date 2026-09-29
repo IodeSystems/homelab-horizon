@@ -67,7 +67,10 @@ function client(): QueryClient {
   });
 }
 
-function render(node: React.ReactNode, qc: QueryClient): { html: string; text: string } {
+function render(
+  node: React.ReactNode,
+  qc: QueryClient,
+): { html: string; text: string; titles: string } {
   const html = renderToStaticMarkup(
     <QueryClientProvider client={qc}>
       <ThemeProvider theme={theme}>{node}</ThemeProvider>
@@ -85,7 +88,19 @@ function render(node: React.ReactNode, qc: QueryClient): { html: string; text: s
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/\s+/g, " ");
-  return { html, text };
+  // The explanation sentences are HOVER text since amendment 6 (flows over
+  // prose): still on the page, in a title attribute, not a paragraph. Checks
+  // that a sentence is SAID read this; checks that something is VISIBLE read
+  // `text`.
+  const titles = [...html.matchAll(/title="([^"]*)"/g)]
+    .map((m) => m[1]!)
+    .join(" | ")
+    .replace(/&#x27;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+  return { html, text, titles };
 }
 
 /** The screen as a browser would receive it, with hz's answer already in hand. */
@@ -196,7 +211,7 @@ console.log("· a reference reaches the page with BOTH halves");
 console.log("· @self is a first-class row, and it is not editable here");
 // ---------------------------------------------------------------------------
 {
-  const { html, text } = screenWith(GATEWAY);
+  const { html, text, titles } = screenWith(GATEWAY);
   // Compared on the ROW CHIPS, not on the notation: "@self" also appears in
   // records' authored halves, so an index of it would measure those.
   check(text.includes("this instance"), "@self is labelled as what it is");
@@ -219,7 +234,7 @@ console.log("· @self is a first-class row, and it is not editable here");
   // Greyed with a reason, never removed: the address field is still rendered.
   check(text.includes("192.168.1.1"), "@self's address is shown, not hidden");
   check(
-    text.includes("local_interface"),
+    titles.includes("local_interface"),
     "…with the sentence naming where it IS changed",
   );
 }
@@ -228,10 +243,10 @@ console.log("· @self is a first-class row, and it is not editable here");
 console.log("· a host nothing points at does not read as a host nothing needs");
 // ---------------------------------------------------------------------------
 {
-  const { text } = screenWith(GATEWAY);
+  const { text, titles } = screenWith(GATEWAY);
   check(text.includes("nothing references this host"), "the zero state says so plainly");
   check(
-    text.includes("as a plain string follow nothing and break"),
+    titles.includes("as a plain string follow nothing and break"),
     "…and the pointer to the OTHER list is on the page beside it",
   );
   check(
@@ -241,7 +256,7 @@ console.log("· a host nothing points at does not read as a host nothing needs")
 
   // The pointer is not a one-off footnote under the empty host: it is stated
   // for a populated host too, where "2 records" is just as incomplete.
-  const pointers = text.split("as a plain string follow nothing and break").length - 1;
+  const pointers = titles.split("as a plain string follow nothing and break").length - 1;
   check(pointers >= 3, `the pointer is carried by every host row (found ${pointers}, wanted 3)`);
   // And every row carries the second section, so no row can be read as a
   // single number.
@@ -253,16 +268,16 @@ console.log("· a host nothing points at does not read as a host nothing needs")
 console.log("· the kinds on the page are the CLI's kinds");
 // ---------------------------------------------------------------------------
 {
-  const { text } = screenWith(GATEWAY);
+  const { text, titles } = screenWith(GATEWAY);
   for (const kind of ["service backend", "port forward", "service internal DNS"]) {
     check(text.includes(kind), `"${kind}" is the heading, verbatim`);
   }
   check(
-    text.includes("HAProxy forwards this service"),
+    titles.includes("HAProxy forwards this service"),
     "a kind heading carries what goes wrong if the address is wrong",
   );
   check(
-    text.includes("iptables DNAT"),
+    titles.includes("iptables DNAT"),
     "…and the consequence differs per kind",
   );
 }
@@ -453,7 +468,7 @@ console.log("· a refusal renders every dependant, not just the first line");
 console.log("· a kind this screen does not know is listed, not dropped");
 // ---------------------------------------------------------------------------
 {
-  const { text } = render(
+  const { text, titles } = render(
     <HostCard
       host={host({ references: [ref({ kind: "wireguard peer address", field: "peers[0].endpoint" })] })}
       onMove={() => {}}
@@ -463,7 +478,7 @@ console.log("· a kind this screen does not know is listed, not dropped");
   check(text.includes("wireguard peer address"), "the unknown kind is named");
   check(text.includes("peers[0].endpoint"), "…and its record is listed");
   check(
-    text.includes("does not recognise"),
+    titles.includes("does not recognise"),
     "…and the screen admits it does not know what the kind means",
   );
 }
@@ -472,7 +487,7 @@ console.log("· a kind this screen does not know is listed, not dropped");
 console.log("· the two lists are two sections, never one");
 // ---------------------------------------------------------------------------
 {
-  const { text } = render(
+  const { text, titles } = render(
     <HostCard
       host={host({
         references: [ref({})],
@@ -510,13 +525,13 @@ console.log("· the two lists are two sections, never one");
   check(text.includes("192.168.1.51:8080"), "the literal it holds now is shown");
   check(text.includes("@nas:8080"), "…and what it would become");
   check(
-    text.includes("does NOT follow this host"),
+    titles.includes("does NOT follow this host"),
     "…with the sentence saying it breaks rather than follows",
   );
 
   // The refused record keeps its value and gets hz's reason, not a blank.
   check(text.includes("hz will not rewrite this"), "a refused record says so in place of a target");
-  check(text.includes("references bottom out"), "…and carries hz's reason verbatim");
+  check(titles.includes("references bottom out"), "…and carries hz's reason verbatim");
 
   // The command is offered, with the dry run named.
   check(text.includes("hz host adopt nas"), "the command that fixes it is on the page");

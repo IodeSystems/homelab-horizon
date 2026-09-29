@@ -204,20 +204,18 @@ function HostRows({ host, onMove }: { host: HostView; onMove: (h: HostView) => v
             </>
           )}
         </TableCell>
-        <TableCell>
-          <ToneChip
-            label={dependants.headline}
-            tone={dependants.tone}
-            hatched={dependants.knowledge === "unreferenced"}
-          />
+        {/* Short counts here; the sentence is each count's title and the
+            section chip below. A sentence-chip per column made the table wider
+            than the page. */}
+        <TableCell sx={{ fontFamily: "monospace", whiteSpace: "nowrap" }} title={dependants.headline}>
+          {host.references.length === 0 ? "none" : `${host.references.length} record${host.references.length === 1 ? "" : "s"}`}
         </TableCell>
-        <TableCell>
-          <ToneChip
-            label={occurrences.headline}
-            tone={occurrences.tone}
-            hatched={occurrences.knowledge !== "clean"}
-            dashed={occurrences.knowledge === "unscanned"}
-          />
+        <TableCell sx={{ fontFamily: "monospace", whiteSpace: "nowrap" }} title={occurrences.headline}>
+          {occurrences.knowledge === "unscanned"
+            ? "unknown"
+            : host.occurrences.length === 0
+              ? "none"
+              : `${host.occurrences.length} record${host.occurrences.length === 1 ? "" : "s"}`}
         </TableCell>
         <TableCell align="right">
           {move.knowledge === "movable" ? (
@@ -225,22 +223,27 @@ function HostRows({ host, onMove }: { host: HostView; onMove: (h: HostView) => v
               {move.action}
             </Button>
           ) : move.knowledge === "elsewhere" ? (
-            <Typography variant="caption" sx={{ color: "text.secondary" }}>
-              {move.why}
+            <Typography variant="caption" sx={{ color: "text.secondary", whiteSpace: "nowrap" }} title={move.why}>
+              set on Settings
             </Typography>
           ) : null}
         </TableCell>
       </TableRow>
       <TableRow>
-        <TableCell colSpan={COLUMNS} sx={{ pt: 0 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-            What points at it
-          </Typography>
-          {/* Said on every host, at every count: this list is the half that
-              FOLLOWS the host, and the other half is below. */}
-          <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 1 }}>
-            {dependants.literalCaveat}
-          </Typography>
+        <TableCell colSpan={COLUMNS} sx={{ pt: 0, overflowWrap: "anywhere" }}>
+          {/* Two lists, two headings, two counts — never merged: this one FOLLOWS
+              the host, the one below does not. The sentence that says so is the
+              heading's title rather than a paragraph (amendment 6). */}
+          <Box sx={{ display: "flex", gap: 1.5, alignItems: "center", flexWrap: "wrap", mt: 0.5, mb: 0.5 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 700 }} title={dependants.literalCaveat}>
+              What points at it
+            </Typography>
+            <ToneChip
+              label={dependants.headline}
+              tone={dependants.tone}
+              hatched={dependants.knowledge === "unreferenced"}
+            />
+          </Box>
           {groupByKind(host.references).map((g) => (
             <KindGroup key={g.kind} group={g} />
           ))}
@@ -262,8 +265,8 @@ export function HostsTable({ hosts, onMove }: { hosts: HostView[]; onMove: (h: H
           <TableRow>
             <TableCell>Host</TableCell>
             <TableCell>Address</TableCell>
-            <TableCell>Follows it</TableCell>
-            <TableCell>Holds it as text</TableCell>
+            <TableCell sx={{ whiteSpace: "nowrap" }}>Follows it</TableCell>
+            <TableCell sx={{ whiteSpace: "nowrap" }}>Holds it as text</TableCell>
             <TableCell />
           </TableRow>
         </TableHead>
