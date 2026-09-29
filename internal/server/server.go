@@ -1144,6 +1144,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/users/disable", s.handleAPIUserDisable)
 	mux.HandleFunc("/api/v1/policy", s.handleAPIPolicy)
 	mux.HandleFunc("/api/v1/settings/oidc", s.handleAPIOIDCSettings)
+	mux.HandleFunc("/api/v1/settings/ntfy", s.handleAPINtfySettings)
 	mux.HandleFunc("/api/v1/settings/oidc/discover", s.handleAPIOIDCDiscover)
 	mux.HandleFunc("/api/v1/rate-limit", s.handleAPIRateLimit)
 	mux.HandleFunc("/api/v1/dns/local", s.handleAPILocalDNS)
