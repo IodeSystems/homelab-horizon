@@ -53,3 +53,4 @@ internal/server/hzbin/bin/
 internal/server/uiembed/dist/
 ui/.rendercheck-checks
 ui/.rendercheck-machines
+ui/.rendercheck-instances

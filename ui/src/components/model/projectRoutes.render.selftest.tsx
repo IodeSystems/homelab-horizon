@@ -461,7 +461,7 @@ console.log("· the tree the router actually built");
   }
   // The gateway and unscoped routes must NOT have been pulled under a project.
   for (const flat of [
-    "/settings", "/machines/", "/machines/$machine", "/drift", "/hosts", "/dns/", "/dns/$zone",
+    "/settings", "/machines/", "/machines/$machine", "/drift", "/hosts", "/instances/", "/instances/$instance", "/dns/", "/dns/$zone",
     "/vpn", "/bans", "/checks", "/ports", "/observability", "/account", "/mfa",
     "/", "/services", "/domains", "/network", "/config", "/$",
   ]) {
