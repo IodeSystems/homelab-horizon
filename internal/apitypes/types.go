@@ -111,6 +111,32 @@ type EnvironmentResp struct {
 	Posture string `json:"posture"`
 	From    string `json:"from,omitempty"`
 	Version string `json:"version,omitempty"`
+	// Upstream is the record's field: the declared Machine (with an hz
+	// marker) whose hz holds this rung's placements. "" is placed here.
+	Upstream string `json:"upstream,omitempty"`
+	// Placement is DERIVED server-side (projection.PlaceRung), for the reason
+	// MachineResp derives MultiHomed: a client must not re-derive a judgement
+	// hz already makes. Always present.
+	Placement RungPlacementResp `json:"placement"`
+}
+
+// Rung placement states — projection.PlacementHere / PlacementRemote.
+const (
+	RungPlacementHere   = "here"
+	RungPlacementRemote = "remote"
+)
+
+// RungPlacementResp is where a rung's placements are answered from. "here":
+// this hz's registrations say which machines run it (placed, unplaced or —
+// when they cannot be read — unknown; the client reads those). "remote":
+// another hz holds them, and "no machine here" is correct, not a gap.
+type RungPlacementResp struct {
+	State     string `json:"state"`
+	Upstream  string `json:"upstream,omitempty"`
+	URL       string `json:"url,omitempty"`
+	Statement string `json:"statement"`
+	// Unresolved is non-empty only on records Save would refuse.
+	Unresolved []ProjectionGap `json:"unresolved,omitempty"`
 }
 
 type ServiceStatus struct {
@@ -249,6 +275,8 @@ type EnvironmentAddReq struct {
 	Posture string `json:"posture"`
 	From    string `json:"from,omitempty"`
 	Version string `json:"version,omitempty"`
+	// Upstream names a declared Machine with an hz marker; "" is placed here.
+	Upstream string `json:"upstream,omitempty"`
 }
 
 // EnvironmentSetReq patches one rung. Every settable field is a POINTER, and
@@ -265,6 +293,9 @@ type EnvironmentSetReq struct {
 	Posture *string `json:"posture,omitempty"`
 	From    *string `json:"from,omitempty"`
 	Version *string `json:"version,omitempty"`
+	// Upstream: nil leaves it, "" clears it (placed here), a name sets it —
+	// refused unless it names a declared Machine with an hz marker.
+	Upstream *string `json:"upstream,omitempty"`
 }
 
 // EnvironmentRmReq removes a rung. Confirm and Cascade mean what they mean on
@@ -297,13 +328,16 @@ type EnvironmentRmReq struct {
 // hash and the issue date, which is all hz ever has. It is the one thing about
 // a machine that lives beside the config rather than in it.
 type MachineResp struct {
-	Name       string   `json:"name"`
-	Project    string   `json:"project"`
-	Segments   []string `json:"segments,omitempty"`
-	Note       string   `json:"note,omitempty"`
-	MultiHomed bool     `json:"multiHomed,omitempty"`
-	Enrolled   bool     `json:"enrolled,omitempty"`
-	EnrolledAt int64    `json:"enrolledAt,omitempty"`
+	Name     string   `json:"name"`
+	Project  string   `json:"project"`
+	Segments []string `json:"segments,omitempty"`
+	Note     string   `json:"note,omitempty"`
+	// HZ is set when this machine runs its own hz (a nested hz — a separate
+	// config layer, not an HA peer). Absent: not declared as one.
+	HZ         *MachineHZResp `json:"hz,omitempty"`
+	MultiHomed bool           `json:"multiHomed,omitempty"`
+	Enrolled   bool           `json:"enrolled,omitempty"`
+	EnrolledAt int64          `json:"enrolledAt,omitempty"`
 
 	// AlreadyDeclared says the record came back unchanged because it already
 	// existed, rather than because this request created it. Only `--self` can
@@ -313,6 +347,12 @@ type MachineResp struct {
 	// there the operator asserted something about the estate, and hz telling
 	// them it was already true is information they asked for.
 	AlreadyDeclared bool `json:"alreadyDeclared,omitempty"`
+}
+
+// MachineHZResp is the nested-hz marker: where that hz answers. This hz never
+// contacts it.
+type MachineHZResp struct {
+	URL string `json:"url"`
 }
 
 // MachineAddReq declares a machine. Segments are names; there is no Segment
@@ -328,6 +368,9 @@ type MachineAddReq struct {
 	Project  string   `json:"project,omitempty"`
 	Segments []string `json:"segments,omitempty"`
 	Note     string   `json:"note,omitempty"`
+	// HZ marks the machine as running its own hz; the URL must be http(s)
+	// with a host.
+	HZ *MachineHZResp `json:"hz,omitempty"`
 
 	// Self declares the box HZ ITSELF IS RUNNING ON, and Name must then be
 	// empty: the name comes from hz's own identity (os.Hostname, the same
@@ -364,6 +407,10 @@ type MachineSetReq struct {
 	Project  *string   `json:"project,omitempty"`
 	Note     *string   `json:"note,omitempty"`
 	Segments *[]string `json:"segments,omitempty"`
+	// HZ sets the nested-hz marker; ClearHZ removes it (refused while an
+	// environment names this machine as its Upstream). Both at once is refused.
+	HZ      *MachineHZResp `json:"hz,omitempty"`
+	ClearHZ bool           `json:"clearHz,omitempty"`
 }
 
 // MachineRmReq removes a machine. Confirm and Cascade mean what they mean on

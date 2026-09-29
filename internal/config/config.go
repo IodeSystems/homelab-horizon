@@ -778,6 +778,18 @@ type Environment struct {
 	Posture string `json:"posture"`
 	From    string `json:"from,omitempty"`
 	Version string `json:"version,omitempty"`
+
+	// Upstream names the hz instance that holds this rung's placements, when
+	// they are not ours. An environment with an Upstream is declared here so
+	// that promotion edges into it and its version are ours to state — but
+	// asking "which machines run it" is a question for that hz, not a gap in
+	// this one (plan/design/estate.md Part A §5).
+	//
+	// It is the NAME of a declared Machine carrying an HZ marker — a nested hz
+	// is a Machine that runs hz (plan/plan.md Tier 1b). "" is placed here: hz
+	// answers from its own registrations. ValidateEnvironments refuses a name
+	// that resolves to no machine, or to a machine without the marker.
+	Upstream string `json:"upstream,omitempty"`
 }
 
 // envKey is the identity of an environment: names are unique per project, not globally,
@@ -806,6 +818,41 @@ var (
 	// is not a target — but never silent.
 	ErrNotUpward = errors.New("promotion is not upward by posture")
 )
+
+// CheckUpstream refuses an Upstream that names no declared machine, or a
+// machine that does not run hz — and says which, because the two have
+// different fixes (declare the machine; mark it). "" is legal: placed here.
+func (c *Config) CheckUpstream(upstream string) error {
+	if upstream == "" {
+		return nil
+	}
+	m, ok := c.FindMachine(upstream)
+	if !ok {
+		return fmt.Errorf("upstream %q names no declared machine — a nested hz is a Machine that runs hz: declare it with an hz URL first%s",
+			upstream, c.hzMachineHint())
+	}
+	if m.HZ == nil {
+		return fmt.Errorf("upstream %q is a declared machine with no hz marker, so nothing says it runs an hz — set its hz URL first%s",
+			upstream, c.hzMachineHint())
+	}
+	return nil
+}
+
+// hzMachineHint lists the machines that carry an hz marker — the only names an
+// Upstream may take.
+func (c *Config) hzMachineHint() string {
+	var names []string
+	for _, m := range c.Machines {
+		if m.HZ != nil {
+			names = append(names, m.Name)
+		}
+	}
+	if len(names) == 0 {
+		return ". No declared machine runs an hz"
+	}
+	sort.Strings(names)
+	return ". Machines that run an hz: " + strings.Join(names, ", ")
+}
 
 // EnvironmentsNamed returns every declared environment with this name, across projects.
 // Zero, one or several: every project gets to have a "prod", so the name alone is not an
@@ -920,6 +967,9 @@ func (c *Config) ValidateEnvironments() error {
 		if PostureRank(e.Posture) < 0 {
 			return fmt.Errorf("environment %q in project %q has posture %q, which is not one of %s",
 				e.Name, e.Project, e.Posture, strings.Join(Postures, ", "))
+		}
+		if err := c.CheckUpstream(e.Upstream); err != nil {
+			return fmt.Errorf("environment %q in project %q: %w", e.Name, e.Project, err)
 		}
 		byKey[k] = e
 	}

@@ -302,6 +302,7 @@ func (c *Config) AddEnvironment(e Environment) error {
 	e.Posture = strings.TrimSpace(e.Posture)
 	e.From = strings.TrimSpace(e.From)
 	e.Version = strings.TrimSpace(e.Version)
+	e.Upstream = strings.TrimSpace(e.Upstream)
 
 	if e.Name == "" {
 		return fmt.Errorf("an environment needs a name")
@@ -325,6 +326,9 @@ func (c *Config) AddEnvironment(e Environment) error {
 		return err
 	}
 	e.From = from
+	if err := c.CheckUpstream(e.Upstream); err != nil {
+		return fmt.Errorf("environment %s/%s: %w", e.Project, e.Name, err)
+	}
 
 	next := c.copyForWrite()
 	next.Environments = append(next.Environments, e)
@@ -344,16 +348,20 @@ func (c *Config) AddEnvironment(e Environment) error {
 // independent facts about one rung, and making an operator restate the posture
 // and the promotion edge in order to bump a version is how a promotion edge gets
 // dropped by accident.
+//
+// Upstream, like From and Version, is cleared by a non-nil "" — the rung then
+// reads as placed here.
 type EnvironmentPatch struct {
-	Posture *string
-	From    *string
-	Version *string
+	Posture  *string
+	From     *string
+	Version  *string
+	Upstream *string
 }
 
 // Empty reports a patch that changes nothing, so a caller can refuse it rather
 // than write a no-op and report success.
 func (p EnvironmentPatch) Empty() bool {
-	return p.Posture == nil && p.From == nil && p.Version == nil
+	return p.Posture == nil && p.From == nil && p.Version == nil && p.Upstream == nil
 }
 
 // SetEnvironment applies a patch to one rung and returns it as it now reads.
@@ -370,7 +378,7 @@ func (c *Config) SetEnvironment(project, name string, patch EnvironmentPatch) (E
 			name, project, c.environmentHint(project))
 	}
 	if patch.Empty() {
-		return Environment{}, fmt.Errorf("nothing to set on %s/%s — pass at least one of --posture, --from or --version", project, name)
+		return Environment{}, fmt.Errorf("nothing to set on %s/%s — pass at least one of --posture, --from, --version or an upstream", project, name)
 	}
 
 	next := c.copyForWrite()
@@ -391,6 +399,13 @@ func (c *Config) SetEnvironment(project, name string, patch EnvironmentPatch) (E
 	}
 	if patch.Version != nil {
 		e.Version = strings.TrimSpace(*patch.Version)
+	}
+	if patch.Upstream != nil {
+		upstream := strings.TrimSpace(*patch.Upstream)
+		if err := c.CheckUpstream(upstream); err != nil {
+			return Environment{}, fmt.Errorf("environment %s/%s: %w", project, name, err)
+		}
+		e.Upstream = upstream
 	}
 	next.Environments[idx] = e
 	if err := next.validateModel(); err != nil {

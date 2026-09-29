@@ -117,7 +117,7 @@ func (s *Server) handleAPIMachineAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	next := *s.cfg()
-	if err := next.AddMachine(config.Machine{Name: name, Project: req.Project, Segments: req.Segments, Note: req.Note}); err != nil {
+	if err := next.AddMachine(config.Machine{Name: name, Project: req.Project, Segments: req.Segments, Note: req.Note, HZ: machineHZ(req.HZ)}); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -157,7 +157,10 @@ func (s *Server) handleAPIMachineSet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	next := *s.cfg()
-	m, err := next.SetMachine(req.Name, config.MachinePatch{Project: req.Project, Note: req.Note, Segments: req.Segments})
+	m, err := next.SetMachine(req.Name, config.MachinePatch{
+		Project: req.Project, Note: req.Note, Segments: req.Segments,
+		HZ: machineHZ(req.HZ), ClearHZ: req.ClearHZ,
+	})
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
@@ -447,11 +450,22 @@ func (s *Server) machineResp(m config.Machine) apitypes.MachineResp {
 		Note:       m.Note,
 		MultiHomed: m.MultiHomed(),
 	}
+	if m.HZ != nil {
+		out.HZ = &apitypes.MachineHZResp{URL: m.HZ.URL}
+	}
 	if cred, ok := s.agentCredentials().Find(m.Name); ok {
 		out.Enrolled = true
 		out.EnrolledAt = cred.CreatedAt
 	}
 	return out
+}
+
+// machineHZ converts the wire marker to the record's. nil stays nil.
+func machineHZ(h *apitypes.MachineHZResp) *config.MachineHZ {
+	if h == nil {
+		return nil
+	}
+	return &config.MachineHZ{URL: h.URL}
 }
 
 // jsonSafeName quotes a caller-supplied name for an error message, so a machine
