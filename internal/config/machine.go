@@ -195,22 +195,34 @@ func (c *Config) AddMachine(m Machine) error {
 
 // MachinePatch is a partial edit of a machine. nil means leave the field
 // alone; a non-nil "" clears it (for Project: makes the machine global).
-// Segments are not here: membership is edited through the segment surface.
+//
+// Segments is the WHOLE new membership list when non-nil — a non-nil empty
+// list takes the machine out of every segment. Membership is declared on the
+// Machine (segment.go's opening comment), so this is its one writer besides
+// `add`; SegmentPatch deliberately cannot grant or drop one.
 type MachinePatch struct {
-	Project *string
-	Note    *string
+	Project  *string
+	Note     *string
+	Segments *[]string
 }
 
 // Empty reports a patch that would change nothing.
-func (p MachinePatch) Empty() bool { return p.Project == nil && p.Note == nil }
+func (p MachinePatch) Empty() bool { return p.Project == nil && p.Note == nil && p.Segments == nil }
 
-// SetMachine edits a declared machine's owner and note in place, so an owner
-// can change without remove and re-add — which would cost the box its agent
-// credential. It validates the whole model, so clearing the note of a
+// SetMachine edits a declared machine's owner, note and segment membership in
+// place, so none of them costs remove and re-add — which would cost the box
+// its agent credential. It validates the whole model, so clearing the note of a
 // multi-homed machine is refused here, naming the machine.
+//
+// LEAVING A SEGMENT THE MACHINE IS ADDRESSED ON IS REFUSED, not cascaded. A
+// member entry must be claimed by its machine (validateSegmentMembers), and
+// dropping the claim would either leave an entry Save refuses or silently
+// delete an address and a public key the operator did not name. The refusal
+// names the command that unaddresses it first — the same refuse-then-name
+// discipline SegmentRemoval uses.
 func (c *Config) SetMachine(name string, patch MachinePatch) (Machine, error) {
 	if patch.Empty() {
-		return Machine{}, fmt.Errorf("nothing to change on machine %q — give a project or a note", name)
+		return Machine{}, fmt.Errorf("nothing to change on machine %q — give a project, a note or segments", name)
 	}
 	idx := -1
 	for i, m := range c.Machines {
@@ -233,6 +245,31 @@ func (c *Config) SetMachine(name string, patch MachinePatch) (Machine, error) {
 	}
 	if patch.Note != nil {
 		m.Note = strings.TrimSpace(*patch.Note)
+	}
+	if patch.Segments != nil {
+		segments := normalizeSegments(*patch.Segments)
+		keep := make(map[string]bool, len(segments))
+		for _, s := range segments {
+			keep[s] = true
+		}
+		for _, old := range m.Segments {
+			if keep[old] {
+				continue
+			}
+			seg, ok := c.FindSegment(old)
+			if !ok {
+				continue
+			}
+			if mem, addressed := seg.Member(m.Name); addressed {
+				return Machine{}, fmt.Errorf("%s is addressed on segment %s (%s), so it cannot leave it here — a member entry must be claimed by its machine, and dropping the claim would delete an address and a key nobody named. Unaddress it first: `hz segment set %s --unaddress %s`",
+					m.Name, old, mem.Address, old, m.Name)
+			}
+		}
+		if len(segments) > 1 && m.Note == "" {
+			return Machine{}, fmt.Errorf("%s would be in %d segments (%s), so it needs a note saying why — forwarding between a machine's own segments is denied by default and a machine that bridges them is a declared exception, not a default",
+				m.Name, len(segments), strings.Join(segments, ", "))
+		}
+		m.Segments = segments
 	}
 	next.Machines[idx] = m
 	if err := next.validateModel(); err != nil {
