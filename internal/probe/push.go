@@ -40,7 +40,8 @@ type Pusher struct {
 	Timeout time.Duration
 
 	// Alert, when set, notifies a human after consecutive failed reports and
-	// again on recovery. Nil is off. It never affects what is reported or
+	// again on recovery — "hz unreachable", or "hz rejects this vantage" when
+	// hz answers 401/403 (see Alerter). Nil is off. It never affects what is reported or
 	// acknowledged.
 	Alert *Alerter
 
@@ -84,7 +85,7 @@ func (p *Pusher) Report(ctx context.Context, req PushRequest) (*PushResponse, er
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("hz returned %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return nil, &HTTPError{Status: resp.StatusCode, Message: hzMessage(msg)}
 	}
 
 	var out PushResponse
@@ -92,6 +93,38 @@ func (p *Pusher) Report(ctx context.Context, req PushRequest) (*PushResponse, er
 		return nil, fmt.Errorf("could not read hz's response: %w", err)
 	}
 	return &out, nil
+}
+
+// HTTPError is hz ANSWERING a report with something other than 200. It is a
+// type so the alerter can tell "hz said no" from "hz is not there" without
+// matching on error text. A transport error is never an *HTTPError.
+type HTTPError struct {
+	Status  int    // hz's HTTP status
+	Message string // hz's own words: the "error" field of its JSON body, or the body
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("hz returned %d: %s", e.Status, e.Message)
+}
+
+// Rejected reports whether hz refused this vantage itself (401 or 403): its
+// token is not one hz accepts — rotated, or the vantage was removed from hz.
+// That is a different fault from hz being down, with a different fix, so it
+// is a different alert.
+func (e *HTTPError) Rejected() bool {
+	return e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden
+}
+
+// hzMessage is the text of an error body: the "error" field of hz's JSON
+// errors (writeJSONError), or the trimmed body when it is anything else.
+func hzMessage(body []byte) string {
+	var j struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &j) == nil && j.Error != "" {
+		return j.Error
+	}
+	return strings.TrimSpace(string(body))
 }
 
 // PushLoop reports to hz on an interval until ctx is done.

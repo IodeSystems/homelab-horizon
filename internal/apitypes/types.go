@@ -2256,6 +2256,22 @@ type TombstoneCancelRequest struct {
 	Value string `json:"value"`
 }
 
+// NtfySettingsResp is hz's ntfy notification target as the settings page sees
+// it. The access token is never included — only whether one is stored.
+type NtfySettingsResp struct {
+	URL          string `json:"url"`
+	HasNtfyToken bool   `json:"hasNtfyToken"`
+}
+
+// NtfySettingsReq is what the settings page sends back. An empty URL turns
+// notifications off. An empty Token keeps the stored one (the page never has
+// it to send back); ClearToken removes it.
+type NtfySettingsReq struct {
+	URL        string `json:"url"`
+	Token      string `json:"token,omitempty"`
+	ClearToken bool   `json:"clearToken,omitempty"`
+}
+
 // OIDCSettingsResp is the single-sign-on configuration as the settings page
 // sees it. The client secret is never included — only whether one is stored.
 type OIDCSettingsResp struct {

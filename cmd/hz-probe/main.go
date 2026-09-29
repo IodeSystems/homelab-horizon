@@ -69,6 +69,10 @@ SERVE FLAGS
                         and cannot see it down.
   --ntfy-url URL        the URL inline; prefer --ntfy-url-file or HZ_PROBE_NTFY_URL
   --ntfy-after N        consecutive failed reports before alerting (default 3)
+  --ntfy-token-file PATH  ntfy access token, sent as "Authorization: Bearer"
+                        (default /etc/hz-probe/ntfy-token; absent = no auth)
+  --ntfy-token TOK      the token inline; prefer --ntfy-token-file or
+                        HZ_PROBE_NTFY_TOKEN
 
 INSTALL FLAGS
   the serve flags, plus:
@@ -100,8 +104,12 @@ VANTAGE-SIDE ALERTING
   In push mode hz is the only notifier, so an outage that takes hz down
   tells nobody. With an ntfy topic URL (resolved like the token: file,
   HZ_PROBE_NTFY_URL, --ntfy-url) the agent posts once after --ntfy-after
-  failed reports, and once more when a report succeeds again. The URL is a
-  secret; install passes it as a systemd credential when the file exists.
+  failed reports, and once more when a report succeeds again. A report hz
+  answers with 401/403 is its own alert ("hz rejects this vantage": the token
+  was rotated or the vantage removed) and does not count as unreachable. An
+  ntfy access token (file, HZ_PROBE_NTFY_TOKEN, --ntfy-token) is optional.
+  The URL and token are secrets; install passes each as a systemd credential
+  when its file exists.
 
 SERVE TLS
   The token crosses the public internet on every poll. With a domain, use a

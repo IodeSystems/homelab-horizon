@@ -209,6 +209,7 @@ var settingsExcluded = map[string]bool{
 	"blessed_iptables_rules": true, // local admin state, own UI, not sync-published
 	"wg_peers":               true, // VPN peer state, own mutation flow
 	"vpn_mfa_secrets":        true, // secrets
+	"ntfy_token":             true, // secret, write-only across the API — the diff is served to the UI
 	"vpn_mfa_sessions":       true, // runtime session expiries
 	"ip_bans":                true, // ban state, mutated at runtime
 	"peer_id":                true, // fleet identity, local
