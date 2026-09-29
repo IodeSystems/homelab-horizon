@@ -1171,6 +1171,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/machines/add", s.handleAPIMachineAdd)
 	mux.HandleFunc("/api/v1/machines/set", s.handleAPIMachineSet)
 	mux.HandleFunc("/api/v1/machines/rm", s.handleAPIMachineRm)
+	// The hz instances: this one and its HA peers. Read-only; the project
+	// column is a join against the machines above.
+	mux.HandleFunc(apitypes.InstancesPath, s.handleAPIInstances)
 	// The segments: what a machine's segment NAME resolves to — a project, a
 	// range, an interface and the addressed members on it.
 	mux.HandleFunc("/api/v1/segments", s.handleAPISegments)

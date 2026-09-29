@@ -1,8 +1,12 @@
 /**
- * Assertions for the host screen's MARKUP — the whole screen, rendered offline.
+ * Assertions for the address audit's MARKUP — rendered offline.
+ *
+ * The audit was the `/hosts` screen; it is now a section of
+ * `/instances/$instance` for this instance (`HostsAudit.tsx`), and
+ * `instances.render.selftest.tsx` checks it is there through the real router.
  *
  * `hosts.selftest.ts` proves the decisions; this proves they reach the page,
- * and it renders the ROUTE COMPONENT rather than the pieces: the screen is
+ * and it renders the QUERY-DRIVEN COMPONENT rather than the pieces: it is
  * driven by a react-query read, and the failure this technique exists to catch
  * is a state that only exists between the component and the query — a pending
  * read rendered as an answered one. That bug was caught this way on the model
@@ -27,9 +31,15 @@ import type {
   HostView,
   HostsViewResp,
 } from "../../api/generated-types";
-import { HostsScreen, HostCard, MoveHostPanel } from "../../routes/hosts";
+import { HostsAudit, HostsTable, MoveHostPanel } from "./HostsAudit";
 import { RefusalNote } from "./HostBits";
 import { readRefusal } from "./hosts";
+
+/** One host, drawn exactly as the audit table draws it — the unit the checks
+ * below were written against when each host was a card. */
+function HostCard({ host, onMove }: { host: HostView; onMove: (h: HostView) => void }) {
+  return <HostsTable hosts={[host]} onMove={onMove} />;
+}
 
 let failures = 0;
 let checks = 0;
@@ -82,7 +92,7 @@ function render(node: React.ReactNode, qc: QueryClient): { html: string; text: s
 function screenWith(data: HostsViewResp) {
   const qc = client();
   qc.setQueryData(HOSTS_VIEW_KEY, data);
-  return render(<HostsScreen />, qc);
+  return render(<HostsAudit />, qc);
 }
 
 function ref(over: Partial<HostRefView>): HostRefView {
@@ -187,11 +197,11 @@ console.log("· @self is a first-class row, and it is not editable here");
 // ---------------------------------------------------------------------------
 {
   const { html, text } = screenWith(GATEWAY);
-  // Compared on the ROW CHIPS, not on the notation: the legend mentions both
-  // spellings above the list, so an index of "@self" would measure the legend.
+  // Compared on the ROW CHIPS, not on the notation: "@self" also appears in
+  // records' authored halves, so an index of it would measure those.
   check(text.includes("this instance"), "@self is labelled as what it is");
   check(
-    text.indexOf("this instance") < text.indexOf("A declared host. Write @nas"),
+    text.indexOf("this instance") >= 0 && text.indexOf("this instance") < text.indexOf("declared host"),
     "…and its row leads the declared ones",
   );
 
@@ -262,13 +272,13 @@ console.log("· not answered, failed, and answered-with-nothing are three pages"
 // ---------------------------------------------------------------------------
 {
   // Never answered: the cache is empty and nothing fetches under SSR.
-  const pending = render(<HostsScreen />, client()).text;
+  const pending = render(<HostsAudit />, client()).text;
 
   // Failed: the query is in the cache, in an error state.
   const qc = client();
   const q = qc.getQueryCache().build(qc, { queryKey: HOSTS_VIEW_KEY });
   q.setState({ status: "error", error: new Error("503 Service Unavailable"), fetchStatus: "idle" });
-  const failed = render(<HostsScreen />, qc).text;
+  const failed = render(<HostsAudit />, qc).text;
 
   // Answered, and the answer is "only @self".
   const empty = screenWith({
@@ -300,8 +310,8 @@ console.log("· not answered, failed, and answered-with-nothing are three pages"
     "an answered-and-empty config says so, as an empty list",
   );
   check(
-    /not a failed read/.test(empty),
-    "…and says out loud that it is not a failed read",
+    /@self/.test(empty) && /set on Settings/.test(empty),
+    "…while @self's own row is still drawn, table and all — empty is not blank",
   );
 
   check(
