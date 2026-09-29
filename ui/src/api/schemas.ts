@@ -351,6 +351,8 @@ export const RemoteProbeSchema = z.object({
   resolvers: z.array(z.string()).optional(),
   pinSha256: z.string().optional(),
   hasToken: z.boolean(),
+  hasNtfyUrl: z.boolean(),
+  hasNtfyToken: z.boolean(),
   reachable: z.boolean(),
   polled: z.boolean(),
   lastPoll: z.string(),
