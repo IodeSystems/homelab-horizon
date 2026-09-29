@@ -89,11 +89,12 @@ export function ReferenceRow({ record }: { record: HostRefView }) {
  */
 export function KindGroup({ group }: { group: RefGroup }) {
   return (
-    <Box sx={{ mb: 2 }}>
-      <Box sx={{ display: "flex", gap: 1, alignItems: "baseline", flexWrap: "wrap", mb: 0.25 }}>
+    <Box sx={{ mb: 1.5 }}>
+      <Box sx={{ display: "flex", gap: 1, alignItems: "baseline", flexWrap: "wrap", mb: 0.5 }}>
         <Typography
           variant="subtitle2"
           sx={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}
+          title={group.consequence}
         >
           {group.kind}
         </Typography>
@@ -101,9 +102,6 @@ export function KindGroup({ group }: { group: RefGroup }) {
           {group.refs.length} record{group.refs.length === 1 ? "" : "s"}
         </Typography>
       </Box>
-      <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 1 }}>
-        {group.consequence}
-      </Typography>
       {group.refs.map((r, i) => (
         <ReferenceRow key={`${r.field}-${r.owner}-${i}`} record={r} />
       ))}
@@ -191,6 +189,11 @@ export function OccurrenceRow({ record }: { record: HostOccurrenceResp }) {
   return (
     <Paper
       variant="outlined"
+      title={
+        reading.state === "adoptable"
+          ? `Written as a plain address, so it does NOT follow this host — moving the box breaks it. Adoption would write ${reading.after} here, which renders exactly the same bytes.`
+          : reading.why
+      }
       sx={{
         p: 1.25,
         mb: 0.75,
@@ -227,11 +230,6 @@ export function OccurrenceRow({ record }: { record: HostOccurrenceResp }) {
           </Typography>
         )}
       </Box>
-      <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mt: 0.25 }}>
-        {reading.state === "adoptable"
-          ? `Written as a plain address, so it does NOT follow this host — moving the box breaks it. Adoption would write ${reading.after} here, which renders exactly the same bytes.`
-          : reading.why}
-      </Typography>
     </Paper>
   );
 }
@@ -255,7 +253,7 @@ export function OccurrenceSection({
   return (
     <Box sx={{ mt: 2 }}>
       <Box sx={{ display: "flex", gap: 1.5, alignItems: "center", flexWrap: "wrap", mb: 0.25 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 700 }} title={reading.meaning}>
           What carries its address
         </Typography>
         <ToneChip
@@ -265,28 +263,18 @@ export function OccurrenceSection({
           dashed={reading.knowledge === "unscanned"}
         />
       </Box>
-      <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 1 }}>
-        {reading.meaning}
-      </Typography>
-
       {reading.knowledge === "unscanned" ? <Note title="why hz could not look">{reading.why}</Note> : null}
 
       {reading.command ? (
-        <Paper variant="outlined" sx={{ p: 1.5, mb: 1.5, bgcolor: "transparent", borderStyle: "dashed" }}>
-          <Typography
-            variant="caption"
-            sx={{ color: "text.secondary", textTransform: "uppercase", letterSpacing: 0.5, display: "block" }}
-          >
-            turn these into references
-          </Typography>
-          <Typography sx={{ fontFamily: "monospace", fontWeight: 700 }}>{reading.command}</Typography>
-          <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
-            It prints what it would change and writes nothing until you add
-            --confirm. Adoption changes how the config is written, never what it
-            renders, so the proxy, DNS, firewall and scrape output come out byte
-            for byte the same.
-          </Typography>
-        </Paper>
+        <Typography
+          variant="body2"
+          sx={{ mb: 1 }}
+          title="Adoption changes how the config is written, never what it renders: the proxy, DNS, firewall and scrape output come out byte for byte the same."
+        >
+          Turn these into references:{" "}
+          <Box component="code" sx={{ fontWeight: 700 }}>{reading.command}</Box> — prints the change,
+          writes nothing until <code>--confirm</code>.
+        </Typography>
       ) : null}
 
       {records.map((r, i) => (
