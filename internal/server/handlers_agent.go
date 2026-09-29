@@ -246,6 +246,16 @@ func (s *Server) desiredFor(machine string) *agent.Desired {
 
 	d := &agent.Desired{Machine: machine, Model: &mc}
 
+	// The segment tunnels come from records alone, so every machine gets
+	// them — built before the local/remote split, like the projection. On
+	// the box hz runs on, hz's own VPN interface is excluded (see
+	// segmentTunnels).
+	localWG := ""
+	if machine == LocalMachineName() {
+		localWG = cfg.WGInterface
+	}
+	d.Segments = segmentTunnels(&mc, cfg, localWG)
+
 	if machine != LocalMachineName() {
 		// Every section below this point comes off the local filesystem. Say
 		// so, once per section, rather than letting five nils speak for hz.
@@ -740,7 +750,7 @@ func (s *Server) sealedConfigsForProjection(cfg *config.Config, instances []proj
 // Deliberately NOT gapped: Forwards, which is empty because the rule's default
 // is deny (projection.MachineConfig.Forwards).
 func noteRemoteGaps(mc *projection.MachineConfig, cfg *config.Config) {
-	const item15 = " Rendering one instead needs a Segment record — a segment's CIDR, its interface, and this machine's address, key and peers on it — which is phase 4 item 15."
+	const item15 = " This machine's SEGMENT interfaces are a different section (`segments`), rendered from the Segment records for any machine hz declares."
 
 	mc.AddGap(agentSectionWireGuard, "hz's WireGuard section is the wg0.conf on hz's own disk, read back:"+
 		" hz mutates that file in place and has no whole-file renderer for it, so there is nothing to render for another machine and nothing to read."+

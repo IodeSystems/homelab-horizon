@@ -167,7 +167,13 @@ console.log("· an unresolved segment is unknown, not empty");
     resolved: true,
     interface: "wg0",
     address: "10.0.0.2/24",
-    peers: ["gw-1"],
+    peers: [
+      {
+        name: "gw-1",
+        public_key: "8AQZQtkyrdjWkUHvaVMTAFDOP/o3gDfiIECAkq2bdU0=",
+        allowed_ips: ["10.0.0.0/24"],
+      },
+    ],
   });
   distinct([unresolved.label, resolved.label], "resolved and name-only are two labels");
   distinct([unresolved.meaning, resolved.meaning], "and two explanations");

@@ -129,12 +129,17 @@ func (s *Server) handleAPIMachineAdd(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, s.machineResp(m))
 }
 
-// handleAPIMachineSet edits a declared machine's owner and note in place.
+// handleAPIMachineSet edits a declared machine's owner, note and segment
+// membership in place.
 //
-// It exists so the owner can change without remove and re-add: removing an
-// enrolled machine revokes its agent credential, and re-attributing a box is
-// not a reason to make it re-enrol. Attribution renders nothing, so this
-// writes immediately like machines/add.
+// It exists so none of those costs remove and re-add: removing an enrolled
+// machine revokes its agent credential, and re-attributing a box or moving it
+// between segments is not a reason to make it re-enrol. It writes immediately
+// like machines/add. Attribution renders nothing; a membership change moves
+// the machine's projection (and so its agent payload), which nothing applies
+// until that box's agent is armed — and a newly joined segment carries no key
+// for this box until it re-enrols (`hz-agent enroll`), which the projection
+// says as a gap.
 // POST /api/v1/machines/set
 func (s *Server) handleAPIMachineSet(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {
@@ -152,7 +157,7 @@ func (s *Server) handleAPIMachineSet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	next := *s.cfg()
-	m, err := next.SetMachine(req.Name, config.MachinePatch{Project: req.Project, Note: req.Note})
+	m, err := next.SetMachine(req.Name, config.MachinePatch{Project: req.Project, Note: req.Note, Segments: req.Segments})
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return

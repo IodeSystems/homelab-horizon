@@ -37,6 +37,7 @@ func TestTheProjectionWireMirrorCarriesEveryFieldOfTheProjection(t *testing.T) {
 	}{
 		{"MachineConfig", projection.MachineConfig{}, apitypes.MachineProjectionResp{}},
 		{"Segment", projection.Segment{}, apitypes.ProjectionSegment{}},
+		{"Peer", projection.Peer{}, apitypes.ProjectionPeer{}},
 		{"Forward", projection.Forward{}, apitypes.ProjectionForward{}},
 		{"HostEntry", projection.HostEntry{}, apitypes.ProjectionHostEntry{}},
 		{"Package", projection.Package{}, apitypes.ProjectionPackage{}},

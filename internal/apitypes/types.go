@@ -352,12 +352,18 @@ type MachineAddReq struct {
 // without remove and re-add (which would cost the box its agent credential).
 // Pointer fields, as on EnvironmentSetReq: nil leaves the field alone, a
 // non-nil "" clears it — for Project, that makes the machine global. Clearing
-// the note of a multi-homed machine is refused. Segments are not here:
-// membership is edited through the segment endpoints.
+// the note of a multi-homed machine is refused.
+//
+// Segments, when present, is the WHOLE new membership list (nil = unchanged,
+// [] = in no segment). More than one segment needs a note, given here or
+// already on the machine. Leaving a segment the machine is ADDRESSED on is
+// refused — unaddress it with segments/set first — because a member entry must
+// be claimed by its machine.
 type MachineSetReq struct {
-	Name    string  `json:"name"`
-	Project *string `json:"project,omitempty"`
-	Note    *string `json:"note,omitempty"`
+	Name     string    `json:"name"`
+	Project  *string   `json:"project,omitempty"`
+	Note     *string   `json:"note,omitempty"`
+	Segments *[]string `json:"segments,omitempty"`
 }
 
 // MachineRmReq removes a machine. Confirm and Cascade mean what they mean on

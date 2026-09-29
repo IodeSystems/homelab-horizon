@@ -68,7 +68,25 @@ const (
 	// say why a unit was restarted would be a report an operator cannot act
 	// on.
 	SubsystemConfig Subsystem = "config"
+
+	// SubsystemSegments is the per-segment WireGuard interfaces
+	// (Desired.Segments): one config file and one live interface per segment
+	// this machine is addressed on. Separate from SubsystemWireGuard, which is
+	// the gateway's own wg0.conf read back — a different producer, a different
+	// file and a different apply half.
+	SubsystemSegments Subsystem = "segments"
 )
+
+// SegmentConfigDir is where the agent keeps one wg(8) config per segment
+// interface. hz names paths inside it (SegmentConfigPath); the agent writes
+// them. Beside the agent credential's directory, not under /etc/wireguard,
+// so that nothing here is a wg-quick file a `wg-quick up` could pick up.
+const SegmentConfigDir = "/etc/hz-agent/segments"
+
+// SegmentConfigPath is the config file for one segment interface.
+func SegmentConfigPath(iface string) string {
+	return SegmentConfigDir + "/" + iface + ".conf"
+}
 
 // Desired is the whole of what hz says this machine should look like.
 //
@@ -127,6 +145,49 @@ type Desired struct {
 	// nil means unmanaged, exactly as for the named sections: hz did not
 	// project for this machine at all.
 	Model *projection.MachineConfig `json:"model,omitempty"`
+
+	// Segments is the machine's segment tunnels: one WireGuard interface per
+	// segment it is addressed on, built from Model's segments.
+	//
+	// THE ONE RENDERED SECTION hz CAN BUILD FOR A MACHINE IT CANNOT TOUCH,
+	// because every input is a record — the interface is the segment's, the
+	// address is the member entry's, and the peers (keys and derived
+	// AllowedIPs) are the projection's. It carries PUBLIC keys and addresses
+	// only. The machine's own private key for each segment was minted on the
+	// box and is loaded there by the agent (apply.go); no field here can hold
+	// it (CLAUDE.md invariant 3).
+	//
+	// nil means hz renders no tunnel for this machine. It does NOT mean "tear
+	// the tunnels down": the agent removes nothing on this section (a segment
+	// dropped from a machine leaves its interface as it was).
+	Segments *SegmentsSection `json:"segments,omitempty"`
+}
+
+// SegmentsSection is every segment tunnel hz renders for one machine.
+type SegmentsSection struct {
+	Tunnels []SegmentTunnel `json:"tunnels"`
+}
+
+// SegmentTunnel is one segment interface on one machine.
+type SegmentTunnel struct {
+	// Segment is the segment's name — also the name the agent's key store
+	// files this machine's private key under (segmentkey.go).
+	Segment string `json:"segment"`
+
+	// Interface is the segment's interface name (config.Segment.Interface).
+	Interface string `json:"interface"`
+
+	// Address is this machine's address on the segment WITH the segment's
+	// prefix length (10.42.0.2/24), which is what `ip address` takes and what
+	// gives the box its route to the rest of the segment.
+	Address string `json:"address"`
+
+	// File is the wg(8) config (internal/wireguard RenderSegmentConfig),
+	// written at SegmentConfigPath(Interface) and loaded with `wg syncconf`.
+	// It holds no private key; Secret is forced anyway by allFiles, for the
+	// reason every WireGuard file's is — the producer's flag is a promise and
+	// the forcing is the property.
+	File File `json:"file"`
 }
 
 // File is one file the agent owns: where it goes, what should be in it, and
@@ -381,6 +442,13 @@ func (d *Desired) allFiles() []ownedFile {
 	if d.Files != nil {
 		for _, f := range d.Files.Files {
 			out = append(out, ownedFile{SubsystemFiles, f})
+		}
+	}
+	if d.Segments != nil {
+		for _, t := range d.Segments.Tunnels {
+			f := t.File
+			f.Secret = true
+			out = append(out, ownedFile{SubsystemSegments, f})
 		}
 	}
 	return out

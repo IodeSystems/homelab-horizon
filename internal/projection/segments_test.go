@@ -129,7 +129,7 @@ func gapMentioning(mc MachineConfig, section, substr string) string {
 // the SEGMENT's, the address is the member entry's, and the peer set is the
 // hub because hub and spoke says so.
 func TestAnAddressedMembershipResolvesToAnInterfaceAnAddressAndPeers(t *testing.T) {
-	g := Global{Config: segmentedEstate(), Instances: exampleInstances()}
+	g := Global{Config: keyedEstate(t), Instances: exampleInstances()}
 	mc := mustProject(t, g, "app-1")
 
 	seg, ok := segmentNamed(mc, "seg:storefront")
@@ -145,9 +145,44 @@ func TestAnAddressedMembershipResolvesToAnInterfaceAnAddressAndPeers(t *testing.
 	if seg.Address != "10.10.2.11" {
 		t.Errorf("address = %q, want app-1's member address", seg.Address)
 	}
-	if strings.Join(seg.Peers, ",") != "gw-1" {
+	if strings.Join(peerNamesOf(seg), ",") != "gw-1" {
 		t.Errorf("peers = %v, want the hub alone — a spoke peers with the hub and not with the other spokes", seg.Peers)
 	}
+}
+
+// keyedEstate is segmentedEstate with every member keyed — the estate after
+// every box has enrolled. Checked against the validator, for the reason
+// TestTheKeylessGapClearsWhenEveryPeerHasAKey gives. Keys repeat ACROSS
+// segments (the fixture has four) and never within one, which is the rule.
+func keyedEstate(t *testing.T) *config.Config {
+	t.Helper()
+	cfg := segmentedEstate()
+	for i := range cfg.Segments {
+		for j := range cfg.Segments[i].Members {
+			cfg.Segments[i].Members[j].PublicKey = testWGKeys[j%len(testWGKeys)]
+		}
+	}
+	if err := cfg.ValidateSegments(); err != nil {
+		t.Fatalf("keyed fixture: %v", err)
+	}
+	return cfg
+}
+
+func peerNamesOf(seg Segment) []string {
+	out := make([]string, 0, len(seg.Peers))
+	for _, p := range seg.Peers {
+		out = append(out, p.Name)
+	}
+	return out
+}
+
+func peerNamed(seg Segment, name string) (Peer, bool) {
+	for _, p := range seg.Peers {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return Peer{}, false
 }
 
 // PEERS ARE DERIVED AND THE DERIVATION IS config.PeersOf. The hub peers with
@@ -155,25 +190,25 @@ func TestAnAddressedMembershipResolvesToAnInterfaceAnAddressAndPeers(t *testing.
 // stored peer list would let this disagree with the membership it is a view of,
 // which is why there is not one.
 func TestPeersAreHubAndSpokeDerivedFromTheMembership(t *testing.T) {
-	g := Global{Config: segmentedEstate(), Instances: exampleInstances()}
+	g := Global{Config: keyedEstate(t), Instances: exampleInstances()}
 
 	hub := mustProject(t, g, "gw-1")
 	seg, ok := segmentNamed(hub, "seg:storefront")
 	if !ok || !seg.Resolved {
 		t.Fatalf("the hub's seg:storefront did not resolve: %+v", seg)
 	}
-	if strings.Join(seg.Peers, ",") != "app-1,app-2" {
+	if strings.Join(peerNamesOf(seg), ",") != "app-1,app-2" {
 		t.Errorf("the hub peers with %v, want both spokes, sorted, and not itself", seg.Peers)
 	}
 
 	spoke := mustProject(t, g, "app-2")
 	seg, _ = segmentNamed(spoke, "seg:storefront")
-	if strings.Join(seg.Peers, ",") != "gw-1" {
+	if strings.Join(peerNamesOf(seg), ",") != "gw-1" {
 		t.Errorf("app-2 peers with %v, want the hub alone — app-1 is a fellow spoke, not a peer", seg.Peers)
 	}
 
 	// The agreement between the two is the property a stored list would break.
-	if !contains(seg.Peers, "gw-1") {
+	if !contains(peerNamesOf(seg), "gw-1") {
 		t.Fatal("a spoke that does not peer with its hub is a spoke with no tunnel")
 	}
 }
@@ -553,7 +588,7 @@ func TestAPeerReachableAtTwoAddressesIsReportedRatherThanPicked(t *testing.T) {
 // membership carries its three fields, `resolved` is present and true, and no
 // section arrives as null.
 func TestAResolvedSegmentCrossesTheWireWhole(t *testing.T) {
-	g := Global{Config: segmentedEstate(), Instances: exampleInstances()}
+	g := Global{Config: keyedEstate(t), Instances: exampleInstances()}
 	b, err := json.Marshal(mustProject(t, g, "app-1"))
 	if err != nil {
 		t.Fatal(err)
@@ -563,7 +598,7 @@ func TestAResolvedSegmentCrossesTheWireWhole(t *testing.T) {
 		`"resolved":true`,
 		`"interface":"wg-storefront"`,
 		`"address":"10.10.2.11"`,
-		`"peers":["gw-1"]`,
+		`"peers":[{"name":"gw-1","public_key":"` + testWGKeys[0] + `","allowed_ips":["10.10.2.0/24"],"endpoint":"gw.example.invalid:51821"}]`,
 		`{"name":"gw-1","address":"10.10.2.1"}`,
 		`"unresolved":[`,
 	} {
