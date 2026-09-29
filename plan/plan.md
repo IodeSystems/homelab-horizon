@@ -433,6 +433,16 @@ NOT checked.
 **next:** pick the ntfy topic, write `/etc/hz-probe/ntfy-url` on `hz-vantage`,
 re-run install; confirm the vantages run `0fbda23` or later.
 
+**ntfy token + "hz rejects this vantage"** (merged 2026-09-29, `6b736ba`): an
+optional ntfy access token (`Authorization: Bearer`) on hz (`ntfy_token`,
+write-only in `GET/PUT /api/v1/settings/ntfy`, Settings → System →
+Notifications, excluded from the pending diff, replicated to peers with the
+config — set it on the primary) and on the vantage (`/etc/hz-probe/ntfy-token`
+→ `LoadCredential`, default-path-never-fatal). A 401/403 from hz is its own
+alert class with its own recovery, no longer "hz unreachable".
+**Open (operator):** hz still returns and diffs the ntfy URL (the topic is the
+secret on a public server); hide it too?
+
 Two decisions worth keeping:
 
 - **The vantage token is write-only across the API.** `hasToken` says one is
