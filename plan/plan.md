@@ -130,6 +130,19 @@ machine-to-machine segments; the crossing does not depend on it.
   (profile `upstream`, attributed to the child's project), records it on
   `Machine.HZ`, and shows the wg config / QR to install on the child.
 
+**N1b built 2026-09-29** (merged): profile `upstream` emits, for client C and
+gateway G, `WG-INPUT -s C -d G -p tcp --dport <hz listen port> ACCEPT`, then
+`WG-INPUT -s C DROP`, `WG-FORWARD -s C DROP`; client `AllowedIPs = G/32`, no
+DNS; never MFA-jailed (`IsPeerMFAJailed`); never a VPN admin; no extra IPs.
+Parent URL is `http://G:<port>` (hz's own listener — HAProxy 80/443 is NOT
+admitted because it fronts LAN backends; WireGuard encrypts the link).
+"Declare a nested instance" creates the client, then the machine, rolling the
+client back if the machine is refused. Add/edit now refuse an unknown profile
+(behaviour change). ❗ **Blocks on the live gateway:** hz there binds
+`127.0.0.1:8080` (systemd drop-in override), so creating an upstream client is
+refused — the rule would admit a port nothing answers on the WG address.
+**Operator's call:** how the child reaches hz's API on the gateway (below).
+
 **Still the operator's, before N4 is designed:**
 - **PCI evidence** (estate.md §6): the VPN reduces exposure, not scope — the
   promotion record ("who promoted what, when") and de-rooting hz are still owed

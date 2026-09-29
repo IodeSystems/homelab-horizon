@@ -57,7 +57,7 @@ import { AddMachineDialog } from "../components/model/MachineDialogs";
  * stays. Kept beside the option it qualifies so the two cannot drift apart
  * unnoticed. */
 export const NESTED_WAITS_ON = [
-  "a segment tunnel proven on a real box (the code and its reboot path landed; neither has run on hardware)",
+  "a credential the child presents to the parent (enrolment)",
   "an armed agent",
   "the registry crossing (packages mirrored, config proxied)",
 ];
