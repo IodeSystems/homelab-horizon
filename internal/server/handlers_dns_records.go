@@ -339,6 +339,7 @@ func (s *Server) applyRecordMutation(w http.ResponseWriter, r *http.Request, op 
 	// by a re-declare read as live {} != last-published {old} and halted all
 	// DNS as drift.
 	s.setLastPublished(driftKey(zone.Name, name, recType), desiredValues)
+	s.markSetSynced(zone.Name, name, recType)
 	writeJSON(w, map[string]any{"ok": true, "values": desiredValues})
 }
 

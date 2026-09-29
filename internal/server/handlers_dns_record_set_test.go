@@ -396,3 +396,73 @@ func TestRecordSetSESBesideForeignRecords(t *testing.T) {
 		t.Fatalf("sync rewrote %d set(s) it had just published", fp.writes-before)
 	}
 }
+
+// syncedRecordServer is recordServer with a synced baseline taken the way a
+// real sync leaves it: Zone.GetDNSProvider fills dns_provider.zone_name on
+// first use (a read that writes), and a real sync calls it before markSynced.
+func syncedRecordServer(t *testing.T) *Server {
+	t.Helper()
+	s, _ := recordServer(t)
+	_ = s.updateConfig(func(c *config.Config) { c.Zones[0].GetDNSProvider() })
+	s.markSynced()
+	return s
+}
+
+func zonePending(s *Server) []apitypes.PendingItem {
+	var out []apitypes.PendingItem
+	for _, it := range s.computePending().Items {
+		if it.Kind == "zone" {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// The 2026-09-28 report: five `hz dns record add` printed "(published)" and
+// `hz pending` still listed the zone's records as not synced. A set published
+// straight to the provider is synced; the zone must not read as pending for it.
+func TestRecordSetPublishedIsNotPending(t *testing.T) {
+	s := syncedRecordServer(t)
+	name := "abc._domainkey.iodesystems.com"
+	if w := setRecords(t, s, apitypes.DNSRecordSetRequest{Name: name, Type: "CNAME", Values: []string{"abc.dkim.amazonses.com"}}); w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	if w := setRecords(t, s, apitypes.DNSRecordSetRequest{Name: "iodesystems.com", Type: "TXT", Values: []string{"v=spf1 include:amazonses.com ~all"}}); w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	if items := zonePending(s); len(items) != 0 {
+		t.Fatalf("published sets read as pending: %+v", items)
+	}
+
+	// Per-value delete publishes too: removing one is synced as well.
+	if w := deleteRecord(t, s, name, "CNAME", "abc.dkim.amazonses.com", []string{"abc.dkim.amazonses.com"}); w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	if items := zonePending(s); len(items) != 0 {
+		t.Fatalf("published delete reads as pending: %+v", items)
+	}
+}
+
+// Only the published set is folded into the baseline. An edit in the same zone
+// that nothing published stays pending, before and after the publish.
+func TestRecordSetPublishLeavesOtherZoneEditsPending(t *testing.T) {
+	s := syncedRecordServer(t)
+	unsynced := config.DNSRecord{Name: "verify.iodesystems.com", Type: "TXT", Value: "not-yet-published"}
+	_ = s.updateConfig(func(c *config.Config) { c.Zones[0].Records = append(c.Zones[0].Records, unsynced) })
+	if items := zonePending(s); len(items) != 1 {
+		t.Fatalf("precondition: the unsynced edit is not pending: %+v", items)
+	}
+
+	if w := setRecords(t, s, apitypes.DNSRecordSetRequest{Name: "mail.iodesystems.com", Type: "MX", Values: []string{"10 feedback-smtp.us-west-2.amazonses.com"}}); w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	items := zonePending(s)
+	if len(items) != 1 {
+		t.Fatalf("the unsynced edit is no longer pending: %+v", items)
+	}
+	f := items[0].Fields
+	if len(f) != 1 || f[0].Path != "records" || strings.Contains(f[0].Before, "not-yet-published") ||
+		!strings.Contains(f[0].After, "not-yet-published") || !strings.Contains(f[0].Before, "feedback-smtp") {
+		t.Fatalf("want the baseline to hold the published MX and not the unsynced TXT: %+v", f)
+	}
+}
