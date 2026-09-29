@@ -2351,6 +2351,19 @@ constancy is the point of the design.
   Decision K's "explain once on the Overview" is reversed because there is
   nothing left to explain.
 
+#### Overview follow-ups (2026-09-29, operator)
+
+- **Empty tiers do not render.** Reverses the rule that every tier renders at
+  zero "so the absence reads as information" — the operator: *"These nothings
+  are annoying."* The headline sentence still says whether anything is waiting,
+  and still refuses to say "nothing" while a source is unanswered, so
+  unknown-vs-empty survives without six empty headings.
+- **Checks are grouped by the service they watch.** `svc:<name>` and
+  `ext:<vantage>:<kind>:<domain>` (mapped through the service's domains) for
+  one service are one row with a line per viewpoint — the operator's report
+  was `svc:sprink` and `ext:gcp-usw1:https:sprink.iodesystems.com` as two rows
+  for one outage.
+
 ### Decision 2 — machines and instances are one surface, two lenses
 
 Not two top-level surfaces, and not one merged table.

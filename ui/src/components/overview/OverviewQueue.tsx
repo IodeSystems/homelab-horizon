@@ -62,6 +62,15 @@ function QueueRow({ item }: { item: QueueItem }) {
           item.ageSeconds !== undefined && <PlainAge ageSeconds={item.ageSeconds} />
         )}
       </Box>
+      {item.details && item.details.length > 0 ? (
+        <Box component="ul" data-group-details sx={{ m: 0, pl: 2.5 }}>
+          {item.details.map((d) => (
+            <Typography key={d} component="li" variant="body2" sx={{ overflowWrap: "anywhere" }}>
+              {d}
+            </Typography>
+          ))}
+        </Box>
+      ) : null}
       {item.changes && item.changes.length > 0 ? (
         <Box component="ul" data-pending-fields sx={{ m: 0, pl: 2.5 }}>
           {item.changes.map((c) => (
@@ -97,30 +106,21 @@ function short(v: string): string {
 function TierSection({ tier }: { tier: OverviewResult["tiers"][number] }) {
   return (
     <Box sx={{ mb: 3 }}>
-      <Box sx={{ display: "flex", alignItems: "baseline", gap: 1.5, flexWrap: "wrap" }}>
-        <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
-          {tier.def.rank}. {tier.def.title}
+      <Box sx={{ display: "flex", alignItems: "baseline", gap: 1.5, flexWrap: "wrap", mb: 1 }}>
+        <Typography variant="subtitle1" sx={{ fontWeight: 700 }} title={tier.def.blurb}>
+          {tier.def.title}
         </Typography>
         <Chip size="small" variant="outlined" label={`${tier.items.length}`} />
       </Box>
-      <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-        {tier.def.blurb}
-      </Typography>
-      {tier.items.length === 0 ? (
-        <Paper variant="outlined" sx={{ p: 1.5, bgcolor: "transparent" }}>
-          <Typography variant="body2" sx={{ color: "text.secondary" }}>
-            {tier.def.emptyNote}
-          </Typography>
-        </Paper>
-      ) : (
-        tier.items.map((item) => <QueueRow key={item.id} item={item} />)
-      )}
+      {tier.items.map((item) => (
+        <QueueRow key={item.id} item={item} />
+      ))}
     </Box>
   );
 }
 
 /**
- * The whole queue: the confidence headline, then every tier in rank order.
+ * The whole queue: the confidence headline, then every NON-EMPTY tier in rank order.
  *
  * `result.unknown` drives an Alert of its own, ABOVE the headline, because a
  * source hz could not ask is itself news, not a footnote under a summary that
@@ -135,10 +135,8 @@ export function OverviewQueue({ result }: { result: OverviewResult }) {
       {!nothingUnknown && (
         <Alert severity="warning" sx={{ mb: 2 }}>
           hz could not be asked about{" "}
-          {result.unknown.map((u) => sourceLabel(u.source)).join(", ")}. Every
-          answered source below is still shown, but this is not the whole
-          picture — treat a quiet screen right now as "not yet checked", not
-          as "checked and clear".
+          {result.unknown.map((u) => sourceLabel(u.source)).join(", ")} — this is not the whole
+          picture yet.
         </Alert>
       )}
 
@@ -146,13 +144,18 @@ export function OverviewQueue({ result }: { result: OverviewResult }) {
         <Typography sx={{ fontWeight: 700 }}>{headline}</Typography>
       </Paper>
 
-      {/* Every tier renders, even at zero — plan/design/ui.md: "The Overview
-          says so rather than silently omitting the tier, so the absence
-          reads as information." A quiet fleet is still six named absences,
-          not a page that stopped showing its work. */}
-      {result.tiers.map((tier) => (
-        <TierSection key={tier.def.key} tier={tier} />
-      ))}
+      {/* ONLY TIERS WITH SOMETHING IN THEM. The design doc had every tier
+          render at zero ("absence reads as information"); the operator read
+          six empty headings as noise — "These nothings are annoying"
+          (2026-09-29). The headline above already says, in one sentence,
+          whether anything is waiting, and says it is NOT the whole picture
+          when a source is unanswered — so an empty tier adds nothing that
+          sentence does not, and the unknown-vs-empty distinction survives. */}
+      {result.tiers
+        .filter((tier) => tier.items.length > 0)
+        .map((tier) => (
+          <TierSection key={tier.def.key} tier={tier} />
+        ))}
     </Box>
   );
 }
