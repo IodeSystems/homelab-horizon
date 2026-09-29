@@ -184,6 +184,14 @@ warning onto the peer-config download path.
 
 # Active work
 
+✅ **Instances replaces Hosts** (2026-09-29, operator: *"these are Homelab
+Horizon Instances — they can be in a project, or a part of a cluster"*). One row
+per hz instance (this gateway + HA peers, `GET /api/v1/instances`), project from
+the machine owner, cluster = the HA peer fleet; the address audit is the detail
+view of this instance, trimmed to rows and hover text. `/hosts` redirects.
+Merged to `dev`, **not deployed**. Open: a peer's project is read-only (peer ID
+may not be its hostname); "instance" also means an app instance on Drift.
+
 ✅ **Attribution — every section belongs to a project or is global** (amendment 6)
 — built and merged to `dev` 2026-09-26, **deployed 2026-09-27** (`2075979`) →
 [done.md](done.md#attribution--amendment-6-2026-09-26).
