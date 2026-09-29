@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -781,6 +782,7 @@ func runSync(c *client, args []string) error {
 		fmt.Println("Sync started.")
 	}
 	if !*wait {
+		c.syncRunning = true
 		return nil
 	}
 	return waitForSync(c)
@@ -807,6 +809,50 @@ func waitForSync(c *client) error {
 	return fmt.Errorf("sync still running after 120s")
 }
 
+// reportPending ends a command that changed something by saying what is still
+// unpublished. Commands used to print "published" or "Service created." and
+// stop, and the operator learned from the UI that a sync was due — or that a
+// change they had just watched go live still read as pending there.
+//
+// Written to w (stderr from main) so stdout stays what the command printed.
+// A failure to read the list is reported, not fatal: the mutation happened.
+func reportPending(c *client, cmd string, w io.Writer) {
+	if !c.mutated || c.syncRunning || cmd == "pending" {
+		return
+	}
+	var pc apitypes.PendingChanges
+	if err := c.do("GET", "/api/v1/sync/pending", nil, &pc); err != nil {
+		_, _ = fmt.Fprintf(w, "Could not read pending changes: %v\n", err)
+		return
+	}
+	if !pc.HasPending {
+		_, _ = fmt.Fprintln(w, "Nothing pending.")
+		return
+	}
+	_, _ = fmt.Fprintf(w, "%d pending change(s) — run 'hz sync' to publish ('hz pending' for detail):\n", pc.Count)
+	sortPending(pc.Items)
+	for _, it := range pc.Items {
+		fields := make([]string, 0, len(it.Fields))
+		for _, f := range it.Fields {
+			fields = append(fields, f.Path)
+		}
+		line := fmt.Sprintf("  %-8s %-8s %s", it.Change, it.Kind, it.Name)
+		if len(fields) > 0 {
+			line += " (" + strings.Join(fields, ", ") + ")"
+		}
+		_, _ = fmt.Fprintln(w, line)
+	}
+}
+
+func sortPending(items []apitypes.PendingItem) {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Kind != items[j].Kind {
+			return items[i].Kind < items[j].Kind
+		}
+		return items[i].Name < items[j].Name
+	})
+}
+
 func runPending(c *client, _ []string) error {
 	var pc apitypes.PendingChanges
 	if err := c.do("GET", "/api/v1/sync/pending", nil, &pc); err != nil {
@@ -817,12 +863,7 @@ func runPending(c *client, _ []string) error {
 		return nil
 	}
 	fmt.Printf("%d pending change(s):\n", pc.Count)
-	sort.Slice(pc.Items, func(i, j int) bool {
-		if pc.Items[i].Kind != pc.Items[j].Kind {
-			return pc.Items[i].Kind < pc.Items[j].Kind
-		}
-		return pc.Items[i].Name < pc.Items[j].Name
-	})
+	sortPending(pc.Items)
 	for _, it := range pc.Items {
 		fmt.Printf("  %-8s %-8s %s\n", it.Change, it.Kind, it.Name)
 		for _, f := range it.Fields {
