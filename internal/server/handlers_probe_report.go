@@ -105,9 +105,26 @@ func (s *Server) handleProbeReport(w http.ResponseWriter, r *http.Request) {
 		set := want
 		resp.Targets = &set
 	}
+	resp.Alert = alertChannelOf(rp)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// alertChannelOf is the ntfy channel for rp — the vantage whose token
+// authenticated this report, which is the ONLY vantage it may go to: the
+// channel is a secret, and another vantage holding it could post to (and
+// read) this one's topic. nil when no topic is set, which tells the vantage
+// to clear its cached copy.
+//
+// Push only, by construction: this runs in the push handler, after the pull
+// refusal. A pulled agent never dials hz, so it has no use for an alert about
+// hz being unreachable, and the poll exchange does not carry one.
+func alertChannelOf(rp config.RemoteProbe) *probe.AlertChannel {
+	if rp.NtfyURL == "" {
+		return nil
+	}
+	return &probe.AlertChannel{URL: rp.NtfyURL, Token: rp.NtfyToken}
 }
 
 // probeByToken finds the configured vantage a token belongs to, comparing in

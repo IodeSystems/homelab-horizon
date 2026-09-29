@@ -1256,6 +1256,11 @@ type RemoteProbeResp struct {
 	PinSHA256 string   `json:"pinSha256,omitempty"`
 	HasToken  bool     `json:"hasToken"`
 
+	// The vantage's ntfy alert channel, write-only like the token: whether
+	// each part is set, never what it is.
+	HasNtfyURL   bool `json:"hasNtfyUrl"`
+	HasNtfyToken bool `json:"hasNtfyToken"`
+
 	// Live state from the poll loop.
 	Reachable    bool      `json:"reachable"`
 	Polled       bool      `json:"polled"` // false = configured but never polled yet
@@ -1290,6 +1295,14 @@ type RemoteProbeRequest struct {
 	Timeout   int      `json:"timeout,omitempty"`
 	Resolvers []string `json:"resolvers,omitempty"`
 	PinSHA256 string   `json:"pinSha256,omitempty"`
+
+	// NtfyURL and NtfyToken are the vantage's alert channel, handed to it in
+	// its push reply. Write-only like Token: empty on edit keeps the stored
+	// value, and only ClearNtfyURL / ClearNtfyToken remove one.
+	NtfyURL        string `json:"ntfyUrl,omitempty"`
+	NtfyToken      string `json:"ntfyToken,omitempty"`
+	ClearNtfyURL   bool   `json:"clearNtfyUrl,omitempty"`
+	ClearNtfyToken bool   `json:"clearNtfyToken,omitempty"`
 
 	// Rename targets an existing entry by its old name, so editing the name
 	// is an edit rather than a delete plus an add.
