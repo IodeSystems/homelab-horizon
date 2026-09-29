@@ -89,7 +89,7 @@ func TestResolveNtfyURL(t *testing.T) {
 	t.Setenv("HZ_PROBE_NTFY_URL", "")
 
 	// Unset everywhere: off, not an error.
-	if got, err := resolveNtfyURL("", filepath.Join(dir, "absent")); err != nil || got != "" {
+	if got, err := resolveNtfyURL("", filepath.Join(dir, "absent"), true); err != nil || got != "" {
 		t.Fatalf("unset should be off: %q, %v", got, err)
 	}
 
@@ -97,7 +97,7 @@ func TestResolveNtfyURL(t *testing.T) {
 	if err := os.WriteFile(empty, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := resolveNtfyURL("", empty); err == nil {
+	if _, err := resolveNtfyURL("", empty, true); err == nil {
 		t.Fatal("an empty file is intent gone wrong, not off")
 	}
 
@@ -105,20 +105,20 @@ func TestResolveNtfyURL(t *testing.T) {
 	if err := os.WriteFile(good, []byte(" https://ntfy.sh/topic \n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := resolveNtfyURL("https://flag.example/x", good); err != nil || got != "https://ntfy.sh/topic" {
+	if got, err := resolveNtfyURL("https://flag.example/x", good, true); err != nil || got != "https://ntfy.sh/topic" {
 		t.Fatalf("the file wins: %q, %v", got, err)
 	}
 
 	t.Setenv("HZ_PROBE_NTFY_URL", "https://env.example/t")
-	if got, _ := resolveNtfyURL("https://flag.example/x", ""); got != "https://env.example/t" {
+	if got, _ := resolveNtfyURL("https://flag.example/x", "", false); got != "https://env.example/t" {
 		t.Fatalf("the environment beats the flag: %q", got)
 	}
 	t.Setenv("HZ_PROBE_NTFY_URL", "")
-	if got, _ := resolveNtfyURL("https://flag.example/x", ""); got != "https://flag.example/x" {
+	if got, _ := resolveNtfyURL("https://flag.example/x", "", false); got != "https://flag.example/x" {
 		t.Fatalf("the flag is the last resort: %q", got)
 	}
 
-	_, err := resolveNtfyURL("ntfy.sh/secret-topic", "")
+	_, err := resolveNtfyURL("ntfy.sh/secret-topic", "", false)
 	if err == nil {
 		t.Fatal("a URL without a scheme should be refused")
 	}
@@ -140,5 +140,46 @@ func TestPullInstallGetsNoUpdateTimer(t *testing.T) {
 	unit := generateUnit(f, "/usr/local/bin/hz-probe")
 	if !strings.Contains(unit, "--listen :8443") {
 		t.Fatal("a pull unit should listen")
+	}
+}
+
+// The production crash-loop, 2026-09-28: an old unit (no --ntfy-url-file) on a
+// new binary, and the default file in a directory the service user cannot
+// read. The DEFAULT path failing to read must switch alerting off, never stop
+// the agent; a file somebody named still fails loudly.
+func TestResolveNtfyURLDefaultPathNeverStopsTheAgent(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 directory, so EACCES cannot be produced")
+	}
+	dir := t.TempDir()
+	locked := filepath.Join(dir, "locked")
+	if err := os.Mkdir(locked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(locked, "ntfy-url")
+	if err := os.WriteFile(file, []byte("https://ntfy.sh/t\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+
+	// Positive control: the instrument really produces EACCES here.
+	if _, err := os.ReadFile(file); err == nil || os.IsNotExist(err) {
+		t.Fatalf("expected a permission error, got %v", err)
+	}
+
+	got, err := resolveNtfyURL("", file, false)
+	if err != nil || got != "" {
+		t.Fatalf("default path unreadable: got %q, %v — want off, no error", got, err)
+	}
+	if _, err := resolveNtfyURL("", file, true); err == nil {
+		t.Fatal("a NAMED file that cannot be read must still be an error")
+	}
+	empty := filepath.Join(dir, "empty")
+	_ = os.WriteFile(empty, nil, 0o600)
+	if got, err := resolveNtfyURL("", empty, false); err != nil || got != "" {
+		t.Fatalf("an empty DEFAULT file: got %q, %v — want off", got, err)
 	}
 }
