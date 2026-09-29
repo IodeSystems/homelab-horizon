@@ -262,7 +262,10 @@ export type PlacementKnowledge =
   /** hz read the registrations and this rung has none. */
   | "unplaced"
   /** hz could not be asked, so "none" would be a guess. */
-  | "unknown";
+  | "unknown"
+  /** Another hz holds this rung's placements (`Environment.Upstream`): "no
+   * machine here" is the model being right, not a gap. */
+  | "remote";
 
 export interface PlacementReading {
   knowledge: PlacementKnowledge;
@@ -288,11 +291,38 @@ export interface PlacementReading {
  * rather than as a fault. Posture is read because `Environment.Name` and
  * `Environment.Posture` are separate fields and six projects call a rung
  * "prod".
+ *
+ * A RUNG PLACED ELSEWHERE is answered first, and from the server's own
+ * statement (`env.placement`, `projection.PlaceRung`), not re-derived here: an
+ * upstream rung is "in <upstream>" whether or not this hz's registrations can
+ * be read, because the question belongs to that hz. Instances registered HERE
+ * at such a rung are a contradiction and are said, not hidden.
  */
 export function readPlacement(
   env: EnvironmentResp,
   instances: InstanceVersion[] | null,
 ): PlacementReading {
+  if (env.placement?.state === "remote") {
+    const upstream = env.placement.upstream || env.upstream || "";
+    const unresolved = env.placement.unresolved ?? [];
+    const here = (instances ?? []).filter((i) => i.project === env.project && i.environment === env.name);
+    const conflict =
+      here.length > 0
+        ? ` But ${here.length} instance${here.length === 1 ? " is" : "s are"} registered at ${env.project}/${env.name} on this hz too (${[...new Set(here.map((i) => i.machine))].sort().join(", ")}) — two hz answering for one rung.`
+        : "";
+    return {
+      knowledge: "remote",
+      machines: [],
+      instances: here,
+      headline: `in ${upstream}`,
+      meaning:
+        (unresolved.length > 0 ? unresolved.map((g) => g.why).join(" ") + " " : "") +
+        (env.placement.statement || `placed in ${upstream}`) +
+        (env.placement.url ? ` (${env.placement.url}).` : ".") +
+        conflict,
+      tone: unresolved.length > 0 || here.length > 0 ? "late" : "neutral",
+    };
+  }
   if (instances === null) {
     return {
       knowledge: "unknown",

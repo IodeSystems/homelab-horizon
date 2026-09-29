@@ -418,8 +418,9 @@ export interface HostsViewResp {
 // source: instances.go
 
 /**
- * InstancesPath is the list of hz instances: this gateway plus every HA peer
- * it knows about (config.Peers). One row per hz, not per machine and not per
+ * InstancesPath is the list of hz instances: this gateway, every HA peer it
+ * knows about (config.Peers), and every declared Machine that runs its own hz
+ * (config.Machine.HZ, role "nested"). One row per hz, not per machine and not per
  * address.
  */
 export const InstancesPath = "/api/v1/instances";
@@ -438,6 +439,13 @@ export const InstanceRoleReplica = "replica";
  * exist, so there is no primary to be or to follow.
  */
 export const InstanceRoleStandalone = "standalone";
+/**
+ * InstanceRoleNested is a SEPARATE hz — its own records and keys, a
+ * config layer of its own — declared here as a Machine with an hz marker
+ * (config.Machine.HZ). Not a cluster member: it shares nothing with this
+ * instance's records. Address is its HZ.URL; nothing here contacts it.
+ */
+export const InstanceRoleNested = "nested";
 /**
  * InstanceResp is one hz instance.
  * Name is the SELF row's machine name as `machines/add` with self=true
@@ -875,6 +883,41 @@ export interface EnvironmentResp {
   posture: string;
   from?: string;
   version?: string;
+  /**
+   * Upstream is the record's field: the declared Machine (with an hz
+   * marker) whose hz holds this rung's placements. "" is placed here.
+   */
+  upstream?: string;
+  /**
+   * Placement is DERIVED server-side (projection.PlaceRung), for the reason
+   * MachineResp derives MultiHomed: a client must not re-derive a judgement
+   * hz already makes. Always present.
+   */
+  placement: RungPlacementResp;
+}
+/**
+ * Rung placement states — projection.PlacementHere / PlacementRemote.
+ */
+export const RungPlacementHere = "here";
+/**
+ * Rung placement states — projection.PlacementHere / PlacementRemote.
+ */
+export const RungPlacementRemote = "remote";
+/**
+ * RungPlacementResp is where a rung's placements are answered from. "here":
+ * this hz's registrations say which machines run it (placed, unplaced or —
+ * when they cannot be read — unknown; the client reads those). "remote":
+ * another hz holds them, and "no machine here" is correct, not a gap.
+ */
+export interface RungPlacementResp {
+  state: string;
+  upstream?: string;
+  url?: string;
+  statement: string;
+  /**
+   * Unresolved is non-empty only on records Save would refuse.
+   */
+  unresolved?: ProjectionGap[];
 }
 export interface ServiceStatus {
   internalDNSUp: boolean; // dnsmasq resolves the primary domain
@@ -1012,6 +1055,10 @@ export interface EnvironmentAddReq {
   posture: string;
   from?: string;
   version?: string;
+  /**
+   * Upstream names a declared Machine with an hz marker; "" is placed here.
+   */
+  upstream?: string;
 }
 /**
  * EnvironmentSetReq patches one rung. Every settable field is a POINTER, and
@@ -1028,6 +1075,11 @@ export interface EnvironmentSetReq {
   posture?: string;
   from?: string;
   version?: string;
+  /**
+   * Upstream: nil leaves it, "" clears it (placed here), a name sets it —
+   * refused unless it names a declared Machine with an hz marker.
+   */
+  upstream?: string;
 }
 /**
  * EnvironmentRmReq removes a rung. Confirm and Cascade mean what they mean on
@@ -1063,6 +1115,11 @@ export interface MachineResp {
   project: string;
   segments?: string[];
   note?: string;
+  /**
+   * HZ is set when this machine runs its own hz (a nested hz — a separate
+   * config layer, not an HA peer). Absent: not declared as one.
+   */
+  hz?: MachineHZResp;
   multiHomed?: boolean;
   enrolled?: boolean;
   enrolledAt?: number /* int64 */;
@@ -1076,6 +1133,13 @@ export interface MachineResp {
    * them it was already true is information they asked for.
    */
   alreadyDeclared?: boolean;
+}
+/**
+ * MachineHZResp is the nested-hz marker: where that hz answers. This hz never
+ * contacts it.
+ */
+export interface MachineHZResp {
+  url: string;
 }
 /**
  * MachineAddReq declares a machine. Segments are names; there is no Segment
@@ -1093,6 +1157,11 @@ export interface MachineAddReq {
   project?: string;
   segments?: string[];
   note?: string;
+  /**
+   * HZ marks the machine as running its own hz; the URL must be http(s)
+   * with a host.
+   */
+  hz?: MachineHZResp;
   /**
    * Self declares the box HZ ITSELF IS RUNNING ON, and Name must then be
    * empty: the name comes from hz's own identity (os.Hostname, the same
@@ -1128,6 +1197,12 @@ export interface MachineSetReq {
   project?: string;
   note?: string;
   segments?: string[];
+  /**
+   * HZ sets the nested-hz marker; ClearHZ removes it (refused while an
+   * environment names this machine as its Upstream). Both at once is refused.
+   */
+  hz?: MachineHZResp;
+  clearHz?: boolean;
 }
 /**
  * MachineRmReq removes a machine. Confirm and Cascade mean what they mean on

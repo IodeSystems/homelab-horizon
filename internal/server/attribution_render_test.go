@@ -287,6 +287,51 @@ func TestAttributionChangesNoRenderedArtifact(t *testing.T) {
 	}
 }
 
+// THE NESTED-HZ MARKERS CHANGE NO RENDERED ARTIFACT (plan/plan.md Tier 1b, N3).
+//
+// Machine.HZ and Environment.Upstream are statements about ANOTHER hz: that a
+// machine runs one, and that a rung's placements are held there. No renderer
+// and no machine projection may read either — the URL is never dialled
+// (CLAUDE.md invariant 1) and an upstream rung changes where a question is
+// answered, not what any box runs. So the estate rendered with a nested hz
+// declared but unmarked and unnamed, and with the marker and an Upstream set,
+// must come out byte-identical.
+//
+// The rung used carries no instance on purpose: what the projection should do
+// with an instance registered HERE at a rung placed ELSEWHERE is not decided,
+// and this guard must not pin an answer to it.
+func TestNestedMarkersChangeNoRenderedArtifact(t *testing.T) {
+	estate := func(marked bool) *config.Config {
+		c := attributionEstate()
+		c.Machines = append(c.Machines, config.Machine{Name: "storefront-prod-hz"})
+		c.Environments = append(c.Environments, config.Environment{Project: "storefront", Name: "pci", Posture: "prod"})
+		if marked {
+			c.Machines[len(c.Machines)-1].HZ = &config.MachineHZ{URL: "https://hz.pci.example.invalid"}
+			c.Environments[len(c.Environments)-1].Upstream = "storefront-prod-hz"
+		}
+		return c
+	}
+	plain, marked := estate(false), estate(true)
+	for label, c := range map[string]*config.Config{"plain": plain, "marked": marked} {
+		if err := config.Save(t.TempDir()+"/config.json", c); err != nil {
+			t.Fatalf("the %s fixture is not a config hz would save: %v", label, err)
+		}
+	}
+
+	a, b := renderEverything(t, plain), renderEverything(t, marked)
+	for _, want := range []string{"shop.example.invalid", "[Peer]", "10.10.2.11", "===== projection storefront-prod-hz"} {
+		if !strings.Contains(a, want) {
+			t.Errorf("the render does not contain %q — the comparison below would not cover it", want)
+		}
+	}
+	if strings.Contains(b, "hz.pci.example.invalid") {
+		t.Error("the nested hz's URL reached a rendered artifact")
+	}
+	if a != b {
+		t.Fatalf("a nested-hz marker changed a rendered artifact. First difference:\n%s", firstDiff(a, b))
+	}
+}
+
 // The fixture must set every attribution field, or the byte-identity above
 // is a claim about fewer fields than it names.
 func TestTheFixtureSetsEveryAttributionField(t *testing.T) {

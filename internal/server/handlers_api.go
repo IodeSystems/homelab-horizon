@@ -727,14 +727,9 @@ func (s *Server) handleAPIEnvironments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	envs := make([]apitypes.EnvironmentResp, 0, len(s.cfg().Environments))
-	for _, e := range s.cfg().Environments {
-		envs = append(envs, apitypes.EnvironmentResp{
-			Project: e.Project,
-			Name:    e.Name,
-			Posture: e.Posture,
-			From:    e.From,
-			Version: e.Version,
-		})
+	cfg := s.cfg()
+	for _, e := range cfg.Environments {
+		envs = append(envs, environmentRespOf(cfg, e))
 	}
 	sort.Slice(envs, func(i, j int) bool {
 		if envs[i].Project != envs[j].Project {

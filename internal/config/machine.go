@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 )
@@ -75,6 +76,54 @@ type Machine struct {
 	//
 	// Optional on a single-segment machine, where there is nothing to explain.
 	Note string `json:"note,omitempty"`
+
+	// HZ marks that this machine runs its OWN hz: a separate config layer
+	// with its own records and keys (a nested hz), NOT an HA peer of this one
+	// — a peer shares these records and is config.Peers. nil is "not known to
+	// run an hz", which is every machine that is not declared as one.
+	//
+	// It is what Environment.Upstream names (plan/plan.md Tier 1b, decided
+	// 2026-09-29: a nested hz is a Machine that runs hz, no new record type).
+	// It confers nothing: hz does not dial the URL (CLAUDE.md invariant 1) and
+	// no renderer reads it (TestNestedMarkersChangeNoRenderedArtifact).
+	HZ *MachineHZ `json:"hz,omitempty"`
+}
+
+// MachineHZ is the nested-hz marker on a Machine.
+type MachineHZ struct {
+	// URL is where that hz answers, http or https with a host. It is a
+	// statement for an operator and the address the Instances list shows;
+	// this hz never contacts it.
+	URL string `json:"url"`
+}
+
+// CheckHZURL refuses a nested-hz URL that is not http(s) with a host. An
+// empty URL is refused too: a marker with no address is "runs an hz,
+// somewhere", which is the unknown this field exists to replace.
+func CheckHZURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return errors.New("a nested hz needs a URL (http:// or https:// with a host) — a marker with no address says nothing about where that hz is")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("nested hz URL %q does not parse: %v", raw, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("nested hz URL %q must be http:// or https://, not %q", raw, u.Scheme)
+	}
+	if u.Hostname() == "" {
+		return fmt.Errorf("nested hz URL %q has no host", raw)
+	}
+	return nil
+}
+
+// normalizeHZ trims the URL. nil stays nil.
+func normalizeHZ(h *MachineHZ) *MachineHZ {
+	if h == nil {
+		return nil
+	}
+	return &MachineHZ{URL: strings.TrimSpace(h.URL)}
 }
 
 // MultiHomed reports a machine in more than one segment — the row that has to
@@ -131,6 +180,11 @@ func (c *Config) ValidateMachines() error {
 			return fmt.Errorf("machine %q is in %d segments (%s) and has no note — a machine that bridges segments is a declared exception and has to say why",
 				m.Name, len(m.Segments), strings.Join(m.Segments, ", "))
 		}
+		if m.HZ != nil {
+			if err := CheckHZURL(m.HZ.URL); err != nil {
+				return fmt.Errorf("machine %q: %w", m.Name, err)
+			}
+		}
 	}
 	return nil
 }
@@ -172,6 +226,7 @@ func (c *Config) AddMachine(m Machine) error {
 	m.Project = strings.TrimSpace(m.Project)
 	m.Note = strings.TrimSpace(m.Note)
 	m.Segments = normalizeSegments(m.Segments)
+	m.HZ = normalizeHZ(m.HZ)
 
 	if m.Name == "" {
 		return fmt.Errorf("a machine needs a name")
@@ -200,14 +255,23 @@ func (c *Config) AddMachine(m Machine) error {
 // list takes the machine out of every segment. Membership is declared on the
 // Machine (segment.go's opening comment), so this is its one writer besides
 // `add`; SegmentPatch deliberately cannot grant or drop one.
+//
+// HZ is the nested-hz marker: nil leaves it alone, a non-nil value with a URL
+// sets it, and ClearHZ removes it. Two fields rather than a pointer-to-pointer
+// because "clear" has to be an explicit act — removing the marker from a
+// machine an environment names as its Upstream is refused, naming the rung.
 type MachinePatch struct {
 	Project  *string
 	Note     *string
 	Segments *[]string
+	HZ       *MachineHZ
+	ClearHZ  bool
 }
 
 // Empty reports a patch that would change nothing.
-func (p MachinePatch) Empty() bool { return p.Project == nil && p.Note == nil && p.Segments == nil }
+func (p MachinePatch) Empty() bool {
+	return p.Project == nil && p.Note == nil && p.Segments == nil && p.HZ == nil && !p.ClearHZ
+}
 
 // SetMachine edits a declared machine's owner, note and segment membership in
 // place, so none of them costs remove and re-add — which would cost the box
@@ -222,7 +286,7 @@ func (p MachinePatch) Empty() bool { return p.Project == nil && p.Note == nil &&
 // discipline SegmentRemoval uses.
 func (c *Config) SetMachine(name string, patch MachinePatch) (Machine, error) {
 	if patch.Empty() {
-		return Machine{}, fmt.Errorf("nothing to change on machine %q — give a project, a note or segments", name)
+		return Machine{}, fmt.Errorf("nothing to change on machine %q — give a project, a note, segments or an hz marker", name)
 	}
 	idx := -1
 	for i, m := range c.Machines {
@@ -271,6 +335,18 @@ func (c *Config) SetMachine(name string, patch MachinePatch) (Machine, error) {
 		}
 		m.Segments = segments
 	}
+	switch {
+	case patch.HZ != nil && patch.ClearHZ:
+		return Machine{}, fmt.Errorf("machine %q: an hz marker was both set and cleared — send one", name)
+	case patch.HZ != nil:
+		m.HZ = normalizeHZ(patch.HZ)
+	case patch.ClearHZ:
+		if users := c.upstreamUsers(name); len(users) > 0 {
+			return Machine{}, fmt.Errorf("%s is the upstream hz of %s, so its hz marker cannot be cleared — an Upstream must name a machine that runs hz. Clear the Upstream first (`env set <project>/<name>` with upstream \"\")",
+				name, strings.Join(users, ", "))
+		}
+		m.HZ = nil
+	}
 	next.Machines[idx] = m
 	if err := next.validateModel(); err != nil {
 		return Machine{}, err
@@ -313,9 +389,35 @@ func (c *Config) MachineRemoval(name string, enrolled, cascade bool) (removes, b
 		}
 	}
 
+	for _, rung := range c.upstreamUsers(name) {
+		d := Dependant{
+			Kind: "environment", Name: rung,
+			How: "names " + name + " as its upstream hz, so it would name a machine nobody declares",
+		}
+		if cascade {
+			d.How = "names " + name + " as its upstream hz; its Upstream would be CLEARED and the rung read as placed here (the rung itself is kept)"
+			removes = append(removes, d)
+		} else {
+			blocked = append(blocked, d)
+		}
+	}
+
 	sortDependants(blocked)
 	sortDependants(removes[1:])
 	return removes, blocked, nil
+}
+
+// upstreamUsers is every rung whose Upstream names this machine, as
+// "<project>/<name>", sorted.
+func (c *Config) upstreamUsers(machine string) []string {
+	var out []string
+	for _, e := range c.Environments {
+		if e.Upstream == machine {
+			out = append(out, e.Project+"/"+e.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // RemoveMachine removes a machine record. It refuses while anything depends on
@@ -341,6 +443,14 @@ func (c *Config) RemoveMachine(name string, enrolled, cascade bool) ([]Dependant
 		}
 	}
 	next.Machines = machines
+	// Cascade CLEARS an Upstream naming this machine and never deletes the
+	// rung: the rung is still declared here, and what it loses is only the
+	// statement that another hz holds its placements.
+	for i := range next.Environments {
+		if next.Environments[i].Upstream == name {
+			next.Environments[i].Upstream = ""
+		}
+	}
 	if err := next.validateModel(); err != nil {
 		return nil, err
 	}

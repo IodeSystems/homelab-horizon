@@ -5,7 +5,9 @@
  * the address audit that used to be `/hosts`. For a PEER: its project, read
  * only, and its role in the cluster — hz does not declare a peer's machine
  * from here, because a peer ID is not necessarily that box's hostname and a
- * record under the wrong name matches nothing.
+ * record under the wrong name matches nothing. For a NESTED hz (a declared
+ * machine that runs its own hz): its URL and owner, both from its Machine
+ * record, edited on that machine's page — this hz never contacts it.
  *
  * The self control never sends a name. Undeclared → `machines/add` with
  * `self: true`, which the server resolves to its own hostname (CLAUDE.md
@@ -114,7 +116,15 @@ function ProjectDialog({
 function ProjectControl({ row, index }: { row: InstanceResp; index: ProjectIndex }) {
   const [open, setOpen] = useState(false);
 
-  const control = !row.self ? (
+  const control = row.role === "nested" ? (
+    <Typography variant="caption" sx={{ color: "text.secondary" }}>
+      Its owner is its machine record&apos;s: edit it on{" "}
+      <Link to="/machines/$machine" params={{ machine: row.name }}>
+        its machine page
+      </Link>
+      .
+    </Typography>
+  ) : !row.self ? (
     <Typography variant="caption" sx={{ color: "text.secondary" }}>
       A peer&apos;s machine is declared on Machines, under its hostname — which may differ from its peer ID.
     </Typography>
@@ -203,7 +213,15 @@ export function InstanceScreen({ name }: { name: string }) {
               <Typography sx={{ fontFamily: "monospace" }}>{row.address || "not detected"}</Typography>
             </Fact>
             <Fact label="Role">{row.role}</Fact>
-            {row.role === "standalone" ? null : (
+            {row.role === "nested" ? (
+              <Fact label="Kind">
+                <Typography variant="body2" data-nested-fact>
+                  A separate hz — its own records and keys, not a member of this cluster. Declared here as a
+                  machine with the URL it answers on; nothing on this page was read from it.
+                </Typography>
+              </Fact>
+            ) : null}
+            {row.role === "standalone" || row.role === "nested" ? null : (
               <Fact label="Config primary">
                 <Typography sx={{ fontFamily: "monospace" }}>{row.primaryId || "none marked"}</Typography>
               </Fact>
@@ -219,7 +237,7 @@ export function InstanceScreen({ name }: { name: string }) {
                 ) : null}
               </Fact>
             ) : null}
-            {!row.self ? (
+            {!row.self && row.role !== "nested" ? (
               <Fact label="Sync">
                 <Typography variant="body2" sx={{ color: "text.secondary" }}>
                   Not observed from here. Reachability is on{" "}

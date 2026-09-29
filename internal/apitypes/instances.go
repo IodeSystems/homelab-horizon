@@ -1,7 +1,8 @@
 package apitypes
 
-// InstancesPath is the list of hz instances: this gateway plus every HA peer
-// it knows about (config.Peers). One row per hz, not per machine and not per
+// InstancesPath is the list of hz instances: this gateway, every HA peer it
+// knows about (config.Peers), and every declared Machine that runs its own hz
+// (config.Machine.HZ, role "nested"). One row per hz, not per machine and not per
 // address.
 const InstancesPath = "/api/v1/instances"
 
@@ -11,6 +12,11 @@ const (
 	InstanceRolePrimary    = "primary"
 	InstanceRoleReplica    = "replica"
 	InstanceRoleStandalone = "standalone"
+	// InstanceRoleNested is a SEPARATE hz — its own records and keys, a
+	// config layer of its own — declared here as a Machine with an hz marker
+	// (config.Machine.HZ). Not a cluster member: it shares nothing with this
+	// instance's records. Address is its HZ.URL; nothing here contacts it.
+	InstanceRoleNested = "nested"
 )
 
 // InstanceResp is one hz instance.

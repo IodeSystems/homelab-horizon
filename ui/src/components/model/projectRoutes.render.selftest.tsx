@@ -54,6 +54,7 @@ import {
   SCOPE_TABS,
 } from "./projectRoutes.ts";
 import { POSTURES } from "./model.ts";
+import { UpstreamSelect, upstreamOptions } from "./EnvironmentDialogs";
 
 let failures = 0;
 let checks = 0;
@@ -82,11 +83,14 @@ const PROJECTS: ProjectResp[] = [
   { name: "eu", parent: "storefront", feedFrom: "acme-co", resolvedFeed: { url: "https://apt.example.net", suite: "stable", component: "main", keyId: "ABC123" }, services: [] },
 ];
 
+/** The server always sends a placement; these rungs are placed here. */
+const HERE = { state: "here", statement: "placed here" };
+
 const ENVIRONMENTS: EnvironmentResp[] = [
-  { project: "acme-co", name: "prod", posture: "prod", version: "1.4.0" },
-  { project: "intern", name: "prod", posture: "prod", version: "2.0.1" },
-  { project: "storefront", name: "staging", posture: "staging", version: "1.4.0" },
-  { project: "storefront", name: "prod", posture: "prod", from: "staging", version: "1.3.8" },
+  { project: "acme-co", name: "prod", posture: "prod", version: "1.4.0", placement: HERE },
+  { project: "intern", name: "prod", posture: "prod", version: "2.0.1", placement: HERE },
+  { project: "storefront", name: "staging", posture: "staging", version: "1.4.0", placement: HERE },
+  { project: "storefront", name: "prod", posture: "prod", from: "staging", version: "1.3.8", placement: HERE },
 ];
 
 function service(name: string, project: string | undefined, domain: string): ServiceResp {
@@ -253,7 +257,7 @@ const SEGMENTS: SegmentResp[] = [
   },
 ];
 
-function seeded(): QueryClient {
+function seeded(environments: EnvironmentResp[] = ENVIRONMENTS): QueryClient {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
@@ -264,7 +268,7 @@ function seeded(): QueryClient {
     configPrimary: true,
   });
   qc.setQueryData(["projects"], PROJECTS);
-  qc.setQueryData(["environments"], ENVIRONMENTS);
+  qc.setQueryData(["environments"], environments);
   qc.setQueryData(["cm", "version-drift"], DRIFT);
   qc.setQueryData(["services"], SERVICES);
   qc.setQueryData(["domains"], DOMAINS);
@@ -353,7 +357,10 @@ function dumpSidebar(what: string, r: Rendered): number {
   return lines.length;
 }
 
-async function at(path: string, opts: { phone?: boolean } = {}): Promise<Rendered> {
+async function at(
+  path: string,
+  opts: { phone?: boolean; environments?: EnvironmentResp[] } = {},
+): Promise<Rendered> {
   const router = createRouter({
     routeTree,
     history: createMemoryHistory({ initialEntries: [path] }),
@@ -362,7 +369,7 @@ async function at(path: string, opts: { phone?: boolean } = {}): Promise<Rendere
   // every assertion below would pass against an empty string.
   await router.load();
   const html = renderToStaticMarkup(
-    <QueryClientProvider client={seeded()}>
+    <QueryClientProvider client={seeded(opts.environments)}>
       <ThemeProvider theme={opts.phone ? phoneTheme : baseTheme}>
         {/* The app's own Register declaration types `router` for the real tree;
             this file builds its own instance, so the structural types differ. */}
@@ -1309,6 +1316,65 @@ console.log("· MACHINE ADD/SET/RM — the writes that had no UI caller");
     !ids.some((id) => id.startsWith("/p/$project/machines/")),
     "no route exists under /p/$project/machines/ — a machine still has exactly one page",
   );
+}
+
+// ---------------------------------------------------------------------------
+console.log("· a rung placed in a nested hz reads 'in <upstream>', and only hz machines are offered as one");
+// ---------------------------------------------------------------------------
+{
+  // storefront/pci is declared here and placed in prod-hz (Environment.Upstream).
+  // DRIFT has no instance at it, so without the upstream it would read
+  // "no machine yet" — the misreport plan/design/estate.md Part A §5 removes.
+  const pci: EnvironmentResp = {
+    project: "storefront",
+    name: "pci",
+    posture: "prod",
+    version: "1.3.8",
+    upstream: "prod-hz",
+    placement: {
+      state: "remote",
+      upstream: "prod-hz",
+      url: "https://hz.prod.example.invalid",
+      statement: "placed in prod-hz: that hz holds the placements of storefront/pci",
+    },
+  };
+  const shop = await at("/p/storefront", { environments: [...ENVIRONMENTS, pci] });
+  const row = (() => {
+    const i = shop.html.indexOf('aria-label="Edit storefront/pci…"');
+    const start = shop.html.lastIndexOf("<tr", i);
+    return i < 0 || start < 0 ? "" : shop.html.slice(start, shop.html.indexOf("</tr>", i));
+  })();
+  const rowText = row.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+  check(row !== "", "the upstream rung has a row");
+  check(rowText.includes("in prod-hz"), `its Placement reads 'in prod-hz' — got: ${rowText}`);
+  check(!rowText.includes("no machine yet") && !rowText.includes("hz cannot say"), "never 'no machine yet', never 'hz cannot say'");
+  check(/title="[^"]*placed in prod-hz[^"]*https:\/\/hz\.prod\.example\.invalid/.test(row), "and its title carries the server's statement and the hz URL");
+
+  // The select's options are not in the SSR output (MUI renders them in a
+  // portal on open), so the SOURCE the select maps is asserted, and the
+  // closed control is rendered for its value and helper text.
+  const machines: MachineResp[] = [
+    { name: "zz-hz", project: "", hz: { url: "https://zz.example.invalid" } },
+    { name: "box-2", project: "storefront" },
+    { name: "prod-hz", project: "storefront", hz: { url: "https://hz.prod.example.invalid" } },
+  ];
+  check(
+    JSON.stringify(upstreamOptions(machines).map((m) => m.name)) === JSON.stringify(["prod-hz", "zz-hz"]),
+    "the Upstream select offers ONLY machines with an hz marker, by name",
+  );
+  const closed = renderToStaticMarkup(
+    <ThemeProvider theme={baseTheme}>
+      <UpstreamSelect value="prod-hz" onChange={() => {}} machines={machines} state="ready" />
+    </ThemeProvider>,
+  );
+  check(closed.includes("prod-hz") && closed.includes("Upstream"), "the closed control shows its label and current value");
+  check(!/<input[^>]*type="text"/.test(closed), "and it is a select, never a text field");
+  const none = renderToStaticMarkup(
+    <ThemeProvider theme={baseTheme}>
+      <UpstreamSelect value="" onChange={() => {}} machines={[machines[1]!]} state="ready" />
+    </ThemeProvider>,
+  );
+  check(none.includes("No declared machine runs its own hz"), "with no hz machine it says so, rather than offering an empty list");
 }
 
 // ---------------------------------------------------------------------------
