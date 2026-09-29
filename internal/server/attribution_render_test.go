@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -297,6 +298,11 @@ func TestAttributionChangesNoRenderedArtifact(t *testing.T) {
 // declared but unmarked and unnamed, and with the marker and an Upstream set,
 // must come out byte-identical.
 //
+// The nested hz's upstream VPN client is present in BOTH estates, with its
+// `upstream` profile: the profile changes rules on purpose (it is not a marker),
+// so it is held constant, and what differs is only the LINK — MachineHZ.VPNClient
+// naming it — which must render nothing.
+//
 // The rung used carries no instance on purpose: what the projection should do
 // with an instance registered HERE at a rung placed ELSEWHERE is not decided,
 // and this guard must not pin an answer to it.
@@ -305,8 +311,10 @@ func TestNestedMarkersChangeNoRenderedArtifact(t *testing.T) {
 		c := attributionEstate()
 		c.Machines = append(c.Machines, config.Machine{Name: "storefront-prod-hz"})
 		c.Environments = append(c.Environments, config.Environment{Project: "storefront", Name: "pci", Posture: "prod"})
+		c.WGPeers = append(c.WGPeers, config.WGPeer{Name: "storefront-prod-hz-vpn", PublicKey: attributionKeys[0], AllowedIPs: "10.100.0.9/32"})
+		c.VPNProfiles = map[string]string{"bob-laptop": config.ProfileFullTunnel, "storefront-prod-hz-vpn": config.ProfileUpstream}
 		if marked {
-			c.Machines[len(c.Machines)-1].HZ = &config.MachineHZ{URL: "https://hz.pci.example.invalid"}
+			c.Machines[len(c.Machines)-1].HZ = &config.MachineHZ{URL: "https://hz.pci.example.invalid", VPNClient: "storefront-prod-hz-vpn"}
 			c.Environments[len(c.Environments)-1].Upstream = "storefront-prod-hz"
 		}
 		return c
@@ -323,6 +331,11 @@ func TestNestedMarkersChangeNoRenderedArtifact(t *testing.T) {
 		if !strings.Contains(a, want) {
 			t.Errorf("the render does not contain %q — the comparison below would not cover it", want)
 		}
+	}
+	// The upstream client's API-port rule, as rendered JSON args — not merely
+	// its address, which wg0.conf's peer block carries too.
+	if !regexp.MustCompile(`"10\.100\.0\.9/32",\s+"-d",\s+"10\.100\.0\.1/32",\s+"-p",\s+"tcp",\s+"--dport",\s+"8080"`).MatchString(a) {
+		t.Error("the render does not contain the upstream client's API-port rule — the comparison below would not cover it")
 	}
 	if strings.Contains(b, "hz.pci.example.invalid") {
 		t.Error("the nested hz's URL reached a rendered artifact")

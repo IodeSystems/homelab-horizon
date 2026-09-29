@@ -95,6 +95,19 @@ type MachineHZ struct {
 	// statement for an operator and the address the Instances list shows;
 	// this hz never contacts it.
 	URL string `json:"url"`
+
+	// VPNClient is the VPN client (a wg0 peer, by name) that hz reaches THIS
+	// hz — its parent — through: profile `upstream`, so it reaches only this
+	// hz's API (config/vpn_upstream.go). "" is no link. When set it must name a
+	// client that exists and is `upstream` (validateUpstreamLinks), and the
+	// client is a dependant of this machine: removing the machine is blocked
+	// by it, and cascade removes it.
+	//
+	// The CHILD dials; this hz never does (CLAUDE.md invariant 1). The link is
+	// bookkeeping for the operator and for removal — no renderer reads it
+	// (TestNestedMarkersChangeNoRenderedArtifact); the client's PROFILE is what
+	// changes rules, and it is present with or without the link.
+	VPNClient string `json:"vpn_client,omitempty"`
 }
 
 // CheckHZURL refuses a nested-hz URL that is not http(s) with a host. An
@@ -123,7 +136,7 @@ func normalizeHZ(h *MachineHZ) *MachineHZ {
 	if h == nil {
 		return nil
 	}
-	return &MachineHZ{URL: strings.TrimSpace(h.URL)}
+	return &MachineHZ{URL: strings.TrimSpace(h.URL), VPNClient: strings.TrimSpace(h.VPNClient)}
 }
 
 // MultiHomed reports a machine in more than one segment — the row that has to
@@ -186,7 +199,7 @@ func (c *Config) ValidateMachines() error {
 			}
 		}
 	}
-	return nil
+	return c.validateUpstreamLinks()
 }
 
 // FindMachine returns one declared machine.
@@ -257,7 +270,9 @@ func (c *Config) AddMachine(m Machine) error {
 // `add`; SegmentPatch deliberately cannot grant or drop one.
 //
 // HZ is the nested-hz marker: nil leaves it alone, a non-nil value with a URL
-// sets it, and ClearHZ removes it. Two fields rather than a pointer-to-pointer
+// sets it, and ClearHZ removes it. A marker sent with no VPNClient KEEPS the
+// one the machine has — an edit of the URL must not silently unlink the
+// nested hz's VPN client; unlinking is ClearHZ. Two fields rather than a pointer-to-pointer
 // because "clear" has to be an explicit act — removing the marker from a
 // machine an environment names as its Upstream is refused, naming the rung.
 type MachinePatch struct {
@@ -339,7 +354,11 @@ func (c *Config) SetMachine(name string, patch MachinePatch) (Machine, error) {
 	case patch.HZ != nil && patch.ClearHZ:
 		return Machine{}, fmt.Errorf("machine %q: an hz marker was both set and cleared — send one", name)
 	case patch.HZ != nil:
-		m.HZ = normalizeHZ(patch.HZ)
+		hz := normalizeHZ(patch.HZ)
+		if hz.VPNClient == "" && m.HZ != nil {
+			hz.VPNClient = m.HZ.VPNClient
+		}
+		m.HZ = hz
 	case patch.ClearHZ:
 		if users := c.upstreamUsers(name); len(users) > 0 {
 			return Machine{}, fmt.Errorf("%s is the upstream hz of %s, so its hz marker cannot be cleared — an Upstream must name a machine that runs hz. Clear the Upstream first (`env set <project>/<name>` with upstream \"\")",
@@ -383,6 +402,19 @@ func (c *Config) MachineRemoval(name string, enrolled, cascade bool) (removes, b
 		}
 		if cascade {
 			d.How = "hz holds an agent credential for " + name + ", and it would be REVOKED — that box's agent stops being able to poll"
+			removes = append(removes, d)
+		} else {
+			blocked = append(blocked, d)
+		}
+	}
+
+	if m, _ := c.FindMachine(name); m.HZ != nil && m.HZ.VPNClient != "" {
+		d := Dependant{
+			Kind: "vpn-client", Name: m.HZ.VPNClient,
+			How: "is " + name + "'s VPN client (profile upstream), which would still reach this hz's API for a machine hz no longer declares",
+		}
+		if cascade {
+			d.How = "is " + name + "'s VPN client (profile upstream), and it would be REMOVED from wg0.conf — that hz loses its tunnel to this one"
 			removes = append(removes, d)
 		} else {
 			blocked = append(blocked, d)

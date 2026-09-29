@@ -363,6 +363,7 @@ console.log("· [Add instance] asks for the kind: cluster node, or declare a nes
   check(nested !== "", "the nested kind is offered");
   check(!/Mui-disabled|aria-disabled="true"|disabled=""/.test(nested), "and ENABLED: declaring one is built (N3)");
   check(text.includes("Declare a nested instance"), "as a declaration");
+  check(/data-nested-kind[\s\S]*?creates the VPN client it reaches this hz through/.test(html), "that also creates the child's VPN client (N1b)");
   check(!/data-nested-disabled/.test(html), "the old greyed option is gone");
   const cannot = /data-nested-cannot[^>]*>([\s\S]*?)<\/span>/.exec(html)?.[1] ?? "";
   check(cannot.includes("mirror packages") && cannot.includes("proxy config"), "it says what it cannot do yet");

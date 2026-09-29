@@ -48,6 +48,26 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 	if profile == "" {
 		profile = config.ProfileLanAccess
 	}
+	if err := s.cfg().CheckPeerProfileChange(name, profile); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// An upstream client is refused here, before anything is written, when
+	// the address it would be handed could not answer — a config that
+	// reaches nothing is worse than no config.
+	parentURL := ""
+	if profile == config.ProfileUpstream {
+		if extraIPs != "" {
+			writeJSONError(w, http.StatusBadRequest, "an upstream client routes nothing behind it — extra allowed IPs would make the gateway route those subnets to a nested hz")
+			return
+		}
+		u, err := s.cfg().ParentAPIURL(s.gatewayWGIP())
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		parentURL = u
+	}
 
 	privKey, pubKey, err := wireguard.GenerateKeyPair()
 	if err != nil {
@@ -102,9 +122,11 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(apitypes.AddPeerResponse{
-		OK:     true,
-		Config: clientConfig,
-		QRCode: qrCode,
+		OK:        true,
+		Config:    clientConfig,
+		QRCode:    qrCode,
+		PublicKey: pubKey,
+		ParentURL: parentURL,
 	})
 }
 
@@ -150,6 +172,20 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "Peer not found")
 		return
 	}
+	// Checked against the peer's CURRENT name (a link names it) and before
+	// wg0.conf is touched, for the reason CheckPeerProfileChange gives.
+	profile := strings.TrimSpace(req.Profile)
+	if profile == "" {
+		profile = config.ProfileLanAccess
+	}
+	if err := s.cfg().CheckPeerProfileChange(peer.Name, profile); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if profile == config.ProfileUpstream && strings.TrimSpace(req.ExtraIPs) != "" {
+		writeJSONError(w, http.StatusBadRequest, "an upstream client routes nothing behind it — extra allowed IPs would make the gateway route those subnets to a nested hz")
+		return
+	}
 
 	// Extract primary IP (first /32) from current AllowedIPs
 	currentIPs := strings.Split(peer.AllowedIPs, ",")
@@ -176,10 +212,6 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	profile := strings.TrimSpace(req.Profile)
-	if profile == "" {
-		profile = config.ProfileLanAccess
-	}
 	oldName := peer.Name
 	wgPeers := s.snapshotWGPeers()
 	if err := s.updateConfig(func(cfg *config.Config) {
@@ -193,6 +225,7 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 			cfg.RenamePeerProfile(oldName, name)
 			cfg.RenamePeerProject(oldName, name)
 			cfg.RenameMFAPeer(oldName, name)
+			cfg.RenameUpstreamClient(oldName, name)
 		}
 		cfg.SetPeerProfile(name, profile)
 		if project != nil {
@@ -238,6 +271,17 @@ func (s *Server) handleAPIDeletePeer(w http.ResponseWriter, r *http.Request) {
 
 	// Look up peer name before removing so we can clean up profile
 	peer := s.wg.GetPeerByPublicKey(req.PublicKey)
+
+	// A nested hz's link is refused here, before wg0.conf is touched: the
+	// machine would name a client that no longer exists, and every later
+	// Save would be refused for it. The machine's removal (cascade) is the
+	// path that takes the client with it, and says so in its dry run.
+	if peer != nil {
+		if m := s.cfg().UpstreamLinkOf(peer.Name); m != "" {
+			writeJSONError(w, http.StatusConflict, fmt.Sprintf("%s is the VPN client of nested hz %s. Remove %s with cascade, which removes this client too", peer.Name, m, m))
+			return
+		}
+	}
 
 	if err := s.wg.RemovePeer(req.PublicKey); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
@@ -300,6 +344,13 @@ func (s *Server) handleAPIToggleAdmin(w http.ResponseWriter, r *http.Request) {
 			isCurrentlyAdmin = true
 			break
 		}
+	}
+	// A VPN admin is signed in to hz's API by its address alone
+	// (isVPNAdmin), and hz's API is the one thing an upstream client reaches.
+	// Demoting is always allowed.
+	if !isCurrentlyAdmin && s.cfg().GetPeerProfile(clientName) == config.ProfileUpstream {
+		writeJSONError(w, http.StatusBadRequest, clientName+" is an upstream client (a nested hz). It cannot be a VPN admin: that would sign whoever holds that box in to this hz's API with no credential")
+		return
 	}
 
 	if err := s.updateConfig(func(cfg *config.Config) {
@@ -380,11 +431,8 @@ func (s *Server) handleAPISetPeerProfile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	switch profile {
-	case config.ProfileLanAccess, config.ProfileFullTunnel, config.ProfileVPNOnly:
-		// valid
-	default:
-		writeJSONError(w, http.StatusBadRequest, "Invalid profile: must be lan-access, full-tunnel, or vpn-only")
+	if err := s.cfg().CheckPeerProfileChange(name, profile); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -404,6 +452,13 @@ func (s *Server) handleAPISetPeerProfile(w http.ResponseWriter, r *http.Request)
 // when fleet peers have VPNRange configured (site-to-site topology).
 func (s *Server) generateClientConfig(clientPrivKey, clientIP, profile string) string {
 	cfg := s.cfg()
+
+	// Upstream first: one site, the gateway's WG address /32, no DNS — the
+	// address the rules admit, from the same source the rules read it from.
+	if profile == config.ProfileUpstream {
+		return wireguard.GenerateUpstreamClientConfig(
+			clientPrivKey, clientIP, cfg.ServerPublicKey, cfg.ServerEndpoint, s.gatewayWGIP())
+	}
 
 	// Check if any fleet peer has VPNRange — if so, multi-site mode.
 	var sites []wireguard.SitePeer
@@ -433,6 +488,16 @@ func (s *Server) generateClientConfig(clientPrivKey, clientIP, profile string) s
 		cfg.ServerPublicKey, cfg.ServerEndpoint,
 		cfg.DNS, cfg.GetAllowedIPsForProfile(profile),
 	)
+}
+
+// gatewayWGIP is this gateway's address on wg0, read the way every
+// iptables.Inputs.ServerWGIP is (wg0.conf's Address, mask dropped), so an
+// upstream client's config and the rule that admits it name one address.
+func (s *Server) gatewayWGIP() string {
+	if s.wg == nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.Split(s.wg.GetAddress(), "/")[0])
 }
 
 // rebuildWGChains rebuilds both horizon-owned iptables chains from the current

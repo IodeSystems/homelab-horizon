@@ -782,6 +782,36 @@ PersistentKeepalive = 25
 `, clientPrivateKey, clientIPForAddress, dns, serverPubKey, serverEndpoint, allowedIPs)
 }
 
+// GenerateUpstreamClientConfig renders the .conf a nested hz is handed for its
+// `upstream` VPN client (config.ProfileUpstream).
+//
+// It differs from GenerateClientConfig in three lines, each on purpose:
+//   - AllowedIPs is the gateway's WG address /32 only — the one address the
+//     gateway's rules admit (iptables upstreamRules), so the child routes
+//     nothing else into the tunnel;
+//   - Address is the client's /32, not /24: the child is itself an hz and
+//     very likely runs its own VPN on a /24 of its own, which a /24 here would
+//     shadow with a connected route;
+//   - there is NO DNS line: the child reaches the parent by IP, port 53 is not
+//     admitted, and wg-quick would otherwise replace the child's resolver with
+//     one it cannot reach.
+//
+// Single-site even in a multi-site fleet: an upstream client reaches one hz.
+//
+// clientPrivateKey arrives as an argument, as for GenerateClientConfig.
+func GenerateUpstreamClientConfig(clientPrivateKey, clientIP, serverPubKey, serverEndpoint, serverWGIP string) string {
+	return fmt.Sprintf(`[Interface]
+PrivateKey = %s
+Address = %s/32
+
+[Peer]
+PublicKey = %s
+Endpoint = %s
+AllowedIPs = %s/32
+PersistentKeepalive = 25
+`, clientPrivateKey, strings.TrimSuffix(clientIP, "/32"), serverPubKey, serverEndpoint, serverWGIP)
+}
+
 // SitePeer describes one site's WireGuard server for multi-site client configs.
 type SitePeer struct {
 	PublicKey  string
