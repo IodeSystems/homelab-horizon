@@ -25,6 +25,11 @@
  * on — never a descendant merely visible in the list. Edit and remove act on
  * the RUNG'S OWN PROJECT instead, which is `env.project` and not necessarily
  * the page's project when the wider scope is showing a descendant's rung.
+ *
+ * THE UPSTREAM CONTROL IS A SELECT TOO, over declared machines WITH an hz
+ * marker only (`MachineResp.hz`). `config.CheckUpstream` refuses a name that
+ * resolves to no machine, or to one without the marker; the select offers
+ * neither, and never free text.
  */
 import { useEffect, useState } from "react";
 import {
@@ -47,8 +52,72 @@ import {
   useRemoveEnvironment,
   useSetEnvironment,
 } from "../../api/environmentHooks";
-import type { DependantResp, EnvironmentResp, RemovalResp } from "../../api/generated-types";
+import { useMachines } from "../../api/hooks";
+import type { DependantResp, EnvironmentResp, MachineResp, RemovalResp } from "../../api/generated-types";
 import { POSTURES } from "./model.ts";
+
+/** The only legal Upstream values: declared machines that run their own hz. */
+export function upstreamOptions(machines: MachineResp[]): MachineResp[] {
+  return machines.filter((m) => m.hz).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Where this rung's placements are held: here (blank), or a nested hz. The
+ * current value stays selectable while the machine list is unread, so opening
+ * the dialog never reads as clearing it.
+ */
+export function UpstreamSelect({
+  value,
+  onChange,
+  machines,
+  state,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  machines: MachineResp[];
+  state: "loading" | "failed" | "ready";
+}) {
+  const options = upstreamOptions(machines);
+  const listed = options.some((m) => m.name === value);
+  return (
+    <TextField
+      select
+      fullWidth
+      label="Upstream"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      helperText={
+        state === "loading"
+          ? "Reading the declared machines…"
+          : state === "failed"
+            ? "hz could not list the machines, so no upstream can be offered — leave this as it is."
+            : options.length === 0
+              ? "No declared machine runs its own hz. Declare a nested instance (Instances → Add instance) to place a rung in one."
+              : "Only a declared machine that runs its own hz. Blank: this hz holds the rung's placements."
+      }
+      sx={{ mb: 2 }}
+      slotProps={{ htmlInput: { "data-upstream-select": true } }}
+    >
+      <MenuItem value="">
+        <em>none — placed here</em>
+      </MenuItem>
+      {options.map((m) => (
+        <MenuItem key={m.name} value={m.name} sx={{ fontFamily: "monospace" }} data-upstream-option={m.name}>
+          {m.name}
+        </MenuItem>
+      ))}
+      {value !== "" && !listed ? (
+        <MenuItem value={value} sx={{ fontFamily: "monospace" }}>
+          {value}
+        </MenuItem>
+      ) : null}
+    </TextField>
+  );
+}
+
+function machinesState(q: { isLoading: boolean; isError: boolean }): "loading" | "failed" | "ready" {
+  return q.isError ? "failed" : q.isLoading ? "loading" : "ready";
+}
 
 /**
  * This project's already-declared rungs, as the only legal values for a
@@ -112,6 +181,8 @@ export function AddEnvironmentDialog({
   const [posture, setPosture] = useState("");
   const [from, setFrom] = useState("");
   const [version, setVersion] = useState("");
+  const [upstream, setUpstream] = useState("");
+  const machines = useMachines();
 
   // Each opening starts blank, not from the last attempt.
   useEffect(() => {
@@ -120,6 +191,7 @@ export function AddEnvironmentDialog({
       setPosture("");
       setFrom("");
       setVersion("");
+      setUpstream("");
       add.reset();
     }
   }, [open]);
@@ -135,6 +207,7 @@ export function AddEnvironmentDialog({
         posture,
         ...(from ? { from } : {}),
         ...(version.trim() ? { version: version.trim() } : {}),
+        ...(upstream ? { upstream } : {}),
       },
       { onSuccess: onClose },
     );
@@ -184,8 +257,14 @@ export function AddEnvironmentDialog({
           value={version}
           onChange={(e) => setVersion(e.target.value)}
           helperText="Left blank, hz projects NO PACKAGE AT ALL for this rung — not the newest one."
-          sx={{ mb: 1 }}
+          sx={{ mb: 2 }}
           slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
+        />
+        <UpstreamSelect
+          value={upstream}
+          onChange={setUpstream}
+          machines={machines.data ?? []}
+          state={machinesState(machines)}
         />
         {add.error ? (
           <Alert severity="error" sx={{ mt: 1 }}>
@@ -218,6 +297,8 @@ export function EditEnvironmentDialog({
   const [posture, setPosture] = useState("");
   const [from, setFrom] = useState("");
   const [version, setVersion] = useState("");
+  const [upstream, setUpstream] = useState("");
+  const machines = useMachines();
 
   // Each opening starts from what hz holds now, not from the last edit.
   useEffect(() => {
@@ -225,6 +306,7 @@ export function EditEnvironmentDialog({
     setPosture(env.posture);
     setFrom(env.from ?? "");
     setVersion(env.version ?? "");
+    setUpstream(env.upstream ?? "");
     set.reset();
   }, [env]);
 
@@ -234,7 +316,12 @@ export function EditEnvironmentDialog({
   const changedPosture = env !== null && posture !== env.posture ? posture : undefined;
   const changedFrom = env !== null && from !== (env.from ?? "") ? from : undefined;
   const changedVersion = env !== null && version !== (env.version ?? "") ? version : undefined;
-  const dirty = changedPosture !== undefined || changedFrom !== undefined || changedVersion !== undefined;
+  const changedUpstream = env !== null && upstream !== (env.upstream ?? "") ? upstream : undefined;
+  const dirty =
+    changedPosture !== undefined ||
+    changedFrom !== undefined ||
+    changedVersion !== undefined ||
+    changedUpstream !== undefined;
 
   const submit = () => {
     if (env === null) return;
@@ -245,6 +332,7 @@ export function EditEnvironmentDialog({
         ...(changedPosture !== undefined ? { posture: changedPosture } : {}),
         ...(changedFrom !== undefined ? { from: changedFrom } : {}),
         ...(changedVersion !== undefined ? { version: changedVersion } : {}),
+        ...(changedUpstream !== undefined ? { upstream: changedUpstream } : {}),
       },
       { onSuccess: onClose },
     );
@@ -278,8 +366,14 @@ export function EditEnvironmentDialog({
           value={version}
           onChange={(e) => setVersion(e.target.value)}
           helperText="Cleared, hz projects NO PACKAGE AT ALL for this rung — not the newest one."
-          sx={{ mb: 1 }}
+          sx={{ mb: 2 }}
           slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
+        />
+        <UpstreamSelect
+          value={upstream}
+          onChange={setUpstream}
+          machines={machines.data ?? []}
+          state={machinesState(machines)}
         />
         {set.error ? (
           <Alert severity="error" sx={{ mt: 1 }}>

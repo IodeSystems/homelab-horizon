@@ -10,9 +10,13 @@
  * the redline session): a **cluster node** — another copy of this hz, an HA
  * peer sharing its records — goes to the existing join flow on Settings → HA
  * Fleet; a **nested instance** — a separate hz with its own records and keys,
- * joined as a segment client (redline-prod-hz) — is shown greyed with what it
- * waits on, because its backend does not exist yet (plan.md, Tier 1b).
- * Greyed with a reason, never removed.
+ * joined as a segment client (redline-prod-hz) — is DECLARED from here: a
+ * nested hz is a Machine that runs hz (plan.md Tier 1b, decided 2026-09-29),
+ * so the option opens `AddMachineDialog` with its hz URL required, and a rung
+ * is then placed in it through `Environment.Upstream`. What a nested instance
+ * cannot do yet — mirror packages, proxy config — is said on the option in
+ * `NESTED_WAITS_ON`: greyed with a reason, never removed, and shrinking as
+ * each piece lands.
  */
 import { useMemo, useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
@@ -38,24 +42,28 @@ import {
   TableRow,
   Typography,
 } from "@mui/material";
+import type { InstanceResp } from "../api/generated-types";
 import { useProjects } from "../api/hooks";
 import { useInstances } from "../api/instanceHooks";
 import { AddButton, EmptyRow, TabHeader } from "../components/model/FlowBits";
 import { LocationCell, PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
 import { buildProjectIndex } from "../components/model/projectRoutes.ts";
-import { peersLabel, projectOf, readInstancesSource } from "../components/instances/instances";
+import { isNested, peersLabel, projectOf, readInstancesSource } from "../components/instances/instances";
+import { AddMachineDialog } from "../components/model/MachineDialogs";
 
-/** What a nested instance waits on — plan.md Tier 1b, N1–N4. Kept beside the
- * option it greys so the two cannot drift apart unnoticed. */
+/** What a declared nested instance cannot do yet — plan.md Tier 1b. N3
+ * (`Environment.Upstream`) is built and is no longer listed. The tunnel code
+ * (N1) landed but has never run on a box and does not survive a reboot, so it
+ * stays. Kept beside the option it qualifies so the two cannot drift apart
+ * unnoticed. */
 export const NESTED_WAITS_ON = [
-  "a segment that is an actual WireGuard tunnel",
+  "a segment tunnel proven on a box (the code landed; it does not yet survive a reboot)",
   "an armed agent",
-  "Environment.Upstream",
   "the registry crossing (packages mirrored, config proxied)",
 ];
 
 /** The kind choice, apart from its dialog so a render check can draw it. */
-export function AddInstanceKindPanel({ onCluster }: { onCluster: () => void }) {
+export function AddInstanceKindPanel({ onCluster, onNested }: { onCluster: () => void; onNested: () => void }) {
   return (
     <List disablePadding data-instance-kinds>
       <ListItemButton onClick={onCluster} aria-label="Cluster node">
@@ -64,10 +72,18 @@ export function AddInstanceKindPanel({ onCluster }: { onCluster: () => void }) {
           secondary="Another copy of this hz — an HA peer that shares its records. Joined from Settings → HA Fleet."
         />
       </ListItemButton>
-      <ListItemButton disabled aria-label="Nested instance" data-nested-disabled>
+      <ListItemButton onClick={onNested} aria-label="Declare a nested instance" data-nested-kind>
         <ListItemText
-          primary="Nested instance — not available yet"
-          secondary={`A separate hz with its own records and keys, in its own project and segment, joined as a segment client (e.g. a prod gateway). Waits on: ${NESTED_WAITS_ON.join("; ")}.`}
+          primary="Declare a nested instance"
+          secondary={
+            <>
+              A separate hz with its own records and keys, in its own project (e.g. a prod gateway). Declares its
+              machine with the URL it answers on; a rung is then placed in it (Upstream).{" "}
+              <span data-nested-cannot>
+                It cannot yet mirror packages or proxy config — that waits on: {NESTED_WAITS_ON.join("; ")}.
+              </span>
+            </>
+          }
         />
       </ListItemButton>
     </List>
@@ -77,6 +93,7 @@ export function AddInstanceKindPanel({ onCluster }: { onCluster: () => void }) {
 function AddInstance() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [declaring, setDeclaring] = useState(false);
   return (
     <>
       <AddButton label="Add instance" onClick={() => setOpen(true)} />
@@ -88,14 +105,23 @@ function AddInstance() {
               setOpen(false);
               navigate({ to: "/settings", search: { tab: "ha-fleet" } });
             }}
+            onNested={() => {
+              setOpen(false);
+              setDeclaring(true);
+            }}
           />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpen(false)}>Cancel</Button>
         </DialogActions>
       </Dialog>
+      <AddMachineDialog nested open={declaring} onClose={() => setDeclaring(false)} />
     </>
   );
+}
+
+function rowKey(row: InstanceResp): string {
+  return `${row.self ? "self" : isNested(row) ? "nested" : "peer"}:${row.name}`;
 }
 
 export function InstancesScreen() {
@@ -135,7 +161,7 @@ export function InstancesScreen() {
             <TableBody>
               {source.rows.map((row) => (
                 <TableRow
-                  key={`${row.self ? "self" : "peer"}:${row.name}`}
+                  key={rowKey(row)}
                   hover
                   data-instance-row={row.name}
                   sx={{ cursor: "pointer" }}

@@ -1,9 +1,10 @@
 /**
  * Readings for `/instances` — decided here, drawn by the two routes.
  *
- * A row is an hz INSTANCE: this gateway plus the HA peers its config names
- * (`GET /api/v1/instances`). Cluster is the HA peer fleet; standalone means
- * no peers are declared.
+ * A row is an hz INSTANCE: this gateway, the HA peers its config names, and
+ * every declared machine that runs its own hz (`GET /api/v1/instances`, role
+ * "nested"). Cluster is the HA peer fleet; standalone means no peers are
+ * declared. A nested hz is NOT in the cluster — a separate config layer.
  */
 import type { InstanceResp } from "../../api/generated-types";
 
@@ -28,10 +29,17 @@ export function readInstancesSource(q: {
   return { state: "loading" };
 }
 
-/** "with 2 peers", or "—" when there is no cluster to be in. */
+/** A nested hz: a separate config layer, never a cluster member. */
+export function isNested(row: InstanceResp): boolean {
+  return row.role === "nested";
+}
+
+/** "with 2 peers", "—" when there is no cluster to be in, and "separate
+ * config layer" for a nested hz. Nested rows are never counted as peers. */
 export function peersLabel(row: InstanceResp, rows: InstanceResp[]): string {
+  if (isNested(row)) return "separate config layer";
   if (row.role === "standalone") return "—";
-  const n = rows.length - 1;
+  const n = rows.filter((r) => !isNested(r)).length - 1;
   return `with ${n} peer${n === 1 ? "" : "s"}`;
 }
 

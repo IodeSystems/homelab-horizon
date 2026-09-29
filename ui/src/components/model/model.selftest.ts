@@ -60,7 +60,7 @@ function gap(section: string, reason: string, why = "a sentence naming what woul
 }
 
 function env(over: Partial<EnvironmentResp>): EnvironmentResp {
-  return { project: "storefront", name: "prod", posture: "prod", ...over };
+  return { project: "storefront", name: "prod", posture: "prod", placement: { state: "here", statement: "placed here" }, ...over };
 }
 
 function instance(over: Partial<InstanceVersion>): InstanceVersion {
@@ -230,6 +230,30 @@ console.log("· placement has three answers, and 'hz cannot say' is one of them"
     otherProject.knowledge === "unplaced",
     "another project's rung named 'prod' does not place this one — the name alone is not an identity",
   );
+}
+
+// ---------------------------------------------------------------------------
+console.log("· a rung placed in a nested hz is a fifth answer: 'in <upstream>', not unplaced, not unknown");
+// ---------------------------------------------------------------------------
+{
+  const remote = env({
+    name: "pci",
+    upstream: "prod-hz",
+    placement: { state: "remote", upstream: "prod-hz", url: "https://hz.example.invalid", statement: "placed in prod-hz" },
+  });
+  const asked = readPlacement(remote, []);
+  const unasked = readPlacement(remote, null);
+  check(asked.knowledge === "remote" && asked.headline === "in prod-hz", `an upstream rung reads 'in prod-hz' — got ${asked.headline}`);
+  check(unasked.knowledge === "remote", "and does so even when this hz's registrations cannot be read — the question is the upstream's");
+  check(asked.tone === "neutral", "a rung placed elsewhere is not a fault and not a next step");
+  check(asked.meaning.includes("https://hz.example.invalid"), "its meaning carries the upstream's URL");
+  const conflict = readPlacement(remote, [instance({ environment: "pci", machine: "app-1" })]);
+  check(
+    conflict.knowledge === "remote" && conflict.tone !== "neutral" && conflict.meaning.includes("app-1"),
+    "an instance registered HERE at a rung placed elsewhere is said, naming the machine — not hidden",
+  );
+  const here = readPlacement(env({ name: "pci" }), []);
+  check(here.knowledge === "unplaced", "the same rung with no upstream is unplaced — the two never collapse");
 }
 
 // ---------------------------------------------------------------------------

@@ -445,6 +445,19 @@ function MachineProjectionScreen() {
           Edit
         </Button>
       </Box>
+      {record?.hz ? (
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 2 }} data-machine-hz>
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
+            Runs its own hz
+          </Typography>
+          <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+            {record.hz.url}
+          </Typography>
+          <Typography variant="caption" sx={{ color: "text.secondary" }}>
+            a nested instance — a separate config layer, not an HA peer; this hz never contacts it
+          </Typography>
+        </Box>
+      ) : null}
       <RemoveMachineDialog name={removing ? machine : null} onClose={() => setRemoving(false)} />
       <EditMachineDialog machine={editing ? record : null} onClose={() => setEditing(false)} />
       <Legend />
