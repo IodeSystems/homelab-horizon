@@ -495,6 +495,18 @@ alert class with its own recovery, no longer "hz unreachable".
 **Open (operator):** hz still returns and diffs the ntfy URL (the topic is the
 secret on a public server); hide it too?
 
+**Vantage alert topic from the UI** (merged 2026-09-29, `a60afed`): set on a
+push vantage's edit dialog (write-only: `hasNtfyUrl`/`hasNtfyToken`); hz hands
+it to THAT vantage (matched by its bearer token, never the body's name) in the
+push reply; the vantage caches it (0600, boots from it with hz down) and follows
+changes hot. A host file/env/flag still wins. Only editable after the vantage's
+first report (a push vantage registers itself).
+⚠ **Found and fixed with it — a LIVE leak:** the pending diff compared
+`remote_probes` as one stringified array, so every vantage edit printed that
+vantage's token in full into `/api/v1/pending` (admin-only, but the token is
+meant to be write-only). `2ccba84` strips `token`/`ntfy_url`/`ntfy_token` per
+vantage before diffing. Live until deployed.
+
 Two decisions worth keeping:
 
 - **The vantage token is write-only across the API.** `hasToken` says one is
