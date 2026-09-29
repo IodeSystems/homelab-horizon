@@ -70,6 +70,27 @@ const FLEET: InstanceResp[] = [
   }),
 ];
 
+/** A standalone gateway plus one declared nested hz (a Machine with an hz marker). */
+const WITH_NESTED: InstanceResp[] = [
+  inst({ declared: true, project: "storefront" }),
+  inst({
+    name: "prod-hz",
+    self: false,
+    address: "https://hz.prod.example.invalid",
+    role: "nested",
+    declared: true,
+    project: "storefront",
+    version: undefined,
+  }),
+];
+
+/** A primary with one peer, plus a nested hz — which must not count as a peer. */
+const FLEET_WITH_NESTED: InstanceResp[] = [
+  inst({ role: "primary", peerId: "gw-a", primaryId: "gw-a" }),
+  inst({ name: "gw-b", self: false, address: "10.100.0.2:8080", role: "replica", peerId: "gw-b", primaryId: "gw-a", version: undefined }),
+  inst({ name: "prod-hz", self: false, address: "https://hz.prod.example.invalid", role: "nested", declared: true, version: undefined }),
+];
+
 const REPLICA_SELF: InstanceResp[] = [
   inst({
     role: "replica",
@@ -300,26 +321,58 @@ console.log("· /hosts redirects, and the gateway group links Instances");
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-console.log("· [Add instance] asks for the kind: cluster node, or nested (greyed, with what it waits on)");
+console.log("· a nested hz is its own row: its URL, its owner, 'nested', never a peer");
+// ---------------------------------------------------------------------------
+{
+  const r = await at("/instances", WITH_NESTED);
+  check(rowCount(r.html) === 2, `self + one nested is 2 rows — got ${rowCount(r.html)}`);
+  const n = rowText(r.html, "prod-hz");
+  check(n.includes("https://hz.prod.example.invalid"), "the nested row's address is its hz URL");
+  check(n.includes("storefront"), "and its project is its machine record's owner");
+  check(n.includes("nested") && n.includes("separate config layer"), `its Cluster cell says nested, a separate layer — got: ${n}`);
+  check(!/\bthis\b/.test(n), "and it carries no 'this' chip");
+  check(rowText(r.html, "gw-host").includes("standalone"), "self stays standalone — a nested hz is no cluster");
+
+  const f = await at("/instances", FLEET_WITH_NESTED);
+  check(rowText(f.html, "gw-host").includes("with 1 peer"), "a nested row is not counted as a peer");
+  check(!rowText(f.html, "prod-hz").includes("peer"), "and says nothing about peers itself");
+
+  const d = await at("/instances/prod-hz", WITH_NESTED);
+  check(d.text.includes("A separate hz") && d.text.includes("not a member of this cluster"), "its detail says what it is");
+  check(!d.text.includes("Config primary"), "and names no config primary");
+  check(!d.text.includes("Settings → HA Fleet"), "and does not send you to HA Fleet for it");
+  check(/href="\/machines\/prod-hz"/.test(d.html), "its owner is edited on its machine page");
+  check(!/aria-label="(Change project|Put in a project)"/.test(d.html), "with no self control here");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· [Add instance] asks for the kind: cluster node, or declare a nested instance");
 // ---------------------------------------------------------------------------
 {
   // Operator, 2026-09-29 (relayed from the redline session): "an instance
   // comes in two flavors, and the add flow has no way to say which."
   const html = renderToStaticMarkup(
     <ThemeProvider theme={baseTheme}>
-      <AddInstanceKindPanel onCluster={() => {}} />
+      <AddInstanceKindPanel onCluster={() => {}} onNested={() => {}} />
     </ThemeProvider>,
   ).replace(/<style[^>]*>[\s\S]*?<\/style>/g, " ");
   const text = html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
   check(text.includes("Cluster node"), "the cluster-node kind is offered");
   check(/aria-label="Cluster node"(?:(?!aria-label)[\s\S])*?HA Fleet/.test(html), "and says it joins from Settings → HA Fleet");
-  const nested = /<[^>]*data-nested-disabled[^>]*>/.exec(html)?.[0] ?? "";
-  check(nested !== "", "the nested kind is offered too — greyed, not removed");
-  check(/Mui-disabled|aria-disabled="true"|disabled=""/.test(nested), "and it is disabled");
+  const nested = /<[^>]*data-nested-kind[^>]*>/.exec(html)?.[0] ?? "";
+  check(nested !== "", "the nested kind is offered");
+  check(!/Mui-disabled|aria-disabled="true"|disabled=""/.test(nested), "and ENABLED: declaring one is built (N3)");
+  check(text.includes("Declare a nested instance"), "as a declaration");
+  check(!/data-nested-disabled/.test(html), "the old greyed option is gone");
+  const cannot = /data-nested-cannot[^>]*>([\s\S]*?)<\/span>/.exec(html)?.[1] ?? "";
+  check(cannot.includes("mirror packages") && cannot.includes("proxy config"), "it says what it cannot do yet");
   check(
-    NESTED_WAITS_ON.every((w) => text.includes(w)),
-    "and it names every thing it waits on (plan.md Tier 1b N1–N4)",
+    NESTED_WAITS_ON.every((w) => cannot.includes(w)),
+    "and names every thing that still waits (plan.md Tier 1b)",
   );
+  check(!NESTED_WAITS_ON.some((w) => w.includes("Upstream")), "Upstream is built, so it is not listed as waited on");
+  check(NESTED_WAITS_ON.some((w) => w.includes("armed agent")), "an armed agent still is");
+  check(NESTED_WAITS_ON.some((w) => w.includes("registry crossing")), "and so is the registry crossing");
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);
