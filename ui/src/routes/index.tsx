@@ -42,6 +42,7 @@ import SyncProblemIcon from "@mui/icons-material/SyncProblem";
 import {
   useAgentObserved,
   useChecks,
+  useServices,
   useCMRegistrations,
   useDashboard,
   useDNSDriftStatus,
@@ -213,6 +214,7 @@ function OverviewPage() {
   const dnsDrift = useDNSDriftStatus();
   const checks = useChecks();
   const pendingChanges = usePendingChanges();
+  const services = useServices();
 
   const result = buildOverview({
     // useAgentObserved answers the whole envelope (machines + hz's clock);
@@ -226,6 +228,9 @@ function OverviewPage() {
     dnsDrift: answerFrom(dnsDrift, "DNS drift"),
     checks: answerFrom(checks, "health checks"),
     pendingChanges: answerFrom(pendingChanges, "pending changes"),
+    // For grouping a service's checks into one row. Not a source: unanswered,
+    // each check is simply its own row.
+    services: services.data,
   });
 
   return (

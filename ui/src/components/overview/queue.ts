@@ -106,6 +106,10 @@ export interface OverviewInputs {
   dnsDrift: Answer<DNSDriftStatusResponse>;
   checks: Answer<CheckStatus[]>;
   pendingChanges: Answer<PendingChanges>;
+  /** Services, for grouping checks by the service they watch. Optional and
+   * not a SOURCE: without it every check is its own row, which is correct,
+   * just less grouped. */
+  services?: { name: string; domains: string[] }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +139,9 @@ export interface QueueItem {
    * diffed it (`PendingItem.fields`). The operator's report: a row naming
    * only the record did not say what a Sync would publish. */
   changes?: { path: string; before: string; after: string }[];
+  /** Grouped rows only: one line per member, e.g. one per vantage that sees
+   * the same service failing. */
+  details?: string[];
 }
 
 export interface TierGroup {
@@ -242,18 +249,78 @@ function dnsDriftItems(status: DNSDriftStatusResponse): QueueItem[] {
  * ordinary states — not a fault and not "hz cannot see it" — so they are not
  * queue rows. See internal/monitor/monitor.go's own constants for the set.
  */
-function checkItems(checks: CheckStatus[]): QueueItem[] {
-  return checks
-    .filter((c) => c.status === "failed" || c.status === "warning")
-    .map((c) => ({
-      id: `checks:${c.name}`,
+/**
+ * Which service a check watches, or "" when it cannot be said.
+ *
+ * `svc:<name>` is hz's own check on a service. `ext:<vantage>:<kind>:<host>`
+ * is a vantage's outside-in check on a domain (`internal/monitor/remote.go`
+ * `remoteCheckName`); its target IS the host, which maps to the service that
+ * serves it. A vantage's own `ext:<vantage>:agent` row watches the vantage,
+ * not a service.
+ */
+export function serviceOfCheck(c: CheckStatus, serviceByDomain: Map<string, string>): string {
+  if (c.name.startsWith("svc:")) return c.name.slice(4);
+  if (c.name.startsWith("ext:") && c.type !== "agent") return serviceByDomain.get(c.target) ?? "";
+  return "";
+}
+
+function checkLine(c: CheckStatus): string {
+  const where = c.vantage ? `from ${c.vantage}` : "from hz";
+  const what = c.last_error || `${c.status}`;
+  return `${where} (${c.type} ${c.target}): ${what}`;
+}
+
+/**
+ * Failing and warning checks, GROUPED BY THE SERVICE they watch.
+ *
+ * The operator's report: `svc:sprink` (hz → backend, host unreachable) and
+ * `ext:gcp-usw1:https:sprink.iodesystems.com` (outside-in, HTTP 503) were two
+ * rows for one outage. One service, one row, one line per viewpoint. A check
+ * that names no service stays its own row, exactly as before.
+ */
+function checkItems(checks: CheckStatus[], services: { name: string; domains: string[] }[] = []): QueueItem[] {
+  const serviceByDomain = new Map<string, string>();
+  for (const svc of services) for (const d of svc.domains) serviceByDomain.set(d, svc.name);
+
+  const bad = checks.filter((c) => c.status === "failed" || c.status === "warning");
+  const groups = new Map<string, CheckStatus[]>();
+  const alone: CheckStatus[] = [];
+  for (const c of bad) {
+    const svc = serviceOfCheck(c, serviceByDomain);
+    if (svc === "") alone.push(c);
+    else groups.set(svc, [...(groups.get(svc) ?? []), c]);
+  }
+
+  const one = (c: CheckStatus): QueueItem => ({
+    id: `checks:${c.name}`,
+    tier: "fault",
+    source: "checks",
+    headline: `${c.name} is ${c.status}`,
+    meaning: c.last_error || `${c.type} against ${c.target} is not passing.`,
+    to: "/checks",
+    ageSeconds: secondsSince(c.last_check),
+  });
+
+  const out: QueueItem[] = alone.map(one);
+  for (const [svc, members] of groups) {
+    if (members.length === 1) {
+      out.push(one(members[0]!));
+      continue;
+    }
+    const ages = members.map((c) => secondsSince(c.last_check)).filter((a): a is number => a !== undefined);
+    const status = members.some((c) => c.status === "failed") ? "failing" : "warning";
+    out.push({
+      id: `checks-service:${svc}`,
       tier: "fault",
       source: "checks",
-      headline: `${c.name} is ${c.status}`,
-      meaning: c.last_error || `${c.type} against ${c.target} is not passing.`,
+      headline: `${svc}: ${members.length} checks ${status}`,
+      meaning: `One service, seen failing from ${members.length} places.`,
       to: "/checks",
-      ageSeconds: secondsSince(c.last_check),
-    }));
+      ageSeconds: ages.length > 0 ? Math.min(...ages) : undefined,
+      details: members.map(checkLine),
+    });
+  }
+  return out;
 }
 
 function pendingChangeItems(pending: PendingChanges): QueueItem[] {
@@ -298,7 +365,7 @@ export function buildOverview(inputs: OverviewInputs): OverviewResult {
   take("fleet", inputs.fleet, fleetItems);
   take("cm-pending", inputs.cmPending, cmPendingItems);
   take("dns-drift", inputs.dnsDrift, dnsDriftItems);
-  take("checks", inputs.checks, checkItems);
+  take("checks", inputs.checks, (c) => checkItems(c, inputs.services));
   take("pending-changes", inputs.pendingChanges, pendingChangeItems);
 
   items.sort((a, z) => {
