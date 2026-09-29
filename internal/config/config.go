@@ -20,6 +20,11 @@ const (
 	ProfileLanAccess  = "lan-access"
 	ProfileFullTunnel = "full-tunnel"
 	ProfileVPNOnly    = "vpn-only"
+
+	// ProfileUpstream is a nested hz reaching this (its parent) hz: the one
+	// port hz's own API listens on, at the gateway's WG address, and nothing
+	// else — no other VPN client, no LAN, nothing forwarded. See vpn_upstream.go.
+	ProfileUpstream = "upstream"
 )
 
 // DNSProviderType identifies the DNS provider for ACME challenges and DNS management
@@ -388,7 +393,8 @@ type Config struct {
 	// VPN-based admin authentication
 	VPNAdmins []string `json:"vpn_admins,omitempty"` // Client names with admin access via VPN IP
 
-	// Per-peer routing profiles: "lan-access" (default), "full-tunnel", "vpn-only"
+	// Per-peer routing profiles: "lan-access" (default), "full-tunnel",
+	// "vpn-only", "upstream" (ValidPeerProfile)
 	VPNProfiles map[string]string `json:"vpn_profiles,omitempty"`
 
 	// VPNProjects attributes a VPN client to a project: peer name -> project.
@@ -2013,6 +2019,14 @@ func (c *Config) IsPeerMFAJailed(name string) bool {
 	if !c.VPNMFAEnabled {
 		return false
 	}
+	// An upstream client is never jailed: it can reach only hz's API
+	// (ProfileUpstream's rules), which authenticates it by enrolment, so MFA
+	// would protect nothing it can reach — and a jailed machine has no person
+	// to answer the prompt. Exempted here, where the jail set is built, so the
+	// rules, the HAProxy ACL and the jailed-peer count all agree.
+	if c.GetPeerProfile(name) == ProfileUpstream {
+		return false
+	}
 	// A live, time-limited exception. Honoured in both scopes — it is the only
 	// bypass "all" mode permits, and the only one an assessor can audit.
 	if c.HasActiveMFAException(name) {
@@ -2843,6 +2857,12 @@ func (c *Config) GetAllowedIPsForProfile(profile string) string {
 			return c.VPNRange
 		}
 		return "10.100.0.0/24"
+	case ProfileUpstream:
+		// The gateway's own WG address and nothing else. The server renders
+		// an upstream config from the LIVE wg0 address instead
+		// (wireguard.GenerateUpstreamClientConfig), the same address the
+		// rules admit; this is the answer when only the config is at hand.
+		return c.GetWGGatewayIP() + "/32"
 	default:
 		return c.GetAllowedIPs()
 	}

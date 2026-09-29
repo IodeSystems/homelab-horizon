@@ -797,6 +797,13 @@ func (s *Server) isVPNAdmin(r *http.Request) bool {
 	if peer == nil {
 		return false
 	}
+	// Never an upstream client, whatever VPNAdmins says: it reaches only this
+	// API, so an address-based sign-in would be the whole of its reach. The
+	// toggle and CheckPeerProfileChange refuse the combination; this holds
+	// if a config arrives with it anyway (peer-sync, a hand edit).
+	if s.cfg().GetPeerProfile(peer.Name) == config.ProfileUpstream {
+		return false
+	}
 
 	for _, adminName := range s.cfg().VPNAdmins {
 		if peer.Name == adminName {

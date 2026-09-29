@@ -1140,6 +1140,12 @@ export interface MachineResp {
  */
 export interface MachineHZResp {
   url: string;
+  /**
+   * VPNClient is the `upstream` VPN client that hz reaches this one
+   * through, by name; empty is no link. Set on add; an edit that omits it
+   * keeps the existing one.
+   */
+  vpnClient?: string;
 }
 /**
  * MachineAddReq declares a machine. Segments are names; there is no Segment
@@ -2031,6 +2037,16 @@ export interface AddPeerResponse {
   ok: boolean;
   config: string;
   qrCode: string;
+  /**
+   * PublicKey is the new client's public key — what delete takes, so a flow
+   * that must undo the add (the nested-instance declaration) can.
+   */
+  publicKey?: string;
+  /**
+   * ParentURL is set for an `upstream` client only: the address the nested
+   * hz reaches this hz's API on — the one the upstream rules admit.
+   */
+  parentUrl?: string;
 }
 export interface PeerConfigResponse {
   ok: boolean;

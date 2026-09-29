@@ -10,7 +10,8 @@
 //   - filter WG-FORWARD (per-peer profile rules + default drop)
 //   - filter INPUT     (jump to WG-INPUT for wg-incoming traffic, plus one
 //     `-s <addr>/32 -j DROP` per banned address)
-//   - filter WG-INPUT  (MFA jail rules for traffic to the gateway itself)
+//   - filter WG-INPUT  (MFA jail rules and `upstream`-profile rules for traffic
+//     to the gateway itself)
 //   - layer-4 port forwards (forwards.go): nat HZ-PREROUTING, nat
 //     HZ-POSTROUTING and filter HZ-FORWARD, plus one jump into each from nat
 //     PREROUTING (narrowed to that jump on readback), nat POSTROUTING and
@@ -61,8 +62,9 @@ const ForwardChainName = "WG-FORWARD"
 // gateway (dnsmasq, sshd, and critically HAProxy, which would then originate
 // LAN-bound connections *from the gateway* and sidestep WG-FORWARD entirely).
 //
-// The chain holds rules for jailed peers only, and has no catch-all DROP:
-// unjailed peers fall through it untouched. With MFA off it is empty, and the
+// The chain holds rules for jailed peers and `upstream`-profile peers only
+// (upstreamRules), and has no catch-all DROP: every other peer falls through it
+// untouched. With MFA off it is empty, and the
 // INPUT jump is a no-op hash lookup.
 const InputChainName = "WG-INPUT"
 
@@ -282,6 +284,8 @@ func ExpectedRules(in Inputs) []Rule {
 		}
 
 		switch profile {
+		case "upstream":
+			rules = append(rules, upstreamRules(ip, in.ServerWGIP, in.ListenPort)...)
 		case "full-tunnel":
 			rules = append(rules, Rule{
 				Table: "filter",
@@ -439,6 +443,43 @@ func jailAllows(listenPort string, haproxyPorts []string) [][]string {
 	return append(allows,
 		[]string{"-p", "udp", "--dport", jailDNSPort},
 		[]string{"-p", "tcp", "--dport", jailDNSPort},
+	)
+}
+
+// upstreamRules is the `upstream` profile (config.ProfileUpstream): a nested hz
+// reaching this hz's API and nothing else.
+//
+//	WG-INPUT    -s <ip>/32 -d <serverWGIP>/32 -p tcp --dport <listenPort> -j ACCEPT
+//	WG-INPUT    -s <ip>/32 -j DROP
+//	WG-FORWARD  -s <ip>/32 -j DROP
+//
+// The one admitted port is hz's own listener — the port jailAllows calls
+// "horizon direct" (the first matcher it returns) and the one a VPN admin's
+// browser reaches hz on at the gateway's WG address. Not HAProxy's ports: HAProxy
+// fronts every vhost, LAN backends included, so admitting them would forward
+// the child to the LAN at L7 from the gateway itself. Not DNS: the child is
+// given an IP (config.ParentAPIURL), not a name. The existing profiles put no
+// rule in WG-INPUT at all, which is why they reach every daemon on the gateway;
+// this one is the first that closes INPUT.
+//
+// FAILS CLOSED, the opposite of the MFA jail: without the gateway's address or
+// hz's port there is no API rule to emit, and the DROPs are emitted anyway. The
+// jail fails open because a person would be stranded from the page that frees
+// them; an upstream client is a machine, and failing open would hand it every
+// listener on the gateway.
+func upstreamRules(ip, serverWGIP, listenPort string) []Rule {
+	src := ip + "/32"
+	var out []Rule
+	if serverWGIP != "" && listenPort != "" {
+		out = append(out, Rule{
+			Table: "filter",
+			Chain: InputChainName,
+			Args:  []string{"-s", src, "-d", serverWGIP + "/32", "-p", "tcp", "--dport", listenPort, "-j", "ACCEPT"},
+		})
+	}
+	return append(out,
+		Rule{Table: "filter", Chain: InputChainName, Args: []string{"-s", src, "-j", "DROP"}},
+		Rule{Table: "filter", Chain: ForwardChainName, Args: []string{"-s", src, "-j", "DROP"}},
 	)
 }
 
