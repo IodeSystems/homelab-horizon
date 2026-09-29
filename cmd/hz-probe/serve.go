@@ -101,7 +101,13 @@ func runServe(args []string) error {
 	// address to keep stable.
 	if f.pushMode() {
 		pusher := &probe.Pusher{URL: f.pushTo, Token: tok}
-		ntfy, err := resolveNtfyURL(f.ntfyURL, f.ntfyFile)
+		fileSet := false
+		fs.Visit(func(fl *flag.Flag) {
+			if fl.Name == "ntfy-url-file" {
+				fileSet = true
+			}
+		})
+		ntfy, err := resolveNtfyURL(f.ntfyURL, f.ntfyFile, fileSet)
 		if err != nil {
 			return err
 		}
@@ -201,22 +207,34 @@ func resolveToken(tokenFlag, tokenFile string) (string, error) {
 
 // resolveNtfyURL reads the optional ntfy topic URL the way resolveToken reads
 // the token: file, then HZ_PROBE_NTFY_URL, then the flag. Unlike the token,
-// finding none is not an error — it is the feature switched off. A file that
-// exists but is empty or unreadable IS an error: that is somebody's intent
-// gone wrong, and silently running without the alert they asked for is the
-// failure this feature exists to prevent.
-func resolveNtfyURL(urlFlag, file string) (string, error) {
+// finding none is not an error — it is the feature switched off.
+//
+// A file somebody NAMED (`fileSet`) that is empty or unreadable IS an error:
+// that is an intent gone wrong, and silently running without the alert they
+// asked for is the failure this feature exists to prevent.
+//
+// THE DEFAULT PATH IS NOT AN INTENT, and must never stop the agent. Found in
+// production 2026-09-28: a vantage installed before this feature updated
+// itself, its old unit passed no --ntfy-url-file, and the default
+// /etc/hz-probe/ntfy-url sits in a root-only directory — so the DynamicUser
+// got EACCES, not ENOENT, the agent exited, and it crash-looped 16,446 times.
+// An old unit plus a new binary is exactly what self-update produces.
+func resolveNtfyURL(urlFlag, file string, fileSet bool) (string, error) {
 	raw := ""
 	if file != "" {
 		b, err := os.ReadFile(file)
 		switch {
 		case err == nil:
 			raw = strings.TrimSpace(string(b))
-			if raw == "" {
+			if raw == "" && fileSet {
 				return "", fmt.Errorf("ntfy URL file %s is empty", file)
 			}
-		case !os.IsNotExist(err):
+		case os.IsNotExist(err):
+		case fileSet:
 			return "", fmt.Errorf("could not read ntfy URL file: %w", err)
+		default:
+			slog.Warn("probe: the default ntfy URL file cannot be read; vantage-side alerting is off",
+				"path", file, "error", err)
 		}
 	}
 	if raw == "" {
