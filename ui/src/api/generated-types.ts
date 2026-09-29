@@ -2048,6 +2048,12 @@ export interface RemoteProbeResp {
   pinSha256?: string;
   hasToken: boolean;
   /**
+   * The vantage's ntfy alert channel, write-only like the token: whether
+   * each part is set, never what it is.
+   */
+  hasNtfyUrl: boolean;
+  hasNtfyToken: boolean;
+  /**
    * Live state from the poll loop.
    */
   reachable: boolean;
@@ -2085,6 +2091,15 @@ export interface RemoteProbeRequest {
   timeout?: number /* int */;
   resolvers?: string[];
   pinSha256?: string;
+  /**
+   * NtfyURL and NtfyToken are the vantage's alert channel, handed to it in
+   * its push reply. Write-only like Token: empty on edit keeps the stored
+   * value, and only ClearNtfyURL / ClearNtfyToken remove one.
+   */
+  ntfyUrl?: string;
+  ntfyToken?: string;
+  clearNtfyUrl?: boolean;
+  clearNtfyToken?: boolean;
   /**
    * Rename targets an existing entry by its old name, so editing the name
    * is an edit rather than a delete plus an add.

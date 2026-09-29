@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -123,6 +122,13 @@ func runServe(args []string) error {
 		if err != nil {
 			return err
 		}
+		// Precedence: an ntfy URL on THIS host (file, environment, flag) wins
+		// over the channel the operator set in hz. Without one, the agent
+		// alerts wherever hz last said — cached, so it still works with hz
+		// down — and follows hz's changes without a restart.
+		if f.ntfyAfter >= 1 {
+			pusher.AlertThreshold = f.ntfyAfter
+		}
 		if ntfy != "" {
 			if f.ntfyAfter < 1 {
 				return fmt.Errorf("--ntfy-after must be at least 1, got %d", f.ntfyAfter)
@@ -131,9 +137,16 @@ func runServe(args []string) error {
 			// The URL and the token are secrets; log that they are set,
 			// never what they are.
 			slog.Info("hz-probe will alert ntfy if hz is unreachable or rejects this vantage",
-				"after_failures", f.ntfyAfter, "ntfy_token", ntfyToken != "")
-		} else if ntfyToken != "" {
-			slog.Warn("hz-probe: an ntfy token is set but no ntfy URL; vantage-side alerting is off")
+				"source", "host", "after_failures", f.ntfyAfter, "ntfy_token", ntfyToken != "",
+				"precedence", "this host's ntfy URL wins over the alert channel set in hz")
+		} else {
+			if ntfyToken != "" {
+				slog.Warn("hz-probe: an ntfy token is set on this host but no ntfy URL; it is ignored — " +
+					"a channel set in hz carries its own token")
+			}
+			slog.Info("hz-probe will alert the ntfy channel set in hz, if any",
+				"source", "hz", "cached_channel", agent.AlertChannel() != nil,
+				"precedence", "an ntfy URL on this host would win; none is set")
 		}
 		held := agent.Targets()
 		slog.Info("hz-probe reporting to hz",
@@ -240,8 +253,7 @@ func resolveNtfyURL(urlFlag, file string, fileSet bool) (string, error) {
 	if err != nil || raw == "" {
 		return "", err
 	}
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+	if !probe.ValidAlertURL(raw) {
 		// Not echoing the value: it is a secret.
 		return "", fmt.Errorf("the ntfy URL is not an http(s) URL with a host")
 	}

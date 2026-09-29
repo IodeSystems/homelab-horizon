@@ -18,6 +18,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/url"
 	"time"
 )
 
@@ -162,6 +163,28 @@ type PushResponse struct {
 	// the things hz needs a human to know about a vantage that is otherwise
 	// working.
 	Notice string `json:"notice,omitempty"`
+
+	// Alert is the ntfy channel the operator set for THIS vantage in hz — the
+	// one whose token authenticated the report, never another's. The vantage
+	// caches it and alerts there when it cannot reach hz. Absent means none
+	// is set in hz: an accepted reply without it clears the vantage's cached
+	// copy. A host-side ntfy URL (file, environment, flag) wins over it.
+	Alert *AlertChannel `json:"alert,omitempty"`
+}
+
+// AlertChannel is where a vantage posts "hz is down". Both fields are
+// secrets: the URL is a capability on the topic, the token an ntfy
+// credential. Never logged.
+type AlertChannel struct {
+	URL   string `json:"url"`
+	Token string `json:"token,omitempty"`
+}
+
+// ValidAlertURL reports whether raw is an http(s) URL with a host — the one
+// rule for an ntfy topic URL, wherever it came from.
+func ValidAlertURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != ""
 }
 
 // PollResponse is the agent's answer: what it holds, and what it saw.

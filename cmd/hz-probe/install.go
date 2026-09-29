@@ -210,7 +210,7 @@ func runInstall(args []string) error {
 			if fileExists(f.ntfyFile) {
 				fmt.Printf("Would pass the ntfy URL in %s as a credential (alert after %d failed reports)\n", f.ntfyFile, f.ntfyAfter)
 			} else {
-				fmt.Printf("No ntfy URL at %s: no alert if this host cannot reach hz\n", f.ntfyFile)
+				fmt.Printf("No ntfy URL at %s: alerts go to the topic set for this vantage in hz, if any\n", f.ntfyFile)
 			}
 			if fileExists(f.ntfyTokenFile) {
 				fmt.Printf("Would pass the ntfy token in %s as a credential (sent as a Bearer header)\n", f.ntfyTokenFile)

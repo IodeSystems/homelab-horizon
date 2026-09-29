@@ -1459,6 +1459,16 @@ type RemoteProbe struct {
 	// public-CA verification. Pull only — a pushing agent is a client, and
 	// verifies hz's certificate rather than presenting one.
 	PinSHA256 string `json:"pin_sha256,omitempty"`
+
+	// NtfyURL is the ntfy topic the vantage alerts when it cannot report to
+	// hz, and NtfyToken the optional ntfy access token for it. Both are
+	// optional and both are secrets: write-only across the remotes API, and
+	// kept out of the pending diff. hz hands them to THIS vantage in its push
+	// reply (handleProbeReport) and to no one else; the vantage caches them,
+	// because the alert exists for the time hz is down. Push only — a pulled
+	// agent never dials hz, so it cannot see hz down.
+	NtfyURL   string `json:"ntfy_url,omitempty"`
+	NtfyToken string `json:"ntfy_token,omitempty"`
 }
 
 // Probe modes.

@@ -43,9 +43,61 @@ type Pusher struct {
 	// again on recovery — "hz unreachable", or "hz rejects this vantage" when
 	// hz answers 401/403 (see Alerter). Nil is off. It never affects what is reported or
 	// acknowledged.
+	//
+	// PRECEDENCE: an Alert set when PushLoop starts is this host's own — a
+	// file, the environment or a flag — and it WINS over the channel hz
+	// hands out; hz does not override what the host's operator said. Nil at
+	// start, Alert follows hz's channel instead: built from the Agent's
+	// cached copy at boot, re-aimed or dropped by each accepted reply.
 	Alert *Alerter
 
+	// AlertThreshold is Threshold for an Alerter built from hz's channel.
+	// Zero means defaultAlertAfter.
+	AlertThreshold int
+
+	// hostAlert records that Alert was set before PushLoop started.
+	hostAlert bool
+
 	http *http.Client
+}
+
+// followChannel points p's alerter at ch, unless the host pinned its own.
+// nil switches alerting off. An existing alerter is re-aimed in place, so an
+// open alert keeps its state and its recovery still goes out.
+func (p *Pusher) followChannel(ch *AlertChannel, vantage string) {
+	if p.hostAlert {
+		return
+	}
+	switch {
+	case ch == nil:
+		p.Alert = nil
+	case p.Alert == nil:
+		p.Alert = &Alerter{URL: ch.URL, Token: ch.Token, Vantage: vantage, Threshold: p.AlertThreshold}
+	default:
+		p.Alert.URL, p.Alert.Token = ch.URL, ch.Token
+	}
+}
+
+// acceptChannel takes the alert channel from an ACCEPTED reply: cache it, or
+// clear the cache when the reply carries none, and follow it. A failed report
+// never reaches here, so it changes nothing — the cache is what alerting runs
+// on while hz is down. Values are never logged.
+func (a *Agent) acceptChannel(p *Pusher, ch *AlertChannel) {
+	if ch != nil && !ValidAlertURL(ch.URL) {
+		slog.Warn("probe: hz sent an alert channel that is not an http(s) URL with a host; keeping the one held")
+		return
+	}
+	if a.SetAlertChannel(ch) {
+		switch {
+		case ch == nil:
+			slog.Info("probe: hz cleared this vantage's alert channel")
+		case p.hostAlert:
+			slog.Info("probe: hz sent an alert channel; cached, but this host's own ntfy URL wins")
+		default:
+			slog.Info("probe: hz set this vantage's alert channel; alerting there", "ntfy_token", ch.Token != "")
+		}
+	}
+	p.followChannel(ch, a.vantage)
 }
 
 func (p *Pusher) client() *http.Client {
@@ -140,6 +192,11 @@ func (a *Agent) PushLoop(ctx context.Context, p *Pusher, interval time.Duration)
 	// sent is the watermark of what hz has acknowledged.
 	var sent time.Time
 
+	// Boot from the cached channel: hz may be the thing that is down, and
+	// that is when the alert matters. Never discarded for age (CLAUDE.md #5).
+	p.hostAlert = p.Alert != nil
+	p.followChannel(a.AlertChannel(), a.vantage)
+
 	for {
 		next := interval
 
@@ -161,6 +218,7 @@ func (a *Agent) PushLoop(ctx context.Context, p *Pusher, interval time.Duration)
 			p.Alert.Failed(ctx, err)
 		default:
 			p.Alert.Succeeded(ctx)
+			a.acceptChannel(p, resp.Alert)
 			if resp.Targets != nil {
 				a.SetTargets(*resp.Targets)
 				slog.Info("probe: hz sent a new target set",
