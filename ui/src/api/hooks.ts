@@ -1,4 +1,6 @@
 import type {
+  NtfySettingsResp,
+  NtfySettingsReq,
   OIDCSettingsResp,
   OIDCSettingsReq,
   OIDCDiscoverResp,
@@ -1941,6 +1943,32 @@ export function useSetLocalDNSDomain() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["dns", "local"] });
+    },
+  });
+}
+
+// --- ntfy notification settings ----------------------------------------------
+//
+// The GET never returns the access token — only hasNtfyToken — so a blank
+// token field on save means "keep it"; clearToken removes it.
+
+export function useNtfySettings() {
+  return useQuery({
+    queryKey: ["ntfy-settings"],
+    queryFn: () => apiFetch<NtfySettingsResp>("/settings/ntfy"),
+  });
+}
+
+export function useSaveNtfySettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: NtfySettingsReq) =>
+      apiFetch<NtfySettingsResp>("/settings/ntfy", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["ntfy-settings"] });
     },
   });
 }
