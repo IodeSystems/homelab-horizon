@@ -30,10 +30,11 @@ import type {
 } from "./generated-types";
 
 /**
- * Declare a machine. `self` is never sent from here — CLAUDE.md invariant 7:
- * the server resolves its own name from its own identity, and a browser
- * filling that in would be guessing at a hostname it has no business asking
- * about.
+ * Declare a machine by name. `self` is not sent from here — the one caller
+ * that sends it is `useSetSelfProject` in `instanceHooks.ts`, which sends
+ * `self: true` and NO name. CLAUDE.md invariant 7: the server resolves its own
+ * name from its own identity, and a browser filling that in would be guessing
+ * at a hostname it has no business asking about.
  */
 export function useAddMachine() {
   const qc = useQueryClient();

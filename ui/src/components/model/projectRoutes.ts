@@ -813,7 +813,7 @@ export function treeRows(
  */
 export interface GatewayEntry {
   label: string;
-  to: "/drift" | "/dns" | "/hosts" | "/observability" | "/settings";
+  to: "/drift" | "/dns" | "/instances" | "/observability" | "/settings";
   /** Why it cannot be scoped, for the title attribute and for the doc. */
   why: string;
 }
@@ -821,7 +821,7 @@ export interface GatewayEntry {
 export const GATEWAY_NAV: GatewayEntry[] = [
   { label: "Drift", to: "/drift", why: "Every instance hz knows about, across every project at once — the screen exists to compare them." },
   { label: "DNS", to: "/dns", why: "A zone is the gateway's own record; nothing in it names a project." },
-  { label: "Hosts", to: "/hosts", why: "A host is an address other records resolve through. It carries no project." },
+  { label: "Instances", to: "/instances", why: "The hz instances: this gateway and its HA peers. The fleet is the gateway's own; a row names its project." },
   { label: "Observability", to: "/observability", why: "Scrape targets and labels are the gateway's own configuration." },
   { label: "Settings", to: "/settings", why: "hz's own configuration. There is one." },
 ];

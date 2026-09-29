@@ -30,6 +30,8 @@ import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as VpnRouteImport } from './routes/vpn'
 import { Route as DnsIndexRouteImport } from './routes/dns.index'
 import { Route as DnsZoneRouteImport } from './routes/dns.$zone'
+import { Route as InstancesIndexRouteImport } from './routes/instances.index'
+import { Route as InstancesInstanceRouteImport } from './routes/instances.$instance'
 import { Route as MachinesIndexRouteImport } from './routes/machines.index'
 import { Route as MachinesMachineRouteImport } from './routes/machines.$machine'
 import { Route as PIndexRouteImport } from './routes/p.index'
@@ -150,6 +152,16 @@ const DnsZoneRoute = DnsZoneRouteImport.update({
   path: '/dns/$zone',
   getParentRoute: () => rootRouteImport,
 } as any)
+const InstancesIndexRoute = InstancesIndexRouteImport.update({
+  id: '/instances/',
+  path: '/instances/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InstancesInstanceRoute = InstancesInstanceRouteImport.update({
+  id: '/instances/$instance',
+  path: '/instances/$instance',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const MachinesIndexRoute = MachinesIndexRouteImport.update({
   id: '/machines/',
   path: '/machines/',
@@ -242,9 +254,11 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
   '/dns/$zone': typeof DnsZoneRoute
+  '/instances/$instance': typeof InstancesInstanceRoute
   '/machines/$machine': typeof MachinesMachineRoute
   '/p/$project': typeof PProjectRouteWithChildren
   '/dns/': typeof DnsIndexRoute
+  '/instances/': typeof InstancesIndexRoute
   '/machines/': typeof MachinesIndexRoute
   '/p/': typeof PIndexRoute
   '/p/$project/bans': typeof PProjectBansRoute
@@ -279,8 +293,10 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
   '/dns/$zone': typeof DnsZoneRoute
+  '/instances/$instance': typeof InstancesInstanceRoute
   '/machines/$machine': typeof MachinesMachineRoute
   '/dns': typeof DnsIndexRoute
+  '/instances': typeof InstancesIndexRoute
   '/machines': typeof MachinesIndexRoute
   '/p': typeof PIndexRoute
   '/p/$project/bans': typeof PProjectBansRoute
@@ -316,9 +332,11 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
   '/dns/$zone': typeof DnsZoneRoute
+  '/instances/$instance': typeof InstancesInstanceRoute
   '/machines/$machine': typeof MachinesMachineRoute
   '/p/$project': typeof PProjectRouteWithChildren
   '/dns/': typeof DnsIndexRoute
+  '/instances/': typeof InstancesIndexRoute
   '/machines/': typeof MachinesIndexRoute
   '/p/': typeof PIndexRoute
   '/p/$project/bans': typeof PProjectBansRoute
@@ -355,9 +373,11 @@ export interface FileRouteTypes {
     | '/settings'
     | '/vpn'
     | '/dns/$zone'
+    | '/instances/$instance'
     | '/machines/$machine'
     | '/p/$project'
     | '/dns/'
+    | '/instances/'
     | '/machines/'
     | '/p/'
     | '/p/$project/bans'
@@ -392,8 +412,10 @@ export interface FileRouteTypes {
     | '/settings'
     | '/vpn'
     | '/dns/$zone'
+    | '/instances/$instance'
     | '/machines/$machine'
     | '/dns'
+    | '/instances'
     | '/machines'
     | '/p'
     | '/p/$project/bans'
@@ -428,9 +450,11 @@ export interface FileRouteTypes {
     | '/settings'
     | '/vpn'
     | '/dns/$zone'
+    | '/instances/$instance'
     | '/machines/$machine'
     | '/p/$project'
     | '/dns/'
+    | '/instances/'
     | '/machines/'
     | '/p/'
     | '/p/$project/bans'
@@ -466,9 +490,11 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRoute
   VpnRoute: typeof VpnRoute
   DnsZoneRoute: typeof DnsZoneRoute
+  InstancesInstanceRoute: typeof InstancesInstanceRoute
   MachinesMachineRoute: typeof MachinesMachineRoute
   PProjectRoute: typeof PProjectRouteWithChildren
   DnsIndexRoute: typeof DnsIndexRoute
+  InstancesIndexRoute: typeof InstancesIndexRoute
   MachinesIndexRoute: typeof MachinesIndexRoute
   PIndexRoute: typeof PIndexRoute
 }
@@ -620,6 +646,20 @@ declare module '@tanstack/react-router' {
       path: '/dns/$zone'
       fullPath: '/dns/$zone'
       preLoaderRoute: typeof DnsZoneRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/instances/': {
+      id: '/instances/'
+      path: '/instances'
+      fullPath: '/instances/'
+      preLoaderRoute: typeof InstancesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/instances/$instance': {
+      id: '/instances/$instance'
+      path: '/instances/$instance'
+      fullPath: '/instances/$instance'
+      preLoaderRoute: typeof InstancesInstanceRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/machines/': {
@@ -774,9 +814,11 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRoute,
   VpnRoute: VpnRoute,
   DnsZoneRoute: DnsZoneRoute,
+  InstancesInstanceRoute: InstancesInstanceRoute,
   MachinesMachineRoute: MachinesMachineRoute,
   PProjectRoute: PProjectRouteWithChildren,
   DnsIndexRoute: DnsIndexRoute,
+  InstancesIndexRoute: InstancesIndexRoute,
   MachinesIndexRoute: MachinesIndexRoute,
   PIndexRoute: PIndexRoute,
 }
