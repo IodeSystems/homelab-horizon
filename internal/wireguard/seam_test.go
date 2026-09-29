@@ -154,7 +154,7 @@ func TestRenderStaysPure(t *testing.T) {
 
 // pureFiles is every file in the pure half. A new renderer joins this list in
 // the same change that adds it, or the guard does not know it exists.
-var pureFiles = []string{"render.go"}
+var pureFiles = []string{"render.go", "segment_render.go"}
 
 // TestRenderCannotMintAKey is the half of the guard specific to WireGuard.
 //

@@ -1,0 +1,15 @@
+# Managed by homelab-horizon: segment iode-net. Edits are overwritten.
+# wg(8) format for `wg syncconf`, not wg-quick. There is no PrivateKey line:
+# the key was minted on this machine, stays on it, and hz-agent loads it.
+[Interface]
+ListenPort = 51820
+
+[Peer]
+# app-1
+PublicKey = IeNDqihcCycgQ9s+UnsC4lShD7/9oHii3oOaBqZqjSY=
+AllowedIPs = 10.42.0.11/32
+
+[Peer]
+# app-2
+PublicKey = UXJR3INLkRixItTxQksh2Bf53PypSSqKUhFOIP2P7ko=
+AllowedIPs = 10.42.0.12/32
