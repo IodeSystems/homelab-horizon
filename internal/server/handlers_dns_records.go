@@ -797,7 +797,7 @@ func (s *Server) recordDNSDrift(info config.DNSDriftInfo) {
 
 // notifyNtfy posts a best-effort notification to the configured ntfy topic.
 func (s *Server) notifyNtfy(title, message, tags, priority string) {
-	url := s.cfg().NtfyURL
+	url, token := s.cfg().NtfyURL, s.cfg().NtfyToken
 	if url == "" {
 		return
 	}
@@ -811,6 +811,9 @@ func (s *Server) notifyNtfy(title, message, tags, priority string) {
 	}
 	if priority != "" {
 		req.Header.Set("Priority", priority)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)

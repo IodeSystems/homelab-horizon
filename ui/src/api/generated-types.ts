@@ -3029,6 +3029,24 @@ export interface TombstoneCancelRequest {
   value: string;
 }
 /**
+ * NtfySettingsResp is hz's ntfy notification target as the settings page sees
+ * it. The access token is never included — only whether one is stored.
+ */
+export interface NtfySettingsResp {
+  url: string;
+  hasNtfyToken: boolean;
+}
+/**
+ * NtfySettingsReq is what the settings page sends back. An empty URL turns
+ * notifications off. An empty Token keeps the stored one (the page never has
+ * it to send back); ClearToken removes it.
+ */
+export interface NtfySettingsReq {
+  url: string;
+  token?: string;
+  clearToken?: boolean;
+}
+/**
  * OIDCSettingsResp is the single-sign-on configuration as the settings page
  * sees it. The client secret is never included — only whether one is stored.
  */

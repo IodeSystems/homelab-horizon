@@ -961,6 +961,10 @@ func (m *Monitor) sendNotification(check config.ServiceCheck, checkErr error, st
 	req.Header.Set("Title", title)
 	req.Header.Set("Priority", priority)
 	req.Header.Set("Tags", tags)
+	// ntfy's access-token scheme. No token, no header: a public topic.
+	if cfg.NtfyToken != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.NtfyToken)
+	}
 
 	resp, err := m.client.Do(req)
 	if err != nil {
