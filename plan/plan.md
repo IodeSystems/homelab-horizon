@@ -91,7 +91,7 @@ Design: [design/estate.md](design/estate.md) Part A §5; build order §7.
 | ◐ | **N1 · Segment → an actual WireGuard tunnel** — code ✅ merged 2026-09-29 (`ca4a407`): projection peers `{name, public_key, allowed_ips (derived), endpoint}`, a missing key is a Gap; `Desired.segments.tunnels[]` served per machine; wg(8) renderer (pure, guarded, no PrivateKey); agent plan/apply with first-sighting adopt; `machines/set` changes segments (API only). **Never run on a real box.** | **next:** N2 on a hub + a spoke — the first real tunnel | ✅ boot path fixed (`24d4bb6`): an armed agent boots its tunnels from `/var/lib/hz-agent/tunnels.json` (0600, atomic) BEFORE its first poll, logs LOUD, never ages it out; leaving a segment tears down only interfaces the agent CREATED (never adopted ones). No rollback floor (`Desired` has only a content hash — no clock rule invented). **Unverified on a real box:** `ip link`/`wg syncconf` (incl. a config with no PrivateKey line)/`wg set private-key`/`ip link del`; whether the agent unit starts early enough at boot; an adopted wg-quick interface now also rebooted by the agent (two owners). Still open from N1: the hub firewall does not open the segment port; listen port from the endpoint (wrong behind port-translating NAT); PersistentKeepalive 25 hardcoded; leaving the LAST segment may tear nothing down (unchecked); a torn-down interface's file stays in `/etc/hz-agent/segments/` | what a machine answers to on a segment (unchanged) |
 | ◻ | **N2 · Arm the agent** — Tier 0 above, unchanged | `sudo hz-agent diff` on the gateway (Tier 0's next step) | as Tier 0 | as Tier 0 (MFA unjail nudge) |
 | ✅ | **N3 · `Environment.Upstream` + `Machine.HZ`** — merged 2026-09-29: `Machine.HZ{URL}` marks a nested hz; `Environment.Upstream` must name a declared machine WITH `HZ` (refused otherwise, two messages); removing it cascades by CLEARING the Upstream, never the rung; `EnvironmentResp.placement` `{here|remote, statement}` — an upstream rung is a statement, never a Gap; `/api/v1/instances` lists nested rows; [Add instance] → "Declare a nested instance" is live, naming what it cannot do yet | N4 | instances registered HERE at a rung placed elsewhere still project normally (the UI flags "two hz answering for one rung") | **yours:** should that conflict be a projection Gap? · may a nested machine share a name with self or a peer (two rows today, not refused)? · no CLI flags yet (`--hz-url`, `--upstream`) |
-| ◻ | **N4 · The registry crossing — packages mirrored, config proxied** (was icebox item 19) | on `redline-prod-hz`: mirror the apt feed (prod keeps deploying when the link is down) and proxy config requests upstream, computing `ConfigGeneration` from the ciphertext it proxied (it needs no key) | depends on N1 and N2 — two unbuilt things deep; invariant 1 holds only if the CHILD pulls from the parent (the parent never dials in) | how the child authenticates to the parent (an agent-style enrolment, or an API token scoped to mirror+proxy — which needs the scoped-token decision in Tier 1) |
+| ◻ | **N4 · The registry crossing — packages mirrored, config proxied** (was icebox item 19; now rides N1b's VPN client, not N1) | on `redline-prod-hz`: mirror the apt feed (prod keeps deploying when the link is down) and proxy config requests upstream, computing `ConfigGeneration` from the ciphertext it proxied (it needs no key) | depends on N1 and N2 — two unbuilt things deep; invariant 1 holds only if the CHILD pulls from the parent (the parent never dials in) | how the child authenticates to the parent (an agent-style enrolment, or an API token scoped to mirror+proxy — which needs the scoped-token decision in Tier 1) |
 | ◐ | **N5 · [Add instance] asks for the kind** | built 2026-09-29: a choice of **Cluster node** (→ Settings HA Fleet) or **Nested instance**, the latter greyed with what it waits on (N1–N4), per "greyed with a reason, never removed" | the greyed option must name its blockers truthfully and change when they land | — |
 
 **Decided 2026-09-29 (operator):**
@@ -113,6 +113,22 @@ Design: [design/estate.md](design/estate.md) Part A §5; build order §7.
   (`Machine.HZ`, `Environment.Upstream`).
 
 **Next:** N2 — arm the agent (Tier 0), then the first real tunnel on a hub + a spoke; then N4.
+
+**Child → parent reachability (operator, 2026-09-29):** *"child must be able
+to communicate with parent (solvable via VPN client if necessary)."* Decided:
+the child joins the parent's EXISTING human VPN (`wg0`) as a client — proven in
+production — instead of waiting on N1's unproven segment tunnel. N1 stays for
+machine-to-machine segments; the crossing does not depend on it.
+- **N1b · `upstream` VPN profile:** reaches ONLY the parent hz's API on the
+  gateway's VPN address — no other VPN clients, no LAN, nothing forwarded (the
+  existing profiles do not restrict what a client reaches on the gateway
+  itself, and `vpn-only` forwards to every VPN client). One auditable crossing.
+- **MFA:** an `upstream`-profile client is never jailed — it can only reach the
+  hz API, which authenticates it by enrolment, so MFA protects nothing it can
+  reach. Stated once, in the rules, tested.
+- **Link:** "Declare a nested instance" also creates the child's VPN client
+  (profile `upstream`, attributed to the child's project), records it on
+  `Machine.HZ`, and shows the wg config / QR to install on the child.
 
 **Still the operator's, before N4 is designed:**
 - **PCI evidence** (estate.md §6): the VPN reduces exposure, not scope — the
