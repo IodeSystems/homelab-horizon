@@ -250,7 +250,13 @@ function Projection({ mc }: { mc: MachineProjectionResp }) {
               {reading.resolved ? (
                 <Rows
                   head={["interface", "address", "peers"]}
-                  body={[[seg.interface ?? "", seg.address ?? "", (seg.peers ?? []).join(" · ")]]}
+                  body={[
+                    [
+                      seg.interface ?? "",
+                      seg.address ?? "",
+                      (seg.peers ?? []).map((p) => `${p.name} (${p.allowed_ips.join(", ")})`).join(" · "),
+                    ],
+                  ]}
                 />
               ) : (
                 <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
