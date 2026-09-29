@@ -18,6 +18,7 @@ import { ThemeProvider } from "@mui/material/styles";
 import baseTheme from "../theme";
 import type { PeerResp, ProjectResp } from "../api/generated-types";
 import { routeTree } from "../routeTree.gen";
+import { PEER_PROFILES, PeerProfileSelect, PeerResultBody } from "../routes/vpn";
 
 let failures = 0;
 let checks = 0;
@@ -167,6 +168,40 @@ console.log("· /vpn has a Project column and renders \"global\" for an unattrib
     unscoped.links.some((h) => h.endsWith("/p/storefront")),
     "an attributed client's cell links to its project",
   );
+}
+
+// ---------------------------------------------------------------------------
+console.log("· the upstream profile is offered, with its one line");
+// ---------------------------------------------------------------------------
+{
+  const upstream = PEER_PROFILES.find((p) => p.value === "upstream");
+  check(upstream !== undefined, "upstream is in the profile list the selects render");
+  check(upstream?.line === "Only the parent hz's API. For a nested hz.", "with exactly its line");
+  const html = renderToStaticMarkup(
+    <ThemeProvider theme={baseTheme}>
+      <PeerProfileSelect value="upstream" onChange={() => {}} />
+    </ThemeProvider>,
+  ).replace(/&#x27;/g, "'");
+  const line = /data-profile-line[^>]*>([^<]*)</.exec(html)?.[1] ?? "";
+  check(line === "Only the parent hz's API. For a nested hz.", "the select shows the chosen profile's line under it");
+  check(html.includes("Upstream (parent hz API only)"), "and the chosen option's label");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· a nested hz's client result shows the parent URL; an ordinary one does not");
+// ---------------------------------------------------------------------------
+{
+  const body = (parentUrl?: string) =>
+    renderToStaticMarkup(
+      <ThemeProvider theme={baseTheme}>
+        <PeerResultBody result={{ ok: true, config: "[Interface]\nPrivateKey = X\n", qrCode: "<svg></svg>", parentUrl }} />
+      </ThemeProvider>,
+    );
+  const nested = body("http://10.100.0.1:8080");
+  check(/data-parent-url[\s\S]*?<code>http:\/\/10\.100\.0\.1:8080<\/code>/.test(nested), "the parent URL is shown, as the address to use");
+  check(nested.includes("PrivateKey = X"), "beside the config");
+  check(nested.includes("<svg></svg>"), "and the QR");
+  check(!/data-parent-url/.test(body()), "a client with no parent URL shows none");
 }
 
 // ---------------------------------------------------------------------------

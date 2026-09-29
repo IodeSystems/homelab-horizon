@@ -78,7 +78,8 @@ export function AddInstanceKindPanel({ onCluster, onNested }: { onCluster: () =>
           secondary={
             <>
               A separate hz with its own records and keys, in its own project (e.g. a prod gateway). Declares its
-              machine with the URL it answers on; a rung is then placed in it (Upstream).{" "}
+              machine with the URL it answers on, and creates the VPN client it reaches this hz through (only
+              this hz&apos;s API); a rung is then placed in it (Upstream).{" "}
               <span data-nested-cannot>
                 It cannot yet mirror packages or proxy config — that waits on: {NESTED_WAITS_ON.join("; ")}.
               </span>
