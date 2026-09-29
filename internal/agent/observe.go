@@ -103,6 +103,17 @@ type Observed struct {
 	// interface at apply time (apply.go), so no struct in this package ever
 	// carries a private key.
 	SegmentKeys map[string]KeyState
+
+	// CreatedTunnels is interface -> segment for every segment interface this
+	// agent's own record says it CREATED (TunnelRecord.Created). The only
+	// interfaces a teardown may touch. Read off the machine like
+	// ConfigGenerations, and for the same reason: it keeps the teardown
+	// decision a function of (payload, observed).
+	CreatedTunnels map[string]string
+
+	// TunnelRecordErr is set when the record EXISTS and could not be read.
+	// Nothing is torn down while it is set.
+	TunnelRecordErr string
 }
 
 // LinkState is one network interface as the kernel reports it.
@@ -155,6 +166,24 @@ type SystemObserver struct {
 
 	// links is seamed for tests; nil uses readLinks.
 	links func(names []string) map[string]LinkState
+
+	// tunnels is the segment tunnel record (tunnel_state.go). Nil reads as
+	// "this agent created nothing", which tears nothing down.
+	tunnels TunnelStore
+}
+
+// WithTunnelRecord attaches the agent's segment tunnel record, which says
+// which interfaces this agent created.
+func (o *SystemObserver) WithTunnelRecord(s TunnelStore) *SystemObserver {
+	o.tunnels = s
+	return o
+}
+
+// WithLinks replaces the interface lookup. For tests outside this package,
+// which cannot otherwise observe a box with no real interfaces.
+func (o *SystemObserver) WithLinks(fn func(names []string) map[string]LinkState) *SystemObserver {
+	o.links = fn
+	return o
 }
 
 // WithSegmentKeys attaches the store holding this box's segment private keys.
@@ -214,8 +243,23 @@ func (o *SystemObserver) Observe(d *Desired) Observed {
 		obs.ConfigGenerations, obs.GenerationsErr = o.readGenerations()
 	}
 
-	if d.Segments != nil && len(d.Segments.Tunnels) > 0 {
-		o.observeTunnels(d.Segments, &obs)
+	// The tunnel record is read when a teardown could be decided (a Model)
+	// or a tunnel is served; the interfaces it names are looked up with the
+	// served ones, so "already gone" is an observation and not a guess.
+	var created []string
+	if o.tunnels != nil && (d.Model != nil || d.Segments != nil) {
+		rec, err := o.tunnels.Load()
+		if err != nil {
+			obs.TunnelRecordErr = err.Error()
+		} else if len(rec.Created) > 0 {
+			obs.CreatedTunnels = rec.Created
+			for iface := range rec.Created {
+				created = append(created, iface)
+			}
+		}
+	}
+	if (d.Segments != nil && len(d.Segments.Tunnels) > 0) || len(created) > 0 {
+		o.observeTunnels(d.Segments, created, &obs)
 	}
 
 	if d.IPTables == nil {
@@ -242,10 +286,22 @@ func (o *SystemObserver) Observe(d *Desired) Observed {
 // observeTunnels looks up each segment interface and checks for this box's
 // key file per segment. Both are reads: an interface lookup needs no
 // privilege, and a key file is stat'ed, never opened.
-func (o *SystemObserver) observeTunnels(sec *SegmentsSection, obs *Observed) {
-	names := make([]string, 0, len(sec.Tunnels))
-	for _, t := range sec.Tunnels {
+func (o *SystemObserver) observeTunnels(sec *SegmentsSection, extra []string, obs *Observed) {
+	var tunnels []SegmentTunnel
+	if sec != nil {
+		tunnels = sec.Tunnels
+	}
+	names := make([]string, 0, len(tunnels)+len(extra))
+	seen := map[string]bool{}
+	for _, t := range tunnels {
 		names = append(names, t.Interface)
+		seen[t.Interface] = true
+	}
+	for _, n := range extra {
+		if !seen[n] {
+			names = append(names, n)
+			seen[n] = true
+		}
 	}
 	read := o.links
 	if read == nil {
@@ -254,7 +310,7 @@ func (o *SystemObserver) observeTunnels(sec *SegmentsSection, obs *Observed) {
 	obs.Links = read(names)
 
 	obs.SegmentKeys = map[string]KeyState{}
-	for _, t := range sec.Tunnels {
+	for _, t := range tunnels {
 		if o.segmentKeys == nil || o.segmentKeys.Dir == "" {
 			obs.SegmentKeys[t.Segment] = KeyState{ReadErr: "this agent was given no segment key store"}
 			continue

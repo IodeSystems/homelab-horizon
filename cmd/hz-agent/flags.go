@@ -82,6 +82,10 @@ type agentFlags struct {
 	// not proven, and SystemReloader was hardcoded at the call site until
 	// this seam.
 	testReloader agent.Reloader
+
+	// testLinks replaces the interface lookup. Nil everywhere but in a test:
+	// the boot tests need a box where an interface exists without root.
+	testLinks func(names []string) map[string]agent.LinkState
 }
 
 const (
@@ -144,6 +148,20 @@ func (f *agentFlags) generations() agent.GenerationStore {
 	return agent.FileGenerationStore{Path: f.statePath}
 }
 
+// tunnelStore is the segment tunnels' last-known-good (internal/agent's
+// tunnel_state.go), or nil when --state is empty.
+//
+// DERIVED FROM --state, beside the generations record, for the reason
+// segmentKeys is derived from the credential path: both are the agent's own
+// state in the agent's own 0700 directory, and a second flag would be a
+// second place to get wrong.
+func (f *agentFlags) tunnelStore() agent.TunnelStore {
+	if strings.TrimSpace(f.statePath) == "" {
+		return nil
+	}
+	return agent.FileTunnelStore{Path: filepath.Join(filepath.Dir(f.statePath), agent.TunnelStateFile)}
+}
+
 // segmentKeys is where this box keeps its per-segment WireGuard private keys.
 //
 // DERIVED FROM THE CREDENTIAL PATH rather than given its own flag, and that is
@@ -159,7 +177,12 @@ func (f *agentFlags) segmentKeys() agent.SegmentKeyStore {
 // observer reads the machine, including this agent's own record of what it
 // last applied.
 func (f *agentFlags) observer() *agent.SystemObserver {
-	return agent.NewSystemObserver().WithGenerations(f.generations()).WithSegmentKeys(f.segmentKeys())
+	o := agent.NewSystemObserver().WithGenerations(f.generations()).WithSegmentKeys(f.segmentKeys()).
+		WithTunnelRecord(f.tunnelStore())
+	if f.testLinks != nil {
+		o = o.WithLinks(f.testLinks)
+	}
+	return o
 }
 
 // reloader is the privileged half that reloads services and restarts units.
