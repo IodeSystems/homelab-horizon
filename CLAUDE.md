@@ -95,15 +95,16 @@ TestCacheNeverGoesStale` (backdates the cache 3 years with `os.Chtimes`),
 ## 6 · A machine carries no environment.
 
 An environment is a coordinate of an **instance**, never of a box.
-`config.Machine` is exactly `{Name, Project, Segments, Note}`
-(`internal/config/machine.go:48-78`). Enforced:
-`internal/config/machine_test.go:27 TestAMachineCarriesNoEnvironment` (the
-exact field list, and no environment field under any spelling), `:58`.
+`config.Machine` is exactly `{Name, Project, Segments, Note, HZ}`
+(`internal/config/machine.go:49-90`; `HZ` is the nested-hz marker, what the box
+runs — `Environment.Upstream` points at the machine, never the reverse). Enforced:
+`internal/config/machine_test.go:32 TestAMachineCarriesNoEnvironment` (the
+exact field list, and no environment field under any spelling), `:69`.
 
 **A machine MAY name an owning project — responsibility, not placement.**
 Amended 2026-09-26 (`plan/design/ui.md`, Decision 1 amendment 6). `""` is
 global. A machine owned by one project may host instances of others, and those
-read as crossings. A named owner must be declared (`internal/config/config.go:708`,
+read as crossings. A named owner must be declared (`internal/config/config.go:712-722`,
 enforced `internal/config/attribution_test.go:34`); removing the project
 re-attributes the machine to global, never deletes it (`attribution_test.go:197`).
 Attribution changes no rendered artifact and no projection:
@@ -116,7 +117,7 @@ cannot be true. It blocks "the VPN becomes a segment row".
 
 ## 7 · Declare, then enrol. A box cannot declare itself.
 
-Enrolment **refuses an undeclared machine** (`handlers_api_machines.go:268-278`)
+Enrolment **refuses an undeclared machine** (`handlers_api_machines.go:271-281`)
 — a box that could declare itself could write itself into the model and then ask
 for a credential, inverting the trust direction. `AddMachine` has exactly one
 production caller (`:120`).
@@ -139,15 +140,15 @@ TestMovingTheHubRewiresEveryPeerSetAndSaysSo` — *"the report is not a second
 answer"*.
 
 ⚠ **False for the legacy human-VPN path**, which does store them:
-`Config.WGPeers` (`internal/config/config.go:457`) and `WGPeer.AllowedIPs`
-(`:603-607`), snapshotted from `wg0.conf` so HA peer-sync can replicate it.
+`Config.WGPeers` (`internal/config/config.go:471`) and `WGPeer.AllowedIPs`
+(`:614-621`), snapshotted from `wg0.conf` so HA peer-sync can replicate it.
 Different subsystem; `architecture.md`'s own "Not true yet" table admits it.
 
 ## 9 · Posture is ordered, and the order is not the name.
 
-`PostureRank` (`internal/config/config.go:735-749`) is the only legal
+`PostureRank` (`internal/config/config.go:749-763`) is the only legal
 comparison. String order sorts `dev < prod < staging`, which would read a
-promotion to prod as a **demotion**. Gate: `CheckPromotion` (`:856-874`).
+promotion to prod as a **demotion**. Gate: `CheckPromotion` (`:917-935`).
 Enforced: `environments_test.go:190`, `promotion_test.go:63`.
 
 ⚠ **Convention, not type.** `Posture` is a plain `string`; nothing stops
@@ -157,8 +158,8 @@ through `PostureRank`.
 ## 10 · A crossing is a declared exception with a reason.
 
 *A reason nobody is obliged to give is a reason nobody gives.* A multi-homed
-machine is **refused without a `Note`** (`internal/config/machine.go:69-77`,
-enforced `:130-133` and `:182-185`; `machine_test.go:109`,
+machine is **refused without a `Note`** (`internal/config/machine.go:70-78`,
+enforced `:179-182` and `:237-240`; `machine_test.go:120`,
 `handlers_api_machines_test.go:99`), and a segment must name its owning project
 (`segment.go:457`) — the owner is what makes another project's machine on it
 read as a crossing.
