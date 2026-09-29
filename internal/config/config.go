@@ -361,7 +361,21 @@ type Config struct {
 	SSLHAProxyCertDir string `json:"ssl_haproxy_cert_dir"`
 
 	// Service monitoring with ntfy notifications
-	NtfyURL            string         `json:"ntfy_url,omitempty"`             // e.g., "https://ntfy.sh/my-homelab-alerts"
+	NtfyURL string `json:"ntfy_url,omitempty"` // e.g., "https://ntfy.sh/my-homelab-alerts"
+	// NtfyToken is an optional ntfy access token, sent as
+	// "Authorization: Bearer <token>" on every notification hz posts. Empty
+	// means an unauthenticated POST (a public topic whose name is the
+	// secret). WRITE-ONLY across the API: the settings endpoint reports only
+	// hasNtfyToken, and it is excluded from the pending diff (pending.go
+	// settingsExcluded).
+	//
+	// PEER-SYNC REPLICATES IT. It is not pinned in mergeRemoteIntoLocal, so
+	// it travels in the full config the primary serves at /api/peer/config
+	// (peer-only, over the site-to-site tunnel) and every peer stores and
+	// uses the primary's value: one token for the fleet, a rotation on the
+	// primary reaches every peer on its next pull, and a token set on a
+	// non-primary is overwritten by that pull.
+	NtfyToken          string         `json:"ntfy_token,omitempty"`
 	ServiceChecks      []ServiceCheck `json:"service_checks,omitempty"`       // Health checks for services
 	DisabledAutoChecks []string       `json:"disabled_auto_checks,omitempty"` // Names of disabled auto-generated checks
 

@@ -130,6 +130,13 @@ func generateUnit(f *serveFlags, execPath string) string {
 		} else {
 			args = append(args, "--ntfy-url-file=")
 		}
+		// The ntfy access token, by exactly the same rule.
+		if fileExists(f.ntfyTokenFile) {
+			creds = append(creds, "LoadCredential=ntfy-token:"+f.ntfyTokenFile)
+			args = append(args, "--ntfy-token-file", "%d/ntfy-token")
+		} else {
+			args = append(args, "--ntfy-token-file=")
+		}
 		return render(args, creds, execPath)
 	}
 
@@ -204,6 +211,11 @@ func runInstall(args []string) error {
 				fmt.Printf("Would pass the ntfy URL in %s as a credential (alert after %d failed reports)\n", f.ntfyFile, f.ntfyAfter)
 			} else {
 				fmt.Printf("No ntfy URL at %s: no alert if this host cannot reach hz\n", f.ntfyFile)
+			}
+			if fileExists(f.ntfyTokenFile) {
+				fmt.Printf("Would pass the ntfy token in %s as a credential (sent as a Bearer header)\n", f.ntfyTokenFile)
+			} else {
+				fmt.Printf("No ntfy token at %s: ntfy is posted to without authentication\n", f.ntfyTokenFile)
 			}
 		}
 		fmt.Printf("Would write %s:\n\n%s", unitPath, unit)
