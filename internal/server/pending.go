@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
+	"sync"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
@@ -31,6 +33,8 @@ func (s *Server) markSynced() {
 	if s.dryRun {
 		return
 	}
+	syncedMu.Lock()
+	defer syncedMu.Unlock()
 	data, err := json.MarshalIndent(s.cfg(), "", "  ")
 	if err != nil {
 		slog.Error("markSynced: marshal config", "err", err)
@@ -52,6 +56,102 @@ func (s *Server) initSyncedBaseline() {
 		return
 	}
 	s.markSynced()
+}
+
+// syncedMu serialises writes to the synced baseline: a full sync's markSynced
+// and a direct record publish's markSetSynced can finish at the same time.
+var syncedMu sync.Mutex
+
+// markSetSynced folds ONE record set that was just published straight to the
+// provider (records/set, and the per-value add/edit/delete) into the synced
+// baseline. Without it `hz pending` kept listing the zone as modified for a
+// set that was already live — "(published)" from `hz dns record add`, and
+// "not synced" from `hz pending`, about the same records.
+//
+// Only that (name, type) is copied, records and tombstones both: every other
+// unsynced edit in the zone stays pending. A zone absent from the baseline is
+// left alone — the zone itself has not been synced, so it stays "added".
+// The baseline file is edited as JSON, not round-tripped through
+// config.LoadFromJSON, so load-time defaults cannot leak into it.
+func (s *Server) markSetSynced(zoneName, name, recType string) {
+	if s.dryRun {
+		return
+	}
+	syncedMu.Lock()
+	defer syncedMu.Unlock()
+
+	live := s.cfg().GetZone(zoneName)
+	if live == nil {
+		return
+	}
+	data, err := os.ReadFile(s.syncedConfigPath())
+	if err != nil {
+		return
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		slog.Warn("markSetSynced: parse synced baseline", "err", err)
+		return
+	}
+	var zones []map[string]json.RawMessage
+	if err := json.Unmarshal(top["zones"], &zones); err != nil {
+		return
+	}
+	for i := range zones {
+		var bz config.Zone
+		if err := json.Unmarshal(mustMarshal(zones[i]), &bz); err != nil || bz.Name != zoneName {
+			continue
+		}
+		inSet := func(d config.DNSRecord) bool {
+			return strings.EqualFold(bz.Qualify(d.Name), name) && d.NormalizedType() == strings.ToUpper(recType)
+		}
+		var recs []config.DNSRecord
+		for _, d := range bz.Records {
+			if !inSet(d) {
+				recs = append(recs, d)
+			}
+		}
+		for _, d := range live.Records {
+			if inSet(d) {
+				recs = append(recs, d)
+			}
+		}
+		var tombs []config.DNSTombstone
+		for _, t := range bz.Tombstones {
+			if !t.MatchesSet(name, recType) {
+				tombs = append(tombs, t)
+			}
+		}
+		for _, t := range live.Tombstones {
+			if t.MatchesSet(name, recType) {
+				tombs = append(tombs, t)
+			}
+		}
+		setOrDrop(zones[i], "records", len(recs) > 0, recs)
+		setOrDrop(zones[i], "tombstones", len(tombs) > 0, tombs)
+		top["zones"] = mustMarshal(zones)
+		out, err := json.MarshalIndent(top, "", "  ")
+		if err != nil {
+			return
+		}
+		if err := os.WriteFile(s.syncedConfigPath(), out, 0600); err != nil {
+			slog.Error("markSetSynced: write synced baseline", "err", err)
+		}
+		return
+	}
+}
+
+func setOrDrop(m map[string]json.RawMessage, key string, set bool, v any) {
+	if !set {
+		delete(m, key) // both fields are omitempty
+		return
+	}
+	m[key] = mustMarshal(v)
+}
+
+func mustMarshal(v any) json.RawMessage {
+	b, _ := json.Marshal(v)
+	return b
 }
 
 // loadSyncedBaseline reads the last-synced snapshot, or nil if absent/unreadable.
@@ -225,13 +325,34 @@ func dropKeys(elem []byte, keys []string) []byte {
 	return out
 }
 
+// marshalZones sorts each zone's records and tombstones first. Their order
+// publishes nothing, and a set folded into the baseline by markSetSynced lands
+// at a different position than the live config's edit put it.
 func marshalZones(c *config.Config) map[string][]byte {
 	m := make(map[string][]byte, len(c.Zones))
 	for i := range c.Zones {
-		b, _ := json.Marshal(c.Zones[i])
-		m[c.Zones[i].Name] = b
+		z := c.Zones[i]
+		z.Records = append([]config.DNSRecord(nil), z.Records...)
+		sort.SliceStable(z.Records, func(a, b int) bool { return recordKey(z.Records[a]) < recordKey(z.Records[b]) })
+		z.Tombstones = append([]config.DNSTombstone(nil), z.Tombstones...)
+		sort.SliceStable(z.Tombstones, func(a, b int) bool {
+			ta, tb := z.Tombstones[a], z.Tombstones[b]
+			return ta.Name+"\x00"+ta.Type+"\x00"+ta.Value < tb.Name+"\x00"+tb.Type+"\x00"+tb.Value
+		})
+		if len(z.Records) == 0 {
+			z.Records = nil
+		}
+		if len(z.Tombstones) == 0 {
+			z.Tombstones = nil
+		}
+		b, _ := json.Marshal(z)
+		m[z.Name] = b
 	}
 	return m
+}
+
+func recordKey(d config.DNSRecord) string {
+	return strings.ToLower(d.Name) + "\x00" + d.NormalizedType() + "\x00" + d.Value
 }
 
 func diffSet(kind string, base, cur map[string][]byte) []apitypes.PendingItem {

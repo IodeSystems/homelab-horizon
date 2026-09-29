@@ -192,6 +192,7 @@ func (s *Server) handleAPIRecordSet(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.setLastPublished(driftKey(zone.Name, name, recType), values)
+	s.markSetSynced(zone.Name, name, recType)
 
 	writeJSON(w, apitypes.DNSRecordSetResponse{
 		OK: true, Zone: zone.Name, Name: name, Type: recType, Values: values, Changed: changed,
