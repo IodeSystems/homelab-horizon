@@ -967,33 +967,15 @@ brings it back. The release itself is `plan.md`, "The release".
 
 ## ◻ `Environment.Upstream` — a rung whose placements live in another hz
 
-**Why excluded:** Tier 3 — the estate as described, not the release. It is one field plus a projection branch, so it is not excluded for size; it is excluded because nothing consumes it until a second hz exists, and there is no second hz.
-
-**Resume condition:** a second hz instance is stood up, OR `redline/prod` reading as *broken* rather than *remote* costs someone an hour. Design: [design/estate.md](design/estate.md) Part A §5.
-
-> Was plan.md item 18, verbatim:
->
-> ◻ not started. Until it exists `redline/prod` reads as *broken* rather than *remote*. One field plus a projection branch that emits a statement instead of a `Gap`
+**Moved back into the release 2026-09-29** (operator decision: nested hz instances are in) → [plan.md](plan.md), "Tier 1b — nested hz instances". The design is unchanged: [design/estate.md](design/estate.md) Part A §5.
 
 ## ◻ The registry crossing — packages mirrored, config proxied
 
-**Why excluded:** Tier 3, and it is the only item with a hard dependency chain — it needs item 15's tunnel AND item 13 steps 4–5. Two unbuilt things deep.
-
-**Resume condition:** the agent is armed (Tier 0) and a segment resolves to an actual tunnel. Design: [design/estate.md](design/estate.md) Part A, "What crosses, and how".
-
-> Was plan.md item 19, verbatim:
->
-> ◻ not started; depends on 15 and on 13 steps 4–5
+**Moved back into the release 2026-09-29** (operator decision: nested hz instances are in) → [plan.md](plan.md), "Tier 1b — nested hz instances". The design is unchanged: [design/estate.md](design/estate.md) Part A §5.
 
 ## ◻ Segment records → an actual WireGuard tunnel
 
-**Why excluded:** the RECORD is in the release and landed — `config.Segment`, `hz segment ls|show|add|set|rm`, the projection resolving a membership, and enrolment reporting a per-segment key ([done.md](done.md#item-15--segment-records--what-a-machinesegments-name-resolves-to)). **The tunnel is not**, and it is Tier 3.
-
-**What is still owed**, precisely: `projection.Segment.Peers` is machine NAMES, so the projection must grow a peer struct (with `AllowedIPs` derived from CIDR + hub) before anything could write a wg config, and `agent.Desired` has no WireGuard section to apply one. Also open: the `/etc/hosts` NAME is hz's best guess (the peer's machine name) because **no record says what a machine answers to on a segment**.
-
-❓ **And a matching gap on the machine side:** there is no way to add a segment to an already-declared machine. `AddMachine` refuses a duplicate and there is no `hz machine set`, so `segment set --member` can only address machines declared with `--segment` up front.
-
-**Resume condition:** a second machine actually needs to reach the gateway over a project segment.
+**Moved back into the release 2026-09-29** (operator decision: nested hz instances are in) → [plan.md](plan.md), "Tier 1b — nested hz instances". The design is unchanged: [design/estate.md](design/estate.md) Part A §5.
 
 ## ◻ Realms — a segment lives in an addressing realm
 

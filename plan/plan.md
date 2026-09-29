@@ -68,6 +68,44 @@ a role hierarchy — offered as a third option, not as a recommendation.
 **Settle this before any more promotion machinery is built**, because every gate
 built meanwhile gates one authority against itself.
 
+## Tier 1b — nested hz instances (the staging → prod crossing)
+
+**Operator decision, 2026-09-29** (relayed from the redline session): nested hz
+instances are IN this release. Why it is required: redline prod must run on a
+SEPARATE hz in a SEPARATE segment (PCI — the CDE keeps its own segment and its
+own keys). `iodesystems-hz` is the registry and promotion plane
+(`redline/dev`, `redline/staging`); `redline-prod-hz` is the local gateway for
+`redline/prod`, joining an iodesystems segment as a **client**, mirroring
+packages and proxying sealed config. Promotion staging → prod crosses that
+boundary — without a nested instance there is no prod rung to promote into.
+Design: [design/estate.md](design/estate.md) Part A §5; build order §7.
+
+**Two kinds of instance** (the operator's framing, and the add flow must ask):
+1. **Cluster node** — another copy of THIS hz (HA peer, shares its records).
+   Exists: Settings → HA Fleet.
+2. **Nested instance** — a separate hz with its own records and keys, in its
+   own project and segment, joined as a segment client. Does not exist yet.
+
+| | Item (build order, estate.md §7) | next | risks | blocking decisions (operator) |
+|---|---|---|---|---|
+| ◻ | **N1 · Segment → an actual WireGuard tunnel** (was icebox; item 15's tunnel half) | `projection.Segment.Peers` becomes a peer struct with `AllowedIPs` derived from CIDR + hub (invariant 8 — derived, never stored); an `agent.Desired` WireGuard section; populate a member's `PublicKey` from enrolment (estate.md §7 row 3: "blocked on enrolment, not on modelling"); let `machines/set` change `segments` (it changes owner and note only today) | the gateway's existing `wg0` and a segment interface on the same box; deny-by-default forwarding between a machine's own interfaces is live and `projection.Forward` has no producer (CLAUDE.md #10) — a client that cannot forward is the intended shape, and must be tested as such | what a machine answers to on a segment (the `/etc/hosts` name is hz's guess today) |
+| ◻ | **N2 · Arm the agent** — Tier 0 above, unchanged | `sudo hz-agent diff` on the gateway (Tier 0's next step) | as Tier 0 | as Tier 0 (MFA unjail nudge) |
+| ◻ | **N3 · `Environment.Upstream`** (was icebox item 18; its resume condition "a second hz instance is stood up" is now met by decision) | one optional field + a projection branch that emits a *statement* ("placed in redline-prod-hz") instead of a `Gap`; the Overview/Environments rung shows it | an Upstream naming an hz nothing declares — refuse on Save, like an undeclared project | **what an Upstream names**: a free string, or a declared instance record (see "the record", below) |
+| ◻ | **N4 · The registry crossing — packages mirrored, config proxied** (was icebox item 19) | on `redline-prod-hz`: mirror the apt feed (prod keeps deploying when the link is down) and proxy config requests upstream, computing `ConfigGeneration` from the ciphertext it proxied (it needs no key) | depends on N1 and N2 — two unbuilt things deep; invariant 1 holds only if the CHILD pulls from the parent (the parent never dials in) | how the child authenticates to the parent (an agent-style enrolment, or an API token scoped to mirror+proxy — which needs the scoped-token decision in Tier 1) |
+| ◐ | **N5 · [Add instance] asks for the kind** | built 2026-09-29: a choice of **Cluster node** (→ Settings HA Fleet) or **Nested instance**, the latter greyed with what it waits on (N1–N4), per "greyed with a reason, never removed" | the greyed option must name its blockers truthfully and change when they land | — |
+
+**Blocking decisions that are the operator's, before N3/N4 are designed:**
+- **The record.** A nested instance needs a record in the parent — it is not
+  an HA peer (`config.Peers` shares records), and today `/instances` lists only
+  this hz and its peers. Is it a Machine (the box, owned by `redline`, a
+  client member of the crossing segment) plus an instance marker, or a new
+  record? It decides what `Environment.Upstream` names.
+- **"Instance" now has three meanings** — an app instance (Drift, Machines), an
+  hz gateway (the Instances screen), and now a nested hz. Rename one?
+- **PCI evidence** (estate.md §6): the VPN reduces exposure, not scope — the
+  promotion record ("who promoted what, when") and de-rooting hz are still owed
+  for the PCI claim; neither is in N1–N4.
+
 ## Tier 2 — makes it usable
 
 | | | detail |

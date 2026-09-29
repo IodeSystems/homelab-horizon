@@ -6,15 +6,28 @@
  * one hz; the address audit that `/hosts` used to be is the detail of the
  * `this` row, at `/instances/$instance`.
  *
- * [Add instance] links to the existing HA-peer join flow on Settings → HA
- * Fleet. It is not rebuilt here.
+ * [Add instance] asks for the KIND first (operator, 2026-09-29, relayed from
+ * the redline session): a **cluster node** — another copy of this hz, an HA
+ * peer sharing its records — goes to the existing join flow on Settings → HA
+ * Fleet; a **nested instance** — a separate hz with its own records and keys,
+ * joined as a segment client (redline-prod-hz) — is shown greyed with what it
+ * waits on, because its backend does not exist yet (plan.md, Tier 1b).
+ * Greyed with a reason, never removed.
  */
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
   Alert,
   Box,
+  Button,
   Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  List,
+  ListItemButton,
+  ListItemText,
   CircularProgress,
   Paper,
   Table,
@@ -32,14 +45,56 @@ import { LocationCell, PROJECT_COLUMN_LABEL } from "../components/model/ProjectB
 import { buildProjectIndex } from "../components/model/projectRoutes.ts";
 import { peersLabel, projectOf, readInstancesSource } from "../components/instances/instances";
 
+/** What a nested instance waits on — plan.md Tier 1b, N1–N4. Kept beside the
+ * option it greys so the two cannot drift apart unnoticed. */
+export const NESTED_WAITS_ON = [
+  "a segment that is an actual WireGuard tunnel",
+  "an armed agent",
+  "Environment.Upstream",
+  "the registry crossing (packages mirrored, config proxied)",
+];
+
+/** The kind choice, apart from its dialog so a render check can draw it. */
+export function AddInstanceKindPanel({ onCluster }: { onCluster: () => void }) {
+  return (
+    <List disablePadding data-instance-kinds>
+      <ListItemButton onClick={onCluster} aria-label="Cluster node">
+        <ListItemText
+          primary="Cluster node"
+          secondary="Another copy of this hz — an HA peer that shares its records. Joined from Settings → HA Fleet."
+        />
+      </ListItemButton>
+      <ListItemButton disabled aria-label="Nested instance" data-nested-disabled>
+        <ListItemText
+          primary="Nested instance — not available yet"
+          secondary={`A separate hz with its own records and keys, in its own project and segment, joined as a segment client (e.g. a prod gateway). Waits on: ${NESTED_WAITS_ON.join("; ")}.`}
+        />
+      </ListItemButton>
+    </List>
+  );
+}
+
 function AddInstance() {
   const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
   return (
-    <AddButton
-      label="Add instance"
-      ariaLabel="Add instance — joins a peer from Settings → HA Fleet"
-      onClick={() => navigate({ to: "/settings", search: { tab: "ha-fleet" } })}
-    />
+    <>
+      <AddButton label="Add instance" onClick={() => setOpen(true)} />
+      <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm">
+        <DialogTitle>Add an instance — which kind?</DialogTitle>
+        <DialogContent sx={{ px: 1 }}>
+          <AddInstanceKindPanel
+            onCluster={() => {
+              setOpen(false);
+              navigate({ to: "/settings", search: { tab: "ha-fleet" } });
+            }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOpen(false)}>Cancel</Button>
+        </DialogActions>
+      </Dialog>
+    </>
   );
 }
 
