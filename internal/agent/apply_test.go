@@ -29,6 +29,15 @@ type recordingReloader struct {
 
 	// restartErr, when set, fails the restart of the unit it names.
 	restartErr map[string]error
+
+	// tunnels is every segment tunnel decision the agent acted on.
+	tunnels []TunnelDecision
+}
+
+func (r *recordingReloader) SegmentTunnel(dec TunnelDecision) error {
+	r.calls = append(r.calls, SubsystemSegments)
+	r.tunnels = append(r.tunnels, dec)
+	return nil
 }
 
 func (r *recordingReloader) HAProxy(*HAProxySection) error {

@@ -176,14 +176,19 @@ type Segment struct {
 	// this machine peers with, derived by config.Segment.PeersOf: hub and
 	// spoke, never a stored list.
 	//
-	// PEERS IS NAMES, NOT A TUNNEL. It is who this box talks to on this
-	// segment; it is not enough to bring a tunnel up, because nothing holds a
-	// peer's WireGuard public key. A membership whose peers are unkeyed is
-	// still Resolved — the three fields here are computed — and carries a
-	// segments gap naming the peers hz cannot emit a `[Peer]` block for.
-	Interface string   `json:"interface,omitempty"`
-	Address   string   `json:"address,omitempty"`
-	Peers     []string `json:"peers,omitempty"`
+	// PEERS IS THE PART OF A TUNNEL hz CAN STATE. Each entry is one `[Peer]`
+	// block's facts: the peer's name, its public key, the addresses routed to
+	// it, and where to dial it. A peer hz can NAME and holds no key for is NOT
+	// in this list — a peer with an empty key is a `[Peer]` block WireGuard
+	// refuses to load, and "no key" means "hz does not know", not "empty". It
+	// is named in a segments gap instead (reason unreadable: the key is a fact
+	// on that peer's box, and that box reporting it at enrolment closes the
+	// gap). The membership is still Resolved — Interface and Address are
+	// computed — and /etc/hosts still carries the unkeyed peer, because an
+	// address needs no key.
+	Interface string `json:"interface,omitempty"`
+	Address   string `json:"address,omitempty"`
+	Peers     []Peer `json:"peers,omitempty"`
 
 	// Resolved says whether the three fields above were computed or merely
 	// left out. False means this entry is still a declared MEMBERSHIP OF A
@@ -203,6 +208,58 @@ type Segment struct {
 	// Rendered even when false (no omitempty) because a reader must not have
 	// to infer it from an absence.
 	Resolved bool `json:"resolved"`
+}
+
+// Peer is one WireGuard peer of one membership: exactly what a `[Peer]` block
+// needs, and nothing hz would have to guess.
+//
+// ALLOWEDIPS IS DERIVED, NEVER STORED (CLAUDE.md invariant 8). A spoke's one
+// peer is the hub, and the spoke routes the whole segment range to it; the
+// hub's peers are the spokes, each routed exactly its own address (/32, or
+// /128 for IPv6). allowedIPs computes it from Segment.CIDR, the member
+// addresses and the one Hub on every projection — config.SegmentMember has no
+// AllowedIPs field, so no stored copy exists to disagree with the membership.
+// Moving the hub or renumbering the range moves every AllowedIPs with it.
+//
+// The /32 on the hub side also stops a spoke from forwarding into the
+// segment: WireGuard's cryptokey routing drops a packet from a peer whose
+// source address is outside that peer's AllowedIPs, so a spoke cannot relay
+// traffic from its other interfaces through the hub.
+type Peer struct {
+	// Name is the peer's machine name — the `# name` comment in the block,
+	// and the name /etc/hosts uses.
+	Name string `json:"name"`
+
+	// PublicKey is the peer's key FOR THIS SEGMENT, as the peer's box reported
+	// it at enrolment (or an operator set it). Never empty: a peer with no key
+	// is a gap, not an entry.
+	PublicKey string `json:"public_key"`
+
+	// AllowedIPs is the derived route set, in CIDR form.
+	AllowedIPs []string `json:"allowed_ips"`
+
+	// Endpoint is host:port to dial, when the record has one. A spoke needs
+	// its hub's (a gap says when it is missing); a hub does not dial its
+	// spokes, so it is usually empty there.
+	Endpoint string `json:"endpoint,omitempty"`
+}
+
+// allowedIPs is the derivation. self is this machine's membership, peer is the
+// member being rendered, and seg is the record both are on.
+//
+// String work only, because this file may not import net (seam_test.go).
+// config.ValidateSegments has already checked that the CIDR is a canonical
+// network and that every address is a bare IP inside it, so the only question
+// left is which of the two shapes applies.
+func allowedIPs(seg config.Segment, self, peer config.SegmentMember) []string {
+	if self.Hub {
+		host := strings.TrimSpace(peer.Address)
+		if strings.Contains(host, ":") {
+			return []string{host + "/128"}
+		}
+		return []string{host + "/32"}
+	}
+	return []string{strings.TrimSpace(seg.CIDR)}
 }
 
 // Forward is a declared exception to the default deny between a machine's own
@@ -545,7 +602,8 @@ func Project(g Global, machineID string) (MachineConfig, error) {
 // segment and not addressed on it is a true statement, not a broken one — so it
 // is a gap rather than a failure and the gap names what addresses it.
 //
-// WHAT RESOLVING DOES NOT BUY: a tunnel. See the keyless-peer gap below.
+// WHAT RESOLVING DOES NOT BUY: a peer whose key nobody reported. See the
+// keyless-peer gap below.
 func projectSegments(mc *MachineConfig, cfg *config.Config, m config.Machine) {
 	if len(m.Segments) == 0 {
 		// Nothing declared, nothing unknown. A machine with no segments has an
@@ -592,9 +650,18 @@ func projectSegments(mc *MachineConfig, cfg *config.Config, m config.Machine) {
 		// answer free to disagree with the membership it is a view of.
 		peers := seg.PeersOf(m.Name)
 		for _, p := range peers {
-			entry.Peers = append(entry.Peers, p.Machine)
-			if strings.TrimSpace(p.PublicKey) == "" {
+			// A PEER WITH NO KEY IS NOT A PEER ENTRY, it is a gap: an empty
+			// PublicKey renders a `[Peer]` block WireGuard refuses, and the
+			// absence means hz does not know, not that the peer has none.
+			if key := strings.TrimSpace(p.PublicKey); key == "" {
 				keyless = append(keyless, name+"/"+p.Machine)
+			} else {
+				entry.Peers = append(entry.Peers, Peer{
+					Name:       p.Machine,
+					PublicKey:  key,
+					AllowedIPs: allowedIPs(seg, self, p),
+					Endpoint:   strings.TrimSpace(p.Endpoint),
+				})
 			}
 			// Only a spoke dials: the hub answers. A spoke's one peer is the
 			// hub, and a hub with no endpoint is a tunnel that cannot come up.
@@ -640,11 +707,15 @@ func segmentGaps(mc *MachineConfig, m config.Machine, unmodelled, unaddressed, k
 	if len(keyless) > 0 {
 		// THE LIMIT THAT RESOLUTION DOES NOT REMOVE. Resolved means hz knows
 		// the interface, the address and who the peers are. It does not mean a
-		// tunnel can be built: WireGuard needs each peer's public key, and
-		// nothing puts one on the record.
-		mc.gap(SectionSegments, ReasonUnmodelled, "hz can name and address "+list(keyless)+
+		// tunnel can be built: WireGuard needs each peer's public key, and a
+		// peer that has not reported one has none on the record.
+		//
+		// UNREADABLE, not unmodelled: the key is a fact on the PEER's box —
+		// minted there, never by hz — and that box's agent reporting it is
+		// what closes the gap, which is what ReasonUnreadable means.
+		mc.gap(SectionSegments, ReasonUnreadable, "hz can name and address "+list(keyless)+
 			" and cannot emit a WireGuard `[Peer]` block for it: no record holds that peer's public key."+
-			" `peers` here is therefore WHO this machine talks to on the segment, not a usable tunnel config."+
+			" It is LEFT OUT of `peers` (a peer with an empty key is not a peer), so this machine's tunnel on that segment has no route to it."+
 			" A box mints its key per interface and reports the public half when it enrols, so the usual cause is that"+
 			" the peer has not run `hz-agent enroll` against this hz yet."+
 			" Enrol it from that box, or record its key with `hz segment set <segment> --member machine=<peer>,key=<public key>`.")
