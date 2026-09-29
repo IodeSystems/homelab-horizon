@@ -1421,6 +1421,18 @@ topic of its own: write the topic URL to `/etc/hz-probe/ntfy-url` (root, 0600
 one recovery notice when a report succeeds again. No file means off. Pull mode
 ignores it: the agent never dials hz there, so it cannot see hz down.
 
+A report hz answers with **401 or 403** is a different fault — the vantage's
+token was rotated, or the vantage was removed from hz — so it is its own alert,
+"hz rejects this vantage" (tag `no_entry`), after the same `--ntfy-after`
+count, with "hz accepts this vantage again" on the next accepted report.
+Rejections do not count toward "hz unreachable", nor the reverse; either
+alert's recovery is sent only when a report is accepted.
+
+For a protected ntfy topic, write an ntfy access token to
+`/etc/hz-probe/ntfy-token` (root, 0600) and re-run `sudo hz-probe install`; it
+becomes a second credential and is sent as `Authorization: Bearer <token>`.
+Also `HZ_PROBE_NTFY_TOKEN` or `--ntfy-token`. No file means no auth header.
+
 The Checks page lists each vantage with its own state, which the check rows
 cannot carry: a vantage hz has never reached produces no rows at all, and that
 reads identically to one nobody configured.
