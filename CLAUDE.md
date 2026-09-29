@@ -49,7 +49,7 @@ hz → agent   machine config   network, units, desired version   non-secret
 hz → app     sealed config    (project, env, app, role)         the APP holds the key
 ```
 
-`internal/agent/desired.go:97-164` — the type **has no field** for a key or a
+`internal/agent/desired.go:97-165` — the type **has no field** for a key or a
 decrypted value. `projection.Unit.ConfigGeneration` (`projection.go:317-337`) is
 a sha256 digest, which is how a blessed config triggers a restart without
 disclosing itself. `internal/server/handlers_configmgr.go` never constructs an

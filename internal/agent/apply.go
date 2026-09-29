@@ -205,6 +205,12 @@ func tunnelCommands(dec TunnelDecision, keys SegmentKeyStore) ([][]string, error
 	if !ifaceName.MatchString(t.Interface) {
 		return nil, fmt.Errorf("segment %s: %q is not an interface name this agent will pass to ip or wg", t.Segment, t.Interface)
 	}
+	if dec.Action == TunnelRemove {
+		// The whole teardown. Only an interface the agent recorded as
+		// created ever gets here (DecideTeardowns), so nothing else about
+		// the tunnel is needed or checked.
+		return [][]string{{"ip", "link", "del", "dev", t.Interface}}, nil
+	}
 	if _, _, err := net.ParseCIDR(t.Address); err != nil {
 		return nil, fmt.Errorf("segment %s: address %q is not ip/prefix: %v", t.Segment, t.Address, err)
 	}
@@ -274,6 +280,14 @@ type Result struct {
 	// config file was written as the agent's record and the live interface
 	// was NOT touched.
 	AdoptedTunnels []string
+
+	// CreatedTunnels is the subset of Tunnels this pass CREATED — what goes
+	// into the agent's record of interfaces it owns (TunnelRecord.Created).
+	CreatedTunnels []string
+
+	// TornDown is the segment interfaces this pass deleted, or found already
+	// gone and forgot, because the machine left their segment.
+	TornDown []string
 }
 
 // Apply writes what differs and reloads what a write touched.
@@ -445,6 +459,27 @@ func (res *Result) applyTunnels(d *Desired, obs Observed, r Reloader, unwritten 
 				continue
 			}
 			res.Tunnels = append(res.Tunnels, dec.Tunnel.Interface)
+			if dec.Action == TunnelCreate {
+				res.CreatedTunnels = append(res.CreatedTunnels, dec.Tunnel.Interface)
+			}
+			res.Reloaded = appendSubsystemOnce(res.Reloaded, SubsystemSegments)
+		}
+	}
+
+	// TEARDOWNS, also re-derived: only an interface in the agent's own
+	// record of what it created, and only for a segment hz's model says the
+	// machine left (DecideTeardowns). A Change naming an interface deletes
+	// nothing.
+	for _, dec := range DecideTeardowns(d, obs) {
+		switch dec.Action {
+		case TunnelForget:
+			res.TornDown = append(res.TornDown, dec.Tunnel.Interface)
+		case TunnelRemove:
+			if err := r.SegmentTunnel(dec); err != nil {
+				res.Errors = append(res.Errors, "segment "+dec.Tunnel.Segment+": "+err.Error())
+				continue
+			}
+			res.TornDown = append(res.TornDown, dec.Tunnel.Interface)
 			res.Reloaded = appendSubsystemOnce(res.Reloaded, SubsystemSegments)
 		}
 	}
@@ -580,6 +615,12 @@ func unitNames(rs []ConfigRestart) []string {
 func (res *Result) prune(d *Desired, p Plan, touched map[Subsystem]bool) {
 	for _, c := range p.Changes {
 		if c.Kind != KindRemove {
+			continue
+		}
+		// A segments removal is an interface teardown, not a file, and
+		// applyTunnels re-derives it on its own. Skipping narrows: nothing
+		// is unlinked for a line skipped here.
+		if c.Subsystem == SubsystemSegments {
 			continue
 		}
 		sub, ok := d.prunable(c.Target)
