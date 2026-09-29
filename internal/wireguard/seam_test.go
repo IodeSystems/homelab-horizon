@@ -141,14 +141,20 @@ func mintingHit(s string) string {
 // further and checks selectors, because its renderer genuinely needs net and
 // time for parsing and an all-or-nothing import rule would have to give up.
 func TestRenderStaysPure(t *testing.T) {
-	bad, err := checkPurity("render.go", nil)
-	if err != nil {
-		t.Fatalf("parse render.go: %v", err)
-	}
-	for _, msg := range bad {
-		t.Error(msg)
+	for _, name := range pureFiles {
+		bad, err := checkPurity(name, nil)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, msg := range bad {
+			t.Error(msg)
+		}
 	}
 }
+
+// pureFiles is every file in the pure half. A new renderer joins this list in
+// the same change that adds it, or the guard does not know it exists.
+var pureFiles = []string{"render.go"}
 
 // TestRenderCannotMintAKey is the half of the guard specific to WireGuard.
 //
@@ -159,21 +165,23 @@ func TestRenderStaysPure(t *testing.T) {
 // different bytes, and nothing about it can be diffed or compared. Generation
 // lives in apply.go; this pins that it stays there.
 func TestRenderCannotMintAKey(t *testing.T) {
-	src, err := os.ReadFile("render.go")
-	if err != nil {
-		t.Fatalf("read render.go: %v", err)
-	}
-	f, err := parser.ParseFile(token.NewFileSet(), "render.go", src, 0)
-	if err != nil {
-		t.Fatalf("parse render.go: %v", err)
-	}
-	for _, decl := range f.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
+	for _, name := range pureFiles {
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
 		}
-		if hit := mintingHit(fn.Name.Name); hit != "" {
-			t.Errorf("render.go declares %s (%q) — key generation belongs in apply.go", fn.Name.Name, hit)
+		f, err := parser.ParseFile(token.NewFileSet(), name, src, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			if hit := mintingHit(fn.Name.Name); hit != "" {
+				t.Errorf("%s declares %s (%q) — key generation belongs in apply.go", name, fn.Name.Name, hit)
+			}
 		}
 	}
 
