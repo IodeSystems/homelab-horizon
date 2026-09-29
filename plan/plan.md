@@ -433,7 +433,7 @@ NOT checked.
 **next:** pick the ntfy topic, write `/etc/hz-probe/ntfy-url` on `hz-vantage`,
 re-run install; confirm the vantages run `0fbda23` or later.
 
-**ntfy token + "hz rejects this vantage"** (merged 2026-09-29, `6b736ba`): an
+**ntfy token + "hz rejects this vantage"** (merged 2026-09-29, `6b736ba`; deployed `f8cdcc1`): an
 optional ntfy access token (`Authorization: Bearer`) on hz (`ntfy_token`,
 write-only in `GET/PUT /api/v1/settings/ntfy`, Settings → System →
 Notifications, excluded from the pending diff, replicated to peers with the
