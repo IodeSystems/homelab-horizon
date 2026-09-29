@@ -18,6 +18,7 @@ import baseTheme from "../theme";
 import type { HostsViewResp, InstanceResp, ProjectResp } from "../api/generated-types";
 import { routeTree } from "../routeTree.gen";
 import { Route as HostsRoute } from "../routes/hosts";
+import { AddInstanceKindPanel, NESTED_WAITS_ON } from "../routes/instances.index";
 
 let failures = 0;
 let checks = 0;
@@ -169,7 +170,7 @@ console.log("· standalone: one self row, global, standalone, no peers");
 {
   const r = await at("/instances", STANDALONE);
   check(r.text.includes("Instances"), "the screen is titled Instances");
-  check(/aria-label="Add instance/.test(r.html), "with [Add instance] as its action");
+  check(/>Add instance</.test(r.html), "with [Add instance] as its action");
   check(rowCount(r.html) === 1, `exactly one row — got ${rowCount(r.html)}`);
   const row = rowText(r.html, "gw-host");
   check(/\bthis\b/.test(row), "the self row carries the 'this' chip");
@@ -297,6 +298,29 @@ console.log("· /hosts redirects, and the gateway group links Instances");
 //      a replica peer is covered by the replica branch too, so the check was
 //      added to make the self guard observable on its own.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+console.log("· [Add instance] asks for the kind: cluster node, or nested (greyed, with what it waits on)");
+// ---------------------------------------------------------------------------
+{
+  // Operator, 2026-09-29 (relayed from the redline session): "an instance
+  // comes in two flavors, and the add flow has no way to say which."
+  const html = renderToStaticMarkup(
+    <ThemeProvider theme={baseTheme}>
+      <AddInstanceKindPanel onCluster={() => {}} />
+    </ThemeProvider>,
+  ).replace(/<style[^>]*>[\s\S]*?<\/style>/g, " ");
+  const text = html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+  check(text.includes("Cluster node"), "the cluster-node kind is offered");
+  check(/aria-label="Cluster node"(?:(?!aria-label)[\s\S])*?HA Fleet/.test(html), "and says it joins from Settings → HA Fleet");
+  const nested = /<[^>]*data-nested-disabled[^>]*>/.exec(html)?.[0] ?? "";
+  check(nested !== "", "the nested kind is offered too — greyed, not removed");
+  check(/Mui-disabled|aria-disabled="true"|disabled=""/.test(nested), "and it is disabled");
+  check(
+    NESTED_WAITS_ON.every((w) => text.includes(w)),
+    "and it names every thing it waits on (plan.md Tier 1b N1–N4)",
+  );
+}
 
 console.log(`\n${checks - failures}/${checks} checks passed`);
 if (failures > 0) {
