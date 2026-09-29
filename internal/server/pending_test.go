@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
@@ -194,4 +195,39 @@ func servicePending(s *Server) []apitypes.PendingItem {
 		}
 	}
 	return out
+}
+
+// The pending diff is served to the UI, and a vantage's secrets are
+// write-only there. remote_probes is diffed as one stringified array, so
+// without stripping, every edit to a vantage printed its token and its ntfy
+// channel in the Before/After of the "settings" item.
+func TestPendingDiffNeverCarriesVantageSecrets(t *testing.T) {
+	base := &config.Config{RemoteProbes: []config.RemoteProbe{
+		{Name: "gcp", Token: "vantage-secret-old", NtfyURL: "https://ntfy.sh/old-topic-secret", NtfyToken: "tk-old-secret"},
+	}}
+	cur := &config.Config{RemoteProbes: []config.RemoteProbe{
+		{Name: "gcp", Token: "vantage-secret-new", NtfyURL: "https://ntfy.sh/new-topic-secret", NtfyToken: "tk-new-secret", Probe: 120},
+	}}
+	items := diffConfig(base, cur)
+	if len(items) == 0 {
+		// The Probe change must still be pending, or this test proves nothing.
+		t.Fatal("no pending item for a changed vantage — the positive half of this test is gone")
+	}
+	for _, it := range items {
+		for _, f := range it.Fields {
+			for _, secret := range []string{"vantage-secret", "topic-secret", "tk-old-secret", "tk-new-secret"} {
+				if strings.Contains(f.Before, secret) || strings.Contains(f.After, secret) {
+					t.Errorf("pending field %s carries a vantage secret (%s)", f.Path, secret)
+				}
+			}
+		}
+	}
+
+	// A secret-only change publishes nothing, so it is not pending.
+	onlySecrets := &config.Config{RemoteProbes: []config.RemoteProbe{
+		{Name: "gcp", Token: "rotated", NtfyURL: "https://ntfy.sh/another", NtfyToken: "another"},
+	}}
+	if items := diffConfig(base, onlySecrets); len(items) != 0 {
+		t.Errorf("a secret-only vantage change reads as pending: %+v", items)
+	}
 }

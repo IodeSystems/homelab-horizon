@@ -232,6 +232,15 @@ var attributionOnly = map[string][]string{
 	"port_exclusions": {"project"},
 }
 
+// elementSecrets lists per-element keys that are SECRETS, write-only across
+// the API. The diff is served to the UI, and a list like remote_probes is
+// diffed as one stringified array, so an unstripped secret appeared in full
+// in the Before/After of every edit to its vantage. A Sync publishes none of
+// them, so dropping them also stops a rotation reading as pending.
+var elementSecrets = map[string][]string{
+	"remote_probes": {"token", "ntfy_url", "ntfy_token"},
+}
+
 // stripAttribution removes the attribution keys from one marshalled element of
 // `list` (a top-level config key), leaving everything a Sync can publish.
 func stripAttribution(list string, elem []byte) []byte {
@@ -286,6 +295,15 @@ func settingsObject(c *config.Config) []byte {
 			if json.Unmarshal(m[k], &elems) == nil {
 				for i := range elems {
 					elems[i] = stripAttribution(k, elems[i])
+				}
+				m[k], _ = json.Marshal(elems)
+			}
+		}
+		if keys, ok := elementSecrets[k]; ok {
+			var elems []json.RawMessage
+			if json.Unmarshal(m[k], &elems) == nil {
+				for i := range elems {
+					elems[i] = dropKeys(elems[i], keys)
 				}
 				m[k], _ = json.Marshal(elems)
 			}
