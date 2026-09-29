@@ -72,7 +72,7 @@ type SegmentPeer struct {
 func RenderSegmentConfig(s SegmentInterface) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Managed by homelab-horizon: segment %s. Edits are overwritten.\n", oneLine(s.Segment))
-	b.WriteString("# wg(8) format for `wg syncconf`, not wg-quick. There is no PrivateKey line:\n")
+	b.WriteString("# wg(8) format for `wg syncconf`, not wg-quick. It holds no private key:\n")
 	b.WriteString("# the key was minted on this machine, stays on it, and hz-agent loads it.\n")
 	b.WriteString("[Interface]\n")
 	if s.ListenPort > 0 {

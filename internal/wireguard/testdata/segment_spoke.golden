@@ -1,5 +1,5 @@
 # Managed by homelab-horizon: segment iode-net. Edits are overwritten.
-# wg(8) format for `wg syncconf`, not wg-quick. There is no PrivateKey line:
+# wg(8) format for `wg syncconf`, not wg-quick. It holds no private key:
 # the key was minted on this machine, stays on it, and hz-agent loads it.
 [Interface]
 
