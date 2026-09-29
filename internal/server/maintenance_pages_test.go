@@ -167,6 +167,10 @@ func (r *noopReloader) Units(*agent.FilesSection) error {
 	return nil
 }
 func (r *noopReloader) RestartUnit(string) error { return nil }
+func (r *noopReloader) SegmentTunnel(agent.TunnelDecision) error {
+	r.reloaded = append(r.reloaded, agent.SubsystemSegments)
+	return nil
+}
 
 // hzFillsTheErrorsDirectory runs hz's OWN writers — the two that exist today —
 // over a fresh HAProxy directory and returns the errors directory they left.

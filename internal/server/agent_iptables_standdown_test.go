@@ -180,11 +180,12 @@ func TestTheStandDownWithholdsTheFirewallInstead(t *testing.T) {
 // standDownReloader fails the test if anything reconciles.
 type standDownReloader struct{ t *testing.T }
 
-func (r standDownReloader) HAProxy(*agent.HAProxySection) error     { return nil }
-func (r standDownReloader) DNSMasq(*agent.DNSMasqSection) error     { return nil }
-func (r standDownReloader) WireGuard(*agent.WireGuardSection) error { return nil }
-func (r standDownReloader) Units(*agent.FilesSection) error         { return nil }
-func (r standDownReloader) RestartUnit(string) error                { return nil }
+func (r standDownReloader) HAProxy(*agent.HAProxySection) error      { return nil }
+func (r standDownReloader) DNSMasq(*agent.DNSMasqSection) error      { return nil }
+func (r standDownReloader) WireGuard(*agent.WireGuardSection) error  { return nil }
+func (r standDownReloader) Units(*agent.FilesSection) error          { return nil }
+func (r standDownReloader) RestartUnit(string) error                 { return nil }
+func (r standDownReloader) SegmentTunnel(agent.TunnelDecision) error { return nil }
 func (r standDownReloader) IPTables(*agent.IPTablesSection, []iptables.Rule) (iptables.Report, error) {
 	r.t.Fatal("Apply reconciled the firewall off a stood-down payload")
 	return iptables.Report{}, nil

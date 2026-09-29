@@ -26,7 +26,10 @@ import (
 // could answer differently on the box than it does in a test. It decides from
 // the payload alone — which is also why `hz-agent diff` can say what would be
 // removed from a directory it is not looking at.
-var pureFiles = []string{"plan.go", "diff.go", "observed.go", "ownership.go"}
+// tunnel_plan.go joined with the segment tunnels: it decides create, sync or
+// adopt for a live interface, and "first sighting adopts" (CLAUDE.md
+// invariant 11) is only checkable if that decision runs on a fixture.
+var pureFiles = []string{"plan.go", "diff.go", "observed.go", "ownership.go", "tunnel_plan.go"}
 
 func TestPureHalfStaysPure(t *testing.T) {
 	banned := map[string]string{

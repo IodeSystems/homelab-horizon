@@ -116,6 +116,7 @@ func Compute(d *Desired, obs Observed) Plan {
 	p.Changes = append(p.Changes, removals(d, obs)...)
 	p.Changes = append(p.Changes, iptablesChanges(d.IPTables, obs)...)
 	p.Changes = append(p.Changes, configChanges(d, obs)...)
+	p.Changes = append(p.Changes, tunnelChanges(d, obs)...)
 	return p
 }
 

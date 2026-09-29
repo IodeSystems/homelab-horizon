@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
@@ -83,12 +85,23 @@ type Reloader interface {
 	// generation of a unit that did not restart must not be recorded as
 	// applied, and a single error for a batch could not say which one it was.
 	RestartUnit(name string) error
+
+	// SegmentTunnel brings one segment interface to what the decision says:
+	// create it, or re-load an existing one. Called only for a decision that
+	// Acts(); an adoption and an unknown never reach it.
+	SegmentTunnel(dec TunnelDecision) error
 }
 
 // SystemReloader is the real one. Each method is a thin call into the apply
 // half that already exists in the subsystem's own package — the agent adds no
 // second implementation of any of them.
-type SystemReloader struct{}
+type SystemReloader struct {
+	// SegmentKeys is where this box's segment private keys are. The key is
+	// handed to `wg set ... private-key <file>` BY PATH: the agent process
+	// never reads it into memory to configure a tunnel. Empty refuses every
+	// tunnel rather than bringing one up with no key.
+	SegmentKeys SegmentKeyStore
+}
 
 // HAProxy validates the config and reloads, via internal/haproxy's apply half.
 func (SystemReloader) HAProxy(sec *HAProxySection) error {
@@ -157,6 +170,76 @@ func (SystemReloader) RestartUnit(name string) error {
 	return nil
 }
 
+// SegmentTunnel runs the commands tunnelCommands lists, in order, each as a
+// typed argv — never a shell string (CLAUDE.md invariant 13). The first
+// failure stops the tunnel; the next pass re-decides from what is live.
+func (r SystemReloader) SegmentTunnel(dec TunnelDecision) error {
+	cmds, err := tunnelCommands(dec, r.SegmentKeys)
+	if err != nil {
+		return err
+	}
+	for _, argv := range cmds {
+		if out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput(); err != nil {
+			return fmt.Errorf("%s: %w: %s", strings.Join(argv, " "), err, strings.TrimSpace(string(out)))
+		}
+	}
+	return nil
+}
+
+// ifaceName is what a Linux interface name may be here: 1–15 characters, no
+// leading '-', nothing a command line could read as an option or a path.
+var ifaceName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.=+-]{0,14}$`)
+
+// tunnelCommands is the exact command list for one decision, validated.
+//
+// Separate from running them so the list can be tested without root: it is
+// where "the private key is passed by path", "nothing here touches
+// forwarding or the firewall" and "the verb is fixed, only typed arguments
+// vary" are checkable. The values come from hz's payload, so each is checked
+// for its shape before it becomes an argument.
+func tunnelCommands(dec TunnelDecision, keys SegmentKeyStore) ([][]string, error) {
+	t := dec.Tunnel
+	if !dec.Acts() {
+		return nil, fmt.Errorf("segment %s: decision %q does not change the interface", t.Segment, dec.Action)
+	}
+	if !ifaceName.MatchString(t.Interface) {
+		return nil, fmt.Errorf("segment %s: %q is not an interface name this agent will pass to ip or wg", t.Segment, t.Interface)
+	}
+	if _, _, err := net.ParseCIDR(t.Address); err != nil {
+		return nil, fmt.Errorf("segment %s: address %q is not ip/prefix: %v", t.Segment, t.Address, err)
+	}
+	if t.File.Path == "" || !filepath.IsAbs(t.File.Path) {
+		return nil, fmt.Errorf("segment %s: config path %q is not absolute", t.Segment, t.File.Path)
+	}
+	if strings.TrimSpace(keys.Dir) == "" {
+		return nil, fmt.Errorf("segment %s: this agent has no segment key store, so it will not bring %s up without a key", t.Segment, t.Interface)
+	}
+	for _, a := range dec.StaleAddrs {
+		if _, _, err := net.ParseCIDR(a); err != nil {
+			return nil, fmt.Errorf("segment %s: stale address %q is not ip/prefix", t.Segment, a)
+		}
+	}
+
+	var cmds [][]string
+	if dec.Action == TunnelCreate {
+		cmds = append(cmds, []string{"ip", "link", "add", "dev", t.Interface, "type", "wireguard"})
+	}
+	// syncconf before the key: the file has no PrivateKey line, and a wg(8)
+	// config that does not name one leaves the interface's key as it is.
+	cmds = append(cmds,
+		[]string{"wg", "syncconf", t.Interface, t.File.Path},
+		[]string{"wg", "set", t.Interface, "private-key", keys.Path(t.Segment)},
+	)
+	for _, a := range dec.StaleAddrs {
+		cmds = append(cmds, []string{"ip", "address", "del", a, "dev", t.Interface})
+	}
+	cmds = append(cmds,
+		[]string{"ip", "address", "replace", t.Address, "dev", t.Interface},
+		[]string{"ip", "link", "set", "dev", t.Interface, "up"},
+	)
+	return cmds, nil
+}
+
 // Result is what one apply pass did.
 type Result struct {
 	Generation string
@@ -183,6 +266,14 @@ type Result struct {
 	// twenty units and restarts none is the correct first run, not a
 	// twenty-unit bounce that failed to log.
 	Adopted []string
+
+	// Tunnels is the segment interfaces this pass created or re-loaded.
+	Tunnels []string
+
+	// AdoptedTunnels is the segment interfaces seen for the first time: the
+	// config file was written as the agent's record and the live interface
+	// was NOT touched.
+	AdoptedTunnels []string
 }
 
 // Apply writes what differs and reloads what a write touched.
@@ -227,9 +318,14 @@ func Apply(d *Desired, p Plan, obs Observed, r Reloader, gens GenerationStore) (
 	}
 
 	touched := map[Subsystem]bool{}
+	// unwritten is every path this pass did NOT bring to its desired
+	// contents. A tunnel whose config file is one of them is not re-loaded:
+	// `wg syncconf` would load whatever is on disk instead.
+	unwritten := map[string]bool{}
 	for _, of := range d.allFiles() {
 		if why, stop := blocked[of.File.Path]; stop {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: refusing to write, %s", of.File.Path, why))
+			unwritten[of.File.Path] = true
 			continue
 		}
 		mode := fs.FileMode(of.File.Mode)
@@ -239,6 +335,7 @@ func Apply(d *Desired, p Plan, obs Observed, r Reloader, gens GenerationStore) (
 		changed, err := writeIfChanged(of.File.Path, []byte(of.File.Contents), mode)
 		if err != nil {
 			res.Errors = append(res.Errors, err.Error())
+			unwritten[of.File.Path] = true
 			continue
 		}
 		if changed {
@@ -275,6 +372,7 @@ func Apply(d *Desired, p Plan, obs Observed, r Reloader, gens GenerationStore) (
 	if d.WireGuard != nil && touched[SubsystemWireGuard] {
 		res.reload(SubsystemWireGuard, r.WireGuard(d.WireGuard))
 	}
+	res.applyTunnels(d, obs, r, unwritten)
 	if d.Files != nil && touched[SubsystemFiles] {
 		err := r.Units(d.Files)
 		res.reload(SubsystemFiles, err)
@@ -320,6 +418,45 @@ func Apply(d *Desired, p Plan, obs Observed, r Reloader, gens GenerationStore) (
 		return res, fmt.Errorf("apply finished with %d error(s)", len(res.Errors))
 	}
 	return res, nil
+}
+
+// applyTunnels acts on the segment tunnel decisions.
+//
+// RE-DERIVED FROM THE PAYLOAD AND THE PRE-WRITE OBSERVATION, not read off the
+// Plan — the same discipline as prune and restartForConfig. obs is what the
+// machine looked like BEFORE this pass wrote anything, which is what makes an
+// adoption an adoption: the config file the write loop just created must not
+// turn a first sighting into a sync within the same pass.
+func (res *Result) applyTunnels(d *Desired, obs Observed, r Reloader, unwritten map[string]bool) {
+	for _, dec := range DecideTunnels(d, obs) {
+		switch {
+		case dec.Action == TunnelAdopt:
+			if !unwritten[dec.Tunnel.File.Path] {
+				res.AdoptedTunnels = append(res.AdoptedTunnels, dec.Tunnel.Interface)
+			}
+		case !dec.Acts():
+			continue
+		case unwritten[dec.Tunnel.File.Path]:
+			res.Errors = append(res.Errors, fmt.Sprintf("segment %s: %s was not written, so %s is left as it is",
+				dec.Tunnel.Segment, dec.Tunnel.File.Path, dec.Tunnel.Interface))
+		default:
+			if err := r.SegmentTunnel(dec); err != nil {
+				res.Errors = append(res.Errors, "segment "+dec.Tunnel.Segment+": "+err.Error())
+				continue
+			}
+			res.Tunnels = append(res.Tunnels, dec.Tunnel.Interface)
+			res.Reloaded = appendSubsystemOnce(res.Reloaded, SubsystemSegments)
+		}
+	}
+}
+
+func appendSubsystemOnce(in []Subsystem, s Subsystem) []Subsystem {
+	for _, have := range in {
+		if have == s {
+			return in
+		}
+	}
+	return append(in, s)
 }
 
 // restartForConfig restarts the units whose sealed config hz says has moved,
