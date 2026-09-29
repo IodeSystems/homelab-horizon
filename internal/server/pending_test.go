@@ -1,8 +1,11 @@
 package server
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
@@ -147,4 +150,48 @@ func TestDiffConfig_AttributionIsNotPending(t *testing.T) {
 	if len(items) != 1 || items[0].Name != "aw4" || len(items[0].Fields) != 1 || items[0].Fields[0].Path != "domains" {
 		t.Fatalf("a domain change beside attribution: %+v", items)
 	}
+}
+
+// The bintag report: a service created and synced, then read by the UI's
+// integration panel, gains a generated token. Sync never publishes that token,
+// so it must not leave the service pending.
+func TestServiceTokenGeneratedAfterSyncIsNotPending(t *testing.T) {
+	s := newTestServer(t, &config.Config{
+		Services: []config.Service{{Name: "bintag", Domains: []string{"bintag.example.com"}}},
+	})
+	s.markSynced()
+	if items := servicePending(s); len(items) != 0 {
+		t.Fatalf("pending right after sync: %+v", items)
+	}
+
+	w := httptest.NewRecorder()
+	s.handleAPIServiceIntegration(w, asAdmin(s, http.MethodGet, "/api/v1/services/integration?name=bintag", ""))
+	if w.Code != http.StatusOK {
+		t.Fatalf("integration: %d %s", w.Code, w.Body.String())
+	}
+	if s.cfg().Services[0].Token == "" {
+		t.Fatal("precondition: the integration read did not generate a token")
+	}
+	if items := servicePending(s); len(items) != 0 {
+		t.Fatalf("a generated token reads as pending: %+v", items)
+	}
+
+	// Positive control: a published field on the same service still counts.
+	_ = s.updateConfig(func(c *config.Config) { c.Services[0].Domains = []string{"bintag.example.net"} })
+	if items := servicePending(s); len(items) != 1 || len(items[0].Fields) != 1 || items[0].Fields[0].Path != "domains" {
+		t.Fatalf("domain change: %+v", items)
+	}
+}
+
+// servicePending is computePending narrowed to services. The test config is
+// built in memory, so the baseline's load-time defaults differ from it in
+// settings; those are not what these tests measure.
+func servicePending(s *Server) []apitypes.PendingItem {
+	var out []apitypes.PendingItem
+	for _, it := range s.computePending().Items {
+		if it.Kind == "service" {
+			out = append(out, it)
+		}
+	}
+	return out
 }

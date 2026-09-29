@@ -194,13 +194,35 @@ func settingsObject(c *config.Config) []byte {
 	return out
 }
 
+// serviceServerHeld lists the per-service keys hz keeps for itself and never
+// publishes. Service.Token authenticates calls INTO hz (handlers_deploy.go); a
+// Sync writes it nowhere. It is also generated lazily — at startup
+// (ensureServicesRunning) and on the first read of /api/v1/services/integration
+// — so a service created and synced gained it afterwards and read as pending
+// forever: "modified service bintag token: -> bd63...", with nothing a Sync
+// could publish to clear it.
+var serviceServerHeld = []string{"token"}
+
 func marshalServices(c *config.Config) map[string][]byte {
 	m := make(map[string][]byte, len(c.Services))
 	for i := range c.Services {
 		b, _ := json.Marshal(c.Services[i])
-		m[c.Services[i].Name] = stripAttribution("services", b)
+		m[c.Services[i].Name] = dropKeys(stripAttribution("services", b), serviceServerHeld)
 	}
 	return m
+}
+
+// dropKeys removes keys from one marshalled JSON object.
+func dropKeys(elem []byte, keys []string) []byte {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(elem, &m); err != nil {
+		return elem
+	}
+	for _, k := range keys {
+		delete(m, k)
+	}
+	out, _ := json.Marshal(m)
+	return out
 }
 
 func marshalZones(c *config.Config) map[string][]byte {
