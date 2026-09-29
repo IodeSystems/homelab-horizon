@@ -419,9 +419,11 @@ to `e92ffe0` under its old unit and crash-looped (16,446 restarts): the default
 `/etc/hz-probe/ntfy-url` is in a root-only dir, EACCES was treated as fatal.
 Restored by re-running `hz-probe install` (unit now passes `--ntfy-url-file=`);
 the binary fix — an unreadable DEFAULT file only warns — is `0fbda23` on `dev`,
-**not deployed** (the gateway runs `59a21e7` from another session).
+deployed to the gateway 2026-09-28 18:09 (`./bin/deploy` at `eb5a8fe`, with
+`cdd162b` pending-feedback). Whether self-updating vantages have picked it up is
+NOT checked.
 **next:** pick the ntfy topic, write `/etc/hz-probe/ntfy-url` on `hz-vantage`,
-re-run install; deploy `0fbda23` so other self-updating vantages cannot hit it.
+re-run install; confirm the vantages run `0fbda23` or later.
 
 Two decisions worth keeping:
 
