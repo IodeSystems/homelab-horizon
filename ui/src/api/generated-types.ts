@@ -415,6 +415,87 @@ export interface HostsViewResp {
 }
 
 //////////
+// source: instances.go
+
+/**
+ * InstancesPath is the list of hz instances: this gateway plus every HA peer
+ * it knows about (config.Peers). One row per hz, not per machine and not per
+ * address.
+ */
+export const InstancesPath = "/api/v1/instances";
+/**
+ * Instance roles. Standalone is "no peers declared" — the fleet does not
+ * exist, so there is no primary to be or to follow.
+ */
+export const InstanceRolePrimary = "primary";
+/**
+ * Instance roles. Standalone is "no peers declared" — the fleet does not
+ * exist, so there is no primary to be or to follow.
+ */
+export const InstanceRoleReplica = "replica";
+/**
+ * Instance roles. Standalone is "no peers declared" — the fleet does not
+ * exist, so there is no primary to be or to follow.
+ */
+export const InstanceRoleStandalone = "standalone";
+/**
+ * InstanceResp is one hz instance.
+ * Name is the SELF row's machine name as `machines/add` with self=true
+ * resolves it (server.LocalMachineName) — never a name the browser supplied —
+ * and a peer row's peer ID. Project and Declared are the join against the
+ * Machine record of that exact name: Declared=false means no record exists,
+ * so Project is "" because there is nothing to read it from, not because the
+ * owner is global. The UI must say which.
+ */
+export interface InstanceResp {
+  name: string;
+  self: boolean;
+  /**
+   * Address is the self row's local_interface and a peer's wg_addr. Empty
+   * on self means hz has not detected its own LAN address.
+   */
+  address: string;
+  /**
+   * Role is InstanceRolePrimary, InstanceRoleReplica or InstanceRoleStandalone.
+   */
+  role: string;
+  /**
+   * PeerID is the fleet identity: config.PeerID on self, Peer.ID on a peer.
+   * Empty on a standalone self with no peer_id set.
+   */
+  peerId: string;
+  /**
+   * PrimaryID is the peer ID of the fleet's config primary, the same on
+   * every row. Empty when standalone, or when no instance is marked primary.
+   */
+  primaryId: string;
+  /**
+   * Project is the owning project of the Machine record named Name. Always
+   * sent; "" is global when Declared, and "no record" when not.
+   */
+  project: string;
+  declared: boolean;
+  /**
+   * Version is the running hz version. Self only — hz does not ask a peer.
+   */
+  version?: string;
+  /**
+   * Sync is the replica's pull-loop state. Present only on the self row of a
+   * replica; absent everywhere else, which is "not a replica here", not
+   * "never synced" (that is Sync present with LastSuccessAt 0).
+   */
+  sync?: InstanceSyncResp;
+}
+/**
+ * InstanceSyncResp is a replica's last pull from the config primary.
+ */
+export interface InstanceSyncResp {
+  pullCount: number /* int */;
+  lastSuccessAt: number /* int64 */; // unix seconds, 0 if never
+  lastError: string; // "" when the last attempt succeeded
+}
+
+//////////
 // source: probe_diagnosis.go
 
 /**
