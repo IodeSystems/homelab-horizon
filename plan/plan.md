@@ -94,14 +94,28 @@ Design: [design/estate.md](design/estate.md) Part A §5; build order §7.
 | ◻ | **N4 · The registry crossing — packages mirrored, config proxied** (was icebox item 19) | on `redline-prod-hz`: mirror the apt feed (prod keeps deploying when the link is down) and proxy config requests upstream, computing `ConfigGeneration` from the ciphertext it proxied (it needs no key) | depends on N1 and N2 — two unbuilt things deep; invariant 1 holds only if the CHILD pulls from the parent (the parent never dials in) | how the child authenticates to the parent (an agent-style enrolment, or an API token scoped to mirror+proxy — which needs the scoped-token decision in Tier 1) |
 | ◐ | **N5 · [Add instance] asks for the kind** | built 2026-09-29: a choice of **Cluster node** (→ Settings HA Fleet) or **Nested instance**, the latter greyed with what it waits on (N1–N4), per "greyed with a reason, never removed" | the greyed option must name its blockers truthfully and change when they land | — |
 
-**Blocking decisions that are the operator's, before N3/N4 are designed:**
-- **The record.** A nested instance needs a record in the parent — it is not
-  an HA peer (`config.Peers` shares records), and today `/instances` lists only
-  this hz and its peers. Is it a Machine (the box, owned by `redline`, a
-  client member of the crossing segment) plus an instance marker, or a new
-  record? It decides what `Environment.Upstream` names.
-- **"Instance" now has three meanings** — an app instance (Drift, Machines), an
-  hz gateway (the Instances screen), and now a nested hz. Rename one?
+**Decided 2026-09-29 (operator):**
+- **The record:** a nested hz is a **Machine that runs hz** — its Machine
+  record (owned by the child's project, a client member of the crossing
+  segment) plus an `HZ{URL}` marker. No new record type. `Environment.Upstream`
+  names that machine.
+- **Child auth:** **enrolment, like the agent** (declare, then enrol —
+  invariant 7). No scoped-token dependency.
+- **Vantage alert topic:** set from the hz UI, handed to the vantage in each
+  push reply and cached there; a host file still wins.
+- **Terminology — OPEN, operator's call.** The operator: *"an Hz Instance
+  means a LAYER of hz — it owns the machine and manages it as HZ does. A Peer
+  is basically a cluster member of an Instance — it's still an instance, but
+  it doesn't represent a distinct config."* Proposed: **cluster** (a config
+  layer; a standalone hz is a one-node cluster) · **node** (a member, today's
+  HA peer) · **child cluster** (a nested hz) · app placements become
+  **deployments**. Nothing is renamed until chosen; code uses neutral names
+  (`Machine.HZ`, `Environment.Upstream`).
+
+**In flight 2026-09-29:** N1 (segment tunnel) and the vantage-topic-from-UI,
+each in its own worktree. N3 follows N1 (both touch `internal/config/machine.go`).
+
+**Still the operator's, before N4 is designed:**
 - **PCI evidence** (estate.md §6): the VPN reduces exposure, not scope — the
   promotion record ("who promoted what, when") and de-rooting hz are still owed
   for the PCI claim; neither is in N1–N4.
