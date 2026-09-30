@@ -56,7 +56,7 @@ func isMCPClient() bool {
 	return fi.Mode()&os.ModeCharDevice == 0
 }
 
-func runServer(configPath string, dryRun bool, mcpEnabled bool, enableAdminToken bool, listenAddr string) {
+func runServer(configPath string, dryRun bool, mcpEnabled bool, enableAdminToken bool, listenAddr string, noVPNListen bool) {
 	// If MCP is enabled and stdin is a pipe, run as MCP stdio server
 	if mcpEnabled && isMCPClient() {
 		runMCPStdio(configPath, dryRun)
@@ -110,6 +110,12 @@ func runServer(configPath string, dryRun bool, mcpEnabled bool, enableAdminToken
 		cfg.SetListenOverride(listenAddr)
 		slog.Warn("listen address overridden for this run only; a restart without --listen reverts it",
 			"listen", listenAddr, "config_says", cfg.ListenAddr)
+	}
+
+	// Same not-persisted property as --listen: a restart without it reverts.
+	if noVPNListen {
+		cfg.SetNoVPNListen(true)
+		slog.Warn("VPN listener disabled for this run only (--no-vpn-listen)")
 	}
 
 	srv, err := server.NewWithConfig(cfg, cfgPath, dryRun, Version)

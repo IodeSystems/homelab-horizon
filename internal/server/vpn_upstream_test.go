@@ -160,7 +160,7 @@ func TestTheUpstreamConfigAndParentURLNameTheAdmittedAddress(t *testing.T) {
 	if strings.Contains(conf, "DNS") {
 		t.Errorf("upstream config carries a DNS line:\n%s", conf)
 	}
-	u, err := s.cfg().ParentAPIURL(s.gatewayWGIP())
+	u, err := s.upstreamParentURL()
 	if err != nil || u != "http://10.100.0.1:8080" {
 		t.Fatalf("parent URL = %q %v", u, err)
 	}
@@ -185,4 +185,36 @@ func TestMachineRmDryRunNamesTheVPNClient(t *testing.T) {
 		t.Fatalf("cascade dry run = %+v", cascaded)
 	}
 	wg0Unchanged(t, path)
+}
+
+// THE BYPASS THE VPN LISTENER WOULD HAVE OPENED. In MFA scope "all" a VPN
+// admin can be jailed, and the L3 jail admits hz's own port ("horizon
+// direct"). Once hz also listens on the WG address that port answers, so an
+// address-based admin sign-in must refuse a jailed peer — HAProxy's portal-only
+// L7 jail no longer stands in front of it. The positive control is the same
+// admin signing in once MFA is off: without it, "not admin" could mean the
+// request never matched a peer at all.
+func TestAJailedVPNAdminIsNotSignedInByAddress(t *testing.T) {
+	s, _ := upstreamServer(t, ":8080")
+	next := *s.cfg()
+	next.VPNProfiles = map[string]string{"prod-hz-vpn": config.ProfileVPNOnly}
+	next.VPNAdmins = []string{"prod-hz-vpn"}
+	next.VPNMFAEnabled = true
+	next.VPNMFAScope = config.MFAScopeAll
+	s.config.Store(&next)
+	if !s.cfg().IsPeerMFAJailed("prod-hz-vpn") {
+		t.Fatal("fixture: the admin is expected to be jailed (scope all, no session)")
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/machines", nil)
+	r.RemoteAddr = "10.100.0.7:40000"
+	if s.isVPNAdmin(r) {
+		t.Fatal("a JAILED VPN admin was signed in by its address — the MFA jail is bypassed on the VPN listener")
+	}
+
+	control := next
+	control.VPNMFAEnabled = false
+	s.config.Store(&control)
+	if !s.isVPNAdmin(r) {
+		t.Fatal("positive control: the same admin, not jailed, must sign in")
+	}
 }

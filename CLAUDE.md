@@ -104,7 +104,7 @@ exact field list, and no environment field under any spelling), `:69`.
 **A machine MAY name an owning project — responsibility, not placement.**
 Amended 2026-09-26 (`plan/design/ui.md`, Decision 1 amendment 6). `""` is
 global. A machine owned by one project may host instances of others, and those
-read as crossings. A named owner must be declared (`internal/config/config.go:718-728`,
+read as crossings. A named owner must be declared (`internal/config/config.go:731-741`,
 enforced `internal/config/attribution_test.go:34`); removing the project
 re-attributes the machine to global, never deletes it (`attribution_test.go:197`).
 Attribution changes no rendered artifact and no projection:
@@ -140,15 +140,15 @@ TestMovingTheHubRewiresEveryPeerSetAndSaysSo` — *"the report is not a second
 answer"*.
 
 ⚠ **False for the legacy human-VPN path**, which does store them:
-`Config.WGPeers` (`internal/config/config.go:477`) and `WGPeer.AllowedIPs`
-(`:620-627`), snapshotted from `wg0.conf` so HA peer-sync can replicate it.
+`Config.WGPeers` (`internal/config/config.go:490`) and `WGPeer.AllowedIPs`
+(`:633-640`), snapshotted from `wg0.conf` so HA peer-sync can replicate it.
 Different subsystem; `architecture.md`'s own "Not true yet" table admits it.
 
 ## 9 · Posture is ordered, and the order is not the name.
 
-`PostureRank` (`internal/config/config.go:755-769`) is the only legal
+`PostureRank` (`internal/config/config.go:768-782`) is the only legal
 comparison. String order sorts `dev < prod < staging`, which would read a
-promotion to prod as a **demotion**. Gate: `CheckPromotion` (`:923-941`).
+promotion to prod as a **demotion**. Gate: `CheckPromotion` (`:936-954`).
 Enforced: `environments_test.go:190`, `promotion_test.go:63`.
 
 ⚠ **Convention, not type.** `Posture` is a plain `string`; nothing stops
