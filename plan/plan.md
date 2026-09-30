@@ -150,10 +150,9 @@ up, background retry, rebind on a WG address change. N1b's create now succeeds
 with a loopback primary. ⚠ **Found and fixed with it — an MFA-jail bypass it
 would have opened:** in scope "all" a VPN admin can be jailed, the L3 jail
 admits hz's own port, and `isVPNAdmin` signed in by address with no jail check —
-now refused (`TestAJailedVPNAdminIsNotSignedInByAddress`). ❓ **Blocks deploy
-(operator):** PCI 2.2.7 `admin_access_encrypted` passes only on a loopback-only
-primary; with hz also on the WG address (plain HTTP, WireGuard-encrypted) it
-would report something false. Does WireGuard count as the encryption for 2.2.7?
+now refused (`TestAJailedVPNAdminIsNotSignedInByAddress`). ✅ **PCI 2.2.7 decided (operator, 2026-09-29): WireGuard counts** —
+`AdminAccessEncrypted(wgIP)` passes a loopback or WG-address primary; the
+evidence names each live listener and how it is encrypted.
 After deploy, check `ss -ltnp | grep 8080` shows no `0.0.0.0`/LAN entry, and
 note every VPN peer can now reach hz directly on `10.100.0.1:8080`
 (lan-access/full-tunnel/vpn-only add no WG-INPUT rule) — hz's normal auth
