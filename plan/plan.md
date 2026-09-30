@@ -143,6 +143,22 @@ client back if the machine is refused. Add/edit now refuse an unknown profile
 refused — the rule would admit a port nothing answers on the WG address.
 **Operator's call:** how the child reaches hz's API on the gateway (below).
 
+**VPN listener built 2026-09-29** (merged `f423766`): hz binds its primary
+(`127.0.0.1:8080` live) AND `<wg0 Address>:<port>` (`vpn_listen`, default on;
+`--no-vpn-listen`), never `0.0.0.0`; `IP_FREEBIND` so it binds before `wg0` is
+up, background retry, rebind on a WG address change. N1b's create now succeeds
+with a loopback primary. ⚠ **Found and fixed with it — an MFA-jail bypass it
+would have opened:** in scope "all" a VPN admin can be jailed, the L3 jail
+admits hz's own port, and `isVPNAdmin` signed in by address with no jail check —
+now refused (`TestAJailedVPNAdminIsNotSignedInByAddress`). ❓ **Blocks deploy
+(operator):** PCI 2.2.7 `admin_access_encrypted` passes only on a loopback-only
+primary; with hz also on the WG address (plain HTTP, WireGuard-encrypted) it
+would report something false. Does WireGuard count as the encryption for 2.2.7?
+After deploy, check `ss -ltnp | grep 8080` shows no `0.0.0.0`/LAN entry, and
+note every VPN peer can now reach hz directly on `10.100.0.1:8080`
+(lan-access/full-tunnel/vpn-only add no WG-INPUT rule) — hz's normal auth
+applies; VPN admins are signed in by address there, as they are via HAProxy.
+
 **Still the operator's, before N4 is designed:**
 - **PCI evidence** (estate.md §6): the VPN reduces exposure, not scope — the
   promotion record ("who promoted what, when") and de-rooting hz are still owed
