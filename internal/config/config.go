@@ -136,8 +136,21 @@ type Config struct {
 	// restart into a permanent change nobody asked to make. That is the whole
 	// safety property of --listen, so it gets a field that Save cannot see.
 	listenOverride string
-	AdminToken     string `json:"admin_token,omitempty"`
-	KioskURL       string `json:"kiosk_url"`
+
+	// VPNListen is the second listener: hz ALSO answers on the gateway's
+	// WireGuard address, at ListenAddr's port, when ListenAddr is a specific
+	// address that is not already that one (loopback, a LAN IP). nil means on.
+	// It exists so a nested hz's upstream client (vpn_upstream.go) reaches this
+	// hz while --listen keeps the plain-HTTP port off the LAN. Never 0.0.0.0:
+	// the whole point of binding loopback is that the LAN does not see this
+	// port. Per-instance; peer-sync pins it (mergeRemoteIntoLocal).
+	VPNListen *bool `json:"vpn_listen,omitempty"`
+	// noVPNListen is --no-vpn-listen: this run only, never saved — the same
+	// reasoning as listenOverride.
+	noVPNListen bool
+
+	AdminToken string `json:"admin_token,omitempty"`
+	KioskURL   string `json:"kiosk_url"`
 	// AdminURL, when set, is the canonical base URL hz uses for integration
 	// snippets (e.g. "https://hz.example.com"). It overrides the self-service
 	// domain and the request host. Set this when neither is what an integration
@@ -2523,6 +2536,22 @@ func (c *Config) SetListenOverride(addr string) {
 // ListenOverride returns the start-option bind, or empty.
 func (c *Config) ListenOverride() string { return c.listenOverride }
 
+// SetNoVPNListen applies --no-vpn-listen for this run.
+func (c *Config) SetNoVPNListen(off bool) { c.noVPNListen = off }
+
+// NoVPNListen reports --no-vpn-listen.
+func (c *Config) NoVPNListen() bool { return c.noVPNListen }
+
+// VPNListenEnabled reports whether hz may add its VPN listener: on unless
+// vpn_listen is false or --no-vpn-listen was given. Whether one is actually
+// added also depends on the primary bind (server.vpnListenTarget).
+func (c *Config) VPNListenEnabled() bool {
+	if c.noVPNListen {
+		return false
+	}
+	return c.VPNListen == nil || *c.VPNListen
+}
+
 // EffectiveListenAddr is the address hz actually binds: the start option when
 // given, otherwise the configured one.
 //
@@ -2886,6 +2915,12 @@ func Template() string {
 {
   // HTTP server listen address
   "listen_addr": ":8080",
+
+  // When listen_addr is a specific address (e.g. 127.0.0.1:8080), hz also
+  // listens on the gateway's WireGuard address at the same port, so a nested
+  // hz can reach it over its upstream VPN client. Never on every interface.
+  // Default true; --no-vpn-listen turns it off for one run.
+  "vpn_listen": true,
 
   // Public URL of this kiosk (for invite QR codes)
   "kiosk_url": "https://vpn.example.com",

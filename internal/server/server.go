@@ -271,6 +271,12 @@ type Server struct {
 	// on a developer's box and unpredictably on a runner.
 	egressIface *string
 
+	// vpnLn is the second listener on the gateway's WG address
+	// (vpn_listener.go); nil until Run starts serving. vpnListen overrides its
+	// bind for tests; nil means listenFreebind.
+	vpnLn     atomic.Pointer[vpnListener]
+	vpnListen func(network, addr string) (net.Listener, error)
+
 	adminToken    string
 	csrfSecret    string
 	dryRun        bool
@@ -593,6 +599,7 @@ func (s *Server) updateConfig(fn func(cfg *config.Config)) error {
 		return err
 	}
 	s.config.Store(&cfg)
+	s.syncVPNListener()
 	return config.Save(s.configPath, &cfg)
 }
 
@@ -1054,6 +1061,9 @@ func (s *Server) startHealthCheck() {
 
 		for range ticker.C {
 			s.runHealthCheck()
+			// A WG address changed by any path (wg0.conf reload, restore)
+			// rebinds within a tick; the config funnels also call it at once.
+			s.syncVPNListener()
 		}
 	}()
 }
@@ -2039,6 +2049,10 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 			errCh <- err
 		}
 	}()
+	// The second listener, on the gateway's WG address, served by the same
+	// http.Server (vpn_listener.go). Binds in the background; never fails or
+	// holds up the start.
+	vpnLn := s.startVPNListener(server)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -2048,6 +2062,7 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	case <-sig:
 		slog.Info("shutting down (draining in-flight requests)")
 		s.static.Stop()
+		vpnLn.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		return server.Shutdown(ctx)

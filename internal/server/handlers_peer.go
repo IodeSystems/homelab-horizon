@@ -402,7 +402,9 @@ func (s *Server) applyNewConfig(newCfg *config.Config) error {
 	// config pulled from the primary must not silently move where this
 	// instance is bound.
 	newCfg.SetListenOverride(old.ListenOverride())
+	newCfg.SetNoVPNListen(old.NoVPNListen())
 	s.config.Store(newCfg)
+	s.syncVPNListener()
 
 	if err := config.Save(s.configPath, newCfg); err != nil {
 		return fmt.Errorf("save: %w", err)
