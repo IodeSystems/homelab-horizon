@@ -271,6 +271,12 @@ type Server struct {
 	// on a developer's box and unpredictably on a runner.
 	egressIface *string
 
+	// vpnLn is the second listener on the gateway's WG address
+	// (vpn_listener.go); nil until Run starts serving. vpnListen overrides its
+	// bind for tests; nil means listenFreebind.
+	vpnLn     atomic.Pointer[vpnListener]
+	vpnListen func(network, addr string) (net.Listener, error)
+
 	adminToken    string
 	csrfSecret    string
 	dryRun        bool
@@ -593,6 +599,7 @@ func (s *Server) updateConfig(fn func(cfg *config.Config)) error {
 		return err
 	}
 	s.config.Store(&cfg)
+	s.syncVPNListener()
 	return config.Save(s.configPath, &cfg)
 }
 
@@ -802,6 +809,14 @@ func (s *Server) isVPNAdmin(r *http.Request) bool {
 	// toggle and CheckPeerProfileChange refuse the combination; this holds
 	// if a config arrives with it anyway (peer-sync, a hand edit).
 	if s.cfg().GetPeerProfile(peer.Name) == config.ProfileUpstream {
+		return false
+	}
+	// Never a JAILED peer. In MFA scope "all" a VPN admin can be jailed, and
+	// the L3 jail admits hz's own port ("horizon direct", jailAllows). Since
+	// hz also listens on the WG address (vpn_listener.go), that port answers —
+	// so an address-based sign-in here would let a jailed admin past the jail,
+	// which HAProxy's L7 jail (portal only) no longer stands in front of.
+	if s.cfg().IsPeerMFAJailed(peer.Name) {
 		return false
 	}
 
@@ -1054,6 +1069,9 @@ func (s *Server) startHealthCheck() {
 
 		for range ticker.C {
 			s.runHealthCheck()
+			// A WG address changed by any path (wg0.conf reload, restore)
+			// rebinds within a tick; the config funnels also call it at once.
+			s.syncVPNListener()
 		}
 	}()
 }
@@ -2039,6 +2057,10 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 			errCh <- err
 		}
 	}()
+	// The second listener, on the gateway's WG address, served by the same
+	// http.Server (vpn_listener.go). Binds in the background; never fails or
+	// holds up the start.
+	vpnLn := s.startVPNListener(server)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -2048,6 +2070,7 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	case <-sig:
 		slog.Info("shutting down (draining in-flight requests)")
 		s.static.Stop()
+		vpnLn.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		return server.Shutdown(ctx)

@@ -180,18 +180,24 @@ func TestRemovingALinkedMachineNamesItsVPNClient(t *testing.T) {
 
 func TestParentAPIURL(t *testing.T) {
 	for _, tc := range []struct {
-		listen, wgIP, want, refuse string
+		listen, wgIP, vpnLn, want, refuse string
 	}{
-		{":8080", "10.100.0.1", "http://10.100.0.1:8080", ""},
-		{"0.0.0.0:8080", "10.100.0.1", "http://10.100.0.1:8080", ""},
-		{"10.100.0.1:9000", "10.100.0.1", "http://10.100.0.1:9000", ""},
-		{"127.0.0.1:8080", "10.100.0.1", "", "not the gateway's WireGuard address"},
-		{"192.168.1.10:8080", "10.100.0.1", "", "not the gateway's WireGuard address"},
-		{":8080", "", "", "does not know the gateway's WireGuard address"},
-		{"", "10.100.0.1", "", "has no port"},
+		{":8080", "10.100.0.1", "", "http://10.100.0.1:8080", ""},
+		{"0.0.0.0:8080", "10.100.0.1", "", "http://10.100.0.1:8080", ""},
+		{"10.100.0.1:9000", "10.100.0.1", "", "http://10.100.0.1:9000", ""},
+		{"127.0.0.1:8080", "10.100.0.1", "", "", "not the gateway's WireGuard address"},
+		{"192.168.1.10:8080", "10.100.0.1", "", "", "not the gateway's WireGuard address"},
+		// The VPN listener, bound exactly where the rule admits: accepted.
+		{"127.0.0.1:8080", "10.100.0.1", "10.100.0.1:8080", "http://10.100.0.1:8080", ""},
+		{"192.168.1.10:8080", "10.100.0.1", "10.100.0.1:8080", "http://10.100.0.1:8080", ""},
+		// Bound somewhere the rule does not admit: still refused.
+		{"127.0.0.1:8080", "10.100.0.1", "10.100.0.2:8080", "", "VPN listener is not bound"},
+		{"127.0.0.1:8080", "10.100.0.1", "10.100.0.1:9090", "", "VPN listener is not bound"},
+		{":8080", "", "", "", "does not know the gateway's WireGuard address"},
+		{"", "10.100.0.1", "", "", "has no port"},
 	} {
 		c := &Config{ListenAddr: tc.listen}
-		got, err := c.ParentAPIURL(tc.wgIP)
+		got, err := c.ParentAPIURL(tc.wgIP, tc.vpnLn)
 		if tc.refuse != "" {
 			if err == nil || !strings.Contains(err.Error(), tc.refuse) {
 				t.Errorf("%q/%q: err = %v, want %q", tc.listen, tc.wgIP, err, tc.refuse)
@@ -206,7 +212,7 @@ func TestParentAPIURL(t *testing.T) {
 	// A start-option bind that moves hz off the port the rule admits.
 	c := &Config{ListenAddr: ":8080"}
 	c.SetListenOverride(":9090")
-	if _, err := c.ParentAPIURL("10.100.0.1"); err == nil {
+	if _, err := c.ParentAPIURL("10.100.0.1", ""); err == nil {
 		t.Error("an override on another port must be refused")
 	}
 }

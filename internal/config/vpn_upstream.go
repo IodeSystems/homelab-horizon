@@ -14,7 +14,8 @@ import (
 //
 // WHAT IT ADMITS, and why exactly that. The child needs hz's API and nothing
 // else. hz's API on the gateway's WG address is hz's OWN listener — ListenAddr,
-// plain HTTP inside the tunnel — which is the same port the MFA jail already
+// or, when that is loopback or a LAN IP, the VPN listener at its port
+// (server/vpn_listener.go); plain HTTP inside the tunnel — which is the same port the MFA jail already
 // admits as "horizon direct" (internal/iptables/rules.go jailAllows). HAProxy's
 // ports are NOT admitted: HAProxy fronts every vhost on the gateway, LAN
 // backends included, so admitting 443 would hand the child the LAN at L7. DNS is
@@ -156,9 +157,14 @@ func (c *Config) validateUpstreamLinks() error {
 // header).
 //
 // Refused when that URL could not answer: no WG address, no port, or hz bound
-// to an address that is neither every interface nor the WG address itself —
-// then the rule would admit a port nothing listens on at that address.
-func (c *Config) ParentAPIURL(serverWGIP string) (string, error) {
+// to an address that is neither every interface nor the WG address itself and
+// no VPN listener there — then the rule would admit a port nothing listens on
+// at that address.
+//
+// vpnListener is the address hz's second listener is BOUND to right now
+// (server.vpnListener.Bound), "" when there is none. It counts only when it is
+// exactly <serverWGIP>:<port>, the address and port the rule admits.
+func (c *Config) ParentAPIURL(serverWGIP, vpnListener string) (string, error) {
 	ip := net.ParseIP(strings.TrimSpace(serverWGIP))
 	if ip == nil || ip.To4() == nil {
 		return "", fmt.Errorf("hz does not know the gateway's WireGuard address (got %q), so there is no address an upstream client could reach it on", serverWGIP)
@@ -175,13 +181,18 @@ func (c *Config) ParentAPIURL(serverWGIP string) (string, error) {
 		return "", fmt.Errorf("hz listens on port %s but its config says %s — the upstream rule admits the config's port, so it would admit one hz is not on", effPort, port)
 	}
 	host = strings.Trim(host, "[]")
+	if vpnListener != "" && vpnListener == net.JoinHostPort(ip.String(), port) {
+		return "http://" + vpnListener, nil
+	}
 	switch host {
 	case "", "0.0.0.0", "::", "*":
 		// every interface, wg0 included
 	default:
 		if h := net.ParseIP(host); h == nil || !h.Equal(ip) {
 			return "", errors.New("hz is bound to " + c.EffectiveListenAddr() + ", which is not the gateway's WireGuard address " + ip.String() +
-				" — an upstream client could reach nothing there. Bind hz to " + ip.String() + ":" + port + " or to every interface (:" + port + ")")
+				", and hz's VPN listener is not bound at " + net.JoinHostPort(ip.String(), port) +
+				" — an upstream client could reach nothing there. Turn vpn_listen on (and drop --no-vpn-listen), or bind hz to " +
+				net.JoinHostPort(ip.String(), port))
 		}
 	}
 	return "http://" + net.JoinHostPort(ip.String(), port), nil
