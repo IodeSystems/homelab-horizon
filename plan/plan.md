@@ -143,7 +143,7 @@ client back if the machine is refused. Add/edit now refuse an unknown profile
 refused — the rule would admit a port nothing answers on the WG address.
 **Operator's call:** how the child reaches hz's API on the gateway (below).
 
-**VPN listener built 2026-09-29** (merged `f423766`): hz binds its primary
+**VPN listener built 2026-09-29** (merged `f423766`, **deployed 2026-09-30** — `ss` shows exactly `127.0.0.1:8080` and `10.100.0.1:8080`; the LAN address refuses): hz binds its primary
 (`127.0.0.1:8080` live) AND `<wg0 Address>:<port>` (`vpn_listen`, default on;
 `--no-vpn-listen`), never `0.0.0.0`; `IP_FREEBIND` so it binds before `wg0` is
 up, background retry, rebind on a WG address change. N1b's create now succeeds
@@ -196,7 +196,7 @@ already drawn that line and the UI can inherit it.
 
 The new model lands on **`dev`**, not `main`, because it will break and churn
 before it is release-ready and **the gateway is serving real traffic**. **`dev`
-is deployed to the gateway (2026-09-27, `e92ffe0`) but not pushed** — 189 commits
+is deployed to the gateway (2026-09-30, `265302d`) but not pushed** — 189 commits
 ahead of `origin/dev`.
 
 #### ✅ The deploy gap below was paid down 2026-09-26 — kept for the move warnings
@@ -299,8 +299,7 @@ for environments, segments and machines** — merged to `dev` and **deployed** 2
 
 One row per item. **The detail is in the linked document** — the landed
 narratives moved to [done.md](done.md) 2026-09-24 so this file stays readable in
-one sitting. **`dev` @ `e92ffe0` is deployed to the gateway** (2026-09-27 17:26,
-`v0.4.0-323-ge92ffe0`, active, 0 restarts, 0 ERRORs, UI bundle matches the local build) and **not pushed**. Rows
+one sitting. **`dev` @ `265302d` is deployed to the gateway** (2026-09-30 09:16, `v0.4.0-392-g265302d`, active, 0 restarts, 0 ERRORs, UI bundle matches the local build) and **not pushed**. Rows
 below that say "not deployed" predate that deploy — re-check before trusting.
 
 | | Item | Status | Detail |
@@ -548,7 +547,7 @@ first report (a push vantage registers itself).
 `remote_probes` as one stringified array, so every vantage edit printed that
 vantage's token in full into `/api/v1/pending` (admin-only, but the token is
 meant to be write-only). `2ccba84` strips `token`/`ntfy_url`/`ntfy_token` per
-vantage before diffing. Live until deployed.
+vantage before diffing. Deployed 2026-09-30 (`265302d`) — closed.
 
 Two decisions worth keeping:
 
