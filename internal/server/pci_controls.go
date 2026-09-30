@@ -189,7 +189,7 @@ var pciCatalogue = map[string]pciMeta{
 	},
 	"admin_access_encrypted": {
 		title: "Admin access encrypted",
-		wants: "The admin interface is not reachable in cleartext off this host.",
+		wants: "The admin interface is reached only through TLS (loopback behind HAProxy) or over WireGuard (the VPN address) — never in cleartext on the LAN.",
 		kind:  remediationManual,
 		hint: "No button on purpose: rebinding the listener can cut off whoever " +
 			"is reading this, and the safe route depends on your HTTPS vhost. " +
@@ -258,7 +258,7 @@ func requirementInSAQ(requirement, level string) bool {
 // pciControls joins live state with the catalogue.
 func (s *Server) pciControls() []PCIControl {
 	cfg := s.cfg()
-	facts := s.hostFacts.snapshot()
+	facts := s.factsSnapshot()
 	level := cfg.EffectiveSAQLevel()
 
 	out := make([]PCIControl, 0, len(pciCatalogue))
@@ -373,7 +373,7 @@ func pciDetail(name string, cfg *config.Config, facts hostFactsSnapshot) string 
 				int(facts.journalRetention.Hours()/24))
 		}
 	case "admin_access_encrypted":
-		return fmt.Sprintf("The admin interface listens on %s.", cfg.EffectiveListenAddr())
+		return adminAccessEvidence(cfg, facts)
 	}
 	return ""
 }
@@ -447,4 +447,24 @@ func (s *Server) handleAPIPCILevel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "saqLevel": req.Level})
+}
+
+// adminAccessEvidence names every listener hz is on and how each is encrypted,
+// so an assessor reads the path rather than a bare pass.
+func adminAccessEvidence(cfg *config.Config, facts hostFactsSnapshot) string {
+	primary := cfg.EffectiveListenAddr()
+	var how string
+	switch {
+	case cfg.AdminBoundToLoopback():
+		how = "loopback — reached through HAProxy's TLS frontend"
+	case cfg.AdminAccessEncrypted(facts.wgIP):
+		how = "the WireGuard address — encrypted by WireGuard"
+	default:
+		how = "reachable in cleartext off this host"
+	}
+	out := fmt.Sprintf("hz listens on %s (%s)", primary, how)
+	if facts.vpnListener != "" {
+		out += fmt.Sprintf(" and on %s (the WireGuard address — encrypted by WireGuard)", facts.vpnListener)
+	}
+	return out + "."
 }

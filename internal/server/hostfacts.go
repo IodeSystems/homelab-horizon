@@ -38,6 +38,12 @@ type hostFactsSnapshot struct {
 	lastAptUpdate     time.Time
 	journalPersistent bool
 	journalRetention  time.Duration
+
+	// Not host facts — the live admin listeners, carried here so the PCI
+	// 2.2.7 control and its evidence read what the process actually bound.
+	// Filled by Server.factsSnapshot, empty from a bare snapshot().
+	wgIP        string // the gateway's WireGuard address (wg0.conf Address)
+	vpnListener string // the VPN listener's BOUND address, or ""
 }
 
 func (h *hostFacts) snapshot() (facts hostFactsSnapshot) {
@@ -243,4 +249,14 @@ func parseSystemdDuration(s string) time.Duration {
 		return time.Duration(n * float64(time.Second))
 	}
 	return 0
+}
+
+// factsSnapshot is the host facts plus the live admin listeners (see the
+// hostFactsSnapshot fields). Every PCI read goes through this, so 2.2.7 is
+// decided on what hz is bound to, not only on what its config says.
+func (s *Server) factsSnapshot() hostFactsSnapshot {
+	facts := s.hostFacts.snapshot()
+	facts.wgIP = s.gatewayWGIP()
+	facts.vpnListener = s.vpnListenerBound()
+	return facts
 }

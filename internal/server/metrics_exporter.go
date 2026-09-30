@@ -293,7 +293,7 @@ func (c *hzCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 
 	// ---- Host facts (measured on the health tick, not here) ----
-	facts := c.s.hostFacts.snapshot()
+	facts := c.s.factsSnapshot()
 	if facts.measured {
 		gauge(c.timeSynced, b2f(facts.timeSynced))
 		gauge(c.pendingUpdates, float64(facts.securityUpdates), "security")
@@ -423,10 +423,10 @@ func hzControls(cfg *config.Config, facts hostFactsSnapshot) []control {
 		{"log_persistence", "10.5.1",
 			facts.measured && facts.journalPersistent && facts.journalRetention >= 365*24*time.Hour},
 		// 2.2.7 — non-console administrative access must be encrypted. hz's
-		// own listener speaks plain HTTP, which is fine while the only route
-		// to it is HAProxy's TLS frontend over loopback, and a finding the
-		// moment it binds a LAN address.
-		{"admin_access_encrypted", "2.2.7", cfg.AdminBoundToLoopback()},
+		// own listener speaks plain HTTP: fine on loopback (HAProxy TLS) and
+		// on the WireGuard address (encrypted by WireGuard — the operator's
+		// call, 2026-09-29), a finding on every interface or a LAN address.
+		{"admin_access_encrypted", "2.2.7", cfg.AdminAccessEncrypted(facts.wgIP)},
 	}
 }
 

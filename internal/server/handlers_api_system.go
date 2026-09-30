@@ -317,7 +317,7 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 	// Audit logging and admin exposure — the two PCI controls that are
 	// properties of the host rather than of a service, so they get their own
 	// card rather than being buried under one.
-	facts := s.hostFacts.snapshot()
+	facts := s.factsSnapshot()
 	// Installed/Running carry the sense the other cards give them: the journal
 	// exists everywhere systemd does, and "running" here means it is actually
 	// retaining what 10.5.1 asks for.
@@ -342,7 +342,7 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 			"logs are kept for %d days; PCI DSS 10.5.1 wants 365",
 			int(facts.journalRetention.Hours()/24)))
 	}
-	if !cfg.AdminBoundToLoopback() {
+	if !cfg.AdminAccessEncrypted(facts.wgIP) {
 		// No fixer for this one on purpose: rebinding the listener can cut off
 		// whoever is reading the message, and the safe route depends on their
 		// HAProxy vhost rather than on anything hz can decide.
@@ -360,7 +360,11 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 		// 2.2.7 rides along on the same card: both are about how this box is
 		// administered and audited, and neither belongs to a service.
 		"admin_loopback_only": cfg.AdminBoundToLoopback(),
-		"listen_addr":         cfg.EffectiveListenAddr(),
+		// The second listener, when bound: the WireGuard address. 2.2.7 counts
+		// it as encrypted (AdminAccessEncrypted), so this names it rather than
+		// letting "loopback only" read as the whole truth.
+		"vpn_listener": facts.vpnListener,
+		"listen_addr":  cfg.EffectiveListenAddr(),
 		// Surfaced separately so the page can say "for this run" rather than
 		// implying the file was changed.
 		"listen_override": cfg.ListenOverride(),
