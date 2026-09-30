@@ -158,6 +158,18 @@ note every VPN peer can now reach hz directly on `10.100.0.1:8080`
 (lan-access/full-tunnel/vpn-only add no WG-INPUT rule) — hz's normal auth
 applies; VPN admins are signed in by address there, as they are via HAProxy.
 
+**Redline push to prod — readiness, measured 2026-09-30.** The operator:
+*"We really need to get redline push to production ASAP … But we need to go
+through the testing."* Not ready as designed. hz can declare the rungs +
+versions, gate promotions (`CheckPromotion`), seal/bless config per rung, and
+declare `redline-prod-hz` as nested with an `upstream` VPN client (live). hz
+can NOT put a build on a box: `agent.Desired` has no packages or units section
+(`internal/agent/desired.go:101-123`) and the agent is unarmed; the child has no
+credential to the parent; no mirror/proxy (N4). **next:** the redline session
+was asked (2026-09-30) how redline deploys today, what staging verifies, and
+which boxes are staging/prod — the minimal tested path goes to the operator for
+approval before any build.
+
 **Still the operator's, before N4 is designed:**
 - **PCI evidence** (estate.md §6): the VPN reduces exposure, not scope — the
   promotion record ("who promoted what, when") and de-rooting hz are still owed
