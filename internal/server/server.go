@@ -811,6 +811,14 @@ func (s *Server) isVPNAdmin(r *http.Request) bool {
 	if s.cfg().GetPeerProfile(peer.Name) == config.ProfileUpstream {
 		return false
 	}
+	// Never a JAILED peer. In MFA scope "all" a VPN admin can be jailed, and
+	// the L3 jail admits hz's own port ("horizon direct", jailAllows). Since
+	// hz also listens on the WG address (vpn_listener.go), that port answers —
+	// so an address-based sign-in here would let a jailed admin past the jail,
+	// which HAProxy's L7 jail (portal only) no longer stands in front of.
+	if s.cfg().IsPeerMFAJailed(peer.Name) {
+		return false
+	}
 
 	for _, adminName := range s.cfg().VPNAdmins {
 		if peer.Name == adminName {
