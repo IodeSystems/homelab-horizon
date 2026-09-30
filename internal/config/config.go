@@ -2595,6 +2595,33 @@ func (c *Config) AdminBoundToLoopback() bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// AdminAccessEncrypted decides PCI DSS 2.2.7 for hz: is every way to reach hz's
+// plain-HTTP listener encrypted?
+//
+// Two paths count, and the operator decided the second (2026-09-29):
+//   - loopback: the only route in is HAProxy's TLS frontend; the cleartext
+//     hop never touches a network (AdminBoundToLoopback).
+//   - the WireGuard address: traffic arrives over wg0, encrypted by WireGuard
+//     (ChaCha20-Poly1305). The VPN listener binds ONLY this address — never
+//     0.0.0.0, pinned by TestTheVPNListenerNeverBindsEveryInterface — so it
+//     never makes this false; a primary bound to the WG address counts too.
+//
+// Anything else — every interface, or a LAN address — is a finding.
+func (c *Config) AdminAccessEncrypted(wgIP string) bool {
+	if c.AdminBoundToLoopback() {
+		return true
+	}
+	wgIP = strings.TrimSpace(wgIP)
+	if wgIP == "" {
+		return false
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(c.EffectiveListenAddr()))
+	if err != nil {
+		return false
+	}
+	return strings.Trim(strings.TrimSpace(host), "[]") == wgIP
+}
+
 // UsersDBPath is the configured identity store path, or the default.
 func (c *Config) UsersDBPath() string {
 	if strings.TrimSpace(c.UsersDB) != "" {
