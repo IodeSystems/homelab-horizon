@@ -212,7 +212,7 @@ func (s *Server) peerSyncSnapshot() PeerSyncStatusSnapshot {
 //
 // Per-instance fields (NOT replicated):
 //   - PeerID, ConfigPrimary, Peers (fleet topology — locally pinned)
-//   - ListenAddr, WGInterface, WGConfigPath, ServerEndpoint, ServerPublicKey
+//   - ListenAddr, VPNListen, WGInterface, WGConfigPath, ServerEndpoint, ServerPublicKey
 //   - PublicIP / PublicIPOverride / PublicIPLastChecked
 //     (each peer manages its own A record / public IP detection)
 //   - LocalInterface (host-specific)
@@ -226,6 +226,7 @@ func mergeRemoteIntoLocal(remote, local *config.Config) *config.Config {
 	out.Peers = local.Peers
 
 	out.ListenAddr = local.ListenAddr
+	out.VPNListen = local.VPNListen
 	out.WGInterface = local.WGInterface
 	out.WGConfigPath = local.WGConfigPath
 	out.ServerEndpoint = local.ServerEndpoint

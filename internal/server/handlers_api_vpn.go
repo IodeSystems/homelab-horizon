@@ -61,7 +61,7 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusBadRequest, "an upstream client routes nothing behind it — extra allowed IPs would make the gateway route those subnets to a nested hz")
 			return
 		}
-		u, err := s.cfg().ParentAPIURL(s.gatewayWGIP())
+		u, err := s.upstreamParentURL()
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return

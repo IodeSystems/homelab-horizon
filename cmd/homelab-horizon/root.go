@@ -33,6 +33,7 @@ type serveOpts struct {
 	noMCP            bool
 	enableAdminToken bool
 	listenAddr       string
+	noVPNListen      bool
 }
 
 func newRoot() *cobra.Command {
@@ -50,7 +51,7 @@ func newRoot() *cobra.Command {
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			runServer(opts.configPath, opts.dryRun, !opts.noMCP, opts.enableAdminToken, opts.listenAddr)
+			runServer(opts.configPath, opts.dryRun, !opts.noMCP, opts.enableAdminToken, opts.listenAddr, opts.noVPNListen)
 			return nil
 		},
 	}
@@ -70,6 +71,11 @@ func newRoot() *cobra.Command {
 		"override the listen address for this run only, e.g. 127.0.0.1:8080 "+
 			"(PCI DSS 2.2.7: reachable only via the HTTPS vhost). Not persisted — "+
 			"restart without it to revert")
+	root.Flags().BoolVar(&opts.noVPNListen, "no-vpn-listen", false,
+		"do not also listen on the gateway's WireGuard address, this run only. "+
+			"By default hz adds that listener when --listen/listen_addr is a specific "+
+			"non-WG address (e.g. 127.0.0.1:8080), so a nested hz can reach it; "+
+			"vpn_listen: false in the config turns it off for good")
 
 	root.AddCommand(
 		newVersionCmd(),

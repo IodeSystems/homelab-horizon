@@ -160,7 +160,7 @@ func TestTheUpstreamConfigAndParentURLNameTheAdmittedAddress(t *testing.T) {
 	if strings.Contains(conf, "DNS") {
 		t.Errorf("upstream config carries a DNS line:\n%s", conf)
 	}
-	u, err := s.cfg().ParentAPIURL(s.gatewayWGIP())
+	u, err := s.upstreamParentURL()
 	if err != nil || u != "http://10.100.0.1:8080" {
 		t.Fatalf("parent URL = %q %v", u, err)
 	}
