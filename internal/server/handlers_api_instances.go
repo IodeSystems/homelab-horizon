@@ -7,6 +7,7 @@ import (
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/db"
 )
 
 // handleAPIInstances lists the hz instances: this one first, then every HA
@@ -29,7 +30,40 @@ func (s *Server) handleAPIInstances(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusMethodNotAllowed, "GET required")
 		return
 	}
-	writeJSON(w, instancesFrom(s.cfg(), LocalMachineName(), s.version, s.peerSyncSnapshot()))
+	cfg := s.cfg()
+	rows := instancesFrom(cfg, LocalMachineName(), s.version, s.peerSyncSnapshot())
+	s.decorateNested(r, cfg, rows)
+	writeJSON(w, rows)
+}
+
+// decorateNested adds what this hz knows of each nested hz from its own
+// records (N4a): whether an instance token is minted, and when the instance
+// last asked for a desired state — recorded on its pull, never by dialling it.
+func (s *Server) decorateNested(r *http.Request, cfg *config.Config, rows []apitypes.InstanceResp) {
+	var pulls map[string]db.InstancePull
+	unknown := ""
+	if s.users == nil {
+		unknown = "identity store unavailable — pulls are recorded in hz.db"
+	} else if p, err := s.users.InstancePulls(r.Context()); err != nil {
+		unknown = err.Error()
+	} else {
+		pulls = p
+	}
+	for i := range rows {
+		if rows[i].Role != apitypes.InstanceRoleNested {
+			continue
+		}
+		m, ok := cfg.FindMachine(rows[i].Name)
+		if !ok || m.HZ == nil {
+			continue
+		}
+		n := &apitypes.InstanceNestedResp{HasToken: m.HZ.TokenSHA256 != "", PullsUnknown: unknown}
+		if p, ok := pulls[m.Name]; ok {
+			n.LastPullAt = p.At.Unix()
+			n.LastPullRung = p.Project + "/" + p.Environment
+		}
+		rows[i].Nested = n
+	}
 }
 
 // instancesFrom is the whole decision, pure so it is tested without a server.

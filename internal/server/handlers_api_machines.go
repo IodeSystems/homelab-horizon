@@ -489,7 +489,7 @@ func (s *Server) machineResp(m config.Machine) apitypes.MachineResp {
 		MultiHomed: m.MultiHomed(),
 	}
 	if m.HZ != nil {
-		out.HZ = &apitypes.MachineHZResp{URL: m.HZ.URL, VPNClient: m.HZ.VPNClient}
+		out.HZ = &apitypes.MachineHZResp{URL: m.HZ.URL, VPNClient: m.HZ.VPNClient, HasToken: m.HZ.TokenSHA256 != ""}
 	}
 	if cred, ok := s.agentCredentials().Find(m.Name); ok {
 		out.Enrolled = true

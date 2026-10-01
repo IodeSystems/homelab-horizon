@@ -91,7 +91,21 @@ func stagingReport(version, sha string) apitypes.DeployReportReq {
 	}
 }
 
+// report posts a deploy report the way redline's staging deploy does: the
+// artifact is uploaded FIRST (N4a — promote refuses an artifact hz does not
+// hold). The record is written directly; the upload handler has its own tests
+// (handlers_api_artifacts_test.go). reportOnly skips the upload.
 func (f deployFixture) report(t *testing.T, token string, req apitypes.DeployReportReq) apitypes.DeployReportResultResp {
+	t.Helper()
+	if sha, err := db.NormalizeSHA256(req.ArtifactSHA256); err == nil {
+		if _, err := f.s.users.RecordArtifact(context.Background(), db.Artifact{SHA256: sha, Project: req.Project, Size: 1, UploadedBy: "test-upload"}); err != nil {
+			t.Fatalf("record artifact: %v", err)
+		}
+	}
+	return f.reportOnly(t, token, req)
+}
+
+func (f deployFixture) reportOnly(t *testing.T, token string, req apitypes.DeployReportReq) apitypes.DeployReportResultResp {
 	t.Helper()
 	w := f.call(f.s.handleAPIDeployReport, http.MethodPost, "/api/v1/deploys/report", token, req)
 	if w.Code != http.StatusOK {
