@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -998,5 +999,64 @@ func TestTheBoxCanSayItsOwnFingerprint(t *testing.T) {
 	}
 	if want := FingerprintOf(priv.PublicKey()).String(); fp != want {
 		t.Fatalf("Fingerprint = %q, want %q — it does not describe this box's key", fp, want)
+	}
+}
+
+// TestRejectedConfigNeverReplacesTheCache: Options.Accept runs BEFORE the
+// config is cached, so a bad blessing falls back to the good last-known-good
+// and leaves it in place — a later boot with hz unreachable still gets the
+// good one (redline's ask, 2026-10-01).
+func TestRejectedConfigNeverReplacesTheCache(t *testing.T) {
+	h := newHZ(t)
+	serve := func(seq int64, password string) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.config = func(req ConfigRequest, k EnvKey) (ConfigResponse, error) {
+			return ConfigResponse{
+				ConfigID: "cfg-" + strconv.FormatInt(seq, 10), Sequence: seq, MinVer: "1.0.0",
+				Entries: []ConfigEntry{sealEntry(t, k, req.Addr("DB_PASSWORD"), BindingEnv, password)},
+			}, nil
+		}
+	}
+	accept := func(o *Options) {
+		o.Accept = func(c *Config) error {
+			if v, _ := c.Lookup("DB_PASSWORD"); v == "bad" {
+				return errors.New("DB_PASSWORD fails validation")
+			}
+			return nil
+		}
+	}
+	c := newClient(t, h, accept)
+
+	serve(1, "good")
+	if cfg, err := c.Load(ctx(t)); err != nil || cfg.Source != SourceServer {
+		t.Fatalf("first load: %+v, %v", cfg, err)
+	}
+
+	serve(2, "bad")
+	cfg, err := c.Load(ctx(t))
+	if err != nil {
+		t.Fatalf("a rejected config must fall back to the cache, not fail: %v", err)
+	}
+	if v, _ := cfg.Lookup("DB_PASSWORD"); cfg.Source != SourceCache || v != "good" || !errors.Is(cfg.Degraded, ErrRejected) {
+		t.Fatalf("after a rejection: source %s, value %q, degraded %v", cfg.Source, v, cfg.Degraded)
+	}
+
+	// The next boot, hz unreachable: the cache still holds the GOOD config.
+	h.set(func() { h.configStatus = http.StatusInternalServerError })
+	rebooted := newClient(t, h, func(o *Options) { accept(o); o.StateDir = c.State().Root() })
+	cfg, err = rebooted.Load(ctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := cfg.Lookup("DB_PASSWORD"); v != "good" || cfg.Sequence != 1 {
+		t.Fatalf("the rejected config replaced the cache: value %q, sequence %d", v, cfg.Sequence)
+	}
+
+	// The rejection raised no floor: hz fixing the blessing AT sequence 2 is accepted.
+	h.set(func() { h.configStatus = 0 })
+	serve(2, "fixed")
+	if cfg, err = rebooted.Load(ctx(t)); err != nil || cfg.Source != SourceServer || cfg.Sequence != 2 {
+		t.Fatalf("a fixed blessing at the rejected sequence: %+v, %v", cfg, err)
 	}
 }

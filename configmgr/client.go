@@ -122,6 +122,13 @@ var (
 	// denial: pending, unknown, an error status, a body that did not parse.
 	// A caller holding a cache boots it; a caller holding none has nothing.
 	ErrUnsettled = errors.New("hz gave no settled answer")
+
+	// ErrRejected means hz served a config that opened, and Options.Accept
+	// refused it. It takes the cached-boot path like any other unusable
+	// answer, and it is never cached: a bad blessing must not replace a good
+	// last-known-good (plan/design/config-manager.md: "a config that fails
+	// validation falls back to cache, loudly").
+	ErrRejected = errors.New("config rejected by the application")
 )
 
 // Source says where a Config's bytes came from.
@@ -184,6 +191,12 @@ type Options struct {
 
 	// PollInterval is how often an unapproved box re-asks. Defaults to 5s.
 	PollInterval time.Duration
+	// Accept, when set, is the application's own validation of a config hz
+	// served. It runs after the config decrypts and BEFORE it is written as
+	// last-known-good. A non-nil error makes Load boot the cache instead, LOUD,
+	// with Degraded wrapping ErrRejected; the rejected config is not cached
+	// and raises no sequence floor. Nil accepts everything, as before.
+	Accept func(*Config) error
 }
 
 // Client is one application's view of the config manager, for one address.
@@ -374,6 +387,12 @@ func (c *Client) Load(ctx context.Context) (*Config, error) {
 	var cfg *Config
 	if err == nil {
 		cfg, err = c.build(key, resp, SourceServer)
+	}
+	if err == nil && c.opts.Accept != nil {
+		if aerr := c.opts.Accept(cfg); aerr != nil {
+			err = fmt.Errorf("%w: config %s (sequence %d): %v", ErrRejected, resp.ConfigID, resp.Sequence, aerr)
+			cfg = nil
+		}
 	}
 	if err == nil {
 		if perr := c.state.PutCache(c.Addr(), c.opts.Version, *resp, floors); perr != nil {
