@@ -66,6 +66,15 @@ type InstanceNestedResp struct {
 	// PullsUnknown is set when hz could not read its pull record (hz.db
 	// unavailable); LastPullAt is then not an answer.
 	PullsUnknown string `json:"pullsUnknown,omitempty"`
+	// State is one of the NestedState* constants. GrantExpiresAt is set while
+	// a bootstrap command is live; EnrolledAt when this hz remembers the box
+	// enrolling. Both are held in memory: a restart forgets them, and the
+	// state then reads from the token, the link and the pulls alone.
+	State          string `json:"state"`
+	GrantExpiresAt int64  `json:"grantExpiresAt,omitempty"`
+	EnrolledAt     int64  `json:"enrolledAt,omitempty"`
+	// VPNClient is the linked upstream VPN client, "" for none.
+	VPNClient string `json:"vpnClient,omitempty"`
 }
 
 // InstanceSyncResp is a replica's last pull from the config primary.

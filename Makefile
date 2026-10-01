@@ -136,6 +136,25 @@ build-linux-arm64: ui dist hz-embed ui-embed
 build-linux-arm: ui dist hz-embed ui-embed
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -tags $(SERVER_TAGS) $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-armv7 $(CMD_PATH)
 
+# Server binaries for NESTED hz children (internal/server/childbin.go). The
+# parent cannot embed itself, so it holds these on disk and a fresh child
+# downloads its platform's over the upstream VPN. Each gets a manifest the
+# parent re-checks the file against; a partial upload reads as missing.
+CHILD_PLATFORMS=linux-amd64 linux-arm64
+.PHONY: child-bins
+child-bins: build-linux-amd64 build-linux-arm64
+	@for p in $(CHILD_PLATFORMS); do \
+	  sum=$$(sha256sum dist/$(BINARY_NAME)-$$p | cut -d' ' -f1); \
+	  printf '{"version":"%s","sha256":"%s"}\n' "$(VERSION)" "$$sum" > dist/$(BINARY_NAME)-$$p.json; \
+	  echo "child binary $$p: $(VERSION) $$sum"; \
+	done
+
+# Upload them to a parent hz without deploying it: make child-bins-upload HOST=user@host
+.PHONY: child-bins-upload
+child-bins-upload:
+	@test -n "$(HOST)" || { echo "usage: make child-bins-upload HOST=user@parent-hz"; exit 2; }
+	./bin/deploy --host $(HOST) --child-bins-only
+
 # Clean build artifacts
 .PHONY: clean
 clean:

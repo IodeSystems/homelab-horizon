@@ -471,9 +471,11 @@ On the **parent** (the office hz):
 ```bash
 # 0. Once: declare the child as a machine that runs hz, place the rung in it, and
 #    mint its instance token (shown ONCE; hz keeps only its sha256; a re-mint
-#    replaces it). The token authenticates as instance:<machine> for exactly three
-#    calls — desired, artifact download, the forwarded report — and only for rungs
-#    whose upstream is that machine. Every other route refuses it.
+#    replaces it). The token authenticates as instance:<machine> for desired,
+#    artifact download and the forwarded report — only for rungs whose upstream is
+#    that machine — and for the server-binary download a bootstrap makes (below).
+#    Every other route refuses it. Step 0 is what "Spinning up a nested hz" does
+#    for you in one command.
 #    The CLI has no --hz-url / --upstream flags yet: declare the machine in the UI
 #    (Instances → Add instance → Declare a nested instance), then set the rung's upstream
 #    (POST /api/v1/environments/set {"project":"redline","name":"prod","upstream":"redline-prod-hz"}).
@@ -548,6 +550,49 @@ An unreadable token file is LOUD, never fatal: the child keeps serving its cache
 - **Retention.** After each upload and daily, hz keeps: any artifact an apply or promotion into a rung pinned on one of that rung's supported lines, the newest apply per rung, the last 3 distinct artifacts promoted per rung, and each rung's newest report's artifact; a rung whose lines hz cannot derive keeps everything pinned into it. Anything else older than 7 days is deleted; each deletion is logged with its size and why it was not kept, and the record stays with `deleted_at` (the Overview shows "artifact deleted <when>"). A re-upload restores it.
 - Uploads, applies, holds and the last pull time of each instance are in `hz.db` (migration `0017`), beside the artifacts in `/var/lib/homelab-horizon/artifacts/`. Same caveat as above: not peer-synced, no backup. `apply` and `hold` are admin-gated like `promote` — one authority gating itself; what they add is the record and the separation in time between approved and running.
 - The Overview shows, per rung, **Applied** (version · who · when, or "nothing applied") and **Hold**, an **Apply** action when the newest promotion is not applied yet, and Hold/Unhold; the promotions list marks the applied one. A nested instance's page (Instances) mints its token and shows its last pull.
+
+### Spinning up a nested hz
+
+One command, generated on the **parent**, provisions a nested hz on a fresh Ubuntu box (amd64 or arm64) and connects it.
+
+**Generate it.** On the project's page, **[Add nested instance]**: a machine name, a rung name and the rung it is promoted from. Or:
+
+```bash
+hz nested bootstrap redline loadtest-hz --rung loadtest --from staging
+#   = POST /api/v1/nested/bootstrap {"project":"redline","machine":"loadtest-hz","rung":"loadtest","from":"staging"}
+#     optional: "posture" (default prod), "platform" ("linux-amd64"|"linux-arm64"), "url"
+# -> 200 {"command":"curl -fsSL https://portal.example.com/admin/hz-child/install/hzc_<48 hex> | sudo bash",
+#         "expiresAt":<unix>,"machine":"loadtest-hz","rung":"redline/loadtest",
+#         "platforms":["linux-amd64","linux-arm64"],"missing":[],"reused":[],"revoked":false}
+```
+
+In one save it declares the machine (an hz marker, owned by the project) and the rung `redline/loadtest` (posture prod, `from` staging, upstream = the machine), then mints a **single-use grant that expires in an hour**. The grant is for an operator sitting in front of a box; nothing a running child does depends on it. Generating again for the same machine revokes the unused earlier command. If the machine and rung already exist (a wiped box being re-provisioned), they are reused and only the grant is new; enrolling rotates the box's VPN key and its instance token.
+
+It is refused, with a sentence, when: the parent has no public vhost (`kiosk_url`); a child could not reach the parent's hz over the VPN (no WireGuard key or endpoint, or hz not listening on the WG address); no child server binary is uploaded (or the named `platform`'s is missing); the machine exists and runs no hz, or belongs to another project; the rung exists placed elsewhere or with another `from`; the VPN client name is taken. When only one platform is missing the command is still shown, with a warning above it, and the script stops on such a box before it changes anything.
+
+**Child binaries.** The parent cannot embed itself. `bin/deploy` (local build) uploads `dist/homelab-horizon-linux-{amd64,arm64}` and a `{version, sha256}` manifest each to `/var/lib/homelab-horizon/child-bin/` on the parent; `make child-bins-upload HOST=user@parent` does only that. The parent re-hashes each file against its manifest; a partial upload reads as missing.
+
+**What the command does** (run as root; each step says what failed if it fails):
+
+1. Checks the box: root, Linux, amd64/arm64, systemd, and that the parent holds a binary for this platform.
+2. Installs `wireguard-tools`, `curl` and `jq` if missing.
+3. Generates a WireGuard keypair **on the box**.
+4. Enrols: `POST /admin/hz-child/enrol/<grant>` on the public vhost with `{"public_key","platform","hostname"}`. The parent creates (or re-keys) the box's `upstream`-profile VPN client, links it on the machine, mints the instance token and consumes the grant. It answers `{"wg":{"address","peer_public_key","endpoint","allowed_ips"},"parent_url":"http://<parent WG address>:<port>","instance_token","machine","project","rung","service_name","binary":{"url","sha256","version"},"seed":{...}}`. A bad public key is a 400 and a missing binary a 409, and neither uses the command up.
+5. Writes `/etc/wireguard/hz-upstream.conf` (0600) and enables `wg-quick@hz-upstream` at boot. Its only route is the parent's WG address `/32`.
+6. Downloads the server binary **over the VPN** (`GET /api/v1/nested/bin/<platform>`, instance token), checks its sha256, and installs it to `/usr/local/bin/homelab-horizon`.
+7. Writes `/etc/homelab-horizon/config.json`: the `upstream` block (`token_file` `/etc/homelab-horizon/upstream.token`, 0600), the project, the rung and a local service `<project>-<rung>` with a token **generated on the box** (`/etc/homelab-horizon/<service>.service-token`, 0600). An existing config is backed up beside it and merged, not replaced.
+8. Installs the systemd unit (`homelab-horizon install`, as `bin/deploy` does) and starts it.
+9. Waits for the child's first pull: its local `desired` answering 200, or 404 "nothing applied" (the parent said so), counts as connected. Then it prints a summary. On failure it prints the step and how to recover.
+
+Re-running: until step 4 the same command can be re-run. After it, generate a **new** command and run that; the script is safe on a box it already provisioned (new key, merged config). The script never traces (`set -x`) and never prints a key or a token.
+
+**Network.** The box needs outbound HTTPS to the parent's public vhost (steps 1–4) and outbound UDP to the parent's WireGuard endpoint. Nothing inbound: the parent never dials the box.
+
+**What crosses.** Up: the box's WireGuard **public** key. Down: the instance token (the parent keeps only its sha256), the WireGuard peer details, the binary and the seed config. The private key never leaves the box, and the parent stores no private key for it. The child's local service token is never sent to the parent.
+
+**State.** The Instances page, the instance's page and the project's Nested instances table show *declared · command generated (expires …) · enrolled · connected (last pull …) · never connected*. Grants and enrolment times are held in memory: after a parent restart a live command is gone (generate a new one) and the state reads from the token, the VPN link and the pulls.
+
+**Teardown.** On the box: `systemctl disable --now homelab-horizon wg-quick@hz-upstream`, then remove `/usr/local/bin/homelab-horizon`, `/etc/homelab-horizon/` and `/etc/wireguard/hz-upstream.conf`. On the parent: remove the machine with cascade (the machine page, or `hz machine rm loadtest-hz --cascade --confirm`), which removes its VPN client and clears the rung's upstream (the rung itself stays; remove it separately if it should go). Removing the VPN client alone cuts the link; minting a new instance token (`hz machine hz-token`) revokes the old one.
 
 ## Observability
 

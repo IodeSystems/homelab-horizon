@@ -180,6 +180,11 @@ COMMANDS
                                      while its agent credential exists (--cascade revokes it)
   machine hz-token <name>            Mint the instance token a nested hz pulls with.
                                      Shown ONCE; a re-mint replaces the old one
+  nested bootstrap <project> <machine> --rung <name> --from <rung>
+              [--posture P] [--platform linux-amd64|linux-arm64] [--url U]
+                                     Declare a nested hz and its rung, and print ONE
+                                     command that provisions it on a fresh Ubuntu box.
+                                     Single use, expires in an hour
   segment ls                         Declared segments: project, range, interface, members,
                                      hub. A membership is a LABEL until a segment exists
   segment show <name>                One segment: its range, its interface, every addressed
@@ -486,6 +491,8 @@ func dispatch(c *client, cmd string, rest []string) error {
 		err = runEnvironment(c, rest)
 	case "machine", "machines":
 		err = runMachine(c, rest)
+	case "nested":
+		err = runNested(c, rest)
 	case "segment", "segments":
 		err = runSegment(c, rest)
 	case "feed":
