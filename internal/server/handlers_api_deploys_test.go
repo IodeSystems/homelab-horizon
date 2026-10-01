@@ -312,6 +312,8 @@ func TestPromoteDowngradeNeedsTheFlagAndIsRecorded(t *testing.T) {
 	if w := f.promote(toProd("1.5.0")); w.Code != http.StatusOK {
 		t.Fatalf("promote 1.5.0: %d %s", w.Code, w.Body.String())
 	}
+	// prod's deploy reports it, so line 1.5.0 is supported and the rollback is gated.
+	f.report(t, prodSvcToken, prodReport("1.5.0", deployShaA))
 
 	// Staging rolls back to 1.4.0 and reports it. Promoting it is a downgrade.
 	f.report(t, f.pat, stagingReport("1.4.0", deployShaB))
@@ -342,6 +344,7 @@ func TestPromoteDowngradeNeedsTheFlagAndIsRecorded(t *testing.T) {
 
 	// The flag on an UPWARD promotion is not a downgrade, and says so.
 	f.report(t, f.pat, stagingReport("1.6.0", deployShaA))
+	f.report(t, prodSvcToken, prodReport("1.4.0", deployShaB))
 	f.satisfyGate(t, "1.6.0")
 	up := toProd("1.6.0")
 	up.AllowDowngrade = true

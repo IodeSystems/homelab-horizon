@@ -4,8 +4,9 @@
  * `internal/server/handlers_api_lines.go`, `GET /api/v1/projects/lines`.
  *
  * A version's LINE is its MAJOR.MINOR.PATCH (1.9.0-1.2 is on 1.9.0). A rung
- * supports its declared line (current), the most recent different line
- * promoted into it (prior), and the project's pins. The server derives these;
+ * supports the line it last REPORTED RUNNING (current), the newest different
+ * line it reported before that (prior), and the project's pins — never its
+ * declared version: a promote is what it SHOULD run. The server derives these;
  * this file only renders them.
  *
  * EVERY CELL HAS AN ANSWER, never a blank (invariant 2): "no kept backup" is an

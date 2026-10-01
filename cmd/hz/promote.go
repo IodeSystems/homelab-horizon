@@ -21,7 +21,8 @@ Refused unless ALL hold, each with its own reason:
   - X is not lower than <to>'s declared version, unless --allow-downgrade;
   - for EVERY line <to> supports now (` + "`hz lines <project>`" + `), a kept backup
     exists and X's newest restore test on <from> against it passed. A target
-    with no supported line (the first release) requires none, and says so.
+    with no supported line (it has reported running nothing) requires none,
+    and says so.
 
 The artifact sha256 <from> reported for X is pinned on the promotion, and
 GET /api/v1/deploys/check refuses any other bundle of X for <to>.

@@ -74,7 +74,7 @@ const LINES: ProjectLinesResp = {
       declared: "1.4.0",
       supported: [],
       gaps: [],
-      none_required: "none required: redline/staging has no supported line yet",
+      none_required: "none required: redline/staging has reported running nothing yet",
     },
     {
       environment: "prod",
@@ -85,7 +85,7 @@ const LINES: ProjectLinesResp = {
       supported: [
         {
           line: "1.0.1",
-          why: [{ kind: "current", detail: "redline/prod declares 1.0.1-0.3" }],
+          why: [{ kind: "current", detail: "redline/prod reported running 1.0.1-0.3 (report #7, 2026-10-01T17:31:00Z, ubuntu@192.0.2.161)" }],
           restore: {
             status: "no-kept-backup",
             version: "",
@@ -95,7 +95,7 @@ const LINES: ProjectLinesResp = {
         {
           line: "1.0.0",
           why: [
-            { kind: "prior", detail: "1.0.0-1.1 was promoted from staging by promotion #2" },
+            { kind: "prior", detail: "redline/prod reported running 1.0.0-1.1 (report #4, 2026-09-30T12:00:00Z, ubuntu@192.0.2.161)" },
             { kind: "pinned", detail: "legacy import" },
           ],
           kept_backup: {
@@ -314,7 +314,7 @@ console.log("· through the router — the Release lines section");
   const r = await at("/p/redline");
   check(r.text.includes("Release lines"), "the Overview has a Release lines section");
   check(r.html.includes('aria-label="Release lines"'), "with a table");
-  check(r.text.includes("none required: redline/staging has no supported line yet"), "a rung with no line says none required");
+  check(r.text.includes("none required: redline/staging has reported running nothing yet"), "a rung with no line says none required");
   check(r.html.includes('data-kept="none"') && r.text.includes("no kept backup"), "a line without a kept backup says so");
   check(r.text.includes("cccccccccccc · s3://redline-kept/1.0.0.sql.zst · 1h ago"), "a kept backup reads sha12 · location · age");
   check(r.text.includes("prior · pinned: legacy import"), "why names every reason, a pin with its reason");
@@ -337,7 +337,7 @@ console.log("· ReleaseLinesTable — every state answers");
 
   const first: ProjectLinesResp = {
     ...LINES,
-    rungs: LINES.rungs.map((r) => ({ ...r, supported: [], gaps: [], none_required: `none required: redline/${r.environment} has no supported line yet` })),
+    rungs: LINES.rungs.map((r) => ({ ...r, supported: [], gaps: [], none_required: `none required: redline/${r.environment} has reported running nothing yet` })),
   };
   const none = standalone(<ReleaseLinesTable lines={first} error={null} loading={false} project="redline" />);
   check(
@@ -347,8 +347,8 @@ console.log("· ReleaseLinesTable — every state answers");
 
   const gap: ProjectLinesResp = {
     ...LINES,
-    rungs: [{ ...LINES.rungs[1]!, supported: [], gaps: ['redline/prod declares "deb-1.2", which hz cannot read a line from'] }],
-    retired_unknown: "hz cannot say which lines are retired: redline/prod declares \"deb-1.2\"",
+    rungs: [{ ...LINES.rungs[1]!, supported: [], gaps: ['report #9 of redline/prod records "deb-1.2", which hz cannot read a line from'] }],
+    retired_unknown: "hz cannot say which lines are retired: report #9 of redline/prod records \"deb-1.2\"",
   };
   const unknown = standalone(<ReleaseLinesTable lines={gap} error={null} loading={false} project="redline" />);
   check(

@@ -17,9 +17,13 @@ import (
 //     MAJOR.MINOR.FIX.HOTFIX#BUILD travels as MAJOR.MINOR.FIX-HOTFIX.BUILD, so a
 //     hotfix and a rebuild stay on their line. Derived by parseVersion, hz's one
 //     parser — there is no second one, and no 4-part parser.
-//   - The SUPPORTED lines of a rung are DERIVED (CLAUDE.md #8), never stored:
-//     the line of its declared version, the most recent DIFFERENT line promoted
-//     into it, and any line its project pins (config.json, with a reason).
+//   - The SUPPORTED lines of a rung are DERIVED (CLAUDE.md #8), never stored,
+//     from what the rung REPORTED RUNNING (deploy_reports — operator,
+//     2026-10-01): the line of its newest report, the newest DIFFERENT line it
+//     reported before that, and any line its project pins (config.json, with a
+//     reason). Not the declared version, not the promotions into it: a promote
+//     says what the rung SHOULD run, and a rehearsal promote into a rung with no
+//     box would have hz demand a restore test protecting data never written.
 //   - Each supported line keeps one backup, held by the app; hz records it. The
 //     newest record per (project, line) is the kept backup.
 //   - A restore test is "build V restored line L's kept backup, migrated, tests
@@ -73,7 +77,7 @@ type LinePin struct {
 // LineWhy is one reason a line is supported.
 type LineWhy struct {
 	Kind   string // WhyCurrent, WhyPrior or WhyPinned
-	Detail string // the sentence: what declares it, which promotion, the pin's reason
+	Detail string // the sentence: which report ran it, or the pin's reason
 }
 
 // SupportedLine is one line and every reason it is supported.
@@ -92,22 +96,31 @@ func (s SupportedLine) Kinds() string {
 }
 
 // RungLines is the derivation's answer for one rung. Supported empty AND Gaps
-// empty is "no supported line" — the first release. A gap is "hz cannot say":
-// a declared version that is not semver, or a pin that is not a line. They are
-// different answers (CLAUDE.md #2), and the gate refuses on a gap.
+// empty is "no supported line" — the rung has reported running nothing. A gap
+// is "hz cannot say": a report hz cannot read a line from, or a pin that is
+// not a line. They are different answers (CLAUDE.md #2), and the gate refuses
+// on a gap.
 type RungLines struct {
 	Supported []SupportedLine
 	Gaps      []string
 }
 
+// NoneRequired is the sentence for a rung with no supported line and no gap:
+// the gate requires nothing, and says why — never a silent empty.
+func NoneRequired(project, environment string) string {
+	return "none required: " + project + "/" + environment + " has reported running nothing yet"
+}
+
 // DeriveSupportedLines computes one rung's supported lines. Pure: the caller
-// supplies the declared version (config.json), every promotion INTO the rung
-// newest first (PromotionsInto), and the project's pins.
+// supplies every deploy report OF the rung newest first (DeployReportsOf) and
+// the project's pins. A line exists on a rung once something on that rung
+// reported running it.
 //
-// The prior line is the line of the newest promotion whose line differs from
-// the current line. Same-line promotions — hotfixes, rebuilds — are skipped:
-// "always one prior" means one prior LINE.
-func DeriveSupportedLines(project, environment, declared string, into []Promotion, pins []LinePin) RungLines {
+// The current line is the newest report's. The prior line is the line of the
+// newest report whose line differs from the current line. Same-line reports —
+// hotfixes, rebuilds, redeploys — are skipped: "always one prior" means one
+// prior LINE.
+func DeriveSupportedLines(project, environment string, reports []DeployReport, pins []LinePin) RungLines {
 	var out RungLines
 	add := func(line string, why LineWhy) {
 		for i := range out.Supported {
@@ -118,30 +131,31 @@ func DeriveSupportedLines(project, environment, declared string, into []Promotio
 		}
 		out.Supported = append(out.Supported, SupportedLine{Line: line, Why: []LineWhy{why}})
 	}
+	ran := func(r DeployReport) string {
+		return fmt.Sprintf("%s/%s reported running %s (report #%d, %s, %s)",
+			project, environment, r.Version, r.ID, r.ReportedAt.UTC().Format(time.RFC3339), r.Host)
+	}
 
 	current := ""
-	if declared != "" {
-		l, err := LineOf(declared)
+	for i, r := range reports {
+		l, err := LineOf(r.Version)
 		if err != nil {
-			out.Gaps = append(out.Gaps, fmt.Sprintf("%s/%s declares %q, which hz cannot read a line from (%v) — "+
-				"so it cannot say which kept backup a release must restore", project, environment, declared, err))
-		} else {
-			current = l
-			add(l, LineWhy{Kind: WhyCurrent, Detail: project + "/" + environment + " declares " + declared})
+			// A report row is validated on insert; one that does not parse is
+			// a gap, not a line to skip silently. When it is the NEWEST, the
+			// current line is unknown and the gate refuses on the gap.
+			out.Gaps = append(out.Gaps, fmt.Sprintf("report #%d of %s/%s records %q, which hz cannot read a line from (%v) — "+
+				"so it cannot say which kept backup a release must restore", r.ID, project, environment, r.Version, err))
+			continue
 		}
-	}
-	for _, p := range into {
-		l, err := LineOf(p.Version)
-		if err != nil {
-			// A promotions row is validated on insert; one that does not parse
-			// is a gap, not a line to skip silently.
-			out.Gaps = append(out.Gaps, fmt.Sprintf("promotion #%d records %q, which hz cannot read a line from", p.ID, p.Version))
+		if i == 0 {
+			current = l
+			add(l, LineWhy{Kind: WhyCurrent, Detail: ran(r)})
 			continue
 		}
 		if l == current {
 			continue
 		}
-		add(l, LineWhy{Kind: WhyPrior, Detail: fmt.Sprintf("%s was promoted from %s by promotion #%d", p.Version, p.FromEnv, p.ID)})
+		add(l, LineWhy{Kind: WhyPrior, Detail: ran(r)})
 		break
 	}
 	for _, pin := range pins {

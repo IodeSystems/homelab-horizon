@@ -89,6 +89,35 @@ func TestDeployReportLatestIsByIDAndNeverReportedIsNotFound(t *testing.T) {
 	}
 }
 
+// DeployReportsOf is one rung's reports newest first BY ID: a row whose
+// reported_at is later (a box's clock is not ours) does not jump the queue.
+func TestDeployReportsOfIsOneRungNewestFirstByID(t *testing.T) {
+	ctx := context.Background()
+	d := open(t)
+	if got, err := d.DeployReportsOf(ctx, "redline", "prod"); err != nil || len(got) != 0 {
+		t.Fatalf("never reported = %+v, %v; want an empty list", got, err)
+	}
+	// The oldest row, stamped far in the future.
+	if _, err := d.ExecContext(ctx, `
+		INSERT INTO deploy_reports (project, environment, app, version, describe, artifact_sha256, host, build_url, reported_at, reported_by)
+		VALUES ('redline', 'prod', 'redline', '1.0.0-0.1', '', ?, 'ubuntu@host', '', '2099-01-01 00:00:00', 'service:redline-prod')`, shaA); err != nil {
+		t.Fatal(err)
+	}
+	p := report("1.0.1-0.3", shaB)
+	p.Environment = "prod"
+	newest, err := d.RecordDeployReport(ctx, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.RecordDeployReport(ctx, report("9.9.9", shaA)); err != nil { // staging: another rung
+		t.Fatal(err)
+	}
+	got, err := d.DeployReportsOf(ctx, "redline", "prod")
+	if err != nil || len(got) != 2 || got[0].ID != newest || got[0].Version != "1.0.1-0.3" || got[1].Version != "1.0.0-0.1" {
+		t.Fatalf("prod's reports = %+v, %v; want id %d first, staging's absent", got, err, newest)
+	}
+}
+
 func TestDeployReportRefusesBadInput(t *testing.T) {
 	ctx := context.Background()
 	d := open(t)

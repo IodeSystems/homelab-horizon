@@ -6,8 +6,8 @@ import (
 )
 
 // PinnedLine keeps a release line supported on every rung of a project beyond
-// the two hz derives (the declared version's line and the one promoted before
-// it — db.DeriveSupportedLines). A supported line needs a kept backup and a
+// the two hz derives (the line the rung last reported running and the one it
+// reported before it — db.DeriveSupportedLines). A supported line needs a kept backup and a
 // passing restore test before anything is promoted past it, so a pin is a
 // standing cost, and a cost nobody is obliged to explain is one nobody
 // explains: a pin without a Reason is refused, as a multi-homed machine

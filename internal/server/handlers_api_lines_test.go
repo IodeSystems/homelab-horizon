@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -236,19 +237,28 @@ func TestKeptBackupScopeIsTheProject(t *testing.T) {
 // ---------------------------------------------------------------------------
 // The gate
 
-// prodOn promotes a first release into prod (none required), putting prod on
-// line 1.0.0.
+// prodReport is what bin/deploy prod posts after it flips: prod's own report.
+func prodReport(version, sha string) apitypes.DeployReportReq {
+	r := stagingReport(version, sha)
+	r.Environment, r.Host = "prod", "ubuntu@192.0.2.161"
+	return r
+}
+
+// prodOn promotes a first release into prod (none required) and has prod's
+// deploy report running it, putting prod on line 1.0.0. The promote alone
+// would not: a line exists on a rung once the rung reported running it.
 func (f deployFixture) prodOn(t *testing.T, version string) {
 	t.Helper()
 	f.report(t, f.pat, stagingReport(version, deployShaA))
 	if w := f.promote(toProd(version)); w.Code != http.StatusOK {
 		t.Fatalf("first release %s: %d %s", version, w.Code, w.Body.String())
 	}
+	f.report(t, prodSvcToken, prodReport(version, deployShaA))
 }
 
 func TestFirstReleaseSaysNoneRequired(t *testing.T) {
 	f := newDeployFixture(t)
-	if r := rungOf(t, f.lines(t), "prod"); r.NoneRequired != "none required: redline/prod has no supported line yet" || len(r.Supported) != 0 {
+	if r := rungOf(t, f.lines(t), "prod"); r.NoneRequired != "none required: redline/prod has reported running nothing yet" || len(r.Supported) != 0 {
 		t.Fatalf("lines before the first release: %+v", r)
 	}
 	f.report(t, f.pat, stagingReport("1.0.0-0.1", deployShaA))
@@ -257,12 +267,58 @@ func TestFirstReleaseSaysNoneRequired(t *testing.T) {
 		t.Fatalf("first release: %d %s", w.Code, w.Body.String())
 	}
 	out := promoteResp(t, w)
-	if out.RestoreTests != "none required: redline/prod has no supported line yet" || out.LinesChecked == nil || len(out.LinesChecked) != 0 {
+	if out.RestoreTests != "none required: redline/prod has reported running nothing yet" || out.LinesChecked == nil || len(out.LinesChecked) != 0 {
 		t.Fatalf("first release answered %+v — the gate must SAY none required", out)
 	}
 	// The raw body carries the sentence, not an absent key.
-	if !strings.Contains(w.Body.String(), `"restore_tests":"none required: redline/prod has no supported line yet"`) {
+	if !strings.Contains(w.Body.String(), `"restore_tests":"none required: redline/prod has reported running nothing yet"`) {
 		t.Fatalf("restore_tests absent from the wire: %s", w.Body.String())
+	}
+}
+
+// A line exists on a rung once the rung REPORTED running it — never because a
+// promote declared it (operator, 2026-10-01). A rehearsal promote into a prod
+// with no box must not make hz demand a restore test of data never written.
+func TestALineExistsOnceTheRungReportedRunningIt(t *testing.T) {
+	f := newDeployFixture(t)
+	none := "none required: redline/prod has reported running nothing yet"
+
+	// Promote 1.0.0-0.4 into prod; prod's deploy reports nothing.
+	f.report(t, stagingSvcToken, stagingReport("1.0.0-0.4", deployShaA))
+	if w := f.promote(toProd("1.0.0-0.4")); w.Code != http.StatusOK {
+		t.Fatalf("rehearsal promote: %d %s", w.Code, w.Body.String())
+	}
+	if got := f.declared(t, "prod"); got != "1.0.0-0.4" {
+		t.Fatalf("instrument: prod declares %q, want the promoted 1.0.0-0.4", got)
+	}
+	if r := rungOf(t, f.lines(t), "prod"); r.NoneRequired != none || len(r.Supported) != 0 || len(r.Gaps) != 0 {
+		t.Fatalf("declared but never reported, prod's lines = %+v — want none required", r)
+	}
+	// The next promote needs no restore test.
+	f.report(t, stagingSvcToken, stagingReport("1.0.0-1.1", deployShaB))
+	w := f.promote(toProd("1.0.0-1.1"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("second promote, prod never reported: %d %s", w.Code, w.Body.String())
+	}
+	if out := promoteResp(t, w); out.RestoreTests != none || len(out.LinesChecked) != 0 {
+		t.Fatalf("second promote answered %+v — want %q", out, none)
+	}
+
+	// prod's deploy reports 1.0.0-0.4: line 1.0.0 is supported, the report named.
+	rep := f.report(t, prodSvcToken, prodReport("1.0.0-0.4", deployShaA))
+	prod := rungOf(t, f.lines(t), "prod")
+	if got := supportedOf(prod); got != "1.0.0=current" || prod.NoneRequired != "" {
+		t.Fatalf("after prod's report, prod supports %q (%+v)", got, prod)
+	}
+	want := fmt.Sprintf("redline/prod reported running 1.0.0-0.4 (report #%d, ", rep.ID)
+	if d := prod.Supported[0].Why[0].Detail; !strings.HasPrefix(d, want) || !strings.HasSuffix(d, "Z, ubuntu@192.0.2.161)") {
+		t.Fatalf("the why = %q, want it to name the report (%q…)", d, want)
+	}
+	// …and the next promote is gated.
+	f.report(t, stagingSvcToken, stagingReport("1.0.0-1.2", deployShaC))
+	w = f.promote(toProd("1.0.0-1.2"))
+	if w.Code != http.StatusConflict || !strings.Contains(errorOf(w), "line 1.0.0 is supported on redline/prod but has no kept backup") {
+		t.Fatalf("after prod reported, the promote must be gated: %d %q", w.Code, errorOf(w))
 	}
 }
 
@@ -340,20 +396,17 @@ func TestGateNamesEveryFailingLine(t *testing.T) {
 
 func TestGateRefusesWhatItCannotRead(t *testing.T) {
 	f := newDeployFixture(t)
-	next := *f.s.cfg()
-	v := "deb-1.2"
-	if _, err := next.SetEnvironment("redline", "prod", config.EnvironmentPatch{Version: &v}); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.s.updateConfig(func(c *config.Config) { *c = next }); err != nil {
+	// A prod report row hz cannot read a line from. The writer refuses one, so
+	// it is inserted raw — the derivation must still not read it as "nothing".
+	if _, err := f.s.users.ExecContext(context.Background(), `
+		INSERT INTO deploy_reports (project, environment, app, version, describe, artifact_sha256, host, build_url, reported_by)
+		VALUES ('redline', 'prod', 'redline', 'deb-1.2', '', ?, 'ubuntu@192.0.2.161', '', 'service:redline-prod')`, deployShaA); err != nil {
 		t.Fatal(err)
 	}
 	f.report(t, f.pat, stagingReport("1.0.0", deployShaA))
-	req := toProd("1.0.0")
-	req.AllowDowngrade = true // the downgrade check cannot order deb-1.2 either
-	w := f.promote(req)
-	if w.Code != http.StatusConflict || !strings.Contains(errorOf(w), `hz cannot say which lines redline/prod supports: redline/prod declares "deb-1.2"`) {
-		t.Fatalf("unreadable declaration: %d %q", w.Code, errorOf(w))
+	w := f.promote(toProd("1.0.0"))
+	if w.Code != http.StatusConflict || !strings.Contains(errorOf(w), `hz cannot say which lines redline/prod supports: report #1 of redline/prod records "deb-1.2"`) {
+		t.Fatalf("unreadable report: %d %q", w.Code, errorOf(w))
 	}
 	l := f.lines(t)
 	if r := rungOf(t, l, "prod"); r.NoneRequired != "" || len(r.Gaps) != 1 {
@@ -397,6 +450,7 @@ func TestPinsAndRetiredLines(t *testing.T) {
 		if w := f.promote(toProd(v)); w.Code != http.StatusOK {
 			t.Fatalf("promote %s: %d %s", v, w.Code, w.Body.String())
 		}
+		f.report(t, prodSvcToken, prodReport(v, deployShaA))
 		if v != "1.0.2" {
 			f.keep(t, f.pat, keptReq(v, deployShaB, v))
 		}
@@ -411,9 +465,10 @@ func TestPinsAndRetiredLines(t *testing.T) {
 		t.Fatalf("prod lines %+v", prod.Supported)
 	}
 	// A pin is the PROJECT's: staging, which declares nothing and was never
-	// promoted into, supports the pinned line and nothing else. It has no
-	// `from`, so no restore test is asked of it.
-	if s := rungOf(t, l, "staging"); supportedOf(s) != "0.9.0=pinned" || s.NoneRequired != "" || s.Supported[0].Restore.Status != restoreNoSource {
+	// promoted into, supports the lines IT reported running and the pinned
+	// line. It has no `from`, so no restore test is asked of it.
+	if s := rungOf(t, l, "staging"); supportedOf(s) != "1.0.2=current 1.0.1=prior 0.9.0=pinned" || s.NoneRequired != "" ||
+		s.Supported[2].Restore.Status != restoreNoSource {
 		t.Fatalf("staging %+v", s)
 	}
 	// 1.0.0 has a kept backup and is supported nowhere: retired. hz says so.
@@ -459,9 +514,11 @@ func TestRehearsalReleaseLines(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("first release: %d %s", w.Code, w.Body.String())
 	}
-	if out := promoteResp(t, w); out.RestoreTests != "none required: redline/prod has no supported line yet" {
+	if out := promoteResp(t, w); out.RestoreTests != "none required: redline/prod has reported running nothing yet" {
 		t.Fatalf("first release: %+v", out)
 	}
+	// bin/deploy prod ships it and reports. Only now is 1.0.0 a line on prod.
+	f.report(t, prodSvcToken, prodReport("1.0.0-0.1", deployShaA))
 
 	// 2. A hotfix on staging: 1.0.0.1#1 -> 1.0.0-1.1, line 1.0.0.
 	f.report(t, stagingSvcToken, stagingReport("1.0.0-1.1", deployShaB))
@@ -485,6 +542,7 @@ func TestRehearsalReleaseLines(t *testing.T) {
 	if w := f.promote(toProd("1.0.0-1.1")); w.Code != http.StatusOK {
 		t.Fatalf("hotfix: %d %s", w.Code, w.Body.String())
 	}
+	f.report(t, prodSvcToken, prodReport("1.0.0-1.1", deployShaB))
 
 	// 5. A hotfix promoted on the same line: still ONE supported line.
 	if got := supportedOf(rungOf(t, f.lines(t), "prod")); got != "1.0.0=current" {
@@ -507,7 +565,13 @@ func TestRehearsalReleaseLines(t *testing.T) {
 		t.Fatalf("1.0.1-0.3 checked %+v — want line 1.0.0 only, computed BEFORE the promotion", out.LinesChecked)
 	}
 
-	// 7. After: current and always one prior.
+	// 7. Promoted, not yet deployed: prod still supports 1.0.0 alone.
+	if got := supportedOf(rungOf(t, f.lines(t), "prod")); got != "1.0.0=current" {
+		t.Fatalf("promoted but not reported, prod supports %q", got)
+	}
+	f.report(t, prodSvcToken, prodReport("1.0.1-0.3", deployShaA))
+
+	// 8. Reported: current and always one prior.
 	prod := rungOf(t, f.lines(t), "prod")
 	if got := supportedOf(prod); got != "1.0.1=current 1.0.0=prior" {
 		t.Fatalf("after 1.0.1 prod supports %q", got)
@@ -517,7 +581,7 @@ func TestRehearsalReleaseLines(t *testing.T) {
 		t.Fatalf("1.0.1 has no kept backup yet; 1.0.0 has: %+v", prod.Supported)
 	}
 
-	// 8. The record: none-required, then checked, checked.
+	// 9. The record: none-required, then checked, checked.
 	list, err := f.s.users.Promotions(context.Background(), "redline", 0)
 	if err != nil || len(list) != 3 || list[2].RestoreGate != db.RestoreGateNoneRequired ||
 		list[1].RestoreGate != db.RestoreGateChecked || list[0].RestoreGate != db.RestoreGateChecked ||
@@ -535,6 +599,10 @@ func TestRollbackMaySkipRestoreTestsOnlyForTheBuildThatRan(t *testing.T) {
 	f.satisfyGate(t, "1.0.1-0.3")
 	if w := f.promote(toProd("1.0.1-0.3")); w.Code != http.StatusOK {
 		t.Fatalf("1.0.1-0.3: %d %s", w.Code, w.Body.String())
+	}
+	f.report(t, prodSvcToken, prodReport("1.0.1-0.3", deployShaB))
+	if got := supportedOf(rungOf(t, f.lines(t), "prod")); got != "1.0.1=current 1.0.0=prior" {
+		t.Fatalf("before the rollback prod supports %q", got)
 	}
 
 	refusal := func(req apitypes.PromoteReq, want string) {

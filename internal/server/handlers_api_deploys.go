@@ -154,9 +154,11 @@ func promoteRefusal(w http.ResponseWriter, msg string) {
 //     target's declared version, unless allowDowngrade. A target whose
 //     declared version cannot be compared counts as needing the flag.
 //  4. THE RESTORE-TEST GATE (handlers_api_lines.go restoreGate): for every
-//     supported line of the target — derived BEFORE the promotion — a kept
+//     supported line of the target — derived from what the target REPORTED
+//     RUNNING, before the promotion — a kept
 //     backup exists and X's newest restore test on `from` against it passed.
-//     No supported line (the first release) requires nothing, and says so.
+//     No supported line (the target has reported running nothing) requires
+//     nothing, and says so.
 //     A downgrade is gated too, UNLESS skipRestoreTests (the operator's call,
 //     2026-10-01): then the gate is skipped only when the target was promoted
 //     to this exact version AND artifact before — it ran there. Any other
