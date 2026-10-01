@@ -359,6 +359,10 @@ type Server struct {
 	// dnsRunningProbe replaces `systemctl is-active dnsmasq` for the child
 	// dnsmasq rule (child_sync.go); nil is the real probe.
 	dnsRunningProbe func() bool
+
+	// startSyncRun replaces runSyncInternal for the start-sync
+	// (start_sync.go); nil is the real sync. Tests count it.
+	startSyncRun func(SyncLogger, <-chan struct{})
 }
 
 func New(configPath string) (*Server, error) {
@@ -2103,6 +2107,10 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	// nested, the puller and report drainer. Both stop with the MFA pruner.
 	s.startArtifactRetention(mfaDone)
 	s.startChild(mfaDone)
+
+	// A nested hz with unsynced changes syncs once, shortly (start_sync.go):
+	// nobody is signed in to a child to press Sync.
+	s.startSyncIfPending(startSyncDelay)
 
 	// "server ready" is a claim, and it used to be made unconditionally — on a
 	// boot where WireGuard, dnsmasq and HAProxy had all failed, hz logged it
