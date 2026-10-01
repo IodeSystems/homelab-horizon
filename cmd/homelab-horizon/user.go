@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/iodesystems/homelab-horizon/internal/db"
+	"github.com/iodesystems/homelab-horizon/internal/server"
 )
 
 // Console account recovery.
@@ -25,7 +26,70 @@ func newUserCmd(opts *serveOpts) *cobra.Command {
 		Use:   "user",
 		Short: "Manage accounts from the console",
 	}
-	cmd.AddCommand(newUserListCmd(opts), newSetPasswordCmd(opts))
+	cmd.AddCommand(newUserListCmd(opts), newSetPasswordCmd(opts), newUserCreateCmd(opts))
+	return cmd
+}
+
+// geteuid is os.Geteuid; tests replace it to drive the root-only commands.
+var geteuid = os.Geteuid
+
+// requireRoot refuses a root-only console command for anyone else.
+func requireRoot(what string) error {
+	if geteuid() != 0 {
+		return fmt.Errorf("%s must run as root (sudo): it acts with the full authority of this hz", what)
+	}
+	return nil
+}
+
+// newUserCreateCmd creates an admin account and its first personal API token.
+//
+// The console path for a box nobody can sign in to yet — above all a nested hz
+// seeded by the bootstrap script, which has no account and so keeps
+// bootstrapAllowed's unauthenticated first-account door open until one
+// exists. Like --enable-admin-token it is console-only and needs root; it is
+// never exposed over HTTP.
+func newUserCreateCmd(opts *serveOpts) *cobra.Command {
+	var admin bool
+	var tokenFile string
+
+	cmd := &cobra.Command{
+		Use:   "create <name>",
+		Short: "Create an admin account and a personal API token (console, root only)",
+		Long: "Creates an account and a personal API token for it, writes the token to\n" +
+			"--token-file (mode 0600) and never prints it. The account has no password;\n" +
+			"give it one with 'user set-password' if a person will sign in with it.\n\n" +
+			"hz has exactly one role, admin, and --admin says so on purpose: this is\n" +
+			"full control of this hz.\n\n" +
+			"Refuses when the account already exists or the token file is already there.\n\n" +
+			"A console path like --enable-admin-token: it requires root on the box and is\n" +
+			"never reachable over HTTP. Creating the first account also closes the\n" +
+			"unauthenticated first-account sign-up a fresh hz has.",
+		Example: "  homelab-horizon user create hz-local-admin --admin --token-file /etc/homelab-horizon/admin.token",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireRoot("user create"); err != nil {
+				return err
+			}
+			if !admin {
+				return fmt.Errorf("pass --admin: hz has exactly one role, admin, and this account will hold it")
+			}
+			return withStore(opts.configPath, func(ctx context.Context, store *db.DB) error {
+				user, err := server.CreateConsoleAdmin(ctx, store, args[0], tokenFile)
+				if err != nil {
+					return err
+				}
+				// Never the token: only where it is.
+				say(cmd.ErrOrStderr(), "Created admin account %s. Its API token %q is in %s (0600); it is not shown.\n",
+					user.Username, server.ConsoleAdminTokenName, tokenFile)
+				say(cmd.ErrOrStderr(), "Take it back with: homelab-horizon token revoke --user %s --name %s\n",
+					user.Username, server.ConsoleAdminTokenName)
+				return nil
+			})
+		},
+	}
+	cmd.Flags().BoolVar(&admin, "admin", false, "required: the account is an admin (hz's only role)")
+	cmd.Flags().StringVar(&tokenFile, "token-file", "", "write the account's API token here, 0600 (required; must not exist)")
+	_ = cmd.MarkFlagRequired("token-file")
 	return cmd
 }
 
