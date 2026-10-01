@@ -24,9 +24,11 @@ ALTER TABLE promotions ADD COLUMN build_url TEXT NOT NULL DEFAULT '';
 -- What the restore-test gate said when this row was written. 'predates' is every
 -- row written before the gate existed — NOT "none required", which is an answer
 -- the gate gave (the target had no supported line). A 'checked' row has one
--- promotion_lines row per line checked.
+-- promotion_lines row per line checked. 'skipped-ran-before' is a rollback the
+-- operator asked to skip the gate for (skipRestoreTests), allowed only for the
+-- exact artifact this rung was promoted to before.
 ALTER TABLE promotions ADD COLUMN restore_gate TEXT NOT NULL DEFAULT 'predates'
-    CHECK (restore_gate IN ('predates', 'none-required', 'checked'));
+    CHECK (restore_gate IN ('predates', 'none-required', 'checked', 'skipped-ran-before'));
 
 -- One preserved backup per line, held by the APP; hz records that it exists,
 -- where, and its digest. hz never reads, moves or deletes the backup.

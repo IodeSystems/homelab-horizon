@@ -135,17 +135,19 @@ export function PromotePanel({
   const from = env.from ?? "";
   const [version, setVersion] = useState(sourceReport?.version ?? "");
   const [allowDowngrade, setAllowDowngrade] = useState(false);
+  const [skipRestoreTests, setSkipRestoreTests] = useState(false);
 
   useEffect(() => {
     setVersion(sourceReport?.version ?? "");
     setAllowDowngrade(false);
+    setSkipRestoreTests(false);
     promote.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [env.project, env.name, sourceReport?.id]);
 
   const submit = () =>
     promote.mutate(
-      { project: env.project, from, to: env.name, version: version.trim(), allowDowngrade },
+      { project: env.project, from, to: env.name, version: version.trim(), allowDowngrade, skipRestoreTests },
       { onSuccess: onClose },
     );
 
@@ -183,6 +185,10 @@ export function PromotePanel({
         <FormControlLabel
           control={<Checkbox checked={allowDowngrade} onChange={(e) => setAllowDowngrade(e.target.checked)} />}
           label="Allow a downgrade (a rollback — recorded as one)"
+        />
+        <FormControlLabel
+          control={<Checkbox checked={skipRestoreTests} onChange={(e) => setSkipRestoreTests(e.target.checked)} />}
+          label={`Skip restore tests — only for the exact build ${env.name} already ran (recorded)`}
         />
         {promote.error ? (
           <Alert severity="error" sx={{ mt: 1, whiteSpace: "pre-line" }} data-promote-refusal>
@@ -266,6 +272,11 @@ export function RecentPromotions({
                 {p.downgrade ? (
                   <Typography component="span" variant="body2" sx={{ color: "warning.main", ml: 1 }}>
                     downgrade
+                  </Typography>
+                ) : null}
+                {p.restore_gate === "skipped-ran-before" ? (
+                  <Typography component="span" variant="body2" sx={{ color: "warning.main", ml: 1 }}>
+                    restore tests skipped
                   </Typography>
                 ) : null}
               </TableCell>

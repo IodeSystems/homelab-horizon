@@ -349,6 +349,12 @@ export interface PromoteReq {
   to: string;
   version: string;
   allowDowngrade: boolean;
+  /**
+   * SkipRestoreTests skips the restore-test gate — for a rollback to an
+   * artifact the target already ran. Refused for any other version or build;
+   * recorded on the promotion as restore_gate "skipped-ran-before".
+   */
+  skipRestoreTests: boolean;
 }
 /**
  * PromoteResp answers a promotion that happened. ArtifactSHA256 is the PINNED

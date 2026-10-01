@@ -423,9 +423,9 @@ curl -sf -X POST "$HZ_URL/api/v1/restore-tests/report" -H "Authorization: Bearer
 #      1.0.1-0.3 failed its restore test against line 1.0.0 (https://ci.example/builds/7)
 #    Sets prod's version and records who promoted which artifact sha256 and build_url,
 #    when, and which lines were checked with which restore test.
-hz env promote redline staging prod --version 1.0.1-0.3 [--allow-downgrade]
+hz env promote redline staging prod --version 1.0.1-0.3 [--allow-downgrade] [--skip-restore-tests]
 #    = POST /api/v1/environments/promote
-#      {"project":"redline","from":"staging","to":"prod","version":"1.0.1-0.3","allowDowngrade":false}
+#      {"project":"redline","from":"staging","to":"prod","version":"1.0.1-0.3","allowDowngrade":false,"skipRestoreTests":false}
 #    -> 200 {"promoted":true,"version":"1.0.1-0.3","artifact_sha256":"<hex>","build_url":"...",
 #            "downgrade":false,"id":3,
 #            "restore_tests":"checked 1 line(s) of redline/prod: 1.0.0 (restore test #9)",
@@ -452,7 +452,7 @@ curl -s "$HZ_URL/api/v1/deploys/check?project=redline&environment=prod&version=1
 - **Encoding a four-part version.** A `MAJOR.MINOR.FIX.HOTFIX#BUILD` version travels as semver `MAJOR.MINOR.FIX-HOTFIX.BUILD`: `1.9.1.0#7` → `1.9.1-0.7`. hz parses semver only; put the human form in `describe`.
 - **A line** is a version's `MAJOR.MINOR.PATCH`: `1.9.0-1.2` is on line `1.9.0`, so hotfixes and rebuilds stay on their line. A rung **supports** the line of its declared version (*current*), the most recent *different* line promoted into it (*prior*), and any line its project **pins** (`hz line pin`, reason required; declared in `config.json`). hz derives the supported lines on every read and promote; nothing stores them. A declared version that is not semver, or a pin that is not a line, is reported as "hz cannot say" and the promote is refused.
 - **Retired lines** have a kept backup and are supported on no rung. The app may delete those backups; hz says so in `hz lines` and deletes nothing.
-- The restore test that counts is the newest one of version X **on the source rung** against the line's **newest** kept backup. A test against an older backup of the line is superseded. The gate also applies to `--allow-downgrade`.
+- The restore test that counts is the newest one of version X **on the source rung** against the line's **newest** kept backup. A test against an older backup of the line is superseded. The gate also applies to `--allow-downgrade`, unless you also pass `--skip-restore-tests` (`skipRestoreTests`). hz accepts that only for the exact build (version and artifact sha256) already promoted into the target, so only for a rollback to something that ran there. The skip is recorded on the promotion (`restore_gate: "skipped-ran-before"`). The source rung must still report that build first. Data migrated forward may not be readable by the older build; the skip does not check that.
 - **Repeat reports** append: the same version may be reported again with a different sha256 (a rebuild). The newest report wins; the promote pins its sha256; the check compares against the pin.
 - Reports, promotions, kept backups and restore tests are append-only rows in `hz.db` on the config primary (migrations `0014`, `0015`, `0016`). They are **not** peer-synced and have no backup; a check asked of an HA peer finds no promotion and refuses.
 - `promote` and `check` need an admin credential. hz has one privilege level, so the gate stops an untested version, not a person; what it adds is the record (`promoted_by`). The project Overview shows the newest report per rung (with its build link), a Promote action on any rung with a `from` edge — its dialog lists the required restore tests before the button — recent promotions, and the release lines.

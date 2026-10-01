@@ -28,6 +28,8 @@ GET /api/v1/deploys/check refuses any other bundle of X for <to>.
 
   --version X         a semver tag, no leading v ("1.4.0", "1.0.0-rc.1.1414")
   --allow-downgrade   a rollback: X may be lower; recorded as a downgrade
+  --skip-restore-tests  skip the restore-test gate — only for the exact build
+                      <to> already ran (a rollback); recorded on the promotion
 `
 
 // envPromote is `hz env promote`. Flags may sit before, between or after the
@@ -37,6 +39,7 @@ func envPromote(c *client, args []string) error {
 	fs.Usage = func() { fmt.Fprint(os.Stderr, envPromoteUsage) }
 	version := fs.String("version", "", "the version to promote")
 	allowDowngrade := fs.Bool("allow-downgrade", false, "allow a version lower than the target's")
+	skipRestore := fs.Bool("skip-restore-tests", false, "skip the restore-test gate for a build the target already ran")
 
 	var pos []string
 	for {
@@ -55,7 +58,7 @@ func envPromote(c *client, args []string) error {
 
 	req := apitypes.PromoteReq{
 		Project: pos[0], From: pos[1], To: pos[2],
-		Version: *version, AllowDowngrade: *allowDowngrade,
+		Version: *version, AllowDowngrade: *allowDowngrade, SkipRestoreTests: *skipRestore,
 	}
 	var out apitypes.PromoteResp
 	if err := c.do(http.MethodPost, "/api/v1/environments/promote", req, &out); err != nil {

@@ -525,3 +525,64 @@ func TestRehearsalReleaseLines(t *testing.T) {
 		t.Fatalf("promotion record %+v, %v", list, err)
 	}
 }
+
+// A rollback may skip the restore-test gate, explicitly (skipRestoreTests), and
+// only to the exact build the target already ran — operator, 2026-10-01.
+func TestRollbackMaySkipRestoreTestsOnlyForTheBuildThatRan(t *testing.T) {
+	f := newDeployFixture(t)
+	f.prodOn(t, "1.0.0-0.1") // first release, artifact A
+	f.report(t, f.pat, stagingReport("1.0.1-0.3", deployShaB))
+	f.satisfyGate(t, "1.0.1-0.3")
+	if w := f.promote(toProd("1.0.1-0.3")); w.Code != http.StatusOK {
+		t.Fatalf("1.0.1-0.3: %d %s", w.Code, w.Body.String())
+	}
+
+	refusal := func(req apitypes.PromoteReq, want string) {
+		t.Helper()
+		w := f.promote(req)
+		if w.Code != http.StatusConflict || !strings.Contains(errorOf(w), want) {
+			t.Fatalf("want 409 %q, got %d %q", want, w.Code, errorOf(w))
+		}
+		if got := f.declared(t, "prod"); got != "1.0.1-0.3" {
+			t.Fatalf("a refused rollback moved prod to %q", got)
+		}
+	}
+	rollback := func(version string, skip bool) apitypes.PromoteReq {
+		r := toProd(version)
+		r.AllowDowngrade, r.SkipRestoreTests = true, skip
+		return r
+	}
+
+	// Never promoted into prod: the skip is refused.
+	f.report(t, f.pat, stagingReport("1.0.0-0.0", deployShaA))
+	refusal(rollback("1.0.0-0.0", true), "1.0.0-0.0 was never promoted into it")
+
+	// The version prod ran, but a REBUILD of it: refused.
+	f.report(t, f.pat, stagingReport("1.0.0-0.1", deployShaB))
+	refusal(rollback("1.0.0-0.1", true), "skipRestoreTests covers only the build that ran there")
+
+	// The build that ran — without the flag, the gate still applies.
+	f.report(t, f.pat, stagingReport("1.0.0-0.1", deployShaA))
+	refusal(rollback("1.0.0-0.1", false), "has no restore test against line")
+	// The skip does not imply the downgrade.
+	noDown := rollback("1.0.0-0.1", true)
+	noDown.AllowDowngrade = false
+	refusal(noDown, "pass allowDowngrade")
+
+	w := f.promote(rollback("1.0.0-0.1", true))
+	if w.Code != http.StatusOK {
+		t.Fatalf("rollback with skip: %d %s", w.Code, w.Body.String())
+	}
+	out := promoteResp(t, w)
+	if !out.Downgrade || !strings.HasPrefix(out.RestoreTests, "skipped: redline/prod ran 1.0.0-0.1 (this artifact) before") ||
+		len(out.LinesChecked) != 0 {
+		t.Fatalf("rollback answered %+v", out)
+	}
+	p, err := f.s.users.LatestPromotionOf(context.Background(), "redline", "prod", "1.0.0-0.1")
+	if err != nil || p.ID != out.ID || p.RestoreGate != db.RestoreGateSkipped || !p.Downgrade {
+		t.Fatalf("the record: %+v, %v", p, err)
+	}
+	if code, c := f.check("prod", "1.0.0-0.1", deployShaA); code != http.StatusOK || !c.OK {
+		t.Fatalf("check after rollback: %d %+v", code, c)
+	}
+}
