@@ -328,12 +328,23 @@ func (s *Server) handleChildInstallScript(w http.ResponseWriter, r *http.Request
 		return
 	}
 	have, _ := s.childBins.Available()
-	_, _ = w.Write([]byte(renderChildInstallScript(s.installBaseURL(r), gr, have)))
+	parentAddr := ""
+	if u, err := s.upstreamParentURL(); err == nil {
+		if pu, perr := url.Parse(u); perr == nil {
+			parentAddr = pu.Hostname()
+		}
+	}
+	_, _ = w.Write([]byte(renderChildInstallScript(s.installBaseURL(r), gr, have, parentAddr)))
 }
 
 // renderChildInstallScript fills the template. Every value is a token, a URL
 // hz built, a validated name or a constant — none is free text.
-func renderChildInstallScript(base string, gr childGrant, platforms []string) string {
+//
+// parentAddr is the parent's VPN address. The script refuses, BEFORE it
+// enrols, a box where that address is already assigned to a local interface:
+// the first real run (2026-10-01) hit a leftover wg0 holding the parent's own
+// range, so the parent address was local and nothing entered the tunnel.
+func renderChildInstallScript(base string, gr childGrant, platforms []string, parentAddr string) string {
 	rep := strings.NewReplacer(
 		"@@HZ_BASE@@", strings.TrimSuffix(base, "/"),
 		"@@GRANT@@", gr.Token,
@@ -344,6 +355,7 @@ func renderChildInstallScript(base string, gr childGrant, platforms []string) st
 		"@@EXPIRES@@", gr.Expires.UTC().Format(time.RFC3339),
 		"@@IFACE@@", childUpstreamIface,
 		"@@TOKEN_FILE@@", childTokenFile,
+		"@@PARENT_ADDR@@", parentAddr,
 	)
 	return rep.Replace(hzChildInstallScript)
 }

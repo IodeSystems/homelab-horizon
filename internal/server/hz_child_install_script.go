@@ -49,6 +49,7 @@ PROJECT="@@PROJECT@@"
 RUNG="@@RUNG@@"
 PLATFORMS="@@PLATFORMS@@"
 IFACE="@@IFACE@@"
+PARENT_ADDR="@@PARENT_ADDR@@"
 
 WG_DIR=/etc/wireguard
 WG_CONF="$WG_DIR/$IFACE.conf"
@@ -95,6 +96,13 @@ case " $PLATFORMS " in
   *) die "the parent holds no $PLATFORM server binary (it has: ${PLATFORMS:-none}). Nothing was changed. Upload one on the parent (make child-bins-upload) and re-run this command." ;;
 esac
 command -v systemctl >/dev/null 2>&1 || die "systemd is required (systemctl not found)."
+# The parent's VPN address must not already be THIS box's: a leftover
+# interface holding it (e.g. an old hz's wg0 on the same range) makes the
+# parent local, and nothing would ever enter the tunnel.
+if [ -n "$PARENT_ADDR" ] && command -v ip >/dev/null 2>&1; then
+  CLASH=$(ip -4 -o addr show | awk -v a="$PARENT_ADDR" '{split($4, c, "/"); if (c[1] == a && $2 != "'"$IFACE"'") print $2}' | head -1)
+  [ -z "$CLASH" ] || die "interface $CLASH on this box already holds $PARENT_ADDR, the parent's VPN address, so traffic to the parent would never leave this box. Remove it first (e.g. ip link del $CLASH, and its config under /etc/wireguard), then re-run this command — nothing was changed."
+fi
 say "  $PLATFORM, machine $MACHINE, rung $PROJECT/$RUNG"
 
 TMP=$(mktemp -d)
@@ -216,6 +224,7 @@ jq --slurpfile seed "$TMP/seed.json" --rawfile tok "$TMP/svc.token" '
   | ($s.environments[0]) as $e
   | ($s.services[0]) as $v
   | .upstream = $s.upstream
+  | .listen_addr = (if ((.listen_addr // "") == "" or .listen_addr == ":8080") then "127.0.0.1:8080" else .listen_addr end)
   | .projects = ([(.projects // [])[] | select(.name != $p.name)]
       + [([(.projects // [])[] | select(.name == $p.name)] | first) // $p])
   | .environments = ([(.environments // [])[] | select((.project != $e.project) or (.name != $e.name))]
