@@ -241,6 +241,8 @@ its flip; the full rehearsal promote of `1.0.0-0.4` runs (no exemption used).
 ⚠ hz has no line for legacy Kotlin redline: the legacy-backup restore/migrate
 test on the pre-migration box is a REQUIRED MANUAL step hz does not enforce.
 
+✅ **`dev` pushed to origin 2026-10-01 (operator: "a dev build we could propagate", never a release tag cut from dev).** Redline pins the pseudo-version `v0.4.1-0.20261001193315-614d4a6512a8` (resolved through the public Go proxy). ❗ **The repo is PUBLIC:** before the push, the 356 unpushed commits were rewritten (`git filter-repo --refs origin/dev..dev`, text AND messages) to replace infrastructure identifiers in `plan/` with placeholders (`<loadtest-instance>`, `<loadtest-ip>`, `<aws-zone>`, `<legacy-prod-ip>`, `<legacy-vpn-ip>`, `<prod-domain>`, `<deploy-token-file>`). Checked: 0 hits in the pushed range, 20 in the pre-scrub backup; code byte-identical. The local branch `backup/dev-pre-scrub` holds the originals: **NEVER push it**; delete it once N4a is merged. **Rule from here on: plan/ is published on push — write placeholders, never instance IDs, public IPs, token paths or the prod domain.**
+
 ⚠ Single authority still applies (Tier 1): the report and the promote use an
 unscoped API token — the gate is evidence-based but gates one authority against
 itself.
