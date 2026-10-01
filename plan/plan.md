@@ -170,6 +170,29 @@ was asked (2026-09-30) how redline deploys today, what staging verifies, and
 which boxes are staging/prod — the minimal tested path goes to the operator for
 approval before any build.
 
+**Redline push to prod — the plan (operator-approved 2026-09-30).** From the
+redline session's answer: no prod box, no promotion, deploy = `bin/deploy`
+(rsync + slot flip via hzclient v0.3.0), each deploy a REBUILD, config in
+`.properties`, staging = `192.168.1.160` on the office hz. Decided: **prod on its
+own hz from day one** (PCI); staging reports what it runs with a **deploy-time
+report**; prod is a **fresh VM** (NOT the loadtest box `<loadtest-ip>`, which
+stays disposable — it runs an empty hz v0.2.0 and redline with load-test data).
+
+| | step | side | state |
+|---|---|---|---|
+| R1 | versioned, immutable bundle per build; prod deploys THAT bundle, never a rebuild | redline | ◻ sent to redline session |
+| R2 | `bin/deploy` posts the report after a successful flip | redline | ◻ sent |
+| H1 | `POST /api/v1/deploys/report` — rung, version, artifact sha256, host (API token) | hz | ◐ building |
+| H2 | evidence gate: `hz env promote redline staging prod --version X` refused unless staging REPORTED X (on top of `CheckPromotion`'s structural check, which checks no evidence); records who/when/artifact | hz | ◐ building |
+| H3 | `GET /api/v1/deploys/check` — prod's declared version + artifact match, for `bin/deploy prod` | hz | ◐ building |
+| R3 | `bin/deploy prod` refuses unless H3 says ok | redline | ◻ sent |
+| T | **rehearse on staging**: a promote works; a skip, an unreported version and a different artifact are refused | both | ◻ |
+| P | fresh prod VM → `redline-prod-hz` (current hz, nested, `upstream` client), prod `HZ_URL` → child, hzclient v0.3.0 rolling API checked against it, prod secrets (configmgr from birth) | you + both | ◻ — **yours:** VM region/size; cutover timing |
+
+⚠ Single authority still applies (Tier 1): the report and the promote use an
+unscoped API token — the gate is evidence-based but gates one authority against
+itself.
+
 **Still the operator's, before N4 is designed:**
 - **PCI evidence** (estate.md §6): the VPN reduces exposure, not scope — the
   promotion record ("who promoted what, when") and de-rooting hz are still owed
