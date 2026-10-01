@@ -30,8 +30,14 @@ func runEnvironment(c *client, args []string) error {
 		return envRm(c, args)
 	case "promote":
 		return envPromote(c, args)
+	case "apply":
+		return envApply(c, args)
+	case "hold":
+		return envHold(c, args, true)
+	case "unhold":
+		return envHold(c, args, false)
 	default:
-		return fmt.Errorf("unknown env subcommand: %s (want ls, show, add, set, rm or promote)", sub)
+		return fmt.Errorf("unknown env subcommand: %s (want ls, show, add, set, rm, promote, apply, hold or unhold)", sub)
 	}
 }
 

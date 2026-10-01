@@ -39,9 +39,26 @@ import {
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
 import UpgradeIcon from "@mui/icons-material/Upgrade";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import PlayArrowOutlinedIcon from "@mui/icons-material/PlayArrowOutlined";
+import PanToolOutlinedIcon from "@mui/icons-material/PanToolOutlined";
 import { useEnvironments, useServices, useVersionDrift } from "../api/hooks";
-import type { EnvironmentResp, InstanceVersion } from "../api/generated-types";
-import { useLatestDeploys, useProjectLines, usePromotions } from "../api/deployHooks";
+import type { EnvironmentResp, InstanceVersion, PromotionResp } from "../api/generated-types";
+import {
+  useAppliedState,
+  useArtifacts,
+  useLatestDeploys,
+  useProjectLines,
+  usePromotions,
+} from "../api/deployHooks";
+import {
+  AppliedCell,
+  ApplyDialog,
+  HoldCell,
+  HoldDialog,
+  applyOffer,
+  stateFor,
+  type AppliedSource,
+} from "../components/model/ApplyBits";
 import { ReleaseLinesTable } from "../components/model/ReleaseLines";
 import {
   readFeed,
@@ -101,21 +118,31 @@ function RungRow({
   instances,
   index,
   reports,
+  applied,
+  offer,
   onEdit,
   onRemove,
   onPromote,
+  onApply,
+  onHold,
 }: {
   env: EnvironmentResp;
   instances: InstanceVersion[] | null;
   index: ProjectIndex;
   reports: ReportSource;
-  /** All three act on `env.project` — the rung's OWN project, never the page's. */
+  applied: AppliedSource;
+  /** The newest promotion into this rung when it is not applied yet. */
+  offer: PromotionResp | null;
+  /** All of these act on `env.project` — the rung's OWN project, never the page's. */
   onEdit: (env: EnvironmentResp) => void;
   onRemove: (env: EnvironmentResp) => void;
   onPromote: (env: EnvironmentResp) => void;
+  onApply: (env: EnvironmentResp, offer: PromotionResp) => void;
+  onHold: (env: EnvironmentResp) => void;
 }) {
   const rung = readRung(env);
   const placement = readPlacement(env, instances);
+  const held = stateFor(applied, env.project, env.name)?.hold ?? null;
   return (
     <TableRow hover>
       <TableCell sx={{ fontFamily: "monospace", fontWeight: 700 }} title={rung.nameNote}>
@@ -138,6 +165,12 @@ function RungRow({
       <TableCell>
         <ReportedCell source={reports} env={env} />
       </TableCell>
+      <TableCell>
+        <AppliedCell source={applied} env={env} />
+      </TableCell>
+      <TableCell>
+        <HoldCell source={applied} env={env} />
+      </TableCell>
       <TableCell title={placement.meaning}>
         <ToneChip
           label={placement.headline}
@@ -156,6 +189,28 @@ function RungRow({
             sx={{ color: "text.secondary" }}
           >
             <UpgradeIcon fontSize="small" />
+          </IconButton>
+        ) : null}
+        {offer ? (
+          <IconButton
+            size="small"
+            aria-label={`Apply ${offer.version} to ${env.project}/${env.name}…`}
+            title={`Apply ${offer.version} to ${env.project}/${env.name}… — its newest promotion, not applied yet`}
+            onClick={() => onApply(env, offer)}
+            sx={{ color: "primary.main" }}
+          >
+            <PlayArrowOutlinedIcon fontSize="small" />
+          </IconButton>
+        ) : null}
+        {applied.known ? (
+          <IconButton
+            size="small"
+            aria-label={`${held ? "Unhold" : "Hold"} ${env.project}/${env.name}…`}
+            title={held ? `Unhold ${env.project}/${env.name}… (held: ${held.reason})` : `Hold ${env.project}/${env.name}… — an emergency stop on top of the apply`}
+            onClick={() => onHold(env)}
+            sx={{ color: held ? "warning.main" : "text.secondary" }}
+          >
+            <PanToolOutlinedIcon fontSize="small" />
           </IconButton>
         ) : null}
         <IconButton
@@ -235,8 +290,12 @@ function ProjectOverview() {
   const [editing, setEditing] = useState<EnvironmentResp | null>(null);
   const [removing, setRemoving] = useState<EnvironmentResp | null>(null);
   const [promoting, setPromoting] = useState<EnvironmentResp | null>(null);
+  const [applying, setApplying] = useState<{ env: EnvironmentResp; offer: PromotionResp } | null>(null);
+  const [holding, setHolding] = useState<EnvironmentResp | null>(null);
   const deploys = useLatestDeploys();
   const promotions = usePromotions();
+  const appliedQ = useAppliedState();
+  const artifacts = useArtifacts();
   const lines = useProjectLines(resolution.found ? resolution.route.name : "");
 
   // The layout above renders the no-such-project screen and no <Outlet/>, so
@@ -258,6 +317,17 @@ function ProjectOverview() {
   const promotionRows = promotions.data
     ?.filter((p) => inScope(reading.names, p.project))
     .slice(0, 10);
+  const applied: AppliedSource = appliedQ.data
+    ? { known: true, rungs: appliedQ.data }
+    : appliedQ.error
+      ? { known: false, loading: false, why: appliedQ.error.message }
+      : { known: false, loading: true };
+  const appliedIds = appliedQ.data
+    ? new Set(appliedQ.data.flatMap((r) => (r.applied ? [r.applied.promotion_id] : [])))
+    : undefined;
+  const deletedArtifacts = artifacts.data
+    ? new Map(artifacts.data.filter((a) => a.deleted_at).map((a) => [a.sha256, a.deleted_at ?? ""]))
+    : undefined;
 
   // null, deliberately, and not []: hz has not answered, which is a different
   // answer from "nothing is placed" (invariant 2).
@@ -331,6 +401,8 @@ function ProjectOverview() {
                 <TableCell>From</TableCell>
                 <TableCell>Version</TableCell>
                 <TableCell>Reported</TableCell>
+                <TableCell>Applied</TableCell>
+                <TableCell>Hold</TableCell>
                 <TableCell>Placement</TableCell>
                 <TableCell />
               </TableRow>
@@ -345,9 +417,13 @@ function ProjectOverview() {
                     instances={instances}
                     index={index}
                     reports={reports}
+                    applied={applied}
+                    offer={applyOffer(applied, promotions.data, e)}
                     onEdit={setEditing}
                     onRemove={setRemoving}
                     onPromote={setPromoting}
+                    onApply={(env, offer) => setApplying({ env, offer })}
+                    onHold={setHolding}
                   />
                 ))}
             </TableBody>
@@ -363,6 +439,8 @@ function ProjectOverview() {
             error={promotions.error}
             loading={promotions.isLoading}
             project={route.name}
+            applied={appliedIds}
+            deleted={deletedArtifacts}
           />
         </>
       ) : null}
@@ -424,6 +502,12 @@ function ProjectOverview() {
         env={promoting}
         sourceReport={promoting?.from ? reportFor(reports, promoting.project, promoting.from) : null}
         onClose={() => setPromoting(null)}
+      />
+      <ApplyDialog env={applying?.env ?? null} offer={applying?.offer ?? null} onClose={() => setApplying(null)} />
+      <HoldDialog
+        env={holding}
+        held={holding ? (stateFor(applied, holding.project, holding.name)?.hold ?? null) : null}
+        onClose={() => setHolding(null)}
       />
     </Box>
   );

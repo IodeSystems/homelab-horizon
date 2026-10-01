@@ -229,11 +229,17 @@ export function RecentPromotions({
   error,
   loading,
   project,
+  applied,
+  deleted,
 }: {
   promotions: PromotionResp[] | undefined;
   error: Error | null;
   loading: boolean;
   project: string;
+  /** Promotion ids each rung's newest apply applied (N4a). Absent = not known. */
+  applied?: Set<number>;
+  /** Artifact sha256 -> when retention deleted its file (N4a). */
+  deleted?: Map<string, string>;
 }) {
   if (error) {
     return (
@@ -277,6 +283,16 @@ export function RecentPromotions({
                 {p.restore_gate === "skipped-ran-before" ? (
                   <Typography component="span" variant="body2" sx={{ color: "warning.main", ml: 1 }}>
                     restore tests skipped
+                  </Typography>
+                ) : null}
+                {applied?.has(p.id) ? (
+                  <Typography component="span" variant="body2" data-promotion-applied sx={{ color: "success.main", ml: 1 }}>
+                    applied
+                  </Typography>
+                ) : null}
+                {deleted?.has(p.artifact_sha256) ? (
+                  <Typography component="span" variant="body2" data-artifact-deleted sx={{ color: "error.main", ml: 1 }}>
+                    artifact deleted {deleted.get(p.artifact_sha256)}
                   </Typography>
                 ) : null}
               </TableCell>

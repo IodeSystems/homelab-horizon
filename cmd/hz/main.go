@@ -149,7 +149,15 @@ COMMANDS
                                      newest deploy report is X, and unless X passed a
                                      restore test against every supported line's kept
                                      backup; pins its artifact sha256
-  lines <project>                    Release lines per rung: supported (current / prior /
+  env apply <project> <env> --version V
+                                     Make the rung RUN its newest promotion: desired
+                                     answers the newest apply. A promote alone changes
+                                     nothing a box pulls
+  env hold <project> <env> --reason "why"
+                                     Emergency stop on top of an apply; rides desired.
+                                     --reason is REQUIRED
+  env unhold <project> <env>         Lift the hold
+  lines <project>                   Release lines per rung: supported (current / prior /
                                      pinned, and why), each line's kept backup, the next
                                      promotion's restore tests, and retired lines
   line pin <project> <line> --reason "why"
@@ -170,6 +178,8 @@ COMMANDS
   machine rm <name> [--cascade] [--confirm]
                                      Remove a machine. Dry run without --confirm; refused
                                      while its agent credential exists (--cascade revokes it)
+  machine hz-token <name>            Mint the instance token a nested hz pulls with.
+                                     Shown ONCE; a re-mint replaces the old one
   segment ls                         Declared segments: project, range, interface, members,
                                      hub. A membership is a LABEL until a segment exists
   segment show <name>                One segment: its range, its interface, every addressed

@@ -25,12 +25,20 @@ type DeployReportReq struct {
 	// scheme (an R0 build may name a bucket path); at most 2048 bytes and no
 	// control characters.
 	BuildURL string `json:"build_url,omitempty"`
+	// ForwardedFor is set by a nested hz forwarding a report it received
+	// locally: who reported it THERE ("service:redline-prod"). Accepted only
+	// from an instance token, which is recorded as
+	// "instance:<machine> (for <forwarded_for>)".
+	ForwardedFor string `json:"forwarded_for,omitempty"`
 }
 
-// DeployReportResultResp answers a recorded report.
+// DeployReportResultResp answers a recorded report. Upstream is set only by a
+// nested hz answering for an upstream rung: "queued" — the report is recorded
+// here and queued for the parent, and the answer never waits on the parent.
 type DeployReportResultResp struct {
-	Recorded bool  `json:"recorded"`
-	ID       int64 `json:"id"`
+	Recorded bool   `json:"recorded"`
+	ID       int64  `json:"id"`
+	Upstream string `json:"upstream,omitempty"`
 }
 
 // DeployCheckResp is GET /api/v1/deploys/check. Reason is set on every refusal.
