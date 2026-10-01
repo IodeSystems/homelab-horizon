@@ -54,6 +54,12 @@ type Record struct {
 	IP   string
 	// Wildcard answers for every subdomain of Name as well.
 	Wildcard bool
+	// ForwardUpstream is the opposite of an answer: Name and everything below
+	// it are NOT answered here but forwarded to the standard upstream servers
+	// (`server=/name/#`). It exists for a subdomain delegated to another DNS
+	// owner, which a broader wildcard `address=` above it would otherwise
+	// answer with this resolver's address. IP and Wildcard are ignored.
+	ForwardUpstream bool
 	// Comment is written above the record so the generated file explains
 	// itself to whoever reads it on the box.
 	Comment string
@@ -132,13 +138,24 @@ func RenderConfig(in ConfigInput) string {
 // domain fronting a vhost. `host-record=name,ip` is an exact A record and also
 // gives dnsmasq the reverse lookup, which is right for a host — a machine
 // called "desktop" should not also be answering for "anything.desktop".
+//
+// A third, `server=/name/#`, is for a delegated subdomain (ForwardUpstream):
+// dnsmasq matches --address and --server domains together and the LONGEST
+// match wins, so it carves the delegated name out of a broader
+// `address=/parent/ip` and sends it to the standard (unqualified) upstream
+// servers — the public answer, from the delegated zone's owner.
 func RenderHosts(in HostsInput) string {
 	sorted := make([]Record, len(in.Records))
 	copy(sorted, in.Records)
 	// Deterministic order: the file is regenerated on every service change,
 	// and map iteration order would make every write look like a diff to
 	// anyone watching the box.
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].Name != sorted[j].Name {
+			return sorted[i].Name < sorted[j].Name
+		}
+		return !sorted[i].ForwardUpstream && sorted[j].ForwardUpstream
+	})
 
 	var hosts strings.Builder
 	hosts.WriteString("# DNS records served by homelab-horizon.\n")
@@ -148,6 +165,10 @@ func RenderHosts(in HostsInput) string {
 	for _, r := range sorted {
 		if r.Comment != "" {
 			fmt.Fprintf(&hosts, "# %s\n", strings.ReplaceAll(r.Comment, "\n", " "))
+		}
+		if r.ForwardUpstream {
+			fmt.Fprintf(&hosts, "server=/%s/#\n", r.Name)
+			continue
 		}
 		if r.Wildcard {
 			fmt.Fprintf(&hosts, "address=/%s/%s\n", r.Name, r.IP)

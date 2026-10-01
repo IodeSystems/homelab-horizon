@@ -227,9 +227,9 @@ type recordFlags struct {
 func newRecordFlags(cmd string) *recordFlags {
 	rf := &recordFlags{fs: flag.NewFlagSet(cmd, flag.ContinueOnError)}
 	rf.fs.StringVar(&rf.name, "name", "", "record name (FQDN)")
-	rf.fs.StringVar(&rf.typ, "type", "", "A | AAAA | CNAME | TXT | MX")
+	rf.fs.StringVar(&rf.typ, "type", "", "A | AAAA | CNAME | TXT | MX | NS")
 	rf.fs.StringVar(&rf.zone, "zone", "", "zone (default: the managed zone the name is in)")
-	rf.fs.Var(&rf.values, "value", "value (repeatable). TXT unquoted; MX \"<pref> <host>\"")
+	rf.fs.Var(&rf.values, "value", "value (repeatable). TXT unquoted; MX \"<pref> <host>\"; NS one nameserver per --value")
 	rf.fs.IntVar(&rf.ttl, "ttl", 0, "TTL seconds (default: declared, else live, else 300)")
 	rf.fs.StringVar(&rf.note, "note", "", "why this record exists")
 	return rf
@@ -347,7 +347,7 @@ func dedupe(vs []string) []string {
 func dnsRecordRemove(c *client, args []string) error {
 	name, rest := leadingName(args)
 	fs := flag.NewFlagSet("dns record rm", flag.ContinueOnError)
-	typ := fs.String("type", "", "A | AAAA | CNAME | TXT | MX")
+	typ := fs.String("type", "", "A | AAAA | CNAME | TXT | MX | NS")
 	zoneFlag := fs.String("zone", "", "zone (default: the managed zone the name is in)")
 	var only multiFlag
 	fs.Var(&only, "value", "remove only this declared value (repeatable; default: every declared value)")

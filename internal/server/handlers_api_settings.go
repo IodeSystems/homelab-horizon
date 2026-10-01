@@ -243,6 +243,14 @@ func (s *Server) handleAPIEditZone(w http.ResponseWriter, r *http.Request) {
 			subZones = append(subZones, sz)
 		}
 	}
+	if z := s.cfg().GetZone(originalName); z != nil {
+		for _, sz := range subZones {
+			if err := z.SubZoneDelegationError(sz); err != nil {
+				writeJSONError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+	}
 
 	sslEmail := strings.TrimSpace(req.SSLEmail)
 

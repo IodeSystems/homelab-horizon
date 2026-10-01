@@ -25,6 +25,8 @@ import type {
   HostShowResp,
   ServiceAssignReq,
   ServiceAssignResp,
+  DNSRecordSetRequest,
+  DNSRecordSetResponse,
 } from "./generated-types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
@@ -996,6 +998,22 @@ export function useAddRecord() {
   return useMutation({
     mutationFn: (input: RecordMutationInput) =>
       apiFetch<{ ok: boolean; values: string[] }>("/zones/records/add", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSettled: (_data, _err, variables) => {
+      qc.invalidateQueries({ queryKey: ["zones", "records", variables.zone] });
+    },
+  });
+}
+
+// Declares a whole (name, type) value set in one write — the NS set of a
+// delegation, which per-value adds would publish one nameserver at a time.
+export function useSetRecordSet() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: DNSRecordSetRequest & { zone: string }) =>
+      apiFetch<DNSRecordSetResponse>("/zones/records/set", {
         method: "POST",
         body: JSON.stringify(input),
       }),
