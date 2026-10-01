@@ -1017,3 +1017,5 @@ instance. **Watch on the first run:** the first publish seeds
 `LastPublishedRecords`, so a public-IP change reads as `driftPublish`, not
 `driftDrift` — confirm that on a real IP rotation, because the drift-halt scope
 is ALL DNS sync and a false `driftDrift` halts automated failover.
+
+- ❗ **Replace the copied DNS credential on `<loadtest-instance>` with a scoped IAM user** (operator, 2026-10-01: "definitely set a to do item"). On 2026-10-01 the office's Route53 credential (profile `iodesystems-dns`, IAM user `WorkCertBotDns`) was COPIED to that box's `/root/.aws/credentials` (0600), at the operator's explicit choice, because no AWS console was available. That credential sees **seven** hosted zones (incl. the operator's personal domain), so the box can rewrite DNS for all of them; hz config on the box is the only limit. Fix: hosted zone `loadtest.redline.iodesystems.com` + an IAM user with ChangeResourceRecordSets/ListResourceRecordSets/GetHostedZone on that zone ARN only, GetChange on `change/*`, ListHostedZones*; swap the key; delete the copied one from the box. **Resume condition:** the operator has AWS console access.
