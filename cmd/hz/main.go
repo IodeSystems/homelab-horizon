@@ -142,6 +142,9 @@ COMMANDS
                                      Remove a rung. Dry run without --confirm; refused
                                      while a service is on it or another rung promotes
                                      from it
+  env promote <project> <from> <to> --version X [--allow-downgrade]
+                                     Move X up a promotion edge. Refused unless <from>'s
+                                     newest deploy report is X; pins its artifact sha256
   machine ls [--multi-homed]         Declared machines: segment count, enrolment, membership.
                                      --multi-homed lists only the boxes that bridge
                                      segments, with the declared reason for each
