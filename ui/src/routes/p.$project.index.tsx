@@ -37,9 +37,11 @@ import {
   Typography,
 } from "@mui/material";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
+import UpgradeIcon from "@mui/icons-material/Upgrade";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import { useEnvironments, useServices, useVersionDrift } from "../api/hooks";
 import type { EnvironmentResp, InstanceVersion } from "../api/generated-types";
+import { useLatestDeploys, usePromotions } from "../api/deployHooks";
 import {
   readFeed,
   readInstanceSource,
@@ -67,6 +69,13 @@ import {
   EditEnvironmentDialog,
   RemoveEnvironmentDialog,
 } from "../components/model/EnvironmentDialogs";
+import {
+  PromoteDialog,
+  RecentPromotions,
+  ReportedCell,
+  reportFor,
+  type ReportSource,
+} from "../components/model/DeployBits";
 
 /** Posture colours the ladder, never the name. The name is plain text. */
 function postureTone(posture: string) {
@@ -90,15 +99,19 @@ function RungRow({
   env,
   instances,
   index,
+  reports,
   onEdit,
   onRemove,
+  onPromote,
 }: {
   env: EnvironmentResp;
   instances: InstanceVersion[] | null;
   index: ProjectIndex;
-  /** Both act on `env.project` — the rung's OWN project, never the page's. */
+  reports: ReportSource;
+  /** All three act on `env.project` — the rung's OWN project, never the page's. */
   onEdit: (env: EnvironmentResp) => void;
   onRemove: (env: EnvironmentResp) => void;
+  onPromote: (env: EnvironmentResp) => void;
 }) {
   const rung = readRung(env);
   const placement = readPlacement(env, instances);
@@ -121,6 +134,9 @@ function RungRow({
           </Typography>
         )}
       </TableCell>
+      <TableCell>
+        <ReportedCell source={reports} env={env} />
+      </TableCell>
       <TableCell title={placement.meaning}>
         <ToneChip
           label={placement.headline}
@@ -130,6 +146,17 @@ function RungRow({
         />
       </TableCell>
       <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+        {env.from ? (
+          <IconButton
+            size="small"
+            aria-label={`Promote ${env.project}/${env.from} → ${env.name}…`}
+            title={`Promote ${env.project}/${env.from} → ${env.name}… (refused unless ${env.from} reported the version)`}
+            onClick={() => onPromote(env)}
+            sx={{ color: "text.secondary" }}
+          >
+            <UpgradeIcon fontSize="small" />
+          </IconButton>
+        ) : null}
         <IconButton
           size="small"
           aria-label={`Edit ${env.project}/${env.name}…`}
@@ -206,6 +233,9 @@ function ProjectOverview() {
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<EnvironmentResp | null>(null);
   const [removing, setRemoving] = useState<EnvironmentResp | null>(null);
+  const [promoting, setPromoting] = useState<EnvironmentResp | null>(null);
+  const deploys = useLatestDeploys();
+  const promotions = usePromotions();
 
   // The layout above renders the no-such-project screen and no <Outlet/>, so
   // this component only ever runs with a resolved project.
@@ -217,6 +247,15 @@ function ProjectOverview() {
   const ownRungs = (environments.data ?? []).filter((e) => e.project === route.name);
   const editingSiblings = (environments.data ?? []).filter((e) => e.project === editing?.project);
   const mine = (services.data ?? []).filter((s) => inScope(reading.names, s.project));
+  // Not [] while unanswered: "nothing reported" and "could not ask" differ.
+  const reports: ReportSource = deploys.data
+    ? { known: true, reports: deploys.data }
+    : deploys.error
+      ? { known: false, loading: false, why: deploys.error.message }
+      : { known: false, loading: true };
+  const promotionRows = promotions.data
+    ?.filter((p) => inScope(reading.names, p.project))
+    .slice(0, 10);
 
   // null, deliberately, and not []: hz has not answered, which is a different
   // answer from "nothing is placed" (invariant 2).
@@ -289,6 +328,7 @@ function ProjectOverview() {
                 <TableCell>{LOCATION_COLUMN_LABEL}</TableCell>
                 <TableCell>From</TableCell>
                 <TableCell>Version</TableCell>
+                <TableCell>Reported</TableCell>
                 <TableCell>Placement</TableCell>
                 <TableCell />
               </TableRow>
@@ -302,14 +342,28 @@ function ProjectOverview() {
                     env={e}
                     instances={instances}
                     index={index}
+                    reports={reports}
                     onEdit={setEditing}
                     onRemove={setRemoving}
+                    onPromote={setPromoting}
                   />
                 ))}
             </TableBody>
           </Table>
         </TableContainer>
       )}
+
+      {rungs.length > 0 ? (
+        <>
+          <TabHeader title="Recent promotions" />
+          <RecentPromotions
+            promotions={promotionRows}
+            error={promotions.error}
+            loading={promotions.isLoading}
+            project={route.name}
+          />
+        </>
+      ) : null}
 
       <TabHeader title="Services" action={addService} />
       {services.error ? (
@@ -351,6 +405,11 @@ function ProjectOverview() {
       />
       <EditEnvironmentDialog env={editing} siblings={editingSiblings} onClose={() => setEditing(null)} />
       <RemoveEnvironmentDialog target={removing} onClose={() => setRemoving(null)} />
+      <PromoteDialog
+        env={promoting}
+        sourceReport={promoting?.from ? reportFor(reports, promoting.project, promoting.from) : null}
+        onClose={() => setPromoting(null)}
+      />
     </Box>
   );
 }
