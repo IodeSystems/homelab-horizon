@@ -355,6 +355,10 @@ type Server struct {
 	childGrantsOnce sync.Once
 	childEnrolMu    sync.Mutex
 	wgReload        func() error
+
+	// dnsRunningProbe replaces `systemctl is-active dnsmasq` for the child
+	// dnsmasq rule (child_sync.go); nil is the real probe.
+	dnsRunningProbe func() bool
 }
 
 func New(configPath string) (*Server, error) {
@@ -366,6 +370,15 @@ func New(configPath string) (*Server, error) {
 }
 
 func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version string) (*Server, error) {
+	// A nested hz whose own WireGuard settings name its tunnel to the parent
+	// is refused BEFORE anything below touches WireGuard or iptables (the
+	// forward-chain setup is a few lines down). Refusing to start leaves the
+	// tunnel exactly as wg-quick has it; starting would hand it to hz.
+	// child_sync.go has the rest of what hz may touch on a child.
+	if err := cfg.UpstreamTunnelCollision(); err != nil {
+		return nil, fmt.Errorf("LOUD: refusing to start: %w", err)
+	}
+
 	// Set up system interfaces
 	var fs system.FileSystem
 	var runner system.CommandRunner
@@ -1587,6 +1600,7 @@ func (s *Server) observeSubsystems() subsystemObservation {
 	o := subsystemObservation{
 		WGConfigPath: cfg.WGConfigPath,
 		DNSEnabled:   cfg.DNSMasqEnabled,
+		DNSChild:     cfg.Upstream != nil,
 		HAEnabled:    cfg.HAProxyEnabled,
 	}
 
@@ -1652,7 +1666,7 @@ func (s *Server) applySubsystemPlan(p subsystemPlan) SubsystemState {
 // broken, but it is not doing that job either, and silence there is how a
 // gateway ends up with no DNS and a green dashboard.
 func skipStatus(reason string) string {
-	if strings.Contains(reason, "disabled in the configuration") {
+	if strings.Contains(reason, "disabled in the configuration") || strings.HasPrefix(reason, childDNSMasqSkipPrefix) {
 		return monitor.StatusDisabled
 	}
 	return monitor.StatusWarning

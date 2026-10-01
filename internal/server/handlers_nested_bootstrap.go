@@ -44,7 +44,7 @@ import (
 // childUpstreamIface is the child's WireGuard interface name — its config is
 // /etc/wireguard/<this>.conf. Not wg0: a child that later runs its own human
 // VPN keeps wg0 for that.
-const childUpstreamIface = "hz-upstream"
+const childUpstreamIface = config.ChildUpstreamIface
 
 // childTokenFile is where the child keeps the instance token (0600).
 const childTokenFile = "/etc/homelab-horizon/upstream.token"

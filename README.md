@@ -592,6 +592,19 @@ Re-running: until step 4 the same command can be re-run. After it, generate a **
 
 **State.** The Instances page, the instance's page and the project's Nested instances table show *declared · command generated (expires …) · enrolled · connected (last pull …) · never connected*. Grants and enrolment times are held in memory: after a parent restart a live command is gone (generate a new one) and the state reads from the token, the VPN link and the pulls.
 
+**What a sync touches on a child.** A child (any hz with an `upstream` block) runs the same sync as any hz. On a box hz does not otherwise own, per renderer:
+
+| Renderer | What a child sync does | Skipped on a child? |
+|---|---|---|
+| dnsmasq | Writes `/etc/dnsmasq.d/wg-vpn.conf` and `wg-hosts.conf`, may install `dnsmasq.service`, and restarts dnsmasq (which starts it if stopped). `dnsmasq_enabled` defaults to true. | **Yes, when dnsmasq is not running**: hz never starts dnsmasq on a child, because port 53 may belong to systemd-resolved. It says so in the sync log. Start dnsmasq yourself to opt in. The same rule applies at startup, on edits and in the interface heal. |
+| DNS records | Publishes Route53 records only for services with `external_dns` in a zone with a provider. A provider-less zone publishes nothing. | No |
+| Let's Encrypt | Only with `ssl_enabled` (default off). | No |
+| HAProxy | Only with `haproxy_enabled` (default off; **set it** for a child with proxied services). Replaces `/etc/haproxy/haproxy.cfg` and reloads haproxy, which binds 80/443. | No |
+| WireGuard | Not touched. hz's WireGuard is `wg_interface` (wg0), never `hz-upstream`. | A child whose `wg_interface` or `wg_config_path` names `hz-upstream` is refused at save and at start. |
+| iptables | Not touched by a sync. The 60-second health check flushes only hz's own chains (`WG-*`, `HZ-*`) and deletes only hz-shaped rules. It leaves docker's rules alone. It does add hz's own rules (a MASQUERADE on the egress interface, the wg0 jumps). | No |
+
+Nothing hz runs writes `/etc/wireguard/hz-upstream.conf`; only the bootstrap script does.
+
 **Teardown.** On the box: `systemctl disable --now homelab-horizon wg-quick@hz-upstream`, then remove `/usr/local/bin/homelab-horizon`, `/etc/homelab-horizon/` and `/etc/wireguard/hz-upstream.conf`. On the parent: remove the machine with cascade (the machine page, or `hz machine rm loadtest-hz --cascade --confirm`), which removes its VPN client and clears the rung's upstream (the rung itself stays; remove it separately if it should go). Removing the VPN client alone cuts the link; minting a new instance token (`hz machine hz-token`) revokes the old one.
 
 ## Observability
