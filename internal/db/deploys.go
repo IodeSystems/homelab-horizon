@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Deploy reports and the promotion record (migrations 0014, 0015).
@@ -34,8 +35,11 @@ type DeployReport struct {
 	Describe       string
 	ArtifactSHA256 string
 	Host           string
-	ReportedAt     time.Time
-	ReportedBy     string
+	// BuildURL is where the build's tests and logs are kept; "" when the
+	// report carried none (every report before migration 0016).
+	BuildURL   string
+	ReportedAt time.Time
+	ReportedBy string
 }
 
 // Promotion is one row of promotions.
@@ -50,6 +54,31 @@ type Promotion struct {
 	PromotedBy     string
 	// Downgrade is true when --allow-downgrade was NEEDED, not merely passed.
 	Downgrade bool
+	// BuildURL is the pinned report's build_url, pinned beside its artifact.
+	BuildURL string
+	// RestoreGate is what the restore-test gate answered: RestoreGateChecked
+	// (Lines holds each line and its evidence), RestoreGateNoneRequired (the
+	// target had no supported line), or RestoreGatePredates on a row written
+	// before the gate existed. Derived from Lines on write; read back as stored.
+	RestoreGate string
+	// Lines is set on write only; PromotionLines reads them back.
+	Lines []PromotionLine
+}
+
+// The restore-gate answers a promotion row carries (migration 0016).
+const (
+	RestoreGatePredates     = "predates"
+	RestoreGateNoneRequired = "none-required"
+	RestoreGateChecked      = "checked"
+)
+
+// PromotionLine is one line a promotion was checked against and the evidence
+// that satisfied it.
+type PromotionLine struct {
+	Line          string
+	Why           string
+	KeptBackupID  int64
+	RestoreTestID int64
 }
 
 // CheckDeployVersion refuses a version that the promotion gate could not order.
@@ -72,6 +101,30 @@ func CheckDeployVersion(v string) error {
 	}
 	if _, err := parseVersion(v); err != nil {
 		return err
+	}
+	return nil
+}
+
+// ErrInvalidLocator means a build_url or a backup location is too long or
+// carries a control character.
+var ErrInvalidLocator = errors.New("invalid locator")
+
+// MaxLocatorLen bounds a build_url or a kept backup's location.
+const MaxLocatorLen = 2048
+
+// CheckLocator refuses a build_url or location hz would store and render
+// unsafely: over MaxLocatorLen, or holding a control character (a newline in a
+// value shown in a table, or a terminal escape in `hz lines`). Any scheme is
+// accepted — an R0 build names a bucket path — so this is NOT a URL parse.
+// "" passes; whether a field is required is the caller's question.
+func CheckLocator(what, s string) error {
+	if len(s) > MaxLocatorLen {
+		return fmt.Errorf("%w: %s is %d bytes, the limit is %d", ErrInvalidLocator, what, len(s), MaxLocatorLen)
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("%w: %s carries a control character (%U)", ErrInvalidLocator, what, r)
+		}
 	}
 	return nil
 }
@@ -109,23 +162,26 @@ func (d *DB) RecordDeployReport(ctx context.Context, r DeployReport) (int64, err
 	if err != nil {
 		return 0, err
 	}
+	if err := CheckLocator("build_url", r.BuildURL); err != nil {
+		return 0, err
+	}
 	res, err := d.ExecContext(ctx, `
 		INSERT INTO deploy_reports
-		    (project, environment, app, version, describe, artifact_sha256, host, reported_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.Project, r.Environment, r.App, r.Version, r.Describe, sha, r.Host, r.ReportedBy)
+		    (project, environment, app, version, describe, artifact_sha256, host, build_url, reported_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.Project, r.Environment, r.App, r.Version, r.Describe, sha, r.Host, r.BuildURL, r.ReportedBy)
 	if err != nil {
 		return 0, fmt.Errorf("record deploy report: %w", err)
 	}
 	return res.LastInsertId()
 }
 
-const deployReportCols = `id, project, environment, app, version, describe, artifact_sha256, host, reported_at, reported_by`
+const deployReportCols = `id, project, environment, app, version, describe, artifact_sha256, host, build_url, reported_at, reported_by`
 
 func scanDeployReport(row interface{ Scan(...any) error }) (*DeployReport, error) {
 	var r DeployReport
 	if err := row.Scan(&r.ID, &r.Project, &r.Environment, &r.App, &r.Version, &r.Describe,
-		&r.ArtifactSHA256, &r.Host, &r.ReportedAt, &r.ReportedBy); err != nil {
+		&r.ArtifactSHA256, &r.Host, &r.BuildURL, &r.ReportedAt, &r.ReportedBy); err != nil {
 		return nil, err
 	}
 	return &r, nil
@@ -167,7 +223,9 @@ func (d *DB) LatestDeployReports(ctx context.Context) ([]DeployReport, error) {
 	return out, rows.Err()
 }
 
-// RecordPromotion appends one promotion and returns its id.
+// RecordPromotion appends one promotion — and, in the same transaction, one
+// promotion_lines row per line it was checked against — and returns its id.
+// restore_gate is derived from p.Lines: none means the gate required nothing.
 func (d *DB) RecordPromotion(ctx context.Context, p Promotion) (int64, error) {
 	if strings.TrimSpace(p.Project) == "" || strings.TrimSpace(p.FromEnv) == "" || strings.TrimSpace(p.ToEnv) == "" {
 		return 0, errors.New("a promotion needs a project, a source and a target")
@@ -182,27 +240,70 @@ func (d *DB) RecordPromotion(ctx context.Context, p Promotion) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := CheckLocator("build_url", p.BuildURL); err != nil {
+		return 0, err
+	}
 	downgrade := 0
 	if p.Downgrade {
 		downgrade = 1
 	}
-	res, err := d.ExecContext(ctx, `
-		INSERT INTO promotions (project, from_env, to_env, version, artifact_sha256, promoted_by, downgrade)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		p.Project, p.FromEnv, p.ToEnv, p.Version, sha, p.PromotedBy, downgrade)
+	gate := RestoreGateNoneRequired
+	if len(p.Lines) > 0 {
+		gate = RestoreGateChecked
+	}
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO promotions (project, from_env, to_env, version, artifact_sha256, promoted_by, downgrade, build_url, restore_gate)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Project, p.FromEnv, p.ToEnv, p.Version, sha, p.PromotedBy, downgrade, p.BuildURL, gate)
 	if err != nil {
 		return 0, fmt.Errorf("record promotion: %w", err)
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	for _, l := range p.Lines {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO promotion_lines (promotion_id, line, why, kept_backup_id, restore_test_id)
+			VALUES (?, ?, ?, ?, ?)`, id, l.Line, l.Why, l.KeptBackupID, l.RestoreTestID); err != nil {
+			return 0, fmt.Errorf("record promotion line %s: %w", l.Line, err)
+		}
+	}
+	return id, tx.Commit()
 }
 
-const promotionCols = `id, project, from_env, to_env, version, artifact_sha256, promoted_at, promoted_by, downgrade`
+// PromotionLines is the lines one promotion was checked against, by line.
+func (d *DB) PromotionLines(ctx context.Context, promotionID int64) ([]PromotionLine, error) {
+	rows, err := d.QueryContext(ctx, `
+		SELECT line, why, kept_backup_id, restore_test_id FROM promotion_lines
+		WHERE promotion_id = ? ORDER BY line`, promotionID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []PromotionLine
+	for rows.Next() {
+		var l PromotionLine
+		if err := rows.Scan(&l.Line, &l.Why, &l.KeptBackupID, &l.RestoreTestID); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+const promotionCols = `id, project, from_env, to_env, version, artifact_sha256, promoted_at, promoted_by, downgrade, build_url, restore_gate`
 
 func scanPromotion(row interface{ Scan(...any) error }) (*Promotion, error) {
 	var p Promotion
 	var downgrade int
 	if err := row.Scan(&p.ID, &p.Project, &p.FromEnv, &p.ToEnv, &p.Version, &p.ArtifactSHA256,
-		&p.PromotedAt, &p.PromotedBy, &downgrade); err != nil {
+		&p.PromotedAt, &p.PromotedBy, &downgrade, &p.BuildURL, &p.RestoreGate); err != nil {
 		return nil, err
 	}
 	p.Downgrade = downgrade == 1
@@ -232,6 +333,28 @@ func (d *DB) Promotions(ctx context.Context, project string, limit int) ([]Promo
 		SELECT `+promotionCols+` FROM promotions
 		WHERE (? = '' OR project = ?)
 		ORDER BY id DESC LIMIT ?`, project, project, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Promotion
+	for rows.Next() {
+		p, err := scanPromotion(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *p)
+	}
+	return out, rows.Err()
+}
+
+// PromotionsInto is every promotion into one rung, newest first — the input
+// DeriveSupportedLines reads the prior line from.
+func (d *DB) PromotionsInto(ctx context.Context, project, toEnv string) ([]Promotion, error) {
+	rows, err := d.QueryContext(ctx, `
+		SELECT `+promotionCols+` FROM promotions
+		WHERE project = ? AND to_env = ?
+		ORDER BY id DESC`, project, toEnv)
 	if err != nil {
 		return nil, err
 	}
