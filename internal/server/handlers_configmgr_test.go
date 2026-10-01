@@ -289,6 +289,9 @@ func TestCMDeniedIsDistinguishableFromUnknown(t *testing.T) {
 	if !strings.Contains(denied.Body.String(), "wrong box") {
 		t.Errorf("the denial should carry its reason: %s", denied.Body.String())
 	}
+	if denied.Header().Get(configmgr.DeniedHeader) == "" {
+		t.Errorf("the denial must carry %s — it is what tells a client this 403 is not the peer gate", configmgr.DeniedHeader)
+	}
 
 	// A machine hz has never heard of — the signature of a restore from backup,
 	// not of an attack.
@@ -478,6 +481,15 @@ func TestCMAdminEndpointsRefuseNonAdmins(t *testing.T) {
 	s.handleAPICMRegister(w, r)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("register from outside the VPN: status %d, want 403", w.Code)
+	}
+	// The peer gate's 403 is NOT a denial: a box whose VPN is down must boot
+	// its cache, not refuse.
+	r = httptest.NewRequest(http.MethodPost, "/api/v1/cm/config", strings.NewReader("{}"))
+	r.RemoteAddr = "203.0.113.5:40000"
+	w = httptest.NewRecorder()
+	s.handleAPICMConfig(w, r)
+	if w.Code != http.StatusForbidden || w.Header().Get(configmgr.DeniedHeader) != "" {
+		t.Errorf("config from outside the VPN: status %d, denied marker %q — want 403 with no marker", w.Code, w.Header().Get(configmgr.DeniedHeader))
 	}
 }
 
