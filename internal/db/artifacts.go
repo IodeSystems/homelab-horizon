@@ -29,6 +29,9 @@ type Artifact struct {
 	// file: "never uploaded" (ErrNotFound) and "deleted" are different answers.
 	DeletedAt  *time.Time
 	DeletedWhy string
+	// StoredAt is when the current file was written: the upload, or the
+	// newest re-upload after a deletion. Retention ages from this.
+	StoredAt time.Time
 }
 
 // Deleted reports whether the file is gone by retention.
@@ -96,10 +99,16 @@ func scanArtifact(row interface{ Scan(...any) error }) (*Artifact, error) {
 	if err := row.Scan(&a.SHA256, &a.Project, &a.Size, &a.UploadedAt, &a.UploadedBy, &kind, &at, &reason); err != nil {
 		return nil, err
 	}
-	if kind.Valid && kind.String == ArtifactDeleted && at.Valid {
-		t := at.Time
-		a.DeletedAt = &t
-		a.DeletedWhy = reason.String
+	a.StoredAt = a.UploadedAt
+	if kind.Valid && at.Valid {
+		switch kind.String {
+		case ArtifactDeleted:
+			t := at.Time
+			a.DeletedAt = &t
+			a.DeletedWhy = reason.String
+		case ArtifactRestored:
+			a.StoredAt = at.Time
+		}
 	}
 	return &a, nil
 }

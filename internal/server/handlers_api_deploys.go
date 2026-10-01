@@ -52,8 +52,36 @@ var promoteMu sync.Mutex
 // attributed to exactly the rung being reported. A restore-test report is
 // scoped the same way (handlers_api_lines.go).
 func (s *Server) deployReporter(r *http.Request, req apitypes.DeployReportReq) (who string, status int, msg string) {
+	if req.ForwardedFor != "" {
+		if _, ok := s.instanceCaller(r); !ok {
+			return "", http.StatusBadRequest, "forwarded_for is accepted only from an instance token — it is a nested hz saying who reported to it"
+		}
+		if err := db.CheckLocator("forwarded_for", req.ForwardedFor); err != nil || len(req.ForwardedFor) > 256 {
+			return "", http.StatusBadRequest, "forwarded_for must be at most 256 bytes with no control characters"
+		}
+	}
 	if s.isAdmin(r) {
 		return s.adminActor(r), 0, ""
+	}
+	// A nested hz forwarding a report it took locally (handlers_nested.go):
+	// only for a rung whose Upstream is that instance.
+	if strings.HasPrefix(requestBearer(r), instanceTokenPrefix) {
+		env, err := s.cfg().LookupEnvironment(req.Project, req.Environment)
+		if err != nil {
+			if _, ok := s.instanceCaller(r); !ok {
+				return "", http.StatusUnauthorized, "Unauthorized"
+			}
+			return "", http.StatusForbidden, "no rung " + req.Project + "/" + req.Environment + " names this instance as its upstream"
+		}
+		machine, status, msg := s.instanceForRung(r, env)
+		if status != 0 {
+			return "", status, msg
+		}
+		who = "instance:" + machine
+		if req.ForwardedFor != "" {
+			who += " (for " + req.ForwardedFor + ")"
+		}
+		return who, 0, ""
 	}
 	svc, status, msg := s.reportingService(r)
 	if status != 0 {
@@ -100,6 +128,12 @@ func (s *Server) handleAPIDeployReport(w http.ResponseWriter, r *http.Request) {
 		// Decoded before the scope check, because the scope IS the rung in the
 		// body. An unauthenticated caller learns only that its JSON is bad.
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+	// A nested hz takes a report for its upstream rungs locally and forwards
+	// it (handlers_nested.go); the parent's own scope rules apply there.
+	if s.child != nil && s.cfg().ServesUpstream(req.Project, req.Environment) {
+		s.handleChildReport(w, r, req)
 		return
 	}
 	who, status, msg := s.deployReporter(r, req)
@@ -230,6 +264,24 @@ func (s *Server) handleAPIEnvironmentPromote(w http.ResponseWriter, r *http.Requ
 	if latest.Version != req.Version {
 		promoteRefusal(w, req.From+" has not reported running "+req.Version+"; it last reported "+latest.Version+
 			" at "+latest.ReportedAt.UTC().Format(time.RFC3339)+" on "+latest.Host)
+		return
+	}
+	// N4a: the artifact being pinned must be IN hz, or the rung it is promoted
+	// into has nothing to pull. "Never uploaded" and "deleted" are different
+	// refusals (#2).
+	art, err := s.users.LookupArtifact(r.Context(), latest.ArtifactSHA256)
+	switch {
+	case errors.Is(err, db.ErrNotFound):
+		promoteRefusal(w, "artifact "+artifactSHA12(latest.ArtifactSHA256)+" is not uploaded to hz; "+req.To+
+			" cannot pull it — the staging deploy uploads it before it reports")
+		return
+	case err != nil:
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	case art.Deleted():
+		promoteRefusal(w, "artifact "+artifactSHA12(latest.ArtifactSHA256)+" was uploaded and then deleted by retention at "+
+			art.DeletedAt.UTC().Format(time.RFC3339)+"; "+req.To+" cannot pull it — re-upload it (PUT /api/v1/artifacts/"+
+			latest.ArtifactSHA256+"?project="+req.Project+")")
 		return
 	}
 
