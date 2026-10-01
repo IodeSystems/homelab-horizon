@@ -144,7 +144,16 @@ COMMANDS
                                      from it
   env promote <project> <from> <to> --version X [--allow-downgrade]
                                      Move X up a promotion edge. Refused unless <from>'s
-                                     newest deploy report is X; pins its artifact sha256
+                                     newest deploy report is X, and unless X passed a
+                                     restore test against every supported line's kept
+                                     backup; pins its artifact sha256
+  lines <project>                    Release lines per rung: supported (current / prior /
+                                     pinned, and why), each line's kept backup, the next
+                                     promotion's restore tests, and retired lines
+  line pin <project> <line> --reason "why"
+                                     Keep a line supported beyond current + prior.
+                                     --reason is REQUIRED
+  line unpin <project> <line>        Remove a pin
   machine ls [--multi-homed]         Declared machines: segment count, enrolment, membership.
                                      --multi-homed lists only the boxes that bridge
                                      segments, with the declared reason for each
@@ -469,6 +478,10 @@ func dispatch(c *client, cmd string, rest []string) error {
 		err = runSegment(c, rest)
 	case "feed":
 		err = runFeed(c, rest)
+	case "lines":
+		err = runLines(c, rest)
+	case "line":
+		err = runLine(c, rest)
 	case "import":
 		err = runImport(c, rest)
 	case "config":
