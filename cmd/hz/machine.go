@@ -46,8 +46,10 @@ func runMachine(c *client, args []string) error {
 		return machineAdd(c, args)
 	case "rm", "remove", "delete":
 		return machineRm(c, args)
+	case "hz-token":
+		return machineHZToken(c, args)
 	default:
-		return fmt.Errorf("unknown machine subcommand: %s (want ls, show, add or rm)", sub)
+		return fmt.Errorf("unknown machine subcommand: %s (want ls, show, add, rm or hz-token)", sub)
 	}
 }
 

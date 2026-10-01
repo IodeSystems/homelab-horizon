@@ -276,7 +276,7 @@ func TestMachineUnknownSubcommand(t *testing.T) {
 	s := newDeclareStub(t, &hzconfig.Config{})
 	c := s.start(t)
 	err := runMachine(c, []string{"frobnicate"})
-	if err == nil || !strings.Contains(err.Error(), "want ls, show, add or rm") {
+	if err == nil || !strings.Contains(err.Error(), "want ls, show, add, rm or hz-token") {
 		t.Fatalf("an unknown subcommand does not list the real ones: %v", err)
 	}
 }
