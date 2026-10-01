@@ -12,7 +12,7 @@
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { RouterProvider, createRouter, createMemoryHistory, isRedirect } from "@tanstack/react-router";
+import { RouterProvider, createRootRoute, createRouter, createMemoryHistory, isRedirect } from "@tanstack/react-router";
 import { ThemeProvider } from "@mui/material/styles";
 import baseTheme from "../theme";
 import type { HostsViewResp, InstanceResp, ProjectResp } from "../api/generated-types";
@@ -20,6 +20,12 @@ import { routeTree } from "../routeTree.gen";
 import { Route as HostsRoute } from "../routes/hosts";
 import { AddInstanceKindPanel, NESTED_WAITS_ON } from "../routes/instances.index";
 import { MintTokenPanel } from "../routes/instances.$instance";
+import {
+  BootstrapCommandPanel,
+  NestedInstancesSection,
+  readNestedState,
+} from "./instances/NestedBootstrap";
+import type { EnvironmentResp, NestedBootstrapResp } from "../api/generated-types";
 
 let failures = 0;
 let checks = 0;
@@ -384,15 +390,15 @@ console.log("· N4a — a nested instance's token and last pull");
     inst({}),
     inst({ name: "prod-hz", self: false, address: "http://10.100.0.9:8080", role: "nested", declared: true, version: undefined, nested: n }),
   ];
-  const never = await at("/instances/prod-hz", nested({ hasToken: false, lastPullAt: 0, lastPullRung: "" }));
+  const never = await at("/instances/prod-hz", nested({ hasToken: false, lastPullAt: 0, lastPullRung: "", state: "declared" }));
   check(never.html.includes('data-instance-token-state="none"') && never.text.includes("Mint instance token"), "no token: offers Mint instance token");
   check(never.html.includes('data-last-pull="never"') && never.text.includes("never pulled"), "never pulled says so — not a blank, not 'long ago'");
-  const pulled = await at("/instances/prod-hz", nested({ hasToken: true, lastPullAt: 1790000000, lastPullRung: "storefront/prod" }));
+  const pulled = await at("/instances/prod-hz", nested({ hasToken: true, lastPullAt: 1790000000, lastPullRung: "storefront/prod", state: "connected" }));
   check(pulled.html.includes('data-instance-token-state="minted"') && pulled.text.includes("Mint a new instance token"), "a minted token offers a re-mint");
   check(pulled.html.includes('data-last-pull="pulled"') && pulled.text.includes("storefront/prod"), "the last pull names its time and rung");
-  const unknown = await at("/instances/prod-hz", nested({ hasToken: true, lastPullAt: 0, lastPullRung: "", pullsUnknown: "identity store unavailable" }));
+  const unknown = await at("/instances/prod-hz", nested({ hasToken: true, lastPullAt: 0, lastPullRung: "", pullsUnknown: "identity store unavailable", state: "never-connected" }));
   check(unknown.html.includes('data-last-pull="unknown"') && !unknown.text.includes("never pulled"), "an unreadable pull record is not 'never pulled'");
-  const self = await at("/instances/gw-host", nested({ hasToken: false, lastPullAt: 0, lastPullRung: "" }));
+  const self = await at("/instances/gw-host", nested({ hasToken: false, lastPullAt: 0, lastPullRung: "", state: "declared" }));
   check(!self.html.includes("data-instance-token-state"), "this instance's own page offers no instance token");
 
   const panel = (token: string | null) =>
@@ -405,6 +411,85 @@ console.log("· N4a — a nested instance's token and last pull");
   check(offer.includes("data-token-offer") && !offer.includes("data-instance-token"), "before minting: the offer, no token");
   const shown = panel("hzi_abc123");
   check(shown.includes("data-token-shown-once") && shown.includes('value="hzi_abc123"'), "after minting: the token, marked shown once");
+}
+
+
+console.log("· the nested bootstrap — states, the command panel, the project section");
+{
+  const T = 1790000000;
+  const row = (n: InstanceResp["nested"]): InstanceResp[] => [
+    inst({}),
+    inst({ name: "loadtest-hz", self: false, address: "http://10.100.0.3:8080", role: "nested", declared: true, project: "storefront", version: undefined, nested: n }),
+  ];
+  const states: [InstanceResp["nested"], string, string][] = [
+    [{ hasToken: false, lastPullAt: 0, lastPullRung: "", state: "declared" }, "declared", "declared"],
+    [{ hasToken: false, lastPullAt: 0, lastPullRung: "", state: "command-generated", grantExpiresAt: T }, "command-generated", "command generated (expires 2026-09-21 14:13:20Z)"],
+    [{ hasToken: true, lastPullAt: 0, lastPullRung: "", state: "enrolled", enrolledAt: T }, "enrolled", "enrolled — waiting for its first pull"],
+    [{ hasToken: true, lastPullAt: T, lastPullRung: "storefront/loadtest", state: "connected" }, "connected", "connected (last pull 2026-09-21 14:13:20Z · storefront/loadtest)"],
+    [{ hasToken: true, lastPullAt: 0, lastPullRung: "", state: "never-connected" }, "never-connected", "never connected"],
+  ];
+  for (const [n, state, label] of states) {
+    check(readNestedState(n).label === label, `${state} reads "${label}" — got "${readNestedState(n).label}"`);
+    const list = await at("/instances", row(n));
+    const r = rowText(list.html, "loadtest-hz");
+    check(list.html.includes(`data-nested-state="${state}"`) && r.includes(label), `the Instances row shows ${state}`);
+    const d = await at("/instances/loadtest-hz", row(n));
+    check(d.html.includes(`data-nested-state="${state}"`), `the instance page shows ${state}`);
+  }
+  check(readNestedState(undefined).state === "declared", "a row with no nested facts reads as declared");
+
+  const draw = (node: React.ReactNode) => {
+    const html = renderToStaticMarkup(<ThemeProvider theme={baseTheme}>{node}</ThemeProvider>).replace(/<style[^>]*>[\s\S]*?<\/style>/g, " ");
+    return { html, text: html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ") };
+  };
+  const resp: NestedBootstrapResp = {
+    command: "curl -fsSL https://portal.example.com/admin/hz-child/install/hzc_abc | sudo bash",
+    expiresAt: T,
+    machine: "loadtest-hz",
+    project: "storefront",
+    rung: "storefront/loadtest",
+    platforms: ["linux-arm64"],
+    missing: ["linux-amd64"],
+    warning: "This command works only on linux-arm64 boxes",
+    reused: [],
+    revoked: true,
+  };
+  const p = draw(<BootstrapCommandPanel resp={resp} />);
+  check(p.html.includes('value="curl -fsSL https://portal.example.com/admin/hz-child/install/hzc_abc | sudo bash"'), "the panel shows the command");
+  check(p.html.includes('aria-label="Copy the command"'), "with a copy button");
+  check(p.text.includes("2026-09-21 14:13:20Z") && p.html.includes("data-bootstrap-expires"), "and its expiry");
+  check(p.html.includes("data-bootstrap-warning") && p.text.includes("works only on linux-arm64"), "a missing platform is said before the command");
+  check(p.html.indexOf("data-bootstrap-warning") < p.html.indexOf("data-bootstrap-command"), "above it, not below");
+  check(p.text.includes("Shown once") && p.text.includes("no longer works"), "shown once, and a revoked earlier command is said");
+  check(p.text.includes("nothing inbound"), "and the network requirement in one line");
+  const plain = draw(<BootstrapCommandPanel resp={{ ...resp, warning: undefined, missing: [], revoked: false }} />);
+  check(!plain.html.includes("data-bootstrap-warning"), "no warning when every platform is there");
+
+  const envs: EnvironmentResp[] = [
+    { project: "storefront", name: "staging", posture: "staging", placement: { state: "here", statement: "" } } as EnvironmentResp,
+    { project: "storefront", name: "loadtest", posture: "prod", from: "staging", upstream: "loadtest-hz", placement: { state: "remote", statement: "" } } as EnvironmentResp,
+  ];
+  // The section links each row to its instance page, so it is drawn inside a
+  // router whose root renders it.
+  const section = async (instances: { rows?: InstanceResp[]; error?: string; loading: boolean }) => {
+    const root = createRootRoute({
+      component: () => <NestedInstancesSection project="storefront" instances={instances} environments={envs} onAdd={() => {}} />,
+    });
+    const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ["/"] }) });
+    await router.load();
+    return draw(<RouterProvider router={router as never} />);
+  };
+  const empty = await section({ rows: [inst({})], loading: false });
+  check(empty.text.includes("No nested instances in storefront.") && empty.html.includes("data-empty-row"), "none: one line");
+  check(empty.html.includes('aria-label="Add a nested instance to storefront"'), "with [Add nested instance] beside it");
+  const full = await section({ rows: row(states[3]![0]), loading: false });
+  check(full.html.includes('data-nested-row="loadtest-hz"') && full.text.includes("storefront/loadtest"), "a row names its rung");
+  check(full.html.includes('data-nested-state="connected"'), "and its state");
+  const other = await section({ rows: row(states[3]![0]).map((r) => ({ ...r, project: "elsewhere" })), loading: false });
+  check(!other.html.includes("data-nested-row"), "another project's nested instance is not listed");
+  check((await section({ loading: true })).text.includes("Asking hz"), "loading is not empty");
+  const failed = await section({ error: "503", loading: false });
+  check(failed.text.includes("could not be asked") && !failed.text.includes("No nested instances"), "a failed read is not empty");
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

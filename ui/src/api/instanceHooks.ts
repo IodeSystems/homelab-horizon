@@ -11,7 +11,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
-import type { InstanceResp, MachineResp } from "./generated-types";
+import type { InstanceResp, MachineResp, NestedBootstrapReq, NestedBootstrapResp } from "./generated-types";
 
 export const INSTANCES_KEY = ["instances"];
 
@@ -57,6 +57,24 @@ export function useSetSelfProject() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: INSTANCES_KEY });
       qc.invalidateQueries({ queryKey: ["machines"] });
+    },
+  });
+}
+
+/**
+ * Generate the one-command bootstrap of a nested hz
+ * (`POST /api/v1/nested/bootstrap`): declares the machine and the rung, and
+ * answers with the command ONCE. Re-generating revokes an unused earlier one.
+ */
+export function useNestedBootstrap() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: NestedBootstrapReq) =>
+      apiFetch<NestedBootstrapResp>("/nested/bootstrap", { method: "POST", body: JSON.stringify(req) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: INSTANCES_KEY });
+      qc.invalidateQueries({ queryKey: ["machines"] });
+      qc.invalidateQueries({ queryKey: ["environments"] });
     },
   });
 }

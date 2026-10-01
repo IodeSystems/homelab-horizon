@@ -44,6 +44,7 @@ import { LocationCell } from "../components/model/ProjectBits";
 import { buildProjectIndex, type ProjectIndex } from "../components/model/projectRoutes.ts";
 import { HostsAudit } from "../components/hosts/HostsAudit";
 import { findInstance, projectOf, readInstancesSource } from "../components/instances/instances";
+import { NestedStateChip } from "../components/instances/NestedBootstrap";
 
 function when(unix: number): string {
   return unix > 0 ? new Date(unix * 1000).toISOString().replace("T", " ").replace(/\.\d+Z$/, "Z") : "never";
@@ -248,6 +249,9 @@ export function NestedPullFacts({ row }: { row: InstanceResp }) {
   const n = row.nested;
   return (
     <>
+      <Fact label="State">
+        <NestedStateChip nested={n} />
+      </Fact>
       <Fact label="Instance token">
         <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
           <Typography variant="body2" data-instance-token-state={n?.hasToken ? "minted" : "none"}>
