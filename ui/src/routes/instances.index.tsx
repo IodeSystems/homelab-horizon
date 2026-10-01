@@ -52,12 +52,13 @@ import { isNested, peersLabel, projectOf, readInstancesSource } from "../compone
 import { AddMachineDialog } from "../components/model/MachineDialogs";
 
 /** What a declared nested instance cannot do yet — plan.md Tier 1b. N3
- * (`Environment.Upstream`) is built and is no longer listed. The tunnel code
- * (N1) landed but has never run on a box and does not survive a reboot, so it
+ * (`Environment.Upstream`) is built and is no longer listed; nor is the
+ * child's credential to the parent — N4a's instance token (minted on the
+ * instance's page), which pulls the applied artifact. The tunnel code (N1)
+ * landed but has never run on a box and does not survive a reboot, so it
  * stays. Kept beside the option it qualifies so the two cannot drift apart
  * unnoticed. */
 export const NESTED_WAITS_ON = [
-  "a credential the child presents to the parent (enrolment)",
   "an armed agent",
   "the registry crossing (packages mirrored, config proxied)",
 ];
