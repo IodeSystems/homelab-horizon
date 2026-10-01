@@ -28,8 +28,10 @@ func runEnvironment(c *client, args []string) error {
 		return envSet(c, args)
 	case "rm", "remove", "delete":
 		return envRm(c, args)
+	case "promote":
+		return envPromote(c, args)
 	default:
-		return fmt.Errorf("unknown env subcommand: %s (want ls, show, add, set or rm)", sub)
+		return fmt.Errorf("unknown env subcommand: %s (want ls, show, add, set, rm or promote)", sub)
 	}
 }
 
