@@ -8,7 +8,8 @@ package server
 // not in a comment — or this file will not compile.
 //
 // SECRETS NEVER SIT IN A SHELL VARIABLE. The WireGuard private key, the
-// instance token and the local service token go straight from the command
+// instance token, the local admin's API token (written by hz itself, `user
+// create --token-file`) and the local service token go straight from the command
 // that makes them into a 0600 file, and curl reads its Authorization header
 // from a file (-H @file), so none of them is on a command line, in the
 // environment, or printed. Never add set -x: TestChildScriptLeaksNoSecret
@@ -33,8 +34,10 @@ const hzChildInstallScript = `#!/bin/bash
 #   5. writes /etc/wireguard/@@IFACE@@.conf (0600) and brings it up at boot
 #   6. downloads the hz server binary OVER THE VPN and checks its sha256
 #   7. writes /etc/homelab-horizon/config.json (merged if it exists, backed up)
-#   8. installs and starts the homelab-horizon systemd unit
-#   9. waits for this hz's first answer from the parent
+#   8. creates the local admin @@ADMIN_USER@@ and its API token (only if this
+#      hz has no account yet; closes the first-account sign-up)
+#   9. installs and starts the homelab-horizon systemd unit
+#  10. waits for this hz's first answer from the parent
 #
 # Re-running: before step 4 the same command can be run again. From step 4 on
 # the command is used up — generate a NEW one on the parent and run that; it
@@ -56,6 +59,8 @@ WG_CONF="$WG_DIR/$IFACE.conf"
 HZ_DIR=/etc/homelab-horizon
 HZ_CFG="$HZ_DIR/config.json"
 TOKEN_FILE="@@TOKEN_FILE@@"
+ADMIN_USER="@@ADMIN_USER@@"
+ADMIN_TOKEN_FILE="@@ADMIN_TOKEN_FILE@@"
 BIN=/usr/local/bin/homelab-horizon
 
 STEP="starting"
@@ -79,7 +84,7 @@ on_exit() {
 }
 trap on_exit EXIT
 
-step() { STEP="$1"; say "[$2/9] $1"; }
+step() { STEP="$1"; say "[$2/10] $1"; }
 die() { say "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------- 1. checks
@@ -237,8 +242,24 @@ install -m 0600 "$TMP/config.json" "$HZ_CFG"
 install -m 0600 "$TMP/svc.token" "$SVC_TOKEN_FILE"
 say "  upstream $PARENT_URL, rung $PROJECT/$RUNG, local service $SERVICE"
 
-# --------------------------------------------------------------- 8. service
-step "installing and starting the homelab-horizon service" 8
+# ----------------------------------------------------------- 8. local admin
+step "creating the local admin account" 8
+# An hz with no account lets anyone who reaches its API create the first
+# admin. Creating one here, BEFORE hz starts, closes that door on a fresh box;
+# its token (written by hz, 0600, never printed) is what 'homelab-horizon
+# sync' uses. Only when there is no account at all: a re-run keeps the
+# existing account and its token.
+ACCOUNTS=$("$BIN" user list --config "$HZ_CFG" 2>"$TMP/user-list.err") || die "could not list this hz's accounts: $(tr '\n' ' ' < "$TMP/user-list.err")"
+if [ -z "$ACCOUNTS" ]; then
+  "$BIN" user create "$ADMIN_USER" --admin --token-file "$ADMIN_TOKEN_FILE" --config "$HZ_CFG" 2>"$TMP/user-create.err" \
+    || die "could not create $ADMIN_USER: $(tr '\n' ' ' < "$TMP/user-create.err")"
+  say "  created $ADMIN_USER; its API token is in $ADMIN_TOKEN_FILE (0600)"
+else
+  say "  this hz already has an account; kept as it is (no new account, no new token)"
+fi
+
+# --------------------------------------------------------------- 9. service
+step "installing and starting the homelab-horizon service" 9
 (cd "$HZ_DIR" && "$BIN" install --config "$HZ_CFG") > "$TMP/install.log" 2>&1 || {
   cat "$TMP/install.log" >&2
   die "homelab-horizon install failed (output above)."
@@ -247,8 +268,8 @@ systemctl daemon-reload
 systemctl enable homelab-horizon >/dev/null 2>&1
 systemctl restart homelab-horizon || die "homelab-horizon did not start — see: journalctl -u homelab-horizon -n 50 --no-pager"
 
-# ---------------------------------------------------------------- 9. verify
-step "waiting for this hz to reach the parent" 9
+# -------------------------------------------------------------- 10. verify
+step "waiting for this hz to reach the parent" 10
 port=$(jq -r '.listen_addr // ":8080"' "$HZ_CFG" | sed 's/.*://')
 { printf 'Authorization: Bearer '; cat "$SVC_TOKEN_FILE"; } > "$TMP/svc.hdr"
 state="hz not answering on 127.0.0.1:$port yet"
@@ -290,6 +311,12 @@ echo "  hz            $BIN $BIN_VERSION, config $HZ_CFG"
 echo "  local API     http://127.0.0.1:$port — the app on this box uses it with"
 echo "                the service token in $SVC_TOKEN_FILE (service $SERVICE)"
 echo "  instance key  $TOKEN_FILE (this hz's credential to the parent)"
+if [ -s "$ADMIN_TOKEN_FILE" ]; then
+  echo "  local admin   $ADMIN_USER — its API token is in $ADMIN_TOKEN_FILE (0600);"
+  echo "                'homelab-horizon sync' uses it to sync this hz"
+else
+  echo "  local admin   none created: this hz already had an account"
+fi
 echo
 echo "  The parent shows this instance as connected on its Instances page."
 `

@@ -44,10 +44,20 @@ import (
 // childUpstreamIface is the child's WireGuard interface name — its config is
 // /etc/wireguard/<this>.conf. Not wg0: a child that later runs its own human
 // VPN keeps wg0 for that.
-const childUpstreamIface = "hz-upstream"
+const childUpstreamIface = config.ChildUpstreamIface
 
 // childTokenFile is where the child keeps the instance token (0600).
 const childTokenFile = "/etc/homelab-horizon/upstream.token"
+
+// childAdminUser is the account the bootstrap creates on a child that has
+// none, and childAdminTokenFile where its personal API token goes (0600,
+// written by `homelab-horizon user create`). Without an account a child can
+// be synced by nobody, and its first-account sign-up (bootstrapAllowed) stays
+// open to anyone who reaches its API.
+const (
+	childAdminUser      = "hz-local-admin"
+	childAdminTokenFile = "/etc/homelab-horizon/admin.token"
+)
 
 // childListenPort is the port a seeded child's hz answers on: the default
 // listen address (config.Default, ":8080"), which the seed does not change.
@@ -355,6 +365,8 @@ func renderChildInstallScript(base string, gr childGrant, platforms []string, pa
 		"@@EXPIRES@@", gr.Expires.UTC().Format(time.RFC3339),
 		"@@IFACE@@", childUpstreamIface,
 		"@@TOKEN_FILE@@", childTokenFile,
+		"@@ADMIN_USER@@", childAdminUser,
+		"@@ADMIN_TOKEN_FILE@@", childAdminTokenFile,
 		"@@PARENT_ADDR@@", parentAddr,
 	)
 	return rep.Replace(hzChildInstallScript)
