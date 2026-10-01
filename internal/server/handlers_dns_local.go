@@ -181,6 +181,11 @@ func (s *Server) applyLocalDNS() error {
 		// so beats silently accepting a record that answers nothing.
 		return nil
 	}
+	if s.dnsmasqChildSkip() != "" {
+		// Recorded, and served once the operator runs dnsmasq (child_sync.go).
+		slog.Info("dnsmasq not synced", "reason", childDNSMasqWhy)
+		return nil
+	}
 	// The domain lives on the resolver object, so a config change has to be
 	// pushed into it before the config file is regenerated.
 	s.dns.SetLocalDomain(s.cfg().LocalDNSDomain)

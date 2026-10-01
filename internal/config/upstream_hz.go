@@ -110,6 +110,31 @@ func (c *Config) ValidateUpstream() error {
 		}
 		seen[r] = true
 	}
+	return c.UpstreamTunnelCollision()
+}
+
+// ChildUpstreamIface is the WireGuard interface a bootstrapped child reaches
+// its parent through: /etc/wireguard/<this>.conf, brought up by
+// wg-quick@<this>. wg-quick owns it, never hz.
+const ChildUpstreamIface = "hz-upstream"
+
+// UpstreamTunnelCollision refuses a child whose OWN WireGuard settings
+// (wg_interface, wg_config_path — the human-VPN wg0 hz manages) name the
+// upstream tunnel. hz would then bring that interface up and down, rewrite its
+// config file on a peer edit, heal its PostUp and build its iptables chains on
+// it: the tunnel to the parent, edited by the thing it carries. The bootstrap
+// seed never sets either field, so this is a hand edit, and it is refused at
+// Save and at start (server.NewWithConfig).
+func (c *Config) UpstreamTunnelCollision() error {
+	if c.Upstream == nil {
+		return nil
+	}
+	if c.WGInterface == ChildUpstreamIface {
+		return fmt.Errorf("upstream: wg_interface is %q, the tunnel to the parent, which wg-quick manages — hz must not; leave wg_interface as wg0 (or unset)", ChildUpstreamIface)
+	}
+	if c.WGConfigPath != "" && filepath.Base(c.WGConfigPath) == ChildUpstreamIface+".conf" {
+		return fmt.Errorf("upstream: wg_config_path %q is the tunnel to the parent's config, which wg-quick manages — hz must not; leave wg_config_path as /etc/wireguard/wg0.conf (or unset)", c.WGConfigPath)
+	}
 	return nil
 }
 

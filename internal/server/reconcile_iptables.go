@@ -91,7 +91,10 @@ func (s *Server) reconcileIPTables() {
 		if err := s.updateConfig(func(c *config.Config) { c.LocalInterface = newLocalIP }); err != nil {
 			slog.Warn("iptables-sync: persist LocalInterface failed", "err", err)
 		}
-		if err := s.dns.WriteConfig(); err != nil {
+		if s.dnsmasqChildSkip() != "" {
+			// child_sync.go: a child never (re)starts dnsmasq on its own.
+			slog.Info("iptables-sync: dnsmasq not rewritten", "reason", childDNSMasqWhy)
+		} else if err := s.dns.WriteConfig(); err != nil {
 			slog.Warn("iptables-sync: dns WriteConfig failed", "err", err)
 		} else if err := s.dns.Reload(); err != nil {
 			slog.Warn("iptables-sync: dns Reload failed", "err", err)

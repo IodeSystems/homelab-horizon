@@ -31,8 +31,11 @@ func (s *Server) syncServices() {
 		s.monitor.RefreshChecks(s.cfg())
 	}
 
-	// Update DNSMasq
-	if s.cfg().DNSMasqEnabled {
+	// Update DNSMasq — never (re)started on a child that is not running it
+	// (child_sync.go).
+	if s.cfg().DNSMasqEnabled && s.dnsmasqChildSkip() != "" {
+		slog.Info("dnsmasq not synced", "reason", childDNSMasqWhy)
+	} else if s.cfg().DNSMasqEnabled {
 		if err := s.dns.SetRecords(s.cfg().DeriveDNSRecords()); err != nil {
 			slog.Warn("dns.SetMappings", "err", err)
 		}
@@ -282,7 +285,11 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 	if checkCancelled() {
 		return
 	}
-	if s.cfg().DNSMasqEnabled {
+	if s.cfg().DNSMasqEnabled && s.dnsmasqChildSkip() != "" {
+		// child_sync.go: on a nested hz, never start dnsmasq.
+		log.Step("Skipping DNSMasq")
+		log.Info("  " + childDNSMasqWhy)
+	} else if s.cfg().DNSMasqEnabled {
 		log.Step("Syncing DNSMasq...")
 
 		records := s.cfg().DeriveDNSRecords()

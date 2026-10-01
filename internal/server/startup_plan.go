@@ -48,6 +48,7 @@ type subsystemObservation struct {
 	WGUp           bool
 
 	DNSEnabled      bool
+	DNSChild        bool // this hz is nested (config has upstream); child_sync.go
 	DNSBinaryOnPath bool
 	DNSConfigPath   string
 	DNSConfigExists bool
@@ -112,6 +113,10 @@ func planDNSMasq(o subsystemObservation) subsystemPlan {
 		p.Skip = "dnsmasq is disabled in the configuration."
 	case !o.DNSBinaryOnPath:
 		p.Skip = "the dnsmasq binary is not installed (run: sudo homelab-horizon install-deps)."
+	case childDNSMasqSkip(o.DNSChild, o.DNSRunning) != "":
+		// A nested hz never starts dnsmasq; one already running is left as it
+		// is, like on any hz (child_sync.go).
+		p.Skip = childDNSMasqWhy
 	default:
 		// The ordering fix. hz owns /etc/dnsmasq.d/hz.conf outright, and
 		// Status() only reports missing interfaces once the file exists — so a
