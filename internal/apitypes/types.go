@@ -1892,7 +1892,7 @@ type DeclaredDNSRecordResp struct {
 type DNSRecordSetRequest struct {
 	Zone         string   `json:"zone,omitempty"` // derived from Name when empty
 	Name         string   `json:"name"`
-	Type         string   `json:"type"` // A, AAAA, CNAME, TXT, MX
+	Type         string   `json:"type"` // A, AAAA, CNAME, TXT, MX, NS (NS below the apex only: a delegation)
 	Values       []string `json:"values"`
 	TTL          int      `json:"ttl,omitempty"` // seconds; 0 keeps the declared TTL, else 300
 	Note         string   `json:"note,omitempty"`

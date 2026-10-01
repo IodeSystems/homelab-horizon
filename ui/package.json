@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "pnpm run test:logic && pnpm run test:nested && pnpm run test:render && pnpm run test:model && pnpm run test:model-render && pnpm run test:routes && pnpm run test:routes-render && pnpm run test:edge && pnpm run test:health && pnpm run test:hosts && pnpm run test:hosts-render && pnpm run test:assign && pnpm run test:assign-render && pnpm run test:overview && pnpm run test:overview-render && pnpm run test:segments-render && pnpm run test:bans-render && pnpm run test:checks-render && pnpm run test:vpn-render && pnpm run test:ports-render && pnpm run test:machines-render && pnpm run test:instances-render && pnpm run test:settings-render && pnpm run test:vantages-render && pnpm run test:deploys-render",
+    "test": "pnpm run test:logic && pnpm run test:nested && pnpm run test:render && pnpm run test:model && pnpm run test:model-render && pnpm run test:routes && pnpm run test:routes-render && pnpm run test:edge && pnpm run test:health && pnpm run test:hosts && pnpm run test:hosts-render && pnpm run test:assign && pnpm run test:assign-render && pnpm run test:overview && pnpm run test:overview-render && pnpm run test:segments-render && pnpm run test:bans-render && pnpm run test:checks-render && pnpm run test:vpn-render && pnpm run test:ports-render && pnpm run test:machines-render && pnpm run test:instances-render && pnpm run test:settings-render && pnpm run test:vantages-render && pnpm run test:deploys-render && pnpm run test:dns-delegation && pnpm run test:zone-records-render",
     "test:logic": "node src/components/drift/observation.selftest.ts",
     "test:nested": "node src/components/instances/declareNested.selftest.ts",
     "test:render": "vite build --ssr src/components/drift/render.selftest.tsx --outDir .rendercheck --logLevel warn && node .rendercheck/render.selftest.js",
@@ -32,7 +32,9 @@
     "test:instances-render": "vite build --ssr src/components/instances.render.selftest.tsx --outDir .rendercheck-instances --logLevel warn && node .rendercheck-instances/instances.render.selftest.js",
     "test:settings-render": "vite build --ssr src/components/settings.render.selftest.tsx --outDir .rendercheck-settings --logLevel warn && node .rendercheck-settings/settings.render.selftest.js",
     "test:vantages-render": "vite build --ssr src/components/vantages.render.selftest.tsx --outDir .rendercheck-vantages --logLevel warn && node .rendercheck-vantages/vantages.render.selftest.js",
-    "test:deploys-render": "vite build --ssr src/components/model/deploys.render.selftest.tsx --outDir .rendercheck-deploys --logLevel warn && node .rendercheck-deploys/deploys.render.selftest.js"
+    "test:deploys-render": "vite build --ssr src/components/model/deploys.render.selftest.tsx --outDir .rendercheck-deploys --logLevel warn && node .rendercheck-deploys/deploys.render.selftest.js",
+    "test:dns-delegation": "node src/components/dnsDelegation.selftest.ts",
+    "test:zone-records-render": "vite build --ssr src/components/zoneRecords.render.selftest.tsx --outDir .rendercheck-zonerecords --logLevel warn && node .rendercheck-zonerecords/zoneRecords.render.selftest.js"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

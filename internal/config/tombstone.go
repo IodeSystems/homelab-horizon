@@ -222,13 +222,19 @@ func (c *Config) ClassifyRecord(zoneName, name, recType, value string) string {
 // apex are the provider's own delegation records: they are not hz's to track,
 // and surfacing them as inventory invites someone to "clean them up" and break
 // the zone.
+//
+// NS BELOW the apex is a delegation of a subdomain (dns_delegation.go). One hz
+// declared is owned and skipped by OwnsRecord below; one made by hand is
+// someone else's delegation and is ingested like any other foreign record, so
+// it is visible and never mistaken for nothing.
 var ingestSkippedTypes = map[string]bool{"NS": true, "SOA": true}
 
 // ShouldIngest reports whether a record live at the provider should be adopted
 // as track-only inventory.
 func (c *Config) ShouldIngest(zoneName, name, recType string) bool {
-	_, rt := normalizeRecordKey(name, recType)
-	if ingestSkippedTypes[rt] {
+	rn, rt := normalizeRecordKey(name, recType)
+	apex := rn == strings.ToLower(strings.TrimSuffix(zoneName, "."))
+	if ingestSkippedTypes[rt] && (rt != "NS" || apex) {
 		return false
 	}
 	if c.OwnsRecord(zoneName, name, recType) {

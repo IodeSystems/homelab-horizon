@@ -1142,6 +1142,55 @@ Configure your provider in the zone's `dns_provider` block:
 | Google Cloud DNS | `googlecloud` | `gcp_project` (+ optional `gcp_service_account_json`) |
 | DuckDNS | `duckdns` | `api_token` |
 
+### Delegating a subdomain to a nested hz
+
+One owner per name: two hz instances never write one zone. hz halts all DNS
+sync when a record it published changes under it, so a child hz writing into
+the parent's zone stops the parent. Give the child its own hosted zone, and let
+the parent publish only the NS record that points at it.
+
+1. **Create the child's hosted zone** (Route53: a public hosted zone named, for
+   example, `loadtest.app.example.com`). Note its hosted zone ID and its four
+   nameservers.
+2. **Scope the child's credentials to that zone.** The child hz gets an IAM
+   identity that can change only its own hosted zone:
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": ["route53:GetHostedZone", "route53:ListResourceRecordSets", "route53:ChangeResourceRecordSets"],
+         "Resource": "arn:aws:route53:::hostedzone/<CHILD_ZONE_ID>"
+       },
+       { "Effect": "Allow", "Action": "route53:GetChange", "Resource": "arn:aws:route53:::change/*" }
+     ]
+   }
+   ```
+
+   Set `aws_hosted_zone_id` (or the zone's `zone_id`) on the child's zone, so
+   hz never has to look the zone up by name. `ListHostedZonesByName` cannot be
+   scoped to one zone.
+3. **Declare the delegation on the parent hz**, one `--value` per nameserver:
+
+   ```bash
+   hz dns record add --name loadtest.app.example.com --type NS \
+     --value ns-1.awsdns-01.org --value ns-2.awsdns-02.com \
+     --value ns-3.awsdns-03.net --value ns-4.awsdns-04.co.uk --note "nested hz: app prod"
+   ```
+
+   Or on the zone's DNS page: **Add Record**, type NS, nameservers one per line.
+
+What the parent then refuses, each with a sentence that names the delegation:
+an NS at the zone apex (that set is the provider's), any other record type at
+the delegated name, and any record, service domain or `sub_zones` entry at or
+below it. The parent's dnsmasq writes `server=/loadtest.app.example.com/#`, so
+LAN and VPN clients resolve the delegated name upstream. Without it, a wildcard
+service domain above it (`address=/app.example.com/...`) answers for it with
+the parent's address. dnsmasq uses the longest matching domain, so the
+`server=` line wins over a broader `address=`.
+
 ## Single sign-on (OIDC)
 
 hz can hand authentication to an OpenID Connect provider. Local accounts and

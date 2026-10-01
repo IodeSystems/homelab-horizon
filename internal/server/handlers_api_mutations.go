@@ -268,6 +268,13 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 			domains = append(domains, d)
 		}
 	}
+	// Before updateConfig, which stores before Save validates.
+	for _, d := range domains {
+		if err := s.cfg().ServiceDomainDelegationError(req.Name, d); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 
 	forwards := requestForwards(req.Forwards)
 
@@ -705,6 +712,10 @@ func (s *Server) handleAPIAddSubZone(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
+			if err := cfg.Zones[i].SubZoneDelegationError(subZone); err != nil {
+				writeJSONError(w, http.StatusBadRequest, err.Error())
+				return
+			}
 			break
 		}
 	}
@@ -848,6 +859,10 @@ func (s *Server) handleAPIDomainSSLAdd(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusConflict, "SSL coverage already exists")
 			return
 		}
+	}
+	if err := zone.SubZoneDelegationError(subZone); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	// Add SubZone to the zone

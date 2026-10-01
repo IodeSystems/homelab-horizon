@@ -433,6 +433,19 @@ func (p *LibdnsAdapter) toLibdnsRecord(record Record) (libdns.Record, error) {
 			Target: target,
 		}, nil
 
+	case "NS":
+		// A delegation's nameserver: written fully qualified, compared without
+		// the dot (CanonicalRecordValue), the same as a CNAME target.
+		target := record.Value
+		if !strings.HasSuffix(target, ".") {
+			target += "."
+		}
+		return libdns.NS{
+			Name:   relName,
+			TTL:    ttl,
+			Target: target,
+		}, nil
+
 	case "TXT":
 		return libdns.TXT{
 			Name: relName,
