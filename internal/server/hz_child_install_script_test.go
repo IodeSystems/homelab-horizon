@@ -26,7 +26,7 @@ import (
 func renderedTestScript() string {
 	gr := childGrant{Token: "hzc_" + strings.Repeat("ab", 24), Machine: "loadtest-hz", Project: "redline", Rung: "loadtest",
 		Expires: time.Unix(1_800_000_000, 0)}
-	return renderChildInstallScript(bootKiosk, gr, []string{"linux-amd64", "linux-arm64"})
+	return renderChildInstallScript(bootKiosk, gr, []string{"linux-amd64", "linux-arm64"}, "10.100.0.1")
 }
 
 func TestChildScriptRendersForAGrant(t *testing.T) {
@@ -351,5 +351,53 @@ func TestEnrolSeedLoadsAsTheChildsConfig(t *testing.T) {
 	n := nestedRow(t, f.s, "loadtest-hz")
 	if n.State != apitypes.NestedStateConnected || n.LastPullRung != "redline/loadtest" {
 		t.Fatalf("the parent after the child's first pull: %+v", n)
+	}
+}
+
+// A seeded child binds loopback, not every interface: an empty or default
+// ":8080" listen address becomes 127.0.0.1:8080; an explicit one is kept.
+func TestChildScriptSeedsALoopbackListener(t *testing.T) {
+	seed := childSeed("redline", "loadtest", "prod", "redline-loadtest", "http://10.100.0.1:8080")
+	for current, want := range map[string]string{
+		`{}`:                               "127.0.0.1:8080",
+		`{"listen_addr": ":8080"}`:         "127.0.0.1:8080",
+		`{"listen_addr": "10.0.0.5:9000"}`: "10.0.0.5:9000",
+	} {
+		cfg, err := config.LoadFromJSON(runJQMerge(t, seed, current, "tok"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.ListenAddr != want {
+			t.Errorf("current %s: listen %q, want %q", current, cfg.ListenAddr, want)
+		}
+	}
+}
+
+// The preflight, run in bash with `ip` faked: a box where the parent's VPN
+// address is already on a local interface is refused BEFORE enrolling (the
+// first real run hit exactly this, a leftover wg0 on the parent's range).
+func TestChildScriptRefusesWhenTheParentAddressIsLocal(t *testing.T) {
+	s := renderedTestScript()
+	start := strings.Index(s, `if [ -n "$PARENT_ADDR" ]`)
+	end := strings.Index(s[start:], "\nfi\n")
+	if start < 0 || end < 0 {
+		t.Fatal("instrument: the preflight is not where this test looks")
+	}
+	block := s[start : start+end+4]
+	if strings.Index(s, block) > strings.Index(s, `step "enrolling with the parent hz"`) {
+		t.Fatal("the preflight must run before enrolling")
+	}
+	for name, tc := range map[string]struct{ ipOut, want string }{
+		"clash":      {"8: wg0    inet 10.100.0.1/24 scope global wg0", "DIE"},
+		"no clash":   {"2: eth0    inet 192.0.2.10/24 scope global eth0", "OK"},
+		"own tunnel": {"9: hz-upstream    inet 10.100.0.1/32 scope global hz-upstream", "OK"},
+	} {
+		prog := `PARENT_ADDR=10.100.0.1; IFACE=hz-upstream; ip() { echo "$FAKE"; }; die() { echo DIE; exit 0; }; ` + block + "echo OK"
+		cmd := exec.Command("bash", "-c", prog)
+		cmd.Env = append(os.Environ(), "FAKE="+tc.ipOut)
+		out, err := cmd.Output()
+		if got := strings.TrimSpace(string(out)); err != nil || got != tc.want {
+			t.Errorf("%s: got %q (%v), want %s", name, got, err, tc.want)
+		}
 	}
 }
