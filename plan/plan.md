@@ -201,6 +201,20 @@ record dies with the box. A non-primary refuses the POSTs; a check on a peer
 fails closed. Before rehearsal: declare `redline/prod` `from: staging` (none
 today), mint `redline-deploy` admin token.
 
+◻ **Versions, lines and the restore test (operator, 2026-09-30) — design, not approved for build.**
+Decided: redline's `MAJOR.MINOR.FIX.HOTFIX#BUILD` goes on the wire as semver
+`MAJOR.MINOR.FIX-HOTFIX.BUILD` (`1.9.1.0#7` → `1.9.1-0.7`), human form in
+`describe`; BUILD = the build machine's run number — no number = no test logs =
+not reportable (redline enforces; ❗ no build machine exists — every build is
+`bin/deploy` on the desktop); add `build_url` to the report. Hotfixes go through
+staging, as a **backup-restore test**. Supported lines = the current line and
+always one prior; a preserved backup per supported line, used to test
+backup → restore → migrate. Proposal (unapproved): line = semver core (hz derives
+it, no 4-part parser); supported = prod's line + the line promoted before it
+(derived from `promotions`, #8), operator may pin more; evidence for prod adds a
+`restore_test` report per supported line's fixture. ❓ **Operator:** fixture
+source — a prod backup is cardholder data in staging (PCI) unless scrubbed.
+
 ⚠ Single authority still applies (Tier 1): the report and the promote use an
 unscoped API token — the gate is evidence-based but gates one authority against
 itself.
