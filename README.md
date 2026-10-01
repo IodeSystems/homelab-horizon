@@ -378,6 +378,42 @@ Deploys are **atomic**: the upload is extracted into a fresh release directory, 
 
 This is how the project hosts its own landing page (`docs/`): a static service on the public domain, served by hz, with auto SSL.
 
+### Promoting a release (staging → prod)
+
+hz does not put a build on a box. It records what each rung **reported** running, gates a promotion on that evidence, and answers whether a given bundle may be deployed to a rung. Three endpoints and one CLI command:
+
+```bash
+# 1. After a successful deploy to staging, the deploy reports what it shipped.
+#    Token: an admin API token (any rung), OR the service token of a service
+#    assigned to exactly this project/environment (that rung only; 403 otherwise).
+curl -sf -X POST "$HZ_URL/api/v1/deploys/report" -H "Authorization: Bearer $HZ_TOKEN" \
+  -d '{"project":"redline","environment":"staging","app":"redline",
+       "version":"1.4.0","describe":"v1.4.0-3-gabc123",
+       "artifact_sha256":"<64 hex>","host":"ubuntu@192.168.1.160"}'
+# -> 200 {"recorded":true,"id":12}     400 {"error":"..."} undeclared rung, bad version, bad sha256
+
+# 2. Promote. Refused (409, reason in "error") unless prod declares `from: staging`
+#    at a higher posture, staging's NEWEST report is 1.4.0, and 1.4.0 is not lower
+#    than prod's declared version (unless --allow-downgrade, recorded as a downgrade).
+#    Sets prod's version and records who promoted which artifact sha256, when.
+hz env promote redline staging prod --version 1.4.0 [--allow-downgrade]
+#    = POST /api/v1/environments/promote
+#      {"project":"redline","from":"staging","to":"prod","version":"1.4.0","allowDowngrade":false}
+#    -> 200 {"promoted":true,"version":"1.4.0","artifact_sha256":"<hex>","downgrade":false,"id":3}
+
+# 3. Before deploying to prod, ask. Admin API token.
+curl -s "$HZ_URL/api/v1/deploys/check?project=redline&environment=prod&version=1.4.0&artifact_sha256=<hex>" \
+  -H "Authorization: Bearer $HZ_ADMIN_TOKEN"
+# -> 200 {"ok":true}
+# -> 409 {"ok":false,"reason":"..."}  prod declares another version; the artifact differs
+#        from the one promoted; the version was set by hand, not promoted; nothing declared
+```
+
+- **Versions** are semver with no leading `v` and no `+build` (that goes in `describe`); a prerelease such as `1.0.0-rc.1.1414` is accepted and ordered by semver precedence.
+- **Repeat reports** append: the same version may be reported again with a different sha256 (a rebuild). The newest report wins; the promote pins its sha256; the check compares against the pin.
+- Reports and promotions are append-only rows in `hz.db` on the config primary (migrations `0014`, `0015`). They are **not** peer-synced; a check asked of an HA peer finds no promotion and refuses.
+- `promote` and `check` need an admin credential. hz has one privilege level, so the gate stops an untested version, not a person; what it adds is the record (`promoted_by`). The project Overview shows the newest report per rung, a Promote action on any rung with a `from` edge, and recent promotions.
+
 ## Observability
 
 hz already knows every host and backend it routes to, so it can hand Prometheus
