@@ -1200,6 +1200,13 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/deploys/check", s.handleAPIDeployCheck)
 	mux.HandleFunc("/api/v1/deploys/latest", s.handleAPIDeployLatest)
 	mux.HandleFunc("/api/v1/promotions", s.handleAPIPromotions)
+	// Release lines (handlers_api_lines.go). Same placement rule: the POSTs
+	// write hz.db or config.json and belong on the primary.
+	mux.HandleFunc("/api/v1/backups/kept", s.handleAPIKeptBackup)
+	mux.HandleFunc("/api/v1/restore-tests/report", s.handleAPIRestoreTestReport)
+	mux.HandleFunc("/api/v1/projects/lines", s.handleAPIProjectLines)
+	mux.HandleFunc("/api/v1/projects/lines/pin", s.handleAPILinePin(true))
+	mux.HandleFunc("/api/v1/projects/lines/unpin", s.handleAPILinePin(false))
 	// The machines: identity and segment membership. No project and no
 	// environment — those are coordinates of an instance, not of a box
 	// (plan/design/architecture.md, "Instance, not machine, carries the environment").

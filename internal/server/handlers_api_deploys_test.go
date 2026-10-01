@@ -325,6 +325,7 @@ func TestPromoteDowngradeNeedsTheFlagAndIsRecorded(t *testing.T) {
 
 	req := toProd("1.4.0")
 	req.AllowDowngrade = true
+	f.satisfyGate(t, "1.4.0") // the restore-test gate applies to a rollback too
 	w = f.promote(req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("downgrade with the flag: %d %s", w.Code, w.Body.String())
@@ -341,6 +342,7 @@ func TestPromoteDowngradeNeedsTheFlagAndIsRecorded(t *testing.T) {
 
 	// The flag on an UPWARD promotion is not a downgrade, and says so.
 	f.report(t, f.pat, stagingReport("1.6.0", deployShaA))
+	f.satisfyGate(t, "1.6.0")
 	up := toProd("1.6.0")
 	up.AllowDowngrade = true
 	w = f.promote(up)
@@ -356,6 +358,7 @@ func TestPromotePrereleaseOrdering(t *testing.T) {
 	f := newDeployFixture(t)
 	for _, v := range []string{"1.0.0-rc.1.9", "1.0.0-rc.1.10", "1.0.0-rc.1.1415", "1.0.0"} {
 		f.report(t, f.pat, stagingReport(v, deployShaA))
+		f.satisfyGate(t, v)
 		if w := f.promote(toProd(v)); w.Code != http.StatusOK {
 			t.Fatalf("upward to %s refused: %d %q", v, w.Code, errorOf(w))
 		}
