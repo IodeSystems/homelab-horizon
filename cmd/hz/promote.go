@@ -18,7 +18,10 @@ Refused unless ALL hold, each with its own reason:
   - <to> declares ` + "`from: <from>`" + `, in the same project, at a higher posture;
   - <from>'s NEWEST deploy report is X (POST /api/v1/deploys/report) — the
     evidence that X is what ran there;
-  - X is not lower than <to>'s declared version, unless --allow-downgrade.
+  - X is not lower than <to>'s declared version, unless --allow-downgrade;
+  - for EVERY line <to> supports now (` + "`hz lines <project>`" + `), a kept backup
+    exists and X's newest restore test on <from> against it passed. A target
+    with no supported line (the first release) requires none, and says so.
 
 The artifact sha256 <from> reported for X is pinned on the promotion, and
 GET /api/v1/deploys/check refuses any other bundle of X for <to>.
@@ -64,5 +67,9 @@ func envPromote(c *client, args []string) error {
 	}
 	fmt.Printf("%s %s/%s -> %s: %s\n", kind, req.Project, req.From, req.To, out.Version)
 	fmt.Printf("  artifact sha256 %s (pinned; the deploy check refuses any other build of %s)\n", out.ArtifactSHA256, out.Version)
+	if out.BuildURL != "" {
+		fmt.Printf("  build %s\n", out.BuildURL)
+	}
+	fmt.Printf("  restore tests: %s\n", out.RestoreTests)
 	return nil
 }

@@ -6,6 +6,7 @@
  */
 import type {
   DeployReportResp,
+  ProjectLinesResp,
   PromoteReq,
   PromoteResp,
   PromotionResp,
@@ -49,7 +50,22 @@ export function usePromote() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["environments"] });
       qc.invalidateQueries({ queryKey: ["promotions"] });
+      qc.invalidateQueries({ queryKey: ["lines"] });
       qc.invalidateQueries({ queryKey: ["pending"] });
     },
+  });
+}
+
+/**
+ * One project's release lines (`GET /projects/lines`): per rung, the supported
+ * lines and why, each line's kept backup, the next promotion's restore-test
+ * status, and the retired lines. Server: `internal/server/handlers_api_lines.go`.
+ */
+export function useProjectLines(project: string) {
+  return useQuery({
+    queryKey: ["lines", project],
+    queryFn: () => apiFetch<ProjectLinesResp>(`/projects/lines?project=${encodeURIComponent(project)}`),
+    retry: false,
+    enabled: project !== "",
   });
 }

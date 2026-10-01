@@ -389,19 +389,58 @@ hz does not put a build on a box. It records what each rung **reported** running
 curl -sf -X POST "$HZ_URL/api/v1/deploys/report" -H "Authorization: Bearer $HZ_TOKEN" \
   -d '{"project":"redline","environment":"staging","app":"redline",
        "version":"1.4.0","describe":"v1.4.0-3-gabc123",
-       "artifact_sha256":"<64 hex>","host":"ubuntu@192.168.1.160"}'
-# -> 200 {"recorded":true,"id":12}     400 {"error":"..."} undeclared rung, bad version, bad sha256
+       "artifact_sha256":"<64 hex>","host":"ubuntu@192.168.1.160",
+       "build_url":"https://ci.example/builds/7"}'
+# -> 200 {"recorded":true,"id":12}     400 {"error":"..."} undeclared rung, bad version, bad sha256,
+#    build_url over 2048 bytes or carrying a control character. build_url is optional, any scheme.
 
-# 2. Promote. Refused (409, reason in "error") unless prod declares `from: staging`
-#    at a higher posture, staging's NEWEST report is 1.4.0, and 1.4.0 is not lower
-#    than prod's declared version (unless --allow-downgrade, recorded as a downgrade).
-#    Sets prod's version and records who promoted which artifact sha256, when.
-hz env promote redline staging prod --version 1.4.0 [--allow-downgrade]
+# 2. The app keeps one backup per supported line, and says so. Token: admin, or the
+#    service token of a service in this PROJECT (any rung of it).
+#    taken_by_version must be on the line. The newest record per (project, line) wins.
+curl -sf -X POST "$HZ_URL/api/v1/backups/kept" -H "Authorization: Bearer $HZ_TOKEN" \
+  -d '{"project":"redline","line":"1.0.0","backup_sha256":"<64 hex>",
+       "location":"s3://redline-kept/1.0.0.sql.zst","taken_by_version":"1.0.0-0.1",
+       "build_url":"https://ci.example/builds/5"}'
+# -> 200 {"recorded":true,"id":4}
+
+# 3. Staging restores that backup with the new build, migrates, runs the tests, and
+#    reports the result. Token scoped like a deploy report: its own rung only.
+#    "passed" is REQUIRED; a failure is reported too.
+curl -sf -X POST "$HZ_URL/api/v1/restore-tests/report" -H "Authorization: Bearer $HZ_TOKEN" \
+  -d '{"project":"redline","environment":"staging","version":"1.0.1-0.3","line":"1.0.0",
+       "backup_sha256":"<the kept backup sha256>","passed":true,
+       "build_url":"https://ci.example/builds/7"}'
+# -> 200 {"recorded":true,"id":9}
+
+# 4. Promote. Refused (409, reason in "error") unless prod declares `from: staging`
+#    at a higher posture, staging's NEWEST report is X, X is not lower than prod's
+#    declared version (unless --allow-downgrade, recorded as a downgrade), AND, for
+#    every line prod supports BEFORE the promotion, a kept backup exists and X's newest
+#    restore test on staging against that backup's sha256 passed. Each failing line is
+#    its own sentence (newline-separated):
+#      line 1.0.0 is supported on redline/prod but has no kept backup
+#      1.0.1-0.3 has no restore test against line 1.0.0's kept backup cccccccccccc
+#      1.0.1-0.3 failed its restore test against line 1.0.0 (https://ci.example/builds/7)
+#    Sets prod's version and records who promoted which artifact sha256 and build_url,
+#    when, and which lines were checked with which restore test.
+hz env promote redline staging prod --version 1.0.1-0.3 [--allow-downgrade]
 #    = POST /api/v1/environments/promote
-#      {"project":"redline","from":"staging","to":"prod","version":"1.4.0","allowDowngrade":false}
-#    -> 200 {"promoted":true,"version":"1.4.0","artifact_sha256":"<hex>","downgrade":false,"id":3}
+#      {"project":"redline","from":"staging","to":"prod","version":"1.0.1-0.3","allowDowngrade":false}
+#    -> 200 {"promoted":true,"version":"1.0.1-0.3","artifact_sha256":"<hex>","build_url":"...",
+#            "downgrade":false,"id":3,
+#            "restore_tests":"checked 1 line(s) of redline/prod: 1.0.0 (restore test #9)",
+#            "lines_checked":[{"line":"1.0.0","why":"current","kept_backup_id":4,
+#                              "backup_sha256":"<hex>","restore_test_id":9}]}
+#    The first release (prod declares nothing, nothing promoted into it) requires none and
+#    says so: "restore_tests":"none required: redline/prod has no supported line yet".
 
-# 3. Before deploying to prod, ask. Admin API token.
+# 5. The lines, per rung — supported and why, kept backups, the next promotion's
+#    restore tests, retired lines. Admin.
+hz lines redline                     # = GET /api/v1/projects/lines?project=redline
+hz line pin redline 0.9.0 --reason "legacy import still restores 0.9"
+hz line unpin redline 0.9.0          # = POST /api/v1/projects/lines/{pin,unpin}
+
+# 6. Before deploying to prod, ask. Admin API token.
 curl -s "$HZ_URL/api/v1/deploys/check?project=redline&environment=prod&version=1.4.0&artifact_sha256=<hex>" \
   -H "Authorization: Bearer $HZ_ADMIN_TOKEN"
 # -> 200 {"ok":true}
@@ -410,9 +449,13 @@ curl -s "$HZ_URL/api/v1/deploys/check?project=redline&environment=prod&version=1
 ```
 
 - **Versions** are semver with no leading `v` and no `+build` (that goes in `describe`); a prerelease such as `1.0.0-rc.1.1414` is accepted and ordered by semver precedence.
+- **Encoding a four-part version.** A `MAJOR.MINOR.FIX.HOTFIX#BUILD` version travels as semver `MAJOR.MINOR.FIX-HOTFIX.BUILD`: `1.9.1.0#7` → `1.9.1-0.7`. hz parses semver only; put the human form in `describe`.
+- **A line** is a version's `MAJOR.MINOR.PATCH`: `1.9.0-1.2` is on line `1.9.0`, so hotfixes and rebuilds stay on their line. A rung **supports** the line of its declared version (*current*), the most recent *different* line promoted into it (*prior*), and any line its project **pins** (`hz line pin`, reason required; declared in `config.json`). hz derives the supported lines on every read and promote; nothing stores them. A declared version that is not semver, or a pin that is not a line, is reported as "hz cannot say" and the promote is refused.
+- **Retired lines** have a kept backup and are supported on no rung. The app may delete those backups; hz says so in `hz lines` and deletes nothing.
+- The restore test that counts is the newest one of version X **on the source rung** against the line's **newest** kept backup. A test against an older backup of the line is superseded. The gate also applies to `--allow-downgrade`.
 - **Repeat reports** append: the same version may be reported again with a different sha256 (a rebuild). The newest report wins; the promote pins its sha256; the check compares against the pin.
-- Reports and promotions are append-only rows in `hz.db` on the config primary (migrations `0014`, `0015`). They are **not** peer-synced; a check asked of an HA peer finds no promotion and refuses.
-- `promote` and `check` need an admin credential. hz has one privilege level, so the gate stops an untested version, not a person; what it adds is the record (`promoted_by`). The project Overview shows the newest report per rung, a Promote action on any rung with a `from` edge, and recent promotions.
+- Reports, promotions, kept backups and restore tests are append-only rows in `hz.db` on the config primary (migrations `0014`, `0015`, `0016`). They are **not** peer-synced and have no backup; a check asked of an HA peer finds no promotion and refuses.
+- `promote` and `check` need an admin credential. hz has one privilege level, so the gate stops an untested version, not a person; what it adds is the record (`promoted_by`). The project Overview shows the newest report per rung (with its build link), a Promote action on any rung with a `from` edge — its dialog lists the required restore tests before the button — recent promotions, and the release lines.
 
 ## Observability
 
