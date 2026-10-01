@@ -443,6 +443,7 @@ func TestInstanceTokenIsRefusedOnAdminRoutes(t *testing.T) {
 		{"GET", "/api/v1/promotions"},
 		{"GET", "/api/v1/artifacts"},
 		{"POST", "/api/v1/machines/hz-token"},
+		{"POST", "/api/v1/nested/bootstrap"},
 		{"GET", "/api/v1/machines"},
 		{"POST", "/api/v1/machines/set"},
 		{"GET", "/api/v1/environments"},

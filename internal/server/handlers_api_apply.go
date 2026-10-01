@@ -39,9 +39,11 @@ import (
 // from "running" in time and in the record, not between two people.
 //
 // THE INSTANCE TOKEN is the one credential a nested hz holds for this one. It
-// authenticates as instance:<machine> for exactly three calls — desired, an
-// artifact download, and a forwarded deploy report — and only for rungs whose
-// Upstream names that machine. isAdmin never accepts it, so every admin route
+// authenticates as instance:<machine> for exactly four calls — desired, an
+// artifact download, and a forwarded deploy report, only for rungs whose
+// Upstream names that machine; and the hz server binary the bootstrap installs
+// (GET /api/v1/nested/bin/<platform>, handlers_nested_bootstrap.go), which is
+// no rung's. isAdmin never accepts it, so every admin route
 // refuses it without knowing it exists; TestInstanceTokenIsRefusedOnAdminRoutes
 // enumerates them.
 
@@ -52,6 +54,16 @@ const instanceTokenPrefix = "hzi_"
 func tokenDigest(tok string) string {
 	sum := sha256.Sum256([]byte(tok))
 	return hex.EncodeToString(sum[:])
+}
+
+// newInstanceToken mints one instance token. The caller stores only its
+// tokenDigest.
+func newInstanceToken() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return instanceTokenPrefix + hex.EncodeToString(raw), nil
 }
 
 // instanceCaller resolves an instance token to its machine.
@@ -425,12 +437,11 @@ func (s *Server) handleAPIMachineHZToken(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusBadRequest, "machine is required")
 		return
 	}
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
+	tok, err := newInstanceToken()
+	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	tok := instanceTokenPrefix + hex.EncodeToString(raw)
 	next := *s.cfg()
 	if err := next.SetInstanceTokenHash(req.Machine, tokenDigest(tok)); err != nil {
 		writeJSONError(w, http.StatusConflict, err.Error())

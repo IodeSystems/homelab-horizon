@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
@@ -57,12 +58,42 @@ func (s *Server) decorateNested(r *http.Request, cfg *config.Config, rows []apit
 		if !ok || m.HZ == nil {
 			continue
 		}
-		n := &apitypes.InstanceNestedResp{HasToken: m.HZ.TokenSHA256 != "", PullsUnknown: unknown}
+		n := &apitypes.InstanceNestedResp{HasToken: m.HZ.TokenSHA256 != "", PullsUnknown: unknown, VPNClient: m.HZ.VPNClient}
+		var pulled time.Time
 		if p, ok := pulls[m.Name]; ok {
+			pulled = p.At
 			n.LastPullAt = p.At.Unix()
 			n.LastPullRung = p.Project + "/" + p.Environment
 		}
+		grants := s.childGrantStore()
+		expires, _ := grants.pending(m.Name)
+		enrolled, _ := grants.enrolledAt(m.Name)
+		n.State = nestedState(n.HasToken, expires, enrolled, pulled)
+		n.GrantExpiresAt = unixOrZero(expires)
+		n.EnrolledAt = unixOrZero(enrolled)
 		rows[i].Nested = n
+	}
+}
+
+// nestedState is the one state a nested instance shows, from what this hz
+// holds. A zero time is "none": no live command, no enrolment remembered, no
+// pull recorded. Compared in whole seconds: hz.db stores a pull to the second.
+//
+// A live command wins: the operator is provisioning (or re-provisioning) the
+// box now. An enrolment newer than the last pull is a box that has not pulled
+// YET — a re-provisioned box must not read as connected on the old box's pull.
+func nestedState(hasToken bool, grantExpires, enrolledAt, lastPull time.Time) string {
+	switch {
+	case !grantExpires.IsZero():
+		return apitypes.NestedStateCommandGenerated
+	case !enrolledAt.IsZero() && (lastPull.IsZero() || lastPull.Unix() < enrolledAt.Unix()):
+		return apitypes.NestedStateEnrolled
+	case !lastPull.IsZero():
+		return apitypes.NestedStateConnected
+	case hasToken:
+		return apitypes.NestedStateNeverConnected
+	default:
+		return apitypes.NestedStateDeclared
 	}
 }
 
