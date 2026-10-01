@@ -596,6 +596,12 @@ func (c *Client) registerAndWait(ctx context.Context, req RegisterRequest) (*Reg
 func (c *Client) fetch(ctx context.Context) (*ConfigResponse, error) {
 	var resp ConfigResponse
 	if err := c.post(ctx, configPath, c.configRequest(), &resp); err != nil {
+		// An enrolled box learns of a revocation HERE, not at registration:
+		// only the marked 403 is a denial.
+		var se *statusError
+		if errors.As(err, &se) && se.Denied {
+			return nil, fmt.Errorf("%w: %s: %s", ErrDenied, c.Addr(), se.Body)
+		}
 		return nil, fmt.Errorf("%w: %v", ErrUnsettled, err)
 	}
 	return &resp, nil
@@ -613,6 +619,12 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 	return jsonRPC(ctx, c.http, http.MethodGet, joinURL(c.opts.BaseURL, path), nil, out, true)
 }
 
+// DeniedHeader marks hz's one positive denial on /cm/config: a 403 that
+// carries it means the registration was denied (revoked) and the box must not
+// boot. A 403 WITHOUT it — the peer gate refusing a caller that is not a
+// WireGuard peer or loopback — is a network fault and boots the cache.
+const DeniedHeader = "X-HZ-CM-Denied"
+
 // statusError is a non-2xx answer, carrying the code so a caller can branch on
 // it. Push needs that: a 404 from the current-key endpoint means "no pointer is
 // set", which is the ordinary state of a brand-new address and not a failure.
@@ -622,6 +634,8 @@ type statusError struct {
 	Code   int
 	Status string
 	Body   string
+	// Denied is DeniedHeader on the answer.
+	Denied bool
 }
 
 func (e *statusError) Error() string {
@@ -670,7 +684,8 @@ func jsonRPC(ctx context.Context, hc *http.Client, method, u string, in, out any
 		return fmt.Errorf("%s %s: body is larger than %d bytes", req.Method, req.URL.Path, maxBodySize)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &statusError{Method: req.Method, Path: req.URL.Path, Code: resp.StatusCode, Status: resp.Status, Body: snippet(raw)}
+		return &statusError{Method: req.Method, Path: req.URL.Path, Code: resp.StatusCode, Status: resp.Status, Body: snippet(raw),
+			Denied: resp.StatusCode == http.StatusForbidden && resp.Header.Get(DeniedHeader) != ""}
 	}
 	if out == nil {
 		return nil

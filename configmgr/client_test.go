@@ -58,6 +58,8 @@ type hz struct {
 
 	// configStatus, when non-zero, is returned instead of a config.
 	configStatus int
+	// configDenied adds DeniedHeader to the configStatus answer.
+	configDenied bool
 
 	// configBody, when set, is returned verbatim instead of a config.
 	configBody string
@@ -182,6 +184,9 @@ func (h *hz) handleConfig(w http.ResponseWriter, r *http.Request) {
 	defer h.mu.Unlock()
 
 	if h.configStatus != 0 {
+		if h.configDenied {
+			w.Header().Set(DeniedHeader, "registration")
+		}
 		http.Error(w, "hz is having a day", h.configStatus)
 		return
 	}
@@ -1058,5 +1063,28 @@ func TestRejectedConfigNeverReplacesTheCache(t *testing.T) {
 	serve(2, "fixed")
 	if cfg, err = rebooted.Load(ctx(t)); err != nil || cfg.Source != SourceServer || cfg.Sequence != 2 {
 		t.Fatalf("a fixed blessing at the rejected sequence: %+v, %v", cfg, err)
+	}
+}
+
+// TestRevokedBoxRefusesOnlyOnTheMarkedDenial: an enrolled box learns of a
+// revocation from /cm/config. Only a 403 carrying DeniedHeader is a denial; a
+// plain 403 (the peer gate: VPN down, wrong source address) still boots the
+// cache, or a network fault would take the box down (#5).
+func TestRevokedBoxRefusesOnlyOnTheMarkedDenial(t *testing.T) {
+	h := newHZ(t)
+	c := newClient(t, h, nil)
+	if _, err := c.Load(ctx(t)); err != nil {
+		t.Fatal(err)
+	}
+
+	h.set(func() { h.configStatus = http.StatusForbidden; h.configDenied = false })
+	cfg, err := c.Load(ctx(t))
+	if err != nil || cfg.Source != SourceCache {
+		t.Fatalf("an unmarked 403 must boot the cache: %+v, %v", cfg, err)
+	}
+
+	h.set(func() { h.configStatus = http.StatusForbidden; h.configDenied = true })
+	if _, err := c.Load(ctx(t)); !errors.Is(err, ErrDenied) {
+		t.Fatalf("a marked 403 is a revocation, want ErrDenied, got %v", err)
 	}
 }

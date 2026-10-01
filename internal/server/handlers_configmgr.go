@@ -455,6 +455,11 @@ func (s *Server) handleAPICMConfig(w http.ResponseWriter, r *http.Request) {
 		if reg.DeniedReason != "" {
 			msg += ": " + reg.DeniedReason
 		}
+		// The marker is what makes this 403 a denial. cmPeerGate also answers
+		// 403 (not a peer, not loopback — e.g. a box whose VPN is down), and a
+		// client that read every 403 as denied would refuse to boot its cache
+		// over a network fault (CLAUDE.md #5).
+		w.Header().Set(configmgr.DeniedHeader, "registration")
 		writeJSONError(w, http.StatusForbidden, msg)
 		return
 	case db.RegistrationApproved:
