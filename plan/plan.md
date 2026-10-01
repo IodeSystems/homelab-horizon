@@ -184,12 +184,22 @@ with its own data layer.
 |---|---|---|---|
 | R1 | versioned, immutable bundle per build; prod deploys THAT bundle, never a rebuild | redline | ◻ sent to redline session |
 | R2 | `bin/deploy` posts the report after a successful flip | redline | ◻ sent |
-| H1 | `POST /api/v1/deploys/report` — rung, version, artifact sha256, host (API token) | hz | ◐ building |
-| H2 | evidence gate: `hz env promote redline staging prod --version X` refused unless staging REPORTED X (on top of `CheckPromotion`'s structural check, which checks no evidence); records who/when/artifact | hz | ◐ building |
-| H3 | `GET /api/v1/deploys/check` — prod's declared version + artifact match, for `bin/deploy prod` | hz | ◐ building |
+| H1 | `POST /api/v1/deploys/report` — rung, version, artifact sha256, host (API token) | hz | ✅ merged `c0f4e66`, not deployed |
+| H2 | evidence gate: `hz env promote redline staging prod --version X` refused unless staging REPORTED X (on top of `CheckPromotion`'s structural check, which checks no evidence); records who/when/artifact | hz | ✅ merged `c0f4e66`, not deployed |
+| H3 | `GET /api/v1/deploys/check` — prod's declared version + artifact match, for `bin/deploy prod` | hz | ✅ merged `c0f4e66`, not deployed |
 | R3 | `bin/deploy prod` refuses unless H3 says ok | redline | ◻ sent |
 | T | **rehearse on staging**: a promote works; a skip, an unreported version and a different artifact are refused | both | ◻ |
 | P | fresh prod VM → `redline-prod-hz` (current hz, nested, `upstream` client), prod `HZ_URL` → child, hzclient v0.3.0 rolling API checked against it, prod secrets (configmgr from birth) | you + both | ◻ — **yours:** VM region/size; cutover timing |
+
+✅ **H1–H3 notes (2026-09-30):** prerelease versions ordered by `db.CompareVersions`
+(no leading `v`, no `+build`); a service token reports ONLY its own rung;
+check/promote need an admin credential; promote evidence = the source rung's
+NEWEST report must be X (a later staging report supersedes); reports and
+promotions are append-only by SQLite trigger. ❗ **They live in `hz.db`, which is
+not peer-synced and has NO BACKUP** (see icebox) — the PCI "who promoted what"
+record dies with the box. A non-primary refuses the POSTs; a check on a peer
+fails closed. Before rehearsal: declare `redline/prod` `from: staging` (none
+today), mint `redline-deploy` admin token.
 
 ⚠ Single authority still applies (Tier 1): the report and the promote use an
 unscoped API token — the gate is evidence-based but gates one authority against
