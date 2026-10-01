@@ -681,6 +681,10 @@ type Project struct {
 	// with nothing in it, which ValidateFeeds rejects. Collapsing the two is
 	// goal property 6 in plan/design/architecture.md — the founding bug.
 	Feed *Feed `json:"feed,omitempty"`
+
+	// PinnedLines are release lines the operator keeps supported beyond the
+	// derived two (current and prior) — internal/config/lines.go.
+	PinnedLines []PinnedLine `json:"pinnedLines,omitempty"`
 }
 
 // ValidateProjects checks the project tree is usable: names unique, parents real, no
@@ -696,6 +700,9 @@ func (c *Config) ValidateProjects() error {
 		}
 		if _, dup := byName[p.Name]; dup {
 			return fmt.Errorf("project %q is declared twice", p.Name)
+		}
+		if err := p.validatePins(); err != nil {
+			return err
 		}
 		byName[p.Name] = p
 	}
