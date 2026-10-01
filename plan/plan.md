@@ -175,8 +175,10 @@ redline session's answer: no prod box, no promotion, deploy = `bin/deploy`
 (rsync + slot flip via hzclient v0.3.0), each deploy a REBUILD, config in
 `.properties`, staging = `192.168.1.160` on the office hz. Decided: **prod on its
 own hz from day one** (PCI); staging reports what it runs with a **deploy-time
-report**; prod is a **fresh VM** (NOT the loadtest box `<loadtest-ip>`, which
-stays disposable — it runs an empty hz v0.2.0 and redline with load-test data).
+report**; prod is a **fresh VM** — NOT the loadtest box: AWS `<loadtest-instance>`
+(m7g.large, arm64, <aws-zone>, `<loadtest-ip>`), the operator's **pre-migration
+test** box. It runs an empty hz v0.2.0 and redline (a dirty 2026-09-17 build)
+with its own data layer.
 
 | | step | side | state |
 |---|---|---|---|
