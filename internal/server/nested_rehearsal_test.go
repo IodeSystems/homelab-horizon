@@ -200,4 +200,31 @@ func TestRehearsalNestedPullApplyHold(t *testing.T) {
 	if n := f.childHits.count(); n != 0 {
 		t.Fatalf("the parent DIALLED the child's address %d time(s) — the child pulls, the parent never initiates", n)
 	}
+
+	// The child's local scope: the parent's
+	// instance token and no token are refused; forwarded_for from a local
+	// caller is refused.
+	for name, c := range map[string]struct {
+		token string
+		want  int
+	}{
+		"no token":       {"", http.StatusUnauthorized},
+		"instance token": {tok, http.StatusUnauthorized}, // the child does not know the token it holds for the parent
+		"unknown token":  {"nope", http.StatusUnauthorized},
+	} {
+		r := httptest.NewRequest("GET", desiredPath, nil)
+		if c.token != "" {
+			r.Header.Set("Authorization", "Bearer "+c.token)
+		}
+		w := httptest.NewRecorder()
+		childH.ServeHTTP(w, r)
+		if w.Code != c.want {
+			t.Errorf("child desired with %s: %d, want %d", name, w.Code, c.want)
+		}
+	}
+	bad := rep
+	bad.ForwardedFor = "service:someone"
+	if w := ops("POST", "/api/v1/deploys/report", bad); w.Code != http.StatusBadRequest {
+		t.Errorf("a local report carrying forwarded_for: %d", w.Code)
+	}
 }
