@@ -40,9 +40,10 @@ import {
   Typography,
 } from "@mui/material";
 import type { DeployReportResp, EnvironmentResp, PromotionResp } from "../../api/generated-types";
-import { usePromote } from "../../api/deployHooks";
+import { useProjectLines, usePromote } from "../../api/deployHooks";
 import { formatAge } from "../drift/observation.ts";
 import { EmptyRow } from "./FlowBits";
+import { BuildLink, RequiredRestoreTests, type LinesSource } from "./ReleaseLines";
 
 /**
  * What hz answered about reports: the list, still asking, or that it could
@@ -104,6 +105,12 @@ export function ReportedCell({ source, env }: { source: ReportSource; env: Envir
       title={`${r.describe || r.version} · sha256 ${r.artifact_sha256} · reported by ${r.reportedBy} at ${r.reportedAt}`}
     >
       {r.version} · {r.host} · {formatAge(r.ageSeconds)} ago
+      {r.build_url ? (
+        <>
+          {" · "}
+          <BuildLink url={r.build_url} />
+        </>
+      ) : null}
     </Typography>
   );
 }
@@ -119,6 +126,12 @@ export function PromotePanel({
   onClose: () => void;
 }) {
   const promote = usePromote();
+  const lines = useProjectLines(env.project);
+  const linesSource: LinesSource = lines.data
+    ? { known: true, lines: lines.data }
+    : lines.error
+      ? { known: false, loading: false, why: lines.error.message }
+      : { known: false, loading: true };
   const from = env.from ?? "";
   const [version, setVersion] = useState(sourceReport?.version ?? "");
   const [allowDowngrade, setAllowDowngrade] = useState(false);
@@ -151,7 +164,14 @@ export function PromotePanel({
             ? `${from} last reported ${sourceReport.version} on ${sourceReport.host}, ${formatAge(sourceReport.ageSeconds)} ago.`
             : `${from} has reported nothing — hz refuses a promote without a report.`}
           {env.version ? ` ${env.name} declares ${env.version}.` : ` ${env.name} declares no version.`}
+          {sourceReport?.build_url ? (
+            <>
+              {" "}
+              Build: <BuildLink url={sourceReport.build_url} />
+            </>
+          ) : null}
         </Typography>
+        <RequiredRestoreTests source={linesSource} project={env.project} target={env.name} version={version} />
         <TextField
           fullWidth
           label="Version"
@@ -165,7 +185,7 @@ export function PromotePanel({
           label="Allow a downgrade (a rollback — recorded as one)"
         />
         {promote.error ? (
-          <Alert severity="error" sx={{ mt: 1 }} data-promote-refusal>
+          <Alert severity="error" sx={{ mt: 1, whiteSpace: "pre-line" }} data-promote-refusal>
             {promote.error.message}
           </Alert>
         ) : null}

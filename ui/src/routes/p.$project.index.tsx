@@ -41,7 +41,8 @@ import UpgradeIcon from "@mui/icons-material/Upgrade";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import { useEnvironments, useServices, useVersionDrift } from "../api/hooks";
 import type { EnvironmentResp, InstanceVersion } from "../api/generated-types";
-import { useLatestDeploys, usePromotions } from "../api/deployHooks";
+import { useLatestDeploys, useProjectLines, usePromotions } from "../api/deployHooks";
+import { ReleaseLinesTable } from "../components/model/ReleaseLines";
 import {
   readFeed,
   readInstanceSource,
@@ -236,6 +237,7 @@ function ProjectOverview() {
   const [promoting, setPromoting] = useState<EnvironmentResp | null>(null);
   const deploys = useLatestDeploys();
   const promotions = usePromotions();
+  const lines = useProjectLines(resolution.found ? resolution.route.name : "");
 
   // The layout above renders the no-such-project screen and no <Outlet/>, so
   // this component only ever runs with a resolved project.
@@ -360,6 +362,19 @@ function ProjectOverview() {
             promotions={promotionRows}
             error={promotions.error}
             loading={promotions.isLoading}
+            project={route.name}
+          />
+        </>
+      ) : null}
+
+      {ownRungs.length > 0 ? (
+        <>
+          {/* This project's own rungs only: lines, kept backups and pins are per project. */}
+          <TabHeader title="Release lines" />
+          <ReleaseLinesTable
+            lines={lines.data}
+            error={lines.error}
+            loading={lines.isLoading}
             project={route.name}
           />
         </>
