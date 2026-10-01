@@ -362,7 +362,8 @@ export interface PromoteReq {
  * that report's build_url. Downgrade is true when AllowDowngrade was needed,
  * and is recorded as such.
  * RestoreTests is the restore-test gate's answer in one sentence, ALWAYS set:
- * "none required: redline/prod has no supported line yet" on a first release,
+ * "none required: redline/prod has reported running nothing yet" when the
+ * target has no deploy report (its supported lines come from its reports),
  * never an absent field. LinesChecked lists each supported line of the target
  * (as it was BEFORE the promotion) and the evidence that satisfied it.
  */
@@ -500,7 +501,7 @@ export interface RestoreTestResp {
  */
 export interface LineWhyResp {
   kind: string; // "current", "prior" or "pinned"
-  detail: string; // what declares it, which promotion, or the pin's reason
+  detail: string; // which deploy report ran it, or the pin's reason
 }
 /**
  * SupportedLineResp is one supported line of one rung.
@@ -531,9 +532,10 @@ export interface LineRestoreResp {
 }
 /**
  * RungLinesResp is one rung's supported lines. Supported empty AND Gaps empty
- * is "no supported line" — the first release, and NoneRequired says so in
- * words. A gap is "hz cannot say" (a declared version that is not semver, a
- * pin that is not a line); the gate refuses on one.
+ * is "no supported line" — the rung has reported running nothing, and
+ * NoneRequired says so in words. Lines derive from the rung's deploy reports,
+ * never from Declared. A gap is "hz cannot say" (a report hz cannot read a
+ * line from, a pin that is not a line); the gate refuses on one.
  */
 export interface RungLinesResp {
   environment: string;

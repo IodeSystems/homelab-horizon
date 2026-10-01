@@ -15,9 +15,11 @@ import (
 const linesUsage = `usage: hz lines <project>
 
 Release lines, per rung. A version's line is its MAJOR.MINOR.PATCH (1.9.0-1.2 is
-on line 1.9.0). A rung SUPPORTS the line of its declared version (current), the
-most recent different line promoted into it (prior), and any line the project
-pins. hz derives these on every read; nothing stores them.
+on line 1.9.0). A rung SUPPORTS the line it last REPORTED RUNNING (current), the
+newest different line it reported running before that (prior), and any line
+the project pins. Not its declared version: a line exists on a rung once its
+deploy reported running it. hz derives these on every read; nothing stores
+them.
 
 A promote into a rung is refused unless EVERY line it supports has a kept
 backup and the promoted version passed a restore test against that backup.

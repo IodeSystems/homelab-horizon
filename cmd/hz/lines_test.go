@@ -34,7 +34,7 @@ func TestLinesAndPinSendTheContractRequests(t *testing.T) {
 							KeptBackup: &apitypes.KeptBackupResp{Line: "1.0.0", BackupSHA256: sha, Location: "s3://kept/1.0.0", TakenByVersion: "1.0.0-0.1", AgeSeconds: 120},
 							Restore:    apitypes.LineRestoreResp{Status: "passed", Sentence: "1.0.2 passed its restore test"}},
 					}},
-					{Environment: "staging", Posture: "staging", NoneRequired: "none required: redline/staging has no supported line yet"},
+					{Environment: "staging", Posture: "staging", NoneRequired: "none required: redline/staging has reported running nothing yet"},
 				},
 				Retired: []apitypes.KeptBackupResp{{Line: "0.9.0", BackupSHA256: sha, Location: "s3://kept/0.9.0", AgeSeconds: 86400 * 3}},
 			})
@@ -62,7 +62,7 @@ func TestLinesAndPinSendTheContractRequests(t *testing.T) {
 		"kept backup  none",
 		"restore      no-kept-backup: line 1.0.1 is supported on redline/prod but has no kept backup",
 		"kept backup  cccccccccccc at s3://kept/1.0.0, taken by 1.0.0-0.1, 2m ago",
-		"none required: redline/staging has no supported line yet",
+		"none required: redline/staging has reported running nothing yet",
 		"0.9.0  cccccccccccc at s3://kept/0.9.0, 3d ago",
 		"hz deletes nothing",
 	} {
