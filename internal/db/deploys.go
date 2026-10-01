@@ -70,6 +70,9 @@ const (
 	RestoreGatePredates     = "predates"
 	RestoreGateNoneRequired = "none-required"
 	RestoreGateChecked      = "checked"
+	// RestoreGateSkipped: the promote asked to skip the gate (skipRestoreTests)
+	// and the target had run this exact artifact before. No lines are checked.
+	RestoreGateSkipped = "skipped-ran-before"
 )
 
 // PromotionLine is one line a promotion was checked against and the evidence
@@ -248,7 +251,13 @@ func (d *DB) RecordPromotion(ctx context.Context, p Promotion) (int64, error) {
 		downgrade = 1
 	}
 	gate := RestoreGateNoneRequired
-	if len(p.Lines) > 0 {
+	switch {
+	case p.RestoreGate == RestoreGateSkipped:
+		if len(p.Lines) > 0 {
+			return 0, errors.New("a promotion that skipped the restore gate checked no lines")
+		}
+		gate = RestoreGateSkipped
+	case len(p.Lines) > 0:
 		gate = RestoreGateChecked
 	}
 	tx, err := d.BeginTx(ctx, nil)

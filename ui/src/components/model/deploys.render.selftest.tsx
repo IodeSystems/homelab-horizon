@@ -148,6 +148,20 @@ const PROMOTIONS: PromotionResp[] = [
     build_url: "",
     restore_gate: "none-required",
   },
+  {
+    id: 2,
+    project: "redline",
+    from: "staging",
+    to: "prod",
+    version: "1.3.8",
+    artifact_sha256: SHA,
+    promotedAt: "2026-09-28T10:00:00Z",
+    promotedBy: "user:carl (token:redline-deploy)",
+    downgrade: true,
+    ageSeconds: 172800,
+    build_url: "",
+    restore_gate: "skipped-ran-before",
+  },
 ];
 
 const DRIFT: VersionDriftResponse = { instances: [], unadmitted: 0, serverTime: "2026-09-30T10:03:00Z" };
@@ -225,6 +239,7 @@ console.log("· through the router at /p/redline");
     "staging, which declares no from, carries none",
   );
   check(r.text.includes("Recent promotions"), "the promotion record sits under the table");
+  check((r.text.match(/restore tests skipped/g) ?? []).length === 1, "a rollback that skipped restore tests says so, and only that one");
   check(
     r.text.includes("redline/staging → prod") && r.text.includes("user:carl (token:redline-deploy)") && r.text.includes("1d ago"),
     "a promotion row names from → to, who and when",
@@ -267,6 +282,7 @@ console.log("· PromotePanel — prefilled from the SOURCE rung's newest report"
   check(r.text.includes("staging last reported 1.4.0 on ubuntu@192.0.2.160"), "and says where it came from");
   check(r.text.includes("prod declares 1.3.9"), "and what the target declares now");
   check(r.text.includes("Allow a downgrade"), "the downgrade checkbox is offered");
+  check(r.text.includes("Skip restore tests — only for the exact build prod already ran"), "the skip-restore-tests checkbox is offered, and says its limit");
 
   const empty = standalone(<PromotePanel env={prod} sourceReport={null} onClose={() => {}} />);
   check(empty.text.includes("staging has reported nothing"), "with no report it says hz will refuse");

@@ -157,8 +157,10 @@ func promoteRefusal(w http.ResponseWriter, msg string) {
 //     supported line of the target — derived BEFORE the promotion — a kept
 //     backup exists and X's newest restore test on `from` against it passed.
 //     No supported line (the first release) requires nothing, and says so.
-//     It applies to a downgrade too: no exemption was decided, so none is
-//     made here.
+//     A downgrade is gated too, UNLESS skipRestoreTests (the operator's call,
+//     2026-10-01): then the gate is skipped only when the target was promoted
+//     to this exact version AND artifact before — it ran there. Any other
+//     version or build is refused; the skip is recorded on the promotion.
 //
 // On success the target's Version is set through the env-set writer
 // (SetEnvironment + updateConfig, so Save validates it), and a promotions row
@@ -250,10 +252,37 @@ func (s *Server) handleAPIEnvironmentPromote(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	gate, err := s.restoreGate(r.Context(), cfg, req.Project, req.From, to, req.Version)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
+	var gate gateResult
+	gateRecord := ""
+	if req.SkipRestoreTests {
+		ran, err := s.users.LatestPromotionOf(r.Context(), req.Project, req.To, req.Version)
+		if errors.Is(err, db.ErrNotFound) {
+			promoteRefusal(w, "skipRestoreTests is for a rollback to a version "+req.Project+"/"+req.To+
+				" already ran; "+req.Version+" was never promoted into it")
+			return
+		}
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if ran.ArtifactSHA256 != latest.ArtifactSHA256 {
+			promoteRefusal(w, req.From+"'s newest report of "+req.Version+" is artifact "+latest.ArtifactSHA256[:12]+
+				", not the "+ran.ArtifactSHA256[:12]+" "+req.Project+"/"+req.To+" ran (promotion #"+
+				strconv.FormatInt(ran.ID, 10)+") — skipRestoreTests covers only the build that ran there")
+			return
+		}
+		gate = gateResult{
+			checked: []apitypes.LineCheckedResp{},
+			summary: "skipped: " + req.Project + "/" + req.To + " ran " + req.Version + " (this artifact) before, promotion #" +
+				strconv.FormatInt(ran.ID, 10) + " — no restore test was run (skipRestoreTests)",
+		}
+		gateRecord = db.RestoreGateSkipped
+	} else {
+		gate, err = s.restoreGate(r.Context(), cfg, req.Project, req.From, to, req.Version)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	if len(gate.refusals) > 0 {
 		promoteRefusal(w, strings.Join(gate.refusals, "\n"))
@@ -273,7 +302,7 @@ func (s *Server) handleAPIEnvironmentPromote(w http.ResponseWriter, r *http.Requ
 	id, err := s.users.RecordPromotion(r.Context(), db.Promotion{
 		Project: req.Project, FromEnv: req.From, ToEnv: req.To, Version: req.Version,
 		ArtifactSHA256: latest.ArtifactSHA256, PromotedBy: s.adminActor(r), Downgrade: downgrade,
-		BuildURL: latest.BuildURL, Lines: gate.lines,
+		BuildURL: latest.BuildURL, Lines: gate.lines, RestoreGate: gateRecord,
 	})
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, req.To+" now declares "+req.Version+
