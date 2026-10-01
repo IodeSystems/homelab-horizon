@@ -201,7 +201,7 @@ record dies with the box. A non-primary refuses the POSTs; a check on a peer
 fails closed. Before rehearsal: declare `redline/prod` `from: staging` (none
 today), mint `redline-deploy` admin token.
 
-◐ **Versions, lines and the restore test (operator, 2026-09-30) — APPROVED, building in a worktree** (build_url, kept backups, restore-test reports, the gate, `hz lines`).
+✅ **Versions, lines and the restore test (operator, 2026-09-30) — merged `7d919fa`, NOT deployed** (build_url, kept backups, restore-test reports, the gate, `hz lines`; migration 0016). ❓ **Operator:** rollbacks (`--allow-downgrade`) are restore-gated too — an emergency rollback may be blocked. **Roles:** redline-52 owns the redline repo + staging deploys; this session owns homelab-horizon + the office hz; announce deploys on `.160` to each other (an hz restart breaks a slot flip).
 Decided: redline's `MAJOR.MINOR.FIX.HOTFIX#BUILD` goes on the wire as semver
 `MAJOR.MINOR.FIX-HOTFIX.BUILD` (`1.9.1.0#7` → `1.9.1-0.7`), human form in
 `describe`; BUILD = the build machine's run number — no number = no test logs =
