@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 const shaC = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
@@ -45,59 +46,89 @@ func lines(r RungLines) []string {
 	return out
 }
 
-func promo(id int64, version string) Promotion {
-	return Promotion{ID: id, Project: "redline", FromEnv: "staging", ToEnv: "prod", Version: version}
+// ran is one prod deploy report, as DeployReportsOf returns it.
+func ran(id int64, version string) DeployReport {
+	return DeployReport{
+		ID: id, Project: "redline", Environment: "prod", App: "redline", Version: version,
+		Host: "ubuntu@192.0.2.161", ReportedAt: time.Date(2026, 10, 1, 17, 0, int(id), 0, time.UTC),
+	}
 }
 
 func TestDeriveSupportedLines(t *testing.T) {
-	// The first release: nothing declared, nothing promoted, nothing pinned.
-	if r := DeriveSupportedLines("redline", "prod", "", nil, nil); len(r.Supported) != 0 || len(r.Gaps) != 0 {
-		t.Fatalf("first release = %+v, want no line and no gap", r)
+	// Reported nothing, nothing pinned: no line, no gap — the gate requires none.
+	if r := DeriveSupportedLines("redline", "prod", nil, nil); len(r.Supported) != 0 || len(r.Gaps) != 0 {
+		t.Fatalf("no report = %+v, want no line and no gap", r)
+	}
+	if got := NoneRequired("redline", "prod"); got != "none required: redline/prod has reported running nothing yet" {
+		t.Fatalf("the sentence = %q", got)
 	}
 
-	// current + prior; the prior SKIPS same-line promotions (hotfixes).
-	into := []Promotion{promo(5, "1.0.1-0.3"), promo(4, "1.0.0-1.1"), promo(3, "1.0.0-0.1")}
-	r := DeriveSupportedLines("redline", "prod", "1.0.1-0.3", into, nil)
+	// The current line is the NEWEST report's, and its why names the report.
+	r := DeriveSupportedLines("redline", "prod", []DeployReport{ran(7, "1.0.0-0.4")}, nil)
+	if got := strings.Join(lines(r), " "); got != "1.0.0=current" {
+		t.Fatalf("one report = %q", got)
+	}
+	if d := r.Supported[0].Why[0].Detail; d != "redline/prod reported running 1.0.0-0.4 (report #7, 2026-10-01T17:00:07Z, ubuntu@192.0.2.161)" {
+		t.Fatalf("current names the report: %q", d)
+	}
+
+	// current + prior; the prior SKIPS same-line reports (hotfixes, redeploys).
+	reports := []DeployReport{ran(5, "1.0.1-0.3"), ran(4, "1.0.0-1.1"), ran(3, "1.0.0-0.1")}
+	r = DeriveSupportedLines("redline", "prod", reports, nil)
 	if got := strings.Join(lines(r), " "); got != "1.0.1=current 1.0.0=prior" {
 		t.Fatalf("current+prior = %q", got)
 	}
-	if !strings.Contains(r.Supported[1].Why[0].Detail, "promotion #4") {
-		t.Fatalf("the prior names the NEWEST promotion of its line: %+v", r.Supported[1])
+	if !strings.Contains(r.Supported[1].Why[0].Detail, "reported running 1.0.0-1.1 (report #4,") {
+		t.Fatalf("the prior names the NEWEST report of its line: %+v", r.Supported[1])
 	}
 	// Hotfixes on the current line do not produce a prior.
-	into = []Promotion{promo(7, "1.0.1-2.1"), promo(6, "1.0.1-1.1"), promo(5, "1.0.1-0.3"), promo(4, "1.0.0-1.1")}
-	if got := strings.Join(lines(DeriveSupportedLines("redline", "prod", "1.0.1-2.1", into, nil)), " "); got != "1.0.1=current 1.0.0=prior" {
-		t.Fatalf("same-line promotions skipped = %q", got)
+	reports = []DeployReport{ran(7, "1.0.1-2.1"), ran(6, "1.0.1-1.1"), ran(5, "1.0.1-0.3"), ran(4, "1.0.0-1.1")}
+	if got := strings.Join(lines(DeriveSupportedLines("redline", "prod", reports, nil)), " "); got != "1.0.1=current 1.0.0=prior" {
+		t.Fatalf("same-line reports skipped = %q", got)
+	}
+	// Same-line reports only: no prior.
+	reports = []DeployReport{ran(3, "1.0.0-1.1"), ran(2, "1.0.0-0.1"), ran(1, "1.0.0-0.1")}
+	if got := strings.Join(lines(DeriveSupportedLines("redline", "prod", reports, nil)), " "); got != "1.0.0=current" {
+		t.Fatalf("one line only = %q", got)
 	}
 	// Only ONE prior, however many lines came before.
-	into = []Promotion{promo(3, "1.2.0"), promo(2, "1.1.0"), promo(1, "1.0.0")}
-	if got := strings.Join(lines(DeriveSupportedLines("redline", "prod", "1.2.0", into, nil)), " "); got != "1.2.0=current 1.1.0=prior" {
+	reports = []DeployReport{ran(3, "1.2.0"), ran(2, "1.1.0"), ran(1, "1.0.0")}
+	if got := strings.Join(lines(DeriveSupportedLines("redline", "prod", reports, nil)), " "); got != "1.2.0=current 1.1.0=prior" {
 		t.Fatalf("one prior = %q", got)
+	}
+	// A rollback that REPORTED: the line rolled back to is current, the line
+	// it left is prior.
+	rollback := []DeployReport{ran(4, "1.0.0-0.1"), ran(3, "1.0.1-0.3"), ran(2, "1.0.0-0.1")}
+	if got := strings.Join(lines(DeriveSupportedLines("redline", "prod", rollback, nil)), " "); got != "1.0.0=current 1.0.1=prior" {
+		t.Fatalf("after a reported rollback = %q", got)
 	}
 
 	// A pin adds its line, with its reason; a pin of a supported line merges.
 	pins := []LinePin{{Line: "1.0.0", Reason: "customer X stays on 1.0 until March"}, {Line: "1.2.0", Reason: "belt"}}
-	r = DeriveSupportedLines("redline", "prod", "1.2.0", into, pins)
+	r = DeriveSupportedLines("redline", "prod", reports, pins)
 	if got := strings.Join(lines(r), " "); got != "1.2.0=current,pinned 1.1.0=prior 1.0.0=pinned" {
 		t.Fatalf("pinned = %q", got)
 	}
 	if r.Supported[2].Why[0].Detail != "customer X stays on 1.0 until March" {
 		t.Fatalf("the pin's reason is its why: %+v", r.Supported[2])
 	}
-
-	// Unknown is not empty: a declared version hz cannot read a line from, and
-	// a pin that is not a line, are gaps — never "no supported line".
-	r = DeriveSupportedLines("redline", "prod", "deb-1.2", nil, []LinePin{{Line: "1.9", Reason: "typo"}})
-	if len(r.Supported) != 0 || len(r.Gaps) != 2 ||
-		!strings.Contains(r.Gaps[0], `declares "deb-1.2"`) || !strings.Contains(r.Gaps[1], `pins "1.9"`) {
-		t.Fatalf("gaps = %+v", r)
+	// Pins alone, nothing reported: the pinned line, no current.
+	if got := strings.Join(lines(DeriveSupportedLines("redline", "prod", nil, pins[:1])), " "); got != "1.0.0=pinned" {
+		t.Fatalf("pins only = %q", got)
 	}
 
-	// Declared nothing but promoted before (version cleared by hand): the last
-	// promoted line is still prior — it is what ran there.
-	r = DeriveSupportedLines("redline", "prod", "", []Promotion{promo(1, "1.0.0-0.1")}, nil)
-	if got := strings.Join(lines(r), " "); got != "1.0.0=prior" {
-		t.Fatalf("cleared declaration = %q", got)
+	// Unknown is not empty: a report hz cannot read a line from, and a pin
+	// that is not a line, are gaps — never "no supported line".
+	r = DeriveSupportedLines("redline", "prod", []DeployReport{ran(9, "deb-1.2")}, []LinePin{{Line: "1.9", Reason: "typo"}})
+	if len(r.Supported) != 0 || len(r.Gaps) != 2 ||
+		!strings.Contains(r.Gaps[0], `report #9 of redline/prod records "deb-1.2"`) || !strings.Contains(r.Gaps[1], `pins "1.9"`) {
+		t.Fatalf("gaps = %+v", r)
+	}
+	// An unreadable NEWEST report leaves the current line unknown (a gap); the
+	// newest readable line before it is still prior — it is what ran there.
+	r = DeriveSupportedLines("redline", "prod", []DeployReport{ran(9, "deb-1.2"), ran(8, "1.0.0-0.1")}, nil)
+	if got := strings.Join(lines(r), " "); got != "1.0.0=prior" || len(r.Gaps) != 1 {
+		t.Fatalf("unreadable newest = %q %+v", got, r.Gaps)
 	}
 }
 
@@ -231,7 +262,7 @@ func TestPromotionPinsBuildURLAndRecordsItsLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	into, err := d.PromotionsInto(ctx, "redline", "prod")
+	into, err := d.Promotions(ctx, "redline", 0)
 	if err != nil || len(into) != 2 || into[0].ID != second || into[1].ID != first {
 		t.Fatalf("into = %+v, %v", into, err)
 	}
@@ -268,7 +299,7 @@ func TestPromotionBeforeTheGateReadsPredates(t *testing.T) {
 		VALUES ('redline', 'staging', 'prod', '1.0.0', ?, 'user:carl')`, shaA); err != nil {
 		t.Fatal(err)
 	}
-	into, err := d.PromotionsInto(ctx, "redline", "prod")
+	into, err := d.Promotions(ctx, "redline", 0)
 	if err != nil || len(into) != 1 || into[0].RestoreGate != RestoreGatePredates || into[0].BuildURL != "" {
 		t.Fatalf("pre-gate row = %+v, %v", into, err)
 	}

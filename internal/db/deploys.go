@@ -203,6 +203,29 @@ func (d *DB) LatestDeployReport(ctx context.Context, project, environment string
 	return r, err
 }
 
+// DeployReportsOf is every report of one rung, newest first by id (never by
+// reported_at) — the input DeriveSupportedLines reads the rung's lines from.
+// A rung that never reported answers an empty list: "reported running nothing".
+func (d *DB) DeployReportsOf(ctx context.Context, project, environment string) ([]DeployReport, error) {
+	rows, err := d.QueryContext(ctx, `
+		SELECT `+deployReportCols+` FROM deploy_reports
+		WHERE project = ? AND environment = ?
+		ORDER BY id DESC`, project, environment)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []DeployReport
+	for rows.Next() {
+		r, err := scanDeployReport(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *r)
+	}
+	return out, rows.Err()
+}
+
 // LatestDeployReports is the newest report of every rung that has one, sorted
 // by project then environment. A rung that never reported is absent, which the
 // caller renders as "nothing reported", never as a blank.
@@ -342,28 +365,6 @@ func (d *DB) Promotions(ctx context.Context, project string, limit int) ([]Promo
 		SELECT `+promotionCols+` FROM promotions
 		WHERE (? = '' OR project = ?)
 		ORDER BY id DESC LIMIT ?`, project, project, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	var out []Promotion
-	for rows.Next() {
-		p, err := scanPromotion(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *p)
-	}
-	return out, rows.Err()
-}
-
-// PromotionsInto is every promotion into one rung, newest first — the input
-// DeriveSupportedLines reads the prior line from.
-func (d *DB) PromotionsInto(ctx context.Context, project, toEnv string) ([]Promotion, error) {
-	rows, err := d.QueryContext(ctx, `
-		SELECT `+promotionCols+` FROM promotions
-		WHERE project = ? AND to_env = ?
-		ORDER BY id DESC`, project, toEnv)
 	if err != nil {
 		return nil, err
 	}

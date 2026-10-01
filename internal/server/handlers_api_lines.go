@@ -24,9 +24,11 @@ import (
 //	POST /api/v1/projects/lines/unpin
 //
 // SUPPORTED LINES ARE DERIVED on every read and every promote
-// (db.DeriveSupportedLines), never stored: the declared version's line, the
-// most recent different line promoted into the rung, and the project's pins.
-// A stored list would be a second answer free to disagree (CLAUDE.md #8).
+// (db.DeriveSupportedLines), never stored, from what the rung REPORTED RUNNING
+// (its deploy reports): the newest report's line, the newest different line it
+// reported before that, and the project's pins. Not the declared version and
+// not the promotions into it — a promote is what the rung SHOULD run. A stored
+// list would be a second answer free to disagree (CLAUDE.md #8).
 //
 // The restore-test gate (restoreGate) is evaluated by the SAME function the
 // lines read uses (lineEvidence), so the UI's "missing" and the promote's
@@ -37,9 +39,10 @@ import (
 // icebox's caveat on H1–H3 applies unchanged). Pins are declarations and live
 // in config.json.
 
-// rungLines derives one rung's supported lines from config.json and hz.db.
+// rungLines derives one rung's supported lines from its deploy reports
+// (hz.db) and the project's pins (config.json).
 func (s *Server) rungLines(ctx context.Context, cfg *config.Config, project string, env config.Environment) (db.RungLines, error) {
-	into, err := s.users.PromotionsInto(ctx, project, env.Name)
+	reports, err := s.users.DeployReportsOf(ctx, project, env.Name)
 	if err != nil {
 		return db.RungLines{}, err
 	}
@@ -47,7 +50,7 @@ func (s *Server) rungLines(ctx context.Context, cfg *config.Config, project stri
 	for _, p := range cfg.ProjectPins(project) {
 		pins = append(pins, db.LinePin{Line: p.Line, Reason: p.Reason})
 	}
-	return db.DeriveSupportedLines(project, env.Name, env.Version, into, pins), nil
+	return db.DeriveSupportedLines(project, env.Name, reports, pins), nil
 }
 
 // The statuses a line's restore evidence can have (apitypes.SupportedLineResp).
@@ -143,11 +146,12 @@ type gateResult struct {
 	summary  string // PromoteResp.RestoreTests — always set on success
 }
 
-// restoreGate checks every supported line of the target AS IT IS NOW — before
-// the promotion moves its declared version — against version's restore tests
-// on `from`. Computing it after the write would let a release qualify itself:
-// its own line would be "current" and the line it replaces would become a
-// "prior" the test was never asked of.
+// restoreGate checks every supported line of the target AS IT IS NOW — what
+// the target has reported running, before this promotion — against version's
+// restore tests on `from`. The promotion itself adds no line: a line appears
+// only when the target's deploy reports running it, so a release cannot
+// qualify itself, and a promote into a rung with no box demands nothing of the
+// next one.
 func (s *Server) restoreGate(ctx context.Context, cfg *config.Config, project, from string, to config.Environment, version string) (gateResult, error) {
 	var g gateResult
 	rl, err := s.rungLines(ctx, cfg, project, to)
@@ -158,7 +162,7 @@ func (s *Server) restoreGate(ctx context.Context, cfg *config.Config, project, f
 		g.refusals = append(g.refusals, "hz cannot say which lines "+project+"/"+to.Name+" supports: "+gap)
 	}
 	if len(rl.Supported) == 0 && len(rl.Gaps) == 0 {
-		g.summary = "none required: " + project + "/" + to.Name + " has no supported line yet"
+		g.summary = db.NoneRequired(project, to.Name)
 		g.checked = []apitypes.LineCheckedResp{}
 		return g, nil
 	}
@@ -356,7 +360,7 @@ func (s *Server) projectLines(ctx context.Context, cfg *config.Config, project s
 		}
 		gaps = append(gaps, rl.Gaps...)
 		if len(rl.Supported) == 0 && len(rl.Gaps) == 0 {
-			rung.NoneRequired = "none required: " + project + "/" + env.Name + " has no supported line yet"
+			rung.NoneRequired = db.NoneRequired(project, env.Name)
 		}
 		// The version the rung's NEXT promotion would carry: its source's newest report.
 		version := ""
