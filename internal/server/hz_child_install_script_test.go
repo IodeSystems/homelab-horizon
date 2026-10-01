@@ -34,6 +34,7 @@ func TestChildScriptRendersForAGrant(t *testing.T) {
 	for _, want := range []string{
 		`BASE="https://portal.example.com"`, `GRANT="hzc_abab`, `MACHINE="loadtest-hz"`, `PROJECT="redline"`,
 		`RUNG="loadtest"`, `PLATFORMS="linux-amd64 linux-arm64"`, `IFACE="hz-upstream"`, `TOKEN_FILE="/etc/homelab-horizon/upstream.token"`,
+		`ADMIN_USER="hz-local-admin"`, `ADMIN_TOKEN_FILE="/etc/homelab-horizon/admin.token"`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("script lacks %s", want)
@@ -72,7 +73,7 @@ func TestChildScriptShellcheck(t *testing.T) {
 // secret file only cat'ed inside a { ... } > file group.
 func secretLeaks(script string) []string {
 	var bad []string
-	secretCat := regexp.MustCompile(`cat "\$(TMP/(wg\.key|instance\.token|svc\.token)|SVC_TOKEN_FILE|TOKEN_FILE)"`)
+	secretCat := regexp.MustCompile(`cat "\$(TMP/(wg\.key|instance\.token|svc\.token)|SVC_TOKEN_FILE|ADMIN_TOKEN_FILE|TOKEN_FILE)"`)
 	inGroup := false
 	for i, line := range strings.Split(script, "\n") {
 		t := strings.TrimSpace(line)
@@ -127,6 +128,7 @@ func TestChildScriptLeaksNoSecret(t *testing.T) {
 		`echo "token: $(cat "$TMP/instance.token")"`,
 		`TOKEN=$(jq -r '.instance_token' "$TMP/enrol.json")`,
 		`cat "$TMP/svc.token"`,
+		`cat "$ADMIN_TOKEN_FILE"`,
 		`{ printf 'x'; cat "$TMP/wg.key"; }`,
 	} {
 		if len(secretLeaks(script+"\n"+leak+"\n")) == 0 {
@@ -341,6 +343,46 @@ func TestEnrolSeedLoadsAsTheChildsConfig(t *testing.T) {
 	child.child = nested.New(*childCfg.Upstream, childDir)
 	child.child.PollOnce(context.Background())
 
+	// Step 8 on the seeded box: the script's own block runs, and the console
+	// command it issues is performed by the function `user create` calls,
+	// against the child's identity store. Afterwards the child's first-account
+	// door is CLOSED and the token authenticates on its sync surface.
+	ctx := context.Background()
+	childStore, err := db.Open(filepath.Join(childDir, "hz.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = childStore.Close() })
+	child.users = childStore
+	if !child.bootstrapAllowed(ctx) {
+		t.Fatal("instrument: the fresh child's first-account door is already closed")
+	}
+	step8 := newAdminStep(t)
+	step8.cfg = cfgPath
+	for _, c := range creates(step8.run(t)) {
+		f := strings.Fields(c) // user create <name> --admin --token-file <file> --config <cfg>
+		if len(f) != 8 || f[3] != "--admin" || f[4] != "--token-file" || f[6] != "--config" || f[7] != cfgPath {
+			t.Fatalf("the script's user create: %q", c)
+		}
+		if _, err := CreateConsoleAdmin(ctx, childStore, f[2], f[5]); err != nil {
+			t.Fatalf("user create %s: %v", f[2], err)
+		}
+	}
+	if child.bootstrapAllowed(ctx) {
+		t.Fatal("after the bootstrap the child's first-account door is still OPEN: anyone reaching its API can create the first admin")
+	}
+	adminTok, err := os.ReadFile(step8.tokenFile)
+	if err != nil {
+		t.Fatalf("the admin token file: %v", err)
+	}
+	sr := httptest.NewRequest(http.MethodGet, "/api/v1/services/sync/status", nil)
+	sr.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(adminTok)))
+	sw := httptest.NewRecorder()
+	child.handler().ServeHTTP(sw, sr)
+	if sw.Code != http.StatusOK {
+		t.Fatalf("the local admin's token on the child's sync status: %d %s", sw.Code, sw.Body.String())
+	}
+
 	q := url.Values{"project": {"redline"}, "environment": {"loadtest"}}
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/deploys/desired?"+q.Encode(), nil)
 	r.Header.Set("Authorization", "Bearer "+svcToken)
@@ -400,5 +442,95 @@ func TestChildScriptRefusesWhenTheParentAddressIsLocal(t *testing.T) {
 		if got := strings.TrimSpace(string(out)); err != nil || got != tc.want {
 			t.Errorf("%s: got %q (%v), want %s", name, got, err, tc.want)
 		}
+	}
+}
+
+// adminStepBlock is the script's step 8, as it runs on the box.
+func adminStepBlock(t *testing.T) string {
+	t.Helper()
+	s := renderedTestScript()
+	start := strings.Index(s, `step "creating the local admin account" 8`)
+	end := strings.Index(s, "# --------------------------------------------------------------- 9. service")
+	if start < 0 || end < start {
+		t.Fatal("instrument: step 8 is not where this test looks")
+	}
+	if strings.Index(s, `install -m 0755 "$TMP/hz.bin" "$BIN.new"`) > start {
+		t.Fatal("step 8 runs before the binary is installed")
+	}
+	return s[start:end]
+}
+
+// adminStep runs step 8 in bash with BIN faked: the fake records every
+// invocation, and `user list` prints the accounts file. It returns the
+// invocations this run made, one per line.
+type adminStep struct {
+	dir, accounts, log, tokenFile, cfg string
+}
+
+func newAdminStep(t *testing.T) *adminStep {
+	t.Helper()
+	dir := t.TempDir()
+	a := &adminStep{dir: dir, accounts: filepath.Join(dir, "accounts"), log: filepath.Join(dir, "bin.log"),
+		tokenFile: filepath.Join(dir, "admin.token"), cfg: filepath.Join(dir, "config.json")}
+	fake := "#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$FAKE_LOG\"\n" +
+		"if [ \"$1 $2\" = \"user list\" ]; then cat \"$FAKE_ACCOUNTS\" 2>/dev/null || true; fi\n"
+	if err := os.WriteFile(filepath.Join(dir, "hz"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+func (a *adminStep) run(t *testing.T) []string {
+	t.Helper()
+	_ = os.Remove(a.log)
+	prog := `set -euo pipefail; say() { printf '%s\n' "$*"; }; die() { echo "DIE: $*"; exit 1; }; step() { :; }; ` +
+		`TMP=$(mktemp -d); BIN="$FAKE_BIN"; HZ_CFG="$FAKE_CFG"; ADMIN_USER=hz-local-admin; ADMIN_TOKEN_FILE="$FAKE_TOKEN_FILE"; ` +
+		adminStepBlock(t)
+	cmd := exec.Command("bash", "-c", prog)
+	cmd.Env = append(os.Environ(), "FAKE_BIN="+filepath.Join(a.dir, "hz"), "FAKE_LOG="+a.log, "FAKE_ACCOUNTS="+a.accounts,
+		"FAKE_CFG="+a.cfg, "FAKE_TOKEN_FILE="+a.tokenFile)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("step 8: %v\n%s", err, out)
+	}
+	raw, _ := os.ReadFile(a.log)
+	return strings.Split(strings.TrimSpace(string(raw)), "\n")
+}
+
+// creates reports the `user create` invocations among calls.
+func creates(calls []string) []string {
+	var out []string
+	for _, c := range calls {
+		if strings.HasPrefix(c, "user create ") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// Step 8 creates hz-local-admin, with its token in the admin token file, only
+// when the box has no account — a re-run keeps the one it made.
+func TestChildScriptCreatesTheLocalAdminOnce(t *testing.T) {
+	a := newAdminStep(t)
+	first := creates(a.run(t))
+	want := "user create hz-local-admin --admin --token-file " + a.tokenFile + " --config " + a.cfg
+	if len(first) != 1 || first[0] != want {
+		t.Fatalf("first run on a box with no account: %q, want [%q]", first, want)
+	}
+	if err := os.WriteFile(a.accounts, []byte("hz-local-admin\tadmin\tenabled\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls := a.run(t)
+	if len(calls) == 0 || !strings.HasPrefix(calls[0], "user list") {
+		t.Fatalf("instrument: the re-run did not ask for the accounts: %q", calls)
+	}
+	if again := creates(calls); len(again) != 0 {
+		t.Fatalf("a re-run with an existing account created another: %q", again)
+	}
+
+	// The step precedes the service start, so a fresh box never serves with
+	// the first-account door open.
+	s := renderedTestScript()
+	if strings.Index(s, `step "creating the local admin account" 8`) > strings.Index(s, `systemctl restart homelab-horizon`) {
+		t.Fatal("the admin is created after hz starts")
 	}
 }
