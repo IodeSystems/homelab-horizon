@@ -61,6 +61,30 @@ func TestToLibdnsRecordMXAndTXT(t *testing.T) {
 	}
 }
 
+// A delegation's NS goes out typed and fully qualified, and reads back without
+// the dot — or hz's own publish reads as drift on the next sync.
+func TestNSRoundTripsThroughTheAdapter(t *testing.T) {
+	adapter := NewLibdnsAdapter("fake", "iodesystems.com", &fakeLibdns{})
+	ns, err := adapter.toLibdnsRecord(Record{Name: "loadtest.redline.iodesystems.com", Type: "NS", Value: "ns-1.awsdns-01.org", TTL: 300})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rr := ns.RR(); rr.Type != "NS" || rr.Name != "loadtest.redline" || rr.Data != "ns-1.awsdns-01.org." {
+		t.Errorf("NS rr = %+v", rr)
+	}
+
+	fake := &fakeLibdns{records: []libdns.Record{
+		libdns.NS{Name: "loadtest.redline", Target: "ns-1.awsdns-01.org.", TTL: time.Minute},
+	}}
+	recs, err := NewLibdnsAdapter("fake", "iodesystems.com", fake).ListRecords("Z1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 || recs[0].Name != "loadtest.redline.iodesystems.com" || recs[0].Value != "ns-1.awsdns-01.org" {
+		t.Fatalf("live NS = %+v", recs)
+	}
+}
+
 // One desired value over two live ones must write. SyncRecord compared only
 // the first live value it found, so {a, b} -> {a} was a no-op that left b up.
 func TestSyncRecordSetShrinksToOneValue(t *testing.T) {

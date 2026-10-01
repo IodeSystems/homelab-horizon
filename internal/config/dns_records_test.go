@@ -79,12 +79,12 @@ func TestValidateRecords(t *testing.T) {
 }
 
 func TestIsDeclarableRecordType(t *testing.T) {
-	for _, ok := range []string{"a", "AAAA", "cname", "TXT", "mx"} {
+	for _, ok := range []string{"a", "AAAA", "cname", "TXT", "mx", "ns"} {
 		if !IsDeclarableRecordType(ok) {
 			t.Errorf("%s refused", ok)
 		}
 	}
-	for _, bad := range []string{"NS", "SOA", "SRV", "CAA", ""} {
+	for _, bad := range []string{"SOA", "SRV", "CAA", ""} {
 		if IsDeclarableRecordType(bad) {
 			t.Errorf("%s accepted", bad)
 		}
@@ -95,6 +95,7 @@ func TestCanonicalRecordValue(t *testing.T) {
 	cases := [][3]string{
 		{"CNAME", "a.dkim.amazonses.com.", "a.dkim.amazonses.com"},
 		{"cname", " a.example.net ", "a.example.net"},
+		{"NS", "ns-1.awsdns-01.org.", "ns-1.awsdns-01.org"},
 		{"MX", "10  mail.example.net.", "10 mail.example.net"},
 		{"TXT", "ends with a dot.", "ends with a dot."},
 		{"A", "192.0.2.1", "192.0.2.1"},

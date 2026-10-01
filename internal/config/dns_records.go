@@ -8,10 +8,14 @@ import (
 )
 
 // DeclarableRecordTypes are the types an operator may declare on a zone from
-// the CLI or API. Anything else (NS, SOA, SRV, CAA, ...) is refused: NS and SOA
-// are the provider's delegation, and the rest have no value parser here, so hz
-// could not tell a correct value from a typo before it reached the provider.
-var DeclarableRecordTypes = []string{"A", "AAAA", "CNAME", "TXT", "MX"}
+// the CLI or API. Anything else (SOA, SRV, CAA, ...) is refused: SOA is the
+// provider's, and the rest have no value parser here, so hz could not tell a
+// correct value from a typo before it reached the provider.
+//
+// NS is declarable BELOW the apex only: a delegation of a subdomain to another
+// owner (dns_delegation.go). The apex NS set is the provider's own delegation of
+// the zone, and ValidateRecords refuses it.
+var DeclarableRecordTypes = []string{"A", "AAAA", "CNAME", "TXT", "MX", "NS"}
 
 // IsDeclarableRecordType reports whether t (any case) is in DeclarableRecordTypes.
 func IsDeclarableRecordType(t string) bool {
@@ -38,7 +42,7 @@ func IsDeclarableRecordType(t string) bool {
 func CanonicalRecordValue(recType, value string) string {
 	value = strings.TrimSpace(value)
 	switch strings.ToUpper(strings.TrimSpace(recType)) {
-	case "CNAME":
+	case "CNAME", "NS":
 		return strings.TrimSuffix(value, ".")
 	case "MX":
 		fields := strings.Fields(value)
@@ -70,6 +74,10 @@ func validateRecordValue(recType, value string) error {
 	case "CNAME":
 		if !looksLikeHostname(value) {
 			return fmt.Errorf("target %q of a CNAME is not a hostname", value)
+		}
+	case "NS":
+		if !looksLikeHostname(value) {
+			return fmt.Errorf("nameserver %q of an NS record is not a hostname", value)
 		}
 	case "MX":
 		fields := strings.Fields(value)
@@ -128,7 +136,9 @@ func (z *Zone) ContainsName(fqdn string) bool {
 //   - a CNAME has no sibling of another type at the same name (RFC 1034 §3.6.2;
 //     Route53 refuses the write anyway, but only after hz has saved the config);
 //   - there is no CNAME at the apex, which would shadow the zone's NS and SOA;
-//   - the same value is not declared twice for one (name, type).
+//   - the same value is not declared twice for one (name, type);
+//   - a delegation (NS) is below the apex, holds no other type, and has
+//     nothing declared beneath it (ValidateDelegationRecords).
 func (z *Zone) ValidateRecords() error {
 	type key struct{ name, typ string }
 	values := map[key][]string{}
@@ -165,5 +175,5 @@ func (z *Zone) ValidateRecords() error {
 			return fmt.Errorf("the CNAME %s cannot coexist with another record type at the same name", k.name)
 		}
 	}
-	return nil
+	return z.ValidateDelegationRecords()
 }
