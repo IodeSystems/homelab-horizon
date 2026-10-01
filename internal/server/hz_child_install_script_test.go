@@ -324,8 +324,9 @@ func TestEnrolSeedLoadsAsTheChildsConfig(t *testing.T) {
 		childCfg.Services[0].Project != "redline" || childCfg.Services[0].Environment != "loadtest" {
 		t.Fatalf("child service: %+v", childCfg.Services)
 	}
-	if childCfg.ListenAddr != ":"+childListenPort {
-		t.Fatalf("the seed changed the child's listen address: %s", childCfg.ListenAddr)
+	// Loopback, at the port the parent records in MachineHZ.URL.
+	if childCfg.ListenAddr != "127.0.0.1:"+childListenPort {
+		t.Fatalf("the seed's listen address: %s, want 127.0.0.1:%s", childCfg.ListenAddr, childListenPort)
 	}
 
 	// The child, as the script starts it — with the token file the script
