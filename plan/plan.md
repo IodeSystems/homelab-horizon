@@ -230,6 +230,14 @@ synced; admin token `redline-deploy` minted for `carl@iodesystems.com`, value at
 backups are fine as fixtures (never stored card data); PCI helpers/conformance
 still wanted.
 
+◐ **Supported lines derive from what the rung REPORTED RUNNING** (operator,
+2026-10-01), not from promotions/declared version — a promote says what prod
+SHOULD run; a rehearsal promote with no prod box must not create a line to
+protect. Building in a worktree. Then: redline's `bin/deploy prod` reports after
+its flip; the full rehearsal promote of `1.0.0-0.4` runs (no exemption used).
+⚠ hz has no line for legacy Kotlin redline: the legacy-backup restore/migrate
+test on the pre-migration box is a REQUIRED MANUAL step hz does not enforce.
+
 ⚠ Single authority still applies (Tier 1): the report and the promote use an
 unscoped API token — the gate is evidence-based but gates one authority against
 itself.
