@@ -206,6 +206,138 @@ export interface AgentIPTablesRule {
 }
 
 //////////
+// source: artifacts.go
+
+/**
+ * ArtifactUploadResp answers PUT /api/v1/artifacts/{sha256}?project=P.
+ * Existing is true when hz already held these bytes (an idempotent re-upload:
+ * the body was not re-read).
+ */
+export interface ArtifactUploadResp {
+  stored: boolean;
+  sha256: string;
+  size: number /* int64 */;
+  existing: boolean;
+}
+/**
+ * ApplyReq is POST /api/v1/environments/apply. Version must be the version of
+ * the NEWEST promotion into the rung: an apply never picks a build.
+ */
+export interface ApplyReq {
+  project: string;
+  environment: string;
+  version: string;
+}
+/**
+ * ApplyResp answers an apply. Existing is true when the newest apply into the
+ * rung already applied this promotion — nothing new was recorded.
+ */
+export interface ApplyResp {
+  applied: boolean;
+  id: number /* int64 */;
+  version: string;
+  artifact_sha256: string;
+  promotion_id: number /* int64 */;
+  existing: boolean;
+}
+/**
+ * HoldReq is POST /api/v1/environments/hold (Reason required) and
+ * /environments/unhold (Reason ignored).
+ */
+export interface HoldReq {
+  project: string;
+  environment: string;
+  reason?: string;
+}
+/**
+ * HoldResp is a rung's hold: who, why, when.
+ */
+export interface HoldResp {
+  by: string;
+  reason: string;
+  at: string;
+}
+/**
+ * HoldStateResp answers hold and unhold: the rung's hold after the call, null
+ * when not held.
+ */
+export interface HoldStateResp {
+  project: string;
+  environment: string;
+  hold?: HoldResp;
+}
+/**
+ * DesiredResp is GET /api/v1/deploys/desired?project=&environment= — what the
+ * rung should run, from the NEWEST APPLY (never the newest promotion). Hold is
+ * null when the rung is not held; a held rung still names its applied build,
+ * and whoever acts on it must not flip while Hold is set.
+ * Nothing applied is a 404 {"error":"nothing applied to <p>/<env>"}, never this
+ * body with empty fields. The ETag is a hash of (apply_id, hold state).
+ */
+export interface DesiredResp {
+  version: string;
+  artifact_sha256: string;
+  promotion_id: number /* int64 */;
+  apply_id: number /* int64 */;
+  applied_by: string;
+  applied_at: string;
+  build_url: string;
+  hold?: HoldResp;
+}
+/**
+ * RungDeployStateResp is one rung's apply and hold, for the Overview
+ * (GET /api/v1/deploys/applied). Applied is null when nothing was applied —
+ * the UI says "nothing applied", never a blank.
+ */
+export interface RungDeployStateResp {
+  project: string;
+  environment: string;
+  applied?: AppliedResp;
+  hold?: HoldResp;
+  artifact?: ArtifactResp;
+}
+/**
+ * AppliedResp is one apply.
+ */
+export interface AppliedResp {
+  id: number /* int64 */;
+  version: string;
+  artifact_sha256: string;
+  promotion_id: number /* int64 */;
+  applied_by: string;
+  applied_at: string;
+  age_seconds: number /* int64 */;
+}
+/**
+ * ArtifactResp is one artifact record. DeletedAt is set when retention removed
+ * the file ("deleted <when>"); the record itself is kept.
+ */
+export interface ArtifactResp {
+  sha256: string;
+  project: string;
+  size: number /* int64 */;
+  uploaded_at: string;
+  uploaded_by: string;
+  deleted_at?: string;
+  deleted_why?: string;
+}
+/**
+ * InstanceTokenReq is POST /api/v1/machines/hz-token: mint the token a nested
+ * hz authenticates to this one with.
+ */
+export interface InstanceTokenReq {
+  machine: string;
+}
+/**
+ * InstanceTokenResp carries the token ONCE. hz stores only its sha256; a
+ * re-mint replaces it, and the old token stops working.
+ */
+export interface InstanceTokenResp {
+  machine: string;
+  token: string;
+}
+
+//////////
 // source: cm_recovery.go
 
 /**
@@ -325,13 +457,23 @@ export interface DeployReportReq {
    * control characters.
    */
   build_url?: string;
+  /**
+   * ForwardedFor is set by a nested hz forwarding a report it received
+   * locally: who reported it THERE ("service:redline-prod"). Accepted only
+   * from an instance token, which is recorded as
+   * "instance:<machine> (for <forwarded_for>)".
+   */
+  forwarded_for?: string;
 }
 /**
- * DeployReportResultResp answers a recorded report.
+ * DeployReportResultResp answers a recorded report. Upstream is set only by a
+ * nested hz answering for an upstream rung: "queued" — the report is recorded
+ * here and queued for the parent, and the answer never waits on the parent.
  */
 export interface DeployReportResultResp {
   recorded: boolean;
   id: number /* int64 */;
+  upstream?: string;
 }
 /**
  * DeployCheckResp is GET /api/v1/deploys/check. Reason is set on every refusal.
@@ -770,6 +912,26 @@ export interface InstanceResp {
    * "never synced" (that is Sync present with LastSuccessAt 0).
    */
   sync?: InstanceSyncResp;
+  /**
+   * Nested is present on a nested row only: whether its instance token is
+   * minted, and when it last asked this hz for a rung's desired state — an
+   * observation recorded on the pull, never a dial (invariant 1).
+   */
+  nested?: InstanceNestedResp;
+}
+/**
+ * InstanceNestedResp is what this hz knows of a nested hz from its pulls.
+ * LastPullAt 0 is "never pulled", which is not "pulled long ago".
+ */
+export interface InstanceNestedResp {
+  hasToken: boolean;
+  lastPullAt: number /* int64 */;
+  lastPullRung: string;
+  /**
+   * PullsUnknown is set when hz could not read its pull record (hz.db
+   * unavailable); LastPullAt is then not an answer.
+   */
+  pullsUnknown?: string;
 }
 /**
  * InstanceSyncResp is a replica's last pull from the config primary.
@@ -1423,6 +1585,11 @@ export interface MachineHZResp {
    * keeps the existing one.
    */
   vpnClient?: string;
+  /**
+   * HasToken is response-only: an instance token has been minted for this
+   * nested hz (POST /api/v1/machines/hz-token). The token is never sent back.
+   */
+  hasToken?: boolean;
 }
 /**
  * MachineAddReq declares a machine. Segments are names; there is no Segment

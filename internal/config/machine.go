@@ -108,6 +108,16 @@ type MachineHZ struct {
 	// (TestNestedMarkersChangeNoRenderedArtifact); the client's PROFILE is what
 	// changes rules, and it is present with or without the link.
 	VPNClient string `json:"vpn_client,omitempty"`
+
+	// TokenSHA256 is the sha256 (hex) of the INSTANCE TOKEN this hz minted for
+	// that nested hz (POST /api/v1/machines/hz-token, plan/plan.md N4a). The
+	// token is shown once and never stored; "" is "none minted". It
+	// authenticates the child as `instance:<machine>` for exactly three calls
+	// — desired, artifact download and the forwarded report — and only for
+	// rungs whose Upstream names this machine. A digest, not a key: it rides
+	// peer-sync like the rest of the record and confers nothing on a reader.
+	// No client edit sets it — an edit of the marker keeps it (SetMachine).
+	TokenSHA256 string `json:"token_sha256,omitempty"`
 }
 
 // CheckHZURL refuses a nested-hz URL that is not http(s) with a host. An
@@ -136,7 +146,7 @@ func normalizeHZ(h *MachineHZ) *MachineHZ {
 	if h == nil {
 		return nil
 	}
-	return &MachineHZ{URL: strings.TrimSpace(h.URL), VPNClient: strings.TrimSpace(h.VPNClient)}
+	return &MachineHZ{URL: strings.TrimSpace(h.URL), VPNClient: strings.TrimSpace(h.VPNClient), TokenSHA256: strings.TrimSpace(h.TokenSHA256)}
 }
 
 // MultiHomed reports a machine in more than one segment — the row that has to
@@ -357,6 +367,11 @@ func (c *Config) SetMachine(name string, patch MachinePatch) (Machine, error) {
 		hz := normalizeHZ(patch.HZ)
 		if hz.VPNClient == "" && m.HZ != nil {
 			hz.VPNClient = m.HZ.VPNClient
+		}
+		// The instance token is minted, never edited: an edit of the URL
+		// keeps it, or the child would lose its credential to a typo fix.
+		if m.HZ != nil {
+			hz.TokenSHA256 = m.HZ.TokenSHA256
 		}
 		m.HZ = hz
 	case patch.ClearHZ:

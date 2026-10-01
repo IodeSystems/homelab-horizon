@@ -51,6 +51,21 @@ type InstanceResp struct {
 	// replica; absent everywhere else, which is "not a replica here", not
 	// "never synced" (that is Sync present with LastSuccessAt 0).
 	Sync *InstanceSyncResp `json:"sync,omitempty"`
+	// Nested is present on a nested row only: whether its instance token is
+	// minted, and when it last asked this hz for a rung's desired state — an
+	// observation recorded on the pull, never a dial (invariant 1).
+	Nested *InstanceNestedResp `json:"nested,omitempty"`
+}
+
+// InstanceNestedResp is what this hz knows of a nested hz from its pulls.
+// LastPullAt 0 is "never pulled", which is not "pulled long ago".
+type InstanceNestedResp struct {
+	HasToken     bool   `json:"hasToken"`
+	LastPullAt   int64  `json:"lastPullAt"`
+	LastPullRung string `json:"lastPullRung"`
+	// PullsUnknown is set when hz could not read its pull record (hz.db
+	// unavailable); LastPullAt is then not an answer.
+	PullsUnknown string `json:"pullsUnknown,omitempty"`
 }
 
 // InstanceSyncResp is a replica's last pull from the config primary.
