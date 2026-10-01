@@ -94,6 +94,8 @@ import {
   reportFor,
   type ReportSource,
 } from "../components/model/DeployBits";
+import { useInstances } from "../api/instanceHooks";
+import { AddNestedInstanceDialog, NestedInstancesSection } from "../components/instances/NestedBootstrap";
 
 /** Posture colours the ladder, never the name. The name is plain text. */
 function postureTone(posture: string) {
@@ -292,6 +294,8 @@ function ProjectOverview() {
   const [promoting, setPromoting] = useState<EnvironmentResp | null>(null);
   const [applying, setApplying] = useState<{ env: EnvironmentResp; offer: PromotionResp } | null>(null);
   const [holding, setHolding] = useState<EnvironmentResp | null>(null);
+  const [addingNested, setAddingNested] = useState(false);
+  const instancesQ = useInstances();
   const deploys = useLatestDeploys();
   const promotions = usePromotions();
   const appliedQ = useAppliedState();
@@ -431,6 +435,13 @@ function ProjectOverview() {
         </TableContainer>
       )}
 
+      <NestedInstancesSection
+        project={route.name}
+        instances={{ rows: instancesQ.data, error: instancesQ.error?.message, loading: instancesQ.isLoading }}
+        environments={environments.data ?? []}
+        onAdd={() => setAddingNested(true)}
+      />
+
       {rungs.length > 0 ? (
         <>
           <TabHeader title="Recent promotions" />
@@ -495,6 +506,12 @@ function ProjectOverview() {
         project={route.name}
         siblings={ownRungs}
         onClose={() => setAdding(false)}
+      />
+      <AddNestedInstanceDialog
+        open={addingNested}
+        project={route.name}
+        rungs={ownRungs.filter((e) => !e.upstream)}
+        onClose={() => setAddingNested(false)}
       />
       <EditEnvironmentDialog env={editing} siblings={editingSiblings} onClose={() => setEditing(null)} />
       <RemoveEnvironmentDialog target={removing} onClose={() => setRemoving(null)} />

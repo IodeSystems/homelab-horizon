@@ -50,6 +50,7 @@ import { LocationCell, PROJECT_COLUMN_LABEL } from "../components/model/ProjectB
 import { buildProjectIndex } from "../components/model/projectRoutes.ts";
 import { isNested, peersLabel, projectOf, readInstancesSource } from "../components/instances/instances";
 import { AddMachineDialog } from "../components/model/MachineDialogs";
+import { NestedStateChip } from "../components/instances/NestedBootstrap";
 
 /** What a declared nested instance cannot do yet — plan.md Tier 1b. N3
  * (`Environment.Upstream`) is built and is no longer listed; nor is the
@@ -80,7 +81,8 @@ export function AddInstanceKindPanel({ onCluster, onNested }: { onCluster: () =>
             <>
               A separate hz with its own records and keys, in its own project (e.g. a prod gateway). Declares its
               machine with the URL it answers on, and creates the VPN client it reaches this hz through (only
-              this hz&apos;s API); a rung is then placed in it (Upstream).{" "}
+              this hz&apos;s API); a rung is then placed in it (Upstream). To provision a fresh box in one
+              command, use [Add nested instance] on its project&apos;s page.{" "}
               <span data-nested-cannot>
                 It cannot yet mirror packages or proxy config — that waits on: {NESTED_WAITS_ON.join("; ")}.
               </span>
@@ -199,6 +201,11 @@ export function InstancesScreen() {
                     <Typography variant="body2" component="span" sx={{ color: "text.secondary" }}>
                       {peersLabel(row, source.rows)}
                     </Typography>
+                    {isNested(row) ? (
+                      <Box component="span" sx={{ ml: 1 }}>
+                        <NestedStateChip nested={row.nested} />
+                      </Box>
+                    ) : null}
                   </TableCell>
                 </TableRow>
               ))}
