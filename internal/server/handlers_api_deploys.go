@@ -23,6 +23,9 @@ import (
 //	GET  /api/v1/deploys/latest        newest report per rung (UI)
 //	GET  /api/v1/promotions            the promotion record (UI)
 //
+// and, in handlers_api_lines.go, the release lines the promote's restore-test
+// gate reads: kept backups, restore tests, the lines read and the pins.
+//
 // THE ONE AUTHORITY (CLAUDE.md). Promote and check are admin-gated, and an
 // admin API token has no scope, so the evidence gate gates one authority
 // against itself: it stops a version nobody tested, not a person. What it adds
@@ -46,22 +49,16 @@ var promoteMu sync.Mutex
 // deployReporter authorises a report and returns who to record. An admin (an
 // account, its API token, the admin cookie or a VPN admin) may report for any
 // rung. Otherwise the bearer must be a SERVICE token, and the service must be
-// attributed to exactly the rung being reported.
+// attributed to exactly the rung being reported. A restore-test report is
+// scoped the same way (handlers_api_lines.go).
 func (s *Server) deployReporter(r *http.Request, req apitypes.DeployReportReq) (who string, status int, msg string) {
 	if s.isAdmin(r) {
 		return s.adminActor(r), 0, ""
 	}
-	tok := requestBearer(r)
-	// An empty token must never reach findServiceByToken: a service with no
-	// token has Token == "", and "" would match it.
-	if tok == "" || strings.HasPrefix(tok, db.APITokenPrefix) {
-		return "", http.StatusUnauthorized, "Unauthorized"
+	svc, status, msg := s.reportingService(r)
+	if status != 0 {
+		return "", status, msg
 	}
-	idx := s.findServiceByToken(tok)
-	if idx < 0 {
-		return "", http.StatusUnauthorized, "Unauthorized: unknown token"
-	}
-	svc := s.cfg().Services[idx]
 	if svc.Project == "" || svc.Environment == "" {
 		return "", http.StatusForbidden, "service " + svc.Name + "'s token may report only for its own rung, and " + svc.Name +
 			" is attributed to none — `hz service assign " + svc.Name + " <project>/<environment>`, or report with an admin API token"
@@ -71,6 +68,22 @@ func (s *Server) deployReporter(r *http.Request, req apitypes.DeployReportReq) (
 			", not " + req.Project + "/" + req.Environment
 	}
 	return "service:" + svc.Name, 0, ""
+}
+
+// reportingService resolves a non-admin bearer to the service whose token it
+// is, or says why not (401).
+func (s *Server) reportingService(r *http.Request) (svc config.Service, status int, msg string) {
+	tok := requestBearer(r)
+	// An empty token must never reach findServiceByToken: a service with no
+	// token has Token == "", and "" would match it.
+	if tok == "" || strings.HasPrefix(tok, db.APITokenPrefix) {
+		return config.Service{}, http.StatusUnauthorized, "Unauthorized"
+	}
+	idx := s.findServiceByToken(tok)
+	if idx < 0 {
+		return config.Service{}, http.StatusUnauthorized, "Unauthorized: unknown token"
+	}
+	return s.cfg().Services[idx], 0, ""
 }
 
 // handleAPIDeployReport is H1. Append-only: every call is a new row, a
@@ -113,9 +126,9 @@ func (s *Server) handleAPIDeployReport(w http.ResponseWriter, r *http.Request) {
 	id, err := s.users.RecordDeployReport(r.Context(), db.DeployReport{
 		Project: req.Project, Environment: req.Environment, App: req.App,
 		Version: req.Version, Describe: req.Describe, ArtifactSHA256: req.ArtifactSHA256,
-		Host: req.Host, ReportedBy: who,
+		Host: req.Host, BuildURL: req.BuildURL, ReportedBy: who,
 	})
-	if errors.Is(err, db.ErrInvalidVersion) || errors.Is(err, db.ErrInvalidSHA256) {
+	if errors.Is(err, db.ErrInvalidVersion) || errors.Is(err, db.ErrInvalidSHA256) || errors.Is(err, db.ErrInvalidLocator) {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -140,6 +153,12 @@ func promoteRefusal(w http.ResponseWriter, msg string) {
 //  3. Not a downgrade (db.CompareVersions, hz's one semver comparator) of the
 //     target's declared version, unless allowDowngrade. A target whose
 //     declared version cannot be compared counts as needing the flag.
+//  4. THE RESTORE-TEST GATE (handlers_api_lines.go restoreGate): for every
+//     supported line of the target — derived BEFORE the promotion — a kept
+//     backup exists and X's newest restore test on `from` against it passed.
+//     No supported line (the first release) requires nothing, and says so.
+//     It applies to a downgrade too: no exemption was decided, so none is
+//     made here.
 //
 // On success the target's Version is set through the env-set writer
 // (SetEnvironment + updateConfig, so Save validates it), and a promotions row
@@ -231,6 +250,16 @@ func (s *Server) handleAPIEnvironmentPromote(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
+	gate, err := s.restoreGate(r.Context(), cfg, req.Project, req.From, to, req.Version)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if len(gate.refusals) > 0 {
+		promoteRefusal(w, strings.Join(gate.refusals, "\n"))
+		return
+	}
+
 	next := *cfg
 	version := req.Version
 	if _, err := next.SetEnvironment(req.Project, req.To, config.EnvironmentPatch{Version: &version}); err != nil {
@@ -244,6 +273,7 @@ func (s *Server) handleAPIEnvironmentPromote(w http.ResponseWriter, r *http.Requ
 	id, err := s.users.RecordPromotion(r.Context(), db.Promotion{
 		Project: req.Project, FromEnv: req.From, ToEnv: req.To, Version: req.Version,
 		ArtifactSHA256: latest.ArtifactSHA256, PromotedBy: s.adminActor(r), Downgrade: downgrade,
+		BuildURL: latest.BuildURL, Lines: gate.lines,
 	})
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, req.To+" now declares "+req.Version+
@@ -251,7 +281,8 @@ func (s *Server) handleAPIEnvironmentPromote(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, apitypes.PromoteResp{
-		Promoted: true, Version: req.Version, ArtifactSHA256: latest.ArtifactSHA256, Downgrade: downgrade, ID: id,
+		Promoted: true, Version: req.Version, ArtifactSHA256: latest.ArtifactSHA256, BuildURL: latest.BuildURL,
+		Downgrade: downgrade, ID: id, RestoreTests: gate.summary, LinesChecked: gate.checked,
 	})
 }
 
@@ -345,7 +376,7 @@ func deployReportResp(now time.Time, r db.DeployReport) apitypes.DeployReportRes
 	return apitypes.DeployReportResp{
 		ID: r.ID, Project: r.Project, Environment: r.Environment, App: r.App,
 		Version: r.Version, Describe: r.Describe, ArtifactSHA256: r.ArtifactSHA256, Host: r.Host,
-		ReportedAt: r.ReportedAt.UTC().Format(time.RFC3339), ReportedBy: r.ReportedBy,
+		BuildURL: r.BuildURL, ReportedAt: r.ReportedAt.UTC().Format(time.RFC3339), ReportedBy: r.ReportedBy,
 		AgeSeconds: ageSeconds(now, r.ReportedAt),
 	}
 }
@@ -400,6 +431,7 @@ func (s *Server) handleAPIPromotions(w http.ResponseWriter, r *http.Request) {
 			ID: p.ID, Project: p.Project, From: p.FromEnv, To: p.ToEnv, Version: p.Version,
 			ArtifactSHA256: p.ArtifactSHA256, PromotedAt: p.PromotedAt.UTC().Format(time.RFC3339),
 			PromotedBy: p.PromotedBy, Downgrade: p.Downgrade, AgeSeconds: ageSeconds(now, p.PromotedAt),
+			BuildURL: p.BuildURL, RestoreGate: p.RestoreGate,
 		})
 	}
 	writeJSON(w, out)
