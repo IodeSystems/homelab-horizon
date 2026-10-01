@@ -212,8 +212,15 @@ always one prior; a preserved backup per supported line, used to test
 backup → restore → migrate. Proposal (unapproved): line = semver core (hz derives
 it, no 4-part parser); supported = prod's line + the line promoted before it
 (derived from `promotions`, #8), operator may pin more; evidence for prod adds a
-`restore_test` report per supported line's fixture. ❓ **Operator:** fixture
-source — a prod backup is cardholder data in staging (PCI) unless scrubbed.
+`restore_test` report per supported line's fixture. **Correction (operator, 2026-09-30): redline holds NO card data, only PII** — the
+"PCI" rationale used above (own prod hz, fixtures) is PII/privacy, not CDE scope.
+**No build machine yet** (aw4 is the future one): R0 `bin/build` on the dev box —
+clean checkout of a commit, monotonic run counter, tests + logs kept as
+`dist/builds/<n>/` (copied durable) = `build_url`; a failed run yields no bundle.
+Order: R0 → R1–R3 → hz deploy/edge/token → rehearsal → **first restore test =
+legacy Kotlin prod backup → redline2 migrate on the pre-migration box** (PII,
+operator OK'd) → prod VM + own hz + cutover → supported lines / kept backups /
+restore-test gate (from the second release on).
 
 ⚠ Single authority still applies (Tier 1): the report and the promote use an
 unscoped API token — the gate is evidence-based but gates one authority against
