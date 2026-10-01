@@ -301,6 +301,101 @@ export interface CMRecoveryWrapResp {
 }
 
 //////////
+// source: deploys.go
+
+/**
+ * DeployReportReq is POST /api/v1/deploys/report: what a rung now runs, posted
+ * by the deploy after a successful flip.
+ * Version is a semver tag with no leading v and no build metadata
+ * (prerelease allowed: "1.0.0-rc.1.1414"); it is what the promotion gate orders
+ * and matches. Describe is `git describe` output — provenance only, never
+ * compared.
+ */
+export interface DeployReportReq {
+  project: string;
+  environment: string;
+  app: string;
+  version: string;
+  describe: string;
+  artifact_sha256: string;
+  host: string;
+}
+/**
+ * DeployReportResultResp answers a recorded report.
+ */
+export interface DeployReportResultResp {
+  recorded: boolean;
+  id: number /* int64 */;
+}
+/**
+ * DeployCheckResp is GET /api/v1/deploys/check. Reason is set on every refusal.
+ */
+export interface DeployCheckResp {
+  ok: boolean;
+  reason?: string;
+}
+/**
+ * PromoteReq is POST /api/v1/environments/promote.
+ */
+export interface PromoteReq {
+  project: string;
+  from: string;
+  to: string;
+  version: string;
+  allowDowngrade: boolean;
+}
+/**
+ * PromoteResp answers a promotion that happened. ArtifactSHA256 is the PINNED
+ * artifact: the one the source rung last reported for Version. Downgrade is
+ * true when AllowDowngrade was needed, and is recorded as such.
+ */
+export interface PromoteResp {
+  promoted: boolean;
+  version: string;
+  artifact_sha256: string;
+  downgrade: boolean;
+  id: number /* int64 */;
+}
+/**
+ * DeployReportResp is one stored report, for GET /api/v1/deploys/latest — the
+ * newest per rung. A rung that never reported is ABSENT from that list, and
+ * the UI says "nothing reported" for it, never a blank cell.
+ */
+export interface DeployReportResp {
+  id: number /* int64 */;
+  project: string;
+  environment: string;
+  app: string;
+  version: string;
+  describe: string;
+  artifact_sha256: string;
+  host: string;
+  reportedAt: string;
+  reportedBy: string;
+  /**
+   * AgeSeconds is computed by the server when it answers, so the client
+   * needs no clock agreement with hz to say "3 min ago".
+   */
+  ageSeconds: number /* int64 */;
+}
+/**
+ * PromotionResp is one row of the promotion record, for GET
+ * /api/v1/promotions?project= (newest first).
+ */
+export interface PromotionResp {
+  id: number /* int64 */;
+  project: string;
+  from: string;
+  to: string;
+  version: string;
+  artifact_sha256: string;
+  promotedAt: string;
+  promotedBy: string;
+  downgrade: boolean;
+  ageSeconds: number /* int64 */;
+}
+
+//////////
 // source: hosts_view.go
 
 /**
