@@ -1190,6 +1190,16 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/environments/add", s.handleAPIEnvironmentAdd)
 	mux.HandleFunc("/api/v1/environments/set", s.handleAPIEnvironmentSet)
 	mux.HandleFunc("/api/v1/environments/rm", s.handleAPIEnvironmentRm)
+	// The tested staging -> prod release (handlers_api_deploys.go). Plain
+	// registrations, so a non-primary refuses the POSTs
+	// (nonPrimaryGuardMiddleware): reports and promotions are in node-local
+	// hz.db and belong on the primary. A peer still answers the GETs, and a
+	// check there finds no promotion row and refuses — fail-closed.
+	mux.HandleFunc("/api/v1/environments/promote", s.handleAPIEnvironmentPromote)
+	mux.HandleFunc("/api/v1/deploys/report", s.handleAPIDeployReport)
+	mux.HandleFunc("/api/v1/deploys/check", s.handleAPIDeployCheck)
+	mux.HandleFunc("/api/v1/deploys/latest", s.handleAPIDeployLatest)
+	mux.HandleFunc("/api/v1/promotions", s.handleAPIPromotions)
 	// The machines: identity and segment membership. No project and no
 	// environment — those are coordinates of an instance, not of a box
 	// (plan/design/architecture.md, "Instance, not machine, carries the environment").
