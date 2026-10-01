@@ -6,6 +6,13 @@
 #   ./bin/deploy --host user@h                      # single host, local build
 #   ./bin/deploy --host user@h --version v0.0.1     # single host, release
 #   ./bin/deploy --version v0.0.1                   # fan out, pin all to vX
+#   ./bin/deploy --host user@h --child-bins-only    # only the child binaries
+#
+# A local-build deploy also uploads the server binaries a NESTED hz child
+# installs (dist/homelab-horizon-linux-{amd64,arm64} + a sha256/version
+# manifest each) into the parent data dir, /var/lib/homelab-horizon/child-bin. The
+# parent cannot embed itself; its "Add nested instance" command refuses a
+# platform with no binary there. --no-child-bins skips it.
 #
 # .hz.json (gitignored, repo root) is an array of per-host entries:
 #   [
@@ -27,9 +34,15 @@ REMOTE_PATH="/usr/local/bin/homelab-horizon"
 # without its UI answers the API and shows an explanatory page where the login
 # form should be.
 REMOTE_UI_DIR="/usr/local/share/homelab-horizon/ui"
+# Where a parent keeps child server binaries (internal/server/childbin.go):
+# <data dir>/child-bin, the data dir being where hz.db lives.
+REMOTE_CHILD_BIN_DIR="/var/lib/homelab-horizon/child-bin"
+CHILD_PLATFORMS="linux-amd64 linux-arm64"
 
 CLI_HOST=""
 CLI_VERSION=""
+CHILD_BINS=1
+CHILD_BINS_ONLY=0
 
 usage() {
   cat <<HELP
@@ -37,6 +50,8 @@ Usage: $0 [--host USER@HOST] [--version vX.Y.Z]
 
   --host       SSH target. Single-shot; ignores $CONFIG_FILE.
   --version    GitHub release tag. Overrides every entry's version.
+  --no-child-bins    Do not upload the nested-hz child binaries.
+  --child-bins-only  Build and upload only the child binaries; no deploy.
   -h, --help   Show this help
 
 No --host: read $CONFIG_FILE (JSON array of {host, version}) and fan out.
@@ -54,6 +69,10 @@ while [ $# -gt 0 ]; do
     --version)
       [ $# -ge 2 ] || err "--version needs a value"
       CLI_VERSION="$2"; shift 2 ;;
+    --no-child-bins)
+      CHILD_BINS=0; shift ;;
+    --child-bins-only)
+      CHILD_BINS_ONLY=1; shift ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -128,6 +147,26 @@ for i in "${!HOSTS[@]}"; do
   fi
 done
 
+# Child binaries ride a LOCAL build only: a --version deploy pulls a release
+# on the host and has no dist/ here to upload from.
+if [ "$CHILD_BINS_ONLY" = 1 ]; then
+  [ "$CHILD_BINS" = 1 ] || err "--child-bins-only and --no-child-bins contradict each other"
+  NEED_BUILD=()
+fi
+WANT_CHILD_BINS=0
+if [ "$CHILD_BINS" = 1 ]; then
+  if [ "$CHILD_BINS_ONLY" = 1 ] || [ "${#NEED_BUILD[@]}" -gt 0 ]; then
+    WANT_CHILD_BINS=1
+  else
+    echo "Note: release deploy — child binaries are not uploaded (run: make child-bins-upload HOST=<parent>)."
+  fi
+fi
+
+if [ "$WANT_CHILD_BINS" = 1 ]; then
+  echo "Building child binaries ($CHILD_PLATFORMS) with manifests..."
+  make child-bins
+  for p in $CHILD_PLATFORMS; do unset 'NEED_BUILD[$p]'; done
+fi
 if [ "${#NEED_BUILD[@]}" -gt 0 ]; then
   for arch in "${!NEED_BUILD[@]}"; do
     echo "Building $arch locally..."
@@ -146,6 +185,29 @@ for v in "${VERSIONS[@]}"; do
     break
   fi
 done
+
+# ----- Child binaries --------------------------------------------------------
+
+upload_child_bins() {
+  local host="$1" p
+  echo "Uploading child server binaries to $host:$REMOTE_CHILD_BIN_DIR ..."
+  for p in $CHILD_PLATFORMS; do
+    [ -f "dist/homelab-horizon-$p" ] && [ -f "dist/homelab-horizon-$p.json" ] \
+      || err "dist/homelab-horizon-$p or its manifest is missing — run: make child-bins"
+    scp -q "dist/homelab-horizon-$p" "$host:/tmp/hz-child-$p.new"
+    scp -q "dist/homelab-horizon-$p.json" "$host:/tmp/hz-child-$p.json.new"
+  done
+  # Binary first, manifest second: in between the parent's sha256 check reads
+  # the platform as missing, never as a binary it would hand out.
+  ssh "$host" "set -e
+    sudo install -d -m 0755 $REMOTE_CHILD_BIN_DIR
+    for p in $CHILD_PLATFORMS; do
+      sudo install -m 0644 /tmp/hz-child-\$p.new $REMOTE_CHILD_BIN_DIR/homelab-horizon-\$p
+      sudo install -m 0644 /tmp/hz-child-\$p.json.new $REMOTE_CHILD_BIN_DIR/\$p.json
+      rm -f /tmp/hz-child-\$p.new /tmp/hz-child-\$p.json.new
+    done
+    echo '  stored:' \$(ls $REMOTE_CHILD_BIN_DIR)"
+}
 
 # ----- Per-host deploy -----------------------------------------------------
 
@@ -243,7 +305,12 @@ deploy_one() {
 }
 
 for i in "${!HOSTS[@]}"; do
-  deploy_one "${HOSTS[$i]}" "${ARCHS[$i]}" "${VERSIONS[$i]}"
+  if [ "$CHILD_BINS_ONLY" != 1 ]; then
+    deploy_one "${HOSTS[$i]}" "${ARCHS[$i]}" "${VERSIONS[$i]}"
+  fi
+  if [ "$WANT_CHILD_BINS" = 1 ] && { [ "$CHILD_BINS_ONLY" = 1 ] || [ -z "${VERSIONS[$i]}" ]; }; then
+    upload_child_bins "${HOSTS[$i]}"
+  fi
 done
 
 echo
