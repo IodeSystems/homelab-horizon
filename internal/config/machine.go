@@ -112,9 +112,10 @@ type MachineHZ struct {
 	// TokenSHA256 is the sha256 (hex) of the INSTANCE TOKEN this hz minted for
 	// that nested hz (POST /api/v1/machines/hz-token, plan/plan.md N4a). The
 	// token is shown once and never stored; "" is "none minted". It
-	// authenticates the child as `instance:<machine>` for exactly three calls
-	// — desired, artifact download and the forwarded report — and only for
-	// rungs whose Upstream names this machine. A digest, not a key: it rides
+	// authenticates the child as `instance:<machine>` for exactly four calls
+	// — desired, artifact download and the forwarded report, only for rungs
+	// whose Upstream names this machine, and the bootstrap's server-binary
+	// download. A nested bootstrap's enrolment mints it too. A digest, not a key: it rides
 	// peer-sync like the rest of the record and confers nothing on a reader.
 	// No client edit sets it — an edit of the marker keeps it (SetMachine).
 	TokenSHA256 string `json:"token_sha256,omitempty"`

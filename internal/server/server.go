@@ -1154,6 +1154,8 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/admin/hz-probe/bin/", s.handleProbeBinary)            // hz-probe binaries for the installer above
 	mux.HandleFunc("/admin/hz-agent/bin/", s.handleAgentBinary)            // hz-agent, the root daemon: fetched once, by a human, with sudo
 	mux.HandleFunc("/admin/hz/bin/", s.handleHZBinary)                     // per-arch hz binaries (needs -tags hzembed)
+	mux.HandleFunc("/admin/hz-child/install/", s.handleChildInstallScript) // nested hz bootstrap script, for a live grant
+	mux.HandleFunc("/admin/hz-child/enrol/", s.handleChildEnrol)           // nested hz enrolment: public key up, peer + token down
 
 	// Backup/restore API (Bearer token auth)
 	mux.HandleFunc("/admin/backup/export", s.backupAuthMiddleware(s.handleBackupExport))
@@ -1236,6 +1238,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/deploys/desired", s.handleAPIDeployDesired)
 	mux.HandleFunc("/api/v1/deploys/applied", s.handleAPIDeploysApplied)
 	mux.HandleFunc("/api/v1/machines/hz-token", s.handleAPIMachineHZToken)
+	// The one-command bootstrap of a nested hz (handlers_nested_bootstrap.go).
+	// Generate writes config.json; the binary is fetched by the child over its
+	// upstream VPN client with its instance token.
+	mux.HandleFunc(apitypes.NestedBootstrapPath, s.handleAPINestedBootstrap)
+	mux.HandleFunc("/api/v1/nested/bin/", s.handleNestedBinary)
 	// Release lines (handlers_api_lines.go). Same placement rule: the POSTs
 	// write hz.db or config.json and belong on the primary.
 	mux.HandleFunc("/api/v1/backups/kept", s.handleAPIKeptBackup)
