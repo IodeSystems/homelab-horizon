@@ -309,6 +309,16 @@ type Config struct {
 	// effect of editing a service would be indefensible.
 	UsersDB string `json:"users_db,omitempty"`
 
+	// ArtifactMaxBytes caps one artifact upload (PUT /api/v1/artifacts/).
+	// 0 is the default, 512 MiB. Artifacts live in <data dir>/artifacts, the
+	// directory UsersDB is in (upstream_hz.go).
+	ArtifactMaxBytes int64 `json:"artifact_max_bytes,omitempty"`
+
+	// Upstream makes THIS hz a nested ("child") hz for the listed rungs: it
+	// pulls their applied artifact from the parent hz and serves it locally
+	// (upstream_hz.go, plan/plan.md N4a). nil is "not nested".
+	Upstream *UpstreamHZ `json:"upstream,omitempty"`
+
 	// RateLimit is the coarse volume tier at the edge (EDGE-4).
 	//
 	// hz already had two blunt instruments: an iptables ban, which is binary
@@ -1792,6 +1802,11 @@ func Save(path string, cfg *Config) error {
 	// delegated name is written to a zone no resolver reads for it — silent at
 	// the write, and the delegated zone's owner never sees it.
 	if err := cfg.ValidateDelegations(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// The nested-hz upstream, same chokepoint: a URL with no host or a rung
+	// listed twice is a puller that cannot start or two pullers for one cache.
+	if err := cfg.ValidateUpstream(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	dir := filepath.Dir(path)

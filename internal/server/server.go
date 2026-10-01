@@ -34,6 +34,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/integration"
 	"github.com/iodesystems/homelab-horizon/internal/letsencrypt"
 	"github.com/iodesystems/homelab-horizon/internal/monitor"
+	"github.com/iodesystems/homelab-horizon/internal/nested"
 	"github.com/iodesystems/homelab-horizon/internal/route53"
 	"github.com/iodesystems/homelab-horizon/internal/system"
 	"github.com/iodesystems/homelab-horizon/internal/wireguard"
@@ -333,6 +334,16 @@ type Server struct {
 	// control test enumerate the surface instead of hand-listing it, so a
 	// route added to registerPeerAPI is covered without touching the test.
 	peerAPIRoutes []string
+
+	// artifactDir is the parent's artifact store, <data dir>/artifacts (N4a,
+	// handlers_api_artifacts.go). "" is no store: dry-run, and tests that
+	// do not set one. artifactMu serialises retention.
+	artifactDir string
+	artifactMu  sync.Mutex
+
+	// child is set when config.json has an upstream block: this hz is nested
+	// for those rungs and serves them from its cache (handlers_nested.go).
+	child *nested.Child
 }
 
 func New(configPath string) (*Server, error) {
@@ -545,6 +556,8 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 			s.users = store
 			slog.Info("identity store ready", "path", store.Path())
 		}
+		s.artifactDir = filepath.Join(cfg.DataDir(), "artifacts")
+		s.child = childFromConfig(cfg)
 	}
 	s.config.Store(cfg)
 	// After the config is stored: the collector reads live server state.
@@ -1200,6 +1213,17 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/deploys/check", s.handleAPIDeployCheck)
 	mux.HandleFunc("/api/v1/deploys/latest", s.handleAPIDeployLatest)
 	mux.HandleFunc("/api/v1/promotions", s.handleAPIPromotions)
+	// N4a (handlers_api_artifacts.go, handlers_api_apply.go): the artifact
+	// store, apply, hold, desired and the instance token. Same placement rule
+	// as above — they write hz.db and belong on the primary.
+	mux.HandleFunc("/api/v1/artifacts", s.handleAPIArtifacts)
+	mux.HandleFunc("/api/v1/artifacts/", s.handleAPIArtifact)
+	mux.HandleFunc("/api/v1/environments/apply", s.handleAPIEnvironmentApply)
+	mux.HandleFunc("/api/v1/environments/hold", s.handleAPIEnvironmentHold(true))
+	mux.HandleFunc("/api/v1/environments/unhold", s.handleAPIEnvironmentHold(false))
+	mux.HandleFunc("/api/v1/deploys/desired", s.handleAPIDeployDesired)
+	mux.HandleFunc("/api/v1/deploys/applied", s.handleAPIDeploysApplied)
+	mux.HandleFunc("/api/v1/machines/hz-token", s.handleAPIMachineHZToken)
 	// Release lines (handlers_api_lines.go). Same placement rule: the POSTs
 	// write hz.db or config.json and belong on the primary.
 	mux.HandleFunc("/api/v1/backups/kept", s.handleAPIKeptBackup)
@@ -2041,6 +2065,11 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	mfaDone := make(chan struct{})
 	s.startMFASessionPruner(mfaDone)
 	defer close(mfaDone)
+
+	// N4a: artifact retention (at start, then daily) and, when this hz is
+	// nested, the puller and report drainer. Both stop with the MFA pruner.
+	s.startArtifactRetention(mfaDone)
+	s.startChild(mfaDone)
 
 	// "server ready" is a claim, and it used to be made unconditionally — on a
 	// boot where WireGuard, dnsmasq and HAProxy had all failed, hz logged it

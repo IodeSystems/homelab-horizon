@@ -19,6 +19,7 @@ import type { HostsViewResp, InstanceResp, ProjectResp } from "../api/generated-
 import { routeTree } from "../routeTree.gen";
 import { Route as HostsRoute } from "../routes/hosts";
 import { AddInstanceKindPanel, NESTED_WAITS_ON } from "../routes/instances.index";
+import { MintTokenPanel } from "../routes/instances.$instance";
 
 let failures = 0;
 let checks = 0;
@@ -374,6 +375,36 @@ console.log("· [Add instance] asks for the kind: cluster node, or declare a nes
   check(!NESTED_WAITS_ON.some((w) => w.includes("Upstream")), "Upstream is built, so it is not listed as waited on");
   check(NESTED_WAITS_ON.some((w) => w.includes("armed agent")), "an armed agent still is");
   check(NESTED_WAITS_ON.some((w) => w.includes("registry crossing")), "and so is the registry crossing");
+  check(!NESTED_WAITS_ON.some((w) => w.includes("credential")), "the child's credential is built (N4a's instance token), so it is not listed");
+}
+
+console.log("· N4a — a nested instance's token and last pull");
+{
+  const nested = (n: InstanceResp["nested"]): InstanceResp[] => [
+    inst({}),
+    inst({ name: "prod-hz", self: false, address: "http://10.100.0.9:8080", role: "nested", declared: true, version: undefined, nested: n }),
+  ];
+  const never = await at("/instances/prod-hz", nested({ hasToken: false, lastPullAt: 0, lastPullRung: "" }));
+  check(never.html.includes('data-instance-token-state="none"') && never.text.includes("Mint instance token"), "no token: offers Mint instance token");
+  check(never.html.includes('data-last-pull="never"') && never.text.includes("never pulled"), "never pulled says so — not a blank, not 'long ago'");
+  const pulled = await at("/instances/prod-hz", nested({ hasToken: true, lastPullAt: 1790000000, lastPullRung: "storefront/prod" }));
+  check(pulled.html.includes('data-instance-token-state="minted"') && pulled.text.includes("Mint a new instance token"), "a minted token offers a re-mint");
+  check(pulled.html.includes('data-last-pull="pulled"') && pulled.text.includes("storefront/prod"), "the last pull names its time and rung");
+  const unknown = await at("/instances/prod-hz", nested({ hasToken: true, lastPullAt: 0, lastPullRung: "", pullsUnknown: "identity store unavailable" }));
+  check(unknown.html.includes('data-last-pull="unknown"') && !unknown.text.includes("never pulled"), "an unreadable pull record is not 'never pulled'");
+  const self = await at("/instances/gw-host", nested({ hasToken: false, lastPullAt: 0, lastPullRung: "" }));
+  check(!self.html.includes("data-instance-token-state"), "this instance's own page offers no instance token");
+
+  const panel = (token: string | null) =>
+    renderToStaticMarkup(
+      <ThemeProvider theme={baseTheme}>
+        <MintTokenPanel machine="prod-hz" token={token} error={null} pending={false} onMint={() => {}} onClose={() => {}} />
+      </ThemeProvider>,
+    );
+  const offer = panel(null);
+  check(offer.includes("data-token-offer") && !offer.includes("data-instance-token"), "before minting: the offer, no token");
+  const shown = panel("hzi_abc123");
+  check(shown.includes("data-token-shown-once") && shown.includes('value="hzi_abc123"'), "after minting: the token, marked shown once");
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

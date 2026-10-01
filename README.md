@@ -460,6 +460,94 @@ curl -s "$HZ_URL/api/v1/deploys/check?project=redline&environment=prod&version=1
 - **Repeat reports** append: the same version may be reported again with a different sha256 (a rebuild). The newest report wins; the promote pins its sha256; the check compares against the pin.
 - Reports, promotions, kept backups and restore tests are append-only rows in `hz.db` on the config primary (migrations `0014`, `0015`, `0016`). They are **not** peer-synced and have no backup; a check asked of an HA peer finds no promotion and refuses.
 - `promote` and `check` need an admin credential. hz has one privilege level, so the gate stops an untested version, not a person; what it adds is the record (`promoted_by`). The project Overview shows the newest report per rung (with its build link), a Promote action on any rung with a `from` edge — its dialog lists the required restore tests before the button — recent promotions, and the release lines.
+- **Promote also refuses an artifact hz does not hold** (409 `artifact <sha12> is not uploaded to hz; prod cannot pull it — the staging deploy uploads it before it reports`). The staging deploy uploads its bundle before it reports — next section.
+
+### Nested prod: pull, apply, hold
+
+A prod rung can be served by its **own** hz (a *nested* or *child* hz) that pulls the applied build from this one (the *parent*). The child polls; **the parent never dials the child**. A promotion approves a build; an **apply** is what the rung runs. `desired` answers the newest apply, so a rung is **held by default**: promoting alone changes nothing a box pulls. A **hold** is the emergency stop on top.
+
+On the **parent** (the office hz):
+
+```bash
+# 0. Once: declare the child as a machine that runs hz, place the rung in it, and
+#    mint its instance token (shown ONCE; hz keeps only its sha256; a re-mint
+#    replaces it). The token authenticates as instance:<machine> for exactly three
+#    calls — desired, artifact download, the forwarded report — and only for rungs
+#    whose upstream is that machine. Every other route refuses it.
+#    The CLI has no --hz-url / --upstream flags yet: declare the machine in the UI
+#    (Instances → Add instance → Declare a nested instance), then set the rung's upstream
+#    (POST /api/v1/environments/set {"project":"redline","name":"prod","upstream":"redline-prod-hz"}).
+hz machine hz-token redline-prod-hz > upstream.token   # = POST /api/v1/machines/hz-token {"machine":"redline-prod-hz"}
+#    -> 200 {"machine":"redline-prod-hz","token":"hzi_<64 hex>"}
+
+# 1. The staging deploy UPLOADS its bundle before it reports. The path is the bundle's
+#    sha256; hz re-hashes the body as it streams it to disk.
+#    Token: admin, or the service token of a service in ?project= (required).
+curl -sf -X PUT --data-binary @redline-1.4.0.tar.zst \
+  "https://hz.example/api/v1/artifacts/$(sha256sum redline-1.4.0.tar.zst | cut -d' ' -f1)?project=redline" \
+  -H "Authorization: Bearer $HZ_TOKEN"
+# -> 200 {"stored":true,"sha256":"<hex>","size":123456,"existing":false}
+# -> 200 {... "existing":true}   already stored: the body is not re-read
+# -> 400 {"error":"artifact sha256 mismatch: the body hashes to <a>, not <b> — nothing was stored"}
+# -> 413 {"error":"artifact exceeds the size cap of 536870912 bytes — artifact_max_bytes in config.json ..."}
+# -> 403 a service token of another project; 409 the sha is stored for another project
+
+# 2. Report and promote as in the previous section, then APPLY. Admin. Refused (409)
+#    unless --version is the NEWEST promotion into the rung (an apply never picks a
+#    build; promote an older one with --allow-downgrade to roll back) and its artifact
+#    is uploaded. Re-applying the applied promotion records nothing.
+hz env apply redline prod --version 1.4.0
+#    = POST /api/v1/environments/apply {"project":"redline","environment":"prod","version":"1.4.0"}
+#    -> 200 {"applied":true,"id":4,"version":"1.4.0","artifact_sha256":"<hex>","promotion_id":3,"existing":false}
+
+# 3. Hold / unhold. Admin. A hold needs a reason; each is an append-only event.
+hz env hold redline prod --reason "cutover at 02:00"   # = POST /api/v1/environments/hold
+hz env unhold redline prod                             # = POST /api/v1/environments/unhold
+#    -> 200 {"project":"redline","environment":"prod","hold":{"by":"user:carl","reason":"...","at":"<RFC3339>"}}
+#           ("hold":null after an unhold; 409 unhold of a rung not held)
+
+# 4. Desired — what the child pulls. Admin, or the instance token for its own rungs.
+curl -s "https://hz.example/api/v1/deploys/desired?project=redline&environment=prod" -H "Authorization: Bearer $TOKEN"
+# -> 200 {"version":"1.4.0","artifact_sha256":"<hex>","promotion_id":3,"apply_id":4,
+#         "applied_by":"user:carl","applied_at":"<RFC3339>","build_url":"...","hold":null}
+#    ETag = hash(apply_id, hold state): a new apply, a hold and an unhold each change it.
+#    If-None-Match with the current tag -> 304.
+# -> 404 {"error":"nothing applied to redline/prod"}
+# -> 403 an instance token for a rung whose upstream is another machine
+# -> 503 asked of an HA replica (applies live in the primary's hz.db)
+
+# 5. The artifact. Admin: any. Instance token: only one an apply into its rungs pinned.
+curl -s -o bundle "https://hz.example/api/v1/artifacts/<sha256>" -H "Authorization: Bearer $TOKEN"
+# -> 200 the bytes (X-Artifact-SHA256, Content-Length)
+# -> 404 "artifact <sha12> was never uploaded to hz"
+# -> 404 "... was uploaded <when> by <who>, and its file is gone: retention deleted it at <when> (<why>)"
+```
+
+On the **child** (`redline-prod-hz`, the same hz binary) — its own `config.json` names the parent and the rungs it serves:
+
+```json
+"upstream": {
+  "url": "http://10.100.0.1:8080",
+  "token_file": "/etc/homelab-horizon/upstream.token",
+  "rungs": [{"project": "redline", "environment": "prod"}],
+  "poll_seconds": 30
+}
+```
+
+The child polls the parent's `desired` (conditional GET, default every 30s), downloads a newly applied artifact, **verifies its sha256**, stores it under `/var/lib/homelab-horizon/upstream/artifacts/`, and only then writes its cache (`upstream/desired-*.json`, 0600, atomic). It then answers, for those rungs, **from its cache** — to its own admin, or to a local service token attributed to the rung (declare `redline/prod` and the `redline-prod` service in the child's config):
+
+- `GET /api/v1/deploys/desired?project=redline&environment=prod` — the parent's body and ETag, passed through. **A cache answers however old** (CLAUDE.md #5). When the parent is not answering, the response carries `X-HZ-Upstream: unreachable since <RFC3339>` (or `refused since <RFC3339>: <why>`) and the child logs `LOUD`. No cache and the parent never reached: **503** `never reached the parent hz …` — not 404. 404 only when the parent *said* nothing is applied. A parent that says "nothing applied" after the child cached an apply is logged LOUD and the cache is kept.
+- `GET /api/v1/artifacts/<sha256>` — the pulled artifact (the current one and the one before it; older pulls are deleted).
+- `POST /api/v1/deploys/report` — recorded locally, answered at once `{"recorded":true,"id":N,"upstream":"queued"}`, and forwarded to the parent with the instance token; the parent records `reported_by: "instance:redline-prod-hz (for service:redline-prod)"`. A failed forward stays queued (`upstream/reports.queue.jsonl`, append-only) and is retried; one the parent refuses for good (a 4xx) is kept in `reports.refused.jsonl`. Nothing is dropped; a report whose answer was lost may be recorded twice.
+
+An unreadable token file is LOUD, never fatal: the child keeps serving its cache. The `upstream` block is read at start — a change takes a restart.
+
+- **The artifact is code that runs as root on the child box** (`provision.sh`, units). Whoever controls the parent hz controls that box. It is not a secret and must not carry one: secrets travel the sealed-config channel.
+- **Use the URL that answers directly.** The office's HAProxy answers http with a 301 to https, and curl and Go's client turn a redirected POST into a GET with no body — redline hit this. Use the `https://` URL, or the VPN address (`http://10.100.0.1:8080`) that answers without a redirect; or keep the method across a redirect (`curl --post301 --post302 --location`). The child refuses to follow a redirect at all and says so.
+- **Timeouts.** hz extends its 30s read deadline for an upload and its write deadline for a download to an hour; a proxy in front of hz needs its own timeouts raised for a large bundle.
+- **Retention.** After each upload and daily, hz keeps: any artifact an apply or promotion into a rung pinned on one of that rung's supported lines, the newest apply per rung, the last 3 distinct artifacts promoted per rung, and each rung's newest report's artifact; a rung whose lines hz cannot derive keeps everything pinned into it. Anything else older than 7 days is deleted; each deletion is logged with its size and why it was not kept, and the record stays with `deleted_at` (the Overview shows "artifact deleted <when>"). A re-upload restores it.
+- Uploads, applies, holds and the last pull time of each instance are in `hz.db` (migration `0017`), beside the artifacts in `/var/lib/homelab-horizon/artifacts/`. Same caveat as above: not peer-synced, no backup. `apply` and `hold` are admin-gated like `promote` — one authority gating itself; what they add is the record and the separation in time between approved and running.
+- The Overview shows, per rung, **Applied** (version · who · when, or "nothing applied") and **Hold**, an **Apply** action when the newest promotion is not applied yet, and Hold/Unhold; the promotions list marks the applied one. A nested instance's page (Instances) mints its token and shows its last pull.
 
 ## Observability
 
