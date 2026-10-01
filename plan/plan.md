@@ -201,7 +201,7 @@ record dies with the box. A non-primary refuses the POSTs; a check on a peer
 fails closed. Before rehearsal: declare `redline/prod` `from: staging` (none
 today), mint `redline-deploy` admin token.
 
-◻ **Versions, lines and the restore test (operator, 2026-09-30) — design, not approved for build.**
+◐ **Versions, lines and the restore test (operator, 2026-09-30) — APPROVED, building in a worktree** (build_url, kept backups, restore-test reports, the gate, `hz lines`).
 Decided: redline's `MAJOR.MINOR.FIX.HOTFIX#BUILD` goes on the wire as semver
 `MAJOR.MINOR.FIX-HOTFIX.BUILD` (`1.9.1.0#7` → `1.9.1-0.7`), human form in
 `describe`; BUILD = the build machine's run number — no number = no test logs =
@@ -221,6 +221,14 @@ Order: R0 → R1–R3 → hz deploy/edge/token → rehearsal → **first restore
 legacy Kotlin prod backup → redline2 migrate on the pre-migration box** (PII,
 operator OK'd) → prod VM + own hz + cutover → supported lines / kept backups /
 restore-test gate (from the second release on).
+
+✅ **Live on the office hz (2026-09-30):** H1–H3 deployed (`v0.4.0-405-g629caaf`,
+binds 127.0.0.1 + 10.100.0.1, 0 errors); `redline/prod from: staging` declared and
+synced; admin token `redline-deploy` minted for `carl@iodesystems.com`, value at
+`<deploy-token-file>` (0600, dev box) — checked live: check → 409
+"nothing declared", no token → 401, promotions → 200 `[]`. Operator: real prod
+backups are fine as fixtures (never stored card data); PCI helpers/conformance
+still wanted.
 
 ⚠ Single authority still applies (Tier 1): the report and the promote use an
 unscoped API token — the gate is evidence-based but gates one authority against
