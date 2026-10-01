@@ -15,6 +15,8 @@ import { RouterProvider, createRouter, createMemoryHistory } from "@tanstack/rea
 import { ThemeProvider } from "@mui/material/styles";
 import baseTheme from "../../theme";
 import type {
+  ArtifactResp,
+  RungDeployStateResp,
   DeployReportResp,
   EnvironmentResp,
   ProjectResp,
@@ -24,6 +26,7 @@ import type {
 import { routeTree } from "../../routeTree.gen";
 import { PromotePanel, ReportedCell, type ReportSource } from "./DeployBits";
 import { BuildLink, ReleaseLinesTable, RequiredRestoreTests } from "./ReleaseLines";
+import { AppliedCell, ApplyPanel, HoldCell, HoldPanel, applyOffer, type AppliedSource } from "./ApplyBits";
 import type { ProjectLinesResp } from "../../api/generated-types";
 
 let failures = 0;
@@ -164,7 +167,39 @@ const PROMOTIONS: PromotionResp[] = [
   },
 ];
 
-const DRIFT: VersionDriftResponse = { instances: [], unadmitted: 0, serverTime: "2026-09-30T10:03:00Z" };
+// N4a: prod RUNS promotion #2 (1.3.8, applied) and is held; #3 (1.3.9) is
+// promoted and not applied. Staging has nothing applied.
+const OLD_SHA = "b".repeat(64);
+const APPLIED: RungDeployStateResp[] = [
+  { project: "redline", environment: "staging" },
+  {
+    project: "redline",
+    environment: "prod",
+    applied: {
+      id: 5,
+      version: "1.3.8",
+      artifact_sha256: SHA,
+      promotion_id: 2,
+      applied_by: "user:carl",
+      applied_at: "2026-09-28T11:00:00Z",
+      age_seconds: 7200,
+    },
+    hold: { by: "user:carl", reason: "cutover at 02:00", at: "2026-09-30T09:00:00Z" },
+  },
+];
+const ARTIFACTS: ArtifactResp[] = [
+  {
+    sha256: OLD_SHA,
+    project: "redline",
+    size: 10,
+    uploaded_at: "2026-09-01T00:00:00Z",
+    uploaded_by: "service:redline-staging",
+    deleted_at: "2026-09-20T00:00:00Z",
+    deleted_why: "not kept: …",
+  },
+];
+
+const DRIFT: VersionDriftResponse ={ instances: [], unadmitted: 0, serverTime: "2026-09-30T10:03:00Z" };
 
 function seeded(): QueryClient {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
@@ -176,6 +211,8 @@ function seeded(): QueryClient {
   qc.setQueryData(["deploys", "latest"], [STAGING_REPORT]);
   qc.setQueryData(["promotions"], PROMOTIONS);
   qc.setQueryData(["lines", "redline"], LINES);
+  qc.setQueryData(["deploys", "applied"], APPLIED);
+  qc.setQueryData(["artifacts"], ARTIFACTS);
   return qc;
 }
 
@@ -389,6 +426,62 @@ console.log("· the Promote dialog — the required restore tests, before the bu
   check(failed.html.includes('data-required="unknown"') && failed.text.includes("still checks"), "a failed read says the promote still checks");
   const other = standalone(<RequiredRestoreTests source={lines} project="redline" target="prod" version="1.5.0" />);
   check(other.html.includes('data-required-for="other"') && other.text.includes("Shown for 1.4.0"), "a typed version other than the tested one is flagged");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· N4a — Applied, Hold, Apply, through the router at /p/redline");
+// ---------------------------------------------------------------------------
+{
+  const r = await at("/p/redline");
+  check(r.text.includes("Applied") && r.text.includes("Hold"), "the Environments table has Applied and Hold columns");
+  check(r.html.includes('data-applied="none"') && r.text.includes("nothing applied"), "staging, nothing applied, says so — not a blank");
+  check(r.html.includes('data-applied="applied"') && r.text.includes("1.3.8 · user:carl · 2h ago"), "prod reads version · who · when from its newest apply");
+  check(r.html.includes('data-hold="held"') && r.text.includes("held: cutover at 02:00 · user:carl"), "prod's hold shows reason · who");
+  check(r.html.includes('data-hold="none"'), "staging's hold says none");
+  check(
+    r.html.includes('aria-label="Apply 1.3.9 to redline/prod…"'),
+    "prod, whose newest promotion (1.3.9) is not applied, offers Apply of exactly that",
+  );
+  check(!/aria-label="Apply [^"]* to redline\/staging…"/.test(r.html), "staging, never promoted into, offers no Apply");
+  check(r.html.includes('aria-label="Unhold redline/prod…"'), "a held rung offers Unhold");
+  check(r.html.includes('aria-label="Hold redline/staging…"'), "an unheld rung offers Hold");
+  check((r.html.match(/data-promotion-applied/g) ?? []).length === 1, "the promotions list marks the one applied promotion");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· N4a — AppliedCell, HoldCell, applyOffer, the panels");
+// ---------------------------------------------------------------------------
+{
+  const prod = ENVIRONMENTS[1]!;
+  const known: AppliedSource = { known: true, rungs: APPLIED };
+  const asking = standalone(<AppliedCell source={{ known: false, loading: true }} env={prod} />);
+  check(asking.html.includes('data-applied="loading"') && !asking.text.includes("nothing applied"), "asking is not nothing applied");
+  const failed = standalone(<AppliedCell source={{ known: false, loading: false, why: "503" }} env={prod} />);
+  check(failed.html.includes('data-applied="unknown"') && failed.text.includes("cannot ask"), "a failed read says cannot ask");
+  const holdFailed = standalone(<HoldCell source={{ known: false, loading: false, why: "503" }} env={prod} />);
+  check(holdFailed.text.includes("cannot ask") && !holdFailed.text.includes("none"), "a failed hold read is not 'none'");
+
+  const deletedState: AppliedSource = {
+    known: true,
+    rungs: [{ ...APPLIED[1]!, artifact: { ...ARTIFACTS[0]!, sha256: SHA } }],
+  };
+  const gone = standalone(<AppliedCell source={deletedState} env={prod} />);
+  check(gone.html.includes("data-artifact-deleted") && gone.text.includes("artifact deleted 2026-09-20"), "an applied artifact deleted by retention says when");
+
+  check(applyOffer(known, PROMOTIONS, prod)?.id === 3, "applyOffer is the newest promotion when it is not applied");
+  const appliedNewest: AppliedSource = {
+    known: true,
+    rungs: [{ ...APPLIED[1]!, applied: { ...APPLIED[1]!.applied!, promotion_id: 3 } }],
+  };
+  check(applyOffer(appliedNewest, PROMOTIONS, prod) === null, "no Apply when the newest promotion is applied");
+  check(applyOffer({ known: false, loading: true }, PROMOTIONS, prod) === null, "no Apply while hz has not answered");
+
+  const ap = standalone(<ApplyPanel env={prod} offer={PROMOTIONS[0]!} onClose={() => {}} />);
+  check(ap.html.includes('data-apply-offer="3"') && ap.text.includes("Promotion #3"), "the Apply panel names the promotion it applies");
+  const hp = standalone(<HoldPanel env={prod} held={null} onClose={() => {}} />);
+  check(hp.html.includes('data-hold-panel="free"') && hp.text.includes("Required"), "Hold asks for a reason");
+  const up = standalone(<HoldPanel env={prod} held={APPLIED[1]!.hold} onClose={() => {}} />);
+  check(up.html.includes('data-hold-panel="held"') && up.text.includes("cutover at 02:00") && up.text.includes("Unhold"), "a held rung's panel offers Unhold and says why it is held");
 }
 
 // ---------------------------------------------------------------------------

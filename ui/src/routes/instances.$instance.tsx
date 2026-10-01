@@ -38,6 +38,7 @@ import {
 import type { InstanceResp } from "../api/generated-types";
 import { useProjects } from "../api/hooks";
 import { useInstances, useSetSelfProject } from "../api/instanceHooks";
+import { useMintInstanceToken } from "../api/deployHooks";
 import { TabHeader } from "../components/model/FlowBits";
 import { LocationCell } from "../components/model/ProjectBits";
 import { buildProjectIndex, type ProjectIndex } from "../components/model/projectRoutes.ts";
@@ -159,6 +160,124 @@ function ProjectControl({ row, index }: { row: InstanceResp; index: ProjectIndex
   );
 }
 
+/**
+ * The mint result, apart from its dialog so a render check can draw it. The
+ * token is in the mutation's answer and nowhere else: closing the dialog
+ * forgets it, and hz keeps only its sha256.
+ */
+export function MintTokenPanel({
+  machine,
+  token,
+  error,
+  pending,
+  onMint,
+  onClose,
+}: {
+  machine: string;
+  token: string | null;
+  error: string | null;
+  pending: boolean;
+  onMint: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <>
+      <DialogTitle>
+        Instance token for <code>{machine}</code>
+      </DialogTitle>
+      <DialogContent>
+        {token ? (
+          <>
+            <Alert severity="warning" sx={{ mb: 2 }} data-token-shown-once>
+              Shown once. hz keeps only its sha256 — copy it now into the child&apos;s upstream.token_file (0600).
+            </Alert>
+            <TextField
+              fullWidth
+              value={token}
+              slotProps={{ input: { readOnly: true }, htmlInput: { "data-instance-token": true } }}
+              sx={{ "& input": { fontFamily: "monospace" } }}
+            />
+          </>
+        ) : (
+          <Typography variant="body2" data-token-offer>
+            {machine} pulls its rungs&apos; applied artifact with this token, and forwards deploy reports. A new
+            token replaces the old one, which stops working.
+          </Typography>
+        )}
+        {error ? (
+          <Alert severity="error" sx={{ mt: 2 }}>
+            {error}
+          </Alert>
+        ) : null}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>{token ? "Done" : "Cancel"}</Button>
+        {token ? null : (
+          <Button variant="contained" onClick={onMint} disabled={pending}>
+            {pending ? "Minting…" : "Mint instance token"}
+          </Button>
+        )}
+      </DialogActions>
+    </>
+  );
+}
+
+function MintTokenDialog({ machine, open, onClose }: { machine: string; open: boolean; onClose: () => void }) {
+  const mint = useMintInstanceToken();
+  const close = () => {
+    mint.reset();
+    onClose();
+  };
+  return (
+    <Dialog open={open} onClose={close} fullWidth maxWidth="sm">
+      <MintTokenPanel
+        machine={machine}
+        token={mint.data?.token ?? null}
+        error={mint.error?.message ?? null}
+        pending={mint.isPending}
+        onMint={() => mint.mutate({ machine })}
+        onClose={close}
+      />
+    </Dialog>
+  );
+}
+
+/** A nested hz's token and last pull — what this hz records of it, never a dial. */
+export function NestedPullFacts({ row }: { row: InstanceResp }) {
+  const [open, setOpen] = useState(false);
+  const n = row.nested;
+  return (
+    <>
+      <Fact label="Instance token">
+        <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+          <Typography variant="body2" data-instance-token-state={n?.hasToken ? "minted" : "none"}>
+            {n?.hasToken ? "minted" : "none minted — it cannot pull from this hz"}
+          </Typography>
+          <Button size="small" variant="outlined" sx={{ textTransform: "none" }} onClick={() => setOpen(true)}>
+            {n?.hasToken ? "Mint a new instance token" : "Mint instance token"}
+          </Button>
+        </Box>
+        <MintTokenDialog machine={row.name} open={open} onClose={() => setOpen(false)} />
+      </Fact>
+      <Fact label="Last pull">
+        {n?.pullsUnknown ? (
+          <Typography variant="body2" data-last-pull="unknown" sx={{ color: "warning.main" }}>
+            cannot ask: {n.pullsUnknown}
+          </Typography>
+        ) : !n || n.lastPullAt === 0 ? (
+          <Typography variant="body2" data-last-pull="never" sx={{ color: "text.secondary" }}>
+            never pulled
+          </Typography>
+        ) : (
+          <Typography variant="body2" data-last-pull="pulled">
+            {when(n.lastPullAt)} · {n.lastPullRung}
+          </Typography>
+        )}
+      </Fact>
+    </>
+  );
+}
+
 export function InstanceScreen({ name }: { name: string }) {
   const query = useInstances();
   const projects = useProjects();
@@ -221,6 +340,7 @@ export function InstanceScreen({ name }: { name: string }) {
                 </Typography>
               </Fact>
             ) : null}
+            {row.role === "nested" ? <NestedPullFacts row={row} /> : null}
             {row.role === "standalone" || row.role === "nested" ? null : (
               <Fact label="Config primary">
                 <Typography sx={{ fontFamily: "monospace" }}>{row.primaryId || "none marked"}</Typography>
