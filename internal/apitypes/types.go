@@ -357,6 +357,9 @@ type MachineHZResp struct {
 	// through, by name; empty is no link. Set on add; an edit that omits it
 	// keeps the existing one.
 	VPNClient string `json:"vpnClient,omitempty"`
+	// HasToken is response-only: an instance token has been minted for this
+	// nested hz (POST /api/v1/machines/hz-token). The token is never sent back.
+	HasToken bool `json:"hasToken,omitempty"`
 }
 
 // MachineAddReq declares a machine. Segments are names; there is no Segment
