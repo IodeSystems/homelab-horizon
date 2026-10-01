@@ -344,6 +344,17 @@ type Server struct {
 	// child is set when config.json has an upstream block: this hz is nested
 	// for those rungs and serves them from its cache (handlers_nested.go).
 	child *nested.Child
+
+	// The one-command bootstrap of a nested hz (handlers_nested_bootstrap.go):
+	// the stored server binaries a child installs (<data dir>/child-bin; nil
+	// is no store), the in-memory bootstrap grants, and the wg0 reload the
+	// enrolment calls (nil is s.wg.Reload; tests replace it so a test never
+	// runs systemd-run on the box running the suite).
+	childBins       *childBinStore
+	childGrants     *childGrants
+	childGrantsOnce sync.Once
+	childEnrolMu    sync.Mutex
+	wgReload        func() error
 }
 
 func New(configPath string) (*Server, error) {
@@ -557,6 +568,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 			slog.Info("identity store ready", "path", store.Path())
 		}
 		s.artifactDir = filepath.Join(cfg.DataDir(), "artifacts")
+		s.childBins = newChildBinStore(filepath.Join(cfg.DataDir(), "child-bin"))
 		s.child = childFromConfig(cfg)
 	}
 	s.config.Store(cfg)

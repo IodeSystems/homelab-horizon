@@ -932,6 +932,19 @@ export interface InstanceNestedResp {
    * unavailable); LastPullAt is then not an answer.
    */
   pullsUnknown?: string;
+  /**
+   * State is one of the NestedState* constants. GrantExpiresAt is set while
+   * a bootstrap command is live; EnrolledAt when this hz remembers the box
+   * enrolling. Both are held in memory: a restart forgets them, and the
+   * state then reads from the token, the link and the pulls alone.
+   */
+  state: string;
+  grantExpiresAt?: number /* int64 */;
+  enrolledAt?: number /* int64 */;
+  /**
+   * VPNClient is the linked upstream VPN client, "" for none.
+   */
+  vpnClient?: string;
 }
 /**
  * InstanceSyncResp is a replica's last pull from the config primary.
@@ -941,6 +954,164 @@ export interface InstanceSyncResp {
   lastSuccessAt: number /* int64 */; // unix seconds, 0 if never
   lastError: string; // "" when the last attempt succeeded
 }
+
+//////////
+// source: nested_bootstrap.go
+
+/**
+ * NestedBootstrapPath is the generate endpoint.
+ */
+export const NestedBootstrapPath = "/api/v1/nested/bootstrap";
+/**
+ * NestedBootstrapReq declares a nested hz for a project and asks for the
+ * command that provisions it.
+ * Rung is the rung's NAME in Project; the rung is declared as Project/Rung with
+ * Upstream = Machine. From is an existing rung of the same project that
+ * promotes into it. Posture defaults to prod.
+ * Platform is optional: "linux-amd64" or "linux-arm64" when the operator
+ * knows the box's architecture. With it, a missing binary for that platform is
+ * a refusal; without it, a missing one is a warning on the response and the
+ * script stops on such a box before it touches anything.
+ * URL is optional: where the child's hz will answer, a statement for the
+ * operator (MachineHZ.URL). Empty on a new machine is "not known yet" — a
+ * .invalid placeholder — and enrolment replaces it with the box's VPN address.
+ */
+export interface NestedBootstrapReq {
+  project: string;
+  machine: string;
+  rung: string;
+  from: string;
+  posture?: string;
+  platform?: string;
+  url?: string;
+}
+/**
+ * NestedBootstrapResp is the generated command, shown once.
+ * Reused lists what already existed (a re-provision of a wiped box): "machine",
+ * "rung". Revoked is true when an unused earlier command for this machine was
+ * revoked by this one.
+ */
+export interface NestedBootstrapResp {
+  command: string;
+  expiresAt: number /* int64 */; // unix seconds
+  machine: string;
+  project: string;
+  rung: string; // "<project>/<rung>"
+  /**
+   * Platforms is every platform a child binary is stored for; Missing is
+   * the supported ones that are not. Warning is a sentence when Missing is
+   * not empty — the UI shows it before the command.
+   */
+  platforms: string[];
+  missing: string[];
+  warning?: string;
+  reused: string[];
+  revoked: boolean;
+}
+/**
+ * NestedEnrolReq is what the box sends: its WireGuard PUBLIC key, and the
+ * platform it needs a binary for. Hostname is a label for the log only — the
+ * machine's identity is the grant's.
+ */
+export interface NestedEnrolReq {
+  public_key: string;
+  platform: string;
+  hostname?: string;
+}
+/**
+ * NestedEnrolResp is everything the box needs, and nothing it does not. The
+ * instance token is shown here ONCE; the parent keeps its sha256.
+ */
+export interface NestedEnrolResp {
+  wg: NestedEnrolWG;
+  parent_url: string;
+  instance_token: string;
+  machine: string;
+  project: string;
+  rung: string;
+  service_name: string;
+  binary: NestedEnrolBinary;
+  /**
+   * Seed is the child's config.json seed: the project, the rung, a local
+   * service for that rung (token empty — the BOX generates it and the
+   * parent never sees it) and the upstream block.
+   */
+  seed: NestedChildSeed;
+}
+/**
+ * NestedEnrolWG is the box's side of the upstream tunnel.
+ */
+export interface NestedEnrolWG {
+  address: string; // the box's VPN address, no mask
+  peer_public_key: string;
+  endpoint: string;
+  allowed_ips: string; // the parent's WG address /32 — nothing else
+}
+/**
+ * NestedEnrolBinary is the server binary the box downloads over the VPN.
+ */
+export interface NestedEnrolBinary {
+  url: string;
+  sha256: string;
+  version: string;
+}
+/**
+ * NestedChildSeed is the subset of the child's config.json the bootstrap
+ * writes. The json tags are config.Config's; TestEnrolSeedLoadsAsTheChildsConfig
+ * loads it through config.LoadFromJSON, so a tag that drifts fails there.
+ */
+export interface NestedChildSeed {
+  projects: NestedSeedProject[];
+  environments: NestedSeedEnvironment[];
+  services: NestedSeedService[];
+  upstream: NestedSeedUpstream;
+}
+export interface NestedSeedProject {
+  name: string;
+}
+export interface NestedSeedEnvironment {
+  project: string;
+  name: string;
+  posture: string;
+}
+export interface NestedSeedService {
+  name: string;
+  project: string;
+  environment: string;
+  token: string;
+  domains: string[];
+}
+export interface NestedSeedUpstream {
+  url: string;
+  token_file: string;
+  rungs: NestedSeedRung[];
+  poll_seconds?: number /* int */;
+}
+export interface NestedSeedRung {
+  project: string;
+  environment: string;
+}
+/**
+ * NestedStateDeclared: the machine is declared; nothing provisioned.
+ */
+export const NestedStateDeclared = "declared";
+/**
+ * NestedStateCommandGenerated: a bootstrap command is live (GrantExpiresAt).
+ */
+export const NestedStateCommandGenerated = "command-generated";
+/**
+ * NestedStateEnrolled: the box enrolled (EnrolledAt) and has not pulled since.
+ */
+export const NestedStateEnrolled = "enrolled";
+/**
+ * NestedStateConnected: the instance has pulled a desired state (LastPullAt).
+ */
+export const NestedStateConnected = "connected";
+/**
+ * NestedStateNeverConnected: hz holds a token and a VPN link for it, and
+ * has no record of a pull — and no enrolment this hz remembers.
+ */
+export const NestedStateNeverConnected = "never-connected";
 
 //////////
 // source: probe_diagnosis.go
