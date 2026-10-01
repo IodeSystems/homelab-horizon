@@ -319,6 +319,12 @@ export interface DeployReportReq {
   describe: string;
   artifact_sha256: string;
   host: string;
+  /**
+   * BuildURL is where the build's tests and logs are kept. Optional; any
+   * scheme (an R0 build may name a bucket path); at most 2048 bytes and no
+   * control characters.
+   */
+  build_url?: string;
 }
 /**
  * DeployReportResultResp answers a recorded report.
@@ -346,15 +352,33 @@ export interface PromoteReq {
 }
 /**
  * PromoteResp answers a promotion that happened. ArtifactSHA256 is the PINNED
- * artifact: the one the source rung last reported for Version. Downgrade is
- * true when AllowDowngrade was needed, and is recorded as such.
+ * artifact: the one the source rung last reported for Version, and BuildURL
+ * that report's build_url. Downgrade is true when AllowDowngrade was needed,
+ * and is recorded as such.
+ * RestoreTests is the restore-test gate's answer in one sentence, ALWAYS set:
+ * "none required: redline/prod has no supported line yet" on a first release,
+ * never an absent field. LinesChecked lists each supported line of the target
+ * (as it was BEFORE the promotion) and the evidence that satisfied it.
  */
 export interface PromoteResp {
   promoted: boolean;
   version: string;
   artifact_sha256: string;
+  build_url: string;
   downgrade: boolean;
   id: number /* int64 */;
+  restore_tests: string;
+  lines_checked: LineCheckedResp[];
+}
+/**
+ * LineCheckedResp is one line a promotion was checked against.
+ */
+export interface LineCheckedResp {
+  line: string;
+  why: string; // "current", "prior", "pinned"; comma-joined
+  kept_backup_id: number /* int64 */;
+  backup_sha256: string;
+  restore_test_id: number /* int64 */;
 }
 /**
  * DeployReportResp is one stored report, for GET /api/v1/deploys/latest — the
@@ -370,6 +394,7 @@ export interface DeployReportResp {
   describe: string;
   artifact_sha256: string;
   host: string;
+  build_url: string; // "" when the report carried none
   reportedAt: string;
   reportedBy: string;
   /**
@@ -393,6 +418,155 @@ export interface PromotionResp {
   promotedBy: string;
   downgrade: boolean;
   ageSeconds: number /* int64 */;
+  build_url: string;
+  /**
+   * RestoreGate: "checked", "none-required", or "predates" (written before
+   * the restore-test gate existed — not the same answer as none required).
+   */
+  restore_gate: string;
+}
+/**
+ * RecordedResp answers a recorded kept backup or restore test.
+ */
+export interface RecordedResp {
+  recorded: boolean;
+  id: number /* int64 */;
+}
+/**
+ * KeptBackupReq is POST /api/v1/backups/kept: the app says it keeps a backup
+ * for a line. The newest per (project, line) is the kept backup.
+ * TakenByVersion must be on Line. Location is required (where the app keeps
+ * it); BuildURL is optional.
+ */
+export interface KeptBackupReq {
+  project: string;
+  line: string;
+  backup_sha256: string;
+  location: string;
+  taken_by_version: string;
+  build_url?: string;
+}
+/**
+ * RestoreTestReq is POST /api/v1/restore-tests/report: "build Version restored
+ * Line's kept backup (BackupSHA256), migrated, tests passed" — or did not.
+ * Passed is REQUIRED: an absent passed is refused, never read as false.
+ */
+export interface RestoreTestReq {
+  project: string;
+  environment: string;
+  version: string;
+  line: string;
+  backup_sha256: string;
+  passed?: boolean;
+  build_url?: string;
+}
+/**
+ * KeptBackupResp is one kept-backup record.
+ */
+export interface KeptBackupResp {
+  id: number /* int64 */;
+  line: string;
+  backup_sha256: string;
+  location: string;
+  taken_by_version: string;
+  build_url: string;
+  recorded_at: string;
+  recorded_by: string;
+  age_seconds: number /* int64 */;
+}
+/**
+ * RestoreTestResp is one restore-test record.
+ */
+export interface RestoreTestResp {
+  id: number /* int64 */;
+  environment: string;
+  version: string;
+  line: string;
+  backup_sha256: string;
+  passed: boolean;
+  build_url: string;
+  reported_at: string;
+  reported_by: string;
+  age_seconds: number /* int64 */;
+}
+/**
+ * LineWhyResp is one reason a line is supported.
+ */
+export interface LineWhyResp {
+  kind: string; // "current", "prior" or "pinned"
+  detail: string; // what declares it, which promotion, or the pin's reason
+}
+/**
+ * SupportedLineResp is one supported line of one rung.
+ * KeptBackup is null when the line has none — the gate refuses on that.
+ * Restore is the restore-test evidence for the rung's NEXT promotion: the
+ * newest version its source rung reported, tested against this line's kept
+ * backup. Status is one of:
+ * 	passed | failed | missing | superseded   — a test was looked for
+ * 	no-kept-backup                          — nothing to test against
+ * 	no-source-report                        — the source rung reported nothing
+ * 	no-source                               — the rung has no `from` edge
+ * and Sentence is the gate's own words for it.
+ */
+export interface SupportedLineResp {
+  line: string;
+  why: LineWhyResp[];
+  kept_backup?: KeptBackupResp;
+  restore: LineRestoreResp;
+}
+/**
+ * LineRestoreResp is a line's restore-test status for one version.
+ */
+export interface LineRestoreResp {
+  status: string;
+  version: string; // "" when there is no source report
+  sentence: string;
+  test?: RestoreTestResp; // the test the status rests on, when there is one
+}
+/**
+ * RungLinesResp is one rung's supported lines. Supported empty AND Gaps empty
+ * is "no supported line" — the first release, and NoneRequired says so in
+ * words. A gap is "hz cannot say" (a declared version that is not semver, a
+ * pin that is not a line); the gate refuses on one.
+ */
+export interface RungLinesResp {
+  environment: string;
+  posture: string;
+  from: string;
+  declared: string;
+  supported: SupportedLineResp[];
+  gaps: string[];
+  none_required?: string;
+}
+/**
+ * PinnedLineResp is one pin, as config.json declares it.
+ */
+export interface PinnedLineResp {
+  line: string;
+  reason: string;
+}
+/**
+ * ProjectLinesResp is GET /api/v1/projects/lines?project=.
+ * Retired lines hold a kept backup but are supported on no rung: the app may
+ * delete them. hz says so and deletes nothing. When any rung has a gap, hz
+ * cannot say which lines are retired — RetiredUnknown says why and Retired is
+ * empty, which is NOT "none retired".
+ */
+export interface ProjectLinesResp {
+  project: string;
+  pins: PinnedLineResp[];
+  rungs: RungLinesResp[];
+  retired: KeptBackupResp[];
+  retired_unknown?: string;
+}
+/**
+ * LinePinReq is POST /api/v1/projects/lines/pin (Reason required) and
+ * /unpin (Reason ignored).
+ */
+export interface LinePinReq {
+  project: string;
+  line: string;
+  reason?: string;
 }
 
 //////////
