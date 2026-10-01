@@ -211,6 +211,25 @@ func (s *Server) applyRecordMutation(w http.ResponseWriter, r *http.Request, op 
 		writeJSONError(w, http.StatusNotFound, "Zone not found")
 		return
 	}
+
+	// Refuse before anything reaches the provider: the value's own shape, and
+	// the delegation rules (no NS at the apex, nothing else at or below a
+	// delegated name). The set-level CNAME rules are the set endpoint's; this
+	// path has never enforced them, and starting here would refuse edits on a
+	// zone that already breaks one.
+	if op != recordOpDelete {
+		if err := (config.DNSRecord{Name: name, Type: recType, Value: value}).Validate(); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		candidate := *zone
+		candidate.Records = applyRecordToConfig(append([]config.DNSRecord(nil), zone.Records...), op, name, recType, value, oldValue, req.TTL)
+		if err := candidate.ValidateDelegationRecords(); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
 	providerCfg := zone.GetDNSProvider()
 	if providerCfg == nil {
 		writeJSONError(w, http.StatusBadRequest, "No DNS provider configured for zone")

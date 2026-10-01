@@ -80,11 +80,13 @@ COMMANDS
                                      Records hz owns on its zones (DKIM, SPF, verification)
                                      and whether each is live. --all: every record at the
                                      provider, with its owner (declared/derived/observed)
-  dns record add --name N --type A|AAAA|CNAME|TXT|MX --value V [--value V2]
+  dns record add --name N --type A|AAAA|CNAME|TXT|MX|NS --value V [--value V2]
                  [--ttl SEC] [--note "why"] [--zone Z]
                                      Declare values hz owns at (name, type) and publish them.
                                      The zone is the managed zone the name is in; a name in
-                                     none is refused. TXT unquoted; MX "10 host". A value
+                                     none is refused. TXT unquoted; MX "10 host"; NS (below
+                                     the apex) delegates the name, one --value per
+                                     nameserver, and nothing may be declared under it. A value
                                      already live that hz did not publish must be named to
                                      be adopted — hz refuses a write that would delete it
   dns record edit <name> --type T [--value V ...] [--ttl SEC] [--note "why"]

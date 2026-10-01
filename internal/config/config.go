@@ -1788,6 +1788,12 @@ func Save(path string, cfg *Config) error {
 	if err := cfg.ValidateRecoveryRecipients(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
+	// Delegations, same chokepoint. A record, service domain or sub_zone below a
+	// delegated name is written to a zone no resolver reads for it — silent at
+	// the write, and the delegated zone's owner never sees it.
+	if err := cfg.ValidateDelegations(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
 	dir := filepath.Dir(path)
 	if dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0755); err != nil {

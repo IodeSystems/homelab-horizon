@@ -1145,6 +1145,9 @@ func (c *Config) ValidateService(svc *Service) error {
 		if zone == nil {
 			return &ValidationError{Field: "domain", Message: fmt.Sprintf("no zone configured for domain %q", domain)}
 		}
+		if err := c.ServiceDomainDelegationError(svc.Name, domain); err != nil {
+			return &ValidationError{Field: "domain", Message: err.Error()}
+		}
 	}
 
 	// Validate InternalDNS if present. A host reference resolves first, so the
@@ -1527,6 +1530,23 @@ func (c *Config) DeriveDNSRecords() []dnsmasq.Record {
 			Wildcard: !local[name] || wildcards[name],
 			Comment:  comments[name],
 		})
+	}
+	// A delegated subdomain is not this hz's to answer. A service domain above
+	// it is a wildcard address= that would answer for it too — measured on the
+	// office hz: address=/redline.iodesystems.com/192.168.1.160 answered .160
+	// for loadtest.redline.iodesystems.com. Forwarding it upstream gives
+	// internal clients the delegated zone's public answer.
+	for i := range c.Zones {
+		for _, d := range c.Zones[i].Delegations() {
+			if d.Name == strings.ToLower(c.Zones[i].Name) {
+				continue // refused by validation; never forward a whole zone away
+			}
+			records = append(records, dnsmasq.Record{
+				Name:            d.Name,
+				ForwardUpstream: true,
+				Comment:         d.describe() + "; resolved upstream, not answered here",
+			})
+		}
 	}
 	return records
 }

@@ -3011,7 +3011,7 @@ export interface DeclaredDNSRecordResp {
 export interface DNSRecordSetRequest {
   zone?: string; // derived from Name when empty
   name: string;
-  type: string; // A, AAAA, CNAME, TXT, MX
+  type: string; // A, AAAA, CNAME, TXT, MX, NS (NS below the apex only: a delegation)
   values: string[];
   ttl?: number /* int */; // seconds; 0 keeps the declared TTL, else 300
   note?: string;
