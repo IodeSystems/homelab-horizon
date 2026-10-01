@@ -23,6 +23,8 @@ import type {
 } from "../../api/generated-types";
 import { routeTree } from "../../routeTree.gen";
 import { PromotePanel, ReportedCell, type ReportSource } from "./DeployBits";
+import { BuildLink, ReleaseLinesTable, RequiredRestoreTests } from "./ReleaseLines";
+import type { ProjectLinesResp } from "../../api/generated-types";
 
 let failures = 0;
 let checks = 0;
@@ -57,6 +59,78 @@ const STAGING_REPORT: DeployReportResp = {
   reportedAt: "2026-09-30T10:00:00Z",
   reportedBy: "service:redline-staging",
   ageSeconds: 180,
+  build_url: "https://ci.test/builds/7",
+};
+
+// prod: on 1.0.1 (current, no kept backup) with 1.0.0 prior (kept, tested).
+const LINES: ProjectLinesResp = {
+  project: "redline",
+  pins: [],
+  rungs: [
+    {
+      environment: "staging",
+      posture: "staging",
+      from: "",
+      declared: "1.4.0",
+      supported: [],
+      gaps: [],
+      none_required: "none required: redline/staging has no supported line yet",
+    },
+    {
+      environment: "prod",
+      posture: "prod",
+      from: "staging",
+      declared: "1.0.1-0.3",
+      gaps: [],
+      supported: [
+        {
+          line: "1.0.1",
+          why: [{ kind: "current", detail: "redline/prod declares 1.0.1-0.3" }],
+          restore: {
+            status: "no-kept-backup",
+            version: "",
+            sentence: "line 1.0.1 is supported on redline/prod but has no kept backup",
+          },
+        },
+        {
+          line: "1.0.0",
+          why: [
+            { kind: "prior", detail: "1.0.0-1.1 was promoted from staging by promotion #2" },
+            { kind: "pinned", detail: "legacy import" },
+          ],
+          kept_backup: {
+            id: 4,
+            line: "1.0.0",
+            backup_sha256: "c".repeat(64),
+            location: "s3://redline-kept/1.0.0.sql.zst",
+            taken_by_version: "1.0.0-0.1",
+            build_url: "",
+            recorded_at: "2026-09-30T09:00:00Z",
+            recorded_by: "service:redline-prod",
+            age_seconds: 3600,
+          },
+          restore: {
+            status: "passed",
+            version: "1.4.0",
+            sentence: "1.4.0 passed its restore test against line 1.0.0's kept backup cccccccccccc (restore test #9)",
+            test: {
+              id: 9,
+              environment: "staging",
+              version: "1.4.0",
+              line: "1.0.0",
+              backup_sha256: "c".repeat(64),
+              passed: true,
+              build_url: "gs://redline-builds/dist/builds/7/",
+              reported_at: "2026-09-30T09:30:00Z",
+              reported_by: "service:redline-staging",
+              age_seconds: 1800,
+            },
+          },
+        },
+      ],
+    },
+  ],
+  retired: [],
 };
 
 const PROMOTIONS: PromotionResp[] = [
@@ -71,6 +145,8 @@ const PROMOTIONS: PromotionResp[] = [
     promotedBy: "user:carl (token:redline-deploy)",
     downgrade: false,
     ageSeconds: 86400,
+    build_url: "",
+    restore_gate: "none-required",
   },
 ];
 
@@ -85,6 +161,7 @@ function seeded(): QueryClient {
   qc.setQueryData(["cm", "version-drift"], DRIFT);
   qc.setQueryData(["deploys", "latest"], [STAGING_REPORT]);
   qc.setQueryData(["promotions"], PROMOTIONS);
+  qc.setQueryData(["lines", "redline"], LINES);
   return qc;
 }
 
@@ -194,6 +271,108 @@ console.log("· PromotePanel — prefilled from the SOURCE rung's newest report"
   const empty = standalone(<PromotePanel env={prod} sourceReport={null} onClose={() => {}} />);
   check(empty.text.includes("staging has reported nothing"), "with no report it says hz will refuse");
   check(/<button[^>]*disabled[^>]*>Promote<\/button>/.test(empty.html), "and Promote is disabled with no version");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· build_url — a link only when http(s)");
+// ---------------------------------------------------------------------------
+{
+  const http = standalone(<BuildLink url="https://ci.test/builds/7" />);
+  check(http.html.includes('href="https://ci.test/builds/7"') && http.html.includes('data-build-url="link"'), "an https build_url is a link");
+  const bucket = standalone(<BuildLink url="gs://redline-builds/dist/builds/7/" />);
+  check(
+    !bucket.html.includes("<a") && bucket.html.includes('data-build-url="text"') && bucket.text.includes("gs://redline-builds/dist/builds/7/"),
+    "a bucket path is monospace text, not a dead link",
+  );
+  const js = standalone(<BuildLink url="javascript:alert(1)" />);
+  check(!js.html.includes("href"), "a javascript: build_url is never an href");
+
+  const cell = standalone(<ReportedCell source={{ known: true, reports: [STAGING_REPORT] }} env={ENVIRONMENTS[0]!} />);
+  check(cell.html.includes('href="https://ci.test/builds/7"'), "the Reported cell carries the report's build link");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· through the router — the Release lines section");
+// ---------------------------------------------------------------------------
+{
+  const r = await at("/p/redline");
+  check(r.text.includes("Release lines"), "the Overview has a Release lines section");
+  check(r.html.includes('aria-label="Release lines"'), "with a table");
+  check(r.text.includes("none required: redline/staging has no supported line yet"), "a rung with no line says none required");
+  check(r.html.includes('data-kept="none"') && r.text.includes("no kept backup"), "a line without a kept backup says so");
+  check(r.text.includes("cccccccccccc · s3://redline-kept/1.0.0.sql.zst · 1h ago"), "a kept backup reads sha12 · location · age");
+  check(r.text.includes("prior · pinned: legacy import"), "why names every reason, a pin with its reason");
+  check(r.html.includes('data-restore="passed"') && r.text.includes("1.4.0 passed (#9)"), "the restore column names the version and test id");
+  check(r.html.includes('data-retired="none"') && r.text.includes("No retired lines."), "no retired line says so");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· ReleaseLinesTable — every state answers");
+// ---------------------------------------------------------------------------
+{
+  const loading = standalone(<ReleaseLinesTable lines={undefined} error={null} loading={true} project="redline" />);
+  check(loading.html.includes('data-lines="loading"') && !loading.text.includes("No supported"), "loading is not empty");
+
+  const failed = standalone(<ReleaseLinesTable lines={undefined} error={new Error("503")} loading={false} project="redline" />);
+  check(
+    failed.html.includes('data-lines="unknown"') && failed.text.includes("could not be asked") && !failed.text.includes("No supported"),
+    "a failed read says so — never 'no supported lines'",
+  );
+
+  const first: ProjectLinesResp = {
+    ...LINES,
+    rungs: LINES.rungs.map((r) => ({ ...r, supported: [], gaps: [], none_required: `none required: redline/${r.environment} has no supported line yet` })),
+  };
+  const none = standalone(<ReleaseLinesTable lines={first} error={null} loading={false} project="redline" />);
+  check(
+    none.html.includes('data-lines="none"') && none.html.includes("data-empty-row") && none.text.includes("No supported release lines in redline"),
+    "no line anywhere is a one-line empty state",
+  );
+
+  const gap: ProjectLinesResp = {
+    ...LINES,
+    rungs: [{ ...LINES.rungs[1]!, supported: [], gaps: ['redline/prod declares "deb-1.2", which hz cannot read a line from'] }],
+    retired_unknown: "hz cannot say which lines are retired: redline/prod declares \"deb-1.2\"",
+  };
+  const unknown = standalone(<ReleaseLinesTable lines={gap} error={null} loading={false} project="redline" />);
+  check(
+    unknown.html.includes('data-lines-row="gap"') && unknown.text.includes("hz cannot say:") && !unknown.text.includes("none required"),
+    "a gap is 'hz cannot say', not none required",
+  );
+  check(
+    unknown.html.includes('data-retired="unknown"') && !unknown.text.includes("No retired lines."),
+    "retired is unknown when a rung is — never 'no retired lines'",
+  );
+
+  const retired: ProjectLinesResp = { ...LINES, retired: [LINES.rungs[1]!.supported[1]!.kept_backup!] };
+  const some = standalone(<ReleaseLinesTable lines={retired} error={null} loading={false} project="redline" />);
+  check(some.html.includes('data-retired="some"') && some.text.includes("hz deletes nothing"), "retired lines say the app may delete them, hz deletes nothing");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· the Promote dialog — the required restore tests, before the button");
+// ---------------------------------------------------------------------------
+{
+  const prod = ENVIRONMENTS[1]!;
+  const r = standalone(<PromotePanel env={prod} sourceReport={STAGING_REPORT} onClose={() => {}} />);
+  check(r.html.includes('data-required="list"') && r.text.includes("Required restore tests"), "the dialog lists the required restore tests");
+  check(
+    r.html.includes('data-required-line="no-kept-backup"') && r.text.includes("line 1.0.1 is supported on redline/prod but has no kept backup"),
+    "a missing kept backup is shown in the gate's own words",
+  );
+  check(r.html.includes('data-required-line="passed"'), "a satisfied line is shown satisfied");
+  check(r.text.indexOf("Required restore tests") < r.text.lastIndexOf("Promote"), "the list comes before the Promote button");
+  check(r.html.includes('href="https://ci.test/builds/7"'), "the source report's build link is in the dialog");
+
+  const lines = { known: true as const, lines: LINES };
+  const staging = standalone(<RequiredRestoreTests source={lines} project="redline" target="staging" version="1.4.0" />);
+  check(staging.html.includes('data-required="none"') && staging.text.includes("none required"), "a target with no line says none required");
+  const asking = standalone(<RequiredRestoreTests source={{ known: false, loading: true }} project="redline" target="prod" version="1.4.0" />);
+  check(asking.html.includes('data-required="loading"') && !asking.text.includes("none required"), "loading is not none required");
+  const failed = standalone(<RequiredRestoreTests source={{ known: false, loading: false, why: "503" }} project="redline" target="prod" version="1.4.0" />);
+  check(failed.html.includes('data-required="unknown"') && failed.text.includes("still checks"), "a failed read says the promote still checks");
+  const other = standalone(<RequiredRestoreTests source={lines} project="redline" target="prod" version="1.5.0" />);
+  check(other.html.includes('data-required-for="other"') && other.text.includes("Shown for 1.4.0"), "a typed version other than the tested one is flagged");
 }
 
 // ---------------------------------------------------------------------------
