@@ -3273,13 +3273,43 @@ export interface LocalDNSRecord {
    */
   shadowsDerived?: string;
 }
+/**
+ * LocalDNSDerived is one name a service makes hz answer.
+ */
+export interface LocalDNSDerived {
+  name: string;
+  ip: string;
+  /**
+   * Service is the service the name comes from.
+   */
+  service: string;
+  /**
+   * Ports the service uses: backend, both blue-green slots, HAProxy.
+   */
+  ports: ServicePort[];
+}
+/**
+ * ServicePort is one port a service uses.
+ */
+export interface ServicePort {
+  port: number /* int */;
+  /**
+   * Label is "backend", "slot a", "slot b", "http" or "https".
+   */
+  label: string;
+  /**
+   * Active marks the blue-green slot that is active.
+   */
+  active?: boolean;
+}
 export interface LocalDNSResponse {
   records: LocalDNSRecord[];
   /**
    * Derived are the records hz generates from services, shown so the page
    * can present everything the resolver answers rather than half of it.
+   * Sorted by IP, then name.
    */
-  derived?: LocalDNSRecord[];
+  derived?: LocalDNSDerived[];
   /**
    * Enabled is false when dnsmasq is off, in which case records are stored
    * and served the moment it is turned on.

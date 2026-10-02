@@ -642,8 +642,18 @@ listen stats
 			}
 			fmt.Fprintf(&sb, "    option httpchk GET %s\n", checkPath)
 			sb.WriteString("    http-check expect status 200\n")
-			fmt.Fprintf(&sb, "    server next %s check inter 3s fall 2 rise 2%s\n", b.NextServer, serverProto(b.Proto))
+			// Order is the policy under `balance first`: every request goes
+			// to the first listed server that is up. Current (the active
+			// slot) is first, next (the standby) takes traffic only when
+			// current is down, drained or in maint. Runtime states set over
+			// the admin socket do not survive a reload, and hz reloads on
+			// most edits — so after any reload with both slots up, the
+			// first line is what serves. Listing next first (as 4ebc2af
+			// did) sent that traffic to the standby, and after a promote +
+			// swap, to the slot that still runs the OLD code.
+			// TestDeployBackendServesTheActiveSlot pins it.
 			fmt.Fprintf(&sb, "    server current %s check inter 3s fall 2 rise 2%s\n", b.CurrentServer, serverProto(b.Proto))
+			fmt.Fprintf(&sb, "    server next %s check inter 3s fall 2 rise 2%s\n", b.NextServer, serverProto(b.Proto))
 		} else {
 			sb.WriteString("    balance roundrobin\n")
 			if b.HTTPCheck {
