@@ -9,7 +9,7 @@
  * delete-and-re-add, so this screen does not pretend otherwise.
  */
 import { useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { Link, createFileRoute } from "@tanstack/react-router";
 import {
   Alert,
   Box,
@@ -25,6 +25,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
+import { CheckStatusFilter, filterByStatus, noneWithStatus, parseStatusParam } from "../components/CheckFilter";
 import { CheckId, checkAnchor } from "../components/CheckId";
 import { useChecks } from "../api/hooks";
 import { inScope } from "../components/model/projectRoutes.ts";
@@ -41,12 +42,14 @@ import {
 function ProjectChecks() {
   const { index, resolution, scope, param } = useProjectContext();
   const q = useChecks();
+  const { status } = Route.useSearch();
   const [adding, setAdding] = useState(false);
 
   if (!resolution.found) return null;
   const route = resolution.route;
   const reading = scopeOf(route, scope);
   const mine = (q.data ?? []).filter((r) => inScope(reading.names, r.project));
+  const shown = filterByStatus(mine, status);
   const add = <AddButton label="Add check" onClick={() => setAdding(true)} />;
 
   return (
@@ -63,6 +66,24 @@ function ProjectChecks() {
       ) : mine.length === 0 ? (
         <EmptyRow text={`No checks attributed to ${route.name}.`} action={add} />
       ) : (
+        <>
+        <CheckStatusFilter
+          rows={mine}
+          active={status}
+          linkTo={(st, chip) => (
+            <Link
+              to="/p/$project/checks"
+              params={{ project: param }}
+              search={{ ...(scope === "own" ? { scope: "own" as const } : {}), ...(st ? { status: st } : {}) }}
+              style={{ textDecoration: "none" }}
+            >
+              {chip}
+            </Link>
+          )}
+        />
+        {shown.length === 0 ? (
+          <EmptyRow text={noneWithStatus(status ?? "")} />
+        ) : (
         <TableContainer component={Paper}>
           <Table size="small">
             <TableHead>
@@ -72,7 +93,7 @@ function ProjectChecks() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {mine.map((r) => {
+              {shown.map((r) => {
                 const follows = svcFollows(r.name);
                 return (
                   <TableRow key={r.name} hover id={checkAnchor(r.name)}>
@@ -106,6 +127,8 @@ function ProjectChecks() {
             </TableBody>
           </Table>
         </TableContainer>
+        )}
+        </>
       )}
 
       {adding ? <AddCheckDialog project={route.name} onClose={() => setAdding(false)} /> : null}
@@ -115,4 +138,8 @@ function ProjectChecks() {
 
 export const Route = createFileRoute("/p/$project/checks")({
   component: ProjectChecks,
+  validateSearch: (search: Record<string, unknown>): { status?: string } => {
+    const status = parseStatusParam(search.status);
+    return status === undefined ? {} : { status };
+  },
 });
