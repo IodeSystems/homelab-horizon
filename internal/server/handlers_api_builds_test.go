@@ -18,10 +18,10 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/db"
 )
 
-// The build registry over the handlers: builders, numbering, logs, state,
+// The build registry over the handlers: build agents, numbering, logs, state,
 // finish, provenance on promote, log retention, and the whole path end to end.
 
-const secondBuilder = "build-2"
+const secondAgent = "build-2"
 
 type buildFixture struct {
 	n4aFixture
@@ -34,7 +34,6 @@ func newBuildFixture(t *testing.T) buildFixture {
 	f.s.buildDir = filepath.Join(t.TempDir(), "builds")
 	if err := f.s.updateConfig(func(c *config.Config) {
 		c.Projects = append(append([]config.Project(nil), c.Projects...), config.Project{Name: "storefront"})
-		c.Machines = append(append([]config.Machine(nil), c.Machines...), config.Machine{Name: secondBuilder}, config.Machine{Name: "laptop"})
 		c.AdminURL = "https://hz.example.com/"
 	}); err != nil {
 		t.Fatal(err)
@@ -68,21 +67,21 @@ func decodeAs[T any](t *testing.T, w *httptest.ResponseRecorder) T {
 	return out
 }
 
-func (f buildFixture) mintBuilder(t *testing.T, machine string, projects ...string) string {
+func (f buildFixture) mintAgent(t *testing.T, name, project string) string {
 	t.Helper()
-	w := f.doJSON("POST", "/api/v1/builders", f.pat, apitypes.BuilderReq{Machine: machine, Projects: projects})
+	w := f.doJSON("POST", "/api/v1/build-agents", f.pat, apitypes.BuildAgentReq{Name: name, Project: project})
 	if w.Code != http.StatusOK {
-		t.Fatalf("mint builder %s: %d %s", machine, w.Code, w.Body.String())
+		t.Fatalf("mint build agent %s: %d %s", name, w.Code, w.Body.String())
 	}
-	out := decodeAs[apitypes.BuilderTokenResp](t, w)
+	out := decodeAs[apitypes.BuildAgentTokenResp](t, w)
 	if !strings.HasPrefix(out.Token, builderTokenPrefix) || len(out.Token) != len(builderTokenPrefix)+64 {
 		t.Fatalf("token = %q", out.Token)
 	}
 	return out.Token
 }
 
-func startReq(project, machine string) apitypes.BuildStartReq {
-	return apitypes.BuildStartReq{Project: project, Commit: testCommit, VersionCore: "1.0.0.0", Describe: "v1.0.0-3-g0123456", Machine: machine}
+func startReq(project, agent string) apitypes.BuildStartReq {
+	return apitypes.BuildStartReq{Project: project, Commit: testCommit, VersionCore: "1.0.0.0", Describe: "v1.0.0-3-g0123456", Agent: agent}
 }
 
 func (f buildFixture) start(t *testing.T, token string, req apitypes.BuildStartReq) apitypes.BuildStartResp {
@@ -102,54 +101,76 @@ func buildPath(id int64, verb string) string {
 	return p
 }
 
-func TestBuilderMintRotateRevoke(t *testing.T) {
+func TestBuildAgentMintRotateRevoke(t *testing.T) {
 	f := newBuildFixture(t)
-	if w := f.doJSON("POST", "/api/v1/builders", f.pat, apitypes.BuilderReq{Machine: "nope", Projects: []string{"redline"}}); w.Code != http.StatusConflict ||
-		!strings.Contains(errorOf(w), "cannot make itself a builder") {
-		t.Fatalf("undeclared machine: %d %q", w.Code, errorOf(w))
+	// A name that is no machine is fine: an agent is not a machine.
+	if _, ok := f.s.cfg().FindMachine("ci-anywhere"); ok {
+		t.Fatal("fixture declares ci-anywhere")
 	}
-	if w := f.doJSON("POST", "/api/v1/builders", f.pat, apitypes.BuilderReq{Machine: secondBuilder, Projects: []string{"nosuch"}}); w.Code != http.StatusConflict {
-		t.Fatalf("undeclared project: %d", w.Code)
+	f.mintAgent(t, "ci-anywhere", "storefront")
+	for _, c := range []struct {
+		name string
+		req  apitypes.BuildAgentReq
+		code int
+	}{
+		{"undeclared project", apitypes.BuildAgentReq{Name: secondAgent, Project: "nosuch"}, http.StatusConflict},
+		{"no project", apitypes.BuildAgentReq{Name: secondAgent}, http.StatusConflict},
+		{"no name", apitypes.BuildAgentReq{Project: "redline"}, http.StatusBadRequest},
+		{"bad name", apitypes.BuildAgentReq{Name: "a b", Project: "redline"}, http.StatusConflict},
+	} {
+		if w := f.doJSON("POST", "/api/v1/build-agents", f.pat, c.req); w.Code != c.code {
+			t.Errorf("%s: %d %s, want %d", c.name, w.Code, w.Body.String(), c.code)
+		}
 	}
-	tok := f.mintBuilder(t, secondBuilder, "redline")
-	f.start(t, tok, startReq("redline", secondBuilder))
+	w := f.doJSON("POST", "/api/v1/build-agents", f.pat, apitypes.BuildAgentReq{Name: secondAgent, Project: "redline", Host: "desktop", Note: "dev box"})
+	first := decodeAs[apitypes.BuildAgentTokenResp](t, w)
+	if w.Code != http.StatusOK || first.Rotated || first.Host != "desktop" || first.Project != "redline" {
+		t.Fatalf("mint: %d %s", w.Code, w.Body.String())
+	}
+	tok := first.Token
+	f.start(t, tok, startReq("redline", secondAgent))
 
 	// The list carries no token and no digest.
-	w := f.do("GET", "/api/v1/builders", f.pat, nil)
-	list := decodeAs[[]apitypes.BuilderResp](t, w)
-	if len(list) != 2 || strings.Contains(w.Body.String(), tokenDigest(tok)) || strings.Contains(w.Body.String(), tok) {
-		t.Fatalf("builders = %s", w.Body.String())
+	w = f.do("GET", "/api/v1/build-agents", f.pat, nil)
+	list := decodeAs[[]apitypes.BuildAgentResp](t, w)
+	if len(list) != 3 || strings.Contains(w.Body.String(), tokenDigest(tok)) || strings.Contains(w.Body.String(), tok) {
+		t.Fatalf("build agents = %s", w.Body.String())
 	}
 
-	// Re-mint rotates: the old token is refused, the new one works.
-	w = f.doJSON("POST", "/api/v1/builders", f.pat, apitypes.BuilderReq{Machine: secondBuilder, Projects: []string{"redline", "storefront"}})
-	rot := decodeAs[apitypes.BuilderTokenResp](t, w)
-	if !rot.Rotated {
-		t.Fatalf("re-mint not marked rotated: %+v", rot)
+	// Re-mint rotates: the old token is refused, the new one works, and the
+	// host is kept. Another project on the same name is refused.
+	if w := f.doJSON("POST", "/api/v1/build-agents", f.pat, apitypes.BuildAgentReq{Name: secondAgent, Project: "storefront"}); w.Code != http.StatusConflict ||
+		!strings.Contains(errorOf(w), "builds one project") {
+		t.Fatalf("project change: %d %q", w.Code, errorOf(w))
 	}
-	if w := f.doJSON("POST", "/api/v1/builds", tok, startReq("redline", secondBuilder)); w.Code != http.StatusUnauthorized {
+	w = f.doJSON("POST", "/api/v1/build-agents", f.pat, apitypes.BuildAgentReq{Name: secondAgent, Project: "redline"})
+	rot := decodeAs[apitypes.BuildAgentTokenResp](t, w)
+	if !rot.Rotated || rot.Host != "desktop" {
+		t.Fatalf("re-mint = %+v", rot)
+	}
+	if w := f.doJSON("POST", "/api/v1/builds", tok, startReq("redline", secondAgent)); w.Code != http.StatusUnauthorized {
 		t.Fatalf("the rotated-out token: %d", w.Code)
 	}
-	f.start(t, rot.Token, startReq("storefront", secondBuilder))
+	f.start(t, rot.Token, startReq("redline", secondAgent))
 
 	// Revoked → 401.
-	if w := f.do("DELETE", "/api/v1/builders/"+secondBuilder, f.pat, nil); w.Code != http.StatusOK {
+	if w := f.do("DELETE", "/api/v1/build-agents/"+secondAgent, f.pat, nil); w.Code != http.StatusOK {
 		t.Fatalf("revoke: %d %s", w.Code, w.Body.String())
 	}
-	if w := f.doJSON("POST", "/api/v1/builds", rot.Token, startReq("redline", secondBuilder)); w.Code != http.StatusUnauthorized {
-		t.Fatalf("a revoked builder: %d", w.Code)
+	if w := f.doJSON("POST", "/api/v1/builds", rot.Token, startReq("redline", secondAgent)); w.Code != http.StatusUnauthorized {
+		t.Fatalf("a revoked build agent: %d", w.Code)
 	}
-	if w := f.do("DELETE", "/api/v1/builders/"+secondBuilder, f.pat, nil); w.Code != http.StatusNotFound {
+	if w := f.do("DELETE", "/api/v1/build-agents/"+secondAgent, f.pat, nil); w.Code != http.StatusNotFound {
 		t.Fatalf("revoke twice: %d", w.Code)
 	}
 }
 
 func TestBuildStartScopeAndShape(t *testing.T) {
 	f := newBuildFixture(t)
-	tok := f.mintBuilder(t, secondBuilder, "redline")
-	other := f.mintBuilder(t, "laptop", "storefront")
+	tok := f.mintAgent(t, secondAgent, "redline")
+	other := f.mintAgent(t, "laptop", "storefront")
 
-	out := f.start(t, tok, startReq("redline", secondBuilder))
+	out := f.start(t, tok, startReq("redline", secondAgent))
 	if out.Number != 1 || out.Version != "1.0.0-0.1" || out.BuildURL != "https://hz.example.com/p/redline/builds/1" {
 		t.Fatalf("start = %+v", out)
 	}
@@ -162,15 +183,18 @@ func TestBuildStartScopeAndShape(t *testing.T) {
 		req   apitypes.BuildStartReq
 		code  int
 	}{
-		{"another project", tok, startReq("storefront", secondBuilder), http.StatusForbidden},
-		{"another machine", tok, startReq("redline", "laptop"), http.StatusForbidden},
-		{"the other builder for redline", other, startReq("redline", "laptop"), http.StatusForbidden},
-		{"an admin token", f.pat, startReq("redline", secondBuilder), http.StatusUnauthorized},
-		{"a service token", stagingSvcToken, startReq("redline", secondBuilder), http.StatusUnauthorized},
-		{"no token", "", startReq("redline", secondBuilder), http.StatusUnauthorized},
-		{"short commit", tok, apitypes.BuildStartReq{Project: "redline", Commit: "0123456", VersionCore: "1.0.0.0", Machine: secondBuilder}, http.StatusBadRequest},
-		{"three-part core", tok, apitypes.BuildStartReq{Project: "redline", Commit: testCommit, VersionCore: "1.0.0", Machine: secondBuilder}, http.StatusBadRequest},
-		{"negative core", tok, apitypes.BuildStartReq{Project: "redline", Commit: testCommit, VersionCore: "1.0.0.-1", Machine: secondBuilder}, http.StatusBadRequest},
+		{"another project", tok, startReq("storefront", secondAgent), http.StatusForbidden},
+		{"another agent named", tok, startReq("redline", "laptop"), http.StatusForbidden},
+		{"no agent named", tok, startReq("redline", ""), http.StatusBadRequest},
+		{"agent and machine disagree", tok, apitypes.BuildStartReq{Project: "redline", Commit: testCommit, VersionCore: "1.0.0.0", Agent: secondAgent, Machine: "laptop"}, http.StatusBadRequest},
+		{"builder and machine disagree", tok, apitypes.BuildStartReq{Project: "redline", Commit: testCommit, VersionCore: "1.0.0.0", Builder: "laptop", Machine: secondAgent}, http.StatusBadRequest},
+		{"the storefront agent for redline", other, startReq("redline", "laptop"), http.StatusForbidden},
+		{"an admin token", f.pat, startReq("redline", secondAgent), http.StatusUnauthorized},
+		{"a service token", stagingSvcToken, startReq("redline", secondAgent), http.StatusUnauthorized},
+		{"no token", "", startReq("redline", secondAgent), http.StatusUnauthorized},
+		{"short commit", tok, apitypes.BuildStartReq{Project: "redline", Commit: "0123456", VersionCore: "1.0.0.0", Machine: secondAgent}, http.StatusBadRequest},
+		{"three-part core", tok, apitypes.BuildStartReq{Project: "redline", Commit: testCommit, VersionCore: "1.0.0", Machine: secondAgent}, http.StatusBadRequest},
+		{"negative core", tok, apitypes.BuildStartReq{Project: "redline", Commit: testCommit, VersionCore: "1.0.0.-1", Machine: secondAgent}, http.StatusBadRequest},
 	}
 	for _, c := range cases {
 		if w := f.doJSON("POST", "/api/v1/builds", c.token, c.req); w.Code != c.code {
@@ -178,8 +202,23 @@ func TestBuildStartScopeAndShape(t *testing.T) {
 		}
 	}
 	// Refusals consume no number.
-	if next := f.start(t, tok, startReq("redline", secondBuilder)); next.Number != 2 {
+	if next := f.start(t, tok, startReq("redline", secondAgent)); next.Number != 2 {
 		t.Fatalf("after refusals the next is #%d", next.Number)
+	}
+	// The older spellings of `agent` still start a build: `machine` is what
+	// redline's script sends today.
+	base := apitypes.BuildStartReq{Project: "redline", Commit: testCommit, VersionCore: "1.0.0.0"}
+	viaMachine, viaBuilder, viaAll := base, base, base
+	viaMachine.Machine = secondAgent
+	viaBuilder.Builder = secondAgent
+	viaAll.Agent, viaAll.Builder, viaAll.Machine = secondAgent, secondAgent, secondAgent
+	for i, req := range []apitypes.BuildStartReq{viaMachine, viaBuilder, viaAll} {
+		if got := f.start(t, tok, req); got.Number != int64(3+i) {
+			t.Fatalf("alias %d: #%d", i, got.Number)
+		}
+	}
+	if b := decodeAs[apitypes.BuildResp](t, f.do("GET", buildPath(out.ID, ""), f.pat, nil)); b.Agent != secondAgent || b.Machine != secondAgent {
+		t.Fatalf("the build names agent %q machine %q", b.Agent, b.Machine)
 	}
 }
 
@@ -187,8 +226,8 @@ func TestBuildStartScopeAndShape(t *testing.T) {
 func TestConcurrentStartsFromTwoBuilders(t *testing.T) {
 	f := newBuildFixture(t)
 	toks := map[string]string{
-		secondBuilder: f.mintBuilder(t, secondBuilder, "redline"),
-		"laptop":      f.mintBuilder(t, "laptop", "redline"),
+		secondAgent: f.mintAgent(t, secondAgent, "redline"),
+		"laptop":    f.mintAgent(t, "laptop", "redline"),
 	}
 	const each = 15
 	var mu sync.Mutex
@@ -233,7 +272,7 @@ func TestConcurrentStartsFromTwoBuilders(t *testing.T) {
 func TestBuildSeedEndpoint(t *testing.T) {
 	f := newBuildFixture(t)
 	f.reportOnly(t, stagingSvcToken, stagingReport("1.0.0-0.4", deployShaA))
-	tok := f.mintBuilder(t, secondBuilder, "redline")
+	tok := f.mintAgent(t, secondAgent, "redline")
 	if w := f.doJSON("POST", "/api/v1/builds/seed", f.pat, apitypes.BuildSeedReq{Project: "redline", Next: 3}); w.Code != http.StatusConflict ||
 		!strings.Contains(errorOf(w), "only raises") {
 		t.Fatalf("lowering below the seed: %d %q", w.Code, errorOf(w))
@@ -245,16 +284,16 @@ func TestBuildSeedEndpoint(t *testing.T) {
 	if w := f.doJSON("POST", "/api/v1/builds/seed", tok, apitypes.BuildSeedReq{Project: "redline", Next: 60}); w.Code != http.StatusUnauthorized {
 		t.Fatalf("a builder seeding: %d", w.Code)
 	}
-	if out := f.start(t, tok, startReq("redline", secondBuilder)); out.Number != 6 || out.Version != "1.0.0-0.6" {
+	if out := f.start(t, tok, startReq("redline", secondAgent)); out.Number != 6 || out.Version != "1.0.0-0.6" {
 		t.Fatalf("after the seed: %+v", out)
 	}
 }
 
 func TestBuildLogAppendCapAndTail(t *testing.T) {
 	f := newBuildFixture(t)
-	tok := f.mintBuilder(t, secondBuilder, "redline")
-	other := f.mintBuilder(t, "laptop", "redline")
-	b := f.start(t, tok, startReq("redline", secondBuilder))
+	tok := f.mintAgent(t, secondAgent, "redline")
+	other := f.mintAgent(t, "laptop", "redline")
+	b := f.start(t, tok, startReq("redline", secondAgent))
 
 	if w := f.do("POST", buildPath(b.ID, "log"), tok, []byte("hello\n")); w.Code != http.StatusOK {
 		t.Fatalf("append: %d %s", w.Code, w.Body.String())
@@ -326,7 +365,7 @@ func TestBuildLogAppendCapAndTail(t *testing.T) {
 	if w := f.doJSON("POST", buildPath(b.ID, "finish"), tok, apitypes.BuildFinishReq{Result: "failed", FailedStep: "test"}); w.Code != http.StatusOK {
 		t.Fatalf("finish: %d %s", w.Code, w.Body.String())
 	}
-	b2 := f.start(t, tok, startReq("redline", secondBuilder))
+	b2 := f.start(t, tok, startReq("redline", secondAgent))
 	_ = f.do("POST", buildPath(b2.ID, "finish"), tok, []byte(`{"result":"failed"}`))
 	if w := f.do("POST", buildPath(b2.ID, "log"), tok, []byte("late")); w.Code != http.StatusConflict {
 		t.Fatalf("log after finish: %d", w.Code)
@@ -335,8 +374,8 @@ func TestBuildLogAppendCapAndTail(t *testing.T) {
 
 func TestBuildStateUpdates(t *testing.T) {
 	f := newBuildFixture(t)
-	tok := f.mintBuilder(t, secondBuilder, "redline")
-	b := f.start(t, tok, startReq("redline", secondBuilder))
+	tok := f.mintAgent(t, secondAgent, "redline")
+	b := f.start(t, tok, startReq("redline", secondAgent))
 	state := apitypes.BuildStateReq{Step: "test", Status: "running", Steps: []apitypes.BuildStepResp{
 		{Name: "compile", Status: "passed", StartedAt: "2026-10-02T10:00:00Z", FinishedAt: "2026-10-02T10:01:00Z"},
 		{Name: "test", Status: "running", StartedAt: "2026-10-02T10:01:00Z"},
@@ -369,8 +408,9 @@ func TestBuildStateUpdates(t *testing.T) {
 
 func TestFinishRules(t *testing.T) {
 	f := newBuildFixture(t)
-	tok := f.mintBuilder(t, secondBuilder, "redline", "storefront")
-	b := f.start(t, tok, startReq("redline", secondBuilder))
+	tok := f.mintAgent(t, secondAgent, "redline")
+	narrow := f.mintAgent(t, "laptop", "storefront")
+	b := f.start(t, tok, startReq("redline", secondAgent))
 	finish := func(req apitypes.BuildFinishReq) *httptest.ResponseRecorder {
 		return f.doJSON("POST", buildPath(b.ID, "finish"), tok, req)
 	}
@@ -378,9 +418,9 @@ func TestFinishRules(t *testing.T) {
 	if w := finish(apitypes.BuildFinishReq{Result: "passed", ArtifactSHA256: notUploaded}); w.Code != http.StatusConflict || !strings.Contains(errorOf(w), "not uploaded") {
 		t.Fatalf("passed, artifact not uploaded: %d %q", w.Code, errorOf(w))
 	}
-	otherSha, w := f.upload(t, tok, "storefront", "storefront bundle")
+	otherSha, w := f.upload(t, narrow, "storefront", "storefront bundle")
 	if w.Code != http.StatusOK {
-		t.Fatalf("builder upload into storefront: %d %s", w.Code, w.Body.String())
+		t.Fatalf("agent upload into storefront: %d %s", w.Code, w.Body.String())
 	}
 	if w := finish(apitypes.BuildFinishReq{Result: "passed", ArtifactSHA256: otherSha}); w.Code != http.StatusConflict || !strings.Contains(errorOf(w), "storefront") {
 		t.Fatalf("passed with another project's artifact: %d %q", w.Code, errorOf(w))
@@ -405,8 +445,7 @@ func TestFinishRules(t *testing.T) {
 	if w := f.doJSON("PUT", buildPath(b.ID, "state"), tok, apitypes.BuildStateReq{Step: "x", Status: "running"}); w.Code != http.StatusConflict {
 		t.Fatalf("state after finish: %d", w.Code)
 	}
-	// A builder may upload only into its granted projects.
-	narrow := f.mintBuilder(t, "laptop", "storefront")
+	// An agent may upload only into its own project.
 	if _, w := f.upload(t, narrow, "redline", "not yours"); w.Code != http.StatusForbidden {
 		t.Fatalf("upload outside the grant: %d", w.Code)
 	}
@@ -414,8 +453,8 @@ func TestFinishRules(t *testing.T) {
 
 func TestAbandonedIsDerivedOnReadThroughTheAPI(t *testing.T) {
 	f := newBuildFixture(t)
-	tok := f.mintBuilder(t, secondBuilder, "redline")
-	b := f.start(t, tok, startReq("redline", secondBuilder))
+	tok := f.mintAgent(t, secondAgent, "redline")
+	b := f.start(t, tok, startReq("redline", secondAgent))
 	if _, err := f.s.users.ExecContext(context.Background(), `UPDATE builds SET last_activity_at = datetime('now', '-3 hours') WHERE id = ?`, b.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -440,19 +479,19 @@ func TestAbandonedIsDerivedOnReadThroughTheAPI(t *testing.T) {
 // (b) — skipping the check — turns red.
 func TestProvenanceOnPromote(t *testing.T) {
 	f := newBuildFixture(t)
-	tok := f.mintBuilder(t, secondBuilder, "redline")
+	tok := f.mintAgent(t, secondAgent, "redline")
 
 	// Uploaded, reported, no build → refused, naming the rule.
 	bare, _ := f.upload(t, stagingSvcToken, "redline", "no build made this")
 	f.reportOnly(t, stagingSvcToken, stagingReport("1.4.0", bare))
 	if w := f.promote(toProd("1.4.0")); w.Code != http.StatusConflict ||
-		!strings.Contains(errorOf(w), "a promotion needs the artifact of a passed build by a builder granted for the project") {
+		!strings.Contains(errorOf(w), "a promotion needs the artifact of a passed build by a build agent registered for the project at build time") {
 		t.Fatalf("no build: %d %q", w.Code, errorOf(w))
 	}
 
 	// A failed build's artifact → refused: failing names no artifact, so
 	// nothing vouches for the bytes it uploaded.
-	failed := f.start(t, tok, startReq("redline", secondBuilder))
+	failed := f.start(t, tok, startReq("redline", secondAgent))
 	failedSha, _ := f.upload(t, tok, "redline", "a failed build's bytes")
 	_ = f.doJSON("POST", buildPath(failed.ID, "finish"), tok, apitypes.BuildFinishReq{Result: "failed", FailedStep: "test"})
 	f.reportOnly(t, stagingSvcToken, stagingReport("1.4.1", failedSha))
@@ -461,7 +500,7 @@ func TestProvenanceOnPromote(t *testing.T) {
 	}
 
 	// A passed build → promoted, and the row names the build.
-	passed := f.start(t, tok, startReq("redline", secondBuilder))
+	passed := f.start(t, tok, startReq("redline", secondAgent))
 	sha, _ := f.upload(t, tok, "redline", "a passed build's bytes")
 	if w := f.doJSON("POST", buildPath(passed.ID, "finish"), tok, apitypes.BuildFinishReq{Result: "passed", ArtifactSHA256: sha}); w.Code != http.StatusOK {
 		t.Fatalf("finish: %d %s", w.Code, w.Body.String())
@@ -480,9 +519,9 @@ func TestProvenanceOnPromote(t *testing.T) {
 		t.Fatalf("promotion row = %+v", promos[0])
 	}
 
-	// Revoke the builder: it can start no NEW build, and its past passed build
+	// Revoke the agent: it can start no NEW build, and its past passed build
 	// stays promotable — a rollback target (the grant counts at build time).
-	if w := f.do("DELETE", "/api/v1/builders/"+secondBuilder, f.pat, nil); w.Code != http.StatusOK {
+	if w := f.do("DELETE", "/api/v1/build-agents/"+secondAgent, f.pat, nil); w.Code != http.StatusOK {
 		t.Fatal(w.Body.String())
 	}
 	f.reportOnly(t, stagingSvcToken, stagingReport(passed.Version, sha))
@@ -528,8 +567,8 @@ func TestGrandfatheredArtifactIsPromotableAndMarked(t *testing.T) {
 		t.Fatalf("promotion = %+v", ps[0])
 	}
 	// And the first build of redline is numbered above the reported #4.
-	tok := f.mintBuilder(t, secondBuilder, "redline")
-	if b := f.start(t, tok, startReq("redline", secondBuilder)); b.Number != 5 {
+	tok := f.mintAgent(t, secondAgent, "redline")
+	if b := f.start(t, tok, startReq("redline", secondAgent)); b.Number != 5 {
 		t.Fatalf("first build after a reported 1.0.0-0.4 is #%d", b.Number)
 	}
 }
@@ -537,15 +576,15 @@ func TestGrandfatheredArtifactIsPromotableAndMarked(t *testing.T) {
 func TestBuildLogRetentionDeletesWithTheArtifactAndAfter30Days(t *testing.T) {
 	f := newBuildFixture(t)
 	ctx := context.Background()
-	tok := f.mintBuilder(t, secondBuilder, "redline")
+	tok := f.mintAgent(t, secondAgent, "redline")
 
 	// A passed build whose artifact retention later deletes.
-	passed := f.start(t, tok, startReq("redline", secondBuilder))
+	passed := f.start(t, tok, startReq("redline", secondAgent))
 	_ = f.do("POST", buildPath(passed.ID, "log"), tok, []byte("passed log\n"))
 	sha, _ := f.upload(t, tok, "redline", "kept until retention")
 	_ = f.doJSON("POST", buildPath(passed.ID, "finish"), tok, apitypes.BuildFinishReq{Result: "passed", ArtifactSHA256: sha})
 	// A passed build whose artifact stays.
-	kept := f.start(t, tok, startReq("redline", secondBuilder))
+	kept := f.start(t, tok, startReq("redline", secondAgent))
 	_ = f.do("POST", buildPath(kept.ID, "log"), tok, []byte("kept log\n"))
 	keptSha, _ := f.upload(t, tok, "redline", "stays")
 	_ = f.doJSON("POST", buildPath(kept.ID, "finish"), tok, apitypes.BuildFinishReq{Result: "passed", ArtifactSHA256: keptSha})
@@ -555,7 +594,7 @@ func TestBuildLogRetentionDeletesWithTheArtifactAndAfter30Days(t *testing.T) {
 		n := int64(100 + i)
 		if _, err := f.s.users.ExecContext(ctx, `INSERT INTO builds (project, number, commit_sha, version_core, version, machine, started_at, last_activity_at, status, result, finished_at)
 			VALUES ('redline', ?, ?, '1.0.0.0', ?, ?, datetime('now', ?), datetime('now', ?), 'failed', 'failed', datetime('now', ?))`,
-			n, testCommit, "1.0.0-0."+strconv.FormatInt(n, 10), secondBuilder, ago, ago, ago); err != nil {
+			n, testCommit, "1.0.0-0."+strconv.FormatInt(n, 10), secondAgent, ago, ago, ago); err != nil {
 			t.Fatal(err)
 		}
 		p, _ := f.s.buildLogPath("redline", n)
@@ -599,8 +638,8 @@ func TestBuildLogRetentionDeletesWithTheArtifactAndAfter30Days(t *testing.T) {
 // entry or its own subtree, never the SPA catch-all.
 func TestBuilderTokenIsRefusedOnAdminRoutes(t *testing.T) {
 	f := newBuildFixture(t)
-	tok := f.mintBuilder(t, secondBuilder, "redline")
-	b := f.start(t, tok, startReq("redline", secondBuilder))
+	tok := f.mintAgent(t, secondAgent, "redline")
+	b := f.start(t, tok, startReq("redline", secondAgent))
 	mux := f.s.setupRoutes()
 	routes := append(adminRoutesUnderTest(),
 		struct{ method, path string }{"GET", buildPath(b.ID, "")},
@@ -668,6 +707,9 @@ func adminRoutesUnderTest() []struct{ method, path string } {
 		{"GET", "/api/v1/dashboard"},
 		{"GET", "/api/v1/builders"},
 		{"POST", "/api/v1/builders"},
+		{"GET", "/api/v1/build-agents"},
+		{"POST", "/api/v1/build-agents"},
+		{"DELETE", "/api/v1/build-agents/build-1"},
 		{"GET", "/api/v1/builds"},
 		{"POST", "/api/v1/builds/seed"},
 	}
@@ -679,9 +721,9 @@ func adminRoutesUnderTest() []struct{ method, path string } {
 func TestBuildEndToEnd(t *testing.T) {
 	f := newBuildFixture(t)
 	ctx := context.Background()
-	tok := f.mintBuilder(t, secondBuilder, "redline")
+	tok := f.mintAgent(t, secondAgent, "redline")
 
-	b := f.start(t, tok, startReq("redline", secondBuilder))
+	b := f.start(t, tok, startReq("redline", secondAgent))
 	if w := f.do("POST", buildPath(b.ID, "log"), tok, []byte("$ make test\nok\n")); w.Code != http.StatusOK {
 		t.Fatal(w.Body.String())
 	}
@@ -693,7 +735,7 @@ func TestBuildEndToEnd(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("upload: %d %s", w.Code, w.Body.String())
 	}
-	if rec, _ := f.s.users.LookupArtifact(ctx, sha); rec.UploadedBy != "builder:"+secondBuilder {
+	if rec, _ := f.s.users.LookupArtifact(ctx, sha); rec.UploadedBy != "build-agent:"+secondAgent {
 		t.Fatalf("uploaded by %q", rec.UploadedBy)
 	}
 	if w := f.doJSON("POST", buildPath(b.ID, "finish"), tok, apitypes.BuildFinishReq{Result: "passed", ArtifactSHA256: sha}); w.Code != http.StatusOK {
@@ -721,7 +763,7 @@ func TestBuildEndToEnd(t *testing.T) {
 		t.Fatalf("artifacts = %+v", arts)
 	}
 	got := decodeAs[apitypes.BuildResp](t, f.do("GET", buildPath(b.ID, ""), f.pat, nil))
-	if got.Result != "passed" || got.LogSize != int64(len("$ make test\nok\n")) || got.Commit != testCommit || got.Machine != secondBuilder {
+	if got.Result != "passed" || got.LogSize != int64(len("$ make test\nok\n")) || got.Commit != testCommit || got.Agent != secondAgent || got.Machine != secondAgent {
 		t.Fatalf("build = %+v", got)
 	}
 }

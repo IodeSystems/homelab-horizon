@@ -1264,7 +1264,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// The build registry (handlers_api_builds.go): builders, and the builds
 	// they start, log, state and finish. Same placement rule: the numbers and
 	// the logs are on the primary.
-	mux.HandleFunc("/api/v1/builders", s.handleAPIBuilders)
+	mux.HandleFunc("/api/v1/build-agents", s.handleAPIBuildAgents)
+	mux.HandleFunc("/api/v1/build-agents/", s.handleAPIBuildAgent)
+	mux.HandleFunc("/api/v1/builders", s.handleAPIBuilders) // deprecated, one release
 	mux.HandleFunc("/api/v1/builders/", s.handleAPIBuilder)
 	mux.HandleFunc("/api/v1/builds", s.handleAPIBuilds)
 	mux.HandleFunc("/api/v1/builds/seed", s.handleAPIBuildSeed)
