@@ -94,6 +94,24 @@ function seeded(): QueryClient {
   });
   qc.setQueryData(["projects"], PROJECTS);
   qc.setQueryData(["checks"], CHECKS);
+  qc.setQueryData(["checks", "history", "all", 120], {
+    from: 1790000000000,
+    bucketMs: 60000,
+    buckets: 120,
+    series: [
+      {
+        name: "history-flap-check",
+        type: "ping",
+        target: "10.0.0.7",
+        runs: [
+          { s: "ok", f: 0, n: 60 },
+          { s: "failed", f: 60, n: 60 },
+        ],
+        lat: [],
+        samples: 120,
+      },
+    ],
+  });
   return qc;
 }
 
@@ -190,6 +208,26 @@ console.log("· /checks (unscoped) carries a Project column, and \"\" reads as g
   );
 
   check(r.text.includes("Add Check"), "the unscoped screen keeps its own Add action");
+}
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+console.log("· every place a check renders shows its ID, selectable, with a copy control");
+// ---------------------------------------------------------------------------
+{
+  const scoped = await at("/p/storefront/checks");
+  check(/data-check-id="svc:web"/.test(scoped.html), "project Checks tab: svc:web's ID is shown");
+  check(/data-check-id="storefront-db"/.test(scoped.html), "project Checks tab: a standalone check's ID is shown");
+  check(/aria-label="Copy check ID svc:web"/.test(scoped.html), "project Checks tab: a copy control for it");
+  check(/<tr[^>]*id="check-svc:web"/.test(scoped.html), "project Checks tab: the row is an anchor (#check-<id>)");
+
+  const all = await at("/checks");
+  for (const id of ["svc:web", "storefront-db", "tls:example.net", "acme-billing"]) {
+    check(new RegExp(`data-check-id="${id}"`).test(all.html), `/checks: ${id} shows its ID`);
+    check(all.html.includes(`aria-label="Copy check ID ${id}"`), `/checks: ${id} has a copy control`);
+  }
+  check(/<tr[^>]*id="check-acme-billing"/.test(all.html), "/checks: the row is an anchor (#check-<id>)");
+  check(/data-check-id="history-flap-check"/.test(all.html), "the fleet history ribbons name checks by copyable ID");
 }
 
 // ---------------------------------------------------------------------------

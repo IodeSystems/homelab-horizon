@@ -25,6 +25,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
+import { CheckId, checkAnchor } from "../components/CheckId";
 import { useChecks } from "../api/hooks";
 import { inScope } from "../components/model/projectRoutes.ts";
 import { AddButton, EmptyRow, TabHeader } from "../components/model/FlowBits";
@@ -74,10 +75,10 @@ function ProjectChecks() {
               {mine.map((r) => {
                 const follows = svcFollows(r.name);
                 return (
-                  <TableRow key={r.name} hover>
+                  <TableRow key={r.name} hover id={checkAnchor(r.name)}>
                     <TableCell sx={{ fontFamily: "monospace" }}>
+                      <CheckId id={r.name} />
                       <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                        {r.name}
                         {follows && (
                           <Tooltip title={`Follows service ${follows} — its project is the service's, not its own.`}>
                             <Chip
