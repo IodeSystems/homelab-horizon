@@ -1778,8 +1778,36 @@ would turn a compromised hz into code execution on a host outside your
 network. hz is a source of bytes over a verified connection, never an
 instruction.
 
-Re-running the install command does the same thing immediately, and
-`--no-auto-update` skips the timer.
+**Update on report.** The timer is the fallback. Because every report tells
+the agent which build hz holds, an agent that has seen the *same* differing
+build on every report for **15 minutes** writes a flag,
+`/var/lib/hz-probe/update-wanted`, in its own state directory. A root path
+unit (`hz-probe-update.path`) sees it and starts the same
+`hz-probe-update.service` the timer runs. A deploy rolled back inside the 15
+minutes never reaches the vantage.
+
+The flag is a doorbell, not an instruction. It holds a timestamp the updater
+never reads; the updater asks hz for the version itself, checks the download
+runs **and is the version hz named** (anything else is refused, loudly), and
+runs a command line fixed in a root-owned unit. The agent can make the
+updater run sooner — it cannot choose the version, the bytes or the command.
+Every run removes the flag, so the trigger does not loop, and the updater
+makes **at most one attempt an hour** (recorded in
+`/var/lib/hz-probe-update/last-attempt`, which the agent cannot write); a run
+inside the hour exits 0 and says so.
+
+The trade-off: a vantage now trails a deploy by 15 minutes, plus up to an
+hour if it attempted an update recently, instead of up to a day. The cost is
+that a compromised agent can make its updater ask hz hourly instead of daily.
+
+An existing vantage gets the path unit without anyone touching it: each
+update run rewrites the update units when the timer is installed, so the
+first timer run *on the new build* adds and enables it — the run after the
+one that installed the build, which was still the old binary. Re-running the
+install command adds it at once.
+
+Re-running the install command updates immediately, and `--no-auto-update`
+skips the timer and the path unit both.
 
 **When hz itself is down.** In push mode hz is the only notifier, so an
 outage that takes out the whole gateway tells nobody. Give the vantage an ntfy
