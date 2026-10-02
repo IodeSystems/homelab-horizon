@@ -78,7 +78,8 @@ INSTALL FLAGS
   the serve flags, plus:
   --dry-run             print what install would do, change nothing
   --no-start            write and enable the unit, but do not start it
-  --no-auto-update      do not install the daily update timer
+  --no-auto-update      do not install the daily update timer or the
+                        update-on-report path unit
 
 UPDATE
   'update' asks hz which build it holds, and if it differs from the installed
@@ -87,8 +88,12 @@ UPDATE
   which is the point, since an agent that executed what hz sent it would turn
   a compromised hz into code execution out here.
 
-  install writes a daily timer that runs it. --no-auto-update skips that, and
-  you update by re-running the install command instead.
+  install writes a daily timer that runs it, and a path unit that runs it
+  when the agent has seen the same differing build on every report for 15
+  minutes (the agent writes update-wanted in its state directory; the flag
+  names nothing, and update asks hz for itself). At most one attempt an hour.
+  --no-auto-update skips both, and you update by re-running the install
+  command instead.
 
 GEN-CERT FLAGS
   --host IP-OR-NAME     what hz will connect to; repeatable (default: this host)
