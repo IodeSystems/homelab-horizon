@@ -1868,6 +1868,7 @@ function ServiceRow({
     <>
       <TableRow
         hover
+        id={`service-${service.name}`}
         onClick={() => setOpen(!open)}
         sx={{ cursor: "pointer", "& > *": { borderBottom: "unset" } }}
       >

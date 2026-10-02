@@ -150,6 +150,23 @@ func (c *Config) DeriveDNSMappings() map[string]string {
 // already won, which reports no conflicts, ever.
 func (c *Config) deriveServiceDNSMappings() map[string]string {
 	mappings := make(map[string]string)
+	for name, d := range c.deriveServiceDNS() {
+		mappings[name] = d.IP
+	}
+	return mappings
+}
+
+// DerivedDNSName is one name a service makes hz answer, and the service it
+// comes from — the one that wins when several services claim the name.
+type DerivedDNSName struct {
+	IP      string
+	Service string
+}
+
+// deriveServiceDNS is deriveServiceDNSMappings with the owning service kept.
+// The one loop: the address and its owner cannot disagree.
+func (c *Config) deriveServiceDNS() map[string]DerivedDNSName {
+	mappings := make(map[string]DerivedDNSName)
 	for _, svc := range c.Services {
 		if svc.InternalDNS == nil || svc.InternalDNS.IP == "" {
 			continue
@@ -181,7 +198,7 @@ func (c *Config) deriveServiceDNSMappings() map[string]string {
 			ip = c.LocalInterface
 		}
 		for _, domain := range svc.Domains {
-			mappings[domain] = ip
+			mappings[domain] = DerivedDNSName{IP: ip, Service: svc.Name}
 		}
 	}
 	return mappings
@@ -1555,4 +1572,64 @@ func (c *Config) DeriveDNSRecords() []dnsmasq.Record {
 // which shows them beside the operator's own records.
 func (c *Config) DeriveDNSRecordsDerivedOnly() map[string]string {
 	return c.deriveServiceDNSMappings()
+}
+
+// DeriveDNSNamesByService is DeriveDNSRecordsDerivedOnly with each name's
+// owning service.
+func (c *Config) DeriveDNSNamesByService() map[string]DerivedDNSName {
+	return c.deriveServiceDNS()
+}
+
+// ServicePort is one port a service uses, and what uses it.
+type ServicePort struct {
+	Port int
+	// Label is "backend", "slot a", "slot b" (blue-green), "http" or
+	// "https" (HAProxy, in front of a proxied service).
+	Label string
+	// Active marks the blue-green slot active_slot names.
+	Active bool
+}
+
+// ServicePorts lists the ports a service uses: its backend port, both
+// blue-green slots when it has proxy.deploy, and HAProxy's ports when it is
+// proxied. Derived from the config on each call; nil for a service that uses
+// none. A backend that does not parse as host:port contributes nothing.
+func (c *Config) ServicePorts(svc *Service) []ServicePort {
+	if svc == nil || svc.Proxy == nil {
+		return nil
+	}
+	var out []ServicePort
+	backendPort := func(addr string) int {
+		_, p, err := net.SplitHostPort(addr)
+		if err != nil {
+			return 0
+		}
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return 0
+		}
+		return n
+	}
+	if d := c.ResolvedDeploy(svc); d != nil && svc.Proxy.Backend != "" {
+		if p := backendPort(c.ServiceBackend(svc)); p > 0 {
+			out = append(out, ServicePort{Port: p, Label: "slot a", Active: d.ActiveSlot != "b"})
+		}
+		if p := backendPort(d.NextBackend); p > 0 {
+			out = append(out, ServicePort{Port: p, Label: "slot b", Active: d.ActiveSlot == "b"})
+		}
+	} else if p := backendPort(c.ServiceBackend(svc)); p > 0 {
+		out = append(out, ServicePort{Port: p, Label: "backend"})
+	}
+	httpPort, httpsPort := c.HAProxyHTTPPort, c.HAProxyHTTPSPort
+	if httpPort == 0 {
+		httpPort = 80
+	}
+	if httpsPort == 0 {
+		httpsPort = 443
+	}
+	out = append(out, ServicePort{Port: httpPort, Label: "http"})
+	if c.SSLEnabled {
+		out = append(out, ServicePort{Port: httpsPort, Label: "https"})
+	}
+	return out
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
@@ -62,15 +63,29 @@ func (s *Server) listLocalDNS(w http.ResponseWriter, _ *http.Request) {
 
 	// The derived set travels too, so the page can show what is being served
 	// in total rather than only the operator's own half.
-	for name, ip := range cfg.DeriveDNSRecordsDerivedOnly() {
+	for name, d := range cfg.DeriveDNSNamesByService() {
 		if conflicts[name] != "" {
 			continue
 		}
 		if isLocalRecord(cfg.LocalDNSRecords, name) {
 			continue
 		}
-		out.Derived = append(out.Derived, apitypes.LocalDNSRecord{Name: name, IP: ip, Wildcard: true})
+		rec := apitypes.LocalDNSDerived{Name: name, IP: d.IP, Service: d.Service, Ports: []apitypes.ServicePort{}}
+		if svc := cfg.GetService(d.Service); svc != nil {
+			for _, p := range cfg.ServicePorts(svc) {
+				rec.Ports = append(rec.Ports, apitypes.ServicePort{Port: p.Port, Label: p.Label, Active: p.Active})
+			}
+		}
+		out.Derived = append(out.Derived, rec)
 	}
+	// A map ranges in random order; the page groups by address.
+	sort.Slice(out.Derived, func(i, j int) bool {
+		a, b := out.Derived[i], out.Derived[j]
+		if a.IP != b.IP {
+			return a.IP < b.IP
+		}
+		return a.Name < b.Name
+	})
 
 	_ = json.NewEncoder(w).Encode(out)
 }

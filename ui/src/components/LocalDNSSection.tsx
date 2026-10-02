@@ -33,6 +33,7 @@ import {
   useDeleteLocalDNSRecord,
   type LocalDNSRecord,
 } from "../api/hooks";
+import { DerivedNamesTable } from "./DerivedNamesTable";
 
 // Names hz answers for on the inside — the split-horizon half of DNS.
 //
@@ -46,15 +47,7 @@ export default function LocalDNSSection() {
   const remove = useDeleteLocalDNSRecord();
   const [editing, setEditing] = useState<LocalDNSRecord | null>(null);
   const [addOpen, setAddOpen] = useState(false);
-
-  if (isLoading) return null;
-  if (error) {
-    return (
-      <Alert severity="error" sx={{ mt: 4 }}>
-        Could not load local records: {error.message}
-      </Alert>
-    );
-  }
+  const [prefill, setPrefill] = useState<{ name: string; ip: string } | null>(null);
 
   const records = data?.records ?? [];
   const derived = data?.derived ?? [];
@@ -90,7 +83,13 @@ export default function LocalDNSSection() {
         </Alert>
       )}
 
-      {records.length === 0 && (
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          Could not load local records: {error.message}
+        </Alert>
+      )}
+
+      {data && records.length === 0 && (
         <Alert severity="info" sx={{ mb: 2 }}>
           No local records. A machine only findable over mDNS — a Mac finds it,
           a phone does not — is the usual reason to add one.
@@ -170,37 +169,28 @@ export default function LocalDNSSection() {
         </TableContainer>
       )}
 
-      {derived.length > 0 && (
-        <Box sx={{ mt: 3 }}>
-          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
-            Also served, derived from services ({derived.length})
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {/* Listed so this page shows everything the resolver answers,
-                rather than only the half an operator typed. */}
-            These come from service definitions and update themselves. Add a
-            local record with the same name to override one.
-          </Typography>
-          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, mt: 1 }}>
-            {derived.map((r) => (
-              <Chip
-                key={r.name}
-                size="small"
-                variant="outlined"
-                label={`${r.name} → ${r.ip}`}
-                sx={{ fontFamily: "monospace" }}
-              />
-            ))}
-          </Box>
-        </Box>
-      )}
+      <DerivedNamesTable
+        state={
+          isLoading
+            ? { kind: "loading" }
+            : error
+              ? { kind: "error", message: error.message }
+              : { kind: "ready", derived }
+        }
+        onOverride={(d) => {
+          setPrefill({ name: d.name, ip: d.ip });
+          setAddOpen(true);
+        }}
+      />
 
       <RecordDialog
         open={addOpen || editing !== null}
         record={editing}
+        prefill={prefill}
         onClose={() => {
           setAddOpen(false);
           setEditing(null);
+          setPrefill(null);
         }}
       />
     </Box>
@@ -267,10 +257,13 @@ function LocalDomainField() {
 function RecordDialog({
   open,
   record,
+  prefill,
   onClose,
 }: {
   open: boolean;
   record: LocalDNSRecord | null;
+  // A new record seeded from a derived name: the Override action.
+  prefill: { name: string; ip: string } | null;
   onClose: () => void;
 }) {
   const save = useSetLocalDNSRecord();
@@ -282,11 +275,11 @@ function RecordDialog({
 
   // Seed once per opening rather than on every render, so typing is not
   // clobbered by the record prop.
-  const key = record?.name ?? "__new__";
+  const key = record?.name ?? (prefill ? `__override__${prefill.name}` : "__new__");
   if (open && seeded !== key) {
     setSeeded(key);
-    setName(record?.name ?? "");
-    setIP(record?.ip ?? "");
+    setName(record?.name ?? prefill?.name ?? "");
+    setIP(record?.ip ?? prefill?.ip ?? "");
     setWildcard(record?.wildcard ?? false);
     setComment(record?.comment ?? "");
   }
@@ -299,7 +292,9 @@ function RecordDialog({
 
   return (
     <Dialog open={open} onClose={close} maxWidth="xs" fullWidth>
-      <DialogTitle>{record ? `Edit ${record.name}` : "Add local record"}</DialogTitle>
+      <DialogTitle>
+        {record ? `Edit ${record.name}` : prefill ? `Override ${prefill.name}` : "Add local record"}
+      </DialogTitle>
       <DialogContent>
         {save.error && (
           <Alert severity="error" sx={{ mb: 2 }}>
