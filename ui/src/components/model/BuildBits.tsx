@@ -1,10 +1,12 @@
 /**
  * The build registry on screen: a project's Builds tab, one build's page, the
- * provenance line in the Promote dialog, and the builders in Settings.
+ * provenance line in the Promote dialog, and the build agents (in Settings and
+ * on each project's Builds tab).
  * Server: `internal/server/handlers_api_builds.go`.
  *
- * BUILD NUMBERS COME FROM hz. A builder (a declared machine with a builder
- * token) starts a build; hz allocates its number. Every list here answers in
+ * BUILD NUMBERS COME FROM hz. A build agent (a token registered for ONE
+ * project; not a machine, and never listed with them) starts a build; hz
+ * allocates its number. Every list here answers in
  * three ways (invariant 2): the rows, an answered empty list, or "cannot ask".
  * Loading is a fourth sentence, not a blank.
  *
@@ -41,8 +43,8 @@ import {
   Typography,
 } from "@mui/material";
 import { Delete as DeleteIcon } from "@mui/icons-material";
-import type { ArtifactResp, BuildResp, BuildStepResp, BuilderResp } from "../../api/generated-types";
-import { useMintBuilder, useRemoveBuilder } from "../../api/buildHooks";
+import type { ArtifactResp, BuildAgentReq, BuildAgentResp, BuildResp, BuildStepResp } from "../../api/generated-types";
+import { useMintBuildAgent, useRemoveBuildAgent } from "../../api/buildHooks";
 import { AddButton, EmptyRow, TabHeader } from "./FlowBits";
 
 /** What hz answered: the rows, still asking, or that it could not be asked. */
@@ -117,7 +119,7 @@ function CannotAsk({ what, why }: { what: string; why: string }) {
   );
 }
 
-/** A project's builds: number, version, commit, machine, result, duration, artifact. */
+/** A project's builds: number, version, commit, agent, result, duration, artifact. */
 export function BuildsTable({
   source,
   emptyText,
@@ -141,7 +143,7 @@ export function BuildsTable({
             <TableCell>Build</TableCell>
             <TableCell>Version</TableCell>
             <TableCell>Commit</TableCell>
-            <TableCell>Machine</TableCell>
+            <TableCell>Agent</TableCell>
             <TableCell>Result</TableCell>
             <TableCell>Duration</TableCell>
             <TableCell>Artifact</TableCell>
@@ -160,7 +162,7 @@ export function BuildsTable({
               <TableCell sx={{ fontFamily: "monospace" }} title={b.commit}>
                 {b.commit.slice(0, 8)}
               </TableCell>
-              <TableCell sx={{ fontFamily: "monospace" }}>{b.machine}</TableCell>
+              <TableCell sx={{ fontFamily: "monospace" }}>{b.agent || b.machine}</TableCell>
               <TableCell>
                 <ResultChip result={b.result} failedStep={b.failed_step} />
               </TableCell>
@@ -260,7 +262,7 @@ export function BuildFacts({ build }: { build: BuildResp }) {
           {row("Version", build.version)}
           {row("Commit", build.commit)}
           {build.describe ? row("Describe", build.describe) : null}
-          {row("Machine", build.machine)}
+          {row("Agent", build.agent || build.machine)}
           {row("Started", build.started_at)}
           {row(build.finished_at ? "Finished" : "Last activity", build.finished_at ?? build.last_activity_at)}
           {row("Duration", formatDuration(build.duration_seconds))}
@@ -324,63 +326,101 @@ export function ProvenanceLine({ source, sha }: { source: Source<ArtifactResp[]>
 }
 
 // ---------------------------------------------------------------------------
-// Builders (Settings).
+// Build agents (Settings, and each project's Builds tab).
 
-/** The builders, each with [Revoke], and [Add builder]. */
-export function BuildersSection({
+/** Agents grouped by their host label, hosts sorted, "" last. */
+export function groupByHost(rows: BuildAgentResp[]): { host: string; agents: BuildAgentResp[] }[] {
+  const by = new Map<string, BuildAgentResp[]>();
+  for (const a of rows) {
+    const h = a.host ?? "";
+    by.set(h, [...(by.get(h) ?? []), a]);
+  }
+  return [...by.entries()]
+    .sort(([a], [b]) => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b)))
+    .map(([host, agents]) => ({ host, agents: [...agents].sort((x, y) => x.name.localeCompare(y.name)) }));
+}
+
+/**
+ * The build agents, grouped by host, each with [Rotate] and [Revoke], and
+ * [Add build agent]. With `project`, only that project's agents, and the add
+ * dialog registers for it. A build agent is NOT a machine: nothing here reads
+ * the machines list, and Host is a label.
+ */
+export function BuildAgentsSection({
   source,
-  machines,
   projects,
+  project,
 }: {
-  source: Source<BuilderResp[]>;
-  machines: string[];
+  source: Source<BuildAgentResp[]>;
   projects: string[];
+  project?: string;
 }) {
   const [adding, setAdding] = useState<string | null>(null);
-  const remove = useRemoveBuilder();
-  const add = <AddButton label="Add builder" onClick={() => setAdding("")} />;
+  const remove = useRemoveBuildAgent();
+  const add = <AddButton label="Add build agent" onClick={() => setAdding("")} />;
+  const title = project ? `Build agents for ${project}` : "Build agents";
+  const rows = source.known ? source.rows.filter((a) => !project || a.project === project) : [];
   return (
-    <Box data-builders>
-      <TabHeader title="Builders" action={add} />
+    <Box data-build-agents>
+      <TabHeader title={title} action={add} />
       {!source.known ? (
         source.loading ? (
-          <Asking what="its builders" />
+          <Asking what="its build agents" />
         ) : (
-          <CannotAsk what="its builders" why={source.why} />
+          <CannotAsk what="its build agents" why={source.why} />
         )
-      ) : source.rows.length === 0 ? (
-        <EmptyRow text="No builders — build numbers come from hz, and only a builder can start a build." action={add} />
+      ) : rows.length === 0 ? (
+        <EmptyRow
+          text={
+            project
+              ? `No build agents for ${project} — build numbers come from hz, and only a build agent registered for ${project} can start one.`
+              : "No build agents — build numbers come from hz, and only a build agent can start a build."
+          }
+          action={add}
+        />
       ) : (
         <TableContainer component={Paper}>
-          <Table size="small" aria-label="Builders">
+          <Table size="small" aria-label={title}>
             <TableHead>
               <TableRow>
-                <TableCell>Machine</TableCell>
-                <TableCell>Projects</TableCell>
+                <TableCell>Agent</TableCell>
+                <TableCell>Project</TableCell>
+                <TableCell>Note</TableCell>
                 <TableCell align="right">Token</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {source.rows.map((b) => (
-                <TableRow key={b.machine} data-builder={b.machine}>
-                  <TableCell sx={{ fontFamily: "monospace" }}>{b.machine}</TableCell>
-                  <TableCell>{b.projects.join(", ")}</TableCell>
-                  <TableCell align="right">
-                    <Button size="small" sx={{ textTransform: "none" }} onClick={() => setAdding(b.machine)}>
-                      Rotate
-                    </Button>
-                    <IconButton
-                      size="small"
-                      color="error"
-                      aria-label={`Revoke builder ${b.machine}`}
-                      disabled={remove.isPending}
-                      onClick={() => remove.mutate(b.machine)}
-                    >
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
+              {groupByHost(rows).map((g) => [
+                <TableRow key={`host:${g.host}`} data-build-agent-host={g.host}>
+                  <TableCell colSpan={4} sx={{ fontWeight: 600, bgcolor: "action.hover" }}>
+                    {g.host ? `host ${g.host}` : "no host"} · {g.agents.length} {g.agents.length === 1 ? "agent" : "agents"}
                   </TableCell>
-                </TableRow>
-              ))}
+                </TableRow>,
+                ...g.agents.map((a) => (
+                  <TableRow key={a.name} data-build-agent={a.name}>
+                    <TableCell sx={{ fontFamily: "monospace" }}>{a.name}</TableCell>
+                    <TableCell>{a.project}</TableCell>
+                    <TableCell>{a.note}</TableCell>
+                    <TableCell align="right">
+                      {a.has_token ? null : (
+                        <Chip size="small" color="warning" label="no token" sx={{ mr: 1 }} data-no-token />
+                      )}
+                      <Button size="small" sx={{ textTransform: "none" }} onClick={() => setAdding(a.name)}>
+                        {a.has_token ? "Rotate" : "Mint"}
+                      </Button>
+                      <IconButton
+                        size="small"
+                        color="error"
+                        aria-label={`Revoke build agent ${a.name}`}
+                        disabled={remove.isPending}
+                        onClick={() => remove.mutate(a.name)}
+                      >
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </TableCell>
+                  </TableRow>
+                )),
+              ])}
             </TableBody>
           </Table>
         </TableContainer>
@@ -390,12 +430,12 @@ export function BuildersSection({
           {remove.error.message}
         </Alert>
       ) : null}
-      <AddBuilderDialog
+      <AddBuildAgentDialog
         open={adding !== null}
-        machine={adding ?? ""}
-        current={source.known ? source.rows.find((b) => b.machine === adding) : undefined}
-        machines={machines}
+        name={adding ?? ""}
+        current={source.known ? source.rows.find((a) => a.name === adding) : undefined}
         projects={projects}
+        project={project}
         onClose={() => setAdding(null)}
       />
     </Box>
@@ -403,64 +443,63 @@ export function BuildersSection({
 }
 
 /**
- * The Add builder dialog's contents. The token is shown ONCE, here, in the
- * answer to the mint; hz keeps only its sha256.
+ * The Add build agent dialog's contents: a name of its own, ONE project, and
+ * an optional host label — never a machine picker. The token is shown ONCE,
+ * here, in the answer to the mint; hz keeps only its sha256.
  */
-export function AddBuilderPanel({
-  machines,
+export function AddBuildAgentPanel({
   projects,
-  initialMachine,
-  initialProjects,
+  initialName,
+  initialProject,
+  initialHost,
+  lockProject,
   token,
   error,
   pending,
   onMint,
   onClose,
 }: {
-  machines: string[];
   projects: string[];
-  initialMachine: string;
-  initialProjects: string[];
+  initialName: string;
+  initialProject: string;
+  initialHost: string;
+  lockProject: boolean;
   token: string | null;
   error: string | null;
   pending: boolean;
-  onMint: (machine: string, projects: string[]) => void;
+  onMint: (req: BuildAgentReq) => void;
   onClose: () => void;
 }) {
-  const [machine, setMachine] = useState(initialMachine);
-  const [chosen, setChosen] = useState<string[]>(initialProjects);
+  const rotating = initialName !== "";
+  const [name, setName] = useState(initialName);
+  const [project, setProject] = useState(initialProject);
+  const [host, setHost] = useState(initialHost);
+  const [note, setNote] = useState("");
   return (
     <>
-      <DialogTitle>{initialMachine ? `Rotate builder ${initialMachine}` : "Add builder"}</DialogTitle>
+      <DialogTitle>{rotating ? `Rotate build agent ${initialName}` : "Add build agent"}</DialogTitle>
       <DialogContent>
         {token ? (
-          <Box data-builder-token>
+          <Box data-build-agent-token>
             <Alert severity="success" sx={{ mb: 2 }}>
-              Builder token for {machine}. Shown once; hz keeps only its sha256.
+              Build agent token for {name}. Shown once; hz keeps only its sha256.
             </Alert>
             <TextField fullWidth value={token} slotProps={{ input: { readOnly: true } }} sx={{ "& input": { fontFamily: "monospace" } }} />
           </Box>
         ) : (
           <>
-            <FormControl fullWidth sx={{ mt: 1, mb: 2 }} disabled={initialMachine !== ""}>
-              <InputLabel id="builder-machine">Machine</InputLabel>
-              <Select labelId="builder-machine" label="Machine" value={machine} onChange={(e) => setMachine(e.target.value)}>
-                {machines.map((m) => (
-                  <MenuItem key={m} value={m}>
-                    {m}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <FormControl fullWidth>
-              <InputLabel id="builder-projects">Projects</InputLabel>
-              <Select
-                labelId="builder-projects"
-                label="Projects"
-                multiple
-                value={chosen}
-                onChange={(e) => setChosen(typeof e.target.value === "string" ? e.target.value.split(",") : e.target.value)}
-              >
+            <TextField
+              fullWidth
+              label="Name"
+              value={name}
+              disabled={rotating}
+              onChange={(e) => setName(e.target.value)}
+              helperText="The agent's own name — not a machine's."
+              sx={{ mt: 1, mb: 2 }}
+            />
+            <FormControl fullWidth sx={{ mb: 2 }} disabled={rotating || lockProject}>
+              <InputLabel id="build-agent-project">Project</InputLabel>
+              <Select labelId="build-agent-project" label="Project" value={project} onChange={(e) => setProject(e.target.value)}>
                 {projects.map((p) => (
                   <MenuItem key={p} value={p}>
                     {p}
@@ -468,7 +507,16 @@ export function AddBuilderPanel({
                 ))}
               </Select>
             </FormControl>
-            {initialMachine ? (
+            <TextField
+              fullWidth
+              label="Host (optional)"
+              value={host}
+              onChange={(e) => setHost(e.target.value)}
+              helperText="A label for the box it runs on; several agents may share one."
+              sx={{ mb: 2 }}
+            />
+            <TextField fullWidth label="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+            {rotating ? (
               <Typography variant="body2" sx={{ color: "warning.main", mt: 2 }}>
                 Rotating replaces the token: the old one stops working.
               </Typography>
@@ -476,7 +524,7 @@ export function AddBuilderPanel({
           </>
         )}
         {error ? (
-          <Alert severity="error" sx={{ mt: 2 }} data-builder-refusal>
+          <Alert severity="error" sx={{ mt: 2 }} data-build-agent-refusal>
             {error}
           </Alert>
         ) : null}
@@ -484,8 +532,12 @@ export function AddBuilderPanel({
       <DialogActions>
         <Button onClick={onClose}>{token ? "Done" : "Cancel"}</Button>
         {token ? null : (
-          <Button variant="contained" disabled={machine === "" || chosen.length === 0 || pending} onClick={() => onMint(machine, chosen)}>
-            {pending ? "Minting…" : "Mint builder token"}
+          <Button
+            variant="contained"
+            disabled={name.trim() === "" || project === "" || pending}
+            onClick={() => onMint({ name: name.trim(), project, host: host.trim() || undefined, note: note.trim() || undefined })}
+          >
+            {pending ? "Minting…" : "Mint build agent token"}
           </Button>
         )}
       </DialogActions>
@@ -493,22 +545,22 @@ export function AddBuilderPanel({
   );
 }
 
-function AddBuilderDialog({
+function AddBuildAgentDialog({
   open,
-  machine,
+  name,
   current,
-  machines,
   projects,
+  project,
   onClose,
 }: {
   open: boolean;
-  machine: string;
-  current: BuilderResp | undefined;
-  machines: string[];
+  name: string;
+  current: BuildAgentResp | undefined;
   projects: string[];
+  project?: string;
   onClose: () => void;
 }) {
-  const mint = useMintBuilder();
+  const mint = useMintBuildAgent();
   const close = () => {
     mint.reset();
     onClose();
@@ -516,16 +568,17 @@ function AddBuilderDialog({
   return (
     <Dialog open={open} onClose={close} fullWidth maxWidth="sm">
       {open ? (
-        <AddBuilderPanel
-          key={machine}
-          machines={machines}
+        <AddBuildAgentPanel
+          key={name}
           projects={projects}
-          initialMachine={machine}
-          initialProjects={current?.projects ?? []}
+          initialName={name}
+          initialProject={current?.project ?? project ?? ""}
+          initialHost={current?.host ?? ""}
+          lockProject={project !== undefined}
           token={mint.data?.token ?? null}
           error={mint.error?.message ?? null}
           pending={mint.isPending}
-          onMint={(m, ps) => mint.mutate({ machine: m, projects: ps })}
+          onMint={(req) => mint.mutate(req)}
           onClose={close}
         />
       ) : null}
