@@ -17,6 +17,7 @@ const unitPath = "/etc/systemd/system/hz-probe.service"
 const (
 	updateUnitPath  = "/etc/systemd/system/hz-probe-update.service"
 	updateTimerPath = "/etc/systemd/system/hz-probe-update.timer"
+	updatePathPath  = "/etc/systemd/system/hz-probe-update.path"
 )
 
 // updateUnitTemplate runs the update as root.
@@ -51,6 +52,26 @@ Persistent=true
 
 [Install]
 WantedBy=timers.target
+`
+
+// updatePathTemplate starts the updater when the agent raises update-wanted.
+//
+// The trigger is the file's existence, nothing in it: the updater it starts
+// is the same root unit the timer runs, with the same fixed command line, and
+// it asks hz for the version itself. The agent can make it run sooner; it
+// cannot make it do anything else. The updater removes the file on every
+// run, so the trigger does not loop; its own hourly limit bounds how often a
+// flag can cause a download.
+const updatePathTemplate = `[Unit]
+Description=hz-probe - run the updater when the agent asks for one
+
+[Path]
+PathExists=__FLAG__
+PathModified=__FLAG__
+Unit=hz-probe-update.service
+
+[Install]
+WantedBy=paths.target
 `
 
 // unitTemplate is the systemd unit install writes.
@@ -196,7 +217,7 @@ func runInstall(args []string) error {
 	dryRun := fs.Bool("dry-run", false, "print what install would do, change nothing")
 	noStart := fs.Bool("no-start", false, "write and enable the unit, but do not start it")
 	brief := fs.Bool("brief", false, "skip the trailing remote_probes block (the installer prints its own)")
-	noAutoUpdate := fs.Bool("no-auto-update", false, "do not install the daily update timer")
+	noAutoUpdate := fs.Bool("no-auto-update", false, "do not install the daily update timer or the update-on-report trigger")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -219,6 +240,9 @@ func runInstall(args []string) error {
 			}
 		}
 		fmt.Printf("Would write %s:\n\n%s", unitPath, unit)
+		for _, u := range updateUnits(&f, execPath(), *noAutoUpdate) {
+			fmt.Printf("\nWould write %s:\n\n%s", u.path, u.content)
+		}
 		return nil
 	}
 
@@ -250,11 +274,12 @@ func runInstall(args []string) error {
 	// The update timer, for push installs. In pull mode hz does not hold the
 	// agent's token, so the unattended download has nothing to authenticate
 	// with — those are updated by re-running the install command.
-	if !*noAutoUpdate && f.pushMode() {
-		if err := writeUpdateUnits(&f); err != nil {
+	upd := updateUnits(&f, execPath(), *noAutoUpdate)
+	if len(upd) > 0 {
+		if _, err := writeUpdateUnits(upd); err != nil {
 			return err
 		}
-		fmt.Printf("Created %s and %s\n", updateUnitPath, updateTimerPath)
+		fmt.Printf("Created %s, %s and %s\n", updateUnitPath, updateTimerPath, updatePathPath)
 	}
 
 	if err := run("systemctl", "daemon-reload"); err != nil {
@@ -263,13 +288,13 @@ func runInstall(args []string) error {
 	if err := run("systemctl", "enable", "hz-probe"); err != nil {
 		return err
 	}
-	if !*noAutoUpdate && f.pushMode() {
-		if err := run("systemctl", "enable", "--now", "hz-probe-update.timer"); err != nil {
+	if len(upd) > 0 {
+		if err := run("systemctl", "enable", "--now", "hz-probe-update.timer", "hz-probe-update.path"); err != nil {
 			// Not fatal: the agent works, it just will not update itself.
 			// Failing the whole install over the timer would be worse.
-			fmt.Printf("Warning: could not enable the update timer: %v\n", err)
+			fmt.Printf("Warning: could not enable the update timer and trigger: %v\n", err)
 		} else {
-			fmt.Println("Daily update check enabled (hz-probe-update.timer).")
+			fmt.Println("Daily update check enabled (hz-probe-update.timer), and update on report (hz-probe-update.path).")
 		}
 	}
 
@@ -338,21 +363,47 @@ func runInstall(args []string) error {
 	return nil
 }
 
-// writeUpdateUnits writes the root-side updater and its timer.
-func writeUpdateUnits(f *serveFlags) error {
+// unitFile is one rendered systemd unit and where it goes.
+type unitFile struct {
+	path, content string
+}
+
+// updateUnits renders the root-side updater, its daily timer and its path
+// trigger, or nothing when this install gets no auto-update: a pull install
+// (hz does not hold its token, so an unattended download cannot
+// authenticate) or --no-auto-update. All three or none — the path unit is
+// installed under exactly the timer's rule.
+func updateUnits(f *serveFlags, exe string, noAutoUpdate bool) []unitFile {
+	if noAutoUpdate || !f.pushMode() {
+		return nil
+	}
 	args := []string{
-		execPath(), "update",
+		exe, "update",
 		"--token-file", f.tokenFile,
 		"--push-to", f.pushTo,
+		"--state", f.statePath,
 	}
-	unit := strings.NewReplacer("__EXEC__", strings.Join(args, " ")).Replace(updateUnitTemplate)
-	if err := os.WriteFile(updateUnitPath, []byte(unit), 0o644); err != nil {
-		return fmt.Errorf("writing the update unit: %w", err)
+	return []unitFile{
+		{updateUnitPath, strings.NewReplacer("__EXEC__", strings.Join(args, " ")).Replace(updateUnitTemplate)},
+		{updateTimerPath, updateTimerTemplate},
+		{updatePathPath, strings.NewReplacer("__FLAG__", f.updateFlagPath()).Replace(updatePathTemplate)},
 	}
-	if err := os.WriteFile(updateTimerPath, []byte(updateTimerTemplate), 0o644); err != nil {
-		return fmt.Errorf("writing the update timer: %w", err)
+}
+
+// writeUpdateUnits writes units whose content differs from what is on disk,
+// and reports whether it wrote any.
+func writeUpdateUnits(units []unitFile) (bool, error) {
+	changed := false
+	for _, u := range units {
+		if b, err := os.ReadFile(u.path); err == nil && string(b) == u.content {
+			continue
+		}
+		if err := os.WriteFile(u.path, []byte(u.content), 0o644); err != nil {
+			return changed, fmt.Errorf("writing %s: %w", u.path, err)
+		}
+		changed = true
 	}
-	return nil
+	return changed, nil
 }
 
 // ensureToken mints a token if the file is not already there, and reports
