@@ -241,6 +241,25 @@ that greps for the field names does not.
 
 ---
 
+## The kinds of node — never fold one into another
+
+Set by the operator, 2026-10-02: *"we have 4 kinds of external nodes: Vantage,
+Hz Instance, Hz Node (part of an instance), and Build Machine"*, plus the
+machine hz manages. Each has its own record, its own credential and its own
+page. Folding one into `Machine` is the mistake this list exists to stop: a
+builder declared as a machine read as a project owning the box.
+
+| Kind | What it is | Credential | Record | Page |
+|---|---|---|---|---|
+| **Machine** | a box hz projects network and units ONTO; the agent's target | agent enrolment | `config.Machine` | Machines |
+| **Vantage** | an outside probe that pushes check results in | probe token | remotes | Checks |
+| **Hz Instance** | a nested hz with its OWN config (e.g. redline-loadtest) | instance token `hzi_` + an `upstream` VPN client | ⚠ `Machine.HZ` today — moving to its own record | Instances |
+| **Hz Node** | a cluster member of ONE instance (HA peer); no config of its own | HA join / peer sync | the HA peer list | Settings › HA |
+| **Build Machine** | numbers, logs and uploads builds for projects; owned by no project | builder token `hzb_` | ⚠ `Builder` naming a `Machine` today — B2 makes it independent | Settings, Builds |
+
+⚠ Not enforced yet: B2 (builders) and the instance separation are in
+`plan/plan.md`; until they land, the two ⚠ rows are the debt, not the rule.
+
 ## The one authority — know this before designing any gate
 
 `RoleAdmin` is the **only** role (`internal/db/users.go:23,29,70-71`: *"hz has
