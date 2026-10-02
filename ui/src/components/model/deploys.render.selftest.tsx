@@ -209,7 +209,7 @@ const ARTIFACTS: ArtifactResp[] = [
     project: "redline",
     size: 10,
     uploaded_at: "2026-09-30T09:00:00Z",
-    uploaded_by: "builder:build-1",
+    uploaded_by: "build-agent:build-1",
     provenance: "build",
     build_id: 9,
     build_number: 7,

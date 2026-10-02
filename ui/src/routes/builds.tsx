@@ -14,7 +14,7 @@ function AllBuilds() {
   return (
     <Box>
       <TabHeader title="Builds" />
-      <BuildsTable source={sourceOf(q)} showProject emptyText="No builds — a builder starts one." />
+      <BuildsTable source={sourceOf(q)} showProject emptyText="No builds — a build agent starts one." />
     </Box>
   );
 }

@@ -15,7 +15,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createRootRoute, createRouter, createMemoryHistory, isRedirect } from "@tanstack/react-router";
 import { ThemeProvider } from "@mui/material/styles";
 import baseTheme from "../theme";
-import type { HostsViewResp, InstanceResp, ProjectResp } from "../api/generated-types";
+import type { BuildAgentResp, HostsViewResp, InstanceResp, ProjectResp } from "../api/generated-types";
 import { routeTree } from "../routeTree.gen";
 import { Route as HostsRoute } from "../routes/hosts";
 import { AddInstanceKindPanel, NESTED_WAITS_ON } from "../routes/instances.index";
@@ -43,6 +43,9 @@ function check(ok: boolean, what: string): void {
 // ---------------------------------------------------------------------------
 
 const PROJECTS: ProjectResp[] = [{ name: "storefront" }];
+
+/** A build agent is NOT an hz instance: seeded so its absence is a claim about the screen, not the fixture. */
+const BUILD_AGENTS: BuildAgentResp[] = [{ name: "agent-only-xyz", project: "storefront", host: "agent-host-xyz", has_token: true }];
 
 function inst(over: Partial<InstanceResp>): InstanceResp {
   return {
@@ -137,6 +140,7 @@ function seeded(instances: Seed): QueryClient {
   qc.setQueryData(["auth", "status"], { authenticated: true, username: "ops", role: "admin", configPrimary: true });
   qc.setQueryData(["projects"], PROJECTS);
   qc.setQueryData(["topology", "hosts-view"], HOSTS_VIEW);
+  qc.setQueryData(["build-agents"], BUILD_AGENTS);
   if (instances === "failed") {
     const q = qc.getQueryCache().build(qc, { queryKey: ["instances"] });
     q.setState({ status: "error", error: new Error("503 Service Unavailable"), fetchStatus: "idle" });
@@ -313,6 +317,17 @@ console.log("· /hosts redirects, and the gateway group links Instances");
   check(zone !== "", "the gateway group is on the page");
   check(/href="\/instances"/.test(zone) && zone.includes("Instances"), "and has an Instances entry");
   check(!/href="\/hosts"/.test(zone) && !/>Hosts</.test(zone), "and no Hosts entry");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· a build agent is not an hz instance");
+// ---------------------------------------------------------------------------
+{
+  for (const [path, seed] of [["/instances", FLEET], ["/instances/gw-b", FLEET]] as const) {
+    const r = await at(path, seed);
+    check(r.text.includes("gw-b"), `${path} renders its instances (the absence below is not a blank page)`);
+    check(!r.text.includes("agent-only-xyz") && !r.text.includes("agent-host-xyz"), `${path} lists no build agent and no agent host`);
+  }
 }
 
 // ---------------------------------------------------------------------------

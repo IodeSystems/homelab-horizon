@@ -1,12 +1,12 @@
 /**
  * The build registry (`internal/server/handlers_api_builds.go`): builds hz
- * numbered, one build's log, and the builders allowed to start them.
+ * numbered, one build's log, and the build agents allowed to start them.
  */
 import type {
-  BuilderReq,
-  BuilderRemovedResp,
-  BuilderResp,
-  BuilderTokenResp,
+  BuildAgentReq,
+  BuildAgentRemovedResp,
+  BuildAgentResp,
+  BuildAgentTokenResp,
   BuildResp,
 } from "./generated-types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -69,31 +69,32 @@ export function useBuildLogTail(id: number, running: boolean) {
   });
 }
 
-/** The builders: machine and the projects each may build. Never a token. */
-export function useBuilders() {
+/** The build agents: name, project, host label. Never a token. */
+export function useBuildAgents() {
   return useQuery({
-    queryKey: ["builders"],
-    queryFn: () => apiFetch<BuilderResp[]>("/builders"),
+    queryKey: ["build-agents"],
+    queryFn: () => apiFetch<BuildAgentResp[]>("/build-agents"),
     retry: false,
   });
 }
 
-/** Make a declared machine a builder — the answer is the ONLY time its token is shown. */
-export function useMintBuilder() {
+/** Register (or rotate) a build agent — the answer is the ONLY time its token is shown. */
+export function useMintBuildAgent() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (req: BuilderReq) =>
-      apiFetch<BuilderTokenResp>("/builders", { method: "POST", body: JSON.stringify(req) }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["builders"] }),
+    mutationFn: (req: BuildAgentReq) =>
+      apiFetch<BuildAgentTokenResp>("/build-agents", { method: "POST", body: JSON.stringify(req) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["build-agents"] }),
   });
 }
 
-/** Revoke a builder's token and grant. */
-export function useRemoveBuilder() {
+/** Revoke a build agent's token. */
+export function useRemoveBuildAgent() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (machine: string) =>
-      apiFetch<BuilderRemovedResp>(`/builders/${encodeURIComponent(machine)}`, { method: "DELETE" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["builders"] }),
+    mutationFn: (name: string) =>
+      apiFetch<BuildAgentRemovedResp>(`/build-agents/${encodeURIComponent(name)}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["build-agents"] }),
   });
 }
+
