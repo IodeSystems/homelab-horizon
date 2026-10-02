@@ -34,7 +34,7 @@ import (
 // leave them to find out which.
 type Dependant struct {
 	// Kind is "project", "environment", "service", "segment", "machine",
-	// "credential", "vpn-client", "check", "ban", "port-exclusion" or "builder".
+	// "credential", "vpn-client", "check", "ban", "port-exclusion" or "build-agent".
 	Kind string `json:"kind"`
 	// Name identifies the record: a project name, "<project>/<environment>",
 	// a segment name, a machine name, a service name, the machine a
@@ -211,17 +211,15 @@ func (c *Config) ProjectRemoval(name string, cascade bool) (removes, blocked []D
 	for _, r := range c.PortExclusions {
 		attributed("port-exclusion", r.Label(), r.Project)
 	}
-	for _, b := range c.Builders {
-		for _, p := range b.Projects {
-			if !doomed[p] {
-				continue
-			}
-			d := Dependant{Kind: "builder", Name: b.Machine, How: "is granted builds of " + p}
-			if cascade {
-				d.How += " and that grant would be REVOKED (the builder is removed when it is granted nothing else)"
-			}
-			add(d)
+	for _, a := range c.BuildAgents {
+		if !doomed[a.Project] {
+			continue
 		}
+		d := Dependant{Kind: "build-agent", Name: a.Name, How: "is registered to build " + a.Project}
+		if cascade {
+			d.How += ", and it would be REMOVED with its token"
+		}
+		add(d)
 	}
 	sortDependants(blocked)
 	sortDependants(removes[1:])
@@ -293,20 +291,13 @@ func (c *Config) RemoveProject(name string, cascade bool) ([]Dependant, error) {
 			next.PortExclusions[i].Project = ""
 		}
 	}
-	var builders []Builder
-	for _, b := range next.Builders {
-		var kept []string
-		for _, p := range b.Projects {
-			if !doomed[p] {
-				kept = append(kept, p)
-			}
-		}
-		if len(kept) > 0 {
-			b.Projects = kept
-			builders = append(builders, b)
+	var agents []BuildAgent
+	for _, a := range next.BuildAgents {
+		if !doomed[a.Project] {
+			agents = append(agents, a)
 		}
 	}
-	next.Builders = builders
+	next.BuildAgents = agents
 	next.Projects, next.Environments = projects, environments
 	if err := next.validateModel(); err != nil {
 		return nil, err
@@ -596,7 +587,7 @@ func (c *Config) validateModel() error {
 	if err := c.ValidateMachines(); err != nil {
 		return err
 	}
-	if err := c.ValidateBuilders(); err != nil {
+	if err := c.ValidateBuildAgents(); err != nil {
 		return err
 	}
 	return c.ValidateSegments()
@@ -619,7 +610,7 @@ func (c *Config) copyForWrite() *Config {
 	next.ServiceChecks = cloneNonNil(c.ServiceChecks)
 	next.IPBans = cloneNonNil(c.IPBans)
 	next.PortExclusions = cloneNonNil(c.PortExclusions)
-	next.Builders = cloneNonNil(c.Builders)
+	next.BuildAgents = cloneNonNil(c.BuildAgents)
 	return &next
 }
 
@@ -639,7 +630,7 @@ func (c *Config) adopt(next *Config) {
 	c.Machines, c.Segments = next.Machines, next.Segments
 	c.ServiceChecks, c.IPBans, c.PortExclusions = next.ServiceChecks, next.IPBans, next.PortExclusions
 	c.VPNProjects = next.VPNProjects
-	c.Builders = next.Builders
+	c.BuildAgents = next.BuildAgents
 }
 
 func (c *Config) hasProject(name string) bool {

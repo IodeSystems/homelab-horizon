@@ -25,10 +25,10 @@ const (
 	prodSvcToken    = "svc-redline-prod-token"
 	looseSvcToken   = "svc-loose-token"
 
-	// The fixture's builder, granted redline: what proves an artifact.
-	testBuilderMachine = "build-1"
-	testBuilderToken   = "hzb_0000000000000000000000000000000000000000000000000000000000000001"
-	testCommit         = "0123456789abcdef0123456789abcdef01234567"
+	// The fixture's build agent, registered for redline: what proves an artifact.
+	testAgent        = "build-1"
+	testBuilderToken = "hzb_0000000000000000000000000000000000000000000000000000000000000001"
+	testCommit       = "0123456789abcdef0123456789abcdef01234567"
 )
 
 type deployFixture struct {
@@ -51,8 +51,7 @@ func newDeployFixture(t *testing.T) deployFixture {
 			{Name: "redline-prod", Domains: []string{"redline.test"}, Project: "redline", Environment: "prod", Token: prodSvcToken},
 			{Name: "loose", Domains: []string{"loose.test"}, Token: looseSvcToken},
 		},
-		Machines: []config.Machine{{Name: testBuilderMachine}},
-		Builders: []config.Builder{{Machine: testBuilderMachine, Projects: []string{"redline"}, TokenSHA256: tokenDigest(testBuilderToken)}},
+		BuildAgents: []config.BuildAgent{{Name: testAgent, Project: "redline", TokenSHA256: tokenDigest(testBuilderToken)}},
 	})
 	store, err := db.Open(filepath.Join(t.TempDir(), "hz.db"))
 	if err != nil {
@@ -120,7 +119,7 @@ func (f deployFixture) report(t *testing.T, token string, req apitypes.DeployRep
 func (f deployFixture) prove(t *testing.T, project, sha string) *db.Build {
 	t.Helper()
 	ctx := context.Background()
-	b, _, err := f.s.users.StartBuild(ctx, db.BuildStart{Project: project, Commit: testCommit, VersionCore: "0.0.0.0", Machine: testBuilderMachine}, nil)
+	b, _, err := f.s.users.StartBuild(ctx, db.BuildStart{Project: project, Commit: testCommit, VersionCore: "0.0.0.0", Machine: testAgent}, nil)
 	if err != nil {
 		t.Fatalf("start build: %v", err)
 	}

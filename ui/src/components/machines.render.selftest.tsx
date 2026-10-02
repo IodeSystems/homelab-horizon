@@ -22,6 +22,7 @@ import { ThemeProvider } from "@mui/material/styles";
 import baseTheme from "../theme";
 import type {
   CMRegistrationResp,
+  BuildAgentResp,
   MachineResp,
   ProjectResp,
   VersionDriftResponse,
@@ -56,6 +57,13 @@ const PROJECTS: ProjectResp[] = [
  * plain owned case. `an-1` is global and hosts nothing — the unscoped
  * screen's "global" reading, on a row with no crossing story to confuse it.
  */
+/**
+ * A build agent is NOT a machine (operator, 2026-10-02). Seeded so its absence
+ * from every Machines screen is a claim about the screen, not the fixture —
+ * and the Builds tab, from the same client, is the positive control.
+ */
+const BUILD_AGENTS: BuildAgentResp[] = [{ name: "agent-only-xyz", project: "storefront", host: "agent-host-xyz", has_token: true }];
+
 const MACHINES: MachineResp[] = [
   { name: "gw-1", project: "intern", segments: ["seg-a"], enrolled: true },
   { name: "box-2", project: "storefront", segments: ["seg-a"], enrolled: false },
@@ -95,6 +103,7 @@ function seeded(): QueryClient {
   qc.setQueryData(["cm-registrations", "pending"], []);
   qc.setQueryData(["cm-registrations", "denied"], []);
   qc.setQueryData(["cm", "version-drift"], DRIFT);
+  qc.setQueryData(["build-agents"], BUILD_AGENTS);
   // /machines/$machine renders nothing but a spinner until its projection
   // query answers — see `MachineProjectionScreen`'s early `isLoading` return.
   for (const name of ["gw-1", "box-2", "an-1"]) {
@@ -241,6 +250,22 @@ console.log("· /machines/<name> has the owner edit control");
   check(!/aria-label="Edit owner"/.test(unscoped.html), "and the edit control is nowhere else");
   const scoped = await at("/p/storefront/machines");
   check(!/aria-label="Edit owner"/.test(scoped.html), "not on the project tab either — one page, one control");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· a build agent is not a machine");
+// ---------------------------------------------------------------------------
+{
+  for (const path of ["/machines", "/p/storefront/machines", "/machines/gw-1"]) {
+    const r = await at(path);
+    check(r.text.includes("gw-1") || r.text.includes("box-2"), `${path} renders its machines (the absence below is not a blank page)`);
+    check(!r.text.includes("agent-only-xyz") && !r.text.includes("agent-host-xyz"), `${path} lists no build agent and no agent host`);
+  }
+  const builds = await at("/p/storefront/builds");
+  check(
+    builds.html.includes('data-build-agent="agent-only-xyz"') && builds.text.includes("Build agents for storefront") && builds.text.includes("host agent-host-xyz · 1 agent"),
+    "positive control: the same seeded agent shows on the project's Builds tab, grouped by host",
+  );
 }
 
 // ---------------------------------------------------------------------------
