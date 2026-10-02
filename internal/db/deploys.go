@@ -63,7 +63,20 @@ type Promotion struct {
 	RestoreGate string
 	// Lines is set on write only; PromotionLines reads them back.
 	Lines []PromotionLine
+	// Provenance is what the provenance check answered (migration 0018):
+	// ProvenanceBuild (BuildID names the passed build the artifact came from),
+	// ProvenanceGrandfathered (uploaded before 0018, no build record), or
+	// ProvenancePredates on a row written before the check existed.
+	Provenance string
+	BuildID    int64
 }
+
+// The provenance answers a promotion row carries (migration 0018).
+const (
+	ProvenancePredates      = "predates"
+	ProvenanceBuild         = "build"
+	ProvenanceGrandfathered = "grandfathered"
+)
 
 // The restore-gate answers a promotion row carries (migration 0016).
 const (
@@ -283,15 +296,29 @@ func (d *DB) RecordPromotion(ctx context.Context, p Promotion) (int64, error) {
 	case len(p.Lines) > 0:
 		gate = RestoreGateChecked
 	}
+	var buildID any
+	switch p.Provenance {
+	case ProvenanceBuild:
+		if p.BuildID <= 0 {
+			return 0, errors.New("a promotion of a build's artifact names the build")
+		}
+		buildID = p.BuildID
+	case ProvenanceGrandfathered:
+		if p.BuildID != 0 {
+			return 0, errors.New("a grandfathered artifact has no build")
+		}
+	default:
+		return 0, fmt.Errorf("a promotion records its artifact's provenance (%q or %q), not %q", ProvenanceBuild, ProvenanceGrandfathered, p.Provenance)
+	}
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO promotions (project, from_env, to_env, version, artifact_sha256, promoted_by, downgrade, build_url, restore_gate)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Project, p.FromEnv, p.ToEnv, p.Version, sha, p.PromotedBy, downgrade, p.BuildURL, gate)
+		INSERT INTO promotions (project, from_env, to_env, version, artifact_sha256, promoted_by, downgrade, build_url, restore_gate, provenance, build_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Project, p.FromEnv, p.ToEnv, p.Version, sha, p.PromotedBy, downgrade, p.BuildURL, gate, p.Provenance, buildID)
 	if err != nil {
 		return 0, fmt.Errorf("record promotion: %w", err)
 	}
@@ -329,16 +356,18 @@ func (d *DB) PromotionLines(ctx context.Context, promotionID int64) ([]Promotion
 	return out, rows.Err()
 }
 
-const promotionCols = `id, project, from_env, to_env, version, artifact_sha256, promoted_at, promoted_by, downgrade, build_url, restore_gate`
+const promotionCols = `id, project, from_env, to_env, version, artifact_sha256, promoted_at, promoted_by, downgrade, build_url, restore_gate, provenance, build_id`
 
 func scanPromotion(row interface{ Scan(...any) error }) (*Promotion, error) {
 	var p Promotion
 	var downgrade int
+	var buildID sql.NullInt64
 	if err := row.Scan(&p.ID, &p.Project, &p.FromEnv, &p.ToEnv, &p.Version, &p.ArtifactSHA256,
-		&p.PromotedAt, &p.PromotedBy, &downgrade, &p.BuildURL, &p.RestoreGate); err != nil {
+		&p.PromotedAt, &p.PromotedBy, &downgrade, &p.BuildURL, &p.RestoreGate, &p.Provenance, &buildID); err != nil {
 		return nil, err
 	}
 	p.Downgrade = downgrade == 1
+	p.BuildID = buildID.Int64
 	return &p, nil
 }
 

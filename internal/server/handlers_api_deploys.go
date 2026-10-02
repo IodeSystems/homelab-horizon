@@ -103,8 +103,8 @@ func (s *Server) deployReporter(r *http.Request, req apitypes.DeployReportReq) (
 func (s *Server) reportingService(r *http.Request) (svc config.Service, status int, msg string) {
 	tok := requestBearer(r)
 	// An empty token must never reach findServiceByToken: a service with no
-	// token has Token == "", and "" would match it.
-	if tok == "" || strings.HasPrefix(tok, db.APITokenPrefix) {
+	// token has Token == "", and "" would match it. Nor does a builder's.
+	if tok == "" || strings.HasPrefix(tok, db.APITokenPrefix) || strings.HasPrefix(tok, builderTokenPrefix) {
 		return config.Service{}, http.StatusUnauthorized, "Unauthorized"
 	}
 	idx := s.findServiceByToken(tok)
@@ -284,6 +284,22 @@ func (s *Server) handleAPIEnvironmentPromote(w http.ResponseWriter, r *http.Requ
 			latest.ArtifactSHA256+"?project="+req.Project+")")
 		return
 	}
+	// PROVENANCE (migration 0018): the artifact is a passed build's, by a
+	// builder granted for this project — or it was uploaded before builds
+	// existed and is grandfathered. Anything else names the rule.
+	prov, err := s.artifactProvenance(r.Context(), cfg, req.Project, latest.ArtifactSHA256)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if prov.kind == "" {
+		promoteRefusal(w, prov.refusal)
+		return
+	}
+	var buildID, buildNumber int64
+	if prov.build != nil {
+		buildID, buildNumber = prov.build.ID, prov.build.Number
+	}
 
 	downgrade := false
 	if to.Version != "" {
@@ -357,6 +373,7 @@ func (s *Server) handleAPIEnvironmentPromote(w http.ResponseWriter, r *http.Requ
 		Project: req.Project, FromEnv: req.From, ToEnv: req.To, Version: req.Version,
 		ArtifactSHA256: latest.ArtifactSHA256, PromotedBy: s.adminActor(r), Downgrade: downgrade,
 		BuildURL: latest.BuildURL, Lines: gate.lines, RestoreGate: gateRecord,
+		Provenance: prov.kind, BuildID: buildID,
 	})
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, req.To+" now declares "+req.Version+
@@ -366,6 +383,7 @@ func (s *Server) handleAPIEnvironmentPromote(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, apitypes.PromoteResp{
 		Promoted: true, Version: req.Version, ArtifactSHA256: latest.ArtifactSHA256, BuildURL: latest.BuildURL,
 		Downgrade: downgrade, ID: id, RestoreTests: gate.summary, LinesChecked: gate.checked,
+		Provenance: prov.kind, BuildID: buildID, BuildNumber: buildNumber,
 	})
 }
 
@@ -484,7 +502,9 @@ func (s *Server) handleAPIDeployLatest(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	out := make([]apitypes.DeployReportResp, 0, len(reports))
 	for _, rep := range reports {
-		out = append(out, deployReportResp(now, rep))
+		resp := deployReportResp(now, rep)
+		resp.BuildNumber = s.buildNumberOf(r.Context(), rep.Project, rep.Version)
+		out = append(out, resp)
 	}
 	writeJSON(w, out)
 }
@@ -515,6 +535,7 @@ func (s *Server) handleAPIPromotions(w http.ResponseWriter, r *http.Request) {
 			ArtifactSHA256: p.ArtifactSHA256, PromotedAt: p.PromotedAt.UTC().Format(time.RFC3339),
 			PromotedBy: p.PromotedBy, Downgrade: p.Downgrade, AgeSeconds: ageSeconds(now, p.PromotedAt),
 			BuildURL: p.BuildURL, RestoreGate: p.RestoreGate,
+			Provenance: p.Provenance, BuildID: p.BuildID, BuildNumber: s.buildNumberOfID(r.Context(), p.BuildID),
 		})
 	}
 	writeJSON(w, out)

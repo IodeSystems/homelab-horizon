@@ -139,3 +139,34 @@ func TestRetentionDecisionTable(t *testing.T) {
 		t.Fatalf("deleted %+v; x is the newest apply and y the last promoted", dels)
 	}
 }
+
+func TestBuildLogRetentionDecision(t *testing.T) {
+	const day = int64(86400)
+	now := int64(1_000 * day)
+	in := BuildLogInput{
+		Now: now, FailedKeepSeconds: 30 * day,
+		DeletedArtifacts: map[string]bool{sha('a'): true},
+		Builds: []BuildLog{
+			{ID: 1, Number: 1, Result: "passed", ArtifactSHA: sha('a'), EndedAt: now - 400*day}, // artifact deleted: log goes
+			{ID: 2, Number: 2, Result: "passed", ArtifactSHA: sha('b'), EndedAt: now - 400*day}, // artifact kept: log kept, however old
+			{ID: 3, Number: 3, Result: "failed", EndedAt: now - 31*day},                         // failed, past 30 days: goes
+			{ID: 4, Number: 4, Result: "failed", EndedAt: now - 29*day},                         // failed, inside 30 days: kept
+			{ID: 5, Number: 5, Result: "abandoned", EndedAt: now - 31*day},                      // abandoned, as failed: goes
+			{ID: 6, Number: 6, Result: "running", EndedAt: now - 400*day},                       // running: never
+		},
+	}
+	got := DecideBuildLogs(in)
+	var ids []int64
+	for _, d := range got {
+		ids = append(ids, d.ID)
+		if d.Why == "" {
+			t.Errorf("deletion %d has no reason", d.ID)
+		}
+	}
+	if len(ids) != 3 || ids[0] != 1 || ids[1] != 3 || ids[2] != 5 {
+		t.Fatalf("deleted %v, want [1 3 5]: %+v", ids, got)
+	}
+	if !strings.Contains(got[0].Why, "artifact") || !strings.Contains(got[1].Why, "30 days") {
+		t.Fatalf("reasons: %+v", got)
+	}
+}

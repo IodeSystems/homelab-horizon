@@ -142,7 +142,7 @@ func TestDeployReportsAndPromotionsAreAppendOnly(t *testing.T) {
 	if _, err := d.RecordDeployReport(ctx, report("1.4.0", shaA)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.RecordPromotion(ctx, Promotion{
+	if _, err := d.RecordPromotion(ctx, Promotion{Provenance: ProvenanceGrandfathered,
 		Project: "redline", FromEnv: "staging", ToEnv: "prod", Version: "1.4.0",
 		ArtifactSHA256: shaA, PromotedBy: "user:carl",
 	}); err != nil {
@@ -172,7 +172,7 @@ func TestPromotionLatestOfPinsTheNewest(t *testing.T) {
 		t.Fatalf("no promotion: %v", err)
 	}
 	for _, sha := range []string{shaA, shaB} {
-		if _, err := d.RecordPromotion(ctx, Promotion{
+		if _, err := d.RecordPromotion(ctx, Promotion{Provenance: ProvenanceGrandfathered,
 			Project: "redline", FromEnv: "staging", ToEnv: "prod", Version: "1.4.0",
 			ArtifactSHA256: sha, PromotedBy: "user:carl", Downgrade: sha == shaB,
 		}); err != nil {
