@@ -461,40 +461,47 @@ curl -s "$HZ_URL/api/v1/deploys/check?project=redline&environment=prod&version=1
 - Reports, promotions, kept backups and restore tests are append-only rows in `hz.db` on the config primary (migrations `0014`, `0015`, `0016`). They are **not** peer-synced and have no backup; a check asked of an HA peer finds no promotion and refuses.
 - `promote` and `check` need an admin credential. hz has one privilege level, so the gate stops an untested version, not a person; what it adds is the record (`promoted_by`). The project Overview shows the newest report per rung (with its build link), a Promote action on any rung with a `from` edge — its dialog lists the required restore tests before the button — recent promotions, and the release lines.
 - **Promote also refuses an artifact hz does not hold** (409 `artifact <sha12> is not uploaded to hz; prod cannot pull it — the staging deploy uploads it before it reports`). The staging deploy uploads its bundle before it reports — see "Nested prod" below.
-- **Promote also requires provenance** (migration `0018`): the artifact must be the artifact of a **passed build by a builder granted for the project** — or have been uploaded before `0018` ran (grandfathered). Next section.
+- **Promote also requires provenance** (migration `0018`): the artifact must be the artifact of a **passed build by a build agent registered for the project at build time** — or have been uploaded before `0018` ran (grandfathered). Next section.
 
 ### Builds: numbers, logs and provenance
 
-**Build numbers come from hz.** A build machine used to mint its number from a counter file, so two build machines would mint the same `1.0.0.0#N` with different artifacts. Now a **builder** asks hz to start a build, and hz allocates the number, the version, and a page for the build's log and state.
+**Build numbers come from hz.** A build machine used to mint its number from a counter file, so two build machines would mint the same `1.0.0.0#N` with different artifacts. Now a **build agent** asks hz to start a build, and hz allocates the number, the version, and a page for the build's log and state.
 
-- A **builder** is a *declared* machine (`hz machine add` first — a box cannot make itself a builder) granted one or more projects. Its token (`hzb_<64 hex>`) is shown once; hz keeps its sha256 in `config.json` (`builders`). It authenticates as `builder:<machine>` for exactly five calls — start, log, state, finish and artifact upload — for its projects only, and only for builds that machine started. Every admin route refuses it.
+- A **build agent** is a token registered for **one** project. Its token (`hzb_<64 hex>`) is shown once; hz keeps its sha256 in `config.json` (`build_agents`). It authenticates as `build-agent:<name>` for exactly five calls — start, log, state, finish and artifact upload — for its project only, and only for builds that agent started. Every admin route refuses it.
+- **A build agent is not a machine and not an hz instance.** A *machine* is a box hz projects a network and units onto, and it may be *owned* by one project; an *instance* is an hz. A build agent is neither: it is a credential that numbers one project's builds, and one box can run several of them, for several projects. B1 tied a builder to a declared machine, so the dev box had to be declared as a machine owned by one project, and it then showed on that project's Machines list as if the project owned the box. So an agent has its own name, never resolved against machines, and an optional `host` — a free-text label of the box it runs on, used only to group agents ("host desktop · 3 agents"). Agents never appear on the Machines or Instances screens or APIs, and removing a machine never touches an agent.
+- **Migration from B1.** `config.json`'s old `builders` key (`{"machine","projects":[...],"token_sha256"}`) still loads: each builder becomes one agent per project. The **first** project keeps the builder's name and token digest, so the token in use keeps working with no re-mint; its host is the old machine name. Each other project becomes `<name>-<project>` with **no token** and a note saying so (`hz build-agent ls` shows `NO TOKEN`; mint it with `hz build-agent add <name>-<project> --project <project>`). The next save writes `build_agents` only. The machine the builder named is not deleted: remove it by hand (`hz machine rm <name> --confirm`).
 - The **number** is per project, from a sequence in `hz.db`, allocated in the same transaction that records the build. It only goes up. A failed or abandoned build keeps its number; a refused start consumes none.
 - **Seeding.** The first build of a project is numbered above every version already recorded for it — in deploy reports, promotions, applies, restore tests, kept backups, config-manager registrations and declared versions — by the version's last numeric prerelease identifier (`1.0.0-0.4` → the first build is `#5`). A run numbered before hz and reported nowhere is covered by raising the number by hand (`hz builds seed`), which never lowers it. After that, a number whose version is already recorded is skipped (and logged): hz never hands out an existing version.
 
 ```bash
-# 0. Once, admin: make a declared machine a builder. Re-running rotates the token
-#    (the old one stops working) and replaces the grant.
-hz builder add build-1 --project redline [--project storefront] > builder.token
-#    = POST /api/v1/builders {"machine":"build-1","projects":["redline"]}
-#    -> 200 {"machine":"build-1","projects":["redline"],"token":"hzb_<64 hex>","rotated":false}
-#    -> 409 {"error":"builder \"laptop\" names no declared machine — declare it first ..."}
-hz builder ls                        # = GET /api/v1/builders -> [{"machine":"build-1","projects":["redline"]}]
-hz builder rm build-1                # = DELETE /api/v1/builders/build-1 -> {"removed":true,"machine":"build-1"}
+# 0. Once, admin: register a build agent for ONE project. Re-running rotates the
+#    token (the old one stops working) and keeps host and note unless given.
+hz build-agent add build-1 --project redline [--host desktop] [--note "..."] > agent.token
+#    = POST /api/v1/build-agents {"name":"build-1","project":"redline","host":"desktop"}
+#    -> 200 {"name":"build-1","project":"redline","host":"desktop","token":"hzb_<64 hex>","rotated":false}
+#    -> 409 {"error":"build agent \"build-1\" is registered for project \"redline\", not \"storefront\" — an agent builds one project; ..."}
+hz build-agent ls                    # = GET /api/v1/build-agents
+#    -> [{"name":"build-1","project":"redline","host":"desktop","has_token":true}]
+hz build-agent rm build-1            # = DELETE /api/v1/build-agents/build-1 -> {"removed":true,"name":"build-1"}
+#    DEPRECATED for one release: `hz builder ...` (same commands, says so on stderr) and
+#    /api/v1/builders[/{name}] in B1's field names ({"machine","projects":[one]}), each
+#    answer carrying "deprecated" and a Deprecation: true header.
 hz builds seed redline --next 6      # = POST /api/v1/builds/seed {"project":"redline","next":6}
 #    -> 200 {"project":"redline","previous":5,"next":6}
 #    -> 409 {"error":"build number seed is lower than the next number: redline's next build number is 6; 3 would hand out numbers again — the seed only raises it"}
 
-# The build script, with the builder token — in this order:
+# The build script, with the agent token — in this order:
 # 1. START. commit is the full 40-hex sha; version_core is MAJOR.MINOR.FIX.HOTFIX,
-#    four non-negative integers with no leading zero; machine is the token's own.
+#    four non-negative integers with no leading zero; agent is the token's own name
+#    (`builder` and `machine` are older spellings, still accepted; all given must agree).
 curl -sf -X POST "$HZ_URL/api/v1/builds" -H "Authorization: Bearer $HZB" \
   -d '{"project":"redline","commit":"<40 hex>","version_core":"1.0.0.0",
-       "describe":"v1.0.0-3-gabc123","machine":"build-1"}'
+       "describe":"v1.0.0-3-gabc123","agent":"build-1"}'
 # -> 200 {"id":12,"number":7,"version":"1.0.0-0.7","build_url":"https://hz.example.com/p/redline/builds/7"}
 #    version = MAJOR.MINOR.FIX-HOTFIX.NUMBER, the semver hz orders (db.CompareVersions).
 #    build_url is admin_url (or the address hz was reached at) + /p/<project>/builds/<number>.
-# -> 400 bad commit or version_core; 401 no, unknown or revoked builder token;
-#    403 a project the builder is not granted, or another machine's name
+# -> 400 bad commit or version_core, no agent named, or agent/builder/machine disagree;
+#    401 no, unknown or revoked agent token; 403 another project, or another agent's name
 
 # 2. LOG, as often as you like: text/plain chunks, appended to
 #    <data dir>/builds/<project>/<number>.log (0600).
@@ -513,7 +520,7 @@ curl -sf -X PUT "$HZ_URL/api/v1/builds/12/state" -H "Authorization: Bearer $HZB"
         {"name":"test","status":"running","started_at":"2026-10-02T10:01:00Z"}]}'
 # -> 200 the build (as GET /api/v1/builds/12)
 
-# 4. UPLOAD the artifact, with the builder token, into the build's project
+# 4. UPLOAD the artifact, with the agent token, into the build's project
 #    (PUT /api/v1/artifacts/<sha256>?project=redline — previous section).
 
 # 5. FINISH, once. passed names the artifact, which must ALREADY be uploaded to the
@@ -531,7 +538,7 @@ curl -sf -X POST "$HZ_URL/api/v1/builds/12/finish" -H "Authorization: Bearer $HZ
 curl -s "$HZ_URL/api/v1/builds?project=redline[&number=7][&limit=100]"   # newest first
 curl -s "$HZ_URL/api/v1/builds/12"
 # -> {"id":12,"project":"redline","number":7,"version":"1.0.0-0.7","version_core":"1.0.0.0",
-#     "commit":"<40 hex>","describe":"...","machine":"build-1","started_at":"...","last_activity_at":"...",
+#     "commit":"<40 hex>","describe":"...","agent":"build-1","machine":"build-1","started_at":"...","last_activity_at":"...",
 #     "finished_at":"...","result":"passed","step":"package","steps":[...],"artifact_sha256":"<hex>",
 #     "duration_seconds":300,"log_size":10240,"log_truncated":false,"build_url":"..."}
 curl -s "$HZ_URL/api/v1/builds/12/log?offset=0"    # or ?tail=65536 — text/plain, at most 4 MiB per call
@@ -541,12 +548,12 @@ curl -s "$HZ_URL/api/v1/builds/12/log?offset=0"    # or ?tail=65536 — text/pla
 
 - **result** is `running`, `passed`, `failed` or **`abandoned`**: a build with no finish and no log or state activity for **2 hours** reads as abandoned. That is derived on every read and never written; a late log chunk makes it read as running again.
 - **The log is capped at 20 MiB per build.** The chunk that crosses the cap is cut at the cap, one line `[hz] log truncated: …` is appended, and every later chunk is a 413. A chunk after the finish is a 409.
-- **Provenance on promote.** On top of every check above, the artifact being promoted (the source rung's newest report's) must be the artifact of a passed build of this project **by a builder granted for the project when the promote runs**. Revoking a builder (`hz builder rm`) therefore makes its builds unpromotable until it is granted again. Otherwise the promote is refused: `artifact <sha12> has no build record: no passed build of redline names it, and it was uploaded after hz began numbering builds — a promotion needs the artifact of a passed build by a builder granted for the project (...)`. A failed build names no artifact, so the bytes it uploaded are refused the same way.
+- **Provenance on promote.** On top of every check above, the artifact being promoted (the source rung's newest report's) must be the artifact of a passed build of this project **by a build agent registered for the project at build time**. The registration is checked when the build starts, never at promote: revoking an agent (`hz build-agent rm`) stops its new builds and leaves its passed builds promotable, so they stay rollback targets. Otherwise the promote is refused: `artifact <sha12> has no build record: no passed build of redline names it, and it was uploaded after hz began numbering builds — a promotion needs the artifact of a passed build by a build agent registered for the project at build time (...)`. A failed build names no artifact, so the bytes it uploaded are refused the same way.
 - **Grandfathered.** Every artifact already uploaded when migration `0018` ran is promotable with no build. The list was taken from the rows that existed then, not by a time cutoff, and nothing can add to it. `GET /api/v1/artifacts` marks each artifact `"provenance":"build"` (with `build_number`), `"no build record"` (grandfathered) or `"unproven"` (promote refuses it). The promotion row records `"provenance":"build"` with `build_id`, or `"grandfathered"`; rows from before `0018` read `"predates"`.
 - **Reports.** A deploy report's `build_url` is accepted as before. When the reported version is a build hz numbered, `GET /api/v1/deploys/latest` and `/promotions` carry its `build_number`, and the Overview links hz's build page.
 - **Retention.** A passed build's log is deleted with its artifact, by the artifact retention above, in the same pass. A failed or abandoned build's log is kept 30 days from its finish (or last activity). The build row stays and says when and why its log was deleted.
-- **A builder on the dev box makes builds traceable, not independent.** hz records which machine built which commit into which artifact, with its log; it does not make the box that writes the code a different party from the one that builds it. Builds, numbers and logs live on the config primary (`hz.db`, `<data dir>/builds/`): not peer-synced, no backup.
-- The UI: a **Builds** tab on every project (`/p/<project>/builds`: number, version, commit, machine, result, duration, artifact), a page per build (`/p/<project>/builds/<number>`: steps, the log tail, refreshed while it runs, and the artifact sha), the build in the Promote dialog ("no build record (grandfathered)" otherwise), and **Settings → Builders** ([Add builder]; the token is shown once).
+- **A build agent on the dev box makes builds traceable, not independent.** hz records which agent built which commit into which artifact, with its log; it does not make the box that writes the code a different party from the one that builds it. Builds, numbers and logs live on the config primary (`hz.db`, `<data dir>/builds/`): not peer-synced, no backup.
+- The UI: a **Builds** tab on every project (`/p/<project>/builds`: number, version, commit, agent, result, duration, artifact, and **Build agents for <project>**, grouped by host), a page per build (`/p/<project>/builds/<number>`: steps, the log tail, refreshed while it runs, and the artifact sha), the build in the Promote dialog ("no build record (grandfathered)" otherwise), and **Settings → Build agents** ([Add build agent]: a name, one project, an optional host — no machine picker; the token is shown once).
 
 
 ### Nested prod: pull, apply, hold
@@ -572,7 +579,7 @@ hz machine hz-token redline-prod-hz > upstream.token   # = POST /api/v1/machines
 # 1. The staging deploy UPLOADS its bundle before it reports. The path is the bundle's
 #    sha256; hz re-hashes the body as it streams it to disk.
 #    Token: admin, the service token of a service in ?project= (required), or a
-#    builder token granted that project.
+#    build agent token registered for that project.
 curl -sf -X PUT --data-binary @redline-1.4.0.tar.zst \
   "https://hz.example/api/v1/artifacts/$(sha256sum redline-1.4.0.tar.zst | cut -d' ' -f1)?project=redline" \
   -H "Authorization: Bearer $HZ_TOKEN"
