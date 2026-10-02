@@ -76,6 +76,13 @@ func (s *Server) artifactUploader(r *http.Request, project string) (who string, 
 	if _, ok := s.instanceCaller(r); ok {
 		return "", http.StatusForbidden, "an instance token downloads artifacts; it cannot upload one"
 	}
+	if strings.HasPrefix(requestBearer(r), builderTokenPrefix) {
+		b, status, msg := s.builderFor(r, project)
+		if status != 0 {
+			return "", status, msg
+		}
+		return "builder:" + b.Machine, 0, ""
+	}
 	svc, status, msg := s.reportingService(r)
 	if status != 0 {
 		return "", status, msg
@@ -285,7 +292,12 @@ func (s *Server) handleAPIArtifacts(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]apitypes.ArtifactResp, 0, len(list))
 	for i := len(list) - 1; i >= 0; i-- {
-		out = append(out, artifactResp(list[i]))
+		a := artifactResp(list[i])
+		if err := s.artifactProvenanceResp(r.Context(), &a); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		out = append(out, a)
 	}
 	writeJSON(w, out)
 }
@@ -319,6 +331,9 @@ func (s *Server) runArtifactRetention(ctx context.Context, trigger string) []art
 		slog.Warn("artifact deleted by retention", "sha256", d.SHA, "size", d.Size, "why", d.Why, "trigger", trigger)
 		done = append(done, d)
 	}
+	// A build's log goes with its artifact, and a failed build's after 30
+	// days — decided in the same pass, from the records just written.
+	s.runBuildLogRetention(ctx, trigger)
 	return done
 }
 

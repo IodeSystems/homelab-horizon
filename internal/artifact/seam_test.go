@@ -9,9 +9,10 @@ import (
 )
 
 // The pure/privileged seam (CLAUDE.md #12), as internal/agent carries it:
-// retention.go DECIDES which artifacts to delete and must not be able to touch
-// the filesystem, the clock or the network; store.go and the server act.
-var pureFiles = []string{"retention.go"}
+// retention.go and buildlogs.go DECIDE which artifacts and build logs to
+// delete and must not be able to touch the filesystem, the clock or the
+// network; store.go and the server act.
+var pureFiles = []string{"retention.go", "buildlogs.go"}
 
 func TestPureHalfStaysPure(t *testing.T) {
 	banned := map[string]string{

@@ -107,7 +107,22 @@ type ArtifactResp struct {
 	UploadedBy string `json:"uploaded_by"`
 	DeletedAt  string `json:"deleted_at,omitempty"`
 	DeletedWhy string `json:"deleted_why,omitempty"`
+	// Provenance is where the artifact came from, as the promote gate reads
+	// it: ProvenanceBuild (BuildNumber is the newest passed build of it),
+	// ProvenanceNoBuildRecord (uploaded before builds existed — grandfathered,
+	// promotable), or ProvenanceUnproven (uploaded since, by no passed build —
+	// not promotable).
+	Provenance  string `json:"provenance"`
+	BuildID     int64  `json:"build_id,omitempty"`
+	BuildNumber int64  `json:"build_number,omitempty"`
 }
+
+// The provenance answers an artifact carries.
+const (
+	ProvenanceBuild         = "build"
+	ProvenanceNoBuildRecord = "no build record"
+	ProvenanceUnproven      = "unproven"
+)
 
 // InstanceTokenReq is POST /api/v1/machines/hz-token: mint the token a nested
 // hz authenticates to this one with.

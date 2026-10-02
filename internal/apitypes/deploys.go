@@ -79,6 +79,11 @@ type PromoteResp struct {
 	ID             int64             `json:"id"`
 	RestoreTests   string            `json:"restore_tests"`
 	LinesChecked   []LineCheckedResp `json:"lines_checked"`
+	// Provenance is "build" or "grandfathered"; BuildID and BuildNumber name
+	// the build for "build".
+	Provenance  string `json:"provenance"`
+	BuildID     int64  `json:"build_id,omitempty"`
+	BuildNumber int64  `json:"build_number,omitempty"`
 }
 
 // LineCheckedResp is one line a promotion was checked against.
@@ -108,6 +113,9 @@ type DeployReportResp struct {
 	// AgeSeconds is computed by the server when it answers, so the client
 	// needs no clock agreement with hz to say "3 min ago".
 	AgeSeconds int64 `json:"ageSeconds"`
+	// BuildNumber is set when Version is a build hz numbered for this
+	// project, so the UI can link hz's build page; absent otherwise.
+	BuildNumber int64 `json:"build_number,omitempty"`
 }
 
 // PromotionResp is one row of the promotion record, for GET
@@ -127,6 +135,12 @@ type PromotionResp struct {
 	// RestoreGate: "checked", "none-required", or "predates" (written before
 	// the restore-test gate existed — not the same answer as none required).
 	RestoreGate string `json:"restore_gate"`
+	// Provenance: "build" (BuildID/BuildNumber name the passed build the
+	// artifact came from), "grandfathered" (uploaded before builds existed),
+	// or "predates" (written before the provenance check existed).
+	Provenance  string `json:"provenance"`
+	BuildID     int64  `json:"build_id,omitempty"`
+	BuildNumber int64  `json:"build_number,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

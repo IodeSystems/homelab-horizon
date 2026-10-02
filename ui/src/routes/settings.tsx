@@ -36,6 +36,8 @@ import {
   useMFASettings,
   useMFAExceptionRevoke,
   useDisableAdminToken,
+  useMachines,
+  useProjects,
   useSettings,
   useUpdateMFASettings,
 } from "../api/hooks";
@@ -45,6 +47,8 @@ import UsersTab from "../components/UsersTab";
 import PCITab from "../components/PCITab";
 import { IPTablesTab } from "../components/IPTablesTab";
 import NtfyCard from "../components/NtfyCard";
+import { useBuilders } from "../api/buildHooks";
+import { BuildersSection, sourceOf } from "../components/model/BuildBits";
 
 // --- Zone Tab ---
 
@@ -1028,15 +1032,32 @@ function HzCliTab() {
  * anything else opens System, as before.
  */
 export interface SettingsSearch {
-  tab?: "ha-fleet";
+  tab?: "ha-fleet" | "builders";
 }
 
 const HA_FLEET_TAB = 3;
+const BUILDERS_TAB = 8;
+
+/** The builders: which declared machines may start builds, of which projects. */
+function BuildersTab() {
+  const builders = useBuilders();
+  const machines = useMachines();
+  const projects = useProjects();
+  return (
+    <BuildersSection
+      source={sourceOf(builders)}
+      machines={(machines.data ?? []).map((m) => m.name)}
+      projects={(projects.data ?? []).map((p) => p.name)}
+    />
+  );
+}
 
 function SettingsPage() {
   const { data, isLoading, error } = useSettings();
   const search = Route.useSearch();
-  const [tab, setTab] = useState(search.tab === "ha-fleet" ? HA_FLEET_TAB : 0);
+  const [tab, setTab] = useState(
+    search.tab === "ha-fleet" ? HA_FLEET_TAB : search.tab === "builders" ? BUILDERS_TAB : 0,
+  );
 
   if (isLoading) {
     return (
@@ -1075,6 +1096,7 @@ function SettingsPage() {
         <Tab label="Users" />
         <Tab label="PCI" />
         <Tab label="hz CLI" />
+        <Tab label="Builders" />
       </Tabs>
 
       {tab === 0 && (
@@ -1111,6 +1133,7 @@ function SettingsPage() {
       {tab === 5 && <UsersTab />}
       {tab === 6 && <PCITab />}
       {tab === 7 && <HzCliTab />}
+      {tab === BUILDERS_TAB && <BuildersTab />}
     </Box>
   );
 }
@@ -1118,5 +1141,5 @@ function SettingsPage() {
 export const Route = createFileRoute("/settings")({
   component: SettingsPage,
   validateSearch: (search: Record<string, unknown>): SettingsSearch =>
-    search.tab === "ha-fleet" ? { tab: "ha-fleet" } : {},
+    search.tab === "ha-fleet" ? { tab: "ha-fleet" } : search.tab === "builders" ? { tab: "builders" } : {},
 });

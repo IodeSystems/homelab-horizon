@@ -132,6 +132,7 @@ func (f n4aFixture) stageAndPromote(t *testing.T, version, body string) string {
 	if w.Code != http.StatusOK {
 		t.Fatalf("upload: %d %s", w.Code, w.Body.String())
 	}
+	f.prove(t, "redline", sha)
 	f.reportOnly(t, stagingSvcToken, stagingReport(version, sha))
 	if w := f.promote(toProd(version)); w.Code != http.StatusOK {
 		t.Fatalf("promote %s: %d %s", version, w.Code, w.Body.String())
@@ -462,6 +463,11 @@ func TestInstanceTokenIsRefusedOnAdminRoutes(t *testing.T) {
 		{"GET", "/api/v1/vpn/peers"},
 		{"GET", "/api/v1/account/tokens"},
 		{"GET", "/api/v1/dashboard"},
+		{"GET", "/api/v1/builders"},
+		{"POST", "/api/v1/builders"},
+		{"GET", "/api/v1/builds"},
+		{"POST", "/api/v1/builds"},
+		{"POST", "/api/v1/builds/seed"},
 	}
 	for _, rt := range routes {
 		r := httptest.NewRequest(rt.method, rt.path, strings.NewReader("{}"))

@@ -40,10 +40,11 @@ import {
   Typography,
 } from "@mui/material";
 import type { DeployReportResp, EnvironmentResp, PromotionResp } from "../../api/generated-types";
-import { useProjectLines, usePromote } from "../../api/deployHooks";
+import { useArtifacts, useProjectLines, usePromote } from "../../api/deployHooks";
 import { formatAge } from "../drift/observation.ts";
 import { EmptyRow } from "./FlowBits";
 import { BuildLink, RequiredRestoreTests, type LinesSource } from "./ReleaseLines";
+import { BuildNumberLink, ProvenanceLine, sourceOf } from "./BuildBits";
 
 /**
  * What hz answered about reports: the list, still asking, or that it could
@@ -105,6 +106,12 @@ export function ReportedCell({ source, env }: { source: ReportSource; env: Envir
       title={`${r.describe || r.version} · sha256 ${r.artifact_sha256} · reported by ${r.reportedBy} at ${r.reportedAt}`}
     >
       {r.version} · {r.host} · {formatAge(r.ageSeconds)} ago
+      {r.build_number ? (
+        <>
+          {" · build "}
+          <BuildNumberLink project={r.project} number={r.build_number} />
+        </>
+      ) : null}
       {r.build_url ? (
         <>
           {" · "}
@@ -127,6 +134,7 @@ export function PromotePanel({
 }) {
   const promote = usePromote();
   const lines = useProjectLines(env.project);
+  const artifacts = useArtifacts();
   const linesSource: LinesSource = lines.data
     ? { known: true, lines: lines.data }
     : lines.error
@@ -173,6 +181,7 @@ export function PromotePanel({
             </>
           ) : null}
         </Typography>
+        {sourceReport ? <ProvenanceLine source={sourceOf(artifacts)} sha={sourceReport.artifact_sha256} /> : null}
         <RequiredRestoreTests source={linesSource} project={env.project} target={env.name} version={version} />
         <TextField
           fullWidth
@@ -283,6 +292,15 @@ export function RecentPromotions({
                 {p.restore_gate === "skipped-ran-before" ? (
                   <Typography component="span" variant="body2" sx={{ color: "warning.main", ml: 1 }}>
                     restore tests skipped
+                  </Typography>
+                ) : null}
+                {p.build_number ? (
+                  <Typography component="span" variant="body2" data-promotion-build={p.build_number} sx={{ ml: 1 }}>
+                    build <BuildNumberLink project={p.project} number={p.build_number} />
+                  </Typography>
+                ) : p.provenance === "grandfathered" ? (
+                  <Typography component="span" variant="body2" data-promotion-build="grandfathered" sx={{ color: "text.secondary", ml: 1 }}>
+                    no build record
                   </Typography>
                 ) : null}
                 {applied?.has(p.id) ? (
