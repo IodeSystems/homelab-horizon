@@ -752,15 +752,18 @@ type provenance struct {
 }
 
 // artifactProvenance answers whether sha may be promoted in project: the
-// artifact of a passed build by a builder granted for project NOW, or
-// grandfathered (uploaded before migration 0018).
+// artifact of a passed build of project, or grandfathered (uploaded before
+// migration 0018).
+//
+// The builder's grant is checked when the build STARTS (a build row exists
+// only for a token granted for its project), never again here: revoking a
+// builder stops new builds and leaves its past passed builds promotable, so
+// they stay rollback targets (operator, 2026-10-02).
 func (s *Server) artifactProvenance(ctx context.Context, cfg *config.Config, project, sha string) (provenance, error) {
 	b, err := s.users.PassedBuildOf(ctx, project, sha)
 	switch {
 	case err == nil:
-		if bl, ok := cfg.FindBuilder(b.Machine); ok && bl.Grants(project) {
-			return provenance{kind: db.ProvenanceBuild, build: b}, nil
-		}
+		return provenance{kind: db.ProvenanceBuild, build: b}, nil
 	case !errors.Is(err, db.ErrNotFound):
 		return provenance{}, err
 	}
@@ -770,10 +773,6 @@ func (s *Server) artifactProvenance(ctx context.Context, cfg *config.Config, pro
 	}
 	if old {
 		return provenance{kind: db.ProvenanceGrandfathered}, nil
-	}
-	if b != nil {
-		return provenance{refusal: "artifact " + artifactSHA12(sha) + " is build #" + strconv.FormatInt(b.Number, 10) + "'s, by builder " + b.Machine +
-			", which is no longer granted builds of " + project + " — a promotion needs the artifact of a passed build by a builder granted for the project"}, nil
 	}
 	return provenance{refusal: "artifact " + artifactSHA12(sha) + " has no build record: no passed build of " + project +
 		" names it, and it was uploaded after hz began numbering builds — a promotion needs the artifact of a passed build by a builder granted for the project" +

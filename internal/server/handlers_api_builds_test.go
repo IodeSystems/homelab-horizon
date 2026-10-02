@@ -480,13 +480,14 @@ func TestProvenanceOnPromote(t *testing.T) {
 		t.Fatalf("promotion row = %+v", promos[0])
 	}
 
-	// Revoke the builder: its builds stop being promotable.
+	// Revoke the builder: it can start no NEW build, and its past passed build
+	// stays promotable — a rollback target (the grant counts at build time).
 	if w := f.do("DELETE", "/api/v1/builders/"+secondBuilder, f.pat, nil); w.Code != http.StatusOK {
 		t.Fatal(w.Body.String())
 	}
 	f.reportOnly(t, stagingSvcToken, stagingReport(passed.Version, sha))
-	if w := f.promote(toProd(passed.Version)); w.Code != http.StatusConflict || !strings.Contains(errorOf(w), "no longer granted") {
-		t.Fatalf("revoked builder: %d %q", w.Code, errorOf(w))
+	if w := f.promote(toProd(passed.Version)); w.Code != http.StatusOK {
+		t.Fatalf("a revoked builder's passed build must stay promotable: %d %q", w.Code, errorOf(w))
 	}
 }
 
