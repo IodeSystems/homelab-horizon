@@ -320,7 +320,29 @@ export interface ArtifactResp {
   uploaded_by: string;
   deleted_at?: string;
   deleted_why?: string;
+  /**
+   * Provenance is where the artifact came from, as the promote gate reads
+   * it: ProvenanceBuild (BuildNumber is the newest passed build of it),
+   * ProvenanceNoBuildRecord (uploaded before builds existed — grandfathered,
+   * promotable), or ProvenanceUnproven (uploaded since, by no passed build —
+   * not promotable).
+   */
+  provenance: string;
+  build_id?: number /* int64 */;
+  build_number?: number /* int64 */;
 }
+/**
+ * The provenance answers an artifact carries.
+ */
+export const ProvenanceBuild = "build";
+/**
+ * The provenance answers an artifact carries.
+ */
+export const ProvenanceNoBuildRecord = "no build record";
+/**
+ * The provenance answers an artifact carries.
+ */
+export const ProvenanceUnproven = "unproven";
 /**
  * InstanceTokenReq is POST /api/v1/machines/hz-token: mint the token a nested
  * hz authenticates to this one with.
@@ -335,6 +357,159 @@ export interface InstanceTokenReq {
 export interface InstanceTokenResp {
   machine: string;
   token: string;
+}
+
+//////////
+// source: builds.go
+
+/**
+ * BuilderReq is POST /api/v1/builders: make a declared machine a builder for
+ * these projects, minting its token. Re-minting rotates the token and replaces
+ * the grant.
+ */
+export interface BuilderReq {
+  machine: string;
+  projects: string[];
+}
+/**
+ * BuilderTokenResp answers a mint. Token is shown ONCE; hz keeps its sha256.
+ */
+export interface BuilderTokenResp {
+  machine: string;
+  projects: string[];
+  token: string;
+  /**
+   * Rotated is true when the machine was already a builder: its old token
+   * stopped working.
+   */
+  rotated: boolean;
+}
+/**
+ * BuilderResp is one builder, for GET /api/v1/builders. It carries no token
+ * and no token digest.
+ */
+export interface BuilderResp {
+  machine: string;
+  projects: string[];
+}
+/**
+ * BuilderRemovedResp answers DELETE /api/v1/builders/{machine}.
+ */
+export interface BuilderRemovedResp {
+  removed: boolean;
+  machine: string;
+}
+/**
+ * BuildStartReq is POST /api/v1/builds, with a builder token granted for
+ * Project. Commit is the full 40-hex sha. VersionCore is redline's
+ * MAJOR.MINOR.FIX.HOTFIX ("1.0.0.0"): four non-negative integers. Machine must
+ * be the token's own machine.
+ */
+export interface BuildStartReq {
+  project: string;
+  commit: string;
+  version_core: string;
+  describe?: string;
+  machine: string;
+}
+/**
+ * BuildStartResp answers a start. Version is MAJOR.MINOR.FIX-HOTFIX.NUMBER
+ * ("1.0.0.0", number 7 → "1.0.0-0.7"); BuildURL is hz's page for the build.
+ */
+export interface BuildStartResp {
+  id: number /* int64 */;
+  number: number /* int64 */;
+  version: string;
+  build_url: string;
+}
+/**
+ * BuildStepResp is one step of a build's state. Status is pending, running,
+ * passed, failed or skipped; the times are RFC 3339 or absent.
+ */
+export interface BuildStepResp {
+  name: string;
+  status: string;
+  started_at?: string;
+  finished_at?: string;
+}
+/**
+ * BuildStateReq is PUT /api/v1/builds/{id}/state: the whole state, replacing
+ * the last one. Status is running, passed or failed.
+ */
+export interface BuildStateReq {
+  step: string;
+  status: string;
+  steps: BuildStepResp[];
+}
+/**
+ * BuildFinishReq is POST /api/v1/builds/{id}/finish. passed requires
+ * ArtifactSHA256, ALREADY uploaded (PUT /api/v1/artifacts/{sha}?project=) to
+ * the build's project; failed takes none. A finish is final.
+ */
+export interface BuildFinishReq {
+  result: string;
+  artifact_sha256?: string;
+  failed_step?: string;
+}
+/**
+ * BuildLogAppendResp answers a log chunk. Truncated is true once the log hit
+ * its cap: the chunk that crossed it was cut and a truncation line appended,
+ * and every later chunk is a 413.
+ */
+export interface BuildLogAppendResp {
+  appended: number /* int64 */;
+  size: number /* int64 */;
+  truncated: boolean;
+}
+/**
+ * BuildResp is one build. Result is running, passed, failed or abandoned —
+ * abandoned is DERIVED (no finish, and no log or state activity for 2h), never
+ * stored. ArtifactSHA256 is "" unless the build passed.
+ */
+export interface BuildResp {
+  id: number /* int64 */;
+  project: string;
+  number: number /* int64 */;
+  version: string;
+  version_core: string;
+  commit: string;
+  describe: string;
+  machine: string;
+  started_at: string;
+  last_activity_at: string;
+  finished_at?: string;
+  result: string;
+  step: string;
+  steps: BuildStepResp[];
+  artifact_sha256?: string;
+  failed_step?: string;
+  duration_seconds: number /* int64 */;
+  log_size: number /* int64 */;
+  log_truncated: boolean;
+  /**
+   * LogDeletedAt is set when retention deleted the log; LogDeletedWhy says
+   * why. A build whose log was never written has neither and LogSize 0.
+   */
+  log_deleted_at?: string;
+  log_deleted_why?: string;
+  build_url: string;
+}
+/**
+ * BuildSeedReq is POST /api/v1/builds/seed: raise a project's next build
+ * number to Next — for runs numbered before hz numbered them and reported
+ * nowhere. It never lowers it.
+ */
+export interface BuildSeedReq {
+  project: string;
+  next: number /* int64 */;
+}
+/**
+ * BuildSeedResp answers a seed: the next number before and after.
+ */
+export interface BuildSeedResp {
+  project: string;
+  previous: number /* int64 */;
+  next: number /* int64 */;
 }
 
 //////////
@@ -518,6 +693,13 @@ export interface PromoteResp {
   id: number /* int64 */;
   restore_tests: string;
   lines_checked: LineCheckedResp[];
+  /**
+   * Provenance is "build" or "grandfathered"; BuildID and BuildNumber name
+   * the build for "build".
+   */
+  provenance: string;
+  build_id?: number /* int64 */;
+  build_number?: number /* int64 */;
 }
 /**
  * LineCheckedResp is one line a promotion was checked against.
@@ -551,6 +733,11 @@ export interface DeployReportResp {
    * needs no clock agreement with hz to say "3 min ago".
    */
   ageSeconds: number /* int64 */;
+  /**
+   * BuildNumber is set when Version is a build hz numbered for this
+   * project, so the UI can link hz's build page; absent otherwise.
+   */
+  build_number?: number /* int64 */;
 }
 /**
  * PromotionResp is one row of the promotion record, for GET
@@ -573,6 +760,14 @@ export interface PromotionResp {
    * the restore-test gate existed — not the same answer as none required).
    */
   restore_gate: string;
+  /**
+   * Provenance: "build" (BuildID/BuildNumber name the passed build the
+   * artifact came from), "grandfathered" (uploaded before builds existed),
+   * or "predates" (written before the provenance check existed).
+   */
+  provenance: string;
+  build_id?: number /* int64 */;
+  build_number?: number /* int64 */;
 }
 /**
  * RecordedResp answers a recorded kept backup or restore test.
