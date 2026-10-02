@@ -436,6 +436,19 @@ func (c *Config) MachineRemoval(name string, enrolled, cascade bool) (removes, b
 		}
 	}
 
+	if _, ok := c.FindBuilder(name); ok {
+		d := Dependant{
+			Kind: "builder", Name: name,
+			How: "is a builder, whose token would still start builds for a machine hz no longer declares",
+		}
+		if cascade {
+			d.How = "is a builder, and its token and grant would be REVOKED — its builds stay recorded and stop being promotable"
+			removes = append(removes, d)
+		} else {
+			blocked = append(blocked, d)
+		}
+	}
+
 	for _, rung := range c.upstreamUsers(name) {
 		d := Dependant{
 			Kind: "environment", Name: rung,
@@ -490,6 +503,13 @@ func (c *Config) RemoveMachine(name string, enrolled, cascade bool) ([]Dependant
 		}
 	}
 	next.Machines = machines
+	var builders []Builder
+	for _, b := range next.Builders {
+		if b.Machine != name {
+			builders = append(builders, b)
+		}
+	}
+	next.Builders = builders
 	// Cascade CLEARS an Upstream naming this machine and never deletes the
 	// rung: the rung is still declared here, and what it loses is only the
 	// statement that another hz holds its placements.

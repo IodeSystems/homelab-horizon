@@ -189,6 +189,9 @@ type Config struct {
 	// Additive in exactly the way Projects and Environments are. See
 	// internal/config/machine.go for what else is absent and why.
 	Machines []Machine `json:"machines,omitempty"`
+	// Builders are the declared machines allowed to start builds, per project,
+	// and the sha256 of each one's token (builder.go). Declared state.
+	Builders []Builder `json:"builders,omitempty"`
 	// Segments are the networks a Machine.Segments NAME resolves to: a project,
 	// a range, an interface, and the addressed members on it. Additive in
 	// exactly the way Projects, Environments and Machines are, and empty on
@@ -1807,6 +1810,11 @@ func Save(path string, cfg *Config) error {
 	// The nested-hz upstream, same chokepoint: a URL with no host or a rung
 	// listed twice is a puller that cannot start or two pullers for one cache.
 	if err := cfg.ValidateUpstream(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Builders, same chokepoint: a builder naming a machine or project nobody
+	// declared would hold a token for a box the model does not have.
+	if err := cfg.ValidateBuilders(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	dir := filepath.Dir(path)
