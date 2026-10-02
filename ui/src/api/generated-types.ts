@@ -363,54 +363,107 @@ export interface InstanceTokenResp {
 // source: builds.go
 
 /**
- * BuilderReq is POST /api/v1/builders: make a declared machine a builder for
- * these projects, minting its token. Re-minting rotates the token and replaces
- * the grant.
+ * BuildAgentReq is POST /api/v1/build-agents: register a build agent for ONE
+ * project, minting its token. An agent is NOT a machine
+ * (internal/config/build_agent.go): Name is its own, and Host is a free-text
+ * label of the box it runs on, never resolved against machines. Re-minting an
+ * existing name rotates its token; host and note are kept unless given, and a
+ * different project is refused.
  */
-export interface BuilderReq {
-  machine: string;
-  projects: string[];
+export interface BuildAgentReq {
+  name: string;
+  project: string;
+  host?: string;
+  note?: string;
 }
 /**
- * BuilderTokenResp answers a mint. Token is shown ONCE; hz keeps its sha256.
+ * BuildAgentTokenResp answers a mint. Token is shown ONCE; hz keeps its sha256.
+ */
+export interface BuildAgentTokenResp {
+  name: string;
+  project: string;
+  host?: string;
+  note?: string;
+  token: string;
+  /**
+   * Rotated is true when the agent existed: its old token stopped working.
+   */
+  rotated: boolean;
+}
+/**
+ * BuildAgentResp is one build agent, for GET /api/v1/build-agents. It carries
+ * no token and no token digest. HasToken is false for an agent a migration
+ * created without one: it authenticates nothing until minted.
+ */
+export interface BuildAgentResp {
+  name: string;
+  project: string;
+  host?: string;
+  note?: string;
+  has_token: boolean;
+}
+/**
+ * BuildAgentRemovedResp answers DELETE /api/v1/build-agents/{name}.
+ */
+export interface BuildAgentRemovedResp {
+  removed: boolean;
+  name: string;
+}
+/**
+ * BuilderReq is the DEPRECATED POST /api/v1/builders (B1's shape), kept for
+ * one release. Machine is the agent's name (Name is accepted beside it);
+ * Projects must name exactly ONE project, because an agent builds one.
+ */
+export interface BuilderReq {
+  machine?: string;
+  name?: string;
+  projects: string[];
+  note?: string;
+}
+/**
+ * BuilderTokenResp answers the deprecated mint, in B1's field names.
+ * Deprecated says what to call instead.
  */
 export interface BuilderTokenResp {
   machine: string;
   projects: string[];
   token: string;
-  /**
-   * Rotated is true when the machine was already a builder: its old token
-   * stopped working.
-   */
   rotated: boolean;
+  deprecated: string;
 }
 /**
- * BuilderResp is one builder, for GET /api/v1/builders. It carries no token
- * and no token digest.
+ * BuilderResp is one build agent in B1's field names, for the deprecated
+ * GET /api/v1/builders.
  */
 export interface BuilderResp {
   machine: string;
   projects: string[];
 }
 /**
- * BuilderRemovedResp answers DELETE /api/v1/builders/{machine}.
+ * BuilderRemovedResp answers the deprecated DELETE /api/v1/builders/{name}.
  */
 export interface BuilderRemovedResp {
   removed: boolean;
   machine: string;
+  deprecated: string;
 }
 /**
- * BuildStartReq is POST /api/v1/builds, with a builder token granted for
- * Project. Commit is the full 40-hex sha. VersionCore is redline's
- * MAJOR.MINOR.FIX.HOTFIX ("1.0.0.0"): four non-negative integers. Machine must
- * be the token's own machine.
+ * BuildStartReq is POST /api/v1/builds, with a build agent token registered
+ * for Project. Commit is the full 40-hex sha. VersionCore is redline's
+ * MAJOR.MINOR.FIX.HOTFIX ("1.0.0.0"): four non-negative integers. Agent must
+ * be the token's own agent name.
+ * Builder and Machine are older spellings of Agent and are still accepted
+ * (redline's build script sends `machine`). Every one given must be equal, and
+ * name the token's agent.
  */
 export interface BuildStartReq {
   project: string;
   commit: string;
   version_core: string;
   describe?: string;
-  machine: string;
+  agent?: string;
+  builder?: string;
+  machine?: string;
 }
 /**
  * BuildStartResp answers a start. Version is MAJOR.MINOR.FIX-HOTFIX.NUMBER
@@ -474,6 +527,11 @@ export interface BuildResp {
   version_core: string;
   commit: string;
   describe: string;
+  /**
+   * Agent is the build agent that started it. Machine is the same value under
+   * its pre-2026-10-02 name, kept for one release.
+   */
+  agent: string;
   machine: string;
   started_at: string;
   last_activity_at: string;

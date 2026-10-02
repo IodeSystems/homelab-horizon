@@ -25,35 +25,42 @@ import (
 
 // The build registry (operator, 2026-10-02): build numbers come FROM hz.
 //
-//	POST   /api/v1/builders               {machine, projects[]}   admin   mint (or rotate) a builder token
-//	GET    /api/v1/builders                                       admin
-//	DELETE /api/v1/builders/{machine}                             admin   revoke
-//	POST   /api/v1/builds                 start                   builder
-//	GET    /api/v1/builds?project=&number=&limit=                 admin
-//	GET    /api/v1/builds/{id}                                    admin
-//	POST   /api/v1/builds/{id}/log        text/plain chunk        builder
-//	GET    /api/v1/builds/{id}/log?offset=&tail=                  admin
-//	PUT    /api/v1/builds/{id}/state                              builder
-//	POST   /api/v1/builds/{id}/finish                             builder
-//	POST   /api/v1/builds/seed            {project, next}         admin   raise the next number
+//	POST   /api/v1/build-agents           {name, project, host?, note?}  admin   mint (or rotate) an agent token
+//	GET    /api/v1/build-agents                                          admin
+//	DELETE /api/v1/build-agents/{name}                                   admin   revoke
+//	POST   /api/v1/builds                 start                          build agent
+//	GET    /api/v1/builds?project=&number=&limit=                        admin
+//	GET    /api/v1/builds/{id}                                           admin
+//	POST   /api/v1/builds/{id}/log        text/plain chunk               build agent
+//	GET    /api/v1/builds/{id}/log?offset=&tail=                         admin
+//	PUT    /api/v1/builds/{id}/state                                     build agent
+//	POST   /api/v1/builds/{id}/finish                                    build agent
+//	POST   /api/v1/builds/seed            {project, next}                admin   raise the next number
 //
-// THE BUILDER TOKEN authenticates as builder:<machine> for exactly five calls —
-// start, log, state, finish, and an artifact upload — and only for the
-// projects its grant names, and only for builds that machine started. isAdmin
-// never accepts it, so every admin route refuses it without knowing it exists;
+//	/api/v1/builders[/{name}]   DEPRECATED, one release: the same three admin
+//	                            verbs in B1's field names; each answer says so.
+//
+// A BUILD AGENT IS NOT A MACHINE (internal/config/build_agent.go). It is a
+// token registered for one project; Host only labels the box it runs on.
+//
+// THE AGENT TOKEN authenticates as build-agent:<name> for exactly five calls —
+// start, log, state, finish, and an artifact upload — and only for its
+// project, and only for builds that agent started. isAdmin never accepts it,
+// so every admin route refuses it without knowing it exists;
 // TestBuilderTokenIsRefusedOnAdminRoutes enumerates them.
 //
-// THE ONE AUTHORITY (CLAUDE.md). Minting a builder is admin-gated, so this
+// THE ONE AUTHORITY (CLAUDE.md). Minting an agent is admin-gated, so this
 // gates one authority against itself too. What the registry adds is not a
-// second person: it is ONE source of numbers, and a record — which machine
-// built which commit into which artifact, with its log — that a promotion now
-// has to point at.
+// second person: it is ONE source of numbers, and a record — which agent built
+// which commit into which artifact, with its log — that a promotion now has to
+// point at.
 //
-// A builder on the dev box makes builds TRACEABLE, not independent: the box
+// An agent on the dev box makes builds TRACEABLE, not independent: the box
 // that writes the code also runs the build that vouches for it.
 
-// builderTokenPrefix marks a builder token, so it never reaches the
-// service-token or personal-token lookups by accident.
+// builderTokenPrefix marks a build agent token, so it never reaches the
+// service-token or personal-token lookups by accident. Unchanged from B1, so
+// a B1 token still has it.
 const builderTokenPrefix = "hzb_"
 
 // BuildLogCap bounds one build's log. Past it, one truncation line is
@@ -74,96 +81,119 @@ func newBuilderToken() (string, error) {
 	return builderTokenPrefix + hex.EncodeToString(raw), nil
 }
 
-// builderCaller resolves a builder token to its builder.
-func (s *Server) builderCaller(r *http.Request) (config.Builder, bool) {
+// builderCaller resolves a build agent token to its agent. An agent with no
+// token digest (one a migration split off, not yet minted) matches nothing.
+func (s *Server) builderCaller(r *http.Request) (config.BuildAgent, bool) {
 	tok := requestBearer(r)
 	if !strings.HasPrefix(tok, builderTokenPrefix) {
-		return config.Builder{}, false
+		return config.BuildAgent{}, false
 	}
 	sum := tokenDigest(tok)
-	for _, b := range s.cfg().Builders {
-		if subtle.ConstantTimeCompare([]byte(b.TokenSHA256), []byte(sum)) == 1 {
-			return b, true
+	for _, a := range s.cfg().BuildAgents {
+		if a.TokenSHA256 == "" {
+			continue
+		}
+		if subtle.ConstantTimeCompare([]byte(a.TokenSHA256), []byte(sum)) == 1 {
+			return a, true
 		}
 	}
-	return config.Builder{}, false
+	return config.BuildAgent{}, false
 }
 
-// builderFor authorises a builder token for one project.
-func (s *Server) builderFor(r *http.Request, project string) (config.Builder, int, string) {
-	b, ok := s.builderCaller(r)
+// builderFor authorises a build agent token for one project.
+func (s *Server) builderFor(r *http.Request, project string) (config.BuildAgent, int, string) {
+	a, ok := s.builderCaller(r)
 	if !ok {
 		if strings.HasPrefix(requestBearer(r), builderTokenPrefix) {
-			return b, http.StatusUnauthorized, "Unauthorized: unknown or revoked builder token"
+			return a, http.StatusUnauthorized, "Unauthorized: unknown or revoked build agent token"
 		}
-		return b, http.StatusUnauthorized, "Unauthorized: a build is started, logged and finished with a builder token (`hz builder add <machine> --project P`)"
+		return a, http.StatusUnauthorized, "Unauthorized: a build is started, logged and finished with a build agent token (`hz build-agent add <name> --project P`)"
 	}
-	if !b.Grants(project) {
-		return b, http.StatusForbidden, "builder " + b.Machine + " is granted builds of " + strings.Join(b.Projects, ", ") + ", not " + project
+	if a.Project != project {
+		return a, http.StatusForbidden, "build agent " + a.Name + " is registered for project " + a.Project + ", not " + project
 	}
-	return b, 0, ""
+	return a, 0, ""
 }
 
 // ---------------------------------------------------------------------------
-// Builders.
+// Build agents.
 
-func builderResp(b config.Builder) apitypes.BuilderResp {
-	return apitypes.BuilderResp{Machine: b.Machine, Projects: append([]string{}, b.Projects...)}
+func buildAgentResp(a config.BuildAgent) apitypes.BuildAgentResp {
+	return apitypes.BuildAgentResp{Name: a.Name, Project: a.Project, Host: a.Host, Note: a.Note, HasToken: a.TokenSHA256 != ""}
 }
 
-// handleAPIBuilders lists builders (GET) or mints a builder token (POST).
-func (s *Server) handleAPIBuilders(w http.ResponseWriter, r *http.Request) {
+// handleAPIBuildAgents lists build agents (GET) or mints an agent token (POST).
+func (s *Server) handleAPIBuildAgents(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {
 		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 	switch r.Method {
 	case http.MethodGet:
-		out := []apitypes.BuilderResp{}
-		for _, b := range s.cfg().Builders {
-			out = append(out, builderResp(b))
+		out := []apitypes.BuildAgentResp{}
+		for _, a := range s.cfg().BuildAgents {
+			out = append(out, buildAgentResp(a))
 		}
 		writeJSON(w, out)
 	case http.MethodPost:
-		s.mintBuilder(w, r)
+		var req apitypes.BuildAgentReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+			return
+		}
+		a, tok, rotated, status, msg := s.mintBuildAgent(r, config.BuildAgent{Name: req.Name, Project: req.Project, Host: req.Host, Note: req.Note})
+		if status != 0 {
+			writeJSONError(w, status, msg)
+			return
+		}
+		writeJSON(w, apitypes.BuildAgentTokenResp{Name: a.Name, Project: a.Project, Host: a.Host, Note: a.Note, Token: tok, Rotated: rotated})
 	default:
-		writeJSONError(w, http.StatusMethodNotAllowed, "GET lists builders, POST mints one")
+		writeJSONError(w, http.StatusMethodNotAllowed, "GET lists build agents, POST mints one")
 	}
 }
 
-func (s *Server) mintBuilder(w http.ResponseWriter, r *http.Request) {
-	var req apitypes.BuilderReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
-		return
-	}
-	req.Machine = strings.TrimSpace(req.Machine)
-	if req.Machine == "" {
-		writeJSONError(w, http.StatusBadRequest, "machine is required — a builder is a declared machine")
-		return
+// mintBuildAgent mints a token for a and registers (or rotates) the agent.
+func (s *Server) mintBuildAgent(r *http.Request, a config.BuildAgent) (config.BuildAgent, string, bool, int, string) {
+	a.Name = strings.TrimSpace(a.Name)
+	if a.Name == "" {
+		return a, "", false, http.StatusBadRequest, "name is required — a build agent is named on its own, not after a machine"
 	}
 	tok, err := newBuilderToken()
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
+		return a, "", false, http.StatusInternalServerError, err.Error()
 	}
+	a.TokenSHA256 = tokenDigest(tok)
 	next := *s.cfg()
-	rotated, err := next.SetBuilder(req.Machine, req.Projects, tokenDigest(tok))
+	rotated, err := next.SetBuildAgent(a)
 	if err != nil {
-		writeJSONError(w, http.StatusConflict, err.Error())
-		return
+		return a, "", false, http.StatusConflict, err.Error()
 	}
 	if err := s.updateConfig(func(c *config.Config) { *c = next }); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
-		return
+		return a, "", false, http.StatusInternalServerError, "failed to save: " + err.Error()
 	}
-	b, _ := next.FindBuilder(req.Machine)
-	slog.Info("builder token minted", "machine", b.Machine, "projects", b.Projects, "rotated", rotated, "by", s.adminActor(r))
-	writeJSON(w, apitypes.BuilderTokenResp{Machine: b.Machine, Projects: b.Projects, Token: tok, Rotated: rotated})
+	saved, _ := next.FindBuildAgent(a.Name)
+	slog.Info("build agent token minted", "agent", saved.Name, "project", saved.Project, "host", saved.Host, "rotated", rotated, "by", s.adminActor(r))
+	return saved, tok, rotated, 0, ""
 }
 
-// handleAPIBuilder revokes a builder: DELETE /api/v1/builders/{machine}.
-func (s *Server) handleAPIBuilder(w http.ResponseWriter, r *http.Request) {
+// removeBuildAgent revokes an agent, from either path. name is the path tail.
+func (s *Server) removeBuildAgent(r *http.Request, name string) (int, string) {
+	if name == "" || strings.Contains(name, "/") {
+		return http.StatusBadRequest, "the path names a build agent: /api/v1/build-agents/<name>"
+	}
+	next := *s.cfg()
+	if err := next.RemoveBuildAgent(name); err != nil {
+		return http.StatusNotFound, err.Error()
+	}
+	if err := s.updateConfig(func(c *config.Config) { *c = next }); err != nil {
+		return http.StatusInternalServerError, "failed to save: " + err.Error()
+	}
+	slog.Info("build agent revoked", "agent", name, "by", s.adminActor(r))
+	return 0, ""
+}
+
+// handleAPIBuildAgent revokes an agent: DELETE /api/v1/build-agents/{name}.
+func (s *Server) handleAPIBuildAgent(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {
 		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
 		return
@@ -172,22 +202,79 @@ func (s *Server) handleAPIBuilder(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusMethodNotAllowed, "DELETE required")
 		return
 	}
-	machine := strings.TrimPrefix(r.URL.Path, "/api/v1/builders/")
-	if machine == "" || strings.Contains(machine, "/") {
-		writeJSONError(w, http.StatusBadRequest, "the path names a builder by its machine: /api/v1/builders/<machine>")
+	name := strings.TrimPrefix(r.URL.Path, "/api/v1/build-agents/")
+	if status, msg := s.removeBuildAgent(r, name); status != 0 {
+		writeJSONError(w, status, msg)
 		return
 	}
-	next := *s.cfg()
-	if err := next.RemoveBuilder(machine); err != nil {
-		writeJSONError(w, http.StatusNotFound, err.Error())
+	writeJSON(w, apitypes.BuildAgentRemovedResp{Removed: true, Name: name})
+}
+
+// buildersDeprecated is what every answer on the B1 path says.
+const buildersDeprecated = "/api/v1/builders is deprecated and goes in the next release: use /api/v1/build-agents {name, project, host?, note?} — a build agent is registered for ONE project and is not a machine"
+
+// handleAPIBuilders is the DEPRECATED B1 path, kept one release: GET lists
+// agents in B1's field names, POST mints one from {machine|name, projects[]}
+// with exactly one project.
+func (s *Server) handleAPIBuilders(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	if err := s.updateConfig(func(c *config.Config) { *c = next }); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
+	w.Header().Set("Deprecation", "true")
+	switch r.Method {
+	case http.MethodGet:
+		out := []apitypes.BuilderResp{}
+		for _, a := range s.cfg().BuildAgents {
+			out = append(out, apitypes.BuilderResp{Machine: a.Name, Projects: []string{a.Project}})
+		}
+		writeJSON(w, out)
+	case http.MethodPost:
+		var req apitypes.BuilderReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+			return
+		}
+		name, machine := strings.TrimSpace(req.Name), strings.TrimSpace(req.Machine)
+		if name != "" && machine != "" && name != machine {
+			writeJSONError(w, http.StatusBadRequest, "name "+strconv.Quote(name)+" and machine "+strconv.Quote(machine)+" disagree: machine is the old spelling of name. "+buildersDeprecated)
+			return
+		}
+		if name == "" {
+			name = machine
+		}
+		if len(req.Projects) != 1 {
+			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("a build agent is registered for exactly one project, and this names %d. %s", len(req.Projects), buildersDeprecated))
+			return
+		}
+		a, tok, rotated, status, msg := s.mintBuildAgent(r, config.BuildAgent{Name: name, Project: req.Projects[0], Note: req.Note})
+		if status != 0 {
+			writeJSONError(w, status, msg+". "+buildersDeprecated)
+			return
+		}
+		writeJSON(w, apitypes.BuilderTokenResp{Machine: a.Name, Projects: []string{a.Project}, Token: tok, Rotated: rotated, Deprecated: buildersDeprecated})
+	default:
+		writeJSONError(w, http.StatusMethodNotAllowed, "GET lists build agents, POST mints one. "+buildersDeprecated)
+	}
+}
+
+// handleAPIBuilder is the DEPRECATED DELETE /api/v1/builders/{name}.
+func (s *Server) handleAPIBuilder(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	slog.Info("builder revoked", "machine", machine, "by", s.adminActor(r))
-	writeJSON(w, apitypes.BuilderRemovedResp{Removed: true, Machine: machine})
+	w.Header().Set("Deprecation", "true")
+	if r.Method != http.MethodDelete {
+		writeJSONError(w, http.StatusMethodNotAllowed, "DELETE required. "+buildersDeprecated)
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, "/api/v1/builders/")
+	if status, msg := s.removeBuildAgent(r, name); status != 0 {
+		writeJSONError(w, status, msg)
+		return
+	}
+	writeJSON(w, apitypes.BuilderRemovedResp{Removed: true, Machine: name, Deprecated: buildersDeprecated})
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +332,7 @@ func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 func (s *Server) buildResp(r *http.Request, b db.Build, now time.Time) apitypes.BuildResp {
 	out := apitypes.BuildResp{
 		ID: b.ID, Project: b.Project, Number: b.Number, Version: b.Version, VersionCore: b.VersionCore,
-		Commit: b.Commit, Describe: b.Describe, Machine: b.Machine,
+		Commit: b.Commit, Describe: b.Describe, Agent: b.Machine, Machine: b.Machine,
 		StartedAt: stamp(b.StartedAt), LastActivityAt: stamp(b.LastActivityAt),
 		Result: b.Outcome(now), Step: b.Step, Steps: []apitypes.BuildStepResp{},
 		ArtifactSHA256: b.ArtifactSHA256, FailedStep: b.FailedStep,
@@ -271,7 +358,7 @@ func (s *Server) buildResp(r *http.Request, b db.Build, now time.Time) apitypes.
 	return out
 }
 
-// handleAPIBuilds starts a build (POST, builder) or lists builds (GET, admin).
+// handleAPIBuilds starts a build (POST, build agent) or lists builds (GET, admin).
 func (s *Server) handleAPIBuilds(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
@@ -281,6 +368,27 @@ func (s *Server) handleAPIBuilds(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSONError(w, http.StatusMethodNotAllowed, "POST starts a build, GET lists them")
 	}
+}
+
+// startAgentName is the agent a start body names: `agent`, or its older
+// spellings `builder` and `machine` (redline's script sends `machine`). Every
+// one given must agree.
+func startAgentName(req apitypes.BuildStartReq) (string, error) {
+	name := ""
+	for _, f := range []struct{ key, v string }{{"agent", req.Agent}, {"builder", req.Builder}, {"machine", req.Machine}} {
+		v := strings.TrimSpace(f.v)
+		if v == "" {
+			continue
+		}
+		if name != "" && v != name {
+			return "", fmt.Errorf("the start names agent %q and %s %q: `builder` and `machine` are older spellings of `agent`, and they disagree", name, f.key, v)
+		}
+		name = v
+	}
+	if name == "" {
+		return "", errors.New("agent is required: the build agent this token belongs to (`builder` and `machine` are accepted spellings)")
+	}
+	return name, nil
 }
 
 func (s *Server) startBuild(w http.ResponseWriter, r *http.Request) {
@@ -296,9 +404,14 @@ func (s *Server) startBuild(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, status, msg)
 		return
 	}
-	if req.Machine != b.Machine {
-		writeJSONError(w, http.StatusForbidden, "this token is builder "+b.Machine+"'s; a build names the machine that runs it, and "+
-			strconv.Quote(req.Machine)+" is not "+b.Machine)
+	named, err := startAgentName(req)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if named != b.Name {
+		writeJSONError(w, http.StatusForbidden, "this token is build agent "+b.Name+"'s; a build names the agent that runs it, and "+
+			strconv.Quote(named)+" is not "+b.Name)
 		return
 	}
 	if s.users == nil {
@@ -315,7 +428,7 @@ func (s *Server) startBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	build, skipped, err := s.users.StartBuild(r.Context(), db.BuildStart{
-		Project: req.Project, Commit: req.Commit, VersionCore: req.VersionCore, Describe: req.Describe, Machine: b.Machine,
+		Project: req.Project, Commit: req.Commit, VersionCore: req.VersionCore, Describe: req.Describe, Machine: b.Name,
 	}, declaredVersions(cfg, req.Project))
 	if errors.Is(err, db.ErrInvalidBuild) || errors.Is(err, db.ErrInvalidVersion) {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -326,7 +439,7 @@ func (s *Server) startBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("build started", "project", build.Project, "number", build.Number, "version", build.Version,
-		"commit", build.Commit, "machine", build.Machine, "skipped", skipped)
+		"commit", build.Commit, "agent", build.Machine, "skipped", skipped)
 	writeJSON(w, apitypes.BuildStartResp{ID: build.ID, Number: build.Number, Version: build.Version, BuildURL: s.buildURL(r, build.Project, build.Number)})
 }
 
@@ -466,8 +579,8 @@ func (s *Server) loadBuild(w http.ResponseWriter, r *http.Request, id int64) (*d
 	return b, true
 }
 
-// builderBuild authorises a builder write to one build: a valid builder token,
-// granted for the build's project, of the machine that started it. The token
+// builderBuild authorises an agent write to one build: a valid build agent token,
+// registered for the build's project, of the agent that started it. The token
 // is checked before the build is looked up, so an unauthenticated caller
 // learns nothing about which ids exist.
 func (s *Server) builderBuild(w http.ResponseWriter, r *http.Request, id int64) (*db.Build, bool) {
@@ -485,9 +598,9 @@ func (s *Server) builderBuild(w http.ResponseWriter, r *http.Request, id int64) 
 		writeJSONError(w, status, msg)
 		return nil, false
 	}
-	if caller.Machine != b.Machine {
-		writeJSONError(w, http.StatusForbidden, "build #"+strconv.FormatInt(b.Number, 10)+" was started by builder "+b.Machine+
-			"; builder "+caller.Machine+" cannot write to it")
+	if caller.Name != b.Machine {
+		writeJSONError(w, http.StatusForbidden, "build #"+strconv.FormatInt(b.Number, 10)+" was started by build agent "+b.Machine+
+			"; build agent "+caller.Name+" cannot write to it")
 		return nil, false
 	}
 	return b, true
@@ -755,9 +868,9 @@ type provenance struct {
 // artifact of a passed build of project, or grandfathered (uploaded before
 // migration 0018).
 //
-// The builder's grant is checked when the build STARTS (a build row exists
-// only for a token granted for its project), never again here: revoking a
-// builder stops new builds and leaves its past passed builds promotable, so
+// The agent's registration is checked when the build STARTS (a build row exists
+// only for a token registered for its project), never again here: revoking an
+// agent stops new builds and leaves its past passed builds promotable, so
 // they stay rollback targets (operator, 2026-10-02).
 func (s *Server) artifactProvenance(ctx context.Context, cfg *config.Config, project, sha string) (provenance, error) {
 	b, err := s.users.PassedBuildOf(ctx, project, sha)
@@ -775,7 +888,7 @@ func (s *Server) artifactProvenance(ctx context.Context, cfg *config.Config, pro
 		return provenance{kind: db.ProvenanceGrandfathered}, nil
 	}
 	return provenance{refusal: "artifact " + artifactSHA12(sha) + " has no build record: no passed build of " + project +
-		" names it, and it was uploaded after hz began numbering builds — a promotion needs the artifact of a passed build by a builder granted for the project" +
+		" names it, and it was uploaded after hz began numbering builds — a promotion needs the artifact of a passed build by a build agent registered for the project at build time" +
 		" (POST /api/v1/builds, then /finish {\"result\":\"passed\",\"artifact_sha256\":…})"}, nil
 }
 

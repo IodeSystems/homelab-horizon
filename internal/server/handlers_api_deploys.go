@@ -103,7 +103,7 @@ func (s *Server) deployReporter(r *http.Request, req apitypes.DeployReportReq) (
 func (s *Server) reportingService(r *http.Request) (svc config.Service, status int, msg string) {
 	tok := requestBearer(r)
 	// An empty token must never reach findServiceByToken: a service with no
-	// token has Token == "", and "" would match it. Nor does a builder's.
+	// token has Token == "", and "" would match it. Nor does a build agent's.
 	if tok == "" || strings.HasPrefix(tok, db.APITokenPrefix) || strings.HasPrefix(tok, builderTokenPrefix) {
 		return config.Service{}, http.StatusUnauthorized, "Unauthorized"
 	}
@@ -285,7 +285,7 @@ func (s *Server) handleAPIEnvironmentPromote(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	// PROVENANCE (migration 0018): the artifact is a passed build's, by a
-	// builder granted for this project — or it was uploaded before builds
+	// build agent registered for this project at build time — or it was uploaded before builds
 	// existed and is grandfathered. Anything else names the rule.
 	prov, err := s.artifactProvenance(r.Context(), cfg, req.Project, latest.ArtifactSHA256)
 	if err != nil {

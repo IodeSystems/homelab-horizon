@@ -9,16 +9,16 @@
  *    never issued, and the unscoped list.
  *  - STANDALONE (inside a router whose root renders the node, for the build
  *    links): every list's "cannot ask" and "asking", a deleted log, and the
- *    Builders section and its Add panel — the token shown once.
+ *    Build agents section and its Add panel — the token shown once.
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createRootRoute, createRouter, createMemoryHistory } from "@tanstack/react-router";
 import { ThemeProvider } from "@mui/material/styles";
 import baseTheme from "../../theme";
-import type { BuildResp, ProjectResp } from "../../api/generated-types";
+import type { BuildAgentResp, BuildResp, ProjectResp } from "../../api/generated-types";
 import { routeTree } from "../../routeTree.gen";
-import { AddBuilderPanel, BuildersSection, BuildsTable, LogTailView, formatDuration } from "./BuildBits";
+import { AddBuildAgentPanel, BuildAgentsSection, BuildsTable, LogTailView, formatDuration } from "./BuildBits";
 
 let failures = 0;
 let checks = 0;
@@ -44,6 +44,7 @@ function build(over: Partial<BuildResp>): BuildResp {
     version_core: "1.0.0.0",
     commit: COMMIT,
     describe: "v1.0.0-3-g0123456",
+    agent: "build-1",
     machine: "build-1",
     started_at: "2026-10-02T10:00:00Z",
     last_activity_at: "2026-10-02T10:04:00Z",
@@ -72,6 +73,7 @@ function seeded(builds: BuildResp[] | null): QueryClient {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   qc.setQueryData(["auth", "status"], { authenticated: true, username: "ops", role: "admin", configPrimary: true });
   qc.setQueryData(["projects"], PROJECTS);
+  qc.setQueryData(["build-agents"], [{ name: "desktop", project: "redline", host: "desktop", has_token: true }]);
   if (builds !== null) {
     qc.setQueryData(["builds", "redline"], builds);
     qc.setQueryData(["builds", ""], builds);
@@ -123,7 +125,7 @@ async function standalone(node: React.ReactElement): Promise<Rendered> {
   return draw(seeded([]), router);
 }
 
-console.log("build registry — the Builds tab, a build's page, builders");
+console.log("build registry — the Builds tab, a build's page, build agents");
 
 // ---------------------------------------------------------------------------
 console.log("· through the router at /p/redline/builds");
@@ -133,12 +135,12 @@ console.log("· through the router at /p/redline/builds");
   check(r.text.includes("Builds in redline"), "the tab's header names the project");
   check(r.html.includes('data-build-row="7"') && r.html.includes('data-build-row="6"') && r.html.includes('data-build-row="5"'), "one row per build");
   check(r.html.includes('href="/p/redline/builds/7"'), "a row's number links its build page");
-  check(r.text.includes("1.0.0-0.7") && r.text.includes("01234567") && r.text.includes("build-1"), "version, short commit and machine");
+  check(r.text.includes("1.0.0-0.7") && r.text.includes("01234567") && r.text.includes("build-1"), "version, short commit and agent");
   check(r.html.includes('data-build-result="passed"') && r.html.includes('data-build-result="abandoned"'), "passed and abandoned read as such");
   check(r.text.includes("failed at test"), "a failed build names the step it failed at");
   check(r.text.includes("5m 0s") && r.text.includes(SHA.slice(0, 12)), "duration and the artifact's short sha");
   const empty = await at("/p/redline/builds", []);
-  check(empty.html.includes("data-empty-row") && empty.text.includes("No builds in redline — a builder starts one."), "no builds: one line");
+  check(empty.html.includes("data-empty-row") && empty.text.includes("No builds in redline — a build agent starts one."), "no builds: one line");
   const asking = await at("/p/redline/builds", null);
   check(asking.text.includes("Asking hz for its builds") && !asking.text.includes("No builds"), "not yet answered is not empty");
 }
@@ -149,7 +151,7 @@ console.log("· a build's page at /p/redline/builds/7");
 {
   const r = await at("/p/redline/builds/7");
   check(r.text.includes("Build #7 in redline"), "the header names the build");
-  check(r.text.includes(COMMIT) && r.text.includes("v1.0.0-3-g0123456") && r.text.includes("build-1"), "commit, describe and machine");
+  check(r.text.includes(COMMIT) && r.text.includes("v1.0.0-3-g0123456") && r.text.includes("build-1"), "commit, describe and agent");
   check(r.html.includes("data-build-artifact") && r.text.includes(SHA), "the artifact's full sha");
   check(r.html.includes('data-step="test"') && r.html.includes('data-step="package"'), "every step the build reported");
   check(r.html.includes("data-log-tail") && r.text.includes("$ make test"), "the log's tail");
@@ -184,34 +186,62 @@ console.log("· the answers that are not rows");
 }
 
 // ---------------------------------------------------------------------------
-console.log("· builders (Settings)");
+// ---------------------------------------------------------------------------
+console.log("· build agents (Settings, and the project's Builds tab)");
 // ---------------------------------------------------------------------------
 {
-  const list = await standalone(
-    <BuildersSection source={{ known: true, rows: [{ machine: "build-1", projects: ["redline", "storefront"] }] }} machines={["build-1"]} projects={["redline"]} />,
-  );
-  check(list.html.includes('data-builder="build-1"') && list.text.includes("redline, storefront"), "a builder row names its projects");
-  check(list.text.includes("Add builder") && list.html.includes('aria-label="Revoke builder build-1"'), "with [Add builder] and a revoke");
-  const empty = await standalone(<BuildersSection source={{ known: true, rows: [] }} machines={[]} projects={[]} />);
-  check(empty.html.includes("data-empty-row") && empty.text.includes("No builders"), "no builders: one line, with the button");
-  const failed = await standalone(<BuildersSection source={{ known: false, loading: false, why: "503" }} machines={[]} projects={[]} />);
-  check(failed.html.includes("data-cannot-ask") && !failed.text.includes("No builders"), "a failed read is not 'no builders'");
+  const AGENTS: BuildAgentResp[] = [
+    { name: "desktop", project: "redline", host: "desktop", has_token: true },
+    { name: "desktop-storefront", project: "storefront", host: "desktop", has_token: false, note: "MIGRATED WITH NO TOKEN" },
+    { name: "ci-1", project: "redline", has_token: true },
+  ];
+  const list = await standalone(<BuildAgentsSection source={{ known: true, rows: AGENTS }} projects={["redline", "storefront"]} />);
+  check(list.text.includes("Build agents") && list.html.includes('data-build-agent="desktop-storefront"'), "Settings lists every agent");
+  check(list.text.includes("host desktop · 2 agents") && list.text.includes("no host · 1 agent"), "grouped by host, with a count; no host last");
+  check(list.html.includes("data-no-token") && list.text.includes("Mint"), "a tokenless agent says so and offers a mint");
+  check(list.text.includes("Add build agent") && list.html.includes('aria-label="Revoke build agent desktop"'), "with [Add build agent] and a revoke");
+  check(!list.text.includes("Machine"), "no Machine column: an agent is not a machine");
+
+  const scoped = await standalone(<BuildAgentsSection source={{ known: true, rows: AGENTS }} projects={["redline"]} project="redline" />);
+  check(scoped.text.includes("Build agents for redline"), "the Builds tab titles the section for its project");
+  check(scoped.html.includes('data-build-agent="desktop"') && scoped.html.includes('data-build-agent="ci-1"') && !scoped.html.includes('data-build-agent="desktop-storefront"'), "and lists only that project's agents");
+  check(scoped.text.includes("host desktop · 1 agent"), "grouped by host after the filter");
+  const scopedEmpty = await standalone(<BuildAgentsSection source={{ known: true, rows: AGENTS }} projects={["intern"]} project="intern" />);
+  check(scopedEmpty.html.includes("data-empty-row") && scopedEmpty.text.includes("No build agents for intern"), "a project with no agent: one line, with the button");
+
+  const empty = await standalone(<BuildAgentsSection source={{ known: true, rows: [] }} projects={[]} />);
+  check(empty.html.includes("data-empty-row") && empty.text.includes("No build agents"), "no agents: one line, with the button");
+  const failed = await standalone(<BuildAgentsSection source={{ known: false, loading: false, why: "503" }} projects={[]} />);
+  check(failed.html.includes("data-cannot-ask") && !failed.text.includes("No build agents"), "a failed read is not 'no build agents'");
+
+  const routed = await at("/p/redline/builds");
+  check(routed.text.includes("Build agents for redline") && routed.html.includes('data-build-agent="desktop"'), "through the router: the Builds tab carries the section");
 
   const TOKEN = "hzb_" + "e".repeat(64);
-  const before = await standalone(
-    <AddBuilderPanel machines={["build-1"]} projects={["redline"]} initialMachine="" initialProjects={[]} token={null} error={null} pending={false} onMint={() => {}} onClose={() => {}} />,
+  const panel = (over: Partial<Parameters<typeof AddBuildAgentPanel>[0]>) => (
+    <AddBuildAgentPanel
+      projects={["redline"]}
+      initialName=""
+      initialProject=""
+      initialHost=""
+      lockProject={false}
+      token={null}
+      error={null}
+      pending={false}
+      onMint={() => {}}
+      onClose={() => {}}
+      {...over}
+    />
   );
-  check(before.text.includes("Mint builder token") && !before.html.includes("data-builder-token"), "before the mint: the form, no token");
-  const after = await standalone(
-    <AddBuilderPanel machines={["build-1"]} projects={["redline"]} initialMachine="" initialProjects={[]} token={TOKEN} error={null} pending={false} onMint={() => {}} onClose={() => {}} />,
-  );
-  check(after.html.includes("data-builder-token") && after.html.includes(TOKEN) && after.text.includes("Shown once"), "after: the token, once, saying so");
-  check(!after.text.includes("Mint builder token") && after.text.includes("Done"), "and no second mint from the same dialog");
-  const rotate = await standalone(
-    <AddBuilderPanel machines={["build-1"]} projects={["redline"]} initialMachine="build-1" initialProjects={["redline"]} token={null} error="no machine" pending={false} onMint={() => {}} onClose={() => {}} />,
-  );
-  check(rotate.text.includes("Rotate builder build-1") && rotate.text.includes("old one stops working"), "rotating says the old token stops working");
-  check(rotate.html.includes("data-builder-refusal") && rotate.text.includes("no machine"), "a refusal is shown verbatim");
+  const before = await standalone(panel({}));
+  check(before.text.includes("Mint build agent token") && !before.html.includes("data-build-agent-token"), "before the mint: the form, no token");
+  check(before.text.includes("Name") && before.text.includes("Host (optional)") && !before.text.includes("Machine"), "the dialog asks for a name and a host label, never a machine");
+  const after = await standalone(panel({ token: TOKEN, initialName: "desktop" }));
+  check(after.html.includes("data-build-agent-token") && after.html.includes(TOKEN) && after.text.includes("Shown once"), "after: the token, once, saying so");
+  check(!after.text.includes("Mint build agent token") && after.text.includes("Done"), "and no second mint from the same dialog");
+  const rotate = await standalone(panel({ initialName: "desktop", initialProject: "redline", error: "registered for project redline" }));
+  check(rotate.text.includes("Rotate build agent desktop") && rotate.text.includes("old one stops working"), "rotating says the old token stops working");
+  check(rotate.html.includes("data-build-agent-refusal") && rotate.text.includes("registered for project redline"), "a refusal is shown verbatim");
 }
 
 // ---------------------------------------------------------------------------

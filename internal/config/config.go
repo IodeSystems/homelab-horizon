@@ -189,9 +189,13 @@ type Config struct {
 	// Additive in exactly the way Projects and Environments are. See
 	// internal/config/machine.go for what else is absent and why.
 	Machines []Machine `json:"machines,omitempty"`
-	// Builders are the declared machines allowed to start builds, per project,
-	// and the sha256 of each one's token (builder.go). Declared state.
-	Builders []Builder `json:"builders,omitempty"`
+	// BuildAgents are the credentials allowed to start builds, one project
+	// each — not machines — and the sha256 of each one's token
+	// (build_agent.go). Declared state.
+	BuildAgents []BuildAgent `json:"build_agents,omitempty"`
+	// LegacyBuilders is the pre-2026-10-02 `builders` key. Read only:
+	// LoadFromJSON and Save migrate it into BuildAgents and clear it.
+	LegacyBuilders []LegacyBuilder `json:"builders,omitempty"`
 	// Segments are the networks a Machine.Segments NAME resolves to: a project,
 	// a range, an interface, and the addressed members on it. Additive in
 	// exactly the way Projects, Environments and Machines are, and empty on
@@ -1732,6 +1736,9 @@ func LoadFromJSON(data []byte) (*Config, error) {
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
+	if err := cfg.MigrateLegacyBuilders(); err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
 	return cfg, nil
 }
 
@@ -1827,9 +1834,14 @@ func Save(path string, cfg *Config) error {
 	if err := cfg.ValidateUpstream(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	// Builders, same chokepoint: a builder naming a machine or project nobody
-	// declared would hold a token for a box the model does not have.
-	if err := cfg.ValidateBuilders(); err != nil {
+	// Build agents, same chokepoint: an agent registered for a project nobody
+	// declared, or a name outside the charset, is refused at the write. A
+	// config decoded without LoadFromJSON (a backup restore) still carries the
+	// legacy `builders` key, so it is migrated here first.
+	if err := cfg.MigrateLegacyBuilders(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	if err := cfg.ValidateBuildAgents(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	dir := filepath.Dir(path)

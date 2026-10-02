@@ -81,7 +81,7 @@ func (s *Server) artifactUploader(r *http.Request, project string) (who string, 
 		if status != 0 {
 			return "", status, msg
 		}
-		return "builder:" + b.Machine, 0, ""
+		return "build-agent:" + b.Name, 0, ""
 	}
 	svc, status, msg := s.reportingService(r)
 	if status != 0 {

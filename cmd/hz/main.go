@@ -180,14 +180,16 @@ COMMANDS
                                      while its agent credential exists (--cascade revokes it)
   machine hz-token <name>            Mint the instance token a nested hz pulls with.
                                      Shown ONCE; a re-mint replaces the old one
-  builder add <machine> --project P [--project Q]...
-                                     Make a declared machine a builder: it may start,
-                                     log, state and finish builds of P and upload their
-                                     artifacts. Token shown ONCE; re-running rotates it
-  builder rm <machine>               Revoke a builder's token and grant
-  builder ls                         The builders and their projects
+  build-agent add <name> --project P [--host H] [--note TEXT]
+                                     Register a build agent for ONE project: it may
+                                     start, log, state and finish builds of P and upload
+                                     their artifacts. Not a machine; --host only labels
+                                     the box. Token shown ONCE; re-running rotates it
+  build-agent rm <name>              Revoke a build agent's token
+  build-agent ls                     The build agents, by host, and their projects
+                                     (hz builder: deprecated alias, one release)
   builds ls <project>                A project's builds: number, version, commit,
-                                     machine, result (abandoned after 2h quiet)
+                                     agent, result (abandoned after 2h quiet)
   builds seed <project> --next N     Raise the next build number (never lowers it)
   nested bootstrap <project> <machine> --rung <name> --from <rung>
               [--posture P] [--platform linux-amd64|linux-arm64] [--url U]
@@ -502,7 +504,9 @@ func dispatch(c *client, cmd string, rest []string) error {
 		err = runMachine(c, rest)
 	case "nested":
 		err = runNested(c, rest)
-	case "builder", "builders":
+	case "build-agent", "build-agents":
+		err = runBuildAgent(c, rest)
+	case "builder", "builders": // deprecated, one release
 		err = runBuilder(c, rest)
 	case "builds", "build":
 		err = runBuilds(c, rest)
