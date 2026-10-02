@@ -84,8 +84,8 @@ backend app_backend
     balance first
     option httpchk GET /health
     http-check expect status 200
-    server next 192.168.1.160:8081 check inter 3s fall 2 rise 2
     server current 192.168.1.160:8080 check inter 3s fall 2 rise 2
+    server next 192.168.1.160:8081 check inter 3s fall 2 rise 2
 
 
 === dnsmasq records ===
