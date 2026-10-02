@@ -204,19 +204,29 @@ func (m *Monitor) getAllChecks() []config.ServiceCheck {
 		//   - self service: hz itself; pointless to self-monitor, so skip.
 		checkType := "ping"
 		var target string
+		var slots []config.CheckSlot
 		switch {
 		case svc.Proxy.StaticRoot != "":
 			target = cfg.StaticServeAddr()
 		case svc.Proxy.Backend != "":
 			// Resolved: the check dials the address, so a host reference has
 			// to have become one first.
-			target = cfg.ServiceBackend(&svc)
-			if target == "" {
+			backend := cfg.ServiceBackend(&svc)
+			if backend == "" {
 				continue
 			}
+			path := ""
 			if svc.Proxy.HealthCheck != nil && svc.Proxy.HealthCheck.Path != "" {
 				checkType = "http"
-				target = "http://" + target + svc.Proxy.HealthCheck.Path
+				path = svc.Proxy.HealthCheck.Path
+			}
+			target = probeTarget(checkType, backend, path)
+			// Blue-green: HAProxy serves from whichever slot is healthy, so
+			// probing proxy.backend alone reads "failed" on a working service.
+			// Resolved here, on every derive, so a swap moves the check.
+			if d := cfg.ResolvedDeploy(&svc); d != nil && d.NextBackend != "" {
+				slots = deploySlots(d, backend, checkType, path)
+				target = describeSlots(slots)
 			}
 		default:
 			continue
@@ -243,6 +253,7 @@ func (m *Monitor) getAllChecks() []config.ServiceCheck {
 			Target:   target,
 			Interval: 300,
 			Enabled:  enabled,
+			Slots:    slots,
 		})
 	}
 
@@ -702,10 +713,12 @@ func (m *Monitor) executeCheck(check config.ServiceCheck) {
 	start := time.Now()
 
 	switch strings.ToLower(check.Type) {
-	case "ping":
-		err = m.doPing(check.Target)
-	case "http":
-		err = m.doHTTP(check.Target)
+	case "ping", "http":
+		if len(check.Slots) > 0 {
+			err = m.doSlots(check.Type, check.Slots)
+		} else {
+			err = m.probe(check.Type, check.Target)
+		}
 	case "tls":
 		err = m.doTLS(check.Target)
 	case CheckTypeSubsystem:
@@ -780,6 +793,92 @@ func (m *Monitor) executeCheck(check config.ServiceCheck) {
 	// they read as "this needs scheduling", not "this is on fire".
 	if newStatus != previousStatus && (newStatus == StatusFailed || newStatus == StatusWarning) {
 		m.sendNotification(check, err, newStatus)
+	}
+}
+
+// probe runs one ping or http probe.
+func (m *Monitor) probe(checkType, target string) error {
+	if strings.EqualFold(checkType, "http") {
+		return m.doHTTP(target)
+	}
+	return m.doPing(target)
+}
+
+// probeTarget is what a ping or http probe of a backend dials.
+func probeTarget(checkType, addr, path string) string {
+	if checkType == "http" {
+		return "http://" + addr + path
+	}
+	return addr
+}
+
+// deploySlots lists a blue-green service's two slots, active first. d must
+// be resolved (Config.ResolvedDeploy), backend the resolved proxy.backend.
+func deploySlots(d *config.DeployConfig, backend, checkType, path string) []config.CheckSlot {
+	a := config.CheckSlot{Slot: "a", Active: d.ActiveSlot != "b", Addr: backend}
+	b := config.CheckSlot{Slot: "b", Active: d.ActiveSlot == "b", Addr: d.NextBackend}
+	a.Target = probeTarget(checkType, a.Addr, path)
+	b.Target = probeTarget(checkType, b.Addr, path)
+	if b.Active {
+		return []config.CheckSlot{b, a}
+	}
+	return []config.CheckSlot{a, b}
+}
+
+// slotName is "slot a (active) 192.0.2.5:6302".
+func slotName(s config.CheckSlot) string {
+	if s.Active {
+		return fmt.Sprintf("slot %s (active) %s", s.Slot, s.Addr)
+	}
+	return fmt.Sprintf("slot %s %s", s.Slot, s.Addr)
+}
+
+// describeSlots is the Target of a blue-green check. It names both slots and
+// which is active, so a swap or an edited slot address changes it, and
+// RefreshChecks restarts the check on the new resolution.
+func describeSlots(slots []config.CheckSlot) string {
+	parts := make([]string, len(slots))
+	for i, s := range slots {
+		parts[i] = slotName(s)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// doSlots probes every slot of a blue-green service and reads the result the
+// way HAProxy does: the service is up if any slot answers.
+//
+//   - every slot up: ok.
+//   - some slot down, another up: a warning naming the down slot. The service
+//     works, so it is not a failure; a slot that cannot take over is still a
+//     fact the operator must see, so it is not silent.
+//   - no slot up: failed.
+func (m *Monitor) doSlots(checkType string, slots []config.CheckSlot) error {
+	errs := make([]error, len(slots))
+	var wg sync.WaitGroup
+	for i, s := range slots {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = m.probe(checkType, s.Target)
+		}()
+	}
+	wg.Wait()
+
+	var down, up []string
+	for i, s := range slots {
+		if errs[i] != nil {
+			down = append(down, fmt.Sprintf("%s down (%v)", slotName(s), errs[i]))
+		} else {
+			up = append(up, slotName(s))
+		}
+	}
+	switch {
+	case len(down) == 0:
+		return nil
+	case len(up) == 0:
+		return fmt.Errorf("no slot answers: %s", strings.Join(down, "; "))
+	default:
+		return Warnf("%s; serving from %s", strings.Join(down, "; "), strings.Join(up, ", "))
 	}
 }
 
