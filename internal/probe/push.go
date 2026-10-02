@@ -55,8 +55,17 @@ type Pusher struct {
 	// Zero means defaultAlertAfter.
 	AlertThreshold int
 
+	// UpdateFlag, when set, is where the agent raises update-wanted once it
+	// has seen the same differing build on every accepted report for
+	// UpdateSettle (see update_wanted.go). Empty is off. The flag is a
+	// request to a root updater that asks hz for itself; it names nothing.
+	UpdateFlag string
+
 	// hostAlert records that Alert was set before PushLoop started.
 	hostAlert bool
+
+	// update times the differing build hz reports.
+	update UpdateWatch
 
 	http *http.Client
 }
@@ -179,6 +188,24 @@ func hzMessage(body []byte) string {
 	return strings.TrimSpace(string(body))
 }
 
+// observeVersion feeds one accepted report to the update watch and raises
+// the flag when it says so. A flag that cannot be written is logged; the
+// daily timer is still there.
+func (p *Pusher) observeVersion(running, expected string, now time.Time) {
+	if p.UpdateFlag == "" || !p.update.Observe(running, expected, now) {
+		return
+	}
+	_, since := p.update.Expected()
+	if err := WriteUpdateFlag(p.UpdateFlag, now); err != nil {
+		slog.Warn("probe: could not raise update-wanted; the daily update timer still runs",
+			"path", p.UpdateFlag, "error", err)
+		return
+	}
+	slog.Info("probe: hz has held a different build for the settle time; raised update-wanted for the root updater",
+		"running", running, "available", expected, "since", since.UTC().Format(time.RFC3339),
+		"settle", UpdateSettle, "path", p.UpdateFlag)
+}
+
 // PushLoop reports to hz on an interval until ctx is done.
 //
 // Results are dropped from the buffer only once hz says it took them, so a
@@ -232,6 +259,7 @@ func (a *Agent) PushLoop(ctx context.Context, p *Pusher, interval time.Duration)
 				slog.Warn("probe: this agent is not the build hz holds — update it",
 					"running", a.version, "available", resp.AgentVersion)
 			}
+			p.observeVersion(a.version, resp.AgentVersion, time.Now())
 			if resp.Notice != "" {
 				slog.Warn("probe: notice from hz", "notice", resp.Notice)
 			}
