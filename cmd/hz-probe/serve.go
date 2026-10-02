@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -68,6 +69,17 @@ func (f *serveFlags) register(fs *flag.FlagSet) {
 // public address, no inbound rule and no certificate of its own.
 func (f *serveFlags) pushMode() bool { return strings.TrimSpace(f.pushTo) != "" }
 
+// updateFlagPath is where the agent raises update-wanted: beside its state
+// file, in its own StateDirectory, the one place a DynamicUser can write.
+// install points the root path unit at the same path and update removes it,
+// both from the same --state, so the three cannot disagree.
+func (f *serveFlags) updateFlagPath() string {
+	if strings.TrimSpace(f.statePath) == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(f.statePath), probe.UpdateFlagName)
+}
+
 // vantageName is the configured name, or this host's.
 func (f *serveFlags) vantageName() string {
 	if f.vantage != "" {
@@ -104,7 +116,7 @@ func runServe(args []string) error {
 	// this host, so there is no port to open, no certificate to serve and no
 	// address to keep stable.
 	if f.pushMode() {
-		pusher := &probe.Pusher{URL: f.pushTo, Token: tok}
+		pusher := &probe.Pusher{URL: f.pushTo, Token: tok, UpdateFlag: f.updateFlagPath()}
 		fileSet, tokenFileSet := false, false
 		fs.Visit(func(fl *flag.Flag) {
 			switch fl.Name {

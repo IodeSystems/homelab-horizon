@@ -302,3 +302,88 @@ func TestResolveNtfyURLDefaultPathNeverStopsTheAgent(t *testing.T) {
 		t.Fatalf("an empty DEFAULT file: got %q, %v — want off", got, err)
 	}
 }
+
+// A push install gets the updater, its timer and its path trigger; the
+// trigger watches the agent's flag and starts the same root unit.
+func TestPushInstallRendersTheUpdatePathUnit(t *testing.T) {
+	f := &serveFlags{
+		pushTo: "https://hz.example.com", vantage: "v",
+		tokenFile: "/etc/hz-probe/token", statePath: "/var/lib/hz-probe/state.json",
+	}
+	units := updateUnits(f, "/usr/local/bin/hz-probe", false)
+	byPath := map[string]string{}
+	for _, u := range units {
+		byPath[u.path] = u.content
+	}
+	if len(byPath) != 3 {
+		t.Fatalf("rendered %d update units, want service, timer and path", len(byPath))
+	}
+	path, ok := byPath[updatePathPath]
+	if !ok {
+		t.Fatal("no hz-probe-update.path")
+	}
+	for _, want := range []string{
+		"PathExists=/var/lib/hz-probe/update-wanted",
+		"PathModified=/var/lib/hz-probe/update-wanted",
+		"Unit=hz-probe-update.service",
+		"WantedBy=paths.target",
+	} {
+		if !strings.Contains(path, want) {
+			t.Fatalf("path unit lacks %q:\n%s", want, path)
+		}
+	}
+	svc := byPath[updateUnitPath]
+	if !strings.Contains(svc, "ExecStart=/usr/local/bin/hz-probe update --token-file /etc/hz-probe/token "+
+		"--push-to https://hz.example.com --state /var/lib/hz-probe/state.json") {
+		t.Fatalf("the updater's command line is not the fixed one:\n%s", svc)
+	}
+	if _, ok := byPath[updateTimerPath]; !ok {
+		t.Fatal("the daily timer is gone; it is the fallback")
+	}
+}
+
+// --no-auto-update and pull mode get none of the three.
+func TestNoAutoUpdateOmitsThePathUnit(t *testing.T) {
+	push := &serveFlags{pushTo: "https://hz.example.com", statePath: "/var/lib/hz-probe/state.json"}
+	if u := updateUnits(push, "/usr/local/bin/hz-probe", true); len(u) != 0 {
+		t.Fatalf("--no-auto-update rendered %d update units", len(u))
+	}
+	pull := &serveFlags{listen: ":8443", statePath: "/var/lib/hz-probe/state.json"}
+	if u := updateUnits(pull, "/usr/local/bin/hz-probe", false); len(u) != 0 {
+		t.Fatalf("a pull install rendered %d update units", len(u))
+	}
+}
+
+// The existing-vantage path: units already on disk are rewritten only where
+// they differ, and a missing path unit is added.
+func TestWriteUpdateUnitsAddsOnlyWhatChanged(t *testing.T) {
+	dir := t.TempDir()
+	svc := unitFile{filepath.Join(dir, "a.service"), "same\n"}
+	pth := unitFile{filepath.Join(dir, "a.path"), "new\n"}
+	if err := os.WriteFile(svc.path, []byte(svc.content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := writeUpdateUnits([]unitFile{svc, pth})
+	if err != nil || !changed {
+		t.Fatalf("changed %v, err %v; the missing path unit should be written", changed, err)
+	}
+	if b, _ := os.ReadFile(pth.path); string(b) != "new\n" {
+		t.Fatal("path unit not written")
+	}
+	changed, err = writeUpdateUnits([]unitFile{svc, pth})
+	if err != nil || changed {
+		t.Fatalf("changed %v, err %v; nothing differs the second time", changed, err)
+	}
+}
+
+// The agent's flag, the path unit's watch and the updater's removal all
+// come from --state.
+func TestUpdateFlagPathFollowsState(t *testing.T) {
+	f := &serveFlags{statePath: "/srv/probe/state.json"}
+	if got := f.updateFlagPath(); got != "/srv/probe/update-wanted" {
+		t.Fatalf("flag path = %q", got)
+	}
+	if got := (&serveFlags{}).updateFlagPath(); got != "" {
+		t.Fatalf("no state, flag path = %q; want none", got)
+	}
+}
