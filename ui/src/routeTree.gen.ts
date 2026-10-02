@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as SplatRouteImport } from './routes/$'
 import { Route as AccountRouteImport } from './routes/account'
 import { Route as BansRouteImport } from './routes/bans'
+import { Route as BuildsRouteImport } from './routes/builds'
 import { Route as ChecksRouteImport } from './routes/checks'
 import { Route as ConfigRouteImport } from './routes/config'
 import { Route as DashboardRouteImport } from './routes/dashboard'
@@ -38,6 +39,7 @@ import { Route as PIndexRouteImport } from './routes/p.index'
 import { Route as PProjectRouteImport } from './routes/p.$project'
 import { Route as PProjectIndexRouteImport } from './routes/p.$project.index'
 import { Route as PProjectBansRouteImport } from './routes/p.$project.bans'
+import { Route as PProjectBuildsRouteImport } from './routes/p.$project.builds'
 import { Route as PProjectChecksRouteImport } from './routes/p.$project.checks'
 import { Route as PProjectConfigRouteImport } from './routes/p.$project.config'
 import { Route as PProjectDomainsRouteImport } from './routes/p.$project.domains'
@@ -46,6 +48,8 @@ import { Route as PProjectNetworkRouteImport } from './routes/p.$project.network
 import { Route as PProjectPortsRouteImport } from './routes/p.$project.ports'
 import { Route as PProjectServicesRouteImport } from './routes/p.$project.services'
 import { Route as PProjectVpnRouteImport } from './routes/p.$project.vpn'
+import { Route as PProjectBuildsIndexRouteImport } from './routes/p.$project.builds.index'
+import { Route as PProjectBuildsNumberRouteImport } from './routes/p.$project.builds.$number'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -65,6 +69,11 @@ const AccountRoute = AccountRouteImport.update({
 const BansRoute = BansRouteImport.update({
   id: '/bans',
   path: '/bans',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BuildsRoute = BuildsRouteImport.update({
+  id: '/builds',
+  path: '/builds',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ChecksRoute = ChecksRouteImport.update({
@@ -192,6 +201,11 @@ const PProjectBansRoute = PProjectBansRouteImport.update({
   path: '/bans',
   getParentRoute: () => PProjectRoute,
 } as any)
+const PProjectBuildsRoute = PProjectBuildsRouteImport.update({
+  id: '/builds',
+  path: '/builds',
+  getParentRoute: () => PProjectRoute,
+} as any)
 const PProjectChecksRoute = PProjectChecksRouteImport.update({
   id: '/checks',
   path: '/checks',
@@ -232,12 +246,23 @@ const PProjectVpnRoute = PProjectVpnRouteImport.update({
   path: '/vpn',
   getParentRoute: () => PProjectRoute,
 } as any)
+const PProjectBuildsIndexRoute = PProjectBuildsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => PProjectBuildsRoute,
+} as any)
+const PProjectBuildsNumberRoute = PProjectBuildsNumberRouteImport.update({
+  id: '/$number',
+  path: '/$number',
+  getParentRoute: () => PProjectBuildsRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
   '/account': typeof AccountRoute
   '/bans': typeof BansRoute
+  '/builds': typeof BuildsRoute
   '/checks': typeof ChecksRoute
   '/config': typeof ConfigRoute
   '/dashboard': typeof DashboardRoute
@@ -262,6 +287,7 @@ export interface FileRoutesByFullPath {
   '/machines/': typeof MachinesIndexRoute
   '/p/': typeof PIndexRoute
   '/p/$project/bans': typeof PProjectBansRoute
+  '/p/$project/builds': typeof PProjectBuildsRouteWithChildren
   '/p/$project/checks': typeof PProjectChecksRoute
   '/p/$project/config': typeof PProjectConfigRoute
   '/p/$project/domains': typeof PProjectDomainsRoute
@@ -271,12 +297,15 @@ export interface FileRoutesByFullPath {
   '/p/$project/services': typeof PProjectServicesRoute
   '/p/$project/vpn': typeof PProjectVpnRoute
   '/p/$project/': typeof PProjectIndexRoute
+  '/p/$project/builds/$number': typeof PProjectBuildsNumberRoute
+  '/p/$project/builds/': typeof PProjectBuildsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
   '/account': typeof AccountRoute
   '/bans': typeof BansRoute
+  '/builds': typeof BuildsRoute
   '/checks': typeof ChecksRoute
   '/config': typeof ConfigRoute
   '/dashboard': typeof DashboardRoute
@@ -309,6 +338,8 @@ export interface FileRoutesByTo {
   '/p/$project/services': typeof PProjectServicesRoute
   '/p/$project/vpn': typeof PProjectVpnRoute
   '/p/$project': typeof PProjectIndexRoute
+  '/p/$project/builds/$number': typeof PProjectBuildsNumberRoute
+  '/p/$project/builds': typeof PProjectBuildsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -316,6 +347,7 @@ export interface FileRoutesById {
   '/$': typeof SplatRoute
   '/account': typeof AccountRoute
   '/bans': typeof BansRoute
+  '/builds': typeof BuildsRoute
   '/checks': typeof ChecksRoute
   '/config': typeof ConfigRoute
   '/dashboard': typeof DashboardRoute
@@ -340,6 +372,7 @@ export interface FileRoutesById {
   '/machines/': typeof MachinesIndexRoute
   '/p/': typeof PIndexRoute
   '/p/$project/bans': typeof PProjectBansRoute
+  '/p/$project/builds': typeof PProjectBuildsRouteWithChildren
   '/p/$project/checks': typeof PProjectChecksRoute
   '/p/$project/config': typeof PProjectConfigRoute
   '/p/$project/domains': typeof PProjectDomainsRoute
@@ -349,6 +382,8 @@ export interface FileRoutesById {
   '/p/$project/services': typeof PProjectServicesRoute
   '/p/$project/vpn': typeof PProjectVpnRoute
   '/p/$project/': typeof PProjectIndexRoute
+  '/p/$project/builds/$number': typeof PProjectBuildsNumberRoute
+  '/p/$project/builds/': typeof PProjectBuildsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -357,6 +392,7 @@ export interface FileRouteTypes {
     | '/$'
     | '/account'
     | '/bans'
+    | '/builds'
     | '/checks'
     | '/config'
     | '/dashboard'
@@ -381,6 +417,7 @@ export interface FileRouteTypes {
     | '/machines/'
     | '/p/'
     | '/p/$project/bans'
+    | '/p/$project/builds'
     | '/p/$project/checks'
     | '/p/$project/config'
     | '/p/$project/domains'
@@ -390,12 +427,15 @@ export interface FileRouteTypes {
     | '/p/$project/services'
     | '/p/$project/vpn'
     | '/p/$project/'
+    | '/p/$project/builds/$number'
+    | '/p/$project/builds/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/$'
     | '/account'
     | '/bans'
+    | '/builds'
     | '/checks'
     | '/config'
     | '/dashboard'
@@ -428,12 +468,15 @@ export interface FileRouteTypes {
     | '/p/$project/services'
     | '/p/$project/vpn'
     | '/p/$project'
+    | '/p/$project/builds/$number'
+    | '/p/$project/builds'
   id:
     | '__root__'
     | '/'
     | '/$'
     | '/account'
     | '/bans'
+    | '/builds'
     | '/checks'
     | '/config'
     | '/dashboard'
@@ -458,6 +501,7 @@ export interface FileRouteTypes {
     | '/machines/'
     | '/p/'
     | '/p/$project/bans'
+    | '/p/$project/builds'
     | '/p/$project/checks'
     | '/p/$project/config'
     | '/p/$project/domains'
@@ -467,6 +511,8 @@ export interface FileRouteTypes {
     | '/p/$project/services'
     | '/p/$project/vpn'
     | '/p/$project/'
+    | '/p/$project/builds/$number'
+    | '/p/$project/builds/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -474,6 +520,7 @@ export interface RootRouteChildren {
   SplatRoute: typeof SplatRoute
   AccountRoute: typeof AccountRoute
   BansRoute: typeof BansRoute
+  BuildsRoute: typeof BuildsRoute
   ChecksRoute: typeof ChecksRoute
   ConfigRoute: typeof ConfigRoute
   DashboardRoute: typeof DashboardRoute
@@ -527,6 +574,13 @@ declare module '@tanstack/react-router' {
       path: '/bans'
       fullPath: '/bans'
       preLoaderRoute: typeof BansRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/builds': {
+      id: '/builds'
+      path: '/builds'
+      fullPath: '/builds'
+      preLoaderRoute: typeof BuildsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/checks': {
@@ -704,6 +758,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PProjectBansRouteImport
       parentRoute: typeof PProjectRoute
     }
+    '/p/$project/builds': {
+      id: '/p/$project/builds'
+      path: '/builds'
+      fullPath: '/p/$project/builds'
+      preLoaderRoute: typeof PProjectBuildsRouteImport
+      parentRoute: typeof PProjectRoute
+    }
     '/p/$project/checks': {
       id: '/p/$project/checks'
       path: '/checks'
@@ -760,11 +821,40 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PProjectVpnRouteImport
       parentRoute: typeof PProjectRoute
     }
+    '/p/$project/builds/': {
+      id: '/p/$project/builds/'
+      path: '/'
+      fullPath: '/p/$project/builds/'
+      preLoaderRoute: typeof PProjectBuildsIndexRouteImport
+      parentRoute: typeof PProjectBuildsRoute
+    }
+    '/p/$project/builds/$number': {
+      id: '/p/$project/builds/$number'
+      path: '/$number'
+      fullPath: '/p/$project/builds/$number'
+      preLoaderRoute: typeof PProjectBuildsNumberRouteImport
+      parentRoute: typeof PProjectBuildsRoute
+    }
   }
 }
 
+interface PProjectBuildsRouteChildren {
+  PProjectBuildsNumberRoute: typeof PProjectBuildsNumberRoute
+  PProjectBuildsIndexRoute: typeof PProjectBuildsIndexRoute
+}
+
+const PProjectBuildsRouteChildren: PProjectBuildsRouteChildren = {
+  PProjectBuildsNumberRoute: PProjectBuildsNumberRoute,
+  PProjectBuildsIndexRoute: PProjectBuildsIndexRoute,
+}
+
+const PProjectBuildsRouteWithChildren = PProjectBuildsRoute._addFileChildren(
+  PProjectBuildsRouteChildren,
+)
+
 interface PProjectRouteChildren {
   PProjectBansRoute: typeof PProjectBansRoute
+  PProjectBuildsRoute: typeof PProjectBuildsRouteWithChildren
   PProjectChecksRoute: typeof PProjectChecksRoute
   PProjectConfigRoute: typeof PProjectConfigRoute
   PProjectDomainsRoute: typeof PProjectDomainsRoute
@@ -778,6 +868,7 @@ interface PProjectRouteChildren {
 
 const PProjectRouteChildren: PProjectRouteChildren = {
   PProjectBansRoute: PProjectBansRoute,
+  PProjectBuildsRoute: PProjectBuildsRouteWithChildren,
   PProjectChecksRoute: PProjectChecksRoute,
   PProjectConfigRoute: PProjectConfigRoute,
   PProjectDomainsRoute: PProjectDomainsRoute,
@@ -798,6 +889,7 @@ const rootRouteChildren: RootRouteChildren = {
   SplatRoute: SplatRoute,
   AccountRoute: AccountRoute,
   BansRoute: BansRoute,
+  BuildsRoute: BuildsRoute,
   ChecksRoute: ChecksRoute,
   ConfigRoute: ConfigRoute,
   DashboardRoute: DashboardRoute,
