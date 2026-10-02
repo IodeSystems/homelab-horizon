@@ -340,6 +340,11 @@ type Server struct {
 	// do not set one. artifactMu serialises retention.
 	artifactDir string
 	artifactMu  sync.Mutex
+	// buildDir holds build logs, <data dir>/builds/<project>/<number>.log
+	// (handlers_api_builds.go). "" is no log store. buildLogMu serialises
+	// appends, so the cap is checked and written as one step.
+	buildDir   string
+	buildLogMu sync.Mutex
 
 	// child is set when config.json has an upstream block: this hz is nested
 	// for those rungs and serves them from its cache (handlers_nested.go).
@@ -585,6 +590,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 			slog.Info("identity store ready", "path", store.Path())
 		}
 		s.artifactDir = filepath.Join(cfg.DataDir(), "artifacts")
+		s.buildDir = filepath.Join(cfg.DataDir(), "builds")
 		s.childBins = newChildBinStore(filepath.Join(cfg.DataDir(), "child-bin"))
 		s.child = childFromConfig(cfg)
 	}
@@ -1255,6 +1261,14 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/deploys/desired", s.handleAPIDeployDesired)
 	mux.HandleFunc("/api/v1/deploys/applied", s.handleAPIDeploysApplied)
 	mux.HandleFunc("/api/v1/machines/hz-token", s.handleAPIMachineHZToken)
+	// The build registry (handlers_api_builds.go): builders, and the builds
+	// they start, log, state and finish. Same placement rule: the numbers and
+	// the logs are on the primary.
+	mux.HandleFunc("/api/v1/builders", s.handleAPIBuilders)
+	mux.HandleFunc("/api/v1/builders/", s.handleAPIBuilder)
+	mux.HandleFunc("/api/v1/builds", s.handleAPIBuilds)
+	mux.HandleFunc("/api/v1/builds/seed", s.handleAPIBuildSeed)
+	mux.HandleFunc("/api/v1/builds/", s.handleAPIBuild)
 	// The one-command bootstrap of a nested hz (handlers_nested_bootstrap.go).
 	// Generate writes config.json; the binary is fetched by the child over its
 	// upstream VPN client with its instance token.

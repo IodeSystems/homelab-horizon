@@ -24,6 +24,11 @@ const (
 	stagingSvcToken = "svc-redline-staging-token"
 	prodSvcToken    = "svc-redline-prod-token"
 	looseSvcToken   = "svc-loose-token"
+
+	// The fixture's builder, granted redline: what proves an artifact.
+	testBuilderMachine = "build-1"
+	testBuilderToken   = "hzb_0000000000000000000000000000000000000000000000000000000000000001"
+	testCommit         = "0123456789abcdef0123456789abcdef01234567"
 )
 
 type deployFixture struct {
@@ -46,6 +51,8 @@ func newDeployFixture(t *testing.T) deployFixture {
 			{Name: "redline-prod", Domains: []string{"redline.test"}, Project: "redline", Environment: "prod", Token: prodSvcToken},
 			{Name: "loose", Domains: []string{"loose.test"}, Token: looseSvcToken},
 		},
+		Machines: []config.Machine{{Name: testBuilderMachine}},
+		Builders: []config.Builder{{Machine: testBuilderMachine, Projects: []string{"redline"}, TokenSHA256: tokenDigest(testBuilderToken)}},
 	})
 	store, err := db.Open(filepath.Join(t.TempDir(), "hz.db"))
 	if err != nil {
@@ -101,8 +108,26 @@ func (f deployFixture) report(t *testing.T, token string, req apitypes.DeployRep
 		if _, err := f.s.users.RecordArtifact(context.Background(), db.Artifact{SHA256: sha, Project: req.Project, Size: 1, UploadedBy: "test-upload"}); err != nil {
 			t.Fatalf("record artifact: %v", err)
 		}
+		f.prove(t, req.Project, sha)
 	}
 	return f.reportOnly(t, token, req)
+}
+
+// prove records a passed build of sha by the fixture's builder, directly in
+// the store — the provenance a promotion needs (migration 0018). The build
+// handlers have their own tests (handlers_api_builds_test.go). Core 0.0.0.0
+// keeps the build's version away from the versions the tests report.
+func (f deployFixture) prove(t *testing.T, project, sha string) *db.Build {
+	t.Helper()
+	ctx := context.Background()
+	b, _, err := f.s.users.StartBuild(ctx, db.BuildStart{Project: project, Commit: testCommit, VersionCore: "0.0.0.0", Machine: testBuilderMachine}, nil)
+	if err != nil {
+		t.Fatalf("start build: %v", err)
+	}
+	if err := f.s.users.FinishBuild(ctx, b.ID, db.BuildPassed, sha, ""); err != nil {
+		t.Fatalf("finish build: %v", err)
+	}
+	return b
 }
 
 func (f deployFixture) reportOnly(t *testing.T, token string, req apitypes.DeployReportReq) apitypes.DeployReportResultResp {

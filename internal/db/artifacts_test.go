@@ -58,7 +58,7 @@ func TestAppliesHoldsAndArtifactsAreAppendOnly(t *testing.T) {
 	if err := d.RecordArtifactEvent(ctx, shaA, ArtifactDeleted, "why", "retention"); err != nil {
 		t.Fatal(err)
 	}
-	pid, err := d.RecordPromotion(ctx, Promotion{Project: "redline", FromEnv: "staging", ToEnv: "prod", Version: "1.4.0", ArtifactSHA256: shaA, PromotedBy: "user:carl"})
+	pid, err := d.RecordPromotion(ctx, Promotion{Provenance: ProvenanceGrandfathered, Project: "redline", FromEnv: "staging", ToEnv: "prod", Version: "1.4.0", ArtifactSHA256: shaA, PromotedBy: "user:carl"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,8 +101,8 @@ func TestLatestApplyAndHoldAreByID(t *testing.T) {
 	if _, err := d.LatestHold(ctx, "redline", "prod"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("never held: %v", err)
 	}
-	p1, _ := d.RecordPromotion(ctx, Promotion{Project: "redline", FromEnv: "staging", ToEnv: "prod", Version: "1.4.0", ArtifactSHA256: shaA, PromotedBy: "u"})
-	p2, _ := d.RecordPromotion(ctx, Promotion{Project: "redline", FromEnv: "staging", ToEnv: "prod", Version: "1.5.0", ArtifactSHA256: shaB, PromotedBy: "u"})
+	p1, _ := d.RecordPromotion(ctx, Promotion{Provenance: ProvenanceGrandfathered, Project: "redline", FromEnv: "staging", ToEnv: "prod", Version: "1.4.0", ArtifactSHA256: shaA, PromotedBy: "u"})
+	p2, _ := d.RecordPromotion(ctx, Promotion{Provenance: ProvenanceGrandfathered, Project: "redline", FromEnv: "staging", ToEnv: "prod", Version: "1.5.0", ArtifactSHA256: shaB, PromotedBy: "u"})
 	latest, err := d.LatestPromotionInto(ctx, "redline", "prod")
 	if err != nil || latest.ID != p2 {
 		t.Fatalf("LatestPromotionInto = %+v, %v", latest, err)

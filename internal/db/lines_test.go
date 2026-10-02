@@ -247,14 +247,14 @@ func TestPromotionPinsBuildURLAndRecordsItsLines(t *testing.T) {
 	kb, _ := d.RecordKeptBackup(ctx, kept("1.0.0", shaA, "1.0.0-0.1"))
 	rt, _ := d.RecordRestoreTest(ctx, rtest("1.0.1-0.3", "1.0.0", shaA, true))
 
-	first, err := d.RecordPromotion(ctx, Promotion{
+	first, err := d.RecordPromotion(ctx, Promotion{Provenance: ProvenanceGrandfathered,
 		Project: "redline", FromEnv: "staging", ToEnv: "prod", Version: "1.0.0-0.1",
 		ArtifactSHA256: shaA, PromotedBy: "user:carl", BuildURL: "file:///dist/builds/1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := d.RecordPromotion(ctx, Promotion{
+	second, err := d.RecordPromotion(ctx, Promotion{Provenance: ProvenanceGrandfathered,
 		Project: "redline", FromEnv: "staging", ToEnv: "prod", Version: "1.0.1-0.3",
 		ArtifactSHA256: shaB, PromotedBy: "user:carl", BuildURL: "https://ci.test/builds/3",
 		Lines: []PromotionLine{{Line: "1.0.0", Why: "current", KeptBackupID: kb, RestoreTestID: rt}},
@@ -281,7 +281,7 @@ func TestPromotionPinsBuildURLAndRecordsItsLines(t *testing.T) {
 			t.Errorf("%s: err = %v, want the append-only refusal", stmt, err)
 		}
 	}
-	if _, err := d.RecordPromotion(ctx, Promotion{
+	if _, err := d.RecordPromotion(ctx, Promotion{Provenance: ProvenanceGrandfathered,
 		Project: "redline", FromEnv: "staging", ToEnv: "prod", Version: "1.0.0",
 		ArtifactSHA256: shaA, PromotedBy: "user:carl", BuildURL: strings.Repeat("u", MaxLocatorLen+1),
 	}); !errors.Is(err, ErrInvalidLocator) {
