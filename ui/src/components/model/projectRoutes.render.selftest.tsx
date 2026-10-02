@@ -727,14 +727,14 @@ console.log("· THE TABS ARE WHAT: the same ten at every scope, with a breadcrum
 
   const labels = (r: Rendered) => tabs(r).map(([l]) => l).join(",");
   check(
-    labels(root) === "Overview,Services,Domains,Machines,Network,VPN,Checks,Ports,Bans,Config",
-    `ten tabs with no project (got ${labels(root) || "nothing"})`,
+    labels(root) === "Overview,Services,Domains,Machines,Network,VPN,Checks,Ports,Bans,Config,Builds",
+    `eleven tabs with no project (got ${labels(root) || "nothing"})`,
   );
   check(labels(shop) === labels(root), "the same six in a project");
   check(labels(eu) === labels(root), "and two deep");
   check(
     tabs(root).map(([, h]) => h).join(",") ===
-      "/,/services,/domains,/machines,/network,/vpn,/checks,/ports,/bans,/config",
+      "/,/services,/domains,/machines,/network,/vpn,/checks,/ports,/bans,/config,/builds",
     `with no project they point at the unscoped screens (got ${tabs(root).map(([, h]) => h).join(",")})`,
   );
   check(
@@ -925,8 +925,20 @@ console.log("· A DERIVED SURFACE HAS A LIST ROUTE AND NEVER A DETAIL ROUTE");
   }
 
   // Said the other way as well, so a renamed surface cannot slip past: no route
-  // under /$project may take a second parameter.
-  const twoParams = ids.filter((id) => id.startsWith("/p/$project/") && id.includes("$", 12));
+  // under /$project may take a second parameter — except the detail page of an
+  // OWNED surface, listed here by name. A build carries its project, so
+  // `/p/$project/builds/$number` is its one address (it is the build_url hz
+  // answers a start with). An entry whose tab is not owned fails below, so a
+  // derived surface cannot be let through by adding it to this list.
+  const OWNED_DETAIL_ROUTES = ["/p/$project/builds/$number"];
+  for (const id of OWNED_DETAIL_ROUTES) {
+    const tab = SCOPE_TABS.find((t) => t.projectTo !== "/p/$project" && id.startsWith(`${t.projectTo}/`));
+    check(tab !== undefined && tab.kind === "owned", `${id} is under an OWNED tab (${tab?.label ?? "none"}, ${tab?.kind ?? "-"})`);
+    check(ids.includes(id), `and it exists (${id})`);
+  }
+  const twoParams = ids.filter(
+    (id) => id.startsWith("/p/$project/") && id.includes("$", 12) && !OWNED_DETAIL_ROUTES.includes(id),
+  );
   check(
     twoParams.length === 0,
     `no route under /p/$project takes a second parameter — found ${twoParams.join(", ") || "none"}`,

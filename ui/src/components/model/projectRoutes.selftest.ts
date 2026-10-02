@@ -377,13 +377,13 @@ console.log("· a row says where it lives, including on its own project's page")
 }
 
 // ---------------------------------------------------------------------------
-console.log("· the ten tabs, identical at every scope");
+console.log("· the eleven tabs, identical at every scope");
 // ---------------------------------------------------------------------------
 {
-  check(SCOPE_TABS.length === 10, "ten surfaces a scope can select rows for (amendment 6)");
+  check(SCOPE_TABS.length === 11, "eleven surfaces a scope can select rows for (amendment 6, and Builds)");
   check(
     SCOPE_TABS.map((s) => s.label).join(",") ===
-      "Overview,Services,Domains,Machines,Network,VPN,Checks,Ports,Bans,Config",
+      "Overview,Services,Domains,Machines,Network,VPN,Checks,Ports,Bans,Config,Builds",
     "in that order — the operator learns one tab strip, so the order is part of the contract",
   );
   // Each tab has BOTH addresses, so the same word means the same thing with no

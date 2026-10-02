@@ -446,7 +446,8 @@ export type ProjectNavTo =
   | "/p/$project/checks"
   | "/p/$project/ports"
   | "/p/$project/bans"
-  | "/p/$project/config";
+  | "/p/$project/config"
+  | "/p/$project/builds";
 
 /** The same six surfaces with no project scope — every row hz has. */
 export type UnscopedNavTo =
@@ -459,11 +460,12 @@ export type UnscopedNavTo =
   | "/checks"
   | "/ports"
   | "/bans"
-  | "/config";
+  | "/config"
+  | "/builds";
 
 export interface ScopeTab {
   /** The path segment after the scope prefix: "" for Overview. */
-  key: "" | "services" | "domains" | "machines" | "network" | "vpn" | "checks" | "ports" | "bans" | "config";
+  key: "" | "services" | "domains" | "machines" | "network" | "vpn" | "checks" | "ports" | "bans" | "config" | "builds";
   label: string;
   /** Where this surface lives with no project scope. */
   unscopedTo: UnscopedNavTo;
@@ -600,6 +602,16 @@ export const SCOPE_TABS: ScopeTab[] = [
     projectTo: "/p/$project/config",
     blurb:
       "Registrations, blessed configs and promotion. A config address starts with its project, so the rows narrow like every other tab. Metadata only — hz holds no key.",
+    kind: "owned",
+    detailAt: "",
+  },
+  {
+    key: "builds",
+    label: "Builds",
+    unscopedTo: "/builds",
+    projectTo: "/p/$project/builds",
+    blurb:
+      "The builds hz numbered: version, commit, machine, result, log and artifact. A build carries its project, so its one page is under it.",
     kind: "owned",
     detailAt: "",
   },

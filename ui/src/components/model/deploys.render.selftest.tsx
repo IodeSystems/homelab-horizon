@@ -11,7 +11,7 @@
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { RouterProvider, createRouter, createMemoryHistory } from "@tanstack/react-router";
+import { RouterProvider, createRootRoute, createRouter, createMemoryHistory } from "@tanstack/react-router";
 import { ThemeProvider } from "@mui/material/styles";
 import baseTheme from "../../theme";
 import type {
@@ -25,6 +25,7 @@ import type {
 } from "../../api/generated-types";
 import { routeTree } from "../../routeTree.gen";
 import { PromotePanel, ReportedCell, type ReportSource } from "./DeployBits";
+import { ProvenanceLine } from "./BuildBits";
 import { BuildLink, ReleaseLinesTable, RequiredRestoreTests } from "./ReleaseLines";
 import { AppliedCell, ApplyPanel, HoldCell, HoldPanel, applyOffer, type AppliedSource } from "./ApplyBits";
 import type { ProjectLinesResp } from "../../api/generated-types";
@@ -63,6 +64,7 @@ const STAGING_REPORT: DeployReportResp = {
   reportedBy: "service:redline-staging",
   ageSeconds: 180,
   build_url: "https://ci.test/builds/7",
+  build_number: 7,
 };
 
 // prod: on 1.0.1 (current, no kept backup) with 1.0.0 prior (kept, tested).
@@ -150,6 +152,9 @@ const PROMOTIONS: PromotionResp[] = [
     ageSeconds: 86400,
     build_url: "",
     restore_gate: "none-required",
+    provenance: "build",
+    build_id: 9,
+    build_number: 7,
   },
   {
     id: 2,
@@ -164,6 +169,7 @@ const PROMOTIONS: PromotionResp[] = [
     ageSeconds: 172800,
     build_url: "",
     restore_gate: "skipped-ran-before",
+    provenance: "grandfathered",
   },
 ];
 
@@ -196,6 +202,17 @@ const ARTIFACTS: ArtifactResp[] = [
     uploaded_by: "service:redline-staging",
     deleted_at: "2026-09-20T00:00:00Z",
     deleted_why: "not kept: …",
+    provenance: "no build record",
+  },
+  {
+    sha256: SHA,
+    project: "redline",
+    size: 10,
+    uploaded_at: "2026-09-30T09:00:00Z",
+    uploaded_by: "builder:build-1",
+    provenance: "build",
+    build_id: 9,
+    build_number: 7,
   },
 ];
 
@@ -245,10 +262,17 @@ async function at(path: string): Promise<Rendered> {
   return toRendered(html);
 }
 
-function standalone(node: React.ReactElement): Rendered {
+// Drawn inside a router whose root renders the node, because the build links
+// (BuildNumberLink) are router links and need one to resolve their href.
+async function standalone(node: React.ReactElement): Promise<Rendered> {
+  const root = createRootRoute({ component: () => node });
+  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ["/"] }) });
+  await router.load();
   const html = renderToStaticMarkup(
     <QueryClientProvider client={seeded()}>
-      <ThemeProvider theme={baseTheme}>{node}</ThemeProvider>
+      <ThemeProvider theme={baseTheme}>
+        <RouterProvider router={router as never} />
+      </ThemeProvider>
     </QueryClientProvider>,
   );
   return toRendered(html);
@@ -282,6 +306,9 @@ console.log("· through the router at /p/redline");
     "a promotion row names from → to, who and when",
   );
   check(!r.text.includes("Allow a downgrade"), "SSR renders the Promote dialog closed");
+  check(r.html.includes('data-build-link="7"') && r.html.includes('href="/p/redline/builds/7"'), "a report of a build hz numbered links hz's build page");
+  check(r.html.includes('data-promotion-build="7"'), "a promotion of a build's artifact names the build");
+  check(r.html.includes('data-promotion-build="grandfathered"') && r.text.includes("no build record"), "a grandfathered promotion says no build record");
 }
 
 // ---------------------------------------------------------------------------
@@ -292,20 +319,20 @@ console.log("· ReportedCell — reported, nothing reported, cannot ask, asking"
   const staging = ENVIRONMENTS[0]!;
   const known: ReportSource = { known: true, reports: [STAGING_REPORT] };
 
-  const reported = standalone(<ReportedCell source={known} env={staging} />);
+  const reported = await standalone(<ReportedCell source={known} env={staging} />);
   check(reported.html.includes('data-reported="reported"'), "a reported rung renders the reported state");
   check(reported.html.includes(SHA), "its hover carries the artifact sha256");
 
-  const none = standalone(<ReportedCell source={known} env={prod} />);
+  const none = await standalone(<ReportedCell source={known} env={prod} />);
   check(none.html.includes('data-reported="none"') && none.text.includes("nothing reported"), "an unreported rung says nothing reported");
 
-  const failed = standalone(<ReportedCell source={{ known: false, loading: false, why: "503" }} env={staging} />);
+  const failed = await standalone(<ReportedCell source={{ known: false, loading: false, why: "503" }} env={staging} />);
   check(
     failed.html.includes('data-reported="unknown"') && failed.text.includes("cannot ask") && !failed.text.includes("nothing reported"),
     "a failed read says cannot ask — never 'nothing reported'",
   );
 
-  const loading = standalone(<ReportedCell source={{ known: false, loading: true }} env={staging} />);
+  const loading = await standalone(<ReportedCell source={{ known: false, loading: true }} env={staging} />);
   check(loading.html.includes('data-reported="loading"') && !loading.text.includes("nothing reported"), "and loading is neither");
 }
 
@@ -314,33 +341,52 @@ console.log("· PromotePanel — prefilled from the SOURCE rung's newest report"
 // ---------------------------------------------------------------------------
 {
   const prod = ENVIRONMENTS[1]!;
-  const r = standalone(<PromotePanel env={prod} sourceReport={STAGING_REPORT} onClose={() => {}} />);
+  const r = await standalone(<PromotePanel env={prod} sourceReport={STAGING_REPORT} onClose={() => {}} />);
   check(/value="1\.4\.0"/.test(r.html), "the version is prefilled with staging's reported 1.4.0");
   check(r.text.includes("staging last reported 1.4.0 on ubuntu@192.0.2.160"), "and says where it came from");
   check(r.text.includes("prod declares 1.3.9"), "and what the target declares now");
   check(r.text.includes("Allow a downgrade"), "the downgrade checkbox is offered");
   check(r.text.includes("Skip restore tests — only for the exact build prod already ran"), "the skip-restore-tests checkbox is offered, and says its limit");
+  check(r.html.includes('data-provenance="build"') && r.html.includes('href="/p/redline/builds/7"'), "the dialog names the build the artifact came from");
 
-  const empty = standalone(<PromotePanel env={prod} sourceReport={null} onClose={() => {}} />);
+  const empty = await standalone(<PromotePanel env={prod} sourceReport={null} onClose={() => {}} />);
   check(empty.text.includes("staging has reported nothing"), "with no report it says hz will refuse");
   check(/<button[^>]*disabled[^>]*>Promote<\/button>/.test(empty.html), "and Promote is disabled with no version");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· ProvenanceLine — build, grandfathered, unproven, not uploaded, cannot ask");
+// ---------------------------------------------------------------------------
+{
+  const art = (provenance: string, extra: Partial<ArtifactResp> = {}): ArtifactResp => ({
+    sha256: SHA, project: "redline", size: 1, uploaded_at: "", uploaded_by: "x", provenance, ...extra,
+  });
+  const at_ = (rows: ArtifactResp[]) => standalone(<ProvenanceLine source={{ known: true, rows }} sha={SHA} />);
+  check((await at_([art("build", { build_number: 7 })])).html.includes('data-provenance="build"'), "a built artifact names its build");
+  const gf = await at_([art("no build record")]);
+  check(gf.html.includes('data-provenance="grandfathered"') && gf.text.includes("no build record (grandfathered"), "a grandfathered one says no build record (grandfathered)");
+  const un = await at_([art("unproven")]);
+  check(un.html.includes('data-provenance="unproven"') && un.text.includes("will be refused"), "an unproven one says the promote will be refused");
+  check((await at_([])).html.includes('data-provenance="not-uploaded"'), "an artifact hz does not hold says so");
+  const ca = await standalone(<ProvenanceLine source={{ known: false, loading: false, why: "503" }} sha={SHA} />);
+  check(ca.html.includes('data-provenance="unknown"') && ca.text.includes("could not be asked"), "a failed read is cannot ask, not unproven");
 }
 
 // ---------------------------------------------------------------------------
 console.log("· build_url — a link only when http(s)");
 // ---------------------------------------------------------------------------
 {
-  const http = standalone(<BuildLink url="https://ci.test/builds/7" />);
+  const http = await standalone(<BuildLink url="https://ci.test/builds/7" />);
   check(http.html.includes('href="https://ci.test/builds/7"') && http.html.includes('data-build-url="link"'), "an https build_url is a link");
-  const bucket = standalone(<BuildLink url="gs://redline-builds/dist/builds/7/" />);
+  const bucket = await standalone(<BuildLink url="gs://redline-builds/dist/builds/7/" />);
   check(
     !bucket.html.includes("<a") && bucket.html.includes('data-build-url="text"') && bucket.text.includes("gs://redline-builds/dist/builds/7/"),
     "a bucket path is monospace text, not a dead link",
   );
-  const js = standalone(<BuildLink url="javascript:alert(1)" />);
+  const js = await standalone(<BuildLink url="javascript:alert(1)" />);
   check(!js.html.includes("href"), "a javascript: build_url is never an href");
 
-  const cell = standalone(<ReportedCell source={{ known: true, reports: [STAGING_REPORT] }} env={ENVIRONMENTS[0]!} />);
+  const cell = await standalone(<ReportedCell source={{ known: true, reports: [STAGING_REPORT] }} env={ENVIRONMENTS[0]!} />);
   check(cell.html.includes('href="https://ci.test/builds/7"'), "the Reported cell carries the report's build link");
 }
 
@@ -363,10 +409,10 @@ console.log("· through the router — the Release lines section");
 console.log("· ReleaseLinesTable — every state answers");
 // ---------------------------------------------------------------------------
 {
-  const loading = standalone(<ReleaseLinesTable lines={undefined} error={null} loading={true} project="redline" />);
+  const loading = await standalone(<ReleaseLinesTable lines={undefined} error={null} loading={true} project="redline" />);
   check(loading.html.includes('data-lines="loading"') && !loading.text.includes("No supported"), "loading is not empty");
 
-  const failed = standalone(<ReleaseLinesTable lines={undefined} error={new Error("503")} loading={false} project="redline" />);
+  const failed = await standalone(<ReleaseLinesTable lines={undefined} error={new Error("503")} loading={false} project="redline" />);
   check(
     failed.html.includes('data-lines="unknown"') && failed.text.includes("could not be asked") && !failed.text.includes("No supported"),
     "a failed read says so — never 'no supported lines'",
@@ -376,7 +422,7 @@ console.log("· ReleaseLinesTable — every state answers");
     ...LINES,
     rungs: LINES.rungs.map((r) => ({ ...r, supported: [], gaps: [], none_required: `none required: redline/${r.environment} has reported running nothing yet` })),
   };
-  const none = standalone(<ReleaseLinesTable lines={first} error={null} loading={false} project="redline" />);
+  const none = await standalone(<ReleaseLinesTable lines={first} error={null} loading={false} project="redline" />);
   check(
     none.html.includes('data-lines="none"') && none.html.includes("data-empty-row") && none.text.includes("No supported release lines in redline"),
     "no line anywhere is a one-line empty state",
@@ -387,7 +433,7 @@ console.log("· ReleaseLinesTable — every state answers");
     rungs: [{ ...LINES.rungs[1]!, supported: [], gaps: ['report #9 of redline/prod records "deb-1.2", which hz cannot read a line from'] }],
     retired_unknown: "hz cannot say which lines are retired: report #9 of redline/prod records \"deb-1.2\"",
   };
-  const unknown = standalone(<ReleaseLinesTable lines={gap} error={null} loading={false} project="redline" />);
+  const unknown = await standalone(<ReleaseLinesTable lines={gap} error={null} loading={false} project="redline" />);
   check(
     unknown.html.includes('data-lines-row="gap"') && unknown.text.includes("hz cannot say:") && !unknown.text.includes("none required"),
     "a gap is 'hz cannot say', not none required",
@@ -398,7 +444,7 @@ console.log("· ReleaseLinesTable — every state answers");
   );
 
   const retired: ProjectLinesResp = { ...LINES, retired: [LINES.rungs[1]!.supported[1]!.kept_backup!] };
-  const some = standalone(<ReleaseLinesTable lines={retired} error={null} loading={false} project="redline" />);
+  const some = await standalone(<ReleaseLinesTable lines={retired} error={null} loading={false} project="redline" />);
   check(some.html.includes('data-retired="some"') && some.text.includes("hz deletes nothing"), "retired lines say the app may delete them, hz deletes nothing");
 }
 
@@ -407,7 +453,7 @@ console.log("· the Promote dialog — the required restore tests, before the bu
 // ---------------------------------------------------------------------------
 {
   const prod = ENVIRONMENTS[1]!;
-  const r = standalone(<PromotePanel env={prod} sourceReport={STAGING_REPORT} onClose={() => {}} />);
+  const r = await standalone(<PromotePanel env={prod} sourceReport={STAGING_REPORT} onClose={() => {}} />);
   check(r.html.includes('data-required="list"') && r.text.includes("Required restore tests"), "the dialog lists the required restore tests");
   check(
     r.html.includes('data-required-line="no-kept-backup"') && r.text.includes("line 1.0.1 is supported on redline/prod but has no kept backup"),
@@ -418,13 +464,13 @@ console.log("· the Promote dialog — the required restore tests, before the bu
   check(r.html.includes('href="https://ci.test/builds/7"'), "the source report's build link is in the dialog");
 
   const lines = { known: true as const, lines: LINES };
-  const staging = standalone(<RequiredRestoreTests source={lines} project="redline" target="staging" version="1.4.0" />);
+  const staging = await standalone(<RequiredRestoreTests source={lines} project="redline" target="staging" version="1.4.0" />);
   check(staging.html.includes('data-required="none"') && staging.text.includes("none required"), "a target with no line says none required");
-  const asking = standalone(<RequiredRestoreTests source={{ known: false, loading: true }} project="redline" target="prod" version="1.4.0" />);
+  const asking = await standalone(<RequiredRestoreTests source={{ known: false, loading: true }} project="redline" target="prod" version="1.4.0" />);
   check(asking.html.includes('data-required="loading"') && !asking.text.includes("none required"), "loading is not none required");
-  const failed = standalone(<RequiredRestoreTests source={{ known: false, loading: false, why: "503" }} project="redline" target="prod" version="1.4.0" />);
+  const failed = await standalone(<RequiredRestoreTests source={{ known: false, loading: false, why: "503" }} project="redline" target="prod" version="1.4.0" />);
   check(failed.html.includes('data-required="unknown"') && failed.text.includes("still checks"), "a failed read says the promote still checks");
-  const other = standalone(<RequiredRestoreTests source={lines} project="redline" target="prod" version="1.5.0" />);
+  const other = await standalone(<RequiredRestoreTests source={lines} project="redline" target="prod" version="1.5.0" />);
   check(other.html.includes('data-required-for="other"') && other.text.includes("Shown for 1.4.0"), "a typed version other than the tested one is flagged");
 }
 
@@ -454,18 +500,18 @@ console.log("· N4a — AppliedCell, HoldCell, applyOffer, the panels");
 {
   const prod = ENVIRONMENTS[1]!;
   const known: AppliedSource = { known: true, rungs: APPLIED };
-  const asking = standalone(<AppliedCell source={{ known: false, loading: true }} env={prod} />);
+  const asking = await standalone(<AppliedCell source={{ known: false, loading: true }} env={prod} />);
   check(asking.html.includes('data-applied="loading"') && !asking.text.includes("nothing applied"), "asking is not nothing applied");
-  const failed = standalone(<AppliedCell source={{ known: false, loading: false, why: "503" }} env={prod} />);
+  const failed = await standalone(<AppliedCell source={{ known: false, loading: false, why: "503" }} env={prod} />);
   check(failed.html.includes('data-applied="unknown"') && failed.text.includes("cannot ask"), "a failed read says cannot ask");
-  const holdFailed = standalone(<HoldCell source={{ known: false, loading: false, why: "503" }} env={prod} />);
+  const holdFailed = await standalone(<HoldCell source={{ known: false, loading: false, why: "503" }} env={prod} />);
   check(holdFailed.text.includes("cannot ask") && !holdFailed.text.includes("none"), "a failed hold read is not 'none'");
 
   const deletedState: AppliedSource = {
     known: true,
     rungs: [{ ...APPLIED[1]!, artifact: { ...ARTIFACTS[0]!, sha256: SHA } }],
   };
-  const gone = standalone(<AppliedCell source={deletedState} env={prod} />);
+  const gone = await standalone(<AppliedCell source={deletedState} env={prod} />);
   check(gone.html.includes("data-artifact-deleted") && gone.text.includes("artifact deleted 2026-09-20"), "an applied artifact deleted by retention says when");
 
   check(applyOffer(known, PROMOTIONS, prod)?.id === 3, "applyOffer is the newest promotion when it is not applied");
@@ -476,11 +522,11 @@ console.log("· N4a — AppliedCell, HoldCell, applyOffer, the panels");
   check(applyOffer(appliedNewest, PROMOTIONS, prod) === null, "no Apply when the newest promotion is applied");
   check(applyOffer({ known: false, loading: true }, PROMOTIONS, prod) === null, "no Apply while hz has not answered");
 
-  const ap = standalone(<ApplyPanel env={prod} offer={PROMOTIONS[0]!} onClose={() => {}} />);
+  const ap = await standalone(<ApplyPanel env={prod} offer={PROMOTIONS[0]!} onClose={() => {}} />);
   check(ap.html.includes('data-apply-offer="3"') && ap.text.includes("Promotion #3"), "the Apply panel names the promotion it applies");
-  const hp = standalone(<HoldPanel env={prod} held={null} onClose={() => {}} />);
+  const hp = await standalone(<HoldPanel env={prod} held={null} onClose={() => {}} />);
   check(hp.html.includes('data-hold-panel="free"') && hp.text.includes("Required"), "Hold asks for a reason");
-  const up = standalone(<HoldPanel env={prod} held={APPLIED[1]!.hold} onClose={() => {}} />);
+  const up = await standalone(<HoldPanel env={prod} held={APPLIED[1]!.hold} onClose={() => {}} />);
   check(up.html.includes('data-hold-panel="held"') && up.text.includes("cutover at 02:00") && up.text.includes("Unhold"), "a held rung's panel offers Unhold and says why it is held");
 }
 
