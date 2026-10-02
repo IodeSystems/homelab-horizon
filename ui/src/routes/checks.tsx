@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -40,6 +40,7 @@ import {
   useToggleCheck,
 } from "../api/hooks";
 import type { CheckStatus, ProbeDiagnosis } from "../api/types";
+import { CheckId, checkAnchor } from "../components/CheckId";
 import { ChecksHistory } from "../components/ChecksHistory";
 import { RemoteVantages } from "../components/RemoteVantages";
 import { EdgeDiagnosis, deviceLabel } from "../components/EdgeDiagnosis";
@@ -118,7 +119,7 @@ function CheckRow({
 
   return (
     <>
-      <TableRow hover>
+      <TableRow hover id={checkAnchor(check.name)} sx={{ scrollMarginTop: 80 }}>
         <TableCell>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
             <Typography variant="body2" sx={{ fontWeight: 500 }}>
@@ -149,6 +150,7 @@ function CheckRow({
               </Tooltip>
             )}
           </Box>
+          <CheckId id={check.name} />
         </TableCell>
         <TableCell>
           <Chip
@@ -373,6 +375,13 @@ function ChecksPage() {
     [projectsQuery.data],
   );
   const [addOpen, setAddOpen] = useState(false);
+
+  // `/checks#check-<id>` lands on that check's row once the list has loaded.
+  useEffect(() => {
+    if (!checks || typeof window === "undefined" || !window.location.hash) return;
+    const el = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+    el?.scrollIntoView({ block: "center" });
+  }, [checks]);
 
   if (isLoading) {
     return (

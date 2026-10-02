@@ -18,6 +18,7 @@ import { Link } from "@tanstack/react-router";
 import { Alert, Box, Chip, Paper, Typography } from "@mui/material";
 import { StateBadge } from "../drift/Observation";
 import { formatAge } from "../drift/observation";
+import { CheckId } from "../CheckId";
 import { overviewHeadline, sourceLabel, type OverviewResult, type QueueItem } from "./queue";
 
 /** A row's own age, for the sources that are a reading rather than a
@@ -62,11 +63,19 @@ function QueueRow({ item }: { item: QueueItem }) {
           item.ageSeconds !== undefined && <PlainAge ageSeconds={item.ageSeconds} />
         )}
       </Box>
+      {item.checkIds && !item.details ? (
+        <Box data-single-check-ids>
+          {item.checkIds.map((id) => (
+            <CheckId key={id} id={id} link />
+          ))}
+        </Box>
+      ) : null}
       {item.details && item.details.length > 0 ? (
         <Box component="ul" data-group-details sx={{ m: 0, pl: 2.5 }}>
-          {item.details.map((d) => (
+          {item.details.map((d, i) => (
             <Typography key={d} component="li" variant="body2" sx={{ overflowWrap: "anywhere" }}>
               {d}
+              {item.checkIds?.[i] ? <CheckId id={item.checkIds[i]!} link /> : null}
             </Typography>
           ))}
         </Box>

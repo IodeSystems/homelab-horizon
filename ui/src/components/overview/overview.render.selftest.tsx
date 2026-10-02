@@ -259,6 +259,8 @@ console.log("· a failing check ranks as a fault and links to /checks");
   check(r.text.includes("shop-https"), "the failing check is named");
   check(r.text.includes("connection refused"), "with its own error");
   check(r.links.some((h) => h.endsWith("/checks")), "and links to the checks screen");
+  check(/data-check-id="shop-https"/.test(r.html), "a single check row shows its ID");
+  check(r.html.includes('aria-label="Copy check ID shop-https"'), "with a copy control");
 }
 
 // ---------------------------------------------------------------------------
@@ -331,6 +333,10 @@ console.log("· one service failing from two viewpoints renders as one row");
   check(!r.text.includes("svc:sprink is failed"), "not the two separate rows");
   check(/data-group-details/.test(r.html), "its viewpoints are listed under it");
   check(r.text.includes("from gcp-usw1") && r.text.includes("HTTP 503") && r.text.includes("host unreachable"), "each with what it saw");
+  check(/data-check-id="svc:sprink"/.test(r.html), "a grouped row hides no ID: svc:sprink is listed");
+  check(/data-check-id="ext:gcp-usw1:https:sprink.iodesystems.com"/.test(r.html), "and the outside-in check's ID too");
+  check(r.html.includes('aria-label="Copy check ID svc:sprink"'), "each with a copy control");
+  check(r.html.includes("#check-svc:sprink"), "and the ID links to its row on /checks");
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);
