@@ -80,6 +80,10 @@ const CHECKS: CheckStatusResp[] = [
   chk("tls:example.net", "", "ok", { auto_gen: true, type: "tls" }),
   // A different project's check — must not leak onto storefront's tab.
   chk("acme-billing", "acme-co", "failed"),
+  // storefront's failed and not-yet-run checks, for the status filter.
+  chk("storefront-cache", "storefront", "failed"),
+  // pending = has not run yet: distinct from ok and from failed.
+  chk("storefront-new", "storefront", "pending"),
 ];
 
 function seeded(): QueryClient {
@@ -94,6 +98,24 @@ function seeded(): QueryClient {
   });
   qc.setQueryData(["projects"], PROJECTS);
   qc.setQueryData(["checks"], CHECKS);
+  qc.setQueryData(["checks", "history", "all", 120], {
+    from: 1790000000000,
+    bucketMs: 60000,
+    buckets: 120,
+    series: [
+      {
+        name: "history-flap-check",
+        type: "ping",
+        target: "10.0.0.7",
+        runs: [
+          { s: "ok", f: 0, n: 60 },
+          { s: "failed", f: 60, n: 60 },
+        ],
+        lat: [],
+        samples: 120,
+      },
+    ],
+  });
   return qc;
 }
 
@@ -190,6 +212,64 @@ console.log("· /checks (unscoped) carries a Project column, and \"\" reads as g
   );
 
   check(r.text.includes("Add Check"), "the unscoped screen keeps its own Add action");
+}
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+console.log("· every place a check renders shows its ID, selectable, with a copy control");
+// ---------------------------------------------------------------------------
+{
+  const scoped = await at("/p/storefront/checks");
+  check(/data-check-id="svc:web"/.test(scoped.html), "project Checks tab: svc:web's ID is shown");
+  check(/data-check-id="storefront-db"/.test(scoped.html), "project Checks tab: a standalone check's ID is shown");
+  check(/aria-label="Copy check ID svc:web"/.test(scoped.html), "project Checks tab: a copy control for it");
+  check(/<tr[^>]*id="check-svc:web"/.test(scoped.html), "project Checks tab: the row is an anchor (#check-<id>)");
+
+  const all = await at("/checks");
+  for (const id of ["svc:web", "storefront-db", "tls:example.net", "acme-billing"]) {
+    check(new RegExp(`data-check-id="${id}"`).test(all.html), `/checks: ${id} shows its ID`);
+    check(all.html.includes(`aria-label="Copy check ID ${id}"`), `/checks: ${id} has a copy control`);
+  }
+  check(/<tr[^>]*id="check-acme-billing"/.test(all.html), "/checks: the row is an anchor (#check-<id>)");
+  check(/data-check-id="history-flap-check"/.test(all.html), "the fleet history ribbons name checks by copyable ID");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· ?status= filters every list of checks; counts per state; answered-empty says so");
+// ---------------------------------------------------------------------------
+{
+  const all = await at("/checks");
+  check(/data-check-status-filter/.test(all.html), "/checks: the status filter renders");
+  check(all.html.includes("svc:web") && all.html.includes("acme-billing"), "/checks without a param lists everything");
+  check(/data-status-chip="all"[^>]*>[\s\S]*?All 6/.test(all.html), "/checks: All chip counts every check (6)");
+  check(/data-status-chip="failed"[^>]*>[\s\S]*?failed 2/.test(all.html), "/checks: failed chip counts 2");
+  check(/data-status-chip="pending"[^>]*>[\s\S]*?pending 1/.test(all.html), "/checks: pending is its own chip, not folded into failed");
+  check(/data-status-chip="disabled"[^>]*>[\s\S]*?disabled 0/.test(all.html), "/checks: a state with none shows 0, not nothing");
+
+  const failedOnly = await at("/checks?status=failed");
+  check(failedOnly.html.includes("data-check-id=\"acme-billing\"") && failedOnly.html.includes("data-check-id=\"storefront-cache\""), "?status=failed keeps the failed checks");
+  check(!failedOnly.html.includes("data-check-id=\"svc:web\"") && !failedOnly.html.includes("data-check-id=\"storefront-db\""), "?status=failed drops ok and warning");
+  check(!failedOnly.html.includes("data-check-id=\"storefront-new\""), "?status=failed does not fold pending into failed");
+  check(/data-status-chip="failed"[^>]*data-active="true"/.test(failedOnly.html) || /data-active="true"[^>]*data-status-chip="failed"/.test(failedOnly.html), "the failed chip is marked active");
+  check(/failed 2/.test(failedOnly.text) && /All 6/.test(failedOnly.text), "counts are over the unfiltered list");
+  check(failedOnly.links.some((h) => h === "/checks"), "the All chip links back to /checks with no param");
+  check(failedOnly.links.some((h) => h.includes("status=pending")), "state chips link to their own ?status= URL");
+
+  const pending = await at("/checks?status=pending");
+  check(pending.html.includes("data-check-id=\"storefront-new\"") && !pending.html.includes("data-check-id=\"acme-billing\""), "?status=pending shows only the not-yet-run check");
+
+  const none = await at("/checks?status=disabled");
+  check(none.text.includes("No disabled checks."), "an answered-empty filtered list says so in one line");
+  check(!none.text.includes("No health checks configured"), "and is not the nothing-configured sentence");
+
+  // Scoped tab.
+  const sf = await at("/p/storefront/checks?status=failed");
+  check(sf.html.includes("data-check-id=\"storefront-cache\""), "project tab: ?status=failed keeps storefront's failed check");
+  check(!sf.html.includes("data-check-id=\"svc:web\"") && !sf.html.includes("data-check-id=\"acme-billing\""), "project tab: drops other states and other projects");
+  const sfAll = await at("/p/storefront/checks");
+  check(/All 4/.test(sfAll.text) && /failed 1/.test(sfAll.text), "project tab: counts are over the project's own checks (4 total, 1 failed)");
+  const sfNone = await at("/p/storefront/checks?status=disabled");
+  check(sfNone.text.includes("No disabled checks."), "project tab: answered-empty filtered list says so");
 }
 
 // ---------------------------------------------------------------------------

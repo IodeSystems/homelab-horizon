@@ -142,6 +142,9 @@ export interface QueueItem {
   /** Grouped rows only: one line per member, e.g. one per vantage that sees
    * the same service failing. */
   details?: string[];
+  /** Check rows only: the ID of each check behind this row (`CheckStatus.name`),
+   * parallel to `details` on a grouped row. A group hides no ID. */
+  checkIds?: string[];
 }
 
 export interface TierGroup {
@@ -299,6 +302,7 @@ function checkItems(checks: CheckStatus[], services: { name: string; domains: st
     meaning: c.last_error || `${c.type} against ${c.target} is not passing.`,
     to: "/checks",
     ageSeconds: secondsSince(c.last_check),
+    checkIds: [c.name],
   });
 
   const out: QueueItem[] = alone.map(one);
@@ -318,6 +322,7 @@ function checkItems(checks: CheckStatus[], services: { name: string; domains: st
       to: "/checks",
       ageSeconds: ages.length > 0 ? Math.min(...ages) : undefined,
       details: members.map(checkLine),
+      checkIds: members.map((c) => c.name),
     });
   }
   return out;

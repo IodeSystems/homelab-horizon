@@ -1,5 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { Link, createFileRoute } from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -40,6 +40,8 @@ import {
   useToggleCheck,
 } from "../api/hooks";
 import type { CheckStatus, ProbeDiagnosis } from "../api/types";
+import { CheckStatusFilter, filterByStatus, noneWithStatus, parseStatusParam } from "../components/CheckFilter";
+import { CheckId, checkAnchor } from "../components/CheckId";
 import { ChecksHistory } from "../components/ChecksHistory";
 import { RemoteVantages } from "../components/RemoteVantages";
 import { EdgeDiagnosis, deviceLabel } from "../components/EdgeDiagnosis";
@@ -118,7 +120,7 @@ function CheckRow({
 
   return (
     <>
-      <TableRow hover>
+      <TableRow hover id={checkAnchor(check.name)} sx={{ scrollMarginTop: 80 }}>
         <TableCell>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
             <Typography variant="body2" sx={{ fontWeight: 500 }}>
@@ -149,6 +151,7 @@ function CheckRow({
               </Tooltip>
             )}
           </Box>
+          <CheckId id={check.name} />
         </TableCell>
         <TableCell>
           <Chip
@@ -363,6 +366,7 @@ export function AddCheckDialog({
 }
 
 function ChecksPage() {
+  const { status } = Route.useSearch();
   const { data: checks, isLoading, error } = useChecks();
   const { data: allHistory } = useAllCheckHistory();
   // Same query key the panel uses, so this costs no extra request.
@@ -373,6 +377,13 @@ function ChecksPage() {
     [projectsQuery.data],
   );
   const [addOpen, setAddOpen] = useState(false);
+
+  // `/checks#check-<id>` lands on that check's row once the list has loaded.
+  useEffect(() => {
+    if (!checks || typeof window === "undefined" || !window.location.hash) return;
+    const el = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+    el?.scrollIntoView({ block: "center" });
+  }, [checks]);
 
   if (isLoading) {
     return (
@@ -387,6 +398,7 @@ function ChecksPage() {
   }
 
   const checksList = checks ?? [];
+  const shown = filterByStatus(checksList, status);
   // Keyed by vantage and host: a diagnosis is per name, and a name has one row
   // per probe kind, so all of a name's rows share its cause.
   const causeFor = new Map(
@@ -434,6 +446,16 @@ function ChecksPage() {
 
       <RemoteVantages />
 
+      <CheckStatusFilter
+        rows={checksList}
+        active={status}
+        linkTo={(st, chip) => (
+          <Link to="/checks" search={st ? { status: st } : {}} style={{ textDecoration: "none" }}>
+            {chip}
+          </Link>
+        )}
+      />
+
       <TableContainer component={Paper}>
         <Table size="small">
           <TableHead>
@@ -449,7 +471,7 @@ function ChecksPage() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {checksList.map((check) => (
+            {shown.map((check) => (
               <CheckRow
                 key={check.name}
                 check={check}
@@ -461,11 +483,13 @@ function ChecksPage() {
                 projectIndex={projectIndex}
               />
             ))}
-            {checksList.length === 0 && (
+            {shown.length === 0 && (
               <TableRow>
                 <TableCell colSpan={8} align="center">
-                  <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
-                    No health checks configured
+                  <Typography variant="body2" color="text.secondary" sx={{ py: 4 }} data-checks-empty>
+                    {checksList.length === 0 || status === undefined
+                      ? "No health checks configured"
+                      : noneWithStatus(status)}
                   </Typography>
                 </TableCell>
               </TableRow>
@@ -479,4 +503,8 @@ function ChecksPage() {
 
 export const Route = createFileRoute("/checks")({
   component: ChecksPage,
+  validateSearch: (search: Record<string, unknown>): { status?: string } => {
+    const status = parseStatusParam(search.status);
+    return status === undefined ? {} : { status };
+  },
 });
