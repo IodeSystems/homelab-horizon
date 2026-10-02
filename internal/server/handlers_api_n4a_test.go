@@ -465,6 +465,8 @@ func TestInstanceTokenIsRefusedOnAdminRoutes(t *testing.T) {
 		{"GET", "/api/v1/dashboard"},
 		{"GET", "/api/v1/builders"},
 		{"POST", "/api/v1/builders"},
+		{"GET", "/api/v1/build-agents"},
+		{"POST", "/api/v1/build-agents"},
 		{"GET", "/api/v1/builds"},
 		{"POST", "/api/v1/builds"},
 		{"POST", "/api/v1/builds/seed"},
