@@ -1,4 +1,5 @@
 import type {
+  LocalDNSResponse,
   NtfySettingsResp,
   NtfySettingsReq,
   OIDCSettingsResp,
@@ -1905,13 +1906,6 @@ export interface LocalDNSRecord {
   comment?: string;
   // Set when this record overrides one derived from a service.
   shadowsDerived?: string;
-}
-
-interface LocalDNSResponse {
-  records: LocalDNSRecord[];
-  derived?: LocalDNSRecord[];
-  enabled: boolean;
-  servedAt?: string;
 }
 
 export function useLocalDNS() {

@@ -1623,11 +1623,31 @@ type LocalDNSRecord struct {
 	ShadowsDerived string `json:"shadowsDerived,omitempty"`
 }
 
+// LocalDNSDerived is one name a service makes hz answer.
+type LocalDNSDerived struct {
+	Name string `json:"name"`
+	IP   string `json:"ip"`
+	// Service is the service the name comes from.
+	Service string `json:"service"`
+	// Ports the service uses: backend, both blue-green slots, HAProxy.
+	Ports []ServicePort `json:"ports"`
+}
+
+// ServicePort is one port a service uses.
+type ServicePort struct {
+	Port int `json:"port"`
+	// Label is "backend", "slot a", "slot b", "http" or "https".
+	Label string `json:"label"`
+	// Active marks the blue-green slot that is active.
+	Active bool `json:"active,omitempty"`
+}
+
 type LocalDNSResponse struct {
 	Records []LocalDNSRecord `json:"records"`
 	// Derived are the records hz generates from services, shown so the page
 	// can present everything the resolver answers rather than half of it.
-	Derived []LocalDNSRecord `json:"derived,omitempty"`
+	// Sorted by IP, then name.
+	Derived []LocalDNSDerived `json:"derived,omitempty"`
 	// Enabled is false when dnsmasq is off, in which case records are stored
 	// and served the moment it is turned on.
 	Enabled  bool   `json:"enabled"`

@@ -1510,6 +1510,21 @@ type ServiceCheck struct {
 	// svc:* checks the monitor derives from a service — those follow the
 	// service's own Project and are not stored.
 	Project string `json:"project,omitempty"`
+
+	// Slots is set only on the svc:* check of a blue-green service, and never
+	// stored. HAProxy serves such a service from whichever slot is healthy, so
+	// a check of one address reads "failed" on a service that works. With
+	// Slots, the monitor probes every slot with Type and reads ok if any
+	// answers. Target is then a description, not something to dial.
+	Slots []CheckSlot `json:"-"`
+}
+
+// CheckSlot is one blue-green slot as the monitor probes it.
+type CheckSlot struct {
+	Slot   string // "a" (ProxyConfig.Backend) or "b" (DeployConfig.NextBackend)
+	Active bool   // DeployConfig.ActiveSlot names this slot
+	Addr   string // resolved host:port, for messages
+	Target string // what the probe dials: Addr for ping, a URL for http
 }
 
 // RemoteProbe is an hz-probe agent hz polls for an outside-in view.

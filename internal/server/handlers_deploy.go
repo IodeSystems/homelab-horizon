@@ -254,6 +254,12 @@ func (s *Server) handleDeploySwap(w http.ResponseWriter, svcIdx int) {
 		return
 	}
 
+	// The svc: check names which slot is active. Without this it keeps the
+	// pre-swap resolution until something else re-derives the checks.
+	if s.monitor != nil {
+		s.monitor.RefreshChecks(s.cfg())
+	}
+
 	// Regenerate and reload haproxy so current/next ports reflect the new active slot
 	s.syncHAProxyBackends()
 	ssl := &haproxy.SSLConfig{
