@@ -1,5 +1,6 @@
 /**
- * `/instances` — the Homelab Horizon instances: this gateway and its HA peers.
+ * `/instances` — the Homelab Horizon instances: this gateway, its HA peers (Hz
+ * Nodes) and the nested hz it serves (Hz Instances — never machines).
  *
  * Operator, 2026-09-29: *"these are Homelab Horizon Instances — they can be in
  * a project, or a part of a cluster."* Cluster is the HA peer fleet. A row is
@@ -11,9 +12,10 @@
  * peer sharing its records — goes to the existing join flow on Settings → HA
  * Fleet; a **nested instance** — a separate hz with its own records and keys,
  * joined as a segment client (redline-prod-hz) — is DECLARED from here: a
- * nested hz is a Machine that runs hz (plan.md Tier 1b, decided 2026-09-29),
- * so the option opens `AddMachineDialog` with its hz URL required, and a rung
- * is then placed in it through `Environment.Upstream`. What a nested instance
+ * nested hz is its own Hz Instance record (B3, 2026-10-02; until then a
+ * Machine with an hz marker), so the option opens
+ * `DeclareNestedInstanceDialog`, and a rung is then placed in it through
+ * `Environment.Upstream`. What a nested instance
  * cannot do yet — mirror packages, proxy config — is said on the option in
  * `NESTED_WAITS_ON`: greyed with a reason, never removed, and shrinking as
  * each piece lands.
@@ -49,7 +51,7 @@ import { AddButton, EmptyRow, TabHeader } from "../components/model/FlowBits";
 import { LocationCell, PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
 import { buildProjectIndex } from "../components/model/projectRoutes.ts";
 import { isNested, peersLabel, projectOf, readInstancesSource } from "../components/instances/instances";
-import { AddMachineDialog } from "../components/model/MachineDialogs";
+import { DeclareNestedInstanceDialog } from "../components/instances/HZInstanceDialogs";
 import { NestedStateChip } from "../components/instances/NestedBootstrap";
 
 /** What a declared nested instance cannot do yet — plan.md Tier 1b. N3
@@ -79,8 +81,8 @@ export function AddInstanceKindPanel({ onCluster, onNested }: { onCluster: () =>
           primary="Declare a nested instance"
           secondary={
             <>
-              A separate hz with its own records and keys, in its own project (e.g. a prod gateway). Declares its
-              machine with the URL it answers on, and creates the VPN client it reaches this hz through (only
+              A separate hz with its own records and keys, in its own project (e.g. a prod gateway). Declares it
+              — an hz instance, not a machine — with the URL it answers on, and creates the VPN client it reaches this hz through (only
               this hz&apos;s API); a rung is then placed in it (Upstream). To provision a fresh box in one
               command, use [Add nested instance] on its project&apos;s page.{" "}
               <span data-nested-cannot>
@@ -119,7 +121,7 @@ function AddInstance() {
           <Button onClick={() => setOpen(false)}>Cancel</Button>
         </DialogActions>
       </Dialog>
-      <AddMachineDialog nested open={declaring} onClose={() => setDeclaring(false)} />
+      <DeclareNestedInstanceDialog open={declaring} onClose={() => setDeclaring(false)} />
     </>
   );
 }

@@ -5,9 +5,9 @@
  * the address audit that used to be `/hosts`. For a PEER: its project, read
  * only, and its role in the cluster — hz does not declare a peer's machine
  * from here, because a peer ID is not necessarily that box's hostname and a
- * record under the wrong name matches nothing. For a NESTED hz (a declared
- * machine that runs its own hz): its URL and owner, both from its Machine
- * record, edited on that machine's page — this hz never contacts it.
+ * record under the wrong name matches nothing. For a NESTED hz (an Hz Instance
+ * record, B3 — never a machine): its URL and owner, edited and removed here —
+ * this hz never contacts it.
  *
  * The self control never sends a name. Undeclared → `machines/add` with
  * `self: true`, which the server resolves to its own hostname (CLAUDE.md
@@ -37,7 +37,8 @@ import {
 } from "@mui/material";
 import type { InstanceResp } from "../api/generated-types";
 import { useProjects } from "../api/hooks";
-import { useInstances, useSetSelfProject } from "../api/instanceHooks";
+import { useHZInstances, useInstances, useSetSelfProject } from "../api/instanceHooks";
+import { EditHZInstanceDialog, RemoveHZInstanceDialog } from "../components/instances/HZInstanceDialogs";
 import { useMintInstanceToken } from "../api/deployHooks";
 import { TabHeader } from "../components/model/FlowBits";
 import { LocationCell } from "../components/model/ProjectBits";
@@ -115,17 +116,31 @@ function ProjectDialog({
   );
 }
 
+/** Edit and Remove for a nested row: its Hz Instance record, never a machine. */
+function NestedControls({ name }: { name: string }) {
+  const records = useHZInstances();
+  const [editing, setEditing] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const record = (records.data ?? []).find((h) => h.name === name) ?? null;
+  return (
+    <Box sx={{ display: "flex", gap: 1 }} data-nested-controls>
+      <Button size="small" variant="outlined" sx={{ textTransform: "none" }} disabled={record === null} onClick={() => setEditing(true)}>
+        Edit
+      </Button>
+      <Button size="small" color="error" variant="outlined" sx={{ textTransform: "none" }} onClick={() => setRemoving(true)}>
+        Remove
+      </Button>
+      <EditHZInstanceDialog instance={editing ? record : null} onClose={() => setEditing(false)} />
+      <RemoveHZInstanceDialog name={removing ? name : null} onClose={() => setRemoving(false)} />
+    </Box>
+  );
+}
+
 function ProjectControl({ row, index }: { row: InstanceResp; index: ProjectIndex }) {
   const [open, setOpen] = useState(false);
 
   const control = row.role === "nested" ? (
-    <Typography variant="caption" sx={{ color: "text.secondary" }}>
-      Its owner is its machine record&apos;s: edit it on{" "}
-      <Link to="/machines/$machine" params={{ machine: row.name }}>
-        its machine page
-      </Link>
-      .
-    </Typography>
+    <NestedControls name={row.name} />
   ) : !row.self ? (
     <Typography variant="caption" sx={{ color: "text.secondary" }}>
       A peer&apos;s machine is declared on Machines, under its hostname — which may differ from its peer ID.
@@ -236,7 +251,7 @@ function MintTokenDialog({ machine, open, onClose }: { machine: string; open: bo
         token={mint.data?.token ?? null}
         error={mint.error?.message ?? null}
         pending={mint.isPending}
-        onMint={() => mint.mutate({ machine })}
+        onMint={() => mint.mutate({ instance: machine })}
         onClose={close}
       />
     </Dialog>
@@ -339,8 +354,8 @@ export function InstanceScreen({ name }: { name: string }) {
             {row.role === "nested" ? (
               <Fact label="Kind">
                 <Typography variant="body2" data-nested-fact>
-                  A separate hz — its own records and keys, not a member of this cluster. Declared here as a
-                  machine with the URL it answers on; nothing on this page was read from it.
+                  A separate hz — its own records and keys, not a member of this cluster. Declared here as an hz
+                  instance (not a machine) with the URL it answers on; nothing on this page was read from it.
                 </Typography>
               </Fact>
             ) : null}

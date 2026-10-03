@@ -134,10 +134,10 @@ export function useMintInstanceToken() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (req: InstanceTokenReq) =>
-      apiFetch<InstanceTokenResp>("/machines/hz-token", { method: "POST", body: JSON.stringify(req) }),
+      apiFetch<InstanceTokenResp>("/hz-instances/token", { method: "POST", body: JSON.stringify(req) }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["instances"] });
-      qc.invalidateQueries({ queryKey: ["machines"] });
+      qc.invalidateQueries({ queryKey: ["hz-instances"] });
     },
   });
 }

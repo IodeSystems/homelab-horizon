@@ -1,5 +1,7 @@
 /**
- * The hz instances — this gateway and its HA peers — for `/instances`.
+ * The hz instances — this gateway, its HA peers (Hz Nodes) and the nested hz
+ * (Hz Instances) — for `/instances`. The nested ones are their own record
+ * (`/api/v1/hz-instances`, B3), never a Machine.
  *
  * Own file, like `machineHooks.ts`, so this feature does not share lines of
  * `hooks.ts` with siblings building against it.
@@ -11,9 +13,71 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./client";
-import type { InstanceResp, MachineResp, NestedBootstrapReq, NestedBootstrapResp } from "./generated-types";
+import type {
+  HZInstanceAddReq,
+  HZInstanceResp,
+  HZInstanceRmReq,
+  HZInstanceSetReq,
+  InstanceResp,
+  MachineResp,
+  NestedBootstrapReq,
+  NestedBootstrapResp,
+  RemovalResp,
+} from "./generated-types";
 
 export const INSTANCES_KEY = ["instances"];
+export const HZ_INSTANCES_KEY = ["hz-instances"];
+
+/** The declared nested hz (`GET /api/v1/hz-instances`) — the only legal Upstream values. */
+export function useHZInstances() {
+  return useQuery({
+    queryKey: HZ_INSTANCES_KEY,
+    queryFn: () => apiFetch<HZInstanceResp[]>("/hz-instances"),
+  });
+}
+
+function useInvalidateInstances() {
+  const qc = useQueryClient();
+  return () => {
+    qc.invalidateQueries({ queryKey: INSTANCES_KEY });
+    qc.invalidateQueries({ queryKey: HZ_INSTANCES_KEY });
+    qc.invalidateQueries({ queryKey: ["environments"] });
+  };
+}
+
+export function useAddHZInstance() {
+  const invalidate = useInvalidateInstances();
+  return useMutation({
+    mutationFn: (req: HZInstanceAddReq) =>
+      apiFetch<HZInstanceResp>("/hz-instances/add", { method: "POST", body: JSON.stringify(req) }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useSetHZInstance() {
+  const invalidate = useInvalidateInstances();
+  return useMutation({
+    mutationFn: (req: HZInstanceSetReq) =>
+      apiFetch<HZInstanceResp>("/hz-instances/set", { method: "POST", body: JSON.stringify(req) }),
+    onSuccess: invalidate,
+  });
+}
+
+/** `hz-instances/rm`: without `confirm` it is the dry run, and writes nothing. */
+export function useRemoveHZInstance() {
+  const invalidate = useInvalidateInstances();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: HZInstanceRmReq) =>
+      apiFetch<RemovalResp>("/hz-instances/rm", { method: "POST", body: JSON.stringify(req) }),
+    onSuccess: (_out, req) => {
+      if (req.confirm) {
+        invalidate();
+        qc.invalidateQueries({ queryKey: ["vpn"] });
+      }
+    },
+  });
+}
 
 export function useInstances() {
   return useQuery({
@@ -63,7 +127,7 @@ export function useSetSelfProject() {
 
 /**
  * Generate the one-command bootstrap of a nested hz
- * (`POST /api/v1/nested/bootstrap`): declares the machine and the rung, and
+ * (`POST /api/v1/nested/bootstrap`): declares the hz instance and the rung, and
  * answers with the command ONCE. Re-generating revokes an unused earlier one.
  */
 export function useNestedBootstrap() {
@@ -73,7 +137,7 @@ export function useNestedBootstrap() {
       apiFetch<NestedBootstrapResp>("/nested/bootstrap", { method: "POST", body: JSON.stringify(req) }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: INSTANCES_KEY });
-      qc.invalidateQueries({ queryKey: ["machines"] });
+      qc.invalidateQueries({ queryKey: HZ_INSTANCES_KEY });
       qc.invalidateQueries({ queryKey: ["environments"] });
     },
   });
