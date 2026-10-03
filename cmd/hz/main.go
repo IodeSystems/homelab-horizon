@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/db"
 
 	"github.com/iodesystems/homelab-horizon/hzapi"
 )
@@ -262,6 +263,15 @@ COMMANDS
   config show <config-id>            Decrypt a config locally and print it
   config resolve <project>/<env>/<app>/<role> --version=V [--json]
                                      What a box would get, and what it shadowed
+  backup pull [--dir D] [--keep N]   Pull hz's backup zip to THIS machine, verify it (every
+                                     sha256, the hz.db snapshot's integrity, schema version
+                                     and row counts), write it 0600 and keep the newest N
+                                     (default ~/backups/hz-<host>, 14). Fails LOUD, non-zero
+  backup verify <zip>                The same checks on a file, plus: would it restore into
+                                     this binary (schema not newer than this hz's)
+  backup install-timer [--dir D] [--keep N] [--enable]
+                                     Write a systemd USER timer + service here that run
+                                     'backup pull' daily (Persistent=true); --enable starts it
   schema [service]                   Dump the JSON request schema
   version                            Print version
 
@@ -530,6 +540,8 @@ func dispatch(c *client, cmd string, rest []string) error {
 		err = runLine(c, rest)
 	case "import":
 		err = runImport(c, rest)
+	case "backup":
+		err = runBackup(c, rest)
 	case "config":
 		err = runCM(c, rest)
 	case "cm":
@@ -678,11 +690,10 @@ func (c *client) isPersonalToken() bool {
 	return strings.HasPrefix(c.token, apiTokenPrefix)
 }
 
-// apiTokenPrefix mirrors db.APITokenPrefix. Duplicated rather than imported:
-// cmd/hz is the operator CLI and builds standalone, and pulling in the identity
-// store to read one constant would drag SQLite into a binary that never opens a
-// database.
-const apiTokenPrefix = "hz_pat_"
+// apiTokenPrefix is db.APITokenPrefix. It was duplicated while cmd/hz never
+// opened a database; `hz backup pull|verify` opens a snapshot, so cmd/hz links
+// internal/db (and SQLite) now and the copy would only be a second answer.
+const apiTokenPrefix = db.APITokenPrefix
 
 // do issues an authenticated request. body may be nil. If out is non-nil the
 // JSON response is decoded into it.
