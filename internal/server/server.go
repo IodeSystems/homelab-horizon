@@ -591,6 +591,14 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 	// than one running without user accounts. s.users stays nil and every
 	// caller checks.
 	if !dryRun {
+		// A backup import stages its database beside the live one; this is
+		// the only moment nothing holds the file, so it is put in place here.
+		if applied, err := db.ApplyPendingRestore(cfg.UsersDBPath()); err != nil {
+			slog.Error("LOUD: staged database restore NOT applied; starting on the existing database", "error", err)
+		} else if applied {
+			slog.Warn("LOUD: database restored from a backup import; the previous one is kept as .pre-restore-<time>",
+				"path", cfg.UsersDBPath())
+		}
 		if store, err := db.Open(cfg.UsersDBPath()); err != nil {
 			slog.Error("identity store unavailable; user accounts are disabled this run", "error", err)
 		} else {
