@@ -48,8 +48,8 @@ func upstreamServer(t *testing.T, listen string) (*Server, string) {
 			{Name: "alice-phone", PublicKey: attributionKeys[1], AllowedIPs: "10.100.0.2/32"},
 		},
 		VPNProfiles: map[string]string{"prod-hz-vpn": config.ProfileUpstream},
-		Machines: []config.Machine{{Name: "prod-hz", Project: "redline",
-			HZ: &config.MachineHZ{URL: "https://hz.prod.redline.example", VPNClient: "prod-hz-vpn"}}},
+		HZInstances: []config.HZInstance{{Name: "prod-hz", Project: "redline",
+			URL: "https://hz.prod.redline.example", VPNClient: "prod-hz-vpn"}},
 	}
 	s := newTestServer(t, cfg)
 	path := filepath.Join(t.TempDir(), "wg0.conf")
@@ -166,17 +166,18 @@ func TestTheUpstreamConfigAndParentURLNameTheAdmittedAddress(t *testing.T) {
 	}
 }
 
-// The machine's removal names its VPN client in the dry run — blocked without
-// cascade, removed with it.
-func TestMachineRmDryRunNamesTheVPNClient(t *testing.T) {
+// The instance's removal names its VPN client in the dry run — blocked without
+// cascade, removed with it; and a confirmed cascade takes the client out of
+// wg0.conf and its profile out of the config.
+func TestHZInstanceRmDryRunNamesTheVPNClient(t *testing.T) {
 	s, path := upstreamServer(t, ":8080")
 	var out apitypes.RemovalResp
-	postDeclare(t, s, s.handleAPIMachineRm, "/api/v1/machines/rm", apitypes.MachineRmReq{Name: "prod-hz"}, &out)
+	postDeclare(t, s, s.handleAPIHZInstanceRm, "/api/v1/hz-instances/rm", apitypes.HZInstanceRmReq{Name: "prod-hz"}, &out)
 	if len(out.Blocked) != 1 || out.Blocked[0].Kind != "vpn-client" || out.Blocked[0].Name != "prod-hz-vpn" {
 		t.Fatalf("blocked = %+v", out.Blocked)
 	}
 	var cascaded apitypes.RemovalResp
-	postDeclare(t, s, s.handleAPIMachineRm, "/api/v1/machines/rm", apitypes.MachineRmReq{Name: "prod-hz", Cascade: true}, &cascaded)
+	postDeclare(t, s, s.handleAPIHZInstanceRm, "/api/v1/hz-instances/rm", apitypes.HZInstanceRmReq{Name: "prod-hz", Cascade: true}, &cascaded)
 	found := false
 	for _, d := range cascaded.Removes {
 		found = found || (d.Kind == "vpn-client" && strings.Contains(d.How, "REMOVED from wg0.conf"))
@@ -185,6 +186,38 @@ func TestMachineRmDryRunNamesTheVPNClient(t *testing.T) {
 		t.Fatalf("cascade dry run = %+v", cascaded)
 	}
 	wg0Unchanged(t, path)
+
+	var done apitypes.RemovalResp
+	postDeclare(t, s, s.handleAPIHZInstanceRm, "/api/v1/hz-instances/rm", apitypes.HZInstanceRmReq{Name: "prod-hz", Cascade: true, Confirm: true}, &done)
+	if !done.OK {
+		t.Fatalf("cascade + confirm: %+v", done)
+	}
+	b, _ := os.ReadFile(path)
+	if strings.Contains(string(b), attributionKeys[0]) {
+		t.Fatalf("the instance's VPN client is still in wg0.conf:\n%s", b)
+	}
+	if _, ok := s.cfg().VPNProfiles["prod-hz-vpn"]; ok {
+		t.Fatal("the removed client's profile entry is still in the config")
+	}
+	if _, ok := s.cfg().FindHZInstance("prod-hz"); ok {
+		t.Fatal("the instance is still declared")
+	}
+}
+
+// A machine's removal names no VPN client: an hz instance's link is the
+// instance's, and nothing about a machine reaches it.
+func TestMachineRmNeverTouchesAnInstancesVPNClient(t *testing.T) {
+	s, path := upstreamServer(t, ":8080")
+	postDeclare(t, s, s.handleAPIMachineAdd, "/api/v1/machines/add", apitypes.MachineAddReq{Name: "prod-hz"}, nil)
+	var out apitypes.RemovalResp
+	postDeclare(t, s, s.handleAPIMachineRm, "/api/v1/machines/rm", apitypes.MachineRmReq{Name: "prod-hz", Cascade: true, Confirm: true}, &out)
+	if !out.OK || len(out.Removes) != 1 {
+		t.Fatalf("machine rm = %+v", out)
+	}
+	wg0Unchanged(t, path)
+	if h, ok := s.cfg().FindHZInstance("prod-hz"); !ok || h.VPNClient != "prod-hz-vpn" {
+		t.Fatalf("removing a machine touched the instance: %+v %v", h, ok)
+	}
 }
 
 // THE BYPASS THE VPN LISTENER WOULD HAVE OPENED. In MFA scope "all" a VPN

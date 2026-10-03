@@ -344,17 +344,22 @@ export const ProvenanceNoBuildRecord = "no build record";
  */
 export const ProvenanceUnproven = "unproven";
 /**
- * InstanceTokenReq is POST /api/v1/machines/hz-token: mint the token a nested
- * hz authenticates to this one with.
+ * InstanceTokenReq is POST /api/v1/hz-instances/token: mint the token a
+ * nested hz authenticates to this one with. Instance names the hz instance;
+ * Machine is its pre-B3 spelling, accepted one release (POST
+ * /api/v1/machines/hz-token and `hz machine hz-token` send it).
  */
 export interface InstanceTokenReq {
-  machine: string;
+  instance?: string;
+  machine?: string;
 }
 /**
  * InstanceTokenResp carries the token ONCE. hz stores only its sha256; a
- * re-mint replaces it, and the old token stops working.
+ * re-mint replaces it, and the old token stops working. Machine repeats
+ * Instance for a pre-B3 client, one release.
  */
 export interface InstanceTokenResp {
+  instance: string;
   machine: string;
   token: string;
 }
@@ -1087,13 +1092,67 @@ export interface HostsViewResp {
 }
 
 //////////
+// source: hz_instances.go
+
+/**
+ * HZInstancesPath is the list.
+ */
+export const HZInstancesPath = "/api/v1/hz-instances";
+/**
+ * HZInstanceResp is one nested hz. HasToken says an instance token is minted;
+ * the token and its digest are never sent.
+ */
+export interface HZInstanceResp {
+  name: string;
+  project: string;
+  url: string;
+  vpnClient?: string;
+  note?: string;
+  hasToken: boolean;
+}
+/**
+ * HZInstanceAddReq declares a nested hz. URL must be http(s) with a host;
+ * VPNClient, when set, must name an existing `upstream` VPN client.
+ */
+export interface HZInstanceAddReq {
+  name: string;
+  project?: string;
+  url: string;
+  vpnClient?: string;
+  note?: string;
+}
+/**
+ * HZInstanceSetReq edits an instance in place. nil leaves a field alone; a
+ * non-nil "" clears it (Project: global; VPNClient: unlink). The token is not
+ * editable — mint a new one.
+ */
+export interface HZInstanceSetReq {
+  name: string;
+  project?: string;
+  url?: string;
+  vpnClient?: string;
+  note?: string;
+}
+/**
+ * HZInstanceRmReq removes an instance. Without Confirm it is a dry run. It is
+ * refused while a rung's Upstream names the instance or its VPN client exists,
+ * unless Cascade: then every such Upstream is CLEARED (the rung is kept) and
+ * the VPN client is removed from wg0.conf.
+ */
+export interface HZInstanceRmReq {
+  name: string;
+  cascade?: boolean;
+  confirm?: boolean;
+}
+
+//////////
 // source: instances.go
 
 /**
  * InstancesPath is the list of hz instances: this gateway, every HA peer it
- * knows about (config.Peers), and every declared Machine that runs its own hz
- * (config.Machine.HZ, role "nested"). One row per hz, not per machine and not per
- * address.
+ * knows about (config.Peers — Hz Nodes), and every declared hz instance
+ * (config.HZInstance, role "nested"). One row per hz, not per machine and not
+ * per address.
  */
 export const InstancesPath = "/api/v1/instances";
 /**
@@ -1113,17 +1172,18 @@ export const InstanceRoleReplica = "replica";
 export const InstanceRoleStandalone = "standalone";
 /**
  * InstanceRoleNested is a SEPARATE hz — its own records and keys, a
- * config layer of its own — declared here as a Machine with an hz marker
- * (config.Machine.HZ). Not a cluster member: it shares nothing with this
- * instance's records. Address is its HZ.URL; nothing here contacts it.
+ * config layer of its own — declared here as an hz instance
+ * (config.HZInstance). Not a cluster member: it shares nothing with this
+ * instance's records. Address is its URL; nothing here contacts it.
  */
 export const InstanceRoleNested = "nested";
 /**
  * InstanceResp is one hz instance.
  * Name is the SELF row's machine name as `machines/add` with self=true
  * resolves it (server.LocalMachineName) — never a name the browser supplied —
- * and a peer row's peer ID. Project and Declared are the join against the
- * Machine record of that exact name: Declared=false means no record exists,
+ * a peer row's peer ID, and a nested row's hz instance name. Project and
+ * Declared are the join against the record of that exact name — the Machine
+ * for self and peers, the HZInstance for a nested row: Declared=false means no record exists,
  * so Project is "" because there is nothing to read it from, not because the
  * owner is global. The UI must say which.
  */
@@ -1218,20 +1278,24 @@ export const NestedBootstrapPath = "/api/v1/nested/bootstrap";
 /**
  * NestedBootstrapReq declares a nested hz for a project and asks for the
  * command that provisions it.
+ * Instance is the hz instance the command declares (config.HZInstance, never a
+ * Machine). Machine is its pre-B3 spelling, accepted one release; sending both
+ * with different values is refused.
  * Rung is the rung's NAME in Project; the rung is declared as Project/Rung with
- * Upstream = Machine. From is an existing rung of the same project that
+ * Upstream = Instance. From is an existing rung of the same project that
  * promotes into it. Posture defaults to prod.
  * Platform is optional: "linux-amd64" or "linux-arm64" when the operator
  * knows the box's architecture. With it, a missing binary for that platform is
  * a refusal; without it, a missing one is a warning on the response and the
  * script stops on such a box before it touches anything.
  * URL is optional: where the child's hz will answer, a statement for the
- * operator (MachineHZ.URL). Empty on a new machine is "not known yet" — a
+ * operator (HZInstance.URL). Empty on a new instance is "not known yet" — a
  * .invalid placeholder — and enrolment replaces it with the box's VPN address.
  */
 export interface NestedBootstrapReq {
   project: string;
-  machine: string;
+  instance?: string;
+  machine?: string;
   rung: string;
   from: string;
   posture?: string;
@@ -1240,13 +1304,15 @@ export interface NestedBootstrapReq {
 }
 /**
  * NestedBootstrapResp is the generated command, shown once.
- * Reused lists what already existed (a re-provision of a wiped box): "machine",
- * "rung". Revoked is true when an unused earlier command for this machine was
- * revoked by this one.
+ * Reused lists what already existed (a re-provision of a wiped box):
+ * "instance", "rung". Revoked is true when an unused earlier command for this
+ * instance was revoked by this one. Machine repeats Instance for a pre-B3
+ * client, one release.
  */
 export interface NestedBootstrapResp {
   command: string;
   expiresAt: number /* int64 */; // unix seconds
+  instance: string;
   machine: string;
   project: string;
   rung: string; // "<project>/<rung>"
@@ -1264,7 +1330,7 @@ export interface NestedBootstrapResp {
 /**
  * NestedEnrolReq is what the box sends: its WireGuard PUBLIC key, and the
  * platform it needs a binary for. Hostname is a label for the log only — the
- * machine's identity is the grant's.
+ * instance's identity is the grant's.
  */
 export interface NestedEnrolReq {
   public_key: string;
@@ -1279,7 +1345,8 @@ export interface NestedEnrolResp {
   wg: NestedEnrolWG;
   parent_url: string;
   instance_token: string;
-  machine: string;
+  instance: string;
+  machine: string; // = Instance, for a pre-B3 reader
   project: string;
   rung: string;
   service_name: string;
@@ -1919,7 +1986,7 @@ export interface EnvironmentAddReq {
   from?: string;
   version?: string;
   /**
-   * Upstream names a declared Machine with an hz marker; "" is placed here.
+   * Upstream names a declared hz instance (HZInstanceResp); "" is placed here.
    */
   upstream?: string;
 }
@@ -1940,7 +2007,7 @@ export interface EnvironmentSetReq {
   version?: string;
   /**
    * Upstream: nil leaves it, "" clears it (placed here), a name sets it —
-   * refused unless it names a declared Machine with an hz marker.
+   * refused unless it names a declared hz instance.
    */
   upstream?: string;
 }
@@ -1979,10 +2046,9 @@ export interface MachineResp {
   segments?: string[];
   note?: string;
   /**
-   * HZ is set when this machine runs its own hz (a nested hz — a separate
-   * config layer, not an HA peer). Absent: not declared as one.
+   * No nested-hz marker: an hz instance is its own record since B3
+   * (HZInstanceResp, /api/v1/hz-instances), never a machine.
    */
-  hz?: MachineHZResp;
   multiHomed?: boolean;
   enrolled?: boolean;
   enrolledAt?: number /* int64 */;
@@ -1996,24 +2062,6 @@ export interface MachineResp {
    * them it was already true is information they asked for.
    */
   alreadyDeclared?: boolean;
-}
-/**
- * MachineHZResp is the nested-hz marker: where that hz answers. This hz never
- * contacts it.
- */
-export interface MachineHZResp {
-  url: string;
-  /**
-   * VPNClient is the `upstream` VPN client that hz reaches this one
-   * through, by name; empty is no link. Set on add; an edit that omits it
-   * keeps the existing one.
-   */
-  vpnClient?: string;
-  /**
-   * HasToken is response-only: an instance token has been minted for this
-   * nested hz (POST /api/v1/machines/hz-token). The token is never sent back.
-   */
-  hasToken?: boolean;
 }
 /**
  * MachineAddReq declares a machine. Segments are names; there is no Segment
@@ -2031,11 +2079,6 @@ export interface MachineAddReq {
   project?: string;
   segments?: string[];
   note?: string;
-  /**
-   * HZ marks the machine as running its own hz; the URL must be http(s)
-   * with a host.
-   */
-  hz?: MachineHZResp;
   /**
    * Self declares the box HZ ITSELF IS RUNNING ON, and Name must then be
    * empty: the name comes from hz's own identity (os.Hostname, the same
@@ -2071,12 +2114,6 @@ export interface MachineSetReq {
   project?: string;
   note?: string;
   segments?: string[];
-  /**
-   * HZ sets the nested-hz marker; ClearHZ removes it (refused while an
-   * environment names this machine as its Upstream). Both at once is refused.
-   */
-  hz?: MachineHZResp;
-  clearHz?: boolean;
 }
 /**
  * MachineRmReq removes a machine. Confirm and Cascade mean what they mean on

@@ -1,9 +1,9 @@
 package apitypes
 
 // InstancesPath is the list of hz instances: this gateway, every HA peer it
-// knows about (config.Peers), and every declared Machine that runs its own hz
-// (config.Machine.HZ, role "nested"). One row per hz, not per machine and not per
-// address.
+// knows about (config.Peers — Hz Nodes), and every declared hz instance
+// (config.HZInstance, role "nested"). One row per hz, not per machine and not
+// per address.
 const InstancesPath = "/api/v1/instances"
 
 // Instance roles. Standalone is "no peers declared" — the fleet does not
@@ -13,9 +13,9 @@ const (
 	InstanceRoleReplica    = "replica"
 	InstanceRoleStandalone = "standalone"
 	// InstanceRoleNested is a SEPARATE hz — its own records and keys, a
-	// config layer of its own — declared here as a Machine with an hz marker
-	// (config.Machine.HZ). Not a cluster member: it shares nothing with this
-	// instance's records. Address is its HZ.URL; nothing here contacts it.
+	// config layer of its own — declared here as an hz instance
+	// (config.HZInstance). Not a cluster member: it shares nothing with this
+	// instance's records. Address is its URL; nothing here contacts it.
 	InstanceRoleNested = "nested"
 )
 
@@ -23,8 +23,9 @@ const (
 //
 // Name is the SELF row's machine name as `machines/add` with self=true
 // resolves it (server.LocalMachineName) — never a name the browser supplied —
-// and a peer row's peer ID. Project and Declared are the join against the
-// Machine record of that exact name: Declared=false means no record exists,
+// a peer row's peer ID, and a nested row's hz instance name. Project and
+// Declared are the join against the record of that exact name — the Machine
+// for self and peers, the HZInstance for a nested row: Declared=false means no record exists,
 // so Project is "" because there is nothing to read it from, not because the
 // owner is global. The UI must say which.
 type InstanceResp struct {

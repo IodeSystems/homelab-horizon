@@ -178,8 +178,16 @@ COMMANDS
   machine rm <name> [--cascade] [--confirm]
                                      Remove a machine. Dry run without --confirm; refused
                                      while its agent credential exists (--cascade revokes it)
-  machine hz-token <name>            Mint the instance token a nested hz pulls with.
+  instance ls                        The hz instances: nested hz with their own config.
+                                     Not machines — they never appear in machine ls
+  instance add <name> --url U [--project P] [--vpn-client C] [--note TEXT]
+                                     Declare a nested hz (the bootstrap does this too)
+  instance rm <name> [--cascade] [--confirm]
+                                     Remove one. Dry run without --confirm; refused while
+                                     a rung's upstream names it (--cascade clears it)
+  instance token <name>              Mint the instance token a nested hz pulls with.
                                      Shown ONCE; a re-mint replaces the old one
+                                     (hz machine hz-token: deprecated alias, one release)
   build-agent add <name> --project P [--host H] [--note TEXT]
                                      Register a build agent for ONE project: it may
                                      start, log, state and finish builds of P and upload
@@ -191,7 +199,7 @@ COMMANDS
   builds ls <project>                A project's builds: number, version, commit,
                                      agent, result (abandoned after 2h quiet)
   builds seed <project> --next N     Raise the next build number (never lowers it)
-  nested bootstrap <project> <machine> --rung <name> --from <rung>
+  nested bootstrap <project> <instance> --rung <name> --from <rung>
               [--posture P] [--platform linux-amd64|linux-arm64] [--url U]
                                      Declare a nested hz and its rung, and print ONE
                                      command that provisions it on a fresh Ubuntu box.
@@ -504,6 +512,8 @@ func dispatch(c *client, cmd string, rest []string) error {
 		err = runMachine(c, rest)
 	case "nested":
 		err = runNested(c, rest)
+	case "instance", "instances":
+		err = runInstance(c, rest)
 	case "build-agent", "build-agents":
 		err = runBuildAgent(c, rest)
 	case "builder", "builders": // deprecated, one release

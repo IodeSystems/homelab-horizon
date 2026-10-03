@@ -23,7 +23,7 @@ import (
 // N4a over the parent's handlers: upload, promote's upload check, apply, hold,
 // desired, the instance token, download scope and retention.
 
-const nestedMachine = "redline-prod-hz"
+const nestedInstance = "redline-prod-hz"
 
 type n4aFixture struct {
 	deployFixture
@@ -52,14 +52,14 @@ func newN4aFixture(t *testing.T) n4aFixture {
 	}))
 	t.Cleanup(childAddr.Close)
 	if err := f.s.updateConfig(func(c *config.Config) {
-		c.Machines = append(append([]config.Machine(nil), c.Machines...),
-			config.Machine{Name: nestedMachine, HZ: &config.MachineHZ{URL: childAddr.URL}},
-			config.Machine{Name: "other-hz", HZ: &config.MachineHZ{URL: "http://192.0.2.9:8080"}},
+		c.HZInstances = append(append([]config.HZInstance(nil), c.HZInstances...),
+			config.HZInstance{Name: nestedInstance, URL: childAddr.URL},
+			config.HZInstance{Name: "other-hz", URL: "http://192.0.2.9:8080"},
 		)
 		envs := append([]config.Environment(nil), c.Environments...)
 		for i := range envs {
 			if envs[i].Name == "prod" {
-				envs[i].Upstream = nestedMachine
+				envs[i].Upstream = nestedInstance
 			}
 		}
 		envs = append(envs, config.Environment{Project: "redline", Name: "loadtest", Posture: "prod", Upstream: "other-hz"})
@@ -93,7 +93,7 @@ func (f n4aFixture) upload(t *testing.T, token, project, body string) (string, *
 
 func (f n4aFixture) mint(t *testing.T, machine string) string {
 	t.Helper()
-	w := f.call(f.s.handleAPIMachineHZToken, http.MethodPost, "/api/v1/machines/hz-token", f.pat, apitypes.InstanceTokenReq{Machine: machine})
+	w := f.call(f.s.handleAPIInstanceToken, http.MethodPost, "/api/v1/hz-instances/token", f.pat, apitypes.InstanceTokenReq{Instance: machine})
 	if w.Code != http.StatusOK {
 		t.Fatalf("mint: %d %s", w.Code, w.Body.String())
 	}
@@ -204,7 +204,7 @@ func TestArtifactUpload(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("unknown token: %d", w.Code)
 	}
-	tok := f.mint(t, nestedMachine)
+	tok := f.mint(t, nestedInstance)
 	_, w = f.upload(t, tok, "redline", "x")
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("instance token upload: %d", w.Code)
@@ -349,9 +349,9 @@ func TestInstanceTokenScope(t *testing.T) {
 	if w := f.apply("prod", "1.4.0"); w.Code != http.StatusOK {
 		t.Fatal(w.Body.String())
 	}
-	tok := f.mint(t, nestedMachine)
-	m, _ := f.s.cfg().FindMachine(nestedMachine)
-	if m.HZ.TokenSHA256 != tokenDigest(tok) || strings.Contains(mustJSON(t, f.s.cfg()), tok) {
+	tok := f.mint(t, nestedInstance)
+	h, _ := f.s.cfg().FindHZInstance(nestedInstance)
+	if h.TokenSHA256 != tokenDigest(tok) || strings.Contains(mustJSON(t, f.s.cfg()), tok) {
 		t.Fatal("the token is stored, or its digest is not")
 	}
 
@@ -360,7 +360,7 @@ func TestInstanceTokenScope(t *testing.T) {
 		t.Fatalf("desired: %d %s", w.Code, w.Body.String())
 	}
 	pulls, _ := f.s.users.InstancePulls(context.Background())
-	if pulls[nestedMachine].Environment != "prod" {
+	if pulls[nestedInstance].Environment != "prod" {
 		t.Fatalf("the pull was not recorded: %+v", pulls)
 	}
 	iw := f.call(f.s.handleAPIInstances, http.MethodGet, "/api/v1/instances", f.pat, nil)
@@ -370,8 +370,8 @@ func TestInstanceTokenScope(t *testing.T) {
 	for _, row := range rows {
 		seen[row.Name] = row.Nested
 	}
-	if n := seen[nestedMachine]; n == nil || !n.HasToken || n.LastPullAt == 0 || n.LastPullRung != "redline/prod" {
-		t.Fatalf("instances row for %s: %+v", nestedMachine, n)
+	if n := seen[nestedInstance]; n == nil || !n.HasToken || n.LastPullAt == 0 || n.LastPullRung != "redline/prod" {
+		t.Fatalf("instances row for %s: %+v", nestedInstance, n)
 	}
 	if n := seen["other-hz"]; n == nil || n.HasToken || n.LastPullAt != 0 {
 		t.Fatalf("instances row for other-hz (no token, never pulled): %+v", n)
@@ -383,7 +383,7 @@ func TestInstanceTokenScope(t *testing.T) {
 		ArtifactSHA256: sha, Host: "prod-1", ForwardedFor: "service:redline-prod"}
 	f.reportOnly(t, tok, rep)
 	latest, _ := f.s.users.LatestDeployReport(context.Background(), "redline", "prod")
-	if latest.ReportedBy != "instance:"+nestedMachine+" (for service:redline-prod)" {
+	if latest.ReportedBy != "instance:"+nestedInstance+" (for service:redline-prod)" {
 		t.Fatalf("forwarded report attributed to %q", latest.ReportedBy)
 	}
 
@@ -410,16 +410,24 @@ func TestInstanceTokenScope(t *testing.T) {
 	}
 
 	// Re-mint revokes the old token.
-	tok2 := f.mint(t, nestedMachine)
+	tok2 := f.mint(t, nestedInstance)
 	if w := f.desired(tok, "prod", ""); w.Code != http.StatusUnauthorized {
 		t.Fatalf("the replaced token still works: %d", w.Code)
 	}
 	if w := f.desired(tok2, "prod", ""); w.Code != http.StatusOK {
 		t.Fatalf("the new token: %d", w.Code)
 	}
-	// A machine with no marker gets no token.
-	if w := f.call(f.s.handleAPIMachineHZToken, http.MethodPost, "/api/v1/machines/hz-token", f.pat, apitypes.InstanceTokenReq{Machine: "nope"}); w.Code != http.StatusConflict {
-		t.Fatalf("mint for an undeclared machine: %d", w.Code)
+	// An undeclared instance gets no token.
+	if w := f.call(f.s.handleAPIInstanceToken, http.MethodPost, "/api/v1/hz-instances/token", f.pat, apitypes.InstanceTokenReq{Instance: "nope"}); w.Code != http.StatusConflict {
+		t.Fatalf("mint for an undeclared instance: %d", w.Code)
+	}
+	// The pre-B3 path and field still mint, one release; the two spellings
+	// disagreeing is refused.
+	if w := f.call(f.s.handleAPIInstanceToken, http.MethodPost, "/api/v1/machines/hz-token", f.pat, apitypes.InstanceTokenReq{Machine: nestedInstance}); w.Code != http.StatusOK {
+		t.Fatalf("the alias: %d %s", w.Code, w.Body.String())
+	}
+	if w := f.call(f.s.handleAPIInstanceToken, http.MethodPost, "/api/v1/hz-instances/token", f.pat, apitypes.InstanceTokenReq{Instance: nestedInstance, Machine: "other-hz"}); w.Code != http.StatusBadRequest {
+		t.Fatalf("instance and machine disagreeing: %d", w.Code)
 	}
 }
 
@@ -430,7 +438,7 @@ func TestInstanceTokenScope(t *testing.T) {
 // path falling through to something else.
 func TestInstanceTokenIsRefusedOnAdminRoutes(t *testing.T) {
 	f := newN4aFixture(t)
-	tok := f.mint(t, nestedMachine)
+	tok := f.mint(t, nestedInstance)
 	mux := f.s.setupRoutes()
 	h := f.s.handler()
 	routes := []struct{ method, path string }{
@@ -444,6 +452,11 @@ func TestInstanceTokenIsRefusedOnAdminRoutes(t *testing.T) {
 		{"GET", "/api/v1/promotions"},
 		{"GET", "/api/v1/artifacts"},
 		{"POST", "/api/v1/machines/hz-token"},
+		{"GET", "/api/v1/hz-instances"},
+		{"POST", "/api/v1/hz-instances/add"},
+		{"POST", "/api/v1/hz-instances/set"},
+		{"POST", "/api/v1/hz-instances/rm"},
+		{"POST", "/api/v1/hz-instances/token"},
 		{"POST", "/api/v1/nested/bootstrap"},
 		{"GET", "/api/v1/machines"},
 		{"POST", "/api/v1/machines/set"},

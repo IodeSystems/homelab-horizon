@@ -10,7 +10,7 @@ import (
 // (vpn_upstream.go; plan/plan.md Tier 1b N1b).
 
 // linkedEstate: a nested hz whose VPN client is `upstream`, beside a human
-// client on vpn-only. Built through AddMachine, so it is a config hz would save.
+// client on vpn-only. Built through AddHZInstance, so it is a config hz would save.
 func linkedEstate(t *testing.T) *Config {
 	t.Helper()
 	c := &Config{
@@ -25,8 +25,8 @@ func linkedEstate(t *testing.T) *Config {
 	if err := c.AddProject("redline", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.AddMachine(Machine{Name: "prod-hz", Project: "redline",
-		HZ: &MachineHZ{URL: "https://hz.prod.redline.example", VPNClient: " prod-hz-vpn "}}); err != nil {
+	if err := c.AddHZInstance(HZInstance{Name: "prod-hz", Project: "redline",
+		URL: "https://hz.prod.redline.example", VPNClient: " prod-hz-vpn "}); err != nil {
 		t.Fatalf("a link to an upstream client must be accepted: %v", err)
 	}
 	return c
@@ -44,9 +44,9 @@ func TestUpstreamClientAllowedIPsIsTheGatewayOnly(t *testing.T) {
 
 func TestTheLinkIsTrimmedAndStored(t *testing.T) {
 	c := linkedEstate(t)
-	m, _ := c.FindMachine("prod-hz")
-	if m.HZ.VPNClient != "prod-hz-vpn" {
-		t.Fatalf("VPNClient = %q", m.HZ.VPNClient)
+	h, _ := c.FindHZInstance("prod-hz")
+	if h.VPNClient != "prod-hz-vpn" {
+		t.Fatalf("VPNClient = %q", h.VPNClient)
 	}
 	if got := c.UpstreamLinkOf("prod-hz-vpn"); got != "prod-hz" {
 		t.Fatalf("UpstreamLinkOf = %q", got)
@@ -57,7 +57,7 @@ func TestTheLinkIsTrimmedAndStored(t *testing.T) {
 }
 
 // Validation: the link must name a client that exists, is `upstream`, and is
-// no other machine's. Each refusal checked at AddMachine AND at Save (the
+// no other instance's. Each refusal checked at AddHZInstance AND at Save (the
 // chokepoint every writer passes, peer-sync and hand edits included).
 func TestTheLinkMustNameAnUpstreamClient(t *testing.T) {
 	for label, tc := range map[string]struct {
@@ -66,18 +66,18 @@ func TestTheLinkMustNameAnUpstreamClient(t *testing.T) {
 	}{
 		"no such client":        {"ghost", "no such client"},
 		"a non-upstream client": {"alice-phone", `profile is "vpn-only"`},
-		"another machine's":     {"prod-hz-vpn", "both name VPN client"},
+		"another instance's":    {"prod-hz-vpn", "both name VPN client"},
 	} {
 		c := linkedEstate(t)
-		err := c.AddMachine(Machine{Name: "other-hz", HZ: &MachineHZ{URL: "https://hz.other.example", VPNClient: tc.client}})
+		err := c.AddHZInstance(HZInstance{Name: "other-hz", URL: "https://hz.other.example", VPNClient: tc.client})
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
-			t.Errorf("%s: AddMachine error = %v, want %q", label, err, tc.want)
+			t.Errorf("%s: AddHZInstance error = %v, want %q", label, err, tc.want)
 		}
-		if _, ok := c.FindMachine("other-hz"); ok {
-			t.Errorf("%s: a refused machine was written", label)
+		if _, ok := c.FindHZInstance("other-hz"); ok {
+			t.Errorf("%s: a refused instance was written", label)
 		}
 
-		c.Machines = append(c.Machines, Machine{Name: "other-hz", HZ: &MachineHZ{URL: "https://hz.other.example", VPNClient: tc.client}})
+		c.HZInstances = append(c.HZInstances, HZInstance{Name: "other-hz", URL: "https://hz.other.example", VPNClient: tc.client})
 		err = Save(filepath.Join(t.TempDir(), "config.json"), c)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: Save error = %v, want %q", label, err, tc.want)
@@ -91,7 +91,7 @@ func TestALinkedClientCannotLeaveUpstream(t *testing.T) {
 	c := linkedEstate(t)
 	for _, p := range []string{ProfileLanAccess, ProfileFullTunnel, ProfileVPNOnly} {
 		if err := c.CheckPeerProfileChange("prod-hz-vpn", p); err == nil || !strings.Contains(err.Error(), "prod-hz") {
-			t.Errorf("%s: a linked client's widening was not refused naming the machine: %v", p, err)
+			t.Errorf("%s: a linked client's widening was not refused naming the instance: %v", p, err)
 		}
 	}
 	if err := c.CheckPeerProfileChange("prod-hz-vpn", ProfileUpstream); err != nil {
@@ -114,18 +114,21 @@ func TestAVPNAdminCannotBeUpstream(t *testing.T) {
 	}
 }
 
-// Editing the URL must not silently unlink; ClearHZ is the unlink.
+// Editing the URL must not silently unlink; an explicit "" VPN client is the
+// unlink.
 func TestAnHZEditKeepsTheLink(t *testing.T) {
 	c := linkedEstate(t)
-	m, err := c.SetMachine("prod-hz", MachinePatch{HZ: &MachineHZ{URL: "https://hz2.prod.redline.example"}})
+	u := "https://hz2.prod.redline.example"
+	h, err := c.SetHZInstance("prod-hz", HZInstancePatch{URL: &u})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.HZ.URL != "https://hz2.prod.redline.example" || m.HZ.VPNClient != "prod-hz-vpn" {
-		t.Fatalf("a URL edit changed the link: %+v", m.HZ)
+	if h.URL != u || h.VPNClient != "prod-hz-vpn" {
+		t.Fatalf("a URL edit changed the link: %+v", h)
 	}
-	if m, err = c.SetMachine("prod-hz", MachinePatch{ClearHZ: true}); err != nil || m.HZ != nil {
-		t.Fatalf("ClearHZ: %+v %v", m.HZ, err)
+	none := ""
+	if h, err = c.SetHZInstance("prod-hz", HZInstancePatch{VPNClient: &none}); err != nil || h.VPNClient != "" {
+		t.Fatalf("unlink: %+v %v", h, err)
 	}
 }
 
@@ -144,20 +147,20 @@ func TestARenameCarriesTheLink(t *testing.T) {
 
 // Removal: the client is a dependant. Blocked without cascade, named in the
 // removes list with cascade, and the dry run says it leaves wg0.conf.
-func TestRemovingALinkedMachineNamesItsVPNClient(t *testing.T) {
+func TestRemovingALinkedInstanceNamesItsVPNClient(t *testing.T) {
 	c := linkedEstate(t)
-	_, blocked, err := c.MachineRemoval("prod-hz", false, false)
+	_, blocked, err := c.HZInstanceRemoval("prod-hz", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(blocked) != 1 || blocked[0].Kind != "vpn-client" || blocked[0].Name != "prod-hz-vpn" {
 		t.Fatalf("without cascade the client must block: %+v", blocked)
 	}
-	if _, err := c.RemoveMachine("prod-hz", false, false); err == nil {
+	if _, err := c.RemoveHZInstance("prod-hz", false); err == nil {
 		t.Fatal("a blocked removal went through")
 	}
 
-	removes, blocked, err := c.MachineRemoval("prod-hz", false, true)
+	removes, blocked, err := c.HZInstanceRemoval("prod-hz", true)
 	if err != nil || len(blocked) != 0 {
 		t.Fatalf("cascade: blocked=%+v err=%v", blocked, err)
 	}
@@ -170,11 +173,11 @@ func TestRemovingALinkedMachineNamesItsVPNClient(t *testing.T) {
 	if !strings.Contains(said, "REMOVED from wg0.conf") {
 		t.Fatalf("the cascade dry run does not say the client is removed: %+v", removes)
 	}
-	if _, err := c.RemoveMachine("prod-hz", false, true); err != nil {
+	if _, err := c.RemoveHZInstance("prod-hz", true); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := c.FindMachine("prod-hz"); ok {
-		t.Fatal("the machine is still declared")
+	if _, ok := c.FindHZInstance("prod-hz"); ok {
+		t.Fatal("the instance is still declared")
 	}
 }
 

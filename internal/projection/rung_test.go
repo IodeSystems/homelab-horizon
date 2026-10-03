@@ -10,10 +10,10 @@ import (
 func rungEstate() *config.Config {
 	return &config.Config{
 		Projects: []config.Project{{Name: "redline"}},
-		Machines: []config.Machine{
-			{Name: "redline-prod-hz", Project: "redline", HZ: &config.MachineHZ{URL: "https://hz.prod.redline.example"}},
-			{Name: "build-1"},
+		HZInstances: []config.HZInstance{
+			{Name: "redline-prod-hz", Project: "redline", URL: "https://hz.prod.redline.example"},
 		},
+		Machines: []config.Machine{{Name: "build-1"}},
 		Environments: []config.Environment{
 			{Project: "redline", Name: "staging", Posture: "staging"},
 			{Project: "redline", Name: "prod", Posture: "prod", From: "staging", Upstream: "redline-prod-hz"},
@@ -29,7 +29,7 @@ func TestAnUpstreamRungIsPlacedRemotelyNotAGap(t *testing.T) {
 	prod, _ := cfg.LookupEnvironment("redline", "prod")
 	p := PlaceRung(cfg, prod)
 	if p.State != PlacementRemote || p.Upstream != "redline-prod-hz" || p.URL != "https://hz.prod.redline.example" {
-		t.Fatalf("an upstream rung must be remote, naming the machine and its URL; got %+v", p)
+		t.Fatalf("an upstream rung must be remote, naming the instance and its URL; got %+v", p)
 	}
 	if len(p.Unresolved) != 0 {
 		t.Fatalf("an upstream rung must not be a gap; got %+v", p.Unresolved)
@@ -49,7 +49,8 @@ func TestAnUpstreamRungIsPlacedRemotelyNotAGap(t *testing.T) {
 }
 
 // Records Save would refuse still reach a projection honestly: the projection
-// says the upstream does not resolve rather than trusting the name.
+// says the upstream does not resolve rather than trusting the name — and a
+// MACHINE of that name (build-1) is not an hz instance.
 func TestAnUnresolvableUpstreamIsSaidNotTrusted(t *testing.T) {
 	cfg := rungEstate()
 	for _, name := range []string{"ghost-hz", "build-1"} {

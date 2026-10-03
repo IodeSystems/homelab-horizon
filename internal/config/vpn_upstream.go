@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// The `upstream` VPN profile: a nested hz (a Machine with an HZ marker) reaching
+// The `upstream` VPN profile: a nested hz (an HZInstance) reaching
 // its PARENT — this hz — as a client of the existing human VPN, wg0
 // (plan/plan.md Tier 1b, "Child → parent reachability", N1b).
 //
@@ -40,12 +40,12 @@ func ValidPeerProfile(p string) bool {
 // message.
 const PeerProfileNames = "lan-access, full-tunnel, vpn-only or upstream"
 
-// UpstreamLinkOf returns the machine whose nested-hz marker names this VPN
-// client (MachineHZ.VPNClient), or "" when none does.
+// UpstreamLinkOf returns the hz instance whose link names this VPN client
+// (HZInstance.VPNClient), or "" when none does.
 func (c *Config) UpstreamLinkOf(peer string) string {
-	for _, m := range c.Machines {
-		if m.HZ != nil && m.HZ.VPNClient != "" && m.HZ.VPNClient == peer {
-			return m.Name
+	for _, h := range c.HZInstances {
+		if h.VPNClient != "" && h.VPNClient == peer {
+			return h.Name
 		}
 	}
 	return ""
@@ -68,7 +68,7 @@ func (c *Config) CheckPeerProfileChange(peer, profile string) error {
 		return fmt.Errorf("invalid profile %q: must be %s", profile, PeerProfileNames)
 	}
 	if m := c.UpstreamLinkOf(peer); m != "" && profile != ProfileUpstream {
-		return fmt.Errorf("%s is the VPN client of nested hz %s, so it must stay %q — anything wider widens what that hz reaches. Remove %s (cascade removes this client too) or clear its hz marker first",
+		return fmt.Errorf("%s is the VPN client of nested hz %s, so it must stay %q — anything wider widens what that hz reaches. Remove hz instance %s (cascade removes this client too) or unlink its VPN client first",
 			peer, m, ProfileUpstream, m)
 	}
 	if profile == ProfileUpstream && c.IsVPNAdminName(peer) {
@@ -94,51 +94,45 @@ func (c *Config) RenameUpstreamClient(oldName, newName string) {
 	if oldName == newName {
 		return
 	}
-	machines := append([]Machine(nil), c.Machines...)
+	instances := append([]HZInstance(nil), c.HZInstances...)
 	changed := false
-	for i, m := range machines {
-		if m.HZ != nil && m.HZ.VPNClient == oldName {
-			hz := *m.HZ
-			hz.VPNClient = newName
-			machines[i].HZ = &hz
+	for i, h := range instances {
+		if h.VPNClient == oldName {
+			instances[i].VPNClient = newName
 			changed = true
 		}
 	}
 	if changed {
-		c.Machines = machines
+		c.HZInstances = instances
 	}
 }
 
-// validateUpstreamLinks checks every MachineHZ.VPNClient: it names a VPN client
-// hz holds (WGPeers, the snapshot of wg0.conf), that client's profile is
-// `upstream`, and no two machines share one.
+// validateUpstreamLinks checks every HZInstance.VPNClient: it names a VPN
+// client hz holds (WGPeers, the snapshot of wg0.conf), that client's profile
+// is `upstream`, and no two instances share one.
 func (c *Config) validateUpstreamLinks() error {
 	peers := make(map[string]bool, len(c.WGPeers))
 	for _, p := range c.WGPeers {
 		peers[p.Name] = true
 	}
 	owner := map[string]string{}
-	names := make([]string, 0, len(c.Machines))
-	for _, m := range c.Machines {
-		names = append(names, m.Name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		m, _ := c.FindMachine(name)
-		if m.HZ == nil || m.HZ.VPNClient == "" {
+	instances := append([]HZInstance(nil), c.HZInstances...)
+	sort.Slice(instances, func(i, j int) bool { return instances[i].Name < instances[j].Name })
+	for _, h := range instances {
+		if h.VPNClient == "" {
 			continue
 		}
-		client := m.HZ.VPNClient
+		client := h.VPNClient
 		if !peers[client] {
-			return fmt.Errorf("machine %q names VPN client %q as its link to this hz, and there is no such client", m.Name, client)
+			return fmt.Errorf("hz instance %q names VPN client %q as its link to this hz, and there is no such client", h.Name, client)
 		}
 		if p := c.GetPeerProfile(client); p != ProfileUpstream {
-			return fmt.Errorf("machine %q names VPN client %q as its link to this hz, and that client's profile is %q, not %q — a nested hz reaches only the parent's API", m.Name, client, p, ProfileUpstream)
+			return fmt.Errorf("hz instance %q names VPN client %q as its link to this hz, and that client's profile is %q, not %q — a nested hz reaches only the parent's API", h.Name, client, p, ProfileUpstream)
 		}
 		if other, dup := owner[client]; dup {
-			return fmt.Errorf("machines %q and %q both name VPN client %q — one client is one nested hz", other, m.Name, client)
+			return fmt.Errorf("hz instances %q and %q both name VPN client %q — one client is one nested hz", other, h.Name, client)
 		}
-		owner[client] = m.Name
+		owner[client] = h.Name
 	}
 	return nil
 }

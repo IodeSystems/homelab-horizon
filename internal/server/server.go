@@ -387,6 +387,14 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 	if err := cfg.UpstreamTunnelCollision(); err != nil {
 		return nil, fmt.Errorf("LOUD: refusing to start: %w", err)
 	}
+	// B3: a machine that carried a pre-B3 nested-hz marker and nothing else
+	// is removed now — FIRST, before any Save below writes the config — unless
+	// hz holds an agent credential for it (only the server can read that).
+	if removed, _ := settleLegacyHZCarriers(cfg, configPath); len(removed) > 0 && configPath != "" {
+		if err := config.Save(configPath, cfg); err != nil {
+			slog.Error("LOUD: could not save the config after migrating hz instances off machines", "err", err)
+		}
+	}
 
 	// Set up system interfaces
 	var fs system.FileSystem
@@ -1260,7 +1268,13 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/environments/unhold", s.handleAPIEnvironmentHold(false))
 	mux.HandleFunc("/api/v1/deploys/desired", s.handleAPIDeployDesired)
 	mux.HandleFunc("/api/v1/deploys/applied", s.handleAPIDeploysApplied)
-	mux.HandleFunc("/api/v1/machines/hz-token", s.handleAPIMachineHZToken)
+	mux.HandleFunc("/api/v1/machines/hz-token", s.handleAPIInstanceToken) // pre-B3 alias, one release
+	// Hz instances: nested hz with their own config — never machines.
+	mux.HandleFunc(apitypes.HZInstancesPath, s.handleAPIHZInstances)
+	mux.HandleFunc(apitypes.HZInstancesPath+"/add", s.handleAPIHZInstanceAdd)
+	mux.HandleFunc(apitypes.HZInstancesPath+"/set", s.handleAPIHZInstanceSet)
+	mux.HandleFunc(apitypes.HZInstancesPath+"/rm", s.handleAPIHZInstanceRm)
+	mux.HandleFunc(apitypes.HZInstancesPath+"/token", s.handleAPIInstanceToken)
 	// The build registry (handlers_api_builds.go): builders, and the builds
 	// they start, log, state and finish. Same placement rule: the numbers and
 	// the logs are on the primary.

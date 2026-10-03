@@ -12,7 +12,7 @@ import (
 //
 // A grant is what the generated command carries in its URL. It is SINGLE USE —
 // enrolment consumes it — and it expires an hour after it is minted. One live
-// grant per machine: generating again revokes the earlier one if it is unused.
+// grant per hz instance: generating again revokes the earlier one if it is unused.
 //
 // NOT THE BOOT PATH (CLAUDE.md #5). The expiry is on a bootstrap an operator is
 // sitting in front of; nothing a running child does depends on it. Once
@@ -28,18 +28,18 @@ const childGrantTTL = time.Hour
 const childGrantPrefix = "hzc_"
 
 type childGrant struct {
-	Token   string
-	Machine string
-	Project string
-	Rung    string // the rung's name in Project
-	Expires time.Time
+	Token    string
+	Instance string
+	Project  string
+	Rung     string // the rung's name in Project
+	Expires  time.Time
 }
 
 type childGrants struct {
 	mu       sync.Mutex
 	now      func() time.Time
-	byName   map[string]childGrant // machine -> its one live grant
-	enrolled map[string]time.Time  // machine -> when it last enrolled (this process)
+	byName   map[string]childGrant // instance -> its one live grant
+	enrolled map[string]time.Time  // instance -> when it last enrolled (this process)
 }
 
 func newChildGrants() *childGrants {
@@ -57,7 +57,7 @@ func (g *childGrants) issue(machine, project, rung string) (childGrant, bool, er
 	g.sweepLocked()
 	_, revoked := g.byName[machine]
 	gr := childGrant{
-		Token: childGrantPrefix + hex.EncodeToString(raw), Machine: machine,
+		Token: childGrantPrefix + hex.EncodeToString(raw), Instance: machine,
 		Project: project, Rung: rung, Expires: g.now().Add(childGrantTTL),
 	}
 	g.byName[machine] = gr
@@ -91,7 +91,7 @@ func (g *childGrants) take(token string) (childGrant, bool) {
 	defer g.mu.Unlock()
 	gr, ok := g.findLocked(token)
 	if ok {
-		delete(g.byName, gr.Machine)
+		delete(g.byName, gr.Instance)
 	}
 	return gr, ok
 }

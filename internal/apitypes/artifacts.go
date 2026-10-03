@@ -124,15 +124,20 @@ const (
 	ProvenanceUnproven      = "unproven"
 )
 
-// InstanceTokenReq is POST /api/v1/machines/hz-token: mint the token a nested
-// hz authenticates to this one with.
+// InstanceTokenReq is POST /api/v1/hz-instances/token: mint the token a
+// nested hz authenticates to this one with. Instance names the hz instance;
+// Machine is its pre-B3 spelling, accepted one release (POST
+// /api/v1/machines/hz-token and `hz machine hz-token` send it).
 type InstanceTokenReq struct {
-	Machine string `json:"machine"`
+	Instance string `json:"instance,omitempty"`
+	Machine  string `json:"machine,omitempty"`
 }
 
 // InstanceTokenResp carries the token ONCE. hz stores only its sha256; a
-// re-mint replaces it, and the old token stops working.
+// re-mint replaces it, and the old token stops working. Machine repeats
+// Instance for a pre-B3 client, one release.
 type InstanceTokenResp struct {
-	Machine string `json:"machine"`
-	Token   string `json:"token"`
+	Instance string `json:"instance"`
+	Machine  string `json:"machine"`
+	Token    string `json:"token"`
 }

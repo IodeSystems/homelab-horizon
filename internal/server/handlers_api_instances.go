@@ -12,8 +12,8 @@ import (
 )
 
 // handleAPIInstances lists the hz instances: this one first, then every HA
-// peer in config.Peers, in config order, then every declared machine with an
-// hz marker (a nested hz), by name.
+// peer in config.Peers (Hz Nodes), in config order, then every declared hz
+// instance (config.HZInstance, a nested hz), by name.
 //
 // It is a read of what hz already holds. It does NOT contact a peer (CLAUDE.md
 // invariant 1 — hz reaches off-box to read only through the subsystems that
@@ -54,20 +54,20 @@ func (s *Server) decorateNested(r *http.Request, cfg *config.Config, rows []apit
 		if rows[i].Role != apitypes.InstanceRoleNested {
 			continue
 		}
-		m, ok := cfg.FindMachine(rows[i].Name)
-		if !ok || m.HZ == nil {
+		h, ok := cfg.FindHZInstance(rows[i].Name)
+		if !ok {
 			continue
 		}
-		n := &apitypes.InstanceNestedResp{HasToken: m.HZ.TokenSHA256 != "", PullsUnknown: unknown, VPNClient: m.HZ.VPNClient}
+		n := &apitypes.InstanceNestedResp{HasToken: h.TokenSHA256 != "", PullsUnknown: unknown, VPNClient: h.VPNClient}
 		var pulled time.Time
-		if p, ok := pulls[m.Name]; ok {
+		if p, ok := pulls[h.Name]; ok {
 			pulled = p.At
 			n.LastPullAt = p.At.Unix()
 			n.LastPullRung = p.Project + "/" + p.Environment
 		}
 		grants := s.childGrantStore()
-		expires, _ := grants.pending(m.Name)
-		enrolled, _ := grants.enrolledAt(m.Name)
+		expires, _ := grants.pending(h.Name)
+		enrolled, _ := grants.enrolledAt(h.Name)
 		n.State = nestedState(n.HasToken, expires, enrolled, pulled)
 		n.GrantExpiresAt = unixOrZero(expires)
 		n.EnrolledAt = unixOrZero(enrolled)
@@ -161,20 +161,18 @@ func instancesFrom(cfg *config.Config, selfName, version string, snap PeerSyncSt
 		join(&row)
 		out = append(out, row)
 	}
-	// Nested hz: a separate config layer, declared here as a Machine. It is a
-	// statement from the records only — the URL is never dialled (invariant
-	// 1) — so it carries no version, no sync, no peer or primary ID: those are
-	// facts about THIS instance's cluster and a nested hz is not in it.
+	// Nested hz: a separate config layer, declared here as an HZInstance. It
+	// is a statement from the records only — the URL is never dialled
+	// (invariant 1) — so it carries no version, no sync, no peer or primary
+	// ID: those are facts about THIS instance's cluster and a nested hz is not
+	// in it.
 	nested := make([]apitypes.InstanceResp, 0)
-	for _, m := range cfg.Machines {
-		if m.HZ == nil {
-			continue
-		}
+	for _, h := range cfg.HZInstances {
 		nested = append(nested, apitypes.InstanceResp{
-			Name:     m.Name,
-			Address:  m.HZ.URL,
+			Name:     h.Name,
+			Address:  h.URL,
 			Role:     apitypes.InstanceRoleNested,
-			Project:  m.Project,
+			Project:  h.Project,
 			Declared: true,
 		})
 	}
