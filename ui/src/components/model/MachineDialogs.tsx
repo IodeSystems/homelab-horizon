@@ -28,16 +28,9 @@
  * its own hostname would declare the operator's laptop, not the gateway. This
  * dialog says so rather than reimplementing a guess at "self" in the browser.
  *
- * A NESTED hz IS A MACHINE THAT RUNS hz (plan/plan.md Tier 1b): `nested` on
- * `AddMachineDialog` is the same declaration with the hz URL required — the
- * `[Add instance] → Nested instance` flow. Edit sets or clears the marker; a
- * clear is refused server-side while an environment names the machine as its
- * Upstream, and that refusal shows verbatim.
- *
- * NESTED ALSO CREATES THE CHILD'S VPN CLIENT (N1b): profile `upstream`, owned
- * by the machine's owner, linked on the marker — one flow, client first,
- * rolled back if the machine is refused (`instances/declareNested.ts`). The
- * result is the client's config and QR plus the parent URL the child must use.
+ * A NESTED hz IS NOT A MACHINE (B3, 2026-10-02): it is an Hz Instance, its own
+ * record, declared by `instances/HZInstanceDialogs.tsx`. Nothing here offers
+ * an hz URL.
  */
 import { useEffect, useState } from "react";
 import {
@@ -56,11 +49,9 @@ import {
   Typography,
 } from "@mui/material";
 import { useNavigate } from "@tanstack/react-router";
-import { useAddPeer, useDeletePeer, useProjects, useSegments } from "../../api/hooks";
+import { useProjects, useSegments } from "../../api/hooks";
 import { useAddMachine, useRemoveMachine, useSetMachine } from "../../api/machineHooks";
-import type { AddPeerResponse, DependantResp, MachineResp, RemovalResp } from "../../api/generated-types";
-import { PeerResultDialog } from "../../routes/vpn";
-import { declareNested, upstreamClientName } from "../instances/declareNested.ts";
+import type { DependantResp, MachineResp, RemovalResp } from "../../api/generated-types";
 
 /** Same small renderer ProjectDialogs.tsx keeps for its own dry-run lists —
  * not imported from there so the two features do not share a line to edit. */
@@ -87,7 +78,6 @@ export function AddMachineDialog({
   open,
   onClose,
   project,
-  nested = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -95,23 +85,15 @@ export function AddMachineDialog({
    * (the unscoped `/machines` screen) starts at global. Still a select, never
    * assumed — see the file header. */
   project?: string;
-  /** Declare a nested hz: the same record, with its hz URL required. */
-  nested?: boolean;
 }) {
   const add = useAddMachine();
-  const addPeer = useAddPeer();
-  const deletePeer = useDeletePeer();
   const segments = useSegments();
   const projects = useProjects();
   const navigate = useNavigate();
-  const [nestedPending, setNestedPending] = useState(false);
-  const [nestedError, setNestedError] = useState("");
-  const [declared, setDeclaredResult] = useState<{ machine: string; client: string; peer: AddPeerResponse } | null>(null);
   const [name, setName] = useState("");
   const [owner, setOwner] = useState(project ?? "");
   const [selected, setSelected] = useState<string[]>([]);
   const [note, setNote] = useState("");
-  const [hzURL, setHzURL] = useState("");
 
   // Each opening starts blank, not from the last attempt.
   useEffect(() => {
@@ -120,8 +102,6 @@ export function AddMachineDialog({
       setOwner(project ?? "");
       setSelected([]);
       setNote("");
-      setHzURL("");
-      setNestedError("");
       add.reset();
     }
   }, [open, project]);
@@ -132,41 +112,11 @@ export function AddMachineDialog({
   // disabled here as a courtesy — the server is still the authority, and its
   // refusal (`internal/config/machine.go:170-173`) shows verbatim on error.
   const noteRequired = selected.length > 1;
-  const trimmedURL = hzURL.trim();
-  const canSubmit =
-    trimmed !== "" &&
-    !add.isPending &&
-    !nestedPending &&
-    (!noteRequired || trimmedNote !== "") &&
-    (!nested || trimmedURL !== "");
+  const canSubmit = trimmed !== "" && !add.isPending && (!noteRequired || trimmedNote !== "");
   const declaredSegments = segments.data ?? [];
   const declaredProjects = projects.data ?? [];
 
-  const submitNested = async () => {
-    setNestedPending(true);
-    setNestedError("");
-    const out = await declareNested(
-      {
-        addPeer: (req) => addPeer.mutateAsync(req),
-        addMachine: (req) => add.mutateAsync(req),
-        deletePeer: (key) => deletePeer.mutateAsync(key),
-      },
-      { name: trimmed, owner, url: trimmedURL, segments: selected, note: trimmedNote },
-    );
-    setNestedPending(false);
-    if (!out.ok) {
-      setNestedError(out.error);
-      return;
-    }
-    onClose();
-    setDeclaredResult({ machine: out.machine.name, client: out.client, peer: out.peer });
-  };
-
   const submit = () => {
-    if (nested) {
-      void submitNested();
-      return;
-    }
     add.mutate(
       { name: trimmed, project: owner, segments: selected, note: trimmedNote },
       {
@@ -181,24 +131,8 @@ export function AddMachineDialog({
   return (
     <>
       <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
-        <DialogTitle>
-          {nested ? "Declare a nested instance" : project ? `Add machine to ${project}` : "Add machine"}
-        </DialogTitle>
+        <DialogTitle>{project ? `Add machine to ${project}` : "Add machine"}</DialogTitle>
         <DialogContent sx={{ pt: "8px !important" }}>
-          {nested ? (
-            <Typography variant="body2" sx={{ color: "text.secondary", mb: 2 }}>
-              A separate hz with its own records and keys. This declares its Machine record with the URL it
-              answers on, and creates its VPN client
-              {trimmed ? (
-                <>
-                  {" "}
-                  <code>{upstreamClientName(trimmed)}</code>
-                </>
-              ) : null}{" "}
-              (profile upstream: only this hz&apos;s API) so it can reach this hz. This hz never contacts it.
-              Place a rung in it from that rung&apos;s Edit dialog (Upstream).
-            </Typography>
-          ) : null}
           <TextField
             autoFocus
             fullWidth
@@ -212,18 +146,6 @@ export function AddMachineDialog({
             sx={{ mb: 2 }}
             slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
           />
-          {nested ? (
-            <TextField
-              fullWidth
-              required
-              label="hz URL"
-              value={hzURL}
-              onChange={(e) => setHzURL(e.target.value)}
-              helperText="Where that hz answers — http:// or https:// with a host."
-              sx={{ mb: 2 }}
-              slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
-            />
-          ) : null}
           <TextField
             select
             fullWidth
@@ -279,29 +201,15 @@ export function AddMachineDialog({
             }
             sx={{ mb: 2 }}
           />
-          {nested ? (
-            nestedError ? <Alert severity="error">{nestedError}</Alert> : null
-          ) : add.error ? (
-            <Alert severity="error">{add.error.message}</Alert>
-          ) : null}
+          {add.error ? <Alert severity="error">{add.error.message}</Alert> : null}
         </DialogContent>
         <DialogActions>
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="contained" onClick={submit} disabled={!canSubmit}>
-            {add.isPending || nestedPending ? "Adding…" : nested ? "Declare" : "Add machine"}
+            {add.isPending ? "Adding…" : "Add machine"}
           </Button>
         </DialogActions>
       </Dialog>
-      <PeerResultDialog
-        open={declared !== null}
-        result={declared?.peer ?? null}
-        name={declared?.client ?? ""}
-        onClose={() => {
-          const machine = declared?.machine;
-          setDeclaredResult(null);
-          if (machine) navigate({ to: "/machines/$machine", params: { machine } });
-        }}
-      />
     </>
   );
 }
@@ -325,13 +233,11 @@ export function EditMachineDialog({
   const projects = useProjects();
   const [owner, setOwner] = useState("");
   const [note, setNote] = useState("");
-  const [hzURL, setHzURL] = useState("");
 
   useEffect(() => {
     if (machine) {
       setOwner(machine.project ?? "");
       setNote(machine.note ?? "");
-      setHzURL(machine.hz?.url ?? "");
       set.reset();
     }
   }, [machine]);
@@ -346,17 +252,10 @@ export function EditMachineDialog({
   // server will refuse is the kinder default.
   const clearingRequiredNote = multiHomed && trimmedNote === "" && originalNote !== "";
   const canSubmit = machine !== null && !set.isPending && !clearingRequiredNote;
-  // The hz marker is sent only when it changed: a new URL sets it, emptying
-  // the field clears it (`clearHz`), untouched sends neither.
-  const originalURL = machine?.hz?.url ?? "";
-  const trimmedURL = hzURL.trim();
-  const hzChange =
-    trimmedURL === originalURL ? {} : trimmedURL === "" ? { clearHz: true } : { hz: { url: trimmedURL } };
-
   const submit = () => {
     if (!machine) return;
     set.mutate(
-      { name: machine.name, project: owner, note: trimmedNote, ...hzChange },
+      { name: machine.name, project: owner, note: trimmedNote },
       { onSuccess: () => onClose() },
     );
   };
@@ -394,15 +293,6 @@ export function EditMachineDialog({
               : "Optional on a single-segment machine."
           }
           sx={{ mb: 2 }}
-        />
-        <TextField
-          fullWidth
-          label="hz URL"
-          value={hzURL}
-          onChange={(e) => setHzURL(e.target.value)}
-          helperText="Set only if this machine runs its own hz (a nested instance). Emptying it clears the marker — refused while an environment names it as its Upstream."
-          sx={{ mb: 2 }}
-          slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
         />
         {set.error ? <Alert severity="error">{set.error.message}</Alert> : null}
       </DialogContent>
@@ -466,7 +356,7 @@ export function RemoveMachineDialog({
       <DialogContent>
         <FormControlLabel
           control={<Checkbox checked={cascade} onChange={(e) => setCascade(e.target.checked)} />}
-          label="Cascade: also revoke this machine's agent credential, if hz holds one — that box's agent stops being able to poll — remove its upstream VPN client, if it is a nested hz with one — it loses its tunnel to this hz — and clear any environment's Upstream that names it (the rung is kept)"
+          label="Cascade: also revoke this machine's agent credential, if hz holds one — that box's agent stops being able to poll"
           sx={{ mb: 1 }}
         />
         {preview.isPending || (!plan && !preview.error) ? (

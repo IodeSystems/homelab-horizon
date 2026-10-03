@@ -39,6 +39,7 @@ import type {
   DomainResp,
   DomainsResponse,
   EnvironmentResp,
+  HZInstanceResp,
   MachineResp,
   ProjectResp,
   SegmentResp,
@@ -1365,28 +1366,27 @@ console.log("· a rung placed in a nested hz reads 'in <upstream>', and only hz 
   // The select's options are not in the SSR output (MUI renders them in a
   // portal on open), so the SOURCE the select maps is asserted, and the
   // closed control is rendered for its value and helper text.
-  const machines: MachineResp[] = [
-    { name: "zz-hz", project: "", hz: { url: "https://zz.example.invalid" } },
-    { name: "box-2", project: "storefront" },
-    { name: "prod-hz", project: "storefront", hz: { url: "https://hz.prod.example.invalid" } },
+  const hzInstances: HZInstanceResp[] = [
+    { name: "zz-hz", project: "", url: "https://zz.example.invalid", hasToken: false },
+    { name: "prod-hz", project: "storefront", url: "https://hz.prod.example.invalid", hasToken: true },
   ];
   check(
-    JSON.stringify(upstreamOptions(machines).map((m) => m.name)) === JSON.stringify(["prod-hz", "zz-hz"]),
-    "the Upstream select offers ONLY machines with an hz marker, by name",
+    JSON.stringify(upstreamOptions(hzInstances).map((m) => m.name)) === JSON.stringify(["prod-hz", "zz-hz"]),
+    "the Upstream select offers the declared hz instances, by name",
   );
   const closed = renderToStaticMarkup(
     <ThemeProvider theme={baseTheme}>
-      <UpstreamSelect value="prod-hz" onChange={() => {}} machines={machines} state="ready" />
+      <UpstreamSelect value="prod-hz" onChange={() => {}} instances={hzInstances} state="ready" />
     </ThemeProvider>,
   );
   check(closed.includes("prod-hz") && closed.includes("Upstream"), "the closed control shows its label and current value");
   check(!/<input[^>]*type="text"/.test(closed), "and it is a select, never a text field");
   const none = renderToStaticMarkup(
     <ThemeProvider theme={baseTheme}>
-      <UpstreamSelect value="" onChange={() => {}} machines={[machines[1]!]} state="ready" />
+      <UpstreamSelect value="" onChange={() => {}} instances={[]} state="ready" />
     </ThemeProvider>,
   );
-  check(none.includes("No declared machine runs its own hz"), "with no hz machine it says so, rather than offering an empty list");
+  check(none.includes("No hz instance is declared"), "with no hz instance it says so, rather than offering an empty list");
 }
 
 // ---------------------------------------------------------------------------

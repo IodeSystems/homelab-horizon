@@ -80,7 +80,7 @@ const FLEET: InstanceResp[] = [
   }),
 ];
 
-/** A standalone gateway plus one declared nested hz (a Machine with an hz marker). */
+/** A standalone gateway plus one declared nested hz (an Hz Instance record). */
 const WITH_NESTED: InstanceResp[] = [
   inst({ declared: true, project: "storefront" }),
   inst({
@@ -363,7 +363,8 @@ console.log("· a nested hz is its own row: its URL, its owner, 'nested', never 
   check(d.text.includes("A separate hz") && d.text.includes("not a member of this cluster"), "its detail says what it is");
   check(!d.text.includes("Config primary"), "and names no config primary");
   check(!d.text.includes("Settings → HA Fleet"), "and does not send you to HA Fleet for it");
-  check(/href="\/machines\/prod-hz"/.test(d.html), "its owner is edited on its machine page");
+  check(!/href="\/machines\/prod-hz"/.test(d.html), "it links to no machine page — an hz instance is not a machine");
+  check(d.html.includes("data-nested-controls") && d.text.includes("Edit") && d.text.includes("Remove"), "its record is edited and removed here");
   check(!/aria-label="(Change project|Put in a project)"/.test(d.html), "with no self control here");
 }
 
@@ -460,6 +461,7 @@ console.log("· the nested bootstrap — states, the command panel, the project 
   const resp: NestedBootstrapResp = {
     command: "curl -fsSL https://portal.example.com/admin/hz-child/install/hzc_abc | sudo bash",
     expiresAt: T,
+    instance: "loadtest-hz",
     machine: "loadtest-hz",
     project: "storefront",
     rung: "storefront/loadtest",

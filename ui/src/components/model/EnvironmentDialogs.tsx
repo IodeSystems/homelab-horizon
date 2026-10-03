@@ -26,10 +26,10 @@
  * the RUNG'S OWN PROJECT instead, which is `env.project` and not necessarily
  * the page's project when the wider scope is showing a descendant's rung.
  *
- * THE UPSTREAM CONTROL IS A SELECT TOO, over declared machines WITH an hz
- * marker only (`MachineResp.hz`). `config.CheckUpstream` refuses a name that
- * resolves to no machine, or to one without the marker; the select offers
- * neither, and never free text.
+ * THE UPSTREAM CONTROL IS A SELECT TOO, over the declared hz instances only
+ * (`GET /api/v1/hz-instances`, B3 — never a machine). `config.CheckUpstream`
+ * refuses a name that resolves to no instance; the select offers none, and
+ * never free text.
  */
 import { useEffect, useState } from "react";
 import {
@@ -52,32 +52,32 @@ import {
   useRemoveEnvironment,
   useSetEnvironment,
 } from "../../api/environmentHooks";
-import { useMachines } from "../../api/hooks";
-import type { DependantResp, EnvironmentResp, MachineResp, RemovalResp } from "../../api/generated-types";
+import { useHZInstances } from "../../api/instanceHooks";
+import type { DependantResp, EnvironmentResp, HZInstanceResp, RemovalResp } from "../../api/generated-types";
 import { POSTURES } from "./model.ts";
 
-/** The only legal Upstream values: declared machines that run their own hz. */
-export function upstreamOptions(machines: MachineResp[]): MachineResp[] {
-  return machines.filter((m) => m.hz).sort((a, b) => a.name.localeCompare(b.name));
+/** The only legal Upstream values: the declared hz instances, by name. */
+export function upstreamOptions(instances: HZInstanceResp[]): HZInstanceResp[] {
+  return [...instances].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
  * Where this rung's placements are held: here (blank), or a nested hz. The
- * current value stays selectable while the machine list is unread, so opening
+ * current value stays selectable while the instance list is unread, so opening
  * the dialog never reads as clearing it.
  */
 export function UpstreamSelect({
   value,
   onChange,
-  machines,
+  instances,
   state,
 }: {
   value: string;
   onChange: (v: string) => void;
-  machines: MachineResp[];
+  instances: HZInstanceResp[];
   state: "loading" | "failed" | "ready";
 }) {
-  const options = upstreamOptions(machines);
+  const options = upstreamOptions(instances);
   const listed = options.some((m) => m.name === value);
   return (
     <TextField
@@ -88,12 +88,12 @@ export function UpstreamSelect({
       onChange={(e) => onChange(e.target.value)}
       helperText={
         state === "loading"
-          ? "Reading the declared machines…"
+          ? "Reading the declared hz instances…"
           : state === "failed"
-            ? "hz could not list the machines, so no upstream can be offered — leave this as it is."
+            ? "hz could not list its hz instances, so no upstream can be offered — leave this as it is."
             : options.length === 0
-              ? "No declared machine runs its own hz. Declare a nested instance (Instances → Add instance) to place a rung in one."
-              : "Only a declared machine that runs its own hz. Blank: this hz holds the rung's placements."
+              ? "No hz instance is declared. Declare a nested instance (Instances → Add instance) to place a rung in one."
+              : "Only a declared hz instance. Blank: this hz holds the rung's placements."
       }
       sx={{ mb: 2 }}
       slotProps={{ htmlInput: { "data-upstream-select": true } }}
@@ -115,7 +115,7 @@ export function UpstreamSelect({
   );
 }
 
-function machinesState(q: { isLoading: boolean; isError: boolean }): "loading" | "failed" | "ready" {
+function instancesState(q: { isLoading: boolean; isError: boolean }): "loading" | "failed" | "ready" {
   return q.isError ? "failed" : q.isLoading ? "loading" : "ready";
 }
 
@@ -182,7 +182,7 @@ export function AddEnvironmentDialog({
   const [from, setFrom] = useState("");
   const [version, setVersion] = useState("");
   const [upstream, setUpstream] = useState("");
-  const machines = useMachines();
+  const hzInstances = useHZInstances();
 
   // Each opening starts blank, not from the last attempt.
   useEffect(() => {
@@ -263,8 +263,8 @@ export function AddEnvironmentDialog({
         <UpstreamSelect
           value={upstream}
           onChange={setUpstream}
-          machines={machines.data ?? []}
-          state={machinesState(machines)}
+          instances={hzInstances.data ?? []}
+          state={instancesState(hzInstances)}
         />
         {add.error ? (
           <Alert severity="error" sx={{ mt: 1 }}>
@@ -298,7 +298,7 @@ export function EditEnvironmentDialog({
   const [from, setFrom] = useState("");
   const [version, setVersion] = useState("");
   const [upstream, setUpstream] = useState("");
-  const machines = useMachines();
+  const hzInstances = useHZInstances();
 
   // Each opening starts from what hz holds now, not from the last edit.
   useEffect(() => {
@@ -372,8 +372,8 @@ export function EditEnvironmentDialog({
         <UpstreamSelect
           value={upstream}
           onChange={setUpstream}
-          machines={machines.data ?? []}
-          state={machinesState(machines)}
+          instances={hzInstances.data ?? []}
+          state={instancesState(hzInstances)}
         />
         {set.error ? (
           <Alert severity="error" sx={{ mt: 1 }}>
