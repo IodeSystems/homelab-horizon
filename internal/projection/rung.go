@@ -23,8 +23,8 @@ const (
 type RungPlacement struct {
 	State string `json:"state"`
 
-	// Upstream is the Machine running the hz that holds the placements, and
-	// URL is that machine's HZ.URL. Both empty unless State is remote.
+	// Upstream is the hz instance (config.HZInstance) that holds the
+	// placements, and URL is its URL. Both empty unless State is remote.
 	Upstream string `json:"upstream,omitempty"`
 	URL      string `json:"url,omitempty"`
 
@@ -32,8 +32,8 @@ type RungPlacement struct {
 	Statement string `json:"statement"`
 
 	// Unresolved is non-empty only when the records contradict themselves —
-	// an Upstream naming no machine, or a machine without an HZ marker. Save
-	// refuses both (config.CheckUpstream), so this is a config that reached
+	// an Upstream naming no hz instance. Save refuses it
+	// (config.CheckUpstream), so this is a config that reached
 	// the projection without passing Save, and the projection says so rather
 	// than trusting it.
 	Unresolved []Gap `json:"unresolved,omitempty"`
@@ -58,16 +58,11 @@ func PlaceRung(cfg *config.Config, env config.Environment) RungPlacement {
 		Statement: "placed in " + env.Upstream + ": that hz holds the placements of " + env.Project + "/" + env.Name +
 			", so which machines run it is a question for it, not a gap here",
 	}
-	m, ok := cfg.FindMachine(env.Upstream)
-	switch {
-	case !ok:
+	if h, ok := cfg.FindHZInstance(env.Upstream); ok {
+		out.URL = h.URL
+	} else {
 		out.Unresolved = append(out.Unresolved, Gap{Section: SectionMachine, Reason: ReasonUnmodelled,
-			Why: env.Project + "/" + env.Name + " names upstream " + env.Upstream + ", and no machine record declares it — declare the machine with an hz URL"})
-	case m.HZ == nil:
-		out.Unresolved = append(out.Unresolved, Gap{Section: SectionMachine, Reason: ReasonUnmodelled,
-			Why: env.Project + "/" + env.Name + " names upstream " + env.Upstream + ", which is declared without an hz marker — nothing says it runs an hz"})
-	default:
-		out.URL = m.HZ.URL
+			Why: env.Project + "/" + env.Name + " names upstream " + env.Upstream + ", and no hz instance record declares it — declare the hz instance with its URL"})
 	}
 	return out
 }

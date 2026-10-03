@@ -38,7 +38,7 @@ type recordedCall struct{ method, path, auth string }
 
 func TestRehearsalNestedPullApplyHold(t *testing.T) {
 	f := newN4aFixture(t)
-	tok := f.mint(t, nestedMachine)
+	tok := f.mint(t, nestedInstance)
 
 	var mu sync.Mutex
 	var calls []recordedCall
@@ -165,7 +165,7 @@ func TestRehearsalNestedPullApplyHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	up, err := f.s.users.LatestDeployReport(ctx, "redline", "prod")
-	if err != nil || up.ReportedBy != "instance:"+nestedMachine+" (for service:redline-prod)" {
+	if err != nil || up.ReportedBy != "instance:"+nestedInstance+" (for service:redline-prod)" {
 		t.Fatalf("the parent's record: %+v %v", up, err)
 	}
 

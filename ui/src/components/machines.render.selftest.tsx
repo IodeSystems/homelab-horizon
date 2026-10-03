@@ -23,6 +23,8 @@ import baseTheme from "../theme";
 import type {
   CMRegistrationResp,
   BuildAgentResp,
+  HZInstanceResp,
+  InstanceResp,
   MachineResp,
   ProjectResp,
   VersionDriftResponse,
@@ -64,6 +66,29 @@ const PROJECTS: ProjectResp[] = [
  */
 const BUILD_AGENTS: BuildAgentResp[] = [{ name: "agent-only-xyz", project: "storefront", host: "agent-host-xyz", has_token: true }];
 
+/**
+ * An hz instance is NOT a machine either (B3, operator 2026-10-02). Seeded in
+ * both queries a page could read it from, so its absence from every Machines
+ * screen is a claim about the screen; /instances is the positive control.
+ */
+const NESTED_ROW: InstanceResp = {
+  name: "nested-only-xyz",
+  self: false,
+  address: "http://nested-url-xyz.example.invalid:8080",
+  role: "nested",
+  peerId: "",
+  primaryId: "",
+  project: "storefront",
+  declared: true,
+  nested: { hasToken: true, lastPullAt: 0, lastPullRung: "", state: "never-connected" },
+};
+const SELF_ROW: InstanceResp = {
+  name: "gw-1", self: true, address: "192.168.1.1", role: "standalone", peerId: "", primaryId: "", project: "intern", declared: true, version: "v1",
+};
+const HZ_INSTANCES: HZInstanceResp[] = [
+  { name: "nested-only-xyz", project: "storefront", url: "http://nested-url-xyz.example.invalid:8080", hasToken: true },
+];
+
 const MACHINES: MachineResp[] = [
   { name: "gw-1", project: "intern", segments: ["seg-a"], enrolled: true },
   { name: "box-2", project: "storefront", segments: ["seg-a"], enrolled: false },
@@ -104,6 +129,8 @@ function seeded(): QueryClient {
   qc.setQueryData(["cm-registrations", "denied"], []);
   qc.setQueryData(["cm", "version-drift"], DRIFT);
   qc.setQueryData(["build-agents"], BUILD_AGENTS);
+  qc.setQueryData(["instances"], [SELF_ROW, NESTED_ROW]);
+  qc.setQueryData(["hz-instances"], HZ_INSTANCES);
   // /machines/$machine renders nothing but a spinner until its projection
   // query answers — see `MachineProjectionScreen`'s early `isLoading` return.
   for (const name of ["gw-1", "box-2", "an-1"]) {
@@ -265,6 +292,25 @@ console.log("· a build agent is not a machine");
   check(
     builds.html.includes('data-build-agent="agent-only-xyz"') && builds.text.includes("Build agents for storefront") && builds.text.includes("host agent-host-xyz · 1 agent"),
     "positive control: the same seeded agent shows on the project's Builds tab, grouped by host",
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("· an hz instance is not a machine");
+// ---------------------------------------------------------------------------
+{
+  for (const path of ["/machines", "/p/storefront/machines", "/machines/gw-1"]) {
+    const r = await at(path);
+    check(r.text.includes("gw-1") || r.text.includes("box-2"), `${path} renders its machines (the absence below is not a blank page)`);
+    check(
+      !r.html.includes("nested-only-xyz") && !r.html.includes("nested-url-xyz"),
+      `${path} lists no hz instance and no hz URL`,
+    );
+  }
+  const inst = await at("/instances");
+  check(
+    inst.html.includes("nested-only-xyz") && inst.text.includes("nested"),
+    "positive control: the same seeded instance shows on /instances, as a nested row",
   );
 }
 

@@ -1,9 +1,9 @@
 /**
  * Readings for `/instances` — decided here, drawn by the two routes.
  *
- * A row is an hz INSTANCE: this gateway, the HA peers its config names, and
- * every declared machine that runs its own hz (`GET /api/v1/instances`, role
- * "nested"). Cluster is the HA peer fleet; standalone means no peers are
+ * A row is an hz INSTANCE: this gateway, the HA peers its config names (Hz
+ * Nodes), and every declared Hz Instance — a nested hz, its own record and
+ * never a machine (`GET /api/v1/instances`, role "nested"). Cluster is the HA peer fleet; standalone means no peers are
  * declared. A nested hz is NOT in the cluster — a separate config layer.
  */
 import type { InstanceResp } from "../../api/generated-types";

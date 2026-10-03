@@ -33,15 +33,6 @@ desired sees it on the next poll and must not flip while it is set. --reason is
 required: whoever lifts it needs to know why.
 `
 
-const machineHZTokenUsage = `usage: hz machine hz-token <name>
-
-Mints the instance token a nested hz (a machine with an hz marker) uses to
-pull from this one: desired state, the applied artifact, and forwarded deploy
-reports — for rungs whose upstream is <name>, and nothing else. Shown ONCE;
-hz keeps only its sha256. A re-mint replaces it and the old token stops
-working. Put it in the child's upstream.token_file (0600).
-`
-
 // positional parses flags that may sit before, between or after the
 // positionals, the way envPromote does.
 func positional(fs *flag.FlagSet, args []string) ([]string, error) {
@@ -112,24 +103,5 @@ func envHold(c *client, args []string, on bool) error {
 		return nil
 	}
 	fmt.Printf("%s/%s is HELD by %s at %s: %s\n", out.Project, out.Environment, out.Hold.By, out.Hold.At, out.Hold.Reason)
-	return nil
-}
-
-func machineHZToken(c *client, args []string) error {
-	fs := flag.NewFlagSet("machine hz-token", flag.ContinueOnError)
-	fs.Usage = func() { fmt.Fprint(os.Stderr, machineHZTokenUsage) }
-	pos, err := positional(fs, args)
-	if err != nil {
-		return err
-	}
-	if len(pos) != 1 {
-		return fmt.Errorf("%s", machineHZTokenUsage)
-	}
-	var out apitypes.InstanceTokenResp
-	if err := c.do(http.MethodPost, "/api/v1/machines/hz-token", apitypes.InstanceTokenReq{Machine: pos[0]}, &out); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "Instance token for %s — shown once; hz keeps only its sha256. Put it in the child's upstream.token_file (0600):\n", out.Machine)
-	fmt.Println(out.Token)
 	return nil
 }

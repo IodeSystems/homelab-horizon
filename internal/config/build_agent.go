@@ -25,7 +25,7 @@ import (
 // (TestRemovingAMachineLeavesTheBuildAgent).
 //
 // hz mints its token once (POST /api/v1/build-agents) and keeps only the
-// sha256 here, the way an instance token's sha256 sits on MachineHZ. It is
+// sha256 here, the way an instance token's sha256 sits on HZInstance. It is
 // declared state, so it lives in config.json and peer-syncs; the builds
 // themselves are observations and live in hz.db.
 //

@@ -17,8 +17,12 @@ const NestedBootstrapPath = "/api/v1/nested/bootstrap"
 // NestedBootstrapReq declares a nested hz for a project and asks for the
 // command that provisions it.
 //
+// Instance is the hz instance the command declares (config.HZInstance, never a
+// Machine). Machine is its pre-B3 spelling, accepted one release; sending both
+// with different values is refused.
+//
 // Rung is the rung's NAME in Project; the rung is declared as Project/Rung with
-// Upstream = Machine. From is an existing rung of the same project that
+// Upstream = Instance. From is an existing rung of the same project that
 // promotes into it. Posture defaults to prod.
 //
 // Platform is optional: "linux-amd64" or "linux-arm64" when the operator
@@ -27,11 +31,12 @@ const NestedBootstrapPath = "/api/v1/nested/bootstrap"
 // script stops on such a box before it touches anything.
 //
 // URL is optional: where the child's hz will answer, a statement for the
-// operator (MachineHZ.URL). Empty on a new machine is "not known yet" — a
+// operator (HZInstance.URL). Empty on a new instance is "not known yet" — a
 // .invalid placeholder — and enrolment replaces it with the box's VPN address.
 type NestedBootstrapReq struct {
 	Project  string `json:"project"`
-	Machine  string `json:"machine"`
+	Instance string `json:"instance,omitempty"`
+	Machine  string `json:"machine,omitempty"`
 	Rung     string `json:"rung"`
 	From     string `json:"from"`
 	Posture  string `json:"posture,omitempty"`
@@ -41,12 +46,14 @@ type NestedBootstrapReq struct {
 
 // NestedBootstrapResp is the generated command, shown once.
 //
-// Reused lists what already existed (a re-provision of a wiped box): "machine",
-// "rung". Revoked is true when an unused earlier command for this machine was
-// revoked by this one.
+// Reused lists what already existed (a re-provision of a wiped box):
+// "instance", "rung". Revoked is true when an unused earlier command for this
+// instance was revoked by this one. Machine repeats Instance for a pre-B3
+// client, one release.
 type NestedBootstrapResp struct {
 	Command   string `json:"command"`
 	ExpiresAt int64  `json:"expiresAt"` // unix seconds
+	Instance  string `json:"instance"`
 	Machine   string `json:"machine"`
 	Project   string `json:"project"`
 	Rung      string `json:"rung"` // "<project>/<rung>"
@@ -62,7 +69,7 @@ type NestedBootstrapResp struct {
 
 // NestedEnrolReq is what the box sends: its WireGuard PUBLIC key, and the
 // platform it needs a binary for. Hostname is a label for the log only — the
-// machine's identity is the grant's.
+// instance's identity is the grant's.
 type NestedEnrolReq struct {
 	PublicKey string `json:"public_key"`
 	Platform  string `json:"platform"`
@@ -75,7 +82,8 @@ type NestedEnrolResp struct {
 	WG            NestedEnrolWG     `json:"wg"`
 	ParentURL     string            `json:"parent_url"`
 	InstanceToken string            `json:"instance_token"`
-	Machine       string            `json:"machine"`
+	Instance      string            `json:"instance"`
+	Machine       string            `json:"machine"` // = Instance, for a pre-B3 reader
 	Project       string            `json:"project"`
 	Rung          string            `json:"rung"`
 	ServiceName   string            `json:"service_name"`

@@ -45,7 +45,7 @@ export function useAddMachine() {
       qc.invalidateQueries({ queryKey: ["machines"] });
       qc.invalidateQueries({ queryKey: ["segments"] });
       qc.invalidateQueries({ queryKey: ["pending"] });
-      // A machine with an hz marker is a row on /instances.
+      // The self row on /instances joins its Machine record.
       qc.invalidateQueries({ queryKey: ["instances"] });
     },
   });
@@ -65,10 +65,8 @@ export function useSetMachine() {
       apiFetch<MachineResp>("/machines/set", { method: "POST", body: JSON.stringify(req) }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["machines"] });
-      // The hz marker is an /instances row and the URL an upstream rung's
-      // placement statement carries.
+      // The self row on /instances joins its Machine record (owner).
       qc.invalidateQueries({ queryKey: ["instances"] });
-      qc.invalidateQueries({ queryKey: ["environments"] });
     },
   });
 }

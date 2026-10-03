@@ -1,46 +1,46 @@
 /**
- * Declaring a nested instance in one flow (plan/plan.md Tier 1b, N1b): its
- * Machine record with the HZ marker AND the VPN client it reaches this hz
- * through — profile `upstream`, attributed to the machine's owner.
+ * Declaring a nested instance in one flow (plan/plan.md Tier 1b, N1b; B3): its
+ * Hz Instance record (`hz-instances/add` — never a Machine) AND the VPN client
+ * it reaches this hz through — profile `upstream`, attributed to the
+ * instance's owner.
  *
- * ORDER: the VPN client FIRST, the machine SECOND. The machine's marker names
- * the client, and the server refuses a marker naming a client that does not
+ * ORDER: the VPN client FIRST, the instance SECOND. The instance names the
+ * client, and the server refuses an instance naming a client that does not
  * exist (`internal/config/vpn_upstream.go` validateUpstreamLinks), so the
  * other order cannot work.
  *
  * FAILURE: if the client cannot be created nothing was written, and the error
- * is shown. If the MACHINE is then refused, the client just created is
+ * is shown. If the INSTANCE is then refused, the client just created is
  * DELETED (by the public key the add returned), so no half-declared nested
- * instance is left: never a machine without its client, never an orphaned
+ * instance is left: never an instance without its client, never an orphaned
  * client. If that rollback fails too, both errors are returned, naming the
  * client, so the operator knows exactly what is left to remove.
  *
  * Pure apart from the three injected calls, so `declareNested.selftest.ts`
  * can drive every branch without a server.
  */
-import type { AddPeerResponse, MachineAddReq, MachineResp } from "../../api/generated-types";
+import type { AddPeerResponse, HZInstanceAddReq, HZInstanceResp } from "../../api/generated-types";
 
 export interface NestedInput {
   name: string;
   owner: string;
   url: string;
-  segments: string[];
   note: string;
 }
 
 export interface NestedDeps {
   addPeer: (req: { name: string; extraIPs: string; profile: string; project?: string }) => Promise<AddPeerResponse>;
-  addMachine: (req: MachineAddReq) => Promise<MachineResp>;
+  addInstance: (req: HZInstanceAddReq) => Promise<HZInstanceResp>;
   deletePeer: (publicKey: string) => Promise<unknown>;
 }
 
 export type NestedResult =
-  | { ok: true; machine: MachineResp; client: string; peer: AddPeerResponse }
+  | { ok: true; instance: HZInstanceResp; client: string; peer: AddPeerResponse }
   | { ok: false; error: string };
 
-/** The VPN client's name, derived from the machine's so the two read as one. */
-export function upstreamClientName(machine: string): string {
-  return `${machine}-upstream`;
+/** The VPN client's name, derived from the instance's so the two read as one. */
+export function upstreamClientName(instance: string): string {
+  return `${instance}-upstream`;
 }
 
 function message(e: unknown): string {
@@ -56,14 +56,14 @@ export async function declareNested(deps: NestedDeps, input: NestedInput): Promi
     return { ok: false, error: `The VPN client ${client} could not be created, so nothing was declared: ${message(e)}` };
   }
   try {
-    const machine = await deps.addMachine({
+    const instance = await deps.addInstance({
       name: input.name,
       project: input.owner,
-      segments: input.segments,
+      url: input.url,
+      vpnClient: client,
       note: input.note,
-      hz: { url: input.url, vpnClient: client },
     });
-    return { ok: true, machine, client, peer };
+    return { ok: true, instance, client, peer };
   } catch (e) {
     const refused = message(e);
     if (!peer.publicKey) {

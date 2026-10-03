@@ -196,6 +196,18 @@ type Config struct {
 	// LegacyBuilders is the pre-2026-10-02 `builders` key. Read only:
 	// LoadFromJSON and Save migrate it into BuildAgents and clear it.
 	LegacyBuilders []LegacyBuilder `json:"builders,omitempty"`
+	// HZInstances are the nested hz this one serves rungs to (hz_instance.go):
+	// a separate config layer each, NOT a Machine and not an HA peer.
+	// Environment.Upstream names one. Declared state.
+	HZInstances []HZInstance `json:"hz_instances,omitempty"`
+	// LegacyMachineHZ is every pre-B3 `machines[].hz` marker, captured by
+	// UnmarshalJSON. Never written: LoadFromJSON and Save migrate it into
+	// HZInstances (MigrateLegacyMachineHZ) and clear it.
+	LegacyMachineHZ []LegacyMachineHZ `json:"-"`
+	// LegacyHZCarriers are the machines that carried a migrated marker and
+	// nothing else — removal candidates the server settles against its agent
+	// credential store (SettleLegacyHZCarriers). Never written.
+	LegacyHZCarriers []string `json:"-"`
 	// Segments are the networks a Machine.Segments NAME resolves to: a project,
 	// a range, an interface, and the addressed members on it. Additive in
 	// exactly the way Projects, Environments and Machines are, and empty on
@@ -828,10 +840,10 @@ type Environment struct {
 	// asking "which machines run it" is a question for that hz, not a gap in
 	// this one (plan/design/estate.md Part A §5).
 	//
-	// It is the NAME of a declared Machine carrying an HZ marker — a nested hz
-	// is a Machine that runs hz (plan/plan.md Tier 1b). "" is placed here: hz
-	// answers from its own registrations. ValidateEnvironments refuses a name
-	// that resolves to no machine, or to a machine without the marker.
+	// It is the NAME of a declared HZInstance — a nested hz is its own record,
+	// never a Machine (B3, hz_instance.go). "" is placed here: hz answers from
+	// its own registrations. ValidateEnvironments refuses a name that resolves
+	// to no instance.
 	Upstream string `json:"upstream,omitempty"`
 }
 
@@ -862,39 +874,17 @@ var (
 	ErrNotUpward = errors.New("promotion is not upward by posture")
 )
 
-// CheckUpstream refuses an Upstream that names no declared machine, or a
-// machine that does not run hz — and says which, because the two have
-// different fixes (declare the machine; mark it). "" is legal: placed here.
+// CheckUpstream refuses an Upstream that names no declared hz instance. ""
+// is legal: placed here.
 func (c *Config) CheckUpstream(upstream string) error {
 	if upstream == "" {
 		return nil
 	}
-	m, ok := c.FindMachine(upstream)
-	if !ok {
-		return fmt.Errorf("upstream %q names no declared machine — a nested hz is a Machine that runs hz: declare it with an hz URL first%s",
-			upstream, c.hzMachineHint())
-	}
-	if m.HZ == nil {
-		return fmt.Errorf("upstream %q is a declared machine with no hz marker, so nothing says it runs an hz — set its hz URL first%s",
-			upstream, c.hzMachineHint())
+	if _, ok := c.FindHZInstance(upstream); !ok {
+		return fmt.Errorf("upstream %q names no declared hz instance — a nested hz is an Hz Instance record: declare it with its URL first%s",
+			upstream, c.hzInstanceHint())
 	}
 	return nil
-}
-
-// hzMachineHint lists the machines that carry an hz marker — the only names an
-// Upstream may take.
-func (c *Config) hzMachineHint() string {
-	var names []string
-	for _, m := range c.Machines {
-		if m.HZ != nil {
-			names = append(names, m.Name)
-		}
-	}
-	if len(names) == 0 {
-		return ". No declared machine runs an hz"
-	}
-	sort.Strings(names)
-	return ". Machines that run an hz: " + strings.Join(names, ", ")
 }
 
 // EnvironmentsNamed returns every declared environment with this name, across projects.
@@ -1739,6 +1729,9 @@ func LoadFromJSON(data []byte) (*Config, error) {
 	if err := cfg.MigrateLegacyBuilders(); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
+	if err := cfg.MigrateLegacyMachineHZ(); err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
 	return cfg, nil
 }
 
@@ -1782,6 +1775,13 @@ func LoadAuto() (*Config, string, error) {
 }
 
 func Save(path string, cfg *Config) error {
+	// A config decoded without LoadFromJSON (a backup restore) still carries
+	// the pre-B3 `machines[].hz` marker, captured by UnmarshalJSON. It is
+	// migrated FIRST, before ValidateEnvironments reads an Upstream against
+	// the instances — the instance token in use keeps its digest.
+	if err := cfg.MigrateLegacyMachineHZ(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
 	// Refuse to write a config whose project tree does not hold together. Save is the
 	// one chokepoint every writer goes through, so a bad parent or a service naming a
 	// project that does not exist is caught here rather than surfacing later as an
@@ -1842,6 +1842,10 @@ func Save(path string, cfg *Config) error {
 		return fmt.Errorf("config: %w", err)
 	}
 	if err := cfg.ValidateBuildAgents(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Hz instances, same chokepoint (migrated at the top of Save).
+	if err := cfg.ValidateHZInstances(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	dir := filepath.Dir(path)
