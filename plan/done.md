@@ -1868,3 +1868,37 @@ else. plan.md's table now carries a one-line row and a link to each.
 ⚠ **SUPERSEDED THE SAME DAY** by item 27 (*one recursive menu*, `feat/nav-recursive`): the two-zone sidebar below was rendered and rejected as cluttered — 24 lines at the top level, 38 inside a project, six of them apologising for bans and clients. What survived: `/$project/machines` (derived, approved-only), `/$project/segments`, the no-detail-route rule and the deleted column/tabs/`isMobile` branch. What went: the two zones, the gateway entries at every depth, the greyed bans/clients block. The record below is kept as written, because it is history.
 
 ✅ **built 2026-09-25** (`feat/nav-drill-in`, not merged) — [ui.md](design/ui.md) Part 2, *Decision 1, amended again 2026-09-25*, with a *Built 2026-09-25* section carrying the detail. The sidebar has **two zones**: a project zone that is the nested tree at the top level and, once you enter a project, that project's nav plus its subprojects and a **back that names its destination** (`← iodesystems`, `← All projects` at a root); and a **gateway zone of the same fourteen entries in the same order at every depth**, so Settings is one click from three projects deep. **Nothing about the zone is `useState`** — `readProjectZone` decides from the `$project` parameter alone, which is what makes "open the redline nav" a single screen for two people. Two new routes: **`/$project/machines`**, DERIVED through instances (a machine carries no project; `gw-1` appears under every project it hosts and each row says which of *that* project's instances put it there) and **`/$project/segments`**, direct on `Segment.Project` over `GET /api/v1/segments`, **which the UI had never called**. **The rule that keeps reason 3 intact: a derived surface gets a LIST route and NEVER a detail route** — `/$project/machines/$machine` would give one box one URL per hosting project and its diff one home per URL; the check walks the router's real route table and reddens if anything is ever routed under a derived list (positive-controlled by adding one). Deleted: the 260px tree column (the third column), `ProjectTabs`, its `pathname`-tail derivation, and the `isMobile` branch; `ProjectHeader` keeps identity and loses the picker. ⚠ **the machine list asks for `approved` EXPLICITLY** — `useCMRegistrations()` with no argument keys itself `"all"` and the handler defaults an empty state to PENDING, so the obvious read lists exactly the unapproved boxes and looks plausible; pending are counted and named in their own panel, and a fixture box that exists only in the pending list is what the check asserts is absent. ⚠ **all seven `cm_*` tables are empty on the live gateway**, so every project's machine list is correctly empty there today — the empty state says so in words. ⚠ **at phone width the whole sidebar is a `Drawer`, which is a portal, so the project zone renders NOTHING under SSR and sits behind the hamburger on a real phone** — so the project header keeps a `← parent` link and gained an *"enter a subproject"* row (the way up and the way down, on the page), and the hamburger became a labelled **Menu** button. ❌ `/$project/bans` and `/$project/clients` were **not** built and cannot be: `IPBan.Service` is unvalidated free text that [estate.md](design/estate.md) §8 forbids promoting to scope, and `WGPeer` has neither of the two links a client→segment→project chain needs. Both are rendered in the project nav **greyed with the reason and a link to the gateway screen that does hold the rows** — a removed entry is unaskable. **next:** merge, and the assign control item 24 still owes. **blocking decision (yours):** whether `IPBan` gains scope at all, and `seg:people`.
+
+## ✅ The backup does not contain the database (found 2026-09-20, fixed 2026-10-03)
+
+`internal/server/handlers_backup.go:17` says the export produces *"all state
+needed to clone this server"*. It produces `config.json`, the admin token,
+`wireguard.conf`, `invites.txt` and `certs/`. **It does not contain `hz.db`.**
+
+That database holds the config manager's entire state: enrolled machines,
+registrations and their approvals, every wrapped machine key, and every sealed
+config value. Restoring from a backup today gives you a gateway that serves the
+right domains and has forgotten every box it ever approved.
+
+This surfaced while deciding where recovery wraps live — they went into
+`config.json` precisely *because* the database rides no backup, which is the
+correct call for that feature but leaves the general hole open.
+
+Two things to decide, and they are separable:
+
+- **Does the export gain the database?** It is the obvious fix and it changes
+  what a backup zip is: today the zip is safe-ish to hand around (it already
+  carries the admin token and a WireGuard private key, so "safe" is doing work
+  there); with the DB it carries every wrapped environment key. That is still
+  useless without a machine private key or a recovery key, but the blast radius
+  of a leaked backup changes shape.
+- **Or does the comment stop lying?** If the database is deliberately excluded,
+  the header must say what the zip does *not* restore, and the restore path
+  should say it out loud rather than leaving the operator to find out when a box
+  next tries to resolve.
+
+Nothing here is urgent while nothing is deployed. It becomes urgent the moment
+the config manager holds secrets that exist nowhere else — which is the point of
+the recovery-recipient work that found it.
+
+**Fixed (BK, `0530b91`, deployed `v0.4.0-518`):** the export carries a `VACUUM INTO` snapshot of `hz.db` + build logs + a manifest, verified server-side (integrity, schema == the binary's, row counts); `hz backup pull/verify/install-timer`. Decided: the export DOES gain the database (operator, 2026-10-02). Artifacts and child binaries are excluded and named in the manifest.
