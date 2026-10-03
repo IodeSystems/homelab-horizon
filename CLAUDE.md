@@ -95,11 +95,13 @@ TestCacheNeverGoesStale` (backdates the cache 3 years with `os.Chtimes`),
 ## 6 · A machine carries no environment.
 
 An environment is a coordinate of an **instance**, never of a box.
-`config.Machine` is exactly `{Name, Project, Segments, Note, HZ}`
-(`internal/config/machine.go:49-90`; `HZ` is the nested-hz marker, what the box
-runs — `Environment.Upstream` points at the machine, never the reverse). Enforced:
+`config.Machine` is exactly `{Name, Project, Segments, Note}`
+(`internal/config/machine.go:49-83`). A nested hz is NOT on it: since B3
+(2026-10-02) it is its own record, `config.HZInstance`
+(`internal/config/hz_instance.go:31`), and `Environment.Upstream` names an
+instance, never a machine. Enforced:
 `internal/config/machine_test.go:32 TestAMachineCarriesNoEnvironment` (the
-exact field list, and no environment field under any spelling), `:69`.
+exact field list, and no environment field under any spelling), `:63`.
 
 **A machine MAY name an owning project — responsibility, not placement.**
 Amended 2026-09-26 (`plan/design/ui.md`, Decision 1 amendment 6). `""` is
@@ -255,12 +257,17 @@ builder declared as a machine read as a project owning the box.
 |---|---|---|---|---|
 | **Machine** | a box hz projects network and units ONTO; the agent's target | agent enrolment | `config.Machine` | Machines |
 | **Vantage** | an outside probe that pushes check results in | probe token | remotes | Checks |
-| **Hz Instance** | a nested hz with its OWN config (e.g. redline-loadtest) | instance token `hzi_` + an `upstream` VPN client | ⚠ `Machine.HZ` today — moving to its own record | Instances |
+| **Hz Instance** | a nested hz with its OWN config (e.g. redline-loadtest) | instance token `hzi_` + an `upstream` VPN client | `config.HZInstance{Name, Project, URL, VPNClient, TokenSHA256, Note}` (`hz_instances`); `Environment.Upstream` names one | Instances, the owning project's page — never Machines |
 | **Hz Node** | a cluster member of ONE instance (HA peer); no config of its own | HA join / peer sync | the HA peer list | Settings › HA |
-| **Build Agent** | a registration that numbers, logs and uploads builds for ONE project; several may run on one host (a label, not a machine) | agent token `hzb_` | ⚠ `Builder` naming a `Machine` today — B2 makes it `BuildAgent{Name, Project, Host}` | Settings, Builds |
+| **Build Agent** | a registration that numbers, logs and uploads builds for ONE project; several may run on one host (a label, not a machine) | agent token `hzb_` | `config.BuildAgent{Name, Project, Host, Note, TokenSHA256}` (`build_agents`) | Settings, Builds |
 
-⚠ Not enforced yet: B2 (build agents) and the instance separation are in
-`plan/plan.md`; until they land, the two ⚠ rows are the debt, not the rule.
+Enforced, by exact field list: `internal/config/machine_test.go:32`,
+`internal/config/hz_instance_test.go:14 TestAnHZInstanceIsItsOwnRecord`,
+`internal/config/build_agent_test.go:22 TestABuildAgentCarriesNoMachine`; and
+on the wire and the screen: `internal/server/handlers_api_nested_test.go:46`
+(an hz instance is absent from `/api/v1/machines`),
+`ui/src/components/machines.render.selftest.tsx` ("an hz instance is not a
+machine", "a build agent is not a machine").
 
 ## The one authority — know this before designing any gate
 
