@@ -100,7 +100,7 @@ func newBootFixture(t *testing.T) bootFixture {
 }
 
 func bootReq() apitypes.NestedBootstrapReq {
-	return apitypes.NestedBootstrapReq{Project: "redline", Machine: "loadtest-hz", Rung: "loadtest", From: "staging"}
+	return apitypes.NestedBootstrapReq{Project: "redline", Instance: "loadtest-hz", Rung: "loadtest", From: "staging"}
 }
 
 func (f bootFixture) generate(t *testing.T, req apitypes.NestedBootstrapReq) apitypes.NestedBootstrapResp {
@@ -152,8 +152,14 @@ func decodeEnrol(t *testing.T, w *httptest.ResponseRecorder) apitypes.NestedEnro
 	return out
 }
 
-func TestBootstrapDeclaresMachineRungAndGrantInOneStep(t *testing.T) {
+// Generate declares an HZ INSTANCE — never a machine — and the rung, in one
+// save. A machine that happens to share the name is a different record and is
+// left exactly as it was.
+func TestBootstrapDeclaresInstanceRungAndGrantInOneStep(t *testing.T) {
 	f := newBootFixture(t)
+	_ = f.s.updateConfig(func(c *config.Config) {
+		c.Machines = []config.Machine{{Name: "loadtest-hz", Note: "a box of the same name"}}
+	})
 	before := time.Now()
 	out := f.generate(t, bootReq())
 	grant := grantOf(t, out.Command)
@@ -161,13 +167,16 @@ func TestBootstrapDeclaresMachineRungAndGrantInOneStep(t *testing.T) {
 	if exp := time.Unix(out.ExpiresAt, 0); exp.Before(before.Add(59*time.Minute)) || exp.After(before.Add(61*time.Minute)) {
 		t.Fatalf("a bootstrap command lasts an hour, got expiry %s", exp)
 	}
-	if out.Rung != "redline/loadtest" || len(out.Reused) != 0 || out.Revoked || out.Warning != "" || len(out.Missing) != 0 {
+	if out.Rung != "redline/loadtest" || out.Instance != "loadtest-hz" || out.Machine != "loadtest-hz" || len(out.Reused) != 0 || out.Revoked || out.Warning != "" || len(out.Missing) != 0 {
 		t.Fatalf("response: %+v", out)
 	}
 	cfg := f.s.cfg()
-	m, ok := cfg.FindMachine("loadtest-hz")
-	if !ok || m.HZ == nil || m.Project != "redline" || !isPendingHZURL(m.HZ.URL) || m.HZ.TokenSHA256 != "" {
-		t.Fatalf("machine: %+v %+v", m, m.HZ)
+	h, ok := cfg.FindHZInstance("loadtest-hz")
+	if !ok || h.Project != "redline" || !isPendingHZURL(h.URL) || h.TokenSHA256 != "" {
+		t.Fatalf("instance: %+v %v", h, ok)
+	}
+	if len(cfg.Machines) != 1 || cfg.Machines[0].Name != "loadtest-hz" || cfg.Machines[0].Note != "a box of the same name" || cfg.Machines[0].Project != "" {
+		t.Fatalf("generate touched the machines: %+v", cfg.Machines)
 	}
 	e, err := cfg.LookupEnvironment("redline", "loadtest")
 	if err != nil || e.Posture != "prod" || e.From != "staging" || e.Upstream != "loadtest-hz" {
@@ -178,14 +187,14 @@ func TestBootstrapDeclaresMachineRungAndGrantInOneStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := disk.FindMachine("loadtest-hz"); !ok {
-		t.Fatal("the machine is not on disk")
+	if _, ok := disk.FindHZInstance("loadtest-hz"); !ok {
+		t.Fatal("the instance is not on disk")
 	}
 	if _, err := disk.LookupEnvironment("redline", "loadtest"); err != nil {
 		t.Fatal("the rung is not on disk")
 	}
 	if exp, ok := f.s.childGrantStore().pending("loadtest-hz"); !ok || exp.Unix() != out.ExpiresAt {
-		t.Fatal("no live grant for the machine")
+		t.Fatal("no live grant for the instance")
 	}
 	if s := f.script(grant); !strings.Contains(s, `GRANT="`+grant+`"`) {
 		t.Fatalf("the script for a live grant does not carry it:\n%s", s)
@@ -208,12 +217,13 @@ func TestBootstrapRefusalsEachSaySomething(t *testing.T) {
 	}
 	cases := []tc{
 		{name: "no project", req: func(r *apitypes.NestedBootstrapReq) { r.Project = "" }, want: "project is required"},
-		{name: "no machine", req: func(r *apitypes.NestedBootstrapReq) { r.Machine = "" }, want: "machine is required"},
+		{name: "no instance", req: func(r *apitypes.NestedBootstrapReq) { r.Instance = "" }, want: "instance is required"},
+		{name: "instance and machine disagree", req: func(r *apitypes.NestedBootstrapReq) { r.Machine = "other-hz" }, want: "disagree"},
 		{name: "no rung", req: func(r *apitypes.NestedBootstrapReq) { r.Rung = "" }, want: "rung is required"},
 		{name: "no from", req: func(r *apitypes.NestedBootstrapReq) { r.From = "" }, want: "from is required"},
 		{name: "unknown project", req: func(r *apitypes.NestedBootstrapReq) { r.Project = "ghost" }, want: `no project "ghost"`},
 		{name: "from not a rung", req: func(r *apitypes.NestedBootstrapReq) { r.From = "qa" }, want: `from-rung "qa" is not a rung`},
-		{name: "bad machine name", req: func(r *apitypes.NestedBootstrapReq) { r.Machine = "a b" }, want: "must be letters, digits"},
+		{name: "bad instance name", req: func(r *apitypes.NestedBootstrapReq) { r.Instance = "a b" }, want: "must be letters, digits"},
 		{name: "bad platform", req: func(r *apitypes.NestedBootstrapReq) { r.Platform = "linux-mips" }, want: "not one a nested hz is bootstrapped on"},
 		{name: "no public vhost", setup: func(f bootFixture) {
 			_ = f.s.updateConfig(func(c *config.Config) { c.KioskURL = "" })
@@ -233,12 +243,10 @@ func TestBootstrapRefusalsEachSaySomething(t *testing.T) {
 		{name: "a partial upload", setup: func(f bootFixture) {
 			_ = os.WriteFile(filepath.Join(f.binDir, childBinPrefix+"linux-arm64"), []byte("hz arm64 bui"), 0o755)
 		}, req: func(r *apitypes.NestedBootstrapReq) { r.Platform = "linux-arm64" }, want: "does not match its manifest"},
-		{name: "machine is some other box", setup: func(f bootFixture) {
-			_ = f.s.updateConfig(func(c *config.Config) { c.Machines = []config.Machine{{Name: "loadtest-hz", Project: "redline"}} })
-		}, want: "runs no hz"},
-		{name: "machine owned elsewhere", setup: func(f bootFixture) {
+		{name: "instance owned elsewhere", setup: func(f bootFixture) {
 			_ = f.s.updateConfig(func(c *config.Config) {
-				c.Machines = []config.Machine{{Name: "loadtest-hz", Project: "other", HZ: &config.MachineHZ{URL: "http://192.0.2.7:8080"}}}
+				c.Projects = append(append([]config.Project(nil), c.Projects...), config.Project{Name: "other"})
+				c.HZInstances = []config.HZInstance{{Name: "loadtest-hz", Project: "other", URL: "http://192.0.2.7:8080"}}
 			})
 		}, want: "owned by other, not redline"},
 		{name: "rung placed here", setup: func(f bootFixture) {
@@ -248,7 +256,7 @@ func TestBootstrapRefusalsEachSaySomething(t *testing.T) {
 		}, want: "is placed HERE"},
 		{name: "rung in another hz", setup: func(f bootFixture) {
 			_ = f.s.updateConfig(func(c *config.Config) {
-				c.Machines = []config.Machine{{Name: "other-hz", Project: "redline", HZ: &config.MachineHZ{URL: "http://192.0.2.8:8080"}}}
+				c.HZInstances = []config.HZInstance{{Name: "other-hz", Project: "redline", URL: "http://192.0.2.8:8080"}}
 				c.Environments = append(append([]config.Environment(nil), c.Environments...), config.Environment{Project: "redline", Name: "loadtest", Posture: "prod", From: "staging", Upstream: "other-hz"})
 			})
 		}, want: "placed in other-hz, not loadtest-hz"},
@@ -283,7 +291,7 @@ func TestBootstrapRefusalsEachSaySomething(t *testing.T) {
 			if f.s.cfg() != before {
 				t.Fatal("a refused generate changed the config")
 			}
-			if _, ok := f.s.childGrantStore().pending(req.Machine); ok {
+			if _, ok := f.s.childGrantStore().pending(req.Instance); ok {
 				t.Fatal("a refused generate minted a grant")
 			}
 		})
@@ -310,12 +318,30 @@ func TestBootstrapUnnamedMissingPlatformWarnsAndTheScriptStopsFirst(t *testing.T
 	decodeEnrol(t, f.enrol(grantOf(t, out.Command), boxEnrol()))
 }
 
+// The pre-B3 `machine` field still names the instance, one release: the same
+// command, the same instance declared.
+func TestBootstrapAcceptsTheMachineAlias(t *testing.T) {
+	f := newBootFixture(t)
+	req := bootReq()
+	req.Instance, req.Machine = "", "loadtest-hz"
+	out := f.generate(t, req)
+	if out.Instance != "loadtest-hz" || !commandRe.MatchString(out.Command) {
+		t.Fatalf("alias: %+v", out)
+	}
+	if _, ok := f.s.cfg().FindHZInstance("loadtest-hz"); !ok {
+		t.Fatal("the alias declared no instance")
+	}
+	if _, ok := f.s.cfg().FindMachine("loadtest-hz"); ok {
+		t.Fatal("the alias declared a machine")
+	}
+}
+
 func TestRegenerateRevokesTheUnusedGrantAndReuses(t *testing.T) {
 	f := newBootFixture(t)
 	first := grantOf(t, f.generate(t, bootReq()).Command)
 	again := f.generate(t, bootReq())
 	second := grantOf(t, again.Command)
-	if first == second || !again.Revoked || strings.Join(again.Reused, ",") != "machine,rung" {
+	if first == second || !again.Revoked || strings.Join(again.Reused, ",") != "instance,rung" {
 		t.Fatalf("re-generate: %+v", again)
 	}
 	if s := f.script(first); s != childRefusalScript {
@@ -347,9 +373,15 @@ func TestEnrolIsSingleUseAndTheParentStoresNoPrivateKey(t *testing.T) {
 	}
 
 	cfg := f.s.cfg()
-	m, _ := cfg.FindMachine("loadtest-hz")
-	if m.HZ.VPNClient != "loadtest-hz-upstream" || m.HZ.TokenSHA256 != tokenDigest(out.InstanceToken) || m.HZ.URL != "http://10.100.0.3:8080" {
-		t.Fatalf("machine after enrol: %+v", m.HZ)
+	h, _ := cfg.FindHZInstance("loadtest-hz")
+	if h.VPNClient != "loadtest-hz-upstream" || h.TokenSHA256 != tokenDigest(out.InstanceToken) || h.URL != "http://10.100.0.3:8080" {
+		t.Fatalf("instance after enrol: %+v", h)
+	}
+	if out.Instance != "loadtest-hz" || out.Machine != "loadtest-hz" {
+		t.Fatalf("enrol answer names %q / %q", out.Instance, out.Machine)
+	}
+	if _, isMachine := cfg.FindMachine("loadtest-hz"); isMachine {
+		t.Fatal("enrolment declared a machine")
 	}
 	if cfg.GetPeerProfile("loadtest-hz-upstream") != config.ProfileUpstream || cfg.VPNProjects["loadtest-hz-upstream"] != "redline" {
 		t.Fatal("the box's client must be upstream, owned by the project")
@@ -465,7 +497,7 @@ func TestTheInstallRoutesAreOnThePublicVhostOnly(t *testing.T) {
 	decodeEnrol(t, f.enrol(grant, boxEnrol()))
 }
 
-// Re-provisioning a wiped box: the machine and rung are reused, the box's new
+// Re-provisioning a wiped box: the instance and rung are reused, the box's new
 // key REPLACES the old one in wg0 (same address), and the old instance token
 // stops authenticating.
 func TestReprovisionRotatesTheKeyAndTheToken(t *testing.T) {
@@ -473,7 +505,7 @@ func TestReprovisionRotatesTheKeyAndTheToken(t *testing.T) {
 	first := decodeEnrol(t, f.enrol(grantOf(t, f.generate(t, bootReq()).Command), boxEnrol()))
 
 	again := f.generate(t, bootReq())
-	if strings.Join(again.Reused, ",") != "machine,rung" || again.Revoked {
+	if strings.Join(again.Reused, ",") != "instance,rung" || again.Revoked {
 		t.Fatalf("re-generate after enrol: %+v", again)
 	}
 	if st := nestedRow(t, f.s, "loadtest-hz").State; st != apitypes.NestedStateCommandGenerated {

@@ -352,8 +352,11 @@ func renderRemoval(kind, name string, cascade, confirm bool, out apitypes.Remova
 // kindCommand maps the record kind to the command that removes it, so the dry
 // run echoes something the operator can retype.
 func kindCommand(kind string) string {
-	if kind == "environment" {
+	switch kind {
+	case "environment":
 		return "env"
+	case "hz instance":
+		return "instance"
 	}
 	return kind
 }

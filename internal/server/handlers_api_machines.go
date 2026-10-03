@@ -117,7 +117,7 @@ func (s *Server) handleAPIMachineAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	next := *s.cfg()
-	if err := next.AddMachine(config.Machine{Name: name, Project: req.Project, Segments: req.Segments, Note: req.Note, HZ: machineHZ(req.HZ)}); err != nil {
+	if err := next.AddMachine(config.Machine{Name: name, Project: req.Project, Segments: req.Segments, Note: req.Note}); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -159,7 +159,6 @@ func (s *Server) handleAPIMachineSet(w http.ResponseWriter, r *http.Request) {
 	next := *s.cfg()
 	m, err := next.SetMachine(req.Name, config.MachinePatch{
 		Project: req.Project, Note: req.Note, Segments: req.Segments,
-		HZ: machineHZ(req.HZ), ClearHZ: req.ClearHZ,
 	})
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -209,51 +208,13 @@ func (s *Server) handleAPIMachineRm(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, out)
 		return
 	}
-	// A nested hz's VPN client — only reached with cascade, since without it
-	// the client is a blocked dependant and the dry run returned above.
-	vpnClient := ""
-	if m, ok := next.FindMachine(req.Name); ok && m.HZ != nil {
-		vpnClient = m.HZ.VPNClient
-	}
 	if _, err := next.RemoveMachine(req.Name, enrolled, req.Cascade); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// The client leaves wg0.conf BEFORE the config is written, not after: if
-	// the removal fails nothing has changed, while the other order could
-	// leave the client in wg0.conf with its profile entry deleted — and a
-	// client with no profile entry renders as lan-access, which would widen
-	// an orphaned nested hz's reach to the LAN.
-	var wgPeers []config.WGPeer
-	if vpnClient != "" {
-		for _, p := range s.wg.GetPeers() {
-			if p.Name != vpnClient {
-				continue
-			}
-			if err := s.wg.RemovePeer(p.PublicKey); err != nil {
-				writeJSONError(w, http.StatusInternalServerError, "nothing was removed: the VPN client "+vpnClient+" could not be removed from wg0.conf: "+err.Error())
-				return
-			}
-		}
-		wgPeers = s.snapshotWGPeers()
-	}
-	if err := s.updateConfig(func(cfg *config.Config) {
-		*cfg = next
-		if vpnClient != "" {
-			cfg.DeletePeerProfile(vpnClient)
-			cfg.DeletePeerProject(vpnClient)
-			cfg.DeleteMFAPeer(vpnClient)
-			cfg.WGPeers = wgPeers
-		}
-	}); err != nil {
+	if err := s.updateConfig(func(cfg *config.Config) { *cfg = next }); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
 		return
-	}
-	if vpnClient != "" {
-		if err := s.wg.Reload(); err != nil {
-			slog.Warn("wg.Reload", "err", err)
-		}
-		s.rebuildWGChains()
 	}
 	if enrolled {
 		if _, err := s.agentCredentials().Revoke(req.Name); err != nil {
@@ -488,22 +449,11 @@ func (s *Server) machineResp(m config.Machine) apitypes.MachineResp {
 		Note:       m.Note,
 		MultiHomed: m.MultiHomed(),
 	}
-	if m.HZ != nil {
-		out.HZ = &apitypes.MachineHZResp{URL: m.HZ.URL, VPNClient: m.HZ.VPNClient, HasToken: m.HZ.TokenSHA256 != ""}
-	}
 	if cred, ok := s.agentCredentials().Find(m.Name); ok {
 		out.Enrolled = true
 		out.EnrolledAt = cred.CreatedAt
 	}
 	return out
-}
-
-// machineHZ converts the wire marker to the record's. nil stays nil.
-func machineHZ(h *apitypes.MachineHZResp) *config.MachineHZ {
-	if h == nil {
-		return nil
-	}
-	return &config.MachineHZ{URL: h.URL, VPNClient: h.VPNClient}
 }
 
 // jsonSafeName quotes a caller-supplied name for an error message, so a machine

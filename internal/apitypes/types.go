@@ -275,7 +275,7 @@ type EnvironmentAddReq struct {
 	Posture string `json:"posture"`
 	From    string `json:"from,omitempty"`
 	Version string `json:"version,omitempty"`
-	// Upstream names a declared Machine with an hz marker; "" is placed here.
+	// Upstream names a declared hz instance (HZInstanceResp); "" is placed here.
 	Upstream string `json:"upstream,omitempty"`
 }
 
@@ -294,7 +294,7 @@ type EnvironmentSetReq struct {
 	From    *string `json:"from,omitempty"`
 	Version *string `json:"version,omitempty"`
 	// Upstream: nil leaves it, "" clears it (placed here), a name sets it —
-	// refused unless it names a declared Machine with an hz marker.
+	// refused unless it names a declared hz instance.
 	Upstream *string `json:"upstream,omitempty"`
 }
 
@@ -332,12 +332,11 @@ type MachineResp struct {
 	Project  string   `json:"project"`
 	Segments []string `json:"segments,omitempty"`
 	Note     string   `json:"note,omitempty"`
-	// HZ is set when this machine runs its own hz (a nested hz — a separate
-	// config layer, not an HA peer). Absent: not declared as one.
-	HZ         *MachineHZResp `json:"hz,omitempty"`
-	MultiHomed bool           `json:"multiHomed,omitempty"`
-	Enrolled   bool           `json:"enrolled,omitempty"`
-	EnrolledAt int64          `json:"enrolledAt,omitempty"`
+	// No nested-hz marker: an hz instance is its own record since B3
+	// (HZInstanceResp, /api/v1/hz-instances), never a machine.
+	MultiHomed bool  `json:"multiHomed,omitempty"`
+	Enrolled   bool  `json:"enrolled,omitempty"`
+	EnrolledAt int64 `json:"enrolledAt,omitempty"`
 
 	// AlreadyDeclared says the record came back unchanged because it already
 	// existed, rather than because this request created it. Only `--self` can
@@ -347,19 +346,6 @@ type MachineResp struct {
 	// there the operator asserted something about the estate, and hz telling
 	// them it was already true is information they asked for.
 	AlreadyDeclared bool `json:"alreadyDeclared,omitempty"`
-}
-
-// MachineHZResp is the nested-hz marker: where that hz answers. This hz never
-// contacts it.
-type MachineHZResp struct {
-	URL string `json:"url"`
-	// VPNClient is the `upstream` VPN client that hz reaches this one
-	// through, by name; empty is no link. Set on add; an edit that omits it
-	// keeps the existing one.
-	VPNClient string `json:"vpnClient,omitempty"`
-	// HasToken is response-only: an instance token has been minted for this
-	// nested hz (POST /api/v1/machines/hz-token). The token is never sent back.
-	HasToken bool `json:"hasToken,omitempty"`
 }
 
 // MachineAddReq declares a machine. Segments are names; there is no Segment
@@ -375,9 +361,6 @@ type MachineAddReq struct {
 	Project  string   `json:"project,omitempty"`
 	Segments []string `json:"segments,omitempty"`
 	Note     string   `json:"note,omitempty"`
-	// HZ marks the machine as running its own hz; the URL must be http(s)
-	// with a host.
-	HZ *MachineHZResp `json:"hz,omitempty"`
 
 	// Self declares the box HZ ITSELF IS RUNNING ON, and Name must then be
 	// empty: the name comes from hz's own identity (os.Hostname, the same
@@ -414,10 +397,6 @@ type MachineSetReq struct {
 	Project  *string   `json:"project,omitempty"`
 	Note     *string   `json:"note,omitempty"`
 	Segments *[]string `json:"segments,omitempty"`
-	// HZ sets the nested-hz marker; ClearHZ removes it (refused while an
-	// environment names this machine as its Upstream). Both at once is refused.
-	HZ      *MachineHZResp `json:"hz,omitempty"`
-	ClearHZ bool           `json:"clearHz,omitempty"`
 }
 
 // MachineRmReq removes a machine. Confirm and Cascade mean what they mean on

@@ -146,7 +146,14 @@ func (s *Server) handleBackupImport(w http.ResponseWriter, r *http.Request) {
 
 	var errors []string
 
-	// 1. Write config
+	// 1. Write config. A pre-B3 backup still carries `machines[].hz`: migrate
+	// it here and settle its carrier machines against the credential store,
+	// which only the server holds (Save would migrate it but cannot settle).
+	if err := cfg.MigrateLegacyMachineHZ(); err != nil {
+		http.Error(w, "invalid config.json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	settleLegacyHZCarriers(&cfg, s.configPath)
 	cfg.PublicIP = "" // force re-detection
 	if err := config.Save(s.configPath, &cfg); err != nil {
 		errors = append(errors, fmt.Sprintf("config: %v", err))

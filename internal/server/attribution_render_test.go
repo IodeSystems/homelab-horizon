@@ -288,19 +288,21 @@ func TestAttributionChangesNoRenderedArtifact(t *testing.T) {
 	}
 }
 
-// THE NESTED-HZ MARKERS CHANGE NO RENDERED ARTIFACT (plan/plan.md Tier 1b, N3).
+// THE NESTED-HZ RECORDS CHANGE NO RENDERED ARTIFACT (plan/plan.md Tier 1b, N3;
+// B3 made the marker its own record).
 //
-// Machine.HZ and Environment.Upstream are statements about ANOTHER hz: that a
-// machine runs one, and that a rung's placements are held there. No renderer
+// An HZInstance and Environment.Upstream are statements about ANOTHER hz: that
+// one exists, and that a rung's placements are held there. No renderer
 // and no machine projection may read either — the URL is never dialled
 // (CLAUDE.md invariant 1) and an upstream rung changes where a question is
 // answered, not what any box runs. So the estate rendered with a nested hz
-// declared but unmarked and unnamed, and with the marker and an Upstream set,
-// must come out byte-identical.
+// undeclared and unnamed, and with the instance and an Upstream set, must come
+// out byte-identical. A machine of the same name is in BOTH estates, so a
+// projection keyed by name is covered too.
 //
 // The nested hz's upstream VPN client is present in BOTH estates, with its
 // `upstream` profile: the profile changes rules on purpose (it is not a marker),
-// so it is held constant, and what differs is only the LINK — MachineHZ.VPNClient
+// so it is held constant, and what differs is only the LINK — HZInstance.VPNClient
 // naming it — which must render nothing.
 //
 // The rung used carries no instance on purpose: what the projection should do
@@ -314,7 +316,7 @@ func TestNestedMarkersChangeNoRenderedArtifact(t *testing.T) {
 		c.WGPeers = append(c.WGPeers, config.WGPeer{Name: "storefront-prod-hz-vpn", PublicKey: attributionKeys[0], AllowedIPs: "10.100.0.9/32"})
 		c.VPNProfiles = map[string]string{"bob-laptop": config.ProfileFullTunnel, "storefront-prod-hz-vpn": config.ProfileUpstream}
 		if marked {
-			c.Machines[len(c.Machines)-1].HZ = &config.MachineHZ{URL: "https://hz.pci.example.invalid", VPNClient: "storefront-prod-hz-vpn"}
+			c.HZInstances = []config.HZInstance{{Name: "storefront-prod-hz", Project: "storefront", URL: "https://hz.pci.example.invalid", VPNClient: "storefront-prod-hz-vpn"}}
 			c.Environments[len(c.Environments)-1].Upstream = "storefront-prod-hz"
 		}
 		return c
@@ -341,7 +343,7 @@ func TestNestedMarkersChangeNoRenderedArtifact(t *testing.T) {
 		t.Error("the nested hz's URL reached a rendered artifact")
 	}
 	if a != b {
-		t.Fatalf("a nested-hz marker changed a rendered artifact. First difference:\n%s", firstDiff(a, b))
+		t.Fatalf("a nested-hz record changed a rendered artifact. First difference:\n%s", firstDiff(a, b))
 	}
 }
 

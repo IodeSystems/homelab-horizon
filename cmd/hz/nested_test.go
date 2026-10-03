@@ -24,8 +24,8 @@ func TestNestedBootstrapSendsTheContract(t *testing.T) {
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			got = append(got, req)
 			_ = json.NewEncoder(w).Encode(apitypes.NestedBootstrapResp{
-				Command: "curl -fsSL https://portal.example.com/admin/hz-child/install/hzc_x | sudo bash",
-				Machine: req.Machine, Rung: req.Project + "/" + req.Rung, ExpiresAt: 1_800_000_000,
+				Command:  "curl -fsSL https://portal.example.com/admin/hz-child/install/hzc_x | sudo bash",
+				Instance: req.Instance, Machine: req.Instance, Rung: req.Project + "/" + req.Rung, ExpiresAt: 1_800_000_000,
 				Warning: "This command works only on linux-arm64 boxes",
 			})
 		default:
@@ -40,10 +40,24 @@ func TestNestedBootstrapSendsTheContract(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	want := apitypes.NestedBootstrapReq{Project: "redline", Machine: "loadtest-hz", Rung: "loadtest", From: "staging", Platform: "linux-arm64"}
+	want := apitypes.NestedBootstrapReq{Project: "redline", Instance: "loadtest-hz", Rung: "loadtest", From: "staging", Platform: "linux-arm64"}
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("request = %+v", got)
 	}
+	// --instance and the deprecated --machine name the same thing, sent as
+	// `instance`.
+	for _, flagName := range []string{"--instance", "--machine"} {
+		got = nil
+		captureStdout(t, func() {
+			if err := dispatch(c, "nested", []string{"bootstrap", "redline", flagName, "loadtest-hz", "--rung", "loadtest", "--from", "staging", "--platform", "linux-arm64"}); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if len(got) != 1 || got[0] != want {
+			t.Fatalf("%s: request = %+v", flagName, got)
+		}
+	}
+	got = got[:1]
 	if strings.TrimSpace(out) != "curl -fsSL https://portal.example.com/admin/hz-child/install/hzc_x | sudo bash" {
 		t.Fatalf("stdout must be the command alone: %q", out)
 	}
@@ -51,6 +65,7 @@ func TestNestedBootstrapSendsTheContract(t *testing.T) {
 		{"bootstrap", "redline", "loadtest-hz", "--rung", "loadtest"},
 		{"bootstrap", "redline", "loadtest-hz", "--from", "staging"},
 		{"bootstrap", "redline", "--rung", "loadtest", "--from", "staging"},
+		{"bootstrap", "redline", "a-hz", "--instance", "b-hz", "--rung", "loadtest", "--from", "staging"},
 		{"declare"},
 		{},
 	} {

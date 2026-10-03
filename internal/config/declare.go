@@ -34,7 +34,8 @@ import (
 // leave them to find out which.
 type Dependant struct {
 	// Kind is "project", "environment", "service", "segment", "machine",
-	// "credential", "vpn-client", "check", "ban", "port-exclusion" or "build-agent".
+	// "hz-instance", "credential", "vpn-client", "check", "ban",
+	// "port-exclusion" or "build-agent".
 	Kind string `json:"kind"`
 	// Name identifies the record: a project name, "<project>/<environment>",
 	// a segment name, a machine name, a service name, the machine a
@@ -57,7 +58,7 @@ func (d Dependant) String() string { return d.Kind + " " + d.Name + " — " + d.
 // and removing the project re-attributes it rather than removing it.
 func sortDependants(list []Dependant) {
 	rank := map[string]int{
-		"project": 0, "environment": 1, "service": 2, "segment": 3, "machine": 4, "credential": 5,
+		"project": 0, "environment": 1, "service": 2, "segment": 3, "machine": 4, "hz-instance": 4, "credential": 5,
 		"vpn-client": 6, "check": 7, "ban": 8, "port-exclusion": 9,
 	}
 	sort.SliceStable(list, func(i, j int) bool {
@@ -199,6 +200,9 @@ func (c *Config) ProjectRemoval(name string, cascade bool) (removes, blocked []D
 	for _, m := range c.Machines {
 		attributed("machine", m.Name, m.Project)
 	}
+	for _, h := range c.HZInstances {
+		attributed("hz-instance", h.Name, h.Project)
+	}
 	for _, peer := range sortedKeys(c.VPNProjects) {
 		attributed("vpn-client", peer, c.VPNProjects[peer])
 	}
@@ -269,6 +273,11 @@ func (c *Config) RemoveProject(name string, cascade bool) ([]Dependant, error) {
 	for i := range next.Machines {
 		if doomed[next.Machines[i].Project] {
 			next.Machines[i].Project = ""
+		}
+	}
+	for i := range next.HZInstances {
+		if doomed[next.HZInstances[i].Project] {
+			next.HZInstances[i].Project = ""
 		}
 	}
 	for _, peer := range sortedKeys(next.VPNProjects) {
@@ -590,6 +599,9 @@ func (c *Config) validateModel() error {
 	if err := c.ValidateBuildAgents(); err != nil {
 		return err
 	}
+	if err := c.ValidateHZInstances(); err != nil {
+		return err
+	}
 	return c.ValidateSegments()
 }
 
@@ -611,6 +623,7 @@ func (c *Config) copyForWrite() *Config {
 	next.IPBans = cloneNonNil(c.IPBans)
 	next.PortExclusions = cloneNonNil(c.PortExclusions)
 	next.BuildAgents = cloneNonNil(c.BuildAgents)
+	next.HZInstances = cloneNonNil(c.HZInstances)
 	return &next
 }
 
@@ -631,6 +644,7 @@ func (c *Config) adopt(next *Config) {
 	c.ServiceChecks, c.IPBans, c.PortExclusions = next.ServiceChecks, next.IPBans, next.PortExclusions
 	c.VPNProjects = next.VPNProjects
 	c.BuildAgents = next.BuildAgents
+	c.HZInstances = next.HZInstances
 }
 
 func (c *Config) hasProject(name string) bool {

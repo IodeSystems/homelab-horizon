@@ -24,7 +24,7 @@ import (
 )
 
 func renderedTestScript() string {
-	gr := childGrant{Token: "hzc_" + strings.Repeat("ab", 24), Machine: "loadtest-hz", Project: "redline", Rung: "loadtest",
+	gr := childGrant{Token: "hzc_" + strings.Repeat("ab", 24), Instance: "loadtest-hz", Project: "redline", Rung: "loadtest",
 		Expires: time.Unix(1_800_000_000, 0)}
 	return renderChildInstallScript(bootKiosk, gr, []string{"linux-amd64", "linux-arm64"}, "10.100.0.1")
 }
@@ -32,7 +32,7 @@ func renderedTestScript() string {
 func TestChildScriptRendersForAGrant(t *testing.T) {
 	s := renderedTestScript()
 	for _, want := range []string{
-		`BASE="https://portal.example.com"`, `GRANT="hzc_abab`, `MACHINE="loadtest-hz"`, `PROJECT="redline"`,
+		`BASE="https://portal.example.com"`, `GRANT="hzc_abab`, `INSTANCE="loadtest-hz"`, `PROJECT="redline"`,
 		`RUNG="loadtest"`, `PLATFORMS="linux-amd64 linux-arm64"`, `IFACE="hz-upstream"`, `TOKEN_FILE="/etc/homelab-horizon/upstream.token"`,
 		`ADMIN_USER="hz-local-admin"`, `ADMIN_TOKEN_FILE="/etc/homelab-horizon/admin.token"`,
 	} {
@@ -326,7 +326,7 @@ func TestEnrolSeedLoadsAsTheChildsConfig(t *testing.T) {
 		childCfg.Services[0].Project != "redline" || childCfg.Services[0].Environment != "loadtest" {
 		t.Fatalf("child service: %+v", childCfg.Services)
 	}
-	// Loopback, at the port the parent records in MachineHZ.URL.
+	// Loopback, at the port the parent records in HZInstance.URL.
 	if childCfg.ListenAddr != "127.0.0.1:"+childListenPort {
 		t.Fatalf("the seed's listen address: %s, want 127.0.0.1:%s", childCfg.ListenAddr, childListenPort)
 	}

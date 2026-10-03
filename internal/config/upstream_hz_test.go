@@ -40,32 +40,26 @@ func TestValidateUpstream(t *testing.T) {
 	}
 }
 
-// The instance token's digest is minted, never edited: a URL edit keeps it,
-// clearing the marker drops it.
-func TestInstanceTokenHashSurvivesAMarkerEdit(t *testing.T) {
-	c := &Config{Machines: []Machine{{Name: "prod-hz", HZ: &MachineHZ{URL: "http://10.0.0.2:8080"}}, {Name: "plain"}}}
+// The instance token's digest is minted, never edited: a URL edit keeps it.
+// A token is for an hz instance only — never a machine of the same name.
+func TestInstanceTokenHashSurvivesAnInstanceEdit(t *testing.T) {
+	c := &Config{HZInstances: []HZInstance{{Name: "prod-hz", URL: "http://10.0.0.2:8080"}}, Machines: []Machine{{Name: "plain"}}}
 	sha := strings.Repeat("c", 64)
 	if err := c.SetInstanceTokenHash("prod-hz", sha); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SetInstanceTokenHash("plain", sha); err == nil || !strings.Contains(err.Error(), "runs no hz") {
-		t.Fatalf("token for a machine with no marker: %v", err)
+	if err := c.SetInstanceTokenHash("plain", sha); err == nil || !strings.Contains(err.Error(), "no hz instance") {
+		t.Fatalf("token for a machine: %v", err)
 	}
 	if err := c.SetInstanceTokenHash("nope", sha); err == nil {
-		t.Fatal("token for an undeclared machine")
+		t.Fatal("token for an undeclared instance")
 	}
-	if _, err := c.SetMachine("prod-hz", MachinePatch{HZ: &MachineHZ{URL: "https://prod-hz.example"}}); err != nil {
+	u := "https://prod-hz.example"
+	if _, err := c.SetHZInstance("prod-hz", HZInstancePatch{URL: &u}); err != nil {
 		t.Fatal(err)
 	}
-	m, _ := c.FindMachine("prod-hz")
-	if m.HZ.URL != "https://prod-hz.example" || m.HZ.TokenSHA256 != sha {
-		t.Fatalf("after a URL edit: %+v", m.HZ)
-	}
-	if _, err := c.SetMachine("prod-hz", MachinePatch{ClearHZ: true}); err != nil {
-		t.Fatal(err)
-	}
-	m, _ = c.FindMachine("prod-hz")
-	if m.HZ != nil {
-		t.Fatalf("cleared marker kept: %+v", m.HZ)
+	h, _ := c.FindHZInstance("prod-hz")
+	if h.URL != u || h.TokenSHA256 != sha {
+		t.Fatalf("after a URL edit: %+v", h)
 	}
 }

@@ -10,7 +10,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 )
 
-// `hz env apply|hold|unhold` and `hz machine hz-token` send the contract's
+// `hz env apply|hold|unhold` and `hz instance token` send the contract's
 // requests and print the answers.
 func TestEnvApplyHoldAndHZTokenSendTheContract(t *testing.T) {
 	var applies []apitypes.ApplyReq
@@ -35,11 +35,11 @@ func TestEnvApplyHoldAndHZTokenSendTheContract(t *testing.T) {
 				out.Hold = &apitypes.HoldResp{By: "user:carl", Reason: req.Reason, At: "2026-10-01T00:00:00Z"}
 			}
 			_ = json.NewEncoder(w).Encode(out)
-		case "/api/v1/machines/hz-token":
+		case "/api/v1/hz-instances/token":
 			var req apitypes.InstanceTokenReq
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			mints = append(mints, req)
-			_ = json.NewEncoder(w).Encode(apitypes.InstanceTokenResp{Machine: req.Machine, Token: "hzi_abc"})
+			_ = json.NewEncoder(w).Encode(apitypes.InstanceTokenResp{Instance: req.Instance, Machine: req.Instance, Token: "hzi_abc"})
 		default:
 			http.NotFound(w, r)
 		}
@@ -78,12 +78,18 @@ func TestEnvApplyHoldAndHZTokenSendTheContract(t *testing.T) {
 	if !strings.Contains(out, "redline/prod is HELD by user:carl") || !strings.Contains(out, "redline/prod is not held") {
 		t.Fatalf("hold output:\n%s", out)
 	}
+	// `hz instance token` and the deprecated `hz machine hz-token` alias send
+	// the same request.
 	out = captureStdout(t, func() {
+		if err := runInstance(c, []string{"token", "redline-prod-hz"}); err != nil {
+			t.Fatal(err)
+		}
 		if err := runMachine(c, []string{"hz-token", "redline-prod-hz"}); err != nil {
 			t.Fatal(err)
 		}
 	})
-	if len(mints) != 1 || mints[0].Machine != "redline-prod-hz" || strings.TrimSpace(out) != "hzi_abc" {
+	want := apitypes.InstanceTokenReq{Instance: "redline-prod-hz"}
+	if len(mints) != 2 || mints[0] != want || mints[1] != want || strings.TrimSpace(out) != "hzi_abc\nhzi_abc" {
 		t.Fatalf("mint %+v, stdout %q (the token alone, so it can be piped to a file)", mints, out)
 	}
 }

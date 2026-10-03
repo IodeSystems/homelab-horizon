@@ -27,7 +27,8 @@ import (
 //	POST /api/v1/environments/unhold   {project, environment}            admin
 //	GET  /api/v1/deploys/desired       ?project&environment   admin | instance token
 //	GET  /api/v1/deploys/applied       ?project= (UI)                    admin
-//	POST /api/v1/machines/hz-token     {machine}                         admin
+//	POST /api/v1/hz-instances/token    {instance}                        admin
+//	POST /api/v1/machines/hz-token     {machine}   (alias, one release)  admin
 //
 // A PROMOTION APPROVES; AN APPLY IS WHAT RUNS. desired answers the newest
 // APPLY, so a rung is held by default — a promote alone changes nothing a box
@@ -66,26 +67,27 @@ func newInstanceToken() (string, error) {
 	return instanceTokenPrefix + hex.EncodeToString(raw), nil
 }
 
-// instanceCaller resolves an instance token to its machine.
-func (s *Server) instanceCaller(r *http.Request) (machine string, ok bool) {
+// instanceCaller resolves an instance token to its hz instance
+// (config.HZInstance — never a machine).
+func (s *Server) instanceCaller(r *http.Request) (instance string, ok bool) {
 	tok := requestBearer(r)
 	if !strings.HasPrefix(tok, instanceTokenPrefix) {
 		return "", false
 	}
 	sum := tokenDigest(tok)
-	for _, m := range s.cfg().Machines {
-		if m.HZ == nil || m.HZ.TokenSHA256 == "" {
+	for _, h := range s.cfg().HZInstances {
+		if h.TokenSHA256 == "" {
 			continue
 		}
-		if subtle.ConstantTimeCompare([]byte(m.HZ.TokenSHA256), []byte(sum)) == 1 {
-			return m.Name, true
+		if subtle.ConstantTimeCompare([]byte(h.TokenSHA256), []byte(sum)) == 1 {
+			return h.Name, true
 		}
 	}
 	return "", false
 }
 
 // instanceForRung authorises an instance token for one rung: the rung's
-// Upstream must be the token's machine.
+// Upstream must be the token's instance.
 func (s *Server) instanceForRung(r *http.Request, env config.Environment) (machine string, status int, msg string) {
 	machine, ok := s.instanceCaller(r)
 	if !ok {
@@ -415,10 +417,12 @@ func (s *Server) handleAPIDeploysApplied(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, out)
 }
 
-// handleAPIMachineHZToken mints a nested hz's instance token: shown once, its
-// sha256 stored on MachineHZ, a re-mint replacing (and so revoking) the old.
-// POST /api/v1/machines/hz-token
-func (s *Server) handleAPIMachineHZToken(w http.ResponseWriter, r *http.Request) {
+// handleAPIInstanceToken mints a nested hz's instance token: shown once, its
+// sha256 stored on the HZInstance, a re-mint replacing (and so revoking) the
+// old.
+// POST /api/v1/hz-instances/token, and POST /api/v1/machines/hz-token (the
+// pre-B3 path, one release)
+func (s *Server) handleAPIInstanceToken(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {
 		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
 		return
@@ -432,9 +436,13 @@ func (s *Server) handleAPIMachineHZToken(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
 		return
 	}
-	req.Machine = strings.TrimSpace(req.Machine)
-	if req.Machine == "" {
-		writeJSONError(w, http.StatusBadRequest, "machine is required")
+	name, err := instanceAlias(req.Instance, req.Machine)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if name == "" {
+		writeJSONError(w, http.StatusBadRequest, "instance is required — the hz instance to mint a token for")
 		return
 	}
 	tok, err := newInstanceToken()
@@ -443,7 +451,7 @@ func (s *Server) handleAPIMachineHZToken(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	next := *s.cfg()
-	if err := next.SetInstanceTokenHash(req.Machine, tokenDigest(tok)); err != nil {
+	if err := next.SetInstanceTokenHash(name, tokenDigest(tok)); err != nil {
 		writeJSONError(w, http.StatusConflict, err.Error())
 		return
 	}
@@ -451,6 +459,6 @@ func (s *Server) handleAPIMachineHZToken(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
 		return
 	}
-	slog.Info("instance token minted", "machine", req.Machine, "by", s.adminActor(r))
-	writeJSON(w, apitypes.InstanceTokenResp{Machine: req.Machine, Token: tok})
+	slog.Info("instance token minted", "instance", name, "by", s.adminActor(r))
+	writeJSON(w, apitypes.InstanceTokenResp{Instance: name, Machine: name, Token: tok})
 }

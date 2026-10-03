@@ -9,8 +9,8 @@ import (
 
 // The CHILD side of a nested hz (plan/plan.md N4a, decided 2026-10-01).
 //
-// A nested hz is declared on the PARENT as a Machine with an HZ marker, and a
-// parent rung names it as its Upstream. This is the other half, in the CHILD's
+// A nested hz is declared on the PARENT as an HZInstance (hz_instance.go), and
+// a parent rung names it as its Upstream. This is the other half, in the CHILD's
 // own config.json: where the parent answers, the file holding the instance
 // token the parent minted for this machine, and which of the parent's rungs
 // this hz serves locally.
@@ -27,7 +27,7 @@ type UpstreamHZ struct {
 	// redirect is turned into a GET with no body by curl and Go's client, so
 	// give the URL that answers directly.
 	URL string `json:"url"`
-	// TokenFile holds the instance token (POST /api/v1/machines/hz-token on
+	// TokenFile holds the instance token (POST /api/v1/hz-instances/token on
 	// the parent), one line. Read at every poll, so a re-mint is picked up
 	// without a restart. An unreadable file is LOUD, never fatal.
 	TokenFile string `json:"token_file"`
@@ -92,7 +92,7 @@ func (c *Config) ValidateUpstream() error {
 		return fmt.Errorf("upstream: %w", err)
 	}
 	if strings.TrimSpace(u.TokenFile) == "" {
-		return errors.New("upstream: token_file is required — the file holding the instance token the parent minted (`hz machine hz-token <machine>` on the parent)")
+		return errors.New("upstream: token_file is required — the file holding the instance token the parent minted (`hz instance token <name>` on the parent)")
 	}
 	if len(u.Rungs) == 0 {
 		return errors.New("upstream: no rungs — name the parent rungs this hz serves, e.g. {\"project\":\"redline\",\"environment\":\"prod\"}")
@@ -139,37 +139,30 @@ func (c *Config) UpstreamTunnelCollision() error {
 }
 
 // SetInstanceTokenHash records the sha256 of a freshly minted instance token
-// on a nested machine, replacing any earlier one — the old token stops
-// authenticating. The machine must carry an HZ marker: a token for a box that
-// runs no hz would authenticate nothing anybody declared.
-func (c *Config) SetInstanceTokenHash(machine, sha string) error {
+// on an hz instance, replacing any earlier one — the old token stops
+// authenticating.
+func (c *Config) SetInstanceTokenHash(instance, sha string) error {
 	if len(sha) != 64 {
 		return fmt.Errorf("instance token digest must be 64 hex characters, got %d", len(sha))
 	}
 	next := c.copyForWrite()
-	for i, m := range next.Machines {
-		if m.Name != machine {
+	for i, h := range next.HZInstances {
+		if h.Name != instance {
 			continue
 		}
-		if m.HZ == nil {
-			return fmt.Errorf("machine %q runs no hz (no hz marker) — an instance token is for a nested hz; set its hz URL first%s",
-				machine, c.hzMachineHint())
-		}
-		hz := *m.HZ
-		hz.TokenSHA256 = sha
-		next.Machines[i].HZ = &hz
+		next.HZInstances[i].TokenSHA256 = sha
 		c.adopt(next)
 		return nil
 	}
-	return fmt.Errorf("no machine %q — `hz machine ls` lists what exists%s", machine, c.machineHint())
+	return fmt.Errorf("no hz instance %q — an instance token is for a declared nested hz; `hz instance ls` lists them%s", instance, c.hzInstanceHint())
 }
 
-// UpstreamRungsOf is every rung whose Upstream names this machine — the
+// UpstreamRungsOf is every rung whose Upstream names this instance — the
 // instance token's whole scope.
-func (c *Config) UpstreamRungsOf(machine string) []UpstreamRung {
+func (c *Config) UpstreamRungsOf(instance string) []UpstreamRung {
 	var out []UpstreamRung
 	for _, e := range c.Environments {
-		if e.Upstream == machine {
+		if e.Upstream == instance {
 			out = append(out, UpstreamRung{Project: e.Project, Environment: e.Name})
 		}
 	}
