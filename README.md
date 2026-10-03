@@ -324,6 +324,52 @@ Coverage inherited from a wildcard SubZone, and any SubZone another service
 still uses, are reported as shared and never offered for deletion. A service
 that strands nothing deletes without asking anything.
 
+### Backup
+
+hz never sends a backup anywhere. A machine you choose **pulls** it with an
+admin credential (`GET /admin/backup/export`) and keeps it:
+
+```bash
+hz backup pull --dir ~/backups/hz-office --keep 14   # download, verify, write, prune
+hz backup verify ~/backups/hz-office/hz-backup-hz.example.com-20261002T030000Z.zip
+hz backup install-timer --dir ~/backups/hz-office     # systemd USER timer, daily; --enable starts it
+```
+
+The zip contains `manifest.json`, `config.json`, the admin token,
+`wireguard.conf`, `invites.txt`, the certificates in `certs/live/`, the build
+logs in `builds/`, and `hz.db`. It does **not** contain `<data dir>/artifacts/`
+(release artifacts: large, re-uploadable, their sha256s are in `hz.db`) or
+`<data dir>/child-bin/`; the manifest's `excluded` lists both.
+
+`hz.db` is an online snapshot (`VACUUM INTO`), so it has what is still in the
+WAL. A copy of the `.db` file would not. Before hz serves the zip, it opens
+the snapshot read-only and checks three things: `integrity_check` is ok, the
+schema version is the running binary's latest migration, and the row counts
+equal the counts read from the live database. If a check fails, hz answers
+500 with the reason. `hz backup pull` checks the zip again on your machine:
+every sha256 in the manifest, integrity, a recorded schema version, and the row
+counts. If a check fails, it exits non-zero with `LOUD` and writes nothing. It
+writes the file 0600, atomically. `hz backup verify` also checks that the
+snapshot can be restored into the hz you run: its schema must not be newer.
+
+**The backup carries the config manager's wrapped environment keys and every
+sealed config value.** Those open only with a machine private key or a recovery
+key, neither of which is in the zip. But a leaked backup now exposes more: it
+already had the admin token, a WireGuard private key and TLS private keys, and
+now it has every blob the config manager holds, and the identity store: users,
+bcrypt password hashes, **TOTP seeds**, and session and API-token digests. Keep
+it as a secret.
+
+Restore: `POST /admin/backup/import` with the zip. A zip with `hz.db` is checked
+as a whole before hz writes anything. hz refuses a snapshot whose schema is
+newer than its own. hz does not write the database over the open one. It stages
+it as `<db path>.restore` and answers `"restart_required": true`. At the next
+start, before the database opens, hz puts it in place and keeps the old one as
+`hz.db.pre-restore-<time>`. If the staged file fails the same checks at that
+time, hz sets it aside as `.rejected-<time>` and starts on the existing
+database (`LOUD` in the log). A zip with no manifest is from before `hz.db` was
+in the backup. It imports as before.
+
 ### Static Sites
 
 A service can serve a folder of files instead of proxying to a backend. Set `proxy.static_root` to an absolute directory (mutually exclusive with `proxy.backend`):
@@ -458,7 +504,7 @@ curl -s "$HZ_URL/api/v1/deploys/check?project=redline&environment=prod&version=1
 - **Retired lines** have a kept backup and are supported on no rung. The app may delete those backups; hz says so in `hz lines` and deletes nothing.
 - The restore test that counts is the newest one of version X **on the source rung** against the line's **newest** kept backup. A test against an older backup of the line is superseded. The gate also applies to `--allow-downgrade`, unless you also pass `--skip-restore-tests` (`skipRestoreTests`). hz accepts that only for the exact build (version and artifact sha256) already promoted into the target, so only for a rollback to something that ran there. The skip is recorded on the promotion (`restore_gate: "skipped-ran-before"`). The source rung must still report that build first. Data migrated forward may not be readable by the older build; the skip does not check that.
 - **Repeat reports** append: the same version may be reported again with a different sha256 (a rebuild). The newest report wins; the promote pins its sha256; the check compares against the pin.
-- Reports, promotions, kept backups and restore tests are append-only rows in `hz.db` on the config primary (migrations `0014`, `0015`, `0016`). They are **not** peer-synced and have no backup; a check asked of an HA peer finds no promotion and refuses.
+- Reports, promotions, kept backups and restore tests are append-only rows in `hz.db` on the config primary (migrations `0014`, `0015`, `0016`). They are **not** peer-synced; they are in the backup (see [Backup](#backup)); a check asked of an HA peer finds no promotion and refuses.
 - `promote` and `check` need an admin credential. hz has one privilege level, so the gate stops an untested version, not a person; what it adds is the record (`promoted_by`). The project Overview shows the newest report per rung (with its build link), a Promote action on any rung with a `from` edge — its dialog lists the required restore tests before the button — recent promotions, and the release lines.
 - **Promote also refuses an artifact hz does not hold** (409 `artifact <sha12> is not uploaded to hz; prod cannot pull it — the staging deploy uploads it before it reports`). The staging deploy uploads its bundle before it reports — see "Nested prod" below.
 - **Promote also requires provenance** (migration `0018`): the artifact must be the artifact of a **passed build by a build agent registered for the project at build time** — or have been uploaded before `0018` ran (grandfathered). Next section.
@@ -552,7 +598,7 @@ curl -s "$HZ_URL/api/v1/builds/12/log?offset=0"    # or ?tail=65536 — text/pla
 - **Grandfathered.** Every artifact already uploaded when migration `0018` ran is promotable with no build. The list was taken from the rows that existed then, not by a time cutoff, and nothing can add to it. `GET /api/v1/artifacts` marks each artifact `"provenance":"build"` (with `build_number`), `"no build record"` (grandfathered) or `"unproven"` (promote refuses it). The promotion row records `"provenance":"build"` with `build_id`, or `"grandfathered"`; rows from before `0018` read `"predates"`.
 - **Reports.** A deploy report's `build_url` is accepted as before. When the reported version is a build hz numbered, `GET /api/v1/deploys/latest` and `/promotions` carry its `build_number`, and the Overview links hz's build page.
 - **Retention.** A passed build's log is deleted with its artifact, by the artifact retention above, in the same pass. A failed or abandoned build's log is kept 30 days from its finish (or last activity). The build row stays and says when and why its log was deleted.
-- **A build agent on the dev box makes builds traceable, not independent.** hz records which agent built which commit into which artifact, with its log; it does not make the box that writes the code a different party from the one that builds it. Builds, numbers and logs live on the config primary (`hz.db`, `<data dir>/builds/`): not peer-synced, no backup.
+- **A build agent on the dev box makes builds traceable, not independent.** hz records which agent built which commit into which artifact, with its log; it does not make the box that writes the code a different party from the one that builds it. Builds, numbers and logs live on the config primary (`hz.db`, `<data dir>/builds/`): not peer-synced; in the backup (see [Backup](#backup)).
 - The UI: a **Builds** tab on every project (`/p/<project>/builds`: number, version, commit, agent, result, duration, artifact, and **Build agents for <project>**, grouped by host), a page per build (`/p/<project>/builds/<number>`: steps, the log tail, refreshed while it runs, and the artifact sha), the build in the Promote dialog ("no build record (grandfathered)" otherwise), and **Settings → Build agents** ([Add build agent]: a name, one project, an optional host — no machine picker; the token is shown once).
 
 
@@ -655,7 +701,7 @@ An unreadable token file is LOUD, never fatal: the child keeps serving its cache
 - **Use the URL that answers directly.** The office's HAProxy answers http with a 301 to https, and curl and Go's client turn a redirected POST into a GET with no body — redline hit this. Use the `https://` URL, or the VPN address (`http://10.100.0.1:8080`) that answers without a redirect; or keep the method across a redirect (`curl --post301 --post302 --location`). The child refuses to follow a redirect at all and says so.
 - **Timeouts.** hz extends its 30s read deadline for an upload and its write deadline for a download to an hour; a proxy in front of hz needs its own timeouts raised for a large bundle.
 - **Retention.** After each upload and daily, hz keeps: any artifact an apply or promotion into a rung pinned on one of that rung's supported lines, the newest apply per rung, the last 3 distinct artifacts promoted per rung, and each rung's newest report's artifact; a rung whose lines hz cannot derive keeps everything pinned into it. Anything else older than 7 days is deleted; each deletion is logged with its size and why it was not kept, and the record stays with `deleted_at` (the Overview shows "artifact deleted <when>"). A re-upload restores it.
-- Uploads, applies, holds and the last pull time of each instance are in `hz.db` (migration `0017`), beside the artifacts in `/var/lib/homelab-horizon/artifacts/`. Same caveat as above: not peer-synced, no backup. `apply` and `hold` are admin-gated like `promote` — one authority gating itself; what they add is the record and the separation in time between approved and running.
+- Uploads, applies, holds and the last pull time of each instance are in `hz.db` (migration `0017`), beside the artifacts in `/var/lib/homelab-horizon/artifacts/`. Not peer-synced. The rows are in the backup; the artifacts are NOT (see [Backup](#backup)). `apply` and `hold` are admin-gated like `promote` — one authority gating itself; what they add is the record and the separation in time between approved and running.
 - The Overview shows, per rung, **Applied** (version · who · when, or "nothing applied") and **Hold**, an **Apply** action when the newest promotion is not applied yet, and Hold/Unhold; the promotions list marks the applied one. A nested instance's page (Instances) mints its token and shows its last pull.
 
 ### Spinning up a nested hz
