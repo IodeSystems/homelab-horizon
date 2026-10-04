@@ -553,6 +553,74 @@ console.log("· TLS for a nested hz — the parent's domains and certificate, th
   check(!plain.html.includes("data-parent-cert"), "an hz with no upstream shows no parent certificate");
 }
 
+console.log("· DNS for a nested hz — the parent's grant and records, the child's parent answer");
+{
+  const nestedRow = (n: InstanceResp["nested"]): InstanceResp[] => [
+    inst({}),
+    inst({ name: "prod-hz", self: false, address: "http://10.100.0.9:8080", role: "nested", declared: true, version: undefined, nested: n }),
+  ];
+  const base = { hasToken: true, lastPullAt: 1790000000, lastPullRung: "storefront/prod", state: "connected" };
+
+  const none = await at("/instances/prod-hz", nestedRow({ ...base, dns: { grant: [], records: [] } }));
+  check(none.html.includes('data-dns-grant="none"') && none.text.includes("No DNS grant for prod-hz"), "no grant: one line");
+  check(none.html.includes('aria-label="Set DNS grant"'), "with [Set grant] beside it");
+  check(none.html.includes('data-instance-dns-records="none"') && none.text.includes("No DNS published for prod-hz."), "no records: one line");
+  check(none.html.includes('data-dns-last-request="not-since"'), "an unrecorded request is 'not since', not 'never'");
+
+  const full = await at(
+    "/instances/prod-hz",
+    nestedRow({
+      ...base,
+      dns: {
+        grant: ["app.example.com", "*.hz.example.com"],
+        records: [
+          { zone: "example.com", name: "app.example.com", type: "A", values: ["203.0.113.20"], ttl: 300, status: "published" },
+          { zone: "example.com", name: "x.hz.example.com", type: "A", values: ["203.0.113.20"], ttl: 300, status: "pending", reason: "stored on the parent; its DNS sync has not written it yet" },
+        ],
+        lastRequestAt: 1790000200,
+        lastPublicIp: "203.0.113.20",
+        lastRefused: [{ name: "evil.example.com", type: "A", values: ["203.0.113.66"], status: "refused", reason: "evil.example.com is outside hz instance prod-hz's DNS grant" }],
+      },
+    }),
+  );
+  check(full.html.includes('data-dns-grant="app.example.com,*.hz.example.com"') && full.html.includes('aria-label="Edit DNS grant"'), "the grant, with an editor");
+  check(full.html.includes('data-instance-dns-record="app.example.com"') && full.html.includes('data-dns-status="published"'), "a published record");
+  check(full.html.includes('data-dns-status="pending"') && full.text.includes("has not written it yet"), "a pending record says why");
+  check(full.html.includes('data-dns-refused="evil.example.com"') && full.text.includes("outside hz instance prod-hz's DNS grant"), "a refusal names the reason");
+  check(full.html.includes('data-dns-last-request="asked"') && full.text.includes("its public IP 203.0.113.20"), "the last request, with its address");
+
+  const pd = (over: Partial<NonNullable<InstanceResp["parentDns"]>>): InstanceResp[] => [
+    inst({ parentDns: { parent: "http://10.100.0.1:8080", instance: "prod-hz", enabled: true, records: [], ...over } }),
+  ];
+  const answered = await at(
+    "/instances/gw-host",
+    pd({
+      lastAnswerAt: 1790000300,
+      records: [
+        { name: "app.example.com", type: "A", values: ["203.0.113.20"], status: "published" },
+        { name: "evil.example.com", type: "A", values: ["203.0.113.20"], status: "refused", reason: "outside the grant" },
+        { name: "x.hz.example.com", type: "A", values: ["203.0.113.20"], status: "pending" },
+      ],
+    }),
+  );
+  check(answered.html.includes('data-parent-dns="answered"') && answered.text.includes("DNS published by parent http://10.100.0.1:8080"), "the child names its parent");
+  check(answered.text.replace(/&gt;/g, ">").includes("A app.example.com -> 203.0.113.20: published by parent"), "a published record");
+  check(answered.text.replace(/&gt;/g, ">").includes("A evil.example.com -> 203.0.113.20: refused: outside the grant"), "a refused record, with the reason");
+  check(answered.text.replace(/&gt;/g, ">").includes("A x.hz.example.com -> 203.0.113.20: pending"), "a pending record");
+
+  const stale = await at("/instances/gw-host", pd({ lastAnswerAt: 1790000300, lastAttemptAt: 1790000900, lastError: "parent unreachable",
+    records: [{ name: "app.example.com", type: "A", values: ["203.0.113.20"], status: "published" }] }));
+  check(stale.html.includes("data-parent-dns-error") && stale.text.includes("the last one the parent gave"), "an outage keeps the last answer and says so");
+  const never = await at("/instances/gw-host", pd({ lastError: "parent unreachable" }));
+  check(never.html.includes('data-parent-dns="none"') && never.text.includes("has not answered yet"), "never answered is not 'nothing published'");
+  const unasked = await at("/instances/gw-host", pd({ unasked: "this hz's public IP is unknown" }));
+  check(unasked.html.includes('data-parent-dns="unasked"') && unasked.text.includes("public IP is unknown"), "an unknown set is not asked, and says why");
+  const off = await at("/instances/gw-host", pd({ enabled: false, off: "upstream.instance is not set" }));
+  check(off.html.includes('data-parent-dns="off"'), "no instance name: off, with the reason");
+  const plain = await at("/instances/gw-host", [inst({})]);
+  check(!plain.html.includes("data-parent-dns"), "an hz with no upstream shows no parent DNS");
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`);
 if (failures > 0) {
   throw new Error(`${failures} instances render check(s) failed`);
