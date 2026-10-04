@@ -175,6 +175,7 @@ func (z *Zone) qualify(name string) string {
 const (
 	RecordOwnerDerived    = "derived"    // published from a service's external DNS
 	RecordOwnerDeclared   = "declared"   // listed in Zone.Records
+	RecordOwnerInstance   = "instance"   // listed in Zone.Records, published for an hz instance (DNSRecord.Instance)
 	RecordOwnerObserved   = "observed"   // live, but not hz's — never written or deleted
 	RecordOwnerTombstoned = "tombstoned" // hz's, on its way out; awaiting confirmation
 )
@@ -197,6 +198,9 @@ func (c *Config) ClassifyRecord(zoneName, name, recType, value string) string {
 		for _, rec := range c.Zones[i].Records {
 			cn, ct := normalizeRecordKey(c.Zones[i].qualify(rec.Name), rec.Type)
 			if cn == rn && ct == rt && CanonicalRecordValue(ct, rec.Value) == CanonicalRecordValue(rt, value) {
+				if rec.Instance != "" {
+					return RecordOwnerInstance
+				}
 				return RecordOwnerDeclared
 			}
 		}

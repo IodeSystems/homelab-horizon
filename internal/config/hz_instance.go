@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Hz Instances: a nested hz with its OWN config (operator, 2026-10-02 — the
@@ -64,6 +65,14 @@ type HZInstance struct {
 	// owns with a DNS provider (ValidateInstanceDomains, hz_instance_tls.go).
 	// Empty is "no certificate": the instance serves http only.
 	Domains []string `json:"domains,omitempty"`
+	// DNSGrant is where THIS hz publishes DNS the instance asks for
+	// (POST /api/v1/hz-instances/<name>/dns): exact names and "*.suffix"
+	// subtrees, inside zones this hz owns with a DNS provider. Set by this
+	// hz's operator, never by the instance; every Domains name is inside it.
+	// A request outside it is refused, and nothing outside it is ever written
+	// for the instance (hz_instance_dns.go). Empty is "this hz publishes
+	// nothing for it".
+	DNSGrant []string `json:"dns_grant,omitempty"`
 }
 
 // LegacyMachineHZ is the pre-B3 nested-hz marker, `machines[].hz`, with the
@@ -269,6 +278,9 @@ func (c *Config) ValidateHZInstances() error {
 	if err := c.ValidateInstanceDomains(); err != nil {
 		return err
 	}
+	if err := c.ValidateInstanceDNS(); err != nil {
+		return err
+	}
 	return c.validateUpstreamLinks()
 }
 
@@ -282,6 +294,7 @@ func (c *Config) AddHZInstance(h HZInstance) error {
 		VPNClient: strings.TrimSpace(h.VPNClient),
 		Note:      strings.TrimSpace(h.Note),
 		Domains:   NormalizeInstanceDomains(h.Domains),
+		DNSGrant:  NormalizeInstanceDomains(h.DNSGrant),
 	}
 	if _, exists := c.FindHZInstance(h.Name); exists {
 		return fmt.Errorf("hz instance %q already exists — `hz instance ls` lists them", h.Name)
@@ -289,6 +302,8 @@ func (c *Config) AddHZInstance(h HZInstance) error {
 	next := c.copyForWrite()
 	next.HZInstances = append(next.HZInstances, h)
 	sort.Slice(next.HZInstances, func(i, j int) bool { return next.HZInstances[i].Name < next.HZInstances[j].Name })
+	// Domains and no grant: the grant starts as the domains, as Save does.
+	next.MigrateInstanceDNSGrants()
 	if err := next.validateModel(); err != nil {
 		return err
 	}
@@ -308,13 +323,17 @@ type HZInstancePatch struct {
 	// Domains: nil leaves them, an empty non-nil slice clears them (the
 	// instance's certificate is then no longer renewed or served).
 	Domains *[]string
+	// DNSGrant: nil leaves it, an empty non-nil slice revokes it. Every record
+	// the instance owns outside the new grant is removed and tombstoned — the
+	// next sync retracts it at the provider.
+	DNSGrant *[]string
 }
 
 // SetHZInstance edits an instance in place. It keeps the token digest, so a
 // typo fix in the URL never costs the child its credential.
 func (c *Config) SetHZInstance(name string, p HZInstancePatch) (HZInstance, error) {
-	if p.Project == nil && p.URL == nil && p.VPNClient == nil && p.Note == nil && p.Domains == nil {
-		return HZInstance{}, fmt.Errorf("nothing to change on hz instance %q — give a project, a URL, a VPN client, a note or domains", name)
+	if p.Project == nil && p.URL == nil && p.VPNClient == nil && p.Note == nil && p.Domains == nil && p.DNSGrant == nil {
+		return HZInstance{}, fmt.Errorf("nothing to change on hz instance %q — give a project, a URL, a VPN client, a note, domains or a DNS grant", name)
 	}
 	next := c.copyForWrite()
 	idx := -1
@@ -342,11 +361,34 @@ func (c *Config) SetHZInstance(name string, p HZInstancePatch) (HZInstance, erro
 	if p.Domains != nil {
 		h.Domains = NormalizeInstanceDomains(*p.Domains)
 	}
+	if p.DNSGrant != nil {
+		h.DNSGrant = NormalizeInstanceDomains(*p.DNSGrant)
+	}
 	next.HZInstances[idx] = h
+	if p.DNSGrant == nil {
+		// Domains set where there is no grant yet: the grant starts as the
+		// domains, as Save does. An explicit grant is never widened.
+		next.MigrateInstanceDNSGrants()
+		h, _ = next.FindHZInstance(h.Name)
+	}
+	if p.DNSGrant != nil {
+		// Narrowing the grant is the parent's revoke: what the instance owns
+		// outside it goes, and only what the instance owns.
+		next.copyZonesForWrite()
+		grant := h.DNSGrant
+		for _, r := range next.dropInstanceRecords(h.Name, func(_, name, _ string) bool { return GrantCovers(grant, name) },
+			"outside its narrowed DNS grant", time.Now().Unix()) {
+			slog.Warn("LOUD: hz instance "+h.Name+"'s DNS grant no longer covers "+r.Type+" "+r.Name+"; removed, and retracted at the provider by the next sync",
+				"instance", h.Name, "zone", r.Zone, "values", strings.Join(r.Values, ","))
+		}
+	}
 	if err := next.validateModel(); err != nil {
 		return HZInstance{}, err
 	}
 	c.adopt(next)
+	if p.DNSGrant != nil {
+		c.Zones = next.Zones
+	}
 	return h, nil
 }
 
@@ -373,6 +415,10 @@ func (c *Config) HZInstanceRemoval(name string, cascade bool) (removes, blocked 
 		} else {
 			blocked = append(blocked, d)
 		}
+	}
+	for _, r := range c.instanceOwnedSets(name) {
+		removes = append(removes, Dependant{Kind: "dns-record", Name: r,
+			How: "is published by this hz for " + name + "; REMOVED from its zone and retracted at the provider by the next sync"})
 	}
 	for _, rung := range c.upstreamUsers(name) {
 		d := Dependant{Kind: "environment", Name: rung,
@@ -413,11 +459,36 @@ func (c *Config) RemoveHZInstance(name string, cascade bool) ([]Dependant, error
 			next.Environments[i].Upstream = ""
 		}
 	}
+	next.copyZonesForWrite()
+	next.dropInstanceRecords(name, func(_, _, _ string) bool { return false }, "the instance was removed", time.Now().Unix())
 	if err := next.validateModel(); err != nil {
 		return nil, err
 	}
 	c.adopt(next)
+	c.Zones = next.Zones
 	return removes, nil
+}
+
+// instanceOwnedSets is every record set the instance owns, as
+// "<TYPE> <name>", sorted.
+func (c *Config) instanceOwnedSets(instance string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for i := range c.Zones {
+		z := &c.Zones[i]
+		for _, r := range z.Records {
+			if r.Instance != instance {
+				continue
+			}
+			n, t := normalizeRecordKey(z.qualify(r.Name), r.Type)
+			if k := t + " " + n; !seen[k] {
+				seen[k] = true
+				out = append(out, k)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // upstreamUsers is every rung whose Upstream names this instance, as
