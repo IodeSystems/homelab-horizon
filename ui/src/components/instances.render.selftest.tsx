@@ -509,6 +509,50 @@ console.log("· the nested bootstrap — states, the command panel, the project 
   check(failed.text.includes("could not be asked") && !failed.text.includes("No nested instances"), "a failed read is not empty");
 }
 
+console.log("· TLS for a nested hz — the parent's domains and certificate, the child's pulled certificate");
+{
+  const nestedRow = (n: InstanceResp["nested"]): InstanceResp[] => [
+    inst({}),
+    inst({ name: "prod-hz", self: false, address: "http://10.100.0.9:8080", role: "nested", declared: true, version: undefined, nested: n }),
+  ];
+  const base = { hasToken: true, lastPullAt: 1790000000, lastPullRung: "storefront/prod", state: "connected" };
+  const none = await at("/instances/prod-hz", nestedRow({ ...base }));
+  check(none.html.includes('data-tls-domains="none"') && none.text.includes("No TLS domains for prod-hz."), "no domains: one line");
+  check(none.html.includes('aria-label="Set TLS domains"'), "with [Set domains] beside it");
+  check(!none.html.includes("data-cert-state"), "and no certificate row for names nobody declared");
+
+  const issued = await at(
+    "/instances/prod-hz",
+    nestedRow({
+      ...base,
+      domains: ["app.example.com"],
+      cert: { issued: true, notAfter: 1800000000, sans: ["app.example.com"], sha256: "a".repeat(64), lastPulledAt: 1790000100, lastPulledSha256: "a".repeat(64) },
+    }),
+  );
+  check(issued.html.includes('data-tls-domains="app.example.com"') && issued.html.includes('aria-label="Edit TLS domains"'), "the domains, with an editor");
+  check(issued.html.includes('data-cert-state="issued"') && issued.text.includes("not after 2027-01-15"), "issued, with its not-after");
+  check(issued.html.includes('data-cert-pulled="pulled"'), "and when the child last pulled it");
+  check(!/BEGIN|PRIVATE KEY/.test(issued.html), "no key material on the screen");
+
+  const failed = await at(
+    "/instances/prod-hz",
+    nestedRow({ ...base, domains: ["app.example.com"], cert: { issued: false, lastAttemptAt: 1790000000, lastError: "rateLimited" } }),
+  );
+  check(failed.html.includes('data-cert-state="failed"') && failed.text.includes("rateLimited"), "a failed issuance says why");
+  check(failed.html.includes('data-cert-pulled="not-since"') && failed.text.includes("not since this hz started"), "an unrecorded pull is 'not since', not 'never'");
+
+  const child = await at("/instances/gw-host", [
+    inst({ parentCert: { parent: "http://10.100.0.1:8080", instance: "prod-hz", installed: true, notAfter: 1800000000, sans: ["app.example.com"] } }),
+  ]);
+  check(child.html.includes('data-parent-cert="installed"') && child.text.includes("certificate from parent http://10.100.0.1:8080, not after 2027-01-15"), "the child names its parent and the not-after");
+  const expired = await at("/instances/gw-host", [
+    inst({ parentCert: { parent: "http://10.100.0.1:8080", instance: "prod-hz", installed: true, notAfter: 1000000000 } }),
+  ]);
+  check(expired.html.includes('data-parent-cert="expired"') && expired.text.includes("EXPIRED, still served"), "an expired one is kept and says so");
+  const plain = await at("/instances/gw-host", [inst({})]);
+  check(!plain.html.includes("data-parent-cert"), "an hz with no upstream shows no parent certificate");
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`);
 if (failures > 0) {
   throw new Error(`${failures} instances render check(s) failed`);
