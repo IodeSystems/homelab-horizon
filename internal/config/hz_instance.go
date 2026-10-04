@@ -22,10 +22,13 @@ import (
 // the way to remove an hz.
 //
 // It confers nothing on its own: hz never dials the URL (CLAUDE.md #1) and no
-// renderer reads the record (TestNestedMarkersChangeNoRenderedArtifact). The
-// token digest is the child's only power: desired, artifact download, the
-// forwarded report — for rungs whose Upstream names this instance — and the
-// bootstrap's binary download.
+// renderer reads the record (TestNestedMarkersChangeNoRenderedArtifact) — with
+// ONE exception, Domains: each one renders a dnsmasq `server=/name/#`
+// carve-out (externalNameForwards), because the name is the child's to
+// answer. The token digest is the child's only power: desired, artifact
+// download, the forwarded report — for rungs whose Upstream names this
+// instance — the bootstrap's binary download, and the certificate this hz
+// issues for its Domains.
 
 // HZInstance is one nested hz.
 type HZInstance struct {
@@ -53,6 +56,14 @@ type HZInstance struct {
 	TokenSHA256 string `json:"token_sha256,omitempty"`
 	// Note is free text for the operator.
 	Note string `json:"note,omitempty"`
+	// Domains are the hostnames the instance terminates TLS for. THIS hz
+	// issues one certificate covering exactly these names — through its own
+	// zone's DNS provider, never sharing a certificate with this hz's own
+	// names — and the instance pulls it with its token
+	// (GET /api/v1/hz-instances/<name>/cert). Each must be in one zone this hz
+	// owns with a DNS provider (ValidateInstanceDomains, hz_instance_tls.go).
+	// Empty is "no certificate": the instance serves http only.
+	Domains []string `json:"domains,omitempty"`
 }
 
 // LegacyMachineHZ is the pre-B3 nested-hz marker, `machines[].hz`, with the
@@ -143,7 +154,8 @@ func (c *Config) MigrateLegacyMachineHZ() error {
 			if have.Name != inst.Name {
 				continue
 			}
-			if have != inst {
+			if have.Name != inst.Name || have.Project != inst.Project || have.URL != inst.URL ||
+				have.VPNClient != inst.VPNClient || have.TokenSHA256 != inst.TokenSHA256 || have.Note != inst.Note {
 				return fmt.Errorf("machine %q carries a legacy hz marker and an hz instance %q already exists with different values — reconcile them in config.json", m.Name, inst.Name)
 			}
 			dup = true
@@ -254,6 +266,9 @@ func (c *Config) ValidateHZInstances() error {
 			return fmt.Errorf("hz instance %q has a malformed token digest", h.Name)
 		}
 	}
+	if err := c.ValidateInstanceDomains(); err != nil {
+		return err
+	}
 	return c.validateUpstreamLinks()
 }
 
@@ -266,6 +281,7 @@ func (c *Config) AddHZInstance(h HZInstance) error {
 		URL:       strings.TrimSpace(h.URL),
 		VPNClient: strings.TrimSpace(h.VPNClient),
 		Note:      strings.TrimSpace(h.Note),
+		Domains:   NormalizeInstanceDomains(h.Domains),
 	}
 	if _, exists := c.FindHZInstance(h.Name); exists {
 		return fmt.Errorf("hz instance %q already exists — `hz instance ls` lists them", h.Name)
@@ -289,13 +305,16 @@ type HZInstancePatch struct {
 	URL       *string
 	VPNClient *string
 	Note      *string
+	// Domains: nil leaves them, an empty non-nil slice clears them (the
+	// instance's certificate is then no longer renewed or served).
+	Domains *[]string
 }
 
 // SetHZInstance edits an instance in place. It keeps the token digest, so a
 // typo fix in the URL never costs the child its credential.
 func (c *Config) SetHZInstance(name string, p HZInstancePatch) (HZInstance, error) {
-	if p.Project == nil && p.URL == nil && p.VPNClient == nil && p.Note == nil {
-		return HZInstance{}, fmt.Errorf("nothing to change on hz instance %q — give a project, a URL, a VPN client or a note", name)
+	if p.Project == nil && p.URL == nil && p.VPNClient == nil && p.Note == nil && p.Domains == nil {
+		return HZInstance{}, fmt.Errorf("nothing to change on hz instance %q — give a project, a URL, a VPN client, a note or domains", name)
 	}
 	next := c.copyForWrite()
 	idx := -1
@@ -319,6 +338,9 @@ func (c *Config) SetHZInstance(name string, p HZInstancePatch) (HZInstance, erro
 	}
 	if p.Note != nil {
 		h.Note = strings.TrimSpace(*p.Note)
+	}
+	if p.Domains != nil {
+		h.Domains = NormalizeInstanceDomains(*p.Domains)
 	}
 	next.HZInstances[idx] = h
 	if err := next.validateModel(); err != nil {

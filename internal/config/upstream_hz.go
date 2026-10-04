@@ -35,6 +35,11 @@ type UpstreamHZ struct {
 	Rungs []UpstreamRung `json:"rungs"`
 	// PollSeconds is the desired-state poll interval; 0 is 30.
 	PollSeconds int `json:"poll_seconds,omitempty"`
+	// Instance is this hz's name on the parent (its HZInstance record). The
+	// TLS certificate the parent issues for this hz's domains is pulled from
+	// /api/v1/hz-instances/<instance>/cert. "" is "pull no certificate": a
+	// config written before the field existed keeps working, http only.
+	Instance string `json:"instance,omitempty"`
 }
 
 // UpstreamRung is one parent rung, by its coordinates on the parent.
@@ -96,6 +101,11 @@ func (c *Config) ValidateUpstream() error {
 	}
 	if len(u.Rungs) == 0 {
 		return errors.New("upstream: no rungs — name the parent rungs this hz serves, e.g. {\"project\":\"redline\",\"environment\":\"prod\"}")
+	}
+	if u.Instance != "" {
+		if err := CheckHZInstanceName(u.Instance); err != nil {
+			return fmt.Errorf("upstream: instance: %w", err)
+		}
 	}
 	if u.PollSeconds < 0 {
 		return fmt.Errorf("upstream: poll_seconds %d is negative", u.PollSeconds)

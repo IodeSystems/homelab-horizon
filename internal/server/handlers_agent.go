@@ -274,10 +274,7 @@ func (s *Server) desiredFor(machine string) *agent.Desired {
 	_, expected, stale, blessed, currentIface, _ := s.buildClassifierInputs()
 
 	if cfg.HAProxyEnabled && s.haproxy != nil {
-		var ssl *haproxy.SSLConfig
-		if cfg.SSLEnabled {
-			ssl = &haproxy.SSLConfig{Enabled: true, CertDir: cfg.SSLHAProxyCertDir}
-		}
+		ssl := haproxySSLFor(cfg)
 		sec := &agent.HAProxySection{
 			ConfigPath:  cfg.HAProxyConfigPath,
 			StatsSocket: haproxyStatsSocket,

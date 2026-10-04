@@ -540,13 +540,13 @@ func (s *Server) enrolChild(gr childGrant, req apitypes.NestedEnrolReq, bin chil
 			SHA256:  bin.SHA256,
 			Version: bin.Version,
 		},
-		Seed: childSeed(gr.Project, gr.Rung, env.Posture, service, parentURL),
+		Seed: childSeed(h.Name, gr.Project, gr.Rung, env.Posture, service, parentURL),
 	}, 0, nil
 }
 
 // childSeed is the child's config.json seed. The service token is EMPTY: the
 // box generates it, and the parent never learns it.
-func childSeed(project, rung, posture, service, parentURL string) apitypes.NestedChildSeed {
+func childSeed(instance, project, rung, posture, service, parentURL string) apitypes.NestedChildSeed {
 	return apitypes.NestedChildSeed{
 		Projects:     []apitypes.NestedSeedProject{{Name: project}},
 		Environments: []apitypes.NestedSeedEnvironment{{Project: project, Name: rung, Posture: posture}},
@@ -555,6 +555,7 @@ func childSeed(project, rung, posture, service, parentURL string) apitypes.Neste
 			URL:       parentURL,
 			TokenFile: childTokenFile,
 			Rungs:     []apitypes.NestedSeedRung{{Project: project, Environment: rung}},
+			Instance:  instance,
 		},
 	}
 }

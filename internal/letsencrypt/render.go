@@ -231,7 +231,8 @@ type DirEntry struct {
 //
 // Only .pem files are candidates: anything else in there was put there by
 // somebody, is not loaded by HAProxy as a certificate, and is not hz's to
-// delete.
+// delete. ParentCertFile is never one: on a nested hz it is the certificate the
+// PARENT issued, which this hz's own domain list knows nothing of.
 func OrphanedCertFiles(domains []DomainConfig, entries []DirEntry) []string {
 	valid := make(map[string]bool, len(domains))
 	for _, d := range domains {
@@ -240,7 +241,7 @@ func OrphanedCertFiles(domains []DomainConfig, entries []DirEntry) []string {
 
 	var orphans []string
 	for _, e := range entries {
-		if e.IsDir || !strings.HasSuffix(e.Name, ".pem") || valid[e.Name] {
+		if e.IsDir || !strings.HasSuffix(e.Name, ".pem") || valid[e.Name] || e.Name == ParentCertFile {
 			continue
 		}
 		orphans = append(orphans, e.Name)
@@ -393,4 +394,74 @@ func ParseAWSProfiles(files [][]byte) []string {
 		profiles = append([]string{"default"}, profiles...)
 	}
 	return profiles
+}
+
+// ParentCertFile is the bundle a nested hz installs in its HAProxy cert
+// directory: the certificate its PARENT issued for its domains, pulled with
+// its instance token (internal/nested). One name, so the child's own prune
+// (OrphanedCertFiles) and its HTTPS decision agree on which file it is.
+const ParentCertFile = "hz-parent.pem"
+
+// InstanceCertPaths is where THIS hz files the certificate it issues for a
+// nested hz instance: <certDir>/hz-instances/<instance>/, the same three files
+// as CertPathsFor. A directory of its own, apart from live/, so an instance
+// certificate is never packaged into this hz's HAProxy directory, never pruned
+// as one of its own, and the pull endpoint can never hand out an office
+// certificate by naming a domain.
+func InstanceCertPaths(certDir, instance string) CertPaths {
+	dir := path.Join(certDir, "hz-instances", instance)
+	return CertPaths{
+		LiveDir:   dir,
+		Fullchain: path.Join(dir, "fullchain.pem"),
+		Privkey:   path.Join(dir, "privkey.pem"),
+		Chain:     path.Join(dir, "chain.pem"),
+	}
+}
+
+// SplitFullchain splits a fullchain PEM into the leaf (the first block) and
+// the rest (the issuer chain), byte-for-byte. ok is false when the first
+// block is not a CERTIFICATE.
+func SplitFullchain(fullchain []byte) (leaf, chain []byte, ok bool) {
+	block, rest := pem.Decode(fullchain)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, nil, false
+	}
+	leaf = fullchain[:len(fullchain)-len(rest)]
+	return leaf, []byte(strings.TrimLeft(string(rest), "\r\n")), true
+}
+
+// CertSANs reads the DNS names off the first certificate in pemData.
+func CertSANs(pemData []byte) ([]string, bool) {
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return nil, false
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, false
+	}
+	return cert.DNSNames, true
+}
+
+// RenewalReason is why a certificate must be (re)requested, "" when it need
+// not: "missing" (no certificate, or one that does not parse), "sans" (its
+// names differ from the request, either way — see DiffSANs), "expiring"
+// (within withinDays of now). The same three questions the office's sweep
+// asks of its own certificates, asked of the bytes.
+func RenewalReason(d DomainConfig, fullchain []byte, now time.Time, withinDays int) string {
+	sans, ok := CertSANs(fullchain)
+	if !ok {
+		return "missing"
+	}
+	if missing, extra := DiffSANs(d, sans); len(missing) > 0 || len(extra) > 0 {
+		return "sans"
+	}
+	notAfter, ok := CertNotAfter(fullchain)
+	if !ok {
+		return "missing"
+	}
+	if NeedsRenewalAt(notAfter, now, withinDays) {
+		return "expiring"
+	}
+	return ""
 }

@@ -46,6 +46,7 @@ import { buildProjectIndex, type ProjectIndex } from "../components/model/projec
 import { HostsAudit } from "../components/hosts/HostsAudit";
 import { findInstance, projectOf, readInstancesSource } from "../components/instances/instances";
 import { NestedStateChip } from "../components/instances/NestedBootstrap";
+import { InstanceCertFacts, ParentCertFact } from "../components/instances/InstanceTLS";
 
 function when(unix: number): string {
   return unix > 0 ? new Date(unix * 1000).toISOString().replace("T", " ").replace(/\.\d+Z$/, "Z") : "never";
@@ -360,6 +361,10 @@ export function InstanceScreen({ name }: { name: string }) {
               </Fact>
             ) : null}
             {row.role === "nested" ? <NestedPullFacts row={row} /> : null}
+            {row.role === "nested" ? (
+              <InstanceCertFacts name={row.name} domains={row.nested?.domains ?? []} cert={row.nested?.cert} />
+            ) : null}
+            {row.self && row.parentCert ? <ParentCertFact pc={row.parentCert} /> : null}
             {row.role === "standalone" || row.role === "nested" ? null : (
               <Fact label="Config primary">
                 <Typography sx={{ fontFamily: "monospace" }}>{row.primaryId || "none marked"}</Typography>

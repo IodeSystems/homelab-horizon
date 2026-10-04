@@ -7,7 +7,6 @@ import (
 	"net/http"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
-	"github.com/iodesystems/homelab-horizon/internal/haproxy"
 )
 
 // The edge rate limit (EDGE-4).
@@ -136,10 +135,7 @@ func (s *Server) applyHAProxyConfig() error {
 	s.haproxy.SetMFAJail(mfaJailFor(cfg, backends))
 	s.haproxy.SetRateLimit(rateLimitFor(cfg))
 
-	var sslConfig *haproxy.SSLConfig
-	if cfg.SSLEnabled {
-		sslConfig = &haproxy.SSLConfig{Enabled: true, CertDir: cfg.SSLHAProxyCertDir}
-	}
+	sslConfig := haproxySSLFor(cfg)
 	if err := s.haproxy.WriteConfig(cfg.HAProxyHTTPPort, cfg.HAProxyHTTPSPort, sslConfig); err != nil {
 		return fmt.Errorf("write haproxy config: %w", err)
 	}

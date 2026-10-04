@@ -11,7 +11,7 @@ import (
 // The pure/privileged seam (CLAUDE.md #12), as internal/agent carries it:
 // decide.go decides what to fetch, whether the cache answers and what to
 // delete; child.go and queue.go dial, read and write.
-var pureFiles = []string{"decide.go"}
+var pureFiles = []string{"decide.go", "certdecide.go"}
 
 func TestPureHalfStaysPure(t *testing.T) {
 	banned := map[string]string{
@@ -48,6 +48,7 @@ func TestPureHalfCannotAct(t *testing.T) {
 		"Put": true, "Remove": true, "Open": true, "Has": true, "List": true,
 		"fetchArtifact": true, "writeCache": true, "writeAtomic": true, "LoadCache": true,
 		"poll": true, "forward": true, "Drain": true, "Append": true, "Do": true,
+		"pullCert": true, "readInstalled": true, "OnCertInstalled": true, "WriteFile": true,
 	}
 	for _, name := range pureFiles {
 		fset := token.NewFileSet()
