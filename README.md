@@ -767,6 +767,46 @@ Nothing hz runs writes `/etc/wireguard/hz-upstream.conf`; only the bootstrap scr
 
 **Upgrading from a release where a nested hz was a machine** (`machines[].hz`). On load — and on a backup restore — each marker becomes an `hz_instances` record with the same name, owner, URL, VPN client and token digest, so the child keeps pulling with the token it has; nothing is re-bootstrapped. The machine that carried the marker is then removed if it holds nothing else (no segments, no note, no agent enrolment). Otherwise it is kept as a machine, and the log says so with `LOUD`.
 
+### TLS for a nested hz
+
+**Who issues.** The parent. It owns the zone and its DNS credential, so it answers the DNS-01 challenge and issues. The child never issues. Declare the names the child terminates TLS for on the parent:
+
+```bash
+hz instance domains loadtest-hz loadtest.app.example.com     # --clear to stop
+# = POST /api/v1/hz-instances/set {"name":"loadtest-hz","domains":["loadtest.app.example.com"]}
+```
+
+Each name must be in a zone the parent owns, with a DNS provider. All names must be in one zone. A name must not be at or below a delegated name. It must not be a service domain on the parent, and it must not be a name in the parent's own certificate (`sub_zones`). Two instances cannot list the same name. A name that breaks a rule is refused with a sentence.
+
+The parent issues **one certificate per instance**, for exactly those names. It uses the same ACME account and DNS provider as its own certificates. The parent files the certificate in `<ssl_cert_dir>/hz-instances/<name>/`, apart from its own certificates. It never adds the certificate to its own HAProxy, and it never adds the child's names to its own certificates. Issuance starts in the background when you set the domains. Only the config primary issues (or a standalone hz).
+
+**What crosses.** The child pulls the certificate with its instance token:
+
+```
+GET /api/v1/hz-instances/<name>/cert          that instance's token only
+-> 200 {"instance","domains","cert_pem","chain_pem","key_pem","not_after","sha256"}
+   ETag = "<sha256>", Cache-Control: no-store; If-None-Match -> 304
+-> 401 no token, an admin token; 403 another instance's token
+-> 404 no domains, or not issued yet; 409 the certificate on file does not cover the declared names (a reissue is pending)
+```
+
+The ACME account key and the DNS credential never cross. The response type has no field for them. `sha256` is the hash of `cert_pem + chain_pem + key_pem`, which is the bundle the child writes.
+
+**On the child.** Set `upstream.instance` to the child's name on the parent. The bootstrap writes it. A config that does not have it pulls no certificate. On each poll the child does these steps:
+1. Verify the certificate: the sha256 matches, the key matches the certificate, the SANs are exactly the declared names, and `not_after` is in the future. Inside 14 days, it logs `LOUD`.
+2. Write it atomically, mode 0600, to `<ssl_haproxy_cert_dir>/hz-parent.pem`.
+3. Re-render and reload HAProxy only when the sha256 changed.
+
+With that file present, the child renders the HTTPS frontend (`bind *:443 ssl crt <dir>`) and the same http→https `301` the parent uses, without `ssl_enabled`. A refused certificate is not installed, and the installed one keeps serving.
+
+**Renewal.** The parent's renewal sweep (every 12 hours) renews an instance certificate 30 days before expiry, and when its names change. A failure is logged and shown on the instance page. The child picks up the new certificate on its next poll.
+
+**When the link is down.** Boot does not need the parent. The child serves the last certificate it installed, even after it expires, and logs `LOUD`. A browser warning is recoverable. Dropping TLS is not.
+
+**DNS on the parent's LAN.** A broader `address=/app.example.com/<parent>` from a service domain catches every name below it. So the parent's dnsmasq writes `server=/<name>/#` for every instance domain, and for every zone A/AAAA/CNAME record that points somewhere other than this hz, when a broader local answer covers the name. These names then resolve publicly, as delegations do.
+
+**UI.** On the parent, the instance's page (Instances → the instance) shows the domains, the certificate (issued, not after, last pulled by the child) and an editor. On the child, its own Instances row shows "certificate from parent `<url>`, not after …".
+
 ## Observability
 
 hz already knows every host and backend it routes to, so it can hand Prometheus
