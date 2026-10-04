@@ -79,6 +79,12 @@ key (`internal/acme/acme.go:28-41`), issued TLS private keys
 halves of a client's WireGuard key, momentarily, to render a config and a QR
 code (`internal/server/handlers_api_vpn.go:72,117-121`).
 
+Since N4f (2026-10-03) hz also issues a **dedicated certificate per hz instance** and
+hands its private key to that instance over HTTP, authenticated by the instance
+token and scoped to that instance only (`internal/server/handlers_api_apply.go:48`). It is issued material for that
+instance's own names (#3); the office's shared certificates and the ACME account
+key never cross.
+
 ## 5 · Nothing in the boot path may depend on freshness.
 
 Services here run unattended for years. This has killed at least two proposals
@@ -257,7 +263,7 @@ builder declared as a machine read as a project owning the box.
 |---|---|---|---|---|
 | **Machine** | a box hz projects network and units ONTO; the agent's target | agent enrolment | `config.Machine` | Machines |
 | **Vantage** | an outside probe that pushes check results in | probe token | remotes | Checks |
-| **Hz Instance** | a nested hz with its OWN config (e.g. redline-loadtest) | instance token `hzi_` + an `upstream` VPN client | `config.HZInstance{Name, Project, URL, VPNClient, TokenSHA256, Note}` (`hz_instances`); `Environment.Upstream` names one | Instances, the owning project's page — never Machines |
+| **Hz Instance** | a nested hz with its OWN config (e.g. redline-loadtest) | instance token `hzi_` + an `upstream` VPN client | `config.HZInstance{Name, Project, URL, VPNClient, TokenSHA256, Note, Domains}` (`hz_instances`); `Environment.Upstream` names one | Instances, the owning project's page — never Machines |
 | **Hz Node** | a cluster member of ONE instance (HA peer); no config of its own | HA join / peer sync | the HA peer list | Settings › HA |
 | **Build Agent** | a registration that numbers, logs and uploads builds for ONE project; several may run on one host (a label, not a machine) | agent token `hzb_` | `config.BuildAgent{Name, Project, Host, Note, TokenSHA256}` (`build_agents`) | Settings, Builds |
 
