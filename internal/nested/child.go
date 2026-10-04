@@ -52,6 +52,16 @@ type Child struct {
 	Log   *slog.Logger
 	// MaxArtifactBytes bounds a download; 0 is config.DefaultArtifactMaxBytes.
 	MaxArtifactBytes int64
+	// Instance is this hz's name on the parent (upstream.instance); CertDir
+	// is the HAProxy cert dir the parent's certificate is installed in. Both
+	// set, or no certificate is pulled (cert.go).
+	Instance string
+	CertDir  string
+	// OnCertInstalled re-renders and reloads HAProxy after a NEW certificate
+	// is written. Nil is "nothing to reload" (tests).
+	OnCertInstalled func() error
+
+	cert certMemo
 
 	mu    sync.Mutex
 	links map[config.UpstreamRung]*Link
@@ -70,6 +80,7 @@ func New(u config.UpstreamHZ, dataDir string) *Child {
 		URL:       strings.TrimRight(strings.TrimSpace(u.URL), "/"),
 		TokenFile: u.TokenFile,
 		Rungs:     append([]config.UpstreamRung(nil), u.Rungs...),
+		Instance:  strings.TrimSpace(u.Instance),
 		Interval:  interval,
 		Dir:       dir,
 		Store:     artifact.Store{Dir: filepath.Join(dir, "artifacts")},
@@ -125,10 +136,12 @@ func (c *Child) Serves(project, environment string) bool {
 // Run polls every rung and drains the report queue until ctx ends.
 func (c *Child) Run(ctx context.Context) {
 	c.CheckToken()
+	c.CheckInstalledCert()
 	t := time.NewTicker(c.Interval)
 	defer t.Stop()
 	for {
 		c.PollOnce(ctx)
+		_ = c.PullCertOnce(ctx)
 		_ = c.DrainOnce(ctx)
 		select {
 		case <-ctx.Done():
