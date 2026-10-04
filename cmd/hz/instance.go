@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 )
@@ -28,6 +29,11 @@ const instanceUsage = `usage:
   hz instance token <name>
       Mint the instance token it pulls with. Shown ONCE; a re-mint replaces
       the old one.
+  hz instance domains <name> <domain>... | --clear
+      The hostnames it terminates TLS for. This hz issues ONE certificate
+      covering exactly these (DNS-01 through its own zone's provider) and the
+      instance pulls it with its token. All must be in one zone this hz owns
+      with a DNS provider. --clear stops issuing; the child keeps what it has.
 
   hz machine hz-token <name>   DEPRECATED alias of hz instance token, one release.
 `
@@ -54,6 +60,8 @@ func runInstance(c *client, args []string) error {
 		return instanceRm(c, args[1:])
 	case "token":
 		return instanceToken(c, args[1:])
+	case "domains":
+		return instanceDomains(c, args[1:])
 	default:
 		return fmt.Errorf("unknown instance subcommand: %s\n%s", args[0], instanceUsage)
 	}
@@ -82,6 +90,9 @@ func instanceList(c *client) error {
 			token = "NO TOKEN — `hz instance token " + h.Name + "`"
 		}
 		fmt.Printf("%-24s %-16s %-32s %-28s %s\n", h.Name, owner, h.URL, vpn, token)
+		if len(h.Domains) > 0 {
+			fmt.Printf("%-24s tls: %s\n", "", strings.Join(h.Domains, ", "))
+		}
 	}
 	return nil
 }
@@ -153,4 +164,29 @@ func instanceToken(c *client, args []string) error {
 func machineHZToken(c *client, args []string) error {
 	fmt.Fprintln(os.Stderr, "hz machine hz-token is deprecated and goes in the next release: use hz instance token (an hz instance is not a machine)")
 	return instanceToken(c, args)
+}
+
+func instanceDomains(c *client, args []string) error {
+	fs := flag.NewFlagSet("instance domains", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Fprint(os.Stderr, instanceUsage) }
+	clearAll := fs.Bool("clear", false, "declare no domains: this hz stops issuing the instance a certificate")
+	pos, err := positional(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) < 1 || (*clearAll && len(pos) != 1) || (!*clearAll && len(pos) < 2) {
+		return fmt.Errorf("%s", instanceUsage)
+	}
+	domains := append([]string{}, pos[1:]...)
+	var out apitypes.HZInstanceResp
+	if err := c.do(http.MethodPost, apitypes.HZInstancesPath+"/set", apitypes.HZInstanceSetReq{Name: pos[0], Domains: &domains}, &out); err != nil {
+		return err
+	}
+	if len(out.Domains) == 0 {
+		fmt.Printf("hz instance %s declares no domains; no certificate is issued for it. The child keeps the one it has.\n", out.Name)
+		return nil
+	}
+	fmt.Printf("hz instance %s: this hz issues one certificate for %s (in the background; see its Instances page). The child pulls it with its token.\n",
+		out.Name, strings.Join(out.Domains, ", "))
+	return nil
 }

@@ -350,6 +350,15 @@ type Server struct {
 	// for those rungs and serves them from its cache (handlers_nested.go).
 	child *nested.Child
 
+	// instanceCerts is what this process knows of the certificates it issues
+	// for nested hz instances (instance_tls.go): the last issuance attempt and
+	// the child's last pull, per instance. Memory only.
+	instanceCerts instanceCertMemo
+	// obtainInstanceCert issues one instance certificate; nil is the real
+	// CA conversation (letsencrypt.Manager.RequestInstanceCert). Tests
+	// replace it so no test reaches a CA.
+	obtainInstanceCert func(cfg *config.Config, instance string, dc letsencrypt.DomainConfig) error
+
 	// The one-command bootstrap of a nested hz (handlers_nested_bootstrap.go):
 	// the stored server binaries a child installs (<data dir>/child-bin; nil
 	// is no store), the in-memory bootstrap grants, and the wg0 reload the
@@ -609,6 +618,9 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		s.buildDir = filepath.Join(cfg.DataDir(), "builds")
 		s.childBins = newChildBinStore(filepath.Join(cfg.DataDir(), "child-bin"))
 		s.child = childFromConfig(cfg)
+		if s.child != nil {
+			s.child.OnCertInstalled = s.applyHAProxyConfig
+		}
 	}
 	s.config.Store(cfg)
 	// After the config is stored: the collector reads live server state.
@@ -1283,6 +1295,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc(apitypes.HZInstancesPath+"/set", s.handleAPIHZInstanceSet)
 	mux.HandleFunc(apitypes.HZInstancesPath+"/rm", s.handleAPIHZInstanceRm)
 	mux.HandleFunc(apitypes.HZInstancesPath+"/token", s.handleAPIInstanceToken)
+	// GET /api/v1/hz-instances/<name>/cert — that instance's token only
+	// (instance_tls.go).
+	mux.HandleFunc(apitypes.HZInstancesPath+"/", s.handleAPIHZInstanceSubtree)
 	// The build registry (handlers_api_builds.go): builders, and the builds
 	// they start, log, state and finish. Same placement rule: the numbers and
 	// the logs are on the primary.
@@ -1928,7 +1943,7 @@ func (s *Server) startCertRenewal() {
 	if !s.cfg().SSLEnabled {
 		return
 	}
-	if len(s.cfg().DeriveSSLDomains()) == 0 {
+	if len(s.cfg().DeriveSSLDomains()) == 0 && !s.cfg().HasInstanceDomains() {
 		return
 	}
 
@@ -1957,7 +1972,13 @@ func (s *Server) startCertRenewal() {
 func (s *Server) certRenewalSweep() {
 	cfg := s.cfg()
 	sslDomains := cfg.DeriveSSLDomains()
-	if !cfg.SSLEnabled || len(sslDomains) == 0 {
+	if !cfg.SSLEnabled {
+		return
+	}
+	// Nested instances' certificates: issued here, filed apart from this
+	// hz's own, never packaged into its HAProxy (instance_tls.go).
+	s.renewInstanceCerts(cfg)
+	if len(sslDomains) == 0 {
 		return
 	}
 

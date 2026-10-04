@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/iodesystems/homelab-horizon/internal/haproxy"
 	"github.com/iodesystems/homelab-horizon/internal/letsencrypt"
 	"github.com/iodesystems/homelab-horizon/internal/route53"
 )
@@ -47,10 +46,7 @@ func (s *Server) syncServices() {
 	// Update HAProxy
 	if s.cfg().HAProxyEnabled {
 		s.syncHAProxyBackends()
-		var sslConfig *haproxy.SSLConfig
-		if s.cfg().SSLEnabled {
-			sslConfig = &haproxy.SSLConfig{Enabled: true, CertDir: s.cfg().SSLHAProxyCertDir}
-		}
+		sslConfig := haproxySSLFor(s.cfg())
 		if err := s.haproxy.WriteConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, sslConfig); err != nil {
 			slog.Warn("haproxy.WriteConfig", "err", err)
 		}
@@ -689,13 +685,7 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 		s.haproxy.SetTLSMinVersion(s.cfg().TLSMinVersion())
 		log.Info(fmt.Sprintf("  Configured %d backends", len(backends)))
 
-		var sslConfig *haproxy.SSLConfig
-		if s.cfg().SSLEnabled {
-			sslConfig = &haproxy.SSLConfig{
-				Enabled: true,
-				CertDir: s.cfg().SSLHAProxyCertDir,
-			}
-		}
+		sslConfig := haproxySSLFor(s.cfg())
 
 		if err := s.haproxy.WriteConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, sslConfig); err != nil {
 			log.Error(fmt.Sprintf("  Failed to write config: %s", err))

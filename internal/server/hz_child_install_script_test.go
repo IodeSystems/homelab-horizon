@@ -198,7 +198,7 @@ func runJQMerge(t *testing.T, seed apitypes.NestedChildSeed, current, svcToken s
 // An existing config is MERGED: other services, projects and settings are
 // kept, an existing service's domains are kept, and the upstream is replaced.
 func TestChildScriptMergeKeepsAnExistingConfig(t *testing.T) {
-	seed := childSeed("redline", "loadtest", "prod", "redline-loadtest", "http://10.100.0.1:8080")
+	seed := childSeed("redline-loadtest", "redline", "loadtest", "prod", "redline-loadtest", "http://10.100.0.1:8080")
 	current := `{"listen_addr": ":9090", "projects": [{"name": "redline", "parent": ""}, {"name": "ops"}],
 	  "services": [{"name": "grafana", "domains": ["grafana.example.com"]},
 	               {"name": "redline-loadtest", "domains": ["loadtest.example.com"], "token": "old"}],
@@ -400,7 +400,7 @@ func TestEnrolSeedLoadsAsTheChildsConfig(t *testing.T) {
 // A seeded child binds loopback, not every interface: an empty or default
 // ":8080" listen address becomes 127.0.0.1:8080; an explicit one is kept.
 func TestChildScriptSeedsALoopbackListener(t *testing.T) {
-	seed := childSeed("redline", "loadtest", "prod", "redline-loadtest", "http://10.100.0.1:8080")
+	seed := childSeed("redline-loadtest", "redline", "loadtest", "prod", "redline-loadtest", "http://10.100.0.1:8080")
 	for current, want := range map[string]string{
 		`{}`:                               "127.0.0.1:8080",
 		`{"listen_addr": ":8080"}`:         "127.0.0.1:8080",

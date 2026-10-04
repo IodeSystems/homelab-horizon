@@ -40,11 +40,13 @@ import (
 // from "running" in time and in the record, not between two people.
 //
 // THE INSTANCE TOKEN is the one credential a nested hz holds for this one. It
-// authenticates as instance:<machine> for exactly four calls — desired, an
+// authenticates as instance:<machine> for exactly five calls — desired, an
 // artifact download, and a forwarded deploy report, only for rungs whose
 // Upstream names that machine; and the hz server binary the bootstrap installs
 // (GET /api/v1/nested/bin/<platform>, handlers_nested_bootstrap.go), which is
-// no rung's. isAdmin never accepts it, so every admin route
+// no rung's; and a fifth, the TLS certificate this hz issues for that
+// instance's own domains (GET /api/v1/hz-instances/<name>/cert,
+// instance_tls.go). isAdmin never accepts it, so every admin route
 // refuses it without knowing it exists; TestInstanceTokenIsRefusedOnAdminRoutes
 // enumerates them.
 

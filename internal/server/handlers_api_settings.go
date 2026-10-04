@@ -9,7 +9,6 @@ import (
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
-	"github.com/iodesystems/homelab-horizon/internal/haproxy"
 )
 
 func (s *Server) handleAPISettings(w http.ResponseWriter, r *http.Request) {
@@ -331,13 +330,7 @@ func (s *Server) handleAPIHAProxyWriteConfig(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	var sslConfig *haproxy.SSLConfig
-	if s.cfg().SSLEnabled {
-		sslConfig = &haproxy.SSLConfig{
-			Enabled: true,
-			CertDir: s.cfg().SSLHAProxyCertDir,
-		}
-	}
+	sslConfig := haproxySSLFor(s.cfg())
 
 	if err := s.haproxy.WriteConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, sslConfig); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
@@ -373,13 +366,7 @@ func (s *Server) handleAPIHAProxyConfigPreview(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	var sslConfig *haproxy.SSLConfig
-	if s.cfg().SSLEnabled {
-		sslConfig = &haproxy.SSLConfig{
-			Enabled: true,
-			CertDir: s.cfg().SSLHAProxyCertDir,
-		}
-	}
+	sslConfig := haproxySSLFor(s.cfg())
 
 	preview := s.haproxy.GenerateConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, sslConfig)
 
