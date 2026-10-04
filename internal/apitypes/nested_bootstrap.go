@@ -142,6 +142,9 @@ type NestedSeedUpstream struct {
 	TokenFile   string           `json:"token_file"`
 	Rungs       []NestedSeedRung `json:"rungs"`
 	PollSeconds int              `json:"poll_seconds,omitempty"`
+	// Instance is the child's name here, so it can pull the certificate this
+	// hz issues for its domains (/api/v1/hz-instances/<instance>/cert).
+	Instance string `json:"instance,omitempty"`
 }
 
 type NestedSeedRung struct {

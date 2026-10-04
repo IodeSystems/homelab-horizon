@@ -24,16 +24,20 @@ type HZInstanceResp struct {
 	VPNClient string `json:"vpnClient,omitempty"`
 	Note      string `json:"note,omitempty"`
 	HasToken  bool   `json:"hasToken"`
+	// Domains are the hostnames the instance terminates TLS for; this hz
+	// issues one certificate covering exactly these (InstanceCertResp).
+	Domains []string `json:"domains,omitempty"`
 }
 
 // HZInstanceAddReq declares a nested hz. URL must be http(s) with a host;
 // VPNClient, when set, must name an existing `upstream` VPN client.
 type HZInstanceAddReq struct {
-	Name      string `json:"name"`
-	Project   string `json:"project,omitempty"`
-	URL       string `json:"url"`
-	VPNClient string `json:"vpnClient,omitempty"`
-	Note      string `json:"note,omitempty"`
+	Name      string   `json:"name"`
+	Project   string   `json:"project,omitempty"`
+	URL       string   `json:"url"`
+	VPNClient string   `json:"vpnClient,omitempty"`
+	Note      string   `json:"note,omitempty"`
+	Domains   []string `json:"domains,omitempty"`
 }
 
 // HZInstanceSetReq edits an instance in place. nil leaves a field alone; a
@@ -45,6 +49,8 @@ type HZInstanceSetReq struct {
 	URL       *string `json:"url,omitempty"`
 	VPNClient *string `json:"vpnClient,omitempty"`
 	Note      *string `json:"note,omitempty"`
+	// Domains: nil leaves them, [] clears them.
+	Domains *[]string `json:"domains,omitempty"`
 }
 
 // HZInstanceRmReq removes an instance. Without Confirm it is a dry run. It is

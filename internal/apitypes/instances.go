@@ -56,6 +56,9 @@ type InstanceResp struct {
 	// minted, and when it last asked this hz for a rung's desired state — an
 	// observation recorded on the pull, never a dial (invariant 1).
 	Nested *InstanceNestedResp `json:"nested,omitempty"`
+	// ParentCert is present on the SELF row of a nested hz (one with an
+	// upstream block): the certificate its parent issued for its domains.
+	ParentCert *ParentCertResp `json:"parentCert,omitempty"`
 }
 
 // InstanceNestedResp is what this hz knows of a nested hz from its pulls.
@@ -76,6 +79,11 @@ type InstanceNestedResp struct {
 	EnrolledAt     int64  `json:"enrolledAt,omitempty"`
 	// VPNClient is the linked upstream VPN client, "" for none.
 	VPNClient string `json:"vpnClient,omitempty"`
+	// Domains are the names this hz issues the instance's certificate for;
+	// Cert is that certificate's state here. Cert is nil when Domains is
+	// empty.
+	Domains []string                `json:"domains,omitempty"`
+	Cert    *InstanceCertStatusResp `json:"cert,omitempty"`
 }
 
 // InstanceSyncResp is a replica's last pull from the config primary.
