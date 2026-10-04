@@ -61,7 +61,14 @@ type Child struct {
 	// is written. Nil is "nothing to reload" (tests).
 	OnCertInstalled func() error
 
+	// DNSAsks builds the full set of records this hz asks its parent to
+	// publish (config.ParentDNSAsks) and its public IP; unasked is set, and
+	// nothing is sent, when the set cannot be known (dns.go). Nil is "asks
+	// nothing".
+	DNSAsks func() (req apitypes.InstanceDNSReq, unasked string)
+
 	cert certMemo
+	dns  dnsMemo
 
 	mu    sync.Mutex
 	links map[config.UpstreamRung]*Link
@@ -142,6 +149,7 @@ func (c *Child) Run(ctx context.Context) {
 	for {
 		c.PollOnce(ctx)
 		_ = c.PullCertOnce(ctx)
+		c.maybeSyncDNS(ctx)
 		_ = c.DrainOnce(ctx)
 		select {
 		case <-ctx.Done():
