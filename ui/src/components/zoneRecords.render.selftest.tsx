@@ -121,6 +121,34 @@ function screenWith(data: ZoneRecordsResponse) {
   check(!text.includes("below delegation"), "no delegation → nothing marked");
 }
 
+// --- a record published for a nested hz instance (N4h) -----------------------
+{
+  const { html } = screenWith({
+    zone: ZONE,
+    records: [
+      { name: "app.hz.loadtest.example.com", type: "A", value: "203.0.113.20", ttl: 300, owner: "instance", instance: "loadtest-hz" },
+      { name: "www.example.com", type: "A", value: "192.0.2.1", ttl: 300, owner: "declared" },
+    ],
+    declared: [
+      { name: "app.hz.loadtest.example.com", type: "A", value: "203.0.113.20", ttl: 300, live: true, instance: "loadtest-hz" },
+      { name: "www.example.com", type: "A", value: "192.0.2.1", ttl: 300, live: true },
+    ],
+  });
+  const rowOf = (marker: string): string => {
+    const i = html.indexOf(marker);
+    if (i < 0) return "";
+    return html.slice(html.lastIndexOf("<tr", i), html.indexOf("</tr>", i));
+  };
+  const inst = rowOf("app.hz.loadtest.example.com");
+  check(inst.includes("from loadtest-hz") && inst.includes('data-record-owner="instance"'), "an instance's record says whose it is");
+  check(inst.includes("data-record-readonly") && !inst.includes('data-testid="EditIcon"') && !inst.includes('data-testid="DeleteIcon"'),
+    "and is read-only: no edit, no delete");
+  const own = rowOf("www.example.com");
+  check(own.includes('data-testid="EditIcon"') && own.includes('data-testid="DeleteIcon"'),
+    "instrument: this hz's own record still has its edit and delete, so their absence above is a claim about the row");
+  check(html.includes(">instance "), "the owner filter offers instance");
+}
+
 // --- the add form ---------------------------------------------------------------
 {
   const noop = () => {};
