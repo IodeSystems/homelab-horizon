@@ -17,7 +17,7 @@ func TestAnHZInstanceIsItsOwnRecord(t *testing.T) {
 	for i := 0; i < ty.NumField(); i++ {
 		got = append(got, ty.Field(i).Name)
 	}
-	want := []string{"Name", "Project", "URL", "VPNClient", "TokenSHA256", "Note"}
+	want := []string{"Name", "Project", "URL", "VPNClient", "TokenSHA256", "Note", "Domains"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("HZInstance fields = %v, want %v", got, want)
 	}
