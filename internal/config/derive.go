@@ -593,33 +593,9 @@ func (c *Config) DeriveSSLDomains() []letsencrypt.DomainConfig {
 			extraSANs = allDomains[1:]
 		}
 
-		// Build DNS provider config for letsencrypt
-		var dnsProvider *letsencrypt.DNSProviderConfig
-		if providerCfg := zone.GetDNSProvider(); providerCfg != nil {
-			// Use provider's AWSHostedZoneID if set, otherwise fall back to zone's ZoneID
-			awsHostedZoneID := providerCfg.AWSHostedZoneID
-			if awsHostedZoneID == "" && providerCfg.Type == "route53" {
-				awsHostedZoneID = zone.ZoneID
-			}
-			// Same for Cloudflare
-			cloudflareZoneID := providerCfg.CloudflareZoneID
-			if cloudflareZoneID == "" && providerCfg.Type == "cloudflare" {
-				cloudflareZoneID = zone.ZoneID
-			}
-
-			dnsProvider = &letsencrypt.DNSProviderConfig{
-				Type:               letsencrypt.DNSProviderType(providerCfg.Type),
-				AWSAccessKeyID:     providerCfg.AWSAccessKeyID,
-				AWSSecretAccessKey: providerCfg.AWSSecretAccessKey,
-				AWSRegion:          providerCfg.AWSRegion,
-				AWSHostedZoneID:    awsHostedZoneID,
-				AWSProfile:         providerCfg.AWSProfile,
-				NamecomUsername:    providerCfg.NamecomUsername,
-				NamecomAPIToken:    providerCfg.NamecomAPIToken,
-				CloudflareAPIToken: providerCfg.CloudflareAPIToken,
-				CloudflareZoneID:   cloudflareZoneID,
-			}
-		}
+		// Build DNS provider config for letsencrypt (zone id filled in from
+		// the zone when the provider leaves it empty).
+		dnsProvider := zoneLEProvider(zone)
 
 		domains = append(domains, letsencrypt.DomainConfig{
 			Domain:      primaryDomain,
@@ -1538,16 +1514,22 @@ func (c *Config) DeriveDNSRecords() []dnsmasq.Record {
 
 	mappings := c.DeriveDNSMappings()
 	records := make([]dnsmasq.Record, 0, len(mappings))
+	wild := map[string]bool{}
 	for name, ip := range mappings {
+		// A derived service domain is a wildcard; an operator record is
+		// one only if it says so.
+		w := !local[name] || wildcards[name]
+		if w {
+			wild[strings.ToLower(name)] = true
+		}
 		records = append(records, dnsmasq.Record{
-			Name: name,
-			IP:   ip,
-			// A derived service domain is a wildcard; an operator record is
-			// one only if it says so.
-			Wildcard: !local[name] || wildcards[name],
+			Name:     name,
+			IP:       ip,
+			Wildcard: w,
 			Comment:  comments[name],
 		})
 	}
+	forwarded := map[string]bool{}
 	// A delegated subdomain is not this hz's to answer. A service domain above
 	// it is a wildcard address= that would answer for it too — measured on the
 	// office hz: address=/redline.iodesystems.com/192.168.1.160 answered .160
@@ -1558,11 +1540,21 @@ func (c *Config) DeriveDNSRecords() []dnsmasq.Record {
 			if d.Name == strings.ToLower(c.Zones[i].Name) {
 				continue // refused by validation; never forward a whole zone away
 			}
+			forwarded[d.Name] = true
 			records = append(records, dnsmasq.Record{
 				Name:            d.Name,
 				ForwardUpstream: true,
 				Comment:         d.describe() + "; resolved upstream, not answered here",
 			})
+		}
+	}
+	// The same carve-out for a name declared here as pointing ELSEWHERE — a
+	// zone record to another address, or an hz instance's own domain — which
+	// is not a delegation, so the loop above does not see it
+	// (externalNameForwards).
+	for _, r := range c.externalNameForwards(mappings, wild) {
+		if !forwarded[r.Name] {
+			records = append(records, r)
 		}
 	}
 	return records
