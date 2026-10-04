@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,7 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/letsencrypt"
+	"github.com/iodesystems/homelab-horizon/internal/nested"
 	"github.com/iodesystems/homelab-horizon/internal/route53"
 )
 
@@ -329,6 +332,57 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 			}
 		} else if changed {
 			log.Info(fmt.Sprintf("Public IP refreshed: %s", s.cfg().PublicIP))
+		}
+	}
+
+	// Names in zones THIS hz owns that a nested hz asked for: published here,
+	// through the drift-safe path (instance_dns.go).
+	if issuesHere(s.cfg()) && s.cfg().HasInstanceRecords() {
+		if s.dnsSyncBlocked() {
+			log.Step("Skipping hz instance DNS: DNS drift block active (clear drift to resume)")
+		} else {
+			log.Step("Publishing DNS for hz instances...")
+			u, f, err := s.publishAllInstanceDNS(s.newDNSSyncRun())
+			switch {
+			case errors.Is(err, errDNSDriftBlocked):
+				log.Warning("  Halted: an out-of-band change at the provider blocks DNS sync")
+			case err != nil:
+				log.Error(fmt.Sprintf("  hz instance DNS failed: %s", err))
+				hasErrors = true
+			default:
+				log.Success(fmt.Sprintf("  %d record set(s) changed, %d failed", u, f))
+				if f > 0 {
+					hasErrors = true
+				}
+			}
+		}
+	}
+
+	// Names in zones a PARENT owns: asked of the parent. Never blocks the
+	// sync — a parent that does not answer leaves its last answer standing.
+	if s.child != nil && s.child.SendsDNS() {
+		log.Step("Asking parent " + s.child.URL + " to publish this hz's DNS...")
+		st, err := s.child.SyncDNSOnce(context.Background())
+		switch {
+		case st.Unasked != "":
+			log.Warning("  Not asked: " + st.Unasked)
+		case err != nil:
+			log.Warning("  Parent did not answer (" + err.Error() + "); its last answer stands, and the next sync asks again")
+		}
+		if len(st.Records) == 0 && st.Unasked == "" && err == nil {
+			log.Info("  Nothing to ask: no service domain here is in a zone the parent owns")
+		}
+		for _, r := range st.Records {
+			line := "  DNS published by parent: " + nested.DNSLine(r)
+			switch r.Status {
+			case apitypes.InstanceDNSPublished:
+				log.Success(line)
+			case apitypes.InstanceDNSRefused:
+				log.Error(line)
+				hasErrors = true
+			default:
+				log.Warning(line)
+			}
 		}
 	}
 

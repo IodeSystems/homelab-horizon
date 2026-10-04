@@ -224,6 +224,19 @@ func (c *Config) InstanceRecordPublishable(zoneName string, r DNSRecord) (string
 	return "", true
 }
 
+// HasInstanceRecords reports whether any zone holds a record published for an
+// hz instance.
+func (c *Config) HasInstanceRecords() bool {
+	for i := range c.Zones {
+		for _, r := range c.Zones[i].Records {
+			if r.Instance != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // InstanceGrantCovering is the instance whose grant covers name, if any — the
 // admin record edits refuse to write there: the instance publishes there.
 func (c *Config) InstanceGrantCovering(name string) (instance, entry string, ok bool) {
