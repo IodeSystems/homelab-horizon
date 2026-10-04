@@ -807,6 +807,56 @@ With that file present, the child renders the HTTPS frontend (`bind *:443 ssl cr
 
 **UI.** On the parent, the instance's page (Instances → the instance) shows the domains, the certificate (issued, not after, last pulled by the child) and an editor. On the child, its own Instances row shows "certificate from parent `<url>`, not after …".
 
+### DNS for a nested hz
+
+A child serves names in a zone the parent owns. The child cannot publish them: the DNS credential is the parent's and never crosses. So the child asks, and the parent publishes.
+
+**The grant (the parent sets it).** The grant is the only place a child's request can land. An entry is an exact name, or a `*.suffix` subtree (every name strictly below `suffix`):
+
+```bash
+hz instance dns-grant loadtest-hz loadtest.app.example.com '*.hz.loadtest.example.com'   # --clear revokes
+# = POST /api/v1/hz-instances/set {"name":"loadtest-hz","dnsGrant":[...]}
+```
+
+The parent refuses an entry, with a sentence that names the conflict, when the entry:
+- is outside every zone the parent owns, or in a zone with no DNS provider;
+- is the zone apex, or `*.<apex>` (the whole zone);
+- is at or below a delegated name;
+- covers a service domain on the parent, a `sub_zones` name, or a record the parent declares itself;
+- overlaps the grant of another instance.
+
+Every TLS domain of the instance (`hz instance domains`) must be inside its grant. An instance that has domains and no grant gets a grant of exactly its domains, at load and at write (said `LOUD`). A record the parent declared by hand at one of the instance's TLS domains is allowed under the grant. That is the hot fix (see below).
+
+**The request (the child asks).** The child sends the full desired set on its sync, and again every 15 minutes, or after a minute when the last attempt failed or a record is pending:
+
+```
+POST /api/v1/hz-instances/<name>/dns          that instance's token only
+     {"records":[{"name","type":"A|AAAA|CNAME|TXT","values":[...],"ttl"?}],"public_ip"}
+-> 200 {"instance","records":[{"name","type","values","status":"published|pending|refused","reason"?,"converted"?}],"removed":[...]}
+-> 401 no token, an admin token; 403 another instance's token, or another instance's path
+-> 409 the request would leave a config the parent refuses; 503 an HA replica (ask the config primary)
+```
+
+The set holds an A record for each domain of each service with `external_dns` that no zone on the child (with a DNS provider) contains. The values are the service's pin, or else the child's public IP. When the public IP is unknown or stale, the child asks nothing: a name left out of the set reads as a removal. A name the parent holds for this instance that is absent from the set is a removal request. The same set twice changes nothing.
+
+**What the parent refuses.** Per record, with the reason:
+- a name outside the instance's grant;
+- a type other than A, AAAA, CNAME, TXT, a value that does not parse, or a set that breaks the zone's record rules (a CNAME with a sibling);
+- a name another instance owns;
+- a name the parent declares by hand with a **different** value. The reason names the record. The parent's operator decides: delete that record, or keep it.
+
+Accepted records are stored as zone records with `"instance": "<name>"`. The parent's records view shows them as "from `<name>`", read-only. The admin record edits (`zones/records/add|edit|delete|set`) refuse them, and refuse a write inside any grant. To remove them, narrow or revoke the grant: every record the instance owns outside the new grant is removed and retracted. Removing the instance removes all of them. A removal only ever touches records that instance owns.
+
+**The drift guard.** The parent publishes them through the same drift-safe path as every declared record: right after a request that changed something, in `hz sync`, and in `dns/sync-all`. A record that is live and identical, but that hz never wrote, is adopted without a write. An out-of-band change halts all DNS sync, as for any record. The child then sees `pending: DNS sync on the parent is halted…`. Every publish path asks again whether a record is inside its instance's grant. The parent never writes outside the grant, even when its config says to.
+
+**The hot fix.** Before N4h the operator declared the child's name on the parent by hand (`loadtest.app.example.com A <child ip>`). When the child asks for that name with the **identical** value, the parent converts the record to the instance's, without a write, and logs `LOUD`. A different value is refused, as above.
+
+**Certificates.** The instance certificate still covers exactly `domains`. DNS names in the grant do not widen it.
+
+**Never blocking.** The child's boot and sync never wait on the parent. A parent that does not answer leaves the last answer in place (kept in `<data dir>/upstream/parent-dns.json`), and the next round asks again.
+
+**UI.** On the parent, the instance's page shows the grant (with an editor), the records it publishes for the instance with each one's status, and the last request's refusals. On the child, its own Instances row shows "DNS published by parent `<url>`" with each record: published, refused with the reason, or pending.
+
 ## Observability
 
 hz already knows every host and backend it routes to, so it can hand Prometheus
