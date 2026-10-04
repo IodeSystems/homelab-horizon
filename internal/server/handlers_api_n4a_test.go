@@ -484,6 +484,19 @@ func TestInstanceTokenIsRefusedOnAdminRoutes(t *testing.T) {
 		{"GET", "/api/v1/builds"},
 		{"POST", "/api/v1/builds"},
 		{"POST", "/api/v1/builds/seed"},
+		// N4h: the token that asks for DNS reaches no DNS admin route.
+		{"GET", "/api/v1/zones/records?zone=example.com"},
+		{"POST", "/api/v1/zones/records/add"},
+		{"POST", "/api/v1/zones/records/edit"},
+		{"POST", "/api/v1/zones/records/delete"},
+		{"POST", "/api/v1/zones/records/set"},
+		{"POST", "/api/v1/zones/tombstones/cancel"},
+		{"POST", "/api/v1/dns/sync"},
+		{"POST", "/api/v1/dns/sync-all"},
+		{"GET", "/api/v1/dns/drift"},
+		{"POST", "/api/v1/dns/drift/clear"},
+		{"GET", "/api/v1/zones"},
+		{"POST", "/api/v1/zones/edit"},
 	}
 	for _, rt := range routes {
 		r := httptest.NewRequest(rt.method, rt.path, strings.NewReader("{}"))

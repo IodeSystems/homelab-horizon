@@ -244,6 +244,7 @@ func TestInstanceCertIssuanceRequestsExactlyItsDomains(t *testing.T) {
 		for i := range hs {
 			if hs[i].Name == nestedInstance {
 				hs[i].Domains = next
+				hs[i].DNSGrant = next // N4h: a TLS domain lies inside the DNS grant
 			}
 		}
 		c.HZInstances = hs

@@ -354,6 +354,10 @@ type Server struct {
 	// for nested hz instances (instance_tls.go): the last issuance attempt and
 	// the child's last pull, per instance. Memory only.
 	instanceCerts instanceCertMemo
+	// instanceDNS is what this process knows of the DNS requests nested hz
+	// instances make of it (instance_dns.go): the last request per instance,
+	// and the lock that serialises them. Memory only.
+	instanceDNS instanceDNSMemo
 	// obtainInstanceCert issues one instance certificate; nil is the real
 	// CA conversation (letsencrypt.Manager.RequestInstanceCert). Tests
 	// replace it so no test reaches a CA.
@@ -620,6 +624,8 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		s.child = childFromConfig(cfg)
 		if s.child != nil {
 			s.child.OnCertInstalled = s.applyHAProxyConfig
+			// Names in zones the parent owns: asked of the parent (instance_dns.go).
+			s.child.DNSAsks = s.parentDNSRequest
 		}
 	}
 	s.config.Store(cfg)

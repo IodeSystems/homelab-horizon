@@ -204,15 +204,19 @@ func pemLine(b []byte) string {
 	return s + "\n"
 }
 
-// handleAPIHZInstanceSubtree answers /api/v1/hz-instances/<name>/cert.
+// handleAPIHZInstanceSubtree answers /api/v1/hz-instances/<name>/cert and
+// /api/v1/hz-instances/<name>/dns (instance_dns.go).
 func (s *Server) handleAPIHZInstanceSubtree(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, apitypes.HZInstancesPath+"/")
 	name, tail, _ := strings.Cut(rest, "/")
-	if name == "" || "/"+tail != apitypes.HZInstanceCertSuffix {
+	switch {
+	case name != "" && "/"+tail == apitypes.HZInstanceCertSuffix:
+		s.handleAPIHZInstanceCert(w, r, name)
+	case name != "" && "/"+tail == apitypes.HZInstanceDNSSuffix:
+		s.handleAPIHZInstanceDNS(w, r, name)
+	default:
 		writeJSONError(w, http.StatusNotFound, "no such route: "+r.URL.Path)
-		return
 	}
-	s.handleAPIHZInstanceCert(w, r, name)
 }
 
 // handleAPIHZInstanceCert hands an instance its certificate and key — to its
