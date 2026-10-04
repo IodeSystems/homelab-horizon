@@ -1114,6 +1114,12 @@ export interface HZInstanceResp {
    * issues one certificate covering exactly these (InstanceCertResp).
    */
   domains?: string[];
+  /**
+   * DNSGrant is where this hz publishes DNS the instance asks for: exact
+   * names and "*.suffix" subtrees in zones this hz owns with a provider.
+   * Domains lie inside it.
+   */
+  dnsGrant?: string[];
 }
 /**
  * HZInstanceAddReq declares a nested hz. URL must be http(s) with a host;
@@ -1126,6 +1132,7 @@ export interface HZInstanceAddReq {
   vpnClient?: string;
   note?: string;
   domains?: string[];
+  dnsGrant?: string[];
 }
 /**
  * HZInstanceSetReq edits an instance in place. nil leaves a field alone; a
@@ -1142,6 +1149,12 @@ export interface HZInstanceSetReq {
    * Domains: nil leaves them, [] clears them.
    */
   domains?: string[];
+  /**
+   * DNSGrant: nil leaves it, [] revokes it. Narrowing it removes every
+   * record the instance owns outside the new grant (retracted at the
+   * provider by the next sync).
+   */
+  dnsGrant?: string[];
 }
 /**
  * HZInstanceRmReq removes an instance. Without Confirm it is a dry run. It is
@@ -1153,6 +1166,141 @@ export interface HZInstanceRmReq {
   name: string;
   cascade?: boolean;
   confirm?: boolean;
+}
+
+//////////
+// source: instance_dns.go
+
+/**
+ * HZInstanceDNSSuffix follows HZInstancesPath + "/<name>".
+ */
+export const HZInstanceDNSSuffix = "/dns";
+/**
+ * InstanceDNSPublished: the parent's last publish of this (name, type)
+ * wrote exactly these values.
+ */
+export const InstanceDNSPublished = "published";
+/**
+ * InstanceDNSPending: accepted and stored on the parent; its DNS sync has
+ * not written these values yet. Reason says why when the parent knows.
+ */
+export const InstanceDNSPending = "pending";
+/**
+ * InstanceDNSRefused: not accepted. Reason names the rule and the record.
+ */
+export const InstanceDNSRefused = "refused";
+/**
+ * InstanceDNSRecordReq is one record set the child wants: every value at one
+ * (name, type). Type is A, AAAA, CNAME or TXT. TTL 0 is the parent's default.
+ */
+export interface InstanceDNSRecordReq {
+  name: string;
+  type: string;
+  values: string[];
+  ttl?: number /* int */;
+}
+/**
+ * InstanceDNSReq is the child's full desired set. PublicIP is the address the
+ * child detected for itself (the A values it sends are built from it); the
+ * parent shows it on the instance page and writes nothing from it.
+ */
+export interface InstanceDNSReq {
+  records: InstanceDNSRecordReq[];
+  public_ip?: string;
+}
+/**
+ * InstanceDNSRecordStatus is the parent's answer for one requested record
+ * set. Converted is set once, on the request that turned a record the parent
+ * had declared by hand (with the identical value) into this instance's.
+ */
+export interface InstanceDNSRecordStatus {
+  name: string;
+  type: string;
+  values: string[];
+  status: string;
+  reason?: string;
+  converted?: boolean;
+}
+/**
+ * InstanceDNSRemoved is a record set the parent removed because the set no
+ * longer lists it. It is retracted at the provider by the parent's sync.
+ */
+export interface InstanceDNSRemoved {
+  name: string;
+  type: string;
+  values: string[];
+}
+/**
+ * InstanceDNSResp is the parent's answer: one status per requested record
+ * set, in request order, and what this request removed.
+ */
+export interface InstanceDNSResp {
+  instance: string;
+  records: InstanceDNSRecordStatus[];
+  removed?: InstanceDNSRemoved[];
+}
+/**
+ * InstanceOwnedRecordResp is one record set the PARENT holds for an instance,
+ * for the parent's instance page: what is stored, and whether it is published.
+ */
+export interface InstanceOwnedRecordResp {
+  zone: string;
+  name: string;
+  type: string;
+  values: string[];
+  ttl: number /* int */;
+  status: string; // published | pending
+  reason?: string;
+}
+/**
+ * InstanceDNSStatusResp is the parent's view of an instance's DNS: the grant
+ * (declared), the records it owns here (declared, with publish status), and
+ * the instance's last request (observed — memory, a restart forgets it).
+ */
+export interface InstanceDNSStatusResp {
+  grant: string[];
+  records: InstanceOwnedRecordResp[];
+  /**
+   * LastRequestAt 0 is "no request since this hz started".
+   */
+  lastRequestAt?: number /* int64 */;
+  lastPublicIp?: string;
+  /**
+   * LastRefused is every record set the last request asked for and this hz
+   * refused, with the reason.
+   */
+  lastRefused?: InstanceDNSRecordStatus[];
+}
+/**
+ * ParentDNSResp is what a CHILD shows of the DNS its parent publishes for it:
+ * present on the self row of /api/v1/instances when this hz has an upstream.
+ */
+export interface ParentDNSResp {
+  parent: string;
+  instance: string;
+  /**
+   * Enabled is false when this hz asks nothing of its parent (no
+   * upstream.instance). Off says why.
+   */
+  enabled: boolean;
+  off?: string;
+  /**
+   * Records is the parent's LAST answer, kept across failures and restarts.
+   */
+  records: InstanceDNSRecordStatus[];
+  removed?: InstanceDNSRemoved[];
+  /**
+   * LastAnswerAt is when that answer arrived (0: never); LastAttemptAt the
+   * last try; LastError the last try's failure ("" when it succeeded).
+   */
+  lastAnswerAt?: number /* int64 */;
+  lastAttemptAt?: number /* int64 */;
+  lastError?: string;
+  /**
+   * Unasked is set when this hz did not ask this time and says why (its
+   * public IP is unknown, so an absent A record would read as a removal).
+   */
+  unasked?: string;
 }
 
 //////////
@@ -1324,6 +1472,11 @@ export interface InstanceResp {
    * upstream block): the certificate its parent issued for its domains.
    */
   parentCert?: ParentCertResp;
+  /**
+   * ParentDNS is present on the SELF row of a nested hz: the DNS its
+   * parent publishes for it, per record, from the parent's last answer.
+   */
+  parentDns?: ParentDNSResp;
 }
 /**
  * InstanceNestedResp is what this hz knows of a nested hz from its pulls.
@@ -1358,6 +1511,10 @@ export interface InstanceNestedResp {
    */
   domains?: string[];
   cert?: InstanceCertStatusResp;
+  /**
+   * DNS is the instance's DNS grant and the records it owns here.
+   */
+  dns?: InstanceDNSStatusResp;
 }
 /**
  * InstanceSyncResp is a replica's last pull from the config primary.
@@ -3710,7 +3867,8 @@ export interface DNSRecordResp {
   ttl: number /* int */;
   /**
    * Owner is who authored this record: "derived" (a service publishes it),
-   * "declared" (Zone.Records), "observed" (live but not hz's), or
+   * "declared" (Zone.Records), "instance" (Zone.Records, owned by a nested
+   * hz instance — see Instance), "observed" (live but not hz's), or
    * "tombstoned" (hz's, pending retraction). Replaces an earlier `managed`
    * bool that was computed from Zone.Records alone and so reported every
    * service-derived record as un-owned.
@@ -3720,6 +3878,12 @@ export interface DNSRecordResp {
    * Note is the declared record's note, when Owner is "declared".
    */
   note?: string;
+  /**
+   * Instance is the hz instance that owns the record, when Owner is
+   * "instance": the parent publishes it for that nested hz, inside its DNS
+   * grant. Read-only here — narrow or revoke the grant to remove it.
+   */
+  instance?: string;
 }
 /**
  * DNSTombstoneResp is a deletion hz has been told to make and not yet confirmed
@@ -3763,6 +3927,12 @@ export interface DeclaredDNSRecordResp {
    * Live is true when the provider holds exactly this value at this name.
    */
   live: boolean;
+  /**
+   * Instance names the hz instance that owns this record ("" = this hz's
+   * own declaration). Read-only: it changes only by that instance's request
+   * or by narrowing its grant.
+   */
+  instance?: string;
 }
 /**
  * DNSRecordSetRequest declares the complete value set hz owns at one
