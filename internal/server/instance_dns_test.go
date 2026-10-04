@@ -481,4 +481,7 @@ func TestNarrowingTheGrantRetracts(t *testing.T) {
 	if got := fp.live("loadtest.child.example.com", "A"); len(got) != 1 {
 		t.Fatalf("the record still inside the grant went: %v", got)
 	}
+	if got := fp.live("_dmarc.example.com", "TXT"); len(got) != 1 {
+		t.Fatalf("narrowing an instance's grant took this hz's own record: %v", got)
+	}
 }
