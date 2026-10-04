@@ -171,5 +171,6 @@ func childFromConfig(cfg *config.Config) *nested.Child {
 	}
 	c := nested.New(*cfg.Upstream, cfg.DataDir())
 	c.MaxArtifactBytes = cfg.ArtifactCap()
+	c.CertDir = haproxyCertDir(cfg)
 	return c
 }

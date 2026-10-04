@@ -143,10 +143,7 @@ func (s *Server) applyMFAJailConfig() {
 		return
 	}
 
-	var sslConfig *haproxy.SSLConfig
-	if cfg.SSLEnabled {
-		sslConfig = &haproxy.SSLConfig{Enabled: true, CertDir: cfg.SSLHAProxyCertDir}
-	}
+	sslConfig := haproxySSLFor(cfg)
 	if err := s.haproxy.WriteConfig(cfg.HAProxyHTTPPort, cfg.HAProxyHTTPSPort, sslConfig); err != nil {
 		slog.Warn("mfa jail: haproxy WriteConfig", "err", err)
 		return

@@ -227,7 +227,7 @@ func (s *Server) handleDeployMaintPage(w http.ResponseWriter, r *http.Request, s
 	}
 
 	s.syncHAProxyBackends()
-	ssl := &haproxy.SSLConfig{Enabled: s.cfg().SSLEnabled, CertDir: s.cfg().SSLHAProxyCertDir}
+	ssl := haproxySSLFor(s.cfg())
 	if err := s.haproxy.WriteConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, ssl); err != nil {
 		http.Error(w, "failed to write haproxy config: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -262,10 +262,7 @@ func (s *Server) handleDeploySwap(w http.ResponseWriter, svcIdx int) {
 
 	// Regenerate and reload haproxy so current/next ports reflect the new active slot
 	s.syncHAProxyBackends()
-	ssl := &haproxy.SSLConfig{
-		Enabled: s.cfg().SSLEnabled,
-		CertDir: s.cfg().SSLHAProxyCertDir,
-	}
+	ssl := haproxySSLFor(s.cfg())
 	if err := s.haproxy.WriteConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, ssl); err != nil {
 		http.Error(w, "failed to write haproxy config: "+err.Error(), http.StatusInternalServerError)
 		return

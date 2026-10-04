@@ -453,6 +453,7 @@ func TestInstanceTokenIsRefusedOnAdminRoutes(t *testing.T) {
 		{"GET", "/api/v1/artifacts"},
 		{"POST", "/api/v1/machines/hz-token"},
 		{"GET", "/api/v1/hz-instances"},
+		{"GET", "/api/v1/instances"},
 		{"POST", "/api/v1/hz-instances/add"},
 		{"POST", "/api/v1/hz-instances/set"},
 		{"POST", "/api/v1/hz-instances/rm"},

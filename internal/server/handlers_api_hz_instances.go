@@ -19,7 +19,8 @@ import (
 // hzInstanceResp renders one instance for the wire. The token digest never
 // leaves; HasToken says one is minted.
 func hzInstanceResp(h config.HZInstance) apitypes.HZInstanceResp {
-	return apitypes.HZInstanceResp{Name: h.Name, Project: h.Project, URL: h.URL, VPNClient: h.VPNClient, Note: h.Note, HasToken: h.TokenSHA256 != ""}
+	domains := append([]string{}, h.Domains...)
+	return apitypes.HZInstanceResp{Name: h.Name, Project: h.Project, URL: h.URL, VPNClient: h.VPNClient, Note: h.Note, HasToken: h.TokenSHA256 != "", Domains: domains}
 }
 
 // instanceAlias is the one instance name a request carries, accepting the
@@ -69,7 +70,7 @@ func (s *Server) handleAPIHZInstanceAdd(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	next := *s.cfg()
-	if err := next.AddHZInstance(config.HZInstance{Name: req.Name, Project: req.Project, URL: req.URL, VPNClient: req.VPNClient, Note: req.Note}); err != nil {
+	if err := next.AddHZInstance(config.HZInstance{Name: req.Name, Project: req.Project, URL: req.URL, VPNClient: req.VPNClient, Note: req.Note, Domains: req.Domains}); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -78,6 +79,9 @@ func (s *Server) handleAPIHZInstanceAdd(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	h, _ := next.FindHZInstance(strings.TrimSpace(req.Name))
+	if len(h.Domains) > 0 {
+		s.kickInstanceCert(h.Name)
+	}
 	writeJSON(w, hzInstanceResp(h))
 }
 
@@ -97,7 +101,7 @@ func (s *Server) handleAPIHZInstanceSet(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	next := *s.cfg()
-	h, err := next.SetHZInstance(req.Name, config.HZInstancePatch{Project: req.Project, URL: req.URL, VPNClient: req.VPNClient, Note: req.Note})
+	h, err := next.SetHZInstance(req.Name, config.HZInstancePatch{Project: req.Project, URL: req.URL, VPNClient: req.VPNClient, Note: req.Note, Domains: req.Domains})
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
@@ -105,6 +109,16 @@ func (s *Server) handleAPIHZInstanceSet(w http.ResponseWriter, r *http.Request) 
 	if err := s.updateConfig(func(c *config.Config) { *c = next }); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
 		return
+	}
+	if req.Domains != nil && len(h.Domains) > 0 {
+		s.kickInstanceCert(h.Name)
+	}
+	if req.Domains != nil {
+		// A changed name set changes what this hz's resolver must leave to
+		// public DNS (server=/name/#), so the records file is rewritten.
+		if err := s.applyLocalDNS(); err != nil {
+			slog.Warn("dns records after an instance domain edit", "err", err)
+		}
 	}
 	writeJSON(w, hzInstanceResp(h))
 }
