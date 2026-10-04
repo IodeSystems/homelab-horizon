@@ -1838,13 +1838,18 @@ type DNSRecordResp struct {
 	Value string `json:"value"`
 	TTL   int    `json:"ttl"`
 	// Owner is who authored this record: "derived" (a service publishes it),
-	// "declared" (Zone.Records), "observed" (live but not hz's), or
+	// "declared" (Zone.Records), "instance" (Zone.Records, owned by a nested
+	// hz instance — see Instance), "observed" (live but not hz's), or
 	// "tombstoned" (hz's, pending retraction). Replaces an earlier `managed`
 	// bool that was computed from Zone.Records alone and so reported every
 	// service-derived record as un-owned.
 	Owner string `json:"owner"`
 	// Note is the declared record's note, when Owner is "declared".
 	Note string `json:"note,omitempty"`
+	// Instance is the hz instance that owns the record, when Owner is
+	// "instance": the parent publishes it for that nested hz, inside its DNS
+	// grant. Read-only here — narrow or revoke the grant to remove it.
+	Instance string `json:"instance,omitempty"`
 }
 
 // DNSTombstoneResp is a deletion hz has been told to make and not yet confirmed
@@ -1881,6 +1886,10 @@ type DeclaredDNSRecordResp struct {
 	Note  string `json:"note,omitempty"`
 	// Live is true when the provider holds exactly this value at this name.
 	Live bool `json:"live"`
+	// Instance names the hz instance that owns this record ("" = this hz's
+	// own declaration). Read-only: it changes only by that instance's request
+	// or by narrowing its grant.
+	Instance string `json:"instance,omitempty"`
 }
 
 // DNSRecordSetRequest declares the complete value set hz owns at one

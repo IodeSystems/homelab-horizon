@@ -27,6 +27,10 @@ type HZInstanceResp struct {
 	// Domains are the hostnames the instance terminates TLS for; this hz
 	// issues one certificate covering exactly these (InstanceCertResp).
 	Domains []string `json:"domains,omitempty"`
+	// DNSGrant is where this hz publishes DNS the instance asks for: exact
+	// names and "*.suffix" subtrees in zones this hz owns with a provider.
+	// Domains lie inside it.
+	DNSGrant []string `json:"dnsGrant,omitempty"`
 }
 
 // HZInstanceAddReq declares a nested hz. URL must be http(s) with a host;
@@ -38,6 +42,7 @@ type HZInstanceAddReq struct {
 	VPNClient string   `json:"vpnClient,omitempty"`
 	Note      string   `json:"note,omitempty"`
 	Domains   []string `json:"domains,omitempty"`
+	DNSGrant  []string `json:"dnsGrant,omitempty"`
 }
 
 // HZInstanceSetReq edits an instance in place. nil leaves a field alone; a
@@ -51,6 +56,10 @@ type HZInstanceSetReq struct {
 	Note      *string `json:"note,omitempty"`
 	// Domains: nil leaves them, [] clears them.
 	Domains *[]string `json:"domains,omitempty"`
+	// DNSGrant: nil leaves it, [] revokes it. Narrowing it removes every
+	// record the instance owns outside the new grant (retracted at the
+	// provider by the next sync).
+	DNSGrant *[]string `json:"dnsGrant,omitempty"`
 }
 
 // HZInstanceRmReq removes an instance. Without Confirm it is a dry run. It is
