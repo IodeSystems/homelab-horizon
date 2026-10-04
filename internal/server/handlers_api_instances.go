@@ -36,6 +36,7 @@ func (s *Server) handleAPIInstances(w http.ResponseWriter, r *http.Request) {
 	s.decorateNested(r, cfg, rows)
 	if len(rows) > 0 && rows[0].Self {
 		rows[0].ParentCert = s.parentCertResp(cfg)
+		rows[0].ParentDNS = s.parentDNSResp(cfg)
 	}
 	writeJSON(w, rows)
 }
@@ -62,7 +63,7 @@ func (s *Server) decorateNested(r *http.Request, cfg *config.Config, rows []apit
 			continue
 		}
 		n := &apitypes.InstanceNestedResp{HasToken: h.TokenSHA256 != "", PullsUnknown: unknown, VPNClient: h.VPNClient,
-			Domains: append([]string{}, h.Domains...), Cert: s.instanceCertStatus(cfg, h)}
+			Domains: append([]string{}, h.Domains...), Cert: s.instanceCertStatus(cfg, h), DNS: s.instanceDNSStatus(cfg, h)}
 		var pulled time.Time
 		if p, ok := pulls[h.Name]; ok {
 			pulled = p.At

@@ -66,6 +66,10 @@ func (s *Server) handleAPIRecordSet(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if why := instanceRecordRefusal(s.cfg(), zone.Name, name, recType, true); why != "" {
+		writeJSONError(w, http.StatusConflict, why)
+		return
+	}
 	providerCfg := zone.GetDNSProvider()
 	if providerCfg == nil {
 		writeJSONError(w, http.StatusBadRequest, "No DNS provider configured for zone "+zone.Name)

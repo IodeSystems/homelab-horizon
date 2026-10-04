@@ -59,6 +59,9 @@ type InstanceResp struct {
 	// ParentCert is present on the SELF row of a nested hz (one with an
 	// upstream block): the certificate its parent issued for its domains.
 	ParentCert *ParentCertResp `json:"parentCert,omitempty"`
+	// ParentDNS is present on the SELF row of a nested hz: the DNS its
+	// parent publishes for it, per record, from the parent's last answer.
+	ParentDNS *ParentDNSResp `json:"parentDns,omitempty"`
 }
 
 // InstanceNestedResp is what this hz knows of a nested hz from its pulls.
@@ -84,6 +87,8 @@ type InstanceNestedResp struct {
 	// empty.
 	Domains []string                `json:"domains,omitempty"`
 	Cert    *InstanceCertStatusResp `json:"cert,omitempty"`
+	// DNS is the instance's DNS grant and the records it owns here.
+	DNS *InstanceDNSStatusResp `json:"dns,omitempty"`
 }
 
 // InstanceSyncResp is a replica's last pull from the config primary.

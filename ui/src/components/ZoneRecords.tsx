@@ -366,7 +366,7 @@ function EditRecordDialog({
 // consequence, which is what actually decides whether you touch it.
 const OWNER_META: Record<
   string,
-  { color: "success" | "info" | "default" | "warning"; help: string }
+  { color: "success" | "info" | "default" | "warning" | "secondary"; help: string }
 > = {
   derived: {
     color: "success",
@@ -375,6 +375,10 @@ const OWNER_META: Record<
   declared: {
     color: "info",
     help: "Declared on the zone. hz owns this value and republishes it on every sync.",
+  },
+  instance: {
+    color: "secondary",
+    help: "Published by this hz FOR a nested hz instance, which asked for it inside its DNS grant. Read-only here: it changes by that instance's request — narrow or revoke the instance's grant to remove it.",
   },
   observed: {
     color: "default",
@@ -391,11 +395,12 @@ const OBSERVED_META = {
   help: "Live at the provider but not hz's. hz never rewrites or deletes it.",
 };
 
-function OwnerChip({ owner }: { owner: string }) {
+function OwnerChip({ owner, instance }: { owner: string; instance?: string }) {
   const meta = OWNER_META[owner] ?? OBSERVED_META;
+  const label = owner === "instance" && instance ? `from ${instance}` : owner;
   return (
     <Tooltip title={meta.help}>
-      <Chip label={owner} size="small" color={meta.color} variant="outlined" />
+      <Chip label={label} size="small" color={meta.color} variant="outlined" data-record-owner={owner} />
     </Tooltip>
   );
 }
@@ -591,7 +596,7 @@ export function ZoneRecordsTable({ zoneName }: { zoneName: string }) {
           value={ownerFilter}
           onChange={(_, next: string[]) => setOwnerFilter(next)}
         >
-          {["derived", "declared", "observed", "tombstoned"].map((o) => (
+          {["derived", "declared", "instance", "observed", "tombstoned"].map((o) => (
             <ToggleButton key={o} value={o} disabled={!ownerCounts[o]}>
               {o} {ownerCounts[o] ? `(${ownerCounts[o]})` : ""}
             </ToggleButton>
@@ -689,42 +694,54 @@ export function ZoneRecordsTable({ zoneName }: { zoneName: string }) {
                   </TableCell>
                   <TableCell>{rec.ttl}</TableCell>
                   <TableCell>
-                    <OwnerChip owner={rec.owner} />
+                    <OwnerChip owner={rec.owner} instance={rec.instance} />
                   </TableCell>
                   <TableCell align="right">
-                    <Tooltip title="Edit">
-                      <IconButton
-                        size="small"
-                        onClick={() =>
-                          setEditTarget({
-                            zoneName,
-                            name: group.name,
-                            type: group.type,
-                            value: rec.value,
-                            ttl: rec.ttl,
-                            expectedFrom,
-                          })
-                        }
+                    {rec.owner === "instance" ? (
+                      <Tooltip
+                        title={`Published for hz instance ${rec.instance ?? ""}; it changes by that instance's request — narrow its DNS grant on its page to remove it`}
                       >
-                        <EditIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip title="Delete">
-                      <IconButton
-                        size="small"
-                        color="error"
-                        onClick={() =>
-                          setDeleteTarget({
-                            name: group.name,
-                            type: group.type,
-                            value: rec.value,
-                            expectedFrom,
-                          })
-                        }
-                      >
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
+                        <Typography variant="caption" color="text.secondary" data-record-readonly>
+                          read-only
+                        </Typography>
+                      </Tooltip>
+                    ) : (
+                      <>
+                        <Tooltip title="Edit">
+                          <IconButton
+                            size="small"
+                            onClick={() =>
+                              setEditTarget({
+                                zoneName,
+                                name: group.name,
+                                type: group.type,
+                                value: rec.value,
+                                ttl: rec.ttl,
+                                expectedFrom,
+                              })
+                            }
+                          >
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Delete">
+                          <IconButton
+                            size="small"
+                            color="error"
+                            onClick={() =>
+                              setDeleteTarget({
+                                name: group.name,
+                                type: group.type,
+                                value: rec.value,
+                                expectedFrom,
+                              })
+                            }
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </>
+                    )}
                   </TableCell>
                 </TableRow>
               ));

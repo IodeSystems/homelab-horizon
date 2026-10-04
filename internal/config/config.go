@@ -1176,6 +1176,11 @@ type DNSRecord struct {
 	// which service asked for it, and a record nobody can explain is a record
 	// nobody dares remove.
 	Note string `json:"note,omitempty"`
+	// Instance is the hz instance this record is published FOR ("" = this
+	// hz's own declaration): the instance asked for it and it lies inside the
+	// instance's DNS grant (hz_instance_dns.go). Only that instance's request,
+	// or narrowing its grant, changes it — no admin record edit does.
+	Instance string `json:"instance,omitempty"`
 }
 
 // DNSDriftInfo records an out-of-band change detected at a DNS provider: the
@@ -1732,6 +1737,7 @@ func LoadFromJSON(data []byte) (*Config, error) {
 	if err := cfg.MigrateLegacyMachineHZ(); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
+	cfg.MigrateInstanceDNSGrants()
 	return cfg, nil
 }
 
@@ -1782,6 +1788,9 @@ func Save(path string, cfg *Config) error {
 	if err := cfg.MigrateLegacyMachineHZ(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
+	// Same reason: a restored config predating N4h has TLS domains and no
+	// DNS grant, which ValidateHZInstances below refuses.
+	cfg.MigrateInstanceDNSGrants()
 	// Refuse to write a config whose project tree does not hold together. Save is the
 	// one chokepoint every writer goes through, so a bad parent or a service naming a
 	// project that does not exist is caught here rather than surfacing later as an

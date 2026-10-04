@@ -71,9 +71,10 @@ func (s *Server) handleAPIZoneRecords(w http.ResponseWriter, r *http.Request) {
 			TTL:   rec.TTL,
 			Owner: owner,
 		}
-		if owner == config.RecordOwnerDeclared {
+		if owner == config.RecordOwnerDeclared || owner == config.RecordOwnerInstance {
 			if d := findDeclared(*zone, name, rec.Type, rec.Value); d != nil {
 				r.Note = d.Note
+				r.Instance = d.Instance
 			}
 		}
 		resp.Records = append(resp.Records, r)
@@ -91,7 +92,7 @@ func (s *Server) handleAPIZoneRecords(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		resp.Declared = append(resp.Declared, apitypes.DeclaredDNSRecordResp{
-			Name: fqdn, Type: typ, Value: val, TTL: d.EffectiveTTL(), Note: d.Note, Live: isLive,
+			Name: fqdn, Type: typ, Value: val, TTL: d.EffectiveTTL(), Note: d.Note, Live: isLive, Instance: d.Instance,
 		})
 	}
 
@@ -209,6 +210,10 @@ func (s *Server) applyRecordMutation(w http.ResponseWriter, r *http.Request, op 
 	zone := s.cfg().GetZone(req.Zone)
 	if zone == nil {
 		writeJSONError(w, http.StatusNotFound, "Zone not found")
+		return
+	}
+	if why := instanceRecordRefusal(s.cfg(), zone.Name, name, recType, op != recordOpDelete); why != "" {
+		writeJSONError(w, http.StatusConflict, why)
 		return
 	}
 
@@ -360,6 +365,24 @@ func (s *Server) applyRecordMutation(w http.ResponseWriter, r *http.Request, op 
 	s.setLastPublished(driftKey(zone.Name, name, recType), desiredValues)
 	s.markSetSynced(zone.Name, name, recType)
 	writeJSON(w, map[string]any{"ok": true, "values": desiredValues})
+}
+
+// instanceRecordRefusal is why an admin record edit may not touch a set: an
+// hz instance owns it (read-only here — it changes by that instance's
+// request, or goes when its grant is narrowed), or, for a write, the name is
+// inside an instance's DNS grant. "" is no objection. Deleting a record this
+// hz declared itself inside a grant is allowed: that is how the operator
+// clears a hand-declared record that collides with the instance's request.
+func instanceRecordRefusal(cfg *config.Config, zone, name, recType string, writes bool) string {
+	if inst := cfg.InstanceOwnerOf(zone, name, recType); inst != "" {
+		return fmt.Sprintf("%s %s is published for hz instance %s and is read-only here; it changes by that instance's request — narrow or revoke its DNS grant to remove it", strings.ToUpper(recType), name, inst)
+	}
+	if writes {
+		if inst, entry, ok := cfg.InstanceGrantCovering(name); ok {
+			return fmt.Sprintf("%s is inside hz instance %s's DNS grant (%s); records there are that instance's to ask for — narrow its grant first", name, inst, entry)
+		}
+	}
+	return ""
 }
 
 // dnsProvider builds the provider client for a zone (see Server.newDNSProvider).
@@ -544,10 +567,14 @@ func buildZoneRecordSets(zone config.Zone) (sets []zoneRecordSet, errs []error) 
 // record set, replacing any undeclared values at that name/type. Returns the
 // number of record sets that changed and the number that failed.
 func (s *Server) syncZoneRecords(run *dnsSyncRun) (updated, failed int, err error) {
-	for _, zone := range s.cfg().Zones {
+	cfg := s.cfg()
+	for _, zone := range cfg.Zones {
 		if len(zone.Records) == 0 {
 			continue
 		}
+		// An instance-owned record outside its instance's grant is never
+		// written, whatever the config holds (instance_dns.go).
+		zone = syncPublishableZone(cfg, zone)
 
 		sets, errs := buildZoneRecordSets(zone)
 		for _, e := range errs {
