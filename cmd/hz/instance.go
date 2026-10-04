@@ -34,6 +34,11 @@ const instanceUsage = `usage:
       covering exactly these (DNS-01 through its own zone's provider) and the
       instance pulls it with its token. All must be in one zone this hz owns
       with a DNS provider. --clear stops issuing; the child keeps what it has.
+  hz instance dns-grant <name> <entry>... | --clear
+      Where this hz publishes DNS the instance asks for: exact names and
+      '*.suffix' subtrees, in zones this hz owns with a DNS provider. Its TLS
+      domains must lie inside. Narrowing it (or --clear) removes every record
+      the instance owns outside the new grant, and retracts it at the provider.
 
   hz machine hz-token <name>   DEPRECATED alias of hz instance token, one release.
 `
@@ -62,6 +67,8 @@ func runInstance(c *client, args []string) error {
 		return instanceToken(c, args[1:])
 	case "domains":
 		return instanceDomains(c, args[1:])
+	case "dns-grant":
+		return instanceDNSGrant(c, args[1:])
 	default:
 		return fmt.Errorf("unknown instance subcommand: %s\n%s", args[0], instanceUsage)
 	}
@@ -92,6 +99,9 @@ func instanceList(c *client) error {
 		fmt.Printf("%-24s %-16s %-32s %-28s %s\n", h.Name, owner, h.URL, vpn, token)
 		if len(h.Domains) > 0 {
 			fmt.Printf("%-24s tls: %s\n", "", strings.Join(h.Domains, ", "))
+		}
+		if len(h.DNSGrant) > 0 {
+			fmt.Printf("%-24s dns grant: %s\n", "", strings.Join(h.DNSGrant, ", "))
 		}
 	}
 	return nil
@@ -188,5 +198,29 @@ func instanceDomains(c *client, args []string) error {
 	}
 	fmt.Printf("hz instance %s: this hz issues one certificate for %s (in the background; see its Instances page). The child pulls it with its token.\n",
 		out.Name, strings.Join(out.Domains, ", "))
+	return nil
+}
+
+func instanceDNSGrant(c *client, args []string) error {
+	fs := flag.NewFlagSet("instance dns-grant", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Fprint(os.Stderr, instanceUsage) }
+	clearAll := fs.Bool("clear", false, "revoke the grant: this hz publishes nothing for the instance, and removes what it published")
+	pos, err := positional(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) < 1 || (*clearAll && len(pos) != 1) || (!*clearAll && len(pos) < 2) {
+		return fmt.Errorf("%s", instanceUsage)
+	}
+	grant := append([]string{}, pos[1:]...)
+	var out apitypes.HZInstanceResp
+	if err := c.do(http.MethodPost, apitypes.HZInstancesPath+"/set", apitypes.HZInstanceSetReq{Name: pos[0], DNSGrant: &grant}, &out); err != nil {
+		return err
+	}
+	if len(out.DNSGrant) == 0 {
+		fmt.Printf("hz instance %s has no DNS grant; this hz publishes nothing for it, and what it published is retracted.\n", out.Name)
+		return nil
+	}
+	fmt.Printf("hz instance %s: this hz publishes the DNS it asks for under %s, and refuses the rest.\n", out.Name, strings.Join(out.DNSGrant, ", "))
 	return nil
 }
