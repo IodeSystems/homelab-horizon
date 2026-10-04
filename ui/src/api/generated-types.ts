@@ -1109,6 +1109,11 @@ export interface HZInstanceResp {
   vpnClient?: string;
   note?: string;
   hasToken: boolean;
+  /**
+   * Domains are the hostnames the instance terminates TLS for; this hz
+   * issues one certificate covering exactly these (InstanceCertResp).
+   */
+  domains?: string[];
 }
 /**
  * HZInstanceAddReq declares a nested hz. URL must be http(s) with a host;
@@ -1120,6 +1125,7 @@ export interface HZInstanceAddReq {
   url: string;
   vpnClient?: string;
   note?: string;
+  domains?: string[];
 }
 /**
  * HZInstanceSetReq edits an instance in place. nil leaves a field alone; a
@@ -1132,6 +1138,10 @@ export interface HZInstanceSetReq {
   url?: string;
   vpnClient?: string;
   note?: string;
+  /**
+   * Domains: nil leaves them, [] clears them.
+   */
+  domains?: string[];
 }
 /**
  * HZInstanceRmReq removes an instance. Without Confirm it is a dry run. It is
@@ -1143,6 +1153,84 @@ export interface HZInstanceRmReq {
   name: string;
   cascade?: boolean;
   confirm?: boolean;
+}
+
+//////////
+// source: instance_tls.go
+
+/**
+ * HZInstanceCertSuffix follows HZInstancesPath + "/<name>".
+ */
+export const HZInstanceCertSuffix = "/cert";
+/**
+ * InstanceCertResp is the pulled certificate. SHA256 is the hex sha256 of
+ * CertPEM + ChainPEM + KeyPEM, the exact bytes of the HAProxy bundle the child
+ * writes, in that order.
+ */
+export interface InstanceCertResp {
+  instance: string;
+  domains: string[];
+  cert_pem: string;
+  chain_pem: string;
+  key_pem: string;
+  not_after: string; // RFC3339
+  sha256: string;
+}
+/**
+ * InstanceCertStatusResp is what the PARENT shows of an instance's
+ * certificate on its Instances page. No key material.
+ */
+export interface InstanceCertStatusResp {
+  /**
+   * Issued: a certificate is on file. NotAfter, SANs and SHA256 describe it.
+   */
+  issued: boolean;
+  notAfter?: number /* int64 */;
+  sans?: string[];
+  sha256?: string;
+  /**
+   * Unreadable is set when the file exists but could not be read or
+   * parsed — not the same as "not issued".
+   */
+  unreadable?: string;
+  /**
+   * LastAttemptAt / LastError are this process's last issuance attempt
+   * (memory: a restart forgets them). LastError "" with LastAttemptAt set
+   * is a success.
+   */
+  lastAttemptAt?: number /* int64 */;
+  lastError?: string;
+  /**
+   * LastPulledAt / LastPulledSHA256: the child's last fetch of the cert
+   * endpoint (200 or 304) since this process started; 0 is "not since".
+   */
+  lastPulledAt?: number /* int64 */;
+  lastPulledSha256?: string;
+}
+/**
+ * ParentCertResp is what a CHILD shows of the certificate its parent issued:
+ * present on the self row of /api/v1/instances when this hz has an upstream.
+ */
+export interface ParentCertResp {
+  /**
+   * Parent is upstream.url; Instance is upstream.instance ("" = no
+   * certificate is pulled).
+   */
+  parent: string;
+  instance: string;
+  /**
+   * Installed: a bundle is in the HAProxy cert dir. NotAfter / SANs /
+   * SHA256 describe it.
+   */
+  installed: boolean;
+  notAfter?: number /* int64 */;
+  sans?: string[];
+  sha256?: string;
+  /**
+   * LastCheckAt / LastError: the last pull attempt this process made.
+   */
+  lastCheckAt?: number /* int64 */;
+  lastError?: string;
 }
 
 //////////
@@ -1231,6 +1319,11 @@ export interface InstanceResp {
    * observation recorded on the pull, never a dial (invariant 1).
    */
   nested?: InstanceNestedResp;
+  /**
+   * ParentCert is present on the SELF row of a nested hz (one with an
+   * upstream block): the certificate its parent issued for its domains.
+   */
+  parentCert?: ParentCertResp;
 }
 /**
  * InstanceNestedResp is what this hz knows of a nested hz from its pulls.
@@ -1258,6 +1351,13 @@ export interface InstanceNestedResp {
    * VPNClient is the linked upstream VPN client, "" for none.
    */
   vpnClient?: string;
+  /**
+   * Domains are the names this hz issues the instance's certificate for;
+   * Cert is that certificate's state here. Cert is nil when Domains is
+   * empty.
+   */
+  domains?: string[];
+  cert?: InstanceCertStatusResp;
 }
 /**
  * InstanceSyncResp is a replica's last pull from the config primary.
@@ -1406,6 +1506,11 @@ export interface NestedSeedUpstream {
   token_file: string;
   rungs: NestedSeedRung[];
   poll_seconds?: number /* int */;
+  /**
+   * Instance is the child's name here, so it can pull the certificate this
+   * hz issues for its domains (/api/v1/hz-instances/<instance>/cert).
+   */
+  instance?: string;
 }
 export interface NestedSeedRung {
   project: string;
