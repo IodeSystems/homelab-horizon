@@ -72,6 +72,64 @@ func (m *Manager) RequestCertForDomainWithLog(d DomainConfig, logFn LogFunc) err
 		CloudflareZoneID:   providerCfg.CloudflareZoneID,
 	}
 
+	// Save certificates in certbot-compatible layout
+	if err := m.obtainInto(d, acmeProviderCfg, CertPathsFor(m.config.CertDir, d.Domain), logFn); err != nil {
+		return err
+	}
+
+	if logFn != nil {
+		logFn("Packaging certificate for HAProxy...")
+	}
+
+	// Package cert for HAProxy
+	return m.PackageForHAProxyDomain(d.Domain)
+}
+
+// RequestInstanceCert issues the certificate a nested hz instance pulls: the
+// same CA conversation, account and DNS provider as this hz's own
+// certificates, filed under InstanceCertPaths — and NOT packaged for this hz's
+// HAProxy, which never serves an instance's names.
+func (m *Manager) RequestInstanceCert(instance string, d DomainConfig, logFn LogFunc) error {
+	if d.Domain == "" {
+		return fmt.Errorf("no domain specified")
+	}
+	if d.Email == "" {
+		return fmt.Errorf("no email specified")
+	}
+	if d.DNSProvider == nil {
+		return fmt.Errorf("no DNS provider configured for domain %s", d.Domain)
+	}
+	p := d.DNSProvider
+	return m.obtainInto(d, &acme.DNSProviderConfig{
+		Type:               acme.DNSProviderType(p.Type),
+		AWSAccessKeyID:     p.AWSAccessKeyID,
+		AWSSecretAccessKey: p.AWSSecretAccessKey,
+		AWSRegion:          p.AWSRegion,
+		AWSHostedZoneID:    p.AWSHostedZoneID,
+		AWSProfile:         p.AWSProfile,
+		NamecomUsername:    p.NamecomUsername,
+		NamecomAPIToken:    p.NamecomAPIToken,
+		CloudflareAPIToken: p.CloudflareAPIToken,
+		CloudflareZoneID:   p.CloudflareZoneID,
+	}, InstanceCertPaths(m.config.CertDir, instance), logFn)
+}
+
+// ReadInstanceCert reads an instance certificate's fullchain and key, as
+// filed by RequestInstanceCert. Missing wraps os.ErrNotExist.
+func (m *Manager) ReadInstanceCert(instance string) (fullchain, key []byte, err error) {
+	paths := InstanceCertPaths(m.config.CertDir, instance)
+	if fullchain, err = os.ReadFile(paths.Fullchain); err != nil {
+		return nil, nil, err
+	}
+	if key, err = os.ReadFile(paths.Privkey); err != nil {
+		return nil, nil, err
+	}
+	return fullchain, key, nil
+}
+
+// obtainInto asks the CA for exactly RequestedSANs(d) and writes the result
+// in the certbot layout at paths. The one obtain both callers share.
+func (m *Manager) obtainInto(d DomainConfig, acmeProviderCfg *acme.DNSProviderConfig, paths CertPaths, logFn LogFunc) error {
 	// Build the SAN list: exactly the configured domains — primary plus extra
 	// SANs. See RequestedSANs for why the apex is not implied by a wildcard.
 	domains := RequestedSANs(d)
@@ -81,9 +139,6 @@ func (m *Manager) RequestCertForDomainWithLog(d DomainConfig, logFn LogFunc) err
 	if err != nil {
 		return fmt.Errorf("failed to obtain certificate: %w", err)
 	}
-
-	// Save certificates in certbot-compatible layout
-	paths := CertPathsFor(m.config.CertDir, d.Domain)
 
 	if err := os.MkdirAll(paths.LiveDir, 0700); err != nil {
 		return fmt.Errorf("creating cert directory: %w", err)
@@ -105,13 +160,7 @@ func (m *Manager) RequestCertForDomainWithLog(d DomainConfig, logFn LogFunc) err
 			return fmt.Errorf("writing issuer certificate: %w", err)
 		}
 	}
-
-	if logFn != nil {
-		logFn("Packaging certificate for HAProxy...")
-	}
-
-	// Package cert for HAProxy
-	return m.PackageForHAProxyDomain(d.Domain)
+	return nil
 }
 
 // PackageForHAProxyDomain combines cert and key into a single PEM for HAProxy
