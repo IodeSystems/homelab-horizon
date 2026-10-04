@@ -75,7 +75,7 @@ minted client-side (`configmgr/crypto.go:283`), segment keys on the box
 
 ⚠ **Where hz does hold one, say so rather than overclaiming:** the ACME account
 key (`internal/acme/acme.go:28-41`), issued TLS private keys
-(`internal/letsencrypt/apply.go:98`), and — in the legacy human-VPN path — both
+(`internal/letsencrypt/apply.go:153`), and — in the legacy human-VPN path — both
 halves of a client's WireGuard key, momentarily, to render a config and a QR
 code (`internal/server/handlers_api_vpn.go:72,117-121`).
 
@@ -98,7 +98,7 @@ An environment is a coordinate of an **instance**, never of a box.
 `config.Machine` is exactly `{Name, Project, Segments, Note}`
 (`internal/config/machine.go:49-83`). A nested hz is NOT on it: since B3
 (2026-10-02) it is its own record, `config.HZInstance`
-(`internal/config/hz_instance.go:31`), and `Environment.Upstream` names an
+(`internal/config/hz_instance.go:34`), and `Environment.Upstream` names an
 instance, never a machine. Enforced:
 `internal/config/machine_test.go:32 TestAMachineCarriesNoEnvironment` (the
 exact field list, and no environment field under any spelling), `:63`.
