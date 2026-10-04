@@ -104,7 +104,7 @@ An environment is a coordinate of an **instance**, never of a box.
 `config.Machine` is exactly `{Name, Project, Segments, Note}`
 (`internal/config/machine.go:49-83`). A nested hz is NOT on it: since B3
 (2026-10-02) it is its own record, `config.HZInstance`
-(`internal/config/hz_instance.go:34`), and `Environment.Upstream` names an
+(`internal/config/hz_instance.go:35`), and `Environment.Upstream` names an
 instance, never a machine. Enforced:
 `internal/config/machine_test.go:32 TestAMachineCarriesNoEnvironment` (the
 exact field list, and no environment field under any spelling), `:63`.
@@ -263,7 +263,7 @@ builder declared as a machine read as a project owning the box.
 |---|---|---|---|---|
 | **Machine** | a box hz projects network and units ONTO; the agent's target | agent enrolment | `config.Machine` | Machines |
 | **Vantage** | an outside probe that pushes check results in | probe token | remotes | Checks |
-| **Hz Instance** | a nested hz with its OWN config (e.g. redline-loadtest) | instance token `hzi_` + an `upstream` VPN client | `config.HZInstance{Name, Project, URL, VPNClient, TokenSHA256, Note, Domains}` (`hz_instances`); `Environment.Upstream` names one | Instances, the owning project's page — never Machines |
+| **Hz Instance** | a nested hz with its OWN config (e.g. redline-loadtest) | instance token `hzi_` + an `upstream` VPN client | `config.HZInstance{Name, Project, URL, VPNClient, TokenSHA256, Note, Domains, DNSGrant}` (`hz_instances`); `Environment.Upstream` names one. `DNSGrant` is parent-set: the names the parent publishes DNS for when the instance asks (`POST /api/v1/hz-instances/<name>/dns`); the records it owns are zone records with `DNSRecord.Instance` (`internal/config/hz_instance_dns.go`) | Instances, the owning project's page — never Machines |
 | **Hz Node** | a cluster member of ONE instance (HA peer); no config of its own | HA join / peer sync | the HA peer list | Settings › HA |
 | **Build Agent** | a registration that numbers, logs and uploads builds for ONE project; several may run on one host (a label, not a machine) | agent token `hzb_` | `config.BuildAgent{Name, Project, Host, Note, TokenSHA256}` (`build_agents`) | Settings, Builds |
 
