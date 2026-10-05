@@ -28,9 +28,11 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
   IconButton,
   MenuItem,
   Paper,
+  Switch,
   Table,
   TableBody,
   TableCell,
@@ -131,11 +133,27 @@ export function BootstrapCommandPanel({ resp }: { resp: NestedBootstrapResp }) {
           </IconButton>
         </Tooltip>
       </Box>
+      {resp.humanVpn ? (
+        <Typography variant="body2" sx={{ mt: 1 }} data-bootstrap-human-vpn>
+          Human VPN: <code>wg0</code> on <code>{resp.humanVpn.range}</code>
+          {resp.humanVpn.proposed ? " (proposed by this hz)" : ""}, the child at{" "}
+          <code>{resp.humanVpn.serverAddress}</code>; kiosk <code>{resp.humanVpn.kioskUrl}</code>, endpoint{" "}
+          <code>{resp.humanVpn.endpoint}</code>. Open that UDP port inbound on the box, nothing else. The first client is
+          created on the box&apos;s console — the script prints the command.
+          {resp.humanVpn.domainsChanged
+            ? ` ${resp.humanVpn.kiosk} is now one of this instance's domains and inside its DNS grant.`
+            : ""}
+        </Typography>
+      ) : (
+        <Typography variant="body2" sx={{ mt: 1 }} data-bootstrap-human-vpn="none">
+          No human VPN: the child is reached by ssh tunnel only.
+        </Typography>
+      )}
       <Typography variant="caption" sx={{ display: "block", mt: 1, color: "text.secondary" }} data-bootstrap-shown-once>
         Shown once. {resp.revoked ? "The earlier unused command for this instance no longer works. " : ""}
         {resp.reused.length > 0 ? `Reused the existing ${resp.reused.join(" and ")}. ` : ""}
         The box needs outbound HTTPS to this hz&apos;s public address and outbound UDP to its WireGuard endpoint —
-        nothing inbound.
+        {resp.humanVpn ? " and inbound only its human VPN's UDP port." : " nothing inbound."}
       </Typography>
     </Box>
   );
@@ -157,14 +175,20 @@ export function AddNestedInstanceDialog({
   const [instance, setInstance] = useState("");
   const [rung, setRung] = useState("");
   const [from, setFrom] = useState("");
+  const [humanVpn, setHumanVpn] = useState(true);
+  const [kiosk, setKiosk] = useState("");
+  const [humanVpnRange, setHumanVpnRange] = useState("");
   const close = () => {
     gen.reset();
     setInstance("");
     setRung("");
     setFrom("");
+    setHumanVpn(true);
+    setKiosk("");
+    setHumanVpnRange("");
     onClose();
   };
-  const ready = instance.trim() !== "" && rung.trim() !== "" && from !== "";
+  const ready = instance.trim() !== "" && rung.trim() !== "" && from !== "" && (!humanVpn || kiosk.trim() !== "");
   return (
     <Dialog open={open} onClose={close} fullWidth maxWidth="md">
       <DialogTitle>Add nested instance to {project}</DialogTitle>
@@ -199,6 +223,26 @@ export function AddNestedInstanceDialog({
                 </MenuItem>
               ))}
             </TextField>
+            <FormControlLabel
+              control={<Switch checked={humanVpn} onChange={(e) => setHumanVpn(e.target.checked)} />}
+              label="Human VPN and MFA kiosk on the child"
+            />
+            {humanVpn ? (
+              <>
+                <TextField
+                  label="Kiosk name"
+                  value={kiosk}
+                  onChange={(e) => setKiosk(e.target.value)}
+                  helperText="The child's MFA portal and VPN endpoint, e.g. kiosk.hz.loadtest.example.com — added to the instance's domains and DNS grant"
+                />
+                <TextField
+                  label="Human VPN range (optional)"
+                  value={humanVpnRange}
+                  onChange={(e) => setHumanVpnRange(e.target.value)}
+                  helperText="Empty: this hz proposes the next free 10.<n>.0.0/24 after its own VPN range"
+                />
+              </>
+            ) : null}
             {gen.error ? <Alert severity="error">{gen.error.message}</Alert> : null}
           </Box>
         )}
@@ -209,7 +253,20 @@ export function AddNestedInstanceDialog({
           <Button
             variant="contained"
             disabled={!ready || gen.isPending}
-            onClick={() => gen.mutate({ project, instance: instance.trim(), rung: rung.trim(), from })}
+            onClick={() =>
+              gen.mutate(
+                humanVpn
+                  ? {
+                      project,
+                      instance: instance.trim(),
+                      rung: rung.trim(),
+                      from,
+                      kiosk: kiosk.trim(),
+                      humanVpnRange: humanVpnRange.trim() || undefined,
+                    }
+                  : { project, instance: instance.trim(), rung: rung.trim(), from, humanVpn: false },
+              )
+            }
           >
             {gen.isPending ? "Generating…" : "Generate command"}
           </Button>
