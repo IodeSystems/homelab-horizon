@@ -1548,6 +1548,14 @@ export const NestedBootstrapPath = "/api/v1/nested/bootstrap";
  * URL is optional: where the child's hz will answer, a statement for the
  * operator (HZInstance.URL). Empty on a new instance is "not known yet" — a
  * .invalid placeholder — and enrolment replaces it with the box's VPN address.
+ * HumanVPN is the child's OWN wg0 for people, its MFA kiosk and its listener
+ * on its wg0 address (N4g). nil is ON; false is "no human VPN" (the child is
+ * then reached by ssh tunnel only, as before). With it on, Kiosk is required:
+ * the kiosk's hostname (kiosk_url https://<Kiosk>, and the endpoint
+ * <Kiosk>:51820). It is added to the instance's Domains (this hz issues its
+ * certificate) and DNS grant (the child asks for its A record).
+ * HumanVPNRange is optional: without it this hz proposes the next free
+ * 10.<n>.0.0/24 after its own VPN range.
  */
 export interface NestedBootstrapReq {
   project: string;
@@ -1558,6 +1566,28 @@ export interface NestedBootstrapReq {
   posture?: string;
   platform?: string;
   url?: string;
+  humanVpn?: boolean;
+  kiosk?: string;
+  humanVpnRange?: string;
+}
+/**
+ * NestedHumanVPN is the child's human VPN as the command sets it up: Range is
+ * its wg0 range (Proposed when this hz chose it), ServerAddress the child's
+ * own address on it (where its hz also listens), Kiosk, KioskURL and Endpoint
+ * what a person's client is given.
+ */
+export interface NestedHumanVPN {
+  range: string;
+  proposed: boolean;
+  serverAddress: string;
+  kiosk: string;
+  kioskUrl: string;
+  endpoint: string;
+  /**
+   * DomainsChanged is true when this request added the kiosk name to the
+   * instance's domains or DNS grant (a certificate reissue follows).
+   */
+  domainsChanged: boolean;
 }
 /**
  * NestedBootstrapResp is the generated command, shown once.
@@ -1583,6 +1613,10 @@ export interface NestedBootstrapResp {
   warning?: string;
   reused: string[];
   revoked: boolean;
+  /**
+   * HumanVPN is nil when the request turned it off.
+   */
+  humanVpn?: NestedHumanVPN;
 }
 /**
  * NestedEnrolReq is what the box sends: its WireGuard PUBLIC key, and the
@@ -1636,12 +1670,26 @@ export interface NestedEnrolBinary {
  * NestedChildSeed is the subset of the child's config.json the bootstrap
  * writes. The json tags are config.Config's; TestEnrolSeedLoadsAsTheChildsConfig
  * loads it through config.LoadFromJSON, so a tag that drifts fails there.
+ * The human-VPN fields (N4g) are set only when the command has a human VPN.
+ * services[0] is always the rung's service; services[1], when present, is the
+ * kiosk (proxy.self, internal_dns at the child's wg0 address, external_dns {}
+ * so the child asks this hz for its A record).
  */
 export interface NestedChildSeed {
   projects: NestedSeedProject[];
   environments: NestedSeedEnvironment[];
   services: NestedSeedService[];
   upstream: NestedSeedUpstream;
+  wg_interface?: string;
+  wg_config_path?: string;
+  vpn_range?: string;
+  dns?: string;
+  server_endpoint?: string;
+  kiosk_url?: string;
+  vpn_listen?: boolean;
+  vpn_mfa_enabled?: boolean;
+  vpn_mfa_scope?: string;
+  haproxy_enabled?: boolean;
 }
 export interface NestedSeedProject {
   name: string;
@@ -1657,6 +1705,31 @@ export interface NestedSeedService {
   environment: string;
   token: string;
   domains: string[];
+  internal_dns?: NestedSeedInternalDNS;
+  external_dns?: NestedSeedExternalDNS;
+  proxy?: NestedSeedProxy;
+}
+/**
+ * NestedSeedInternalDNS is config.InternalDNS: what the child's dnsmasq
+ * answers for the kiosk name — the child's own wg0 address, so a VPN client
+ * reaches the kiosk THROUGH the tunnel (the jail knows a peer by its tunnel
+ * source address).
+ */
+export interface NestedSeedInternalDNS {
+  ip: string;
+}
+/**
+ * NestedSeedExternalDNS is config.ExternalDNS, always empty here: no pin, so
+ * the record tracks the child's public IP.
+ */
+export interface NestedSeedExternalDNS {
+}
+/**
+ * NestedSeedProxy is config.ProxyConfig's self route: HAProxy sends the kiosk
+ * name to the child's own UI, where the MFA portal is.
+ */
+export interface NestedSeedProxy {
+  self: boolean;
 }
 export interface NestedSeedUpstream {
   url: string;
