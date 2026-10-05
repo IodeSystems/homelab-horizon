@@ -711,15 +711,27 @@ One command, generated on the **parent**, provisions a nested hz on a fresh Ubun
 **Generate it.** On the project's page, **[Add nested instance]**: an instance name, a rung name and the rung it is promoted from. Or:
 
 ```bash
-hz nested bootstrap redline loadtest-hz --rung loadtest --from staging
+hz nested bootstrap redline loadtest-hz --rung loadtest --from staging --kiosk kiosk.hz.loadtest.example.com
 #   (or --instance loadtest-hz; --machine is its deprecated spelling, one release)
-#   = POST /api/v1/nested/bootstrap {"project":"redline","instance":"loadtest-hz","rung":"loadtest","from":"staging"}
-#     optional: "posture" (default prod), "platform" ("linux-amd64"|"linux-arm64"), "url"
+#   (--human-vpn=false: no human VPN, no kiosk; --human-vpn-range 10.<n>.0.0/24 to choose the range)
+#   = POST /api/v1/nested/bootstrap {"project":"redline","instance":"loadtest-hz","rung":"loadtest","from":"staging",
+#                                    "kiosk":"kiosk.hz.loadtest.example.com"}
+#     optional: "posture" (default prod), "platform" ("linux-amd64"|"linux-arm64"), "url",
+#               "humanVpn" (default true), "humanVpnRange"
 #     "machine" is accepted in place of "instance" for one release; both, different, is a 400.
 # -> 200 {"command":"curl -fsSL https://portal.example.com/admin/hz-child/install/hzc_<48 hex> | sudo bash",
 #         "expiresAt":<unix>,"instance":"loadtest-hz","machine":"loadtest-hz","rung":"redline/loadtest",
-#         "platforms":["linux-amd64","linux-arm64"],"missing":[],"reused":[],"revoked":false}
+#         "platforms":["linux-amd64","linux-arm64"],"missing":[],"reused":[],"revoked":false,
+#         "humanVpn":{"range":"10.101.0.0/24","proposed":true,"serverAddress":"10.101.0.1",
+#                     "kiosk":"kiosk.hz.loadtest.example.com","kioskUrl":"https://kiosk.hz.loadtest.example.com",
+#                     "endpoint":"kiosk.hz.loadtest.example.com:51820","domainsChanged":true}}
 ```
+
+**The child's human VPN** (on by default). The child gets its own `wg0` for people, an MFA kiosk, and its hz also listens on its `wg0` address. Generate plans it:
+- **The range.** Without `humanVpnRange`, the parent proposes the next free `10.<n>.0.0/24` after its own VPN range (`10.100.0.0/24` → `10.101.0.0/24`). The proposal skips any range that overlaps the parent's VPN range (the child's `hz-upstream` address is in it), the parent's LAN, or a fleet site's VPN range. An explicit range must pass the same rules. The same parent proposes the same range again, so a re-run keeps the box's `wg0`.
+- **The kiosk name.** It is required with the human VPN. It is added to the instance's `domains` (the parent issues its certificate, [TLS for a nested hz](#tls-for-a-nested-hz)) and to its DNS grant (the child asks for its A record, [DNS for a nested hz](#dns-for-a-nested-hz)). A grant entry that already covers it (`*.hz.loadtest.example.com`) is kept, and no exact entry is added beside it. The name must pass every rule of both lists, in the same save as the instance and the rung. All of an instance's domains must be in **one** zone. A refusal names the rule, and nothing is declared.
+
+Refused with a sentence: the human VPN with no `kiosk`; a `kiosk` or `humanVpnRange` with `humanVpn: false`; a range that overlaps the parent's VPN range, LAN or a site; a kiosk name that breaks a domain or grant rule.
 
 In one save it declares the **hz instance** (owned by the project — never a machine) and the rung `redline/loadtest` (posture prod, `from` staging, upstream = the instance), then mints a **single-use grant that expires in an hour**. The grant is for an operator sitting in front of a box; nothing a running child does depends on it. Generating again for the same instance revokes the unused earlier command. If the instance and rung already exist (a wiped box being re-provisioned), they are reused and only the grant is new; enrolling rotates the box's VPN key and its instance token.
 
@@ -729,24 +741,25 @@ It is refused, with a sentence, when: the parent has no public vhost (`kiosk_url
 
 **What the command does** (run as root; each step says what failed if it fails):
 
-1. Checks the box: root, Linux, amd64/arm64, systemd, and that the parent holds a binary for this platform.
-2. Installs `wireguard-tools`, `curl` and `jq` if missing.
+1. Checks the box: root, Linux, amd64/arm64, systemd, and that the parent holds a binary for this platform. With a human VPN, it refuses the box when the range is already an address or a route on any interface but `wg0` (a VPC subnet, a docker network), or when `/etc/wireguard/wg0.conf` exists with an address other than the child's (another install's — the first bootstrap broke on exactly that).
+2. Installs `wireguard-tools`, `curl` and `jq` if missing, and `haproxy` with a human VPN (it serves the kiosk).
 3. Generates a WireGuard keypair **on the box**.
 4. Enrols: `POST /admin/hz-child/enrol/<grant>` on the public vhost with `{"public_key","platform","hostname"}`. The parent creates (or re-keys) the box's `upstream`-profile VPN client, links it on the hz instance, mints the instance token and consumes the grant. It answers `{"wg":{"address","peer_public_key","endpoint","allowed_ips"},"parent_url":"http://<parent WG address>:<port>","instance_token","instance","machine","project","rung","service_name","binary":{"url","sha256","version"},"seed":{...}}` (`machine` repeats `instance` for one release). A bad public key is a 400 and a missing binary a 409, and neither uses the command up.
 5. Writes `/etc/wireguard/hz-upstream.conf` (0600) and enables `wg-quick@hz-upstream` at boot. Its only route is the parent's WG address `/32`.
 6. Downloads the server binary **over the VPN** (`GET /api/v1/nested/bin/<platform>`, instance token), checks its sha256, and installs it to `/usr/local/bin/homelab-horizon`.
-7. Writes `/etc/homelab-horizon/config.json`: the `upstream` block (`token_file` `/etc/homelab-horizon/upstream.token`, 0600), the project, the rung and a local service `<project>-<rung>` with a token **generated on the box** (`/etc/homelab-horizon/<service>.service-token`, 0600). An existing config is backed up beside it and merged, not replaced.
+7. Writes `/etc/homelab-horizon/config.json`: the `upstream` block (`token_file` `/etc/homelab-horizon/upstream.token`, 0600), the project, the rung and a local service `<project>-<rung>` with a token **generated on the box** (`/etc/homelab-horizon/<service>.service-token`, 0600). An existing config is backed up beside it and merged, not replaced. With a human VPN it also sets `wg_interface`/`wg_config_path` (`wg0`), `vpn_range`, `dns` (the child's `wg0` address), `server_endpoint` (`<kiosk>:51820`), `kiosk_url` (`https://<kiosk>`), `vpn_listen: true`, `vpn_mfa_enabled: true`, `vpn_mfa_scope: all` (only when none is set), `haproxy_enabled: true`, clears `server_public_key` (hz reads it from the box's `wg0.conf` at start), and adds the service `hz-kiosk`: the kiosk name, `proxy.self`, `internal_dns` at the child's `wg0` address and `external_dns: {}`.
 8. Creates the local admin account `hz-local-admin`, with a personal API token in `/etc/homelab-horizon/admin.token` (0600, written by `homelab-horizon user create … --token-file`, never printed). This runs before hz starts, and only when the child has no account yet. A child with no account lets anyone who reaches its API create the first admin; this step closes that. A re-run keeps the existing account and token.
-9. Installs the systemd unit (`homelab-horizon install`, as `bin/deploy` does) and starts it.
-10. Waits for the child's first pull: its local `desired` answering 200, or 404 "nothing applied" (the parent said so), counts as connected. Then it prints a summary. On failure it prints the step and how to recover.
+9. Installs the systemd unit (`homelab-horizon install`, as `bin/deploy` does; it also places `hz-agent`).
+10. With a human VPN: when `/etc/wireguard/wg0.conf` is missing, `hz-agent wg-create-config` writes it (0600), with a server key minted **on the box**; an existing one (same address) is kept, with its key and clients. Then it enables and starts `wg-quick@wg0`.
+11. Starts hz and waits for the child's first pull: its local `desired` answering 200, or 404 "nothing applied" (the parent said so), counts as connected. Then it prints a summary, with a human VPN the first-client commands ([Reaching a nested hz](#reaching-a-nested-hz)). On failure it prints the step and how to recover.
 
 Re-running: until step 4 the same command can be re-run. After it, generate a **new** command and run that; the script is safe on a box it already provisioned (new key, merged config). The script never traces (`set -x`) and never prints a key or a token.
 
 **Syncing a child.** Nobody is signed in to a child to press Sync. So a child (any hz with an `upstream` block) syncs **once, 5 seconds after it starts**, when its config differs from the last-synced snapshot (the same check as `hz pending`). It logs each line `LOUD` to the journal. A parent never does this, and neither does a child with nothing pending. If a sync ends with errors, the snapshot is not updated, so the next start tries again. To sync by hand on the box, run `sudo homelab-horizon sync`. It asks the running hz over loopback, using the token in `admin.token` beside the config, and runs the same sync as `hz sync`.
 
-**Network.** The box needs outbound HTTPS to the parent's public vhost (steps 1–4) and outbound UDP to the parent's WireGuard endpoint. Nothing inbound: the parent never dials the box.
+**Network.** The box needs outbound HTTPS to the parent's public vhost (steps 1–4) and outbound UDP to the parent's WireGuard endpoint. The parent never dials the box. With a human VPN, one port inbound: UDP 51820, for people's clients.
 
-**What crosses.** Up: the box's WireGuard **public** key. Down: the instance token (the parent keeps only its sha256), the WireGuard peer details, the binary and the seed config. The private key never leaves the box, and the parent stores no private key for it. The child's local service token is never sent to the parent.
+**What crosses.** Up: the box's WireGuard **public** key. Down: the instance token (the parent keeps only its sha256), the WireGuard peer details, the binary and the seed config. The private key never leaves the box, and the parent stores no private key for it. The child's local service token is never sent to the parent. With a human VPN, the seed also carries the range and the kiosk name; the child's `wg0` server key is minted on the box and never crosses.
 
 **State.** The Instances page, the instance's page and the project's Nested instances table (never the Machines page) show *declared · command generated (expires …) · enrolled · connected (last pull …) · never connected*. Grants and enrolment times are held in memory: after a parent restart a live command is gone (generate a new one) and the state reads from the token, the VPN link and the pulls.
 
@@ -758,14 +771,34 @@ Re-running: until step 4 the same command can be re-run. After it, generate a **
 | DNS records | Publishes Route53 records only for services with `external_dns` in a zone with a provider. A provider-less zone publishes nothing. | No |
 | Let's Encrypt | Only with `ssl_enabled` (default off). | No |
 | HAProxy | Only with `haproxy_enabled` (default off; **set it** for a child with proxied services). Replaces `/etc/haproxy/haproxy.cfg` and reloads haproxy, which binds 80/443. | No |
-| WireGuard | Not touched. hz's WireGuard is `wg_interface` (wg0), never `hz-upstream`. | A child whose `wg_interface` or `wg_config_path` names `hz-upstream` is refused at save and at start. |
+| WireGuard | Not touched. hz's WireGuard is `wg_interface` (wg0), never `hz-upstream`. With a human VPN, the child's hz manages `wg0` as on any hz (client edits, reloads, the MASQUERADE heal, the `WG-*` chains). | A child whose `wg_interface` or `wg_config_path` names `hz-upstream` is refused at save and at start. |
 | iptables | Not touched by a sync. The 60-second health check flushes only hz's own chains (`WG-*`, `HZ-*`) and deletes only hz-shaped rules. It leaves docker's rules alone. It does add hz's own rules (a MASQUERADE on the egress interface, the wg0 jumps). | No |
 
 Nothing hz runs writes `/etc/wireguard/hz-upstream.conf`; only the bootstrap script does.
 
-**Teardown.** On the box: `systemctl disable --now homelab-horizon wg-quick@hz-upstream`, then remove `/usr/local/bin/homelab-horizon`, `/etc/homelab-horizon/` and `/etc/wireguard/hz-upstream.conf`. On the parent: remove the hz instance with cascade (Remove on the instance's page, or `hz instance rm loadtest-hz --cascade --confirm`), which removes its VPN client and clears the rung's upstream (the rung itself stays; remove it separately if it should go). Removing the VPN client alone cuts the link; minting a new instance token (`hz instance token`) revokes the old one.
+**Teardown.** On the box: `systemctl disable --now homelab-horizon wg-quick@hz-upstream` (and `wg-quick@wg0` with a human VPN), then remove `/usr/local/bin/homelab-horizon`, `/etc/homelab-horizon/`, `/etc/wireguard/hz-upstream.conf` and `/etc/wireguard/wg0.conf`. On the parent: remove the hz instance with cascade (Remove on the instance's page, or `hz instance rm loadtest-hz --cascade --confirm`), which removes its VPN client and clears the rung's upstream (the rung itself stays; remove it separately if it should go). Removing the VPN client alone cuts the link; minting a new instance token (`hz instance token`) revokes the old one.
 
 **Upgrading from a release where a nested hz was a machine** (`machines[].hz`). On load — and on a backup restore — each marker becomes an `hz_instances` record with the same name, owner, URL, VPN client and token digest, so the child keeps pulling with the token it has; nothing is re-bootstrapped. The machine that carried the marker is then removed if it holds nothing else (no segments, no note, no agent enrolment). Otherwise it is kept as a machine, and the log says so with `LOUD`.
+
+### Reaching a nested hz
+
+The child's hz binds `127.0.0.1:8080`, and with a human VPN also its `wg0` address (`vpn_listen`). You reach it the way you reach the parent: the VPN, the MFA kiosk, then the UI.
+
+1. **The firewall.** Open **UDP 51820 inbound** on the box (on a cloud box, its security group). Nothing else: WireGuard does not answer a packet without a valid key, and the MFA kiosk gates what a connected client reaches.
+2. **The first client, from the console.** A child starts with no human VPN client, and nothing outside reaches its UI. So the first one is made **on the box, as root**. The script's summary prints these commands with the name of the parent account that generated the command:
+
+   ```bash
+   sudo homelab-horizon user create carl --admin --token-file /etc/homelab-horizon/carl.token   # skip if carl exists here
+   sudo homelab-horizon vpn add carl-1 --profile vpn-only --vpn-admin --user carl
+   ```
+
+   `vpn add` asks the running hz over loopback (with the `admin.token` the bootstrap wrote), so the hz on the box remains the only writer of `wg0.conf`. It prints the client config and a QR code (`qrencode`) **to the terminal, once**. The config holds the client's private key; hz keeps only the public half. It refuses before it creates anything when stdout is not a terminal, when it is not run as root, or when `--user` is not an account on this hz. The client is recorded as `--user`'s device. `--vpn-admin` makes its address sign it in to the UI. The MFA scope is `all`, so the client is still jailed until it passes the kiosk.
+3. **The kiosk.** Connect the client. Its endpoint is `<kiosk>:51820` (public DNS: the child's A record, which the parent publishes). Its DNS is the child's `wg0` address, where the child's dnsmasq answers the kiosk name with that address, so the kiosk is reached **through** the tunnel (the jail identifies a peer by its tunnel address). Open `https://<kiosk>`, enrol a second factor, and choose a session.
+4. **The UI.** `http://<child wg0 address>:8080` (e.g. `http://10.101.0.1:8080`). Create later clients there.
+
+**dnsmasq.** hz does not start dnsmasq on a nested hz ([What a sync touches](#spinning-up-a-nested-hz)). When it is not running, the summary says so: a connected client then resolves no names, and the portal is reached by address, `http://<child wg0 address>:8080/app/mfa`. Start dnsmasq yourself to opt in.
+
+**Break-glass.** The ssh tunnel still works and needs nothing of the above: `ssh -L 8080:127.0.0.1:8080 <box>`, then `http://127.0.0.1:8080`.
 
 ### TLS for a nested hz
 
