@@ -201,6 +201,7 @@ COMMANDS
                                      agent, result (abandoned after 2h quiet)
   builds seed <project> --next N     Raise the next build number (never lowers it)
   nested bootstrap <project> <instance> --rung <name> --from <rung>
+              --kiosk <hostname> | --human-vpn=false  [--human-vpn-range CIDR]
               [--posture P] [--platform linux-amd64|linux-arm64] [--url U]
                                      Declare a nested hz and its rung, and print ONE
                                      command that provisions it on a fresh Ubuntu box.
