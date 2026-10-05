@@ -481,6 +481,28 @@ console.log("· the nested bootstrap — states, the command panel, the project 
   check(p.text.includes("nothing inbound"), "and the network requirement in one line");
   const plain = draw(<BootstrapCommandPanel resp={{ ...resp, warning: undefined, missing: [], revoked: false }} />);
   check(!plain.html.includes("data-bootstrap-warning"), "no warning when every platform is there");
+  check(p.html.includes('data-bootstrap-human-vpn="none"') && p.text.includes("ssh tunnel only"), "no human VPN is said, not left blank");
+  const human = draw(
+    <BootstrapCommandPanel
+      resp={{
+        ...resp,
+        humanVpn: {
+          range: "10.101.0.0/24",
+          proposed: true,
+          serverAddress: "10.101.0.1",
+          kiosk: "kiosk.hz.loadtest.example.com",
+          kioskUrl: "https://kiosk.hz.loadtest.example.com",
+          endpoint: "kiosk.hz.loadtest.example.com:51820",
+          domainsChanged: true,
+        },
+      }}
+    />,
+  );
+  check(
+    human.text.includes("10.101.0.0/24") && human.text.includes("proposed by this hz") && human.text.includes("kiosk.hz.loadtest.example.com:51820"),
+    "the human VPN's range, its proposer and the endpoint are shown",
+  );
+  check(human.text.includes("inbound only its human VPN") && !human.text.includes("nothing inbound"), "with a human VPN the box needs one inbound port, and says so");
 
   const envs: EnvironmentResp[] = [
     { project: "storefront", name: "staging", posture: "staging", placement: { state: "here", statement: "" } } as EnvironmentResp,
