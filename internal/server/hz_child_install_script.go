@@ -36,8 +36,11 @@ const hzChildInstallScript = `#!/bin/bash
 #   7. writes /etc/homelab-horizon/config.json (merged if it exists, backed up)
 #   8. creates the local admin @@ADMIN_USER@@ and its API token (only if this
 #      hz has no account yet; closes the first-account sign-up)
-#   9. installs and starts the homelab-horizon systemd unit
-#  10. waits for this hz's first answer from the parent
+#   9. installs the homelab-horizon systemd unit
+#  10. the human VPN, when this command has one: this hz's own wg0 for people,
+#      its server key minted HERE (hz-agent wg-create-config) and kept on a
+#      re-run; hz manages wg0, never @@IFACE@@
+#  11. starts hz and waits for its first answer from the parent
 #
 # Re-running: before step 4 the same command can be run again. From step 4 on
 # the command is used up — generate a NEW one on the parent and run that; it
@@ -53,6 +56,13 @@ RUNG="@@RUNG@@"
 PLATFORMS="@@PLATFORMS@@"
 IFACE="@@IFACE@@"
 PARENT_ADDR="@@PARENT_ADDR@@"
+# The human VPN (empty range: this command sets none up).
+HUMAN_VPN_RANGE="@@HUMAN_VPN_RANGE@@"
+HUMAN_ADDR="@@HUMAN_ADDR@@"
+HUMAN_IFACE="@@HUMAN_IFACE@@"
+HUMAN_PORT="@@HUMAN_PORT@@"
+KIOSK="@@KIOSK@@"
+OPERATOR="@@OPERATOR@@"
 
 WG_DIR=/etc/wireguard
 WG_CONF="$WG_DIR/$IFACE.conf"
@@ -62,6 +72,7 @@ TOKEN_FILE="@@TOKEN_FILE@@"
 ADMIN_USER="@@ADMIN_USER@@"
 ADMIN_TOKEN_FILE="@@ADMIN_TOKEN_FILE@@"
 BIN=/usr/local/bin/homelab-horizon
+AGENT=/usr/local/bin/hz-agent
 
 STEP="starting"
 ENROLLED=0
@@ -84,7 +95,24 @@ on_exit() {
 }
 trap on_exit EXIT
 
-step() { STEP="$1"; say "[$2/10] $1"; }
+step() { STEP="$1"; say "[$2/11] $1"; }
+
+# human_vpn_clash prints the first local address or route that overlaps
+# HUMAN_VPN_RANGE on an interface other than HUMAN_IFACE ("<iface> <cidr>"),
+# or nothing. A route with no prefix is a /32; the default route is skipped.
+human_vpn_clash() {
+  (
+    ip -4 -o addr show 2>/dev/null | awk '{print $2, $4}'
+    ip -4 route show 2>/dev/null | awk '$1 != "default" { d = "?"; for (i = 2; i < NF; i++) if ($i == "dev") d = $(i + 1); print d, $1 }'
+  ) | awk -v r="$HUMAN_VPN_RANGE" -v own="$HUMAN_IFACE" '
+    function num(ip,  a) { split(ip, a, "."); return ((a[1] * 256 + a[2]) * 256 + a[3]) * 256 + a[4] }
+    function base(ip, len,  s) { s = 2 ^ (32 - len); return int(num(ip) / s) * s }
+    BEGIN { split(r, R, "/"); rl = R[2] + 0 }
+    $1 != own && $2 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/ {
+      split($2, C, "/"); cl = (C[2] == "" ? 32 : C[2] + 0); m = (cl < rl ? cl : rl)
+      if (base(C[1], m) == base(R[1], m)) { print $1, $2; exit }
+    }'
+}
 die() { say "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------- 1. checks
@@ -108,7 +136,22 @@ if [ -n "$PARENT_ADDR" ] && command -v ip >/dev/null 2>&1; then
   CLASH=$(ip -4 -o addr show | awk -v a="$PARENT_ADDR" '{split($4, c, "/"); if (c[1] == a && $2 != "'"$IFACE"'") print $2}' | head -1)
   [ -z "$CLASH" ] || die "interface $CLASH on this box already holds $PARENT_ADDR, the parent's VPN address, so traffic to the parent would never leave this box. Remove it first (e.g. ip link del $CLASH, and its config under /etc/wireguard), then re-run this command — nothing was changed."
 fi
+# The human VPN's range must be free HERE. The parent chose it clear of its
+# own VPN, LAN and sites; only this box can see its own interfaces, routes
+# (a VPC, docker networks) and a leftover wg0 from an earlier install.
+if [ -n "$HUMAN_VPN_RANGE" ]; then
+  command -v ip >/dev/null 2>&1 || die "the ip command is required to check that $HUMAN_VPN_RANGE is free on this box; nothing was changed."
+  CLASH=$(human_vpn_clash)
+  [ -z "$CLASH" ] || die "the human VPN range $HUMAN_VPN_RANGE is already in use on this box ($CLASH), so its clients would route into the wrong network. Generate the command again on the parent with another range (hz nested bootstrap ... --human-vpn-range 10.<n>.0.0/24), or remove what holds it — nothing was changed."
+  if [ -e "$WG_DIR/$HUMAN_IFACE.conf" ]; then
+    HAVE=$(awk -F= 'tolower($1) ~ /^[ \t]*address[ \t]*$/ { gsub(/[ \t]/, "", $2); print $2; exit }' "$WG_DIR/$HUMAN_IFACE.conf")
+    [ "${HAVE%%/*}" = "$HUMAN_ADDR" ] || die "$WG_DIR/$HUMAN_IFACE.conf already exists with Address ${HAVE:-none}, not $HUMAN_ADDR on $HUMAN_VPN_RANGE — it is another install's (an earlier hz on the parent's range broke the first bootstrap exactly so). Move it aside (mv $WG_DIR/$HUMAN_IFACE.conf $WG_DIR/$HUMAN_IFACE.conf.old; ip link del $HUMAN_IFACE) and re-run, or generate the command with --human-vpn-range matching it — nothing was changed."
+  fi
+fi
 say "  $PLATFORM, instance $INSTANCE, rung $PROJECT/$RUNG"
+if [ -n "$HUMAN_VPN_RANGE" ]; then
+  say "  human VPN $HUMAN_VPN_RANGE ($HUMAN_IFACE, this box $HUMAN_ADDR), kiosk $KIOSK"
+fi
 
 TMP=$(mktemp -d)
 chmod 0700 "$TMP"
@@ -120,6 +163,10 @@ command -v wg >/dev/null 2>&1 || need="$need wireguard-tools"
 command -v wg-quick >/dev/null 2>&1 || case "$need" in *wireguard-tools*) ;; *) need="$need wireguard-tools" ;; esac
 command -v curl >/dev/null 2>&1 || need="$need curl"
 command -v jq >/dev/null 2>&1 || need="$need jq"
+# The kiosk is served by HAProxy, as on any hz.
+if [ -n "$HUMAN_VPN_RANGE" ]; then
+  command -v haproxy >/dev/null 2>&1 || need="$need haproxy"
+fi
 if [ -n "$need" ]; then
   say "  apt-get install$need"
   export DEBIAN_FRONTEND=noninteractive
@@ -237,6 +284,22 @@ jq --slurpfile seed "$TMP/seed.json" --rawfile tok "$TMP/svc.token" '
   | .services = ([(.services // [])[] | select(.name != $v.name)]
       + [((([(.services // [])[] | select(.name == $v.name)] | first) // {domains: []})
           + {name: $v.name, project: $v.project, environment: $v.environment, token: $t})])
+  | if (($s.vpn_range // "") != "") then
+      .wg_interface = $s.wg_interface
+      | .wg_config_path = $s.wg_config_path
+      | .vpn_range = $s.vpn_range
+      | .dns = $s.dns
+      | .server_endpoint = $s.server_endpoint
+      | .server_public_key = ""
+      | .kiosk_url = $s.kiosk_url
+      | .vpn_listen = $s.vpn_listen
+      | .vpn_mfa_enabled = true
+      | .vpn_mfa_scope = (if ((.vpn_mfa_scope // "") == "") then $s.vpn_mfa_scope else .vpn_mfa_scope end)
+      | .haproxy_enabled = true
+    else . end
+  | reduce ($s.services[1:][]) as $k (.;
+      .services = ([.services[] | select(.name != $k.name)]
+        + [((([.services[] | select(.name == $k.name)] | first) // {}) + $k)]))
 ' "$TMP/current.json" > "$TMP/config.json"
 install -m 0600 "$TMP/config.json" "$HZ_CFG"
 install -m 0600 "$TMP/svc.token" "$SVC_TOKEN_FILE"
@@ -259,17 +322,40 @@ else
 fi
 
 # --------------------------------------------------------------- 9. service
-step "installing and starting the homelab-horizon service" 9
+step "installing the homelab-horizon service" 9
 (cd "$HZ_DIR" && "$BIN" install --config "$HZ_CFG") > "$TMP/install.log" 2>&1 || {
   cat "$TMP/install.log" >&2
   die "homelab-horizon install failed (output above)."
 }
 systemctl daemon-reload
 systemctl enable homelab-horizon >/dev/null 2>&1
-systemctl restart homelab-horizon || die "homelab-horizon did not start — see: journalctl -u homelab-horizon -n 50 --no-pager"
 
-# -------------------------------------------------------------- 10. verify
-step "waiting for this hz to reach the parent" 10
+# ------------------------------------------------------------ 10. human VPN
+if [ -n "$HUMAN_VPN_RANGE" ]; then
+  step "setting up the human VPN ($HUMAN_IFACE on $HUMAN_VPN_RANGE)" 10
+  # The server key is minted HERE and never leaves this box. A wg0.conf the
+  # preflight already accepted (same address) is kept: a new key would cut
+  # off every client it was ever handed.
+  if [ -e "$WG_DIR/$HUMAN_IFACE.conf" ]; then
+    say "  $WG_DIR/$HUMAN_IFACE.conf exists with $HUMAN_ADDR; kept (its server key and clients stay)"
+  else
+    [ -x "$AGENT" ] || die "$AGENT is missing — homelab-horizon install places it from a release build; this binary carries none, so the human VPN's server key cannot be minted. Nothing of the human VPN was written."
+    "$AGENT" wg-create-config --hz-config "$HZ_CFG" > "$TMP/wg-create.log" 2>&1 || {
+      cat "$TMP/wg-create.log" >&2
+      die "hz-agent wg-create-config failed (output above)."
+    }
+    say "  wrote $WG_DIR/$HUMAN_IFACE.conf (0600); its private key stays on this box"
+  fi
+  systemctl enable "wg-quick@$HUMAN_IFACE" >/dev/null 2>&1
+  systemctl restart "wg-quick@$HUMAN_IFACE" || die "wg-quick@$HUMAN_IFACE did not start — see: journalctl -u wg-quick@$HUMAN_IFACE -n 30 --no-pager"
+  say "  up; it listens on UDP $HUMAN_PORT (open it inbound on this box's firewall / security group)"
+else
+  step "no human VPN (this command sets none up)" 10
+fi
+
+# -------------------------------------------------------------- 11. verify
+step "starting hz and waiting for it to reach the parent" 11
+systemctl restart homelab-horizon || die "homelab-horizon did not start — see: journalctl -u homelab-horizon -n 50 --no-pager"
 port=$(jq -r '.listen_addr // ":8080"' "$HZ_CFG" | sed 's/.*://')
 { printf 'Authorization: Bearer '; cat "$SVC_TOKEN_FILE"; } > "$TMP/svc.hdr"
 state="hz not answering on 127.0.0.1:$port yet"
@@ -319,6 +405,32 @@ else
 fi
 echo
 echo "  The parent shows this instance as connected on its Instances page."
+if [ -n "$HUMAN_VPN_RANGE" ]; then
+  WHO="${OPERATOR:-<you>}"
+  echo
+  echo "  human VPN     $HUMAN_IFACE on $HUMAN_VPN_RANGE, this box $HUMAN_ADDR; endpoint $KIOSK:$HUMAN_PORT"
+  echo "  kiosk         https://$KIOSK — the MFA portal (every VPN client starts jailed there)"
+  echo "  admin UI      http://$HUMAN_ADDR:$port — over the VPN, after the kiosk"
+  echo
+  echo "  This hz has no human VPN client yet. Create the first one ONCE, here, as"
+  echo "  root, from this console (the second line prints the client config and"
+  echo "  a QR code to this terminal only; nothing keeps a copy):"
+  echo
+  echo "    sudo homelab-horizon user create $WHO --admin --token-file $HZ_DIR/$WHO.token   # skip if $WHO exists here"
+  echo "    sudo homelab-horizon vpn add $WHO-1 --profile vpn-only --vpn-admin --user $WHO"
+  echo
+  echo "  Then: UDP $HUMAN_PORT open inbound on this box (nothing else), connect,"
+  echo "  open https://$KIOSK and enrol a second factor, then http://$HUMAN_ADDR:$port."
+  echo "  Later clients are created from this hz's own UI, over its VPN."
+  if ! systemctl is-active --quiet dnsmasq 2>/dev/null; then
+    echo
+    echo "  WARNING: dnsmasq is not running here. VPN clients are given DNS $HUMAN_ADDR,"
+    echo "  which dnsmasq answers (the kiosk name -> $HUMAN_ADDR, through the tunnel)."
+    echo "  hz does not start dnsmasq on a nested hz; start it to opt in. Until then a"
+    echo "  connected client resolves no names; reach the portal by address instead:"
+    echo "  http://$HUMAN_ADDR:$port/app/mfa"
+  fi
+fi
 `
 
 // childRefusalScript is served for a grant that is unknown, used, expired or

@@ -33,6 +33,20 @@ type childGrant struct {
 	Project  string
 	Rung     string // the rung's name in Project
 	Expires  time.Time
+	// Human is the child's own human VPN (N4g), nil without one. Carried by
+	// the grant so the script's preflight and the enrolment's seed are the
+	// same plan, decided once at generate.
+	Human *childHumanVPN
+}
+
+// childHumanVPN is the human VPN a command sets up on the box: its wg0 range,
+// the kiosk name, and the parent account that generated the command (the
+// name the script's first-client command attributes the client to; "" when
+// no account generated it).
+type childHumanVPN struct {
+	Range    string
+	Kiosk    string
+	Operator string
 }
 
 type childGrants struct {
@@ -48,6 +62,11 @@ func newChildGrants() *childGrants {
 
 // issue mints a grant for machine, replacing (revoking) any unused one.
 func (g *childGrants) issue(machine, project, rung string) (childGrant, bool, error) {
+	return g.issueHuman(machine, project, rung, nil)
+}
+
+// issueHuman is issue, with the human VPN the command sets up (nil: none).
+func (g *childGrants) issueHuman(machine, project, rung string, human *childHumanVPN) (childGrant, bool, error) {
 	raw := make([]byte, 24)
 	if _, err := rand.Read(raw); err != nil {
 		return childGrant{}, false, err
@@ -58,7 +77,7 @@ func (g *childGrants) issue(machine, project, rung string) (childGrant, bool, er
 	_, revoked := g.byName[machine]
 	gr := childGrant{
 		Token: childGrantPrefix + hex.EncodeToString(raw), Instance: machine,
-		Project: project, Rung: rung, Expires: g.now().Add(childGrantTTL),
+		Project: project, Rung: rung, Expires: g.now().Add(childGrantTTL), Human: human,
 	}
 	g.byName[machine] = gr
 	return gr, revoked, nil

@@ -76,4 +76,26 @@ func TestNestedBootstrapSendsTheContract(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatal("an incomplete command was sent")
 	}
+
+	// N4g: the kiosk and range are sent as given; the human VPN is the
+	// parent's default (absent), and --human-vpn=false says so explicitly.
+	got = nil
+	captureStdout(t, func() {
+		if err := dispatch(c, "nested", []string{"bootstrap", "redline", "loadtest-hz", "--rung", "loadtest", "--from", "staging",
+			"--kiosk", "kiosk.hz.loadtest.example.com", "--human-vpn-range", "10.150.0.0/24"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if len(got) != 1 || got[0].Kiosk != "kiosk.hz.loadtest.example.com" || got[0].HumanVPNRange != "10.150.0.0/24" || got[0].HumanVPN != nil {
+		t.Fatalf("request = %+v", got)
+	}
+	got = nil
+	captureStdout(t, func() {
+		if err := dispatch(c, "nested", []string{"bootstrap", "redline", "loadtest-hz", "--rung", "loadtest", "--from", "staging", "--human-vpn=false"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if len(got) != 1 || got[0].HumanVPN == nil || *got[0].HumanVPN || got[0].Kiosk != "" {
+		t.Fatalf("--human-vpn=false: request = %+v", got)
+	}
 }
