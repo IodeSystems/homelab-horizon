@@ -33,15 +33,43 @@ const NestedBootstrapPath = "/api/v1/nested/bootstrap"
 // URL is optional: where the child's hz will answer, a statement for the
 // operator (HZInstance.URL). Empty on a new instance is "not known yet" — a
 // .invalid placeholder — and enrolment replaces it with the box's VPN address.
+//
+// HumanVPN is the child's OWN wg0 for people, its MFA kiosk and its listener
+// on its wg0 address (N4g). nil is ON; false is "no human VPN" (the child is
+// then reached by ssh tunnel only, as before). With it on, Kiosk is required:
+// the kiosk's hostname (kiosk_url https://<Kiosk>, and the endpoint
+// <Kiosk>:51820). It is added to the instance's Domains (this hz issues its
+// certificate) and DNS grant (the child asks for its A record).
+// HumanVPNRange is optional: without it this hz proposes the next free
+// 10.<n>.0.0/24 after its own VPN range.
 type NestedBootstrapReq struct {
-	Project  string `json:"project"`
-	Instance string `json:"instance,omitempty"`
-	Machine  string `json:"machine,omitempty"`
-	Rung     string `json:"rung"`
-	From     string `json:"from"`
-	Posture  string `json:"posture,omitempty"`
-	Platform string `json:"platform,omitempty"`
-	URL      string `json:"url,omitempty"`
+	Project       string `json:"project"`
+	Instance      string `json:"instance,omitempty"`
+	Machine       string `json:"machine,omitempty"`
+	Rung          string `json:"rung"`
+	From          string `json:"from"`
+	Posture       string `json:"posture,omitempty"`
+	Platform      string `json:"platform,omitempty"`
+	URL           string `json:"url,omitempty"`
+	HumanVPN      *bool  `json:"humanVpn,omitempty"`
+	Kiosk         string `json:"kiosk,omitempty"`
+	HumanVPNRange string `json:"humanVpnRange,omitempty"`
+}
+
+// NestedHumanVPN is the child's human VPN as the command sets it up: Range is
+// its wg0 range (Proposed when this hz chose it), ServerAddress the child's
+// own address on it (where its hz also listens), Kiosk, KioskURL and Endpoint
+// what a person's client is given.
+type NestedHumanVPN struct {
+	Range         string `json:"range"`
+	Proposed      bool   `json:"proposed"`
+	ServerAddress string `json:"serverAddress"`
+	Kiosk         string `json:"kiosk"`
+	KioskURL      string `json:"kioskUrl"`
+	Endpoint      string `json:"endpoint"`
+	// DomainsChanged is true when this request added the kiosk name to the
+	// instance's domains or DNS grant (a certificate reissue follows).
+	DomainsChanged bool `json:"domainsChanged"`
 }
 
 // NestedBootstrapResp is the generated command, shown once.
@@ -65,6 +93,8 @@ type NestedBootstrapResp struct {
 	Warning   string   `json:"warning,omitempty"`
 	Reused    []string `json:"reused"`
 	Revoked   bool     `json:"revoked"`
+	// HumanVPN is nil when the request turned it off.
+	HumanVPN *NestedHumanVPN `json:"humanVpn,omitempty"`
 }
 
 // NestedEnrolReq is what the box sends: its WireGuard PUBLIC key, and the
@@ -112,11 +142,27 @@ type NestedEnrolBinary struct {
 // NestedChildSeed is the subset of the child's config.json the bootstrap
 // writes. The json tags are config.Config's; TestEnrolSeedLoadsAsTheChildsConfig
 // loads it through config.LoadFromJSON, so a tag that drifts fails there.
+//
+// The human-VPN fields (N4g) are set only when the command has a human VPN.
+// services[0] is always the rung's service; services[1], when present, is the
+// kiosk (proxy.self, internal_dns at the child's wg0 address, external_dns {}
+// so the child asks this hz for its A record).
 type NestedChildSeed struct {
 	Projects     []NestedSeedProject     `json:"projects"`
 	Environments []NestedSeedEnvironment `json:"environments"`
 	Services     []NestedSeedService     `json:"services"`
 	Upstream     NestedSeedUpstream      `json:"upstream"`
+
+	WGInterface    string `json:"wg_interface,omitempty"`
+	WGConfigPath   string `json:"wg_config_path,omitempty"`
+	VPNRange       string `json:"vpn_range,omitempty"`
+	DNS            string `json:"dns,omitempty"`
+	ServerEndpoint string `json:"server_endpoint,omitempty"`
+	KioskURL       string `json:"kiosk_url,omitempty"`
+	VPNListen      *bool  `json:"vpn_listen,omitempty"`
+	VPNMFAEnabled  bool   `json:"vpn_mfa_enabled,omitempty"`
+	VPNMFAScope    string `json:"vpn_mfa_scope,omitempty"`
+	HAProxyEnabled bool   `json:"haproxy_enabled,omitempty"`
 }
 
 type NestedSeedProject struct {
@@ -130,11 +176,32 @@ type NestedSeedEnvironment struct {
 }
 
 type NestedSeedService struct {
-	Name        string   `json:"name"`
-	Project     string   `json:"project"`
-	Environment string   `json:"environment"`
-	Token       string   `json:"token"`
-	Domains     []string `json:"domains"`
+	Name        string                 `json:"name"`
+	Project     string                 `json:"project"`
+	Environment string                 `json:"environment"`
+	Token       string                 `json:"token"`
+	Domains     []string               `json:"domains"`
+	InternalDNS *NestedSeedInternalDNS `json:"internal_dns,omitempty"`
+	ExternalDNS *NestedSeedExternalDNS `json:"external_dns,omitempty"`
+	Proxy       *NestedSeedProxy       `json:"proxy,omitempty"`
+}
+
+// NestedSeedInternalDNS is config.InternalDNS: what the child's dnsmasq
+// answers for the kiosk name — the child's own wg0 address, so a VPN client
+// reaches the kiosk THROUGH the tunnel (the jail knows a peer by its tunnel
+// source address).
+type NestedSeedInternalDNS struct {
+	IP string `json:"ip"`
+}
+
+// NestedSeedExternalDNS is config.ExternalDNS, always empty here: no pin, so
+// the record tracks the child's public IP.
+type NestedSeedExternalDNS struct{}
+
+// NestedSeedProxy is config.ProxyConfig's self route: HAProxy sends the kiosk
+// name to the child's own UI, where the MFA portal is.
+type NestedSeedProxy struct {
+	Self bool `json:"self"`
 }
 
 type NestedSeedUpstream struct {
