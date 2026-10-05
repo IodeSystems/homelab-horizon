@@ -1,13 +1,21 @@
 package server
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/db"
 	"github.com/iodesystems/homelab-horizon/internal/monitor"
+	"github.com/iodesystems/homelab-horizon/internal/wireguard"
 )
 
 // The skip rules in child_sync.go: what a sync — and hz's other automatic
@@ -144,5 +152,99 @@ func TestAChildMayNotManageItsUpstreamTunnel(t *testing.T) {
 	parent.WGInterface = childUpstreamIface
 	if err := parent.UpstreamTunnelCollision(); err != nil {
 		t.Fatalf("a parent named its wg interface %s and was refused: %v", childUpstreamIface, err)
+	}
+}
+
+// RULE (N4g): a child with a human VPN owns wg0 as any hz does — a client
+// added through its API lands in wg0.conf, and a sync, the masquerade heal and
+// that client edit leave hz-upstream.conf byte-for-byte as wg-quick has it.
+// A child whose wg settings name hz-upstream never starts, so nothing can.
+func TestAChildWithAHumanVPNRendersWG0AndNeverTouchesItsUpstream(t *testing.T) {
+	dir := t.TempDir()
+	const upstreamConf = "[Interface]\nPrivateKey = cGFzc3dvcmQ=\nAddress = 10.100.0.7/32\n\n[Peer]\nPublicKey = " + bootServerPK +
+		"\nEndpoint = vpn.example.com:51820\nAllowedIPs = 10.100.0.1/32\nPersistentKeepalive = 25\n"
+	upPath := filepath.Join(dir, childUpstreamIface+".conf")
+	wgPath := filepath.Join(dir, "wg0.conf")
+	if err := os.WriteFile(upPath, []byte(upstreamConf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wg0 := wireguard.RenderServerInterface(wireguard.ServerInterface{PrivateKey: "cGFzc3dvcmQ=", Address: "10.101.0.1/24",
+		ListenPort: config.ChildHumanVPNPort, PostUp: wireguard.ExpectedPostUp("eth0"), PostDown: wireguard.ExpectedPostDown("eth0")})
+	if err := os.WriteFile(wgPath, []byte(wg0), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	untouched := func(when string) {
+		t.Helper()
+		got, err := os.ReadFile(upPath)
+		if err != nil || string(got) != upstreamConf {
+			t.Fatalf("%s: %s changed (%v):\n%s", when, upPath, err, got)
+		}
+	}
+
+	cfg := childTestConfig(t)
+	cfg.WGConfigPath = wgPath
+	cfg.VPNRange, cfg.DNS, cfg.ServerEndpoint = "10.101.0.0/24", "10.101.0.1", bootKioskName+":51820"
+	cfg.ServerPublicKey = bootServerPK
+	s := newTestServer(t, cfg)
+	s.dnsRunningProbe = func() bool { return false }
+	s.wg = wireguard.NewConfig(wgPath, "wg0")
+	if err := s.wg.Load(); err != nil {
+		t.Fatal(err)
+	}
+	s.wgReload = func() error { return nil }
+
+	// The client is added the way `homelab-horizon vpn add` asks for it: the
+	// whole handler chain, the bootstrap's local admin token, no cookie.
+	store, err := db.Open(cfg.UsersDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	s.users = store
+	tokFile := filepath.Join(dir, "admin.token")
+	if _, err := CreateConsoleAdmin(context.Background(), store, childAdminUser, tokFile); err != nil {
+		t.Fatal(err)
+	}
+	tok, _ := os.ReadFile(tokFile)
+	raw, _ := json.Marshal(apitypes.PeerAddReq{Name: "carl-1", Profile: config.ProfileVPNOnly})
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/vpn/peers/add", bytes.NewReader(raw))
+	r.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tok)))
+	w := httptest.NewRecorder()
+	s.handler().ServeHTTP(w, r)
+	var added apitypes.AddPeerResponse
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &added) != nil {
+		t.Fatalf("the console's client add: %d %s", w.Code, w.Body.String())
+	}
+	body, _ := os.ReadFile(wgPath)
+	if !strings.Contains(string(body), "# carl-1") || !strings.Contains(string(body), "AllowedIPs = 10.101.0.2/32") {
+		t.Fatalf("the client is not in wg0.conf:\n%s", body)
+	}
+	if !strings.Contains(added.Config, "Endpoint = "+bootKioskName+":51820") || !strings.Contains(added.Config, "AllowedIPs = 10.101.0.0/24") {
+		t.Fatalf("the client config does not point at the child's kiosk and range:\n%s", added.Config)
+	}
+	untouched("after a client add")
+
+	s.runSyncInternal(&recSyncLogger{}, nil)
+	untouched("after a sync")
+	if _, err := s.wg.HealMasquerade("ens9"); err != nil {
+		t.Fatal(err)
+	}
+	untouched("after the masquerade heal")
+	if body, _ := os.ReadFile(wgPath); !strings.Contains(string(body), "-o ens9 -j MASQUERADE") {
+		t.Fatalf("instrument: the heal did not reach wg0.conf:\n%s", body)
+	}
+
+	// The tunnel's own file named as hz's: refused at start, before any
+	// write. Were it started, a client add would append to the tunnel.
+	bad := childTestConfig(t)
+	bad.WGConfigPath = upPath
+	bad.PublicIPOverride = "192.0.2.1"
+	srv, err := NewWithConfig(bad, filepath.Join(t.TempDir(), "config.json"), true, "test")
+	if err == nil {
+		_ = srv.wg.AddPeer("intruder", boxKey, "10.100.0.9/32")
+	}
+	untouched("after a start with wg_config_path naming it")
+	if err == nil || !strings.Contains(err.Error(), "refusing to start") {
+		t.Fatalf("a child whose wg_config_path is the upstream tunnel started (%v)", err)
 	}
 }

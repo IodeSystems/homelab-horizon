@@ -10,12 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/db"
 	"github.com/iodesystems/homelab-horizon/internal/wireguard"
 )
 
@@ -26,6 +28,9 @@ const (
 	bootKiosk    = "https://portal.example.com"
 	bootPublic   = "portal.example.com"
 	bootServerPK = "UXJR3INLkRixItTxQksh2Bf53PypSSqKUhFOIP2P7ko="
+	// The child's kiosk (N4g), and this parent's LAN as the probe reads it.
+	bootKioskName = "kiosk.hz.loadtest.example.com"
+	bootLAN       = "192.168.1.0/24"
 )
 
 // boxKey is the public key a box sends (the private half never exists in
@@ -80,8 +85,12 @@ func newBootFixture(t *testing.T) bootFixture {
 		Projects:        []config.Project{{Name: "redline"}, {Name: "other"}},
 		Environments:    []config.Environment{{Project: "redline", Name: "staging", Posture: "staging"}},
 		WGPeers:         []config.WGPeer{{Name: "alice-phone", PublicKey: attributionKeys[0], AllowedIPs: "10.100.0.2/32"}},
+		// The zone the kiosk name is in: this hz owns it, with a provider,
+		// so it issues the kiosk's certificate and publishes its A record.
+		Zones: []config.Zone{{Name: "example.com", ZoneID: "Z1", DNSProvider: &config.DNSProviderConfig{Type: "route53"}}},
 	}
 	s := newTestServer(t, cfg)
+	s.parentLANProbe = func() []string { return []string{bootLAN} }
 	path := filepath.Join(t.TempDir(), "wg0.conf")
 	if err := os.WriteFile(path, []byte(bootWG0), 0o600); err != nil {
 		t.Fatal(err)
@@ -100,7 +109,7 @@ func newBootFixture(t *testing.T) bootFixture {
 }
 
 func bootReq() apitypes.NestedBootstrapReq {
-	return apitypes.NestedBootstrapReq{Project: "redline", Instance: "loadtest-hz", Rung: "loadtest", From: "staging"}
+	return apitypes.NestedBootstrapReq{Project: "redline", Instance: "loadtest-hz", Rung: "loadtest", From: "staging", Kiosk: bootKioskName}
 }
 
 func (f bootFixture) generate(t *testing.T, req apitypes.NestedBootstrapReq) apitypes.NestedBootstrapResp {
@@ -265,6 +274,21 @@ func TestBootstrapRefusalsEachSaySomething(t *testing.T) {
 				c.WGPeers = append(append([]config.WGPeer(nil), c.WGPeers...), config.WGPeer{Name: "loadtest-hz-upstream", PublicKey: attributionKeys[2], AllowedIPs: "10.100.0.9/32"})
 			})
 		}, want: `already exists with profile "lan-access"`},
+		// N4g: the human VPN.
+		{name: "human VPN with no kiosk", req: func(r *apitypes.NestedBootstrapReq) { r.Kiosk = "" }, want: "kiosk is required"},
+		{name: "a kiosk with the human VPN off", req: func(r *apitypes.NestedBootstrapReq) { off := false; r.HumanVPN = &off },
+			want: "humanVpn is false"},
+		{name: "a range on the parent's VPN", req: func(r *apitypes.NestedBootstrapReq) { r.HumanVPNRange = "10.100.0.0/24" },
+			want: "overlaps 10.100.0.0/24"},
+		{name: "a range on the parent's LAN", req: func(r *apitypes.NestedBootstrapReq) { r.HumanVPNRange = "192.168.1.128/25" },
+			want: "overlaps " + bootLAN},
+		{name: "a kiosk outside every zone", req: func(r *apitypes.NestedBootstrapReq) { r.Kiosk = "kiosk.example.invalid" },
+			want: "outside every zone this hz owns"},
+		{name: "a kiosk that is a service here", setup: func(f bootFixture) {
+			_ = f.s.updateConfig(func(c *config.Config) {
+				c.Services = append(append([]config.Service(nil), c.Services...), config.Service{Name: "portal", Domains: []string{bootKioskName}})
+			})
+		}, want: "also a domain of service portal"},
 	}
 	seen := map[string]string{}
 	for _, c := range cases {
@@ -557,6 +581,111 @@ func TestNestedStates(t *testing.T) {
 	for _, c := range cases {
 		if got := nestedState(c.token, c.grant, c.enrolled, c.pulled); got != c.want {
 			t.Errorf("%s: %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
+// N4g: generate plans the child's human VPN — a range clear of this hz's VPN
+// range, LAN and upstream addresses, and the kiosk name made one of the
+// instance's TLS domains and put inside its DNS grant, in the same save, and
+// valid by every rule of both. The script and the seed carry the same plan.
+func TestBootstrapPlansTheChildsHumanVPN(t *testing.T) {
+	f := newBootFixture(t)
+	out := f.generate(t, bootReq())
+	hv := out.HumanVPN
+	if hv == nil {
+		t.Fatal("no human VPN planned")
+	}
+	avoid := append(f.s.cfg().ChildVPNAvoid(), f.s.parentLANs()...)
+	if len(avoid) < 2 {
+		t.Fatalf("instrument: the avoid list is %v", avoid)
+	}
+	if err := config.CheckChildVPNRange(hv.Range, avoid); err != nil {
+		t.Fatalf("OVERLAP — the proposed range overlaps what this hz routes: %v", err)
+	}
+	// The child's upstream address is in this hz's VPN range: the proposal
+	// is clear of every address an upstream client is handed.
+	if err := config.CheckChildVPNRange(hv.Range, []string{"10.100.0.3"}); err != nil {
+		t.Fatalf("OVERLAP — the proposed range holds an upstream address: %v", err)
+	}
+	if hv.Range != "10.101.0.0/24" || !hv.Proposed || hv.ServerAddress != "10.101.0.1" || hv.Kiosk != bootKioskName ||
+		hv.KioskURL != "https://"+bootKioskName || hv.Endpoint != bootKioskName+":51820" || !hv.DomainsChanged {
+		t.Fatalf("the human VPN plan: %+v", hv)
+	}
+
+	h, _ := f.s.cfg().FindHZInstance("loadtest-hz")
+	if !slices.Contains(h.Domains, bootKioskName) || !config.GrantCovers(h.DNSGrant, bootKioskName) {
+		t.Fatalf("the kiosk is not the instance's: domains %v grant %v", h.Domains, h.DNSGrant)
+	}
+	if err := config.Save(filepath.Join(t.TempDir(), "config.json"), f.s.cfg()); err != nil {
+		t.Fatalf("the generated config does not validate: %v", err)
+	}
+
+	s := f.script(grantOf(t, out.Command))
+	for _, want := range []string{`HUMAN_VPN_RANGE="10.101.0.0/24"`, `HUMAN_ADDR="10.101.0.1"`, `HUMAN_IFACE="wg0"`, `HUMAN_PORT="51820"`,
+		`KIOSK="` + bootKioskName + `"`, `OPERATOR=""`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the script lacks %s", want)
+		}
+	}
+
+	// Regenerate: the same range (the box keeps its wg0), the kiosk already
+	// the instance's, no duplicate.
+	again := f.generate(t, bootReq())
+	if again.HumanVPN == nil || again.HumanVPN.Range != hv.Range || again.HumanVPN.DomainsChanged {
+		t.Fatalf("a regenerate: %+v", again.HumanVPN)
+	}
+	h2, _ := f.s.cfg().FindHZInstance("loadtest-hz")
+	if !slices.Equal(h.Domains, h2.Domains) || !slices.Equal(h.DNSGrant, h2.DNSGrant) {
+		t.Fatalf("a regenerate changed the instance: %v %v", h2.Domains, h2.DNSGrant)
+	}
+
+	// The enrolment's seed is the grant's plan.
+	seed := decodeEnrol(t, f.enrol(grantOf(t, again.Command), boxEnrol())).Seed
+	if seed.VPNRange != hv.Range || seed.KioskURL != hv.KioskURL || seed.ServerEndpoint != hv.Endpoint || len(seed.Services) != 2 ||
+		seed.Services[1].Name != childKioskService {
+		t.Fatalf("the enrolment seed: %+v", seed)
+	}
+
+	// The LAN is avoided too.
+	g := newBootFixture(t)
+	g.s.parentLANProbe = func() []string { return []string{"10.101.0.0/16"} }
+	if r := g.generate(t, bootReq()).HumanVPN.Range; r != "10.102.0.0/24" {
+		t.Fatalf("with the LAN on 10.101.0.0/16 the proposal is %s", r)
+	}
+}
+
+// Without a human VPN the command is what it was: no kiosk asked, nothing
+// added to the instance, no range in the script, none in the seed.
+func TestBootstrapWithoutAHumanVPN(t *testing.T) {
+	f := newBootFixture(t)
+	off := false
+	req := bootReq()
+	req.HumanVPN, req.Kiosk = &off, ""
+	out := f.generate(t, req)
+	if out.HumanVPN != nil {
+		t.Fatalf("a human VPN was planned: %+v", out.HumanVPN)
+	}
+	if h, _ := f.s.cfg().FindHZInstance("loadtest-hz"); len(h.Domains) != 0 || len(h.DNSGrant) != 0 {
+		t.Fatalf("the instance gained names: %+v", h)
+	}
+	if s := f.script(grantOf(t, out.Command)); !strings.Contains(s, `HUMAN_VPN_RANGE=""`) {
+		t.Fatal("the script carries a human VPN range")
+	}
+	seed := decodeEnrol(t, f.enrol(grantOf(t, out.Command), boxEnrol())).Seed
+	if seed.VPNRange != "" || seed.KioskURL != "" || len(seed.Services) != 1 {
+		t.Fatalf("the seed sets a human VPN: %+v", seed)
+	}
+}
+
+func TestConsoleUserName(t *testing.T) {
+	for in, want := range map[string]string{"carl": "carl", "carl.t": "carl.t", "a b": "", "-x": "", "": ""} {
+		var u *db.User
+		if in != "" {
+			u = &db.User{Username: in}
+		}
+		if got := consoleUserName(u); got != want {
+			t.Errorf("%q -> %q, want %q", in, got, want)
 		}
 	}
 }

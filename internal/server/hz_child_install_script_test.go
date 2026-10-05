@@ -25,8 +25,90 @@ import (
 
 func renderedTestScript() string {
 	gr := childGrant{Token: "hzc_" + strings.Repeat("ab", 24), Instance: "loadtest-hz", Project: "redline", Rung: "loadtest",
-		Expires: time.Unix(1_800_000_000, 0)}
+		Expires: time.Unix(1_800_000_000, 0), Human: &childHumanVPN{Range: "10.101.0.0/24", Kiosk: bootKioskName, Operator: "carl"}}
 	return renderChildInstallScript(bootKiosk, gr, []string{"linux-amd64", "linux-arm64"}, "10.100.0.1")
+}
+
+// The human-VPN preflight, run in bash with `ip` faked (as the parent-address
+// preflight's test does): a box where the range is already an address or a
+// route on another interface is refused BEFORE enrolling, and so is a box
+// whose wg0.conf is another install's; the child's own wg0 on the range (a
+// re-run) and the upstream tunnel's /32 pass.
+func TestChildScriptRefusesWhenTheHumanVPNRangeIsInUse(t *testing.T) {
+	s := renderedTestScript()
+	fnStart := strings.Index(s, "human_vpn_clash() {")
+	fnEnd := strings.Index(s[fnStart:], "\n}\n")
+	start := strings.Index(s, `if [ -n "$HUMAN_VPN_RANGE" ]; then`+"\n  command -v ip")
+	end := strings.Index(s[start:], "\nfi\n")
+	if fnStart < 0 || fnEnd < 0 || start < 0 || end < 0 {
+		t.Fatal("instrument: the human-VPN preflight is not where this test looks")
+	}
+	if start > strings.Index(s, `step "enrolling with the parent hz"`) {
+		t.Fatal("the human-VPN preflight must run before enrolling")
+	}
+	block := s[fnStart:fnStart+fnEnd+3] + s[start:start+end+4]
+	const (
+		eth0     = "2: ens5    inet 10.0.1.5/24 brd 10.0.1.255 scope global ens5"
+		upstream = "9: hz-upstream    inet 10.100.0.7/32 scope global hz-upstream"
+		vpcRoute = "10.0.0.0/16 dev ens5 proto kernel scope link src 10.0.1.5"
+		upRoute  = "10.100.0.1 dev hz-upstream scope link"
+	)
+	for name, tc := range map[string]struct{ addr, route, wg0, want string }{
+		"a clean box":                {eth0 + "\n" + upstream, vpcRoute + "\n" + upRoute, "", "OK"},
+		"an address in range":        {eth0 + "\n8: docker9    inet 10.101.0.7/24 scope global docker9", vpcRoute, "", "DIE"},
+		"a route over the range":     {eth0, vpcRoute + "\n10.96.0.0/12 via 10.0.1.1 dev ens5", "", "DIE"},
+		"a /32 route inside it":      {eth0, "10.101.0.200 dev tun0 scope link", "", "DIE"},
+		"the child's own wg0":        {eth0 + "\n7: wg0    inet 10.101.0.1/24 scope global wg0", "10.101.0.0/24 dev wg0 proto kernel scope link src 10.101.0.1", "Address = 10.101.0.1/24", "OK"},
+		"another install's wg0.conf": {eth0, vpcRoute, "Address = 10.100.0.1/24", "DIE"},
+		"a wg0.conf with no address": {eth0, vpcRoute, "ListenPort = 51820", "DIE"},
+	} {
+		dir := t.TempDir()
+		if tc.wg0 != "" {
+			if err := os.WriteFile(filepath.Join(dir, "wg0.conf"), []byte("[Interface]\nPrivateKey = cGFzc3dvcmQ=\n"+tc.wg0+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		prog := `HUMAN_VPN_RANGE=10.101.0.0/24; HUMAN_ADDR=10.101.0.1; HUMAN_IFACE=wg0; WG_DIR="$FAKE_WG"; ` +
+			`ip() { case "$*" in "-4 -o addr show") printf '%s\n' "$FAKE_ADDR" ;; "-4 route show") printf '%s\n' "$FAKE_ROUTE" ;; esac; }; ` +
+			`die() { echo DIE; exit 0; }; ` + block + "echo OK"
+		cmd := exec.Command("bash", "-c", prog)
+		cmd.Env = append(os.Environ(), "FAKE_ADDR="+tc.addr, "FAKE_ROUTE="+tc.route, "FAKE_WG="+dir)
+		out, err := cmd.Output()
+		if got := strings.TrimSpace(string(out)); err != nil || got != tc.want {
+			t.Errorf("%s: got %q (%v), want %s", name, got, err, tc.want)
+		}
+	}
+}
+
+// The human VPN step: after the unit is installed (hz-agent is placed by the
+// install) and before hz starts (hz reads the server key's public half from
+// wg0.conf at start); an existing wg0.conf is kept, a missing one is minted on
+// the box by hz-agent. The summary prints the first-client console commands,
+// attributed to the account that generated the command.
+func TestChildScriptSetsUpTheHumanVPNAndNamesTheFirstClient(t *testing.T) {
+	s := renderedTestScript()
+	install := strings.Index(s, `"$BIN" install --config "$HZ_CFG"`)
+	create := strings.Index(s, `"$AGENT" wg-create-config --hz-config "$HZ_CFG"`)
+	up := strings.Index(s, `systemctl restart "wg-quick@$HUMAN_IFACE"`)
+	start := strings.Index(s, "systemctl restart homelab-horizon")
+	if install < 0 || create < 0 || up < 0 || start < 0 || !(install < create && create < up && up < start) {
+		t.Fatalf("order: install %d, wg-create-config %d, wg-quick up %d, hz start %d", install, create, up, start)
+	}
+	if !strings.Contains(s, `if [ -e "$WG_DIR/$HUMAN_IFACE.conf" ]; then`+"\n    say") {
+		t.Fatal("an existing wg0.conf is not kept")
+	}
+	if !strings.Contains(s, `need="$need haproxy"`) {
+		t.Fatal("the kiosk needs haproxy, and the script does not install it")
+	}
+	for _, want := range []string{
+		`sudo homelab-horizon vpn add $WHO-1 --profile vpn-only --vpn-admin --user $WHO`,
+		`sudo homelab-horizon user create $WHO --admin --token-file $HZ_DIR/$WHO.token`,
+		`WHO="${OPERATOR:-<you>}"`, `OPERATOR="carl"`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the summary lacks %s", want)
+		}
+	}
 }
 
 func TestChildScriptRendersForAGrant(t *testing.T) {
@@ -322,9 +404,22 @@ func TestEnrolSeedLoadsAsTheChildsConfig(t *testing.T) {
 	if err != nil || env.Posture != "prod" || env.Upstream != "" {
 		t.Fatalf("child rung: %+v %v — the rung is LOCAL on the child", env, err)
 	}
-	if len(childCfg.Services) != 1 || childCfg.Services[0].Name != out.ServiceName || childCfg.Services[0].Token != svcToken ||
+	if len(childCfg.Services) != 2 || childCfg.Services[0].Name != out.ServiceName || childCfg.Services[0].Token != svcToken ||
 		childCfg.Services[0].Project != "redline" || childCfg.Services[0].Environment != "loadtest" {
 		t.Fatalf("child service: %+v", childCfg.Services)
+	}
+	// N4g: the child's own human VPN and kiosk, as the parent planned them.
+	assertSeededHumanVPN(t, childCfg)
+	// ...and the kiosk's A record: the child asks for it (N4h) and the
+	// parent's grant takes it — the generate step put the name there.
+	childCfg.PublicIPOverride = "203.0.113.50"
+	asks, unasked := childCfg.ParentDNSAsks()
+	if unasked != "" || len(asks) != 1 || asks[0].Name != bootKioskName || asks[0].Values[0] != "203.0.113.50" {
+		t.Fatalf("the child's DNS ask: %+v %q, want the kiosk A record at its public IP", asks, unasked)
+	}
+	_, verdicts, _, err := f.s.cfg().ApplyInstanceDNSRequest("loadtest-hz", asks, time.Now().Unix())
+	if err != nil || len(verdicts) != 1 || !verdicts[0].Accepted {
+		t.Fatalf("the parent's verdict on the kiosk record: %+v %v", verdicts, err)
 	}
 	// Loopback, at the port the parent records in HZInstance.URL.
 	if childCfg.ListenAddr != "127.0.0.1:"+childListenPort {
@@ -394,6 +489,97 @@ func TestEnrolSeedLoadsAsTheChildsConfig(t *testing.T) {
 	n := nestedRow(t, f.s, "loadtest-hz")
 	if n.State != apitypes.NestedStateConnected || n.LastPullRung != "redline/loadtest" {
 		t.Fatalf("the parent after the child's first pull: %+v", n)
+	}
+}
+
+// assertSeededHumanVPN holds a seeded child to the human VPN the fixture's
+// parent plans (10.101.0.0/24 after its 10.100.0.0/24, kiosk bootKioskName):
+// hz's wg0 on that range, the endpoint and kiosk at the kiosk name, the MFA
+// jail with nobody exempt and its portal routed by HAProxy to hz's own UI,
+// split-horizon DNS for the kiosk at the child's wg0 address, hz ALSO
+// listening there — and hz-upstream still not hz's.
+func assertSeededHumanVPN(t *testing.T, c *config.Config) {
+	t.Helper()
+	const addr = "10.101.0.1"
+	if c.WGInterface != "wg0" || c.WGConfigPath != "/etc/wireguard/wg0.conf" || c.VPNRange != "10.101.0.0/24" || c.DNS != addr {
+		t.Fatalf("seeded wg0: iface %q path %q range %q dns %q", c.WGInterface, c.WGConfigPath, c.VPNRange, c.DNS)
+	}
+	if c.ServerEndpoint != bootKioskName+":51820" || c.KioskURL != "https://"+bootKioskName || c.ServerPublicKey != "" {
+		t.Fatalf("seeded endpoint %q, kiosk_url %q, server_public_key %q (must be read from the box's wg0.conf)", c.ServerEndpoint, c.KioskURL, c.ServerPublicKey)
+	}
+	if c.VPNListen == nil || !c.VPNListenEnabled() || !c.VPNMFAEnabled || c.MFAScope() != config.MFAScopeAll || !c.HAProxyEnabled {
+		t.Fatalf("seeded vpn_listen %v, mfa %v scope %s, haproxy %v", c.VPNListen, c.VPNMFAEnabled, c.MFAScope(), c.HAProxyEnabled)
+	}
+	if err := c.UpstreamTunnelCollision(); err != nil {
+		t.Fatalf("the seed hands hz its upstream tunnel: %v", err)
+	}
+	var kiosk *config.Service
+	for i := range c.Services {
+		if c.Services[i].Name == childKioskService {
+			kiosk = &c.Services[i]
+		}
+	}
+	if kiosk == nil || len(kiosk.Domains) != 1 || kiosk.Domains[0] != bootKioskName || kiosk.Proxy == nil || !kiosk.Proxy.Self ||
+		kiosk.InternalDNS == nil || kiosk.InternalDNS.IP != addr || kiosk.ExternalDNS == nil || len(kiosk.ExternalDNS.GetIPs()) != 0 {
+		t.Fatalf("seeded kiosk service: %+v", kiosk)
+	}
+	if got := portalRedirectURL(c, c.DeriveHAProxyBackends()); got != "https://"+bootKioskName+mfaPortalPath {
+		t.Fatalf("the MFA jail's portal: %q — a jailed peer would get a 403, not the kiosk", got)
+	}
+	answered := false
+	for _, r := range c.DeriveDNSRecords() {
+		if r.Name == bootKioskName && r.IP == addr {
+			answered = true
+		}
+	}
+	if !answered {
+		t.Fatalf("dnsmasq does not answer %s with %s: a VPN client would reach the kiosk outside the tunnel", bootKioskName, addr)
+	}
+	if got, why := vpnListenTarget(c.EffectiveListenAddr(), addr, c.VPNListenEnabled()); got != addr+":"+childListenPort {
+		t.Fatalf("hz's VPN listener: %q (%s), want %s:%s", got, why, addr, childListenPort)
+	}
+}
+
+// The seed's merge sets the human VPN over an existing child's config — the
+// defaults hz saved there (the PARENT's range, the example kiosk) included —
+// and keeps everything else, an operator's MFA scope among it.
+func TestChildScriptMergeSetsTheHumanVPN(t *testing.T) {
+	seed, err := withHumanVPN(childSeed("loadtest-hz", "redline", "loadtest", "prod", "redline-loadtest", "http://10.100.0.1:8080"),
+		&childHumanVPN{Range: "10.101.0.0/24", Kiosk: bootKioskName, Operator: "carl"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := `{"listen_addr": "127.0.0.1:8080", "vpn_range": "10.100.0.0/24", "dns": "10.100.0.1", "kiosk_url": "https://kiosk.vpn.example.com",
+	  "server_endpoint": "vpn.example.com:51820", "server_public_key": "UXJR3INLkRixItTxQksh2Bf53PypSSqKUhFOIP2P7ko=", "haproxy_enabled": false,
+	  "vpn_admins": ["carl-1"], "ntfy_url": "https://ntfy.example.com/x",
+	  "services": [{"name": "grafana", "domains": ["grafana.example.com"]},
+	               {"name": "hz-kiosk", "domains": ["old.example.com"], "pci_scope": "out"}]}`
+	cfg, err := config.LoadFromJSON(runJQMerge(t, seed, current, "tok"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSeededHumanVPN(t, cfg)
+	if len(cfg.VPNAdmins) != 1 || cfg.NtfyURL != "https://ntfy.example.com/x" || len(cfg.Services) != 3 {
+		t.Fatalf("the merge lost something: admins %v, ntfy %q, %d services", cfg.VPNAdmins, cfg.NtfyURL, len(cfg.Services))
+	}
+
+	kept, err := config.LoadFromJSON(runJQMerge(t, seed, `{"vpn_mfa_scope": "admins-exempt"}`, "tok"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept.MFAScope() != config.MFAScopeAdminsExempt {
+		t.Fatalf("an operator's MFA scope was replaced: %s", kept.MFAScope())
+	}
+
+	// Without a human VPN the merge sets none of it.
+	plain, err := config.LoadFromJSON(runJQMerge(t, childSeed("loadtest-hz", "redline", "loadtest", "prod", "redline-loadtest", "http://10.100.0.1:8080"),
+		`{"vpn_range": "10.100.0.0/24", "kiosk_url": "https://kiosk.vpn.example.com"}`, "tok"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.VPNRange != "10.100.0.0/24" || plain.KioskURL != "https://kiosk.vpn.example.com" || plain.HAProxyEnabled || len(plain.Services) != 1 {
+		t.Fatalf("a command without a human VPN changed the VPN settings: range %s kiosk %s haproxy %v services %d",
+			plain.VPNRange, plain.KioskURL, plain.HAProxyEnabled, len(plain.Services))
 	}
 }
 

@@ -378,6 +378,10 @@ type Server struct {
 	// dnsmasq rule (child_sync.go); nil is the real probe.
 	dnsRunningProbe func() bool
 
+	// parentLANProbe replaces the live LAN read a child's human-VPN range
+	// avoids (child_human_vpn.go); nil is the real read.
+	parentLANProbe func() []string
+
 	// startSyncRun replaces runSyncInternal for the start-sync
 	// (start_sync.go); nil is the real sync. Tests count it.
 	startSyncRun func(SyncLogger, <-chan struct{})
