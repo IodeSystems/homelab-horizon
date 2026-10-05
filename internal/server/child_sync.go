@@ -42,7 +42,12 @@ package server
 //	             is the renderer a child sync exists for.
 //	wireguard    NOT TOUCHED by a sync. hz's WireGuard is wg_interface /
 //	             wg_config_path (wg0, /etc/wireguard/wg0.conf), never
-//	             hz-upstream. SKIP RULE: a child whose wg_interface or
+//	             hz-upstream. A child bootstrapped with a human VPN (N4g,
+//	             child_human_vpn.go) has a real wg0 for people, and its hz
+//	             manages it as on any hz — client edits, reloads, the
+//	             masquerade heal, the WG-* chains; pinned beside hz-upstream by
+//	             TestAChildWithAHumanVPNRendersWG0AndNeverTouchesItsUpstream.
+//	             SKIP RULE: a child whose wg_interface or
 //	             wg_config_path names hz-upstream is refused at Save
 //	             (config.ValidateUpstream) and at start (NewWithConfig), so hz
 //	             never brings it up or down, rewrites its file or builds chains
@@ -55,7 +60,9 @@ package server
 //	             docker host by TestAChildOnADockerHostTouchesOnlyItsOwnRules).
 //	             It does ADD hz's own rules there (a `-o <egress> -j MASQUERADE`
 //	             and the wg0 jumps), which a child without a human VPN does not
-//	             need. NO SKIP: adding is neither a flush nor a replace.
+//	             need and a child with one does (the MFA jail is WG-INPUT /
+//	             WG-FORWARD on wg0). NO SKIP: adding is neither a flush nor a
+//	             replace.
 //
 // A sync never touches /etc/wireguard/hz-upstream.conf: the only code that
 // writes it is the bootstrap script.
