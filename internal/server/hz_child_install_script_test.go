@@ -103,7 +103,8 @@ func TestChildScriptSetsUpTheHumanVPNAndNamesTheFirstClient(t *testing.T) {
 	for _, want := range []string{
 		`sudo homelab-horizon vpn invite --name $WHO-1 --user $WHO`,
 		`open TCP 443 and UDP $HUMAN_PORT inbound`, `https://$KIOSK/app/`,
-		`sudo homelab-horizon user create $WHO --admin --token-file $HZ_DIR/$WHO.token`,
+		`sudo homelab-horizon user create $WHO --admin --sign-in`,
+		`sudo homelab-horizon user set-password --user $WHO`, `sign in as $WHO with the one-time password`,
 		`WHO="${OPERATOR:-<you>}"`, `OPERATOR="carl"`,
 	} {
 		if !strings.Contains(s, want) {
