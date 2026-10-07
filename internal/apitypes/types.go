@@ -1083,6 +1083,11 @@ type MFAStatusResponse struct {
 	Durations       []string `json:"durations"`
 	ProvisioningURI string   `json:"provisioningUri,omitempty"` // only during enrollment
 
+	// UIURL is hz's UI on the kiosk name, https://<kiosk>/app/ — on the VPN the
+	// kiosk name resolves to this hz and routes to its UI (proxy.self). "" when
+	// there is no kiosk_url: the portal then links its own origin's /app/.
+	UIURL string `json:"uiUrl"`
+
 	Passkeys []PasskeyInfo `json:"passkeys,omitempty"`
 	// PasskeysAvailable is a property of the deployment, not the peer: WebAuthn
 	// needs a secure context, so it requires an https kiosk_url. When false,

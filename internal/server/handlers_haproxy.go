@@ -3,7 +3,9 @@ package server
 import (
 	"log/slog"
 	"net/http"
+	"net/url"
 	"path/filepath"
+	"strings"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/haproxy"
@@ -56,6 +58,20 @@ func (s *Server) syncHAProxyBackends() {
 	s.haproxy.SetRateLimit(rateLimitFor(s.cfg()))
 	s.haproxy.SetMetricsPort(s.cfg().HAProxyMetricsPort)
 	s.haproxy.SetTLSMinVersion(s.cfg().TLSMinVersion())
+}
+
+// kioskUIURL is hz's UI on the kiosk name (scheme://<kiosk host>/app/), or ""
+// with no usable kiosk_url. The MFA portal links it once a peer is through.
+func kioskUIURL(cfg *config.Config) string {
+	raw := strings.TrimSpace(cfg.KioskURL)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host + "/app/"
 }
 
 // haproxySideFilesNow is the provider New hands HAProxy.SetSideFiles: the side

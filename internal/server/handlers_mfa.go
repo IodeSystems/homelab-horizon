@@ -62,6 +62,7 @@ func (s *Server) handleAPIMFAStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	resp.UIURL = kioskUIURL(cfg)
 	resp.Profile = cfg.GetPeerProfile(peerName)
 	resp.FullTunnel = resp.Profile == config.ProfileFullTunnel
 	resp.PasskeysAvailable, resp.PasskeysUnavailableReason = PasskeysAvailable(cfg)
