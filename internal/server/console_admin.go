@@ -78,3 +78,23 @@ func CreateConsoleAdmin(ctx context.Context, store *db.DB, username, tokenFile s
 	keep = true
 	return user, nil
 }
+
+// CreateConsolePerson creates an admin account with no API token, for a person
+// who will sign in (the caller sets the one-time password). Refuses an
+// existing account, like CreateConsoleAdmin.
+func CreateConsolePerson(ctx context.Context, store *db.DB, username string) (*db.User, error) {
+	username = db.NormalizeUsername(username)
+	if username == "" {
+		return nil, errors.New("a username is required")
+	}
+	if _, err := store.UserByUsername(ctx, username); err == nil {
+		return nil, fmt.Errorf("refusing: account %q already exists; nothing was changed (homelab-horizon user set-password --user %s gives it a one-time password)", username, username)
+	} else if !errors.Is(err, db.ErrNotFound) {
+		return nil, fmt.Errorf("look up %q: %w", username, err)
+	}
+	user, err := store.CreateUser(ctx, username, "", db.RoleAdmin)
+	if err != nil {
+		return nil, fmt.Errorf("create account %q: %w", username, err)
+	}
+	return user, nil
+}

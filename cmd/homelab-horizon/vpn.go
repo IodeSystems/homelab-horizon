@@ -58,8 +58,91 @@ func newVPNCmd(opts *serveOpts) *cobra.Command {
 		Use:   "vpn",
 		Short: "Human VPN clients, from the console",
 	}
+	cmd.AddCommand(newVPNInviteCmd(opts))
 	cmd.AddCommand(newVPNAddCmd(opts))
 	return cmd
+}
+
+type vpnInviteArgs struct {
+	req       apitypes.CreateInviteReq
+	expires   time.Duration
+	tokenFile string
+}
+
+// `homelab-horizon vpn invite` — the recommended first client (N4i). It asks
+// the running hz over loopback for an invite and prints the LINK; the person
+// opens it on the device, whose browser generates the WireGuard key. No
+// private key is printed, made or held here, so unlike `vpn add` this needs no
+// terminal.
+func newVPNInviteCmd(opts *serveOpts) *cobra.Command {
+	var a vpnInviteArgs
+	cmd := &cobra.Command{
+		Use:   "invite [--name N] [--profile P] [--user U] [--expires 24h]",
+		Short: "Mint a single-use VPN invite link (console, root only)",
+		Long: "Asks the hz running on this box, over loopback, for a single-use VPN invite\n" +
+			"and prints its link (on a nested hz: https://<kiosk>/invite/<token>). Open it\n" +
+			"on the device: the browser generates the WireGuard key and keeps the private\n" +
+			"half; hz receives only the public key. The link is shown once — hz keeps only\n" +
+			"its sha256 — and works once.\n\n" +
+			"The way in to an hz nobody can reach yet (a nested hz's first client). The\n" +
+			"kiosk must be reachable from where the device is: TCP 443 to the box.",
+		Example: "  homelab-horizon vpn invite --name carl-1 --user carl",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runVPNInvite(cmd.OutOrStdout(), cmd.ErrOrStderr(), opts.configPath, a)
+		},
+	}
+	cmd.Flags().StringVar(&a.req.Name, "name", "", "the device name (default: the invitee chooses)")
+	cmd.Flags().StringVar(&a.req.Profile, "profile", "", "the client's profile: "+config.ProfileVPNOnly+" (default), "+config.ProfileLanAccess+" or "+config.ProfileFullTunnel)
+	cmd.Flags().StringVar(&a.req.User, "user", "", "the account the device is attributed to (must exist here)")
+	cmd.Flags().DurationVar(&a.expires, "expires", 24*time.Hour, "how long the link lives (at most 168h)")
+	cmd.Flags().StringVar(&a.tokenFile, "token-file", "", "file holding a personal API token (default: admin.token beside the config)")
+	return cmd
+}
+
+func runVPNInvite(out, errOut io.Writer, configPath string, a vpnInviteArgs) error {
+	if err := requireRoot("vpn invite"); err != nil {
+		return err
+	}
+	if a.expires <= 0 {
+		return fmt.Errorf("--expires must be positive")
+	}
+	a.req.ExpiresSeconds = int64(a.expires.Seconds())
+	cfg, cfgPath, err := loadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	tokenFile := a.tokenFile
+	if tokenFile == "" {
+		tokenFile = filepath.Join(filepath.Dir(cfgPath), "admin.token")
+	}
+	raw, err := os.ReadFile(tokenFile)
+	if err != nil {
+		return fmt.Errorf("read the API token from %s: %w (the bootstrap writes it; or: homelab-horizon user create <name> --admin --token-file %s)", tokenFile, err, tokenFile)
+	}
+	base, err := loopbackBase(cfg.EffectiveListenAddr())
+	if err != nil {
+		return err
+	}
+	var inv apitypes.CreateInviteResponse
+	c := &http.Client{Timeout: 30 * time.Second}
+	if err := consolePost(c, base, strings.TrimSpace(string(raw)), tokenFile, "/api/v1/vpn/invites/create", a.req, &inv); err != nil {
+		return err
+	}
+	name, owner := inv.Name, inv.User
+	if name == "" {
+		name = "(the invitee names the device)"
+	}
+	if owner == "" {
+		owner = "(none)"
+	}
+	say(errOut, "VPN invite %s: single use, shown once, expires %s. Device %s, profile %s, owner %s.\n",
+		inv.ID, inv.ExpiresAt, name, inv.Profile, owner)
+	if !strings.HasPrefix(inv.URL, "https://") {
+		say(errOut, "WARNING: this hz has no kiosk_url, so the link is its loopback address and works only on this box.\n")
+	}
+	_, _ = fmt.Fprintln(out, inv.URL)
+	return nil
 }
 
 type vpnAddArgs struct {
@@ -138,8 +221,8 @@ func runVPNAdd(out, errOut io.Writer, configPath string, a vpnAddArgs) error {
 	return withStore(configPath, func(ctx context.Context, store *db.DB) error {
 		user, err := store.UserByUsername(ctx, a.user)
 		if err != nil || !user.Enabled() {
-			return fmt.Errorf("--user %q is not an enabled account on this hz, so the device cannot be attributed to it — create it first: homelab-horizon user create %s --admin --token-file %s; nothing was created",
-				a.user, a.user, filepath.Join(filepath.Dir(cfgPath), a.user+".token"))
+			return fmt.Errorf("--user %q is not an enabled account on this hz, so the device cannot be attributed to it — create it first: homelab-horizon user create %s --admin --sign-in; nothing was created",
+				a.user, a.user)
 		}
 		c := &http.Client{Timeout: 30 * time.Second}
 		var added apitypes.AddPeerResponse
@@ -147,9 +230,15 @@ func runVPNAdd(out, errOut io.Writer, configPath string, a vpnAddArgs) error {
 			apitypes.PeerAddReq{Name: a.name, Profile: a.profile, Project: a.project}, &added); err != nil {
 			return err
 		}
+		var adminErr error
 		if a.vpnAdmin {
-			if err := consolePost(c, base, token, tokenFile, "/api/v1/vpn/peers/toggle-admin", map[string]string{"name": a.name}, nil); err != nil {
-				return fmt.Errorf("client %s was created, but making it a VPN admin failed: %w — its config is below; promote it from the UI", a.name, err)
+			// SET, not flip: a flip run twice demotes (loadtest child, 2026-10-07).
+			yes := true
+			var got apitypes.ToggleAdminResponse
+			adminErr = consolePost(c, base, token, tokenFile, "/api/v1/vpn/peers/toggle-admin",
+				apitypes.ToggleAdminReq{Name: a.name, Admin: &yes}, &got)
+			if adminErr == nil && !got.IsAdmin {
+				adminErr = fmt.Errorf("hz answered isAdmin=false")
 			}
 		}
 		ownerErr := store.SetPeerOwner(ctx, a.name, user.ID)
@@ -162,7 +251,10 @@ func runVPNAdd(out, errOut io.Writer, configPath string, a vpnAddArgs) error {
 			say(errOut, "%v\n", err)
 		}
 		say(errOut, "VPN client %s created (%s%s), attributed to %s. The config above holds its private key and is shown once: hz kept only the public key %s.\n",
-			a.name, a.profile, map[bool]string{true: ", VPN admin", false: ""}[a.vpnAdmin], user.Username, added.PublicKey)
+			a.name, a.profile, map[bool]string{true: ", VPN admin", false: ""}[a.vpnAdmin && adminErr == nil], user.Username, added.PublicKey)
+		if adminErr != nil {
+			say(errOut, "WARNING: the client works, but making it a VPN admin failed: %v — promote it from the UI\n", adminErr)
+		}
 		if ownerErr != nil {
 			say(errOut, "WARNING: the client works, but recording %s as its owner failed: %v\n", user.Username, ownerErr)
 		}

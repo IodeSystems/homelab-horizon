@@ -62,6 +62,7 @@ import type { AddPeerResponse, RekeyPeerResponse, VPNPeer } from "../api/types";
 import { buildProjectIndex } from "../components/model/projectRoutes.ts";
 import { PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
 import { LocationCell } from "../components/model/ProjectBits";
+import { InvitesSection } from "../components/invite/InvitesSection";
 
 function StatusDot({ active }: { active: boolean }) {
   return (
@@ -94,6 +95,10 @@ export const PEER_PROFILES: { value: string; label: string; line: string }[] = [
   { value: "vpn-only", label: "VPN Only (restricted)", line: "Other VPN clients only." },
   { value: "upstream", label: "Upstream (parent hz API only)", line: "Only the parent hz's API. For a nested hz." },
 ];
+
+/** A peer that never completed a handshake has no endpoint, handshake or
+ * transfer: hz omits them (omitempty). That is a state, not a blank (#2). */
+export const NEVER_CONNECTED = "never connected";
 
 /** The cycle the table's profile chip steps through. `upstream` is not in it:
  * one click must never widen a nested hz's client to the LAN, and the server
@@ -990,7 +995,7 @@ function VPNPage() {
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                      {peer.endpoint || "\u2014"}
+                      {peer.endpoint || NEVER_CONNECTED}
                     </Typography>
                   </TableCell>
                   <TableCell>
@@ -1000,14 +1005,14 @@ function VPNPage() {
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" color="text.secondary">
-                      {peer.latestHandshake || "\u2014"}
+                      {peer.latestHandshake || NEVER_CONNECTED}
                     </Typography>
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" color="text.secondary">
                       {peer.transferRx && peer.transferTx
                         ? `${peer.transferRx} / ${peer.transferTx}`
-                        : "\u2014"}
+                        : NEVER_CONNECTED}
                     </Typography>
                   </TableCell>
                   <TableCell align="right">
@@ -1076,119 +1081,23 @@ function VPNPage() {
       </TableContainer>
 
       {/* Invites Section */}
-      <Box sx={{ mt: 4 }}>
-        <Box
-          sx={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            mb: 2,
-          }}
-        >
-          <Typography variant="h6" sx={{ fontWeight: 600 }}>
-            Invites
-          </Typography>
-          <Button
-            variant="outlined"
-            startIcon={<AddIcon />}
-            onClick={() =>
-              createInvite.mutate(undefined, {
-                onSuccess: () => setSnack("Invite created"),
-              })
-            }
-            disabled={createInvite.isPending}
-            size="small"
-          >
-            Create Invite
-          </Button>
-        </Box>
-
-        <TableContainer component={Paper}>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell>Token</TableCell>
-                <TableCell>Invite URL</TableCell>
-                <TableCell align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {invites.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={3} align="center">
-                    <Typography
-                      variant="body2"
-                      color="text.secondary"
-                      sx={{ py: 3 }}
-                    >
-                      No active invites.
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                invites.map((invite) => (
-                  <TableRow key={invite.token} hover>
-                    <TableCell>
-                      <Typography
-                        variant="body2"
-                        sx={{ fontFamily: "monospace" }}
-                      >
-                        {invite.token.slice(0, 12)}...
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Box
-                        sx={{ display: "flex", alignItems: "center", gap: 1 }}
-                      >
-                        <Typography
-                          variant="body2"
-                          sx={{
-                            fontFamily: "monospace",
-                            fontSize: 12,
-                            maxWidth: 400,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {invite.url}
-                        </Typography>
-                        <Tooltip title="Copy URL">
-                          <IconButton
-                            size="small"
-                            onClick={() => {
-                              navigator.clipboard.writeText(invite.url);
-                              setSnack("URL copied");
-                            }}
-                          >
-                            <CopyIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                      </Box>
-                    </TableCell>
-                    <TableCell align="right">
-                      <Tooltip title="Delete invite">
-                        <IconButton
-                          size="small"
-                          color="error"
-                          onClick={() =>
-                            deleteInvite.mutate(invite.token, {
-                              onSuccess: () => setSnack("Invite deleted"),
-                            })
-                          }
-                          disabled={deleteInvite.isPending}
-                        >
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      </Box>
+      <InvitesSection
+        invites={invites}
+        creating={createInvite.isPending}
+        onCreate={(req, done, fail) =>
+          createInvite.mutate(req, {
+            onSuccess: done,
+            onError: (e) => fail((e as Error).message),
+          })
+        }
+        deleting={deleteInvite.isPending}
+        onDelete={(id) =>
+          deleteInvite.mutate(id, {
+            onSuccess: () => setSnack("Invite revoked"),
+          })
+        }
+        onCopied={() => setSnack("Link copied")}
+      />
 
       {/* Dialogs */}
       <AddPeerDialog

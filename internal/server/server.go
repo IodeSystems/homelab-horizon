@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bufio"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -312,7 +311,15 @@ type Server struct {
 	exporterSeen   map[string]bool          // job|address -> a probe has seen exposition there (service-mode serving gate)
 
 	configSharesMu sync.Mutex
-	configShares   map[string]*configShare // token -> share
+
+	// invitesMu serialises every read-modify-write of InvitesFile, which is
+	// what makes an invite single use (invites.go).
+	invitesMu sync.Mutex
+
+	// peerApply replaces the wg reload + chain rebuild after an invite adds a
+	// peer. Tests only; nil is the real one.
+	peerApply    func()
+	configShares map[string]*configShare // token -> share
 
 	// installGrants makes the client-binary downloads redeemable rather than
 	// anonymous: a token hz minted for an install command stays valid for an
@@ -635,6 +642,9 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		}
 	}
 	s.config.Store(cfg)
+	// Every HAProxy write puts the files the config names on disk first, from
+	// the live config (handlers_haproxy.go).
+	hap.SetSideFiles(s.haproxySideFilesNow)
 	// After the config is stored: the collector reads live server state.
 	s.promHandler = newPromHandler(s)
 	s.static.Rebuild(cfg)
@@ -983,112 +993,6 @@ func (s *Server) isInVPNRange(ip string) bool {
 	return vpnNet.Contains(clientIP)
 }
 
-// Invite management
-// Invites are stored as "token:expiry" where expiry is a Unix timestamp.
-// Tokens expire after 24 hours by default. Legacy tokens without expiry are still accepted.
-
-const inviteExpiry = 24 * time.Hour
-
-// inviteEntry represents a stored invite with expiration
-type inviteEntry struct {
-	Token  string
-	Expiry int64 // Unix timestamp, 0 means no expiry (legacy)
-}
-
-func (s *Server) getInviteEntries() []inviteEntry {
-	var entries []inviteEntry
-
-	file, err := os.Open(s.cfg().InvitesFile)
-	if err != nil {
-		return entries
-	}
-	defer func() { _ = file.Close() }()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		// Parse "token:expiry" format, or legacy plain token
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) == 2 {
-			var expiry int64
-			_, _ = fmt.Sscanf(parts[1], "%d", &expiry)
-			entries = append(entries, inviteEntry{Token: parts[0], Expiry: expiry})
-		} else {
-			// Legacy format: plain token with no expiry
-			entries = append(entries, inviteEntry{Token: line, Expiry: 0})
-		}
-	}
-	return entries
-}
-
-// getInvites returns valid (non-expired) invite tokens for display
-func (s *Server) getInvites() []string {
-	entries := s.getInviteEntries()
-	var tokens []string
-	now := time.Now().Unix()
-	for _, e := range entries {
-		// Skip expired invites
-		if e.Expiry > 0 && e.Expiry < now {
-			continue
-		}
-		tokens = append(tokens, e.Token)
-	}
-	return tokens
-}
-
-func (s *Server) isValidInvite(token string) bool {
-	entries := s.getInviteEntries()
-	now := time.Now().Unix()
-
-	for _, e := range entries {
-		if e.Token == token {
-			// Check expiry (0 means no expiry for legacy tokens)
-			if e.Expiry == 0 || e.Expiry > now {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// addInvite stores an invite token with 24-hour expiration
-func (s *Server) addInvite(token string) error {
-	expiry := time.Now().Add(inviteExpiry).Unix()
-
-	f, err := os.OpenFile(s.cfg().InvitesFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-
-	_, err = fmt.Fprintf(f, "%s:%d\n", token, expiry)
-	return err
-}
-
-func (s *Server) removeInvite(token string) error {
-	entries := s.getInviteEntries()
-	var remaining []string
-
-	for _, e := range entries {
-		if e.Token != token {
-			if e.Expiry > 0 {
-				remaining = append(remaining, fmt.Sprintf("%s:%d", e.Token, e.Expiry))
-			} else {
-				remaining = append(remaining, e.Token)
-			}
-		}
-	}
-
-	content := strings.Join(remaining, "\n")
-	if len(remaining) > 0 {
-		content += "\n"
-	}
-	return os.WriteFile(s.cfg().InvitesFile, []byte(content), 0600)
-}
-
 // Health check handler - returns minimal response based on background check
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -1423,6 +1327,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/vpn/invites", s.handleAPIListInvites)
 	mux.HandleFunc("/api/v1/vpn/invites/create", s.handleAPICreateInvite)
 	mux.HandleFunc("/api/v1/vpn/invites/delete", s.handleAPIDeleteInvite)
+	// The invitee's two calls: no session, the token is the credential, kiosk vhost only.
+	mux.HandleFunc("/api/v1/vpn/invite/check", s.handleAPIInviteCheck)
+	mux.HandleFunc("/api/v1/vpn/invite/redeem", s.handleAPIInviteRedeem)
 
 	// HA fleet routes
 	mux.HandleFunc("/api/v1/ha/status", s.handleAPIHAStatus)

@@ -24,6 +24,12 @@ import {
   usePasskeyAssert,
 } from "../api/hooks";
 
+/** Where the portal sends a peer that is through: hz's UI on the kiosk name
+ * (the server's uiUrl), else this page's own origin. Never a guessed address. */
+export function uiLink(uiUrl: string | undefined, origin: string = typeof window === "undefined" ? "" : window.location.origin): string {
+  return uiUrl || `${origin}/app/`;
+}
+
 function MFAPage() {
   const status = useMFAStatus();
   const enroll = useMFAEnroll();
@@ -91,9 +97,12 @@ function MFAPage() {
               {data.sessionExpiry &&
                 ` Expires: ${new Date(data.sessionExpiry).toLocaleString()}`}
             </Alert>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
               You have full VPN access according to your routing profile.
             </Typography>
+            <Button variant="contained" href={uiLink(data.uiUrl)} data-ui-link>
+              Open hz
+            </Button>
           </CardContent>
         </Card>
       </Box>

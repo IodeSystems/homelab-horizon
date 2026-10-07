@@ -3174,6 +3174,12 @@ export interface MFAStatusResponse {
   sessionExpiry?: string;
   durations: string[];
   provisioningUri?: string; // only during enrollment
+  /**
+   * UIURL is hz's UI on the kiosk name, https://<kiosk>/app/ — on the VPN the
+   * kiosk name resolves to this hz and routes to its UI (proxy.self). "" when
+   * there is no kiosk_url: the portal then links its own origin's /app/.
+   */
+  uiUrl: string;
   passkeys?: PasskeyInfo[];
   /**
    * PasskeysAvailable is a property of the deployment, not the peer: WebAuthn
@@ -3305,15 +3311,90 @@ export interface ConfigShareResp {
   url: string;
   peerName: string;
 }
+/**
+ * InviteResp is an outstanding invite, as the list shows it: no token, no link.
+ */
 export interface InviteResp {
-  token: string;
-  url: string;
+  /**
+   * ID is a prefix of the token's sha256 — what delete takes.
+   */
+  id: string;
+  name: string; // "" = the invitee names the device
+  profile: string; // vpn-only, lan-access or full-tunnel
+  user: string; // "" = no owning account
+  expiresAt: string;
 }
+/**
+ * CreateInviteReq is POST /api/v1/vpn/invites/create. Every field is optional.
+ */
+export interface CreateInviteReq {
+  name?: string;
+  profile?: string; // default vpn-only
+  user?: string; // an account on this hz
+  /**
+   * ExpiresSeconds defaults to 24h; at most 7 days.
+   */
+  expiresSeconds?: number /* int64 */;
+}
+/**
+ * CreateInviteResponse carries the link ONCE. hz keeps only its sha256.
+ */
 export interface CreateInviteResponse {
   ok: boolean;
-  token: string;
   url: string;
+  id: string;
+  name: string;
+  profile: string;
+  user: string;
+  expiresAt: string;
 }
+/**
+ * DeleteInviteReq is POST /api/v1/vpn/invites/delete.
+ */
+export interface DeleteInviteReq {
+  id: string;
+}
+/**
+ * InviteCheckReq is POST /api/v1/vpn/invite/check (no session: the token is
+ * the credential). Kiosk vhost only.
+ */
+export interface InviteCheckReq {
+  token: string;
+}
+/**
+ * InviteCheckResp says whether the token can still be redeemed, and what it
+ * will make. Nothing is consumed.
+ */
+export interface InviteCheckResp {
+  valid: boolean;
+  name: string;
+  profile: string;
+  expiresAt: string;
+}
+/**
+ * InviteRedeemReq is POST /api/v1/vpn/invite/redeem: the token and the PUBLIC
+ * key the browser generated. Name is used only when the invite carries none.
+ */
+export interface InviteRedeemReq {
+  token: string;
+  publicKey: string;
+  name?: string;
+}
+/**
+ * InviteRedeemResp is the client config with InvitePrivateKeyPlaceholder where
+ * the private key goes. The browser substitutes its own key; hz never had it.
+ */
+export interface InviteRedeemResp {
+  ok: boolean;
+  name: string;
+  address: string;
+  publicKey: string;
+  config: string;
+}
+/**
+ * InvitePrivateKeyPlaceholder stands in the redeemed config's PrivateKey line.
+ */
+export const InvitePrivateKeyPlaceholder = "<PRIVATE_KEY_FROM_THIS_DEVICE>";
 export interface ZoneResp {
   name: string;
   zoneId: string;
@@ -4103,6 +4184,14 @@ export interface DNSSyncAllResponse {
   ok: boolean;
   updated: number /* int */;
   failed: number /* int */;
+}
+/**
+ * ToggleAdminReq is POST /api/v1/vpn/peers/toggle-admin. Without Admin it
+ * flips the client's VPN-admin flag; with Admin it SETS it (idempotent).
+ */
+export interface ToggleAdminReq {
+  name: string;
+  admin?: boolean;
 }
 export interface ToggleAdminResponse {
   ok: boolean;

@@ -21,10 +21,12 @@ const vpnSecret = "PRIVATE-KEY-SENTINEL-do-not-print-anywhere-but-the-terminal="
 // fakeVPNHZ is the running hz `vpn add` talks to over loopback: it records each
 // request and answers the add with a config that holds vpnSecret.
 type fakeVPNHZ struct {
-	mu    sync.Mutex
-	calls []string
-	auth  []string
-	added apitypes.PeerAddReq
+	mu      sync.Mutex
+	calls   []string
+	auth    []string
+	added   apitypes.PeerAddReq
+	invited apitypes.CreateInviteReq
+	admin   apitypes.ToggleAdminReq
 }
 
 func newVPNCLI(t *testing.T) (*tokenCLI, *fakeVPNHZ, string) {
@@ -40,8 +42,12 @@ func newVPNCLI(t *testing.T) (*tokenCLI, *fakeVPNHZ, string) {
 			_ = json.NewDecoder(r.Body).Decode(&f.added)
 			_ = json.NewEncoder(w).Encode(apitypes.AddPeerResponse{OK: true, PublicKey: "pub-of-carl-1",
 				Config: "[Interface]\nPrivateKey = " + vpnSecret + "\nAddress = 10.101.0.2/24\n"})
+		case "/api/v1/vpn/invites/create":
+			_ = json.NewDecoder(r.Body).Decode(&f.invited)
+			_ = json.NewEncoder(w).Encode(apitypes.CreateInviteResponse{OK: true, URL: "https://kiosk.example.com/invite/tok", ID: "0123456789ab", Profile: "vpn-only", Name: f.invited.Name, User: f.invited.User})
 		case "/api/v1/vpn/peers/toggle-admin":
-			_, _ = w.Write([]byte(`{"ok":true}`))
+			_ = json.NewDecoder(r.Body).Decode(&f.admin)
+			_ = json.NewEncoder(w).Encode(apitypes.ToggleAdminResponse{OK: true, IsAdmin: f.admin.Admin != nil && *f.admin.Admin})
 		default:
 			http.NotFound(w, r)
 		}
@@ -93,6 +99,12 @@ func TestVPNAddCreatesPrintsOnceAndAttributes(t *testing.T) {
 		if a != "Bearer hzu_local-admin-token" {
 			t.Fatalf("authorization %q", a)
 		}
+	}
+	if f.admin.Name != "carl-1" || f.admin.Admin == nil || !*f.admin.Admin {
+		t.Fatalf("--vpn-admin must SET admin (a flip run twice demotes): %+v", f.admin)
+	}
+	if !strings.Contains(stderr, ", VPN admin") {
+		t.Fatalf("stderr does not say VPN admin: %s", stderr)
 	}
 	if f.added.Name != "carl-1" || f.added.Profile != "vpn-only" {
 		t.Fatalf("the add asked for %+v", f.added)
