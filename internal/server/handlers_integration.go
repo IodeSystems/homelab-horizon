@@ -55,8 +55,8 @@ func (s *Server) metricsCandidates() []integration.Target {
 
 // refreshMetricsTargets re-probes the metrics candidates and updates the detector.
 // Called from the health loop, so detection runs on the same 60s cadence. It also
-// probes exporter targets for status — that result annotates the topology view but
-// does NOT gate serving (exporters are always emitted; Prometheus owns up/down).
+// probes exporter targets for status — that result annotates the topology view and
+// gates serving for service-mode exporters only (see exporterJobs).
 func (s *Server) refreshMetricsTargets() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -75,8 +75,9 @@ func exporterKey(job, addr string) string { return job + "|" + addr }
 
 // refreshExporterStatus probes every configured exporter target concurrently. For
 // a multi-path rule it tries each candidate path in order and records the first
-// that responds (the resolved path the served config then scrapes). Status-only:
-// a dead target stays in the served config so Prometheus can alert on up==0.
+// that responds (the resolved path the served config then scrapes). A dead target
+// stays in the served config so Prometheus can alert on up==0; a service-mode
+// target must first have been seen alive once (exporterSeen).
 func (s *Server) refreshExporterStatus(ctx context.Context) {
 	targets := s.cfg().DeriveExporterTargets()
 	next := make(map[string]exporterProbe, len(targets))
@@ -104,7 +105,46 @@ func (s *Server) refreshExporterStatus(ctx context.Context) {
 
 	s.exporterMu.Lock()
 	s.exporterStatus = next
+	if s.exporterSeen == nil {
+		s.exporterSeen = map[string]bool{}
+	}
+	for k, p := range next {
+		if p.Alive {
+			s.exporterSeen[k] = true
+		}
+	}
 	s.exporterMu.Unlock()
+}
+
+// exporterSeenAlive reports whether a probe has ever seen exposition at a
+// target since hz started.
+func (s *Server) exporterSeenAlive(job, addr string) bool {
+	s.exporterMu.RLock()
+	defer s.exporterMu.RUnlock()
+	return s.exporterSeen[exporterKey(job, addr)]
+}
+
+// isLoopbackAddr reports whether a host:port names this machine's loopback —
+// an address only a scraper on hz's own host can reach.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	return host == "localhost" || isLoopback(host)
+}
+
+// scrapeRequesterIsRemote reports whether the Prometheus fetching the scrape
+// config runs on another machine than hz. Behind HAProxy the direct peer is
+// loopback; getClientIP takes the real client from X-Forwarded-For, which
+// HAProxy strips and re-adds.
+func (s *Server) scrapeRequesterIsRemote(r *http.Request) bool {
+	ip := s.getClientIP(r)
+	if isLoopback(ip) {
+		return false
+	}
+	li := s.cfg().LocalInterface
+	return li == "" || ip != li
 }
 
 // exporterProbeFor returns the resolved probe state for a target, falling back to
@@ -120,12 +160,27 @@ func (s *Server) exporterProbeFor(job, addr, fallbackPath string) exporterProbe 
 
 // scrapeJobs assembles the full set of Prometheus jobs hz serves: probed-healthy
 // service-metrics jobs (reachable-only) followed by exporter jobs derived from
-// the topology (always emitted — Prometheus owns up/down). Exporters sort after
+// the topology (see exporterJobs for which are emitted). Exporters sort after
 // services and among themselves by job then address for stable output.
-func (s *Server) scrapeJobs() []integration.ScrapeJob {
-	jobs := integration.ServiceJobs(s.metrics.Healthy())
+//
+// remote is true when the requesting Prometheus runs on another machine; service
+// backends on loopback are then left out, because that Prometheus would scrape
+// itself. hz's own endpoints (selfJobs) are not filtered here: they already pick
+// a reachable address.
+func (s *Server) scrapeJobs(remote bool) []integration.ScrapeJob {
+	healthy := s.metrics.Healthy()
+	if remote {
+		kept := healthy[:0:0]
+		for _, t := range healthy {
+			if !isLoopbackAddr(t.Address) {
+				kept = append(kept, t)
+			}
+		}
+		healthy = kept
+	}
+	jobs := integration.ServiceJobs(healthy)
 	jobs = append(jobs, s.selfJobs()...)
-	jobs = append(jobs, s.exporterJobs()...)
+	jobs = append(jobs, s.exporterJobs(remote)...)
 	return jobs
 }
 
@@ -199,10 +254,35 @@ func (s *Server) selfJobs() []integration.ScrapeJob {
 // exporterJobs expands the configured exporters into ScrapeJobs, one job per
 // exporter job_name, grouping that job's expanded targets. Target order follows
 // DeriveExporterTargets (job, then address).
-func (s *Server) exporterJobs() []integration.ScrapeJob {
+//
+// Port and static targets are always emitted: someone declared an exporter
+// there, so Prometheus owns up/down. A service-mode exporter instead expands
+// over EVERY service backend, most of which serve no metrics; emitting those
+// gave Prometheus a permanent up==0 per backend, indistinguishable from an
+// outage. So a service-mode target is emitted once a probe has seen exposition
+// there, and stays emitted after it stops answering — a metrics endpoint that
+// dies still shows as up==0 rather than vanishing. The seen set is in memory:
+// after an hz restart, a target that is down at the time is not emitted until
+// it answers again.
+func (s *Server) exporterJobs(remote bool) []integration.ScrapeJob {
+	cfg := s.cfg()
+	serviceMode := map[string]bool{}
+	for _, e := range cfg.EffectiveExporters() {
+		if e.EffectiveMode() == "service" {
+			serviceMode[e.Job] = true
+		}
+	}
 	var jobs []integration.ScrapeJob
 	idx := map[string]int{}
-	for _, t := range s.cfg().DeriveExporterTargets() {
+	for _, t := range cfg.DeriveExporterTargets() {
+		if serviceMode[t.Job] {
+			if remote && isLoopbackAddr(t.Address) {
+				continue
+			}
+			if !s.exporterSeenAlive(t.Job, t.Address) {
+				continue
+			}
+		}
 		i, ok := idx[t.Job]
 		if !ok {
 			i = len(jobs)
@@ -396,7 +476,7 @@ func (s *Server) handleIntegrationPromScrape(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	w.Header().Set("Content-Type", "application/yaml")
-	_, _ = w.Write([]byte(integration.ScrapeYAML(s.scrapeJobs())))
+	_, _ = w.Write([]byte(integration.ScrapeYAML(s.scrapeJobs(s.scrapeRequesterIsRemote(r)))))
 }
 
 // handleIntegrationPromTargets serves the Prometheus http_sd_config JSON for all
@@ -407,7 +487,7 @@ func (s *Server) handleIntegrationPromTargets(w http.ResponseWriter, r *http.Req
 		writeJSONError(w, http.StatusForbidden, "Forbidden")
 		return
 	}
-	body, err := integration.HTTPSDTargets(s.scrapeJobs())
+	body, err := integration.HTTPSDTargets(s.scrapeJobs(s.scrapeRequesterIsRemote(r)))
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "render error")
 		return

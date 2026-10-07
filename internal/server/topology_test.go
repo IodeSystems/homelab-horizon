@@ -26,7 +26,7 @@ func TestExporterJobsRenderIntoScrapeYAML(t *testing.T) {
 		},
 	})
 
-	jobs := s.exporterJobs()
+	jobs := s.exporterJobs(false)
 	yaml := integration.ScrapeYAML(jobs)
 
 	for _, want := range []string{
@@ -57,7 +57,7 @@ func TestScrapeJobsMergesServicesAndExporters(t *testing.T) {
 	})
 
 	names := map[string]bool{}
-	for _, j := range s.scrapeJobs() {
+	for _, j := range s.scrapeJobs(false) {
 		names[j.Name] = true
 	}
 	for _, want := range []string{"hz", "node"} {
