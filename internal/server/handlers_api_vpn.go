@@ -543,53 +543,6 @@ func (s *Server) wgChainOpts() wireguard.ForwardChainOpts {
 	}
 }
 
-func (s *Server) handleAPIListInvites(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-
-	tokens := s.getInvites()
-
-	invites := make([]apitypes.InviteResp, 0, len(tokens))
-	for _, token := range tokens {
-		url := strings.TrimSuffix(s.cfg().KioskURL, "/") + "/invite/" + token
-		invites = append(invites, apitypes.InviteResp{
-			Token: token,
-			URL:   url,
-		})
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(invites)
-}
-
-func (s *Server) handleAPICreateInvite(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-
-	token := generateToken(32)
-	if err := s.addInvite(token); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	url := strings.TrimSuffix(s.cfg().KioskURL, "/") + "/invite/" + token
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(apitypes.CreateInviteResponse{
-		OK:    true,
-		Token: token,
-		URL:   url,
-	})
-}
-
 func (s *Server) handleAPIGetPeerConfig(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {
 		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
@@ -788,38 +741,6 @@ func (s *Server) handleAPIDeleteConfigShare(w http.ResponseWriter, r *http.Reque
 	s.configSharesMu.Lock()
 	delete(s.configShares, req.Token)
 	s.configSharesMu.Unlock()
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
-}
-
-func (s *Server) handleAPIDeleteInvite(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-
-	var req struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
-		return
-	}
-
-	if req.Token == "" {
-		writeJSONError(w, http.StatusBadRequest, "Token required")
-		return
-	}
-
-	if err := s.removeInvite(req.Token); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})

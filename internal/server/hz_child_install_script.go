@@ -412,16 +412,17 @@ if [ -n "$HUMAN_VPN_RANGE" ]; then
   echo "  kiosk         https://$KIOSK — the MFA portal (every VPN client starts jailed there)"
   echo "  admin UI      http://$HUMAN_ADDR:$port — over the VPN, after the kiosk"
   echo
-  echo "  This hz has no human VPN client yet. Create the first one ONCE, here, as"
-  echo "  root, from this console (the second line prints the client config and"
-  echo "  a QR code to this terminal only; nothing keeps a copy):"
+  echo "  This hz has no human VPN client yet. Make the first one with an invite"
+  echo "  link, here, as root (the link is single use and expires in 24h; the"
+  echo "  device's browser makes the WireGuard key, and hz keeps only the public half):"
   echo
   echo "    sudo homelab-horizon user create $WHO --admin --token-file $HZ_DIR/$WHO.token   # skip if $WHO exists here"
-  echo "    sudo homelab-horizon vpn add $WHO-1 --profile vpn-only --vpn-admin --user $WHO"
+  echo "    sudo homelab-horizon vpn invite --name $WHO-1 --user $WHO"
   echo
-  echo "  Then: UDP $HUMAN_PORT open inbound on this box (nothing else), connect,"
-  echo "  open https://$KIOSK and enrol a second factor, then http://$HUMAN_ADDR:$port."
-  echo "  Later clients are created from this hz's own UI, over its VPN."
+  echo "  Then: open TCP 443 and UDP $HUMAN_PORT inbound on this box (443 serves the"
+  echo "  invite page before the device is on the VPN). On the device: open the link,"
+  echo "  import the config, connect, open https://$KIOSK and enrol a second factor,"
+  echo "  then the UI at https://$KIOSK/app/. Later clients: this hz's UI, over its VPN."
   if ! systemctl is-active --quiet dnsmasq 2>/dev/null; then
     echo
     echo "  WARNING: dnsmasq is not running here. VPN clients are given DNS $HUMAN_ADDR,"

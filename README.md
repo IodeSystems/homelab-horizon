@@ -784,17 +784,19 @@ Nothing hz runs writes `/etc/wireguard/hz-upstream.conf`; only the bootstrap scr
 
 The child's hz binds `127.0.0.1:8080`, and with a human VPN also its `wg0` address (`vpn_listen`). You reach it the way you reach the parent: the VPN, the MFA kiosk, then the UI.
 
-1. **The firewall.** Open **UDP 51820 inbound** on the box (on a cloud box, its security group). Nothing else: WireGuard does not answer a packet without a valid key, and the MFA kiosk gates what a connected client reaches.
-2. **The first client, from the console.** A child starts with no human VPN client, and nothing outside reaches its UI. So the first one is made **on the box, as root**. The script's summary prints these commands with the name of the parent account that generated the command:
+1. **The firewall.** Open **UDP 51820** and **TCP 443 inbound** on the box (on a cloud box, its security group). UDP 51820 is WireGuard, which does not answer a packet without a valid key. TCP 443 is the kiosk vhost: the invite page must load **before** the device is on the VPN. It also serves the kiosk's MFA portal and hz's sign-in page to anyone who can reach it.
+2. **The first client: an invite link, from the console.** A child starts with no human VPN client, and nothing outside reaches its UI. So the first one is made **on the box, as root**. The script's summary prints these commands with the name of the parent account that generated the command:
 
    ```bash
    sudo homelab-horizon user create carl --admin --token-file /etc/homelab-horizon/carl.token   # skip if carl exists here
-   sudo homelab-horizon vpn add carl-1 --profile vpn-only --vpn-admin --user carl
+   sudo homelab-horizon vpn invite --name carl-1 --user carl
    ```
 
-   `vpn add` asks the running hz over loopback (with the `admin.token` the bootstrap wrote), so the hz on the box remains the only writer of `wg0.conf`. It prints the client config and a QR code (`qrencode`) **to the terminal, once**. The config holds the client's private key; hz keeps only the public half. It refuses before it creates anything when stdout is not a terminal, when it is not run as root, or when `--user` is not an account on this hz. The client is recorded as `--user`'s device. `--vpn-admin` makes its address sign it in to the UI. The MFA scope is `all`, so the client is still jailed until it passes the kiosk.
+   `vpn invite` asks the running hz over loopback (with the `admin.token` the bootstrap wrote) and prints a link, `https://<kiosk>/invite/<token>`. The link works **once** and expires after 24 hours (`--expires`, at most 168h). hz keeps only its sha256. Open it on the device. **The device's browser generates the WireGuard keypair** (WebCrypto X25519) and sends hz only the public key. hz creates the client with exactly that key and returns the config without a private key. The browser adds its own key, then offers the `.conf` download and a QR code, both made in the browser. hz never receives, stores or shows the private key. A browser without X25519 is told so. There is no server-generated fallback. The client is recorded as `--user`'s device. `--profile` is `vpn-only` by default. It refuses when it is not run as root, or when `--user` is not an account on this hz.
+
+   `vpn add <name> --profile P --user U` still exists. It prints a server-generated config with the private key to the terminal, once, for a device with no browser.
 3. **The kiosk.** Connect the client. Its endpoint is `<kiosk>:51820` (public DNS: the child's A record, which the parent publishes). Its DNS is the child's `wg0` address, where the child's dnsmasq answers the kiosk name with that address, so the kiosk is reached **through** the tunnel (the jail identifies a peer by its tunnel address). Open `https://<kiosk>`, enrol a second factor, and choose a session.
-4. **The UI.** `http://<child wg0 address>:8080` (e.g. `http://10.101.0.1:8080`). Create later clients there.
+4. **The UI.** `https://<kiosk>/app/`. The kiosk name routes to hz's own UI (`proxy.self`), with the certificate the parent issued. Create later clients there, or mint more invites (VPN page, **Create Invite**; or `hz vpn invite`).
 
 **dnsmasq.** hz does not start dnsmasq on a nested hz ([What a sync touches](#spinning-up-a-nested-hz)). When it is not running, the summary says so: a connected client then resolves no names, and the portal is reached by address, `http://<child wg0 address>:8080/app/mfa`. Start dnsmasq yourself to opt in.
 

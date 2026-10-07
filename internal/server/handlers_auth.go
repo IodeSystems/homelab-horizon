@@ -27,7 +27,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.isValidInvite(token) {
-		http.Redirect(w, r, "/invite/"+token, http.StatusSeeOther)
+		http.Redirect(w, r, s.inviteLink(r, token), http.StatusSeeOther)
 		return
 	}
 

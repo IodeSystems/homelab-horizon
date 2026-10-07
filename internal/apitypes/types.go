@@ -1207,16 +1207,84 @@ type ConfigShareResp struct {
 
 // Invites
 
+//
+// A VPN invite is a single-use link. The invitee's BROWSER generates the
+// WireGuard keypair and sends only the public key; hz never receives, stores or
+// returns a private key on this path. No type below has a field for one —
+// internal/server/invites_test.go pins that by field list.
+//
+// hz keeps only the token's sha256, so the link is shown once, at create.
+
+// InviteResp is an outstanding invite, as the list shows it: no token, no link.
 type InviteResp struct {
-	Token string `json:"token"`
-	URL   string `json:"url"`
+	// ID is a prefix of the token's sha256 — what delete takes.
+	ID        string `json:"id"`
+	Name      string `json:"name"`    // "" = the invitee names the device
+	Profile   string `json:"profile"` // vpn-only, lan-access or full-tunnel
+	User      string `json:"user"`    // "" = no owning account
+	ExpiresAt string `json:"expiresAt"`
 }
 
-type CreateInviteResponse struct {
-	OK    bool   `json:"ok"`
-	Token string `json:"token"`
-	URL   string `json:"url"`
+// CreateInviteReq is POST /api/v1/vpn/invites/create. Every field is optional.
+type CreateInviteReq struct {
+	Name    string `json:"name,omitempty"`
+	Profile string `json:"profile,omitempty"` // default vpn-only
+	User    string `json:"user,omitempty"`    // an account on this hz
+	// ExpiresSeconds defaults to 24h; at most 7 days.
+	ExpiresSeconds int64 `json:"expiresSeconds,omitempty"`
 }
+
+// CreateInviteResponse carries the link ONCE. hz keeps only its sha256.
+type CreateInviteResponse struct {
+	OK        bool   `json:"ok"`
+	URL       string `json:"url"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Profile   string `json:"profile"`
+	User      string `json:"user"`
+	ExpiresAt string `json:"expiresAt"`
+}
+
+// DeleteInviteReq is POST /api/v1/vpn/invites/delete.
+type DeleteInviteReq struct {
+	ID string `json:"id"`
+}
+
+// InviteCheckReq is POST /api/v1/vpn/invite/check (no session: the token is
+// the credential). Kiosk vhost only.
+type InviteCheckReq struct {
+	Token string `json:"token"`
+}
+
+// InviteCheckResp says whether the token can still be redeemed, and what it
+// will make. Nothing is consumed.
+type InviteCheckResp struct {
+	Valid     bool   `json:"valid"`
+	Name      string `json:"name"`
+	Profile   string `json:"profile"`
+	ExpiresAt string `json:"expiresAt"`
+}
+
+// InviteRedeemReq is POST /api/v1/vpn/invite/redeem: the token and the PUBLIC
+// key the browser generated. Name is used only when the invite carries none.
+type InviteRedeemReq struct {
+	Token     string `json:"token"`
+	PublicKey string `json:"publicKey"`
+	Name      string `json:"name,omitempty"`
+}
+
+// InviteRedeemResp is the client config with InvitePrivateKeyPlaceholder where
+// the private key goes. The browser substitutes its own key; hz never had it.
+type InviteRedeemResp struct {
+	OK        bool   `json:"ok"`
+	Name      string `json:"name"`
+	Address   string `json:"address"`
+	PublicKey string `json:"publicKey"`
+	Config    string `json:"config"`
+}
+
+// InvitePrivateKeyPlaceholder stands in the redeemed config's PrivateKey line.
+const InvitePrivateKeyPlaceholder = "<PRIVATE_KEY_FROM_THIS_DEVICE>"
 
 // Zones
 

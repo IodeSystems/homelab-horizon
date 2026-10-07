@@ -75,9 +75,18 @@ minted client-side (`configmgr/crypto.go:283`), segment keys on the box
 
 ⚠ **Where hz does hold one, say so rather than overclaiming:** the ACME account
 key (`internal/acme/acme.go:28-41`), issued TLS private keys
-(`internal/letsencrypt/apply.go:153`), and — in the legacy human-VPN path — both
-halves of a client's WireGuard key, momentarily, to render a config and a QR
-code (`internal/server/handlers_api_vpn.go:72,117-121`).
+(`internal/letsencrypt/apply.go:153`), and — in the admin-side human-VPN paths
+(add a client, rekey, `homelab-horizon vpn add`) — both halves of a client's
+WireGuard key, momentarily, to render a config and a QR code
+(`internal/server/handlers_api_vpn.go:72,119`, rekey `:621,662`).
+
+**The VPN invite path holds none** (N4i, 2026-10-07): the invitee's browser
+generates the keypair (`ui/src/components/invite/keygen.ts`) and hz receives
+the public key only (`internal/server/invites.go`, redeem). The old invite page
+that generated the key on the server is removed, with no fallback. Enforced:
+`internal/server/invites_test.go` `TestNoInviteTypeCarriesAPrivateKey` (exact
+field lists of every invite request, response and stored record) and
+`TestInviteRedeemUsesExactlyTheSubmittedKey`.
 
 Since N4f (2026-10-03) hz also issues a **dedicated certificate per hz instance** and
 hands its private key to that instance over HTTP, authenticated by the instance
