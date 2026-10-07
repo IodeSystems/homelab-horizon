@@ -309,6 +309,7 @@ type Server struct {
 
 	exporterMu     sync.RWMutex             // guards exporterStatus
 	exporterStatus map[string]exporterProbe // job|address -> resolved live path + liveness (status only, not a serving gate)
+	exporterSeen   map[string]bool          // job|address -> a probe has seen exposition there (service-mode serving gate)
 
 	configSharesMu sync.Mutex
 	configShares   map[string]*configShare // token -> share
@@ -589,6 +590,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		health:         &HealthStatus{healthy: true},
 		metrics:        integration.NewDetector(),
 		exporterStatus: map[string]exporterProbe{},
+		exporterSeen:   map[string]bool{},
 		static:         newStaticSupervisor(cfg.StaticServeAddr(), dryRun),
 		configShares:   make(map[string]*configShare),
 		installGrants:  newInstallGrants(),
