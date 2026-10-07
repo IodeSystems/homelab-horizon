@@ -221,8 +221,8 @@ func runVPNAdd(out, errOut io.Writer, configPath string, a vpnAddArgs) error {
 	return withStore(configPath, func(ctx context.Context, store *db.DB) error {
 		user, err := store.UserByUsername(ctx, a.user)
 		if err != nil || !user.Enabled() {
-			return fmt.Errorf("--user %q is not an enabled account on this hz, so the device cannot be attributed to it — create it first: homelab-horizon user create %s --admin --token-file %s; nothing was created",
-				a.user, a.user, filepath.Join(filepath.Dir(cfgPath), a.user+".token"))
+			return fmt.Errorf("--user %q is not an enabled account on this hz, so the device cannot be attributed to it — create it first: homelab-horizon user create %s --admin --sign-in; nothing was created",
+				a.user, a.user)
 		}
 		c := &http.Client{Timeout: 30 * time.Second}
 		var added apitypes.AddPeerResponse
