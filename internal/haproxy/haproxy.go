@@ -64,6 +64,11 @@ type HAProxy struct {
 	tlsMinVersion string
 	rateLimit     *RateLimit
 
+	// sideFiles reports the pattern lists and error pages the config names.
+	// Asked at WriteConfig time, so the contents are current — never a copy
+	// taken when the backends were last set. Nil means none. See SetSideFiles.
+	sideFiles func() []SideFile
+
 	// certs is where the cert facts come from. Never nil after New; see
 	// SetCertStore.
 	certs CertStore

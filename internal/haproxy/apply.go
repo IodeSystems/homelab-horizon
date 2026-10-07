@@ -57,28 +57,78 @@ func writeFileIfChanged(path string, data []byte, perm os.FileMode) (changed boo
 	return true, nil
 }
 
-// WriteConfig generates and writes the HAProxy configuration
+// SetSideFiles sets where WriteConfig learns the side files the config names
+// (the MFA jail list, the per-service maintenance pages). Asked at write time.
+func (h *HAProxy) SetSideFiles(fn func() []SideFile) {
+	h.sideFiles = fn
+}
+
+// WriteConfig generates and writes the HAProxy configuration.
+//
+// ORDER IS THE CONTRACT. HAProxy opens every `-f` list and `errorfile` while
+// it parses the config, and refuses the whole config if one is missing. So:
+//
+//  1. the default 503 page and the side files (SetSideFiles) are written;
+//  2. every file the rendered config references under the config's own
+//     directory is checked to exist. A missing one is an error and
+//     haproxy.cfg is NOT written, so the file on disk is never one a restart
+//     would refuse;
+//  3. haproxy.cfg is written.
+//
+// Found live 2026-10-07: a start-sync wrote a config naming mfa-jailed.lst
+// before anything had written the list, and the reload's validation refused
+// it. The running HAProxy kept the old config; a restart would not have.
+//
+// References outside the config's directory (the package's own
+// /etc/haproxy/errors pages when hz renders elsewhere, as tests do) are not
+// hz's to write and are not checked.
 func (h *HAProxy) WriteConfig(httpPort, httpsPort int, ssl *SSLConfig) error {
 	// Through GenerateConfig rather than RenderConfig directly: that accessor
 	// is what the preview and hz-agent's desired state are built from, and a
 	// second render call here is a second answer waiting to diverge from it.
 	config := h.GenerateConfig(httpPort, httpsPort, ssl)
 
-	// Ensure directory exists
-	dir := strings.TrimSuffix(h.configPath, "/haproxy.cfg")
-	if dir != h.configPath {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("mkdir %s: %w", dir, err)
+	dir := filepath.Dir(h.configPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+
+	// Default 503 error page (overrides vanilla HAProxy; per-service pages
+	// override this). The config names it, so a failed write is an error.
+	if _, err := writeFileIfChanged(filepath.Join(dir, Error503Path), []byte(RenderError503()), 0644); err != nil {
+		return err
+	}
+	if h.sideFiles != nil {
+		for _, f := range h.sideFiles() {
+			if f.Path == "" {
+				continue
+			}
+			if _, err := writeFileIfChanged(f.Path, f.Contents, 0644); err != nil {
+				return err
+			}
 		}
 	}
 
-	// Write default 503 error page (overrides vanilla HAProxy; per-service pages override this)
-	errorsDir := dir + "/errors"
-	if err := os.MkdirAll(errorsDir, 0755); err == nil {
-		_ = os.WriteFile(dir+"/"+Error503Path, []byte(RenderError503()), 0644)
+	if err := checkReferencedFiles(config, dir); err != nil {
+		return err
 	}
-
 	return os.WriteFile(h.configPath, []byte(config), 0644)
+}
+
+// checkReferencedFiles refuses a rendered config that names a file under dir
+// which is not on disk. Absent is refused; an empty file is accepted — an
+// empty jail list is a valid list, not a missing one (CLAUDE.md #2).
+func checkReferencedFiles(config, dir string) error {
+	prefix := filepath.Clean(dir) + string(filepath.Separator)
+	for _, p := range ReferencedFiles(config) {
+		if !strings.HasPrefix(filepath.Clean(p), prefix) {
+			continue
+		}
+		if _, err := os.Stat(p); err != nil {
+			return fmt.Errorf("haproxy.cfg not written: it references %s, which is not on disk: %w", p, err)
+		}
+	}
+	return nil
 }
 
 // WriteJailACL writes the jailed-source list HAProxy reads via `src -f`, and

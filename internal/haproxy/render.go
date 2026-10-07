@@ -923,3 +923,47 @@ func domainToACLPattern(domain string) string {
 	}
 	return domain
 }
+
+// SideFile is a file the rendered haproxy.cfg names and HAProxy opens while it
+// parses that config: a pattern list (`src -f`) or an error page (`errorfile`).
+// HAProxy refuses a config whose side file is missing, so every one must be on
+// disk BEFORE the config that names it is written or validated. WriteConfig
+// writes them first; see there.
+type SideFile struct {
+	Path     string
+	Contents []byte
+}
+
+// ReferencedFiles returns every file path the rendered config makes HAProxy
+// open at parse time: the argument of each `-f` (a pattern or map file) and the
+// path of each `errorfile <code> <path>`. Directories (`crt <dir>`) are not
+// listed; the certificate store is a separate writer's.
+//
+// It reads the RENDERED text, not the inputs, on purpose: a new reference added
+// to the renderer is then checked by WriteConfig without anyone remembering to
+// register it.
+func ReferencedFiles(rendered string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, line := range strings.Split(rendered, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
+			continue
+		}
+		if fields[0] == "errorfile" && len(fields) >= 3 {
+			add(fields[2])
+		}
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] == "-f" {
+				add(fields[i+1])
+			}
+		}
+	}
+	return out
+}
