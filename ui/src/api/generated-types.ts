@@ -3174,6 +3174,12 @@ export interface MFAStatusResponse {
   sessionExpiry?: string;
   durations: string[];
   provisioningUri?: string; // only during enrollment
+  /**
+   * UIURL is hz's UI on the kiosk name, https://<kiosk>/app/ — on the VPN the
+   * kiosk name resolves to this hz and routes to its UI (proxy.self). "" when
+   * there is no kiosk_url: the portal then links its own origin's /app/.
+   */
+  uiUrl: string;
   passkeys?: PasskeyInfo[];
   /**
    * PasskeysAvailable is a property of the deployment, not the peer: WebAuthn
