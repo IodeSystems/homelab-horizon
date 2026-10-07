@@ -78,7 +78,7 @@ key (`internal/acme/acme.go:28-41`), issued TLS private keys
 (`internal/letsencrypt/apply.go:153`), and — in the admin-side human-VPN paths
 (add a client, rekey, `homelab-horizon vpn add`) — both halves of a client's
 WireGuard key, momentarily, to render a config and a QR code
-(`internal/server/handlers_api_vpn.go:72,119`, rekey `:621,662`).
+(`internal/server/handlers_api_vpn.go:78,122`, rekey `:631,672`).
 
 **The VPN invite path holds none** (N4i, 2026-10-07): the invitee's browser
 generates the keypair (`ui/src/components/invite/keygen.ts`) and hz receives

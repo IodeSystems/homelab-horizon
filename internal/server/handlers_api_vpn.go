@@ -36,6 +36,12 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "Name required")
 		return
 	}
+	// A name is the peer's identity everywhere hz keys by it (profile,
+	// project, VPN admin, owner); two peers sharing one share all of those.
+	if err := s.checkNewPeerName(name); err != nil {
+		writeJSONError(w, http.StatusConflict, err.Error())
+		return
+	}
 	// Before the peer exists: wg0.conf is written by AddPeer below, and a
 	// refusal from Save after it would leave a client nobody attributed.
 	project := strings.TrimSpace(req.Project)
@@ -101,10 +107,7 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.wg.Reload(); err != nil {
-		slog.Warn("wg.Reload", "err", err)
-	}
-	s.rebuildWGChains()
+	s.applyPeerChange() // wg reload + chain rebuild
 
 	// Record whose device this is, when a person rather than a token created
 	// it. Best effort: the peer exists and works regardless, and failing the
@@ -171,6 +174,13 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 	if peer == nil {
 		writeJSONError(w, http.StatusNotFound, "Peer not found")
 		return
+	}
+	// A rename may not take another peer's name.
+	if !strings.EqualFold(name, peer.Name) {
+		if err := s.checkNewPeerName(name); err != nil {
+			writeJSONError(w, http.StatusConflict, err.Error())
+			return
+		}
 	}
 	// Checked against the peer's CURRENT name (a link names it) and before
 	// wg0.conf is touched, for the reason CheckPeerProfileChange gives.
