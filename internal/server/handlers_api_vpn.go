@@ -334,9 +334,7 @@ func (s *Server) handleAPIToggleAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Name string `json:"name"`
-	}
+	var req apitypes.ToggleAdminReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
 		return
@@ -355,10 +353,22 @@ func (s *Server) handleAPIToggleAdmin(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	// No admin field: flip (the UI's chip). An admin field: SET — idempotent,
+	// so a re-run cannot undo it. `vpn add --vpn-admin` sends one; it used to
+	// flip, and a second run of the same command demoted the client.
+	want := !isCurrentlyAdmin
+	if req.Admin != nil {
+		want = *req.Admin
+	}
+	if want == isCurrentlyAdmin {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(apitypes.ToggleAdminResponse{OK: true, IsAdmin: want})
+		return
+	}
 	// A VPN admin is signed in to hz's API by its address alone
 	// (isVPNAdmin), and hz's API is the one thing an upstream client reaches.
 	// Demoting is always allowed.
-	if !isCurrentlyAdmin && s.cfg().GetPeerProfile(clientName) == config.ProfileUpstream {
+	if want && s.cfg().GetPeerProfile(clientName) == config.ProfileUpstream {
 		writeJSONError(w, http.StatusBadRequest, clientName+" is an upstream client (a nested hz). It cannot be a VPN admin: that would sign whoever holds that box in to this hz's API with no credential")
 		return
 	}
@@ -390,7 +400,7 @@ func (s *Server) handleAPIToggleAdmin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(apitypes.ToggleAdminResponse{
 		OK:      true,
-		IsAdmin: !isCurrentlyAdmin,
+		IsAdmin: want,
 	})
 }
 

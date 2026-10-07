@@ -2058,6 +2058,13 @@ type DNSSyncAllResponse struct {
 
 // Toggle admin
 
+// ToggleAdminReq is POST /api/v1/vpn/peers/toggle-admin. Without Admin it
+// flips the client's VPN-admin flag; with Admin it SETS it (idempotent).
+type ToggleAdminReq struct {
+	Name  string `json:"name"`
+	Admin *bool  `json:"admin,omitempty"`
+}
+
 type ToggleAdminResponse struct {
 	OK      bool `json:"ok"`
 	IsAdmin bool `json:"isAdmin"`

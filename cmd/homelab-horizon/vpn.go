@@ -230,9 +230,15 @@ func runVPNAdd(out, errOut io.Writer, configPath string, a vpnAddArgs) error {
 			apitypes.PeerAddReq{Name: a.name, Profile: a.profile, Project: a.project}, &added); err != nil {
 			return err
 		}
+		var adminErr error
 		if a.vpnAdmin {
-			if err := consolePost(c, base, token, tokenFile, "/api/v1/vpn/peers/toggle-admin", map[string]string{"name": a.name}, nil); err != nil {
-				return fmt.Errorf("client %s was created, but making it a VPN admin failed: %w — its config is below; promote it from the UI", a.name, err)
+			// SET, not flip: a flip run twice demotes (loadtest child, 2026-10-07).
+			yes := true
+			var got apitypes.ToggleAdminResponse
+			adminErr = consolePost(c, base, token, tokenFile, "/api/v1/vpn/peers/toggle-admin",
+				apitypes.ToggleAdminReq{Name: a.name, Admin: &yes}, &got)
+			if adminErr == nil && !got.IsAdmin {
+				adminErr = fmt.Errorf("hz answered isAdmin=false")
 			}
 		}
 		ownerErr := store.SetPeerOwner(ctx, a.name, user.ID)
@@ -245,7 +251,10 @@ func runVPNAdd(out, errOut io.Writer, configPath string, a vpnAddArgs) error {
 			say(errOut, "%v\n", err)
 		}
 		say(errOut, "VPN client %s created (%s%s), attributed to %s. The config above holds its private key and is shown once: hz kept only the public key %s.\n",
-			a.name, a.profile, map[bool]string{true: ", VPN admin", false: ""}[a.vpnAdmin], user.Username, added.PublicKey)
+			a.name, a.profile, map[bool]string{true: ", VPN admin", false: ""}[a.vpnAdmin && adminErr == nil], user.Username, added.PublicKey)
+		if adminErr != nil {
+			say(errOut, "WARNING: the client works, but making it a VPN admin failed: %v — promote it from the UI\n", adminErr)
+		}
 		if ownerErr != nil {
 			say(errOut, "WARNING: the client works, but recording %s as its owner failed: %v\n", user.Username, ownerErr)
 		}
