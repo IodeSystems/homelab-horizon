@@ -207,10 +207,11 @@ export const VPNPeerSchema = z.object({
   name: z.string(),
   publicKey: z.string(),
   allowedIPs: z.string(),
-  endpoint: z.string(),
-  latestHandshake: z.string(),
-  transferRx: z.string(),
-  transferTx: z.string(),
+  // omitempty: absent for a peer that never connected (#2: not blank).
+  endpoint: z.string().optional(),
+  latestHandshake: z.string().optional(),
+  transferRx: z.string().optional(),
+  transferTx: z.string().optional(),
   online: z.boolean(),
   isAdmin: z.boolean(),
   profile: z.string(),
@@ -276,9 +277,9 @@ export const ZoneSchema = z.object({
   name: z.string(),
   zoneId: z.string(),
   sslEnabled: z.boolean(),
-  sslEmail: z.string(),
+  sslEmail: z.string().optional(), // omitempty
   subZones: z.array(z.string()),
-  providerType: z.string(),
+  providerType: z.string().optional(), // omitempty
 });
 
 export const ZonesSchema = z.array(ZoneSchema);
@@ -468,11 +469,12 @@ export const DomainSSLAddResponseSchema = z.object({
 // Bans
 export const BanEntrySchema = z.object({
   ip: z.string(),
-  timeout: z.number(),
+  // omitempty on the wire: absent means 0 / none.
+  timeout: z.number().optional(),
   createdAt: z.number(),
-  expiresAt: z.number(),
-  reason: z.string(),
-  service: z.string(),
+  expiresAt: z.number().optional(),
+  reason: z.string().optional(),
+  service: z.string().optional(),
   // Attributed project; "" is global (always sent).
   project: z.string(),
 });

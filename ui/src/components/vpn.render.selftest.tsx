@@ -18,7 +18,8 @@ import { ThemeProvider } from "@mui/material/styles";
 import baseTheme from "../theme";
 import type { PeerResp, ProjectResp } from "../api/generated-types";
 import { routeTree } from "../routeTree.gen";
-import { PEER_PROFILES, PeerProfileSelect, PeerResultBody } from "../routes/vpn";
+import { NEVER_CONNECTED, PEER_PROFILES, PeerProfileSelect, PeerResultBody } from "../routes/vpn";
+import { VPNPeersSchema } from "../api/schemas";
 
 let failures = 0;
 let checks = 0;
@@ -85,14 +86,14 @@ interface Rendered {
   links: string[];
 }
 
-async function at(path: string): Promise<Rendered> {
+async function at(path: string, qc: QueryClient = seeded()): Promise<Rendered> {
   const router = createRouter({
     routeTree,
     history: createMemoryHistory({ initialEntries: [path] }),
   });
   await router.load();
   const html = renderToStaticMarkup(
-    <QueryClientProvider client={seeded()}>
+    <QueryClientProvider client={qc}>
       <ThemeProvider theme={baseTheme}>
         <RouterProvider router={router as never} />
       </ThemeProvider>
@@ -202,6 +203,42 @@ console.log("· a nested hz's client result shows the parent URL; an ordinary on
   check(nested.includes("PrivateKey = X"), "beside the config");
   check(nested.includes("<svg></svg>"), "and the QR");
   check(!/data-parent-url/.test(body()), "a client with no parent URL shows none");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· a peer that never connected is listed, and says so (loadtest child, 2026-10-07)");
+// ---------------------------------------------------------------------------
+{
+  // The wire as hz sends it: endpoint, latestHandshake, transferRx/Tx are
+  // omitempty, so a never-connected peer has none of them.
+  const wire = JSON.parse(JSON.stringify(peer("fresh", "PUBKEY-FRESH", "")));
+  for (const k of ["endpoint", "latestHandshake", "transferRx", "transferTx"]) delete wire[k];
+  check(VPNPeersSchema.safeParse([wire, VPN_PEERS[0]]).success, "the schema accepts a never-connected peer beside a connected one");
+
+  const qc = seeded();
+  qc.setQueryData(["vpn", "peers"], [wire, ...VPN_PEERS]);
+  const page = await at("/vpn", qc);
+  check(page.text.includes("fresh") && page.text.includes("vera"), "both are listed");
+  check(page.text.includes(NEVER_CONNECTED), `its empty columns read "${NEVER_CONNECTED}", not blank`);
+  check(!page.text.includes("No VPN peers found."), "the list is not the empty state");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· a failed read is an error, never an empty list");
+// ---------------------------------------------------------------------------
+{
+  for (const path of ["/vpn", "/p/storefront/vpn"]) {
+    // retryOnMount off: else the mount re-fetches the failed query and renders the spinner.
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, retryOnMount: false, staleTime: Infinity } } });
+    qc.setQueryData(["auth", "status"], { authenticated: true, username: "ops", role: "admin" });
+    qc.setQueryData(["projects"], PROJECTS);
+    qc.getQueryCache()
+      .build(qc, { queryKey: ["vpn", "peers"] })
+      .setState({ status: "error", error: new Error("peers read refused"), fetchStatus: "idle", data: undefined });
+    const page = await at(path, qc);
+    check(page.text.includes("peers read refused"), `${path}: the error is shown`);
+    check(!/No VPN peers found\.|No VPN clients attributed/.test(page.text), `${path}: and no empty-list sentence`);
+  }
 }
 
 // ---------------------------------------------------------------------------

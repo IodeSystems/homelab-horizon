@@ -96,6 +96,10 @@ export const PEER_PROFILES: { value: string; label: string; line: string }[] = [
   { value: "upstream", label: "Upstream (parent hz API only)", line: "Only the parent hz's API. For a nested hz." },
 ];
 
+/** A peer that never completed a handshake has no endpoint, handshake or
+ * transfer: hz omits them (omitempty). That is a state, not a blank (#2). */
+export const NEVER_CONNECTED = "never connected";
+
 /** The cycle the table's profile chip steps through. `upstream` is not in it:
  * one click must never widen a nested hz's client to the LAN, and the server
  * refuses that while the client is linked anyway. */
@@ -991,7 +995,7 @@ function VPNPage() {
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                      {peer.endpoint || "\u2014"}
+                      {peer.endpoint || NEVER_CONNECTED}
                     </Typography>
                   </TableCell>
                   <TableCell>
@@ -1001,14 +1005,14 @@ function VPNPage() {
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" color="text.secondary">
-                      {peer.latestHandshake || "\u2014"}
+                      {peer.latestHandshake || NEVER_CONNECTED}
                     </Typography>
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" color="text.secondary">
                       {peer.transferRx && peer.transferTx
                         ? `${peer.transferRx} / ${peer.transferTx}`
-                        : "\u2014"}
+                        : NEVER_CONNECTED}
                     </Typography>
                   </TableCell>
                   <TableCell align="right">
