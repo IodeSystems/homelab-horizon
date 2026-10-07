@@ -635,6 +635,9 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		}
 	}
 	s.config.Store(cfg)
+	// Every HAProxy write puts the files the config names on disk first, from
+	// the live config (handlers_haproxy.go).
+	hap.SetSideFiles(s.haproxySideFilesNow)
 	// After the config is stored: the collector reads live server state.
 	s.promHandler = newPromHandler(s)
 	s.static.Rebuild(cfg)
