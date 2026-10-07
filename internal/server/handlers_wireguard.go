@@ -3,13 +3,9 @@ package server
 import (
 	"fmt"
 	"html/template"
-	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
-
-	"github.com/iodesystems/homelab-horizon/internal/config"
-	"github.com/iodesystems/homelab-horizon/internal/qr"
-	"github.com/iodesystems/homelab-horizon/internal/wireguard"
 )
 
 // inviteBaseCSS is minimal CSS for the invite page (standalone, not part of the SPA).
@@ -29,69 +25,6 @@ button.success:hover { background: #27ae60; }
 pre { background: #0f3460; padding: 1rem; border-radius: 4px; overflow-x: auto; font-family: monospace; white-space: pre-wrap; word-break: break-all; font-size: 0.85rem; }
 a { color: #e94560; }
 `
-
-const inviteTemplateHTML = `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Get Your VPN Config - Homelab Horizon</title>
-    <style>` + inviteBaseCSS + `
-    .invite-container { max-width: 500px; margin: 2rem auto; }
-    </style>
-</head>
-<body>
-    <div class="invite-container">
-        <h1>WireGuard VPN Setup</h1>
-
-        {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
-
-        {{if not .Config}}
-        <div class="card">
-            <p>Enter a name for your device to generate your VPN configuration.</p>
-            <form method="POST" action="/invite/{{.Token}}">
-                <input type="text" name="name" placeholder="Device name (e.g., my-laptop)" required autofocus>
-                <button type="submit">Generate Config</button>
-            </form>
-        </div>
-        {{else}}
-        <div class="card">
-            <div class="info">
-                <strong>Important:</strong> This is the only time you'll see this configuration. Download it now!
-            </div>
-            <h2>Scan QR Code (Mobile)</h2>
-            <div style="background: white; padding: 1rem; border-radius: 8px; display: inline-block; margin-bottom: 1rem;">
-                {{if .QRCode}}{{.QRCode}}{{end}}
-            </div>
-            <h2>Or Download Config File</h2>
-            <pre>{{.Config}}</pre>
-            <form method="POST" action="/invite/{{.Token}}/download">
-                <input type="hidden" name="config" value="{{.Config}}">
-                <input type="hidden" name="name" value="{{.Name}}">
-                <button type="submit" class="success">Download .conf File</button>
-            </form>
-        </div>
-        <div class="card">
-            <h2>Setup Instructions</h2>
-            <ol style="padding-left: 1.5rem; line-height: 1.8;">
-                <li>Download the configuration file or scan the QR code</li>
-                <li>Install WireGuard on your device:
-                    <ul style="padding-left: 1rem; margin: 0.5rem 0;">
-                        <li><strong>Windows/Mac:</strong> <a href="https://www.wireguard.com/install/" target="_blank">wireguard.com/install</a></li>
-                        <li><strong>Linux:</strong> <code>apt install wireguard</code></li>
-                        <li><strong>iOS/Android:</strong> App Store / Play Store</li>
-                    </ul>
-                </li>
-                <li>Import the configuration file into WireGuard</li>
-                <li>Connect and enjoy!</li>
-            </ol>
-        </div>
-        {{end}}
-    </div>
-</body>
-</html>`
-
-var inviteTemplateParsed = template.Must(template.New("invite").Parse(inviteTemplateHTML))
 
 const shareTemplateHTML = `<!DOCTYPE html>
 <html>
@@ -168,99 +101,23 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(cfg))
 }
 
+// handleInvite is the link a VPN invite carries, /invite/<token>. It sends the
+// browser to the SPA page that generates the key ON THE DEVICE
+// (ui/src/routes/invite.$token.tsx); this route only redirects, and renders
+// nothing that depends on the token. Kiosk vhost only, like the install
+// routes: the invitee is not on the VPN yet.
 func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
-	token := strings.TrimPrefix(r.URL.Path, "/invite/")
-	token = strings.TrimSuffix(token, "/download")
-
-	if !s.isValidInvite(token) {
-		data := map[string]interface{}{
-			"Error": "Invalid or expired invite token",
-			"Token": token,
-		}
-		_ = inviteTemplateParsed.Execute(w, data)
+	if !s.requirePublicVhost(w, r) {
 		return
 	}
-
-	if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/download") {
-		s.handleDownload(w, r)
+	token := strings.Trim(strings.TrimPrefix(r.URL.Path, "/invite/"), "/")
+	if token == "" || strings.ContainsAny(token, "/?#") {
+		http.NotFound(w, r)
 		return
 	}
-
-	if r.Method == http.MethodPost {
-		name := strings.TrimSpace(r.FormValue("name"))
-		if name == "" {
-			data := map[string]interface{}{
-				"Error": "Device name is required",
-				"Token": token,
-			}
-			_ = inviteTemplateParsed.Execute(w, data)
-			return
-		}
-
-		privKey, pubKey, err := wireguard.GenerateKeyPair()
-		if err != nil {
-			data := map[string]interface{}{
-				"Error": "Failed to generate keys: " + err.Error(),
-				"Token": token,
-			}
-			_ = inviteTemplateParsed.Execute(w, data)
-			return
-		}
-
-		clientIP, err := s.wg.GetNextIP(s.cfg().VPNRange)
-		if err != nil {
-			data := map[string]interface{}{
-				"Error": "No available IPs: " + err.Error(),
-				"Token": token,
-			}
-			_ = inviteTemplateParsed.Execute(w, data)
-			return
-		}
-
-		if err := s.wg.AddPeer(name, pubKey, clientIP); err != nil {
-			data := map[string]interface{}{
-				"Error": "Failed to add peer: " + err.Error(),
-				"Token": token,
-			}
-			_ = inviteTemplateParsed.Execute(w, data)
-			return
-		}
-
-		// Invited peers default to vpn-only (admin can upgrade later)
-		wgPeers := s.snapshotWGPeers()
-		if err := s.updateConfig(func(cfg *config.Config) {
-			cfg.SetPeerProfile(name, config.ProfileVPNOnly)
-			cfg.WGPeers = wgPeers
-		}); err != nil {
-			slog.Warn("updateConfig", "err", err)
-		}
-
-		if err := s.wg.Reload(); err != nil {
-			slog.Warn("wg.Reload", "err", err)
-		}
-		s.rebuildWGChains()
-		if err := s.removeInvite(token); err != nil {
-			slog.Warn("removeInvite", "err", err)
-		}
-
-		clientConfig := s.generateClientConfig(privKey, strings.TrimSuffix(clientIP, "/32"), config.ProfileVPNOnly)
-
-		qrCode := qr.GenerateSVG(clientConfig, 256)
-
-		data := map[string]interface{}{
-			"Token":  token,
-			"Name":   name,
-			"Config": clientConfig,
-			"QRCode": template.HTML(qrCode),
-		}
-		_ = inviteTemplateParsed.Execute(w, data)
-		return
-	}
-
-	data := map[string]interface{}{
-		"Token": token,
-	}
-	_ = inviteTemplateParsed.Execute(w, data)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	http.Redirect(w, r, "/app/invite/"+url.PathEscape(token), http.StatusFound)
 }
 
 func (s *Server) handleConfigSharePage(w http.ResponseWriter, r *http.Request) {

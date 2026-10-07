@@ -28,6 +28,7 @@ export type {
   ConfigShareResp as ConfigShare,
   InviteResp as Invite,
   CreateInviteResponse,
+  CreateInviteReq,
   HAProxyResp as HAProxyStatus,
   SSLResp as SSLStatus,
   CheckStatusResp as CheckStatus,

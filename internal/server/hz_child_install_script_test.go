@@ -101,7 +101,8 @@ func TestChildScriptSetsUpTheHumanVPNAndNamesTheFirstClient(t *testing.T) {
 		t.Fatal("the kiosk needs haproxy, and the script does not install it")
 	}
 	for _, want := range []string{
-		`sudo homelab-horizon vpn add $WHO-1 --profile vpn-only --vpn-admin --user $WHO`,
+		`sudo homelab-horizon vpn invite --name $WHO-1 --user $WHO`,
+		`open TCP 443 and UDP $HUMAN_PORT inbound`, `https://$KIOSK/app/`,
 		`sudo homelab-horizon user create $WHO --admin --token-file $HZ_DIR/$WHO.token`,
 		`WHO="${OPERATOR:-<you>}"`, `OPERATOR="carl"`,
 	} {

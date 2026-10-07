@@ -46,6 +46,7 @@ import type {
   RemoteProbeToken,
   ConfigShare,
   CreateInviteResponse,
+  CreateInviteReq,
   DashboardData,
   DNSDriftStatusResponse,
   DomainsData,
@@ -801,9 +802,10 @@ export function useInvites() {
 export function useCreateInvite() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () =>
+    mutationFn: (req: CreateInviteReq) =>
       apiFetch<CreateInviteResponse>("/vpn/invites/create", {
         method: "POST",
+        body: JSON.stringify(req),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["vpn", "invites"] });
@@ -814,10 +816,10 @@ export function useCreateInvite() {
 export function useDeleteInvite() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (token: string) =>
+    mutationFn: (id: string) =>
       apiFetch("/vpn/invites/delete", {
         method: "POST",
-        body: JSON.stringify({ token }),
+        body: JSON.stringify({ id }),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["vpn", "invites"] });

@@ -33,6 +33,7 @@ import { Route as DnsIndexRouteImport } from './routes/dns.index'
 import { Route as DnsZoneRouteImport } from './routes/dns.$zone'
 import { Route as InstancesIndexRouteImport } from './routes/instances.index'
 import { Route as InstancesInstanceRouteImport } from './routes/instances.$instance'
+import { Route as InviteTokenRouteImport } from './routes/invite.$token'
 import { Route as MachinesIndexRouteImport } from './routes/machines.index'
 import { Route as MachinesMachineRouteImport } from './routes/machines.$machine'
 import { Route as PIndexRouteImport } from './routes/p.index'
@@ -171,6 +172,11 @@ const InstancesInstanceRoute = InstancesInstanceRouteImport.update({
   path: '/instances/$instance',
   getParentRoute: () => rootRouteImport,
 } as any)
+const InviteTokenRoute = InviteTokenRouteImport.update({
+  id: '/invite/$token',
+  path: '/invite/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const MachinesIndexRoute = MachinesIndexRouteImport.update({
   id: '/machines/',
   path: '/machines/',
@@ -280,6 +286,7 @@ export interface FileRoutesByFullPath {
   '/vpn': typeof VpnRoute
   '/dns/$zone': typeof DnsZoneRoute
   '/instances/$instance': typeof InstancesInstanceRoute
+  '/invite/$token': typeof InviteTokenRoute
   '/machines/$machine': typeof MachinesMachineRoute
   '/p/$project': typeof PProjectRouteWithChildren
   '/dns/': typeof DnsIndexRoute
@@ -323,6 +330,7 @@ export interface FileRoutesByTo {
   '/vpn': typeof VpnRoute
   '/dns/$zone': typeof DnsZoneRoute
   '/instances/$instance': typeof InstancesInstanceRoute
+  '/invite/$token': typeof InviteTokenRoute
   '/machines/$machine': typeof MachinesMachineRoute
   '/dns': typeof DnsIndexRoute
   '/instances': typeof InstancesIndexRoute
@@ -365,6 +373,7 @@ export interface FileRoutesById {
   '/vpn': typeof VpnRoute
   '/dns/$zone': typeof DnsZoneRoute
   '/instances/$instance': typeof InstancesInstanceRoute
+  '/invite/$token': typeof InviteTokenRoute
   '/machines/$machine': typeof MachinesMachineRoute
   '/p/$project': typeof PProjectRouteWithChildren
   '/dns/': typeof DnsIndexRoute
@@ -410,6 +419,7 @@ export interface FileRouteTypes {
     | '/vpn'
     | '/dns/$zone'
     | '/instances/$instance'
+    | '/invite/$token'
     | '/machines/$machine'
     | '/p/$project'
     | '/dns/'
@@ -453,6 +463,7 @@ export interface FileRouteTypes {
     | '/vpn'
     | '/dns/$zone'
     | '/instances/$instance'
+    | '/invite/$token'
     | '/machines/$machine'
     | '/dns'
     | '/instances'
@@ -494,6 +505,7 @@ export interface FileRouteTypes {
     | '/vpn'
     | '/dns/$zone'
     | '/instances/$instance'
+    | '/invite/$token'
     | '/machines/$machine'
     | '/p/$project'
     | '/dns/'
@@ -538,6 +550,7 @@ export interface RootRouteChildren {
   VpnRoute: typeof VpnRoute
   DnsZoneRoute: typeof DnsZoneRoute
   InstancesInstanceRoute: typeof InstancesInstanceRoute
+  InviteTokenRoute: typeof InviteTokenRoute
   MachinesMachineRoute: typeof MachinesMachineRoute
   PProjectRoute: typeof PProjectRouteWithChildren
   DnsIndexRoute: typeof DnsIndexRoute
@@ -714,6 +727,13 @@ declare module '@tanstack/react-router' {
       path: '/instances/$instance'
       fullPath: '/instances/$instance'
       preLoaderRoute: typeof InstancesInstanceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/invite/$token': {
+      id: '/invite/$token'
+      path: '/invite/$token'
+      fullPath: '/invite/$token'
+      preLoaderRoute: typeof InviteTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/machines/': {
@@ -907,6 +927,7 @@ const rootRouteChildren: RootRouteChildren = {
   VpnRoute: VpnRoute,
   DnsZoneRoute: DnsZoneRoute,
   InstancesInstanceRoute: InstancesInstanceRoute,
+  InviteTokenRoute: InviteTokenRoute,
   MachinesMachineRoute: MachinesMachineRoute,
   PProjectRoute: PProjectRouteWithChildren,
   DnsIndexRoute: DnsIndexRoute,

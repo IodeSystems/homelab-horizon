@@ -252,16 +252,23 @@ export const ConfigShareSchema = z.object({
 export const ConfigSharesSchema = z.array(ConfigShareSchema);
 
 export const InviteSchema = z.object({
-  token: z.string(),
-  url: z.string(),
+  id: z.string(),
+  name: z.string(),
+  profile: z.string(),
+  user: z.string(),
+  expiresAt: z.string(),
 });
 
 export const InvitesSchema = z.array(InviteSchema);
 
 export const CreateInviteResponseSchema = z.object({
   ok: z.boolean(),
-  token: z.string(),
   url: z.string(),
+  id: z.string(),
+  name: z.string(),
+  profile: z.string(),
+  user: z.string(),
+  expiresAt: z.string(),
 });
 
 // Zones

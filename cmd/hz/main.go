@@ -179,7 +179,11 @@ COMMANDS
   machine rm <name> [--cascade] [--confirm]
                                      Remove a machine. Dry run without --confirm; refused
                                      while its agent credential exists (--cascade revokes it)
-  instance ls                        The hz instances: nested hz with their own config.
+  vpn invite [--name N] [--profile P] [--user U] [--expires 24h]
+                                     Mint a single-use VPN invite and print its link.
+                                     The invitee's browser makes the key; hz keeps the
+                                     public half only, and only the link's sha256
+  instance ls                      The hz instances: nested hz with their own config.
                                      Not machines — they never appear in machine ls
   instance add <name> --url U [--project P] [--vpn-client C] [--note TEXT]
                                      Declare a nested hz (the bootstrap does this too)
@@ -521,6 +525,8 @@ func dispatch(c *client, cmd string, rest []string) error {
 		err = runEnvironment(c, rest)
 	case "machine", "machines":
 		err = runMachine(c, rest)
+	case "vpn":
+		err = runVPN(c, rest)
 	case "nested":
 		err = runNested(c, rest)
 	case "instance", "instances":
