@@ -4179,6 +4179,14 @@ export interface DNSSyncAllResponse {
   updated: number /* int */;
   failed: number /* int */;
 }
+/**
+ * ToggleAdminReq is POST /api/v1/vpn/peers/toggle-admin. Without Admin it
+ * flips the client's VPN-admin flag; with Admin it SETS it (idempotent).
+ */
+export interface ToggleAdminReq {
+  name: string;
+  admin?: boolean;
+}
 export interface ToggleAdminResponse {
   ok: boolean;
   isAdmin: boolean;
