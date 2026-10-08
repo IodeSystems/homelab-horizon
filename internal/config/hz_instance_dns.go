@@ -561,7 +561,7 @@ func (c *Config) ParentDNSAsks() (asks []InstanceDNSAsk, unasked string) {
 				seen[name] = true
 				continue
 			}
-			if z := c.owningZone(strings.TrimPrefix(name, "*.")); z != nil && z.GetDNSProvider() != nil {
+			if c.selfPublishes(name) {
 				continue // this hz publishes it itself
 			}
 			ips := c.PublishablePublicIPs(svc)

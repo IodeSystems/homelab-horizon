@@ -461,7 +461,34 @@ func (c *Config) WriteMaintenancePageFiles() error {
 // DeriveRoute53Records generates Route53 A records from services with ExternalDNS config.
 // Services with multiple IPs produce multiple records per domain (round-robin DNS).
 func (c *Config) DeriveRoute53Records() []route53.Record {
-	var records []route53.Record
+	records, _ := c.DeriveRoute53Plan()
+	return records
+}
+
+// ExternalDNSSkip is a service domain with external_dns that this hz's own
+// external-DNS sync does not write, and why. It is a statement, not a silence:
+// the caller reports every one.
+type ExternalDNSSkip struct {
+	Service string
+	Name    string
+	// Delegated is true when this is a nested hz and the name is one it hands
+	// to its parent (ParentDNSAsks): the parent publishes it, so not writing
+	// it here is correct, not a failure.
+	Delegated bool
+	Reason    string
+}
+
+// DeriveRoute53Plan is DeriveRoute53Records plus the names it leaves out on
+// purpose. A name is left out when
+//   - this hz is nested and asks its parent to publish the name (no zone here
+//     with a dns_provider holds it), or
+//   - its zone here has neither a dns_provider nor a zone_id, so nothing here
+//     can publish it.
+//
+// The second used to be attempted anyway: an AWS CLI call with no hosted zone,
+// which failed every cycle as "DNS sync failed ... failed to update record: "
+// on a child whose name its parent was already publishing (2026-10-08).
+func (c *Config) DeriveRoute53Plan() (records []route53.Record, skipped []ExternalDNSSkip) {
 	for _, svc := range c.Services {
 		if svc.ExternalDNS == nil {
 			continue
@@ -478,13 +505,32 @@ func (c *Config) DeriveRoute53Records() []route53.Record {
 		}
 
 		for _, domain := range svc.Domains {
+			if c.Upstream != nil && !c.selfPublishes(domain) {
+				if ui := c.Upstream.UIName(); ui != "" && strings.EqualFold(strings.TrimSuffix(domain, "."), ui) {
+					skipped = append(skipped, ExternalDNSSkip{Service: svc.Name, Name: domain,
+						Reason: "this is this hz's VPN-only UI name: it is neither published here nor asked of the parent; remove external_dns from service " + svc.Name})
+					continue
+				}
+				skipped = append(skipped, ExternalDNSSkip{Service: svc.Name, Name: domain, Delegated: true,
+					Reason: "nested hz: no zone here with a DNS provider holds this name, so it is asked of the parent, which publishes it"})
+				continue
+			}
 			zone := c.GetZoneForDomain(domain)
 			if zone == nil {
 				continue // No zone configured for this domain
 			}
+			// A zone with a zone_id and no dns_provider is the legacy shape:
+			// the AWS CLI writes it with ambient credentials, and that still
+			// works. With neither there is no hosted zone to write to.
+			provider := zone.GetDNSProvider()
+			if provider == nil && zone.ZoneID == "" {
+				skipped = append(skipped, ExternalDNSSkip{Service: svc.Name, Name: domain,
+					Reason: fmt.Sprintf("zone %s has no dns_provider and no zone_id, so nothing here publishes %s; add a provider to the zone or remove external_dns from service %s", zone.Name, domain, svc.Name)})
+				continue
+			}
 
 			awsProfile := ""
-			if provider := zone.GetDNSProvider(); provider != nil {
+			if provider != nil {
 				awsProfile = provider.AWSProfile
 			}
 			for _, ip := range publicIPs {
@@ -500,7 +546,17 @@ func (c *Config) DeriveRoute53Records() []route53.Record {
 			}
 		}
 	}
-	return records
+	return records, skipped
+}
+
+// selfPublishes reports whether a zone here with a DNS provider holds name, so
+// this hz publishes it itself. Its complement is exactly what a nested hz asks
+// its parent for (ParentDNSAsks); both read this one predicate so they cannot
+// disagree about who publishes a name.
+func (c *Config) selfPublishes(name string) bool {
+	n := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
+	z := c.owningZone(strings.TrimPrefix(n, "*."))
+	return z != nil && z.GetDNSProvider() != nil
 }
 
 // filterRedundantDomains removes non-wildcard domains that are already covered
