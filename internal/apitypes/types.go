@@ -1943,6 +1943,10 @@ type DNSTombstoneResp struct {
 	// StillLive is true when the value is still present at the provider — i.e.
 	// the retraction has not taken effect yet.
 	StillLive bool `json:"stillLive"`
+	// NotConfirmed is set when hz's last retraction was accepted by the
+	// provider and a read-back found the value still live: "retraction not
+	// confirmed". The tombstone stays pending and is retried each sync.
+	NotConfirmed string `json:"notConfirmed,omitempty"`
 }
 
 type ZoneRecordsResponse struct {

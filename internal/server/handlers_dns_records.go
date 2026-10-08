@@ -109,12 +109,13 @@ func (s *Server) handleAPIZoneRecords(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		resp.Tombstones = append(resp.Tombstones, apitypes.DNSTombstoneResp{
-			Name:      t.Name,
-			Type:      t.Type,
-			Value:     t.Value,
-			CreatedAt: t.CreatedAt,
-			Reason:    t.Reason,
-			StillLive: stillLive,
+			Name:         t.Name,
+			Type:         t.Type,
+			Value:        t.Value,
+			CreatedAt:    t.CreatedAt,
+			Reason:       t.Reason,
+			StillLive:    stillLive,
+			NotConfirmed: t.NotConfirmed,
 		})
 	}
 	writeJSON(w, resp)
@@ -714,8 +715,16 @@ func (r *dnsSyncRun) publish(provider dns.Provider, zone config.Zone, name, recT
 		} else if _, err := provider.SyncRecordSet(zone.ZoneID, desired); err != nil {
 			return false, err
 		}
+		// A nil from the provider is a claim about the provider, not about the
+		// zone (CLAUDE.md #15): libdns/route53 once returned nil from a delete
+		// that deleted nothing. Read the set back and believe that instead.
+		if verr := r.verifyPublished(provider, zone, name, recType, desiredVals); verr != nil {
+			// The baseline is NOT advanced: live still holds what hz last
+			// published, so the next run classifies the set as an intentional
+			// change again and retries the write.
+			return false, verr
+		}
 		r.s.setLastPublished(key, desiredVals)
-		r.liveByZone[zone.Name] = replaceLiveSet(liveAll, name, recType, desired)
 		return true, nil
 
 	case driftTakeover:
@@ -748,6 +757,37 @@ func (r *dnsSyncRun) publish(provider dns.Provider, zone config.Zone, name, recT
 		})
 		return false, errDNSDriftBlocked
 	}
+}
+
+// errDNSWriteUnconfirmed is a provider write that returned success while the
+// zone, read back, does not hold the result. Never logged as done.
+var errDNSWriteUnconfirmed = errors.New("DNS write not confirmed: the provider reported success but the zone, read back, does not hold the result")
+
+// verifyPublished re-lists the zone (bypassing the run's cache) and confirms
+// the (name, type) set holds exactly the desired values. The fresh listing
+// replaces the run's cache either way, so later sets see what is really there.
+func (r *dnsSyncRun) verifyPublished(provider dns.Provider, zone config.Zone, name, recType string, desiredVals []string) error {
+	fresh, err := provider.ListRecords(zone.ZoneID)
+	if err != nil {
+		delete(r.liveByZone, zone.Name) // unknown, not "as cached"
+		return fmt.Errorf("%w: read-back failed: %v", errDNSWriteUnconfirmed, err)
+	}
+	r.liveByZone[zone.Name] = fresh
+	var got []string
+	for _, rec := range fresh {
+		if strings.EqualFold(strings.TrimSuffix(rec.Name, "."), name) && strings.ToUpper(rec.Type) == recType {
+			got = append(got, config.CanonicalRecordValue(recType, rec.Value))
+		}
+	}
+	want := make([]string, len(desiredVals))
+	for i, v := range desiredVals {
+		want[i] = config.CanonicalRecordValue(recType, v)
+	}
+	if !valueSetsEqual(got, want) {
+		return fmt.Errorf("%w: %s %s in zone %s: wanted %v, provider still serves %v",
+			errDNSWriteUnconfirmed, recType, name, zone.Name, want, got)
+	}
+	return nil
 }
 
 type driftDecision int
@@ -784,19 +824,6 @@ func classifyDrift(live, expected, desired []string) driftDecision {
 		return driftPublish
 	}
 	return driftDrift
-}
-
-// replaceLiveSet returns liveAll with the (name,type) entries swapped for
-// desired, so later sets published in the same run see current state.
-func replaceLiveSet(liveAll []dns.Record, name, recType string, desired []dns.Record) []dns.Record {
-	out := make([]dns.Record, 0, len(liveAll)+len(desired))
-	for _, rec := range liveAll {
-		if strings.TrimSuffix(rec.Name, ".") == name && strings.ToUpper(rec.Type) == recType {
-			continue
-		}
-		out = append(out, rec)
-	}
-	return append(out, desired...)
 }
 
 // setLastPublished records the values hz published for a (name,type) key.

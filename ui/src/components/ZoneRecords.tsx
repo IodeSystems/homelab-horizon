@@ -508,7 +508,13 @@ export function ZoneRecordsTable({ zoneName }: { zoneName: string }) {
     <Box>
       <DelegationList delegations={delegations} />
       {pending.length > 0 && (
-        <Alert severity={pending.some((t) => t.stillLive) ? "warning" : "info"} sx={{ mb: 2 }}>
+        <Alert severity={
+            pending.some((t) => t.notConfirmed)
+              ? "error"
+              : pending.some((t) => t.stillLive)
+                ? "warning"
+                : "info"
+          } sx={{ mb: 2 }}>
           <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
             {pending.length} pending deletion{pending.length > 1 ? "s" : ""}
           </Typography>
@@ -519,10 +525,17 @@ export function ZoneRecordsTable({ zoneName }: { zoneName: string }) {
             >
               <Typography variant="caption" sx={{ flexGrow: 1 }}>
                 {t.type} {t.name} → {t.value}
-                {t.stillLive
-                  ? " — still live; hz retries the retraction each sync"
-                  : " — gone at the provider; clears on the next sync"}
+                {t.notConfirmed
+                  ? " — retraction not confirmed: the provider accepted the delete but still serves the record; hz retries each sync"
+                  : t.stillLive
+                    ? " — still live; hz retries the retraction each sync"
+                    : " — gone at the provider; clears on the next sync"}
                 {t.reason ? ` (${t.reason})` : ""}
+                {t.notConfirmed && (
+                  <Box component="span" sx={{ display: "block", color: "error.main" }}>
+                    {t.notConfirmed}
+                  </Box>
+                )}
               </Typography>
               <Tooltip title="Stop retrying this deletion. Nothing is restored — if the record is still live it simply stops being retracted, and hz no longer claims it.">
                 <span>

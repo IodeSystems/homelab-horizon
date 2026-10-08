@@ -1154,6 +1154,11 @@ type DNSTombstone struct {
 	Value     string `json:"value"`                // the specific value being retracted
 	CreatedAt int64  `json:"created_at,omitempty"` // unix seconds, for surfacing a stuck retraction
 	Reason    string `json:"reason,omitempty"`     // e.g. "service ebb deleted"
+	// NotConfirmed is set when the last retraction was accepted by the
+	// provider but a read-back still found the value live: why, with what the
+	// provider still serves. Empty means no unconfirmed attempt, not success —
+	// a tombstone is only ever cleared by confirmation.
+	NotConfirmed string `json:"not_confirmed,omitempty"`
 }
 
 // DNSRecord is a statically-declared DNS record that hz publishes to the zone's
