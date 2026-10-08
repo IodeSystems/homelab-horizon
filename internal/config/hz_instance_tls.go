@@ -47,7 +47,7 @@ func NormalizeInstanceDomains(in []string) []string {
 // saying which name cannot be issued here and why.
 func (c *Config) instanceDomainZone(h HZInstance) (*Zone, error) {
 	var zone *Zone
-	for _, d := range h.Domains {
+	for _, d := range h.TLSDomains() {
 		bare := strings.TrimPrefix(d, "*.")
 		z := c.owningZone(bare)
 		if z == nil {
@@ -57,7 +57,7 @@ func (c *Config) instanceDomainZone(h HZInstance) (*Zone, error) {
 			return nil, fmt.Errorf("hz instance %q: domain %s is in zone %s, which has no dns_provider, so this hz cannot write its DNS-01 challenge and cannot issue it", h.Name, d, z.Name)
 		}
 		if zone != nil && zone.Name != z.Name {
-			return nil, fmt.Errorf("hz instance %q: domains %s and %s are in different zones (%s, %s); one instance certificate is answered through one zone's DNS provider — list names from one zone", h.Name, h.Domains[0], d, zone.Name, z.Name)
+			return nil, fmt.Errorf("hz instance %q: domains %s and %s are in different zones (%s, %s); one instance certificate is answered through one zone's DNS provider — list names from one zone", h.Name, h.TLSDomains()[0], d, zone.Name, z.Name)
 		}
 		zone = z
 	}
@@ -91,7 +91,7 @@ func (c *Config) ValidateInstanceDomains() error {
 	}
 	for _, h := range c.HZInstances {
 		seen := map[string]bool{}
-		for _, d := range h.Domains {
+		for _, d := range h.TLSDomains() {
 			if d != strings.ToLower(strings.TrimSpace(d)) || !instanceDomainRe.MatchString(d) {
 				return fmt.Errorf("hz instance %q: domain %q is not a lower-case hostname (a leading \"*.\" is allowed)", h.Name, d)
 			}
@@ -132,7 +132,7 @@ func (c *Config) InstanceCertRequest(name string) (dc letsencrypt.DomainConfig, 
 	if !found {
 		return dc, false, fmt.Errorf("no hz instance %q%s", name, c.hzInstanceHint())
 	}
-	if len(h.Domains) == 0 {
+	if len(h.TLSDomains()) == 0 {
 		return dc, false, nil
 	}
 	zone, err := c.instanceDomainZone(h)
@@ -155,8 +155,8 @@ func (c *Config) InstanceCertRequest(name string) (dc letsencrypt.DomainConfig, 
 		return dc, false, fmt.Errorf("hz instance %q: no zone here has an ssl.email, and the CA needs a contact address to issue — set ssl.email on zone %s", name, zone.Name)
 	}
 	dc = letsencrypt.DomainConfig{
-		Domain:      h.Domains[0],
-		ExtraSANs:   append([]string(nil), h.Domains[1:]...),
+		Domain:      h.TLSDomains()[0],
+		ExtraSANs:   append([]string(nil), h.TLSDomains()[1:]...),
 		Email:       email,
 		DNSProvider: zoneLEProvider(zone),
 	}
@@ -166,7 +166,7 @@ func (c *Config) InstanceCertRequest(name string) (dc letsencrypt.DomainConfig, 
 // HasInstanceDomains reports whether any instance asks this hz for a cert.
 func (c *Config) HasInstanceDomains() bool {
 	for _, h := range c.HZInstances {
-		if len(h.Domains) > 0 {
+		if len(h.TLSDomains()) > 0 {
 			return true
 		}
 	}
@@ -281,7 +281,7 @@ func (c *Config) externalNameForwards(answers map[string]string, wildcards map[s
 		}
 	}
 	for _, h := range c.HZInstances {
-		for _, d := range h.Domains {
+		for _, d := range h.TLSDomains() {
 			add(d, "hz instance "+h.Name+" terminates TLS for "+d+"; resolved upstream, not answered here")
 		}
 	}
