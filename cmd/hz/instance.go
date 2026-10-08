@@ -29,13 +29,20 @@ const instanceUsage = `usage:
   hz instance token <name>
       Mint the instance token it pulls with. Shown ONCE; a re-mint replaces
       the old one.
+  hz instance domain <name> <domain> | --clear
+      Register its ONE domain. Its names then DERIVE from it: <domain> and
+      kiosk.hz.<domain> (public), hz.<domain> (VPN-only: only the child's
+      dnsmasq answers it, never published); one certificate covers all three,
+      and the DNS grant is <domain>, *.<domain>. It replaces explicit domains
+      and grant: what the instance owned outside them is retracted, and the
+      certificate is reissued. --clear leaves it no names and no grant.
   hz instance domains <name> <domain>... | --clear
-      The hostnames it terminates TLS for. This hz issues ONE certificate
+      An instance with NO domain (pre-N4j): the hostnames it terminates TLS for. This hz issues ONE certificate
       covering exactly these (DNS-01 through its own zone's provider) and the
       instance pulls it with its token. All must be in one zone this hz owns
       with a DNS provider. --clear stops issuing; the child keeps what it has.
   hz instance dns-grant <name> <entry>... | --clear
-      Where this hz publishes DNS the instance asks for: exact names and
+      An instance with NO domain: where this hz publishes DNS the instance asks for: exact names and
       '*.suffix' subtrees, in zones this hz owns with a DNS provider. Its TLS
       domains must lie inside. Narrowing it (or --clear) removes every record
       the instance owns outside the new grant, and retracts it at the provider.
@@ -65,6 +72,8 @@ func runInstance(c *client, args []string) error {
 		return instanceRm(c, args[1:])
 	case "token":
 		return instanceToken(c, args[1:])
+	case "domain":
+		return instanceDomain(c, args[1:])
 	case "domains":
 		return instanceDomains(c, args[1:])
 	case "dns-grant":
@@ -97,6 +106,11 @@ func instanceList(c *client) error {
 			token = "NO TOKEN — `hz instance token " + h.Name + "`"
 		}
 		fmt.Printf("%-24s %-16s %-32s %-28s %s\n", h.Name, owner, h.URL, vpn, token)
+		if h.Domain != "" {
+			fmt.Printf("%-24s domain: %s (UI hz.%s, VPN-only)\n", "", h.Domain, h.Domain)
+		} else {
+			fmt.Printf("%-24s domain: none — `hz instance domain %s <domain>` registers one\n", "", h.Name)
+		}
 		if len(h.Domains) > 0 {
 			fmt.Printf("%-24s tls: %s\n", "", strings.Join(h.Domains, ", "))
 		}
@@ -174,6 +188,34 @@ func instanceToken(c *client, args []string) error {
 func machineHZToken(c *client, args []string) error {
 	fmt.Fprintln(os.Stderr, "hz machine hz-token is deprecated and goes in the next release: use hz instance token (an hz instance is not a machine)")
 	return instanceToken(c, args)
+}
+
+func instanceDomain(c *client, args []string) error {
+	fs := flag.NewFlagSet("instance domain", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Fprint(os.Stderr, instanceUsage) }
+	clearAll := fs.Bool("clear", false, "register no domain: the instance has no names and no DNS grant")
+	pos, err := positional(fs, args)
+	if err != nil {
+		return err
+	}
+	if (*clearAll && len(pos) != 1) || (!*clearAll && len(pos) != 2) {
+		return fmt.Errorf("%s", instanceUsage)
+	}
+	domain := ""
+	if !*clearAll {
+		domain = pos[1]
+	}
+	var out apitypes.HZInstanceResp
+	if err := c.do(http.MethodPost, apitypes.HZInstancesPath+"/set", apitypes.HZInstanceSetReq{Name: pos[0], Domain: &domain}, &out); err != nil {
+		return err
+	}
+	if out.Domain == "" {
+		fmt.Printf("hz instance %s has no domain, no names and no DNS grant; what it published is retracted.\n", out.Name)
+		return nil
+	}
+	fmt.Printf("hz instance %s: domain %s. Names %s (hz.%s is VPN-only); DNS grant %s. The certificate is reissued in the background.\n",
+		out.Name, out.Domain, strings.Join(out.Domains, ", "), out.Domain, strings.Join(out.DNSGrant, ", "))
+	return nil
 }
 
 func instanceDomains(c *client, args []string) error {

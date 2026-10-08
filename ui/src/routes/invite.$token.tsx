@@ -6,6 +6,12 @@ import { apiFetch } from "../api/client";
 import type { InviteCheckResp, InviteRedeemResp } from "../api/generated-types";
 import { cleanDeviceName, fillConfig, generateWGKeyPair, redeemRequest, x25519Unavailable } from "../components/invite/keygen";
 
+/** Where the device goes once connected: the server's uiUrl (hz.<domain>, or
+ * the kiosk name), else this page's own origin — the kiosk vhost. */
+export function inviteUILink(uiUrl: string | undefined, origin: string = typeof window === "undefined" ? "" : window.location.origin): string {
+  return uiUrl || `${origin}/app/`;
+}
+
 // The VPN invite page (N4i). Reached from /invite/<token> on the kiosk vhost,
 // BEFORE the person is on the VPN, so it renders without a session (__root's
 // PUBLIC_ROUTES). The WireGuard keypair is made HERE, in the browser; hz gets
@@ -18,7 +24,7 @@ export type InviteState =
   | { kind: "ready"; check: InviteCheckResp }
   | { kind: "working" }
   | { kind: "failed"; error: string; check?: InviteCheckResp }
-  | { kind: "done"; name: string; address: string; config: string; qrSvg: string };
+  | { kind: "done"; name: string; address: string; config: string; qrSvg: string; uiUrl?: string };
 
 export function InviteView({
   state,
@@ -125,8 +131,12 @@ export function InviteView({
               Download {state.name}.conf
             </Button>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-              Import it into the WireGuard app (or scan the QR code), connect, then open the kiosk to pass MFA.
+              Import it into the WireGuard app (or scan the QR code), connect, then open hz. The VPN sends you to the
+              kiosk to pass MFA first.
             </Typography>
+            <Button variant="outlined" sx={{ mt: 1, textTransform: "none" }} href={inviteUILink(state.uiUrl)} data-invite-ui-link>
+              Open hz: {inviteUILink(state.uiUrl)}
+            </Button>
           </>
         );
     }
@@ -181,7 +191,7 @@ function InvitePage() {
       });
       const config = fillConfig(resp.config, pair.privateKey);
       const qrSvg = await QRCode.toString(config, { type: "svg", margin: 1, width: 240 }).catch(() => "");
-      setState({ kind: "done", name: resp.name, address: resp.address, config, qrSvg });
+      setState({ kind: "done", name: resp.name, address: resp.address, config, qrSvg, uiUrl: resp.uiUrl });
     } catch (e) {
       setState({ kind: "failed", error: (e as Error).message, check });
     }

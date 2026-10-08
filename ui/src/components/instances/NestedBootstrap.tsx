@@ -138,10 +138,18 @@ export function BootstrapCommandPanel({ resp }: { resp: NestedBootstrapResp }) {
           Human VPN: <code>wg0</code> on <code>{resp.humanVpn.range}</code>
           {resp.humanVpn.proposed ? " (proposed by this hz)" : ""}, the child at{" "}
           <code>{resp.humanVpn.serverAddress}</code>; kiosk <code>{resp.humanVpn.kioskUrl}</code>, endpoint{" "}
-          <code>{resp.humanVpn.endpoint}</code>. Open that UDP port inbound on the box, nothing else. The first client is
-          created on the box&apos;s console — the script prints the command.
+          <code>{resp.humanVpn.endpoint}</code>
+          {resp.humanVpn.domain && resp.humanVpn.uiUrl ? (
+            <>
+              ; hz UI <code data-bootstrap-ui-url>{resp.humanVpn.uiUrl}</code> (VPN-only)
+            </>
+          ) : null}
+          . Open that UDP port inbound on the box, nothing else. The first client is created on the box&apos;s console —
+          the script prints the command.
           {resp.humanVpn.domainsChanged
-            ? ` ${resp.humanVpn.kiosk} is now one of this instance's domains and inside its DNS grant.`
+            ? resp.humanVpn.domain
+              ? ` ${resp.humanVpn.domain} is now this instance's domain; its names and DNS grant derive from it.`
+              : ` ${resp.humanVpn.kiosk} is now one of this instance's domains and inside its DNS grant.`
             : ""}
         </Typography>
       ) : (
@@ -176,7 +184,7 @@ export function AddNestedInstanceDialog({
   const [rung, setRung] = useState("");
   const [from, setFrom] = useState("");
   const [humanVpn, setHumanVpn] = useState(true);
-  const [kiosk, setKiosk] = useState("");
+  const [domain, setDomain] = useState("");
   const [humanVpnRange, setHumanVpnRange] = useState("");
   const close = () => {
     gen.reset();
@@ -184,11 +192,11 @@ export function AddNestedInstanceDialog({
     setRung("");
     setFrom("");
     setHumanVpn(true);
-    setKiosk("");
+    setDomain("");
     setHumanVpnRange("");
     onClose();
   };
-  const ready = instance.trim() !== "" && rung.trim() !== "" && from !== "" && (!humanVpn || kiosk.trim() !== "");
+  const ready = instance.trim() !== "" && rung.trim() !== "" && from !== "" && (!humanVpn || domain.trim() !== "");
   return (
     <Dialog open={open} onClose={close} fullWidth maxWidth="md">
       <DialogTitle>Add nested instance to {project}</DialogTitle>
@@ -223,18 +231,22 @@ export function AddNestedInstanceDialog({
                 </MenuItem>
               ))}
             </TextField>
+            <TextField
+              label="Domain"
+              value={domain}
+              onChange={(e) => setDomain(e.target.value)}
+              helperText={
+                domain.trim()
+                  ? `kiosk.hz.${domain.trim()} (kiosk, VPN endpoint) and ${domain.trim()} public; hz.${domain.trim()} VPN-only`
+                  : "The instance's one domain, e.g. loadtest.redline.example.com — its names and DNS grant derive from it"
+              }
+            />
             <FormControlLabel
               control={<Switch checked={humanVpn} onChange={(e) => setHumanVpn(e.target.checked)} />}
               label="Human VPN and MFA kiosk on the child"
             />
             {humanVpn ? (
               <>
-                <TextField
-                  label="Kiosk name"
-                  value={kiosk}
-                  onChange={(e) => setKiosk(e.target.value)}
-                  helperText="The child's MFA portal and VPN endpoint, e.g. kiosk.hz.loadtest.example.com — added to the instance's domains and DNS grant"
-                />
                 <TextField
                   label="Human VPN range (optional)"
                   value={humanVpnRange}
@@ -261,10 +273,10 @@ export function AddNestedInstanceDialog({
                       instance: instance.trim(),
                       rung: rung.trim(),
                       from,
-                      kiosk: kiosk.trim(),
+                      domain: domain.trim(),
                       humanVpnRange: humanVpnRange.trim() || undefined,
                     }
-                  : { project, instance: instance.trim(), rung: rung.trim(), from, humanVpn: false },
+                  : { project, instance: instance.trim(), rung: rung.trim(), from, humanVpn: false, domain: domain.trim() || undefined },
               )
             }
           >

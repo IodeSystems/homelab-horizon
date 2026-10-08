@@ -15,16 +15,28 @@ import (
 // (internal/server/handlers_nested_bootstrap.go).
 
 const nestedBootstrapUsage = `usage: hz nested bootstrap <project> <instance> --rung <name> --from <rung>
-                          --kiosk <hostname> | --human-vpn=false
+                          --domain <domain> [--human-vpn=false]
                           [--human-vpn-range CIDR]
                           [--posture prod] [--platform linux-amd64|linux-arm64] [--url U]
 
+--domain is the instance's ONE registered domain (e.g.
+loadtest.redline.example.com), in a zone this hz owns with a DNS provider.
+Its names derive from it:
+  <domain>            public    the app; the child asks this hz for its A record
+  kiosk.hz.<domain>   public    the MFA kiosk and the human VPN endpoint
+  hz.<domain>         VPN-only  the child's UI; only the child's dnsmasq answers
+This hz issues one certificate for all three, and the child's DNS grant is
+<domain> and *.<domain>. A different domain on a re-run REPLACES the names.
+
 The child gets its OWN human VPN by default: a wg0 on a range this hz
 proposes (the next free 10.<n>.0.0/24 after its own; --human-vpn-range to
-choose), its server key minted on the box, the endpoint <kiosk>:51820, and
-the MFA kiosk at https://<kiosk>. --kiosk is added to the instance's domains
-(this hz issues its certificate) and DNS grant (the child asks for its A
-record). --human-vpn=false bootstraps without one (ssh tunnel only).
+choose), its server key minted on the box, the endpoint
+kiosk.hz.<domain>:51820, and the MFA kiosk at https://kiosk.hz.<domain>.
+--human-vpn=false bootstraps without one (ssh tunnel only).
+
+--kiosk <hostname> is DEPRECATED, one release: it sets only the kiosk name
+(added to the instance's explicit domains and DNS grant), as before
+--domain existed.
 
 Declares <instance> as an hz instance (a nested hz — not a machine) owned by
 <project>, declares the rung
@@ -54,13 +66,17 @@ func runNested(c *client, args []string) error {
 	platform := fs.String("platform", "", "the box's platform, when known: refuse unless its binary is uploaded")
 	hzURL := fs.String("url", "", "where the child's hz will answer (default: its VPN address, set at enrolment)")
 	humanVPN := fs.Bool("human-vpn", true, "give the child its own human VPN and MFA kiosk (--human-vpn=false: ssh tunnel only)")
-	kiosk := fs.String("kiosk", "", "the kiosk's hostname: its MFA portal and VPN endpoint (required with the human VPN)")
+	domain := fs.String("domain", "", "the instance's one domain: its kiosk is kiosk.hz.<domain>, its UI hz.<domain> (VPN-only)")
+	kiosk := fs.String("kiosk", "", "DEPRECATED, one release: the kiosk's hostname only — use --domain")
 	humanRange := fs.String("human-vpn-range", "", "the child's wg0 range (default: proposed by the parent, the next free 10.<n>.0.0/24)")
 	instFlag := fs.String("instance", "", "the hz instance's name (instead of the second positional)")
 	machineFlag := fs.String("machine", "", "DEPRECATED spelling of --instance, one release")
 	pos, err := positional(fs, args[1:])
 	if err != nil {
 		return err
+	}
+	if *kiosk != "" {
+		fmt.Fprintln(os.Stderr, "hz nested bootstrap --kiosk is deprecated and goes in the next release: use --domain <domain> (the kiosk is then kiosk.hz.<domain>)")
 	}
 	if *machineFlag != "" {
 		fmt.Fprintln(os.Stderr, "hz nested bootstrap --machine is deprecated and goes in the next release: use --instance (an hz instance is not a machine)")
@@ -82,7 +98,7 @@ func runNested(c *client, args []string) error {
 		instance = n
 	}
 	req := apitypes.NestedBootstrapReq{Project: pos[0], Instance: instance, Rung: *rung, From: *from,
-		Posture: *posture, Platform: *platform, URL: *hzURL, Kiosk: *kiosk, HumanVPNRange: *humanRange}
+		Posture: *posture, Platform: *platform, URL: *hzURL, Domain: *domain, Kiosk: *kiosk, HumanVPNRange: *humanRange}
 	if !*humanVPN {
 		off := false
 		req.HumanVPN = &off // nil is on: the parent's default
@@ -107,7 +123,12 @@ func runNested(c *client, args []string) error {
 		}
 		fmt.Fprintf(os.Stderr, "Human VPN: wg0 on %s (%s), the child at %s; kiosk %s, endpoint %s — open UDP %s inbound on the box.\n",
 			h.Range, how, h.ServerAddress, h.KioskURL, h.Endpoint, endpointPort(h.Endpoint))
-		if h.DomainsChanged {
+		if h.UIURL != "" && h.Domain != "" {
+			fmt.Fprintf(os.Stderr, "hz UI: %s — VPN-only, after the kiosk.\n", h.UIURL)
+		}
+		if h.DomainsChanged && h.Domain != "" {
+			fmt.Fprintf(os.Stderr, "%s is now %s's domain: this hz issues one certificate for its names and publishes the public ones' A records when the child asks.\n", h.Domain, out.Instance)
+		} else if h.DomainsChanged {
 			fmt.Fprintf(os.Stderr, "%s is now one of %s's domains and inside its DNS grant: this hz issues its certificate and publishes its A record when the child asks.\n", h.Kiosk, out.Instance)
 		}
 	} else {

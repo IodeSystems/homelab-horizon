@@ -86,7 +86,7 @@ func (s *Server) renewInstanceCerts(cfg *config.Config) {
 		return
 	}
 	for _, h := range cfg.HZInstances {
-		if len(h.Domains) > 0 {
+		if len(h.TLSDomains()) > 0 {
 			s.renewInstanceCert(cfg, h.Name)
 		}
 	}
@@ -161,7 +161,7 @@ func (s *Server) kickInstanceCert(name string) {
 // still covers exactly the declared domains. status is the HTTP answer when
 // it cannot be served.
 func instanceCertBody(cfg *config.Config, h config.HZInstance) (apitypes.InstanceCertResp, int, error) {
-	if len(h.Domains) == 0 {
+	if len(h.TLSDomains()) == 0 {
 		return apitypes.InstanceCertResp{}, http.StatusNotFound, fmt.Errorf("hz instance %s declares no domains, so this hz issues it no certificate — set its domains on the parent", h.Name)
 	}
 	fullchain, key, err := instanceCertManager(cfg).ReadInstanceCert(h.Name)
@@ -176,15 +176,15 @@ func instanceCertBody(cfg *config.Config, h config.HZInstance) (apitypes.Instanc
 		return apitypes.InstanceCertResp{}, http.StatusInternalServerError, fmt.Errorf("the certificate on file for %s does not parse", h.Name)
 	}
 	sans, _ := letsencrypt.CertSANs(leaf)
-	want := letsencrypt.DomainConfig{Domain: h.Domains[0], ExtraSANs: h.Domains[1:]}
+	want := letsencrypt.DomainConfig{Domain: h.TLSDomains()[0], ExtraSANs: h.TLSDomains()[1:]}
 	if missing, extra := letsencrypt.DiffSANs(want, sans); len(missing) > 0 || len(extra) > 0 {
 		return apitypes.InstanceCertResp{}, http.StatusConflict, fmt.Errorf("the certificate on file for %s names %s, but it declares %s — a reissue is pending; keep the certificate you have",
-			h.Name, strings.Join(sans, ", "), strings.Join(h.Domains, ", "))
+			h.Name, strings.Join(sans, ", "), strings.Join(h.TLSDomains(), ", "))
 	}
 	notAfter, _ := letsencrypt.CertNotAfter(leaf)
 	body := apitypes.InstanceCertResp{
 		Instance: h.Name,
-		Domains:  append([]string(nil), h.Domains...),
+		Domains:  append([]string(nil), h.TLSDomains()...),
 		CertPEM:  pemLine(leaf),
 		ChainPEM: pemLine(chain),
 		KeyPEM:   pemLine(key),
@@ -265,7 +265,7 @@ func (s *Server) handleAPIHZInstanceCert(w http.ResponseWriter, r *http.Request,
 // instanceCertStatus is the instance page's view of the certificate: what is
 // on file and what this process last did — never key material.
 func (s *Server) instanceCertStatus(cfg *config.Config, h config.HZInstance) *apitypes.InstanceCertStatusResp {
-	if len(h.Domains) == 0 {
+	if len(h.TLSDomains()) == 0 {
 		return nil
 	}
 	out := &apitypes.InstanceCertStatusResp{}

@@ -98,4 +98,16 @@ func TestNestedBootstrapSendsTheContract(t *testing.T) {
 	if len(got) != 1 || got[0].HumanVPN == nil || *got[0].HumanVPN || got[0].Kiosk != "" {
 		t.Fatalf("--human-vpn=false: request = %+v", got)
 	}
+
+	// N4j: --domain is sent as given, with no kiosk.
+	got = nil
+	captureStdout(t, func() {
+		if err := dispatch(c, "nested", []string{"bootstrap", "redline", "loadtest-hz", "--rung", "loadtest", "--from", "staging",
+			"--domain", "loadtest.redline.example.com"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if len(got) != 1 || got[0].Domain != "loadtest.redline.example.com" || got[0].Kiosk != "" {
+		t.Fatalf("--domain: request = %+v", got)
+	}
 }

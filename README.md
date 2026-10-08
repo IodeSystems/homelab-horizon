@@ -711,27 +711,31 @@ One command, generated on the **parent**, provisions a nested hz on a fresh Ubun
 **Generate it.** On the project's page, **[Add nested instance]**: an instance name, a rung name and the rung it is promoted from. Or:
 
 ```bash
-hz nested bootstrap redline loadtest-hz --rung loadtest --from staging --kiosk kiosk.hz.loadtest.example.com
+hz nested bootstrap redline loadtest-hz --rung loadtest --from staging --domain loadtest.redline.example.com
 #   (or --instance loadtest-hz; --machine is its deprecated spelling, one release)
 #   (--human-vpn=false: no human VPN, no kiosk; --human-vpn-range 10.<n>.0.0/24 to choose the range)
+#   (--kiosk <name> is the deprecated spelling, one release: it sets the kiosk name only, no domain)
 #   = POST /api/v1/nested/bootstrap {"project":"redline","instance":"loadtest-hz","rung":"loadtest","from":"staging",
-#                                    "kiosk":"kiosk.hz.loadtest.example.com"}
+#                                    "domain":"loadtest.redline.example.com"}
 #     optional: "posture" (default prod), "platform" ("linux-amd64"|"linux-arm64"), "url",
-#               "humanVpn" (default true), "humanVpnRange"
+#               "humanVpn" (default true), "humanVpnRange", "kiosk" (deprecated)
 #     "machine" is accepted in place of "instance" for one release; both, different, is a 400.
 # -> 200 {"command":"curl -fsSL https://portal.example.com/admin/hz-child/install/hzc_<48 hex> | sudo bash",
 #         "expiresAt":<unix>,"instance":"loadtest-hz","machine":"loadtest-hz","rung":"redline/loadtest",
 #         "platforms":["linux-amd64","linux-arm64"],"missing":[],"reused":[],"revoked":false,
 #         "humanVpn":{"range":"10.101.0.0/24","proposed":true,"serverAddress":"10.101.0.1",
-#                     "kiosk":"kiosk.hz.loadtest.example.com","kioskUrl":"https://kiosk.hz.loadtest.example.com",
-#                     "endpoint":"kiosk.hz.loadtest.example.com:51820","domainsChanged":true}}
+#                     "domain":"loadtest.redline.example.com",
+#                     "kiosk":"kiosk.hz.loadtest.redline.example.com","kioskUrl":"https://kiosk.hz.loadtest.redline.example.com",
+#                     "uiUrl":"https://hz.loadtest.redline.example.com/app/",
+#                     "endpoint":"kiosk.hz.loadtest.redline.example.com:51820","domainsChanged":true}}
 ```
 
 **The child's human VPN** (on by default). The child gets its own `wg0` for people, an MFA kiosk, and its hz also listens on its `wg0` address. Generate plans it:
 - **The range.** Without `humanVpnRange`, the parent proposes the next free `10.<n>.0.0/24` after its own VPN range (`10.100.0.0/24` → `10.101.0.0/24`). The proposal skips any range that overlaps the parent's VPN range (the child's `hz-upstream` address is in it), the parent's LAN, or a fleet site's VPN range. An explicit range must pass the same rules. The same parent proposes the same range again, so a re-run keeps the box's `wg0`.
-- **The kiosk name.** It is required with the human VPN. It is added to the instance's `domains` (the parent issues its certificate, [TLS for a nested hz](#tls-for-a-nested-hz)) and to its DNS grant (the child asks for its A record, [DNS for a nested hz](#dns-for-a-nested-hz)). A grant entry that already covers it (`*.hz.loadtest.example.com`) is kept, and no exact entry is added beside it. The name must pass every rule of both lists, in the same save as the instance and the rung. All of an instance's domains must be in **one** zone. A refusal names the rule, and nothing is declared.
+- **The domain.** It is required with the human VPN. It is set on the instance, and the instance's names, its certificate and its DNS grant derive from it ([Reaching a nested hz](#reaching-a-nested-hz) has the naming convention). The kiosk is `kiosk.hz.<domain>`. The derived names must pass every TLS and grant rule, in the same save as the instance and the rung. A refusal names the rule, and nothing is declared. A re-run with a different domain **replaces** the names: what the instance owned outside them is retracted, and the certificate is reissued.
+- **`kiosk` (deprecated, one release).** Without a domain, it is the kiosk name alone, added to the instance's explicit `domains` and DNS grant, as before. With a domain, a `kiosk` that is not `kiosk.hz.<domain>` is refused.
 
-Refused with a sentence: the human VPN with no `kiosk`; a `kiosk` or `humanVpnRange` with `humanVpn: false`; a range that overlaps the parent's VPN range, LAN or a site; a kiosk name that breaks a domain or grant rule.
+Refused with a sentence: the human VPN with no `domain` (or `kiosk`); a `kiosk` or `humanVpnRange` with `humanVpn: false`; a range that overlaps the parent's VPN range, LAN or a site; a domain whose names break a TLS or grant rule.
 
 In one save it declares the **hz instance** (owned by the project — never a machine) and the rung `redline/loadtest` (posture prod, `from` staging, upstream = the instance), then mints a **single-use grant that expires in an hour**. The grant is for an operator sitting in front of a box; nothing a running child does depends on it. Generating again for the same instance revokes the unused earlier command. If the instance and rung already exist (a wiped box being re-provisioned), they are reused and only the grant is new; enrolling rotates the box's VPN key and its instance token.
 
@@ -747,7 +751,7 @@ It is refused, with a sentence, when: the parent has no public vhost (`kiosk_url
 4. Enrols: `POST /admin/hz-child/enrol/<grant>` on the public vhost with `{"public_key","platform","hostname"}`. The parent creates (or re-keys) the box's `upstream`-profile VPN client, links it on the hz instance, mints the instance token and consumes the grant. It answers `{"wg":{"address","peer_public_key","endpoint","allowed_ips"},"parent_url":"http://<parent WG address>:<port>","instance_token","instance","machine","project","rung","service_name","binary":{"url","sha256","version"},"seed":{...}}` (`machine` repeats `instance` for one release). A bad public key is a 400 and a missing binary a 409, and neither uses the command up.
 5. Writes `/etc/wireguard/hz-upstream.conf` (0600) and enables `wg-quick@hz-upstream` at boot. Its only route is the parent's WG address `/32`.
 6. Downloads the server binary **over the VPN** (`GET /api/v1/nested/bin/<platform>`, instance token), checks its sha256, and installs it to `/usr/local/bin/homelab-horizon`.
-7. Writes `/etc/homelab-horizon/config.json`: the `upstream` block (`token_file` `/etc/homelab-horizon/upstream.token`, 0600), the project, the rung and a local service `<project>-<rung>` with a token **generated on the box** (`/etc/homelab-horizon/<service>.service-token`, 0600). An existing config is backed up beside it and merged, not replaced. With a human VPN it also sets `wg_interface`/`wg_config_path` (`wg0`), `vpn_range`, `dns` (the child's `wg0` address), `server_endpoint` (`<kiosk>:51820`), `kiosk_url` (`https://<kiosk>`), `vpn_listen: true`, `vpn_mfa_enabled: true`, `vpn_mfa_scope: all` (only when none is set), `haproxy_enabled: true`, clears `server_public_key` (hz reads it from the box's `wg0.conf` at start), and adds the service `hz-kiosk`: the kiosk name, `proxy.self`, `internal_dns` at the child's `wg0` address and `external_dns: {}`.
+7. Writes `/etc/homelab-horizon/config.json`: the `upstream` block (`token_file` `/etc/homelab-horizon/upstream.token`, 0600), the project, the rung and a local service `<project>-<rung>` with a token **generated on the box** (`/etc/homelab-horizon/<service>.service-token`, 0600). An existing config is backed up beside it and merged, not replaced. With a human VPN it also sets `wg_interface`/`wg_config_path` (`wg0`), `vpn_range`, `dns` (the child's `wg0` address), `server_endpoint` (`kiosk.hz.<domain>:51820`), `kiosk_url` (`https://kiosk.hz.<domain>`), `vpn_listen: true`, `vpn_mfa_enabled: true`, `vpn_mfa_scope: all` (only when none is set), `haproxy_enabled: true`, clears `server_public_key` (hz reads it from the box's `wg0.conf` at start), and adds the service `hz-kiosk`: the kiosk name, `proxy.self`, `internal_dns` at the child's `wg0` address and `external_dns: {}`. With a domain it also sets `upstream.domain` and adds the service `hz-ui`: `hz.<domain>`, `proxy.self`, `internal_dns` at the child's `wg0` address, and **no** `external_dns`. A seeded service replaces the one of the same name, so a re-run replaces an old kiosk name and endpoint; it does not add a second kiosk.
 8. Creates the local admin account `hz-local-admin`, with a personal API token in `/etc/homelab-horizon/admin.token` (0600, written by `homelab-horizon user create … --token-file`, never printed). This runs before hz starts, and only when the child has no account yet. A child with no account lets anyone who reaches its API create the first admin; this step closes that. A re-run keeps the existing account and token.
 9. Installs the systemd unit (`homelab-horizon install`, as `bin/deploy` does; it also places `hz-agent`).
 10. With a human VPN: when `/etc/wireguard/wg0.conf` is missing, `hz-agent wg-create-config` writes it (0600), with a server key minted **on the box**; an existing one (same address) is kept, with its key and clients. Then it enables and starts `wg-quick@wg0`.
@@ -782,6 +786,23 @@ Nothing hz runs writes `/etc/wireguard/hz-upstream.conf`; only the bootstrap scr
 
 ### Reaching a nested hz
 
+**Naming.** An hz instance registers **one domain** on the parent (`hz instance domain <name> <domain>`, or `--domain` at bootstrap). The domain is in a zone the parent owns, with a DNS provider. Every name of the instance derives from it, and none is stored:
+
+| Name | Example (`domain` = `loadtest.redline.example.com`) | Scope | What it is |
+|---|---|---|---|
+| `<domain>` | `loadtest.redline.example.com` | public | the app; the child asks the parent for its A record |
+| `kiosk.hz.<domain>` | `kiosk.hz.loadtest.redline.example.com` | public | the MFA kiosk, the invite page, and the human VPN endpoint (`:51820`) |
+| `hz.<domain>` | `hz.loadtest.redline.example.com` | **VPN-only** | the child hz's UI and API |
+
+- **One certificate.** The parent issues one certificate for all three names. DNS-01 needs only a TXT record, so the parent can issue the VPN-only name.
+- **The DNS grant** is `<domain>` and `*.<domain>`. An explicit grant (or explicit `domains`) that disagrees with the derived one is refused.
+- **`hz.<domain>` is never published.** Only the child's dnsmasq answers it, with the child's `wg0` address, for its VPN clients. The child never asks the parent for it. The parent refuses it in a child's request, refuses an instance record or a hand-declared record at that name, and never writes it to the public zone. The parent's own dnsmasq does not answer it (it writes `server=/<name>/#` when a broader local answer would cover it).
+- **An instance with no domain** (declared before this existed) keeps its explicit `domains` and DNS grant. Its page says "No domain" with **[Set a domain]**. The parent never guesses a domain.
+
+Another example: `domain` = `staging.shop.example.com` gives `staging.shop.example.com`, `kiosk.hz.staging.shop.example.com` and `hz.staging.shop.example.com`.
+
+**Moving an instance to a domain.** Setting a domain on an instance that has explicit names replaces them. A name outside the derived set (for example an old kiosk `kiosk.hz.loadtest.example.com` beside `loadtest.redline.example.com`) loses its instance-owned record, which the next DNS sync retracts at the provider. The certificate is reissued for the derived names. Then re-run the bootstrap with `--domain` and run the new command on the box: the seed replaces the old `hz-kiosk` name, `kiosk_url` and `server_endpoint`. An existing WireGuard client config still names the old endpoint. The tunnel stays up while it is connected (WireGuard resolves the endpoint only when the tunnel comes up), so change the client's `Endpoint` line to `kiosk.hz.<domain>:51820` before you reconnect. The key and the address do not change. Or redeem a new invite.
+
 The child's hz binds `127.0.0.1:8080`, and with a human VPN also its `wg0` address (`vpn_listen`). You reach it the way you reach the parent: the VPN, the MFA kiosk, then the UI.
 
 1. **The firewall.** Open **UDP 51820** and **TCP 443 inbound** on the box (on a cloud box, its security group). UDP 51820 is WireGuard, which does not answer a packet without a valid key. TCP 443 is the kiosk vhost: the invite page must load **before** the device is on the VPN. It also serves the kiosk's MFA portal and hz's sign-in page to anyone who can reach it.
@@ -797,8 +818,8 @@ The child's hz binds `127.0.0.1:8080`, and with a human VPN also its `wg0` addre
    `vpn invite` asks the running hz over loopback (with the `admin.token` the bootstrap wrote) and prints a link, `https://<kiosk>/invite/<token>`. The link works **once** and expires after 24 hours (`--expires`, at most 168h). hz keeps only its sha256. **The device's browser generates the WireGuard keypair** (WebCrypto X25519) and sends hz only the public key. hz creates the client with exactly that key and returns the config without a private key. The browser adds its own key, then offers the `.conf` download and a QR code, both made in the browser. hz never receives, stores or shows the private key. A browser without X25519 is told so. There is no server-generated fallback. The client is recorded as `--user`'s device. `--profile` is `vpn-only` by default. A peer name must be unique. It refuses when it is not run as root, or when `--user` is not an account on this hz.
 
    `vpn add <name> --profile P --user U` still exists. It prints a server-generated config with the private key to the terminal, once, for a device with no browser.
-3. **The device: the link, then the kiosk.** Open the invite link on the device, import the config and connect. Its endpoint is `<kiosk>:51820` (public DNS: the child's A record, which the parent publishes). Its DNS is the child's `wg0` address, where the child's dnsmasq answers the kiosk name with that address, so the kiosk is reached **through** the tunnel (the jail identifies a peer by its tunnel address). Open `https://<kiosk>`, enrol a second factor, and choose a session.
-4. **The UI, then sign in.** The kiosk shows **Open hz**, `https://<kiosk>/app/`: the kiosk name routes to hz's own UI (`proxy.self`), with the certificate the parent issued. Sign in with the account and the one-time password, and choose your own. Create later clients there, or mint more invites (VPN page, **Create Invite**; or `hz vpn invite`).
+3. **The device: the link, then the kiosk.** Open the invite link on the device, import the config and connect. Its endpoint is `kiosk.hz.<domain>:51820` (public DNS: the child's A record, which the parent publishes). Its DNS is the child's `wg0` address, where the child's dnsmasq answers the kiosk name with that address, so the kiosk is reached **through** the tunnel (the jail identifies a peer by its tunnel address). Open `https://<kiosk>`, enrol a second factor, and choose a session.
+4. **The UI, then sign in.** The kiosk shows **Open hz**, `https://hz.<domain>/app/` (the invite page links the same address): the child's dnsmasq answers `hz.<domain>` with its `wg0` address, and HAProxy routes it to hz's own UI (`proxy.self`), with the certificate the parent issued. A peer that has not passed MFA is sent to the kiosk first. A child with no domain links `https://<kiosk>/app/`. Sign in with the account and the one-time password, and choose your own. Create later clients there, or mint more invites (VPN page, **Create Invite**; or `hz vpn invite`).
 
 **dnsmasq.** hz does not start dnsmasq on a nested hz ([What a sync touches](#spinning-up-a-nested-hz)). When it is not running, the summary says so: a connected client then resolves no names, and the portal is reached by address, `http://<child wg0 address>:8080/app/mfa`. Start dnsmasq yourself to opt in.
 
@@ -806,7 +827,17 @@ The child's hz binds `127.0.0.1:8080`, and with a human VPN also its `wg0` addre
 
 ### TLS for a nested hz
 
-**Who issues.** The parent. It owns the zone and its DNS credential, so it answers the DNS-01 challenge and issues. The child never issues. Declare the names the child terminates TLS for on the parent:
+**Who issues.** The parent. It owns the zone and its DNS credential, so it answers the DNS-01 challenge and issues. The child never issues. Register the instance's domain on the parent; the names derive from it ([Reaching a nested hz](#reaching-a-nested-hz)):
+
+```bash
+hz instance domain loadtest-hz loadtest.redline.example.com     # --clear: no names, no grant
+# = POST /api/v1/hz-instances/set {"name":"loadtest-hz","domain":"loadtest.redline.example.com"}
+# -> 200 {"name":"loadtest-hz",…,"domain":"loadtest.redline.example.com",
+#         "domains":["loadtest.redline.example.com","kiosk.hz.loadtest.redline.example.com","hz.loadtest.redline.example.com"],
+#         "dnsGrant":["loadtest.redline.example.com","*.loadtest.redline.example.com"]}
+```
+
+An instance with no domain declares its names explicitly:
 
 ```bash
 hz instance domains loadtest-hz loadtest.app.example.com     # --clear to stop
@@ -842,13 +873,13 @@ With that file present, the child renders the HTTPS frontend (`bind *:443 ssl cr
 
 **DNS on the parent's LAN.** A broader `address=/app.example.com/<parent>` from a service domain catches every name below it. So the parent's dnsmasq writes `server=/<name>/#` for every instance domain, and for every zone A/AAAA/CNAME record that points somewhere other than this hz, when a broader local answer covers the name. These names then resolve publicly, as delegations do.
 
-**UI.** On the parent, the instance's page (Instances → the instance) shows the domains, the certificate (issued, not after, last pulled by the child) and an editor. On the child, its own Instances row shows "certificate from parent `<url>`, not after …".
+**UI.** On the parent, the instance's page (Instances → the instance) shows the domain and an editor, and a names table: each name, public or VPN-only, its public record (published, pending, not asked for, or never for the VPN-only name) and whether the certificate on file names it. Then the certificate (issued, not after, last pulled by the child). The explicit domains have an editor only when there is no domain. On the child, its own Instances row shows "certificate from parent `<url>`, not after …".
 
 ### DNS for a nested hz
 
 A child serves names in a zone the parent owns. The child cannot publish them: the DNS credential is the parent's and never crosses. So the child asks, and the parent publishes.
 
-**The grant (the parent sets it).** The grant is the only place a child's request can land. An entry is an exact name, or a `*.suffix` subtree (every name strictly below `suffix`):
+**The grant (the parent sets it).** The grant is the only place a child's request can land. With a domain it is derived, `<domain>` and `*.<domain>`, and has no editor. Without one, the parent sets it explicitly. An entry is an exact name, or a `*.suffix` subtree (every name strictly below `suffix`):
 
 ```bash
 hz instance dns-grant loadtest-hz loadtest.app.example.com '*.hz.loadtest.example.com'   # --clear revokes
@@ -878,6 +909,7 @@ The set holds an A record for each domain of each service with `external_dns` th
 
 **What the parent refuses.** Per record, with the reason:
 - a name outside the instance's grant;
+- the instance's VPN-only name, `hz.<domain>`, of any type;
 - a type other than A, AAAA, CNAME, TXT, a value that does not parse, or a set that breaks the zone's record rules (a CNAME with a sibling);
 - a name another instance owns;
 - a name the parent declares by hand with a **different** value. The reason names the record. The parent's operator decides: delete that record, or keep it.
