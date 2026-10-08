@@ -57,13 +57,21 @@ type HZInstance struct {
 	TokenSHA256 string `json:"token_sha256,omitempty"`
 	// Note is free text for the operator.
 	Note string `json:"note,omitempty"`
+	// Domain is the instance's ONE registered domain (N4j,
+	// hz_instance_domain.go). With it set, Domains and DNSGrant are DERIVED
+	// (TLSDomains, Grant) and never stored: <domain>, kiosk.hz.<domain>
+	// (public) and hz.<domain> (VPN-only), and the grant <domain>,
+	// *.<domain>. "" is an instance from before N4j: its explicit Domains
+	// and DNSGrant stand, and nothing is guessed.
+	Domain string `json:"domain,omitempty"`
 	// Domains are the hostnames the instance terminates TLS for. THIS hz
 	// issues one certificate covering exactly these names — through its own
 	// zone's DNS provider, never sharing a certificate with this hz's own
 	// names — and the instance pulls it with its token
 	// (GET /api/v1/hz-instances/<name>/cert). Each must be in one zone this hz
 	// owns with a DNS provider (ValidateInstanceDomains, hz_instance_tls.go).
-	// Empty is "no certificate": the instance serves http only.
+	// Empty is "no certificate": the instance serves http only. Explicit
+	// only when Domain is "" — read it through TLSDomains.
 	Domains []string `json:"domains,omitempty"`
 	// DNSGrant is where THIS hz publishes DNS the instance asks for
 	// (POST /api/v1/hz-instances/<name>/dns): exact names and "*.suffix"
@@ -71,7 +79,8 @@ type HZInstance struct {
 	// hz's operator, never by the instance; every Domains name is inside it.
 	// A request outside it is refused, and nothing outside it is ever written
 	// for the instance (hz_instance_dns.go). Empty is "this hz publishes
-	// nothing for it".
+	// nothing for it". Explicit only when Domain is "" — read it through
+	// Grant.
 	DNSGrant []string `json:"dns_grant,omitempty"`
 }
 
@@ -275,6 +284,9 @@ func (c *Config) ValidateHZInstances() error {
 			return fmt.Errorf("hz instance %q has a malformed token digest", h.Name)
 		}
 	}
+	if err := c.validateInstanceDomainField(); err != nil {
+		return err
+	}
 	if err := c.ValidateInstanceDomains(); err != nil {
 		return err
 	}
@@ -293,9 +305,11 @@ func (c *Config) AddHZInstance(h HZInstance) error {
 		URL:       strings.TrimSpace(h.URL),
 		VPNClient: strings.TrimSpace(h.VPNClient),
 		Note:      strings.TrimSpace(h.Note),
+		Domain:    NormalizeInstanceDomain(h.Domain),
 		Domains:   NormalizeInstanceDomains(h.Domains),
 		DNSGrant:  NormalizeInstanceDomains(h.DNSGrant),
 	}
+	clearDerivedInstanceFields(&h)
 	if _, exists := c.FindHZInstance(h.Name); exists {
 		return fmt.Errorf("hz instance %q already exists — `hz instance ls` lists them", h.Name)
 	}
@@ -320,6 +334,12 @@ type HZInstancePatch struct {
 	URL       *string
 	VPNClient *string
 	Note      *string
+	// Domain: nil leaves it; a different value REPLACES the instance's names —
+	// the explicit Domains and DNSGrant are dropped (they derive from it now),
+	// and every record the instance owns outside the derived grant, or at its
+	// VPN-only name, is removed and tombstoned. "" clears it: the instance then
+	// has no names and no grant until some are set.
+	Domain *string
 	// Domains: nil leaves them, an empty non-nil slice clears them (the
 	// instance's certificate is then no longer renewed or served).
 	Domains *[]string
@@ -332,8 +352,8 @@ type HZInstancePatch struct {
 // SetHZInstance edits an instance in place. It keeps the token digest, so a
 // typo fix in the URL never costs the child its credential.
 func (c *Config) SetHZInstance(name string, p HZInstancePatch) (HZInstance, error) {
-	if p.Project == nil && p.URL == nil && p.VPNClient == nil && p.Note == nil && p.Domains == nil && p.DNSGrant == nil {
-		return HZInstance{}, fmt.Errorf("nothing to change on hz instance %q — give a project, a URL, a VPN client, a note, domains or a DNS grant", name)
+	if p.Project == nil && p.URL == nil && p.VPNClient == nil && p.Note == nil && p.Domain == nil && p.Domains == nil && p.DNSGrant == nil {
+		return HZInstance{}, fmt.Errorf("nothing to change on hz instance %q — give a project, a URL, a VPN client, a note, a domain, domains or a DNS grant", name)
 	}
 	next := c.copyForWrite()
 	idx := -1
@@ -358,25 +378,43 @@ func (c *Config) SetHZInstance(name string, p HZInstancePatch) (HZInstance, erro
 	if p.Note != nil {
 		h.Note = strings.TrimSpace(*p.Note)
 	}
+	if p.Domain != nil {
+		d := NormalizeInstanceDomain(*p.Domain)
+		if d != "" {
+			if err := CheckInstanceDomain(d); err != nil {
+				return HZInstance{}, fmt.Errorf("hz instance %q: %w", name, err)
+			}
+		}
+		if d != h.Domain {
+			h.Domain = d
+			h.Domains, h.DNSGrant = nil, nil
+		}
+	}
 	if p.Domains != nil {
 		h.Domains = NormalizeInstanceDomains(*p.Domains)
 	}
 	if p.DNSGrant != nil {
 		h.DNSGrant = NormalizeInstanceDomains(*p.DNSGrant)
 	}
+	// With a domain the names and the grant are derived (#8): an explicit one
+	// that agrees is dropped here, one that disagrees is refused by
+	// validation, naming the derivation.
+	clearDerivedInstanceFields(&h)
 	next.HZInstances[idx] = h
-	if p.DNSGrant == nil {
+	regrant := p.DNSGrant != nil || p.Domain != nil
+	if !regrant {
 		// Domains set where there is no grant yet: the grant starts as the
 		// domains, as Save does. An explicit grant is never widened.
 		next.MigrateInstanceDNSGrants()
 		h, _ = next.FindHZInstance(h.Name)
 	}
-	if p.DNSGrant != nil {
+	if regrant {
 		// Narrowing the grant is the parent's revoke: what the instance owns
-		// outside it goes, and only what the instance owns.
+		// outside it goes, and only what the instance owns. A domain change
+		// is one too, and a record at the VPN-only name never stays.
 		next.copyZonesForWrite()
-		grant := h.DNSGrant
-		for _, r := range next.dropInstanceRecords(h.Name, func(_, name, _ string) bool { return GrantCovers(grant, name) },
+		grant := h.Grant()
+		for _, r := range next.dropInstanceRecords(h.Name, func(_, name, _ string) bool { return GrantCovers(grant, name) && !h.IsVPNOnly(name) },
 			"outside its narrowed DNS grant", time.Now().Unix()) {
 			slog.Warn("LOUD: hz instance "+h.Name+"'s DNS grant no longer covers "+r.Type+" "+r.Name+"; removed, and retracted at the provider by the next sync",
 				"instance", h.Name, "zone", r.Zone, "values", strings.Join(r.Values, ","))
@@ -386,7 +424,7 @@ func (c *Config) SetHZInstance(name string, p HZInstancePatch) (HZInstance, erro
 		return HZInstance{}, err
 	}
 	c.adopt(next)
-	if p.DNSGrant != nil {
+	if regrant {
 		c.Zones = next.Zones
 	}
 	return h, nil

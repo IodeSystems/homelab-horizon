@@ -40,6 +40,20 @@ type UpstreamHZ struct {
 	// /api/v1/hz-instances/<instance>/cert. "" is "pull no certificate": a
 	// config written before the field existed keeps working, http only.
 	Instance string `json:"instance,omitempty"`
+	// Domain is the domain the parent registered for this hz
+	// (HZInstance.Domain, N4j), seeded by the bootstrap. Its UI is
+	// hz.<domain>, VPN-only: the MFA portal and the invite page link it, and
+	// this hz never asks the parent to publish it (ParentDNSAsks). "" is a
+	// child from before N4j: the links use the kiosk name.
+	Domain string `json:"domain,omitempty"`
+}
+
+// UIName is hz.<domain>, this hz's VPN-only UI name, or "" with no domain.
+func (u *UpstreamHZ) UIName() string {
+	if u == nil || u.Domain == "" {
+		return ""
+	}
+	return InstanceUIName(u.Domain)
 }
 
 // UpstreamRung is one parent rung, by its coordinates on the parent.
@@ -105,6 +119,11 @@ func (c *Config) ValidateUpstream() error {
 	if u.Instance != "" {
 		if err := CheckHZInstanceName(u.Instance); err != nil {
 			return fmt.Errorf("upstream: instance: %w", err)
+		}
+	}
+	if u.Domain != "" {
+		if err := CheckInstanceDomain(u.Domain); err != nil {
+			return fmt.Errorf("upstream: %w", err)
 		}
 	}
 	if u.PollSeconds < 0 {
