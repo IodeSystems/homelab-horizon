@@ -1083,9 +1083,11 @@ type MFAStatusResponse struct {
 	Durations       []string `json:"durations"`
 	ProvisioningURI string   `json:"provisioningUri,omitempty"` // only during enrollment
 
-	// UIURL is hz's UI on the kiosk name, https://<kiosk>/app/ — on the VPN the
-	// kiosk name resolves to this hz and routes to its UI (proxy.self). "" when
-	// there is no kiosk_url: the portal then links its own origin's /app/.
+	// UIURL is hz's UI for a peer that is through: https://hz.<domain>/app/
+	// on a nested hz with a registered domain (upstream.domain — the VPN-only
+	// name), else the kiosk name, https://<kiosk>/app/ — on the VPN either
+	// resolves to this hz and routes to its UI (proxy.self). "" when there is
+	// neither: the portal then links its own origin's /app/.
 	UIURL string `json:"uiUrl"`
 
 	Passkeys []PasskeyInfo `json:"passkeys,omitempty"`
@@ -1286,6 +1288,10 @@ type InviteRedeemResp struct {
 	Address   string `json:"address"`
 	PublicKey string `json:"publicKey"`
 	Config    string `json:"config"`
+	// UIURL is where the device goes once connected and through MFA — the
+	// same address the MFA portal's "Open hz" links (MFAStatusResponse.UIURL).
+	// "" when this hz has neither a domain nor a kiosk_url.
+	UIURL string `json:"uiUrl,omitempty"`
 }
 
 // InvitePrivateKeyPlaceholder stands in the redeemed config's PrivateKey line.

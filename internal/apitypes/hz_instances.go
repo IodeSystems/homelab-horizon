@@ -24,25 +24,61 @@ type HZInstanceResp struct {
 	VPNClient string `json:"vpnClient,omitempty"`
 	Note      string `json:"note,omitempty"`
 	HasToken  bool   `json:"hasToken"`
+	// Domain is the instance's one registered domain (N4j); "" is an
+	// instance from before it, whose Domains and DNSGrant are explicit.
+	Domain string `json:"domain,omitempty"`
 	// Domains are the hostnames the instance terminates TLS for; this hz
 	// issues one certificate covering exactly these (InstanceCertResp).
+	// Derived from Domain when it is set.
 	Domains []string `json:"domains,omitempty"`
 	// DNSGrant is where this hz publishes DNS the instance asks for: exact
 	// names and "*.suffix" subtrees in zones this hz owns with a provider.
-	// Domains lie inside it.
+	// Domains lie inside it. Derived from Domain when it is set.
 	DNSGrant []string `json:"dnsGrant,omitempty"`
+}
+
+// Instance name scopes (InstanceNameResp.Scope).
+const (
+	// InstanceNamePublic: in public DNS; the child asks this hz for its record.
+	InstanceNamePublic = "public"
+	// InstanceNameVPNOnly: answered only by the child's own dnsmasq, with its
+	// wg0 address; never published, never requested (hz.<domain>).
+	InstanceNameVPNOnly = "vpn-only"
+)
+
+// Instance name record states (InstanceNameResp.Record), beside
+// InstanceDNSPublished and InstanceDNSPending.
+const (
+	// InstanceNameRecordNone: public, and the child has asked for no record.
+	InstanceNameRecordNone = "none"
+	// InstanceNameRecordNever: VPN-only; there is no public record, by design.
+	InstanceNameRecordNever = "never"
+)
+
+// InstanceNameResp is one of an instance's names as its page lists it: what
+// scope it has, the state of its public record here, and whether the
+// certificate on file covers it.
+type InstanceNameResp struct {
+	Name   string `json:"name"`
+	Scope  string `json:"scope"`
+	Record string `json:"record"`
+	// InCert: the certificate on file names it. False when none is issued.
+	InCert bool `json:"inCert"`
 }
 
 // HZInstanceAddReq declares a nested hz. URL must be http(s) with a host;
 // VPNClient, when set, must name an existing `upstream` VPN client.
 type HZInstanceAddReq struct {
-	Name      string   `json:"name"`
-	Project   string   `json:"project,omitempty"`
-	URL       string   `json:"url"`
-	VPNClient string   `json:"vpnClient,omitempty"`
-	Note      string   `json:"note,omitempty"`
-	Domains   []string `json:"domains,omitempty"`
-	DNSGrant  []string `json:"dnsGrant,omitempty"`
+	Name      string `json:"name"`
+	Project   string `json:"project,omitempty"`
+	URL       string `json:"url"`
+	VPNClient string `json:"vpnClient,omitempty"`
+	Note      string `json:"note,omitempty"`
+	// Domain registers the instance's one domain; Domains and DNSGrant are
+	// then derived, and an explicit one that disagrees is refused.
+	Domain   string   `json:"domain,omitempty"`
+	Domains  []string `json:"domains,omitempty"`
+	DNSGrant []string `json:"dnsGrant,omitempty"`
 }
 
 // HZInstanceSetReq edits an instance in place. nil leaves a field alone; a
@@ -54,6 +90,10 @@ type HZInstanceSetReq struct {
 	URL       *string `json:"url,omitempty"`
 	VPNClient *string `json:"vpnClient,omitempty"`
 	Note      *string `json:"note,omitempty"`
+	// Domain: nil leaves it; a value replaces the instance's names and grant
+	// with those it derives (records outside them are retracted, the
+	// certificate reissued); "" clears it.
+	Domain *string `json:"domain,omitempty"`
 	// Domains: nil leaves them, [] clears them.
 	Domains *[]string `json:"domains,omitempty"`
 	// DNSGrant: nil leaves it, [] revokes it. Narrowing it removes every
