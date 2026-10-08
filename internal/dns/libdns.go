@@ -228,13 +228,34 @@ func (p *LibdnsAdapter) DeleteRecord(zoneID, name, recordType string) error {
 
 	relName := p.toRelativeName(name)
 
-	// Use RR with empty Data to match any value for this name/type
-	_, err := p.provider.DeleteRecords(ctx, p.zone, []libdns.Record{
-		libdns.RR{
-			Name: relName,
-			Type: recordType,
-		},
-	})
+	// Delete the records the provider itself reports, never a wildcard.
+	//
+	// libdns documents an RR with empty Data as "any value at this name and
+	// type", and this used to rely on it. libdns/route53 v1.6.2 does not honour
+	// it: processRecordSetDeletion matches deletions by exact Data, so "" matched
+	// nothing, every live value landed in "remaining", and the set was UPSERTed
+	// back unchanged — a delete that returned nil and deleted nothing. A
+	// tombstone was logged "retracted" while Route53 kept serving the record
+	// (2026-10-08). Handing back the provider's own records (its Data, TTL and,
+	// for Cloudflare, its ID) is the exact match every provider supports.
+	existing, err := p.provider.GetRecords(ctx, p.zone)
+	if err != nil {
+		p.log(fmt.Sprintf("Delete %s FAILED: %v", name, err))
+		return fmt.Errorf("failed to read records before delete: %w", err)
+	}
+	var doomed []libdns.Record
+	for _, r := range existing {
+		rr := r.RR()
+		if p.sameName(rr.Name, relName) && strings.EqualFold(rr.Type, recordType) {
+			doomed = append(doomed, r)
+		}
+	}
+	if len(doomed) == 0 {
+		p.log(fmt.Sprintf("Delete %s: nothing live", name))
+		return nil
+	}
+
+	_, err = p.provider.DeleteRecords(ctx, p.zone, doomed)
 	if err != nil {
 		p.log(fmt.Sprintf("Delete %s FAILED: %v", name, err))
 		return fmt.Errorf("failed to delete record: %w", err)
@@ -385,6 +406,20 @@ func (p *LibdnsAdapter) toRelativeName(name string) string {
 	}
 
 	return name
+}
+
+// sameName reports whether two names denote the same owner in this zone,
+// whatever form each is in: relative ("www"), FQDN with or without the
+// trailing dot, the apex as "@", "" or the zone name, and any letter case.
+func (p *LibdnsAdapter) sameName(a, b string) bool {
+	norm := func(n string) string {
+		n = p.toRelativeName(strings.ToLower(strings.TrimSpace(n)))
+		if n == "" {
+			return "@"
+		}
+		return n
+	}
+	return norm(a) == norm(b)
 }
 
 // toFQDN converts a libdns relative name back to a fully-qualified name in

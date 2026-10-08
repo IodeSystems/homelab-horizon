@@ -4136,6 +4136,12 @@ export interface DNSTombstoneResp {
    * the retraction has not taken effect yet.
    */
   stillLive: boolean;
+  /**
+   * NotConfirmed is set when hz's last retraction was accepted by the
+   * provider and a read-back found the value still live: "retraction not
+   * confirmed". The tombstone stays pending and is retried each sync.
+   */
+  notConfirmed?: string;
 }
 export interface ZoneRecordsResponse {
   zone: string;

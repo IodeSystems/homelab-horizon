@@ -136,6 +136,17 @@ func (s *Server) retractZoneTombstones(run *dnsSyncRun, provider dns.Provider, z
 			if errors.Is(perr, errDNSDriftBlocked) {
 				return retracted, failed, perr // abort the run; tombstones persist
 			}
+			if errors.Is(perr, errDNSWriteUnconfirmed) {
+				// The live failure (2026-10-08): the provider answered the
+				// delete with success and kept serving the record. The
+				// tombstone stays pending, is retried next sync, and says so
+				// in the zone view.
+				slog.Error("LOUD: tombstone retraction NOT confirmed; the record is still live and the tombstone stays pending",
+					"zone", zone.Name, "name", k.name, "type", k.recType, "err", perr)
+				s.markTombstonesUnconfirmed(zone.Name, grouped[k], perr.Error())
+				failed += len(grouped[k])
+				continue
+			}
 			if perr != nil {
 				slog.Error("tombstone retraction failed", "zone", zone.Name,
 					"name", k.name, "type", k.recType, "err", perr)
@@ -143,7 +154,9 @@ func (s *Server) retractZoneTombstones(run *dnsSyncRun, provider dns.Provider, z
 				continue
 			}
 
-			slog.Info("tombstone retracted", "zone", zone.Name,
+			// publish returns nil only after reading the zone back without
+			// these values (verifyPublished), so this line is a measurement.
+			slog.Info("tombstone retracted (confirmed by read-back)", "zone", zone.Name,
 				"name", k.name, "type", k.recType, "values", len(grouped[k]))
 			s.forgetTombstones(zone.Name, grouped[k])
 			retracted += len(grouped[k])
@@ -160,6 +173,48 @@ func (s *Server) forgetTombstones(zoneName string, done []config.DNSTombstone) {
 		}
 	}); err != nil {
 		slog.Warn("dropping tombstones failed", "zone", zoneName, "err", err)
+	}
+}
+
+// markTombstonesUnconfirmed records, on each pending tombstone, that the last
+// retraction was accepted by the provider and did not take effect. Written only
+// when the reason changes, so a provider that keeps failing does not rewrite
+// the config every sync.
+func (s *Server) markTombstonesUnconfirmed(zoneName string, ts []config.DNSTombstone, reason string) {
+	changed := false
+	for _, z := range s.cfg().Zones {
+		if z.Name != zoneName {
+			continue
+		}
+		for _, cur := range z.Tombstones {
+			for _, t := range ts {
+				if cur.Matches(t.Name, t.Type, t.Value) && cur.NotConfirmed != reason {
+					changed = true
+				}
+			}
+		}
+	}
+	if !changed {
+		return
+	}
+	if err := s.updateConfig(func(cfg *config.Config) {
+		for i := range cfg.Zones {
+			if cfg.Zones[i].Name != zoneName {
+				continue
+			}
+			// Fresh slice: callers mutate a shallow copy of Config.
+			next := append([]config.DNSTombstone(nil), cfg.Zones[i].Tombstones...)
+			for j := range next {
+				for _, t := range ts {
+					if next[j].Matches(t.Name, t.Type, t.Value) {
+						next[j].NotConfirmed = reason
+					}
+				}
+			}
+			cfg.Zones[i].Tombstones = next
+		}
+	}); err != nil {
+		slog.Warn("recording an unconfirmed retraction failed", "zone", zoneName, "err", err)
 	}
 }
 
