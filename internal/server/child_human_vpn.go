@@ -33,22 +33,40 @@ import (
 // childKioskService is the name of the kiosk's service on the child.
 const childKioskService = "hz-kiosk"
 
+// childUIService is the name of the child's VPN-only UI service, on
+// hz.<domain> (N4j).
+const childUIService = "hz-ui"
+
 // planChildHumanVPN reads the request's human-VPN half: nil when it is off,
-// else the range (proposed, or the request's, checked) and the kiosk name.
-// It normalises req.Kiosk for bootstrapPlan, and clears it when off.
+// else the range (proposed, or the request's, checked), the domain and the
+// kiosk name (kiosk.hz.<domain>, or the deprecated explicit kiosk). It
+// normalises req.Domain and req.Kiosk for bootstrapPlan, and clears Kiosk
+// when off — the domain is the instance's, with or without a human VPN.
 func (s *Server) planChildHumanVPN(req *apitypes.NestedBootstrapReq) (*childHumanVPN, error) {
 	on := req.HumanVPN == nil || *req.HumanVPN
+	domain := config.NormalizeInstanceDomain(req.Domain)
 	kiosk := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(req.Kiosk), "."))
 	req.HumanVPNRange = strings.TrimSpace(req.HumanVPNRange)
+	if domain != "" {
+		if err := config.CheckInstanceDomain(domain); err != nil {
+			return nil, err
+		}
+		derived := config.InstanceKioskName(domain)
+		if kiosk != "" && kiosk != derived {
+			return nil, fmt.Errorf("kiosk %s disagrees with domain %s, whose kiosk is %s — give the domain only (kiosk is the deprecated spelling)", kiosk, domain, derived)
+		}
+		kiosk = derived
+	}
+	req.Domain = domain
 	if !on {
-		if kiosk != "" || req.HumanVPNRange != "" {
+		if (req.Kiosk != "" && domain == "") || req.HumanVPNRange != "" {
 			return nil, errors.New("kiosk and humanVpnRange are the child's human VPN, and humanVpn is false — leave them out, or turn the human VPN on")
 		}
 		req.Kiosk = ""
 		return nil, nil
 	}
 	if kiosk == "" {
-		return nil, errors.New("kiosk is required: the child's human VPN (on by default) needs the kiosk's hostname — its MFA portal and its WireGuard endpoint (e.g. kiosk.hz.loadtest.example.com). Or set humanVpn false (hz nested bootstrap --human-vpn=false) to reach the child by ssh tunnel only")
+		return nil, errors.New("domain is required: the child's human VPN (on by default) needs the instance's domain — its kiosk is kiosk.hz.<domain> (the MFA portal and the WireGuard endpoint) and its UI hz.<domain> (e.g. loadtest.redline.example.com). Or set humanVpn false (hz nested bootstrap --human-vpn=false) to reach the child by ssh tunnel only")
 	}
 	req.Kiosk = kiosk
 	avoid := append(s.cfg().ChildVPNAvoid(), s.parentLANs()...)
@@ -62,7 +80,7 @@ func (s *Server) planChildHumanVPN(req *apitypes.NestedBootstrapReq) (*childHuma
 	} else if err := config.CheckChildVPNRange(r, avoid); err != nil {
 		return nil, err
 	}
-	return &childHumanVPN{Range: r, Kiosk: kiosk}, nil
+	return &childHumanVPN{Range: r, Kiosk: kiosk, Domain: domain}, nil
 }
 
 // parentLANs is this hz's LAN as a child range must avoid it: the live read
@@ -105,10 +123,21 @@ func (h *childHumanVPN) endpoint() string {
 
 func (h *childHumanVPN) kioskURL() string { return "https://" + h.Kiosk }
 
+// uiHost is where a person opens the child's UI once through the kiosk:
+// hz.<domain> (VPN-only) with a domain, else the kiosk name.
+func (h *childHumanVPN) uiHost() string {
+	if h.Domain != "" {
+		return config.InstanceUIName(h.Domain)
+	}
+	return h.Kiosk
+}
+
+func (h *childHumanVPN) uiURL() string { return "https://" + h.uiHost() + "/app/" }
+
 func (h *childHumanVPN) resp(proposed, domainsChanged bool) *apitypes.NestedHumanVPN {
 	return &apitypes.NestedHumanVPN{
-		Range: h.Range, Proposed: proposed, ServerAddress: h.serverAddress(),
-		Kiosk: h.Kiosk, KioskURL: h.kioskURL(), Endpoint: h.endpoint(), DomainsChanged: domainsChanged,
+		Range: h.Range, Proposed: proposed, ServerAddress: h.serverAddress(), Domain: h.Domain,
+		Kiosk: h.Kiosk, KioskURL: h.kioskURL(), UIURL: h.uiURL(), Endpoint: h.endpoint(), DomainsChanged: domainsChanged,
 	}
 }
 
@@ -116,7 +145,9 @@ func (h *childHumanVPN) resp(proposed, domainsChanged bool) *apitypes.NestedHuma
 // DNS and hz listener at the child's own wg0 address, the endpoint and the
 // kiosk at the kiosk name, the MFA jail with nobody exempt (the kiosk is how
 // a person gets in — admins included), HAProxy on for the kiosk, and the
-// kiosk service. A nil plan returns the seed unchanged.
+// kiosk service — and, with a domain, the hz-ui service on hz.<domain>: the
+// same self route and wg0 answer, and NO external_dns, so the child never
+// asks its parent to publish it. A nil plan returns the seed unchanged.
 func withHumanVPN(seed apitypes.NestedChildSeed, h *childHumanVPN) (apitypes.NestedChildSeed, error) {
 	if h == nil {
 		return seed, nil
@@ -143,5 +174,14 @@ func withHumanVPN(seed apitypes.NestedChildSeed, h *childHumanVPN) (apitypes.Nes
 		ExternalDNS: &apitypes.NestedSeedExternalDNS{},
 		Proxy:       &apitypes.NestedSeedProxy{Self: true},
 	})
+	if h.Domain != "" {
+		seed.Upstream.Domain = h.Domain
+		seed.Services = append(seed.Services, apitypes.NestedSeedService{
+			Name:        childUIService,
+			Domains:     []string{config.InstanceUIName(h.Domain)},
+			InternalDNS: &apitypes.NestedSeedInternalDNS{IP: addr},
+			Proxy:       &apitypes.NestedSeedProxy{Self: true},
+		})
+	}
 	return seed, nil
 }

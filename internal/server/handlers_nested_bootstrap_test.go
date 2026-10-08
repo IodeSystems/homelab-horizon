@@ -275,7 +275,7 @@ func TestBootstrapRefusalsEachSaySomething(t *testing.T) {
 			})
 		}, want: `already exists with profile "lan-access"`},
 		// N4g: the human VPN.
-		{name: "human VPN with no kiosk", req: func(r *apitypes.NestedBootstrapReq) { r.Kiosk = "" }, want: "kiosk is required"},
+		{name: "human VPN with no kiosk", req: func(r *apitypes.NestedBootstrapReq) { r.Kiosk = "" }, want: "domain is required"},
 		{name: "a kiosk with the human VPN off", req: func(r *apitypes.NestedBootstrapReq) { off := false; r.HumanVPN = &off },
 			want: "humanVpn is false"},
 		{name: "a range on the parent's VPN", req: func(r *apitypes.NestedBootstrapReq) { r.HumanVPNRange = "10.100.0.0/24" },

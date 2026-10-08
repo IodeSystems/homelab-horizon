@@ -109,7 +109,18 @@ function DomainsDialog({ name, domains, open, onClose }: { name: string; domains
 }
 
 /** The parent's facts about a nested instance's TLS: domains, the certificate, the child's pull. */
-export function InstanceCertFacts({ name, domains, cert }: { name: string; domains: string[]; cert?: InstanceCertStatusResp }) {
+export function InstanceCertFacts({
+  name,
+  domains,
+  cert,
+  derived = false,
+}: {
+  name: string;
+  domains: string[];
+  cert?: InstanceCertStatusResp;
+  /** The names derive from the instance's domain (N4j): no editor here. */
+  derived?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const line = certLine(domains, cert);
   return (
@@ -125,17 +136,23 @@ export function InstanceCertFacts({ name, domains, cert }: { name: string; domai
               {domains.join(", ")}
             </Typography>
           )}
-          <Button
-            size="small"
-            variant="outlined"
-            sx={{ textTransform: "none" }}
-            aria-label={domains.length === 0 ? "Set TLS domains" : "Edit TLS domains"}
-            onClick={() => setOpen(true)}
-          >
-            {domains.length === 0 ? "Set domains" : "Edit domains"}
-          </Button>
+          {derived ? (
+            <Typography variant="caption" data-tls-derived sx={{ color: "text.secondary" }}>
+              derived from the domain
+            </Typography>
+          ) : (
+            <Button
+              size="small"
+              variant="outlined"
+              sx={{ textTransform: "none" }}
+              aria-label={domains.length === 0 ? "Set TLS domains" : "Edit TLS domains"}
+              onClick={() => setOpen(true)}
+            >
+              {domains.length === 0 ? "Set domains" : "Edit domains"}
+            </Button>
+          )}
         </Box>
-        <DomainsDialog name={name} domains={domains} open={open} onClose={() => setOpen(false)} />
+        {derived ? null : <DomainsDialog name={name} domains={domains} open={open} onClose={() => setOpen(false)} />}
       </Fact>
       {domains.length === 0 ? null : (
         <>

@@ -34,12 +34,18 @@ const NestedBootstrapPath = "/api/v1/nested/bootstrap"
 // operator (HZInstance.URL). Empty on a new instance is "not known yet" — a
 // .invalid placeholder — and enrolment replaces it with the box's VPN address.
 //
+// Domain is the instance's ONE registered domain (N4j): it is set on the
+// instance (its names and DNS grant derive from it) and the kiosk is
+// kiosk.hz.<Domain>, the endpoint kiosk.hz.<Domain>:51820, and the child's UI
+// hz.<Domain>, VPN-only.
+//
 // HumanVPN is the child's OWN wg0 for people, its MFA kiosk and its listener
 // on its wg0 address (N4g). nil is ON; false is "no human VPN" (the child is
-// then reached by ssh tunnel only, as before). With it on, Kiosk is required:
-// the kiosk's hostname (kiosk_url https://<Kiosk>, and the endpoint
-// <Kiosk>:51820). It is added to the instance's Domains (this hz issues its
-// certificate) and DNS grant (the child asks for its A record).
+// then reached by ssh tunnel only, as before). With it on, Domain (or the
+// deprecated Kiosk) is required. Kiosk is the pre-N4j spelling, one release:
+// it sets only the kiosk's hostname (kiosk_url https://<Kiosk>, the endpoint
+// <Kiosk>:51820), added to the instance's explicit Domains and DNS grant.
+// Sending both is refused unless Kiosk is the derived kiosk.
 // HumanVPNRange is optional: without it this hz proposes the next free
 // 10.<n>.0.0/24 after its own VPN range.
 type NestedBootstrapReq struct {
@@ -52,6 +58,7 @@ type NestedBootstrapReq struct {
 	Platform      string `json:"platform,omitempty"`
 	URL           string `json:"url,omitempty"`
 	HumanVPN      *bool  `json:"humanVpn,omitempty"`
+	Domain        string `json:"domain,omitempty"`
 	Kiosk         string `json:"kiosk,omitempty"`
 	HumanVPNRange string `json:"humanVpnRange,omitempty"`
 }
@@ -59,13 +66,16 @@ type NestedBootstrapReq struct {
 // NestedHumanVPN is the child's human VPN as the command sets it up: Range is
 // its wg0 range (Proposed when this hz chose it), ServerAddress the child's
 // own address on it (where its hz also listens), Kiosk, KioskURL and Endpoint
-// what a person's client is given.
+// what a person's client is given. Domain and UIURL (https://hz.<domain>/app/,
+// VPN-only) are set when the command registered a domain.
 type NestedHumanVPN struct {
 	Range         string `json:"range"`
 	Proposed      bool   `json:"proposed"`
 	ServerAddress string `json:"serverAddress"`
+	Domain        string `json:"domain,omitempty"`
 	Kiosk         string `json:"kiosk"`
 	KioskURL      string `json:"kioskUrl"`
+	UIURL         string `json:"uiUrl,omitempty"`
 	Endpoint      string `json:"endpoint"`
 	// DomainsChanged is true when this request added the kiosk name to the
 	// instance's domains or DNS grant (a certificate reissue follows).
@@ -146,7 +156,9 @@ type NestedEnrolBinary struct {
 // The human-VPN fields (N4g) are set only when the command has a human VPN.
 // services[0] is always the rung's service; services[1], when present, is the
 // kiosk (proxy.self, internal_dns at the child's wg0 address, external_dns {}
-// so the child asks this hz for its A record).
+// so the child asks this hz for its A record); services[2], with a domain, is
+// hz-ui on hz.<domain> (proxy.self, internal_dns at the wg0 address, and NO
+// external_dns: it is VPN-only).
 type NestedChildSeed struct {
 	Projects     []NestedSeedProject     `json:"projects"`
 	Environments []NestedSeedEnvironment `json:"environments"`
@@ -212,6 +224,8 @@ type NestedSeedUpstream struct {
 	// Instance is the child's name here, so it can pull the certificate this
 	// hz issues for its domains (/api/v1/hz-instances/<instance>/cert).
 	Instance string `json:"instance,omitempty"`
+	// Domain is the instance's registered domain (config.UpstreamHZ.Domain).
+	Domain string `json:"domain,omitempty"`
 }
 
 type NestedSeedRung struct {

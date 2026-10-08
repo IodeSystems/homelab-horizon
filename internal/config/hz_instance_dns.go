@@ -109,10 +109,10 @@ func (c *Config) ValidateInstanceDNS() error {
 	for _, h := range c.HZInstances {
 		seen := map[string]bool{}
 		domains := map[string]bool{}
-		for _, d := range h.Domains {
+		for _, d := range h.TLSDomains() {
 			domains[strings.ToLower(d)] = true
 		}
-		for _, g := range h.DNSGrant {
+		for _, g := range h.Grant() {
 			if g != strings.ToLower(strings.TrimSpace(g)) || !instanceDomainRe.MatchString(g) {
 				return fmt.Errorf("hz instance %q: DNS grant entry %q is not a lower-case hostname or \"*.\" subtree", h.Name, g)
 			}
@@ -158,6 +158,9 @@ func (c *Config) ValidateInstanceDNS() error {
 					if !grantEntryCovers(g, n) {
 						continue
 					}
+					if h.IsVPNOnly(n) {
+						return fmt.Errorf("zone %s declares %s %s -> %s, and %s is hz instance %q's VPN-only name: only the instance's own dnsmasq answers it, and it is never published — delete that record", zz.Name, t, n, r.Value, n, h.Name)
+					}
 					if domains[n] && instanceDNSTypes[t] {
 						continue // the hand-declared pointer to the child; converted on its first identical request
 					}
@@ -171,9 +174,9 @@ func (c *Config) ValidateInstanceDNS() error {
 			}
 			claimed = append(claimed, owned{h.Name, g})
 		}
-		for _, d := range h.Domains {
-			if !GrantCovers(h.DNSGrant, d) {
-				return fmt.Errorf("hz instance %q: TLS domain %s is outside its DNS grant (%s); the child must be able to ask for the name it serves — add it to the grant", h.Name, d, grantList(h.DNSGrant))
+		for _, d := range h.TLSDomains() {
+			if !GrantCovers(h.Grant(), d) {
+				return fmt.Errorf("hz instance %q: TLS domain %s is outside its DNS grant (%s); the child must be able to ask for the name it serves — add it to the grant", h.Name, d, grantList(h.Grant()))
 			}
 		}
 	}
@@ -218,8 +221,11 @@ func (c *Config) InstanceRecordPublishable(zoneName string, r DNSRecord) (string
 	if !instanceDNSTypes[t] {
 		return fmt.Sprintf("record %s %s owned by hz instance %q has a type an instance may not ask for", t, name, h.Name), false
 	}
-	if !GrantCovers(h.DNSGrant, name) {
-		return fmt.Sprintf("record %s %s owned by hz instance %q is outside its DNS grant (%s)", t, name, h.Name, grantList(h.DNSGrant)), false
+	if !GrantCovers(h.Grant(), name) {
+		return fmt.Sprintf("record %s %s owned by hz instance %q is outside its DNS grant (%s)", t, name, h.Name, grantList(h.Grant())), false
+	}
+	if h.IsVPNOnly(name) {
+		return fmt.Sprintf("record %s %s owned by hz instance %q is at its VPN-only name, which is never published", t, name, h.Name), false
 	}
 	return "", true
 }
@@ -241,7 +247,7 @@ func (c *Config) HasInstanceRecords() bool {
 // admin record edits refuse to write there: the instance publishes there.
 func (c *Config) InstanceGrantCovering(name string) (instance, entry string, ok bool) {
 	for _, h := range c.HZInstances {
-		for _, g := range h.DNSGrant {
+		for _, g := range h.Grant() {
 			if grantEntryCovers(g, name) {
 				return h.Name, g, true
 			}
@@ -400,8 +406,12 @@ func (c *Config) ApplyInstanceDNSRequest(instance string, asks []InstanceDNSAsk,
 			refuse("type %q is not one an instance may ask for; A, AAAA, CNAME or TXT", t)
 			continue
 		}
-		if !GrantCovers(h.DNSGrant, name) {
-			refuse("%s is outside hz instance %s's DNS grant (%s); the parent's operator widens the grant", name, h.Name, grantList(h.DNSGrant))
+		if !GrantCovers(h.Grant(), name) {
+			refuse("%s is outside hz instance %s's DNS grant (%s); the parent's operator widens the grant", name, h.Name, grantList(h.Grant()))
+			continue
+		}
+		if h.IsVPNOnly(name) {
+			refuse("%s is hz instance %s's VPN-only name: only its own dnsmasq answers it, with its wg0 address, and it is never published — leave it out of the request", name, h.Name)
 			continue
 		}
 		zone := next.owningZone(strings.TrimPrefix(name, "*."))
@@ -528,8 +538,13 @@ func equalStrings(a, b []string) bool {
 // unasked is set, and asks nil, when a needed address is unknown or stale:
 // the set is the WHOLE desired state, and a name left out of it reads to the
 // parent as a removal (CLAUDE.md #2 — unknown is not empty).
+//
+// hz.<upstream.domain> is never asked for, even when a service lists it with
+// external_dns: it is this hz's VPN-only UI name (N4j), and the parent refuses
+// it anyway. Said LOUD, because the service's external_dns is then a lie.
 func (c *Config) ParentDNSAsks() (asks []InstanceDNSAsk, unasked string) {
 	seen := map[string]bool{}
+	vpnOnly := c.Upstream.UIName()
 	for i := range c.Services {
 		svc := &c.Services[i]
 		if svc.ExternalDNS == nil {
@@ -538,6 +553,12 @@ func (c *Config) ParentDNSAsks() (asks []InstanceDNSAsk, unasked string) {
 		for _, d := range svc.Domains {
 			name := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(d), "."))
 			if name == "" || seen[name] {
+				continue
+			}
+			if vpnOnly != "" && name == vpnOnly {
+				slog.Warn("LOUD: service "+svc.Name+" has external_dns on "+name+", this hz's VPN-only UI name; it is not asked of the parent — remove external_dns from the service",
+					"service", svc.Name, "name", name)
+				seen[name] = true
 				continue
 			}
 			if z := c.owningZone(strings.TrimPrefix(name, "*.")); z != nil && z.GetDNSProvider() != nil {

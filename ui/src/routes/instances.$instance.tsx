@@ -48,6 +48,7 @@ import { findInstance, projectOf, readInstancesSource } from "../components/inst
 import { NestedStateChip } from "../components/instances/NestedBootstrap";
 import { InstanceCertFacts, ParentCertFact } from "../components/instances/InstanceTLS";
 import { InstanceDNSFacts, ParentDNSFact } from "../components/instances/InstanceDNS";
+import { InstanceDomainFacts } from "../components/instances/InstanceDomain";
 
 function when(unix: number): string {
   return unix > 0 ? new Date(unix * 1000).toISOString().replace("T", " ").replace(/\.\d+Z$/, "Z") : "never";
@@ -363,9 +364,19 @@ export function InstanceScreen({ name }: { name: string }) {
             ) : null}
             {row.role === "nested" ? <NestedPullFacts row={row} /> : null}
             {row.role === "nested" ? (
-              <InstanceCertFacts name={row.name} domains={row.nested?.domains ?? []} cert={row.nested?.cert} />
+              <InstanceDomainFacts name={row.name} domain={row.nested?.domain} names={row.nested?.names} />
             ) : null}
-            {row.role === "nested" ? <InstanceDNSFacts name={row.name} dns={row.nested?.dns} /> : null}
+            {row.role === "nested" ? (
+              <InstanceCertFacts
+                name={row.name}
+                domains={row.nested?.domains ?? []}
+                cert={row.nested?.cert}
+                derived={!!row.nested?.domain}
+              />
+            ) : null}
+            {row.role === "nested" ? (
+              <InstanceDNSFacts name={row.name} dns={row.nested?.dns} derived={!!row.nested?.domain} />
+            ) : null}
             {row.self && row.parentCert ? <ParentCertFact pc={row.parentCert} /> : null}
             {row.self && row.parentDns ? <ParentDNSFact pd={row.parentDns} /> : null}
             {row.role === "standalone" || row.role === "nested" ? null : (

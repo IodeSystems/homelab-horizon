@@ -113,9 +113,32 @@ func (c *Config) ChildVPNAvoid() []string {
 	return out
 }
 
+// SetInstanceDomain registers domain as the instance's one domain (N4j): its
+// names and its grant then derive from it, and what it owned outside them is
+// retracted. The same domain again is no change.
+func (c *Config) SetInstanceDomain(instance, domain string) (changed bool, err error) {
+	h, ok := c.FindHZInstance(instance)
+	if !ok {
+		return false, fmt.Errorf("no hz instance %q%s", instance, c.hzInstanceHint())
+	}
+	domain = NormalizeInstanceDomain(domain)
+	if err := CheckInstanceDomain(domain); err != nil {
+		return false, err
+	}
+	if h.Domain == domain && len(h.Domains) == 0 && len(h.DNSGrant) == 0 {
+		return false, nil
+	}
+	if _, err := c.SetHZInstance(instance, HZInstancePatch{Domain: &domain}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // AddInstanceKiosk makes kiosk one of the instance's TLS domains (so this hz
 // issues its certificate, N4f) and puts it inside its DNS grant (so the child
-// may ask for its A record, N4h). A grant entry that already covers it is
+// may ask for its A record, N4h). The pre-N4j path (`--kiosk`, deprecated):
+// an instance with a Domain has its kiosk derived, and another name is
+// refused. A grant entry that already covers it is
 // kept as it is — an exact entry beside a covering "*." one would overlap.
 // Validation is SetHZInstance's: the kiosk name obeys every rule a domain and
 // a grant entry obey, and the refusal names the rule.
@@ -127,6 +150,12 @@ func (c *Config) AddInstanceKiosk(instance, kiosk string) (changed bool, err err
 	kiosk = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(kiosk), "."))
 	if kiosk == "" || strings.HasPrefix(kiosk, "*.") || !instanceDomainRe.MatchString(kiosk) {
 		return false, fmt.Errorf("kiosk name %q is not a lower-case hostname (no wildcard: the kiosk is one name)", kiosk)
+	}
+	if h.Domain != "" {
+		if kiosk == h.KioskName() {
+			return false, nil
+		}
+		return false, fmt.Errorf("hz instance %q has domain %s, so its kiosk is %s, derived — give --domain, not another kiosk name", instance, h.Domain, h.KioskName())
 	}
 	var patch HZInstancePatch
 	has := false
