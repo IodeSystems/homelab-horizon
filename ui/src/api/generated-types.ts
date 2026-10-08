@@ -1110,16 +1110,53 @@ export interface HZInstanceResp {
   note?: string;
   hasToken: boolean;
   /**
+   * Domain is the instance's one registered domain (N4j); "" is an
+   * instance from before it, whose Domains and DNSGrant are explicit.
+   */
+  domain?: string;
+  /**
    * Domains are the hostnames the instance terminates TLS for; this hz
    * issues one certificate covering exactly these (InstanceCertResp).
+   * Derived from Domain when it is set.
    */
   domains?: string[];
   /**
    * DNSGrant is where this hz publishes DNS the instance asks for: exact
    * names and "*.suffix" subtrees in zones this hz owns with a provider.
-   * Domains lie inside it.
+   * Domains lie inside it. Derived from Domain when it is set.
    */
   dnsGrant?: string[];
+}
+/**
+ * InstanceNamePublic: in public DNS; the child asks this hz for its record.
+ */
+export const InstanceNamePublic = "public";
+/**
+ * InstanceNameVPNOnly: answered only by the child's own dnsmasq, with its
+ * wg0 address; never published, never requested (hz.<domain>).
+ */
+export const InstanceNameVPNOnly = "vpn-only";
+/**
+ * InstanceNameRecordNone: public, and the child has asked for no record.
+ */
+export const InstanceNameRecordNone = "none";
+/**
+ * InstanceNameRecordNever: VPN-only; there is no public record, by design.
+ */
+export const InstanceNameRecordNever = "never";
+/**
+ * InstanceNameResp is one of an instance's names as its page lists it: what
+ * scope it has, the state of its public record here, and whether the
+ * certificate on file covers it.
+ */
+export interface InstanceNameResp {
+  name: string;
+  scope: string;
+  record: string;
+  /**
+   * InCert: the certificate on file names it. False when none is issued.
+   */
+  inCert: boolean;
 }
 /**
  * HZInstanceAddReq declares a nested hz. URL must be http(s) with a host;
@@ -1131,6 +1168,11 @@ export interface HZInstanceAddReq {
   url: string;
   vpnClient?: string;
   note?: string;
+  /**
+   * Domain registers the instance's one domain; Domains and DNSGrant are
+   * then derived, and an explicit one that disagrees is refused.
+   */
+  domain?: string;
   domains?: string[];
   dnsGrant?: string[];
 }
@@ -1145,6 +1187,12 @@ export interface HZInstanceSetReq {
   url?: string;
   vpnClient?: string;
   note?: string;
+  /**
+   * Domain: nil leaves it; a value replaces the instance's names and grant
+   * with those it derives (records outside them are retracted, the
+   * certificate reissued); "" clears it.
+   */
+  domain?: string;
   /**
    * Domains: nil leaves them, [] clears them.
    */
@@ -1505,11 +1553,21 @@ export interface InstanceNestedResp {
    */
   vpnClient?: string;
   /**
+   * Domain is the instance's one registered domain (N4j); "" is an
+   * instance from before it — the page nudges "set a domain".
+   */
+  domain?: string;
+  /**
    * Domains are the names this hz issues the instance's certificate for;
    * Cert is that certificate's state here. Cert is nil when Domains is
    * empty.
    */
   domains?: string[];
+  /**
+   * Names is one row per name in Domains: public or VPN-only, its record
+   * here, and whether the certificate on file covers it.
+   */
+  names?: InstanceNameResp[];
   cert?: InstanceCertStatusResp;
   /**
    * DNS is the instance's DNS grant and the records it owns here.
@@ -1548,12 +1606,17 @@ export const NestedBootstrapPath = "/api/v1/nested/bootstrap";
  * URL is optional: where the child's hz will answer, a statement for the
  * operator (HZInstance.URL). Empty on a new instance is "not known yet" — a
  * .invalid placeholder — and enrolment replaces it with the box's VPN address.
+ * Domain is the instance's ONE registered domain (N4j): it is set on the
+ * instance (its names and DNS grant derive from it) and the kiosk is
+ * kiosk.hz.<Domain>, the endpoint kiosk.hz.<Domain>:51820, and the child's UI
+ * hz.<Domain>, VPN-only.
  * HumanVPN is the child's OWN wg0 for people, its MFA kiosk and its listener
  * on its wg0 address (N4g). nil is ON; false is "no human VPN" (the child is
- * then reached by ssh tunnel only, as before). With it on, Kiosk is required:
- * the kiosk's hostname (kiosk_url https://<Kiosk>, and the endpoint
- * <Kiosk>:51820). It is added to the instance's Domains (this hz issues its
- * certificate) and DNS grant (the child asks for its A record).
+ * then reached by ssh tunnel only, as before). With it on, Domain (or the
+ * deprecated Kiosk) is required. Kiosk is the pre-N4j spelling, one release:
+ * it sets only the kiosk's hostname (kiosk_url https://<Kiosk>, the endpoint
+ * <Kiosk>:51820), added to the instance's explicit Domains and DNS grant.
+ * Sending both is refused unless Kiosk is the derived kiosk.
  * HumanVPNRange is optional: without it this hz proposes the next free
  * 10.<n>.0.0/24 after its own VPN range.
  */
@@ -1567,6 +1630,7 @@ export interface NestedBootstrapReq {
   platform?: string;
   url?: string;
   humanVpn?: boolean;
+  domain?: string;
   kiosk?: string;
   humanVpnRange?: string;
 }
@@ -1574,14 +1638,17 @@ export interface NestedBootstrapReq {
  * NestedHumanVPN is the child's human VPN as the command sets it up: Range is
  * its wg0 range (Proposed when this hz chose it), ServerAddress the child's
  * own address on it (where its hz also listens), Kiosk, KioskURL and Endpoint
- * what a person's client is given.
+ * what a person's client is given. Domain and UIURL (https://hz.<domain>/app/,
+ * VPN-only) are set when the command registered a domain.
  */
 export interface NestedHumanVPN {
   range: string;
   proposed: boolean;
   serverAddress: string;
+  domain?: string;
   kiosk: string;
   kioskUrl: string;
+  uiUrl?: string;
   endpoint: string;
   /**
    * DomainsChanged is true when this request added the kiosk name to the
@@ -1673,7 +1740,9 @@ export interface NestedEnrolBinary {
  * The human-VPN fields (N4g) are set only when the command has a human VPN.
  * services[0] is always the rung's service; services[1], when present, is the
  * kiosk (proxy.self, internal_dns at the child's wg0 address, external_dns {}
- * so the child asks this hz for its A record).
+ * so the child asks this hz for its A record); services[2], with a domain, is
+ * hz-ui on hz.<domain> (proxy.self, internal_dns at the wg0 address, and NO
+ * external_dns: it is VPN-only).
  */
 export interface NestedChildSeed {
   projects: NestedSeedProject[];
@@ -1741,6 +1810,10 @@ export interface NestedSeedUpstream {
    * hz issues for its domains (/api/v1/hz-instances/<instance>/cert).
    */
   instance?: string;
+  /**
+   * Domain is the instance's registered domain (config.UpstreamHZ.Domain).
+   */
+  domain?: string;
 }
 export interface NestedSeedRung {
   project: string;
@@ -3175,9 +3248,11 @@ export interface MFAStatusResponse {
   durations: string[];
   provisioningUri?: string; // only during enrollment
   /**
-   * UIURL is hz's UI on the kiosk name, https://<kiosk>/app/ — on the VPN the
-   * kiosk name resolves to this hz and routes to its UI (proxy.self). "" when
-   * there is no kiosk_url: the portal then links its own origin's /app/.
+   * UIURL is hz's UI for a peer that is through: https://hz.<domain>/app/
+   * on a nested hz with a registered domain (upstream.domain — the VPN-only
+   * name), else the kiosk name, https://<kiosk>/app/ — on the VPN either
+   * resolves to this hz and routes to its UI (proxy.self). "" when there is
+   * neither: the portal then links its own origin's /app/.
    */
   uiUrl: string;
   passkeys?: PasskeyInfo[];
@@ -3390,6 +3465,12 @@ export interface InviteRedeemResp {
   address: string;
   publicKey: string;
   config: string;
+  /**
+   * UIURL is where the device goes once connected and through MFA — the
+   * same address the MFA portal's "Open hz" links (MFAStatusResponse.UIURL).
+   * "" when this hz has neither a domain nor a kiosk_url.
+   */
+  uiUrl?: string;
 }
 /**
  * InvitePrivateKeyPlaceholder stands in the redeemed config's PrivateKey line.

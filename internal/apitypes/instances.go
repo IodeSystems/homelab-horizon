@@ -82,11 +82,17 @@ type InstanceNestedResp struct {
 	EnrolledAt     int64  `json:"enrolledAt,omitempty"`
 	// VPNClient is the linked upstream VPN client, "" for none.
 	VPNClient string `json:"vpnClient,omitempty"`
+	// Domain is the instance's one registered domain (N4j); "" is an
+	// instance from before it — the page nudges "set a domain".
+	Domain string `json:"domain,omitempty"`
 	// Domains are the names this hz issues the instance's certificate for;
 	// Cert is that certificate's state here. Cert is nil when Domains is
 	// empty.
-	Domains []string                `json:"domains,omitempty"`
-	Cert    *InstanceCertStatusResp `json:"cert,omitempty"`
+	Domains []string `json:"domains,omitempty"`
+	// Names is one row per name in Domains: public or VPN-only, its record
+	// here, and whether the certificate on file covers it.
+	Names []InstanceNameResp      `json:"names,omitempty"`
+	Cert  *InstanceCertStatusResp `json:"cert,omitempty"`
 	// DNS is the instance's DNS grant and the records it owns here.
 	DNS *InstanceDNSStatusResp `json:"dns,omitempty"`
 }
