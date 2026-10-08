@@ -1824,20 +1824,39 @@ func (s *Server) syncPublicIPAndRecords() {
 		return
 	}
 
-	// Sync all derived DNS records
-	records := s.cfg().DeriveRoute53Records()
-	if len(records) == 0 {
-		return
-	}
-
 	reason := "reconcile"
 	if changed {
 		reason = "public IP changed"
 	}
+	s.syncExternalDNSRecords(reason)
+}
+
+// route53SyncRecord is the external-DNS write, a variable so a test can see
+// which names the sync would write without reaching AWS.
+var route53SyncRecord = route53.SyncRecord
+
+// syncExternalDNSRecords publishes every service's external DNS this hz
+// publishes itself, and reports every name it leaves out: a name a nested hz
+// hands its parent at DEBUG (correct, not a failure), a name in a zone with no
+// provider at ERROR with the reason (nothing publishes it).
+func (s *Server) syncExternalDNSRecords(reason string) {
+	records, skipped := s.cfg().DeriveRoute53Plan()
+	for _, sk := range skipped {
+		if sk.Delegated {
+			slog.Debug("external DNS: not written here; the parent hz publishes it",
+				"service", sk.Service, "record", sk.Name, "reason", sk.Reason)
+			continue
+		}
+		slog.Error("DNS sync failed", "service", sk.Service, "record", sk.Name, "err", sk.Reason)
+	}
+	if len(records) == 0 {
+		return
+	}
+
 	slog.Info("syncing DNS records", "count", len(records), "reason", reason)
 
 	for _, rec := range records {
-		changed, err := route53.SyncRecord(rec)
+		changed, err := route53SyncRecord(rec)
 		if err != nil {
 			slog.Error("DNS sync failed", "record", rec.Name, "err", err)
 			continue
