@@ -503,6 +503,30 @@ console.log("· the nested bootstrap — states, the command panel, the project 
     "the human VPN's range, its proposer and the endpoint are shown",
   );
   check(human.text.includes("inbound only its human VPN") && !human.text.includes("nothing inbound"), "with a human VPN the box needs one inbound port, and says so");
+  check(!human.html.includes("data-bootstrap-ui-url"), "a kiosk-only command shows no VPN-only UI name");
+  const withDomain = draw(
+    <BootstrapCommandPanel
+      resp={{
+        ...resp,
+        humanVpn: {
+          range: "10.101.0.0/24",
+          proposed: true,
+          serverAddress: "10.101.0.1",
+          domain: "loadtest.redline.example.com",
+          kiosk: "kiosk.hz.loadtest.redline.example.com",
+          kioskUrl: "https://kiosk.hz.loadtest.redline.example.com",
+          uiUrl: "https://hz.loadtest.redline.example.com/app/",
+          endpoint: "kiosk.hz.loadtest.redline.example.com:51820",
+          domainsChanged: true,
+        },
+      }}
+    />,
+  );
+  check(
+    withDomain.html.includes("data-bootstrap-ui-url") && withDomain.text.includes("https://hz.loadtest.redline.example.com/app/") && withDomain.text.includes("VPN-only"),
+    "with a domain the command names the VPN-only UI",
+  );
+  check(withDomain.text.includes("loadtest.redline.example.com is now this instance") && withDomain.text.includes("derive from it"), "and says the names derive from the domain");
 
   const envs: EnvironmentResp[] = [
     { project: "storefront", name: "staging", posture: "staging", placement: { state: "here", statement: "" } } as EnvironmentResp,
@@ -573,6 +597,48 @@ console.log("· TLS for a nested hz — the parent's domains and certificate, th
   check(expired.html.includes('data-parent-cert="expired"') && expired.text.includes("EXPIRED, still served"), "an expired one is kept and says so");
   const plain = await at("/instances/gw-host", [inst({})]);
   check(!plain.html.includes("data-parent-cert"), "an hz with no upstream shows no parent certificate");
+}
+
+console.log("· an hz instance's ONE domain (N4j) — the derived names, public or VPN-only");
+{
+  const nestedRow = (n: InstanceResp["nested"]): InstanceResp[] => [
+    inst({}),
+    inst({ name: "prod-hz", self: false, address: "http://10.100.0.9:8080", role: "nested", declared: true, version: undefined, nested: n }),
+  ];
+  const base = { hasToken: true, lastPullAt: 1790000000, lastPullRung: "storefront/prod", state: "connected" };
+
+  const legacy = await at("/instances/prod-hz", nestedRow({ ...base, domains: ["app.example.com"], dns: { grant: ["app.example.com"], records: [] } }));
+  check(legacy.html.includes('data-instance-domain="none"') && legacy.text.includes("No domain for prod-hz"), "no domain: one-line nudge");
+  check(legacy.html.includes('aria-label="Set a domain"'), "with [Set a domain] beside it");
+  check(!legacy.html.includes("data-instance-names"), "and no derived names table");
+  check(legacy.html.includes('aria-label="Edit TLS domains"') && legacy.html.includes('aria-label="Edit DNS grant"'), "its explicit names and grant keep their editors");
+
+  const d = "loadtest.redline.example.com";
+  const derived = await at(
+    "/instances/prod-hz",
+    nestedRow({
+      ...base,
+      domain: d,
+      domains: [d, `kiosk.hz.${d}`, `hz.${d}`],
+      names: [
+        { name: d, scope: "public", record: "published", inCert: true },
+        { name: `kiosk.hz.${d}`, scope: "public", record: "pending", inCert: true },
+        { name: `hz.${d}`, scope: "vpn-only", record: "never", inCert: false },
+      ],
+      cert: { issued: true, notAfter: 1800000000, sans: [d, `kiosk.hz.${d}`], sha256: "" },
+      dns: { grant: [d, `*.${d}`], records: [] },
+    }),
+  );
+  check(derived.html.includes(`data-instance-domain="${d}"`) && derived.html.includes('aria-label="Edit domain"'), "the domain, with an editor");
+  check(derived.html.includes("data-instance-names"), "the derived names table");
+  check(
+    derived.html.includes(`data-instance-name="hz.${d}" data-name-scope="vpn-only"`) && derived.text.includes("VPN-only") && derived.text.includes("never published"),
+    "hz.<domain> reads VPN-only, never published",
+  );
+  check(derived.html.includes(`data-instance-name="kiosk.hz.${d}" data-name-scope="public"`) && derived.html.includes('data-name-record="pending"'), "the kiosk is public, its record pending");
+  check(derived.html.includes('data-name-record="published"') && derived.html.includes('data-name-in-cert="yes"') && derived.html.includes('data-name-in-cert="no"'), "record and certificate state per name");
+  check(derived.html.includes("data-tls-derived") && !derived.html.includes('aria-label="Edit TLS domains"'), "the TLS names are derived: no editor");
+  check(derived.html.includes("data-dns-grant-derived") && !derived.html.includes('aria-label="Edit DNS grant"'), "the grant is derived: no editor");
 }
 
 console.log("· DNS for a nested hz — the parent's grant and records, the child's parent answer");

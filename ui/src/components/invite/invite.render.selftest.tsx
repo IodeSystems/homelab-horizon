@@ -81,6 +81,20 @@ console.log("· the invitee's page, state by state");
   check(/data-qr="1"/.test(done.html), "done: the QR, drawn in the browser");
   check(done.text.includes("DEVICE-KEY"), "done: the filled config");
   check(done.text.includes("hz never had it"), "done: says the key is only here");
+  check(/data-invite-ui-link/.test(done.html) && done.html.includes('href="/app/"'), "done: with no uiUrl the link is this page's own /app/");
+
+  const withDomain = view({
+    kind: "done",
+    name: "carl-phone",
+    address: "10.101.0.2",
+    config: "[Interface]\n",
+    qrSvg: "",
+    uiUrl: "https://hz.loadtest.redline.example.com/app/",
+  });
+  check(
+    withDomain.html.includes('href="https://hz.loadtest.redline.example.com/app/"') && withDomain.text.includes("Open hz: https://hz.loadtest.redline.example.com/app/"),
+    "done: with a domain the link is hz.<domain>, not the kiosk",
+  );
 }
 
 console.log("· /invite/<token> renders without a session, through the real router");

@@ -24,7 +24,7 @@ import {
   usePasskeyAssert,
 } from "../api/hooks";
 
-/** Where the portal sends a peer that is through: hz's UI on the kiosk name
+/** Where the portal sends a peer that is through: hz's UI — hz.<domain> on a nested hz with a domain, else the kiosk name
  * (the server's uiUrl), else this page's own origin. Never a guessed address. */
 export function uiLink(uiUrl: string | undefined, origin: string = typeof window === "undefined" ? "" : window.location.origin): string {
   return uiUrl || `${origin}/app/`;
