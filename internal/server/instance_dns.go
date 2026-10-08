@@ -348,7 +348,7 @@ func (s *Server) anyInstanceRecordPending(instance string) bool {
 // instanceDNSStatus is the parent's instance page: the grant, the records the
 // instance owns here with their status, and its last request.
 func (s *Server) instanceDNSStatus(cfg *config.Config, h config.HZInstance) *apitypes.InstanceDNSStatusResp {
-	out := &apitypes.InstanceDNSStatusResp{Grant: append([]string{}, h.DNSGrant...), Records: []apitypes.InstanceOwnedRecordResp{}}
+	out := &apitypes.InstanceDNSStatusResp{Grant: append([]string{}, h.Grant()...), Records: []apitypes.InstanceOwnedRecordResp{}}
 	for _, set := range instanceOwnedSets(cfg, h.Name) {
 		set.Status, set.Reason = s.instanceRecordStatus(cfg, set.Zone, set.Name, set.Type, set.Values)
 		out.Records = append(out.Records, set)
@@ -395,6 +395,43 @@ func syncPublishableZone(cfg *config.Config, zone config.Zone) config.Zone {
 			continue
 		}
 		out.Records = append(out.Records, r)
+	}
+	return out
+}
+
+// instanceNameRows is the instance page's names table (N4j): one row per TLS
+// name — public or VPN-only, the state of its public record here, and whether
+// the certificate on file names it. Pure: built from the cert and DNS status
+// the page already carries, so the table and the panels never disagree.
+func instanceNameRows(h config.HZInstance, cert *apitypes.InstanceCertStatusResp, dns *apitypes.InstanceDNSStatusResp) []apitypes.InstanceNameResp {
+	inCert := map[string]bool{}
+	if cert != nil && cert.Issued {
+		for _, san := range cert.SANs {
+			inCert[strings.ToLower(san)] = true
+		}
+	}
+	record := map[string]string{}
+	if dns != nil {
+		for _, r := range dns.Records {
+			switch r.Type {
+			case "A", "AAAA", "CNAME":
+			default:
+				continue
+			}
+			if record[r.Name] != apitypes.InstanceDNSPending {
+				record[r.Name] = r.Status
+			}
+		}
+	}
+	out := []apitypes.InstanceNameResp{}
+	for _, d := range h.TLSDomains() {
+		row := apitypes.InstanceNameResp{Name: d, Scope: apitypes.InstanceNamePublic, Record: apitypes.InstanceNameRecordNone, InCert: inCert[d]}
+		if h.IsVPNOnly(d) {
+			row.Scope, row.Record = apitypes.InstanceNameVPNOnly, apitypes.InstanceNameRecordNever
+		} else if st, ok := record[d]; ok {
+			row.Record = st
+		}
+		out = append(out, row)
 	}
 	return out
 }

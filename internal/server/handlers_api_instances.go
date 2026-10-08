@@ -63,7 +63,8 @@ func (s *Server) decorateNested(r *http.Request, cfg *config.Config, rows []apit
 			continue
 		}
 		n := &apitypes.InstanceNestedResp{HasToken: h.TokenSHA256 != "", PullsUnknown: unknown, VPNClient: h.VPNClient,
-			Domains: append([]string{}, h.Domains...), Cert: s.instanceCertStatus(cfg, h), DNS: s.instanceDNSStatus(cfg, h)}
+			Domain: h.Domain, Domains: h.TLSDomains(), Cert: s.instanceCertStatus(cfg, h), DNS: s.instanceDNSStatus(cfg, h)}
+		n.Names = instanceNameRows(h, n.Cert, n.DNS)
 		var pulled time.Time
 		if p, ok := pulls[h.Name]; ok {
 			pulled = p.At

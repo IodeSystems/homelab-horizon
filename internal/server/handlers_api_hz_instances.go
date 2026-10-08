@@ -19,8 +19,8 @@ import (
 // hzInstanceResp renders one instance for the wire. The token digest never
 // leaves; HasToken says one is minted.
 func hzInstanceResp(h config.HZInstance) apitypes.HZInstanceResp {
-	domains := append([]string{}, h.Domains...)
-	return apitypes.HZInstanceResp{Name: h.Name, Project: h.Project, URL: h.URL, VPNClient: h.VPNClient, Note: h.Note, HasToken: h.TokenSHA256 != "", Domains: domains, DNSGrant: append([]string{}, h.DNSGrant...)}
+	return apitypes.HZInstanceResp{Name: h.Name, Project: h.Project, URL: h.URL, VPNClient: h.VPNClient, Note: h.Note, HasToken: h.TokenSHA256 != "",
+		Domain: h.Domain, Domains: append([]string{}, h.TLSDomains()...), DNSGrant: append([]string{}, h.Grant()...)}
 }
 
 // instanceAlias is the one instance name a request carries, accepting the
@@ -70,7 +70,7 @@ func (s *Server) handleAPIHZInstanceAdd(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	next := *s.cfg()
-	if err := next.AddHZInstance(config.HZInstance{Name: req.Name, Project: req.Project, URL: req.URL, VPNClient: req.VPNClient, Note: req.Note, Domains: req.Domains, DNSGrant: req.DNSGrant}); err != nil {
+	if err := next.AddHZInstance(config.HZInstance{Name: req.Name, Project: req.Project, URL: req.URL, VPNClient: req.VPNClient, Note: req.Note, Domain: req.Domain, Domains: req.Domains, DNSGrant: req.DNSGrant}); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -79,7 +79,7 @@ func (s *Server) handleAPIHZInstanceAdd(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	h, _ := next.FindHZInstance(strings.TrimSpace(req.Name))
-	if len(h.Domains) > 0 {
+	if len(h.TLSDomains()) > 0 {
 		s.kickInstanceCert(h.Name)
 	}
 	writeJSON(w, hzInstanceResp(h))
@@ -101,7 +101,7 @@ func (s *Server) handleAPIHZInstanceSet(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	next := *s.cfg()
-	h, err := next.SetHZInstance(req.Name, config.HZInstancePatch{Project: req.Project, URL: req.URL, VPNClient: req.VPNClient, Note: req.Note, Domains: req.Domains, DNSGrant: req.DNSGrant})
+	h, err := next.SetHZInstance(req.Name, config.HZInstancePatch{Project: req.Project, URL: req.URL, VPNClient: req.VPNClient, Note: req.Note, Domain: req.Domain, Domains: req.Domains, DNSGrant: req.DNSGrant})
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
@@ -110,15 +110,16 @@ func (s *Server) handleAPIHZInstanceSet(w http.ResponseWriter, r *http.Request) 
 		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
 		return
 	}
-	if req.Domains != nil && len(h.Domains) > 0 {
+	names := req.Domains != nil || req.Domain != nil
+	if names && len(h.TLSDomains()) > 0 {
 		s.kickInstanceCert(h.Name)
 	}
-	if req.DNSGrant != nil {
+	if req.DNSGrant != nil || req.Domain != nil {
 		// A narrowed grant tombstoned what the instance owned outside it;
 		// retract it now rather than at the next sync.
 		s.publishInstanceDNSFromRequest(h.Name)
 	}
-	if req.Domains != nil {
+	if names {
 		// A changed name set changes what this hz's resolver must leave to
 		// public DNS (server=/name/#), so the records file is rewritten.
 		if err := s.applyLocalDNS(); err != nil {

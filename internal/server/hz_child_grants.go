@@ -44,8 +44,11 @@ type childGrant struct {
 // name the script's first-client command attributes the client to; "" when
 // no account generated it).
 type childHumanVPN struct {
-	Range    string
-	Kiosk    string
+	Range string
+	Kiosk string
+	// Domain is the instance's registered domain (N4j), "" for a command
+	// given only the deprecated kiosk name.
+	Domain   string
 	Operator string
 }
 
