@@ -163,7 +163,16 @@ function OwnedRecords({ name, records }: { name: string; records: InstanceOwnedR
 }
 
 /** The parent's facts about a nested instance's DNS: the grant, the records, the last request. */
-export function InstanceDNSFacts({ name, dns }: { name: string; dns?: InstanceDNSStatusResp }) {
+export function InstanceDNSFacts({
+  name,
+  dns,
+  derived = false,
+}: {
+  name: string;
+  dns?: InstanceDNSStatusResp;
+  /** The grant derives from the instance's domain (N4j): no editor here. */
+  derived?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const grant = dns?.grant ?? [];
   const records = dns?.records ?? [];
@@ -181,17 +190,23 @@ export function InstanceDNSFacts({ name, dns }: { name: string; dns?: InstanceDN
               {grant.join(", ")}
             </Typography>
           )}
-          <Button
-            size="small"
-            variant="outlined"
-            sx={{ textTransform: "none" }}
-            aria-label={grant.length === 0 ? "Set DNS grant" : "Edit DNS grant"}
-            onClick={() => setOpen(true)}
-          >
-            {grant.length === 0 ? "Set grant" : "Edit grant"}
-          </Button>
+          {derived ? (
+            <Typography variant="caption" data-dns-grant-derived sx={{ color: "text.secondary" }}>
+              derived from the domain
+            </Typography>
+          ) : (
+            <Button
+              size="small"
+              variant="outlined"
+              sx={{ textTransform: "none" }}
+              aria-label={grant.length === 0 ? "Set DNS grant" : "Edit DNS grant"}
+              onClick={() => setOpen(true)}
+            >
+              {grant.length === 0 ? "Set grant" : "Edit grant"}
+            </Button>
+          )}
         </Box>
-        <GrantDialog name={name} grant={grant} open={open} onClose={() => setOpen(false)} />
+        {derived ? null : <GrantDialog name={name} grant={grant} open={open} onClose={() => setOpen(false)} />}
       </Fact>
       <Fact label="DNS records">
         <OwnedRecords name={name} records={records} />
