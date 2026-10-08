@@ -391,7 +391,15 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 	// and hz must not publish until an operator clears it (see Phase 3 drift
 	// handling). This legacy Route53 path is redundant with sync-all's
 	// dns.Provider publish, which is where drift is actually detected.
-	records := s.cfg().DeriveRoute53Records()
+	records, skipped := s.cfg().DeriveRoute53Plan()
+	for _, sk := range skipped {
+		if sk.Delegated {
+			log.Info("  " + sk.Name + ": published by the parent hz, not here")
+			continue
+		}
+		log.Error("  " + sk.Name + ": not published: " + sk.Reason)
+		hasErrors = true
+	}
 	if s.dnsSyncBlocked() {
 		log.Step("Skipping Route53 DNS sync: DNS drift block active (clear drift to resume)")
 	} else if len(records) > 0 && route53.Available() {

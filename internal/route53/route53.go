@@ -204,8 +204,15 @@ func UpdateRecordSet(r Record, values []string) error {
 			logAWS(r.AWSProfile, fmt.Sprintf("Update %s TIMEOUT after %v", r.Name, awsTimeout))
 			return fmt.Errorf("AWS CLI timed out after %v", awsTimeout)
 		}
-		logAWS(r.AWSProfile, fmt.Sprintf("Update %s FAILED: %s", r.Name, string(output)))
-		return fmt.Errorf("failed to update record: %s", string(output))
+		// err carries what output may not: an AWS CLI that is not installed
+		// produces no output at all, and this once read
+		// "failed to update record: " with nothing after it (CLAUDE.md #2).
+		msg := err.Error()
+		if out := strings.TrimSpace(string(output)); out != "" {
+			msg += ": " + out
+		}
+		logAWS(r.AWSProfile, fmt.Sprintf("Update %s FAILED: %s", r.Name, msg))
+		return fmt.Errorf("failed to update record: %s", msg)
 	}
 
 	logAWS(r.AWSProfile, fmt.Sprintf("Update %s SUCCESS", r.Name))
