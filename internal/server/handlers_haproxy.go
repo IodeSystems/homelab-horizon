@@ -60,9 +60,16 @@ func (s *Server) syncHAProxyBackends() {
 	s.haproxy.SetTLSMinVersion(s.cfg().TLSMinVersion())
 }
 
-// kioskUIURL is hz's UI on the kiosk name (scheme://<kiosk host>/app/), or ""
-// with no usable kiosk_url. The MFA portal links it once a peer is through.
+// kioskUIURL is where a VPN peer opens hz's UI once through MFA — the MFA
+// portal's "Open hz" and the invite page's link: https://hz.<domain>/app/ on
+// a nested hz whose parent registered a domain (upstream.domain, N4j — the
+// VPN-only name, answered by this hz's dnsmasq and routed by its hz-ui
+// service), else hz's UI on the kiosk name (scheme://<kiosk host>/app/), else
+// "" with no usable kiosk_url.
 func kioskUIURL(cfg *config.Config) string {
+	if ui := cfg.Upstream.UIName(); ui != "" {
+		return "https://" + ui + "/app/"
+	}
 	raw := strings.TrimSpace(cfg.KioskURL)
 	if raw == "" {
 		return ""

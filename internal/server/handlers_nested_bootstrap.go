@@ -182,11 +182,19 @@ func bootstrapPlan(cfg *config.Config, req apitypes.NestedBootstrapReq) (*config
 		}
 	}
 
-	// The kiosk name (N4g): one of the instance's TLS domains, so this hz
-	// issues its certificate (N4f), and inside its DNS grant, so the child
-	// may ask for its A record (N4h). Every rule of both is checked here, at
-	// generate, and the refusal names the rule.
-	if kiosk := strings.TrimSpace(req.Kiosk); kiosk != "" {
+	// The domain (N4j): the instance's names and DNS grant derive from it —
+	// its kiosk, its VPN-only UI name and the app's name — so this hz issues
+	// their certificate (N4f) and the child may ask for the public ones'
+	// records (N4h). A different domain on a re-run REPLACES the names, and
+	// what the instance owned outside them is retracted. Every rule is checked
+	// here, at generate, and the refusal names the rule.
+	//
+	// The deprecated kiosk name (N4g) alone: added to the explicit names.
+	if domain := strings.TrimSpace(req.Domain); domain != "" {
+		if _, err := next.SetInstanceDomain(instance, domain); err != nil {
+			return nil, nil, fmt.Errorf("domain %s cannot be this instance's domain: %w", domain, err)
+		}
+	} else if kiosk := strings.TrimSpace(req.Kiosk); kiosk != "" {
 		if _, err := next.AddInstanceKiosk(instance, kiosk); err != nil {
 			return nil, nil, fmt.Errorf("kiosk %s cannot be this instance's name: %w", kiosk, err)
 		}
@@ -305,12 +313,12 @@ func (s *Server) handleAPINestedBootstrap(w http.ResponseWriter, r *http.Request
 		return
 	}
 	after, _ := next.FindHZInstance(req.Instance)
-	domainsChanged := !slices.Equal(before.Domains, after.Domains) || !slices.Equal(before.DNSGrant, after.DNSGrant)
+	domainsChanged := !slices.Equal(before.TLSDomains(), after.TLSDomains()) || !slices.Equal(before.Grant(), after.Grant())
 	if domainsChanged {
 		// As an instance-domain edit does (handleAPIHZInstanceSet): issue
 		// the certificate for the new name set, and leave the names to
 		// public DNS on this hz's resolver.
-		if len(after.Domains) > 0 {
+		if len(after.TLSDomains()) > 0 {
 			s.kickInstanceCert(after.Name)
 		}
 		if err := s.applyLocalDNS(); err != nil {
@@ -398,9 +406,9 @@ func (s *Server) handleChildInstallScript(w http.ResponseWriter, r *http.Request
 // the first real run (2026-10-01) hit a leftover wg0 holding the parent's own
 // range, so the parent address was local and nothing entered the tunnel.
 func renderChildInstallScript(base string, gr childGrant, platforms []string, parentAddr string) string {
-	human, humanAddr := childHumanVPN{}, ""
+	human, humanAddr, uiHost := childHumanVPN{}, "", ""
 	if gr.Human != nil {
-		human, humanAddr = *gr.Human, gr.Human.serverAddress()
+		human, humanAddr, uiHost = *gr.Human, gr.Human.serverAddress(), gr.Human.uiHost()
 	}
 	rep := strings.NewReplacer(
 		"@@HZ_BASE@@", strings.TrimSuffix(base, "/"),
@@ -420,6 +428,7 @@ func renderChildInstallScript(base string, gr childGrant, platforms []string, pa
 		"@@HUMAN_IFACE@@", config.ChildHumanVPNIface,
 		"@@HUMAN_PORT@@", strconv.Itoa(config.ChildHumanVPNPort),
 		"@@KIOSK@@", human.Kiosk,
+		"@@UI_HOST@@", uiHost,
 		"@@OPERATOR@@", human.Operator,
 	)
 	return rep.Replace(hzChildInstallScript)
@@ -503,7 +512,12 @@ func (s *Server) enrolChild(gr childGrant, req apitypes.NestedEnrolReq, bin chil
 	// The seed, before anything is written: a plan that cannot become one
 	// fails here with nothing to roll back.
 	service := childServiceName(gr.Project, gr.Rung)
-	seed, err := withHumanVPN(childSeed(h.Name, gr.Project, gr.Rung, env.Posture, service, parentURL), gr.Human)
+	if gr.Human != nil && gr.Human.Domain != h.Domain {
+		return apitypes.NestedEnrolResp{}, http.StatusConflict, fmt.Errorf("hz instance %s's domain is %q on the parent now, not %q as when this command was generated", h.Name, h.Domain, gr.Human.Domain)
+	}
+	base := childSeed(h.Name, gr.Project, gr.Rung, env.Posture, service, parentURL)
+	base.Upstream.Domain = h.Domain
+	seed, err := withHumanVPN(base, gr.Human)
 	if err != nil {
 		return apitypes.NestedEnrolResp{}, http.StatusInternalServerError, err
 	}

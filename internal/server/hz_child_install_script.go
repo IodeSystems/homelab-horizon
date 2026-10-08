@@ -62,6 +62,7 @@ HUMAN_ADDR="@@HUMAN_ADDR@@"
 HUMAN_IFACE="@@HUMAN_IFACE@@"
 HUMAN_PORT="@@HUMAN_PORT@@"
 KIOSK="@@KIOSK@@"
+UI_HOST="@@UI_HOST@@"
 OPERATOR="@@OPERATOR@@"
 
 WG_DIR=/etc/wireguard
@@ -299,7 +300,8 @@ jq --slurpfile seed "$TMP/seed.json" --rawfile tok "$TMP/svc.token" '
     else . end
   | reduce ($s.services[1:][]) as $k (.;
       .services = ([.services[] | select(.name != $k.name)]
-        + [((([.services[] | select(.name == $k.name)] | first) // {}) + $k)]))
+        + [((([.services[] | select(.name == $k.name)] | first) // {}) + $k)
+           | if ($k | has("external_dns")) then . else del(.external_dns) end]))
 ' "$TMP/current.json" > "$TMP/config.json"
 install -m 0600 "$TMP/config.json" "$HZ_CFG"
 install -m 0600 "$TMP/svc.token" "$SVC_TOKEN_FILE"
@@ -410,6 +412,7 @@ if [ -n "$HUMAN_VPN_RANGE" ]; then
   echo
   echo "  human VPN     $HUMAN_IFACE on $HUMAN_VPN_RANGE, this box $HUMAN_ADDR; endpoint $KIOSK:$HUMAN_PORT"
   echo "  kiosk         https://$KIOSK — the MFA portal (every VPN client starts jailed there)"
+  echo "  hz UI         https://$UI_HOST/app/ — over the VPN, after the kiosk"
   echo "  admin UI      http://$HUMAN_ADDR:$port — over the VPN, after the kiosk"
   echo
   echo "  This hz has no human VPN client and no account a person can sign in with."
@@ -425,7 +428,7 @@ if [ -n "$HUMAN_VPN_RANGE" ]; then
   echo "  invite page before the device is on the VPN). On the device:"
   echo "    1. open the invite link, import the config, connect;"
   echo "    2. open https://$KIOSK and pass MFA (enrol a second factor the first time);"
-  echo "    3. press Open hz there: https://$KIOSK/app/;"
+  echo "    3. press Open hz there: https://$UI_HOST/app/;"
   echo "    4. sign in as $WHO with the one-time password, and choose your own."
   echo "  Later clients: this hz's UI (VPN, Create Invite), over its VPN."
   if ! systemctl is-active --quiet dnsmasq 2>/dev/null; then

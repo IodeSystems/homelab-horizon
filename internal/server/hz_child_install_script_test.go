@@ -102,7 +102,7 @@ func TestChildScriptSetsUpTheHumanVPNAndNamesTheFirstClient(t *testing.T) {
 	}
 	for _, want := range []string{
 		`sudo homelab-horizon vpn invite --name $WHO-1 --user $WHO`,
-		`open TCP 443 and UDP $HUMAN_PORT inbound`, `https://$KIOSK/app/`,
+		`open TCP 443 and UDP $HUMAN_PORT inbound`, `https://$UI_HOST/app/`, `UI_HOST="` + bootKioskName + `"`,
 		`sudo homelab-horizon user create $WHO --admin --sign-in`,
 		`sudo homelab-horizon user set-password --user $WHO`, `sign in as $WHO with the one-time password`,
 		`WHO="${OPERATOR:-<you>}"`, `OPERATOR="carl"`,

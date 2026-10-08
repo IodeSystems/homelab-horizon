@@ -341,7 +341,7 @@ func TestNoInviteTypeCarriesAPrivateKey(t *testing.T) {
 		apitypes.InviteCheckReq{}:       {"Token"},
 		apitypes.InviteCheckResp{}:      {"Valid", "Name", "Profile", "ExpiresAt"},
 		apitypes.InviteRedeemReq{}:      {"Token", "PublicKey", "Name"},
-		apitypes.InviteRedeemResp{}:     {"OK", "Name", "Address", "PublicKey", "Config"},
+		apitypes.InviteRedeemResp{}:     {"OK", "Name", "Address", "PublicKey", "Config", "UIURL"},
 		inviteRecord{}:                  {"SHA256", "Expires", "Name", "Profile", "User"},
 	}
 	for v, fields := range want {

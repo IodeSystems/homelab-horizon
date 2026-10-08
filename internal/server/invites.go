@@ -466,6 +466,7 @@ func (s *Server) handleAPIInviteRedeem(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(apitypes.InviteRedeemResp{
 		OK: true, Name: name, Address: addr, PublicKey: pub,
 		Config: s.generateClientConfig(apitypes.InvitePrivateKeyPlaceholder, addr, profile),
+		UIURL:  kioskUIURL(s.cfg()),
 	})
 }
 
