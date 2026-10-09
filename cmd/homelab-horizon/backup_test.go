@@ -255,3 +255,34 @@ func TestInstallPushTimerRendersTheUnits(t *testing.T) {
 		t.Fatalf("output: %s", out.String())
 	}
 }
+
+// At a terminal the key is ONE line after a prompt; reading to EOF looked
+// hung until Ctrl-D (operator report). A pipe still reads to EOF.
+func TestRecoveryKeyFromStdinReadsOneLineAtATerminal(t *testing.T) {
+	r, w := io.Pipe()
+	go func() { _, _ = w.Write([]byte("hzmprv_example\n")) }() // never closed: a terminal
+	var prompt strings.Builder
+	done := make(chan []byte, 1)
+	go func() {
+		got, err := readRecoveryKeyFromStdin(r, true, &prompt)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- got
+	}()
+	select {
+	case got := <-done:
+		if strings.TrimSpace(string(got)) != "hzmprv_example" {
+			t.Fatalf("got %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("waited for EOF at a terminal: the read is still to EOF, not one line")
+	}
+	if !strings.Contains(prompt.String(), "Paste the recovery private key") {
+		t.Fatalf("no prompt on a terminal: %q", prompt.String())
+	}
+	piped, err := readRecoveryKeyFromStdin(strings.NewReader("hzmprv_example"), false, io.Discard)
+	if err != nil || string(piped) != "hzmprv_example" {
+		t.Fatalf("pipe: %q, %v", piped, err)
+	}
+}
