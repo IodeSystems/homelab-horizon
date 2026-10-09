@@ -1450,3 +1450,37 @@ func TestConfigRequestAddr(t *testing.T) {
 		t.Fatal("a different key name opened the blob")
 	}
 }
+
+// A key copied without its trailing "=" still parses (a password manager
+// dropped it, 2026-10-09); a really truncated key still fails, with a message
+// naming the length and never the key.
+func TestMachineKeyToleratesAMissingPad(t *testing.T) {
+	priv, err := NewMachineKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := MarshalMachinePrivateKey(priv)
+	if !strings.HasSuffix(full, "=") {
+		t.Fatalf("instrument: this key encoding has no pad to drop: %q", full[:len(MachinePrivateKeyPrefix)])
+	}
+	got, err := ParseMachinePrivateKey(strings.TrimRight(full, "="))
+	if err != nil {
+		t.Fatalf("unpadded key refused: %v", err)
+	}
+	if !got.Equal(priv) {
+		t.Fatal("unpadded key parsed to a different key")
+	}
+	pub := MarshalMachinePublicKey(priv.PublicKey())
+	if _, err := ParseMachinePublicKey(strings.TrimRight(pub, "=")); err != nil {
+		t.Fatalf("unpadded public key refused: %v", err)
+	}
+	short := full[:len(full)-6]
+	_, err = ParseMachinePrivateKey(short)
+	if err == nil {
+		t.Fatal("a truncated key parsed")
+	}
+	rest := strings.TrimPrefix(short, MachinePrivateKeyPrefix)
+	if strings.Contains(err.Error(), rest) {
+		t.Fatalf("the error echoes the key: %v", err)
+	}
+}
