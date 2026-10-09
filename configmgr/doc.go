@@ -90,6 +90,11 @@
 //	              AAD = bytes 0..78 || context(EnvKeyAddr)  for kind 0x02
 //	              AAD = bytes 0..78 || context(MachineAddr) for kind 0x03
 //
+// Kind 0x04 has the layout of 0x02 and 0x03. It carries the random data key
+// of one off-site hz.db backup (internal/backup/offsite), wrapped to a
+// recovery recipient: AAD = bytes 0..78 || context(BackupAddr), purpose
+// "hz-config/v1 backup-key".
+//
 // The environment key is used as the AES key directly. It is already 32
 // uniformly random bytes, so a KDF on that path would only add a step the
 // browser must replicate exactly.

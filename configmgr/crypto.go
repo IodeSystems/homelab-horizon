@@ -54,10 +54,12 @@ const (
 
 	purposeWrapEnvKey  = "hz-config/v1 wrap-env-key"
 	purposeMachineSeal = "hz-config/v1 machine-secret"
+	purposeBackupKey   = "hz-config/v1 backup-key"
 
 	labelAddr        = "hz-config/v1 addr"
 	labelEnvKeyAddr  = "hz-config/v1 env-key-addr"
 	labelMachineAddr = "hz-config/v1 machine-addr"
+	labelBackupAddr  = "hz-config/v1 backup-addr"
 	labelKeyID       = "hz-config/v1 env-key-id"
 	labelEnvKeySum   = "hz-config/v1 env-key-checksum"
 	labelFingerprint = "hz-config/v1 machine-fingerprint"
@@ -97,6 +99,7 @@ const (
 	KindEnvSealed     EnvelopeKind = 0x01 // opens with the environment key
 	KindWrappedEnvKey EnvelopeKind = 0x02 // an environment key, wrapped to a machine
 	KindMachineSealed EnvelopeKind = 0x03 // a value sealed directly to a machine
+	KindBackupKey     EnvelopeKind = 0x04 // an off-site backup's data key, wrapped to a recovery recipient
 )
 
 func (k EnvelopeKind) String() string {
@@ -107,6 +110,8 @@ func (k EnvelopeKind) String() string {
 		return "wrapped-env-key"
 	case KindMachineSealed:
 		return "machine-sealed"
+	case KindBackupKey:
+		return "backup-key"
 	default:
 		return fmt.Sprintf("unknown(0x%02x)", byte(k))
 	}
@@ -463,7 +468,7 @@ type EnvelopeHeader struct {
 	Version   byte
 	Kind      EnvelopeKind
 	KeyID     KeyID       // KindEnvSealed only
-	Recipient Fingerprint // KindWrappedEnvKey and KindMachineSealed only
+	Recipient Fingerprint // KindWrappedEnvKey, KindMachineSealed and KindBackupKey only
 }
 
 // ParseEnvelopeHeader reads an envelope's routing information without
@@ -483,7 +488,7 @@ func ParseEnvelopeHeader(envelope []byte) (EnvelopeHeader, error) {
 			return EnvelopeHeader{}, fmt.Errorf("%w: %s envelope is %d bytes, minimum is %d", ErrMalformedEnvelope, h.Kind, len(envelope), envMinLen)
 		}
 		copy(h.KeyID[:], envelope[2:2+KeyIDSize])
-	case KindWrappedEnvKey, KindMachineSealed:
+	case KindWrappedEnvKey, KindMachineSealed, KindBackupKey:
 		if len(envelope) < ecMinLen {
 			return EnvelopeHeader{}, fmt.Errorf("%w: %s envelope is %d bytes, minimum is %d", ErrMalformedEnvelope, h.Kind, len(envelope), ecMinLen)
 		}
@@ -598,6 +603,49 @@ func SealToMachine(recipient *ecdh.PublicKey, addr MachineAddr, plaintext []byte
 // authenticated and must come from what the agent knows about itself.
 func OpenFromMachine(priv *ecdh.PrivateKey, addr MachineAddr, envelope []byte) ([]byte, error) {
 	return openFrom(priv, KindMachineSealed, purposeMachineSeal, addr.context(), envelope)
+}
+
+// BackupKeySize is the length of an off-site backup's data key: AES-256.
+const BackupKeySize = 32
+
+// BackupAddr names one off-site backup file by the random id written in that
+// file's own header. It is the additional data on a kind 0x04 envelope, so a
+// data key wrapped for one backup does not unwrap as another's. The header (id
+// included) is in turn authenticated by every chunk of the file, so the wrap,
+// the header and the ciphertext open together or not at all.
+type BackupAddr struct {
+	BackupID string
+}
+
+func (a BackupAddr) String() string { return "backup:" + a.BackupID }
+
+func (a BackupAddr) context() []byte {
+	return canonicalContext(labelBackupAddr, a.BackupID)
+}
+
+// WrapBackupKey wraps an off-site backup's random data key to one recovery
+// recipient. It is the ephemeral-ECDH construction WrapEnvKey uses for a
+// recovery wrap — deliberately not a new primitive — under its own kind byte
+// and HKDF purpose, so a backup key is never accepted as an environment key
+// and the reverse.
+func WrapBackupKey(recipient *ecdh.PublicKey, addr BackupAddr, key []byte) ([]byte, error) {
+	if len(key) != BackupKeySize {
+		return nil, fmt.Errorf("%w: backup key is %d bytes, want %d", ErrMalformedKey, len(key), BackupKeySize)
+	}
+	return sealTo(recipient, KindBackupKey, purposeBackupKey, addr.context(), key)
+}
+
+// UnwrapBackupKey is the restore side of WrapBackupKey. It runs on the
+// operator's machine with the recovery private key; hz never calls it.
+func UnwrapBackupKey(priv *ecdh.PrivateKey, addr BackupAddr, envelope []byte) ([]byte, error) {
+	pt, err := openFrom(priv, KindBackupKey, purposeBackupKey, addr.context(), envelope)
+	if err != nil {
+		return nil, err
+	}
+	if len(pt) != BackupKeySize {
+		return nil, fmt.Errorf("%w: wrapped backup key is %d bytes, want %d", ErrMalformedEnvelope, len(pt), BackupKeySize)
+	}
+	return pt, nil
 }
 
 // EncodeEnvelope renders an envelope for a JSON field. Standard base64, because
