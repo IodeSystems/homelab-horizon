@@ -23,8 +23,9 @@ import (
 
 const backupUsage = `hz backup - pull and check hz's backup zip
 
-hz never sends a backup anywhere: THIS machine pulls it, with your credential,
-and keeps it. The zip holds config.json, the admin token, wireguard.conf,
+The hz server never sends a backup anywhere: THIS machine pulls it, with your
+credential, and keeps it. (An encrypted off-site copy is pushed by a root
+command on the box: homelab-horizon backup push.) The zip holds config.json, the admin token, wireguard.conf,
 invites, certificates, build logs and a snapshot of hz.db — which carries the
 config manager's wrapped environment keys and sealed values. Those open only
 with a machine private key or a recovery key, but treat the zip as a secret.

@@ -83,8 +83,24 @@ func Open(path string) (*DB, error) {
 	return d, nil
 }
 
-// openRaw opens the file without migrating it. Only OpenAt uses this, to build
-// a database as it stood at an older schema version.
+// OpenExisting opens a database that must already exist, WITHOUT migrating
+// it. It is for a second process reading the database a running hz owns —
+// `homelab-horizon backup push` — which must never change its schema: a
+// newer CLI binary migrating the file under an older running server would be a
+// schema change nobody chose. The export's snapshot check then refuses a
+// schema that is not this binary's latest, with the reason.
+func OpenExisting(path string) (*DB, error) {
+	if path == "" {
+		path = DefaultPath
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil, err // sqlite would otherwise create an empty database
+	}
+	return openRaw(path)
+}
+
+// openRaw opens the file without migrating it. OpenAt uses this, to build a
+// database as it stood at an older schema version, and so does OpenExisting.
 func openRaw(path string) (*DB, error) {
 	if path == "" {
 		path = DefaultPath
