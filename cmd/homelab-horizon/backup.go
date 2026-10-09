@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -320,11 +321,34 @@ func newBackupDecryptCmd() *cobra.Command {
 	return cmd
 }
 
+// stdinIsTerminal reports whether stdin is a terminal; tests replace it.
+var stdinIsTerminal = func() bool {
+	st, err := os.Stdin.Stat()
+	return err == nil && st.Mode()&os.ModeCharDevice != 0
+}
+
+// readRecoveryKeyFromStdin reads the pasted key. At a terminal it prompts on
+// stderr and reads ONE line — reading to EOF looked hung until Ctrl-D (operator
+// report, 2026-10-09). A pipe or redirect is read to EOF as before. The key is
+// never echoed back or logged.
+func readRecoveryKeyFromStdin(stdin io.Reader, tty bool, prompt io.Writer) ([]byte, error) {
+	limited := io.LimitReader(stdin, 1<<16)
+	if !tty {
+		return io.ReadAll(limited)
+	}
+	fmt.Fprint(prompt, "Paste the recovery private key (hzmprv_…), then press Enter: ")
+	line, err := bufio.NewReader(limited).ReadString('\n')
+	if err != nil && !(errors.Is(err, io.EOF) && line != "") {
+		return nil, err
+	}
+	return []byte(line), nil
+}
+
 func runBackupDecrypt(ctx context.Context, in, keyPath, outPath string, stdin io.Reader, out io.Writer) error {
 	var raw []byte
 	var err error
 	if keyPath == "-" {
-		raw, err = io.ReadAll(io.LimitReader(stdin, 1<<16))
+		raw, err = readRecoveryKeyFromStdin(stdin, stdinIsTerminal(), os.Stderr)
 	} else {
 		raw, err = os.ReadFile(keyPath)
 	}
