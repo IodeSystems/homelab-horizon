@@ -326,8 +326,9 @@ that strands nothing deletes without asking anything.
 
 ### Backup
 
-hz never sends a backup anywhere. A machine you choose **pulls** it with an
-admin credential (`GET /admin/backup/export`) and keeps it:
+The hz server never sends a backup anywhere. A machine you choose **pulls** it
+with an admin credential (`GET /admin/backup/export`) and keeps it (for an
+encrypted copy in another place, see [Off-site backups](#off-site-backups)):
 
 ```bash
 hz backup pull --dir ~/backups/hz-office --keep 14   # download, verify, write, prune
@@ -369,6 +370,141 @@ start, before the database opens, hz puts it in place and keeps the old one as
 time, hz sets it aside as `.rejected-<time>` and starts on the existing
 database (`LOUD` in the log). A zip with no manifest is from before `hz.db` was
 in the backup. It imports as before.
+
+### Off-site backups
+
+A pulled backup in the same building as the gateway is lost with the building.
+`homelab-horizon backup push` runs **on the box whose hz.db it is**, as root. It
+builds the same verified zip in-process, encrypts it on the box, and uploads
+the ciphertext to S3 with `s3:PutObject` only:
+
+```bash
+homelab-horizon backup push --dest s3://example-hz-backups/hz-office             # once, now
+homelab-horizon backup install-push-timer --dest s3://example-hz-backups/hz-office --enable
+```
+
+Each push writes two objects:
+
+```
+<prefix>/<host>/<UTC time>.hzbak   ciphertext: the zip, AES-256-GCM in 1 MiB chunks
+<prefix>/<host>/<UTC time>.json    cleartext header: hz version, host, schema version,
+                                   snapshot time, sha256 and size of the .hzbak,
+                                   backup id, recipients' names and fingerprints
+```
+
+- **Encryption.** A random data key per backup, wrapped to **every** recovery
+  recipient in this hz's config (`hz config recovery ls`). The wrap is the
+  construction the config manager uses for recovery wraps (P-256 ephemeral
+  ECDH, HKDF-SHA256, AES-256-GCM), under its own envelope kind (0x04). Only a
+  recovery private key opens it. hz does not hold one. **No recovery recipient,
+  no push**: hz refuses rather than upload plaintext or a file nobody can open.
+  The header in the `.hzbak` is authenticated by every chunk. A changed, cut or
+  reordered file does not decrypt.
+- **Order.** The ciphertext goes first, then the header. A header with no
+  object beside it is a failed push and is easy to find.
+- **Verification without a read.** The writer cannot read the bucket, so the
+  upload cannot be read back. The request carries `x-amz-checksum-sha256` (S3
+  refuses a body that does not match it), and S3's returned `ChecksumSHA256`
+  must equal the sha256 of the local ciphertext. When S3 returns no checksum,
+  the ETag must equal the MD5 (single-part, no SSE-KMS). Anything else is a
+  failure, `LOUD`, and exits non-zero.
+- **Credentials** come from the AWS SDK's default chain. `--aws-profile` (or
+  `AWS_PROFILE`, default `hz-backup`) selects the profile. They never come from
+  hz's config. The timer's service sets `AWS_PROFILE`, `AWS_CONFIG_FILE=/root/.aws/config`
+  and `AWS_SHARED_CREDENTIALS_FILE=/root/.aws/credentials`. Static
+  `AWS_ACCESS_KEY_ID` variables in the environment take precedence over any
+  profile, which is how the SDK's chain works; the unit sets none.
+
+A static-key profile (a box outside AWS):
+
+```ini
+# /root/.aws/config   (0600)
+[profile hz-backup]
+region = us-west-2
+
+# /root/.aws/credentials   (0600)
+[hz-backup]
+aws_access_key_id = AKIA...
+aws_secret_access_key = ...
+```
+
+An assumed-role profile (an EC2 box: no key on disk; the instance role may
+only assume the writer role):
+
+```ini
+# /root/.aws/config
+[profile hz-backup]
+role_arn = arn:aws:iam::123456789012:role/hz-backup-writer-loadtest
+credential_source = Ec2InstanceMetadata
+region = us-west-2
+```
+
+#### Bucket and IAM shape
+
+- **One put-only principal per hz, on its own prefix.** The writer cannot list,
+  read or delete, including its own objects:
+
+  ```json
+  {"Version": "2012-10-17", "Statement": [{
+    "Effect": "Allow", "Action": "s3:PutObject",
+    "Resource": "arn:aws:s3:::example-hz-backups/hz-office/*"}]}
+  ```
+
+- **No standing read principal.** A restore reads with the operator's own
+  MFA-gated admin session, off the boxes. No hz holds a credential that reads
+  the bucket.
+- **The bucket:** Block Public Access on; default encryption SSE-S3 (the
+  objects are already encrypted on the box; SSE-KMS also needs
+  `kms:GenerateDataKey` for every writer); a bucket policy that denies
+  `aws:SecureTransport = false` (the SDK uses HTTPS; hz has no endpoint
+  override); versioning on, so a PUT to an existing key keeps the earlier
+  version.
+- **Retention is lifecycle, not the writers:** expire current objects after N
+  days and noncurrent versions after M days. A writer can not delete anything,
+  so a stolen writer credential can add objects but can not remove backups.
+
+#### Restore, end to end
+
+```bash
+# 1. Download, with YOUR admin session (on your machine, not the box):
+aws s3 ls s3://example-hz-backups/hz-office/gw.example.com/
+aws s3 cp s3://example-hz-backups/hz-office/gw.example.com/20261009T030000Z.hzbak .
+aws s3 cp s3://example-hz-backups/hz-office/gw.example.com/20261009T030000Z.json .
+
+# 2. Decrypt with the offline recovery key (hzmprv_..., from `hz config recovery keygen`).
+#    `-` reads it from stdin: paste it from the password manager, then ctrl-D.
+homelab-horizon backup decrypt 20261009T030000Z.hzbak --recovery-key -
+#    -> 20261009T030000Z.zip (0600), written only when every chunk authenticates,
+#       then checked like `hz backup verify`; the .json beside it is checked too.
+
+# 3. On the box (hz installed, at least as new as the one that took the backup):
+systemctl stop homelab-horizon
+homelab-horizon backup restore 20261009T030000Z.zip    # same checks and staging as /admin/backup/import
+
+# 4. Start: hz swaps the staged hz.db in before it opens the database.
+systemctl start homelab-horizon
+journalctl -u homelab-horizon | grep -i restore
+homelab-horizon sync                                   # regenerate dnsmasq/haproxy configs
+
+# 5. Prove the config manager's keys came back:
+hz config recovery verify <project>/<environment>/<app>/<role> < recovery-key.txt
+```
+
+To check that a push landed, use your admin session:
+`aws s3api head-object --bucket example-hz-backups --key <key>.hzbak --checksum-mode ENABLED`.
+Its `ChecksumSHA256` is base64; `echo <it> | base64 -d | xxd -p -c 64` must equal
+`ciphertext_sha256` in the `.json`.
+
+#### A nested hz
+
+A child hz (an hz instance with its own `hz.db`) works the same, unchanged. It
+needs **its own** recovery recipient in **its own** config (register it on the
+child: `hz --host <child> config recovery add ...`), its own put-only principal,
+and its own prefix:
+
+```bash
+homelab-horizon backup install-push-timer --dest s3://example-hz-backups/hz-instances/<name> --enable
+```
 
 ### Static Sites
 
