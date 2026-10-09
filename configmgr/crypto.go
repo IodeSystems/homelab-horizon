@@ -791,9 +791,20 @@ func decodePrefixed(s, prefix string) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("expected a %q prefix", prefix)
 	}
+	// Tolerate a dropped "=" pad. A password manager or a copy from a terminal
+	// can lose the trailing "=" (operator report, 2026-10-09: a recovery key
+	// came back one character short and failed as "illegal base64 data"). The
+	// key lengths are fixed, so a missing pad is unambiguous; the callers still
+	// check the decoded length and the key itself.
 	b, err := base64.StdEncoding.DecodeString(rest)
+	if err != nil && len(rest)%4 != 0 && !strings.HasSuffix(rest, "=") {
+		if raw, rerr := base64.RawStdEncoding.DecodeString(rest); rerr == nil {
+			return raw, nil
+		}
+	}
 	if err != nil {
-		return nil, fmt.Errorf("not base64: %w", err)
+		// Name the likely cause; never echo the value (it may be a private key).
+		return nil, fmt.Errorf("not base64 (%d characters after %q; a multiple of 4 is expected — a truncated copy, or a missing \"=\" pad?): %w", len(rest), prefix, err)
 	}
 	return b, nil
 }
