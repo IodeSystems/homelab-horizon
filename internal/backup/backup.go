@@ -3,8 +3,10 @@
 // importer before writing anything, and `hz backup pull|verify` on the
 // caller's machine after the download.
 //
-// hz never sends a backup anywhere (CLAUDE.md #1). It answers an
-// authenticated GET; the caller pulls and keeps the file.
+// The hz server never sends a backup anywhere (CLAUDE.md #1). It answers an
+// authenticated GET; the caller pulls and keeps the file. The one outbound
+// copy is `homelab-horizon backup push` (package offsite), a root command on
+// the box that uploads the zip ENCRYPTED, with a put-only principal.
 package backup
 
 import (
