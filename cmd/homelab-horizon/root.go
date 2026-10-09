@@ -90,6 +90,7 @@ func newRoot() *cobra.Command {
 		newUserCmd(&opts),
 		newSyncCmd(&opts),
 		newVPNCmd(&opts),
+		newBackupCmd(&opts),
 	)
 	return root
 }
