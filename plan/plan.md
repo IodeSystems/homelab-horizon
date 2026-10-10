@@ -269,6 +269,8 @@ test on the pre-migration box is a REQUIRED MANUAL step hz does not enforce.
 
 ✅ **configmgr, for redline (2026-10-01):** `Options.Accept` (`5f9ab10`: a rejected config boots the cache and is never cached) and **revocation** (`5f208e8`: hz marks its one positive denial with `X-HZ-CM-Denied`; only that maps to `ErrDenied`; the peer gate's unmarked 403, e.g. VPN down, still boots the cache, #5). Both deployed; `5f208e8` not yet pushed.
 
+✅ **`dev` pushed again 2026-10-10** (operator: "push dev"): `02bf124` (149 commits) → pin `v0.4.1-0.20261010042836-02bf124eb591`. Before the push the unpushed range was rewritten (`git filter-repo`, text + messages) to placeholder 3 legacy-host IPs, both backup bucket names and two hostnames in `plan/`; 0 hits after, 21 in the pre-rewrite backup (the scan works); code byte-identical; the backup branch deleted. Commit hashes in older notes/messages after `b01180c` no longer exist. Tooling: `git-filter-repo`'s pipx venv broke with the Python 3.14 upgrade — `pipx reinstall git-filter-repo`; a second run must answer **N** to "continuation of the previous run".
+
 ⚠ Single authority still applies (Tier 1): the report and the promote use an
 unscoped API token — the gate is evidence-based but gates one authority against
 itself.
