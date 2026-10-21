@@ -70,6 +70,8 @@ built meanwhile gates one authority against itself.
 
 ## Tier 1b — nested hz instances (the staging → prod crossing)
 
+❓ **Loadtest UNREACHABLE since 2026-10-13 ~18:36Z** — the office public IP changed (`<old-office-ip>` → `<office-ip>`); hz re-published office DNS within minutes, but (1) the loadtest SG allows 22/443/80/8080 only from the old IP, and (2) the child's `hz-upstream` WireGuard resolved `vpn.<office-domain>` once at startup and still sends to the old IP — no handshake since (measured from the office `wg show wg0 dump`), so no builds/applies/certs/DNS asks reach the child. **next:** SG source → the new IP (redline-infra, operator-approved plan) → restart `wg-quick@hz-upstream` on the child → handshake, sync, app https, standard checks. **risks:** recurs on every IP change; nothing alerted for 6+ days. **blocking decisions (operator):** ◻ child re-resolves its upstream endpoint (like `reresolve-dns.sh`) + an office alert when a child tunnel goes quiet (hz code); ◻ SSH via the child's own VPN only (close public 22). **AWS state** now lives in redline's separate infra repo (2026-10-20); hz's needs list (office DNS user, both backup writers, the future prod child backup role, retirements, SG shape) sent to redline 2026-10-20 — redline models them there; hz never edits that repo.
+
 **Operator decision, 2026-09-29** (relayed from the redline session): nested hz
 instances are IN this release. Why it is required: redline prod must run on a
 SEPARATE hz in a SEPARATE segment (PCI — the CDE keeps its own segment and its
