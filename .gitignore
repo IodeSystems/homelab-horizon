@@ -29,6 +29,7 @@ ui/.rendercheck-segments
 ui/.rendercheck-bans
 ui/.rendercheck-vpn
 ui/.rendercheck-ports
+ui/.rendercheck-services
 docs/node_modules
 docs/package-lock.json
 homelab-horizon-linux
