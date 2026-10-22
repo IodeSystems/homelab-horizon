@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEnvironments, useProjects } from "../api/hooks";
+import { matchesServiceQuery, parseQueryParam } from "../components/serviceFilter.ts";
 import { buildProjectIndex, type ProjectIndex } from "../components/model/projectRoutes.ts";
 import { LocationCell, PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
 import { AssignDialog, RungCell } from "../components/model/AssignBits";
@@ -41,6 +42,7 @@ import {
   Tooltip,
   Typography,
   MenuItem,
+  InputAdornment,
 } from "@mui/material";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
@@ -2221,6 +2223,8 @@ export function AddServiceDialog({
 }
 
 function ServicesPage() {
+  const { q } = Route.useSearch();
+  const navigate = Route.useNavigate();
   const { data, isLoading, error } = useServices();
   const projects = useProjects();
   const environments = useEnvironments();
@@ -2322,6 +2326,9 @@ function ServicesPage() {
   }
 
   const services = data ?? [];
+  // The type-in filter narrows first; the tab counts are taken over what it
+  // leaves, so a tab says how many it would show.
+  const matching = services.filter((svc) => matchesServiceQuery(svc, q));
 
   const hasError = (svc: Service) =>
     (svc.internalDNS && !svc.status.internalDNSUp) ||
@@ -2329,14 +2336,14 @@ function ServicesPage() {
     (svc.proxy && !svc.status.proxyUp && !!svc.proxy.healthCheck);
 
   const counts = {
-    all: services.length,
-    errors: services.filter(hasError).length,
-    internal: services.filter((s) => s.internalDNS && !s.externalDNS).length,
-    external: services.filter((s) => s.externalDNS).length,
-    proxy: services.filter((s) => s.proxy).length,
+    all: matching.length,
+    errors: matching.filter(hasError).length,
+    internal: matching.filter((s) => s.internalDNS && !s.externalDNS).length,
+    external: matching.filter((s) => s.externalDNS).length,
+    proxy: matching.filter((s) => s.proxy).length,
   };
 
-  const filtered = services.filter((svc) => {
+  const filtered = matching.filter((svc) => {
     switch (tab) {
       case "errors": return hasError(svc);
       case "internal": return !!svc.internalDNS && !svc.externalDNS;
@@ -2369,6 +2376,30 @@ function ServicesPage() {
           </Button>
         </Box>
       </Box>
+
+      <TextField
+        size="small"
+        fullWidth
+        autoFocus
+        placeholder="Filter by name, project, rung, domain or backend"
+        value={q ?? ""}
+        onChange={(e) =>
+          navigate({
+            search: (prev) => ({ ...prev, q: parseQueryParam(e.target.value) }),
+            replace: true,
+          })
+        }
+        slotProps={{
+          input: {
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon fontSize="small" />
+              </InputAdornment>
+            ),
+          },
+        }}
+        sx={{ mb: 1 }}
+      />
 
       <Tabs
         value={tab}
@@ -2511,4 +2542,8 @@ function ServicesPage() {
 
 export const Route = createFileRoute("/services")({
   component: ServicesPage,
+  validateSearch: (search: Record<string, unknown>): { q?: string } => {
+    const q = parseQueryParam(search.q);
+    return q === undefined ? {} : { q };
+  },
 });
