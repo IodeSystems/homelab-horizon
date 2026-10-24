@@ -735,6 +735,12 @@ export interface PromoteReq {
    * recorded on the promotion as restore_gate "skipped-ran-before".
    */
   skipRestoreTests: boolean;
+  /**
+   * DryRun runs every check and answers what the promotion WOULD do, with
+   * Promoted false and DryRun true. It writes nothing: no config save, no
+   * promotions row. A refusal is the same 409 as a real promote.
+   */
+  dryRun: boolean;
 }
 /**
  * PromoteResp answers a promotion that happened. ArtifactSHA256 is the PINNED
@@ -763,6 +769,15 @@ export interface PromoteResp {
   provenance: string;
   build_id?: number /* int64 */;
   build_number?: number /* int64 */;
+  /**
+   * Replaces is the target's declared version before the promotion ("" when
+   * it declared none).
+   */
+  replaces: string;
+  /**
+   * DryRun is true when nothing was written (PromoteReq.DryRun); ID is 0.
+   */
+  dryRun?: boolean;
 }
 /**
  * LineCheckedResp is one line a promotion was checked against.

@@ -200,7 +200,8 @@ func promoteRefusal(w http.ResponseWriter, msg string) {
 //
 // On success the target's Version is set through the env-set writer
 // (SetEnvironment + updateConfig, so Save validates it), and a promotions row
-// pins the artifact the source reported. The config is written FIRST: if the
+// pins the artifact the source reported. dryRun stops after every check and the
+// env-set validation, before any write, and answers what would happen. The config is written FIRST: if the
 // row then fails, the rung declares a version no promotion recorded, and the
 // deploy check refuses it — fail-closed. Re-running the promote repairs it.
 // POST /api/v1/environments/promote
@@ -365,6 +366,14 @@ func (s *Server) handleAPIEnvironmentPromote(w http.ResponseWriter, r *http.Requ
 		promoteRefusal(w, err.Error())
 		return
 	}
+	if req.DryRun {
+		writeJSON(w, apitypes.PromoteResp{
+			Promoted: false, DryRun: true, Version: req.Version, ArtifactSHA256: latest.ArtifactSHA256, BuildURL: latest.BuildURL,
+			Downgrade: downgrade, RestoreTests: gate.summary, LinesChecked: gate.checked,
+			Provenance: prov.kind, BuildID: buildID, BuildNumber: buildNumber, Replaces: to.Version,
+		})
+		return
+	}
 	if err := s.updateConfig(func(c *config.Config) { *c = next }); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
 		return
@@ -383,7 +392,7 @@ func (s *Server) handleAPIEnvironmentPromote(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, apitypes.PromoteResp{
 		Promoted: true, Version: req.Version, ArtifactSHA256: latest.ArtifactSHA256, BuildURL: latest.BuildURL,
 		Downgrade: downgrade, ID: id, RestoreTests: gate.summary, LinesChecked: gate.checked,
-		Provenance: prov.kind, BuildID: buildID, BuildNumber: buildNumber,
+		Provenance: prov.kind, BuildID: buildID, BuildNumber: buildNumber, Replaces: to.Version,
 	})
 }
 

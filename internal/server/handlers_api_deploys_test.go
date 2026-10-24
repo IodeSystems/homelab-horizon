@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -519,5 +520,86 @@ func TestRehearsalStagingToProd(t *testing.T) {
 	_ = json.NewDecoder(rw.Body).Decode(&latest)
 	if len(latest) != 1 || latest[0].Environment != "staging" || latest[0].ArtifactSHA256 != deployShaB || latest[0].ReportedBy != "service:redline-staging" {
 		t.Fatalf("latest reports %+v", latest)
+	}
+}
+
+// dryRun runs every check and writes nothing: config.json byte for byte, the
+// in-memory config and the promotions table are unchanged. The positive
+// control is the real promote after it, which does write.
+func TestPromoteDryRunWritesNothing(t *testing.T) {
+	f := newDeployFixture(t)
+	f.report(t, f.pat, stagingReport("1.4.0", deployShaA))
+	if w := f.promote(toProd("1.4.0")); w.Code != http.StatusOK {
+		t.Fatalf("promote 1.4.0: %d %s", w.Code, w.Body.String())
+	}
+	f.report(t, f.pat, stagingReport("1.5.0", deployShaB))
+
+	before, err := os.ReadFile(f.s.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := func() int {
+		list, err := f.s.users.Promotions(context.Background(), "redline", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(list)
+	}
+	if rows() != 1 {
+		t.Fatalf("fixture: %d promotion rows, want 1", rows())
+	}
+
+	req := toProd("1.5.0")
+	req.DryRun = true
+	w := f.promote(req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("dry run: %d %s", w.Code, w.Body.String())
+	}
+	var out apitypes.PromoteResp
+	if err := json.NewDecoder(w.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Promoted || !out.DryRun || out.ID != 0 || out.Version != "1.5.0" || out.ArtifactSHA256 != deployShaB ||
+		out.Replaces != "1.4.0" || out.Downgrade || out.RestoreTests == "" || out.Provenance != "build" {
+		t.Fatalf("dry run answered %+v", out)
+	}
+
+	after, err := os.ReadFile(f.s.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("a dry run changed config.json")
+	}
+	if got := f.declared(t, "prod"); got != "1.4.0" {
+		t.Fatalf("a dry run moved prod to %q", got)
+	}
+	if rows() != 1 {
+		t.Fatalf("a dry run wrote a promotion row: %d rows", rows())
+	}
+
+	// Positive control: the same request without dryRun writes all three.
+	req.DryRun = false
+	if w := f.promote(req); w.Code != http.StatusOK {
+		t.Fatalf("real promote: %d %s", w.Code, w.Body.String())
+	}
+	after, _ = os.ReadFile(f.s.configPath)
+	if string(after) == string(before) || f.declared(t, "prod") != "1.5.0" || rows() != 2 {
+		t.Fatalf("the real promote did not write: prod %q, %d rows", f.declared(t, "prod"), rows())
+	}
+}
+
+// A dry run refuses with the same status and text as the real promote.
+func TestPromoteDryRunRefusesLikeTheRealOne(t *testing.T) {
+	f := newDeployFixture(t)
+	f.report(t, f.pat, stagingReport("1.3.9", deployShaA))
+
+	real := f.promote(toProd("1.4.0"))
+	req := toProd("1.4.0")
+	req.DryRun = true
+	dry := f.promote(req)
+	if real.Code != http.StatusConflict || dry.Code != real.Code || errorOf(dry) != errorOf(real) ||
+		!strings.Contains(errorOf(dry), "it last reported 1.3.9") {
+		t.Fatalf("real %d %q, dry %d %q", real.Code, errorOf(real), dry.Code, errorOf(dry))
 	}
 }
