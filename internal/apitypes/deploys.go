@@ -58,6 +58,10 @@ type PromoteReq struct {
 	// artifact the target already ran. Refused for any other version or build;
 	// recorded on the promotion as restore_gate "skipped-ran-before".
 	SkipRestoreTests bool `json:"skipRestoreTests"`
+	// DryRun runs every check and answers what the promotion WOULD do, with
+	// Promoted false and DryRun true. It writes nothing: no config save, no
+	// promotions row. A refusal is the same 409 as a real promote.
+	DryRun bool `json:"dryRun"`
 }
 
 // PromoteResp answers a promotion that happened. ArtifactSHA256 is the PINNED
@@ -84,6 +88,11 @@ type PromoteResp struct {
 	Provenance  string `json:"provenance"`
 	BuildID     int64  `json:"build_id,omitempty"`
 	BuildNumber int64  `json:"build_number,omitempty"`
+	// Replaces is the target's declared version before the promotion ("" when
+	// it declared none).
+	Replaces string `json:"replaces"`
+	// DryRun is true when nothing was written (PromoteReq.DryRun); ID is 0.
+	DryRun bool `json:"dryRun,omitempty"`
 }
 
 // LineCheckedResp is one line a promotion was checked against.

@@ -155,7 +155,7 @@ export function PromotePanel({
 
   const submit = () =>
     promote.mutate(
-      { project: env.project, from, to: env.name, version: version.trim(), allowDowngrade, skipRestoreTests },
+      { project: env.project, from, to: env.name, version: version.trim(), allowDowngrade, skipRestoreTests, dryRun: false },
       { onSuccess: onClose },
     );
 

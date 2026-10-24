@@ -31,6 +31,7 @@ GET /api/v1/deploys/check refuses any other bundle of X for <to>.
   --allow-downgrade   a rollback: X may be lower; recorded as a downgrade
   --skip-restore-tests  skip the restore-test gate — only for the exact build
                       <to> already ran (a rollback); recorded on the promotion
+  --dry-run           run every check and print what would happen; writes nothing
 `
 
 // envPromote is `hz env promote`. Flags may sit before, between or after the
@@ -41,6 +42,7 @@ func envPromote(c *client, args []string) error {
 	version := fs.String("version", "", "the version to promote")
 	allowDowngrade := fs.Bool("allow-downgrade", false, "allow a version lower than the target's")
 	skipRestore := fs.Bool("skip-restore-tests", false, "skip the restore-test gate for a build the target already ran")
+	dryRun := fs.Bool("dry-run", false, "run every check; write nothing")
 
 	var pos []string
 	for {
@@ -59,7 +61,7 @@ func envPromote(c *client, args []string) error {
 
 	req := apitypes.PromoteReq{
 		Project: pos[0], From: pos[1], To: pos[2],
-		Version: *version, AllowDowngrade: *allowDowngrade, SkipRestoreTests: *skipRestore,
+		Version: *version, AllowDowngrade: *allowDowngrade, SkipRestoreTests: *skipRestore, DryRun: *dryRun,
 	}
 	var out apitypes.PromoteResp
 	if err := c.do(http.MethodPost, "/api/v1/environments/promote", req, &out); err != nil {
@@ -69,8 +71,21 @@ func envPromote(c *client, args []string) error {
 	if out.Downgrade {
 		kind = "Rolled back (recorded as a downgrade)"
 	}
+	if out.DryRun {
+		kind = "Dry run, nothing written — would promote"
+		if out.Downgrade {
+			kind = "Dry run, nothing written — would roll back (a downgrade)"
+		}
+	}
 	fmt.Printf("%s %s/%s -> %s: %s\n", kind, req.Project, req.From, req.To, out.Version)
-	fmt.Printf("  artifact sha256 %s (pinned; the deploy check refuses any other build of %s)\n", out.ArtifactSHA256, out.Version)
+	if out.Replaces != "" {
+		fmt.Printf("  replaces %s's declared %s\n", req.To, out.Replaces)
+	}
+	pinned := "pinned"
+	if out.DryRun {
+		pinned = "would be pinned"
+	}
+	fmt.Printf("  artifact sha256 %s (%s; the deploy check refuses any other build of %s)\n", out.ArtifactSHA256, pinned, out.Version)
 	if out.BuildURL != "" {
 		fmt.Printf("  build %s\n", out.BuildURL)
 	}
