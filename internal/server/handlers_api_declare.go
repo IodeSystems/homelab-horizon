@@ -47,7 +47,7 @@ func (s *Server) handleAPIProjectAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.updateConfig(func(cfg *config.Config) { *cfg = next }); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
+		writeConfigSaveError(w, err)
 		return
 	}
 	writeJSON(w, projectResp(&next, req.Name))
@@ -100,7 +100,7 @@ func (s *Server) handleAPIProjectRm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.updateConfig(func(cfg *config.Config) { *cfg = next }); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
+		writeConfigSaveError(w, err)
 		return
 	}
 	out.OK = true
@@ -134,7 +134,7 @@ func (s *Server) handleAPIEnvironmentAdd(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := s.updateConfig(func(cfg *config.Config) { *cfg = next }); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
+		writeConfigSaveError(w, err)
 		return
 	}
 	writeJSON(w, environmentResp(&next, req.Project, req.Name))
@@ -165,7 +165,7 @@ func (s *Server) handleAPIEnvironmentSet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := s.updateConfig(func(cfg *config.Config) { *cfg = next }); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
+		writeConfigSaveError(w, err)
 		return
 	}
 	writeJSON(w, environmentResp(&next, req.Project, req.Name))
@@ -205,7 +205,7 @@ func (s *Server) handleAPIEnvironmentRm(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := s.updateConfig(func(cfg *config.Config) { *cfg = next }); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
+		writeConfigSaveError(w, err)
 		return
 	}
 	out.OK = true
@@ -242,7 +242,7 @@ func (s *Server) handleAPIServiceAssign(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := s.updateConfig(func(cfg *config.Config) { *cfg = next }); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
+		writeConfigSaveError(w, err)
 		return
 	}
 	// Assignment renders nothing — no DNS record, no HAProxy backend — so unlike

@@ -91,7 +91,7 @@ func (s *Server) applyImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.updateConfig(func(cfg *config.Config) { *cfg = next }); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
+		writeConfigSaveError(w, err)
 		return
 	}
 	writeJSON(w, apitypes.ImportApplyResp{
@@ -198,7 +198,7 @@ func (s *Server) handleAPIProjectFeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.updateConfig(func(cfg *config.Config) { *cfg = next }); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
+		writeConfigSaveError(w, err)
 		return
 	}
 
