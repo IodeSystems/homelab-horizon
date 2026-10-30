@@ -38,8 +38,6 @@ func (f *fakeHZ) handler() http.HandlerFunc {
 		switch {
 		case r.URL.Path == "/api/deploy/status":
 			write(f.status)
-		case r.URL.Path == "/api/deploy/swap":
-			write(DeploySwapResponse{Status: "ok", ActiveSlot: "b", Current: "10.0.0.1:9002", Next: "10.0.0.1:9001"})
 		case r.URL.Path == "/api/deploy/maint-page/set":
 			write(map[string]string{"status": "ok", "maintenance_page_md5": "d41d8cd98f00b204e9800998ecf8427e"})
 		case r.URL.Path == "/api/deploy/maint-page/clear":
@@ -164,20 +162,6 @@ func TestSetSlotStateRefusesNonsenseWithoutACall(t *testing.T) {
 	}
 	if f.lastPath != "" {
 		t.Errorf("a refused call still reached hz at %s", f.lastPath)
-	}
-}
-
-func TestDeploySwapReportsTheLabelsAfterwards(t *testing.T) {
-	c, f := newFake(t)
-	got, err := c.DeploySwap(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if f.lastMethod != http.MethodPost || f.lastPath != "/api/deploy/swap" {
-		t.Errorf("went to %s %s", f.lastMethod, f.lastPath)
-	}
-	if got.ActiveSlot != "b" || got.Current != "10.0.0.1:9002" {
-		t.Errorf("swap response lost fields: %+v", got)
 	}
 }
 

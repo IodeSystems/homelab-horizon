@@ -1494,7 +1494,7 @@ type DeployConfig struct {
 	NextBackend string `json:"next_backend"`          // Slot B address host:port (Slot A = ProxyConfig.Backend)
 	Token       string `json:"token"`                 // Per-service deploy token
 	ActiveSlot  string `json:"active_slot,omitempty"` // "a" or "b" — which slot is currently serving (default "a")
-	Balance     string `json:"balance,omitempty"`     // "first" (active/standby) or "roundrobin" (even). Default "first".
+	Balance     string `json:"balance,omitempty"`     // "first" (first listed server that is up serves; next is listed first) or "roundrobin" (even). Default "first".
 }
 
 // HealthCheck configures HAProxy health checks for a backend
@@ -1612,15 +1612,6 @@ func (d *DeployConfig) InactiveServer(backend string) string {
 		return backend
 	}
 	return d.NextBackend
-}
-
-// Swap flips the active slot
-func (d *DeployConfig) Swap() {
-	if d.ActiveSlot == "b" {
-		d.ActiveSlot = "a"
-	} else {
-		d.ActiveSlot = "b"
-	}
 }
 
 // GenerateDeployToken creates a random 32-char hex token

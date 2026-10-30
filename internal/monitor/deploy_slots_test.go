@@ -111,10 +111,10 @@ func TestDeployCheckBothSlotsDownFails(t *testing.T) {
 	}
 }
 
-// A swap changes only active_slot. The check has to follow it with no other
-// edit: the running loop holds its check in a local, so RefreshChecks must
-// see a different check and replace it.
-func TestDeployCheckFollowsASwap(t *testing.T) {
+// An edit of active_slot alone (there is no swap verb any more; a config edit
+// still sets it) must move the check: the running loop holds its check in a
+// local, so RefreshChecks must see a different check and replace it.
+func TestDeployCheckFollowsAnActiveSlotEdit(t *testing.T) {
 	a, b := downAddr(t), upAddr(t)
 	cfg := deployCfg(a, b, "a")
 	m := New(cfg)
@@ -126,7 +126,7 @@ func TestDeployCheckFollowsASwap(t *testing.T) {
 	swapped.Services = []config.Service{cfg.Services[0]}
 	proxy := *cfg.Services[0].Proxy
 	deploy := *proxy.Deploy
-	deploy.Swap()
+	deploy.ActiveSlot = "b"
 	proxy.Deploy = &deploy
 	swapped.Services[0].Proxy = &proxy
 	m.RefreshChecks(&swapped)

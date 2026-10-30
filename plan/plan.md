@@ -407,6 +407,8 @@ warning onto the peer-config download path.
 
 # Active work
 
+❓ **Blue-green: `next` listed first; `swap` + `promote` removed** (owner, 2026-10-29, via redline then directly; reverses `634f8b0`). Under `balance first` next serves whenever it is up; the procedure is the rolling sequence (next down → upgrade → up, then current down → upgrade → up). `swap` would put the old-code slot first, so `POST /api/deploy/swap` answers 410 and `hz-client swap|promote`, `hzclient.DeploySwap` and `DeployConfig.Swap` are gone. Built on branch `next-first` (not dev): render order + `TestDeployBackendListsNextFirst` (fails on the old order — checked), golden swapped back, `TestDeploySwapIsRefusedAndChangesNothing` (token positive control). **blocking:** bintag's live deploy calls `/api/deploy/swap` and verifies the standby before it gets traffic (`bintag/internal/deploy/deploy.go`) — the owner chose "fix bintag first", then merge. **next:** bintag moves to the rolling sequence → merge `next-first` to dev → deploy. **risks:** ⚠ deploying MOVES TRAFFIC on every blue-green service with both slots up (the 2026-10-02 pb lesson, reversed): measure each service's two slots' versions before the deploy, and do not edit a declaration before it (an edit rewrites HAProxy at once). `ActiveSlot`/"(active)" labels now name current, which serves only while next is down — cosmetic, left as is. **optional:** rename the labels.
+
 ✅ **Instances replaces Hosts** (2026-09-29, operator: *"these are Homelab
 Horizon Instances — they can be in a project, or a part of a cluster"*). One row
 per hz instance (this gateway + HA peers, `GET /api/v1/instances`), project from

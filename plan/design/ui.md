@@ -745,7 +745,7 @@ by hand two nav entries below the screen that lists them.
 |---|---|---|---|---|
 | **machine** | `config.Machine` — a box hz models (`internal/config/machine.go:42`) | a WireGuard peer on `/vpn` — `config.WGPeer` (`config.go:575`), usually a laptop | an hz replica in Settings → HA Fleet — `config.Peer` (`config.go:584`) | — |
 | **config** | the gateway's own `config.json` | `/settings` (gateway settings) | `/config` — the config *manager*, sealed app config | `hz config` (the CLI noun, renamed from `cm` in 2026-09-22) |
-| **promote** | `hz config promote` — a rung promotion | `hz-client promote` — blue/green cutover (`bin/hz-client:54`) | HA failover: a spare promotes itself (README:815) | — |
+| **promote** | `hz config promote` — a rung promotion | ~~`hz-client promote` — blue/green cutover~~ removed 2026-10-29 with `swap` (next-first) | HA failover: a spare promotes itself (README:815) | — |
 | **host** | `config.HostDecl` — an address (`config.go:498`) | a machine, colloquially | a Prometheus scrape target | — |
 
 The `machine` collision is the one that costs: `/vpn` (1098 lines, **0**

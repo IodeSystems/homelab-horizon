@@ -1738,13 +1738,6 @@ type DeployStateChangeResponse struct {
 	State  string `json:"state"`
 }
 
-type DeploySwapResponse struct {
-	Status     string `json:"status"`
-	ActiveSlot string `json:"active_slot"`
-	Current    string `json:"current"`
-	Next       string `json:"next"`
-}
-
 // Service mutations
 
 type ServiceRequest struct {

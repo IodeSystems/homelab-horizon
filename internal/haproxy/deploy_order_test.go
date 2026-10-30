@@ -37,7 +37,7 @@ func servedByFirst(order []string, up map[string]bool) string {
 	return ""
 }
 
-func TestDeployBackendServesTheActiveSlot(t *testing.T) {
+func TestDeployBackendListsNextFirst(t *testing.T) {
 	cfg := genWithBackends(t, []Backend{{
 		Name: "kc", DomainMatches: []string{"kc.example.com"},
 		Deploy: true, CurrentServer: "192.0.2.10:6302", NextServer: "192.0.2.10:6300",
@@ -51,11 +51,9 @@ func TestDeployBackendServesTheActiveSlot(t *testing.T) {
 		t.Fatalf("server lines = %v, want current and next:\n%s", order, cfg)
 	}
 
-	// The order this replaced, for contrast: with both slots up it served
-	// the standby. After a promote + swap + reload (runtime states reset),
-	// "next" is the slot still running the old code.
-	if got := servedByFirst([]string{"next", "current"}, map[string]bool{"current": true, "next": true}); got != "next" {
-		t.Fatalf("model check: next-first with both up served %q", got)
+	// Owner decision 2026-10-29: next is listed first, current second.
+	if order[0] != "next" || order[1] != "current" {
+		t.Fatalf("server order = %v, want [next current]", order)
 	}
 
 	cases := []struct {
@@ -63,9 +61,9 @@ func TestDeployBackendServesTheActiveSlot(t *testing.T) {
 		up   map[string]bool
 		want string
 	}{
-		{"both up: the active slot serves", map[string]bool{"current": true, "next": true}, "current"},
-		{"current down: the standby takes over", map[string]bool{"next": true}, "next"},
-		{"next down: current serves", map[string]bool{"current": true}, "current"},
+		{"both up: next serves, current is hot standby", map[string]bool{"current": true, "next": true}, "next"},
+		{"current down (upgrading): next serves", map[string]bool{"next": true}, "next"},
+		{"next down (upgrading): current serves", map[string]bool{"current": true}, "current"},
 		{"both down: nothing", map[string]bool{}, ""},
 	}
 	for _, c := range cases {

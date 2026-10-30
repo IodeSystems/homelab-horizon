@@ -51,10 +51,8 @@ COMMANDS
     rolling finalize         Phase 3: up current, verify. Both slots on new code.
 
   Low-level slot control:
-    current up|drain|down    Control the current (active) slot
-    next    up|drain|down    Control the next (standby) slot
-    swap                     Swap slot labels and reload haproxy
-    promote                  Blue-green cutover: up next, drain+down current
+    current up|drain|down    Control the current slot (listed second; hot standby)
+    next    up|drain|down    Control the next slot (listed first; serves when up)
 
   Maintenance page:
     maint-page set <file>    Set a custom 503 page from file ("-" for stdin)
@@ -343,39 +341,6 @@ case "$CMD" in
     deploy_post "$CMD/$ACTION"
     ;;
 
-  swap)
-    echo "Swapping active slot..."
-    deploy_post "swap"
-    ;;
-
-  promote)
-    echo "=== Blue-green promote ==="
-    echo ""
-    status
-    echo ""
-
-    echo "Bringing up next slot..."
-    deploy_post "next/up"
-    wait_healthy "next"
-    echo ""
-
-    echo "Draining current slot..."
-    deploy_post "current/drain"
-    wait_drained "current"
-    echo ""
-
-    echo "Taking current slot offline..."
-    deploy_post "current/down"
-    echo ""
-
-    status
-    echo ""
-    echo "=== Promote complete ==="
-    echo ""
-    echo "Traffic is now on the next slot."
-    echo "Run 'swap' when ready to prep for the next deploy cycle."
-    ;;
-
   rolling)
     SUBCMD="${1:?Missing rolling subcommand (status|start|continue|finalize)}"
     shift
@@ -641,7 +606,7 @@ print(f'Maintenance page set. MD5: {md5}')
   *)
     echo "Unknown command: $CMD"
     echo ""
-    echo "Deploy:  status | current|next (up|drain|down) | swap | promote | rolling (...)"
+    echo "Deploy:  status | current|next (up|drain|down) | rolling (...)"
     echo "Bans:    ban <ip> | unban <ip> | bans"
     echo "Maint:   maint-page set <file> | maint-page clear"
     echo "Site:    site push <dir> [--validate] | site rollback | site releases"

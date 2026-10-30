@@ -112,7 +112,7 @@ Service  = domain + TLS + DNS → backends            the entry point
 ```
 
 - **Many backends, one service** — `current`:6400 and `next`:6402 already are
-  two backends of one instance; `hz-client promote` flips which is live.
+  two backends of one instance; under `balance first` next is listed first and serves whenever it is up (owner, 2026-10-29), and the rolling sequence moves both onto new code.
 - **Many services, one instance** — apex, `www`, a client vanity domain.
 - **Instances with no service** — `redline/*/redline/ops` on :6404 is
   loopback-only. Workers and cron roles likewise. If instance and Service were
