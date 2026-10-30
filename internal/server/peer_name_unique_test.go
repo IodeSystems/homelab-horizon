@@ -53,6 +53,9 @@ func TestAPeerNameIsUniqueOnEveryAddPath(t *testing.T) {
 	if _, ok := s.findInvite(tok); !ok {
 		t.Error("the refused redeem burned the invite")
 	}
+	if after, _ := os.ReadFile(wgPath); string(after) != string(before) {
+		t.Error("a refused add or redeem changed wg0.conf")
+	}
 
 	// A rename onto it is refused.
 	if w := add("carl-2"); w.Code != http.StatusOK {

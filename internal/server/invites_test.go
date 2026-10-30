@@ -256,7 +256,7 @@ func TestInviteCreateRules(t *testing.T) {
 	s, _ := inviteServer(t)
 	inv := mintInvite(t, s, apitypes.CreateInviteReq{})
 	exp, err := time.Parse(time.RFC3339, inv.ExpiresAt)
-	if err != nil || exp.Sub(time.Now()) < 23*time.Hour || exp.Sub(time.Now()) > 25*time.Hour {
+	if err != nil || time.Until(exp) < 23*time.Hour || time.Until(exp) > 25*time.Hour {
 		t.Errorf("default expiry %q, want ~24h", inv.ExpiresAt)
 	}
 	if inv.Profile != config.ProfileVPNOnly {
