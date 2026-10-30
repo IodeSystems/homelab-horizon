@@ -67,16 +67,16 @@ const HAPROXY = [
 ];
 
 const DERIVED: LocalDNSDerived[] = [
-  // Two-slot service: slot a active on :6302, slot b on :6300.
+  // Two-slot service: slot a (current) on :6302, slot b (next) on :6300.
   {
     name: "kc.example.com",
     ip: "192.0.2.10",
     service: "kc",
-    ports: [{ port: 6302, label: "slot a", active: true }, { port: 6300, label: "slot b" }, ...HAPROXY],
+    ports: [{ port: 6302, label: "slot a (current)" }, { port: 6300, label: "slot b (next)" }, ...HAPROXY],
   },
   { name: "wiki.example.com", ip: "192.0.2.10", service: "wiki", ports: [{ port: 8080, label: "backend" }, ...HAPROXY] },
   { name: "nas.example.com", ip: "192.0.2.2", service: "nas", ports: [] },
-  { name: "auth.example.com", ip: "192.0.2.10", service: "kc", ports: [{ port: 6302, label: "slot a", active: true }, { port: 6300, label: "slot b" }, ...HAPROXY] },
+  { name: "auth.example.com", ip: "192.0.2.10", service: "kc", ports: [{ port: 6302, label: "slot a (current)" }, { port: 6300, label: "slot b (next)" }, ...HAPROXY] },
 ];
 
 console.log("derived names — grouped by host, with ports");
@@ -116,7 +116,8 @@ console.log("derived names — grouped by host, with ports");
   // Ports: a two-slot service shows both slots.
   const kc = html.slice(kcRow, html.indexOf("</tr>", kcRow));
   check(kc.includes('data-port="6302"') && kc.includes('data-port="6300"'), "a two-slot service shows both slots");
-  check(kc.includes(":6302 slot a (active)") && kc.includes(":6300 slot b"), "the slots are labelled, the active one marked");
+  check(kc.includes(":6302 slot a (current)") && kc.includes(":6300 slot b (next)"), "the slots are labelled by role");
+  check(!kc.includes("(active)"), "no slot is called active: which one serves is HAProxy's live answer");
   check(kc.includes('data-port="80"') && kc.includes('data-port="443"'), "a proxied service shows HAProxy's ports");
   const wiki = html.slice(html.indexOf('data-derived-name="wiki.example.com"'));
   check(wiki.slice(0, wiki.indexOf("</tr>")).includes(":8080 backend"), "a single-backend service shows its backend port");

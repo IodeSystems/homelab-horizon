@@ -2009,7 +2009,7 @@ function ServiceRow({
                           variant="outlined"
                         />
                       )}
-                      <Chip label={`slot ${service.proxy!.deploy!.activeSlot}`} size="small" variant="outlined" />
+                      <Chip label={`current = slot ${service.proxy!.deploy!.activeSlot}`} size="small" variant="outlined" />
                       <Chip label={service.proxy!.deploy!.balance} size="small" variant="outlined" color="info" />
                     </Box>
                   )}

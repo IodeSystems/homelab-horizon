@@ -45,10 +45,6 @@ export function groupByHost(derived: LocalDNSDerived[]): DerivedGroup[] {
     .map(([ip, names]) => ({ ip, names: [...names].sort((x, y) => x.name.localeCompare(y.name)) }));
 }
 
-function portLabel(p: ServicePort): string {
-  return p.active ? `${p.label} (active)` : p.label;
-}
-
 function Ports({ ports }: { ports: ServicePort[] }) {
   if (ports.length === 0) {
     return (
@@ -60,12 +56,12 @@ function Ports({ ports }: { ports: ServicePort[] }) {
   return (
     <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
       {ports.map((p) => (
-        <Tooltip key={`${p.label}-${p.port}`} title={portLabel(p)}>
+        <Tooltip key={`${p.label}-${p.port}`} title={p.label}>
           <Chip
             size="small"
-            variant={p.active ? "filled" : "outlined"}
+            variant="outlined"
             data-port={p.port}
-            label={`:${p.port} ${portLabel(p)}`}
+            label={`:${p.port} ${p.label}`}
             sx={{ fontFamily: "monospace" }}
           />
         </Tooltip>

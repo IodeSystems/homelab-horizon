@@ -812,29 +812,33 @@ func probeTarget(checkType, addr, path string) string {
 	return addr
 }
 
-// deploySlots lists a blue-green service's two slots, active first. d must
-// be resolved (Config.ResolvedDeploy), backend the resolved proxy.backend.
+// deploySlots lists a blue-green service's two slots in HAProxy's order: next
+// first, then current (render.go; under `balance first`, next serves whenever
+// it is up). d must be resolved (Config.ResolvedDeploy), backend the resolved
+// proxy.backend.
 func deploySlots(d *config.DeployConfig, backend, checkType, path string) []config.CheckSlot {
-	a := config.CheckSlot{Slot: "a", Active: d.ActiveSlot != "b", Addr: backend}
-	b := config.CheckSlot{Slot: "b", Active: d.ActiveSlot == "b", Addr: d.NextBackend}
+	a := config.CheckSlot{Slot: "a", Current: d.ActiveSlot != "b", Addr: backend}
+	b := config.CheckSlot{Slot: "b", Current: d.ActiveSlot == "b", Addr: d.NextBackend}
 	a.Target = probeTarget(checkType, a.Addr, path)
 	b.Target = probeTarget(checkType, b.Addr, path)
-	if b.Active {
+	if a.Current {
 		return []config.CheckSlot{b, a}
 	}
 	return []config.CheckSlot{a, b}
 }
 
-// slotName is "slot a (active) 192.0.2.5:6302".
+// slotName is "slot b (next) 192.0.2.5:6300". It names the slot's ROLE, never
+// "active": which slot serves is HAProxy's live answer, not a config field.
 func slotName(s config.CheckSlot) string {
-	if s.Active {
-		return fmt.Sprintf("slot %s (active) %s", s.Slot, s.Addr)
+	role := "next"
+	if s.Current {
+		role = "current"
 	}
-	return fmt.Sprintf("slot %s %s", s.Slot, s.Addr)
+	return fmt.Sprintf("slot %s (%s) %s", s.Slot, role, s.Addr)
 }
 
 // describeSlots is the Target of a blue-green check. It names both slots and
-// which is active, so a swap or an edited slot address changes it, and
+// their roles, so an edited active_slot or slot address changes it, and
 // RefreshChecks restarts the check on the new resolution.
 func describeSlots(slots []config.CheckSlot) string {
 	parts := make([]string, len(slots))
