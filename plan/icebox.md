@@ -231,6 +231,26 @@ the VPN page's add-peer flow.
 only for the profile that installs the LAN route, which is `lan-access` —
 `vpn-only` and `full-tunnel` are unaffected.
 
+## ◻ Canary rollout across nodes: internal + N%, then 50%, then the rest
+
+Owner, 2026-10-29, after next-first went live: *"at scale, that may be a node that is internal + % of population - the right way to go is have two hz instances, deploy next on it, and route internal + canary %, things look good, canary to 50 and the other node gets upgrade"*. This is what replaces "verify before traffic" once there is more than one box. Today next-first serves the candidate as soon as its check passes, so it is verified by traffic.
+
+The steps: upgrade node B → route internal users + N% to B → watch → 50% → upgrade node A → 100%.
+
+What exists (checked 2026-10-29):
+- `balance first|roundrobin` per deploy backend (`internal/haproxy/render.go:634`), roundrobin with equal weights only;
+- `internal_only` / `local_access` as a source ACL (deny only — it does not pick a backend);
+- two slots of ONE address set.
+
+Missing:
+1. **A backend set larger than two, across machines.** `plan/design/architecture.md` "Many backends, one service" says the model needs a set.
+2. **Per-server weights**, changeable without a reload. The HAProxy runtime `set weight` does not survive a reload (#5, the same trap as runtime slot states), so the weight must be declared config.
+3. **Routing by source:** `use_backend <canary> if local_access` before the weighted split, so internal users always land on the candidate.
+4. **Stickiness:** a cookie or source hash, so one user does not bounce between builds mid-session.
+5. **Mixed-version safety:** both builds serve at once for a whole stage. Schema and API must be backward-compatible across one version; that is the app's contract, and hz cannot check it.
+
+Open question: "two hz instances". The design needs two **app nodes** behind one hz edge. Two hz edges (each node with its own hz) would need DNS-level or upstream weighting instead, and hz's HA peers (Hz Node) share one config, so that is not a split either. The owner decides which is meant before any design.
+
 ## ◻ Path routing for a service (one hostname, two backends)
 
 **Resume condition:** something needs two backends under one name. The first
