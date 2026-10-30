@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/autoheal"
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
 	"github.com/iodesystems/homelab-horizon/internal/letsencrypt"
@@ -28,7 +29,15 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := s.cfg()
-	resp := apitypes.SystemHealthResponse{}
+	resp := apitypes.SystemHealthResponse{
+		Dependencies: []apitypes.DependencyStatus{},
+		InstallHint:  autoheal.InstallHint,
+	}
+	for _, d := range autoheal.Check(cfg) {
+		resp.Dependencies = append(resp.Dependencies, apitypes.DependencyStatus{
+			Name: d.Name, Binary: d.Binary, Package: d.Package, Purpose: d.Purpose, Present: d.Present, Optional: d.Optional,
+		})
+	}
 
 	// Range collision advice. Not a component and not fixable from here —
 	// the remedy is renumbering a network — but it belongs on this page

@@ -2331,16 +2331,58 @@ type PinnedIPResp struct {
 }
 
 type SystemHealthResponse struct {
-	Components           []ComponentHealth `json:"components"`
-	LANAdvice            *CIDRAdviceResp   `json:"lan_advice,omitempty"`
-	VPNAdvice            *CIDRAdviceResp   `json:"vpn_advice,omitempty"`
-	PinnedIPs            []PinnedIPResp    `json:"pinned_ips,omitempty"`
-	PublicIP             string            `json:"publicIP,omitempty"`
-	IPForwarding         bool              `json:"ip_forwarding"`
-	IPForwardingError    string            `json:"ip_forwarding_error,omitempty"`
-	HorizonUnitInstalled bool              `json:"horizon_unit_installed"`
-	HorizonEnabled       bool              `json:"horizon_enabled"`
-	HorizonRunning       bool              `json:"horizon_running"`
+	Components []ComponentHealth `json:"components"`
+	// Dependencies is every command this config requires, present or not
+	// (autoheal.Check): the list startup warns from and `homelab-horizon
+	// check` prints. Installing is CLI-only by design — InstallHint is the
+	// command, there is no HTTP install.
+	Dependencies         []DependencyStatus `json:"dependencies"`
+	InstallHint          string             `json:"install_hint"`
+	LANAdvice            *CIDRAdviceResp    `json:"lan_advice,omitempty"`
+	VPNAdvice            *CIDRAdviceResp    `json:"vpn_advice,omitempty"`
+	PinnedIPs            []PinnedIPResp     `json:"pinned_ips,omitempty"`
+	PublicIP             string             `json:"publicIP,omitempty"`
+	IPForwarding         bool               `json:"ip_forwarding"`
+	IPForwardingError    string             `json:"ip_forwarding_error,omitempty"`
+	HorizonUnitInstalled bool               `json:"horizon_unit_installed"`
+	HorizonEnabled       bool               `json:"horizon_enabled"`
+	HorizonRunning       bool               `json:"horizon_running"`
+}
+
+// DoctorFinding is one result of `hz doctor` (GET /api/v1/doctor), which the
+// System tab's Doctor card renders too, so the page and the CLI read one list.
+//
+// Status is "ok", "failing", "unknown" (hz could not measure — not a shade of
+// failing; a --deep check not run is unknown) or "info" (true and worth
+// knowing, nothing to fix). Fix is the exact command or step; Evidence says
+// what was measured and how, so a reader can check the claim.
+type DoctorFinding struct {
+	Check    string `json:"check"`
+	Subject  string `json:"subject"`
+	Status   string `json:"status"`
+	Problem  string `json:"problem"`
+	Fix      string `json:"fix,omitempty"`
+	Evidence string `json:"evidence,omitempty"`
+}
+
+// DoctorResp is every finding, in check order. Deep says whether the checks
+// that ask outside hz (DNS providers, public DNS) ran.
+type DoctorResp struct {
+	Deep     bool            `json:"deep"`
+	Findings []DoctorFinding `json:"findings"`
+}
+
+// DependencyStatus is one command hz needs for this config, and whether it is
+// on PATH. Purpose says what stops working without it.
+type DependencyStatus struct {
+	Name    string `json:"name"`
+	Binary  string `json:"binary"`
+	Package string `json:"package"`
+	Purpose string `json:"purpose"`
+	Present bool   `json:"present"`
+	// Optional: folded in when present, never run by hz (the node exporter).
+	// Not counted as missing.
+	Optional bool `json:"optional,omitempty"`
 }
 
 // Live host metrics — point-in-time snapshot. CPU/network counters are

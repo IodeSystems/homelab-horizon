@@ -697,6 +697,9 @@ func (s *Server) updateConfig(fn func(cfg *config.Config)) error {
 	if err := s.refuseFleetWhileAgentArmed(old, &cfg); err != nil {
 		return err
 	}
+	if err := refuseNewlyMissingDependencies(old, &cfg); err != nil {
+		return err
+	}
 	s.config.Store(&cfg)
 	s.syncVPNListener()
 	return config.Save(s.configPath, &cfg)
@@ -1457,6 +1460,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/haproxy/write-config", s.handleAPIHAProxyWriteConfig)
 	s.handlePeerInstance(mux, "/api/v1/haproxy/reload", s.handleAPIHAProxyReload)
 	mux.HandleFunc("/api/v1/haproxy/config-preview", s.handleAPIHAProxyConfigPreview)
+	mux.HandleFunc("/api/v1/doctor", s.handleAPIDoctor)
 	mux.HandleFunc("/api/v1/checks", s.handleAPIChecks)
 	mux.HandleFunc("/api/v1/checks/history", s.handleAPICheckHistory)
 	mux.HandleFunc("/api/v1/checks/history/all", s.handleAPIAllCheckHistory)

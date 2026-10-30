@@ -52,7 +52,7 @@ func reportDependencies(w io.Writer, cfg *config.Config) []autoheal.Dependency {
 // dependencyFixHint is the sentence that follows a missing-dependency report.
 // One string, so the install summary and the install-deps failure cannot
 // suggest two different commands.
-const dependencyFixHint = "Install them with: sudo homelab-horizon install-deps"
+const dependencyFixHint = "Install them with: " + autoheal.InstallHint
 
 // runInstallDeps is the `install-deps` verb.
 func runInstallDeps(configPath string, dryRun bool) error {

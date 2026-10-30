@@ -231,10 +231,13 @@ func (c *checker) checkBinaries() {
 	// One remedy, named once. `check` used to suggest a bare `apt install`
 	// per binary, which is four commands that bypass the package allow-list
 	// and do not know which of them this box actually needs.
-	c.checkBinary("WireGuard", "wg", dependencyFixHint, true)
-	c.checkBinary("dnsmasq", "dnsmasq", dependencyFixHint, c.cfg.DNSMasqEnabled)
-	c.checkBinary("qrencode", "qrencode", dependencyFixHint, false)
-	c.checkBinary("haproxy", "haproxy", dependencyFixHint, c.cfg.HAProxyEnabled)
+	//
+	// The list is autoheal's, the same one startup and the System tab read, so
+	// this command cannot name a binary hz no longer needs (it named qrencode
+	// after the QR code moved in process).
+	for _, d := range autoheal.Check(c.cfg) {
+		c.checkBinary(d.Name, d.Binary, dependencyFixHint, true)
+	}
 }
 
 func (c *checker) checkBinary(name, binary, installCmd string, required bool) {

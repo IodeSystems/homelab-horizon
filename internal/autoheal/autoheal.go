@@ -19,36 +19,40 @@ type Dependency struct {
 	// looking at the box rather than the code. "wireguard-tools MISSING" tells
 	// an operator nothing they can act on; "the VPN cannot come up" does.
 	Purpose string `json:"purpose"`
+	// Optional is a package hz folds in when present and never runs itself
+	// (the node exporter: found by probing its port, so it can be up with
+	// no binary on PATH). It is never a reason to refuse an edit, and the
+	// System tab does not count it as missing.
+	Optional bool `json:"optional,omitempty"`
 }
 
 type dependency struct {
-	name    string
-	binary  string
-	pkg     string
-	purpose string
-	require func(*config.Config) bool
+	name     string
+	binary   string
+	pkg      string
+	purpose  string
+	require  func(*config.Config) bool
+	optional bool
 }
 
 var dependencies = []dependency{
 	{"iproute2", "ip", "iproute2", "interface and route management; without it hz cannot configure any network state",
-		func(*config.Config) bool { return true }},
+		func(*config.Config) bool { return true }, false},
 	{"WireGuard tools", "wg", "wireguard-tools", "brings the VPN interface up; without it no peer can connect",
-		func(*config.Config) bool { return true }},
+		func(*config.Config) bool { return true }, false},
 	{"iptables", "iptables", "iptables", "the per-peer firewall, NAT and the MFA jail; without it VPN traffic is unfiltered or unrouted",
-		func(*config.Config) bool { return true }},
-	{"qrencode", "qrencode", "qrencode", "renders the QR code a phone scans to enrol as a VPN peer",
-		func(*config.Config) bool { return true }},
+		func(*config.Config) bool { return true }, false},
 	{"dnsmasq", "dnsmasq", "dnsmasq", "serves split-horizon DNS; without it internal names do not resolve",
-		func(c *config.Config) bool { return c.DNSMasqEnabled }},
+		func(c *config.Config) bool { return c.DNSMasqEnabled }, false},
 	{"HAProxy", "haproxy", "haproxy", "the reverse proxy and TLS edge; without it no published service is reachable",
-		func(c *config.Config) bool { return c.HAProxyEnabled }},
+		func(c *config.Config) bool { return c.HAProxyEnabled }, false},
 	// Opt-in: hz does not need node-exporter to work, it just folds it into
 	// the scrape config it serves when present. Listing it here also puts it
 	// on the KnownPackages allowlist, so `install-deps` will fetch it on a box
 	// whose config enables it, without widening that allowlist.
 	{"Prometheus node exporter", "prometheus-node-exporter", "prometheus-node-exporter",
 		"host metrics for the scrape config hz publishes; optional",
-		func(c *config.Config) bool { return c.NodeExporterEnabled }},
+		func(c *config.Config) bool { return c.NodeExporterEnabled }, true},
 }
 
 // KnownPackages returns the set of apt package names autoheal knows how to
@@ -70,6 +74,37 @@ func KnownPackages() []string {
 // installing something as a side effect.
 var lookPath = exec.LookPath
 
+// InstallHint is the one command that installs what Check reports missing.
+// Every surface that names a remedy uses it, so none can suggest another.
+const InstallHint = "sudo homelab-horizon install-deps"
+
+// DependencyStatus is one dependency this config requires, and whether its
+// binary is on PATH.
+type DependencyStatus struct {
+	Dependency
+	Present bool `json:"present"`
+}
+
+// Check reports every dependency this config requires, present or not, in
+// table order. It is what the System tab and `homelab-horizon check` list, so
+// neither keeps a second list of binaries that could drift from this one (the
+// check command's own list still named qrencode after hz stopped needing it).
+// Pure observation, as Missing.
+func Check(cfg *config.Config) []DependencyStatus {
+	var out []DependencyStatus
+	for _, dep := range dependencies {
+		if !dep.require(cfg) {
+			continue
+		}
+		_, err := lookPath(dep.binary)
+		out = append(out, DependencyStatus{
+			Dependency: Dependency{Name: dep.name, Binary: dep.binary, Package: dep.pkg, Purpose: dep.purpose, Optional: dep.optional},
+			Present:    err == nil,
+		})
+	}
+	return out
+}
+
 // Missing reports the dependencies this config requires whose binary is not on
 // PATH. It is pure observation: it installs nothing, changes nothing, and does
 // not need root.
@@ -81,17 +116,32 @@ var lookPath = exec.LookPath
 // nothing about it. The gate is gone; the report is unconditional.
 func Missing(cfg *config.Config) []Dependency {
 	var missing []Dependency
-	for _, dep := range dependencies {
-		if !dep.require(cfg) {
-			continue
-		}
-		if _, err := lookPath(dep.binary); err != nil {
-			missing = append(missing, Dependency{
-				Name: dep.name, Binary: dep.binary, Package: dep.pkg, Purpose: dep.purpose,
-			})
+	for _, st := range Check(cfg) {
+		if !st.Present {
+			missing = append(missing, st.Dependency)
 		}
 	}
 	return missing
+}
+
+// NewlyMissing is what next requires and this host lacks that prev did not
+// already lack, optional packages aside: the commands an edit from prev to
+// next would leave hz needing and unable to run. An edit is refused on it
+// (server.updateConfig) — at the moment someone asks for the feature, with
+// the command named, rather than as an ERROR on every sync afterwards.
+// Something already missing does not block an unrelated edit.
+func NewlyMissing(prev, next *config.Config) []Dependency {
+	before := map[string]bool{}
+	for _, d := range Missing(prev) {
+		before[d.Binary] = true
+	}
+	var out []Dependency
+	for _, d := range Missing(next) {
+		if !d.Optional && !before[d.Binary] {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // InstallMissing installs the packages Missing reports, deliberately and by
