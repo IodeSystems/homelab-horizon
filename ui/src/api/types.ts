@@ -58,6 +58,7 @@ export type {
   BanRequest,
   UnbanRequest,
   ServiceIntegration,
+  ServiceAddResp,
   CheckResult,
   CheckHistoryResponse,
   ChecksOverview,

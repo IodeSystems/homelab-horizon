@@ -479,10 +479,12 @@ func serviceCreate(c *client, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := c.do("POST", "/api/v1/services/add", req, nil); err != nil {
+	var created apitypes.ServiceAddResp
+	if err := c.do("POST", "/api/v1/services/add", req, &created); err != nil {
 		return err
 	}
 	fmt.Printf("Created service %q.\n", req.Name)
+	printServiceSnippet(req.Name, created.ServiceIntegration)
 	if want != nil {
 		if err := applyHTTPS(c, req.Domains, want); err != nil {
 			return err
@@ -872,4 +874,17 @@ func runPending(c *client, _ []string) error {
 	}
 	fmt.Println("\nRun 'hz sync' to publish.")
 	return nil
+}
+
+// printServiceSnippet prints the script that manages a new service. It holds
+// the service token; `hz service create` is admin-only, and the same token is
+// re-fetchable from the service's Integration panel.
+func printServiceSnippet(name string, in apitypes.ServiceIntegration) {
+	if in.Snippet == "" {
+		// An hz older than the create answer: say where the token is instead.
+		fmt.Printf("Token and hz-client script: the service's Integration panel (GET /api/v1/services/integration?name=%s).\n", name)
+		return
+	}
+	fmt.Println()
+	fmt.Print(in.Snippet)
 }

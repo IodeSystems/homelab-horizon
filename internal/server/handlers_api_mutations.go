@@ -211,6 +211,8 @@ func (s *Server) handleAPIAddService(w http.ResponseWriter, r *http.Request) {
 	req.Domains = domains
 
 	svc := serviceRequestToService(&req)
+	// Minted here, not at the next restart: the create answer carries it.
+	svc.EnsureToken()
 
 	// Placement is checked BEFORE updateConfig, which stores the new config and
 	// only then saves it: a service naming an undeclared project would be live
@@ -235,7 +237,15 @@ func (s *Server) handleAPIAddService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.syncServices()
-	writeJSONOK(w)
+	added := svc
+	for i := range s.cfg().Services {
+		if s.cfg().Services[i].Name == svc.Name {
+			added = s.cfg().Services[i]
+			break
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(apitypes.ServiceAddResp{OK: true, ServiceIntegration: serviceIntegration(&added, s.integrationBaseURL(r))})
 }
 
 // PUT /api/v1/services/edit

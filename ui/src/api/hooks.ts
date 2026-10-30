@@ -66,6 +66,7 @@ import type {
   PeerConfigResponse,
   RekeyPeerResponse,
   Service,
+  ServiceAddResp,
   ServiceIntegration,
   SettingsData,
   SystemHealth,
@@ -360,12 +361,15 @@ export function useAddService() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: ServiceMutationInput) =>
-      apiFetch("/services/add", {
+      apiFetch<ServiceAddResp>("/services/add", {
         method: "POST",
         body: JSON.stringify(input),
       }),
-    onSuccess: () => {
+    onSuccess: (created) => {
       qc.invalidateQueries({ queryKey: ["services"] });
+      // The create answer IS the integration: seed it, so the panel opened
+      // right after shows the minted token without a second round trip.
+      qc.setQueryData(["services", "integration", created.name], created);
       qc.invalidateQueries({ queryKey: ["domains"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       qc.invalidateQueries({ queryKey: ["pending"] });
