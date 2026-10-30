@@ -70,17 +70,6 @@ func (c *Client) SetSlotState(ctx context.Context, slot SlotName, state SlotStat
 	return &out, nil
 }
 
-// DeploySwap exchanges the current and next labels and reloads HAProxy. It
-// moves no traffic by itself: it renames which slot the next deploy cycle will
-// treat as standby.
-func (c *Client) DeploySwap(ctx context.Context) (*DeploySwapResponse, error) {
-	var out DeploySwapResponse
-	if err := c.do(ctx, http.MethodPost, "/api/deploy/swap", nil, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
 // MaintPageSet installs a custom 503 page and returns its md5, which is how a
 // caller confirms hz stored the bytes it sent.
 //

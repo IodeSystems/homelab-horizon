@@ -11,10 +11,10 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/haproxy"
 )
 
-// POST /api/deploy/swap changes only active_slot. The svc: check names the
-// active slot, so the swap has to reach the monitor with no other edit —
-// otherwise the check keeps describing, and warning about, the old one.
-func TestDeploySwapMovesTheServiceCheck(t *testing.T) {
+// POST /api/deploy/swap is gone. Next is listed first under `balance first`,
+// so swapping the labels would put the slot still running the old code first.
+// The refusal must change nothing — not the active slot, not the check.
+func TestDeploySwapIsRefusedAndChangesNothing(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{
 		HAProxyConfigPath: filepath.Join(dir, "haproxy.cfg"),
@@ -31,22 +31,28 @@ func TestDeploySwapMovesTheServiceCheck(t *testing.T) {
 	s.haproxy = haproxy.New(cfg.HAProxyConfigPath, filepath.Join(dir, "haproxy.sock"))
 	s.monitor.RefreshChecks(s.cfg())
 
-	if st := s.monitor.GetStatus("svc:kc"); st == nil || !strings.HasPrefix(st.Target, "slot a (active) 192.0.2.10:6302") {
-		t.Fatalf("before swap: %+v, want slot a active", st)
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/api/deploy/swap", nil)
+	// Positive control: the token is good, so the refusal below is the verb's,
+	// not an auth failure.
+	req := httptest.NewRequest(http.MethodGet, "/api/deploy/status", nil)
 	req.Header.Set("Authorization", "Bearer swap-token")
 	rec := httptest.NewRecorder()
-	// The response may be a 500: the test box has no haproxy binary to
-	// validate and reload with. The config write and the check move first.
+	s.handleDeployAPI(rec, req)
+	if rec.Code == http.StatusUnauthorized {
+		t.Fatalf("status with the service token = %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/deploy/swap", nil)
+	req.Header.Set("Authorization", "Bearer swap-token")
+	rec = httptest.NewRecorder()
 	s.handleDeployAPI(rec, req)
 
-	if got := s.cfg().Services[0].Proxy.Deploy.ActiveSlot; got != "b" {
-		t.Fatalf("active slot = %q after swap (response %d %s)", got, rec.Code, rec.Body.String())
+	if rec.Code != http.StatusGone || !strings.Contains(rec.Body.String(), "rolling") {
+		t.Fatalf("swap = %d %q, want 410 pointing at the rolling sequence", rec.Code, rec.Body.String())
 	}
-	st := s.monitor.GetStatus("svc:kc")
-	if st == nil || !strings.HasPrefix(st.Target, "slot b (active) 192.0.2.10:6300") {
-		t.Fatalf("after swap: %+v, want slot b active", st)
+	if got := s.cfg().Services[0].Proxy.Deploy.ActiveSlot; got != "a" {
+		t.Errorf("active slot = %q after a refused swap, want a", got)
+	}
+	if st := s.monitor.GetStatus("svc:kc"); st == nil || !strings.HasPrefix(st.Target, "slot a (active) 192.0.2.10:6302") {
+		t.Errorf("check after a refused swap: %+v, want slot a still active", st)
 	}
 }

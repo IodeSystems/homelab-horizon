@@ -42,7 +42,10 @@ func extractBearerToken(r *http.Request) string {
 //	GET  /api/deploy/status
 //	POST /api/deploy/current/up|drain|down
 //	POST /api/deploy/next/up|drain|down
-//	POST /api/deploy/swap
+//
+// There is no swap. Under `balance first` next is listed first (render.go),
+// so a label swap would put the slot still running the old code first; the
+// rolling sequence leaves both slots on the new code instead.
 func (s *Server) handleDeployAPI(w http.ResponseWriter, r *http.Request) {
 	token := extractBearerToken(r)
 	if token == "" {
@@ -88,11 +91,7 @@ func (s *Server) handleDeployAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleDeployStateChange(w, backendName, action, parts[1])
 
 	case "swap":
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		s.handleDeploySwap(w, idx)
+		http.Error(w, "swap is removed: next is listed first, so swapping labels would serve the old code; deploy with the rolling sequence (hz-client rolling start|continue|finalize)", http.StatusGone)
 
 	case "maint-page":
 		if r.Method != http.MethodPost {
@@ -244,44 +243,4 @@ func (s *Server) handleDeployMaintPage(w http.ResponseWriter, r *http.Request, s
 	} else {
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}
-}
-
-func (s *Server) handleDeploySwap(w http.ResponseWriter, svcIdx int) {
-	if err := s.updateConfig(func(cfg *config.Config) {
-		cfg.Services[svcIdx].Proxy.Deploy.Swap()
-	}); err != nil {
-		http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// The svc: check names which slot is active. Without this it keeps the
-	// pre-swap resolution until something else re-derives the checks.
-	if s.monitor != nil {
-		s.monitor.RefreshChecks(s.cfg())
-	}
-
-	// Regenerate and reload haproxy so current/next ports reflect the new active slot
-	s.syncHAProxyBackends()
-	ssl := haproxySSLFor(s.cfg())
-	if err := s.haproxy.WriteConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, ssl); err != nil {
-		http.Error(w, "failed to write haproxy config: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if err := s.haproxy.Reload(); err != nil {
-		http.Error(w, "failed to reload haproxy: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	cfg := s.cfg()
-	svc := &cfg.Services[svcIdx]
-	resolved := cfg.ResolvedDeploy(svc)
-	backend := cfg.ServiceBackend(svc)
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(apitypes.DeploySwapResponse{
-		Status:     "ok",
-		ActiveSlot: resolved.ActiveSlot,
-		Current:    resolved.CurrentServer(backend),
-		Next:       resolved.InactiveServer(backend),
-	})
 }

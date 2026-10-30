@@ -63,14 +63,6 @@ type DeployStateChangeResponse struct {
 	State  string `json:"state"`
 }
 
-// DeploySwapResponse is the answer to a swap: the labels after it, not before.
-type DeploySwapResponse struct {
-	Status     string `json:"status"`
-	ActiveSlot string `json:"active_slot"`
-	Current    string `json:"current"`
-	Next       string `json:"next"`
-}
-
 // MaintPageResponse answers both maint-page verbs.
 //
 // It has NO counterpart in internal/apitypes: the handler writes a

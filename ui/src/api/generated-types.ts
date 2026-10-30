@@ -3945,12 +3945,6 @@ export interface DeployStateChangeResponse {
   server: string;
   state: string;
 }
-export interface DeploySwapResponse {
-  status: string;
-  active_slot: string;
-  current: string;
-  next: string;
-}
 export interface ServiceRequest {
   originalName?: string;
   name: string;
