@@ -1833,10 +1833,6 @@ func (s *Server) syncPublicIPAndRecords() {
 	s.syncExternalDNSRecords(reason)
 }
 
-// route53SyncRecord is the external-DNS write, a variable so a test can see
-// which names the sync would write without reaching AWS.
-var route53SyncRecord = route53.SyncRecord
-
 // syncExternalDNSRecords publishes every service's external DNS this hz
 // publishes itself, and reports every name it leaves out: a name a nested hz
 // hands its parent at DEBUG (correct, not a failure), a name in a zone with no
@@ -1854,18 +1850,24 @@ func (s *Server) syncExternalDNSRecords(reason string) {
 	if len(records) == 0 {
 		return
 	}
+	if s.dnsSyncBlocked() {
+		slog.Warn("external DNS held: DNS drift block active (clear drift to resume)", "reason", reason)
+		return
+	}
 
 	slog.Info("syncing DNS records", "count", len(records), "reason", reason)
 
-	for _, rec := range records {
-		changed, err := route53SyncRecord(rec)
-		if err != nil {
-			slog.Error("DNS sync failed", "record", rec.Name, "err", err)
-			continue
+	results, err := s.publishExternalDNS(s.newDNSSyncRun(), records)
+	for _, res := range results {
+		switch {
+		case res.Err != nil:
+			slog.Error("DNS sync failed", "record", res.Name, "err", res.Err)
+		case res.Changed:
+			slog.Info("DNS record updated", "record", res.Name, "value", strings.Join(res.Values, ","))
 		}
-		if changed {
-			slog.Info("DNS record updated", "record", rec.Name, "value", rec.Value)
-		}
+	}
+	if errors.Is(err, errDNSDriftBlocked) {
+		slog.Warn("external DNS stopped: drift detected (clear drift to resume)")
 	}
 }
 
