@@ -87,8 +87,15 @@ func TestDoctorFindsWhatWentWrongThisWeek(t *testing.T) {
 		t.Errorf("new kiosk name = %+v, want info naming the passkeys", f)
 	}
 
-	if f := finding(t, fs, "public-admin", "hz.beta.new.example.com"); f.Status != "failing" || !strings.Contains(f.Fix, "admin-token") {
-		t.Errorf("public UI with the shared token = %+v, want failing with the fix", f)
+	// The operator's rule: a public UI with the shared token is a warning,
+	// failing only under --pci.
+	if f := finding(t, fs, "public-admin", "hz.beta.new.example.com"); f.Status != "warning" || !strings.Contains(f.Fix, "admin-token") {
+		t.Errorf("public UI with the shared token = %+v, want a warning with the way to close it", f)
+	}
+	pci := doctorFactsFor()
+	pci.pci = true
+	if f := finding(t, doctorFindings(doctorCfg(), pci), "public-admin", "hz.beta.new.example.com"); f.Status != "failing" {
+		t.Errorf("public UI with the shared token under --pci = %+v, want failing", f)
 	}
 
 	if f := finding(t, fs, "cert-coverage", "www.stale.example.com"); f.Status != "failing" {
@@ -176,5 +183,32 @@ func TestCoveringCertMatchesOneWildcardLabel(t *testing.T) {
 	}
 	if coveringCert(certs, "a.b.example.com") != "" || coveringCert(certs, "example.com") != "" {
 		t.Error("a wildcard covers exactly one label")
+	}
+}
+
+// Open sign-up on a public UI fails; each gate, and auto_provision off, is the
+// control that it is the openness being measured.
+func TestDoctorFailsOpenSelfRegistrationOnAPublicUI(t *testing.T) {
+	open := func() *config.OIDCConfig {
+		return &config.OIDCConfig{Enabled: true, Issuer: "https://accounts.google.com", AutoProvision: true}
+	}
+	cfg := doctorCfg()
+	cfg.OIDC = open()
+	if f := finding(t, doctorFindings(cfg, doctorFactsFor()), "public-admin", "hz.beta.new.example.com"); f.Status != "failing" || !strings.Contains(f.Problem, "accounts.google.com") {
+		t.Errorf("open sign-up on a public UI = %+v, want failing", f)
+	}
+	for name, gate := range map[string]func(*config.OIDCConfig){
+		"groups":         func(o *config.OIDCConfig) { o.AllowedGroups = []string{"ops"} },
+		"email domain":   func(o *config.OIDCConfig) { o.AllowedEmailDomains = []string{"new.example.com"} },
+		"required claim": func(o *config.OIDCConfig) { o.RequiredClaims = map[string][]string{"hd": {"new.example.com"}} },
+		"no provision":   func(o *config.OIDCConfig) { o.AutoProvision = false },
+		"disabled":       func(o *config.OIDCConfig) { o.Enabled = false },
+	} {
+		o := open()
+		gate(o)
+		cfg.OIDC = o
+		if f := finding(t, doctorFindings(cfg, doctorFactsFor()), "public-admin", "hz.beta.new.example.com"); f.Status == "failing" {
+			t.Errorf("%s: %+v, want not failing", name, f)
+		}
 	}
 }

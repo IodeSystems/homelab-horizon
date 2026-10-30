@@ -2352,9 +2352,10 @@ type SystemHealthResponse struct {
 // DoctorFinding is one result of `hz doctor` (GET /api/v1/doctor), which the
 // System tab's Doctor card renders too, so the page and the CLI read one list.
 //
-// Status is "ok", "failing", "unknown" (hz could not measure — not a shade of
-// failing; a --deep check not run is unknown) or "info" (true and worth
-// knowing, nothing to fix). Fix is the exact command or step; Evidence says
+// Status is "ok", "failing", "warning" (a risk the operator may accept; failing
+// under --pci), "unknown" (hz could not measure — not a shade of failing; a
+// --deep check not run is unknown) or "info" (true and worth knowing, nothing
+// to fix). Fix is the exact command or step; Evidence says
 // what was measured and how, so a reader can check the claim.
 type DoctorFinding struct {
 	Check    string `json:"check"`
@@ -2366,9 +2367,11 @@ type DoctorFinding struct {
 }
 
 // DoctorResp is every finding, in check order. Deep says whether the checks
-// that ask outside hz (DNS providers, public DNS) ran.
+// that ask outside hz (DNS providers, public DNS) ran; PCI whether warnings
+// that PCI DSS forbids were judged failing.
 type DoctorResp struct {
 	Deep     bool            `json:"deep"`
+	PCI      bool            `json:"pci"`
 	Findings []DoctorFinding `json:"findings"`
 }
 
