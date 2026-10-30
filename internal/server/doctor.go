@@ -52,6 +52,7 @@ type doctorProviderRead struct {
 type doctorFacts struct {
 	now  time.Time
 	deep bool
+	pci  bool // judge as PCI DSS does: a warning it forbids is failing
 	deps []autoheal.DependencyStatus
 
 	certDir    string
@@ -68,7 +69,7 @@ type doctorFacts struct {
 	publicAErr    map[string]error
 }
 
-// GET /api/v1/doctor[?deep=1]
+// GET /api/v1/doctor[?deep=1][&pci=1]
 func (s *Server) handleAPIDoctor(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {
 		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
@@ -79,8 +80,11 @@ func (s *Server) handleAPIDoctor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	deep := r.URL.Query().Get("deep") == "1"
+	pci := r.URL.Query().Get("pci") == "1"
 	cfg := s.cfg()
-	writeJSON(w, apitypes.DoctorResp{Deep: deep, Findings: doctorFindings(cfg, s.doctorFacts(r.Context(), cfg, deep))})
+	facts := s.doctorFacts(r.Context(), cfg, deep)
+	facts.pci = pci
+	writeJSON(w, apitypes.DoctorResp{Deep: deep, PCI: pci, Findings: doctorFindings(cfg, facts)})
 }
 
 // doctorFacts reads what the checks judge. The impure half.
@@ -208,7 +212,7 @@ func doctorFindings(cfg *config.Config, f doctorFacts) []apitypes.DoctorFinding 
 	out = append(out, kioskFindings(cfg)...)
 
 	// 3. hz's UI published while the shared admin token works.
-	out = append(out, publicAdminFindings(cfg)...)
+	out = append(out, publicAdminFindings(cfg, f.pci)...)
 
 	// 4. Certificates HAProxy serves.
 	out = append(out, certFindings(cfg, f)...)
@@ -326,15 +330,15 @@ func kioskFindings(cfg *config.Config) []apitypes.DoctorFinding {
 			continue
 		}
 		out = append(out, apitypes.DoctorFinding{Check: "kiosk", Subject: d, Status: "info",
-			Problem: d + " is served by the kiosk service but kiosk_url is still " + host +
-				": passkeys are bound to " + host + " (the WebAuthn RP ID), so moving kiosk_url orphans every enrolled passkey",
-			Fix:      "when moving: set kiosk_url and server_endpoint to " + d + ", then re-enrol passkeys and update each WireGuard client's Endpoint",
+			Problem: d + " is also served by the kiosk service, but kiosk_url is " + host +
+				": passkeys are bound to " + host + " (the WebAuthn RP ID), so moving kiosk_url to " + d + " orphans every enrolled passkey",
+			Fix:      "to make " + d + " the kiosk: set kiosk_url and server_endpoint to it, then re-enrol passkeys and update each WireGuard client's Endpoint",
 			Evidence: "service " + serving.Name + " domains"})
 	}
 	return out
 }
 
-func publicAdminFindings(cfg *config.Config) []apitypes.DoctorFinding {
+func publicAdminFindings(cfg *config.Config, pci bool) []apitypes.DoctorFinding {
 	published := map[string]bool{}
 	for _, n := range publishedNames(cfg) {
 		published[n] = true
@@ -350,20 +354,41 @@ func publicAdminFindings(cfg *config.Config) []apitypes.DoctorFinding {
 			}
 		}
 	}
+	names := strings.Join(public, ", ")
 	switch {
 	case len(public) == 0:
 		return []apitypes.DoctorFinding{{Check: "public-admin", Subject: "hz UI", Status: "ok",
 			Problem: "hz publishes no public record for its own UI", Evidence: "self services compared with published A records"}}
+	case openSelfRegistration(cfg.OIDC):
+		// The operator's rule (2026-10-30): a public UI is acceptable with the
+		// shared token, NOT with sign-up open to whoever the provider
+		// authenticates. hz has one role, so every such account is admin.
+		return []apitypes.DoctorFinding{{Check: "public-admin", Subject: names, Status: "failing",
+			Problem:  "hz's UI is public at " + names + " and single sign-on through " + cfg.OIDC.Issuer + " creates an admin for every account it authenticates (auto_provision with no allowed_groups, allowed_email_domains or required_claims)",
+			Fix:      "gate the sign-in (Google: allowed_email_domains plus required_claims hd), turn off auto_provision, or make these names VPN-only",
+			Evidence: "self services compared with published A records; oidc.auto_provision with no gate"}}
 	case cfg.AdminTokenDisabled:
-		return []apitypes.DoctorFinding{{Check: "public-admin", Subject: strings.Join(public, ", "), Status: "info",
-			Problem:  "hz's UI is public at " + strings.Join(public, ", ") + "; the shared admin token is disabled, so a sign-in is required",
+		return []apitypes.DoctorFinding{{Check: "public-admin", Subject: names, Status: "info",
+			Problem:  "hz's UI is public at " + names + "; the shared admin token is disabled, so a sign-in is required",
 			Evidence: "self services compared with published A records; admin_token_disabled"}}
 	default:
-		return []apitypes.DoctorFinding{{Check: "public-admin", Subject: strings.Join(public, ", "), Status: "failing",
-			Problem:  "hz's UI is public at " + strings.Join(public, ", ") + " while the shared admin token is enabled: whoever holds it is admin from the internet (PCI 8.2.1)",
-			Fix:      "disable the shared admin token (Settings, or POST /api/v1/admin-token/disable), or make these names VPN-only",
-			Evidence: "self services compared with published A records; admin_token_disabled is false"}}
+		// The operator's call (2026-10-30): a warning, failing only under --pci.
+		status := "warning"
+		if pci {
+			status = "failing"
+		}
+		return []apitypes.DoctorFinding{{Check: "public-admin", Subject: names, Status: status,
+			Problem:  "hz's UI is public at " + names + " and the shared admin token is enabled: whoever holds it is admin from the internet; nobody can register (PCI DSS 8.2.1 forbids a shared credential)",
+			Fix:      "to close it: disable the shared admin token (Settings, or POST /api/v1/admin-token/disable), or make these names VPN-only",
+			Evidence: "self services compared with published A records; admin_token_disabled is false; no open self-registration"}}
 	}
+}
+
+// openSelfRegistration: single sign-on that makes a local user of ANY account
+// the provider authenticates.
+func openSelfRegistration(o *config.OIDCConfig) bool {
+	return o != nil && o.Enabled && o.AutoProvision &&
+		len(o.AllowedGroups) == 0 && len(o.AllowedEmailDomains) == 0 && len(o.RequiredClaims) == 0
 }
 
 // certFindings: every certificate HAProxy holds, by expiry, and every service

@@ -244,9 +244,15 @@ console.log("· doctor: failing first with its fix; unknown is unknown; a note k
         { check: "kiosk", subject: "kiosk.hz.beta.example.com", status: "info", problem: "served, kiosk_url elsewhere", fix: "set kiosk_url, re-enrol passkeys" },
         { check: "dns-provider", subject: "example.com", status: "unknown", problem: "not checked", fix: "hz doctor --deep" },
         { check: "cert-coverage", subject: "www.example.com", status: "failing", problem: "no cert", fix: "hz domain ssl add www.example.com" },
+        { check: "public-admin", subject: "hz.example.com", status: "warning", problem: "shared token on a public UI", fix: "disable the shared admin token" },
       ]}
     />,
   );
+  check(
+    html.includes("Warning") && html.indexOf("hz.example.com") < html.indexOf("haproxy") && html.indexOf("hz.example.com") > html.indexOf("www.example.com"),
+    "a warning is said so, after failing and before ok",
+  );
+  check(html.includes("disable the shared admin token"), "a warning carries its fix");
   check(html.indexOf("www.example.com") < html.indexOf("haproxy"), "a failing finding renders before an ok one");
   check(html.includes("hz domain ssl add www.example.com"), "the failing finding carries its fix");
   check(html.includes("Unknown") && html.includes("hz doctor --deep"), "an unrun check is unknown, with how to run it");

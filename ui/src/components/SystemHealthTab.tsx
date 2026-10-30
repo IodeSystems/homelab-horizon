@@ -83,6 +83,7 @@ function CheckRow({
   label,
   ok,
   unknown,
+  warning,
   failingLabel,
   okLabel = "OK",
   unknownLabel = "Unknown",
@@ -96,6 +97,8 @@ function CheckRow({
   label: string;
   ok: boolean;
   unknown?: boolean;
+  // warning: a risk the operator may accept. Not ok, not failing.
+  warning?: boolean;
   failingLabel?: string;
   okLabel?: string;
   unknownLabel?: string;
@@ -108,7 +111,13 @@ function CheckRow({
 }) {
   // Unknown wins over ok: a caller that computed `ok` from facts it could not
   // read must not render a green chip because the unreadable half defaulted.
-  const state: "ok" | "unknown" | "failing" = unknown ? "unknown" : ok ? "ok" : "failing";
+  const state: "ok" | "unknown" | "warning" | "failing" = unknown
+    ? "unknown"
+    : warning
+      ? "warning"
+      : ok
+        ? "ok"
+        : "failing";
   const hint = state === "unknown" ? (unknownHint ?? runToFix) : runToFix;
   const hintLead = state === "unknown" ? "Check it on this host:" : "Run on this host:";
   return (
@@ -122,10 +131,16 @@ function CheckRow({
         <Chip
           size="small"
           label={
-            state === "ok" ? okLabel : state === "unknown" ? unknownLabel : (failingLabel ?? "Missing")
+            state === "ok"
+              ? okLabel
+              : state === "unknown"
+                ? unknownLabel
+                : state === "warning"
+                  ? "Warning"
+                  : (failingLabel ?? "Missing")
           }
-          color={state === "ok" ? "success" : state === "unknown" ? "warning" : "error"}
-          variant={state === "ok" ? "outlined" : "filled"}
+          color={state === "ok" ? "success" : state === "failing" ? "error" : "warning"}
+          variant={state === "ok" || state === "warning" ? "outlined" : "filled"}
         />
         {state === "failing" && fix && (
           <Button
@@ -305,10 +320,10 @@ function RangeAdvice({ health }: { health: SystemHealth }) {
 }
 
 // DoctorRows renders `hz doctor`'s findings as CheckRows: failing in red with
-// its fix, unknown as unknown (a check hz could not run, never a green one),
+// its fix, a warning (failing only under --pci) outlined with its fix, unknown as unknown (a check hz could not run, never a green one),
 // info as a note that still shows its next step, ok as ok.
 export function DoctorRows({ findings }: { findings: DoctorFinding[] }) {
-  const order = { failing: 0, unknown: 1, info: 2, ok: 3 } as Record<string, number>;
+  const order = { failing: 0, warning: 1, unknown: 2, info: 3, ok: 4 } as Record<string, number>;
   const sorted = [...findings].sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
   return (
     <>
@@ -318,6 +333,7 @@ export function DoctorRows({ findings }: { findings: DoctorFinding[] }) {
             label={`${f.check} · ${f.subject} — ${f.problem}`}
             ok={f.status === "ok" || f.status === "info"}
             unknown={f.status === "unknown"}
+            warning={f.status === "warning"}
             okLabel={f.status === "info" ? "Note" : "OK"}
             failingLabel="Failing"
             runToFix={f.fix || undefined}
@@ -345,6 +361,7 @@ function DoctorCard() {
   const { data, isFetching, error } = useDoctor(deep);
   const findings = data?.findings ?? [];
   const failing = findings.filter((f) => f.status === "failing").length;
+  const warnings = findings.filter((f) => f.status === "warning").length;
   return (
     <Card variant="outlined">
       <CardHeader
@@ -355,8 +372,14 @@ function DoctorCard() {
             {data && (
               <Chip
                 size="small"
-                label={failing > 0 ? `${failing} failing` : "Nothing failing"}
-                color={failing > 0 ? "error" : "success"}
+                label={
+                  failing > 0
+                    ? `${failing} failing`
+                    : warnings > 0
+                      ? `${warnings} warning${warnings > 1 ? "s" : ""}`
+                      : "Nothing failing"
+                }
+                color={failing > 0 ? "error" : warnings > 0 ? "warning" : "success"}
                 variant={failing > 0 ? "filled" : "outlined"}
               />
             )}
