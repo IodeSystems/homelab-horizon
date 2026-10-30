@@ -78,6 +78,8 @@ export type {
   HACreateJoinTokenResponse,
   ComponentHealth,
   SystemHealthResponse as SystemHealth,
+  DoctorResp,
+  DoctorFinding,
   SystemMetricsResponse as SystemMetrics,
   CPUMetric,
   MemoryMetric,

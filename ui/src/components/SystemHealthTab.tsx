@@ -22,6 +22,7 @@ import {
 } from "@mui/material";
 import {
   useAptAudit,
+  useDoctor,
   useFixIPForwarding,
   useFixMasquerade,
   useFixWGForwardChain,
@@ -36,7 +37,7 @@ import {
   useWriteDNSMasqConfig,
   useFixLogRetention,
 } from "../api/hooks";
-import type { ComponentHealth, SystemHealth, Zone } from "../api/types";
+import type { ComponentHealth, DoctorFinding, SystemHealth, Zone } from "../api/types";
 import { SystemMetricsCard } from "./SystemMetricsCard";
 
 // The one command that installs every missing dependency, named once so the
@@ -297,6 +298,132 @@ function RangeAdvice({ health }: { health: SystemHealth }) {
               </Typography>
             )}
           </Alert>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+// DoctorRows renders `hz doctor`'s findings as CheckRows: failing in red with
+// its fix, unknown as unknown (a check hz could not run, never a green one),
+// info as a note that still shows its next step, ok as ok.
+export function DoctorRows({ findings }: { findings: DoctorFinding[] }) {
+  const order = { failing: 0, unknown: 1, info: 2, ok: 3 } as Record<string, number>;
+  const sorted = [...findings].sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
+  return (
+    <>
+      {sorted.map((f, i) => (
+        <Box key={`${f.check}:${f.subject}:${i}`}>
+          <CheckRow
+            label={`${f.check} · ${f.subject} — ${f.problem}`}
+            ok={f.status === "ok" || f.status === "info"}
+            unknown={f.status === "unknown"}
+            okLabel={f.status === "info" ? "Note" : "OK"}
+            failingLabel="Failing"
+            runToFix={f.fix || undefined}
+            unknownHint={f.fix || undefined}
+          />
+          {f.status === "info" && f.fix && (
+            <Typography variant="caption" color="text.secondary" component="div" sx={{ pb: 0.5 }}>
+              Next:{" "}
+              <Box component="code" sx={{ fontFamily: "monospace", userSelect: "all" }}>
+                {f.fix}
+              </Box>
+            </Typography>
+          )}
+        </Box>
+      ))}
+    </>
+  );
+}
+
+// DoctorCard — `hz doctor` on this page: the same list, from GET
+// /api/v1/doctor. The deep checks read DNS providers and public DNS, so they
+// run only on the button, never on the poll.
+function DoctorCard() {
+  const [deep, setDeep] = useState(false);
+  const { data, isFetching, error } = useDoctor(deep);
+  const findings = data?.findings ?? [];
+  const failing = findings.filter((f) => f.status === "failing").length;
+  return (
+    <Card variant="outlined">
+      <CardHeader
+        title={
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+            <Typography variant="h6">Doctor</Typography>
+            <Box sx={{ flex: 1 }} />
+            {data && (
+              <Chip
+                size="small"
+                label={failing > 0 ? `${failing} failing` : "Nothing failing"}
+                color={failing > 0 ? "error" : "success"}
+                variant={failing > 0 ? "filled" : "outlined"}
+              />
+            )}
+            <Button size="small" variant="outlined" disabled={isFetching} onClick={() => setDeep(true)}>
+              {isFetching ? <CircularProgress size={16} /> : deep ? "Re-run deep checks" : "Run deep checks"}
+            </Button>
+          </Stack>
+        }
+        subheader={
+          <Typography variant="caption" color="text.secondary">
+            The same checks as{" "}
+            <Box component="code" sx={{ fontFamily: "monospace" }}>
+              hz doctor{deep ? " --deep" : ""}
+            </Box>
+            . Read-only: each finding says what to run.
+          </Typography>
+        }
+        sx={{ pb: 0 }}
+      />
+      <CardContent>
+        {error && <Alert severity="error">Doctor failed: {error.message}</Alert>}
+        <DoctorRows findings={findings} />
+      </CardContent>
+    </Card>
+  );
+}
+
+// DependenciesCard lists every command this config requires (autoheal.Check
+// on the server — the same list startup warns from and `homelab-horizon
+// check` prints), so this page cannot disagree with either. A command the
+// config does not need has no row. There is no install button: installing is
+// CLI-only by design, so a missing row carries the command.
+export function DependenciesCard({ health }: { health: SystemHealth }) {
+  const deps = health.dependencies ?? [];
+  const missing = deps.filter((d) => !d.present && !d.optional).length;
+  return (
+    <Card variant="outlined">
+      <CardHeader
+        title={
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+            <Typography variant="h6">Dependencies</Typography>
+            <Box sx={{ flex: 1 }} />
+            <Chip
+              size="small"
+              label={missing > 0 ? `${missing} missing` : "All present"}
+              color={missing > 0 ? "error" : "success"}
+              variant={missing > 0 ? "filled" : "outlined"}
+            />
+          </Stack>
+        }
+        subheader={
+          <Typography variant="caption" color="text.secondary">
+            The commands this configuration needs on this host.
+          </Typography>
+        }
+        sx={{ pb: 0 }}
+      />
+      <CardContent>
+        {deps.map((d) => (
+          <CheckRow
+            key={d.binary}
+            label={`${d.name} (${d.binary}) — ${d.purpose}`}
+            ok={d.present || !!d.optional}
+            okLabel={d.present ? "Installed" : "Optional — not installed"}
+            failingLabel="Missing"
+            runToFix={health.install_hint || INSTALL_DEPS_HINT}
+          />
         ))}
       </CardContent>
     </Card>
@@ -1277,6 +1404,8 @@ export function SystemHealthTab({
       </Paper>
       <RangeAdvice health={health} />
       <PinnedDNS health={health} />
+      <DoctorCard />
+      <DependenciesCard health={health} />
       <SystemLevelCard health={health} />
       <WireGuardCard health={health} />
       <HAProxyCard health={health} />
