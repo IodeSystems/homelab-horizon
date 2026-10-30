@@ -113,10 +113,12 @@ func runSetup(c *client, _ []string) error {
 		fmt.Println("Aborted.")
 		return nil
 	}
-	if err := c.do("POST", "/api/v1/services/add", req, nil); err != nil {
+	var created apitypes.ServiceAddResp
+	if err := c.do("POST", "/api/v1/services/add", req, &created); err != nil {
 		return err
 	}
 	fmt.Printf("Created service %q.\n", req.Name)
+	printServiceSnippet(req.Name, created.ServiceIntegration)
 
 	if enableHTTPS {
 		want := make(map[string]bool, len(req.Domains))

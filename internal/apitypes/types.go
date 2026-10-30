@@ -2213,6 +2213,18 @@ type ServiceIntegration struct {
 	BaseURL   string `json:"baseURL"`
 	HasDeploy bool   `json:"hasDeploy"`
 	HasStatic bool   `json:"hasStatic"` // static-folder service: site upload available
+	// Snippet is the ready-to-run hz-client script, HZ_URL and HZ_TOKEN filled
+	// in. It is rendered by hz, once, so the UI, the CLI and the create
+	// response cannot disagree about what to run.
+	Snippet string `json:"snippet"`
+}
+
+// ServiceAddResp is the POST /api/v1/services/add answer: the new service's
+// integration, so the token and the script to manage it arrive with the
+// create. The token stays re-fetchable from GET /api/v1/services/integration.
+type ServiceAddResp struct {
+	OK                 bool `json:"ok"`
+	ServiceIntegration `tstype:",extends"`
 }
 
 // HA Fleet

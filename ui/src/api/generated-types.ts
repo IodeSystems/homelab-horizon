@@ -4403,6 +4403,20 @@ export interface ServiceIntegration {
   baseURL: string;
   hasDeploy: boolean;
   hasStatic: boolean; // static-folder service: site upload available
+  /**
+   * Snippet is the ready-to-run hz-client script, HZ_URL and HZ_TOKEN filled
+   * in. It is rendered by hz, once, so the UI, the CLI and the create
+   * response cannot disagree about what to run.
+   */
+  snippet: string;
+}
+/**
+ * ServiceAddResp is the POST /api/v1/services/add answer: the new service's
+ * integration, so the token and the script to manage it arrive with the
+ * create. The token stays re-fetchable from GET /api/v1/services/integration.
+ */
+export interface ServiceAddResp extends ServiceIntegration {
+  ok: boolean;
 }
 export interface HAFleetPeer {
   id: string;

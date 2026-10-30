@@ -1483,54 +1483,8 @@ function IntegrationDialog({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const script = data
-    ? [
-        `# ${data.name} — Homelab Horizon Integration`,
-        ``,
-        `# Download hz-client`,
-        `curl -sO "${data.baseURL}/admin/haproxy/hz-client"`,
-        `chmod +x hz-client`,
-        ``,
-        `# Configure`,
-        `export HZ_TOKEN="${data.token}"`,
-        `export HZ_URL="${data.baseURL}"`,
-        ``,
-        `# --- IP Banning ---`,
-        ``,
-        `./hz-client bans                                               # List active bans`,
-        `./hz-client ban 1.2.3.4 --timeout 3600 --reason "brute force"  # Ban an IP`,
-        `./hz-client unban 1.2.3.4                                      # Unban an IP`,
-        ...(data.hasDeploy
-          ? [
-              ``,
-              `# --- Rolling Deploy ---`,
-              ``,
-              `./hz-client status              # Check deploy status`,
-              `./hz-client rolling start       # Take next slot down — deploy new code to it`,
-              `./hz-client rolling continue    # Bring next up, take current down — deploy to it`,
-              `./hz-client rolling finalize    # Bring current up — both slots on new code`,
-              ``,
-              `# --- Maintenance Page (for incompatible upgrades) ---`,
-              ``,
-              `./hz-client maint-page set maintenance.html  # Serve custom 503 while down`,
-              `./hz-client maint-page clear                 # Restore default after upgrade`,
-            ]
-          : []),
-        ...(data.hasStatic
-          ? [
-              ``,
-              `# --- Static site ---`,
-              `# Each push replaces the WHOLE site (fresh release + atomic swap).`,
-              `# Files removed locally disappear on the next push — no --purge needed.`,
-              ``,
-              `./hz-client site push ./public             # Upload dir as a new release (atomic swap)`,
-              `./hz-client site push ./public --validate  # Dry run: validate without swapping`,
-              `./hz-client site releases                  # List retained releases`,
-              `./hz-client site rollback                  # Revert to the previous release`,
-            ]
-          : []),
-      ].join("\n")
-    : "";
+  // Rendered by hz (serviceIntegration), never here: one script, one answer.
+  const script = data?.snippet ?? "";
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
@@ -2196,6 +2150,12 @@ export function AddServiceDialog({
   const addMutation = useAddService();
   const { data: settings } = useSettings();
   const [error, setError] = useState("");
+  // Set once the create lands: the form gives way to the new service's token
+  // and hz-client script, and closing that closes the whole flow.
+  const [created, setCreated] = useState<string | null>(null);
+  if (created !== null) {
+    return <IntegrationDialog serviceName={created} open onClose={onClose} />;
+  }
   return (
     <>
       <ServiceFormDialog
@@ -2206,7 +2166,7 @@ export function AddServiceDialog({
         onSubmit={(form) =>
           addMutation.mutate(
             { ...formToInput(form), project },
-            { onSuccess: onClose, onError: (err) => setError(err.message) },
+            { onSuccess: (resp) => setCreated(resp.name), onError: (err) => setError(err.message) },
           )
         }
         isSubmitting={addMutation.isPending}
@@ -2253,6 +2213,8 @@ function ServicesPage() {
   const zones = zonesData ?? [];
 
   const [addOpen, setAddOpen] = useState(false);
+  // The service just created: its Integration panel opens with the token.
+  const [created, setCreated] = useState<string | null>(null);
   const [portMapOpen, setPortMapOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Service | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -2267,8 +2229,9 @@ function ServicesPage() {
 
   const handleAdd = (form: ServiceFormState) => {
     addMutation.mutate(formToInput(form), {
-      onSuccess: () => {
+      onSuccess: (resp) => {
         setAddOpen(false);
+        setCreated(resp.name);
         showSnack("Service added", "success");
       },
       onError: (err) => showSnack(err.message, "error"),
@@ -2459,6 +2422,12 @@ function ServicesPage() {
           </TableBody>
         </Table>
       </TableContainer>
+
+      <IntegrationDialog
+        serviceName={created ?? ""}
+        open={created !== null}
+        onClose={() => setCreated(null)}
+      />
 
       {/* Port map dialog */}
       <PortMapDialog
