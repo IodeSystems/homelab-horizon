@@ -2203,6 +2203,25 @@ type DomainSSLRemoveRequest struct {
 	Force bool `json:"force,omitempty"`
 }
 
+// SSLTestIssueReq is POST /api/v1/ssl/test-issue: issue the zone's
+// certificate against Let's Encrypt STAGING and keep none of it.
+type SSLTestIssueReq struct {
+	Zone string `json:"zone"`
+}
+
+// SSLTestIssueResp is the staging answer. OK false is a refusal from the CA or
+// the DNS provider, with Error and the issuance Log saying where it stopped;
+// nothing was written either way.
+type SSLTestIssueResp struct {
+	Zone     string   `json:"zone"`
+	OK       bool     `json:"ok"`
+	Error    string   `json:"error,omitempty"`
+	SANs     []string `json:"sans"`
+	Issuer   string   `json:"issuer,omitempty"`
+	NotAfter string   `json:"notAfter,omitempty"` // RFC 3339
+	Log      []string `json:"log"`
+}
+
 // Service integration
 
 type ServiceIntegration struct {

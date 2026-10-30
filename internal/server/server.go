@@ -202,6 +202,7 @@ type peerSyncStatus struct {
 }
 
 type Server struct {
+	sslTests sslTestGate // POST /api/v1/ssl/test-issue, one per zone per cooldown
 	// config is swapped atomically by applyNewConfig (peer-sync pull loop).
 	// Always access via s.cfg() — never read the field directly outside the
 	// few helpers below. In-place mutation of the pointed-to Config is still
@@ -1309,6 +1310,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/zones/tombstones/cancel", s.handleAPITombstoneCancel)
 	mux.HandleFunc("/api/v1/zones/subzone", s.handleAPIAddSubZone)
 	mux.HandleFunc("/api/v1/ssl/request-cert", s.handleAPIRequestCert)
+	mux.HandleFunc("/api/v1/ssl/test-issue", s.handleAPISSLTestIssue)
 	mux.HandleFunc("/api/v1/domains/ssl/add", s.handleAPIDomainSSLAdd)
 	mux.HandleFunc("/api/v1/domains/ssl/remove", s.handleAPIDomainSSLRemove)
 	// Trigger-sync is per-instance: re-derives haproxy/dnsmasq state.
