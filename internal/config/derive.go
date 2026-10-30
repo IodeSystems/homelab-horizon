@@ -482,8 +482,7 @@ type ExternalDNSSkip struct {
 // purpose. A name is left out when
 //   - this hz is nested and asks its parent to publish the name (no zone here
 //     with a dns_provider holds it), or
-//   - its zone here has neither a dns_provider nor a zone_id, so nothing here
-//     can publish it.
+//   - its zone here has no dns_provider, so nothing here can publish it.
 //
 // The second used to be attempted anyway: an AWS CLI call with no hosted zone,
 // which failed every cycle as "DNS sync failed ... failed to update record: "
@@ -519,20 +518,17 @@ func (c *Config) DeriveRoute53Plan() (records []route53.Record, skipped []Extern
 			if zone == nil {
 				continue // No zone configured for this domain
 			}
-			// A zone with a zone_id and no dns_provider is the legacy shape:
-			// the AWS CLI writes it with ambient credentials, and that still
-			// works. With neither there is no hosted zone to write to.
+			// Only a zone's dns_provider writes it. A zone_id alone was the
+			// legacy shape the AWS CLI wrote with ambient credentials; that
+			// path is gone (2026-10-30), so hz needs no aws binary, and the
+			// shape is reported here, never attempted.
 			provider := zone.GetDNSProvider()
-			if provider == nil && zone.ZoneID == "" {
+			if provider == nil {
 				skipped = append(skipped, ExternalDNSSkip{Service: svc.Name, Name: domain,
-					Reason: fmt.Sprintf("zone %s has no dns_provider and no zone_id, so nothing here publishes %s; add a provider to the zone or remove external_dns from service %s", zone.Name, domain, svc.Name)})
+					Reason: fmt.Sprintf("zone %s has no dns_provider, so nothing here publishes %s; add a provider to the zone or remove external_dns from service %s", zone.Name, domain, svc.Name)})
 				continue
 			}
-
-			awsProfile := ""
-			if provider != nil {
-				awsProfile = provider.AWSProfile
-			}
+			awsProfile := provider.AWSProfile
 			for _, ip := range publicIPs {
 				records = append(records, route53.Record{
 					Name:       domain,

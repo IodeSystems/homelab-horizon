@@ -4,23 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 )
-
-const awsTimeout = 30 * time.Second
-
-func logAWS(profile, action string) {
-	if profile == "" {
-		profile = "default"
-	}
-	slog.Debug(action, "aws_profile", profile)
-}
 
 // Record represents a DNS record
 type Record struct {
@@ -33,104 +21,6 @@ type Record struct {
 	AWSProfile string `json:"aws_profile"`
 }
 
-// Available checks if AWS CLI is available
-func Available() bool {
-	_, err := exec.LookPath("aws")
-	return err == nil
-}
-
-// GetCurrentValue gets the current value of a DNS record (first value only, for backward compat)
-func GetCurrentValue(zoneID, name, recordType, awsProfile string) (string, error) {
-	values, err := GetCurrentValues(zoneID, name, recordType, awsProfile)
-	if err != nil {
-		return "", err
-	}
-	if len(values) == 0 {
-		return "", nil
-	}
-	return values[0], nil
-}
-
-// GetCurrentValues gets all current values of a DNS record set (for round-robin support)
-func GetCurrentValues(zoneID, name, recordType, awsProfile string) ([]string, error) {
-	current, err := getCurrentRecordSet(zoneID, name, recordType, awsProfile)
-	if err != nil || current == nil {
-		return nil, err
-	}
-	return current.Values, nil
-}
-
-// currentRecordSet is what Route53 holds right now for one name and type.
-type currentRecordSet struct {
-	TTL    int      `json:"TTL"`
-	Values []string `json:"Values"`
-}
-
-// needsUpdate reports whether Route53 has to be written.
-//
-// Split out from the call that shells to the AWS CLI so the decision itself is
-// testable: this comparison silently skipped TTL once, which made lowering a
-// TTL a no-op until the address changed anyway.
-func needsUpdate(current *currentRecordSet, values []string, ttl int) bool {
-	if current == nil {
-		return true
-	}
-	if !stringSlicesEqual(current.Values, values) {
-		return true
-	}
-	return ttl > 0 && current.TTL != ttl
-}
-
-func getCurrentRecordSet(zoneID, name, recordType, awsProfile string) (*currentRecordSet, error) {
-	logAWS(awsProfile, fmt.Sprintf("Getting current values for %s (%s)...", name, recordType))
-
-	ctx, cancel := context.WithTimeout(context.Background(), awsTimeout)
-	defer cancel()
-
-	// Route53 stores wildcards as \052 (octal escape for *)
-	queryName := name
-	if strings.HasPrefix(name, "*.") {
-		queryName = "\\052" + name[1:]
-	}
-
-	args := []string{
-		"route53", "list-resource-record-sets",
-		"--hosted-zone-id", zoneID,
-		"--query", fmt.Sprintf("ResourceRecordSets[?Name=='%s.' && Type=='%s'] | [0].{TTL: TTL, Values: ResourceRecords[].Value}", queryName, recordType),
-		"--output", "json",
-	}
-
-	cmd := exec.CommandContext(ctx, "aws", args...)
-	if awsProfile != "" {
-		cmd.Env = append(os.Environ(), "AWS_PROFILE="+awsProfile)
-	}
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("AWS CLI timed out after %v", awsTimeout)
-		}
-		errMsg := strings.TrimSpace(string(output))
-		if errMsg != "" {
-			return nil, fmt.Errorf("%s: %s", err, errMsg)
-		}
-		return nil, err
-	}
-
-	raw := strings.TrimSpace(string(output))
-	if raw == "null" || raw == "None" || raw == "" {
-		logAWS(awsProfile, fmt.Sprintf("Current values for %s: (empty)", name))
-		return nil, nil
-	}
-
-	var current currentRecordSet
-	if err := json.Unmarshal([]byte(raw), &current); err != nil {
-		return nil, fmt.Errorf("could not read the record set for %s: %w", name, err)
-	}
-	logAWS(awsProfile, fmt.Sprintf("Current values for %s: %v (ttl %ds)", name, current.Values, current.TTL))
-	return &current, nil
-}
-
 // DefaultTTL is the TTL hz publishes when a service does not name its own.
 //
 // 60 rather than the conventional 300 because every record hz publishes points
@@ -141,83 +31,6 @@ func getCurrentRecordSet(zoneID, name, recordType, awsProfile string) (*currentR
 // it re-resolves its endpoint — which is why the delay looks like a roaming
 // problem rather than a DNS one.
 const DefaultTTL = 60
-
-// UpdateRecord creates or updates a DNS record (single value)
-func UpdateRecord(r Record) error {
-	return UpdateRecordSet(r, []string{r.Value})
-}
-
-// UpdateRecordSet creates or updates a DNS record set with multiple values (round-robin)
-func UpdateRecordSet(r Record, values []string) error {
-	logAWS(r.AWSProfile, fmt.Sprintf("Updating %s -> %v...", r.Name, values))
-
-	if r.TTL <= 0 {
-		r.TTL = DefaultTTL
-	}
-
-	// Ensure name ends with dot
-	if !strings.HasSuffix(r.Name, ".") {
-		r.Name = r.Name + "."
-	}
-
-	var resourceRecords []map[string]string
-	for _, v := range values {
-		resourceRecords = append(resourceRecords, map[string]string{"Value": v})
-	}
-
-	changeBatch := map[string]interface{}{
-		"Changes": []map[string]interface{}{
-			{
-				"Action": "UPSERT",
-				"ResourceRecordSet": map[string]interface{}{
-					"Name":            r.Name,
-					"Type":            r.Type,
-					"TTL":             r.TTL,
-					"ResourceRecords": resourceRecords,
-				},
-			},
-		},
-	}
-
-	changeBatchJSON, err := json.Marshal(changeBatch)
-	if err != nil {
-		return err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), awsTimeout)
-	defer cancel()
-
-	args := []string{
-		"route53", "change-resource-record-sets",
-		"--hosted-zone-id", r.ZoneID,
-		"--change-batch", string(changeBatchJSON),
-	}
-
-	cmd := exec.CommandContext(ctx, "aws", args...)
-	if r.AWSProfile != "" {
-		cmd.Env = append(os.Environ(), "AWS_PROFILE="+r.AWSProfile)
-	}
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			logAWS(r.AWSProfile, fmt.Sprintf("Update %s TIMEOUT after %v", r.Name, awsTimeout))
-			return fmt.Errorf("AWS CLI timed out after %v", awsTimeout)
-		}
-		// err carries what output may not: an AWS CLI that is not installed
-		// produces no output at all, and this once read
-		// "failed to update record: " with nothing after it (CLAUDE.md #2).
-		msg := err.Error()
-		if out := strings.TrimSpace(string(output)); out != "" {
-			msg += ": " + out
-		}
-		logAWS(r.AWSProfile, fmt.Sprintf("Update %s FAILED: %s", r.Name, msg))
-		return fmt.Errorf("failed to update record: %s", msg)
-	}
-
-	logAWS(r.AWSProfile, fmt.Sprintf("Update %s SUCCESS", r.Name))
-	return nil
-}
 
 // GetPublicIP gets the current public IP address
 func GetPublicIP() (string, error) {
@@ -339,58 +152,6 @@ func CheckIPv6() IPv6Status {
 	}
 
 	return status
-}
-
-// SyncRecord updates a single-value record if the value has changed
-func SyncRecord(r Record) (changed bool, err error) {
-	return SyncRecordSet(r, []string{r.Value})
-}
-
-// SyncRecordSet updates a record set with multiple values (round-robin DNS).
-// All values are UPSERTed as a single record set so Route53 treats them as round-robin.
-func SyncRecordSet(r Record, values []string) (changed bool, err error) {
-	// Resolved here rather than inside UpdateRecordSet, so the comparison below
-	// is against the TTL that would actually be written.
-	if r.TTL <= 0 {
-		r.TTL = DefaultTTL
-	}
-
-	current, err := getCurrentRecordSet(r.ZoneID, r.Name, r.Type, r.AWSProfile)
-	if err != nil {
-		errStr := err.Error()
-		if strings.Contains(errStr, "AccessDenied") || strings.Contains(errStr, "not authorized") {
-			logAWS(r.AWSProfile, fmt.Sprintf("Permission denied for %s: %v", r.Name, err))
-			return false, err
-		}
-		logAWS(r.AWSProfile, fmt.Sprintf("GetCurrentValues error for %s: %v, will try to create", r.Name, err))
-		return true, UpdateRecordSet(r, values)
-	}
-
-	if !needsUpdate(current, values, r.TTL) {
-		logAWS(r.AWSProfile, fmt.Sprintf("%s already set to %v (ttl %ds)", r.Name, values, r.TTL))
-		return false, nil
-	}
-
-	logAWS(r.AWSProfile, fmt.Sprintf("%s mismatch: current=%v new=%v ttl=%ds", r.Name, current, values, r.TTL))
-	return true, UpdateRecordSet(r, values)
-}
-
-// stringSlicesEqual compares two string slices ignoring order
-func stringSlicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	counts := make(map[string]int, len(a))
-	for _, v := range a {
-		counts[v]++
-	}
-	for _, v := range b {
-		counts[v]--
-		if counts[v] < 0 {
-			return false
-		}
-	}
-	return true
 }
 
 // VerifyPropagation checks if a DNS record has propagated by querying public DNS servers

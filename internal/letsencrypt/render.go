@@ -19,7 +19,10 @@ package letsencrypt
 
 import (
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
+	"math/big"
 	"path"
 	"sort"
 	"strings"
@@ -279,88 +282,89 @@ func CertNotAfter(pemData []byte) (notAfter time.Time, ok bool) {
 	return cert.NotAfter, true
 }
 
-// ParseCertInfo assembles a CertInfo from the raw output of the five `openssl
-// x509` invocations GetCertInfo runs. Running them is apply-side; making sense
-// of what they printed is not.
-//
-// Every field is best-effort, exactly as before: openssl that failed or printed
-// something unexpected leaves that field empty rather than failing the whole
-// read, because a cert whose issuer could not be parsed is still a cert whose
-// expiry the operator wants to see.
-func ParseCertInfo(subjectOut, sansOut, issuerOut, datesOut, serialOut string) *CertInfo {
+// opensslTime is how `openssl x509 -dates` printed a validity bound. The API
+// and the UI have always carried that string, so it is kept byte for byte now
+// that the read is crypto/x509 (2026-10-30: hz needs no openssl binary).
+const opensslTime = "Jan _2 15:04:05 2006 GMT"
+
+// CertInfoFromPEM describes the first certificate in pemData — a bundle's
+// leaf, the one `openssl x509 -in` read. Best-effort, exactly as before: data
+// with no parsable certificate gives an empty CertInfo rather than an error,
+// because the caller still wants to show what it can.
+func CertInfoFromPEM(pemData []byte) *CertInfo {
 	info := &CertInfo{}
-	info.Domain = parseSubjectCN(subjectOut)
-	info.SANs = parseSANs(sansOut)
-	info.Issuer = parseIssuer(issuerOut)
-	info.NotBefore, info.NotAfter = parseDates(datesOut)
-	info.Serial = parseSerial(serialOut)
+	cert := firstCertificate(pemData)
+	if cert == nil {
+		return info
+	}
+	info.Domain = cert.Subject.CommonName
+	info.SANs = append([]string(nil), cert.DNSNames...)
+	info.Issuer = opensslName(cert.Issuer)
+	info.NotBefore = cert.NotBefore.UTC().Format(opensslTime)
+	info.NotAfter = cert.NotAfter.UTC().Format(opensslTime)
+	info.Serial = opensslSerial(cert.SerialNumber)
 	return info
 }
 
-// parseSubjectCN extracts CN from "subject=CN = *.example.com" or
-// "subject= /CN=*.example.com" — openssl has printed both shapes.
-func parseSubjectCN(out string) string {
-	subject := strings.TrimSpace(out)
-	idx := strings.Index(subject, "CN")
-	if idx == -1 {
+// CertEndDate is the expiry string DomainStatus carries, or "" when pemData
+// holds no certificate.
+func CertEndDate(pemData []byte) string {
+	cert := firstCertificate(pemData)
+	if cert == nil {
 		return ""
 	}
-	cn := subject[idx+2:]
-	cn = strings.TrimPrefix(cn, " = ")
-	cn = strings.TrimPrefix(cn, "=")
-	cn = strings.TrimSpace(cn)
-	if commaIdx := strings.Index(cn, ","); commaIdx != -1 {
-		cn = cn[:commaIdx]
-	}
-	return cn
+	return cert.NotAfter.UTC().Format(opensslTime)
 }
 
-// parseSANs pulls the DNS names out of `-ext subjectAltName` output, which is
-// a "DNS:*.example.com, DNS:example.com" list on its own line.
-func parseSANs(out string) []string {
-	var sans []string
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "DNS:") && !strings.Contains(line, "DNS:") {
+func firstCertificate(pemData []byte) *x509.Certificate {
+	for {
+		var block *pem.Block
+		block, pemData = pem.Decode(pemData)
+		if block == nil {
+			return nil
+		}
+		if block.Type != "CERTIFICATE" {
 			continue
 		}
-		for _, part := range strings.Split(line, ",") {
-			part = strings.TrimSpace(part)
-			if strings.HasPrefix(part, "DNS:") {
-				sans = append(sans, strings.TrimPrefix(part, "DNS:"))
-			}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil
 		}
+		return cert
 	}
-	return sans
 }
 
-func parseIssuer(out string) string {
-	issuer := strings.TrimSpace(out)
-	issuer = strings.TrimPrefix(issuer, "issuer=")
-	return strings.TrimSpace(issuer)
+// opensslAttr names the attribute types openssl prints in short form.
+var opensslAttr = map[string]string{
+	"2.5.4.6": "C", "2.5.4.8": "ST", "2.5.4.7": "L", "2.5.4.10": "O", "2.5.4.11": "OU", "2.5.4.3": "CN",
 }
 
-func parseDates(out string) (notBefore, notAfter string) {
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "notBefore=") {
-			notBefore = strings.TrimPrefix(line, "notBefore=")
-		} else if strings.HasPrefix(line, "notAfter=") {
-			notAfter = strings.TrimPrefix(line, "notAfter=")
+// opensslName renders a name as current OpenSSL prints it: "C=US, O=Let's
+// Encrypt, CN=R11", in the certificate's own order. (OpenSSL 3.0 spaced the
+// "=", so a box's issuer string changes by those spaces with this read.)
+func opensslName(n pkix.Name) string {
+	parts := make([]string, 0, len(n.Names))
+	for _, atv := range n.Names {
+		t, ok := opensslAttr[atv.Type.String()]
+		if !ok {
+			t = atv.Type.String()
 		}
+		parts = append(parts, fmt.Sprintf("%s=%v", t, atv.Value))
 	}
-	return notBefore, notAfter
+	return strings.Join(parts, ", ")
 }
 
-func parseSerial(out string) string {
-	serial := strings.TrimSpace(out)
-	return strings.TrimPrefix(serial, "serial=")
-}
-
-// ParseEndDate turns `openssl x509 -enddate -noout` output into the expiry
-// string DomainStatus carries.
-func ParseEndDate(out string) string {
-	return strings.TrimSpace(strings.TrimPrefix(out, "notAfter="))
+// opensslSerial is the serial as openssl printed it: upper-case hex, an even
+// number of digits.
+func opensslSerial(n *big.Int) string {
+	if n == nil {
+		return ""
+	}
+	h := fmt.Sprintf("%X", n)
+	if len(h)%2 == 1 {
+		h = "0" + h
+	}
+	return h
 }
 
 // ParseAWSProfiles collects the profile names out of the contents of AWS

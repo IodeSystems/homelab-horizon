@@ -8,14 +8,6 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/route53"
 )
 
-// route53SyncRecordSet and route53Available are the legacy AWS CLI write and
-// its presence check, variables so a test can see which sets take that path
-// without reaching AWS or depending on the CLI being installed.
-var (
-	route53SyncRecordSet = route53.SyncRecordSet
-	route53Available     = route53.Available
-)
-
 // externalDNSResult is one record set the external-DNS publish wrote, or
 // tried to.
 type externalDNSResult struct {
@@ -27,15 +19,14 @@ type externalDNSResult struct {
 }
 
 // publishExternalDNS writes the services' external DNS (DeriveRoute53Plan's
-// records). A set whose zone has a dns_provider goes through that provider —
-// run.publish, the path zone records and sync-all use, with its drift check
-// and read-back. Only the legacy shape, a zone_id and no dns_provider, still
-// shells out to the AWS CLI, and without the CLI that is an error naming the
-// fix, never a silence.
+// records) through each zone's dns_provider — run.publish, the path zone
+// records and sync-all use, with its drift check and read-back.
 //
-// Found live 2026-10-30: a box with a route53 dns_provider and no aws CLI
-// published its zone records and failed every service record with
-// `exec: "aws": executable file not found in $PATH`.
+// Found live 2026-10-30: these records went out through the AWS CLI even when
+// the zone had a dns_provider, and on a box without the CLI every one failed
+// with `exec: "aws": executable file not found in $PATH` while the zone's own
+// records published. There is no CLI path now: DeriveRoute53Plan leaves out a
+// zone with no provider and says why.
 //
 // Returns errDNSDriftBlocked as soon as a set drifts; the caller stops there.
 func (s *Server) publishExternalDNS(run *dnsSyncRun, records []route53.Record) ([]externalDNSResult, error) {
@@ -60,27 +51,28 @@ func (s *Server) publishExternalDNS(run *dnsSyncRun, records []route53.Record) (
 		}
 
 		zone := cfg.GetZone(k.zone)
-		switch {
-		case zone != nil && zone.GetDNSProvider() != nil:
-			provider, err := s.dnsProvider(zone.GetDNSProvider())
-			if err != nil {
-				res.Err = err
-				break
-			}
-			desired := make([]dns.Record, len(rs))
-			for i, rec := range rs {
-				desired[i] = dns.Record{Name: rec.Name, Type: rec.Type, Value: rec.Value, TTL: rec.TTL, ZoneID: zone.ZoneID}
-			}
-			res.Changed, res.Err = run.publish(provider, *zone, k.name, k.typ, desired)
-			if errors.Is(res.Err, errDNSDriftBlocked) {
-				return append(out, res), res.Err
-			}
-		case !route53Available():
-			res.Err = fmt.Errorf("zone %s has a zone_id and no dns_provider, which only the aws CLI can write, and it is not installed; add a dns_provider to the zone", k.zone)
-		default:
-			res.Changed, res.Err = route53SyncRecordSet(rs[0], res.Values)
+		if zone == nil || zone.GetDNSProvider() == nil {
+			// Unreachable while the plan skips these, and checked anyway: a
+			// write with no provider has nowhere to go.
+			res.Err = fmt.Errorf("zone %s has no dns_provider", k.zone)
+			out = append(out, res)
+			continue
 		}
+		provider, err := s.dnsProvider(zone.GetDNSProvider())
+		if err != nil {
+			res.Err = err
+			out = append(out, res)
+			continue
+		}
+		desired := make([]dns.Record, len(rs))
+		for i, rec := range rs {
+			desired[i] = dns.Record{Name: rec.Name, Type: rec.Type, Value: rec.Value, TTL: rec.TTL, ZoneID: zone.ZoneID}
+		}
+		res.Changed, res.Err = run.publish(provider, *zone, k.name, k.typ, desired)
 		out = append(out, res)
+		if errors.Is(res.Err, errDNSDriftBlocked) {
+			return out, res.Err
+		}
 	}
 	return out, nil
 }

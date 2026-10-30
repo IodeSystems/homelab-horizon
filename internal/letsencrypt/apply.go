@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -268,40 +267,26 @@ func (m *Manager) PruneHAProxyCerts() int {
 	return removed
 }
 
-// GetCertInfo returns detailed information about a certificate.
-//
-// Five `openssl x509` reads of one file; ParseCertInfo turns what they printed
-// into the struct. Each read is best-effort — openssl that failed contributes
-// an empty string rather than failing the whole call, which is why the error
-// return has always been nil.
+// GetCertInfo returns detailed information about a certificate. It used to
+// be five `openssl x509` reads of the file; it is one read and crypto/x509
+// (CertInfoFromPEM). The error return stays nil, as it always was: an
+// unreadable file is an empty CertInfo.
 func GetCertInfo(certPath string) (*CertInfo, error) {
-	read := func(args ...string) string {
-		cmd := exec.Command("openssl", append([]string{"x509", "-in", certPath, "-noout"}, args...)...)
-		out, err := cmd.Output()
-		if err != nil {
-			return ""
-		}
-		return string(out)
+	data, err := os.ReadFile(certPath)
+	if err != nil {
+		return &CertInfo{}, nil
 	}
-
-	return ParseCertInfo(
-		read("-subject"),
-		read("-ext", "subjectAltName"),
-		read("-issuer"),
-		read("-dates"),
-		read("-serial"),
-	), nil
+	return CertInfoFromPEM(data), nil
 }
 
-// certEndDate runs `openssl x509 -enddate` and returns the expiry line, or ""
-// when openssl could not read the file.
+// certEndDate returns the certificate's expiry line, or "" when the file
+// could not be read.
 func certEndDate(certPath string) string {
-	cmd := exec.Command("openssl", "x509", "-enddate", "-noout", "-in", certPath)
-	out, err := cmd.Output()
+	data, err := os.ReadFile(certPath)
 	if err != nil {
 		return ""
 	}
-	return ParseEndDate(string(out))
+	return CertEndDate(data)
 }
 
 // fileExists reports whether a path can be stat'd. The certificate checks want
