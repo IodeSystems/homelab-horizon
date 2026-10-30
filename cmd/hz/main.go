@@ -69,6 +69,9 @@ COMMANDS
   setup                              Interactive questionnaire -> create + sync
   sync [--wait]                      Trigger a global sync (--wait: block til done)
   pending                            Show unsynced config changes
+  doctor [--deep]                    Check this hz and say what to fix: commands, kiosk,
+                                     public UI, certs, pending, upstream. --deep also reads
+                                     each DNS provider's zones and public DNS. Exit 1 if failing
   ports next --host IP [--count N] [--from PORT]
                                      Find the next free port range on a host (safe band, common ports skipped)
   ports list --host IP [--count N] [--from PORT]
@@ -511,6 +514,8 @@ func dispatch(c *client, cmd string, rest []string) error {
 		err = runSync(c, rest)
 	case "pending":
 		err = runPending(c, rest)
+	case "doctor":
+		err = runDoctor(c, rest)
 	case "ports":
 		err = runPorts(c, rest)
 	case "domain":

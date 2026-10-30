@@ -4516,6 +4516,14 @@ export interface PinnedIPResp {
 }
 export interface SystemHealthResponse {
   components: ComponentHealth[];
+  /**
+   * Dependencies is every command this config requires, present or not
+   * (autoheal.Check): the list startup warns from and `homelab-horizon
+   * check` prints. Installing is CLI-only by design — InstallHint is the
+   * command, there is no HTTP install.
+   */
+  dependencies: DependencyStatus[];
+  install_hint: string;
   lan_advice?: CIDRAdviceResp;
   vpn_advice?: CIDRAdviceResp;
   pinned_ips?: PinnedIPResp[];
@@ -4525,6 +4533,46 @@ export interface SystemHealthResponse {
   horizon_unit_installed: boolean;
   horizon_enabled: boolean;
   horizon_running: boolean;
+}
+/**
+ * DoctorFinding is one result of `hz doctor` (GET /api/v1/doctor), which the
+ * System tab's Doctor card renders too, so the page and the CLI read one list.
+ * Status is "ok", "failing", "unknown" (hz could not measure — not a shade of
+ * failing; a --deep check not run is unknown) or "info" (true and worth
+ * knowing, nothing to fix). Fix is the exact command or step; Evidence says
+ * what was measured and how, so a reader can check the claim.
+ */
+export interface DoctorFinding {
+  check: string;
+  subject: string;
+  status: string;
+  problem: string;
+  fix?: string;
+  evidence?: string;
+}
+/**
+ * DoctorResp is every finding, in check order. Deep says whether the checks
+ * that ask outside hz (DNS providers, public DNS) ran.
+ */
+export interface DoctorResp {
+  deep: boolean;
+  findings: DoctorFinding[];
+}
+/**
+ * DependencyStatus is one command hz needs for this config, and whether it is
+ * on PATH. Purpose says what stops working without it.
+ */
+export interface DependencyStatus {
+  name: string;
+  binary: string;
+  package: string;
+  purpose: string;
+  present: boolean;
+  /**
+   * Optional: folded in when present, never run by hz (the node exporter).
+   * Not counted as missing.
+   */
+  optional?: boolean;
 }
 export interface CPUMetric {
   user: number /* uint64 */;

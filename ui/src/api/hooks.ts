@@ -70,6 +70,7 @@ import type {
   ServiceIntegration,
   SettingsData,
   SystemHealth,
+  DoctorResp,
   SystemMetrics,
   VPNPeer,
   Zone,
@@ -1607,6 +1608,17 @@ export function useSystemHealth() {
     queryKey: ["system", "health"],
     queryFn: () => apiFetch<SystemHealth>("/system/health"),
     refetchInterval: 15000,
+  });
+}
+
+// useDoctor reads GET /api/v1/doctor — the findings `hz doctor` prints. deep
+// runs the checks that ask outside hz (DNS providers, public DNS), so it is
+// fetched only when asked for, never on an interval.
+export function useDoctor(deep: boolean) {
+  return useQuery({
+    queryKey: ["system", "doctor", deep],
+    queryFn: () => apiFetch<DoctorResp>(deep ? "/doctor?deep=1" : "/doctor"),
+    refetchInterval: deep ? false : 60000,
   });
 }
 

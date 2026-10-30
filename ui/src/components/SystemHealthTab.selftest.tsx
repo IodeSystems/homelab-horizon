@@ -30,7 +30,7 @@ import { ThemeProvider } from "@mui/material/styles";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import theme from "../theme";
 import type { ComponentHealth, SystemHealth } from "../api/types";
-import { HAProxyCard, WireGuardCard } from "./SystemHealthTab";
+import { DependenciesCard, DoctorRows, HAProxyCard, WireGuardCard } from "./SystemHealthTab";
 
 let failures = 0;
 let checks = 0;
@@ -46,6 +46,8 @@ function check(ok: boolean, what: string): void {
 function health(component: ComponentHealth): SystemHealth {
   return {
     components: [component],
+    dependencies: [],
+    install_hint: "sudo homelab-horizon install-deps",
     ip_forwarding: true,
     horizon_unit_installed: true,
     horizon_enabled: true,
@@ -200,6 +202,55 @@ console.log("· the wg0.conf row names the verb and offers no button");
     "no Create config button: one click would mint a new server identity and " +
       "drop every peer, and the CLI verb refuses when the file already exists",
   );
+}
+
+console.log("· a missing dependency is red and carries the install command; a present one is not");
+{
+  const h: SystemHealth = {
+    ...health({ name: "wireguard", installed: true, config_exists: true, enabled: true, running: true }),
+    dependencies: [
+      { name: "HAProxy", binary: "haproxy", package: "haproxy", purpose: "the reverse proxy and TLS edge", present: false },
+      { name: "iptables", binary: "iptables", package: "iptables", purpose: "the per-peer firewall", present: true },
+    ],
+  };
+  const html = render(<DependenciesCard health={h} />);
+  check(html.includes("1 missing"), "the header counts the missing dependency");
+  check(html.includes("HAProxy (haproxy)") && html.includes("iptables (iptables)"), "both required commands have a row");
+  check(html.includes("sudo homelab-horizon install-deps"), "the missing row carries the install command");
+  const allThere = render(
+    <DependenciesCard health={{ ...h, dependencies: h.dependencies.filter((d) => d.present) }} />,
+  );
+  check(allThere.includes("All present") && !allThere.includes("install-deps"), "nothing missing: no command offered");
+  const optional = render(
+    <DependenciesCard
+      health={{
+        ...h,
+        dependencies: [{ name: "Prometheus node exporter", binary: "prometheus-node-exporter", package: "prometheus-node-exporter", purpose: "host metrics; optional", present: false, optional: true }],
+      }}
+    />,
+  );
+  check(
+    optional.includes("All present") && optional.includes("Optional — not installed"),
+    "an absent optional package is said so, and is not counted missing",
+  );
+}
+
+console.log("· doctor: failing first with its fix; unknown is unknown; a note keeps its next step");
+{
+  const html = render(
+    <DoctorRows
+      findings={[
+        { check: "dependency", subject: "haproxy", status: "ok", problem: "installed" },
+        { check: "kiosk", subject: "kiosk.hz.beta.example.com", status: "info", problem: "served, kiosk_url elsewhere", fix: "set kiosk_url, re-enrol passkeys" },
+        { check: "dns-provider", subject: "example.com", status: "unknown", problem: "not checked", fix: "hz doctor --deep" },
+        { check: "cert-coverage", subject: "www.example.com", status: "failing", problem: "no cert", fix: "hz domain ssl add www.example.com" },
+      ]}
+    />,
+  );
+  check(html.indexOf("www.example.com") < html.indexOf("haproxy"), "a failing finding renders before an ok one");
+  check(html.includes("hz domain ssl add www.example.com"), "the failing finding carries its fix");
+  check(html.includes("Unknown") && html.includes("hz doctor --deep"), "an unrun check is unknown, with how to run it");
+  check(html.includes("Note") && html.includes("re-enrol passkeys"), "a note still shows its next step");
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);
