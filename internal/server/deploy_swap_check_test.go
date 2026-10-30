@@ -52,7 +52,7 @@ func TestDeploySwapIsRefusedAndChangesNothing(t *testing.T) {
 	if got := s.cfg().Services[0].Proxy.Deploy.ActiveSlot; got != "a" {
 		t.Errorf("active slot = %q after a refused swap, want a", got)
 	}
-	if st := s.monitor.GetStatus("svc:kc"); st == nil || !strings.HasPrefix(st.Target, "slot a (active) 192.0.2.10:6302") {
-		t.Errorf("check after a refused swap: %+v, want slot a still active", st)
+	if st := s.monitor.GetStatus("svc:kc"); st == nil || !strings.Contains(st.Target, "slot a (current) 192.0.2.10:6302") {
+		t.Errorf("check after a refused swap: %+v, want slot a still current", st)
 	}
 }

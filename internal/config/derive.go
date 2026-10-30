@@ -1631,11 +1631,11 @@ func (c *Config) DeriveDNSNamesByService() map[string]DerivedDNSName {
 // ServicePort is one port a service uses, and what uses it.
 type ServicePort struct {
 	Port int
-	// Label is "backend", "slot a", "slot b" (blue-green), "http" or
-	// "https" (HAProxy, in front of a proxied service).
+	// Label is "backend", "slot a (current)", "slot b (next)" (blue-green;
+	// the role follows active_slot), "http" or "https" (HAProxy, in front of a
+	// proxied service). No slot is marked active: under next-first, which one
+	// serves is HAProxy's live answer, not a config field.
 	Label string
-	// Active marks the blue-green slot active_slot names.
-	Active bool
 }
 
 // ServicePorts lists the ports a service uses: its backend port, both
@@ -1660,10 +1660,10 @@ func (c *Config) ServicePorts(svc *Service) []ServicePort {
 	}
 	if d := c.ResolvedDeploy(svc); d != nil && svc.Proxy.Backend != "" {
 		if p := backendPort(c.ServiceBackend(svc)); p > 0 {
-			out = append(out, ServicePort{Port: p, Label: "slot a", Active: d.ActiveSlot != "b"})
+			out = append(out, ServicePort{Port: p, Label: "slot a (" + slotRole(d.ActiveSlot != "b") + ")"})
 		}
 		if p := backendPort(d.NextBackend); p > 0 {
-			out = append(out, ServicePort{Port: p, Label: "slot b", Active: d.ActiveSlot == "b"})
+			out = append(out, ServicePort{Port: p, Label: "slot b (" + slotRole(d.ActiveSlot == "b") + ")"})
 		}
 	} else if p := backendPort(c.ServiceBackend(svc)); p > 0 {
 		out = append(out, ServicePort{Port: p, Label: "backend"})
@@ -1680,4 +1680,13 @@ func (c *Config) ServicePorts(svc *Service) []ServicePort {
 		out = append(out, ServicePort{Port: httpsPort, Label: "https"})
 	}
 	return out
+}
+
+// slotRole is a blue-green slot's role: "current" for the slot active_slot
+// names, "next" for the other.
+func slotRole(current bool) string {
+	if current {
+		return "current"
+	}
+	return "next"
 }

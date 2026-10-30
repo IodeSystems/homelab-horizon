@@ -1694,10 +1694,8 @@ type LocalDNSDerived struct {
 // ServicePort is one port a service uses.
 type ServicePort struct {
 	Port int `json:"port"`
-	// Label is "backend", "slot a", "slot b", "http" or "https".
+	// Label is "backend", "slot a (current)", "slot b (next)", "http" or "https".
 	Label string `json:"label"`
-	// Active marks the blue-green slot that is active.
-	Active bool `json:"active,omitempty"`
 }
 
 type LocalDNSResponse struct {

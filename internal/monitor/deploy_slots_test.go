@@ -79,24 +79,24 @@ func TestDeployCheckBothSlotsUpIsOK(t *testing.T) {
 	}
 }
 
-// The live case: slot a is active and down, slot b serves.
-func TestDeployCheckActiveDownNextUpIsAWarningNamingTheSlot(t *testing.T) {
+// Slot a holds current and is down; slot b (next) serves.
+func TestDeployCheckCurrentDownNextUpIsAWarningNamingTheSlot(t *testing.T) {
 	a, b := downAddr(t), upAddr(t)
 	st := runSvc(t, deployCfg(a, b, "a"))
 	if st.Status != StatusWarning {
 		t.Fatalf("status = %q (%s), want warning: HAProxy serves from slot b", st.Status, st.LastError)
 	}
-	for _, want := range []string{"slot a (active) " + a + " down", "serving from slot b " + b} {
+	for _, want := range []string{"slot a (current) " + a + " down", "serving from slot b (next) " + b} {
 		if !strings.Contains(st.LastError, want) {
 			t.Errorf("warning %q does not say %q", st.LastError, want)
 		}
 	}
 }
 
-func TestDeployCheckStandbyDownIsAWarning(t *testing.T) {
+func TestDeployCheckNextDownIsAWarning(t *testing.T) {
 	a, b := upAddr(t), downAddr(t)
 	st := runSvc(t, deployCfg(a, b, "a"))
-	if st.Status != StatusWarning || !strings.Contains(st.LastError, "slot b "+b+" down") {
+	if st.Status != StatusWarning || !strings.Contains(st.LastError, "slot b (next) "+b+" down") {
 		t.Fatalf("status = %q (%s), want a warning naming slot b", st.Status, st.LastError)
 	}
 }
@@ -135,16 +135,16 @@ func TestDeployCheckFollowsAnActiveSlotEdit(t *testing.T) {
 	if got == nil || got.Target == before.Target {
 		t.Fatalf("target after swap = %+v, still %q", got, before.Target)
 	}
-	if !strings.HasPrefix(got.Target, "slot b (active) "+b) {
-		t.Errorf("target = %q, want slot b named active and first", got.Target)
+	// Slot a now holds next, so HAProxy lists it first; the check matches.
+	if got.Target != "slot a (next) "+a+", slot b (current) "+b {
+		t.Errorf("target = %q, want slot a (next) first, slot b (current) second", got.Target)
 	}
 
 	after := svcCheck(t, m, "svc:kc")
 	m.executeCheck(after)
 	st := m.GetStatus("svc:kc")
-	if st.Status != StatusWarning || !strings.Contains(st.LastError, "slot a "+a+" down") ||
-		strings.Contains(st.LastError, "slot a (active)") {
-		t.Errorf("after swap: %q (%s), want a warning naming slot a as the standby", st.Status, st.LastError)
+	if st.Status != StatusWarning || !strings.Contains(st.LastError, "slot a (next) "+a+" down") {
+		t.Errorf("after the edit: %q (%s), want a warning naming slot a as next", st.Status, st.LastError)
 	}
 }
 

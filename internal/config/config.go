@@ -1525,10 +1525,10 @@ type ServiceCheck struct {
 
 // CheckSlot is one blue-green slot as the monitor probes it.
 type CheckSlot struct {
-	Slot   string // "a" (ProxyConfig.Backend) or "b" (DeployConfig.NextBackend)
-	Active bool   // DeployConfig.ActiveSlot names this slot
-	Addr   string // resolved host:port, for messages
-	Target string // what the probe dials: Addr for ping, a URL for http
+	Slot    string // "a" (ProxyConfig.Backend) or "b" (DeployConfig.NextBackend)
+	Current bool   // DeployConfig.ActiveSlot names this slot: it holds the current role
+	Addr    string // resolved host:port, for messages
+	Target  string // what the probe dials: Addr for ping, a URL for http
 }
 
 // RemoteProbe is an hz-probe agent hz polls for an outside-in view.

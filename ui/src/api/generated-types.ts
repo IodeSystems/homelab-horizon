@@ -3901,13 +3901,9 @@ export interface LocalDNSDerived {
 export interface ServicePort {
   port: number /* int */;
   /**
-   * Label is "backend", "slot a", "slot b", "http" or "https".
+   * Label is "backend", "slot a (current)", "slot b (next)", "http" or "https".
    */
   label: string;
-  /**
-   * Active marks the blue-green slot that is active.
-   */
-  active?: boolean;
 }
 export interface LocalDNSResponse {
   records: LocalDNSRecord[];

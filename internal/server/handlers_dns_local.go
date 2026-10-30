@@ -73,7 +73,7 @@ func (s *Server) listLocalDNS(w http.ResponseWriter, _ *http.Request) {
 		rec := apitypes.LocalDNSDerived{Name: name, IP: d.IP, Service: d.Service, Ports: []apitypes.ServicePort{}}
 		if svc := cfg.GetService(d.Service); svc != nil {
 			for _, p := range cfg.ServicePorts(svc) {
-				rec.Ports = append(rec.Ports, apitypes.ServicePort{Port: p.Port, Label: p.Label, Active: p.Active})
+				rec.Ports = append(rec.Ports, apitypes.ServicePort{Port: p.Port, Label: p.Label})
 			}
 		}
 		out.Derived = append(out.Derived, rec)

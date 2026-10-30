@@ -213,11 +213,11 @@ print(f\"Service:      {d['service']}\")
 print(f\"Domain:       {d['domain']}\")
 print(f\"Balance:      {d.get('balance', 'first')}\")
 print(f\"Health check: {d.get('health_check', '-')}\")
-print(f\"Active slot:  {d.get('active_slot', 'a')}\")
 md5 = d.get('maintenance_page_md5', '')
 print(f\"Maint page:   {md5 if md5 else '(none)'}\")
 print()
-for role in ('current', 'next'):
+# HAProxy's order: next is listed first and serves whenever it is up.
+for role in ('next', 'current'):
     s = d[role]
     print(f\"  {role:8s}  slot={s.get('slot','?')}  backend={s['backend']}  state={s['state']}\")
 "

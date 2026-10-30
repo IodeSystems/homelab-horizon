@@ -55,8 +55,8 @@ func TestLocalDNSDerivedCarriesServiceAndPorts(t *testing.T) {
 		t.Fatalf("kc = %+v, want service kc", kc)
 	}
 	want := []apitypes.ServicePort{
-		{Port: 6302, Label: "slot a"},
-		{Port: 6300, Label: "slot b", Active: true},
+		{Port: 6302, Label: "slot a (next)"},
+		{Port: 6300, Label: "slot b (current)"},
 		{Port: 80, Label: "http"},
 		{Port: 443, Label: "https"},
 	}
