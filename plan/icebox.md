@@ -247,6 +247,11 @@ Missing:
 2. **Per-server weights**, changeable without a reload. The HAProxy runtime `set weight` does not survive a reload (#5, the same trap as runtime slot states), so the weight must be declared config.
 3. **Routing by source:** `use_backend <canary> if local_access` before the weighted split, so internal users always land on the candidate.
 4. **Stickiness:** a cookie or source hash, so one user does not bounce between builds mid-session.
+4a. **Shape the owner suggested (2026-10-29): a cookie name + a percentage, where the cookie value must be a natural number.** The value is a bucket, `0..99`. A request goes to the canary when `bucket < N`.
+   - **Why this shape:** it gives stickiness for free (#4). It is also monotonic: raising N from 10 to 50 keeps everyone already on the canary there and only adds users, so nobody flips back.
+   - **Assignment:** if the cookie is absent or not a natural number, hz picks `rand(100)` and sets the cookie on the response. "Not a natural number" is a refusal, never a coercion: `abc`, `-1`, `1e2`, `007`, ` 5` and `100+` are re-bucketed, not read as 0. A coerced 0 would put every malformed cookie on the canary (#2: empty ≠ unknown).
+   - **Internal users:** route on source before the bucket, or pin by issuing bucket 0.
+   - **Assumption:** HAProxy's `req.cook(<name>)` with a regex match `^(0|[1-9][0-9]?)$` before the `int` compare. The `int` converter alone would also accept a leading `+`/`-`; this is unverified against the HAProxy docs, so check before building.
 5. **Mixed-version safety:** both builds serve at once for a whole stage. Schema and API must be backward-compatible across one version; that is the app's contract, and hz cannot check it.
 
 Open question: "two hz instances". The design needs two **app nodes** behind one hz edge. Two hz edges (each node with its own hz) would need DNS-level or upstream weighting instead, and hz's HA peers (Hz Node) share one config, so that is not a split either. The owner decides which is meant before any design.
