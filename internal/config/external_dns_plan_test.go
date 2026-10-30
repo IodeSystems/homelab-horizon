@@ -44,18 +44,6 @@ func TestNestedHzDoesNotPublishWhatItAsksTheParentFor(t *testing.T) {
 	}
 }
 
-// A parent's legacy zone (zone_id, no dns_provider) is still written by the
-// AWS CLI with ambient credentials; only a zone with neither is skipped.
-func TestParentLegacyZoneIDStillPublishes(t *testing.T) {
-	c := liveChildConfig()
-	c.Upstream = nil
-	c.Zones[0].ZoneID = "Z1"
-	records, skipped := c.DeriveRoute53Plan()
-	if len(records) != 1 || len(skipped) != 0 {
-		t.Errorf("records=%v skipped=%+v, want the legacy zone published", records, skipped)
-	}
-}
-
 // A nested hz still publishes a name in a zone it has a provider for: that
 // name is not asked of the parent, so nobody else would.
 func TestNestedHzStillPublishesItsOwnProviderZone(t *testing.T) {
@@ -83,7 +71,7 @@ func TestParentProviderlessZoneIsReportedWithAReason(t *testing.T) {
 	if len(skipped) != 1 || skipped[0].Delegated {
 		t.Fatalf("skipped = %+v, want one, not delegated", skipped)
 	}
-	if !strings.Contains(skipped[0].Reason, "loadtest.redline.example.com") || !strings.Contains(skipped[0].Reason, "no dns_provider and no zone_id") {
+	if !strings.Contains(skipped[0].Reason, "loadtest.redline.example.com") || !strings.Contains(skipped[0].Reason, "has no dns_provider") {
 		t.Errorf("reason = %q, want it to name the zone and the missing dns_provider", skipped[0].Reason)
 	}
 }
@@ -98,5 +86,22 @@ func TestNestedHzUINameIsNotCalledDelegated(t *testing.T) {
 	_, skipped := c.DeriveRoute53Plan()
 	if len(skipped) != 1 || skipped[0].Delegated || skipped[0].Reason == "" {
 		t.Errorf("skipped = %+v, want one, not delegated, with a reason", skipped)
+	}
+}
+
+// The legacy shape — a zone_id and no dns_provider — was written by the AWS
+// CLI with ambient credentials. That path is gone, so the shape is reported
+// like any provider-less zone, never attempted.
+func TestZoneIDWithoutAProviderIsNotPublished(t *testing.T) {
+	c := liveChildConfig()
+	c.Upstream = nil
+	c.Zones[0].ZoneID = "Z1"
+
+	records, skipped := c.DeriveRoute53Plan()
+	if len(records) != 0 {
+		t.Errorf("records = %v, want none: only a dns_provider writes a zone", records)
+	}
+	if len(skipped) != 1 || !strings.Contains(skipped[0].Reason, "has no dns_provider") {
+		t.Errorf("skipped = %+v, want one naming the missing dns_provider", skipped)
 	}
 }

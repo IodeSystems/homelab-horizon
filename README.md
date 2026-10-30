@@ -2259,7 +2259,9 @@ Runtime packages (installed by `sudo homelab-horizon install-deps`, never on its
 - `haproxy` - Reverse proxy (when `haproxy_enabled`)
 - `dnsmasq` - Internal DNS (when `dnsmasq_enabled`)
 - `iptables` - NAT masquerading
-- `qrencode` - VPN client QR codes
+
+Nothing else: QR codes, certificate reads, DNS lookups and Route53 calls are
+in-process Go, so no `qrencode`, `openssl`, `dig` or `aws` CLI is needed.
 
 ## License
 

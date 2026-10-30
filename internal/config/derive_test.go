@@ -1188,7 +1188,7 @@ func TestDeriveStaticRoot(t *testing.T) {
 // than cosmetic.
 func TestDeriveRoute53RecordsTTL(t *testing.T) {
 	cfg := &Config{
-		Zones: []Zone{{Name: "example.com", ZoneID: "Z1"}},
+		Zones: []Zone{{Name: "example.com", ZoneID: "Z1", DNSProvider: &DNSProviderConfig{Type: DNSProviderRoute53, AWSProfile: "p"}}},
 		Services: []Service{
 			{
 				Name:        "vpn",

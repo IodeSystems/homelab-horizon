@@ -278,7 +278,7 @@ func TestApplyStillHasTheSideEffects(t *testing.T) {
 		"os.WriteFile(paths.Privkey", // the key write
 		"os.MkdirAll(paths.LiveDir",  // the 0700 directory
 		"os.Remove(",                 // the prune
-		`exec.Command("openssl"`,     // the inspection
+		`os.ReadFile(certPath)`,      // the inspection reads the file
 	} {
 		if !strings.Contains(string(src), want) {
 			t.Errorf("apply.go no longer contains %q — if it moved, the seam moved with it", want)

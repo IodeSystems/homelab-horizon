@@ -1,6 +1,7 @@
 package acme
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -9,11 +10,14 @@ import (
 	"encoding/pem"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	route53sdk "github.com/aws/aws-sdk-go-v2/service/route53"
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/challenge"
@@ -22,6 +26,7 @@ import (
 	"github.com/go-acme/lego/v4/providers/dns/namedotcom"
 	"github.com/go-acme/lego/v4/providers/dns/route53"
 	"github.com/go-acme/lego/v4/registration"
+	mdns "github.com/miekg/dns"
 )
 
 // This file is the PRIVILEGED half of the package: the whole list of things
@@ -34,7 +39,8 @@ import (
 //     from the config, and delete them again
 //   - set process-global AWS_*/NAMECOM_*/CF_* environment variables, because
 //     that is the only interface lego's providers offer
-//   - run `aws route53 get-hosted-zone` and `dig` against public DNS
+//   - read the hosted zone through the AWS SDK and ask a public resolver
+//     for SOA and NS (miekg/dns)
 //
 // Nothing here decides anything an operator reads: which lines describe a
 // provider, what a failure probably means, whether a zone looks delegated —
@@ -58,7 +64,7 @@ func (c *Client) ObtainCertificate(email string, domains []string, providerCfg *
 	}
 	if ZoneVerifiable(providerCfg) {
 		// Verify the zone exists and get its name
-		zoneName, err := verifyRoute53Zone(providerCfg.AWSHostedZoneID, providerCfg.AWSProfile)
+		zoneName, err := verifyRoute53Zone(providerCfg)
 		if err != nil {
 			logFn(fmt.Sprintf("  ⚠ Zone verification failed: %v", err))
 		} else {
@@ -217,45 +223,88 @@ func (c *Client) saveUser(user *User) error {
 	return os.WriteFile(accountFile, data, 0600)
 }
 
-// verifyRoute53Zone checks if a Route53 zone exists and returns its name
-func verifyRoute53Zone(zoneID, awsProfile string) (string, error) {
-	args := []string{
-		"route53", "get-hosted-zone",
-		"--id", NormalizeZoneID(zoneID),
-		"--query", "HostedZone.Name",
-		"--output", "text",
-	}
+// verifyRoute53Zone reads the hosted zone's name through the AWS SDK, with the
+// profile, keys and region the issue itself uses.
+//
+// It used to run `aws route53 get-hosted-zone`. On a box with no CLI that
+// logged "Zone verification failed" before an issue that then succeeded
+// (2026-10-30), and the CLI could resolve other credentials than lego's, so
+// the check could pass or fail apart from the real path.
+func verifyRoute53Zone(p *DNSProviderConfig) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	cmd := exec.Command("aws", args...)
-	if awsProfile != "" {
-		cmd.Env = append(os.Environ(), "AWS_PROFILE="+awsProfile)
+	region := p.AWSRegion
+	if region == "" {
+		region = "us-east-1" // Route53 is global; the SDK still needs a signing region
 	}
-
-	output, err := cmd.CombinedOutput()
+	opts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(region)}
+	if p.AWSProfile != "" {
+		opts = append(opts, awsconfig.WithSharedConfigProfile(p.AWSProfile))
+	}
+	if p.AWSAccessKeyID != "" && p.AWSSecretAccessKey != "" {
+		opts = append(opts, awsconfig.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(p.AWSAccessKeyID, p.AWSSecretAccessKey, "")))
+	}
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
-		return "", fmt.Errorf("aws cli error: %s", strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("loading AWS config: %w", err)
 	}
+	out, err := route53sdk.NewFromConfig(awsCfg).GetHostedZone(ctx, &route53sdk.GetHostedZoneInput{
+		Id: aws.String(NormalizeZoneID(p.AWSHostedZoneID)),
+	})
+	if err != nil {
+		return "", err
+	}
+	if out.HostedZone == nil {
+		return "", fmt.Errorf("hosted zone %s: no zone in the answer", NormalizeZoneID(p.AWSHostedZoneID))
+	}
+	return ParseZoneName(aws.ToString(out.HostedZone.Name)), nil
+}
 
-	return ParseZoneName(string(output)), nil
+// publicResolver is where the SOA and NS checks ask: a public resolver, so the
+// answer is what Let's Encrypt will see, not this box's split-horizon view.
+const publicResolver = "8.8.8.8:53"
+
+// queryShort asks the public resolver for one type and renders the answer the
+// way `dig +short` did, one record per line, so SOAReport and NSReport read
+// the same text they always have.
+func queryShort(name string, qtype uint16) (string, error) {
+	m := new(mdns.Msg)
+	m.SetQuestion(mdns.Fqdn(name), qtype)
+	c := &mdns.Client{Timeout: 10 * time.Second}
+	in, _, err := c.Exchange(m, publicResolver)
+	if err != nil {
+		return "", err
+	}
+	var lines []string
+	for _, rr := range in.Answer {
+		switch v := rr.(type) {
+		case *mdns.SOA:
+			lines = append(lines, fmt.Sprintf("%s %s %d %d %d %d %d", v.Ns, v.Mbox, v.Serial, v.Refresh, v.Retry, v.Expire, v.Minttl))
+		case *mdns.NS:
+			lines = append(lines, v.Ns)
+		}
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 // checkDomainSOA checks if a domain has a valid SOA record (is properly configured in DNS)
 // Returns an error if the domain is not properly delegated.
 //
-// The two `dig` calls are here; both verdicts are in render.go (SOAReport,
+// The two queries are here; both verdicts are in render.go (SOAReport,
 // NSReport), so what the operator is told about a broken delegation can be
-// tested without one.
+// tested without one. They used to be `dig` calls; the query is a few lines of
+// miekg/dns, which lego already brings, so hz needs no dig binary.
 func checkDomainSOA(domain string, logFn func(string)) error {
-	// Use dig to check SOA record
-	cmd := exec.Command("dig", "+short", "SOA", domain, "@8.8.8.8")
-	output, err := cmd.CombinedOutput()
+	output, err := queryShort(domain, mdns.TypeSOA)
 	if err != nil {
 		logFn(fmt.Sprintf("  ⚠ Could not check SOA for %s: %v", domain, err))
-		// Don't fail on dig errors, continue with cert request
+		// Don't fail on a lookup error, continue with cert request
 		return nil
 	}
 
-	lines, needNS := SOAReport(string(output))
+	lines, needNS := SOAReport(output)
 	for _, line := range lines {
 		logFn(line)
 	}
@@ -264,9 +313,8 @@ func checkDomainSOA(domain string, logFn func(string)) error {
 	}
 
 	// Also check NS records
-	cmd = exec.Command("dig", "+short", "NS", domain, "@8.8.8.8")
-	nsOutput, _ := cmd.CombinedOutput()
-	lines, err = NSReport(domain, string(nsOutput))
+	nsOutput, _ := queryShort(domain, mdns.TypeNS)
+	lines, err = NSReport(domain, nsOutput)
 	for _, line := range lines {
 		logFn(line)
 	}

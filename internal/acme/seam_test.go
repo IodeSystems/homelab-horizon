@@ -242,8 +242,8 @@ func TestApplyStillHasTheSideEffects(t *testing.T) {
 		"client.Registration.Register(", // the account
 		"ecdsa.GenerateKey(",            // minting the account key
 		`os.WriteFile(keyFile`,          // writing it
-		`exec.Command("aws"`,            // the zone lookup
-		`exec.Command("dig"`,            // the delegation check
+		".GetHostedZone(",               // the zone lookup
+		"c.Exchange(",                   // the delegation check
 		"os.Setenv(",                    // the provider credentials
 	} {
 		if !strings.Contains(string(src), want) {

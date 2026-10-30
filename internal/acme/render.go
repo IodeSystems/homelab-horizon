@@ -110,8 +110,8 @@ func NormalizeZoneID(zoneID string) string {
 	return strings.TrimPrefix(zoneID, "/hostedzone/")
 }
 
-// ParseZoneName reads a zone name out of `aws route53 get-hosted-zone` output,
-// dropping the trailing dot DNS writes and the shell does not.
+// ParseZoneName reads a hosted zone's name as Route53 returns it,
+// dropping the trailing dot.
 func ParseZoneName(out string) string {
 	return strings.TrimSuffix(strings.TrimSpace(out), ".")
 }
@@ -138,7 +138,8 @@ func ObtainFailureHints(errStr string) []string {
 	return nil
 }
 
-// SOAReport reads `dig +short SOA <domain>` output and says what it means.
+// SOAReport reads a short-form SOA answer (one record per line, as `dig +short`
+// prints it) and says what it means.
 //
 // needNS is true when there was no SOA at all, which is the only case that
 // justifies a second lookup: the caller then runs the NS query and passes its
