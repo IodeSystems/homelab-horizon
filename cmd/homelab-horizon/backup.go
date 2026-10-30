@@ -336,9 +336,11 @@ func readRecoveryKeyFromStdin(stdin io.Reader, tty bool, prompt io.Writer) ([]by
 	if !tty {
 		return io.ReadAll(limited)
 	}
-	fmt.Fprint(prompt, "Paste the recovery private key (hzmprv_…), then press Enter: ")
+	// A prompt that fails to print does not stop the read: the key is on stdin.
+	_, _ = fmt.Fprint(prompt, "Paste the recovery private key (hzmprv_…), then press Enter: ")
 	line, err := bufio.NewReader(limited).ReadString('\n')
-	if err != nil && !(errors.Is(err, io.EOF) && line != "") {
+	// EOF after a partial line is the key without its newline, not an error.
+	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
 		return nil, err
 	}
 	return []byte(line), nil

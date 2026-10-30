@@ -36,13 +36,17 @@ func TestToggleAdminWithAdminSetsIdempotently(t *testing.T) {
 		return out.IsAdmin
 	}
 	yes, no := true, false
-	if !call(apitypes.ToggleAdminReq{Name: "carl-1", Admin: &yes}) || !call(apitypes.ToggleAdminReq{Name: "carl-1", Admin: &yes}) {
+	// Both calls run, in order, before either result is read: a short-circuit
+	// would skip the second call, which is the one that tells a set from a flip.
+	first, second := call(apitypes.ToggleAdminReq{Name: "carl-1", Admin: &yes}), call(apitypes.ToggleAdminReq{Name: "carl-1", Admin: &yes})
+	if !first || !second {
 		t.Fatal("set admin twice: not an admin after the second (a flip, not a set)")
 	}
 	if n := len(s.cfg().VPNAdmins); n != 1 {
 		t.Fatalf("VPNAdmins has %d entries after two sets, want 1", n)
 	}
-	if call(apitypes.ToggleAdminReq{Name: "carl-1", Admin: &no}) || call(apitypes.ToggleAdminReq{Name: "carl-1", Admin: &no}) {
+	first, second = call(apitypes.ToggleAdminReq{Name: "carl-1", Admin: &no}), call(apitypes.ToggleAdminReq{Name: "carl-1", Admin: &no})
+	if first || second {
 		t.Fatal("unset twice: still an admin")
 	}
 	// No admin field: the UI's flip.

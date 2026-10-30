@@ -91,7 +91,7 @@ func TestChildScriptSetsUpTheHumanVPNAndNamesTheFirstClient(t *testing.T) {
 	create := strings.Index(s, `"$AGENT" wg-create-config --hz-config "$HZ_CFG"`)
 	up := strings.Index(s, `systemctl restart "wg-quick@$HUMAN_IFACE"`)
 	start := strings.Index(s, "systemctl restart homelab-horizon")
-	if install < 0 || create < 0 || up < 0 || start < 0 || !(install < create && create < up && up < start) {
+	if install < 0 || create < 0 || up < 0 || start < 0 || install >= create || create >= up || up >= start {
 		t.Fatalf("order: install %d, wg-create-config %d, wg-quick up %d, hz start %d", install, create, up, start)
 	}
 	if !strings.Contains(s, `if [ -e "$WG_DIR/$HUMAN_IFACE.conf" ]; then`+"\n    say") {

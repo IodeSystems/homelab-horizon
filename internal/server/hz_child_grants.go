@@ -63,12 +63,8 @@ func newChildGrants() *childGrants {
 	return &childGrants{now: time.Now, byName: map[string]childGrant{}, enrolled: map[string]time.Time{}}
 }
 
-// issue mints a grant for machine, replacing (revoking) any unused one.
-func (g *childGrants) issue(machine, project, rung string) (childGrant, bool, error) {
-	return g.issueHuman(machine, project, rung, nil)
-}
-
-// issueHuman is issue, with the human VPN the command sets up (nil: none).
+// issueHuman mints a grant for machine, replacing (revoking) any unused one,
+// with the human VPN the command sets up (nil: none).
 func (g *childGrants) issueHuman(machine, project, rung string, human *childHumanVPN) (childGrant, bool, error) {
 	raw := make([]byte, 24)
 	if _, err := rand.Read(raw); err != nil {
