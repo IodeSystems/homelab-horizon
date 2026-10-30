@@ -7,6 +7,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 )
@@ -385,8 +386,19 @@ func (sf *serviceFlags) withHTTPSDomains(base []string) []string {
 // --domains-https list means "these over HTTPS, the difference over HTTP").
 func (sf *serviceFlags) desiredHTTPS(domains []string) map[string]bool {
 	want := make(map[string]bool, len(domains))
-	for _, d := range domains {
-		want[d] = sf.https
+	switch {
+	case sf.set["https"]:
+		for _, d := range domains {
+			want[d] = sf.https
+		}
+	default:
+		// Only a domain this command names has an intent. One the edit kept
+		// from the service is left out, so its coverage stays as it is:
+		// `--domain-https new.example.com` used to plan every other domain of
+		// the service to plain HTTP — on 2026-10-30, four production names.
+		for _, d := range sf.allDomains() {
+			want[d] = false
+		}
 	}
 	for _, d := range sf.httpsList() {
 		want[d] = true
@@ -790,9 +802,15 @@ func runSync(c *client, args []string) error {
 	return waitForSync(c)
 }
 
+// syncWaitLimit bounds `hz sync --wait`. A sync that issues a certificate
+// stages and cleans one DNS-01 TXT record per name, about 30s each at Route53,
+// so a 7-name cert alone took 9m6s on 2026-10-30 — the old 120s limit gave up
+// on a sync that went on to succeed.
+const syncWaitLimit = 30 * time.Minute
+
 func waitForSync(c *client) error {
-	fmt.Print("Waiting for sync")
-	for i := 0; i < 120; i++ {
+	fmt.Print("Waiting for sync (a certificate takes about a minute per name)")
+	for waited := time.Duration(0); waited < syncWaitLimit; waited += time.Second {
 		var st struct {
 			Running bool `json:"running"`
 		}
@@ -804,11 +822,13 @@ func waitForSync(c *client) error {
 			fmt.Println(" done.")
 			return nil
 		}
-		fmt.Print(".")
+		if waited%(10*time.Second) == 0 {
+			fmt.Print(".")
+		}
 		sleep1s()
 	}
 	fmt.Println()
-	return fmt.Errorf("sync still running after 120s")
+	return fmt.Errorf("sync still running after %s; it goes on on the server — 'hz sync --wait' again to keep waiting", syncWaitLimit)
 }
 
 // reportPending ends a command that changed something by saying what is still
