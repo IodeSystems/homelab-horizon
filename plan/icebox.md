@@ -243,8 +243,8 @@ What exists (checked 2026-10-29):
 - two slots of ONE address set.
 
 Missing:
-1. **A backend set larger than two, across machines.** `plan/design/architecture.md` "Many backends, one service" says the model needs a set.
-2. **Per-server weights**, changeable without a reload. The HAProxy runtime `set weight` does not survive a reload (#5, the same trap as runtime slot states), so the weight must be declared config.
+1. **A split declaration: one hostname, two SERVICES** (owner, 2026-10-29: *"two separate services (perhaps on different boxes)"*): `{domain, stable: <service>, canary: <service>, cookie, percent}`. Each service keeps its own backend, slots, checks and box, so no backend set larger than two is needed. Today a domain belongs to exactly one service (`internal/config/derive.go:1454` refuses a second), so the split must own the domain itself, not two services both claiming it. Render: `use_backend <canary> if bucket_lt_N { nbsrv(<canary>_backend) gt 0 }`, else stable. A canary with no server up falls back to stable instead of answering 503.
+2. **The percentage is declared config**, not a runtime `set weight`: HAProxy runtime state does not survive a reload (#5, the same trap as runtime slot states). Moving N is a config edit plus a reload.
 3. **Routing by source:** `use_backend <canary> if local_access` before the weighted split, so internal users always land on the candidate.
 4. **Stickiness:** a cookie or source hash, so one user does not bounce between builds mid-session.
 4a. **Shape the owner suggested (2026-10-29): a cookie name + a percentage, where the cookie value must be a natural number.** The value is a bucket, `0..99`. A request goes to the canary when `bucket < N`.
@@ -254,7 +254,7 @@ Missing:
    - **Assumption:** HAProxy's `req.cook(<name>)` with a regex match `^(0|[1-9][0-9]?)$` before the `int` compare. The `int` converter alone would also accept a leading `+`/`-`; this is unverified against the HAProxy docs, so check before building.
 5. **Mixed-version safety:** both builds serve at once for a whole stage. Schema and API must be backward-compatible across one version; that is the app's contract, and hz cannot check it.
 
-Open question: "two hz instances". The design needs two **app nodes** behind one hz edge. Two hz edges (each node with its own hz) would need DNS-level or upstream weighting instead, and hz's HA peers (Hz Node) share one config, so that is not a split either. The owner decides which is meant before any design.
+Settled (owner, 2026-10-29): two separate hz **services**, possibly on different boxes, behind one hz edge. It is not two hz edges. Rollout: upgrade the canary service → N% (+ internal) → 50% → upgrade the stable service → 100%, or swap the roles in the split.
 
 ## ◻ Path routing for a service (one hostname, two backends)
 
