@@ -210,6 +210,7 @@ var settingsExcluded = map[string]bool{
 	"wg_peers":               true, // VPN peer state, own mutation flow
 	"vpn_mfa_secrets":        true, // secrets
 	"ntfy_token":             true, // secret, write-only across the API — the diff is served to the UI
+	"scrape_token":           true, // inbound bearer, generated on first use; a Sync publishes it nowhere
 	"vpn_mfa_sessions":       true, // runtime session expiries
 	"ip_bans":                true, // ban state, mutated at runtime
 	"peer_id":                true, // fleet identity, local
@@ -418,11 +419,33 @@ func diffFields(before, after []byte) []apitypes.FieldChange {
 	changes := make([]apitypes.FieldChange, 0)
 	for k := range keys {
 		if bf[k] != af[k] {
-			changes = append(changes, apitypes.FieldChange{Path: k, Before: bf[k], After: af[k]})
+			before, after := bf[k], af[k]
+			if secretField(k) {
+				before, after = redactValue(before), redactValue(after)
+			}
+			changes = append(changes, apitypes.FieldChange{Path: k, Before: before, After: after})
 		}
 	}
 	sort.Slice(changes, func(i, j int) bool { return changes[i].Path < changes[j].Path })
 	return changes
+}
+
+// secretField reports whether a dotted diff path ends in a secret: a token,
+// a bearer or anything named secret. The exclusion lists above keep known
+// secrets out of the diff; this is the net under them. Found live 2026-10-30:
+// `hz pending` printed a scrape_token in full, and a zone's DNS provider or a
+// deploy block would have printed its credential the same way on an edit.
+// The change still shows — its value does not.
+func secretField(path string) bool {
+	leaf := strings.ToLower(path[strings.LastIndex(path, ".")+1:])
+	return leaf == "token" || leaf == "bearer" || strings.HasSuffix(leaf, "_token") || strings.Contains(leaf, "secret")
+}
+
+func redactValue(v string) string {
+	if v == "" {
+		return ""
+	}
+	return "<redacted>"
 }
 
 func flattenJSON(b []byte) map[string]string {

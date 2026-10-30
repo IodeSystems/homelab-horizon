@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -229,5 +230,45 @@ func TestPendingDiffNeverCarriesVantageSecrets(t *testing.T) {
 	}}
 	if items := diffConfig(base, onlySecrets); len(items) != 0 {
 		t.Errorf("a secret-only vantage change reads as pending: %+v", items)
+	}
+}
+
+// Found live 2026-10-30: `hz pending` printed a scrape_token in full. A
+// scrape token is an inbound bearer a Sync publishes nowhere, so it is not
+// pending at all; and a secret nested in a service or zone (a deploy token,
+// a DNS provider's key) still reads as changed, never with its value.
+func TestPendingDiffNeverPrintsASecretValue(t *testing.T) {
+	if items := diffConfig(&config.Config{}, &config.Config{ScrapeToken: "scrape-secret-value"}); len(items) != 0 {
+		t.Errorf("a minted scrape token reads as pending: %+v", items)
+	}
+
+	svc := func(deployTok, awsSecret, backend string) *config.Config {
+		return &config.Config{
+			Services: []config.Service{{Name: "kc", Proxy: &config.ProxyConfig{
+				Backend: backend, Deploy: &config.DeployConfig{NextBackend: "192.0.2.10:2", Token: deployTok},
+			}}},
+			Zones: []config.Zone{{Name: "example.com", DNSProvider: &config.DNSProviderConfig{
+				Type: config.DNSProviderRoute53, AWSSecretAccessKey: awsSecret,
+			}}},
+		}
+	}
+	items := diffConfig(svc("deploy-old-value", "aws-old-value", "192.0.2.10:1"), svc("deploy-new-value", "aws-new-value", "192.0.2.10:3"))
+
+	var paths []string
+	for _, it := range items {
+		for _, f := range it.Fields {
+			paths = append(paths, it.Name+":"+f.Path)
+			for _, v := range []string{"deploy-old", "deploy-new", "aws-old", "aws-new"} {
+				if strings.Contains(f.Before, v) || strings.Contains(f.After, v) {
+					t.Errorf("%s %s carries a secret value (%s)", it.Name, f.Path, v)
+				}
+			}
+		}
+	}
+	// Positive half: the changes are still reported, with their paths.
+	for _, want := range []string{"kc:proxy.deploy.token", "example.com:dns_provider.aws_secret_access_key", "kc:proxy.backend"} {
+		if !slices.Contains(paths, want) {
+			t.Errorf("no pending field %s in %v", want, paths)
+		}
 	}
 }
