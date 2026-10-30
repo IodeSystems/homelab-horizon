@@ -77,6 +77,7 @@ COMMANDS
   domain ssl add <domain>...         Give domains HTTPS (adds the SubZone that covers them)
   domain ssl rm <domain>... --confirm
                                      Drop HTTPS from domains (back to plain HTTP)
+  domain ssl test-issue <zone>       Issue the zone's cert against LE STAGING; writes nothing (1/zone/10m)
   dns record list [--zone Z] [--all] [--json]
                                      Records hz owns on its zones (DKIM, SPF, verification)
                                      and whether each is live. --all: every record at the
@@ -403,6 +404,7 @@ EXAMPLES
   hz machine ls --multi-homed                                     # every box that bridges segments
   hz domain list
   hz domain ssl add ebb.example.net --sync
+  hz domain ssl test-issue example.net                            # LE staging, nothing written; 1 per zone per 10m
   hz sync --wait
   hz schema service
   hz host add --name nas --ip 192.168.1.50 --label role=storage

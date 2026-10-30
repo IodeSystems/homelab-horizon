@@ -4393,6 +4393,27 @@ export interface DomainSSLRemoveRequest {
    */
   force?: boolean;
 }
+/**
+ * SSLTestIssueReq is POST /api/v1/ssl/test-issue: issue the zone's
+ * certificate against Let's Encrypt STAGING and keep none of it.
+ */
+export interface SSLTestIssueReq {
+  zone: string;
+}
+/**
+ * SSLTestIssueResp is the staging answer. OK false is a refusal from the CA or
+ * the DNS provider, with Error and the issuance Log saying where it stopped;
+ * nothing was written either way.
+ */
+export interface SSLTestIssueResp {
+  zone: string;
+  ok: boolean;
+  error?: string;
+  sans: string[];
+  issuer?: string;
+  notAfter?: string; // RFC 3339
+  log: string[];
+}
 export interface ServiceIntegration {
   name: string;
   token: string;

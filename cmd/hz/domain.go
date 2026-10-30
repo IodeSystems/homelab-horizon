@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 )
@@ -114,7 +115,7 @@ func domainList(c *client, args []string) error {
 
 func domainSSL(c *client, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("domain ssl subcommand required: add | rm")
+		return fmt.Errorf("domain ssl subcommand required: add | rm | test-issue")
 	}
 	sub := args[0]
 	rest := args[1:]
@@ -123,6 +124,8 @@ func domainSSL(c *client, args []string) error {
 		return domainSSLAdd(c, rest)
 	case "rm", "remove", "delete", "disable":
 		return domainSSLRemove(c, rest)
+	case "test-issue":
+		return domainSSLTestIssue(c, rest)
 	default:
 		return fmt.Errorf("unknown domain ssl subcommand: %s", sub)
 	}
@@ -303,4 +306,29 @@ func domainsOf(changes []httpsChange) string {
 		out = append(out, ch.domain+" "+verb)
 	}
 	return strings.Join(out, ", ")
+}
+
+// domainSSLTestIssue issues a zone's certificate against Let's Encrypt STAGING
+// and keeps none of it: it proves the DNS-01 path before production is asked.
+// hz allows one run per zone per 10 minutes.
+func domainSSLTestIssue(c *client, args []string) error {
+	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
+		return fmt.Errorf("usage: hz domain ssl test-issue <zone>")
+	}
+	// DNS propagation alone takes 30-120s; the default 30s would cut it off.
+	c.http.Timeout = 5 * time.Minute
+	fmt.Printf("Test-issuing %s against Let's Encrypt STAGING (30-120s; nothing is written)...\n", args[0])
+	var out apitypes.SSLTestIssueResp
+	if err := c.do("POST", "/api/v1/ssl/test-issue", apitypes.SSLTestIssueReq{Zone: args[0]}, &out); err != nil {
+		return err
+	}
+	for _, line := range out.Log {
+		fmt.Println("  " + line)
+	}
+	if !out.OK {
+		return fmt.Errorf("staging refused %s: %s", out.Zone, out.Error)
+	}
+	fmt.Printf("OK: staging issued %s (issuer %s, notAfter %s): the DNS-01 path works.\n",
+		strings.Join(out.SANs, ", "), out.Issuer, out.NotAfter)
+	return nil
 }

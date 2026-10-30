@@ -1,11 +1,14 @@
 package letsencrypt
 
 import (
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/acme"
 )
@@ -24,6 +27,8 @@ import (
 //   - list and DELETE files in /etc/haproxy/certs
 //   - run `openssl x509` to inspect a certificate
 //   - read ~/.aws and /root/.aws to list profiles
+//   - TestIssue: ask Let's Encrypt STAGING, under its own account in
+//     <certdir>/accounts-staging, and keep nothing of the answer but a summary
 //
 // Nothing here decides anything — which paths, which SANs, which files are
 // orphans, whether a certificate is stale: all of that is render.go, which is
@@ -56,24 +61,9 @@ func (m *Manager) RequestCertForDomainWithLog(d DomainConfig, logFn LogFunc) err
 	if d.DNSProvider == nil {
 		return fmt.Errorf("no DNS provider configured for domain %s", d.Domain)
 	}
-	providerCfg := d.DNSProvider
-
-	// Convert to acme.DNSProviderConfig
-	acmeProviderCfg := &acme.DNSProviderConfig{
-		Type:               acme.DNSProviderType(providerCfg.Type),
-		AWSAccessKeyID:     providerCfg.AWSAccessKeyID,
-		AWSSecretAccessKey: providerCfg.AWSSecretAccessKey,
-		AWSRegion:          providerCfg.AWSRegion,
-		AWSHostedZoneID:    providerCfg.AWSHostedZoneID,
-		AWSProfile:         providerCfg.AWSProfile,
-		NamecomUsername:    providerCfg.NamecomUsername,
-		NamecomAPIToken:    providerCfg.NamecomAPIToken,
-		CloudflareAPIToken: providerCfg.CloudflareAPIToken,
-		CloudflareZoneID:   providerCfg.CloudflareZoneID,
-	}
 
 	// Save certificates in certbot-compatible layout
-	if err := m.obtainInto(d, acmeProviderCfg, CertPathsFor(m.config.CertDir, d.Domain), logFn); err != nil {
+	if err := m.obtainInto(d, acmeProvider(d.DNSProvider), CertPathsFor(m.config.CertDir, d.Domain), logFn); err != nil {
 		return err
 	}
 
@@ -99,8 +89,55 @@ func (m *Manager) RequestInstanceCert(instance string, d DomainConfig, logFn Log
 	if d.DNSProvider == nil {
 		return fmt.Errorf("no DNS provider configured for domain %s", d.Domain)
 	}
-	p := d.DNSProvider
-	return m.obtainInto(d, &acme.DNSProviderConfig{
+	return m.obtainInto(d, acmeProvider(d.DNSProvider), InstanceCertPaths(m.config.CertDir, instance), logFn)
+}
+
+// TestIssueResult is what a staging issuance proved: the CA issued these
+// SANs. The certificate and its key are not kept.
+type TestIssueResult struct {
+	SANs     []string
+	Issuer   string
+	NotAfter time.Time
+}
+
+// TestIssue asks Let's Encrypt STAGING for exactly the certificate d would get
+// (RequestedSANs, the same DNS provider) and writes none of it: not the live
+// directory, not the HAProxy bundle. It proves the DNS-01 path — credentials,
+// zone, propagation — without spending a production rate limit or putting an
+// untrusted certificate where HAProxy would serve it, and without leaving a
+// staging certificate the renewal sweep would read as valid.
+//
+// Staging has its own account (<certdir>/accounts-staging): an account
+// registered with production does not exist at staging.
+func (m *Manager) TestIssue(d DomainConfig, logFn LogFunc) (*TestIssueResult, error) {
+	if d.Domain == "" {
+		return nil, fmt.Errorf("no domain specified")
+	}
+	if d.Email == "" {
+		return nil, fmt.Errorf("no email specified")
+	}
+	if d.DNSProvider == nil {
+		return nil, fmt.Errorf("no DNS provider configured for domain %s", d.Domain)
+	}
+	staging := acme.NewClient(filepath.Join(m.config.CertDir, "accounts-staging"), true)
+	certs, err := staging.ObtainCertificate(d.Email, RequestedSANs(d), acmeProvider(d.DNSProvider), logFn)
+	if err != nil {
+		return nil, fmt.Errorf("staging issuance failed: %w", err)
+	}
+	block, _ := pem.Decode(certs.Certificate)
+	if block == nil {
+		return nil, fmt.Errorf("staging answered without a PEM certificate")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parsing the staging certificate: %w", err)
+	}
+	return &TestIssueResult{SANs: cert.DNSNames, Issuer: cert.Issuer.CommonName, NotAfter: cert.NotAfter}, nil
+}
+
+// acmeProvider is p in internal/acme's terms.
+func acmeProvider(p *DNSProviderConfig) *acme.DNSProviderConfig {
+	return &acme.DNSProviderConfig{
 		Type:               acme.DNSProviderType(p.Type),
 		AWSAccessKeyID:     p.AWSAccessKeyID,
 		AWSSecretAccessKey: p.AWSSecretAccessKey,
@@ -111,7 +148,7 @@ func (m *Manager) RequestInstanceCert(instance string, d DomainConfig, logFn Log
 		NamecomAPIToken:    p.NamecomAPIToken,
 		CloudflareAPIToken: p.CloudflareAPIToken,
 		CloudflareZoneID:   p.CloudflareZoneID,
-	}, InstanceCertPaths(m.config.CertDir, instance), logFn)
+	}
 }
 
 // ReadInstanceCert reads an instance certificate's fullchain and key, as

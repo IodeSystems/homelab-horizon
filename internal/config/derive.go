@@ -609,58 +609,75 @@ func filterRedundantDomains(domains []string) []string {
 func (c *Config) DeriveSSLDomains() []letsencrypt.DomainConfig {
 	var domains []letsencrypt.DomainConfig
 	for i := range c.Zones {
-		zone := &c.Zones[i]
-		if zone.SSL == nil || !zone.SSL.Enabled {
-			continue
+		if d, ok := zoneSSLDomain(&c.Zones[i]); ok {
+			domains = append(domains, d)
 		}
-
-		// Skip if no SubZones specified - only request what's explicitly configured
-		if len(zone.SubZones) == 0 {
-			continue
-		}
-
-		// Build domain list from sub-zones
-		// Empty string "" means root domain, "*" means root wildcard, otherwise append to zone name
-		var allDomains []string
-		for _, subZone := range zone.SubZones {
-			switch subZone {
-			case "":
-				allDomains = append(allDomains, zone.Name)
-			case "*":
-				allDomains = append(allDomains, "*."+zone.Name)
-			default:
-				allDomains = append(allDomains, subZone+"."+zone.Name)
-			}
-		}
-
-		// Filter out non-wildcard domains that are redundant with a wildcard
-		// in the same request. E.g., if *.example.net is present, remove
-		// dev.example.net — Let's Encrypt rejects this as malformed.
-		allDomains = filterRedundantDomains(allDomains)
-
-		if len(allDomains) == 0 {
-			continue
-		}
-
-		// First domain is primary, rest are extra SANs
-		primaryDomain := allDomains[0]
-		var extraSANs []string
-		if len(allDomains) > 1 {
-			extraSANs = allDomains[1:]
-		}
-
-		// Build DNS provider config for letsencrypt (zone id filled in from
-		// the zone when the provider leaves it empty).
-		dnsProvider := zoneLEProvider(zone)
-
-		domains = append(domains, letsencrypt.DomainConfig{
-			Domain:      primaryDomain,
-			ExtraSANs:   extraSANs,
-			Email:       zone.SSL.Email,
-			DNSProvider: dnsProvider,
-		})
 	}
 	return domains
+}
+
+// ZoneSSLDomain is the certificate request the renewal sweep makes for one
+// zone, by name. ok is false for an unknown zone, one without SSL, or one
+// whose sub_zones name nothing.
+func (c *Config) ZoneSSLDomain(name string) (letsencrypt.DomainConfig, bool) {
+	zone := c.GetZone(name)
+	if zone == nil {
+		return letsencrypt.DomainConfig{}, false
+	}
+	return zoneSSLDomain(zone)
+}
+
+// zoneSSLDomain is one zone's certificate request (see DeriveSSLDomains).
+func zoneSSLDomain(zone *Zone) (letsencrypt.DomainConfig, bool) {
+	if zone.SSL == nil || !zone.SSL.Enabled {
+		return letsencrypt.DomainConfig{}, false
+	}
+
+	// Skip if no SubZones specified - only request what's explicitly configured
+	if len(zone.SubZones) == 0 {
+		return letsencrypt.DomainConfig{}, false
+	}
+
+	// Build domain list from sub-zones
+	// Empty string "" means root domain, "*" means root wildcard, otherwise append to zone name
+	var allDomains []string
+	for _, subZone := range zone.SubZones {
+		switch subZone {
+		case "":
+			allDomains = append(allDomains, zone.Name)
+		case "*":
+			allDomains = append(allDomains, "*."+zone.Name)
+		default:
+			allDomains = append(allDomains, subZone+"."+zone.Name)
+		}
+	}
+
+	// Filter out non-wildcard domains that are redundant with a wildcard
+	// in the same request. E.g., if *.example.net is present, remove
+	// dev.example.net — Let's Encrypt rejects this as malformed.
+	allDomains = filterRedundantDomains(allDomains)
+
+	if len(allDomains) == 0 {
+		return letsencrypt.DomainConfig{}, false
+	}
+
+	// First domain is primary, rest are extra SANs
+	primaryDomain := allDomains[0]
+	var extraSANs []string
+	if len(allDomains) > 1 {
+		extraSANs = allDomains[1:]
+	}
+
+	// Build DNS provider config for letsencrypt (zone id filled in from
+	// the zone when the provider leaves it empty).
+	dnsProvider := zoneLEProvider(zone)
+
+	return letsencrypt.DomainConfig{
+		Domain:      primaryDomain,
+		ExtraSANs:   extraSANs,
+		Email:       zone.SSL.Email,
+		DNSProvider: dnsProvider,
+	}, true
 }
 
 // HostPortEntry represents a single port reservation on a host
