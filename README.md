@@ -1858,6 +1858,55 @@ host, so either disable that feature at instance creation
 router in front of it. And its API needs `proto h2` upstream, which is what
 `--backend-proto h2` is for.
 
+#### Google Workspace, directly
+
+Google is an OIDC issuer (`https://accounts.google.com`), so hz needs no IdP in
+between. **It takes a Workspace admin**: the client must be *Internal*, which
+only a Google Cloud project inside the Workspace organisation can be. Without
+that admin, keep the admin token (or a local account) — a Google client open to
+every Google account, behind only an email-domain gate, is the weak case
+described under *Who gets in*.
+
+1. **Set `admin_url`** to the https name you will sign in at, e.g.
+   `https://hz.example.com`. The redirect URI is derived from it. Google only
+   needs the browser to reach it, so a VPN-only name works. ⚠ `admin_url` is
+   also the `HZ_URL` every integration snippet prints from then on: if it is
+   VPN-only, deploy clients outside the VPN keep the old value — set theirs by
+   hand to a public name (e.g. the kiosk).
+2. **Google Cloud console**, in a project owned by the Workspace organisation:
+   - *Google Auth Platform → Branding*: an app name and support email.
+   - *Audience*: **Internal**. Google then refuses every account outside the
+     organisation before hz sees it.
+   - *Data access*: `openid`, `email`, `profile` only (no app verification needed).
+   - *Clients → Create client → Web application*. Authorized redirect URI:
+     exactly `<admin_url>/api/v1/auth/oidc/callback` (Settings → Users →
+     Single sign-on shows it). Keep the client ID and secret.
+3. **hz**, Settings → Users → Single sign-on (or the file):
+
+   ```json
+   "oidc": {
+     "enabled": true,
+     "issuer": "https://accounts.google.com",
+     "client_id": "…apps.googleusercontent.com",
+     "client_secret": "…",
+     "name": "Google",
+     "allowed_email_domains": ["example.com"],
+     "required_claims": {"hd": ["example.com"]},
+     "auto_provision": false
+   }
+   ```
+
+   `hd` is the Workspace domain; a consumer Gmail account has none, so it is
+   refused even if Internal were ever switched off. Google sends no groups, so
+   leave `groups_claim`, `allowed_groups` and `admin_groups` empty.
+4. **Accounts**: with `auto_provision` off, create each user first with the
+   username = the local part of their Workspace email (`alice` for
+   `alice@example.com`); the first Google sign-in links to it. With it on,
+   every account in the domain becomes an admin — `hz doctor` reports a public
+   UI with ungated sign-up as failing.
+5. **Test discovery**, then sign in from a private window. Keep the admin token
+   until a Google sign-in has worked.
+
 **GitHub is not supported for signing in**, and cannot be without new code:
 GitHub has no OIDC provider for *users* — no issuer to redirect a person to, no
 ID token, no standard claims. (It does run one for CI job identity at
