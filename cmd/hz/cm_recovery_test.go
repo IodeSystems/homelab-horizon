@@ -645,3 +645,45 @@ func TestRecoverySubcommandDispatch(t *testing.T) {
 		t.Fatalf("unknown subcommand: %v", err)
 	}
 }
+
+// One keystore, two instances' keys: a scoped backfill wraps only the scope's.
+// The unscoped run is the control that the fixture holds both.
+func TestBackfillScopedToAnAddressPrefix(t *testing.T) {
+	s, c, ks, _ := recoveryFixture(t, "ops")
+	putKey(t, ks, configmgr.EnvKeyAddr{Project: "acme", Environment: "beta", App: "redline", Role: "api"}, "2026-01", time.Now().UTC())
+	putKey(t, ks, configmgr.EnvKeyAddr{Project: "acme", Environment: "staging", App: "redline", Role: "api"}, "2026-01", time.Now().UTC())
+	sentEnvs := func() []string {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		var envs []string
+		for _, w := range s.wraps {
+			envs = append(envs, w.Environment)
+		}
+		return envs
+	}
+
+	if err := cmRecoveryBackfill(c, []string{"acme/be"}); err == nil {
+		t.Fatal("a partial segment matched: acme/be must not cover acme/beta")
+	}
+	captureStdout(t, func() {
+		if err := cmRecoveryBackfill(c, []string{"acme/beta"}); err != nil {
+			t.Fatalf("scoped backfill: %v", err)
+		}
+	})
+	if got := sentEnvs(); len(got) != 1 || got[0] != "beta" {
+		t.Fatalf("scoped to acme/beta, sent wraps for %v", got)
+	}
+	captureStdout(t, func() {
+		if err := cmRecoveryBackfill(c, []string{"--dry-run", "acme/staging"}); err != nil {
+			t.Fatalf("flags-first scope: %v", err)
+		}
+	})
+	captureStdout(t, func() {
+		if err := cmRecoveryBackfill(c, nil); err != nil {
+			t.Fatalf("unscoped backfill: %v", err)
+		}
+	})
+	if got := sentEnvs(); len(got) != 2 || got[1] != "staging" {
+		t.Fatalf("unscoped backfill after the scoped one sent %v, want beta then staging", got)
+	}
+}

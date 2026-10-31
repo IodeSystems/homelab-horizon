@@ -380,7 +380,7 @@ KEY CUSTODY ('hz config recovery')
 
     hz config recovery keygen --name ops       mint a recovery keypair (terminal only)
     hz config recovery add ops --public-key K  register the PUBLIC half with hz
-    hz config recovery backfill                wrap the keys that already exist
+    hz config recovery backfill [acme/prod]    wrap the keys that already exist (under a prefix)
     hz config recovery ls                      which keys are covered, and by whom
     hz config recovery verify acme/prod/web/app    PROVE a recovery key opens one
 
