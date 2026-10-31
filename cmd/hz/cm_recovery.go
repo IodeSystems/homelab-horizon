@@ -441,16 +441,25 @@ func cmHeldKeys() ([]cmHeldKey, error) {
 //
 // It never prints key material, including in --dry-run, where it does not even
 // load a key: a plan is a list of addresses, key ids and recipient names.
+//
+// An optional address prefix (whole segments: `acme/beta` covers
+// acme/beta/<app>/<role>) limits it to those keys. One keystore can hold keys
+// whose wraps belong on different hz instances, and without it a backfill
+// against one wraps every other instance's keys there too.
 func cmRecoveryBackfill(c *client, args []string) error {
 	fs := flag.NewFlagSet("config recovery backfill", flag.ContinueOnError)
 	dryRun := fs.Bool("dry-run", false, "list what would be wrapped and send nothing")
 	replace := fs.Bool("replace", false, "re-wrap even where a wrap is already stored")
-	if err := fs.Parse(args); err != nil {
+	scope, rest := splitCMPositional(args)
+	if err := fs.Parse(rest); err != nil {
 		return err
 	}
-	if fs.NArg() > 0 {
-		return fmt.Errorf("usage: hz config recovery backfill [--dry-run] [--replace]")
+	if scope == "" && fs.NArg() == 1 {
+		scope = fs.Arg(0)
+	} else if fs.NArg() > 0 {
+		return fmt.Errorf("usage: hz config recovery backfill [<project>[/<environment>[/<app>[/<role>]]]] [--dry-run] [--replace]")
 	}
+	scope = strings.Trim(scope, "/")
 
 	rec, err := cmFetchRecovery(c)
 	if err != nil {
@@ -466,6 +475,17 @@ func cmRecoveryBackfill(c *client, args []string) error {
 	held, err := cmHeldKeys()
 	if err != nil {
 		return err
+	}
+	if scope != "" {
+		inScope := held[:0]
+		for _, h := range held {
+			if a := h.addr.String(); a == scope || strings.HasPrefix(a, scope+"/") {
+				inScope = append(inScope, h)
+			}
+		}
+		if held = inScope; len(held) == 0 {
+			return fmt.Errorf("this machine's keystore holds no key under %s", scope)
+		}
 	}
 	if len(held) == 0 {
 		fmt.Println("This machine's keystore holds no environment keys, so a backfill from here")
