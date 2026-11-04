@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -297,36 +298,113 @@ func (s *Server) exporterJobs(remote bool) []integration.ScrapeJob {
 	return jobs
 }
 
-// promSetupScript is the operator bootstrap for a Prometheus box: it seeds an
-// hz.yml include from this hz, drops any local job hz now owns (avoiding a
-// duplicate-job-name error), installs a refresh timer, validates with promtool,
-// and reloads. %s is the scrape.yaml URL of this hz instance.
-const promSetupScript = `#!/usr/bin/env bash
-# Wire this Prometheus to hz's generated scrape config. Idempotent; validates
-# with promtool before reloading; backs up prometheus.yml. Run with sudo.
+// Where setup.sh installs Prometheus wiring on the Prometheus box.
+const (
+	promYMLPath        = "/etc/prometheus/prometheus.yml"
+	promHZYMLPath      = "/etc/prometheus/hz.yml"
+	promRefreshBin     = "/usr/local/bin/hz-scrape-refresh.sh"
+	promLegacyCronPath = "/etc/cron.d/hz-scrape-refresh"
+)
+
+// promRefreshScript is the body of hz-scrape-refresh.sh, run every 2 min by
+// hz-scrape-refresh.timer. It never writes the live hz.yml in place: the
+// download goes to a candidate file beside it, promtool checks the WHOLE
+// Prometheus config with the candidate included, and only then a rename
+// installs it and Prometheus reloads. Any failure (fetch, unexpected content,
+// promtool rejects, promtool missing) leaves hz.yml untouched, logs to the
+// journal under hz-scrape-refresh, and exits non-zero so the unit shows failed.
+// Format args: scrape.yaml URL, scrape token, prometheus.yml path, hz.yml path.
+const promRefreshScript = `#!/bin/bash
+# hz-scrape-refresh: install hz's generated scrape config only after promtool
+# accepts the full Prometheus config with it. Installed by hz setup.sh; re-run
+# setup.sh instead of editing this file.
 set -euo pipefail
 
 HZ_URL="%s"
 HZ_TOKEN="%s"
-PROM_DIR="/etc/prometheus"
-PROM_YML="$PROM_DIR/prometheus.yml"
-HZ_YML="$PROM_DIR/hz.yml"
-REFRESH_BIN="/usr/local/bin/hz-scrape-refresh.sh"
+PROM_YML="%s"
+HZ_YML="%s"
+PROM_DIR="$(dirname "$PROM_YML")"
+
+log() { logger -t hz-scrape-refresh -- "$*" || true; echo "hz-scrape-refresh: $*" >&2; }
+
+# Candidates live beside the live files: relative paths in prometheus.yml
+# (rule_files, file_sd, certs) resolve as they do for Prometheus, and the
+# install is a same-filesystem rename, so hz.yml is never partially written.
+CAND="$(mktemp "$PROM_DIR/.hz-scrape-candidate.XXXXXX")"
+CHECK="$(mktemp "$PROM_DIR/.hz-scrape-check.XXXXXX")"
+trap 'rm -f "$CAND" "$CHECK"' EXIT
+
+if ! curl -fsS --max-time 60 -H "Authorization: Bearer $HZ_TOKEN" "$HZ_URL" -o "$CAND"; then
+  log "fetch failed; $HZ_YML unchanged"; exit 1
+fi
+if ! grep -q 'scrape_configs:' "$CAND"; then
+  log "hz returned unexpected content; $HZ_YML unchanged"; exit 1
+fi
+if cmp -s "$CAND" "$HZ_YML"; then
+  exit 0
+fi
+if ! command -v promtool >/dev/null; then
+  log "promtool not found; refusing to install an unvalidated config; $HZ_YML unchanged"; exit 1
+fi
+if ! grep -qF "$HZ_YML" "$PROM_YML"; then
+  log "$PROM_YML does not include $HZ_YML; re-run hz setup.sh; $HZ_YML unchanged"; exit 1
+fi
+
+# A copy of prometheus.yml that includes the candidate in place of hz.yml.
+awk -v old="$HZ_YML" -v new="$CAND" '{
+  out = ""
+  while ((i = index($0, old)) > 0) { out = out substr($0, 1, i - 1) new; $0 = substr($0, i + length(old)) }
+  print out $0
+}' "$PROM_YML" > "$CHECK"
+if ! out="$(promtool check config "$CHECK" 2>&1)"; then
+  log "promtool rejected the new scrape config; $HZ_YML unchanged: $out"; exit 1
+fi
+
+chmod 0644 "$CAND"
+mv -f "$CAND" "$HZ_YML"
+systemctl reload prometheus
+log "updated $HZ_YML and reloaded prometheus"
+`
+
+// promSetupScript is the operator bootstrap for a Prometheus box: it removes a
+// legacy cron refresher, wires an hz.yml include into prometheus.yml (dropping
+// any local job hz now owns, avoiding a duplicate-job-name error), installs
+// promRefreshScript plus a systemd timer, runs one refresh, validates with
+// promtool, and reloads. It is the ONE installer: the Observability page shows
+// this script rather than carrying its own copy.
+// Format args: scrape.yaml URL, scrape token, refresh script body.
+const promSetupScript = `#!/usr/bin/env bash
+# Wire this Prometheus to hz's generated scrape config. Idempotent; validates
+# with promtool before installing or reloading; backs up prometheus.yml. Run
+# with sudo.
+set -euo pipefail
+
+HZ_URL="%s"
+HZ_TOKEN="%s"
+PROM_YML="` + promYMLPath + `"
+HZ_YML="` + promHZYMLPath + `"
+REFRESH_BIN="` + promRefreshBin + `"
+LEGACY_CRON="` + promLegacyCronPath + `"
 UNIT_DIR="/etc/systemd/system"
 
 [ "$(id -u)" -eq 0 ] || { echo "run as root (sudo)"; exit 1; }
 command -v promtool >/dev/null || { echo "promtool not found"; exit 1; }
 
-echo "==> seeding $HZ_YML from hz"
+echo "==> fetching scrape config from hz (job names only; not installed yet)"
 tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
-curl -fsS -H "Authorization: Bearer $HZ_TOKEN" "$HZ_URL" | tee "$tmp" >/dev/null
+curl -fsS -H "Authorization: Bearer $HZ_TOKEN" "$HZ_URL" -o "$tmp"
 grep -q 'scrape_configs:' "$tmp" || { echo "hz returned unexpected content"; exit 1; }
-install -m0644 "$tmp" "$HZ_YML"
+
+if [ -e "$LEGACY_CRON" ]; then
+  echo "==> removing legacy cron refresher $LEGACY_CRON (replaced by hz-scrape-refresh.timer)"
+  rm -f "$LEGACY_CRON"
+fi
 
 echo "==> wiring $PROM_YML (include hz.yml, drop local jobs hz now owns)"
 if ! grep -q '^scrape_config_files:' "$PROM_YML"; then
   cp -a "$PROM_YML" "$PROM_YML.bak.$(date +%%s 2>/dev/null || echo bak)"
-  hz_jobs="$(grep -oE 'job_name:[[:space:]]*.*' "$HZ_YML" | sed -E 's/job_name:[[:space:]]*//; s/^["'"'"']//; s/["'"'"']$//')"
+  hz_jobs="$(grep -oE 'job_name:[[:space:]]*.*' "$tmp" | sed -E 's/job_name:[[:space:]]*//; s/^["'"'"']//; s/["'"'"']$//')"
   awk -v hzjobs="$hz_jobs" -v hz="$HZ_YML" '
     BEGIN { n=split(hzjobs, a, "\n"); for(i=1;i<=n;i++) if(a[i]!="") drop[a[i]]=1 }
     /^[^[:space:]#]/ { skip=0 }
@@ -338,22 +416,17 @@ if ! grep -q '^scrape_config_files:' "$PROM_YML"; then
     }
     { if (!skip) print }
   ' "$PROM_YML" > "$PROM_YML.new" && mv "$PROM_YML.new" "$PROM_YML"
+elif ! grep -qF "$HZ_YML" "$PROM_YML"; then
+  cp -a "$PROM_YML" "$PROM_YML.bak.$(date +%%s 2>/dev/null || echo bak)"
+  sed -i "/^scrape_config_files:/a\\  - $HZ_YML" "$PROM_YML"
 else
   echo "    include already present, leaving prometheus.yml untouched"
 fi
 
 echo "==> installing refresh script + timer"
-install -m0755 /dev/stdin "$REFRESH_BIN" <<REFRESH
-#!/bin/bash
-set -euo pipefail
-DEST="$HZ_YML"; TMP="\$(mktemp)"; trap 'rm -f "\$TMP"' EXIT
-curl -fsS -H "Authorization: Bearer $HZ_TOKEN" "$HZ_URL" -o "\$TMP"
-grep -q 'scrape_configs:' "\$TMP" || exit 0
-if ! cmp -s "\$TMP" "\$DEST"; then
-  install -m0644 "\$TMP" "\$DEST"; systemctl reload prometheus
-  logger -t hz-scrape-refresh "updated \$DEST and reloaded prometheus"
-fi
-REFRESH
+install -m0755 /dev/stdin "$REFRESH_BIN" <<'HZ_REFRESH_EOF'
+%s
+HZ_REFRESH_EOF
 
 install -m0644 /dev/stdin "$UNIT_DIR/hz-scrape-refresh.service" <<UNIT
 [Unit]
@@ -374,13 +447,28 @@ OnUnitActiveSec=2min
 WantedBy=timers.target
 UNIT
 
+echo "==> first refresh (fetch, promtool-validate, install)"
+"$REFRESH_BIN" || { echo "refresh failed (see above); hz.yml not installed. prometheus.yml backups: $PROM_YML.bak.*"; exit 1; }
+
 echo "==> validating + enabling"
 promtool check config "$PROM_YML"
 systemctl daemon-reload
 systemctl enable --now hz-scrape-refresh.timer
 systemctl reload prometheus
-echo "done. see Prometheus > Status > Targets"
+echo "done. see Prometheus > Status > Targets; refresh log: journalctl -t hz-scrape-refresh"
 `
+
+// renderPromRefreshScript fills promRefreshScript for the given paths. Tests
+// render it against a temp directory; setup.sh renders it for /etc/prometheus.
+func renderPromRefreshScript(scrapeURL, token, promYML, hzYML string) string {
+	return strings.TrimSuffix(fmt.Sprintf(promRefreshScript, scrapeURL, token, promYML, hzYML), "\n")
+}
+
+// renderPromSetupScript is the setup.sh body for this hz instance.
+func renderPromSetupScript(scrapeURL, token string) string {
+	refresh := renderPromRefreshScript(scrapeURL, token, promYMLPath, promHZYMLPath)
+	return fmt.Sprintf(promSetupScript, scrapeURL, token, refresh)
+}
 
 // handleIntegrationScrapeToken (admin) returns the read-only scrape token,
 // creating one on GET if absent; POST rotates it. The token authorizes the
@@ -426,7 +514,7 @@ func (s *Server) handleIntegrationSetupScript(w http.ResponseWriter, r *http.Req
 	}
 	scrapeURL := s.integrationBaseURL(r) + "/integration/prometheus/scrape.yaml"
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
-	_, _ = fmt.Fprintf(w, promSetupScript, scrapeURL, token)
+	_, _ = io.WriteString(w, renderPromSetupScript(scrapeURL, token))
 }
 
 // requestBearer returns the token from an Authorization: Bearer header, or the

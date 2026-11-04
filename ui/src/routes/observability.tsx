@@ -48,7 +48,9 @@ import {
   useScrapeYaml,
   useScrapeToken,
   useRotateScrapeToken,
+  useSetupScript,
 } from "../api/hooks";
+import { setupInstallCommand } from "../components/observability/promSetup";
 import type { HostDecl, Exporter, ExporterTargetResp } from "../api/types";
 import { readRefusal, type RefusalReading } from "../components/hosts/hosts";
 import { RefusalNote } from "../components/hosts/HostBits";
@@ -639,7 +641,7 @@ function ScrapeTokenSection() {
       </Typography>
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
         The Prometheus discovery endpoints (scrape.yaml / targets.json) require this token or an
-        admin session. <code>setup.sh</code> bakes it into the refresh cron. Rotating it stops
+        admin session. <code>setup.sh</code> bakes it into the refresh timer. Rotating it stops
         existing pullers until they re-run setup.sh.
       </Typography>
       {scrapeToken.isLoading ? (
@@ -719,8 +721,6 @@ function ScrapeTokenSection() {
 const SCRAPE_YAML_PATH = "/integration/prometheus/scrape.yaml";
 const HZ_YML_DEST = "/etc/prometheus/hz.yml";
 const PROM_YML = "/etc/prometheus/prometheus.yml";
-const REFRESH_BIN = "/usr/local/bin/hz-scrape-refresh.sh";
-const CRON_DEST = "/etc/cron.d/hz-scrape-refresh";
 
 function hzOrigin(): string {
   return typeof window !== "undefined" ? window.location.origin : "";
@@ -779,35 +779,6 @@ function scrapeFetchCommand(token: string): string {
   ].join("\n");
 }
 
-// Self-contained cron: wire the include once, install a refresh script (scrape
-// token baked in) + cron.d entry that re-pulls scrape.yaml and reloads every
-// 2 min, then verify it loaded.
-function cronInstallCommand(token: string): string {
-  return [
-    ...shellHeader,
-    ``,
-    `# 1. ${ensureIncludeSnippet[0]?.slice(2)}`,
-    ...ensureIncludeSnippet.slice(1),
-    ``,
-    `# 2. Install the refresh script (scrape token baked in):`,
-    `sudo tee ${REFRESH_BIN} >/dev/null <<'EOF'`,
-    `#!/bin/bash`,
-    `set -euo pipefail`,
-    `curl -fsS -H "Authorization: Bearer ${token}" \\`,
-    `  ${hzOrigin()}${SCRAPE_YAML_PATH} -o ${HZ_YML_DEST}`,
-    `systemctl reload prometheus`,
-    `EOF`,
-    `sudo chmod +x ${REFRESH_BIN}`,
-    ``,
-    `# 3. Pull now, then every 2 minutes via cron:`,
-    `sudo ${REFRESH_BIN}`,
-    `echo '*/2 * * * * root ${REFRESH_BIN}' | sudo tee ${CRON_DEST} >/dev/null`,
-    ``,
-    `# 4. ${verifyLoadedSnippet[0]?.slice(2)}`,
-    ...verifyLoadedSnippet.slice(1),
-  ].join("\n");
-}
-
 function CommandModal({
   open,
   onClose,
@@ -843,7 +814,8 @@ function CommandModal({
 function SetupZone() {
   const scrapeToken = useScrapeToken();
   const scrapeYaml = useScrapeYaml();
-  const [openModal, setOpenModal] = useState<null | "scrape" | "cron">(null);
+  const setupScript = useSetupScript();
+  const [openModal, setOpenModal] = useState<null | "scrape" | "timer">(null);
   const token = scrapeToken.data?.token ?? "";
 
   return (
@@ -852,8 +824,8 @@ function SetupZone() {
         Setup
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Wire a Prometheus server to hz. Pull the generated scrape config once, or install a cron
-        job that keeps it current. Both authenticate with the scrape token below.
+        Wire a Prometheus server to hz. Pull the generated scrape config once, or install a timer
+        that keeps it current. Both authenticate with the scrape token below.
       </Typography>
 
       <Stack spacing={2}>
@@ -880,9 +852,9 @@ function SetupZone() {
               variant="outlined"
               startIcon={<AutorenewIcon />}
               disabled={!token}
-              onClick={() => setOpenModal("cron")}
+              onClick={() => setOpenModal("timer")}
             >
-              Auto-update (cron)
+              Auto-update (timer)
             </Button>
           </Stack>
         </Paper>
@@ -915,19 +887,28 @@ function SetupZone() {
       </CommandModal>
 
       <CommandModal
-        open={openModal === "cron"}
+        open={openModal === "timer"}
         onClose={() => setOpenModal(null)}
-        title="Install auto-update cron"
+        title="Install auto-update timer"
         description={
           <>
-            Wires the <code>scrape_config_files</code> include once, installs a refresh script +{" "}
-            <code>cron.d</code> entry that re-pulls scrape.yaml every 2 minutes and reloads
-            Prometheus, then verifies it loaded. Uses the scrape token — no admin token needed on
-            the box. The command contains your scrape token.
+            Runs hz&apos;s <code>setup.sh</code>: wires the <code>scrape_config_files</code>{" "}
+            include, installs <code>hz-scrape-refresh.timer</code> (every 2 minutes), and removes a
+            legacy <code>/etc/cron.d/hz-scrape-refresh</code>. Each refresh downloads to a temp
+            file, checks the whole Prometheus config with <code>promtool</code>, and only then
+            replaces <code>{HZ_YML_DEST}</code> and reloads — a failed check leaves the live file
+            unchanged (<code>journalctl -t hz-scrape-refresh</code>). Re-run it after rotating the
+            scrape token. The command contains your scrape token.
           </>
         }
-        command={cronInstallCommand(token)}
-      />
+        command={setupScript.data ? setupInstallCommand(setupScript.data) : ""}
+      >
+        {setupScript.isLoading ? (
+          <CircularProgress size={20} />
+        ) : setupScript.error ? (
+          <Alert severity="error">Failed to load setup.sh: {setupScript.error.message}</Alert>
+        ) : null}
+      </CommandModal>
     </Box>
   );
 }
