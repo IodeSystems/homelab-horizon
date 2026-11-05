@@ -1093,7 +1093,7 @@ hz service edit grafana --metrics --metrics-path /metrics --sync
 The generated config is served at `/integration/prometheus/scrape.yaml` and
 `/integration/prometheus/targets.json`, authorized by a **scrape token** that is
 separate from the admin token — a scraper never holds admin rights. The
-Observability page has copy-run snippets for a one-time pull and for
+Observability page has a copy-run command for
 `/integration/prometheus/setup.sh`, which installs a systemd timer that keeps
 it current. Each refresh checks the whole Prometheus config with `promtool`
 before it replaces `hz.yml`; a rejected config leaves the live file unchanged
