@@ -715,69 +715,9 @@ function ScrapeTokenSection() {
   );
 }
 
-// Prometheus wiring targets. scrape.yaml is fetched with the scrape token onto
-// the Prometheus box; hz.yml is the include file Prometheus reads via
-// scrape_config_files (matches what setup.sh installs server-side).
-const SCRAPE_YAML_PATH = "/integration/prometheus/scrape.yaml";
+// hz.yml is the include file Prometheus reads via scrape_config_files; setup.sh
+// installs and refreshes it.
 const HZ_YML_DEST = "/etc/prometheus/hz.yml";
-const PROM_YML = "/etc/prometheus/prometheus.yml";
-
-function hzOrigin(): string {
-  return typeof window !== "undefined" ? window.location.origin : "";
-}
-
-// Preamble: shell vars every snippet references (PROM_URL is overridable).
-const shellHeader = [
-  `PROM_URL="\${PROM_URL:-http://localhost:9090}"   # Prometheus API — override if not local`,
-  `PROM_YML=${PROM_YML}`,
-  `HZ_YML=${HZ_YML_DEST}`,
-];
-
-// Idempotently wire the scrape_config_files include into prometheus.yml. Without
-// this hz.yml is written but never read — the "not loaded" trap.
-const ensureIncludeSnippet = [
-  `# Ensure prometheus.yml includes hz.yml (idempotent):`,
-  `if ! grep -qF "$HZ_YML" "$PROM_YML"; then`,
-  `  sudo cp -a "$PROM_YML" "$PROM_YML.bak.$(date +%s)"`,
-  `  if grep -qE '^scrape_config_files:' "$PROM_YML"; then`,
-  `    sudo sed -i "/^scrape_config_files:/a\\  - $HZ_YML" "$PROM_YML"`,
-  `  else`,
-  `    printf '\\nscrape_config_files:\\n  - %s\\n' "$HZ_YML" | sudo tee -a "$PROM_YML" >/dev/null`,
-  `  fi`,
-  `fi`,
-];
-
-// Confirm Prometheus actually loaded the include after a reload.
-const verifyLoadedSnippet = [
-  `# Verify hz.yml is loaded by Prometheus:`,
-  `sleep 1`,
-  `if curl -fsS "$PROM_URL/api/v1/status/config" | grep -q hz.yml; then`,
-  `  echo "OK: hz.yml is loaded by Prometheus"`,
-  `else`,
-  `  echo "WARNING: hz.yml NOT loaded — check scrape_config_files in $PROM_YML"`,
-  `fi`,
-];
-
-// One-time: fetch scrape.yaml → wire include → validate → reload → verify.
-function scrapeFetchCommand(token: string): string {
-  return [
-    ...shellHeader,
-    ``,
-    `# 1. Fetch hz's generated scrape config:`,
-    `curl -fsS -H "Authorization: Bearer ${token}" \\`,
-    `  ${hzOrigin()}${SCRAPE_YAML_PATH} | sudo tee "$HZ_YML" >/dev/null`,
-    ``,
-    `# 2. ${ensureIncludeSnippet[0]?.slice(2)}`,
-    ...ensureIncludeSnippet.slice(1),
-    ``,
-    `# 3. Validate + reload:`,
-    `sudo promtool check config "$PROM_YML"`,
-    `sudo systemctl reload prometheus`,
-    ``,
-    `# 4. ${verifyLoadedSnippet[0]?.slice(2)}`,
-    ...verifyLoadedSnippet.slice(1),
-  ].join("\n");
-}
 
 function CommandModal({
   open,
@@ -791,7 +731,7 @@ function CommandModal({
   onClose: () => void;
   title: string;
   description: ReactNode;
-  command: string;
+  command?: string;
   children?: ReactNode;
 }) {
   return (
@@ -801,7 +741,7 @@ function CommandModal({
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           {description}
         </Typography>
-        <CodeBlock text={command} maxHeight={400} />
+        {command !== undefined && <CodeBlock text={command} maxHeight={400} />}
         {children}
       </DialogContent>
       <DialogActions>
@@ -824,8 +764,8 @@ function SetupZone() {
         Setup
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Wire a Prometheus server to hz. Pull the generated scrape config once, or install a timer
-        that keeps it current. Both authenticate with the scrape token below.
+        Wire a Prometheus server to hz. Install a timer that keeps the generated scrape config
+        current. It authenticates with the scrape token below.
       </Typography>
 
       <Stack spacing={2}>
@@ -837,16 +777,15 @@ function SetupZone() {
             Prometheus wiring
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.5 }}>
-            Each opens a copy-run command (scrape token baked in) for your Prometheus box.
+            Auto-update opens a copy-run command (scrape token baked in) for your Prometheus box.
           </Typography>
           <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", gap: 1 }}>
             <Button
               variant="outlined"
-              startIcon={<ContentCopyIcon />}
-              disabled={!token}
+              startIcon={<VisibilityIcon />}
               onClick={() => setOpenModal("scrape")}
             >
-              scrape.yaml (one-time)
+              View scrape.yaml
             </Button>
             <Button
               variant="outlined"
@@ -863,20 +802,14 @@ function SetupZone() {
       <CommandModal
         open={openModal === "scrape"}
         onClose={() => setOpenModal(null)}
-        title="Fetch scrape.yaml"
+        title="Current scrape.yaml"
         description={
           <>
-            One-time pull of hz's generated scrape config to <code>{HZ_YML_DEST}</code>, wires the{" "}
-            <code>scrape_config_files</code> include into <code>prometheus.yml</code> if missing,
-            reloads, then verifies Prometheus actually loaded it. The command contains your scrape
-            token.
+            The scrape config hz serves now. The auto-update timer installs it as{" "}
+            <code>{HZ_YML_DEST}</code> after <code>promtool</code> accepts it.
           </>
         }
-        command={scrapeFetchCommand(token)}
       >
-        <Typography variant="subtitle2" sx={{ fontWeight: 600, mt: 2, mb: 1 }}>
-          Current scrape.yaml
-        </Typography>
         {scrapeYaml.isLoading ? (
           <CircularProgress size={20} />
         ) : scrapeYaml.error ? (
