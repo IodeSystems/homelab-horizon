@@ -7,7 +7,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
+
+	"github.com/go-acme/lego/v4/certificate"
 
 	"github.com/iodesystems/homelab-horizon/internal/acme"
 )
@@ -163,15 +166,71 @@ func (m *Manager) ReadInstanceCert(instance string) (fullchain, key []byte, err 
 	return fullchain, key, nil
 }
 
+// certLocks serializes issuance per certificate file, across every Manager in
+// the process: the sync, the renewal sweep, the request-cert API and instance
+// certificates each build their own. Two concurrent requests for one SAN set
+// get the SAME pending order from the CA (same account, same identifiers);
+// both solve its challenges, the first finalizes, and the second's finalize
+// fails with orderNotReady — a failure reported for a certificate that was
+// issued (seen live 2026-11-06: a sync and the post-restart sweep).
+var certLocks sync.Map // CertPaths.Fullchain -> *sync.Mutex
+
+func lockCert(fullchain string) (unlock func()) {
+	mu, _ := certLocks.LoadOrStore(fullchain, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	return mu.(*sync.Mutex).Unlock
+}
+
+// issuedWhileWaiting reports whether the certificate at path was written
+// after since and carries exactly d's SANs — another request for the same
+// certificate finished while this one waited for the lock, so asking the CA
+// again would only spend an order on the same names.
+func issuedWhileWaiting(path string, d DomainConfig, since time.Time) bool {
+	st, err := os.Stat(path)
+	if err != nil || !st.ModTime().After(since) {
+		return false
+	}
+	pemData, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	sans, ok := CertSANs(pemData)
+	if !ok {
+		return false
+	}
+	missing, extra := DiffSANs(d, sans)
+	return len(missing) == 0 && len(extra) == 0
+}
+
 // obtainInto asks the CA for exactly RequestedSANs(d) and writes the result
-// in the certbot layout at paths. The one obtain both callers share.
+// in the certbot layout at paths. The one obtain both callers share. One
+// request per certificate at a time (certLocks); a request that waited on
+// another for the same SANs returns that one's result instead of re-ordering.
 func (m *Manager) obtainInto(d DomainConfig, acmeProviderCfg *acme.DNSProviderConfig, paths CertPaths, logFn LogFunc) error {
 	// Build the SAN list: exactly the configured domains — primary plus extra
 	// SANs. See RequestedSANs for why the apex is not implied by a wildcard.
 	domains := RequestedSANs(d)
 
+	waitStart := time.Now()
+	unlock := lockCert(paths.Fullchain)
+	defer unlock()
+	if issuedWhileWaiting(paths.Fullchain, d, waitStart) {
+		msg := "certificate for " + d.Domain + " was issued by a concurrent request while this one waited; using it"
+		slog.Info("cert: " + msg)
+		if logFn != nil {
+			logFn(msg)
+		}
+		return nil
+	}
+
 	// Request certificate using ACME client
-	certs, err := m.acme.ObtainCertificate(d.Email, domains, acmeProviderCfg, logFn)
+	var certs *certificate.Resource
+	var err error
+	if m.obtainFn != nil {
+		certs, err = m.obtainFn(d.Email, domains, acmeProviderCfg, logFn)
+	} else {
+		certs, err = m.acme.ObtainCertificate(d.Email, domains, acmeProviderCfg, logFn)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to obtain certificate: %w", err)
 	}
