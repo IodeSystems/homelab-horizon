@@ -27,6 +27,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/go-acme/lego/v4/certificate"
+
 	"github.com/iodesystems/homelab-horizon/internal/acme"
 )
 
@@ -34,6 +36,10 @@ import (
 type Manager struct {
 	config Config
 	acme   *acme.Client
+
+	// obtainFn replaces the CA conversation in tests. nil is the real one,
+	// m.acme.ObtainCertificate.
+	obtainFn func(email string, domains []string, providerCfg *acme.DNSProviderConfig, logFn func(string)) (*certificate.Resource, error)
 }
 
 // New creates a new Let's Encrypt manager
