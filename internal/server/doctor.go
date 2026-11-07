@@ -286,15 +286,56 @@ func containsString(list []string, s string) bool {
 	return false
 }
 
-// selfServices are the services that route to hz itself.
+// selfServices are the services that route to hz itself: a `self` service,
+// or a plain proxy whose backend is hz's own listener. The second is the older
+// shape (a kiosk declared as `backend: localhost:8080`); it serves hz exactly
+// as `self` does, and a check that counted only `self` read a working kiosk
+// as "not served" and missed a published plain proxy to hz's UI.
 func selfServices(cfg *config.Config) []config.Service {
 	var out []config.Service
 	for _, svc := range cfg.Services {
-		if svc.Proxy != nil && svc.Proxy.Self {
+		if routesToHZ(cfg, svc) {
 			out = append(out, svc)
 		}
 	}
 	return out
+}
+
+// routesToHZ reports whether svc's traffic reaches this hz. A backend reaches
+// hz when its port is hz's listen port and its host is an address that
+// listener accepts: any loopback name or the LAN address when hz binds every
+// interface; loopback only when hz binds loopback; exactly the bound address
+// otherwise. Static and blue-green services never do.
+func routesToHZ(cfg *config.Config, svc config.Service) bool {
+	if svc.Proxy == nil {
+		return false
+	}
+	if svc.Proxy.Self {
+		return true
+	}
+	if svc.Proxy.StaticRoot != "" || svc.Proxy.Deploy != nil {
+		return false
+	}
+	bHost, bPort, err := net.SplitHostPort(cfg.ServiceBackend(&svc))
+	if err != nil {
+		return false
+	}
+	lHost, lPort, err := net.SplitHostPort(strings.TrimSpace(cfg.EffectiveListenAddr()))
+	if err != nil || lPort == "" {
+		lHost, lPort = "", "8080"
+	}
+	if bPort != lPort {
+		return false
+	}
+	loopback := strings.EqualFold(bHost, "localhost") || isLoopback(bHost)
+	switch {
+	case lHost == "" || lHost == "0.0.0.0" || lHost == "::":
+		return loopback || (cfg.LocalInterface != "" && bHost == cfg.LocalInterface)
+	case strings.EqualFold(lHost, "localhost") || isLoopback(lHost):
+		return loopback
+	default:
+		return bHost == lHost
+	}
 }
 
 func kioskFindings(cfg *config.Config) []apitypes.DoctorFinding {
@@ -321,10 +362,10 @@ func kioskFindings(cfg *config.Config) []apitypes.DoctorFinding {
 	if serving == nil {
 		return []apitypes.DoctorFinding{{Check: "kiosk", Subject: host, Status: "failing",
 			Problem: "kiosk_url names " + host + ", but no service routes that name to hz",
-			Fix:     "add " + host + " to hz's kiosk service, or set kiosk_url to a name hz serves", Evidence: "kiosk_url compared with every self service's domains"}}
+			Fix:     "add " + host + " to hz's kiosk service, or set kiosk_url to a name hz serves", Evidence: "kiosk_url compared with the domains of every service that routes to hz"}}
 	}
 	out := []apitypes.DoctorFinding{{Check: "kiosk", Subject: host, Status: "ok",
-		Problem: "the kiosk is served at " + host + " (service " + serving.Name + ")", Evidence: "kiosk_url compared with every self service's domains"}}
+		Problem: "the kiosk is served at " + host + " (service " + serving.Name + ")", Evidence: "kiosk_url compared with the domains of every service that routes to hz"}}
 	for _, d := range serving.Domains {
 		if strings.EqualFold(d, host) {
 			continue
