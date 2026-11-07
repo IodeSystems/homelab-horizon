@@ -1373,6 +1373,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/pci/level", s.handleAPIPCILevel)
 	mux.HandleFunc("/api/v1/mfa/exception", s.handleAPIMFAException)
 	mux.HandleFunc("/api/v1/mfa/exception/revoke", s.handleAPIMFAExceptionRevoke)
+	mux.HandleFunc("/api/v1/vpn/peers/tag", s.handleAPIPeerTag)
 
 	// Config manager. The first three are the machine protocol, authenticated
 	// as a VPN peer rather than as an admin — register is the one endpoint an

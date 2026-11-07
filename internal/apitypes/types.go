@@ -1048,6 +1048,11 @@ type PeerResp struct {
 	MFAEnrolled      bool   `json:"mfaEnrolled"`
 	MFASessionActive bool   `json:"mfaSessionActive"`
 	MFASessionExpiry string `json:"mfaSessionExpiry,omitempty"`
+	// Tag is "user" (a person; MFA applies) or "infra" (a machine; no MFA
+	// while vpn-only). MFAExempt is why the client skips MFA right now
+	// (config.MFAExemption), "" when it does not or MFA is off.
+	Tag       string `json:"tag"`
+	MFAExempt string `json:"mfaExempt,omitempty"`
 }
 
 // PeerAddReq creates a VPN client. Project is optional; empty is global, and
@@ -1152,6 +1157,25 @@ type MFAVerifyResponse struct {
 	Expiry string `json:"expiry,omitempty"`
 }
 
+// PeerTagReq tags a VPN client "user" (a person; MFA applies) or "infra" (a
+// machine; exempt from MFA while vpn-only). Reason is required for infra.
+type PeerTagReq struct {
+	Name   string `json:"name"`
+	Tag    string `json:"tag"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// MFAExemptResp is one VPN client that is NOT jailed right now, and why:
+// "upstream", "infra", "exception", "admin", "session-forever" or "session".
+// Reason/SetBy/SetAt carry the record behind an infra tag or an exception.
+type MFAExemptResp struct {
+	Name   string `json:"name"`
+	Why    string `json:"why"`
+	Reason string `json:"reason,omitempty"`
+	SetBy  string `json:"setBy,omitempty"`
+	SetAt  string `json:"setAt,omitempty"`
+}
+
 // MFAExceptionResp is a live, time-limited bypass — the only kind "all" scope
 // permits.
 type MFAExceptionResp struct {
@@ -1172,6 +1196,14 @@ type MFASettingsResponse struct {
 	// before the switch rather than after.
 	AdminsWithoutFactor []string           `json:"adminsWithoutFactor,omitempty"`
 	Exceptions          []MFAExceptionResp `json:"exceptions,omitempty"`
+	// Exempt is every VPN client that skips MFA right now, and why — the
+	// report the owner reasons about (2026-11-07). Persons with a live session
+	// are listed too: "session" is how the jail is passed, not a bypass, but
+	// "session-forever" is standing and belongs in the same view.
+	Exempt []MFAExemptResp `json:"exempt,omitempty"`
+	// InfraInactive are clients tagged infra whose profile is no longer
+	// vpn-only: the tag is kept and NOT honoured; they are jailed.
+	InfraInactive []string `json:"infraInactive,omitempty"`
 
 	// Inactivity re-jailing. Zero means off; the floor is the smallest
 	// non-zero value the API accepts, and the form needs it to say so rather
