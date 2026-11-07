@@ -3227,6 +3227,13 @@ export interface PeerResp {
   mfaEnrolled: boolean;
   mfaSessionActive: boolean;
   mfaSessionExpiry?: string;
+  /**
+   * Tag is "user" (a person; MFA applies) or "infra" (a machine; no MFA
+   * while vpn-only). MFAExempt is why the client skips MFA right now
+   * (config.MFAExemption), "" when it does not or MFA is off.
+   */
+  tag: string;
+  mfaExempt?: string;
 }
 /**
  * PeerAddReq creates a VPN client. Project is optional; empty is global, and
@@ -3337,6 +3344,27 @@ export interface MFAVerifyResponse {
   expiry?: string;
 }
 /**
+ * PeerTagReq tags a VPN client "user" (a person; MFA applies) or "infra" (a
+ * machine; exempt from MFA while vpn-only). Reason is required for infra.
+ */
+export interface PeerTagReq {
+  name: string;
+  tag: string;
+  reason?: string;
+}
+/**
+ * MFAExemptResp is one VPN client that is NOT jailed right now, and why:
+ * "upstream", "infra", "exception", "admin", "session-forever" or "session".
+ * Reason/SetBy/SetAt carry the record behind an infra tag or an exception.
+ */
+export interface MFAExemptResp {
+  name: string;
+  why: string;
+  reason?: string;
+  setBy?: string;
+  setAt?: string;
+}
+/**
  * MFAExceptionResp is a live, time-limited bypass — the only kind "all" scope
  * permits.
  */
@@ -3361,6 +3389,18 @@ export interface MFASettingsResponse {
    */
   adminsWithoutFactor?: string[];
   exceptions?: MFAExceptionResp[];
+  /**
+   * Exempt is every VPN client that skips MFA right now, and why — the
+   * report the owner reasons about (2026-11-07). Persons with a live session
+   * are listed too: "session" is how the jail is passed, not a bypass, but
+   * "session-forever" is standing and belongs in the same view.
+   */
+  exempt?: MFAExemptResp[];
+  /**
+   * InfraInactive are clients tagged infra whose profile is no longer
+   * vpn-only: the tag is kept and NOT honoured; they are jailed.
+   */
+  infraInactive?: string[];
   /**
    * Inactivity re-jailing. Zero means off; the floor is the smallest
    * non-zero value the API accepts, and the form needs it to say so rather

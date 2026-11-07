@@ -238,6 +238,11 @@ func doctorFindings(cfg *config.Config, f doctorFacts) []apitypes.DoctorFinding 
 	// 6. A nested hz cut loose from its parent.
 	out = append(out, detachedFindings(cfg, f)...)
 
+	// 7. VPN clients that skip MFA in a standing way — the report the owner
+	// reasons about (2026-11-07). A live session is how the jail is passed,
+	// not a bypass, so it is left out; a "forever" session is standing.
+	out = append(out, mfaExemptFindings(cfg)...)
+
 	// 7. DNS providers can read the zones they claim (deep).
 	for _, z := range cfg.Zones {
 		if z.GetDNSProvider() == nil {
@@ -297,6 +302,44 @@ func selfServices(cfg *config.Config) []config.Service {
 		if cfg.RoutesToHZ(&svc) {
 			out = append(out, svc)
 		}
+	}
+	return out
+}
+
+func mfaExemptFindings(cfg *config.Config) []apitypes.DoctorFinding {
+	var names []string
+	for _, p := range cfg.WGPeers {
+		names = append(names, p.Name)
+	}
+	exempt, inactive := mfaExemptReport(cfg, names)
+	const evidence = "config.MFAExemption over the VPN clients in config (the jail's own decision)"
+	var out []apitypes.DoctorFinding
+	for _, e := range exempt {
+		var problem string
+		switch e.Why {
+		case config.MFAExemptSession:
+			continue
+		case config.MFAExemptInfra:
+			problem = "tagged infra (a machine, vpn-only): no MFA, in either scope — " + e.Reason
+			if e.SetBy != "" {
+				problem += " (set by " + e.SetBy + ")"
+			}
+		case config.MFAExemptUpstream:
+			problem = "an upstream client (a nested hz): no MFA; it reaches only hz's API"
+		case config.MFAExemptException:
+			problem = "a time-limited MFA exception: " + e.Reason
+		case config.MFAExemptAdmin:
+			problem = "a VPN admin: no MFA while scope is admins-exempt"
+		case config.MFAExemptSessionForever:
+			problem = "a person's MFA session that never expires — a standing bypass for a human"
+		}
+		out = append(out, apitypes.DoctorFinding{Check: "vpn-mfa", Subject: e.Name, Status: "info", Problem: problem, Evidence: evidence})
+	}
+	for _, n := range inactive {
+		out = append(out, apitypes.DoctorFinding{Check: "vpn-mfa", Subject: n, Status: "warning",
+			Problem:  "tagged infra but not vpn-only, so the tag is NOT honoured and the client is jailed",
+			Fix:      "set its profile back to vpn-only, or tag it user",
+			Evidence: evidence})
 	}
 	return out
 }

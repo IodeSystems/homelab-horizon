@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -397,6 +398,11 @@ func (s *Server) handleAPIMFASettings(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		sort.Slice(resp.Exceptions, func(i, j int) bool { return resp.Exceptions[i].Name < resp.Exceptions[j].Name })
+		var names []string
+		for _, p := range s.wg.GetPeers() {
+			names = append(names, p.Name)
+		}
+		resp.Exempt, resp.InfraInactive = mfaExemptReport(cfg, names)
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
@@ -570,6 +576,125 @@ func (s *Server) handleAPIMFAException(w http.ResponseWriter, r *http.Request) {
 		"ok":      true,
 		"expires": time.Unix(expires, 0).Format(time.RFC3339),
 	})
+}
+
+// VPN client tags. "user" is a person, who answers MFA; "infra" is a machine —
+// a service box — that has nobody to answer it and is exempt, in both scopes,
+// while vpn-only (config.VPNInfraClients).
+const (
+	peerTagUser  = "user"
+	peerTagInfra = "infra"
+)
+
+// checkPeerTag decides a tag change before anything is written. exists is
+// whether the client is in wg0.conf; profile is its current profile.
+func checkPeerTag(name, tag, reason string, exists bool, profile string) error {
+	switch {
+	case name == "":
+		return errors.New("peer name required")
+	case !exists:
+		return fmt.Errorf("no VPN client named %q", name)
+	case tag != peerTagUser && tag != peerTagInfra:
+		return fmt.Errorf(`tag must be %q or %q`, peerTagUser, peerTagInfra)
+	case tag == peerTagUser:
+		return nil
+	case reason == "":
+		// The exemption never expires, so the reason is the audit trail.
+		return errors.New("reason required — an infra client skips MFA for good, so the reason is the record")
+	case profile != config.ProfileVPNOnly:
+		return fmt.Errorf("an infra client must be vpn-only (this one is %q): a machine with no MFA must not also reach the LAN or the internet through the gateway — change its profile first", profileOrDefault(profile))
+	}
+	return nil
+}
+
+func profileOrDefault(p string) string {
+	if p == "" {
+		return config.ProfileLanAccess
+	}
+	return p
+}
+
+// mfaExemptReport lists every client in peers that skips MFA right now, and
+// why, read from config.MFAExemption — the same decision the jail uses — plus
+// the infra tags that are not honoured because the client is not vpn-only.
+// Empty when MFA is off: then nothing is jailed and nothing is "exempt".
+func mfaExemptReport(cfg *config.Config, peers []string) (exempt []apitypes.MFAExemptResp, inactive []string) {
+	if !cfg.VPNMFAEnabled {
+		return nil, nil
+	}
+	sort.Strings(peers)
+	stamp := func(unix int64) string {
+		if unix == 0 {
+			return ""
+		}
+		return time.Unix(unix, 0).UTC().Format(time.RFC3339)
+	}
+	for _, name := range peers {
+		why := cfg.MFAExemption(name)
+		if why == "" {
+			if cfg.IsInfraClient(name) {
+				inactive = append(inactive, name)
+			}
+			continue
+		}
+		e := apitypes.MFAExemptResp{Name: name, Why: why}
+		switch why {
+		case config.MFAExemptInfra:
+			ic := cfg.VPNInfraClients[name]
+			e.Reason, e.SetBy, e.SetAt = ic.Reason, ic.SetBy, stamp(ic.SetAt)
+		case config.MFAExemptException:
+			ex := cfg.VPNMFAExceptions[name]
+			e.Reason, e.SetBy, e.SetAt = ex.Reason, ex.GrantedBy, stamp(ex.GrantedAt)
+		}
+		exempt = append(exempt, e)
+	}
+	return exempt, inactive
+}
+
+// handleAPIPeerTag tags a VPN client "infra" or "user" (admin only).
+func (s *Server) handleAPIPeerTag(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	var req apitypes.PeerTagReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	tag := strings.TrimSpace(req.Tag)
+	reason := strings.TrimSpace(req.Reason)
+	exists := false
+	for _, p := range s.wg.GetPeers() {
+		if p.Name == name {
+			exists = true
+			break
+		}
+	}
+	if err := checkPeerTag(name, tag, reason, exists, s.cfg().GetPeerProfile(name)); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	actor := s.adminActor(r)
+	if err := s.updateConfig(func(cfg *config.Config) {
+		if tag == peerTagInfra {
+			cfg.SetInfraClient(name, config.InfraClient{Reason: reason, SetAt: time.Now().Unix(), SetBy: actor})
+		} else {
+			cfg.ClearInfraClient(name)
+		}
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
+	// Loud, like an exception grant: tagging infra weakens the control.
+	slog.Warn("VPN client tagged", "peer", name, "tag", tag, "reason", reason, "by", actor)
+	s.rebuildWGChains()
+	writeJSON(w, map[string]any{"ok": true, "name": name, "tag": tag})
 }
 
 // handleAPIMFAExceptionRevoke ends an exception early (admin only).

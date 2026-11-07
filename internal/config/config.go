@@ -502,16 +502,29 @@ type Config struct {
 	// anyone in VPNAdmins bypasses MFA permanently, so an operator can't lock
 	// themselves out.
 	//
-	// MFAScopeAll: nobody is exempt, admins included. Required by PCI DSS
-	// 8.5.1, which permits no standing bypass for any user — the only escape
-	// is a documented, time-limited exception, which is what VPNMFAExceptions
-	// is for.
+	// MFAScopeAll: no PERSON is exempt, admins included. Required by PCI DSS
+	// 8.5.1, which permits no standing bypass for any user — a person's only
+	// escape is a documented, time-limited exception (VPNMFAExceptions).
+	// Machines are not users: an upstream client and an infra client
+	// (VPNInfraClients) stay exempt here, as system accounts under 8.6.
+	// ⚠ A person's "forever" MFA session is still honoured in this scope
+	// (MFAExemption); it is reported, not refused — the owner's call.
 	VPNMFAScope string `json:"vpn_mfa_scope,omitempty"`
 
 	// VPNMFAExceptions are time-limited, reasoned bypasses. They always
 	// expire: a permanent exception is the thing "all" mode exists to
 	// eliminate, so there is deliberately no way to express one.
 	VPNMFAExceptions map[string]MFAException `json:"vpn_mfa_exceptions,omitempty"` // peer name -> exception
+
+	// VPNInfraClients are VPN clients tagged "infra": a machine — a service
+	// box — with no person to answer an MFA prompt. Every other client is
+	// "user" (owner, 2026-11-07: "VPN can be tagged infra or user"; "This is a
+	// service box, so it should be exempt"). Exempt from the jail in BOTH
+	// scopes, the way an upstream client is: PCI DSS treats a system account
+	// doing automated work under 8.6, not 8.4's MFA. Never expires, so it
+	// carries a required reason and who/when, and every one is reported
+	// (MFAExemption, hz doctor). Honoured only while the profile is vpn-only.
+	VPNInfraClients map[string]InfraClient `json:"vpn_infra_clients,omitempty"` // peer name -> tag
 
 	// WireGuard VPN client peers — shared state, replicated to non-primary
 	// instances via the pull loop. Handlers update this after every WG
@@ -2168,46 +2181,13 @@ func (c *Config) CheckProjectRef(project string) error {
 	return fmt.Errorf("no project %q — attribute to a declared project, or leave it empty for global%s", project, c.projectHint())
 }
 
-// IsPeerMFAJailed returns true if MFA is enabled, the peer has no active session,
-// and the peer is not a VPN admin (admins bypass MFA).
+// IsPeerMFAJailed reports whether a peer is MFA-jailed: MFA is on and
+// MFAExemption names no reason it is not.
 func (c *Config) IsPeerMFAJailed(name string) bool {
 	if !c.VPNMFAEnabled {
 		return false
 	}
-	// An upstream client is never jailed: it can reach only hz's API
-	// (ProfileUpstream's rules), which authenticates it by enrolment, so MFA
-	// would protect nothing it can reach — and a jailed machine has no person
-	// to answer the prompt. Exempted here, where the jail set is built, so the
-	// rules, the HAProxy ACL and the jailed-peer count all agree.
-	if c.GetPeerProfile(name) == ProfileUpstream {
-		return false
-	}
-	// A live, time-limited exception. Honoured in both scopes — it is the only
-	// bypass "all" mode permits, and the only one an assessor can audit.
-	if c.HasActiveMFAException(name) {
-		return false
-	}
-	// VPN admins bypass MFA — unless scope is "all", where the whole point is
-	// that nobody has a standing bypass, admins least of all: they are the
-	// highest-privilege identities on the box.
-	if c.MFAScope() != MFAScopeAll {
-		for _, admin := range c.VPNAdmins {
-			if admin == name {
-				return false
-			}
-		}
-	}
-	if c.VPNMFASessions != nil {
-		if expiry, ok := c.VPNMFASessions[name]; ok {
-			if expiry == 0 { // forever
-				return false
-			}
-			if expiry > time.Now().Unix() {
-				return false
-			}
-		}
-	}
-	return true
+	return c.MFAExemption(name) == ""
 }
 
 // GetJailedPeers returns a set of peer names that are currently MFA-jailed.
@@ -3010,8 +2990,101 @@ func (c *Config) PruneExpiredMFASessions() bool {
 	return pruned
 }
 
+// InfraClient tags a VPN client a machine that needs no MFA.
+type InfraClient struct {
+	Reason string `json:"reason"`           // why, for the audit trail; required
+	SetAt  int64  `json:"set_at,omitempty"` // unix seconds
+	SetBy  string `json:"set_by,omitempty"` // best-effort attribution
+}
+
+// SetInfraClient tags a client infra. Callers validate the reason and the
+// peer; this only stores what it is given.
+func (c *Config) SetInfraClient(name string, ic InfraClient) {
+	if c.VPNInfraClients == nil {
+		c.VPNInfraClients = make(map[string]InfraClient)
+	}
+	c.VPNInfraClients[name] = ic
+}
+
+// ClearInfraClient returns a client to "user". Returns false if it was not infra.
+func (c *Config) ClearInfraClient(name string) bool {
+	if _, ok := c.VPNInfraClients[name]; !ok {
+		return false
+	}
+	delete(c.VPNInfraClients, name)
+	return true
+}
+
+// IsInfraClient reports whether a client is tagged infra (whether or not the
+// tag is currently honoured — see MFAExemption).
+func (c *Config) IsInfraClient(name string) bool {
+	_, ok := c.VPNInfraClients[name]
+	return ok
+}
+
+// MFA exemption reasons, as MFAExemption reports them.
+const (
+	MFAExemptUpstream       = "upstream"        // a nested hz's client: hz's API only
+	MFAExemptInfra          = "infra"           // a client tagged infra (VPNInfraClients)
+	MFAExemptException      = "exception"       // a live, time-limited MFAException
+	MFAExemptAdmin          = "admin"           // a VPN admin, scope admins-exempt only
+	MFAExemptSessionForever = "session-forever" // a person passed MFA and chose "forever"
+	MFAExemptSession        = "session"         // a person passed MFA; the session is live
+)
+
+// MFAExemption reports why a peer is NOT jailed, or "" when it is (or when
+// MFA is off, where nothing is jailed and nothing is exempt). The ONE place the
+// jail is decided: IsPeerMFAJailed is its negation, and the report of VPN
+// clients without MFA reads the same answers, so the two cannot disagree.
+func (c *Config) MFAExemption(name string) string {
+	// An upstream client is never jailed: it can reach only hz's API
+	// (ProfileUpstream's rules), which authenticates it by enrolment, so MFA
+	// would protect nothing it can reach — and a jailed machine has no person
+	// to answer the prompt. Exempted here, where the jail set is built, so the
+	// rules, the HAProxy ACL and the jailed-peer count all agree.
+	if c.GetPeerProfile(name) == ProfileUpstream {
+		return MFAExemptUpstream
+	}
+	// An infra client: a machine, vpn-only. Honoured in both scopes for the
+	// upstream client's reason. A tag on a client whose profile has since
+	// changed is NOT honoured — an MFA-free machine with LAN access or a full
+	// tunnel is a different risk than the one that was tagged.
+	if c.IsInfraClient(name) && c.GetPeerProfile(name) == ProfileVPNOnly {
+		return MFAExemptInfra
+	}
+	// A live, time-limited exception. Honoured in both scopes.
+	if c.HasActiveMFAException(name) {
+		return MFAExemptException
+	}
+	// VPN admins bypass MFA — unless scope is "all", where the whole point is
+	// that nobody has a standing bypass, admins least of all: they are the
+	// highest-privilege identities on the box.
+	if c.MFAScope() != MFAScopeAll {
+		for _, admin := range c.VPNAdmins {
+			if admin == name {
+				return MFAExemptAdmin
+			}
+		}
+	}
+	if c.VPNMFASessions != nil {
+		if expiry, ok := c.VPNMFASessions[name]; ok {
+			if expiry == 0 { // forever
+				return MFAExemptSessionForever
+			}
+			if expiry > time.Now().Unix() {
+				return MFAExemptSession
+			}
+		}
+	}
+	return ""
+}
+
 // RenameMFAPeer updates MFA maps when a peer is renamed.
 func (c *Config) RenameMFAPeer(oldName, newName string) {
+	if ic, ok := c.VPNInfraClients[oldName]; ok {
+		delete(c.VPNInfraClients, oldName)
+		c.VPNInfraClients[newName] = ic
+	}
 	if c.VPNMFASecrets != nil {
 		if s, ok := c.VPNMFASecrets[oldName]; ok {
 			delete(c.VPNMFASecrets, oldName)
@@ -3043,6 +3116,7 @@ func (c *Config) DeleteMFAPeer(name string) {
 	c.ClearMFASecret(name)
 	c.ClearPasskeys(name)
 	c.RevokeMFAException(name)
+	c.ClearInfraClient(name)
 }
 
 // GetAllowedIPsForProfile returns client-side AllowedIPs for a routing profile

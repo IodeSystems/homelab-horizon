@@ -648,6 +648,13 @@ func (s *Server) handleAPIVPNPeers(w http.ResponseWriter, r *http.Request) {
 			AllowedIPs: p.AllowedIPs,
 			Profile:    s.cfg().GetPeerProfile(p.Name),
 			Project:    s.cfg().PeerProject(p.Name),
+			Tag:        peerTagUser,
+		}
+		if s.cfg().IsInfraClient(p.Name) {
+			pr.Tag = peerTagInfra
+		}
+		if s.cfg().VPNMFAEnabled {
+			pr.MFAExempt = s.cfg().MFAExemption(p.Name)
 		}
 		if status, ok := ifaceStatus.Peers[p.PublicKey]; ok {
 			pr.Endpoint = status.Endpoint
