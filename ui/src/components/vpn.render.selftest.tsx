@@ -58,6 +58,7 @@ function peer(name: string, publicKey: string, project: string, isAdmin = false)
     project,
     mfaEnrolled: false,
     mfaSessionActive: false,
+    tag: "user",
   };
 }
 

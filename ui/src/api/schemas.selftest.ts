@@ -22,7 +22,7 @@ function check(ok: boolean, what: string): void {
 check(
   VPNPeerSchema.safeParse({
     name: "fresh", publicKey: "K", allowedIPs: "10.101.0.2/32", online: false, isAdmin: false,
-    profile: "vpn-only", project: "", mfaEnrolled: false, mfaSessionActive: false,
+    profile: "vpn-only", project: "", mfaEnrolled: false, mfaSessionActive: false, tag: "",
   }).success,
   "PeerResp: a never-connected peer (no endpoint, handshake, transfer)",
 );

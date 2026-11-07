@@ -43,6 +43,7 @@ import {
 import type { HAFleetPeer } from "../api/types";
 import { SystemHealthTab } from "../components/SystemHealthTab";
 import UsersTab from "../components/UsersTab";
+import { MFAExemptList } from "../components/vpn/MFAExemptList";
 import PCITab from "../components/PCITab";
 import { IPTablesTab } from "../components/IPTablesTab";
 import NtfyCard from "../components/NtfyCard";
@@ -772,6 +773,9 @@ function VPNMFATab() {
               No active exceptions. Grant one with{" "}
               <code>POST /api/v1/mfa/exception</code> (name, duration, reason).
             </Typography>
+          )}
+          {mfa.data?.enabled && (
+            <MFAExemptList exempt={mfa.data.exempt ?? []} inactive={mfa.data.infraInactive ?? []} />
           )}
         </Box>
         <Alert severity="warning" sx={{ mb: 2 }}>

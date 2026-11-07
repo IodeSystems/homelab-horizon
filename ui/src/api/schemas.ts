@@ -220,6 +220,8 @@ export const VPNPeerSchema = z.object({
   mfaEnrolled: z.boolean(),
   mfaSessionActive: z.boolean(),
   mfaSessionExpiry: z.string().optional(),
+  tag: z.string(),
+  mfaExempt: z.string().optional(),
 });
 
 export const VPNPeersSchema = z.array(VPNPeerSchema);
