@@ -507,8 +507,8 @@ type Config struct {
 	// escape is a documented, time-limited exception (VPNMFAExceptions).
 	// Machines are not users: an upstream client and an infra client
 	// (VPNInfraClients) stay exempt here, as system accounts under 8.6.
-	// ⚠ A person's "forever" MFA session is still honoured in this scope
-	// (MFAExemption); it is reported, not refused — the owner's call.
+	// A person's "forever" MFA session is not honoured in this scope and
+	// cannot be requested (MFADurations drops it).
 	VPNMFAScope string `json:"vpn_mfa_scope,omitempty"`
 
 	// VPNMFAExceptions are time-limited, reasoned bypasses. They always
@@ -2789,6 +2789,33 @@ const (
 	MFAScopeAll          = "all"           // nobody is exempt, admins included
 )
 
+// DefaultMFADurations is the session-duration allowlist when the operator has
+// not set one.
+var DefaultMFADurations = []string{"2h", "4h", "8h", "forever"}
+
+// MFADurations is the session durations a peer may request: the operator's
+// list (or the default), without "forever" under scope "all" — a permanent
+// session is a standing bypass, and MFAExemption would not honour it. If
+// that leaves nothing (the operator allowed only "forever"), the default
+// list applies, so a person can still verify.
+func (c *Config) MFADurations() []string {
+	if out := c.mfaDurationsFrom(c.VPNMFADurations); len(out) > 0 {
+		return out
+	}
+	return c.mfaDurationsFrom(DefaultMFADurations)
+}
+
+func (c *Config) mfaDurationsFrom(allowed []string) []string {
+	out := make([]string, 0, len(allowed))
+	for _, d := range allowed {
+		if d == "forever" && c.MFAScope() == MFAScopeAll {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
 // MFAException is a time-limited bypass of the MFA jail for one peer.
 //
 // Expires is mandatory and always in the future when granted — PCI DSS 8.5.1
@@ -3068,7 +3095,13 @@ func (c *Config) MFAExemption(name string) string {
 	}
 	if c.VPNMFASessions != nil {
 		if expiry, ok := c.VPNMFASessions[name]; ok {
-			if expiry == 0 { // forever
+			// "forever" is a standing bypass for a person, which is what
+			// scope "all" exists to remove: not honoured there. The person
+			// verifies again and gets a time-limited session.
+			if expiry == 0 {
+				if c.MFAScope() == MFAScopeAll {
+					return ""
+				}
 				return MFAExemptSessionForever
 			}
 			if expiry > time.Now().Unix() {

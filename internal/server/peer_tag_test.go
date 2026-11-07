@@ -58,12 +58,17 @@ func TestMFAExemptReportListsEveryClientThatSkipsMFA(t *testing.T) {
 			t.Errorf("infra record lost its audit fields: %+v", e)
 		}
 	}
+	// tablet's forever session is not honoured under scope all: jailed, so
+	// not in the report.
 	want := map[string]string{
 		"box": config.MFAExemptInfra, "nested": config.MFAExemptUpstream,
-		"phone": config.MFAExemptSession, "tablet": config.MFAExemptSessionForever,
+		"phone": config.MFAExemptSession,
 	}
 	if len(got) != len(want) {
 		t.Errorf("exempt = %v, want %v", got, want)
+	}
+	if !cfg.IsPeerMFAJailed("tablet") {
+		t.Error("scope all: tablet's forever session still exempts it")
 	}
 	for n, w := range want {
 		if got[n] != w {
