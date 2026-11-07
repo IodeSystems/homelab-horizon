@@ -331,7 +331,7 @@ func mfaExemptFindings(cfg *config.Config) []apitypes.DoctorFinding {
 		case config.MFAExemptAdmin:
 			problem = "a VPN admin: no MFA while scope is admins-exempt"
 		case config.MFAExemptSessionForever:
-			problem = "a person's MFA session that never expires — a standing bypass for a human"
+			problem = "a person's MFA session that never expires — a standing bypass for a human (not honoured under scope all)"
 		}
 		out = append(out, apitypes.DoctorFinding{Check: "vpn-mfa", Subject: e.Name, Status: "info", Problem: problem, Evidence: evidence})
 	}

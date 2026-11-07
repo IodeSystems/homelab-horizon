@@ -813,10 +813,19 @@ function VPNMFATab() {
             <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
               {ALL_DURATIONS.map((d) => {
                 const active = durations.includes(d);
+                // Scope "all" drops a permanent session (config.MFADurations).
+                const off = d === "forever" && mfa.data?.scope === "all";
                 return (
                   <Chip
                     key={d}
-                    label={d === "forever" ? "Permanent" : d}
+                    disabled={off}
+                    label={
+                      d === "forever"
+                        ? off
+                          ? "Permanent (not under scope all)"
+                          : "Permanent"
+                        : d
+                    }
                     color={active ? "primary" : "default"}
                     variant={active ? "filled" : "outlined"}
                     onClick={() => {

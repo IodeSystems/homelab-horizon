@@ -44,10 +44,7 @@ func (s *Server) handleAPIMFAStatus(w http.ResponseWriter, r *http.Request) {
 
 	cfg := s.cfg()
 	resp := apitypes.MFAStatusResponse{
-		Durations: cfg.VPNMFADurations,
-	}
-	if len(resp.Durations) == 0 {
-		resp.Durations = []string{"2h", "4h", "8h", "forever"}
+		Durations: cfg.MFADurations(),
 	}
 
 	if cfg.VPNMFASecrets != nil {
@@ -56,7 +53,8 @@ func (s *Server) handleAPIMFAStatus(w http.ResponseWriter, r *http.Request) {
 
 	if cfg.VPNMFASessions != nil {
 		if expiry, ok := cfg.VPNMFASessions[peerName]; ok {
-			resp.SessionActive = expiry == 0 || expiry > time.Now().Unix()
+			forever := expiry == 0 && cfg.MFAScope() != config.MFAScopeAll
+			resp.SessionActive = forever || expiry > time.Now().Unix()
 			if expiry != 0 {
 				resp.SessionExpiry = time.Unix(expiry, 0).Format(time.RFC3339)
 			}
@@ -192,9 +190,6 @@ func (s *Server) handleAPIMFAVerify(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// defaultMFADurations is the allowlist when the operator hasn't set one.
-var defaultMFADurations = []string{"2h", "4h", "8h", "forever"}
-
 // mfaSessionExpiry validates a requested session duration against the
 // operator's allowlist and returns the unix expiry (0 = forever).
 //
@@ -204,12 +199,8 @@ var defaultMFADurations = []string{"2h", "4h", "8h", "forever"}
 func (s *Server) mfaSessionExpiry(cfg *config.Config, requested string) (int64, error) {
 	duration := strings.TrimSpace(requested)
 
-	allowed := cfg.VPNMFADurations
-	if len(allowed) == 0 {
-		allowed = defaultMFADurations
-	}
 	valid := false
-	for _, a := range allowed {
+	for _, a := range cfg.MFADurations() {
 		if a == duration || (duration == "" && a == "forever") {
 			valid = true
 			break

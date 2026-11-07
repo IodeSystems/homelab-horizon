@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 )
@@ -104,5 +105,40 @@ func TestInfraClientsRoundTripJSON(t *testing.T) {
 	}
 	if got := back.VPNInfraClients["box"]; got.Reason != "service box" || got.SetBy != "admin" || got.SetAt != 1 {
 		t.Errorf("round trip = %+v", got)
+	}
+}
+
+// Scope "all" leaves a person no standing bypass: a forever session stops
+// counting and "forever" cannot be requested. Positive control: the same
+// config under the default scope honours it, so the test sees a change.
+func TestScopeAllDropsForeverSessions(t *testing.T) {
+	c := &Config{
+		VPNMFAEnabled:  true,
+		VPNMFASessions: map[string]int64{"phone": 0, "live": time.Now().Unix() + 3600},
+	}
+	if got := c.MFAExemption("phone"); got != MFAExemptSessionForever {
+		t.Fatalf("control: default scope exemption %q, want %q", got, MFAExemptSessionForever)
+	}
+	if !slices.Contains(c.MFADurations(), "forever") {
+		t.Fatalf("control: default durations %v lack forever", c.MFADurations())
+	}
+
+	c.VPNMFAScope = MFAScopeAll
+	if !c.IsPeerMFAJailed("phone") {
+		t.Errorf("scope all: forever session still honoured (%q)", c.MFAExemption("phone"))
+	}
+	if c.MFAExemption("live") != MFAExemptSession {
+		t.Errorf("scope all: a time-limited session must still count")
+	}
+	if slices.Contains(c.MFADurations(), "forever") {
+		t.Errorf("scope all: durations %v offer forever", c.MFADurations())
+	}
+	c.VPNMFADurations = []string{"forever", "1h"}
+	if got := c.MFADurations(); !slices.Equal(got, []string{"1h"}) {
+		t.Errorf("scope all, operator list: %v, want [1h]", got)
+	}
+	c.VPNMFADurations = []string{"forever"}
+	if got := c.MFADurations(); !slices.Equal(got, []string{"2h", "4h", "8h"}) {
+		t.Errorf("scope all, forever-only list: %v, want the default without forever", got)
 	}
 }
