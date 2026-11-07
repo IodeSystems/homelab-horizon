@@ -1480,6 +1480,55 @@ func (c *Config) SelfBackendAddr() string {
 	return "127.0.0.1:" + port
 }
 
+// RoutesToHZ reports whether svc's traffic reaches this hz: a `self` service,
+// or a plain proxy whose backend is hz's own listener — the older shape (a
+// kiosk declared as `backend: localhost:8080`), which serves hz exactly as
+// `self` does. A backend reaches hz when its port is hz's listen port and its
+// host is an address that listener accepts: any loopback name or the LAN
+// address when hz binds every interface; loopback only when hz binds loopback;
+// exactly the bound address otherwise. Static and blue-green services never do.
+//
+// Used by the MFA jail (which host is the portal) and by hz doctor. Counting
+// only `self` jailed peers out of a kiosk declared the older way (403 instead
+// of the portal redirect, seen live 2026-11-06).
+func (c *Config) RoutesToHZ(svc *Service) bool {
+	if svc.Proxy == nil {
+		return false
+	}
+	if svc.Proxy.Self {
+		return true
+	}
+	if svc.Proxy.StaticRoot != "" || svc.Proxy.Deploy != nil {
+		return false
+	}
+	bHost, bPort, err := net.SplitHostPort(c.ServiceBackend(svc))
+	if err != nil {
+		return false
+	}
+	lHost, lPort, err := net.SplitHostPort(strings.TrimSpace(c.EffectiveListenAddr()))
+	if err != nil || lPort == "" {
+		lHost, lPort = "", "8080"
+	}
+	if bPort != lPort {
+		return false
+	}
+	loopbackHost := func(h string) bool {
+		if strings.EqualFold(h, "localhost") {
+			return true
+		}
+		ip := net.ParseIP(h)
+		return ip != nil && ip.IsLoopback()
+	}
+	switch {
+	case lHost == "" || lHost == "0.0.0.0" || lHost == "::":
+		return loopbackHost(bHost) || (c.LocalInterface != "" && bHost == c.LocalInterface)
+	case loopbackHost(lHost):
+		return loopbackHost(bHost)
+	default:
+		return bHost == lHost
+	}
+}
+
 // StaticServeAddr returns the loopback address hz binds to serve static-folder
 // services, and that HAProxy backends for those services point at. Defaults to
 // 127.0.0.1:8091 when StaticServePort is unset.

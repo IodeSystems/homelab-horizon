@@ -66,7 +66,7 @@ func TestRoutesToHZFollowsTheListener(t *testing.T) {
 		cfg := &config.Config{LocalInterface: "192.168.1.160"}
 		cfg.SetListenOverride(c.listen)
 		svc := config.Service{Name: "x", Proxy: &config.ProxyConfig{Backend: c.backend}}
-		if got := routesToHZ(cfg, svc); got != c.want {
+		if got := cfg.RoutesToHZ(&svc); got != c.want {
 			t.Errorf("listen %q backend %q = %v, want %v", c.listen, c.backend, got, c.want)
 		}
 	}
@@ -76,7 +76,7 @@ func TestRoutesToHZFollowsTheListener(t *testing.T) {
 		{StaticRoot: "/srv/x", Backend: "127.0.0.1:8080"},
 		{Backend: "127.0.0.1:8080", Deploy: &config.DeployConfig{NextBackend: "127.0.0.1:8082"}},
 	} {
-		if routesToHZ(cfg, config.Service{Name: "x", Proxy: p}) {
+		if cfg.RoutesToHZ(&config.Service{Name: "x", Proxy: p}) {
 			t.Errorf("%+v routes to hz", p)
 		}
 	}

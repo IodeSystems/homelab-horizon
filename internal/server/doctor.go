@@ -294,48 +294,11 @@ func containsString(list []string, s string) bool {
 func selfServices(cfg *config.Config) []config.Service {
 	var out []config.Service
 	for _, svc := range cfg.Services {
-		if routesToHZ(cfg, svc) {
+		if cfg.RoutesToHZ(&svc) {
 			out = append(out, svc)
 		}
 	}
 	return out
-}
-
-// routesToHZ reports whether svc's traffic reaches this hz. A backend reaches
-// hz when its port is hz's listen port and its host is an address that
-// listener accepts: any loopback name or the LAN address when hz binds every
-// interface; loopback only when hz binds loopback; exactly the bound address
-// otherwise. Static and blue-green services never do.
-func routesToHZ(cfg *config.Config, svc config.Service) bool {
-	if svc.Proxy == nil {
-		return false
-	}
-	if svc.Proxy.Self {
-		return true
-	}
-	if svc.Proxy.StaticRoot != "" || svc.Proxy.Deploy != nil {
-		return false
-	}
-	bHost, bPort, err := net.SplitHostPort(cfg.ServiceBackend(&svc))
-	if err != nil {
-		return false
-	}
-	lHost, lPort, err := net.SplitHostPort(strings.TrimSpace(cfg.EffectiveListenAddr()))
-	if err != nil || lPort == "" {
-		lHost, lPort = "", "8080"
-	}
-	if bPort != lPort {
-		return false
-	}
-	loopback := strings.EqualFold(bHost, "localhost") || isLoopback(bHost)
-	switch {
-	case lHost == "" || lHost == "0.0.0.0" || lHost == "::":
-		return loopback || (cfg.LocalInterface != "" && bHost == cfg.LocalInterface)
-	case strings.EqualFold(lHost, "localhost") || isLoopback(lHost):
-		return loopback
-	default:
-		return bHost == lHost
-	}
 }
 
 func kioskFindings(cfg *config.Config) []apitypes.DoctorFinding {
