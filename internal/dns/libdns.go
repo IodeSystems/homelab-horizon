@@ -134,7 +134,7 @@ func (p *LibdnsAdapter) GetRecord(zoneID, name, recordType string) (*Record, err
 
 	for _, r := range records {
 		rr := r.RR()
-		if rr.Name == relName && rr.Type == recordType {
+		if unescapeDNSName(rr.Name) == relName && rr.Type == recordType {
 			return &Record{
 				Name:   name,
 				Type:   rr.Type,
@@ -147,6 +147,32 @@ func (p *LibdnsAdapter) GetRecord(zoneID, name, recordType string) (*Record, err
 
 	return nil, nil // Not found
 }
+
+// unescapeDNSName decodes the \ooo octal escapes a provider may return in a
+// record name. Route53 lists `*.beta.example.com` as `\052.beta.example.com.`
+// and libdns/route53 v1.6.2 unescapes TXT values only, so a wildcard read back
+// never matched the name hz wrote: every sync reported the write unconfirmed.
+// Anything that is not a valid 3-digit octal escape is kept as written.
+func unescapeDNSName(name string) string {
+	if !strings.Contains(name, `\`) {
+		return name
+	}
+	var sb strings.Builder
+	for i := 0; i < len(name); i++ {
+		if name[i] == '\\' && i+3 < len(name) && isOctal(name[i+1]) && isOctal(name[i+2]) && isOctal(name[i+3]) {
+			v := (int(name[i+1]-'0') << 6) | (int(name[i+2]-'0') << 3) | int(name[i+3]-'0')
+			if v <= 0xff {
+				sb.WriteByte(byte(v))
+				i += 3
+				continue
+			}
+		}
+		sb.WriteByte(name[i])
+	}
+	return sb.String()
+}
+
+func isOctal(c byte) bool { return c >= '0' && c <= '7' }
 
 // ListRecords returns every record live in the zone at the provider.
 func (p *LibdnsAdapter) ListRecords(zoneID string) ([]Record, error) {
@@ -321,7 +347,7 @@ func (p *LibdnsAdapter) SyncRecordSet(zoneID string, records []Record) (changed 
 	var existingValues []string
 	for _, r := range existing {
 		rr := r.RR()
-		if rr.Name == relName && rr.Type == recordType {
+		if unescapeDNSName(rr.Name) == relName && rr.Type == recordType {
 			existingValues = append(existingValues, config.CanonicalRecordValue(rr.Type, rr.Data))
 		}
 	}
@@ -413,7 +439,7 @@ func (p *LibdnsAdapter) toRelativeName(name string) string {
 // trailing dot, the apex as "@", "" or the zone name, and any letter case.
 func (p *LibdnsAdapter) sameName(a, b string) bool {
 	norm := func(n string) string {
-		n = p.toRelativeName(strings.ToLower(strings.TrimSpace(n)))
+		n = p.toRelativeName(strings.ToLower(strings.TrimSpace(unescapeDNSName(n))))
 		if n == "" {
 			return "@"
 		}
@@ -425,6 +451,7 @@ func (p *LibdnsAdapter) sameName(a, b string) bool {
 // toFQDN converts a libdns relative name back to a fully-qualified name in
 // this zone. "@" (or empty) is the zone apex.
 func (p *LibdnsAdapter) toFQDN(name string) string {
+	name = unescapeDNSName(name)
 	zoneName := strings.TrimSuffix(p.zone, ".")
 	if name == "" || name == "@" {
 		return zoneName
