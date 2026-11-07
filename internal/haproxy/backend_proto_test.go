@@ -63,3 +63,27 @@ func TestUnknownProtoEmitsNothing(t *testing.T) {
 		t.Fatalf("unknown proto leaked into the config:\n%s", cfg)
 	}
 }
+
+// `ssl verify none` makes HAProxy speak TLS to a backend that serves only
+// HTTPS and accept its self-signed certificate. Health checks follow `ssl`.
+func TestBackendProtoHTTPSOnPlainCheckedAndDeployServers(t *testing.T) {
+	cfg := genWithBackends(t, []Backend{
+		{Name: "kvm", DomainMatches: []string{"kvm.example.com"}, Server: "192.168.1.171:443", Proto: "https"},
+		{Name: "kvmc", DomainMatches: []string{"kvmc.example.com"}, Server: "192.168.1.172:443", Proto: "https", HTTPCheck: true, CheckPath: "/"},
+		{Name: "bg", DomainMatches: []string{"bg.example.com"}, Deploy: true,
+			CurrentServer: "127.0.0.1:20005", NextServer: "127.0.0.1:20007", CheckPath: "/", Proto: "https"},
+		{Name: "wiki", DomainMatches: []string{"wiki.example.com"}, Server: "10.0.0.5:80"},
+	})
+	if !strings.Contains(cfg, "server kvm 192.168.1.171:443 ssl verify none\n") {
+		t.Errorf("no ssl on the plain server line:\n%s", cfg)
+	}
+	if !strings.Contains(cfg, "server kvmc 192.168.1.172:443 check ssl verify none\n") {
+		t.Errorf("no ssl on the health-checked server line:\n%s", cfg)
+	}
+	if n := strings.Count(cfg, "ssl verify none"); n != 4 {
+		t.Errorf("want ssl verify none on 4 server lines (2 plain, 2 slots), got %d:\n%s", n, cfg)
+	}
+	if strings.Contains(cfg, "server wiki 10.0.0.5:80 ssl") || strings.Contains(cfg, "proto h2") {
+		t.Errorf("https leaked onto another backend:\n%s", cfg)
+	}
+}

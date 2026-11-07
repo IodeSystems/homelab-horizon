@@ -1988,7 +1988,7 @@ prefix is a tree: `/api/packages/` exposes everything beneath it, so name the
 narrowest prefix that works, with the trailing slash, or
 `/api/packages/x-debian-secret` rides along with `/api/packages/x-debian`.
 
-## Backend protocol (h2c)
+## Backend protocol (h2c, https)
 
 By default HAProxy talks **HTTP/1.1** to every backend, which is what nearly
 every service wants. A backend that requires HTTP/2 — a gRPC service, or
@@ -2010,8 +2010,30 @@ travels the same way. WebSocket backends are another reason to leave it off
 unless asked for: WebSockets over an HTTP/2 upstream need extended CONNECT
 (RFC 8441) support on both sides.
 
-Only `h2` is accepted; anything else is rejected at validation
-(`proxy.backend_proto`), and it cannot be combined with a static-folder or
+### HTTPS to the backend
+
+A device that serves only HTTPS — a KVM, a router or NAS admin page — usually
+has a self-signed certificate. `--backend-proto https` renders `ssl verify
+none` on its server line; HAProxy's health check follows `ssl`, and hz's own
+`svc:` check probes it over https (at `/` when no health path is set):
+
+```bash
+hz service create --name kvm --domain-https kvm.example.com --internal-only \
+    --backend 192.168.1.171:443 --backend-proto https --health-check / \
+    --timeout-tunnel 3600 --sync
+```
+
+⚠ **The backend's certificate is not verified**, by HAProxy or by hz's check.
+The link is encrypted but unauthenticated: whatever answers at the backend
+address is trusted. Use it for a device on your LAN, never for a backend
+across a network you do not control. Only the derived `svc:` check skips
+verification; an `https://` check you configure yourself still verifies.
+
+A KVM streams video over a WebSocket. Without `--timeout-tunnel`, HAProxy
+closes an idle tunnel after the default 50 s client/server timeout.
+
+Only `h2` and `https` are accepted; anything else is rejected at validation
+(`proxy.backend_proto`), and neither can be combined with a static-folder or
 `self` service, whose backend is hz's own HTTP/1.1 server.
 
 ## Health Checks

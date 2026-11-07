@@ -1300,10 +1300,11 @@ func (c *Config) ValidateService(svc *Service) error {
 	// Backend protocol: only a value hz knows, and only where there is a real
 	// backend. HAProxy speaks h2c by prior knowledge with no fallback, so a
 	// typo here would silently mean HTTP/1.1 and a static or self service
-	// pointed at hz's own HTTP/1.1 servers would simply break.
+	// pointed at hz's own HTTP/1.1 servers would simply break; the same holds
+	// for https against hz's own plain-HTTP listeners.
 	if svc.Proxy != nil && svc.Proxy.BackendProto != "" {
 		if !ValidBackendProto(svc.Proxy.BackendProto) {
-			return &ValidationError{Field: "proxy.backend_proto", Message: `unknown protocol (use "h2" or leave empty for HTTP/1.1)`}
+			return &ValidationError{Field: "proxy.backend_proto", Message: `unknown protocol (use "h2", "https", or leave empty for HTTP/1.1)`}
 		}
 		if svc.Proxy.Backend == "" && svc.Proxy.Deploy == nil {
 			return &ValidationError{Field: "proxy.backend_proto", Message: "backend_proto needs a backend (not valid for static or self services)"}

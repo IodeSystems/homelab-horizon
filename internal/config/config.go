@@ -1444,15 +1444,29 @@ type ProxyConfig struct {
 	// HTTP/1.1, which is right for nearly everything. "h2" is cleartext
 	// HTTP/2 (h2c) by prior knowledge — HAProxy does not negotiate and does
 	// not fall back, so a backend that is not h2c fails outright. Set it only
-	// for a backend that requires HTTP/2, such as a gRPC service.
+	// for a backend that requires HTTP/2, such as a gRPC service. "https" is
+	// HTTP/1.1 over TLS, for a backend that serves only TLS — see
+	// BackendProtoHTTPS for what it does NOT check.
 	BackendProto string `json:"backend_proto,omitempty"`
 }
 
-// BackendProtoH2 is the only non-default value BackendProto accepts.
+// BackendProtoH2 is cleartext HTTP/2 (h2c) to the backend.
 const BackendProtoH2 = "h2"
 
+// BackendProtoHTTPS is HTTP/1.1 over TLS to the backend, for a device that
+// serves only HTTPS with a self-signed certificate (a KVM, a router UI).
+//
+// ⚠ The backend's certificate is NOT verified: HAProxy renders `ssl verify
+// none`, and hz's derived svc:* check skips verification the same way. The
+// link is encrypted but unauthenticated — anything that answers at the
+// backend address is trusted. Acceptable for a device on the LAN; never use it
+// for a backend reached across a network you do not control.
+const BackendProtoHTTPS = "https"
+
 // ValidBackendProto reports whether a backend_proto value is one hz knows.
-func ValidBackendProto(v string) bool { return v == "" || v == BackendProtoH2 }
+func ValidBackendProto(v string) bool {
+	return v == "" || v == BackendProtoH2 || v == BackendProtoHTTPS
+}
 
 // SelfBackendAddr returns the loopback address of this hz instance's own admin
 // UI, derived from ListenAddr. Used by services with proxy.self so HAProxy
@@ -1514,6 +1528,13 @@ type ServiceCheck struct {
 	// svc:* checks the monitor derives from a service — those follow the
 	// service's own Project and are not stored.
 	Project string `json:"project,omitempty"`
+
+	// InsecureTLS is set only on the svc:* check of a service whose
+	// backend_proto is "https", and never stored: the probe then skips
+	// certificate verification, as HAProxy does for that backend
+	// (BackendProtoHTTPS). A configured check cannot set it, so an https://
+	// check an operator writes always verifies.
+	InsecureTLS bool `json:"-"`
 
 	// Slots is set only on the svc:* check of a blue-green service, and never
 	// stored. HAProxy serves such a service from whichever slot is healthy, so
