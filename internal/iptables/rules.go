@@ -335,6 +335,8 @@ func ExpectedRules(in Inputs) []Rule {
 		Args:  []string{"-j", "DROP"},
 	})
 
+	rules = withGatewayReplies(rules)
+
 	// Layer-4 port forwards: jumps plus the HZ-* chain bodies. Nothing when
 	// no forward is configured. Never touches INPUT.
 	rules = append(rules, forwardRules(in)...)
@@ -481,6 +483,40 @@ func upstreamRules(ip, serverWGIP, listenPort string) []Rule {
 		Rule{Table: "filter", Chain: InputChainName, Args: []string{"-s", src, "-j", "DROP"}},
 		Rule{Table: "filter", Chain: ForwardChainName, Args: []string{"-s", src, "-j", "DROP"}},
 	)
+}
+
+// gatewayRepliesRule accepts, in WG-INPUT, the replies on connections the
+// GATEWAY opened to a peer — HAProxy proxying to a backend on a VPN client, hz
+// probing it. Without it a jailed or upstream peer's per-peer DROP also ate
+// its SYN-ACKs, so a service whose backend is that peer hung (seen live
+// 2026-11-07: <a service> → a vpn-only client, half-open SYNs).
+//
+// `--ctdir REPLY` is the point. Plain RELATED,ESTABLISHED would also keep
+// alive every connection the PEER opened before it was jailed (an SSH session
+// to the gateway survives the jail); in the reply direction only flows whose
+// original direction was gateway → peer match, so the jail still stops the
+// peer from opening, or continuing, anything of its own.
+//
+// Emitted in iptables-save readback form, like every other expected rule.
+var gatewayRepliesRule = Rule{
+	Table: "filter",
+	Chain: InputChainName,
+	Args:  []string{"-m", "conntrack", "--ctstate", "ESTABLISHED", "--ctdir", "REPLY", "-j", "ACCEPT"},
+}
+
+// withGatewayReplies puts gatewayRepliesRule first in WG-INPUT, and only when
+// WG-INPUT has per-peer rules at all: an empty WG-INPUT is what "nobody jailed,
+// no upstream peer" looks like, and stays exactly that.
+func withGatewayReplies(rules []Rule) []Rule {
+	for i, r := range rules {
+		if r.Table == "filter" && r.Chain == InputChainName {
+			out := make([]Rule, 0, len(rules)+1)
+			out = append(out, rules[:i]...)
+			out = append(out, gatewayRepliesRule)
+			return append(out, rules[i:]...)
+		}
+	}
+	return rules
 }
 
 // peerIP pulls the first /32 IP from an AllowedIPs string, falling back to

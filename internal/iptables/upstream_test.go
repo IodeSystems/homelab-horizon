@@ -31,7 +31,9 @@ func upstreamInputs() Inputs {
 
 // Byte for byte: every rule the generator emits for a gateway with one
 // lan-access client and one upstream client. The upstream client gets exactly
-// three rules — the API port ACCEPT and a DROP on INPUT, a DROP on FORWARD.
+// three rules — the API port ACCEPT and a DROP on INPUT, a DROP on FORWARD —
+// and WG-INPUT opens with the gateway-replies ACCEPT (replies on connections
+// the gateway opened; nothing the client opens).
 func TestUpstreamRulesExact(t *testing.T) {
 	got := ExpectedRules(upstreamInputs())
 	want := []string{
@@ -42,6 +44,7 @@ func TestUpstreamRulesExact(t *testing.T) {
 		"filter|WG-FORWARD|-s 10.100.0.2/32 -d 10.100.0.0/24 -j ACCEPT",
 		"filter|WG-FORWARD|-s 10.100.0.2/32 -d 192.168.1.0/24 -j ACCEPT",
 		"filter|WG-FORWARD|-s 10.100.0.2/32 -j DROP",
+		"filter|WG-INPUT|-m conntrack --ctstate ESTABLISHED --ctdir REPLY -j ACCEPT",
 		"filter|WG-INPUT|-s 10.100.0.7/32 -d 10.100.0.1/32 -p tcp --dport 8080 -j ACCEPT",
 		"filter|WG-INPUT|-s 10.100.0.7/32 -j DROP",
 		"filter|WG-FORWARD|-s 10.100.0.7/32 -j DROP",
