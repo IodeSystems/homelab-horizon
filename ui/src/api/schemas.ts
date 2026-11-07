@@ -242,8 +242,8 @@ export const RekeyPeerResponseSchema = z.object({
   ok: z.boolean(),
   config: z.string(),
   qrCode: z.string(),
-  shareToken: z.string(),
-  shareURL: z.string(),
+  shareToken: z.string().optional(),
+  shareURL: z.string().optional(),
 });
 
 export const ConfigShareSchema = z.object({

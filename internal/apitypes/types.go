@@ -1230,12 +1230,21 @@ type PeerConfigResponse struct {
 	QRCode string `json:"qrCode"`
 }
 
+// RekeyPeerReq: Share asks for a share link (an unauthenticated kiosk URL
+// serving the new config, private key included). Off unless asked.
+type RekeyPeerReq struct {
+	PublicKey string `json:"publicKey"`
+	Share     bool   `json:"share,omitempty"`
+}
+
+// RekeyPeerResponse: ShareToken and ShareURL are set only when the request
+// asked for a share link.
 type RekeyPeerResponse struct {
 	OK         bool   `json:"ok"`
 	Config     string `json:"config"`
 	QRCode     string `json:"qrCode"`
-	ShareToken string `json:"shareToken"`
-	ShareURL   string `json:"shareURL"`
+	ShareToken string `json:"shareToken,omitempty"`
+	ShareURL   string `json:"shareURL,omitempty"`
 }
 
 type ConfigShareResp struct {

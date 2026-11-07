@@ -25,6 +25,7 @@ export type {
   AddPeerResponse,
   PeerConfigResponse,
   RekeyPeerResponse,
+  RekeyPeerReq,
   ConfigShareResp as ConfigShare,
   InviteResp as Invite,
   CreateInviteResponse,

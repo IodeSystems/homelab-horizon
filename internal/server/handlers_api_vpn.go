@@ -618,9 +618,7 @@ func (s *Server) handleAPIRekeyPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		PublicKey string `json:"publicKey"`
-	}
+	var req apitypes.RekeyPeerReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
 		return
@@ -683,34 +681,32 @@ func (s *Server) handleAPIRekeyPeer(w http.ResponseWriter, r *http.Request) {
 
 	qrCode := qr.GenerateSVG(clientConfig, 256)
 
-	// Create a config share link automatically
-	token := generateToken(32)
+	resp := apitypes.RekeyPeerResponse{OK: true, Config: clientConfig, QRCode: qrCode}
 
-	// Remove any existing share for this peer
+	// A share link is an unauthenticated URL on the kiosk that serves this
+	// client's full config, private key included, until revoked or hz
+	// restarts. Only when the admin asks for one. Any share for this peer is
+	// removed either way: it carries the key just replaced.
 	s.configSharesMu.Lock()
 	for t, share := range s.configShares {
 		if share.PeerName == peer.Name {
 			delete(s.configShares, t)
 		}
 	}
-	s.configShares[token] = &configShare{
-		Token:    token,
-		PeerName: peer.Name,
-		Config:   clientConfig,
-		QRCode:   qrCode,
+	if req.Share {
+		resp.ShareToken = generateToken(32)
+		s.configShares[resp.ShareToken] = &configShare{
+			Token:    resp.ShareToken,
+			PeerName: peer.Name,
+			Config:   clientConfig,
+			QRCode:   qrCode,
+		}
+		resp.ShareURL = strings.TrimSuffix(s.cfg().KioskURL, "/") + "/share/" + resp.ShareToken
 	}
 	s.configSharesMu.Unlock()
 
-	shareURL := strings.TrimSuffix(s.cfg().KioskURL, "/") + "/share/" + token
-
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(apitypes.RekeyPeerResponse{
-		OK:         true,
-		Config:     clientConfig,
-		QRCode:     qrCode,
-		ShareToken: token,
-		ShareURL:   shareURL,
-	})
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleAPIListConfigShares(w http.ResponseWriter, r *http.Request) {

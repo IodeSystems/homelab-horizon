@@ -4,6 +4,7 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Chip,
   CircularProgress,
   Dialog,
@@ -11,6 +12,7 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
+  FormControlLabel,
   FormHelperText,
   IconButton,
   InputLabel,
@@ -571,6 +573,7 @@ function PeerConfigDialog({
   const [rekeyResult, setRekeyResult] = useState<RekeyPeerResponse | null>(null);
   const [copied, setCopied] = useState("");
   const [confirmRekey, setConfirmRekey] = useState(false);
+  const [wantShare, setWantShare] = useState(false);
 
   // Reset state when dialog opens/closes or peer changes
   const [lastPeerKey, setLastPeerKey] = useState("");
@@ -578,6 +581,7 @@ function PeerConfigDialog({
     setLastPeerKey(peer.publicKey);
     setRekeyResult(null);
     setConfirmRekey(false);
+    setWantShare(false);
     setCopied("");
   }
 
@@ -599,7 +603,7 @@ function PeerConfigDialog({
 
   const handleRekey = () => {
     if (!peer) return;
-    rekeyPeer.mutate(peer.publicKey, {
+    rekeyPeer.mutate({ publicKey: peer.publicKey, share: wantShare }, {
       onSuccess: (data) => {
         setRekeyResult(data);
         setConfirmRekey(false);
@@ -723,7 +727,7 @@ function PeerConfigDialog({
                     <IconButton
                       size="small"
                       onClick={() =>
-                        handleCopy(rekeyResult.shareURL, "share")
+                        handleCopy(rekeyResult.shareURL ?? "", "share")
                       }
                     >
                       <CopyIcon fontSize="small" />
@@ -778,6 +782,17 @@ function PeerConfigDialog({
             This will generate a new keypair and <strong>invalidate</strong> the
             client's current WireGuard config. They will need the new config to
             reconnect.
+            <FormControlLabel
+              sx={{ display: "flex", mt: 1 }}
+              control={
+                <Checkbox
+                  size="small"
+                  checked={wantShare}
+                  onChange={(e) => setWantShare(e.target.checked)}
+                />
+              }
+              label="Also create a share link — anyone with the link gets this client's private key, until you revoke it or hz restarts"
+            />
           </Alert>
         )}
       </DialogContent>
