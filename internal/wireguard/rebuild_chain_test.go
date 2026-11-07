@@ -92,6 +92,9 @@ func TestJailedPeerIsDroppedOnBothChains(t *testing.T) {
 
 	input := rulesFor(inputChainName, opts)
 	wantInput := []string{
+		// Replies on connections the gateway opened (a jailed peer may be a
+		// proxy backend); nothing the peer opens. See iptables.gatewayRepliesRule.
+		"-m conntrack --ctstate ESTABLISHED --ctdir REPLY -j ACCEPT",
 		"-s 10.100.0.2/32 -d 10.100.0.1/32 -p tcp --dport 8080 -j ACCEPT",
 		"-s 10.100.0.2/32 -d 10.100.0.1/32 -p tcp --dport 80 -j ACCEPT",
 		"-s 10.100.0.2/32 -d 10.100.0.1/32 -p tcp --dport 443 -j ACCEPT",
