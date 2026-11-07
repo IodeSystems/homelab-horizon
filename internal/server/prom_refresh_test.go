@@ -39,7 +39,7 @@ const refreshHZNew = `scrape_configs:
 
 type refreshBox struct {
 	dir, promYML, hzYML, script, reloads string
-	path                                string
+	path                                 string
 }
 
 func newRefreshBox(t *testing.T, body *string, status *int, withPromtool bool) *refreshBox {
