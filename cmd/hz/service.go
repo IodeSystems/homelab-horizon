@@ -313,7 +313,7 @@ func newServiceFlags(name string) *serviceFlags {
 	f.IntVar(&sf.tServer, "timeout-server", 0, "HAProxy server timeout override (s)")
 	f.IntVar(&sf.tTunnel, "timeout-tunnel", 0, "HAProxy tunnel timeout override (s)")
 	f.Var(&sf.publicPaths, "public-path", "path prefix reachable from anywhere despite --internal-only (repeatable)")
-	f.StringVar(&sf.backendProto, "backend-proto", "", `protocol to the backend: "" (HTTP/1.1) or "h2" (cleartext HTTP/2, for gRPC backends)`)
+	f.StringVar(&sf.backendProto, "backend-proto", "", `protocol to the backend: "" (HTTP/1.1), "h2" (cleartext HTTP/2, for gRPC backends) or "https" (HTTP/1.1 over TLS; the backend's certificate is NOT verified — for a LAN device with a self-signed cert)`)
 	f.BoolVar(&sf.metrics, "metrics", false, "enable Prometheus metrics discovery for this service")
 	f.StringVar(&sf.metricsPath, "metrics-path", "", "metrics path to scrape (default /metrics)")
 	f.StringVar(&sf.metricsBearer, "metrics-bearer", "", "optional bearer token for probing/scraping metrics")

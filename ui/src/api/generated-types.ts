@@ -2190,7 +2190,7 @@ export interface ProxyResp {
   deploy?: DeployResp;
   maintenancePageMD5?: string;
   timeouts?: ProxyTimeoutsResp;
-  backendProto?: string; // "" = HTTP/1.1, "h2" = cleartext HTTP/2 to the backend
+  backendProto?: string; // "" = HTTP/1.1, "h2" = cleartext HTTP/2, "https" = HTTP/1.1 over TLS, backend cert NOT verified
   publicPaths?: string[]; // path prefixes exempt from internalOnly
 }
 /**
@@ -4047,7 +4047,7 @@ export interface ServiceRequestProxy {
   internalOnly: boolean;
   deploy?: ServiceRequestDeploy;
   timeouts?: ServiceRequestTimeouts;
-  backendProto?: string; // "" = HTTP/1.1, "h2" = cleartext HTTP/2 to the backend
+  backendProto?: string; // "" = HTTP/1.1, "h2" = cleartext HTTP/2, "https" = HTTP/1.1 over TLS, backend cert NOT verified
   publicPaths?: string[]; // path prefixes exempt from internalOnly
 }
 /**

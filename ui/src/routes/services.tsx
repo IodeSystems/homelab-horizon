@@ -1207,10 +1207,15 @@ function ServiceFormDialog({
                   size="small"
                   fullWidth
                   sx={{ mt: 2 }}
-                  helperText="HTTP/2 has no fallback: a backend that is not h2c will fail outright. Only set it for gRPC backends that require it."
+                  helperText={
+                    form.backendProto === "https"
+                      ? "HTTPS does not verify the backend's certificate: anything answering at the backend address is trusted. For a LAN device with a self-signed certificate."
+                      : "HTTP/2 has no fallback: a backend that is not h2c will fail outright. Only set it for gRPC backends that require it."
+                  }
                 >
                   <MenuItem value="">HTTP/1.1 (default)</MenuItem>
                   <MenuItem value="h2">HTTP/2 cleartext (h2c)</MenuItem>
+                  <MenuItem value="https">HTTPS, certificate not verified</MenuItem>
                 </TextField>
               </Collapse>
             </Box>

@@ -159,8 +159,11 @@ type Backend struct {
 	MFAPortal   bool     `json:"mfa_portal,omitempty"`   // this backend is the MFA portal — the one thing an MFA-jailed VPN peer may reach
 
 	// Proto is the protocol to the backend: empty for HTTP/1.1, "h2" for
-	// cleartext HTTP/2. It becomes ` proto h2` on the server line, health
-	// checks included — HAProxy speaks h2 immediately, with no negotiation.
+	// cleartext HTTP/2, "https" for HTTP/1.1 over TLS. "h2" becomes ` proto
+	// h2` on the server line, health checks included — HAProxy speaks h2
+	// immediately, with no negotiation. "https" becomes ` ssl verify none`:
+	// health checks follow `ssl` by default, and the backend's certificate is
+	// NOT verified (config.BackendProtoHTTPS).
 	Proto string `json:"proto,omitempty"`
 
 	// RateLimitRequests is the per-source threshold for this backend within
@@ -693,13 +696,16 @@ func publicPathExemptions(paths []string) string {
 	return sb.String()
 }
 
-// serverProto renders the protocol suffix for a server line. Only "h2" is
-// emitted; anything else is HTTP/1.1, which is the default and needs no
-// keyword. Validation upstream (config.ValidBackendProto) is what keeps a typo
-// from silently meaning "HTTP/1.1".
+// serverProto renders the protocol suffix for a server line. Only "h2" and
+// "https" are emitted; anything else is HTTP/1.1, which is the default and
+// needs no keyword. Validation upstream (config.ValidBackendProto) is what
+// keeps a typo from silently meaning "HTTP/1.1".
 func serverProto(proto string) string {
-	if proto == "h2" {
+	switch proto {
+	case "h2":
 		return " proto h2"
+	case "https":
+		return " ssl verify none"
 	}
 	return ""
 }

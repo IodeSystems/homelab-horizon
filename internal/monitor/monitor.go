@@ -117,6 +117,9 @@ type Monitor struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	client   *http.Client
+	// insecureClient skips certificate verification. Only a check derived
+	// from an https backend (ServiceCheck.InsecureTLS) uses it.
+	insecureClient *http.Client
 
 	// externalNames keeps remote-vantage check names in discovery order.
 	// Their statuses live in the same map as everything else, but they are
@@ -160,6 +163,14 @@ func New(cfg *config.Config) *Monitor {
 		cancel:   cancel,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
+		},
+		// For svc:* checks of an https backend only (ServiceCheck.InsecureTLS):
+		// the same trust HAProxy gives that backend, `ssl verify none`.
+		insecureClient: &http.Client{
+			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // verify none by design: config.BackendProtoHTTPS
+			},
 		},
 	}
 	m.config.Store(cfg)
@@ -205,6 +216,7 @@ func (m *Monitor) getAllChecks() []config.ServiceCheck {
 		checkType := "ping"
 		var target string
 		var slots []config.CheckSlot
+		insecureTLS := false
 		switch {
 		case svc.Proxy.StaticRoot != "":
 			target = cfg.StaticServeAddr()
@@ -220,12 +232,16 @@ func (m *Monitor) getAllChecks() []config.ServiceCheck {
 				checkType = "http"
 				path = svc.Proxy.HealthCheck.Path
 			}
-			target = probeTarget(checkType, backend, path)
+			insecureTLS = svc.Proxy.BackendProto == config.BackendProtoHTTPS
+			if insecureTLS {
+				checkType = "http"
+			}
+			target = probeTarget(checkType, backend, path, insecureTLS)
 			// Blue-green: HAProxy serves from whichever slot is healthy, so
 			// probing proxy.backend alone reads "failed" on a working service.
 			// Resolved here, on every derive, so a swap moves the check.
 			if d := cfg.ResolvedDeploy(&svc); d != nil && d.NextBackend != "" {
-				slots = deploySlots(d, backend, checkType, path)
+				slots = deploySlots(d, backend, checkType, path, insecureTLS)
 				target = describeSlots(slots)
 			}
 		default:
@@ -248,12 +264,13 @@ func (m *Monitor) getAllChecks() []config.ServiceCheck {
 		}
 
 		checks = append(checks, config.ServiceCheck{
-			Name:     checkName,
-			Type:     checkType,
-			Target:   target,
-			Interval: 300,
-			Enabled:  enabled,
-			Slots:    slots,
+			Name:        checkName,
+			Type:        checkType,
+			Target:      target,
+			Interval:    300,
+			Enabled:     enabled,
+			Slots:       slots,
+			InsecureTLS: insecureTLS,
 		})
 	}
 
@@ -715,9 +732,9 @@ func (m *Monitor) executeCheck(check config.ServiceCheck) {
 	switch strings.ToLower(check.Type) {
 	case "ping", "http":
 		if len(check.Slots) > 0 {
-			err = m.doSlots(check.Type, check.Slots)
+			err = m.doSlots(check.Type, check.Slots, check.InsecureTLS)
 		} else {
-			err = m.probe(check.Type, check.Target)
+			err = m.probe(check.Type, check.Target, check.InsecureTLS)
 		}
 	case "tls":
 		err = m.doTLS(check.Target)
@@ -796,16 +813,29 @@ func (m *Monitor) executeCheck(check config.ServiceCheck) {
 	}
 }
 
-// probe runs one ping or http probe.
-func (m *Monitor) probe(checkType, target string) error {
+// probe runs one ping or http probe. insecureTLS skips certificate
+// verification; only a check derived from an https backend sets it.
+func (m *Monitor) probe(checkType, target string, insecureTLS bool) error {
 	if strings.EqualFold(checkType, "http") {
+		if insecureTLS {
+			return m.doHTTPWith(m.insecureClient, target)
+		}
 		return m.doHTTP(target)
 	}
 	return m.doPing(target)
 }
 
-// probeTarget is what a ping or http probe of a backend dials.
-func probeTarget(checkType, addr, path string) string {
+// probeTarget is what a ping or http probe of a backend dials. A backend that
+// serves only TLS (backend_proto "https") is always probed over https: a ping
+// of it proves only the port is open, and an http:// probe of a TLS port
+// fails every time.
+func probeTarget(checkType, addr, path string, tls bool) string {
+	if tls {
+		if path == "" {
+			path = "/"
+		}
+		return "https://" + addr + path
+	}
 	if checkType == "http" {
 		return "http://" + addr + path
 	}
@@ -816,11 +846,11 @@ func probeTarget(checkType, addr, path string) string {
 // first, then current (render.go; under `balance first`, next serves whenever
 // it is up). d must be resolved (Config.ResolvedDeploy), backend the resolved
 // proxy.backend.
-func deploySlots(d *config.DeployConfig, backend, checkType, path string) []config.CheckSlot {
+func deploySlots(d *config.DeployConfig, backend, checkType, path string, tls bool) []config.CheckSlot {
 	a := config.CheckSlot{Slot: "a", Current: d.ActiveSlot != "b", Addr: backend}
 	b := config.CheckSlot{Slot: "b", Current: d.ActiveSlot == "b", Addr: d.NextBackend}
-	a.Target = probeTarget(checkType, a.Addr, path)
-	b.Target = probeTarget(checkType, b.Addr, path)
+	a.Target = probeTarget(checkType, a.Addr, path, tls)
+	b.Target = probeTarget(checkType, b.Addr, path, tls)
 	if a.Current {
 		return []config.CheckSlot{b, a}
 	}
@@ -856,14 +886,14 @@ func describeSlots(slots []config.CheckSlot) string {
 //     works, so it is not a failure; a slot that cannot take over is still a
 //     fact the operator must see, so it is not silent.
 //   - no slot up: failed.
-func (m *Monitor) doSlots(checkType string, slots []config.CheckSlot) error {
+func (m *Monitor) doSlots(checkType string, slots []config.CheckSlot, insecureTLS bool) error {
 	errs := make([]error, len(slots))
 	var wg sync.WaitGroup
 	for i, s := range slots {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs[i] = m.probe(checkType, s.Target)
+			errs[i] = m.probe(checkType, s.Target, insecureTLS)
 		}()
 	}
 	wg.Wait()
@@ -915,13 +945,15 @@ func (m *Monitor) doPing(target string) error {
 }
 
 // doHTTP performs an HTTP GET check
-func (m *Monitor) doHTTP(target string) error {
+func (m *Monitor) doHTTP(target string) error { return m.doHTTPWith(m.client, target) }
+
+func (m *Monitor) doHTTPWith(client *http.Client, target string) error {
 	req, err := http.NewRequestWithContext(m.ctx, "GET", target, nil)
 	if err != nil {
 		return fmt.Errorf("invalid URL: %w", err)
 	}
 
-	resp, err := m.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}

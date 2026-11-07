@@ -68,7 +68,7 @@ type ProxyResp struct {
 	Deploy             *DeployResp        `json:"deploy,omitempty"`
 	MaintenancePageMD5 string             `json:"maintenancePageMD5,omitempty"`
 	Timeouts           *ProxyTimeoutsResp `json:"timeouts,omitempty"`
-	BackendProto       string             `json:"backendProto,omitempty"` // "" = HTTP/1.1, "h2" = cleartext HTTP/2 to the backend
+	BackendProto       string             `json:"backendProto,omitempty"` // "" = HTTP/1.1, "h2" = cleartext HTTP/2, "https" = HTTP/1.1 over TLS, backend cert NOT verified
 	PublicPaths        []string           `json:"publicPaths,omitempty"`  // path prefixes exempt from internalOnly
 }
 
@@ -1840,7 +1840,7 @@ type ServiceRequestProxy struct {
 	InternalOnly bool                       `json:"internalOnly"`
 	Deploy       *ServiceRequestDeploy      `json:"deploy,omitempty"`
 	Timeouts     *ServiceRequestTimeouts    `json:"timeouts,omitempty"`
-	BackendProto string                     `json:"backendProto,omitempty"` // "" = HTTP/1.1, "h2" = cleartext HTTP/2 to the backend
+	BackendProto string                     `json:"backendProto,omitempty"` // "" = HTTP/1.1, "h2" = cleartext HTTP/2, "https" = HTTP/1.1 over TLS, backend cert NOT verified
 	PublicPaths  []string                   `json:"publicPaths,omitempty"`  // path prefixes exempt from internalOnly
 }
 
