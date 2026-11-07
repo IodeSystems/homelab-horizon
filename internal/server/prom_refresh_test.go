@@ -112,13 +112,13 @@ func writeFile(t *testing.T, path, body string, mode os.FileMode) {
 	}
 }
 
-// run executes the refresh script; it returns the exit error and the output.
-func (b *refreshBox) run(t *testing.T) (error, string) {
+// run executes the refresh script; it returns the output and the exit error.
+func (b *refreshBox) run(t *testing.T) (string, error) {
 	t.Helper()
 	cmd := exec.Command(filepath.Join(b.path, "bash"), b.script)
 	cmd.Env = []string{"PATH=" + b.path}
 	out, err := cmd.CombinedOutput()
-	return err, string(out)
+	return string(out), err
 }
 
 func (b *refreshBox) hz(t *testing.T) string {
@@ -160,7 +160,7 @@ func (b *refreshBox) noCandidatesLeft(t *testing.T) {
 func TestPromRefreshInstallsAValidChangeAndReloads(t *testing.T) {
 	body, status := refreshHZNew, http.StatusOK
 	b := newRefreshBox(t, &body, &status, true)
-	if err, out := b.run(t); err != nil {
+	if out, err := b.run(t); err != nil {
 		t.Fatalf("refresh failed: %v\n%s", err, out)
 	}
 	if b.hz(t) != refreshHZNew {
@@ -175,7 +175,7 @@ func TestPromRefreshInstallsAValidChangeAndReloads(t *testing.T) {
 func TestPromRefreshUnchangedDoesNotReload(t *testing.T) {
 	body, status := refreshHZOld, http.StatusOK
 	b := newRefreshBox(t, &body, &status, true)
-	if err, out := b.run(t); err != nil {
+	if out, err := b.run(t); err != nil {
 		t.Fatalf("refresh failed: %v\n%s", err, out)
 	}
 	if b.reloaded(t) {
@@ -206,7 +206,7 @@ func TestPromRefreshRefusesAndLeavesHZYMLUnchanged(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			body, status := tc.body, tc.status
 			b := newRefreshBox(t, &body, &status, tc.promtool)
-			err, out := b.run(t)
+			out, err := b.run(t)
 			if err == nil {
 				t.Fatalf("refresh exited 0; want failure\n%s", out)
 			}
@@ -228,7 +228,7 @@ func TestPromRefreshRefusesWhenIncludeNotWired(t *testing.T) {
 	body, status := refreshHZNew, http.StatusOK
 	b := newRefreshBox(t, &body, &status, true)
 	writeFile(t, b.promYML, "global:\n  scrape_interval: 15s\n", 0o644)
-	err, out := b.run(t)
+	out, err := b.run(t)
 	if err == nil || !strings.Contains(out, "does not include") {
 		t.Fatalf("want refusal for an unwired include; err=%v\n%s", err, out)
 	}
