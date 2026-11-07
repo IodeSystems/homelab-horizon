@@ -1516,6 +1516,23 @@ export function useMFAException() {
   });
 }
 
+/** Tag a VPN client "infra" (a machine: no MFA while vpn-only; reason required)
+ * or "user" (a person: MFA applies). POST /vpn/peers/tag. */
+export function usePeerTag() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; tag: "user" | "infra"; reason?: string }) =>
+      apiFetch("/vpn/peers/tag", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["mfa", "settings"] });
+      qc.invalidateQueries({ queryKey: ["vpn", "peers"] });
+    },
+  });
+}
+
 export function useMFAExceptionRevoke() {
   const qc = useQueryClient();
   return useMutation({

@@ -45,6 +45,7 @@ import {
   useDeleteInvite,
   useDeletePeer,
   useEditPeer,
+  usePeerTag,
   useGetPeerConfig,
   useInvites,
   useMFAGrantSession,
@@ -360,7 +361,10 @@ function EditPeerDialog({
   const [extraIPs, setExtraIPs] = useState("");
   const [profile, setProfile] = useState("lan-access");
   const [project, setProject] = useState("");
+  const [tag, setTag] = useState<"user" | "infra">("user");
+  const [tagReason, setTagReason] = useState("");
   const editPeer = useEditPeer();
+  const peerTag = usePeerTag();
   const projectsQuery = useProjects();
   const index = useMemo(
     () => buildProjectIndex(projectsQuery.data ?? []),
@@ -374,17 +378,38 @@ function EditPeerDialog({
     setName(peer.name);
     setProfile(peer.profile || "lan-access");
     setProject(peer.project);
+    setTag(peer.tag === "infra" ? "infra" : "user");
+    setTagReason("");
     // Extract extra IPs (everything after the first /32 entry)
     const parts = peer.allowedIPs.split(",").map((s) => s.trim());
     const extra = parts.filter((p) => !p.endsWith("/32"));
     setExtraIPs(extra.join(", "));
   }
 
+  const wasInfra = peer?.tag === "infra";
+  const tagChanged = (tag === "infra") !== wasInfra || (tag === "infra" && tagReason.trim() !== "");
+  // The server refuses both; say so before Save rather than after.
+  const tagProblem =
+    tag === "infra" && profile !== "vpn-only"
+      ? "An infra client must be vpn-only: a machine with no MFA must not also reach the LAN or the internet."
+      : tag === "infra" && !wasInfra && !tagReason.trim()
+        ? "A reason is required: an infra client skips MFA for good, so the reason is the record."
+        : "";
+
   const handleSubmit = () => {
     if (!peer) return;
+    const newName = name.trim();
     editPeer.mutate(
-      { publicKey: peer.publicKey, name: name.trim(), extraIPs: extraIPs.trim(), profile, project },
-      { onSuccess: () => onClose() },
+      { publicKey: peer.publicKey, name: newName, extraIPs: extraIPs.trim(), profile, project },
+      {
+        onSuccess: () => {
+          if (!tagChanged) return onClose();
+          peerTag.mutate(
+            { name: newName, tag, reason: tag === "infra" ? tagReason.trim() || undefined : undefined },
+            { onSuccess: () => onClose() },
+          );
+        },
+      },
     );
   };
 
@@ -424,6 +449,37 @@ function EditPeerDialog({
         </TextField>
         <PeerProfileSelect value={profile} onChange={setProfile} />
         <TextField
+          select
+          label="Client kind"
+          fullWidth
+          margin="normal"
+          value={tag}
+          onChange={(e) => setTag(e.target.value === "infra" ? "infra" : "user")}
+          helperText={
+            tag === "infra"
+              ? "A machine (a service box): no MFA, in either MFA scope, while vpn-only. Listed under Settings › VPN clients without MFA."
+              : "A person: must pass MFA when MFA is on."
+          }
+        >
+          <MenuItem value="user">user — a person</MenuItem>
+          <MenuItem value="infra">infra — a machine, no MFA</MenuItem>
+        </TextField>
+        {tag === "infra" && (
+          <TextField
+            label={wasInfra ? "Reason (leave blank to keep the recorded one)" : "Reason (required)"}
+            fullWidth
+            margin="normal"
+            value={tagReason}
+            onChange={(e) => setTagReason(e.target.value)}
+            placeholder="e.g. AI/dev box: its services are VPN-only"
+          />
+        )}
+        {tagProblem && (
+          <Alert severity="warning" sx={{ mt: 1 }}>
+            {tagProblem}
+          </Alert>
+        )}
+        <TextField
           label="Extra Allowed IPs"
           fullWidth
           margin="normal"
@@ -436,15 +492,20 @@ function EditPeerDialog({
             {editPeer.error.message}
           </Alert>
         )}
+        {peerTag.error && (
+          <Alert severity="error" sx={{ mt: 1 }}>
+            {peerTag.error.message}
+          </Alert>
+        )}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
         <Button
           onClick={handleSubmit}
           variant="contained"
-          disabled={!name.trim() || editPeer.isPending}
+          disabled={!name.trim() || editPeer.isPending || peerTag.isPending || tagProblem !== ""}
         >
-          {editPeer.isPending ? "Saving..." : "Save"}
+          {editPeer.isPending || peerTag.isPending ? "Saving..." : "Save"}
         </Button>
       </DialogActions>
     </Dialog>
@@ -902,7 +963,9 @@ function VPNPage() {
                       title={
                         peer.profile === "upstream"
                           ? "Only the parent hz's API. For a nested hz. Changed from Edit, never by a click."
-                          : "Click to cycle profile"
+                          : peer.tag === "infra"
+                            ? "An infra client: no MFA only while vpn-only. Changed from Edit, never by a click."
+                            : "Click to cycle profile"
                       }
                     >
                       <Chip
@@ -915,7 +978,7 @@ function VPNPage() {
                               ? "info"
                               : "default"
                         }
-                        onClick={peer.profile === "upstream" ? undefined : () => {
+                        onClick={peer.profile === "upstream" || peer.tag === "infra" ? undefined : () => {
                           const profiles = CYCLE_PROFILES;
                           const current = peer.profile || "lan-access";
                           const idx = profiles.indexOf(current);
@@ -928,7 +991,7 @@ function VPNPage() {
                             },
                           );
                         }}
-                        sx={{ cursor: peer.profile === "upstream" ? "default" : "pointer" }}
+                        sx={{ cursor: peer.profile === "upstream" || peer.tag === "infra" ? "default" : "pointer" }}
                       />
                     </Tooltip>
                   </TableCell>
@@ -938,6 +1001,14 @@ function VPNPage() {
                         {peer.profile === "upstream" ? (
                           <Tooltip title="Never jailed: it reaches only hz's API, which authenticates it by enrolment.">
                             <Chip label="exempt" size="small" color="default" />
+                          </Tooltip>
+                        ) : peer.mfaExempt === "infra" ? (
+                          <Tooltip title="Tagged infra: a machine, vpn-only. No MFA in either scope.">
+                            <Chip label="infra" size="small" color="info" />
+                          </Tooltip>
+                        ) : peer.tag === "infra" ? (
+                          <Tooltip title="Tagged infra but not vpn-only, so the tag is not honoured: jailed until its profile is vpn-only again.">
+                            <Chip label="infra (inactive)" size="small" color="warning" />
                           </Tooltip>
                         ) : peer.isAdmin ? (
                           <Chip label="bypass" size="small" color="default" />
