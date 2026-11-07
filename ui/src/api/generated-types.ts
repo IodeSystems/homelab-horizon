@@ -3429,12 +3429,24 @@ export interface PeerConfigResponse {
   config: string;
   qrCode: string;
 }
+/**
+ * RekeyPeerReq: Share asks for a share link (an unauthenticated kiosk URL
+ * serving the new config, private key included). Off unless asked.
+ */
+export interface RekeyPeerReq {
+  publicKey: string;
+  share?: boolean;
+}
+/**
+ * RekeyPeerResponse: ShareToken and ShareURL are set only when the request
+ * asked for a share link.
+ */
 export interface RekeyPeerResponse {
   ok: boolean;
   config: string;
   qrCode: string;
-  shareToken: string;
-  shareURL: string;
+  shareToken?: string;
+  shareURL?: string;
 }
 export interface ConfigShareResp {
   token: string;

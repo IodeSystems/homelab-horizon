@@ -65,6 +65,7 @@ import type {
   PendingChanges,
   PeerConfigResponse,
   RekeyPeerResponse,
+  RekeyPeerReq,
   Service,
   ServiceAddResp,
   ServiceIntegration,
@@ -748,10 +749,10 @@ export function useGetPeerConfig(publicKey: string) {
 export function useRekeyPeer() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (publicKey: string) =>
+    mutationFn: (req: RekeyPeerReq) =>
       apiFetch<RekeyPeerResponse>("/vpn/peers/rekey", {
         method: "POST",
-        body: JSON.stringify({ publicKey }),
+        body: JSON.stringify(req),
         schema: RekeyPeerResponseSchema,
       }),
     onSuccess: () => {
