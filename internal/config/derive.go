@@ -323,10 +323,11 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 			DomainMatches: svc.Domains,
 			Server:        server,
 			InternalOnly:  svc.Proxy.InternalOnly,
-			// A proxy.self service routes to hz's own UI, which is where the
-			// MFA portal lives — so it's the one host an MFA-jailed VPN peer
-			// is allowed through HAProxy to reach.
-			MFAPortal: self,
+			// A service that routes to hz's own UI — proxy.self, or a plain
+			// proxy to hz's listener (RoutesToHZ) — is where the MFA portal
+			// lives, so it's the one host an MFA-jailed VPN peer is allowed
+			// through HAProxy to reach.
+			MFAPortal: c.RoutesToHZ(&svc),
 			// Per-service threshold; zero falls back to the gateway default.
 			RateLimitRequests: svc.Proxy.RateLimitRequests,
 		}
