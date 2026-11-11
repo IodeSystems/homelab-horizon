@@ -264,6 +264,11 @@ var staticContentTypes = map[string]string{
 	".ttf":   "font/ttf",
 	".wasm":  "application/wasm",
 	".pdf":   "application/pdf",
+	// Text a person reads or pipes to a shell: an install script and a
+	// public key (minisign, ssh). Host mime.types map .pub to Microsoft
+	// Publisher and .sh to a type a browser downloads instead of showing.
+	".sh":  "text/plain; charset=utf-8",
+	".pub": "text/plain; charset=utf-8",
 }
 
 func contentType(name string) string {
