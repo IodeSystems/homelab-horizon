@@ -19,7 +19,7 @@ import (
 
 // The addresses every test seals against unless it is testing addressing.
 var (
-	testAddr = Addr{Environment: "prod", App: "redline", Role: "app", Key: "DB_PASSWORD"}
+	testAddr = Addr{Project: "acme", Environment: "prod", App: "redline", Role: "app", Key: "DB_PASSWORD"}
 	testMach = MachineAddr{Machine: "mch_01k9v2w3x4y5z6a7b8c9d0e1f2", Key: "NPM_TOKEN"}
 	// The registration a wrapped environment key is granted at: the same
 	// address testAddr's value lives under, without the key name.
@@ -365,7 +365,7 @@ func TestParseEnvKeyRejects(t *testing.T) {
 		{"one character too long", text + "0"},
 		{"body replaced with zeros", EnvKeyPrefix + strings.Repeat("0", len(body))},
 		{"letter outside the alphabet", EnvKeyPrefix + "U" + body[1:]},
-		{"two characters transposed", EnvKeyPrefix + swap(body, 3, 4)},
+		{"two characters transposed", EnvKeyPrefix + transpose(t, body)},
 	}
 
 	for _, tc := range cases {
@@ -496,13 +496,15 @@ func TestUnwrapRejectsEveryAlteredAddressField(t *testing.T) {
 		name string
 		addr EnvKeyAddr
 	}{
-		{"environment", EnvKeyAddr{"staging", testKeyAddr.App, testKeyAddr.Role}},
-		{"app", EnvKeyAddr{testKeyAddr.Environment, "billing", testKeyAddr.Role}},
-		{"role", EnvKeyAddr{testKeyAddr.Environment, testKeyAddr.App, "ops"}},
-		{"environment emptied", EnvKeyAddr{"", testKeyAddr.App, testKeyAddr.Role}},
-		{"role emptied", EnvKeyAddr{testKeyAddr.Environment, testKeyAddr.App, ""}},
+		{"project", EnvKeyAddr{"globex", testKeyAddr.Environment, testKeyAddr.App, testKeyAddr.Role}},
+		{"environment", EnvKeyAddr{testKeyAddr.Project, "staging", testKeyAddr.App, testKeyAddr.Role}},
+		{"app", EnvKeyAddr{testKeyAddr.Project, testKeyAddr.Environment, "billing", testKeyAddr.Role}},
+		{"role", EnvKeyAddr{testKeyAddr.Project, testKeyAddr.Environment, testKeyAddr.App, "ops"}},
+		{"project emptied", EnvKeyAddr{"", testKeyAddr.Environment, testKeyAddr.App, testKeyAddr.Role}},
+		{"environment emptied", EnvKeyAddr{testKeyAddr.Project, "", testKeyAddr.App, testKeyAddr.Role}},
+		{"role emptied", EnvKeyAddr{testKeyAddr.Project, testKeyAddr.Environment, testKeyAddr.App, ""}},
 		{"everything empty", EnvKeyAddr{}},
-		{"role with a trailing space", EnvKeyAddr{testKeyAddr.Environment, testKeyAddr.App, testKeyAddr.Role + " "}},
+		{"role with a trailing space", EnvKeyAddr{testKeyAddr.Project, testKeyAddr.Environment, testKeyAddr.App, testKeyAddr.Role + " "}},
 	}
 
 	for _, tc := range cases {
@@ -904,6 +906,25 @@ func swap(s string, i, j int) string {
 	return string(b)
 }
 
+// transpose swaps the first adjacent pair of DIFFERENT characters, so the
+// result is always a changed string.
+//
+// The key is random, so a fixed pair of indices is a coin flip: when the two
+// characters happen to be equal the "transposed" key is the original key, it
+// parses, and the test fails — about one run in thirty-two, which is often
+// enough to be seen and rare enough to be dismissed as noise. Same assertion,
+// no dependence on which key was generated.
+func transpose(t *testing.T, s string) string {
+	t.Helper()
+	for i := 0; i+1 < len(s); i++ {
+		if s[i] != s[i+1] {
+			return swap(s, i, i+1)
+		}
+	}
+	t.Fatalf("every character of %q is the same; nothing to transpose", s)
+	return ""
+}
+
 // browserWrapEnvKey is an independent reimplementation of the wrapping
 // construction, written only from the recipe in doc.go and from raw primitives
 // — no package internals, HKDF spelled out as the two HMACs it is. It stands in
@@ -961,7 +982,7 @@ func browserWrapEnvKey(t *testing.T, recipientSEC1 []byte, addr EnvKeyAddr, envK
 	// The approval page reads the registration's address off the pending
 	// registration and encodes it exactly as doc.go's kind 0x02 row says.
 	additional := append(append([]byte{}, header...),
-		browserContext("hz-config/v1 env-key-addr", addr.Environment, addr.App, addr.Role)...)
+		browserContext("hz-config/v1 env-key-addr", addr.Project, addr.Environment, addr.App, addr.Role)...)
 
 	nonce := make([]byte, 12)
 	if _, err := rand.Read(nonce); err != nil {
@@ -1004,7 +1025,7 @@ func TestDocumentedBrowserRecipeInteroperates(t *testing.T) {
 	// The address binding survives the reimplementation too: an approval page
 	// that wraps to one registration produces a blob no other registration on
 	// the same box can open.
-	elsewhere := EnvKeyAddr{Environment: "staging", App: testKeyAddr.App, Role: "ops"}
+	elsewhere := EnvKeyAddr{Project: testKeyAddr.Project, Environment: "staging", App: testKeyAddr.App, Role: "ops"}
 	if _, err := UnwrapEnvKey(machine, elsewhere, env); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("a browser-built grant for %s unwrapped at %s: err = %v", testKeyAddr, elsewhere, err)
 	}
@@ -1043,7 +1064,7 @@ func TestDocumentedEnvSealRecipeInteroperates(t *testing.T) {
 	env = append(env, nonce...)
 	env = gcm.Seal(env, nonce, plaintext, append(append([]byte{}, header...),
 		browserContext("hz-config/v1 addr",
-			testAddr.Environment, testAddr.App, testAddr.Role, testAddr.Key)...))
+			testAddr.Project, testAddr.Environment, testAddr.App, testAddr.Role, testAddr.Key)...))
 
 	got, err := Open(k, testAddr, env)
 	if err != nil {
@@ -1113,14 +1134,16 @@ func TestOpenRejectsEveryAlteredAddressField(t *testing.T) {
 		name string
 		addr Addr
 	}{
-		{"environment", Addr{"staging", testAddr.App, testAddr.Role, testAddr.Key}},
-		{"app", Addr{testAddr.Environment, "billing", testAddr.Role, testAddr.Key}},
-		{"role", Addr{testAddr.Environment, testAddr.App, "ops", testAddr.Key}},
-		{"key name", Addr{testAddr.Environment, testAddr.App, testAddr.Role, "API_TOKEN"}},
-		{"environment emptied", Addr{"", testAddr.App, testAddr.Role, testAddr.Key}},
-		{"key name emptied", Addr{testAddr.Environment, testAddr.App, testAddr.Role, ""}},
+		{"project", Addr{"globex", testAddr.Environment, testAddr.App, testAddr.Role, testAddr.Key}},
+		{"environment", Addr{testAddr.Project, "staging", testAddr.App, testAddr.Role, testAddr.Key}},
+		{"app", Addr{testAddr.Project, testAddr.Environment, "billing", testAddr.Role, testAddr.Key}},
+		{"role", Addr{testAddr.Project, testAddr.Environment, testAddr.App, "ops", testAddr.Key}},
+		{"key name", Addr{testAddr.Project, testAddr.Environment, testAddr.App, testAddr.Role, "API_TOKEN"}},
+		{"project emptied", Addr{"", testAddr.Environment, testAddr.App, testAddr.Role, testAddr.Key}},
+		{"environment emptied", Addr{testAddr.Project, "", testAddr.App, testAddr.Role, testAddr.Key}},
+		{"key name emptied", Addr{testAddr.Project, testAddr.Environment, testAddr.App, testAddr.Role, ""}},
 		{"everything empty", Addr{}},
-		{"key name with a trailing space", Addr{testAddr.Environment, testAddr.App, testAddr.Role, testAddr.Key + " "}},
+		{"key name with a trailing space", Addr{testAddr.Project, testAddr.Environment, testAddr.App, testAddr.Role, testAddr.Key + " "}},
 	}
 
 	for _, tc := range cases {
@@ -1282,10 +1305,10 @@ func TestAddressEncodingIsUnambiguous(t *testing.T) {
 // count, or the encoding stops being unambiguous the moment anyone names a key
 // in something other than ASCII.
 func TestAddressEncodingCountsBytesNotRunes(t *testing.T) {
-	a := Addr{Environment: "pröd", App: "x", Role: "r", Key: "k"}
+	a := Addr{Project: "p", Environment: "pröd", App: "x", Role: "r", Key: "k"}
 	ctx := a.context()
 
-	want := browserContext("hz-config/v1 addr", a.Environment, a.App, a.Role, a.Key)
+	want := browserContext("hz-config/v1 addr", a.Project, a.Environment, a.App, a.Role, a.Key)
 	if !bytes.Equal(ctx, want) {
 		t.Fatal("context does not match the documented encoding for a non-ASCII field")
 	}
@@ -1299,11 +1322,11 @@ func TestAddressEncodingCountsBytesNotRunes(t *testing.T) {
 // authenticates — the same guarantee the other browser-recipe tests give.
 func TestDocumentedAddressRecipeInteroperates(t *testing.T) {
 	if got, want := testAddr.context(), browserContext("hz-config/v1 addr",
-		testAddr.Environment, testAddr.App, testAddr.Role, testAddr.Key); !bytes.Equal(got, want) {
+		testAddr.Project, testAddr.Environment, testAddr.App, testAddr.Role, testAddr.Key); !bytes.Equal(got, want) {
 		t.Fatalf("Addr context = %x, recipe produced %x", got, want)
 	}
 	if got, want := testKeyAddr.context(), browserContext("hz-config/v1 env-key-addr",
-		testKeyAddr.Environment, testKeyAddr.App, testKeyAddr.Role); !bytes.Equal(got, want) {
+		testKeyAddr.Project, testKeyAddr.Environment, testKeyAddr.App, testKeyAddr.Role); !bytes.Equal(got, want) {
 		t.Fatalf("EnvKeyAddr context = %x, recipe produced %x", got, want)
 	}
 	if got, want := testMach.context(), browserContext("hz-config/v1 machine-addr",
@@ -1386,7 +1409,7 @@ func browserSealToMachine(t *testing.T, recipientSEC1 []byte, addr MachineAddr, 
 // knows from its own launch arguments — never one read back out of hz's answer.
 func TestRegisterRequestEnvKeyAddr(t *testing.T) {
 	req := RegisterRequest{
-		Machine: "box-7", Environment: "prod", App: "redline", Role: "app", Version: "1.2.5",
+		Machine: "box-7", Project: "acme", Environment: "prod", App: "redline", Role: "app", Version: "1.2.5",
 	}
 	if got, want := req.EnvKeyAddr(), testKeyAddr; got != want {
 		t.Fatalf("EnvKeyAddr = %s, want %s", got, want)
@@ -1411,9 +1434,9 @@ func TestRegisterRequestEnvKeyAddr(t *testing.T) {
 }
 
 func TestConfigRequestAddr(t *testing.T) {
-	req := ConfigRequest{Environment: "prod", App: "redline", Role: "app", Version: "1.2.5"}
+	req := ConfigRequest{Project: "acme", Environment: "prod", App: "redline", Role: "app", Version: "1.2.5"}
 	got := req.Addr("DB_PASSWORD")
-	want := Addr{Environment: "prod", App: "redline", Role: "app", Key: "DB_PASSWORD"}
+	want := Addr{Project: "acme", Environment: "prod", App: "redline", Role: "app", Key: "DB_PASSWORD"}
 	if got != want {
 		t.Fatalf("Addr = %s, want %s", got, want)
 	}
@@ -1425,5 +1448,39 @@ func TestConfigRequestAddr(t *testing.T) {
 	}
 	if _, err := Open(k, req.Addr("OTHER"), env); !errors.Is(err, ErrAuthentication) {
 		t.Fatal("a different key name opened the blob")
+	}
+}
+
+// A key copied without its trailing "=" still parses (a password manager
+// dropped it, 2026-10-09); a really truncated key still fails, with a message
+// naming the length and never the key.
+func TestMachineKeyToleratesAMissingPad(t *testing.T) {
+	priv, err := NewMachineKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := MarshalMachinePrivateKey(priv)
+	if !strings.HasSuffix(full, "=") {
+		t.Fatalf("instrument: this key encoding has no pad to drop: %q", full[:len(MachinePrivateKeyPrefix)])
+	}
+	got, err := ParseMachinePrivateKey(strings.TrimRight(full, "="))
+	if err != nil {
+		t.Fatalf("unpadded key refused: %v", err)
+	}
+	if !got.Equal(priv) {
+		t.Fatal("unpadded key parsed to a different key")
+	}
+	pub := MarshalMachinePublicKey(priv.PublicKey())
+	if _, err := ParseMachinePublicKey(strings.TrimRight(pub, "=")); err != nil {
+		t.Fatalf("unpadded public key refused: %v", err)
+	}
+	short := full[:len(full)-6]
+	_, err = ParseMachinePrivateKey(short)
+	if err == nil {
+		t.Fatal("a truncated key parsed")
+	}
+	rest := strings.TrimPrefix(short, MachinePrivateKeyPrefix)
+	if strings.Contains(err.Error(), rest) {
+		t.Fatalf("the error echoes the key: %v", err)
 	}
 }

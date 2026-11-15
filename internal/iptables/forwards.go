@@ -1,5 +1,9 @@
 package iptables
 
+// This file is part of the PURE half of the package: the layer-4 port-forward
+// rules. `net` appears below for ParseIP/ParseCIDR only — string parsing, no
+// socket, no resolver — which seam_test.go enforces rather than trusting.
+
 import (
 	"net"
 	"strconv"
@@ -36,8 +40,12 @@ type ForwardInput struct {
 // generator, which does not trust config validation to have run.
 func ForwardsFromConfig(cfg *config.Config) []ForwardInput {
 	var out []ForwardInput
-	for _, svc := range cfg.Services {
-		for _, f := range svc.Forwards {
+	for i := range cfg.Services {
+		svc := &cfg.Services[i]
+		// Resolved here rather than in the generator: a DNAT target is a
+		// literal address and forwardRules re-checks it as one, so a host
+		// reference has to be gone before the rule is built.
+		for _, f := range cfg.ResolvedForwards(svc) {
 			ip, port, ok := f.BackendIPPort()
 			if !ok {
 				continue

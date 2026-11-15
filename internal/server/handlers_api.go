@@ -161,6 +161,8 @@ func (s *Server) handleAPIServices(w http.ResponseWriter, r *http.Request) {
 	sorted := make([]apitypes.ServiceResp, 0, len(s.cfg().Services))
 	for _, svc := range s.cfg().Services {
 		sr := apitypes.ServiceResp{
+			Project:       svc.Project,
+			Environment:   svc.Environment,
 			Dormant:       svc.Dormant,
 			DormantReason: svc.DormantReason,
 			Name:          svc.Name,
@@ -645,6 +647,14 @@ func (s *Server) handleAPIVPNPeers(w http.ResponseWriter, r *http.Request) {
 			PublicKey:  p.PublicKey,
 			AllowedIPs: p.AllowedIPs,
 			Profile:    s.cfg().GetPeerProfile(p.Name),
+			Project:    s.cfg().PeerProject(p.Name),
+			Tag:        peerTagUser,
+		}
+		if s.cfg().IsInfraClient(p.Name) {
+			pr.Tag = peerTagInfra
+		}
+		if s.cfg().VPNMFAEnabled {
+			pr.MFAExempt = s.cfg().MFAExemption(p.Name)
 		}
 		if status, ok := ifaceStatus.Peers[p.PublicKey]; ok {
 			pr.Endpoint = status.Endpoint
@@ -711,6 +721,34 @@ func (s *Server) handleAPIZones(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(zones)
 }
 
+// handleAPIEnvironments returns the declared environments, sorted by project then name.
+//
+// It returns the records only, not the services in them: a service already carries its
+// project and environment, and /api/v1/services already returns both, so joining them is
+// the caller's to do. Counting here would make two endpoints that have to agree.
+// GET /api/v1/environments
+func (s *Server) handleAPIEnvironments(w http.ResponseWriter, r *http.Request) {
+	if !s.isAdmin(r) {
+		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	envs := make([]apitypes.EnvironmentResp, 0, len(s.cfg().Environments))
+	cfg := s.cfg()
+	for _, e := range cfg.Environments {
+		envs = append(envs, environmentRespOf(cfg, e))
+	}
+	sort.Slice(envs, func(i, j int) bool {
+		if envs[i].Project != envs[j].Project {
+			return envs[i].Project < envs[j].Project
+		}
+		return envs[i].Name < envs[j].Name
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(envs)
+}
+
 // handleAPIServiceIntegration returns the service token and integration instructions.
 // GET /api/v1/services/integration?name=serviceName
 func (s *Server) handleAPIServiceIntegration(w http.ResponseWriter, r *http.Request) {
@@ -759,17 +797,73 @@ func (s *Server) handleAPIServiceIntegration(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	baseURL := s.integrationBaseURL(r)
-
-	hasDeploy := svc.Proxy != nil && svc.Proxy.Deploy != nil
-	hasStatic := svc.Proxy != nil && svc.Proxy.StaticRoot != ""
-
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(apitypes.ServiceIntegration{
+	_ = json.NewEncoder(w).Encode(serviceIntegration(svc, s.integrationBaseURL(r)))
+}
+
+// serviceIntegration is a service's token, hz's address and the hz-client
+// script that manages it. The create response and the Integration panel both
+// come from here.
+func serviceIntegration(svc *config.Service, baseURL string) apitypes.ServiceIntegration {
+	in := apitypes.ServiceIntegration{
 		Name:      svc.Name,
 		Token:     svc.Token,
 		BaseURL:   baseURL,
-		HasDeploy: hasDeploy,
-		HasStatic: hasStatic,
-	})
+		HasDeploy: svc.Proxy != nil && svc.Proxy.Deploy != nil,
+		HasStatic: svc.Proxy != nil && svc.Proxy.StaticRoot != "",
+	}
+	in.Snippet = integrationSnippet(in)
+	return in
+}
+
+// integrationSnippet renders the ready-to-run hz-client script for one service.
+// Deploy lines only for a blue-green service, site lines only for a static one.
+func integrationSnippet(in apitypes.ServiceIntegration) string {
+	lines := []string{
+		"# " + in.Name + " — Homelab Horizon Integration",
+		"",
+		"# Download hz-client",
+		`curl -sO "` + in.BaseURL + `/admin/haproxy/hz-client"`,
+		"chmod +x hz-client",
+		"",
+		"# Configure",
+		`export HZ_TOKEN="` + in.Token + `"`,
+		`export HZ_URL="` + in.BaseURL + `"`,
+		"",
+		"# --- IP Banning ---",
+		"",
+		"./hz-client bans                                               # List active bans",
+		`./hz-client ban 1.2.3.4 --timeout 3600 --reason "brute force"  # Ban an IP`,
+		"./hz-client unban 1.2.3.4                                      # Unban an IP",
+	}
+	if in.HasDeploy {
+		lines = append(lines,
+			"",
+			"# --- Rolling Deploy ---",
+			"",
+			"./hz-client status              # Check deploy status",
+			"./hz-client rolling start       # Take next slot down — deploy new code to it",
+			"./hz-client rolling continue    # Bring next up, take current down — deploy to it",
+			"./hz-client rolling finalize    # Bring current up — both slots on new code",
+			"",
+			"# --- Maintenance Page (for incompatible upgrades) ---",
+			"",
+			"./hz-client maint-page set maintenance.html  # Serve custom 503 while down",
+			"./hz-client maint-page clear                 # Restore default after upgrade",
+		)
+	}
+	if in.HasStatic {
+		lines = append(lines,
+			"",
+			"# --- Static site ---",
+			"# Each push replaces the WHOLE site (fresh release + atomic swap).",
+			"# Files removed locally disappear on the next push — no --purge needed.",
+			"",
+			"./hz-client site push ./public             # Upload dir as a new release (atomic swap)",
+			"./hz-client site push ./public --validate  # Dry run: validate without swapping",
+			"./hz-client site releases                  # List retained releases",
+			"./hz-client site rollback                  # Revert to the previous release",
+		)
+	}
+	return strings.Join(lines, "\n") + "\n"
 }

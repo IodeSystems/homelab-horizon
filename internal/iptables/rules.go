@@ -8,8 +8,10 @@
 //   - nat POSTROUTING  (a single MASQUERADE rule pinned to the default iface)
 //   - filter FORWARD   (jump to WG-FORWARD + stateful return traffic)
 //   - filter WG-FORWARD (per-peer profile rules + default drop)
-//   - filter INPUT     (jump to WG-INPUT, for wg-incoming traffic only)
-//   - filter WG-INPUT  (MFA jail rules for traffic to the gateway itself)
+//   - filter INPUT     (jump to WG-INPUT for wg-incoming traffic, plus one
+//     `-s <addr>/32 -j DROP` per banned address)
+//   - filter WG-INPUT  (MFA jail rules and `upstream`-profile rules for traffic
+//     to the gateway itself)
 //   - layer-4 port forwards (forwards.go): nat HZ-PREROUTING, nat
 //     HZ-POSTROUTING and filter HZ-FORWARD, plus one jump into each from nat
 //     PREROUTING (narrowed to that jump on readback), nat POSTROUTING and
@@ -18,11 +20,30 @@
 // Other iptables state on the host is none of horizon's business — the
 // classifier treats it as "unknown" and leaves it alone unless the admin
 // explicitly removes it via the IPTables tab. In particular, INPUT is read
-// back only for rules that jump to WG-INPUT: a typical host has a pile of
-// unrelated INPUT rules (ufw, docker) and horizon must not claim them.
+// back only for horizon's WG-INPUT jump and for source-DROP rules (the shape
+// of a ban): a typical host has a pile of unrelated INPUT rules (ufw, docker)
+// and horizon must not claim them.
+//
+// The package is split along one seam, and the split is load-bearing for the
+// hz-agent work (plan/design/architecture.md, "hz-agent de-roots the hz web surface"):
+//
+//	rules.go     pure  inputs in, desired rule set out.
+//	forwards.go  pure  the layer-4 forward half of that rule set.
+//	classify.go  pure  live ∪ expected ∪ stale ∪ blessed → a verdict per rule,
+//	                   plus the iptables-save parser the reader feeds it.
+//	reconcile.go root  the side effects: run iptables-save to read the host,
+//	                   run iptables to add, delete and rebuild.
+//
+// Nothing in the pure half reads a file, runs a command, looks at a clock or
+// consults the environment — everything arrives as an argument, so what a
+// machine *should* have installed can be computed, diffed and tested without
+// being on that machine and without being root. seam_test.go guards that.
 package iptables
 
+// This file is part of the PURE half of the package: config in, rules out.
+
 import (
+	"net"
 	"strings"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
@@ -41,8 +62,9 @@ const ForwardChainName = "WG-FORWARD"
 // gateway (dnsmasq, sshd, and critically HAProxy, which would then originate
 // LAN-bound connections *from the gateway* and sidestep WG-FORWARD entirely).
 //
-// The chain holds rules for jailed peers only, and has no catch-all DROP:
-// unjailed peers fall through it untouched. With MFA off it is empty, and the
+// The chain holds rules for jailed peers and `upstream`-profile peers only
+// (upstreamRules), and has no catch-all DROP: every other peer falls through it
+// untouched. With MFA off it is empty, and the
 // INPUT jump is a no-op hash lookup.
 const InputChainName = "WG-INPUT"
 
@@ -146,6 +168,19 @@ type Inputs struct {
 	// fixed set, so a forward skipped here is never installed.
 	Forwards      []ForwardInput
 	ReservedPorts map[int]string
+
+	// BannedIPs are the addresses horizon wants dropped in filter INPUT — the
+	// IPs from cfg.IPBans, minus any whose ExpiresAt has passed. The expiry
+	// filtering is the caller's because it needs a clock and this half has
+	// none; emitting an already-expired ban would have the reconciler reinstall
+	// a rule the 30s expiry loop is on its way to removing.
+	//
+	// Supplying them makes a ban an EXPECTED rule: horizon generates it, so the
+	// classifier calls it horizon's own and the IPTables tab offers no action
+	// on it (a ban is lifted through the Bans API, not by unblessing a rule).
+	// Leave it empty and a live ban rule falls to "unknown", which is what the
+	// reconciler saw before bans were modelled at all.
+	BannedIPs []string
 }
 
 // PeerInput is the subset of a WG peer we need to emit forward rules. Keeping
@@ -202,6 +237,8 @@ func ExpectedRules(in Inputs) []Rule {
 		Args:  []string{"-i", in.WGInterface, "-j", InputChainName},
 	})
 
+	rules = append(rules, banRules(in.BannedIPs)...)
+
 	// WG-FORWARD / WG-INPUT bodies: per-peer rules + default drop.
 	for _, p := range in.Peers {
 		ip := p.IP
@@ -247,6 +284,8 @@ func ExpectedRules(in Inputs) []Rule {
 		}
 
 		switch profile {
+		case "upstream":
+			rules = append(rules, upstreamRules(ip, in.ServerWGIP, in.ListenPort)...)
 		case "full-tunnel":
 			rules = append(rules, Rule{
 				Table: "filter",
@@ -296,6 +335,8 @@ func ExpectedRules(in Inputs) []Rule {
 		Args:  []string{"-j", "DROP"},
 	})
 
+	rules = withGatewayReplies(rules)
+
 	// Layer-4 port forwards: jumps plus the HZ-* chain bodies. Nothing when
 	// no forward is configured. Never touches INPUT.
 	rules = append(rules, forwardRules(in)...)
@@ -311,6 +352,15 @@ func ExpectedRules(in Inputs) []Rule {
 // server WG IP come from the current config because they're unchanged by an
 // interface swap. The only thing an iface/CIDR change rewrites is MASQUERADE's
 // `-o` and lan-access's `-d <LanCIDR>`.
+//
+// BANS ARE DELIBERATELY ABSENT (Inputs.BannedIPs is left empty below). A ban
+// rule does not depend on the interface, so it is not iface drift; and stale is
+// the one classification Reconcile DELETES. Feeding the ban list in here would
+// make "lifted in config" mean "deleted from the kernel by the next reconcile
+// tick" — which is a wider delete scope than horizon had before, and removing
+// the live rule is unbanIP's explicit job while handlers_ban.go is the writer.
+// A ban that leaves the config therefore reads as unknown and is left alone.
+// See TestBanRemovedFromConfigIsUnknownNotStale.
 //
 // The forward jumps (ForwardJumpRules) are always included. Classify ranks
 // expected above stale, so they stay while any forward exists and are deleted
@@ -341,6 +391,42 @@ func staleIfaceRules(cfg *config.Config, peers []PeerInput, serverWGIP, listenPo
 	return ExpectedRules(in)
 }
 
+// banRules emits one `filter INPUT -s <addr>/32 -j DROP` per banned address.
+//
+// EMITTED IN READBACK FORM. handlers_ban.go inserts `-s <addr> -j DROP` and the
+// kernel prints it back as `-s <addr>/32 -j DROP`. Canonical does not normalize
+// a host address to its /32, so emitting the bare form would mean the expected
+// rule never matches the live one: the reconciler would read the ban as
+// missing and insert a second copy on every pass. TestBanRuleReadbackRoundTrip
+// is the guard.
+//
+// IPv4 ONLY. `iptables` is the v4 binary, so a v6 entry in cfg.IPBans has no
+// live rule and cannot get one — handlers_ban.go's own insert fails for it.
+// Generating a rule horizon can never install would show as a permanently
+// missing expected rule and a failed add every pass, so the address is parsed
+// and anything that is not a v4 host address is skipped. (Fixing the v6 ban
+// path itself is handlers_ban.go's problem, not the generator's.)
+//
+// Only reached when there is a WireGuard interface: ExpectedRules returns
+// nothing without one, and that stays true with bans. An empty expected set is
+// how iptablesSectionFor says "horizon manages no firewall on this box"; a
+// lone ban rule must not flip a WG-less machine into managed.
+func banRules(bannedIPs []string) []Rule {
+	out := make([]Rule, 0, len(bannedIPs))
+	for _, b := range bannedIPs {
+		ip := net.ParseIP(strings.TrimSpace(b))
+		if ip == nil || ip.To4() == nil {
+			continue
+		}
+		out = append(out, Rule{
+			Table: "filter",
+			Chain: "INPUT",
+			Args:  []string{"-s", ip.String() + "/32", "-j", "DROP"},
+		})
+	}
+	return out
+}
+
 // jailAllows returns the destination-port matchers a jailed peer is permitted
 // to reach on the gateway, in rule order: horizon direct, HAProxy (where the
 // L7 jail then decides which vhost), DNS.
@@ -360,6 +446,77 @@ func jailAllows(listenPort string, haproxyPorts []string) [][]string {
 		[]string{"-p", "udp", "--dport", jailDNSPort},
 		[]string{"-p", "tcp", "--dport", jailDNSPort},
 	)
+}
+
+// upstreamRules is the `upstream` profile (config.ProfileUpstream): a nested hz
+// reaching this hz's API and nothing else.
+//
+//	WG-INPUT    -s <ip>/32 -d <serverWGIP>/32 -p tcp --dport <listenPort> -j ACCEPT
+//	WG-INPUT    -s <ip>/32 -j DROP
+//	WG-FORWARD  -s <ip>/32 -j DROP
+//
+// The one admitted port is hz's own listener — the port jailAllows calls
+// "horizon direct" (the first matcher it returns) and the one a VPN admin's
+// browser reaches hz on at the gateway's WG address. Not HAProxy's ports: HAProxy
+// fronts every vhost, LAN backends included, so admitting them would forward
+// the child to the LAN at L7 from the gateway itself. Not DNS: the child is
+// given an IP (config.ParentAPIURL), not a name. The existing profiles put no
+// rule in WG-INPUT at all, which is why they reach every daemon on the gateway;
+// this one is the first that closes INPUT.
+//
+// FAILS CLOSED, the opposite of the MFA jail: without the gateway's address or
+// hz's port there is no API rule to emit, and the DROPs are emitted anyway. The
+// jail fails open because a person would be stranded from the page that frees
+// them; an upstream client is a machine, and failing open would hand it every
+// listener on the gateway.
+func upstreamRules(ip, serverWGIP, listenPort string) []Rule {
+	src := ip + "/32"
+	var out []Rule
+	if serverWGIP != "" && listenPort != "" {
+		out = append(out, Rule{
+			Table: "filter",
+			Chain: InputChainName,
+			Args:  []string{"-s", src, "-d", serverWGIP + "/32", "-p", "tcp", "--dport", listenPort, "-j", "ACCEPT"},
+		})
+	}
+	return append(out,
+		Rule{Table: "filter", Chain: InputChainName, Args: []string{"-s", src, "-j", "DROP"}},
+		Rule{Table: "filter", Chain: ForwardChainName, Args: []string{"-s", src, "-j", "DROP"}},
+	)
+}
+
+// gatewayRepliesRule accepts, in WG-INPUT, the replies on connections the
+// GATEWAY opened to a peer — HAProxy proxying to a backend on a VPN client, hz
+// probing it. Without it a jailed or upstream peer's per-peer DROP also ate
+// its SYN-ACKs, so a service whose backend is that peer hung (seen live
+// 2026-11-07: <a service> → a vpn-only client, half-open SYNs).
+//
+// `--ctdir REPLY` is the point. Plain RELATED,ESTABLISHED would also keep
+// alive every connection the PEER opened before it was jailed (an SSH session
+// to the gateway survives the jail); in the reply direction only flows whose
+// original direction was gateway → peer match, so the jail still stops the
+// peer from opening, or continuing, anything of its own.
+//
+// Emitted in iptables-save readback form, like every other expected rule.
+var gatewayRepliesRule = Rule{
+	Table: "filter",
+	Chain: InputChainName,
+	Args:  []string{"-m", "conntrack", "--ctstate", "ESTABLISHED", "--ctdir", "REPLY", "-j", "ACCEPT"},
+}
+
+// withGatewayReplies puts gatewayRepliesRule first in WG-INPUT, and only when
+// WG-INPUT has per-peer rules at all: an empty WG-INPUT is what "nobody jailed,
+// no upstream peer" looks like, and stays exactly that.
+func withGatewayReplies(rules []Rule) []Rule {
+	for i, r := range rules {
+		if r.Table == "filter" && r.Chain == InputChainName {
+			out := make([]Rule, 0, len(rules)+1)
+			out = append(out, rules[:i]...)
+			out = append(out, gatewayRepliesRule)
+			return append(out, rules[i:]...)
+		}
+	}
+	return rules
 }
 
 // peerIP pulls the first /32 IP from an AllowedIPs string, falling back to

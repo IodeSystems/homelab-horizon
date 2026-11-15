@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -101,17 +100,17 @@ func (s *Server) handleSiteReleases(w http.ResponseWriter, r *http.Request, mgr 
 	writeJSON(w, rels)
 }
 
-// siteManager builds a release manager for svc's static root. When hz runs as
-// root, extracted files are chowned to the unprivileged file-server user so the
-// child process can read them.
+// siteManager builds a release manager for svc's static root.
+//
+// NO OWNER ARGUMENT AND NO Geteuid BRANCH. It used to chown every extracted
+// file to the unprivileged user hz forked its static child as. That was one of
+// the six Geteuid branches the flip has to remove (privilege-audit.md §7.C),
+// and it was granting the wrong thing anyway: a release is world-readable by
+// mode, so the chown bought no read it did not already have, while making the
+// file server the OWNER of a 0644 file — i.e. able to write the site it
+// serves. internal/sitedeploy's package doc has the whole argument.
 func (s *Server) siteManager(svc *config.Service) *sitedeploy.Manager {
-	uid, gid := -1, -1
-	if os.Geteuid() == 0 {
-		if cred, err := unprivilegedCredential(); err == nil {
-			uid, gid = int(cred.Uid), int(cred.Gid)
-		}
-	}
-	return sitedeploy.New(svc.Proxy.StaticRoot, siteReleasesKept, uid, gid)
+	return sitedeploy.New(svc.Proxy.StaticRoot, siteReleasesKept)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

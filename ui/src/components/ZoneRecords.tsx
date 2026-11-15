@@ -36,10 +36,20 @@ import {
   useEditRecord,
   useDeleteRecord,
   useCancelTombstone,
+  useSetRecordSet,
 } from "../api/hooks";
 import type { DNSRecordResp } from "../api/types";
+import type { DeclaredDNSRecordResp } from "../api/generated-types";
+import {
+  type Delegation,
+  delegationCovering,
+  delegationLine,
+  delegationRefusal,
+  delegationsOf,
+  parseNameServers,
+} from "./dnsDelegation";
 
-const RECORD_TYPES = ["TXT", "A", "AAAA", "CNAME"];
+const RECORD_TYPES = ["TXT", "A", "AAAA", "CNAME", "NS"];
 
 interface RecordGroup {
   name: string;
@@ -68,22 +78,117 @@ function groupRecords(records: DNSRecordResp[]): RecordGroup[] {
   );
 }
 
+export interface RecordForm {
+  name: string;
+  type: string;
+  value: string;
+  ttl: number;
+}
+
+const EMPTY_FORM: RecordForm = { name: "", type: "TXT", value: "", ttl: 300 };
+
+/**
+ * The add form's fields. NS is the one multi-value type: a delegation is a SET
+ * of nameservers, typed one per line and published as one write. A name the
+ * zone has delegated away shows the delegation instead of a form the server
+ * would refuse.
+ */
+export function AddRecordFields({
+  zoneName,
+  form,
+  setForm,
+  refusal,
+}: {
+  zoneName: string;
+  form: RecordForm;
+  setForm: (f: RecordForm) => void;
+  refusal: string | undefined;
+}) {
+  const ns = form.type === "NS";
+  const multiline = form.type === "TXT" || ns;
+  return (
+    <>
+      <TextField
+        label="Name"
+        value={form.name}
+        onChange={(e) => setForm({ ...form, name: e.target.value })}
+        placeholder={ns ? `sub.${zoneName}` : zoneName}
+        size="small"
+        fullWidth
+        helperText={ns ? "The delegated name — never the zone apex" : "Full record name, e.g. _acme-challenge.example.com"}
+      />
+      <Select
+        value={form.type}
+        onChange={(e) => setForm({ ...form, type: e.target.value })}
+        size="small"
+        fullWidth
+      >
+        {RECORD_TYPES.map((t) => (
+          <MenuItem key={t} value={t}>
+            {t}
+          </MenuItem>
+        ))}
+      </Select>
+      <TextField
+        label={ns ? "Nameservers" : "Value"}
+        value={form.value}
+        onChange={(e) => setForm({ ...form, value: e.target.value })}
+        placeholder={
+          form.type === "TXT"
+            ? "google-site-verification=..."
+            : ns
+              ? "ns-1.awsdns-01.org\nns-2.awsdns-02.com"
+              : undefined
+        }
+        helperText={ns ? "One per line — the delegated zone's own NS set" : undefined}
+        size="small"
+        fullWidth
+        multiline={multiline}
+        minRows={multiline ? 2 : 1}
+      />
+      <TextField
+        label="TTL"
+        type="number"
+        value={form.ttl}
+        onChange={(e) => setForm({ ...form, ttl: parseInt(e.target.value, 10) || 300 })}
+        size="small"
+        fullWidth
+      />
+      {refusal && (
+        <Alert severity="info" data-delegation-refusal>
+          {refusal}
+        </Alert>
+      )}
+    </>
+  );
+}
+
 function AddRecordDialog({
   open,
   zoneName,
   groups,
+  delegations,
+  declared,
   onClose,
 }: {
   open: boolean;
   zoneName: string;
   groups: RecordGroup[];
+  delegations: Delegation[];
+  declared: DeclaredDNSRecordResp[];
   onClose: () => void;
 }) {
   const addRecord = useAddRecord();
-  const [form, setForm] = useState({ name: "", type: "TXT", value: "", ttl: 300 });
+  const setRecordSet = useSetRecordSet();
+  const [form, setForm] = useState<RecordForm>(EMPTY_FORM);
+  const pending = addRecord.isPending || setRecordSet.isPending;
+  const error = addRecord.error ?? setRecordSet.error;
+  const refusal = delegationRefusal(zoneName, form.name, form.type, delegations);
 
   const handleClose = () => {
-    setForm({ name: "", type: "TXT", value: "", ttl: 300 });
+    setForm(EMPTY_FORM);
+    addRecord.reset();
+    setRecordSet.reset();
     onClose();
   };
 
@@ -93,6 +198,25 @@ function AddRecordDialog({
     // exact (name, type). If nothing exists yet, it's an empty set.
     const existing = groups.find((g) => g.name === name && g.type === form.type);
     const expectedFrom = existing ? existing.records.map((r) => r.value) : [];
+    if (form.type === "NS") {
+      // The whole set in one write: what is already declared at the name plus
+      // what was typed, so adding a nameserver never drops another.
+      const already = declared
+        .filter((d) => d.type === "NS" && d.name.toLowerCase() === name.toLowerCase().replace(/\.$/, ""))
+        .map((d) => d.value);
+      setRecordSet.mutate(
+        {
+          zone: zoneName,
+          name,
+          type: "NS",
+          values: parseNameServers([...already, form.value].join("\n")),
+          ttl: form.ttl,
+          expectedFrom,
+        },
+        { onSuccess: handleClose },
+      );
+      return;
+    }
     addRecord.mutate(
       {
         zone: zoneName,
@@ -110,60 +234,40 @@ function AddRecordDialog({
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <DialogTitle>Add DNS Record &mdash; {zoneName}</DialogTitle>
       <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: "8px !important" }}>
-        <TextField
-          label="Name"
-          value={form.name}
-          onChange={(e) => setForm({ ...form, name: e.target.value })}
-          placeholder={zoneName}
-          size="small"
-          fullWidth
-          helperText="Full record name, e.g. _acme-challenge.example.com"
-        />
-        <Select
-          value={form.type}
-          onChange={(e) => setForm({ ...form, type: e.target.value })}
-          size="small"
-          fullWidth
-        >
-          {RECORD_TYPES.map((t) => (
-            <MenuItem key={t} value={t}>
-              {t}
-            </MenuItem>
-          ))}
-        </Select>
-        <TextField
-          label="Value"
-          value={form.value}
-          onChange={(e) => setForm({ ...form, value: e.target.value })}
-          placeholder={form.type === "TXT" ? "google-site-verification=..." : undefined}
-          size="small"
-          fullWidth
-          multiline={form.type === "TXT"}
-          minRows={form.type === "TXT" ? 2 : 1}
-        />
-        <TextField
-          label="TTL"
-          type="number"
-          value={form.ttl}
-          onChange={(e) => setForm({ ...form, ttl: parseInt(e.target.value, 10) || 300 })}
-          size="small"
-          fullWidth
-        />
-        {addRecord.isError && (
-          <Alert severity="error">{(addRecord.error as Error).message}</Alert>
-        )}
+        <AddRecordFields zoneName={zoneName} form={form} setForm={setForm} refusal={refusal} />
+        {error && <Alert severity="error">{(error as Error).message}</Alert>}
       </DialogContent>
       <DialogActions>
         <Button onClick={handleClose}>Cancel</Button>
         <Button
           onClick={handleSubmit}
           variant="contained"
-          disabled={!form.name.trim() || !form.value.trim() || addRecord.isPending}
+          disabled={!form.name.trim() || !form.value.trim() || !!refusal || pending}
         >
-          {addRecord.isPending ? <CircularProgress size={20} /> : "Add"}
+          {pending ? <CircularProgress size={20} /> : "Add"}
         </Button>
       </DialogActions>
     </Dialog>
+  );
+}
+
+/** One line per delegated name. Nothing at all when the zone delegates nothing. */
+export function DelegationList({ delegations }: { delegations: Delegation[] }) {
+  if (delegations.length === 0) return null;
+  return (
+    <Box sx={{ mb: 2, display: "flex", flexDirection: "column", gap: 0.5 }}>
+      {delegations.map((d) => (
+        <Typography key={d.name} variant="body2" data-delegation={d.name}>
+          <strong>{d.name}</strong> {delegationLine(d)}
+          {!d.live && (
+            <Typography component="span" variant="caption" color="warning.main">
+              {" "}
+              · not yet live at the provider
+            </Typography>
+          )}
+        </Typography>
+      ))}
+    </Box>
   );
 }
 
@@ -262,7 +366,7 @@ function EditRecordDialog({
 // consequence, which is what actually decides whether you touch it.
 const OWNER_META: Record<
   string,
-  { color: "success" | "info" | "default" | "warning"; help: string }
+  { color: "success" | "info" | "default" | "warning" | "secondary"; help: string }
 > = {
   derived: {
     color: "success",
@@ -271,6 +375,10 @@ const OWNER_META: Record<
   declared: {
     color: "info",
     help: "Declared on the zone. hz owns this value and republishes it on every sync.",
+  },
+  instance: {
+    color: "secondary",
+    help: "Published by this hz FOR a nested hz instance, which asked for it inside its DNS grant. Read-only here: it changes by that instance's request — narrow or revoke the instance's grant to remove it.",
   },
   observed: {
     color: "default",
@@ -287,11 +395,12 @@ const OBSERVED_META = {
   help: "Live at the provider but not hz's. hz never rewrites or deletes it.",
 };
 
-function OwnerChip({ owner }: { owner: string }) {
+function OwnerChip({ owner, instance }: { owner: string; instance?: string }) {
   const meta = OWNER_META[owner] ?? OBSERVED_META;
+  const label = owner === "instance" && instance ? `from ${instance}` : owner;
   return (
     <Tooltip title={meta.help}>
-      <Chip label={owner} size="small" color={meta.color} variant="outlined" />
+      <Chip label={label} size="small" color={meta.color} variant="outlined" data-record-owner={owner} />
     </Tooltip>
   );
 }
@@ -351,6 +460,11 @@ export function ZoneRecordsTable({ zoneName }: { zoneName: string }) {
     [records],
   );
 
+  const delegations = useMemo(
+    () => delegationsOf(zoneName, data?.declared),
+    [zoneName, data?.declared],
+  );
+
   if (isLoading) {
     return (
       <Box sx={{ display: "flex", justifyContent: "center", py: 4 }}>
@@ -392,8 +506,15 @@ export function ZoneRecordsTable({ zoneName }: { zoneName: string }) {
 
   return (
     <Box>
+      <DelegationList delegations={delegations} />
       {pending.length > 0 && (
-        <Alert severity={pending.some((t) => t.stillLive) ? "warning" : "info"} sx={{ mb: 2 }}>
+        <Alert severity={
+            pending.some((t) => t.notConfirmed)
+              ? "error"
+              : pending.some((t) => t.stillLive)
+                ? "warning"
+                : "info"
+          } sx={{ mb: 2 }}>
           <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
             {pending.length} pending deletion{pending.length > 1 ? "s" : ""}
           </Typography>
@@ -404,10 +525,17 @@ export function ZoneRecordsTable({ zoneName }: { zoneName: string }) {
             >
               <Typography variant="caption" sx={{ flexGrow: 1 }}>
                 {t.type} {t.name} → {t.value}
-                {t.stillLive
-                  ? " — still live; hz retries the retraction each sync"
-                  : " — gone at the provider; clears on the next sync"}
+                {t.notConfirmed
+                  ? " — retraction not confirmed: the provider accepted the delete but still serves the record; hz retries each sync"
+                  : t.stillLive
+                    ? " — still live; hz retries the retraction each sync"
+                    : " — gone at the provider; clears on the next sync"}
                 {t.reason ? ` (${t.reason})` : ""}
+                {t.notConfirmed && (
+                  <Box component="span" sx={{ display: "block", color: "error.main" }}>
+                    {t.notConfirmed}
+                  </Box>
+                )}
               </Typography>
               <Tooltip title="Stop retrying this deletion. Nothing is restored — if the record is still live it simply stops being retracted, and hz no longer claims it.">
                 <span>
@@ -481,7 +609,7 @@ export function ZoneRecordsTable({ zoneName }: { zoneName: string }) {
           value={ownerFilter}
           onChange={(_, next: string[]) => setOwnerFilter(next)}
         >
-          {["derived", "declared", "observed", "tombstoned"].map((o) => (
+          {["derived", "declared", "instance", "observed", "tombstoned"].map((o) => (
             <ToggleButton key={o} value={o} disabled={!ownerCounts[o]}>
               {o} {ownerCounts[o] ? `(${ownerCounts[o]})` : ""}
             </ToggleButton>
@@ -541,6 +669,11 @@ export function ZoneRecordsTable({ zoneName }: { zoneName: string }) {
             )}
             {groups.map((group) => {
               const expectedFrom = liveValuesFor(group.name, group.type);
+              const covering = delegationCovering(group.name, delegations);
+              // The delegation's own NS set is the delegation; anything else at
+              // or below it is in this zone but no resolver reads it here.
+              const shadowed =
+                covering && !(covering.name === group.name.toLowerCase().replace(/\.$/, "") && group.type === "NS");
               return group.records.map((rec, i) => (
                 <TableRow key={`${group.name}|${group.type}|${rec.value}`} hover>
                   {i === 0 && (
@@ -549,6 +682,17 @@ export function ZoneRecordsTable({ zoneName }: { zoneName: string }) {
                       sx={{ verticalAlign: "top", fontWeight: 600 }}
                     >
                       {group.name}
+                      {covering && (
+                        <Tooltip title={`${covering.name} is ${delegationLine(covering)}`}>
+                          <Chip
+                            label={shadowed ? "below delegation" : "delegation"}
+                            size="small"
+                            color={shadowed ? "warning" : "default"}
+                            variant="outlined"
+                            sx={{ ml: 1 }}
+                          />
+                        </Tooltip>
+                      )}
                     </TableCell>
                   )}
                   {i === 0 && (
@@ -563,42 +707,54 @@ export function ZoneRecordsTable({ zoneName }: { zoneName: string }) {
                   </TableCell>
                   <TableCell>{rec.ttl}</TableCell>
                   <TableCell>
-                    <OwnerChip owner={rec.owner} />
+                    <OwnerChip owner={rec.owner} instance={rec.instance} />
                   </TableCell>
                   <TableCell align="right">
-                    <Tooltip title="Edit">
-                      <IconButton
-                        size="small"
-                        onClick={() =>
-                          setEditTarget({
-                            zoneName,
-                            name: group.name,
-                            type: group.type,
-                            value: rec.value,
-                            ttl: rec.ttl,
-                            expectedFrom,
-                          })
-                        }
+                    {rec.owner === "instance" ? (
+                      <Tooltip
+                        title={`Published for hz instance ${rec.instance ?? ""}; it changes by that instance's request — narrow its DNS grant on its page to remove it`}
                       >
-                        <EditIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip title="Delete">
-                      <IconButton
-                        size="small"
-                        color="error"
-                        onClick={() =>
-                          setDeleteTarget({
-                            name: group.name,
-                            type: group.type,
-                            value: rec.value,
-                            expectedFrom,
-                          })
-                        }
-                      >
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
+                        <Typography variant="caption" color="text.secondary" data-record-readonly>
+                          read-only
+                        </Typography>
+                      </Tooltip>
+                    ) : (
+                      <>
+                        <Tooltip title="Edit">
+                          <IconButton
+                            size="small"
+                            onClick={() =>
+                              setEditTarget({
+                                zoneName,
+                                name: group.name,
+                                type: group.type,
+                                value: rec.value,
+                                ttl: rec.ttl,
+                                expectedFrom,
+                              })
+                            }
+                          >
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Delete">
+                          <IconButton
+                            size="small"
+                            color="error"
+                            onClick={() =>
+                              setDeleteTarget({
+                                name: group.name,
+                                type: group.type,
+                                value: rec.value,
+                                expectedFrom,
+                              })
+                            }
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </>
+                    )}
                   </TableCell>
                 </TableRow>
               ));
@@ -611,6 +767,8 @@ export function ZoneRecordsTable({ zoneName }: { zoneName: string }) {
         open={addOpen}
         zoneName={zoneName}
         groups={allGroups}
+        delegations={delegations}
+        declared={data.declared ?? []}
         onClose={() => setAddOpen(false)}
       />
       <EditRecordDialog target={editTarget} onClose={() => setEditTarget(null)} />

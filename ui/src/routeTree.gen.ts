@@ -10,24 +10,56 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as SplatRouteImport } from './routes/$'
 import { Route as AccountRouteImport } from './routes/account'
 import { Route as BansRouteImport } from './routes/bans'
+import { Route as BuildsRouteImport } from './routes/builds'
 import { Route as ChecksRouteImport } from './routes/checks'
 import { Route as ConfigRouteImport } from './routes/config'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as DomainsRouteImport } from './routes/domains'
+import { Route as DriftRouteImport } from './routes/drift'
+import { Route as HostsRouteImport } from './routes/hosts'
 import { Route as MfaRouteImport } from './routes/mfa'
+import { Route as NetworkRouteImport } from './routes/network'
 import { Route as ObservabilityRouteImport } from './routes/observability'
 import { Route as PortsRouteImport } from './routes/ports'
+import { Route as ProjectsRouteImport } from './routes/projects'
+import { Route as SegmentsRouteImport } from './routes/segments'
 import { Route as ServicesRouteImport } from './routes/services'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as VpnRouteImport } from './routes/vpn'
 import { Route as DnsIndexRouteImport } from './routes/dns.index'
 import { Route as DnsZoneRouteImport } from './routes/dns.$zone'
+import { Route as InstancesIndexRouteImport } from './routes/instances.index'
+import { Route as InstancesInstanceRouteImport } from './routes/instances.$instance'
+import { Route as InviteTokenRouteImport } from './routes/invite.$token'
+import { Route as MachinesIndexRouteImport } from './routes/machines.index'
+import { Route as MachinesMachineRouteImport } from './routes/machines.$machine'
+import { Route as PIndexRouteImport } from './routes/p.index'
+import { Route as PProjectRouteImport } from './routes/p.$project'
+import { Route as PProjectIndexRouteImport } from './routes/p.$project.index'
+import { Route as PProjectBansRouteImport } from './routes/p.$project.bans'
+import { Route as PProjectBuildsRouteImport } from './routes/p.$project.builds'
+import { Route as PProjectChecksRouteImport } from './routes/p.$project.checks'
+import { Route as PProjectConfigRouteImport } from './routes/p.$project.config'
+import { Route as PProjectDomainsRouteImport } from './routes/p.$project.domains'
+import { Route as PProjectMachinesRouteImport } from './routes/p.$project.machines'
+import { Route as PProjectNetworkRouteImport } from './routes/p.$project.network'
+import { Route as PProjectPortsRouteImport } from './routes/p.$project.ports'
+import { Route as PProjectServicesRouteImport } from './routes/p.$project.services'
+import { Route as PProjectVpnRouteImport } from './routes/p.$project.vpn'
+import { Route as PProjectBuildsIndexRouteImport } from './routes/p.$project.builds.index'
+import { Route as PProjectBuildsNumberRouteImport } from './routes/p.$project.builds.$number'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SplatRoute = SplatRouteImport.update({
+  id: '/$',
+  path: '/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AccountRoute = AccountRouteImport.update({
@@ -38,6 +70,11 @@ const AccountRoute = AccountRouteImport.update({
 const BansRoute = BansRouteImport.update({
   id: '/bans',
   path: '/bans',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BuildsRoute = BuildsRouteImport.update({
+  id: '/builds',
+  path: '/builds',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ChecksRoute = ChecksRouteImport.update({
@@ -60,9 +97,24 @@ const DomainsRoute = DomainsRouteImport.update({
   path: '/domains',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DriftRoute = DriftRouteImport.update({
+  id: '/drift',
+  path: '/drift',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HostsRoute = HostsRouteImport.update({
+  id: '/hosts',
+  path: '/hosts',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const MfaRoute = MfaRouteImport.update({
   id: '/mfa',
   path: '/mfa',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NetworkRoute = NetworkRouteImport.update({
+  id: '/network',
+  path: '/network',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ObservabilityRoute = ObservabilityRouteImport.update({
@@ -73,6 +125,16 @@ const ObservabilityRoute = ObservabilityRouteImport.update({
 const PortsRoute = PortsRouteImport.update({
   id: '/ports',
   path: '/ports',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsRoute = ProjectsRouteImport.update({
+  id: '/projects',
+  path: '/projects',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SegmentsRoute = SegmentsRouteImport.update({
+  id: '/segments',
+  path: '/segments',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ServicesRoute = ServicesRouteImport.update({
@@ -100,129 +162,401 @@ const DnsZoneRoute = DnsZoneRouteImport.update({
   path: '/dns/$zone',
   getParentRoute: () => rootRouteImport,
 } as any)
+const InstancesIndexRoute = InstancesIndexRouteImport.update({
+  id: '/instances/',
+  path: '/instances/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InstancesInstanceRoute = InstancesInstanceRouteImport.update({
+  id: '/instances/$instance',
+  path: '/instances/$instance',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InviteTokenRoute = InviteTokenRouteImport.update({
+  id: '/invite/$token',
+  path: '/invite/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MachinesIndexRoute = MachinesIndexRouteImport.update({
+  id: '/machines/',
+  path: '/machines/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MachinesMachineRoute = MachinesMachineRouteImport.update({
+  id: '/machines/$machine',
+  path: '/machines/$machine',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PIndexRoute = PIndexRouteImport.update({
+  id: '/p/',
+  path: '/p/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PProjectRoute = PProjectRouteImport.update({
+  id: '/p/$project',
+  path: '/p/$project',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PProjectIndexRoute = PProjectIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => PProjectRoute,
+} as any)
+const PProjectBansRoute = PProjectBansRouteImport.update({
+  id: '/bans',
+  path: '/bans',
+  getParentRoute: () => PProjectRoute,
+} as any)
+const PProjectBuildsRoute = PProjectBuildsRouteImport.update({
+  id: '/builds',
+  path: '/builds',
+  getParentRoute: () => PProjectRoute,
+} as any)
+const PProjectChecksRoute = PProjectChecksRouteImport.update({
+  id: '/checks',
+  path: '/checks',
+  getParentRoute: () => PProjectRoute,
+} as any)
+const PProjectConfigRoute = PProjectConfigRouteImport.update({
+  id: '/config',
+  path: '/config',
+  getParentRoute: () => PProjectRoute,
+} as any)
+const PProjectDomainsRoute = PProjectDomainsRouteImport.update({
+  id: '/domains',
+  path: '/domains',
+  getParentRoute: () => PProjectRoute,
+} as any)
+const PProjectMachinesRoute = PProjectMachinesRouteImport.update({
+  id: '/machines',
+  path: '/machines',
+  getParentRoute: () => PProjectRoute,
+} as any)
+const PProjectNetworkRoute = PProjectNetworkRouteImport.update({
+  id: '/network',
+  path: '/network',
+  getParentRoute: () => PProjectRoute,
+} as any)
+const PProjectPortsRoute = PProjectPortsRouteImport.update({
+  id: '/ports',
+  path: '/ports',
+  getParentRoute: () => PProjectRoute,
+} as any)
+const PProjectServicesRoute = PProjectServicesRouteImport.update({
+  id: '/services',
+  path: '/services',
+  getParentRoute: () => PProjectRoute,
+} as any)
+const PProjectVpnRoute = PProjectVpnRouteImport.update({
+  id: '/vpn',
+  path: '/vpn',
+  getParentRoute: () => PProjectRoute,
+} as any)
+const PProjectBuildsIndexRoute = PProjectBuildsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => PProjectBuildsRoute,
+} as any)
+const PProjectBuildsNumberRoute = PProjectBuildsNumberRouteImport.update({
+  id: '/$number',
+  path: '/$number',
+  getParentRoute: () => PProjectBuildsRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/$': typeof SplatRoute
   '/account': typeof AccountRoute
   '/bans': typeof BansRoute
+  '/builds': typeof BuildsRoute
   '/checks': typeof ChecksRoute
   '/config': typeof ConfigRoute
   '/dashboard': typeof DashboardRoute
   '/domains': typeof DomainsRoute
+  '/drift': typeof DriftRoute
+  '/hosts': typeof HostsRoute
   '/mfa': typeof MfaRoute
+  '/network': typeof NetworkRoute
   '/observability': typeof ObservabilityRoute
   '/ports': typeof PortsRoute
+  '/projects': typeof ProjectsRoute
+  '/segments': typeof SegmentsRoute
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
   '/dns/$zone': typeof DnsZoneRoute
+  '/instances/$instance': typeof InstancesInstanceRoute
+  '/invite/$token': typeof InviteTokenRoute
+  '/machines/$machine': typeof MachinesMachineRoute
+  '/p/$project': typeof PProjectRouteWithChildren
   '/dns/': typeof DnsIndexRoute
+  '/instances/': typeof InstancesIndexRoute
+  '/machines/': typeof MachinesIndexRoute
+  '/p/': typeof PIndexRoute
+  '/p/$project/bans': typeof PProjectBansRoute
+  '/p/$project/builds': typeof PProjectBuildsRouteWithChildren
+  '/p/$project/checks': typeof PProjectChecksRoute
+  '/p/$project/config': typeof PProjectConfigRoute
+  '/p/$project/domains': typeof PProjectDomainsRoute
+  '/p/$project/machines': typeof PProjectMachinesRoute
+  '/p/$project/network': typeof PProjectNetworkRoute
+  '/p/$project/ports': typeof PProjectPortsRoute
+  '/p/$project/services': typeof PProjectServicesRoute
+  '/p/$project/vpn': typeof PProjectVpnRoute
+  '/p/$project/': typeof PProjectIndexRoute
+  '/p/$project/builds/$number': typeof PProjectBuildsNumberRoute
+  '/p/$project/builds/': typeof PProjectBuildsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/$': typeof SplatRoute
   '/account': typeof AccountRoute
   '/bans': typeof BansRoute
+  '/builds': typeof BuildsRoute
   '/checks': typeof ChecksRoute
   '/config': typeof ConfigRoute
   '/dashboard': typeof DashboardRoute
   '/domains': typeof DomainsRoute
+  '/drift': typeof DriftRoute
+  '/hosts': typeof HostsRoute
   '/mfa': typeof MfaRoute
+  '/network': typeof NetworkRoute
   '/observability': typeof ObservabilityRoute
   '/ports': typeof PortsRoute
+  '/projects': typeof ProjectsRoute
+  '/segments': typeof SegmentsRoute
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
   '/dns/$zone': typeof DnsZoneRoute
+  '/instances/$instance': typeof InstancesInstanceRoute
+  '/invite/$token': typeof InviteTokenRoute
+  '/machines/$machine': typeof MachinesMachineRoute
   '/dns': typeof DnsIndexRoute
+  '/instances': typeof InstancesIndexRoute
+  '/machines': typeof MachinesIndexRoute
+  '/p': typeof PIndexRoute
+  '/p/$project/bans': typeof PProjectBansRoute
+  '/p/$project/checks': typeof PProjectChecksRoute
+  '/p/$project/config': typeof PProjectConfigRoute
+  '/p/$project/domains': typeof PProjectDomainsRoute
+  '/p/$project/machines': typeof PProjectMachinesRoute
+  '/p/$project/network': typeof PProjectNetworkRoute
+  '/p/$project/ports': typeof PProjectPortsRoute
+  '/p/$project/services': typeof PProjectServicesRoute
+  '/p/$project/vpn': typeof PProjectVpnRoute
+  '/p/$project': typeof PProjectIndexRoute
+  '/p/$project/builds/$number': typeof PProjectBuildsNumberRoute
+  '/p/$project/builds': typeof PProjectBuildsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/$': typeof SplatRoute
   '/account': typeof AccountRoute
   '/bans': typeof BansRoute
+  '/builds': typeof BuildsRoute
   '/checks': typeof ChecksRoute
   '/config': typeof ConfigRoute
   '/dashboard': typeof DashboardRoute
   '/domains': typeof DomainsRoute
+  '/drift': typeof DriftRoute
+  '/hosts': typeof HostsRoute
   '/mfa': typeof MfaRoute
+  '/network': typeof NetworkRoute
   '/observability': typeof ObservabilityRoute
   '/ports': typeof PortsRoute
+  '/projects': typeof ProjectsRoute
+  '/segments': typeof SegmentsRoute
   '/services': typeof ServicesRoute
   '/settings': typeof SettingsRoute
   '/vpn': typeof VpnRoute
   '/dns/$zone': typeof DnsZoneRoute
+  '/instances/$instance': typeof InstancesInstanceRoute
+  '/invite/$token': typeof InviteTokenRoute
+  '/machines/$machine': typeof MachinesMachineRoute
+  '/p/$project': typeof PProjectRouteWithChildren
   '/dns/': typeof DnsIndexRoute
+  '/instances/': typeof InstancesIndexRoute
+  '/machines/': typeof MachinesIndexRoute
+  '/p/': typeof PIndexRoute
+  '/p/$project/bans': typeof PProjectBansRoute
+  '/p/$project/builds': typeof PProjectBuildsRouteWithChildren
+  '/p/$project/checks': typeof PProjectChecksRoute
+  '/p/$project/config': typeof PProjectConfigRoute
+  '/p/$project/domains': typeof PProjectDomainsRoute
+  '/p/$project/machines': typeof PProjectMachinesRoute
+  '/p/$project/network': typeof PProjectNetworkRoute
+  '/p/$project/ports': typeof PProjectPortsRoute
+  '/p/$project/services': typeof PProjectServicesRoute
+  '/p/$project/vpn': typeof PProjectVpnRoute
+  '/p/$project/': typeof PProjectIndexRoute
+  '/p/$project/builds/$number': typeof PProjectBuildsNumberRoute
+  '/p/$project/builds/': typeof PProjectBuildsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/$'
     | '/account'
     | '/bans'
+    | '/builds'
     | '/checks'
     | '/config'
     | '/dashboard'
     | '/domains'
+    | '/drift'
+    | '/hosts'
     | '/mfa'
+    | '/network'
     | '/observability'
     | '/ports'
+    | '/projects'
+    | '/segments'
     | '/services'
     | '/settings'
     | '/vpn'
     | '/dns/$zone'
+    | '/instances/$instance'
+    | '/invite/$token'
+    | '/machines/$machine'
+    | '/p/$project'
     | '/dns/'
+    | '/instances/'
+    | '/machines/'
+    | '/p/'
+    | '/p/$project/bans'
+    | '/p/$project/builds'
+    | '/p/$project/checks'
+    | '/p/$project/config'
+    | '/p/$project/domains'
+    | '/p/$project/machines'
+    | '/p/$project/network'
+    | '/p/$project/ports'
+    | '/p/$project/services'
+    | '/p/$project/vpn'
+    | '/p/$project/'
+    | '/p/$project/builds/$number'
+    | '/p/$project/builds/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/$'
     | '/account'
     | '/bans'
+    | '/builds'
     | '/checks'
     | '/config'
     | '/dashboard'
     | '/domains'
+    | '/drift'
+    | '/hosts'
     | '/mfa'
+    | '/network'
     | '/observability'
     | '/ports'
+    | '/projects'
+    | '/segments'
     | '/services'
     | '/settings'
     | '/vpn'
     | '/dns/$zone'
+    | '/instances/$instance'
+    | '/invite/$token'
+    | '/machines/$machine'
     | '/dns'
+    | '/instances'
+    | '/machines'
+    | '/p'
+    | '/p/$project/bans'
+    | '/p/$project/checks'
+    | '/p/$project/config'
+    | '/p/$project/domains'
+    | '/p/$project/machines'
+    | '/p/$project/network'
+    | '/p/$project/ports'
+    | '/p/$project/services'
+    | '/p/$project/vpn'
+    | '/p/$project'
+    | '/p/$project/builds/$number'
+    | '/p/$project/builds'
   id:
     | '__root__'
     | '/'
+    | '/$'
     | '/account'
     | '/bans'
+    | '/builds'
     | '/checks'
     | '/config'
     | '/dashboard'
     | '/domains'
+    | '/drift'
+    | '/hosts'
     | '/mfa'
+    | '/network'
     | '/observability'
     | '/ports'
+    | '/projects'
+    | '/segments'
     | '/services'
     | '/settings'
     | '/vpn'
     | '/dns/$zone'
+    | '/instances/$instance'
+    | '/invite/$token'
+    | '/machines/$machine'
+    | '/p/$project'
     | '/dns/'
+    | '/instances/'
+    | '/machines/'
+    | '/p/'
+    | '/p/$project/bans'
+    | '/p/$project/builds'
+    | '/p/$project/checks'
+    | '/p/$project/config'
+    | '/p/$project/domains'
+    | '/p/$project/machines'
+    | '/p/$project/network'
+    | '/p/$project/ports'
+    | '/p/$project/services'
+    | '/p/$project/vpn'
+    | '/p/$project/'
+    | '/p/$project/builds/$number'
+    | '/p/$project/builds/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  SplatRoute: typeof SplatRoute
   AccountRoute: typeof AccountRoute
   BansRoute: typeof BansRoute
+  BuildsRoute: typeof BuildsRoute
   ChecksRoute: typeof ChecksRoute
   ConfigRoute: typeof ConfigRoute
   DashboardRoute: typeof DashboardRoute
   DomainsRoute: typeof DomainsRoute
+  DriftRoute: typeof DriftRoute
+  HostsRoute: typeof HostsRoute
   MfaRoute: typeof MfaRoute
+  NetworkRoute: typeof NetworkRoute
   ObservabilityRoute: typeof ObservabilityRoute
   PortsRoute: typeof PortsRoute
+  ProjectsRoute: typeof ProjectsRoute
+  SegmentsRoute: typeof SegmentsRoute
   ServicesRoute: typeof ServicesRoute
   SettingsRoute: typeof SettingsRoute
   VpnRoute: typeof VpnRoute
   DnsZoneRoute: typeof DnsZoneRoute
+  InstancesInstanceRoute: typeof InstancesInstanceRoute
+  InviteTokenRoute: typeof InviteTokenRoute
+  MachinesMachineRoute: typeof MachinesMachineRoute
+  PProjectRoute: typeof PProjectRouteWithChildren
   DnsIndexRoute: typeof DnsIndexRoute
+  InstancesIndexRoute: typeof InstancesIndexRoute
+  MachinesIndexRoute: typeof MachinesIndexRoute
+  PIndexRoute: typeof PIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -232,6 +566,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/$': {
+      id: '/$'
+      path: '/$'
+      fullPath: '/$'
+      preLoaderRoute: typeof SplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/account': {
@@ -246,6 +587,13 @@ declare module '@tanstack/react-router' {
       path: '/bans'
       fullPath: '/bans'
       preLoaderRoute: typeof BansRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/builds': {
+      id: '/builds'
+      path: '/builds'
+      fullPath: '/builds'
+      preLoaderRoute: typeof BuildsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/checks': {
@@ -276,11 +624,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DomainsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/drift': {
+      id: '/drift'
+      path: '/drift'
+      fullPath: '/drift'
+      preLoaderRoute: typeof DriftRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/hosts': {
+      id: '/hosts'
+      path: '/hosts'
+      fullPath: '/hosts'
+      preLoaderRoute: typeof HostsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/mfa': {
       id: '/mfa'
       path: '/mfa'
       fullPath: '/mfa'
       preLoaderRoute: typeof MfaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/network': {
+      id: '/network'
+      path: '/network'
+      fullPath: '/network'
+      preLoaderRoute: typeof NetworkRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/observability': {
@@ -295,6 +664,20 @@ declare module '@tanstack/react-router' {
       path: '/ports'
       fullPath: '/ports'
       preLoaderRoute: typeof PortsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects': {
+      id: '/projects'
+      path: '/projects'
+      fullPath: '/projects'
+      preLoaderRoute: typeof ProjectsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/segments': {
+      id: '/segments'
+      path: '/segments'
+      fullPath: '/segments'
+      preLoaderRoute: typeof SegmentsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/services': {
@@ -332,25 +715,225 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DnsZoneRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/instances/': {
+      id: '/instances/'
+      path: '/instances'
+      fullPath: '/instances/'
+      preLoaderRoute: typeof InstancesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/instances/$instance': {
+      id: '/instances/$instance'
+      path: '/instances/$instance'
+      fullPath: '/instances/$instance'
+      preLoaderRoute: typeof InstancesInstanceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/invite/$token': {
+      id: '/invite/$token'
+      path: '/invite/$token'
+      fullPath: '/invite/$token'
+      preLoaderRoute: typeof InviteTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/machines/': {
+      id: '/machines/'
+      path: '/machines'
+      fullPath: '/machines/'
+      preLoaderRoute: typeof MachinesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/machines/$machine': {
+      id: '/machines/$machine'
+      path: '/machines/$machine'
+      fullPath: '/machines/$machine'
+      preLoaderRoute: typeof MachinesMachineRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/p/': {
+      id: '/p/'
+      path: '/p'
+      fullPath: '/p/'
+      preLoaderRoute: typeof PIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/p/$project': {
+      id: '/p/$project'
+      path: '/p/$project'
+      fullPath: '/p/$project'
+      preLoaderRoute: typeof PProjectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/p/$project/': {
+      id: '/p/$project/'
+      path: '/'
+      fullPath: '/p/$project/'
+      preLoaderRoute: typeof PProjectIndexRouteImport
+      parentRoute: typeof PProjectRoute
+    }
+    '/p/$project/bans': {
+      id: '/p/$project/bans'
+      path: '/bans'
+      fullPath: '/p/$project/bans'
+      preLoaderRoute: typeof PProjectBansRouteImport
+      parentRoute: typeof PProjectRoute
+    }
+    '/p/$project/builds': {
+      id: '/p/$project/builds'
+      path: '/builds'
+      fullPath: '/p/$project/builds'
+      preLoaderRoute: typeof PProjectBuildsRouteImport
+      parentRoute: typeof PProjectRoute
+    }
+    '/p/$project/checks': {
+      id: '/p/$project/checks'
+      path: '/checks'
+      fullPath: '/p/$project/checks'
+      preLoaderRoute: typeof PProjectChecksRouteImport
+      parentRoute: typeof PProjectRoute
+    }
+    '/p/$project/config': {
+      id: '/p/$project/config'
+      path: '/config'
+      fullPath: '/p/$project/config'
+      preLoaderRoute: typeof PProjectConfigRouteImport
+      parentRoute: typeof PProjectRoute
+    }
+    '/p/$project/domains': {
+      id: '/p/$project/domains'
+      path: '/domains'
+      fullPath: '/p/$project/domains'
+      preLoaderRoute: typeof PProjectDomainsRouteImport
+      parentRoute: typeof PProjectRoute
+    }
+    '/p/$project/machines': {
+      id: '/p/$project/machines'
+      path: '/machines'
+      fullPath: '/p/$project/machines'
+      preLoaderRoute: typeof PProjectMachinesRouteImport
+      parentRoute: typeof PProjectRoute
+    }
+    '/p/$project/network': {
+      id: '/p/$project/network'
+      path: '/network'
+      fullPath: '/p/$project/network'
+      preLoaderRoute: typeof PProjectNetworkRouteImport
+      parentRoute: typeof PProjectRoute
+    }
+    '/p/$project/ports': {
+      id: '/p/$project/ports'
+      path: '/ports'
+      fullPath: '/p/$project/ports'
+      preLoaderRoute: typeof PProjectPortsRouteImport
+      parentRoute: typeof PProjectRoute
+    }
+    '/p/$project/services': {
+      id: '/p/$project/services'
+      path: '/services'
+      fullPath: '/p/$project/services'
+      preLoaderRoute: typeof PProjectServicesRouteImport
+      parentRoute: typeof PProjectRoute
+    }
+    '/p/$project/vpn': {
+      id: '/p/$project/vpn'
+      path: '/vpn'
+      fullPath: '/p/$project/vpn'
+      preLoaderRoute: typeof PProjectVpnRouteImport
+      parentRoute: typeof PProjectRoute
+    }
+    '/p/$project/builds/': {
+      id: '/p/$project/builds/'
+      path: '/'
+      fullPath: '/p/$project/builds/'
+      preLoaderRoute: typeof PProjectBuildsIndexRouteImport
+      parentRoute: typeof PProjectBuildsRoute
+    }
+    '/p/$project/builds/$number': {
+      id: '/p/$project/builds/$number'
+      path: '/$number'
+      fullPath: '/p/$project/builds/$number'
+      preLoaderRoute: typeof PProjectBuildsNumberRouteImport
+      parentRoute: typeof PProjectBuildsRoute
+    }
   }
 }
 
+interface PProjectBuildsRouteChildren {
+  PProjectBuildsNumberRoute: typeof PProjectBuildsNumberRoute
+  PProjectBuildsIndexRoute: typeof PProjectBuildsIndexRoute
+}
+
+const PProjectBuildsRouteChildren: PProjectBuildsRouteChildren = {
+  PProjectBuildsNumberRoute: PProjectBuildsNumberRoute,
+  PProjectBuildsIndexRoute: PProjectBuildsIndexRoute,
+}
+
+const PProjectBuildsRouteWithChildren = PProjectBuildsRoute._addFileChildren(
+  PProjectBuildsRouteChildren,
+)
+
+interface PProjectRouteChildren {
+  PProjectBansRoute: typeof PProjectBansRoute
+  PProjectBuildsRoute: typeof PProjectBuildsRouteWithChildren
+  PProjectChecksRoute: typeof PProjectChecksRoute
+  PProjectConfigRoute: typeof PProjectConfigRoute
+  PProjectDomainsRoute: typeof PProjectDomainsRoute
+  PProjectMachinesRoute: typeof PProjectMachinesRoute
+  PProjectNetworkRoute: typeof PProjectNetworkRoute
+  PProjectPortsRoute: typeof PProjectPortsRoute
+  PProjectServicesRoute: typeof PProjectServicesRoute
+  PProjectVpnRoute: typeof PProjectVpnRoute
+  PProjectIndexRoute: typeof PProjectIndexRoute
+}
+
+const PProjectRouteChildren: PProjectRouteChildren = {
+  PProjectBansRoute: PProjectBansRoute,
+  PProjectBuildsRoute: PProjectBuildsRouteWithChildren,
+  PProjectChecksRoute: PProjectChecksRoute,
+  PProjectConfigRoute: PProjectConfigRoute,
+  PProjectDomainsRoute: PProjectDomainsRoute,
+  PProjectMachinesRoute: PProjectMachinesRoute,
+  PProjectNetworkRoute: PProjectNetworkRoute,
+  PProjectPortsRoute: PProjectPortsRoute,
+  PProjectServicesRoute: PProjectServicesRoute,
+  PProjectVpnRoute: PProjectVpnRoute,
+  PProjectIndexRoute: PProjectIndexRoute,
+}
+
+const PProjectRouteWithChildren = PProjectRoute._addFileChildren(
+  PProjectRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  SplatRoute: SplatRoute,
   AccountRoute: AccountRoute,
   BansRoute: BansRoute,
+  BuildsRoute: BuildsRoute,
   ChecksRoute: ChecksRoute,
   ConfigRoute: ConfigRoute,
   DashboardRoute: DashboardRoute,
   DomainsRoute: DomainsRoute,
+  DriftRoute: DriftRoute,
+  HostsRoute: HostsRoute,
   MfaRoute: MfaRoute,
+  NetworkRoute: NetworkRoute,
   ObservabilityRoute: ObservabilityRoute,
   PortsRoute: PortsRoute,
+  ProjectsRoute: ProjectsRoute,
+  SegmentsRoute: SegmentsRoute,
   ServicesRoute: ServicesRoute,
   SettingsRoute: SettingsRoute,
   VpnRoute: VpnRoute,
   DnsZoneRoute: DnsZoneRoute,
+  InstancesInstanceRoute: InstancesInstanceRoute,
+  InviteTokenRoute: InviteTokenRoute,
+  MachinesMachineRoute: MachinesMachineRoute,
+  PProjectRoute: PProjectRouteWithChildren,
   DnsIndexRoute: DnsIndexRoute,
+  InstancesIndexRoute: InstancesIndexRoute,
+  MachinesIndexRoute: MachinesIndexRoute,
+  PIndexRoute: PIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

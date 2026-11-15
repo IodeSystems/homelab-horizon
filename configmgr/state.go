@@ -18,8 +18,8 @@ import (
 //
 //	<state>/machine.key                       one keypair per machine
 //	<state>/machine.id                        hz's identity for this box
-//	<state>/<env>/<app>/<role>/config.key     the unwrapped environment key
-//	<state>/<env>/<app>/<role>/last-known-good
+//	<state>/<proj>/<env>/<app>/<role>/config.key     the unwrapped environment key
+//	<state>/<proj>/<env>/<app>/<role>/last-known-good
 //
 // # The address IS the path
 //
@@ -53,7 +53,7 @@ import (
 // # No freshness anywhere
 //
 // Nothing here records an expiry, a TTL or a last-checked time, and nothing
-// reads one. A three-year-old cache is valid config. See plan/config-manager.md,
+// reads one. A three-year-old cache is valid config. See plan/design/config-manager.md,
 // "Constraint: nothing in the boot path may depend on freshness".
 
 const (
@@ -141,7 +141,7 @@ func (s *State) MachineKey() (*ecdh.PrivateKey, error) {
 // One keypair per machine, not per registration. A box running two roles shares
 // it, so either role can unwrap anything granted to that machine — separate
 // users with separate state trees, or the separation is advisory. See
-// plan/config-manager.md, "How a client knows its own address".
+// plan/design/config-manager.md, "How a client knows its own address".
 func (s *State) EnsureMachineKey() (*ecdh.PrivateKey, error) {
 	priv, err := s.MachineKey()
 	if err == nil {
@@ -341,25 +341,36 @@ func (s *State) PutCache(addr EnvKeyAddr, version string, resp ConfigResponse, f
 // still a bad ten minutes if nobody can see why.
 func (s *State) Addresses() []EnvKeyAddr {
 	var out []EnvKeyAddr
-	envs, _ := os.ReadDir(s.root)
-	for _, env := range envs {
-		if !env.IsDir() {
+	projects, _ := os.ReadDir(s.root)
+	for _, project := range projects {
+		if !project.IsDir() {
 			continue
 		}
-		apps, _ := os.ReadDir(filepath.Join(s.root, env.Name()))
-		for _, app := range apps {
-			if !app.IsDir() {
+		envs, _ := os.ReadDir(filepath.Join(s.root, project.Name()))
+		for _, env := range envs {
+			if !env.IsDir() {
 				continue
 			}
-			roles, _ := os.ReadDir(filepath.Join(s.root, env.Name(), app.Name()))
-			for _, role := range roles {
-				if !role.IsDir() {
+			apps, _ := os.ReadDir(filepath.Join(s.root, project.Name(), env.Name()))
+			for _, app := range apps {
+				if !app.IsDir() {
 					continue
 				}
-				if _, err := os.Lstat(filepath.Join(s.root, env.Name(), app.Name(), role.Name(), envKeyName)); err != nil {
-					continue
+				roles, _ := os.ReadDir(filepath.Join(s.root, project.Name(), env.Name(), app.Name()))
+				for _, role := range roles {
+					if !role.IsDir() {
+						continue
+					}
+					if _, err := os.Lstat(filepath.Join(s.root, project.Name(), env.Name(), app.Name(), role.Name(), envKeyName)); err != nil {
+						continue
+					}
+					out = append(out, EnvKeyAddr{
+						Project:     project.Name(),
+						Environment: env.Name(),
+						App:         app.Name(),
+						Role:        role.Name(),
+					})
 				}
-				out = append(out, EnvKeyAddr{Environment: env.Name(), App: app.Name(), Role: role.Name()})
 			}
 		}
 	}
@@ -371,6 +382,13 @@ func (s *State) Addresses() []EnvKeyAddr {
 // checkName first, so no address field can walk out of the tree — "." and ".."
 // are not merely rejected by that charset, they are unrepresentable in it.
 func (s *State) addrDir(addr EnvKeyAddr) (string, error) {
+	// An empty project is not a default either. It is the field that says WHOSE
+	// prod this is, and an empty one collapses every project's rung of the same
+	// name onto one directory — which is the defect the coordinate exists to
+	// close, re-created one layer down.
+	if err := checkName("project", addr.Project); err != nil {
+		return "", err
+	}
 	if err := checkName("environment", addr.Environment); err != nil {
 		return "", err
 	}
@@ -383,7 +401,7 @@ func (s *State) addrDir(addr EnvKeyAddr) (string, error) {
 	if err := checkName("role", addr.Role); err != nil {
 		return "", err
 	}
-	return filepath.Join(s.root, addr.Environment, addr.App, addr.Role), nil
+	return filepath.Join(s.root, addr.Project, addr.Environment, addr.App, addr.Role), nil
 }
 
 // readSecret reads a file that must not be readable by anyone else.

@@ -2,18 +2,14 @@ package server
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
-	"github.com/iodesystems/homelab-horizon/internal/autoheal"
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
 	"github.com/iodesystems/homelab-horizon/internal/wireguard"
@@ -23,22 +19,31 @@ import (
 // buttons that lived on the old Go-template setup page (ripped in 807364b).
 // Every endpoint is POST + admin-only; responses are JSON {ok:true} on
 // success and {error:"..."} on failure.
+//
+// NOTHING HERE BUILDS A SHELL STRING, and there is no longer a helper that
+// could. `systemdRun` lived at the top of this file — a variadic
+// `systemd-run --pipe --wait --service-type=oneshot <anything>` that let an
+// HTTP handler run a command as root outside hz's own sandbox — and it is
+// gone, along with its four call sites. Three were in the haproxy fix-logging
+// handler; the fourth was that handler's inline `bash -c "cat > …"`, which a
+// grep for the helper's name would have missed.
+//
+// The two handlers that needed it moved to the binaries that own the files:
+// `sudo hz-agent wg-create-config` writes wg0.conf, `sudo homelab-horizon
+// fix-haproxy-logging` repairs haproxy's logging. Both had been "move" items
+// on item 12's readiness checklist (plan/design/privilege-audit.md §7 A) and
+// the checklist named them as systemdRun's last two callers — which was stale:
+// wg/create-config never called it, so moving fix-logging alone is what
+// retired it.
+//
+// The remaining fixers here take TYPED arguments the whole way down — an
+// iptables rule, a sysctl, a systemd unit name, all constants or config
+// values, never a string assembled for a shell. `shell_guard_test.go` fails
+// the build if that stops being true.
 
 func (s *Server) writeFixOK(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(apitypes.OKResponse{OK: true})
-}
-
-// systemdRun executes a command inside a transient one-shot unit so it escapes
-// horizon's own ProtectSystem=strict sandbox. Mirrors the pattern the ripped
-// handlers used. The command's combined stdout/stderr is returned for errors.
-func systemdRun(args ...string) (string, error) {
-	cmd := exec.Command("systemd-run", append([]string{"--pipe", "--wait", "--service-type=oneshot"}, args...)...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return strings.TrimSpace(string(out)), err
-	}
-	return strings.TrimSpace(string(out)), nil
 }
 
 // POST /api/v1/system/fix/ip-forwarding — sysctl net.ipv4.ip_forward=1
@@ -128,122 +133,17 @@ func (s *Server) handleAPISystemFixWGRules(w http.ResponseWriter, r *http.Reques
 	s.writeFixOK(w)
 }
 
-// POST /api/v1/wg/create-config — generate a fresh [Interface] wg0.conf with
-// a new keypair + PostUp/PostDown for the current default iface. Only used
-// on a truly fresh install; persists the server's public key into config.
-func (s *Server) handleAPIWGCreateConfig(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-	cfg := s.cfg()
-
-	privKey, pubKey, err := wireguard.GenerateKeyPair()
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "keygen: "+err.Error())
-		return
-	}
-
-	serverIP := strings.Split(cfg.VPNRange, "/")[0]
-	serverIP = strings.TrimSuffix(serverIP, ".0") + ".1"
-
-	outIface := config.DetectDefaultInterface()
-	if outIface == "" {
-		outIface = "eth0"
-	}
-
-	wgConfig := fmt.Sprintf(`[Interface]
-PrivateKey = %s
-Address = %s/24
-ListenPort = 51820
-PostUp = %s
-PostDown = %s
-`, privKey, serverIP, wireguard.ExpectedPostUp(outIface), wireguard.ExpectedPostDown(outIface))
-
-	// /etc is sandboxed from horizon's own systemd unit — shell out through
-	// systemd-run to escape ProtectSystem=strict.
-	script := fmt.Sprintf("mkdir -p /etc/wireguard && chmod 700 /etc/wireguard && cat > %s && chmod 600 %s",
-		cfg.WGConfigPath, cfg.WGConfigPath)
-	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot", "bash", "-c", script)
-	cmd.Stdin = strings.NewReader(wgConfig)
-	if out, cmdErr := cmd.CombinedOutput(); cmdErr != nil {
-		writeJSONError(w, http.StatusInternalServerError, "write config: "+cmdErr.Error()+" — "+strings.TrimSpace(string(out)))
-		return
-	}
-
-	if err := s.updateConfig(func(c *config.Config) { c.ServerPublicKey = pubKey }); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "save public key: "+err.Error())
-		return
-	}
-	_ = s.wg.Load()
-
-	s.writeFixOK(w)
-}
-
-// POST /api/v1/system/install/horizon-unit — writes the systemd unit that
-// supervises horizon itself into /etc/systemd/system/homelab-horizon.service
-// and runs daemon-reload so the new unit is visible.
-func (s *Server) handleAPISystemInstallHorizonUnit(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-
-	binaryPath := "/usr/local/bin/homelab-horizon"
-	if execPath, err := os.Executable(); err == nil {
-		if abs, err := filepath.Abs(execPath); err == nil {
-			binaryPath = abs
-		}
-	}
-	configPath := s.configPath
-	if abs, err := filepath.Abs(configPath); err == nil {
-		configPath = abs
-	}
-	content := config.GenerateServiceFile(binaryPath, configPath)
-
-	const servicePath = "/etc/systemd/system/homelab-horizon.service"
-	cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
-		"bash", "-c", fmt.Sprintf("cat > %s", servicePath))
-	cmd.Stdin = strings.NewReader(content)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "write unit: "+err.Error()+" — "+strings.TrimSpace(string(out)))
-		return
-	}
-	if out, err := systemdRun("systemctl", "daemon-reload"); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "daemon-reload: "+err.Error()+" — "+out)
-		return
-	}
-	s.writeFixOK(w)
-}
-
-// POST /api/v1/system/enable/horizon — systemctl enable homelab-horizon
-func (s *Server) handleAPISystemEnableHorizon(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-	if out, err := systemdRun("systemctl", "enable", "homelab-horizon"); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error()+" — "+out)
-		return
-	}
-	s.writeFixOK(w)
-}
-
 // aptAuditEntry is one line in the apt-audit.log JSONL file. Horizon has a
 // single admin token so there's no per-user attribution — SourceIP is the
 // closest we get to "who asked for this."
+//
+// HISTORICAL as of 2026-09-22. POST /system/install/package was the only writer
+// and is gone (privilege-classification.md §3.1 #8) — packages are installed by
+// `homelab-horizon install-deps`, which journals rather than writing here. The
+// read stays because the file is the only record of what the button installed
+// while it existed, and answering "was it ever pressed on this box" is the
+// question §3.1 said to read it for. Nothing appends to it any more, so a box
+// provisioned after this commit will have none.
 type aptAuditEntry struct {
 	Timestamp time.Time `json:"timestamp"`
 	Package   string    `json:"package"`
@@ -253,76 +153,10 @@ type aptAuditEntry struct {
 	SourceIP  string    `json:"source_ip,omitempty"`
 }
 
-// aptAuditPath is the JSONL log file next to config.json; one entry per line,
-// append-only. Read via GET /api/v1/system/apt-audit (latest last, tail).
+// aptAuditPath is the JSONL log file next to config.json; one entry per line.
+// Read-only now — see aptAuditEntry. Read via GET /api/v1/system/apt-audit.
 func (s *Server) aptAuditPath() string {
 	return filepath.Join(filepath.Dir(s.configPath), "apt-audit.log")
-}
-
-// recordAptAudit appends one JSONL line. Best-effort: errors logged but not
-// surfaced — the install itself already returned, and the audit being incomplete
-// shouldn't break the response to the admin.
-func (s *Server) recordAptAudit(entry aptAuditEntry) {
-	f, err := os.OpenFile(s.aptAuditPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "apt-audit open: %v\n", err)
-		return
-	}
-	defer func() { _ = f.Close() }()
-	if err := json.NewEncoder(f).Encode(entry); err != nil {
-		fmt.Fprintf(os.Stderr, "apt-audit write: %v\n", err)
-	}
-}
-
-// POST /api/v1/system/install/package — admin installs one of the apt
-// packages horizon knows about. Whitelisted in autoheal.KnownPackages so
-// this endpoint can't be coerced into running arbitrary apt commands.
-// Every invocation is journaled to apt-audit.log (next to config.json)
-// with timestamp, admin, output, and error — readable via /apt-audit.
-func (s *Server) handleAPISystemInstallPackage(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-	var body struct {
-		Package string `json:"package"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid json body: "+err.Error())
-		return
-	}
-	if body.Package == "" {
-		writeJSONError(w, http.StatusBadRequest, "package is required")
-		return
-	}
-
-	output, err := autoheal.InstallPackage(body.Package)
-	entry := aptAuditEntry{
-		Timestamp: time.Now().UTC(),
-		Package:   body.Package,
-		Success:   err == nil,
-		Output:    output,
-		SourceIP:  s.getClientIP(r),
-	}
-	if err != nil {
-		entry.Error = err.Error()
-	}
-	s.recordAptAudit(entry)
-
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok":      true,
-		"package": body.Package,
-		"output":  output,
-	})
 }
 
 // GET /api/v1/system/apt-audit — returns the last ~N entries of the
@@ -517,69 +351,16 @@ func (s *Server) handleAPIDNSMasqStart(w http.ResponseWriter, r *http.Request) {
 	s.writeFixOK(w)
 }
 
-// POST /api/v1/haproxy/fix-logging — fixes the two common reasons HAProxy
-// logs get silently dropped when the daemon is chrooted:
-//  1. rsyslogd apparmor profile missing `attach_disconnected` flag.
-//  2. /var/log/haproxy.log doesn't exist (rsyslog can't create it after
-//     dropping privileges).
-//
-// Collects errors rather than bailing on the first — each sub-fix is
-// independent and partial success is useful.
-func (s *Server) handleAPIHAProxyFixLogging(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-
-	var errs []string
-
-	const profilePath = "/etc/apparmor.d/usr.sbin.rsyslogd"
-	if data, err := os.ReadFile(profilePath); err == nil {
-		content := string(data)
-		if !strings.Contains(content, "attach_disconnected") {
-			fixed := strings.Replace(content,
-				"profile rsyslogd /usr/sbin/rsyslogd {",
-				"profile rsyslogd /usr/sbin/rsyslogd flags=(attach_disconnected) {", 1)
-			if fixed == content {
-				errs = append(errs, "could not find apparmor profile declaration to patch")
-			} else {
-				cmd := exec.Command("systemd-run", "--pipe", "--wait", "--service-type=oneshot",
-					"bash", "-c", fmt.Sprintf("cat > %s", profilePath))
-				cmd.Stdin = strings.NewReader(fixed)
-				if out, err := cmd.CombinedOutput(); err != nil {
-					errs = append(errs, "write apparmor profile: "+err.Error()+" — "+strings.TrimSpace(string(out)))
-				} else {
-					if out, err := systemdRun("apparmor_parser", "-r", profilePath); err != nil {
-						errs = append(errs, "reload apparmor: "+err.Error()+" — "+out)
-					}
-				}
-			}
-		}
-	}
-
-	if _, err := os.Stat("/var/log/haproxy.log"); os.IsNotExist(err) {
-		script := "touch /var/log/haproxy.log && chown syslog:adm /var/log/haproxy.log && chmod 640 /var/log/haproxy.log"
-		if out, err := systemdRun("bash", "-c", script); err != nil {
-			errs = append(errs, "create log file: "+err.Error()+" — "+out)
-		}
-	}
-
-	// Best-effort rsyslog bounce — not fatal if it fails.
-	_, _ = systemdRun("systemctl", "restart", "rsyslog")
-
-	if len(errs) > 0 {
-		writeJSONError(w, http.StatusInternalServerError, strings.Join(errs, "; "))
-		return
-	}
-	s.writeFixOK(w)
-}
-
 // POST /api/v1/system/fix/log-retention — make the journal survive reboots and
 // keep a year of it (PCI DSS 10.5.1).
+//
+// HANDED OVER 2026-09-25 (privilege-audit.md §7 B, §3.1 #13). The bytes, the
+// file name, the sweep and the claim glob now live in ONE place,
+// internal/server/logretention.go, and the agent declares the same file from
+// the same constants. This handler is hz's writer and stays until hz stops
+// writing files at all (item 12 step 5); what it gained is that it also
+// RECORDS the decision (Config.JournalRetention), because a file on disk is
+// not something hz can declare and a declaration is what the agent owns.
 //
 // Written as a drop-in rather than an edit to journald.conf: the main file is
 // a package-managed default full of commented examples, and rewriting it means
@@ -595,36 +376,39 @@ func (s *Server) handleAPISystemFixLogRetention(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// journald creates nothing itself: with Storage=persistent and no
-	// directory it silently stays volatile, so the directory comes first.
+	// /var/log/journal, and the comment that used to be here was WRONG.
+	//
+	// It read "journald creates nothing itself: with Storage=persistent and no
+	// directory it silently stays volatile". That is the rule for Storage=auto
+	// — and hostfacts.go's journalPersistence says the opposite about
+	// persistent, four lines of comment apart, so the two could not both be
+	// true. systemd.journald.conf(5) settles it: "persistent" stores below
+	// /var/log/journal, *creating the directory if necessary*; "auto" writes
+	// there only if it already exists.
+	//
+	// The mkdir stays because it is free and makes the transition visible
+	// immediately rather than at journald's next start — but it is NOT a
+	// precondition, and that is what makes the hand-over complete: the agent
+	// needs to place one file, not create a directory nothing declares.
 	if err := s.fs.MkdirAll("/var/log/journal", 0o755); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "could not create /var/log/journal: "+err.Error())
 		return
 	}
 
-	const dropInDir = "/etc/systemd/journald.conf.d"
-	if err := s.fs.MkdirAll(dropInDir, 0o755); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "could not create "+dropInDir+": "+err.Error())
-		return
-	}
-
-	// SystemMaxUse is set alongside retention because the two bounds are
-	// independent: without a size cap a year of logs can fill the disk, and
-	// filling the disk on a gateway takes far more than logging with it.
-	const conf = `# Written by homelab-horizon for PCI DSS 10.5.1.
-# Twelve months of audit history, with a size cap so a year of logs cannot
-# fill the disk this gateway runs on.
-[Journal]
-Storage=persistent
-MaxRetentionSec=1year
-SystemMaxUse=2G
-`
-	if err := s.fs.WriteFile(dropInDir+"/99-homelab-horizon.conf", []byte(conf), 0o644); err != nil {
+	if err := writeJournalDropInAt(s.journaldPaths().DropInDir); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "could not write the drop-in: "+err.Error())
 		return
 	}
 
-	if err := s.runner.Run(r.Context(), "systemctl", "restart", "systemd-journald"); err != nil {
+	// THE RECORD, and it is the hand-over. Without it the only trace of this
+	// request is the file itself, which hz can write but cannot declare.
+	if err := s.updateConfig(func(c *config.Config) { c.JournalRetention = true }); err != nil {
+		writeJSONError(w, http.StatusInternalServerError,
+			"the drop-in is written, but hz could not record that it manages this machine's journal: "+err.Error())
+		return
+	}
+
+	if err := s.runner.Run(r.Context(), "systemctl", "restart", journaldUnit); err != nil {
 		writeJSONError(w, http.StatusInternalServerError,
 			"config written, but journald did not restart: "+err.Error())
 		return

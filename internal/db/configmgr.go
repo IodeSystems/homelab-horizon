@@ -14,7 +14,7 @@ import (
 
 // Config manager persistence: machine enrolment, per-address registration and
 // approval, blessed configs and their sealed values, machine-scoped secrets,
-// and the audit trail of ciphertext relays. See plan/config-manager.md and
+// and the audit trail of ciphertext relays. See plan/design/config-manager.md and
 // migrations/0009_config_manager_addresses.up.sql for the model this
 // implements — 0009, not 0008, is the current schema.
 
@@ -24,7 +24,7 @@ var (
 	ErrMachineNameTaken = errors.New("machine name already registered")
 	// ErrNoConfigMatches means resolution found zero candidates for the
 	// address and version asked about — a named failure, never a hang and
-	// never mistaken for a pending approval (plan/config-manager.md
+	// never mistaken for a pending approval (plan/design/config-manager.md
 	// "Resolution rules", rule 3).
 	ErrNoConfigMatches = errors.New("no config matches")
 	// ErrInvalidVersion means a version string is not a clean semver tag
@@ -100,24 +100,28 @@ func canonSegment(kind, s string) (string, error) {
 	return s, nil
 }
 
-// canonAddress folds a whole (environment, app, role) triple.
-func canonAddress(environment, app, role string) (string, string, string, error) {
+// canonAddress folds a whole (project, environment, app, role) quadruple.
+func canonAddress(project, environment, app, role string) (string, string, string, string, error) {
+	p, err := canonSegment("project", project)
+	if err != nil {
+		return "", "", "", "", err
+	}
 	env, err := canonSegment("environment", environment)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	a, err := canonSegment("app", app)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	r, err := canonSegment("role", role)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	if reservedRoles[r] {
-		return "", "", "", fmt.Errorf("%w: role %q is reserved", ErrInvalidAddress, r)
+		return "", "", "", "", fmt.Errorf("%w: role %q is reserved", ErrInvalidAddress, r)
 	}
-	return env, a, r, nil
+	return p, env, a, r, nil
 }
 
 // Machine is a box's identity: one row per box, one keypair per box,
@@ -144,7 +148,7 @@ type Machine struct {
 }
 
 // RegisterMachine creates a machine identity. The caller supplies the
-// agent-generated public key (a fresh key per plan/config-manager.md, never
+// agent-generated public key (a fresh key per plan/design/config-manager.md, never
 // the WireGuard key); hz never sees a private key, at registration or ever.
 //
 // Enrolling is not admission. A machine row grants nothing on its own — every
@@ -203,6 +207,46 @@ func (d *DB) ListMachines(ctx context.Context) ([]Machine, error) {
 		out = append(out, *m)
 	}
 	return out, rows.Err()
+}
+
+// DeleteMachine removes a box's identity, and with it everything the schema
+// hangs off that identity. It is the only way a machine NAME becomes free
+// again, which is what makes re-enrolment possible at all: RegisterMachine
+// refuses a taken name, and there is deliberately no UPDATE path for
+// public_key.
+//
+// THE CASCADE IS THE POINT, not a side effect. Every row that goes is sealed
+// or wrapped to the keypair that is going away, so keeping it would leave rows
+// that look live and open nowhere:
+//
+//   - cm_registrations CASCADE. An approved row holds this address's
+//     environment key wrapped to this machine's public key. With the box's
+//     private half gone, the blob is bytes.
+//   - cm_machine_secrets CASCADE. Sealed directly to the same public key, so
+//     identically unopenable. plan/design/config-manager.md hole 11 asked for a
+//     re-enrol path that does NOT destroy these; that requirement is withdrawn
+//     here, because preserving a secret nothing can decrypt preserves an
+//     illusion. What is owed instead is that the destruction is LOUD — the
+//     caller names each key it is about to drop — and the handler above does
+//     that rather than deleting quietly.
+//   - cm_secret_reads SET NULL. Evidence outlives the thing it is evidence
+//     about; the audit rows survive with a blanked machine_id.
+//
+// WHAT THIS IS NOT: a revocation. A box that was ever approved unwrapped that
+// environment key onto its own disk at 0600, and deleting hz's copy of the
+// wrapped blob reaches none of it — the same property DenyRegistration
+// documents, for the same reason. The only revocation of an environment key is
+// rotating it. What removal buys is bounded and worth stating exactly: hz will
+// serve this box nothing further, and the name is free for a fresh keypair.
+func (d *DB) DeleteMachine(ctx context.Context, id string) error {
+	res, err := d.ExecContext(ctx, `DELETE FROM cm_machines WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete machine: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // RecordMachineSeen stamps a machine's last_seen_at. Called on every boot,
@@ -269,12 +313,33 @@ const (
 type Registration struct {
 	ID          string
 	MachineID   string
+	Project     string
 	Environment string
 	App         string
 	Role        string
 	// Version is what the box was running when the tuple was FIRST seen — the
 	// version an admin reviewed, not a rolling "what runs now" counter.
-	Version      string
+	Version string
+
+	// ObservedVersion is what this instance last reported it is RUNNING, and it
+	// IS the rolling counter Version refuses to be. Empty means the box has not
+	// reported since 0011 added the column, which is an ordinary state and not
+	// a fault: the next register or resolve fills it in.
+	//
+	// It is the "observed" half of plan/design/architecture.md's desired/observed
+	// split. hz displays the drift and never closes it; there is no upgrade
+	// verb anywhere near this field.
+	ObservedVersion string
+	// ObservedBuild is the full `git describe` string beside it — provenance
+	// only. It is not well ordered and NOTHING compares it, here or anywhere:
+	// parseVersion's semver range test runs on ObservedVersion alone, so a
+	// build string that is not semver is stored without complaint.
+	ObservedBuild string
+	// ObservedAt is when that report arrived, refreshed on every resolve. It is
+	// the whole staleness signal: a version with no time beside it cannot be
+	// told from a version a box stopped reporting a month ago.
+	ObservedAt *time.Time
+
 	State        RegistrationState
 	WrapKeyID    string
 	ApprovedBy   string
@@ -285,7 +350,9 @@ type Registration struct {
 }
 
 const selectRegistration = `
-	SELECT id, machine_id, environment, app, role, version, state,
+	SELECT id, machine_id, project, environment, app, role, version,
+	       COALESCE(observed_version, ''), COALESCE(observed_build, ''), observed_at,
+	       state,
 	       COALESCE(wrap_key_id, ''), COALESCE(approved_by, ''), approved_at,
 	       COALESCE(denied_reason, ''), created_at, last_seen_at
 	FROM cm_registrations`
@@ -296,33 +363,91 @@ const selectRegistration = `
 // pending row, which is the thing an admin reviews. Every later call for the
 // same tuple touches last_seen_at and nothing else: later boots must never
 // re-litigate approval or a routine restart would block on a human
-// (plan/config-manager.md "Approve the REGISTRATION, not the BOOT").
+// (plan/design/config-manager.md "Approve the REGISTRATION, not the BOOT").
 //
 // Environment is part of the tuple, and that is the correction 0009 exists
 // for. A box restarted with a different --env is a different tuple, so it
 // lands in pending holding no key for the address it has wandered into,
 // instead of quietly bumping last_seen_at on the row it used to be. That is
 // what makes the design's fail-closed claim true rather than aspirational.
-func (d *DB) UpsertRegistration(ctx context.Context, machineID, environment, app, role, version string) (*Registration, error) {
+//
+// It also records the OBSERVED version, on both halves of the upsert, because
+// a register is a report of what the box is running now. Two different columns
+// take the same argument on the first call and diverge from the second on:
+// version freezes at what an admin reviewed, observed_version rolls forward.
+// observed_build is BLANKED rather than left alone, because a register carries
+// no build string — keeping the previous one would pair a build with a version
+// it may not belong to, and the resolve that follows within the same boot puts
+// the real one back.
+func (d *DB) UpsertRegistration(ctx context.Context, machineID, project, environment, app, role, version string) (*Registration, error) {
 	machineID = strings.TrimSpace(machineID)
 	version = strings.TrimSpace(version)
 	if machineID == "" || version == "" {
 		return nil, errors.New("a registration needs a machine and a version")
 	}
-	env, a, r, err := canonAddress(environment, app, role)
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return nil, err
 	}
 
 	_, err = d.ExecContext(ctx, `
-		INSERT INTO cm_registrations (id, machine_id, environment, app, role, version)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT (machine_id, environment, app, role) DO UPDATE SET last_seen_at = CURRENT_TIMESTAMP`,
-		ashid.New("reg"), machineID, env, a, r, version)
+		INSERT INTO cm_registrations
+		    (id, machine_id, project, environment, app, role, version, observed_version, observed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT (machine_id, project, environment, app, role) DO UPDATE SET
+		    last_seen_at = CURRENT_TIMESTAMP,
+		    observed_version = excluded.observed_version,
+		    observed_build = NULL,
+		    observed_at = CURRENT_TIMESTAMP`,
+		ashid.New("reg"), machineID, p, env, a, r, version, version)
 	if err != nil {
 		return nil, fmt.Errorf("upsert registration: %w", err)
 	}
-	return d.RegistrationAt(ctx, machineID, env, a, r)
+	return d.RegistrationAt(ctx, machineID, p, env, a, r)
+}
+
+// RecordObservedVersion stamps what one registration reported it is running.
+//
+// This rides the RESOLVE path, which is the only one a running box repeats: a
+// register happens once per address per rebuild, a resolve happens every boot
+// and every re-read. There is deliberately no heartbeat endpoint and no new
+// route — the report travels on a request the box was making anyway, so a box
+// that never resolves is a box that never needed config, and its silence here
+// is accurate rather than a missing feature.
+//
+// NOTHING IS PARSED. version is stored as sent and build is not looked at at
+// all: parseVersion's semver work is range containment, a different job, and a
+// `git describe` build string that is not semver must round-trip without
+// erroring. Callers that want to know whether a reported version is well formed
+// must ask separately.
+//
+// An empty version is a NO-OP, not an error. A client too old to report one is
+// not a failure — it is the state every registration was in before 0011, and
+// blanking a version a box reported last week to record that a newer boot said
+// nothing would be strictly worse than leaving it.
+func (d *DB) RecordObservedVersion(ctx context.Context, registrationID, version, build string) error {
+	registrationID = strings.TrimSpace(registrationID)
+	if registrationID == "" {
+		return errors.New("recording an observed version needs a registration")
+	}
+	version = strings.TrimSpace(version)
+	build = strings.TrimSpace(build)
+	if version == "" {
+		return nil
+	}
+
+	res, err := d.ExecContext(ctx, `
+		UPDATE cm_registrations
+		SET observed_version = ?, observed_build = NULLIF(?, ''), observed_at = CURRENT_TIMESTAMP
+		WHERE id = ?`,
+		version, build, registrationID)
+	if err != nil {
+		return fmt.Errorf("record observed version: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // RegistrationByID looks a registration up by primary key.
@@ -331,13 +456,13 @@ func (d *DB) RegistrationByID(ctx context.Context, id string) (*Registration, er
 }
 
 // RegistrationAt looks a registration up by the tuple that identifies it.
-func (d *DB) RegistrationAt(ctx context.Context, machineID, environment, app, role string) (*Registration, error) {
-	env, a, r, err := canonAddress(environment, app, role)
+func (d *DB) RegistrationAt(ctx context.Context, machineID, project, environment, app, role string) (*Registration, error) {
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return nil, err
 	}
 	return scanRegistration(d.QueryRowContext(ctx, selectRegistration+
-		` WHERE machine_id = ? AND environment = ? AND app = ? AND role = ?`, machineID, env, a, r))
+		` WHERE machine_id = ? AND project = ? AND environment = ? AND app = ? AND role = ?`, machineID, p, env, a, r))
 }
 
 // ListRegistrationsByState lists registrations in one admission state, oldest
@@ -437,7 +562,7 @@ func (d *DB) ApproveRegistration(ctx context.Context, id string, wrappedEnvKey [
 // clearing hz's copy of the wrapped blob reaches none of it, and the box keeps
 // reading every value at that address. The only true revocation of an
 // environment key is rotating it — see "de-approval is not revocation" in
-// plan/config-manager.md. Stated plainly here because a false security
+// plan/design/config-manager.md. Stated plainly here because a false security
 // property asserted next to the function that appears to implement it is the
 // kind of thing that gets repeated.
 func (d *DB) DenyRegistration(ctx context.Context, id, reason string) (*Registration, error) {
@@ -492,8 +617,9 @@ func scanRegistration(row rowScanner) (*Registration, error) {
 func scanRegistrationRow(row rowScanner) (*Registration, error) {
 	var r Registration
 	var state string
-	var approvedAt, lastSeen sql.NullTime
-	if err := row.Scan(&r.ID, &r.MachineID, &r.Environment, &r.App, &r.Role, &r.Version,
+	var approvedAt, lastSeen, observedAt sql.NullTime
+	if err := row.Scan(&r.ID, &r.MachineID, &r.Project, &r.Environment, &r.App, &r.Role, &r.Version,
+		&r.ObservedVersion, &r.ObservedBuild, &observedAt,
 		&state, &r.WrapKeyID, &r.ApprovedBy, &approvedAt, &r.DeniedReason,
 		&r.CreatedAt, &lastSeen); err != nil {
 		return nil, err
@@ -504,6 +630,9 @@ func scanRegistrationRow(row rowScanner) (*Registration, error) {
 	}
 	if lastSeen.Valid {
 		r.LastSeenAt = &lastSeen.Time
+	}
+	if observedAt.Valid {
+		r.ObservedAt = &observedAt.Time
 	}
 	return &r, nil
 }
@@ -535,6 +664,21 @@ const (
 	// OriginPromoted: opened under a source address's key and re-sealed under
 	// this one's, by a client. hz was never in the path.
 	OriginPromoted ValueOrigin = "promoted"
+	// OriginAwaiting: DECLARED by a promotion and not answered. An
+	// environment-bound key does not travel — prod's database password is born
+	// in prod — so a promotion records the key, its binding and the config that
+	// declared it, and carries no bytes.
+	//
+	// This is the difference between blank and absent, and it is goal property 6
+	// (plan/design/architecture.md): a config key cannot be SILENTLY absent. Omitting
+	// the key would leave the target holding a config in which it had never been
+	// heard of, and the app would fall back to its compiled default — the
+	// founding bug. An awaiting row says "declared here, awaiting a value", and
+	// the pull refuses to serve the config until it has one.
+	//
+	// It is not a tombstone. A tombstone says a value existed and was destroyed;
+	// this says a value is required and was never supplied.
+	OriginAwaiting ValueOrigin = "awaiting"
 )
 
 // ConfigValue is one key within a Config. Always sealed; there is no plaintext
@@ -561,6 +705,11 @@ type ConfigValue struct {
 // its key name, its binding and its lineage survive; the payload does not.
 func (v ConfigValue) Tombstoned() bool { return v.TombstonedAt != nil }
 
+// Awaiting reports whether this key was declared by a promotion and never
+// answered. Distinct from Tombstoned in both directions, and the schema refuses
+// a row that is both.
+func (v ConfigValue) Awaiting() bool { return v.Origin == OriginAwaiting }
+
 // validate checks a value's shape before it is offered to the database.
 //
 // Note what is NOT checked: any rule about the value's length or emptiness.
@@ -577,6 +726,27 @@ func (v ConfigValue) validate() error {
 	case BindingInvariant, BindingEnv:
 	default:
 		return fmt.Errorf("unknown binding %q", v.Binding)
+	}
+	// An awaiting value is checked first and separately, because every rule
+	// below it is a rule about bytes and an awaiting row has none. It is the one
+	// legal row with no ciphertext and no tombstone.
+	if v.Origin == OriginAwaiting {
+		if v.Binding != BindingEnv {
+			return fmt.Errorf("only an environment-bound key can be awaiting; %q is %s", v.Key, v.Binding)
+		}
+		if len(v.Ciphertext) != 0 {
+			return errors.New("an awaiting value carries no ciphertext: it was never answered")
+		}
+		if v.KeyID != "" {
+			return errors.New("an awaiting value names no sealing key: nothing sealed it")
+		}
+		if v.TombstonedAt != nil {
+			return errors.New("an awaiting value is not a tombstone: nothing was destroyed")
+		}
+		if v.SourceConfigID == "" {
+			return errors.New("an awaiting value needs the config whose promotion declared it")
+		}
+		return nil
 	}
 	if len(v.Ciphertext) == 0 {
 		return ErrValueOmitted
@@ -619,6 +789,7 @@ func (v ConfigValue) withInferredOrigin() ConfigValue {
 // never be recomputed.
 type Config struct {
 	ID          string
+	Project     string
 	Environment string
 	App         string
 	Role        string
@@ -630,12 +801,26 @@ type Config struct {
 	Values      []ConfigValue
 }
 
+// AwaitingKeys lists the keys this config declares and has no value for, in the
+// order the values were read (by key name). A config with any of them is
+// DECLARED but not usable: the pull refuses to serve it, by name, rather than
+// serving the rest and letting the app default the missing one.
+func (c Config) AwaitingKeys() []string {
+	var out []string
+	for _, v := range c.Values {
+		if v.Awaiting() {
+			out = append(out, v.Key)
+		}
+	}
+	return out
+}
+
 const selectConfig = `
-	SELECT id, environment, app, role, min_ver, COALESCE(max_ver, ''), seq, created_at, created_by
+	SELECT id, project, environment, app, role, min_ver, COALESCE(max_ver, ''), seq, created_at, created_by
 	FROM cm_configs`
 
 // CreateConfig blesses a config and its values in one transaction: a config
-// with half its keys written is not a config, per plan/config-manager.md.
+// with half its keys written is not a config, per plan/design/config-manager.md.
 //
 // Three refusals happen here that 0008 accepted, and every one of them is a
 // fleet-wide time bomb rather than a typo. They are checked at BLESS time
@@ -657,8 +842,8 @@ const selectConfig = `
 // retroactively change what a running box gets with no diff anywhere. That
 // tension is real and is the caller's to resolve, not something to paper over
 // by dropping the check.
-func (d *DB) CreateConfig(ctx context.Context, environment, app, role, minVer, maxVer, createdBy string, values []ConfigValue) (*Config, error) {
-	env, a, r, err := canonAddress(environment, app, role)
+func (d *DB) CreateConfig(ctx context.Context, project, environment, app, role, minVer, maxVer, createdBy string, values []ConfigValue) (*Config, error) {
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return nil, err
 	}
@@ -716,19 +901,19 @@ func (d *DB) CreateConfig(ctx context.Context, environment, app, role, minVer, m
 	var openEnded int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM cm_configs
-		WHERE environment = ? AND app = ? AND role = ? AND max_ver IS NULL`,
-		env, a, r).Scan(&openEnded); err != nil {
+		WHERE project = ? AND environment = ? AND app = ? AND role = ? AND max_ver IS NULL`,
+		p, env, a, r).Scan(&openEnded); err != nil {
 		return nil, fmt.Errorf("count open-ended configs: %w", err)
 	}
 	if maxVer != "" && openEnded == 0 {
-		return nil, fmt.Errorf("%w: %s/%s/%s", ErrNoOpenRange, env, a, r)
+		return nil, fmt.Errorf("%w: %s/%s/%s/%s", ErrNoOpenRange, p, env, a, r)
 	}
 
 	id := ashid.New("cfg")
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO cm_configs (id, environment, app, role, min_ver, max_ver, created_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, env, a, r, minVer, nullString(maxVer), createdBy,
+		INSERT INTO cm_configs (id, project, environment, app, role, min_ver, max_ver, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, p, env, a, r, minVer, nullString(maxVer), createdBy,
 	); err != nil {
 		return nil, fmt.Errorf("create config: %w", err)
 	}
@@ -737,7 +922,10 @@ func (d *DB) CreateConfig(ctx context.Context, environment, app, role, minVer, m
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO cm_config_values (config_id, key, binding, ciphertext, key_id, origin, source_config_id)
 			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			id, v.Key, string(v.Binding), v.Ciphertext, v.KeyID,
+			// key_id is NULL, not '', for an awaiting row: it names no sealing
+			// key because nothing sealed it, and an empty string there would be
+			// absent-vs-empty one level down from the bug this state fixes.
+			id, v.Key, string(v.Binding), v.Ciphertext, nullString(v.KeyID),
 			string(v.Origin), nullString(v.SourceConfigID),
 		); err != nil {
 			if isUniqueViolation(err) {
@@ -769,13 +957,13 @@ func (d *DB) GetConfig(ctx context.Context, id string) (*Config, error) {
 // ListConfigsForAddress lists every config ever blessed for
 // (environment, app, role), oldest (lowest seq) first. Values are not
 // populated — use GetConfig for a single config's contents.
-func (d *DB) ListConfigsForAddress(ctx context.Context, environment, app, role string) ([]Config, error) {
-	env, a, r, err := canonAddress(environment, app, role)
+func (d *DB) ListConfigsForAddress(ctx context.Context, project, environment, app, role string) ([]Config, error) {
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return nil, err
 	}
 	rows, err := d.QueryContext(ctx, selectConfig+
-		` WHERE environment = ? AND app = ? AND role = ? ORDER BY seq`, env, a, r)
+		` WHERE project = ? AND environment = ? AND app = ? AND role = ? ORDER BY seq`, p, env, a, r)
 	if err != nil {
 		return nil, err
 	}
@@ -810,7 +998,7 @@ func (d *DB) TombstoneConfigValue(ctx context.Context, configID, key, actor stri
 	res, err := d.ExecContext(ctx, `
 		UPDATE cm_config_values
 		SET ciphertext = NULL, tombstoned_at = CURRENT_TIMESTAMP, tombstoned_by = ?
-		WHERE config_id = ? AND key = ? AND tombstoned_at IS NULL`,
+		WHERE config_id = ? AND key = ? AND tombstoned_at IS NULL AND origin != 'awaiting'`,
 		nullString(actor), configID, key)
 	if err != nil {
 		return fmt.Errorf("tombstone value: %w", err)
@@ -842,8 +1030,8 @@ func (d *DB) TombstoneConfigValue(ctx context.Context, configID, key, actor stri
 // What it still does not reach, and cannot: every box that ever applied the
 // value holds it in plaintext in its last-known-good cache, indefinitely. Only
 // rotating the key touches that.
-func (d *DB) TombstoneValueAtAddress(ctx context.Context, environment, app, role, key, actor string) (int64, error) {
-	env, a, r, err := canonAddress(environment, app, role)
+func (d *DB) TombstoneValueAtAddress(ctx context.Context, project, environment, app, role, key, actor string) (int64, error) {
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return 0, err
 	}
@@ -855,10 +1043,10 @@ func (d *DB) TombstoneValueAtAddress(ctx context.Context, environment, app, role
 	res, err := d.ExecContext(ctx, `
 		UPDATE cm_config_values
 		SET ciphertext = NULL, tombstoned_at = CURRENT_TIMESTAMP, tombstoned_by = ?
-		WHERE key = ? AND tombstoned_at IS NULL AND config_id IN (
-			SELECT id FROM cm_configs WHERE environment = ? AND app = ? AND role = ?
+		WHERE key = ? AND tombstoned_at IS NULL AND origin != 'awaiting' AND config_id IN (
+			SELECT id FROM cm_configs WHERE project = ? AND environment = ? AND app = ? AND role = ?
 		)`,
-		nullString(actor), key, env, a, r)
+		nullString(actor), key, p, env, a, r)
 	if err != nil {
 		return 0, fmt.Errorf("tombstone value at address: %w", err)
 	}
@@ -868,7 +1056,7 @@ func (d *DB) TombstoneValueAtAddress(ctx context.Context, environment, app, role
 
 func (d *DB) configValues(ctx context.Context, configID string) ([]ConfigValue, error) {
 	rows, err := d.QueryContext(ctx, `
-		SELECT key, binding, ciphertext, key_id, origin, COALESCE(source_config_id, ''),
+		SELECT key, binding, ciphertext, COALESCE(key_id, ''), origin, COALESCE(source_config_id, ''),
 		       tombstoned_at, COALESCE(tombstoned_by, '')
 		FROM cm_config_values WHERE config_id = ? ORDER BY key`, configID)
 	if err != nil {
@@ -905,7 +1093,7 @@ func scanConfig(row rowScanner) (*Config, error) {
 
 func scanConfigRow(row rowScanner) (*Config, error) {
 	var c Config
-	if err := row.Scan(&c.ID, &c.Environment, &c.App, &c.Role, &c.MinVer, &c.MaxVer,
+	if err := row.Scan(&c.ID, &c.Project, &c.Environment, &c.App, &c.Role, &c.MinVer, &c.MaxVer,
 		&c.Seq, &c.CreatedAt, &c.CreatedBy); err != nil {
 		return nil, err
 	}
@@ -914,7 +1102,7 @@ func scanConfigRow(row rowScanner) (*Config, error) {
 
 // Resolution is what ResolveConfig returns: the winning config, in full
 // (values populated), and every other candidate it shadowed, most-recently
-// shadowed first. Shadowed configs carry no Values — plan/config-manager.md
+// shadowed first. Shadowed configs carry no Values — plan/design/config-manager.md
 // rule 2 asks that the overlap be inspectable, not that every loser's
 // ciphertext be pulled along for the ride.
 type Resolution struct {
@@ -922,7 +1110,7 @@ type Resolution struct {
 	Shadowed []Config
 }
 
-// ResolveConfig implements plan/config-manager.md "Resolution rules": every
+// ResolveConfig implements plan/design/config-manager.md "Resolution rules": every
 // config for (environment, app, role) whose [MinVer, MaxVer] range contains
 // version is a candidate; the candidate with the highest seq wins, because
 // seq is assigned once at blessing time and never recomputed (see cm_configs
@@ -931,8 +1119,8 @@ type Resolution struct {
 // overlap that produced the winner is always inspectable. Zero matches is
 // ErrNoConfigMatches — never an empty Resolution, and never mistaken for a
 // pending approval.
-func (d *DB) ResolveConfig(ctx context.Context, environment, app, role, version string) (*Resolution, error) {
-	env, a, r, err := canonAddress(environment, app, role)
+func (d *DB) ResolveConfig(ctx context.Context, project, environment, app, role, version string) (*Resolution, error) {
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return nil, err
 	}
@@ -941,7 +1129,7 @@ func (d *DB) ResolveConfig(ctx context.Context, environment, app, role, version 
 		return nil, fmt.Errorf("resolve version: %w", err)
 	}
 
-	candidates, err := d.ListConfigsForAddress(ctx, env, a, r)
+	candidates, err := d.ListConfigsForAddress(ctx, p, env, a, r)
 	if err != nil {
 		return nil, err
 	}
@@ -957,8 +1145,8 @@ func (d *DB) ResolveConfig(ctx context.Context, environment, app, role, version 
 		}
 	}
 	if len(matches) == 0 {
-		return nil, fmt.Errorf("%w: no config satisfies %s for %s/%s/%s",
-			ErrNoConfigMatches, version, env, a, r)
+		return nil, fmt.Errorf("%w: no config satisfies %s for %s/%s/%s/%s",
+			ErrNoConfigMatches, version, p, env, a, r)
 	}
 
 	// candidates (and so matches) came back ordered by seq ascending; the
@@ -981,7 +1169,7 @@ func (d *DB) ResolveConfig(ctx context.Context, environment, app, role, version 
 
 // parsedVersion is a clean semver tag: MAJOR.MINOR.PATCH with an optional
 // -PRERELEASE. Build metadata (+...), if present, is stripped before parsing
-// and never compared — per plan/config-manager.md open question 1, the
+// and never compared — per plan/design/config-manager.md open question 1, the
 // caller supplies the clean tag and carries the full `git describe` string
 // elsewhere, for provenance only.
 type parsedVersion struct {
@@ -1027,6 +1215,34 @@ func parseVersion(s string) (parsedVersion, error) {
 	}
 
 	return parsedVersion{major: nums[0], minor: nums[1], patch: nums[2], prerelease: prerelease}, nil
+}
+
+// CompareVersions is parseVersion + compareVersions for a caller outside this
+// package, and it exists so that there is exactly ONE version comparison in hz.
+//
+// The version-drift join (internal/server/handlers_version_drift.go) has to say
+// whether an instance is behind or ahead of the version its rung declares. That
+// is the same semver 2.0.0 precedence `ResolveConfig` already applies to a
+// config's [MinVer, MaxVer] range, and a second implementation of it would be
+// free to disagree — the "1.10.0 sorts before 1.9.0" bug, discovered twice, in
+// two screens, saying different things about the same box.
+//
+// NEITHER SIDE IS MADE TO PARSE. An environment's declared version is opaque by
+// design (config.Environment.Version: "a Debian version, an image tag, a git
+// sha") and an observed one is stored exactly as the box sent it. So a string
+// that is not a clean semver tag is not an error here either — it comes back
+// wrapped in ErrInvalidVersion and the caller renders "not comparable", which
+// is the truthful answer rather than a fault.
+func CompareVersions(a, b string) (int, error) {
+	pa, err := parseVersion(a)
+	if err != nil {
+		return 0, err
+	}
+	pb, err := parseVersion(b)
+	if err != nil {
+		return 0, err
+	}
+	return compareVersions(pa, pb), nil
 }
 
 // compareVersions returns -1, 0, or 1 as a is less than, equal to, or greater
@@ -1303,6 +1519,7 @@ func (d *DB) ListRecentSecretReads(ctx context.Context, limit int) ([]SecretRead
 // should be sealed under. SetAt/SetBy are here so an operator can see when a
 // rotation was announced and by whom.
 type CurrentKey struct {
+	Project     string
 	Environment string
 	App         string
 	Role        string
@@ -1316,18 +1533,18 @@ type CurrentKey struct {
 // none, and a client must be able to tell that apart from a pointer naming some
 // other key. Answering "no pointer" as if it were "this key" would be a silent
 // lie, and a client told that seals under whatever its filesystem offers.
-func (d *DB) CurrentKeyFor(ctx context.Context, environment, app, role string) (*CurrentKey, error) {
-	env, a, r, err := canonAddress(environment, app, role)
+func (d *DB) CurrentKeyFor(ctx context.Context, project, environment, app, role string) (*CurrentKey, error) {
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return nil, err
 	}
 	var c CurrentKey
 	var setBy sql.NullString
 	err = d.QueryRowContext(ctx, `
-		SELECT environment, app, role, key_id, set_by, set_at
+		SELECT project, environment, app, role, key_id, set_by, set_at
 		FROM cm_current_keys
-		WHERE environment = ? AND app = ? AND role = ?`, env, a, r,
-	).Scan(&c.Environment, &c.App, &c.Role, &c.KeyID, &setBy, &c.SetAt)
+		WHERE project = ? AND environment = ? AND app = ? AND role = ?`, p, env, a, r,
+	).Scan(&c.Project, &c.Environment, &c.App, &c.Role, &c.KeyID, &setBy, &c.SetAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -1344,8 +1561,8 @@ func (d *DB) CurrentKeyFor(ctx context.Context, environment, app, role string) (
 // nothing about that. Announcing a key hz has never seen is legitimate and
 // expected: the operator mints it locally and tells the fleet, and the first
 // seal under it necessarily precedes any config that uses it.
-func (d *DB) SetCurrentKey(ctx context.Context, environment, app, role, keyID, setBy string) (*CurrentKey, error) {
-	env, a, r, err := canonAddress(environment, app, role)
+func (d *DB) SetCurrentKey(ctx context.Context, project, environment, app, role, keyID, setBy string) (*CurrentKey, error) {
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return nil, err
 	}
@@ -1359,17 +1576,17 @@ func (d *DB) SetCurrentKey(ctx context.Context, environment, app, role, keyID, s
 		}
 	}
 	if _, err := d.ExecContext(ctx, `
-		INSERT INTO cm_current_keys (environment, app, role, key_id, set_by)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT (environment, app, role) DO UPDATE SET
+		INSERT INTO cm_current_keys (project, environment, app, role, key_id, set_by)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (project, environment, app, role) DO UPDATE SET
 			key_id = excluded.key_id,
 			set_by = excluded.set_by,
 			set_at = CURRENT_TIMESTAMP`,
-		env, a, r, keyID, nullString(setBy),
+		p, env, a, r, keyID, nullString(setBy),
 	); err != nil {
 		return nil, fmt.Errorf("set current key: %w", err)
 	}
-	return d.CurrentKeyFor(ctx, env, a, r)
+	return d.CurrentKeyFor(ctx, p, env, a, r)
 }
 
 // RegistrationsHoldingStaleKey lists approved registrations at an address whose
@@ -1379,8 +1596,8 @@ func (d *DB) SetCurrentKey(ctx context.Context, environment, app, role, keyID, s
 // open anything sealed under Y, so a rotation not followed by re-wrapping every
 // approved registration breaks config pulls fleet-wide — and before this the
 // only way to find out was a box failing at its next restart.
-func (d *DB) RegistrationsHoldingStaleKey(ctx context.Context, environment, app, role string) ([]Registration, error) {
-	env, a, r, err := canonAddress(environment, app, role)
+func (d *DB) RegistrationsHoldingStaleKey(ctx context.Context, project, environment, app, role string) ([]Registration, error) {
+	p, env, a, r, err := canonAddress(project, environment, app, role)
 	if err != nil {
 		return nil, err
 	}
@@ -1388,17 +1605,23 @@ func (d *DB) RegistrationsHoldingStaleKey(ctx context.Context, environment, app,
 	// false and nothing is reported stale: an address with no announced current
 	// key has nothing to be stale against, and reporting the whole fleet would
 	// be noise the first time anyone opened the page.
+	//
+	// The self-join carries project on BOTH sides. Comparing only environment
+	// and role would let a registration in one project match cm_current_keys'
+	// pointer for a different project sharing that (environment, app, role) —
+	// a cross-project leak in the very query rotation depends on.
 	rows, err := d.QueryContext(ctx, selectRegistration+`
-		WHERE environment = ? AND app = ? AND role = ?
+		WHERE project = ? AND environment = ? AND app = ? AND role = ?
 		  AND state = 'approved'
 		  AND wrap_key_id IS NOT NULL
 		  AND wrap_key_id <> COALESCE(
 		        (SELECT key_id FROM cm_current_keys c
-		          WHERE c.environment = cm_registrations.environment
+		          WHERE c.project = cm_registrations.project
+		            AND c.environment = cm_registrations.environment
 		            AND c.app = cm_registrations.app
 		            AND c.role = cm_registrations.role),
 		        wrap_key_id)
-		ORDER BY created_at`, env, a, r)
+		ORDER BY created_at`, p, env, a, r)
 	if err != nil {
 		return nil, fmt.Errorf("list stale registrations: %w", err)
 	}

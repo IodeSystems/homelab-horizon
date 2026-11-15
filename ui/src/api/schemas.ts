@@ -93,6 +93,14 @@ export const ServiceSchema = z.object({
     )
     .optional(),
   name: z.string(),
+  // Which project (and rung) the service belongs to. Listed for the same
+  // reason as `dormant`: a zod object STRIPS what it does not name, so without
+  // these two lines the server's `project` never reached the client and every
+  // project-scoped screen selected nothing — an empty list that looks exactly
+  // like a project with no services. Both are optional on the record: naming no
+  // project at all is explicitly legal and permanent.
+  project: z.string().optional(),
+  environment: z.string().optional(),
   domains: z.array(z.string()),
   internalDNS: z.object({ ip: z.string() }).optional(),
   externalDNS: z
@@ -199,16 +207,21 @@ export const VPNPeerSchema = z.object({
   name: z.string(),
   publicKey: z.string(),
   allowedIPs: z.string(),
-  endpoint: z.string(),
-  latestHandshake: z.string(),
-  transferRx: z.string(),
-  transferTx: z.string(),
+  // omitempty: absent for a peer that never connected (#2: not blank).
+  endpoint: z.string().optional(),
+  latestHandshake: z.string().optional(),
+  transferRx: z.string().optional(),
+  transferTx: z.string().optional(),
   online: z.boolean(),
   isAdmin: z.boolean(),
   profile: z.string(),
+  // Attributed project; "" is global (always sent).
+  project: z.string(),
   mfaEnrolled: z.boolean(),
   mfaSessionActive: z.boolean(),
   mfaSessionExpiry: z.string().optional(),
+  tag: z.string(),
+  mfaExempt: z.string().optional(),
 });
 
 export const VPNPeersSchema = z.array(VPNPeerSchema);
@@ -229,8 +242,8 @@ export const RekeyPeerResponseSchema = z.object({
   ok: z.boolean(),
   config: z.string(),
   qrCode: z.string(),
-  shareToken: z.string(),
-  shareURL: z.string(),
+  shareToken: z.string().optional(),
+  shareURL: z.string().optional(),
 });
 
 export const ConfigShareSchema = z.object({
@@ -242,16 +255,23 @@ export const ConfigShareSchema = z.object({
 export const ConfigSharesSchema = z.array(ConfigShareSchema);
 
 export const InviteSchema = z.object({
-  token: z.string(),
-  url: z.string(),
+  id: z.string(),
+  name: z.string(),
+  profile: z.string(),
+  user: z.string(),
+  expiresAt: z.string(),
 });
 
 export const InvitesSchema = z.array(InviteSchema);
 
 export const CreateInviteResponseSchema = z.object({
   ok: z.boolean(),
-  token: z.string(),
   url: z.string(),
+  id: z.string(),
+  name: z.string(),
+  profile: z.string(),
+  user: z.string(),
+  expiresAt: z.string(),
 });
 
 // Zones
@@ -259,9 +279,9 @@ export const ZoneSchema = z.object({
   name: z.string(),
   zoneId: z.string(),
   sslEnabled: z.boolean(),
-  sslEmail: z.string(),
+  sslEmail: z.string().optional(), // omitempty
   subZones: z.array(z.string()),
-  providerType: z.string(),
+  providerType: z.string().optional(), // omitempty
 });
 
 export const ZonesSchema = z.array(ZoneSchema);
@@ -322,6 +342,8 @@ export const CheckStatusSchema = z.object({
   interval: z.number(),
   enabled: z.boolean(),
   auto_gen: z.boolean(),
+  // Attributed project; "" is global (always sent).
+  project: z.string(),
   // Set when the result came from a remote hz-probe agent rather than hz.
   vantage: z.string().optional(),
 });
@@ -339,6 +361,8 @@ export const RemoteProbeSchema = z.object({
   resolvers: z.array(z.string()).optional(),
   pinSha256: z.string().optional(),
   hasToken: z.boolean(),
+  hasNtfyUrl: z.boolean(),
+  hasNtfyToken: z.boolean(),
   reachable: z.boolean(),
   polled: z.boolean(),
   lastPoll: z.string(),
@@ -369,6 +393,33 @@ export const RemoteProbeTestSchema = z.object({
   certTrusted: z.boolean(),
   certSubject: z.string().optional(),
   certNotAfter: z.string().optional(),
+});
+
+// The edge diagnosis: one verdict per public name per vantage.
+//
+// `evidence` and `diagnoses` are required rather than optional on purpose. The
+// server never sends null for either — an empty list is an answer ("no rung
+// was climbed", "nothing is being watched") and marking them optional here
+// would let a client that silently received nothing render the same as one
+// that received an empty answer.
+export const ProbeDiagnosisSchema = z.object({
+  target: z.string(),
+  host: z.string(),
+  vantage: z.string(),
+  status: z.string(),
+  cause: z.string(),
+  device: z.string(),
+  hzCanFix: z.boolean(),
+  summary: z.string(),
+  fix: z.string(),
+  confirm: z.string(),
+  evidence: z.array(z.string()),
+  at: z.string(),
+});
+
+export const ProbeDiagnosisDataSchema = z.object({
+  vantages: z.number(),
+  diagnoses: z.array(ProbeDiagnosisSchema),
 });
 
 export const RemoteProbeTokenSchema = z.object({
@@ -420,11 +471,14 @@ export const DomainSSLAddResponseSchema = z.object({
 // Bans
 export const BanEntrySchema = z.object({
   ip: z.string(),
-  timeout: z.number(),
+  // omitempty on the wire: absent means 0 / none.
+  timeout: z.number().optional(),
   createdAt: z.number(),
-  expiresAt: z.number(),
-  reason: z.string(),
-  service: z.string(),
+  expiresAt: z.number().optional(),
+  reason: z.string().optional(),
+  service: z.string().optional(),
+  // Attributed project; "" is global (always sent).
+  project: z.string(),
 });
 
 export const BanListResponseSchema = z.object({
@@ -494,6 +548,10 @@ export const ExporterTargetSchema = z.object({
 
 export const TopologyDataSchema = z.object({
   hosts: z.array(HostDeclSchema),
+  // The reserved "@self" pseudo-host: this instance's own LAN address. Not a
+  // declaration and never edited — present so a client can show what @self
+  // resolves to. Defaulted because a server from before it existed omits it.
+  selfHost: HostDeclSchema.default({ name: "self", ip: "" }),
   exporters: z.array(ExporterSchema),
   targets: z.array(ExporterTargetSchema),
   knownHosts: z.array(z.string()),
@@ -525,12 +583,16 @@ export const HostPortEntrySchema = z.object({
   proto: z.string(),
   service: z.string(),
   domain: z.string().optional(),
+  // The owning service's project; "" is global (always sent).
+  project: z.string(),
 });
 
 export const PortRangeSchema = z.object({
   from: z.number(),
   to: z.number().optional(),
   note: z.string().optional(),
+  // Attributed project; absent is global.
+  project: z.string().optional(),
 });
 
 export const PortExclusionsRespSchema = z.object({
@@ -560,4 +622,69 @@ export const ServiceDeletePreviewResponseSchema = z.object({
   service: z.string(),
   domains: z.array(z.string()),
   orphans: z.array(ServiceDeleteOrphanSchema),
+});
+
+// The agent fleet read (GET /api/v1/agent/observed) — the drift screen's data.
+//
+// `state`, `generationMatch` and a change's `kind` are validated as plain
+// strings rather than z.enum, deliberately. The screen parses each of them
+// into a closed union itself and renders anything it does not recognise as "hz
+// said something this screen does not know", which is the honest answer when
+// the backend grows a fifth state. A z.enum here would log a dev warning and
+// then hand the component the unknown value anyway — the same outcome, plus
+// noise, minus the on-screen admission.
+export const AgentChangeSchema = z.object({
+  subsystem: z.string(),
+  target: z.string(),
+  kind: z.string(),
+  detail: z.string().optional(),
+});
+
+export const AgentIPTablesRuleSchema = z.object({
+  table: z.string(),
+  chain: z.string(),
+  args: z.array(z.string()),
+  canonical: z.string(),
+  display: z.string(),
+  state: z.string(),
+  reason: z.string().optional(),
+});
+
+export const AgentIPTablesSchema = z.object({
+  readable: z.boolean(),
+  why: z.string().optional(),
+  rules: z.array(AgentIPTablesRuleSchema),
+  summary: z.object({
+    expected: z.number(),
+    stale: z.number(),
+    blessed: z.number(),
+    unknown: z.number(),
+  }),
+});
+
+export const AgentObservationSchema = z.object({
+  machine: z.string(),
+  state: z.string(),
+  enrolled: z.boolean(),
+  reportedAt: z.string().optional(),
+  ageSeconds: z.number(),
+  sameSince: z.string().optional(),
+  sameForSeconds: z.number(),
+  staleAfterSeconds: z.number(),
+  generation: z.string().optional(),
+  desiredGeneration: z.string().optional(),
+  generationMatch: z.string(),
+  inSync: z.boolean(),
+  pending: z.number(),
+  unknown: z.number(),
+  applying: z.boolean(),
+  agentVersion: z.string().optional(),
+  truncated: z.boolean(),
+  changes: z.array(AgentChangeSchema),
+  iptables: AgentIPTablesSchema.optional(),
+});
+
+export const AgentObservedResponseSchema = z.object({
+  machines: z.array(AgentObservationSchema),
+  serverTime: z.string(),
 });

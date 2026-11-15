@@ -1,8 +1,13 @@
 package server
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
@@ -115,5 +120,155 @@ func TestDiffConfig_ExcludesRuntimeNoise(t *testing.T) {
 	cur := &config.Config{PublicIP: "5.6.7.8", PublicIPLastChecked: 999}
 	if items := diffConfig(base, cur); len(items) != 0 {
 		t.Errorf("runtime public-IP fields should be excluded, got %+v", items)
+	}
+}
+
+// The operator's report, 2026-09-27: assigning aw4 to iode/dev showed "aw4
+// modified since the last Sync" — but attribution changes no rendered
+// artifact, so a Sync would publish nothing. Attribution is not pending; a
+// real change beside it still is.
+func TestDiffConfig_AttributionIsNotPending(t *testing.T) {
+	base := &config.Config{
+		Services:       []config.Service{{Name: "aw4", Domains: []string{"aw4.example.com"}}},
+		Machines:       []config.Machine{{Name: "box-1"}},
+		ServiceChecks:  []config.ServiceCheck{{Name: "ping", Type: "ping", Target: "192.0.2.1"}},
+		PortExclusions: []config.PortRange{{From: 9000}},
+	}
+	cur := &config.Config{
+		Services:       []config.Service{{Name: "aw4", Domains: []string{"aw4.example.com"}, Project: "iode", Environment: "dev"}},
+		Machines:       []config.Machine{{Name: "box-1", Project: "iode"}},
+		ServiceChecks:  []config.ServiceCheck{{Name: "ping", Type: "ping", Target: "192.0.2.1", Project: "iode"}},
+		PortExclusions: []config.PortRange{{From: 9000, Project: "iode"}},
+		VPNProjects:    map[string]string{"laptop": "iode"},
+	}
+	if items := diffConfig(base, cur); len(items) != 0 {
+		t.Fatalf("attribution alone reported as pending: %+v", items)
+	}
+
+	// Positive control: a real change beside the attribution is still pending,
+	// and names the field — so the empty result above is not a blind diff.
+	cur.Services[0].Domains = []string{"aw4.example.net"}
+	items := diffConfig(base, cur)
+	if len(items) != 1 || items[0].Name != "aw4" || len(items[0].Fields) != 1 || items[0].Fields[0].Path != "domains" {
+		t.Fatalf("a domain change beside attribution: %+v", items)
+	}
+}
+
+// The bintag report: a service created and synced, then read by the UI's
+// integration panel, gains a generated token. Sync never publishes that token,
+// so it must not leave the service pending.
+func TestServiceTokenGeneratedAfterSyncIsNotPending(t *testing.T) {
+	s := newTestServer(t, &config.Config{
+		Services: []config.Service{{Name: "bintag", Domains: []string{"bintag.example.com"}}},
+	})
+	s.markSynced()
+	if items := servicePending(s); len(items) != 0 {
+		t.Fatalf("pending right after sync: %+v", items)
+	}
+
+	w := httptest.NewRecorder()
+	s.handleAPIServiceIntegration(w, asAdmin(s, http.MethodGet, "/api/v1/services/integration?name=bintag", ""))
+	if w.Code != http.StatusOK {
+		t.Fatalf("integration: %d %s", w.Code, w.Body.String())
+	}
+	if s.cfg().Services[0].Token == "" {
+		t.Fatal("precondition: the integration read did not generate a token")
+	}
+	if items := servicePending(s); len(items) != 0 {
+		t.Fatalf("a generated token reads as pending: %+v", items)
+	}
+
+	// Positive control: a published field on the same service still counts.
+	_ = s.updateConfig(func(c *config.Config) { c.Services[0].Domains = []string{"bintag.example.net"} })
+	if items := servicePending(s); len(items) != 1 || len(items[0].Fields) != 1 || items[0].Fields[0].Path != "domains" {
+		t.Fatalf("domain change: %+v", items)
+	}
+}
+
+// servicePending is computePending narrowed to services. The test config is
+// built in memory, so the baseline's load-time defaults differ from it in
+// settings; those are not what these tests measure.
+func servicePending(s *Server) []apitypes.PendingItem {
+	var out []apitypes.PendingItem
+	for _, it := range s.computePending().Items {
+		if it.Kind == "service" {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// The pending diff is served to the UI, and a vantage's secrets are
+// write-only there. remote_probes is diffed as one stringified array, so
+// without stripping, every edit to a vantage printed its token and its ntfy
+// channel in the Before/After of the "settings" item.
+func TestPendingDiffNeverCarriesVantageSecrets(t *testing.T) {
+	base := &config.Config{RemoteProbes: []config.RemoteProbe{
+		{Name: "gcp", Token: "vantage-secret-old", NtfyURL: "https://ntfy.sh/old-topic-secret", NtfyToken: "tk-old-secret"},
+	}}
+	cur := &config.Config{RemoteProbes: []config.RemoteProbe{
+		{Name: "gcp", Token: "vantage-secret-new", NtfyURL: "https://ntfy.sh/new-topic-secret", NtfyToken: "tk-new-secret", Probe: 120},
+	}}
+	items := diffConfig(base, cur)
+	if len(items) == 0 {
+		// The Probe change must still be pending, or this test proves nothing.
+		t.Fatal("no pending item for a changed vantage — the positive half of this test is gone")
+	}
+	for _, it := range items {
+		for _, f := range it.Fields {
+			for _, secret := range []string{"vantage-secret", "topic-secret", "tk-old-secret", "tk-new-secret"} {
+				if strings.Contains(f.Before, secret) || strings.Contains(f.After, secret) {
+					t.Errorf("pending field %s carries a vantage secret (%s)", f.Path, secret)
+				}
+			}
+		}
+	}
+
+	// A secret-only change publishes nothing, so it is not pending.
+	onlySecrets := &config.Config{RemoteProbes: []config.RemoteProbe{
+		{Name: "gcp", Token: "rotated", NtfyURL: "https://ntfy.sh/another", NtfyToken: "another"},
+	}}
+	if items := diffConfig(base, onlySecrets); len(items) != 0 {
+		t.Errorf("a secret-only vantage change reads as pending: %+v", items)
+	}
+}
+
+// Found live 2026-10-30: `hz pending` printed a scrape_token in full. A
+// scrape token is an inbound bearer a Sync publishes nowhere, so it is not
+// pending at all; and a secret nested in a service or zone (a deploy token,
+// a DNS provider's key) still reads as changed, never with its value.
+func TestPendingDiffNeverPrintsASecretValue(t *testing.T) {
+	if items := diffConfig(&config.Config{}, &config.Config{ScrapeToken: "scrape-secret-value"}); len(items) != 0 {
+		t.Errorf("a minted scrape token reads as pending: %+v", items)
+	}
+
+	svc := func(deployTok, awsSecret, backend string) *config.Config {
+		return &config.Config{
+			Services: []config.Service{{Name: "kc", Proxy: &config.ProxyConfig{
+				Backend: backend, Deploy: &config.DeployConfig{NextBackend: "192.0.2.10:2", Token: deployTok},
+			}}},
+			Zones: []config.Zone{{Name: "example.com", DNSProvider: &config.DNSProviderConfig{
+				Type: config.DNSProviderRoute53, AWSSecretAccessKey: awsSecret,
+			}}},
+		}
+	}
+	items := diffConfig(svc("deploy-old-value", "aws-old-value", "192.0.2.10:1"), svc("deploy-new-value", "aws-new-value", "192.0.2.10:3"))
+
+	var paths []string
+	for _, it := range items {
+		for _, f := range it.Fields {
+			paths = append(paths, it.Name+":"+f.Path)
+			for _, v := range []string{"deploy-old", "deploy-new", "aws-old", "aws-new"} {
+				if strings.Contains(f.Before, v) || strings.Contains(f.After, v) {
+					t.Errorf("%s %s carries a secret value (%s)", it.Name, f.Path, v)
+				}
+			}
+		}
+	}
+	// Positive half: the changes are still reported, with their paths.
+	for _, want := range []string{"kc:proxy.deploy.token", "example.com:dns_provider.aws_secret_access_key", "kc:proxy.backend"} {
+		if !slices.Contains(paths, want) {
+			t.Errorf("no pending field %s in %v", want, paths)
+		}
 	}
 }

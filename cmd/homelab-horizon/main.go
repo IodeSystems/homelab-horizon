@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/autoheal"
 	"github.com/iodesystems/homelab-horizon/internal/config"
@@ -25,13 +24,18 @@ var (
 const servicePath = "/etc/systemd/system/homelab-horizon.service"
 
 func main() {
-	// Unprivileged static-file-server child mode. hz re-execs itself with this
-	// env set (dropped to an unprivileged user) and feeds the host->site map
-	// over stdin. Handle it before flag parsing and the MCP stdin-pipe probe,
-	// which would otherwise mistake our control pipe for an MCP client.
+	// Static-file-server mode. Two ways in, one job: hz re-execs itself with
+	// this env set (dropped to an unprivileged user, map pushed over stdin), or
+	// systemd starts the agent-managed hz-static unit with it (map read from
+	// the file named by StaticServerEnvSites). Handle it before flag parsing
+	// and the MCP stdin-pipe probe, which would otherwise mistake the forked
+	// control pipe for an MCP client.
 	if addr := os.Getenv(server.StaticServerEnvAddr); addr != "" {
 		hzlog.Setup()
-		server.RunStaticServerChild(addr)
+		if err := server.RunStaticServerChild(addr, os.Getenv(server.StaticServerEnvSites)); err != nil {
+			slog.Error("static file server stopped", "err", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -52,15 +56,11 @@ func isMCPClient() bool {
 	return fi.Mode()&os.ModeCharDevice == 0
 }
 
-func runServer(configPath string, dryRun bool, mcpEnabled bool, enableAdminToken bool, listenAddr string) {
+func runServer(configPath string, dryRun bool, mcpEnabled bool, enableAdminToken bool, listenAddr string, noVPNListen bool) {
 	// If MCP is enabled and stdin is a pipe, run as MCP stdio server
 	if mcpEnabled && isMCPClient() {
 		runMCPStdio(configPath, dryRun)
 		return
-	}
-
-	if !dryRun {
-		maybeSelfInstall(configPath)
 	}
 
 	slog.Info("Homelab Horizon", "version", Version, "built", BuildTime)
@@ -112,12 +112,10 @@ func runServer(configPath string, dryRun bool, mcpEnabled bool, enableAdminToken
 			"listen", listenAddr, "config_says", cfg.ListenAddr)
 	}
 
-	if cfg.AutoHeal {
-		slog.Info("auto-heal enabled, checking dependencies")
-		if err := autoheal.Run(cfg); err != nil {
-			slog.Error("auto-heal failed", "err", err)
-			os.Exit(1)
-		}
+	// Same not-persisted property as --listen: a restart without it reverts.
+	if noVPNListen {
+		cfg.SetNoVPNListen(true)
+		slog.Warn("VPN listener disabled for this run only (--no-vpn-listen)")
 	}
 
 	srv, err := server.NewWithConfig(cfg, cfgPath, dryRun, Version)
@@ -130,78 +128,6 @@ func runServer(configPath string, dryRun bool, mcpEnabled bool, enableAdminToken
 		slog.Error("server error", "err", err)
 		os.Exit(1)
 	}
-}
-
-func maybeSelfInstall(configPath string) {
-	// Don't auto-install in Docker (no systemd)
-	if _, err := os.Stat("/.dockerenv"); err == nil {
-		return
-	}
-	// Don't auto-install if we are in MCP mode or not root
-	if isMCPClient() || os.Geteuid() != 0 {
-		return
-	}
-
-	targetPath := "/usr/local/bin/homelab-horizon"
-	currentPath, err := os.Executable()
-	if err != nil {
-		return
-	}
-
-	currentPath, _ = filepath.Abs(currentPath)
-	targetPath, _ = filepath.Abs(targetPath)
-
-	// If we are already running from the target path, we are good
-	if currentPath == targetPath {
-		return
-	}
-
-	// Also don't self-install if we are already running as a systemd service
-	// (this handles cases where someone might have installed it to a different path manually)
-	if os.Getenv("INVOCATION_ID") != "" || os.Getenv("JOURNAL_STREAM") != "" {
-		return
-	}
-
-	slog.Info("self-installing", "from", currentPath, "to", targetPath)
-
-	// 1. Copy binary to target path
-	if err := copyFile(currentPath, targetPath); err != nil {
-		slog.Warn("self-install: failed to copy binary", "target", targetPath, "err", err)
-		return
-	}
-
-	// 2. Ensure executable
-	if err := os.Chmod(targetPath, 0755); err != nil {
-		slog.Warn("self-install: failed to chmod binary", "err", err)
-		return
-	}
-
-	// 3. Install/Update systemd service
-	if err := installService(false); err != nil {
-		slog.Warn("self-install: failed to install systemd service", "err", err)
-		return
-	}
-
-	// 4. Fire a restart and die
-	slog.Info("restarting as systemd service")
-	// Use systemctl restart, but since we are about to exit, we use Start if it's not running
-	// or Restart if it is. Restart is generally safer for "upgrading"
-	cmd := exec.Command("systemctl", "restart", "homelab-horizon")
-	_ = cmd.Start() // We don't wait for it to finish as it will kill us
-
-	// Give systemd a tiny bit of time to receive the command before we exit
-	time.Sleep(500 * time.Millisecond)
-
-	// Die and get replaced by the service
-	os.Exit(0)
-}
-
-func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(dst, data, 0755)
 }
 
 func runMCPStdio(configPath string, dryRun bool) {
@@ -295,16 +221,23 @@ func runCheck(dryRun bool) error {
 	c.checkNetwork()
 	c.checkRanges()
 	c.checkPinnedDNS()
+	c.checkFeeds()
 	c.printSummary()
 
 	return nil
 }
 
 func (c *checker) checkBinaries() {
-	c.checkBinary("WireGuard", "wg", "apt install wireguard-tools", true)
-	c.checkBinary("dnsmasq", "dnsmasq", "apt install dnsmasq", c.cfg.DNSMasqEnabled)
-	c.checkBinary("qrencode", "qrencode", "apt install qrencode", false)
-	c.checkBinary("haproxy", "haproxy", "apt install haproxy", c.cfg.HAProxyEnabled)
+	// One remedy, named once. `check` used to suggest a bare `apt install`
+	// per binary, which is four commands that bypass the package allow-list
+	// and do not know which of them this box actually needs.
+	//
+	// The list is autoheal's, the same one startup and the System tab read, so
+	// this command cannot name a binary hz no longer needs (it named qrencode
+	// after the QR code moved in process).
+	for _, d := range autoheal.Check(c.cfg) {
+		c.checkBinary(d.Name, d.Binary, dependencyFixHint, true)
+	}
 }
 
 func (c *checker) checkBinary(name, binary, installCmd string, required bool) {
@@ -414,7 +347,7 @@ func (c *checker) checkSystemdService() {
 		}
 		fmt.Println("  --------------------------------")
 		if c.canFix() && askYesNo("  Install systemd service?") {
-			if err := installService(c.dryRun); err != nil {
+			if err := installService(c.cfgPath, c.dryRun, false); err != nil {
 				fmt.Printf("  Error: %v\n", err)
 			}
 		}
@@ -558,6 +491,25 @@ func (c *checker) checkPinnedDNS() {
 	}
 }
 
+// checkFeeds warns about package feeds declared without a signing key.
+//
+// Not counted against allGood, for the same reason checkPinnedDNS is not: an
+// unsigned feed is legal and sometimes deliberate. It is reported because the
+// failure it invites is silent — anyone on the path between a machine and an
+// unsigned repository can serve it different packages, and the install that
+// results looks exactly like a correct one.
+func (c *checker) checkFeeds() {
+	if c.cfg == nil {
+		return
+	}
+	for _, w := range c.cfg.FeedWarnings() {
+		fmt.Printf("Checking package feed for %s... UNSIGNED\n", w.Project)
+		fmt.Printf("  %s is declared with no key_id.\n", w.URL)
+		fmt.Println("  Every project under this one inherits it, so the machines affected are")
+		fmt.Println("  not only this project's. Set key_id to the signing key's fingerprint.")
+	}
+}
+
 func (c *checker) printSummary() {
 	fmt.Println()
 	fmt.Println("======================")
@@ -645,8 +597,13 @@ PostDown = iptables -D FORWARD -i %%i -j ACCEPT; iptables -t nat -D POSTROUTING 
 	return nil
 }
 
-func installService(dryRun bool) error {
-	_, cfgPath, _ := config.LoadAuto()
+func installService(configPath string, dryRun, withDeps bool) error {
+	cfg, cfgPath, _ := config.LoadAuto()
+	if configPath != "" {
+		if loaded, err := config.Load(configPath); err == nil {
+			cfg, cfgPath = loaded, configPath
+		}
+	}
 	serviceContent := generateSystemdService(cfgPath)
 
 	if dryRun {
@@ -654,7 +611,8 @@ func installService(dryRun bool) error {
 		fmt.Printf("Path: %s\n", servicePath)
 		fmt.Println("Content:")
 		fmt.Println(serviceContent)
-		return nil
+		fmt.Println()
+		return shipAgent(agentInstallDir, embeddedAgent, true, os.Stdout)
 	}
 
 	if os.Geteuid() != 0 {
@@ -667,6 +625,30 @@ func installService(dryRun bool) error {
 	}
 	if err := os.MkdirAll(workDir, 0755); err != nil {
 		return fmt.Errorf("creating working directory: %w", err)
+	}
+
+	// The directories hz writes into. These used to be created by
+	// autoheal.Run at every boot, as root, behind the `auto_heal` key
+	// (privilege-classification.md §3.5); `install` is where they belong —
+	// once, with a human present, at the moment the box is being set up.
+	//
+	// The unit's own ExecStartPre=+ already covers four of these, which is the
+	// overlap architecture.md says every remaining `+` will have to justify
+	// after the flip. Creating them here as well makes `install` complete on
+	// its own rather than depending on a first start to finish the job.
+	for _, d := range []struct {
+		path string
+		mode os.FileMode
+	}{
+		{"/etc/wireguard", 0700},
+		{"/etc/dnsmasq.d", 0755},
+		{"/etc/haproxy", 0755},
+		{"/etc/haproxy/certs", 0755},
+		{"/etc/haproxy/errors", 0755},
+	} {
+		if err := os.MkdirAll(d.path, d.mode); err != nil {
+			return fmt.Errorf("creating %s: %w", d.path, err)
+		}
 	}
 
 	if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
@@ -686,7 +668,44 @@ func installService(dryRun bool) error {
 		return fmt.Errorf("systemctl daemon-reload: %w", err)
 	}
 
+	// Every install ships the agent (agentbin.go). One file, no systemd: the
+	// agent stays inert and nothing here enables or starts it.
 	fmt.Println()
+	if err := shipAgent(agentInstallDir, embeddedAgent, false, os.Stdout); err != nil {
+		return err
+	}
+
+	// Post-install validation. The unit is installed; that is not the same as
+	// the gateway being able to do its job, and "Installation complete!" over
+	// a box with no haproxy, dnsmasq or wireguard-tools was the first thing an
+	// operator read before starting a service that could only fail.
+	fmt.Println()
+	missing := reportDependencies(os.Stdout, cfg)
+	if len(missing) > 0 && withDeps {
+		fmt.Println()
+		fmt.Println("Installing (--with-deps)...")
+		if err := autoheal.InstallMissing(cfg); err != nil {
+			return err
+		}
+		missing = reportDependencies(os.Stdout, cfg)
+	}
+
+	fmt.Println()
+	if len(missing) > 0 {
+		fmt.Println("Systemd unit installed, but the gateway is NOT ready to start.")
+		fmt.Println()
+		fmt.Println("Next steps:")
+		fmt.Println("  1. " + dependencyFixHint)
+		fmt.Println("  2. Start service: systemctl start homelab-horizon")
+		fmt.Println("  3. Enable on boot: systemctl enable homelab-horizon")
+		fmt.Println("  4. View logs: journalctl -u homelab-horizon -f")
+		fmt.Println()
+		// Not an error: the unit really was installed, and a provisioning
+		// script that installs dependencies in its own step should not see a
+		// failure. The report is the deliverable.
+		return nil
+	}
+
 	fmt.Println("Installation complete!")
 	fmt.Println()
 	fmt.Println("Next steps:")

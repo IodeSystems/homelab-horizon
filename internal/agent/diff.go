@@ -1,0 +1,208 @@
+package agent
+
+import (
+	"fmt"
+	"regexp"
+	"strings"
+)
+
+// This file is PURE, and it is the one that must never leak. Everything a
+// human, a log line or a failing test sees about a change comes through here.
+//
+// Two layers, because one is a promise and the other is a check:
+//
+//  1. File.Secret, declared by whatever produced the payload. A secret file is
+//     described by size only — never by content.
+//  2. redactLine, applied to every emitted line regardless of that flag. A
+//     file wrongly marked public still does not hand over a private key.
+//
+// Layer 2 exists because layer 1 is a human decision made somewhere else, and
+// "the producer will remember" is not a security property.
+
+// maxDiffLines bounds how much of a changed file reaches the report. A diff
+// report is a summary an operator reads, not a copy of the file; an haproxy.cfg
+// rewrite would otherwise put two thousand lines in a log.
+const maxDiffLines = 3
+
+// secretAssignment matches `<key> = <value>` where the key names something
+// that must not be printed. WireGuard's PrivateKey and PresharedKey are the
+// concrete cases on the gateway; the rest are there because the next file the
+// agent is handed will not be a WireGuard config.
+//
+// The leading group allows a `+`/`-` DIFF MARKER, and that is not cosmetic.
+// describeTextChange redacts a line and then prefixes it, so its own output
+// was always safe — but this function is also the SECOND pass over text that
+// has already been formatted: Report re-redacts every line it prints, and
+// StateReport.Sanitized re-redacts every Detail a machine sent hz. Without
+// the marker, a line that arrives already reading "  + PrivateKey = …" walks
+// straight through both of those. A second pass that cannot match the shape
+// its own first pass emits is not a second layer.
+var secretAssignment = regexp.MustCompile(`(?i)^(\s*[-+]?\s*)([a-z0-9_.\-]*(private[_ -]?key|preshared[_ -]?key|secret|password|passphrase|token|credential)[a-z0-9_.\-]*)(\s*[:=]\s*)(.*)$`)
+
+// pemPrivateKey matches a PEM banner for key material, in any of the forms
+// openssl and the ACME clients emit (RSA/EC/ENCRYPTED/plain PKCS#8).
+//
+// A certificate bundle is the payload's second kind of secret and it is shaped
+// nothing like a WireGuard config: there is no `key = value` line to blank,
+// just a banner and base64. secretAssignment cannot see it, so layer 2 would
+// have had exactly nothing to say about a cert — which would make the cert
+// section's Secret flag a single point of failure rather than the first of
+// two.
+var pemPrivateKey = regexp.MustCompile(`(?i)-----(BEGIN|END)[A-Z0-9 ]*PRIVATE KEY-----`)
+
+// secretBlob matches a line that is nothing but a long base64 run: a PEM body
+// line, a bare WireGuard key, a token pasted on a line of its own.
+//
+// Forty characters is past anything hz renders as a whole line on its own (a
+// 32-byte key is 44 base64 characters, a PEM body line is 64) and the match is
+// anchored to the WHOLE line, so haproxy.cfg and dnsmasq.conf directives —
+// which all carry spaces — never touch it. A long unbroken path made only of
+// base64 characters would be blanked; that is the direction to err in, and the
+// line is a sample in a summary, not data anything reads back.
+var secretBlob = regexp.MustCompile(`^(\s*[-+]?\s*)[A-Za-z0-9+/]{40,}={0,2}\s*$`)
+
+// redactLine blanks the value of any assignment whose key names key material,
+// any PEM key banner, and any line that is just a base64 blob — and passes
+// everything else through unchanged.
+//
+// Applied to every line the report emits, not only to files marked secret.
+func redactLine(line string) string {
+	if m := secretAssignment.FindStringSubmatch(line); m != nil {
+		return m[1] + m[2] + m[4] + "[redacted]"
+	}
+	if loc := pemPrivateKey.FindStringIndex(line); loc != nil {
+		return line[:loc[0]] + "[redacted private key]"
+	}
+	if m := secretBlob.FindStringSubmatch(line); m != nil {
+		return m[1] + "[redacted]"
+	}
+	return line
+}
+
+// describeTextChange summarises a file that exists and differs.
+//
+// A secret file gets sizes and nothing else: the fact that a key rotated is
+// operationally useful, the key is not.
+func describeTextChange(current, desired string, secret bool) string {
+	if secret {
+		return fmt.Sprintf("contents differ (%d bytes on disk, %d desired) — not shown, this file carries key material",
+			len(current), len(desired))
+	}
+
+	added, removed := lineDelta(current, desired)
+	head := fmt.Sprintf("contents differ (+%d/-%d lines)", len(added), len(removed))
+
+	var parts []string
+	parts = append(parts, head)
+	for _, l := range sample(removed, maxDiffLines) {
+		parts = append(parts, "  - "+truncate(redactLine(l), 120))
+	}
+	for _, l := range sample(added, maxDiffLines) {
+		parts = append(parts, "  + "+truncate(redactLine(l), 120))
+	}
+	if len(removed) > maxDiffLines || len(added) > maxDiffLines {
+		parts = append(parts, "  … truncated")
+	}
+	return strings.Join(parts, "\n")
+}
+
+// lineDelta reports which lines are only in desired and which only in current.
+//
+// Multiset difference rather than a real LCS diff: the report says what moved,
+// not where. An operator deciding whether to let the agent apply needs "these
+// four backend lines appear and these four go", and an alignment algorithm
+// would buy nothing for that at the cost of being wrong in interesting ways.
+func lineDelta(current, desired string) (added, removed []string) {
+	count := map[string]int{}
+	for _, l := range strings.Split(current, "\n") {
+		count[l]++
+	}
+	for _, l := range strings.Split(desired, "\n") {
+		if count[l] > 0 {
+			count[l]--
+			continue
+		}
+		added = append(added, l)
+	}
+
+	want := map[string]int{}
+	for _, l := range strings.Split(desired, "\n") {
+		want[l]++
+	}
+	for _, l := range strings.Split(current, "\n") {
+		if want[l] > 0 {
+			want[l]--
+			continue
+		}
+		removed = append(removed, l)
+	}
+	return added, removed
+}
+
+func sample(lines []string, n int) []string {
+	out := make([]string, 0, n)
+	for _, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		out = append(out, l)
+		if len(out) == n {
+			break
+		}
+	}
+	return out
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
+// Report renders a plan as the text `hz-agent diff` prints and the daemon
+// logs. It is the data behind the redesign's drift screen
+// (plan/design/ui.md), which is why the plan carries structure and this
+// function only formats it.
+func Report(p Plan) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "machine:    %s\n", orNone(p.Machine))
+	fmt.Fprintf(&b, "generation: %s\n", orNone(p.Generation))
+
+	pending, unknown := p.Pending(), p.Unknown()
+	switch {
+	case len(pending) == 0 && len(unknown) == 0:
+		b.WriteString("state:      in sync — nothing to apply\n")
+	case len(pending) == 0:
+		fmt.Fprintf(&b, "state:      nothing to apply, but %d target(s) could not be read\n", len(unknown))
+	default:
+		fmt.Fprintf(&b, "state:      %d change(s) would be applied", len(pending))
+		if len(unknown) > 0 {
+			fmt.Fprintf(&b, ", %d target(s) could not be read", len(unknown))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+
+	for _, c := range p.Changes {
+		fmt.Fprintf(&b, "  [%s] %s %s\n", c.Kind, c.Subsystem, c.Target)
+		for _, line := range strings.Split(c.Detail, "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			// c.Detail is already redacted for the file paths that went
+			// through describeTextChange; redact again because this function
+			// is the last thing between a Change and a terminal, and a Change
+			// can be constructed anywhere.
+			fmt.Fprintf(&b, "        %s\n", redactLine(line))
+		}
+	}
+	return b.String()
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "(none)"
+	}
+	return s
+}

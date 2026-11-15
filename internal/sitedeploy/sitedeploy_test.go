@@ -65,7 +65,7 @@ func served(t *testing.T, live, rel string) string {
 func TestDeploy_AtomicSwapAndRollback(t *testing.T) {
 	dir := t.TempDir()
 	live := filepath.Join(dir, "site")
-	m := New(live, 5, -1, -1)
+	m := New(live, 5)
 
 	if _, err := m.Deploy(bytes.NewReader(tgz(t, map[string]string{"index.html": "v1"})), "20260101T000001Z", false, DefaultLimits); err != nil {
 		t.Fatal(err)
@@ -108,7 +108,7 @@ func TestDeploy_AtomicSwapAndRollback(t *testing.T) {
 
 func TestDeploy_Prune(t *testing.T) {
 	dir := t.TempDir()
-	m := New(filepath.Join(dir, "site"), 2, -1, -1)
+	m := New(filepath.Join(dir, "site"), 2)
 	ids := []string{"20260101T000001Z", "20260101T000002Z", "20260101T000003Z"}
 	for _, id := range ids {
 		if _, err := m.Deploy(bytes.NewReader(tgz(t, map[string]string{"index.html": id})), id, false, DefaultLimits); err != nil {
@@ -128,7 +128,7 @@ func TestDeploy_Prune(t *testing.T) {
 func TestDeploy_DryRunDoesNotSwap(t *testing.T) {
 	dir := t.TempDir()
 	live := filepath.Join(dir, "site")
-	m := New(live, 5, -1, -1)
+	m := New(live, 5)
 	res, err := m.Deploy(bytes.NewReader(tgz(t, map[string]string{"index.html": "x"})), "20260101T000001Z", true, DefaultLimits)
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +159,7 @@ func TestDeploy_RejectsUnsafeArchives(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			m := New(filepath.Join(dir, "site"), 5, -1, -1)
+			m := New(filepath.Join(dir, "site"), 5)
 			_, err := m.Deploy(bytes.NewReader(tgzRaw(t, tc.hdrs, tc.bodies)), "20260101T000001Z", false, DefaultLimits)
 			if err == nil {
 				t.Fatal("expected rejection, got nil")
@@ -173,7 +173,7 @@ func TestDeploy_RejectsUnsafeArchives(t *testing.T) {
 
 func TestDeploy_EnforcesLimits(t *testing.T) {
 	dir := t.TempDir()
-	m := New(filepath.Join(dir, "site"), 5, -1, -1)
+	m := New(filepath.Join(dir, "site"), 5)
 
 	// Size limit.
 	_, err := m.Deploy(bytes.NewReader(tgz(t, map[string]string{"big": "0123456789"})), "20260101T000001Z", false, Limits{MaxBytes: 5, MaxFiles: 10})
@@ -197,7 +197,7 @@ func TestDeploy_RefusesNonEmptyRealDir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(live, "existing"), []byte("x"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	m := New(live, 5, -1, -1)
+	m := New(live, 5)
 	if _, err := m.Deploy(bytes.NewReader(tgz(t, map[string]string{"index.html": "v1"})), "20260101T000001Z", false, DefaultLimits); err == nil {
 		t.Error("expected refusal to clobber a non-empty real directory")
 	}

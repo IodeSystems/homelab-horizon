@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/db"
 
 	"github.com/iodesystems/homelab-horizon/hzapi"
 )
@@ -38,24 +39,40 @@ const usage = `hz - operator CLI for homelab-horizon (admin-token scoped)
 USAGE
   hz [--host URL] [--token TOK] <command> [args]
 
-CONFIG
+CONNECTING (hz's own settings — NOT the 'hz config' command below)
   Resolved in order (later wins): ~/.hz_config -> env -> flags.
   ~/.hz_config   JSON: {"host": "http://192.168.1.89:8080", "token": "<admin-token>"}
   HZ_HOST HZ_TOKEN   env overrides
   --host --token     flag overrides
   HZ_CONFIG          alternate config path
+  These say which instance hz talks to and as whom. There is no command that
+  edits them — edit the file. 'hz config' is the config manager: the sealed
+  application config hz holds for OTHER machines. Two different things that
+  share a word; the second is the admin UI's Config page.
 
 COMMANDS
   service list                       List services (table)
   service show <name> [--json]       Show one service
   service create [flags]             Create a service (see 'hz schema service')
   service edit <name> [flags]        Edit a service; only flags you pass change
+  service assign <name> <project>[/<environment>]
+                                     Put a service in the project tree. The project
+                                     (and the rung, if named) must be declared first:
+                                     declare, THEN assign. A project with no rung is
+                                     legal — not every service is on a ladder
+  service unassign <name>            Take a service out of the tree. It keeps its
+                                     domains, backend and certificate and goes on
+                                     working; it moves to (unassigned) in 'project ls'
   service delete <name>              Delete a service; reports the SubZone/DNS state
                                      it strands and requires --delete-orphans or
                                      --keep-orphans when there is any
   setup                              Interactive questionnaire -> create + sync
   sync [--wait]                      Trigger a global sync (--wait: block til done)
   pending                            Show unsynced config changes
+  doctor [--deep] [--pci]            Check this hz and say what to fix: commands, kiosk,
+                                     public UI, certs, pending, upstream. --deep also reads
+                                     each DNS provider's zones and public DNS. --pci fails
+                                     the warnings PCI DSS forbids. Exit 1 if failing
   ports next --host IP [--count N] [--from PORT]
                                      Find the next free port range on a host (safe band, common ports skipped)
   ports list --host IP [--count N] [--from PORT]
@@ -64,36 +81,207 @@ COMMANDS
   domain ssl add <domain>...         Give domains HTTPS (adds the SubZone that covers them)
   domain ssl rm <domain>... --confirm
                                      Drop HTTPS from domains (back to plain HTTP)
+  domain ssl test-issue <zone>       Issue the zone's cert against LE STAGING; writes nothing (1/zone/10m)
+  dns record list [--zone Z] [--all] [--json]
+                                     Records hz owns on its zones (DKIM, SPF, verification)
+                                     and whether each is live. --all: every record at the
+                                     provider, with its owner (declared/derived/observed)
+  dns record add --name N --type A|AAAA|CNAME|TXT|MX|NS --value V [--value V2]
+                 [--ttl SEC] [--note "why"] [--zone Z]
+                                     Declare values hz owns at (name, type) and publish them.
+                                     The zone is the managed zone the name is in; a name in
+                                     none is refused. TXT unquoted; MX "10 host"; NS (below
+                                     the apex) delegates the name, one --value per
+                                     nameserver, and nothing may be declared under it. A value
+                                     already live that hz did not publish must be named to
+                                     be adopted — hz refuses a write that would delete it
+  dns record edit <name> --type T [--value V ...] [--ttl SEC] [--note "why"]
+                                     Replace the declared values (or only TTL/note)
+  dns record rm <name> --type T [--value V] [--confirm]
+                                     Remove declared values. Deletes at the provider only a
+                                     value hz declared that is live as declared; others at
+                                     the name are left alone. Dry run without --confirm
   host list                          List declared hosts (table)
+  host show <name>                   One host and EVERY record that resolves through it
+                                     ('self' = this gateway's own address, @self)
   host add --name N --ip IP [--label k=v ...]
                                      Declare a host (error if name/ip already used)
-  host rm <name|ip>                  Remove a declared host
+  host set <name> <ip>               Repoint a host: every @<name> record follows it
+  host adopt <name> [--confirm]      Rewrite records that carry this host's address as a
+                                     plain string into @<name> references, so the next
+                                     move is one edit. DRY RUN without --confirm
+  host rm <name|ip>                  Remove a declared host (refused while referenced)
   exporter list                      List exporter jobs, then expanded live targets (up/down)
   exporter add --job J --mode port|service|static [mode flags] [--path P] [--bearer T] [--label k=v ...]
                                      Add a Prometheus exporter job (error if job exists)
   exporter rm <job>                  Remove an exporter job
-  cm key new <env>/<app>/<role> [--label L] [--set-current]
+  config ...                         The config manager. Was 'hz cm'; 'cm' still works
+                                     as a deprecated alias for every verb below
+  config key new <project>/<env>/<app>/<role> [--label L] [--set-current]
                                      Mint an environment key into the local keystore
-  cm key ls [<env>/<app>/<role>] [--json]
+  config key ls [<project>/<env>/<app>/<role>] [--json]
                                      List what this machine holds (ids and labels, never material)
-  cm key export <env>/<app>/<role> [--id KEYID]
+  config key export <project>/<env>/<app>/<role> [--id KEYID]
                                      Print the key text for a password manager (terminal only)
-  cm key import <env>/<app>/<role> [--label L] [--created-at T]
+  config key import <project>/<env>/<app>/<role> [--label L] [--created-at T]
                                      Read key text from STDIN into the keystore
-  cm key current <env>/<app>/<role> [--set KEYID]
+  config key current <project>/<env>/<app>/<role> [--set KEYID]
                                      Read or move hz's advisory current-key pointer
-  cm pending [--all]                 Show the approval queue
-  cm approve <registration-id>       Wrap this machine's environment key to the box's
+  config machines [--json]           List enrolled boxes: addresses, secrets, fingerprint
+  config pending [--all]             Show the approval queue
+  project ls                         Services grouped by project and environment
+  project show <project>             One project: its parent, its feed, its services
+  project add <name> [--parent P]    Declare a project (writes immediately — a declared
+                                     project holds nothing until something names it)
+  project rm <name> [--cascade] [--confirm]
+                                     Remove a project. Dry run without --confirm; refused
+                                     while a child project, a rung or a service depends on
+                                     it, naming each. --cascade takes them with it
+  env ls                             Declared environments by project: posture, from,
+                                     version, and how many services are in each
+  env show <project>/<name>          One environment and the services in it
+  env add <project>/<name> --posture <dev|staging|prod> [--from E] [--version V]
+                                     Declare a rung in a project. The project must exist
+                                     first: declare, THEN assign
+  env set <project>/<name> [--posture P] [--from E] [--version V]
+                                     Change one. Only the flags you pass are touched;
+                                     --from "" clears the promotion edge
+  env rm <project>/<name> [--cascade] [--confirm]
+                                     Remove a rung. Dry run without --confirm; refused
+                                     while a service is on it or another rung promotes
+                                     from it
+  env promote <project> <from> <to> --version X [--allow-downgrade]
+                                     Move X up a promotion edge. Refused unless <from>'s
+                                     newest deploy report is X, and unless X passed a
+                                     restore test against every supported line's kept
+                                     backup; pins its artifact sha256
+  env apply <project> <env> --version V
+                                     Make the rung RUN its newest promotion: desired
+                                     answers the newest apply. A promote alone changes
+                                     nothing a box pulls
+  env hold <project> <env> --reason "why"
+                                     Emergency stop on top of an apply; rides desired.
+                                     --reason is REQUIRED
+  env unhold <project> <env>         Lift the hold
+  lines <project>                   Release lines per rung: supported (current / prior /
+                                     pinned, and why), each line's kept backup, the next
+                                     promotion's restore tests, and retired lines
+  line pin <project> <line> --reason "why"
+                                     Keep a line supported beyond current + prior.
+                                     --reason is REQUIRED
+  line unpin <project> <line>        Remove a pin
+  machine ls [--multi-homed]         Declared machines: segment count, enrolment, membership.
+                                     --multi-homed lists only the boxes that bridge
+                                     segments, with the declared reason for each
+  machine show <name>                One machine: its segments, its note, whether hz has
+                                     issued it an agent credential
+  machine add <name> [--segment S]... [--note "why"]
+                                     Declare a machine — identity and segment membership.
+                                     No project and no environment: those are coordinates
+                                     of an instance, and one box hosts several. --note is
+                                     REQUIRED with more than one --segment. Declaring is
+                                     what lets hz issue that box an agent credential
+  machine rm <name> [--cascade] [--confirm]
+                                     Remove a machine. Dry run without --confirm; refused
+                                     while its agent credential exists (--cascade revokes it)
+  vpn invite [--name N] [--profile P] [--user U] [--expires 24h]
+                                     Mint a single-use VPN invite and print its link.
+                                     The invitee's browser makes the key; hz keeps the
+                                     public half only, and only the link's sha256
+  instance ls                      The hz instances: nested hz with their own config.
+                                     Not machines — they never appear in machine ls
+  instance add <name> --url U [--project P] [--vpn-client C] [--note TEXT]
+                                     Declare a nested hz (the bootstrap does this too)
+  instance rm <name> [--cascade] [--confirm]
+                                     Remove one. Dry run without --confirm; refused while
+                                     a rung's upstream names it (--cascade clears it)
+  instance token <name>              Mint the instance token a nested hz pulls with.
+                                     Shown ONCE; a re-mint replaces the old one
+                                     (hz machine hz-token: deprecated alias, one release)
+  build-agent add <name> --project P [--host H] [--note TEXT]
+                                     Register a build agent for ONE project: it may
+                                     start, log, state and finish builds of P and upload
+                                     their artifacts. Not a machine; --host only labels
+                                     the box. Token shown ONCE; re-running rotates it
+  build-agent rm <name>              Revoke a build agent's token
+  build-agent ls                     The build agents, by host, and their projects
+                                     (hz builder: deprecated alias, one release)
+  builds ls <project>                A project's builds: number, version, commit,
+                                     agent, result (abandoned after 2h quiet)
+  builds seed <project> --next N     Raise the next build number (never lowers it)
+  nested bootstrap <project> <instance> --rung <name> --from <rung>
+              --kiosk <hostname> | --human-vpn=false  [--human-vpn-range CIDR]
+              [--posture P] [--platform linux-amd64|linux-arm64] [--url U]
+                                     Declare a nested hz and its rung, and print ONE
+                                     command that provisions it on a fresh Ubuntu box.
+                                     Single use, expires in an hour
+  segment ls                         Declared segments: project, range, interface, members,
+                                     hub. A membership is a LABEL until a segment exists
+  segment show <name>                One segment: its range, its interface, every addressed
+                                     member with its peers, and the memberships not yet
+                                     addressed
+  segment add <name> --project P --cidr C --interface I [--note "what for"]
+              [--member machine=M,address=A[,hub=true][,endpoint=H:P][,key=K]]...
+                                     Declare the network a machine's segment name resolves
+                                     to. Ranges may not overlap and two segments may not
+                                     share an interface — that is what lets a machine be
+                                     in two. Membership itself is declared on the machine
+  segment set <name> [--cidr C] [--interface I] [--project P] [--note "what for"]
+              [--hub <machine>] [--member machine=M[,address=A][,endpoint=H:P][,key=K]]...
+              [--unaddress <machine>]... [--cascade] [--confirm]
+                                     Change a segment that exists, and address or re-address
+                                     one of its memberships. The NAME is identity and cannot
+                                     change. --hub is a TOPOLOGY change: it rewires every
+                                     member's peers, and the rewiring is printed. A --cidr
+                                     that would strand an addressed member refuses and names
+                                     them; --cascade unaddresses them, dry run until --confirm
+  segment rm <name> [--cascade] [--confirm]
+                                     Remove a segment. Dry run without --confirm; refused
+                                     while a machine is a member (--cascade drops the
+                                     membership from each)
+  feed ls                            Every project's package feed and where it came from
+  feed show <project>                The feed a project installs from, and which project declared it
+  feed set <project> --url U --suite S --component C [--key-id ID] [--execute]
+                                     Declare the package repository a project's machines
+                                     install from. Dry run without --execute
+  import [--merge] [--execute]       Propose a project tree for a gateway that has none:
+                                     projects, environments and which service is on which
+                                     rung, each with the evidence it came from. Services
+                                     nothing explains are left unassigned, which is legal.
+                                     Dry run without --execute; --merge is required to write
+                                     over a config that already declares projects
+  import --plan-out FILE             Write that proposal out as an editable plan file. It
+                                     is a STARTING POINT: hz can only see what is in the
+                                     config, and a flat estate (one domain, a subdomain
+                                     per service) hides which services are one application
+  import --from FILE [--execute]     Import the plan file you corrected. Validated hard
+                                     first — unknown service, undeclared project, bad
+                                     posture, a rung spread across projects, or a service
+                                     the file forgot — and failures name the line
+  config approve <registration-id>   Wrap this machine's environment key to the box's
                                      public key. You will be asked to TYPE the
                                      fingerprint the BOX printed; it is compared against
                                      the key hz served and a mismatch sends nothing
-  cm deny <registration-id> --reason=...
+  config deny <registration-id> --reason=...
                                      Refuse a registration (not a revocation)
-  cm promote <config-id> --to=<env> [--dry-run]
+  config remove <machine> [--yes]    Remove an enrolled box so its name can be enrolled
+                                     again — the fix for "enrolled with a different public
+                                     key" after a rebuild. Destroys its registrations and
+                                     machine secrets; NOT a revocation
+  config promote <config-id> --to=<env> [--dry-run]
                                      Open under the source key, re-seal under the target's
-  cm show <config-id>                Decrypt a config locally and print it
-  cm resolve <env>/<app>/<role> --version=V [--json]
+  config show <config-id>            Decrypt a config locally and print it
+  config resolve <project>/<env>/<app>/<role> --version=V [--json]
                                      What a box would get, and what it shadowed
+  backup pull [--dir D] [--keep N]   Pull hz's backup zip to THIS machine, verify it (every
+                                     sha256, the hz.db snapshot's integrity, schema version
+                                     and row counts), write it 0600 and keep the newest N
+                                     (default ~/backups/hz-<host>, 14). Fails LOUD, non-zero
+  backup verify <zip>                The same checks on a file, plus: would it restore into
+                                     this binary (schema not newer than this hz's)
+  backup install-timer [--dir D] [--keep N] [--enable]
+                                     Write a systemd USER timer + service here that run
+                                     'backup pull' daily (Persistent=true); --enable starts it
   schema [service]                   Dump the JSON request schema
   version                            Print version
 
@@ -164,14 +352,17 @@ The generated Prometheus scrape config is served at
   GET /integration/prometheus/scrape.yaml
   GET /integration/prometheus/targets.json
 
-CONFIG MANAGER ('hz cm')
+CONFIG MANAGER ('hz config')
+  Was 'hz cm'. The old spelling still works and does the same thing; it prints a
+  one-line notice on stderr so a script that still uses it keeps running.
+
   Environment keys live in a keystore on THIS machine, under $HZ_HOME or ~/.hz.
   hz never holds one: it stores blobs it cannot open. Every value is sealed and
   unsealed here, and the approval ceremony runs here rather than in the browser
   because a page served by hz cannot defend against hz.
 
   No command takes key material in argv — argv is world-readable through /proc.
-  Keys come from the keystore, or from stdin ('hz cm key import').
+  Keys come from the keystore, or from stdin ('hz config key import').
 
   Blessing a config is NOT here. An application pushes its own config by linking
   configmgr and calling configmgr.Push: the key-to-binding declaration is then
@@ -179,6 +370,22 @@ CONFIG MANAGER ('hz cm')
   no separate binary for a laptop or a build box to be missing. hz keeps only
   what is generic — the keys, the ceremony, and operations on blobs it cannot
   read.
+
+KEY CUSTODY ('hz config recovery')
+  A keystore on one machine is a single point of failure: lose it and the
+  environment keys are gone, not locked. A recovery recipient is a recipient
+  that is always approved — every environment key is wrapped to its PUBLIC key
+  as it is minted, so the key survives the loss of that machine. The PRIVATE
+  half lives in a password manager, never on a box and never in hz.
+
+    hz config recovery keygen --name ops       mint a recovery keypair (terminal only)
+    hz config recovery add ops --public-key K  register the PUBLIC half with hz
+    hz config recovery backfill [acme/prod]    wrap the keys that already exist (under a prefix)
+    hz config recovery ls                      which keys are covered, and by whom
+    hz config recovery verify acme/prod/web/app    PROVE a recovery key opens one
+
+  Run verify. A backup nobody has restored from is not a backup, and every
+  other command here reports only that a blob was produced.
 
 EXAMPLES
   hz service list
@@ -192,11 +399,24 @@ EXAMPLES
     --backend 192.168.1.76:8080                                   # lan.* stays HTTP, www.* gets HTTPS
   hz service edit ebb --https --confirm --sync                    # turn on HTTPS for existing domains
   hz service edit grafana.example.net --metrics --sync   # opt into /metrics scraping
+  hz project add redline                                          # declare ...
+  hz env add redline/staging --posture staging                    # ... then declare ...
+  hz service assign ebb redline/staging                           # ... then assign
+  hz service unassign ebb                                         # out of the tree, still serving
+  hz machine add ci-1 --segment seg:intern --segment seg:storefront \
+    --note "publishes packages, deploys storefront"               # multi-homed, and it says why
+  hz machine ls --multi-homed                                     # every box that bridges segments
   hz domain list
   hz domain ssl add ebb.example.net --sync
+  hz domain ssl test-issue example.net                            # LE staging, nothing written; 1 per zone per 10m
   hz sync --wait
   hz schema service
   hz host add --name nas --ip 192.168.1.50 --label role=storage
+  hz service edit web --backend @nas:8080                          # points at the DECLARATION, not the address
+  hz host show nas                                                # what breaks if that box moves
+  hz host set nas 192.168.1.51 --sync                             # it moved; one edit moves every record
+  hz host show self                                               # what points at THIS gateway
+  hz service edit app --internal-dns-ip @self                     # hz pointing at itself, per instance
   hz exporter add --job node --mode port --port 9100 --sync       # node_exporter on every known host
   hz exporter add --job app-metrics --mode service --path /api/metrics  # every non-opted-in service backend
   hz exporter add --job pg --mode static --target 192.168.1.60:9187 --label db=main
@@ -259,6 +479,32 @@ func main() {
 	// any subcommand work without a config present.
 	c := newClient(cfgHost, cfgToken)
 
+	err := run(c, cmd, rest, os.Stderr)
+	if errors.Is(err, flag.ErrHelp) {
+		return // flag already printed usage to stderr
+	}
+	if err != nil {
+		fatal(err)
+	}
+}
+
+// run dispatches a command and, when it changed something, ends by reporting
+// what is still waiting on a sync (to stderr, so stdout stays the command's).
+func run(c *client, cmd string, rest []string, stderr io.Writer) error {
+	err := dispatch(c, cmd, rest)
+	if err == nil {
+		reportPending(c, cmd, stderr)
+	}
+	return err
+}
+
+// dispatch maps a top-level command word onto its runner.
+//
+// It is a function rather than a switch inline in main() so a test can assert
+// what a word dispatches to — which is what the 'cm' -> 'config' rename needs:
+// the old spelling has to reach the same runner, and a rename whose old form
+// silently does nothing is worse than no rename at all.
+func dispatch(c *client, cmd string, rest []string) error {
 	var err error
 	switch cmd {
 	case "service":
@@ -269,25 +515,62 @@ func main() {
 		err = runSync(c, rest)
 	case "pending":
 		err = runPending(c, rest)
+	case "doctor":
+		err = runDoctor(c, rest)
 	case "ports":
 		err = runPorts(c, rest)
 	case "domain":
 		err = runDomain(c, rest)
+	case "dns":
+		err = runDNS(c, rest)
 	case "host":
 		err = runHost(c, rest)
 	case "exporter":
 		err = runExporter(c, rest)
+	case "project":
+		err = runProject(c, rest)
+	case "env", "environment":
+		err = runEnvironment(c, rest)
+	case "machine", "machines":
+		err = runMachine(c, rest)
+	case "vpn":
+		err = runVPN(c, rest)
+	case "nested":
+		err = runNested(c, rest)
+	case "instance", "instances":
+		err = runInstance(c, rest)
+	case "build-agent", "build-agents":
+		err = runBuildAgent(c, rest)
+	case "builder", "builders": // deprecated, one release
+		err = runBuilder(c, rest)
+	case "builds", "build":
+		err = runBuilds(c, rest)
+	case "segment", "segments":
+		err = runSegment(c, rest)
+	case "feed":
+		err = runFeed(c, rest)
+	case "lines":
+		err = runLines(c, rest)
+	case "line":
+		err = runLine(c, rest)
+	case "import":
+		err = runImport(c, rest)
+	case "backup":
+		err = runBackup(c, rest)
+	case "config":
+		err = runCM(c, rest)
 	case "cm":
+		// `cm` was the original spelling and it is in muscle memory, in the
+		// plan docs, and — the part that decides this — in scripts on boxes
+		// this repo cannot see. Breaking it silently would turn a rename into
+		// an outage, so it keeps working and says so on stderr, where a
+		// pipeline reading stdout is unaffected.
+		fmt.Fprintln(os.Stderr, "hz: 'hz cm' is now 'hz config'. The old name still works; nothing else changed.")
 		err = runCM(c, rest)
 	default:
 		err = fmt.Errorf("unknown command: %s\nRun 'hz --help'", cmd)
 	}
-	if errors.Is(err, flag.ErrHelp) {
-		return // flag already printed usage to stderr
-	}
-	if err != nil {
-		fatal(err)
-	}
+	return err
 }
 
 func fatal(err error) {
@@ -348,6 +631,13 @@ type client struct {
 	token     string
 	http      *http.Client
 	loggedn   bool
+
+	// mutated is set by a successful non-GET request, so the command can end
+	// by saying what is still waiting on a sync (reportPending).
+	mutated bool
+	// syncRunning is set when a sync was started and not waited for: the
+	// pending list is then mid-change and reporting it would mislead.
+	syncRunning bool
 }
 
 func newClient(flagHost, flagToken string) *client {
@@ -415,11 +705,10 @@ func (c *client) isPersonalToken() bool {
 	return strings.HasPrefix(c.token, apiTokenPrefix)
 }
 
-// apiTokenPrefix mirrors db.APITokenPrefix. Duplicated rather than imported:
-// cmd/hz is the operator CLI and builds standalone, and pulling in the identity
-// store to read one constant would drag SQLite into a binary that never opens a
-// database.
-const apiTokenPrefix = "hz_pat_"
+// apiTokenPrefix is db.APITokenPrefix. It was duplicated while cmd/hz never
+// opened a database; `hz backup pull|verify` opens a snapshot, so cmd/hz links
+// internal/db (and SQLite) now and the copy would only be a second answer.
+const apiTokenPrefix = db.APITokenPrefix
 
 // do issues an authenticated request. body may be nil. If out is non-nil the
 // JSON response is decoded into it.
@@ -475,6 +764,9 @@ func (c *client) do(method, path string, body, out interface{}) error {
 			Code: resp.StatusCode,
 			Msg:  fmt.Sprintf("%s %s -> %d: %s", method, path, resp.StatusCode, apiError(raw)),
 		}
+	}
+	if method != http.MethodGet && !strings.HasSuffix(strings.SplitN(path, "?", 2)[0], "/preview") {
+		c.mutated = true
 	}
 	if out != nil && len(raw) > 0 {
 		if err := json.Unmarshal(raw, out); err != nil {

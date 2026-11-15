@@ -55,7 +55,7 @@ function relativeTime(isoStr: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-type FormState = {
+export type FormState = {
   name: string;
   mode: "push" | "pull";
   url: string;
@@ -65,6 +65,13 @@ type FormState = {
   probe: number;
   resolvers: string;
   pinSha256: string;
+  // The vantage's ntfy alert channel. Write-only like the token: these hold
+  // only what the operator types, never the stored value (the API does not
+  // return it), and empty means keep.
+  ntfyUrl: string;
+  ntfyToken: string;
+  clearNtfyUrl: boolean;
+  clearNtfyToken: boolean;
 };
 
 // Push by default: it needs nothing inbound, so there is no address to keep
@@ -79,7 +86,32 @@ const emptyForm: FormState = {
   probe: 300,
   resolvers: "",
   pinSha256: "",
+  ntfyUrl: "",
+  ntfyToken: "",
+  clearNtfyUrl: false,
+  clearNtfyToken: false,
 };
+
+// editForm is the form for an existing vantage. The secrets start blank
+// whatever the probe object carries: blank is "keep", and a stored value
+// must never reach an input.
+export function editForm(p: RemoteProbe): FormState {
+  return {
+    name: p.name,
+    mode: p.mode === "pull" ? "pull" : "push",
+    url: p.url,
+    token: "",
+    enabled: p.enabled,
+    poll: p.poll || 60,
+    probe: p.probe || 60,
+    resolvers: (p.resolvers ?? []).join(", "),
+    pinSha256: p.pinSha256 ?? "",
+    ntfyUrl: "",
+    ntfyToken: "",
+    clearNtfyUrl: false,
+    clearNtfyToken: false,
+  };
+}
 
 function formToRequest(form: FormState, oldName?: string): RemoteProbeRequest {
   return {
@@ -95,8 +127,95 @@ function formToRequest(form: FormState, oldName?: string): RemoteProbeRequest {
       .map((r) => r.trim())
       .filter(Boolean),
     pinSha256: form.pinSha256.trim(),
+    ntfyUrl: form.ntfyUrl.trim(),
+    ntfyToken: form.ntfyToken.trim(),
+    clearNtfyUrl: form.clearNtfyUrl,
+    clearNtfyToken: form.clearNtfyToken,
     oldName,
   };
+}
+
+// AlertChannelFields sets where the vantage alerts when it cannot reach hz.
+// hz hands the channel to the vantage in its next report's reply; the
+// vantage caches it, so it still alerts while hz is down. A topic file on
+// the vantage host wins over this one.
+export function AlertChannelFields({
+  probe,
+  form,
+  setForm,
+}: {
+  probe: RemoteProbe;
+  form: FormState;
+  setForm: (f: FormState) => void;
+}) {
+  const status = (set: boolean, clearing: boolean) =>
+    clearing ? "set — cleared on save" : set ? "set" : "not set";
+  return (
+    <Box>
+      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        Alert topic
+      </Typography>
+      <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+        The vantage alerts here when it cannot reach hz. Delivered to the vantage on its next report.
+      </Typography>
+      <Stack spacing={1.5}>
+        <Box>
+          <TextField
+            label="Alert topic (ntfy URL)"
+            size="small"
+            fullWidth
+            type="password"
+            autoComplete="off"
+            disabled={form.clearNtfyUrl}
+            placeholder={probe.hasNtfyUrl ? "•••••• (unchanged)" : "https://ntfy.sh/my-vantage-alerts"}
+            helperText={`${status(probe.hasNtfyUrl, form.clearNtfyUrl)}. ${
+              probe.hasNtfyUrl ? "Leave blank to keep it; hz never displays it." : "Stored in hz, never shown again."
+            }`}
+            value={form.ntfyUrl}
+            onChange={(e) => setForm({ ...form, ntfyUrl: e.target.value })}
+          />
+          {probe.hasNtfyUrl && (
+            <FormControlLabel
+              control={
+                <Checkbox
+                  size="small"
+                  checked={form.clearNtfyUrl}
+                  onChange={(e) => setForm({ ...form, clearNtfyUrl: e.target.checked, ntfyUrl: "" })}
+                />
+              }
+              label={<Typography variant="body2">Clear the alert topic on save</Typography>}
+            />
+          )}
+        </Box>
+        <Box>
+          <TextField
+            label="ntfy token"
+            size="small"
+            fullWidth
+            type="password"
+            autoComplete="new-password"
+            disabled={form.clearNtfyToken}
+            placeholder={probe.hasNtfyToken ? "•••••• (unchanged)" : "optional"}
+            helperText={`${status(probe.hasNtfyToken, form.clearNtfyToken)}. Sent as Authorization: Bearer; empty posts without one.`}
+            value={form.ntfyToken}
+            onChange={(e) => setForm({ ...form, ntfyToken: e.target.value })}
+          />
+          {probe.hasNtfyToken && (
+            <FormControlLabel
+              control={
+                <Checkbox
+                  size="small"
+                  checked={form.clearNtfyToken}
+                  onChange={(e) => setForm({ ...form, clearNtfyToken: e.target.checked, ntfyToken: "" })}
+                />
+              }
+              label={<Typography variant="body2">Clear the ntfy token on save</Typography>}
+            />
+          )}
+        </Box>
+      </Stack>
+    </Box>
+  );
 }
 
 // CopyBox is a command to run somewhere else. Selectable, wrapped, with a
@@ -347,17 +466,7 @@ export function RemoteVantages() {
 
   function openEdit(p: RemoteProbe) {
     setEditing(p.name);
-    setForm({
-      name: p.name,
-      mode: p.mode === "pull" ? "pull" : "push",
-      url: p.url,
-      token: "",
-      enabled: p.enabled,
-      poll: p.poll || 60,
-      probe: p.probe || 60,
-      resolvers: (p.resolvers ?? []).join(", "),
-      pinSha256: p.pinSha256 ?? "",
-    });
+    setForm(editForm(p));
     setSaveError("");
     setTestResult(null);
     setSeenCert(null);
@@ -406,6 +515,7 @@ export function RemoteVantages() {
   }
 
   const saving = addRemote.isPending || updateRemote.isPending;
+  const editingProbe = editing ? probes.find((p) => p.name === editing) : undefined;
   const canSave =
     form.name.trim() !== "" &&
     (form.mode === "push" || form.url.trim() !== "") &&
@@ -599,6 +709,12 @@ export function RemoteVantages() {
                 onChange={(e) => setForm({ ...form, probe: parseInt(e.target.value) || 60 })}
               />
             </Stack>
+            {/* Push only: a pulled agent never dials hz, so it cannot see hz
+                down. Edit only: a new push vantage registers itself, and
+                this is set on its row once it has. */}
+            {editingProbe && form.mode === "push" && (
+              <AlertChannelFields probe={editingProbe} form={form} setForm={setForm} />
+            )}
             <FormControlLabel
               control={
                 <Checkbox

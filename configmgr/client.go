@@ -122,6 +122,13 @@ var (
 	// denial: pending, unknown, an error status, a body that did not parse.
 	// A caller holding a cache boots it; a caller holding none has nothing.
 	ErrUnsettled = errors.New("hz gave no settled answer")
+
+	// ErrRejected means hz served a config that opened, and Options.Accept
+	// refused it. It takes the cached-boot path like any other unusable
+	// answer, and it is never cached: a bad blessing must not replace a good
+	// last-known-good (plan/design/config-manager.md: "a config that fails
+	// validation falls back to cache, loudly").
+	ErrRejected = errors.New("config rejected by the application")
 )
 
 // Source says where a Config's bytes came from.
@@ -149,12 +156,18 @@ type Options struct {
 	// Machine is the box's name. Defaults to os.Hostname.
 	Machine string
 
-	// Environment is a launch flag (--env), App is compiled in, Role is the
-	// process's own launch flag (redline's --serviceName). All three are
-	// required, and an empty Role is refused rather than defaulted: the
-	// unprefixed default maps to a NAMED default role, because an empty role
+	// Project and App are compiled in, Environment is a launch flag (--env),
+	// Role is the process's own launch flag (redline's --serviceName). All four
+	// are required, and an empty one is refused rather than defaulted: the
+	// unprefixed default maps to a NAMED default, because an empty segment
 	// breaks the state path even though the AEAD encodes an empty field
 	// happily.
+	//
+	// Project is compiled in beside App, and that is what makes binding it
+	// worth anything: a project IS a package and a package ships one binary, so
+	// the process knows its project independently of hz. A project supplied by
+	// hz would be hz's own opinion fed back to it, which authenticates nothing.
+	Project     string
 	Environment string
 	App         string
 	Role        string
@@ -178,6 +191,12 @@ type Options struct {
 
 	// PollInterval is how often an unapproved box re-asks. Defaults to 5s.
 	PollInterval time.Duration
+	// Accept, when set, is the application's own validation of a config hz
+	// served. It runs after the config decrypts and BEFORE it is written as
+	// last-known-good. A non-nil error makes Load boot the cache instead, LOUD,
+	// with Degraded wrapping ErrRejected; the rejected config is not cached
+	// and raises no sequence floor. Nil accepts everything, as before.
+	Accept func(*Config) error
 }
 
 // Client is one application's view of the config manager, for one address.
@@ -213,9 +232,9 @@ func New(opts Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Validates environment, app and role as path segments, before anything
+	// Validates project, environment, app and role as path segments, before anything
 	// else has a chance to use them.
-	if _, err := state.addrDir(EnvKeyAddr{Environment: opts.Environment, App: opts.App, Role: opts.Role}); err != nil {
+	if _, err := state.addrDir(EnvKeyAddr{Project: opts.Project, Environment: opts.Environment, App: opts.App, Role: opts.Role}); err != nil {
 		return nil, err
 	}
 	c := &Client{
@@ -239,7 +258,7 @@ func New(opts Options) (*Client, error) {
 
 // Addr is this client's grant address, built from its own launch arguments.
 func (c *Client) Addr() EnvKeyAddr {
-	return EnvKeyAddr{Environment: c.opts.Environment, App: c.opts.App, Role: c.opts.Role}
+	return EnvKeyAddr{Project: c.opts.Project, Environment: c.opts.Environment, App: c.opts.App, Role: c.opts.Role}
 }
 
 // State is the tree this client reads and writes.
@@ -283,6 +302,7 @@ func (c *Client) Enrol(ctx context.Context) error {
 
 	req := RegisterRequest{
 		Machine:     c.opts.Machine,
+		Project:     c.opts.Project,
 		Environment: c.opts.Environment,
 		App:         c.opts.App,
 		Role:        c.opts.Role,
@@ -367,6 +387,12 @@ func (c *Client) Load(ctx context.Context) (*Config, error) {
 	var cfg *Config
 	if err == nil {
 		cfg, err = c.build(key, resp, SourceServer)
+	}
+	if err == nil && c.opts.Accept != nil {
+		if aerr := c.opts.Accept(cfg); aerr != nil {
+			err = fmt.Errorf("%w: config %s (sequence %d): %v", ErrRejected, resp.ConfigID, resp.Sequence, aerr)
+			cfg = nil
+		}
 	}
 	if err == nil {
 		if perr := c.state.PutCache(c.Addr(), c.opts.Version, *resp, floors); perr != nil {
@@ -489,6 +515,7 @@ func (c *Client) open(key EnvKey, e ConfigEntry) ([]byte, error) {
 func (c *Client) configRequest() ConfigRequest {
 	return ConfigRequest{
 		Machine:     c.opts.Machine,
+		Project:     c.opts.Project,
 		Environment: c.opts.Environment,
 		App:         c.opts.App,
 		Role:        c.opts.Role,
@@ -533,7 +560,7 @@ func (c *Client) registerAndWait(ctx context.Context, req RegisterRequest) (*Reg
 		// approval, and it only works if an operator compares it against a
 		// value THE BOX produced. Before this, the library printed no such
 		// value: an implementor would have had to open the private key file and
-		// derive it, which nobody does — so `hz cm pending` said "you will need
+		// derive it, which nobody does — so `hz config pending` said "you will need
 		// the fingerprint the box printed" and the box had printed nothing.
 		//
 		// An operator with no source for the number reaches for the one on
@@ -569,6 +596,12 @@ func (c *Client) registerAndWait(ctx context.Context, req RegisterRequest) (*Reg
 func (c *Client) fetch(ctx context.Context) (*ConfigResponse, error) {
 	var resp ConfigResponse
 	if err := c.post(ctx, configPath, c.configRequest(), &resp); err != nil {
+		// An enrolled box learns of a revocation HERE, not at registration:
+		// only the marked 403 is a denial.
+		var se *statusError
+		if errors.As(err, &se) && se.Denied {
+			return nil, fmt.Errorf("%w: %s: %s", ErrDenied, c.Addr(), se.Body)
+		}
 		return nil, fmt.Errorf("%w: %v", ErrUnsettled, err)
 	}
 	return &resp, nil
@@ -586,6 +619,12 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 	return jsonRPC(ctx, c.http, http.MethodGet, joinURL(c.opts.BaseURL, path), nil, out, true)
 }
 
+// DeniedHeader marks hz's one positive denial on /cm/config: a 403 that
+// carries it means the registration was denied (revoked) and the box must not
+// boot. A 403 WITHOUT it — the peer gate refusing a caller that is not a
+// WireGuard peer or loopback — is a network fault and boots the cache.
+const DeniedHeader = "X-HZ-CM-Denied"
+
 // statusError is a non-2xx answer, carrying the code so a caller can branch on
 // it. Push needs that: a 404 from the current-key endpoint means "no pointer is
 // set", which is the ordinary state of a brand-new address and not a failure.
@@ -595,6 +634,8 @@ type statusError struct {
 	Code   int
 	Status string
 	Body   string
+	// Denied is DeniedHeader on the answer.
+	Denied bool
 }
 
 func (e *statusError) Error() string {
@@ -643,7 +684,8 @@ func jsonRPC(ctx context.Context, hc *http.Client, method, u string, in, out any
 		return fmt.Errorf("%s %s: body is larger than %d bytes", req.Method, req.URL.Path, maxBodySize)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &statusError{Method: req.Method, Path: req.URL.Path, Code: resp.StatusCode, Status: resp.Status, Body: snippet(raw)}
+		return &statusError{Method: req.Method, Path: req.URL.Path, Code: resp.StatusCode, Status: resp.Status, Body: snippet(raw),
+			Denied: resp.StatusCode == http.StatusForbidden && resp.Header.Get(DeniedHeader) != ""}
 	}
 	if out == nil {
 		return nil

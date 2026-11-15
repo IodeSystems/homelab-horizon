@@ -129,7 +129,7 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(apitypes.LoginResponse{
 			OK:       true,
 			Invite:   true,
-			Redirect: "/invite/" + token,
+			Redirect: s.inviteLink(r, token),
 		})
 		return
 	}

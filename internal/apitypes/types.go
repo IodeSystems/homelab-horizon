@@ -68,7 +68,7 @@ type ProxyResp struct {
 	Deploy             *DeployResp        `json:"deploy,omitempty"`
 	MaintenancePageMD5 string             `json:"maintenancePageMD5,omitempty"`
 	Timeouts           *ProxyTimeoutsResp `json:"timeouts,omitempty"`
-	BackendProto       string             `json:"backendProto,omitempty"` // "" = HTTP/1.1, "h2" = cleartext HTTP/2 to the backend
+	BackendProto       string             `json:"backendProto,omitempty"` // "" = HTTP/1.1, "h2" = cleartext HTTP/2, "https" = HTTP/1.1 over TLS, backend cert NOT verified
 	PublicPaths        []string           `json:"publicPaths,omitempty"`  // path prefixes exempt from internalOnly
 }
 
@@ -98,6 +98,47 @@ type ExternalDNSResp struct {
 	TTL           int      `json:"ttl"`
 }
 
+// EnvironmentResp is one declared rung: which project it belongs to, its name, its
+// posture, the environment it promotes from, and the version it declares.
+//
+// Name and Posture are both here and are not redundant — an environment named "prod"
+// may honestly sit at staging's posture, and the read surface has to be able to say so.
+// Version is the *desired* version; what an instance actually reports is a separate
+// axis, and the gap between them is the rollout.
+type EnvironmentResp struct {
+	Project string `json:"project"`
+	Name    string `json:"name"`
+	Posture string `json:"posture"`
+	From    string `json:"from,omitempty"`
+	Version string `json:"version,omitempty"`
+	// Upstream is the record's field: the declared Machine (with an hz
+	// marker) whose hz holds this rung's placements. "" is placed here.
+	Upstream string `json:"upstream,omitempty"`
+	// Placement is DERIVED server-side (projection.PlaceRung), for the reason
+	// MachineResp derives MultiHomed: a client must not re-derive a judgement
+	// hz already makes. Always present.
+	Placement RungPlacementResp `json:"placement"`
+}
+
+// Rung placement states — projection.PlacementHere / PlacementRemote.
+const (
+	RungPlacementHere   = "here"
+	RungPlacementRemote = "remote"
+)
+
+// RungPlacementResp is where a rung's placements are answered from. "here":
+// this hz's registrations say which machines run it (placed, unplaced or —
+// when they cannot be read — unknown; the client reads those). "remote":
+// another hz holds them, and "no machine here" is correct, not a gap.
+type RungPlacementResp struct {
+	State     string `json:"state"`
+	Upstream  string `json:"upstream,omitempty"`
+	URL       string `json:"url,omitempty"`
+	Statement string `json:"statement"`
+	// Unresolved is non-empty only on records Save would refuse.
+	Unresolved []ProjectionGap `json:"unresolved,omitempty"`
+}
+
 type ServiceStatus struct {
 	InternalDNSUp       bool   `json:"internalDNSUp"`                 // dnsmasq resolves the primary domain
 	InternalDNSResolved string `json:"internalDNSResolved,omitempty"` // actual IP from dnsmasq
@@ -111,6 +152,8 @@ type ServiceStatus struct {
 
 type ServiceResp struct {
 	Name         string            `json:"name"`
+	Project      string            `json:"project,omitempty"`
+	Environment  string            `json:"environment,omitempty"`
 	Domains      []string          `json:"domains"`
 	InternalDNS  *InternalDNSResp  `json:"internalDNS,omitempty"`
 	ExternalDNS  *ExternalDNSResp  `json:"externalDNS,omitempty"`
@@ -139,6 +182,575 @@ type ServiceForward struct {
 	Backend     string `json:"backend"` // "ip:port" on the LAN
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
+}
+
+// FeedResp is a package feed — the apt-style repository a project's machines
+// install from. Mirrors config.Feed one-to-one.
+type FeedResp struct {
+	URL       string `json:"url"`
+	Suite     string `json:"suite"`
+	Component string `json:"component"`
+	KeyID     string `json:"keyId,omitempty"`
+}
+
+// ProjectResp is one node of the project tree and the feed it installs from,
+// already resolved.
+//
+// Feed and ResolvedFeed are separate on purpose. Feed is what THIS project
+// declares — nil for most of them. ResolvedFeed is what its machines actually
+// get after walking up Parent, and FeedFrom names the project that supplied
+// it. A client must never have to re-walk the tree to answer "where did this
+// come from": one resolver, server-side, and the answer travels with the
+// value. FeedFrom equal to Name means declared here; anything else is
+// inherited; empty means there is no feed anywhere up the chain, which is
+// legal.
+type ProjectResp struct {
+	Name         string    `json:"name"`
+	Parent       string    `json:"parent,omitempty"`
+	Feed         *FeedResp `json:"feed,omitempty"`
+	ResolvedFeed *FeedResp `json:"resolvedFeed,omitempty"`
+	FeedFrom     string    `json:"feedFrom,omitempty"`
+
+	// Services are the services assigned to this project, by name. A project
+	// may legitimately have none — it is declared before anything moves into
+	// it, and the root may never hold a service at all.
+	Services []string `json:"services,omitempty"`
+}
+
+// FeedSetReq declares the package repository a project's machines install from.
+// Whole-record replacement, never a field-level merge: a feed wins whole when it
+// resolves (see config.ResolveFeed), and a half-updated one would make "where
+// did this value come from" unanswerable.
+type FeedSetReq struct {
+	Project   string `json:"project"`
+	URL       string `json:"url"`
+	Suite     string `json:"suite"`
+	Component string `json:"component"`
+	KeyID     string `json:"keyId,omitempty"`
+}
+
+// Declaring the model. These are the write half of ProjectResp and
+// EnvironmentResp: until they landed, a project or a rung could only be created
+// by `hz import --execute` or by hand-editing config.json on the gateway, and
+// step 2 of the acceptance walkthrough had no command.
+//
+// The server owns the config and may be serving it to another request, so every
+// one of these is a request to the server — the CLI never writes config.json.
+
+// ProjectAddReq declares a project. Parent is optional; empty makes it a root.
+type ProjectAddReq struct {
+	Name   string `json:"name"`
+	Parent string `json:"parent,omitempty"`
+}
+
+// DependantResp is one record that points at the thing a removal would take,
+// and how. Structured rather than a sentence in an error string so the CLI can
+// render the list as a list — an operator told only "3 things depend on this"
+// has to go and find them.
+type DependantResp struct {
+	Kind string `json:"kind"` // "project", "environment" or "service"
+	Name string `json:"name"` // project name, "<project>/<environment>", or service name
+	How  string `json:"how"`  // the relationship, in a sentence
+}
+
+// ProjectRmReq removes a project. Confirm is what separates a dry run from a
+// write: WITHOUT it the server computes the removal and writes nothing, so
+// `hz project rm` alone always shows what it would take.
+//
+// Cascade takes the descendant subtree, its rungs, and unassigns the services
+// on them. Opt-in, never a fallback for a refusal: a removal that quietly
+// unassigned services would change records the operator never named.
+type ProjectRmReq struct {
+	Name    string `json:"name"`
+	Cascade bool   `json:"cascade,omitempty"`
+	Confirm bool   `json:"confirm,omitempty"`
+}
+
+// EnvironmentAddReq declares a rung. Posture is required and closed to the three
+// config.Postures ranks — a value outside them compares below dev against every
+// other rung, which would make every promotion into it look upward.
+type EnvironmentAddReq struct {
+	Project string `json:"project"`
+	Name    string `json:"name"`
+	Posture string `json:"posture"`
+	From    string `json:"from,omitempty"`
+	Version string `json:"version,omitempty"`
+	// Upstream names a declared hz instance (HZInstanceResp); "" is placed here.
+	Upstream string `json:"upstream,omitempty"`
+}
+
+// EnvironmentSetReq patches one rung. Every settable field is a POINTER, and
+// that is the contract: nil means "leave this alone", non-nil means "make it
+// this", and a non-nil empty string clears From or Version.
+//
+// Partial rather than whole-record, unlike FeedSetReq. A feed resolves, so a
+// half-updated one makes its provenance unanswerable; a rung's three fields are
+// independent facts, and making an operator restate the posture and the
+// promotion edge to bump a version is how an edge gets dropped by accident.
+type EnvironmentSetReq struct {
+	Project string  `json:"project"`
+	Name    string  `json:"name"`
+	Posture *string `json:"posture,omitempty"`
+	From    *string `json:"from,omitempty"`
+	Version *string `json:"version,omitempty"`
+	// Upstream: nil leaves it, "" clears it (placed here), a name sets it —
+	// refused unless it names a declared hz instance.
+	Upstream *string `json:"upstream,omitempty"`
+}
+
+// EnvironmentRmReq removes a rung. Confirm and Cascade mean what they mean on
+// ProjectRmReq; cascade here cuts the promotion edges INTO this rung and takes
+// the services on it off it.
+type EnvironmentRmReq struct {
+	Project string `json:"project"`
+	Name    string `json:"name"`
+	Cascade bool   `json:"cascade,omitempty"`
+	Confirm bool   `json:"confirm,omitempty"`
+}
+
+// MachineResp is one declared machine: identity, owner and segment membership.
+//
+// IT CARRIES NO ENVIRONMENT, and that is the model rather than an omission —
+// an environment is a coordinate of an INSTANCE (plan/design/architecture.md,
+// "Instance, not machine, carries the environment"). Project is the OWNER,
+// always present, "" meaning global: responsibility, not placement — one
+// machine hosts instances from several projects whatever its owner is
+// (CLAUDE.md invariant 6, amended). It carries no observed version either:
+// that belongs to an instance and several instances share a box, so a
+// machine-level version would report a half-finished rollout as finished.
+//
+// MultiHomed is derived server-side rather than left to a client counting
+// Segments, for the reason ProjectResp gives about FeedFrom: a client must
+// never have to re-derive a judgement hz already makes. Blast radius is the
+// UNION of the segments, and a row that bridges two has to be visible as one.
+//
+// Enrolled says whether hz holds an agent credential for this machine — the
+// hash and the issue date, which is all hz ever has. It is the one thing about
+// a machine that lives beside the config rather than in it.
+type MachineResp struct {
+	Name     string   `json:"name"`
+	Project  string   `json:"project"`
+	Segments []string `json:"segments,omitempty"`
+	Note     string   `json:"note,omitempty"`
+	// No nested-hz marker: an hz instance is its own record since B3
+	// (HZInstanceResp, /api/v1/hz-instances), never a machine.
+	MultiHomed bool  `json:"multiHomed,omitempty"`
+	Enrolled   bool  `json:"enrolled,omitempty"`
+	EnrolledAt int64 `json:"enrolledAt,omitempty"`
+
+	// AlreadyDeclared says the record came back unchanged because it already
+	// existed, rather than because this request created it. Only `--self` can
+	// produce it: that is the one add whose whole job is to reach a state
+	// ("this gateway is declared"), so a second run must read as done rather
+	// than as AddMachine's duplicate-name refusal. A named add still refuses —
+	// there the operator asserted something about the estate, and hz telling
+	// them it was already true is information they asked for.
+	AlreadyDeclared bool `json:"alreadyDeclared,omitempty"`
+}
+
+// MachineAddReq declares a machine. Segments are names; there is no Segment
+// record to resolve them against until phase 4 item 15, so hz checks their
+// shape and not their existence.
+//
+// Note is REQUIRED when Segments names more than one: forwarding between a
+// machine's own segment interfaces is denied by default and a machine that
+// bridges them is a declared exception with a reason, not a default.
+type MachineAddReq struct {
+	Name string `json:"name"`
+	// Project is the owning project; empty is global. Must be declared.
+	Project  string   `json:"project,omitempty"`
+	Segments []string `json:"segments,omitempty"`
+	Note     string   `json:"note,omitempty"`
+
+	// Self declares the box HZ ITSELF IS RUNNING ON, and Name must then be
+	// empty: the name comes from hz's own identity (os.Hostname, the same
+	// answer the agent gives) rather than from a hostname the operator has to
+	// go and look up and can mistype. Getting it wrong is not a small error —
+	// a machine declared under one name and enrolled under another matches
+	// nothing, and nothing says so.
+	//
+	// THE SERVER RESOLVES IT, never the CLI. `hz` runs wherever the operator
+	// is; the gateway is where hz is. A client that sent its own hostname
+	// would declare the operator's laptop.
+	//
+	// It does NOT weaken declare-then-enrol. A machine record is still an
+	// operator's assertion — this is an operator running an operator command
+	// with an admin credential. What it removes is the question hz has no
+	// business asking about one box: whether the machine it is running on
+	// exists.
+	Self bool `json:"self,omitempty"`
+}
+
+// MachineSetReq edits a declared machine in place, so its owner can change
+// without remove and re-add (which would cost the box its agent credential).
+// Pointer fields, as on EnvironmentSetReq: nil leaves the field alone, a
+// non-nil "" clears it — for Project, that makes the machine global. Clearing
+// the note of a multi-homed machine is refused.
+//
+// Segments, when present, is the WHOLE new membership list (nil = unchanged,
+// [] = in no segment). More than one segment needs a note, given here or
+// already on the machine. Leaving a segment the machine is ADDRESSED on is
+// refused — unaddress it with segments/set first — because a member entry must
+// be claimed by its machine.
+type MachineSetReq struct {
+	Name     string    `json:"name"`
+	Project  *string   `json:"project,omitempty"`
+	Note     *string   `json:"note,omitempty"`
+	Segments *[]string `json:"segments,omitempty"`
+}
+
+// MachineRmReq removes a machine. Confirm and Cascade mean what they mean on
+// ProjectRmReq. Cascade here REVOKES the machine's agent credential: without it
+// a removal is refused while one exists, because a credential naming a machine
+// hz no longer declares still authenticates and nothing in the config explains
+// it.
+type MachineRmReq struct {
+	Name    string `json:"name"`
+	Cascade bool   `json:"cascade,omitempty"`
+	Confirm bool   `json:"confirm,omitempty"`
+}
+
+// SegmentResp is one declared segment: the thing a machine's segment NAME
+// resolves to.
+//
+// IT CARRIES NO ENVIRONMENT and no version, for the reason MachineResp carries
+// neither: a segment is a network, not a rung. It carries a PROJECT because a
+// project's machines form the segment (plan/design/architecture.md, "Segments"), and
+// the owner is what makes another project's machine on it read as a crossing.
+//
+// Peers on each member is DERIVED server-side rather than left to a client
+// pairing members up, for the reason MachineResp derives MultiHomed: a client
+// must never have to re-derive a judgement hz already makes. Hub and spoke, so
+// a spoke's peers are the hub and the hub's are every spoke.
+type SegmentResp struct {
+	Name      string              `json:"name"`
+	Project   string              `json:"project"`
+	CIDR      string              `json:"cidr"`
+	Interface string              `json:"interface"`
+	Note      string              `json:"note,omitempty"`
+	Members   []SegmentMemberResp `json:"members,omitempty"`
+	// Unaddressed is every machine that names this segment and has no member
+	// entry. It is not an error — it is the state `hz machine add --segment`
+	// leaves — but it is the difference between a segment that is complete and
+	// one that is half declared, and a client counting Members would read it
+	// as the segment being smaller than it is.
+	Unaddressed []string `json:"unaddressed,omitempty"`
+}
+
+// SegmentMemberResp is one machine's presence on one segment.
+//
+// PublicKey is the public half and only ever the public half; hz never holds
+// the secret one. Empty means the box has not produced a key for this
+// interface yet, which is a different state from not being a member.
+type SegmentMemberResp struct {
+	Machine   string   `json:"machine"`
+	Address   string   `json:"address"`
+	PublicKey string   `json:"publicKey,omitempty"`
+	Hub       bool     `json:"hub,omitempty"`
+	Endpoint  string   `json:"endpoint,omitempty"`
+	Peers     []string `json:"peers,omitempty"`
+}
+
+// SegmentAddReq declares a segment. Project, CIDR and Interface are all
+// required: a segment nobody owns is a network nobody is responsible for, a
+// segment with no range cannot check a member address, and a segment with no
+// interface has nowhere to land on the box.
+//
+// Members addresses machines that ALREADY name this segment. A member for a
+// machine that does not is refused — membership is declared on the machine and
+// addressed here, and the two must not disagree.
+type SegmentAddReq struct {
+	Name      string                `json:"name"`
+	Project   string                `json:"project"`
+	CIDR      string                `json:"cidr"`
+	Interface string                `json:"interface"`
+	Note      string                `json:"note,omitempty"`
+	Members   []SegmentMemberAddReq `json:"members,omitempty"`
+}
+
+// SegmentMemberAddReq is one member of a segment being declared.
+type SegmentMemberAddReq struct {
+	Machine   string `json:"machine"`
+	Address   string `json:"address"`
+	PublicKey string `json:"publicKey,omitempty"`
+	Hub       bool   `json:"hub,omitempty"`
+	Endpoint  string `json:"endpoint,omitempty"`
+}
+
+// SegmentRmReq removes a segment. Confirm and Cascade mean what they mean on
+// ProjectRmReq. Cascade here DROPS the membership from every machine that names
+// the segment: without it a removal is refused while one does, because a
+// membership naming a segment that no longer exists is a config hz will not
+// save.
+type SegmentRmReq struct {
+	Name    string `json:"name"`
+	Cascade bool   `json:"cascade,omitempty"`
+	Confirm bool   `json:"confirm,omitempty"`
+}
+
+// SegmentSetReq changes a segment that already exists, and the memberships on
+// it. Every settable field is a POINTER, and that is the contract
+// EnvironmentSetReq sets: nil means "leave this alone", non-nil means "make it
+// this", and a non-nil empty string clears Note.
+//
+// THE NAME IS NOT HERE, and that is the model rather than an omission: it is the
+// identity every Machine.Segments entry resolves through, so renaming the
+// segment is renaming it on every machine in it — a rewrite of records the
+// operator did not name.
+//
+// MEMBERSHIP IS NOT HERE EITHER. Members are ADDRESSED and UNADDRESSED; a
+// machine cannot be joined to the segment here, because membership is declared
+// on the Machine and a second writer for it is how the two records come to
+// disagree.
+//
+// Cascade and Confirm carry only the CIDR case: a new range can put an existing
+// member address outside itself, which is a change to a record the operator did
+// not name, so it blocks, cascade opts in and unaddresses them, and confirm is
+// what actually writes that. A set that strands nobody writes immediately, the
+// way `hz env set` does.
+type SegmentSetReq struct {
+	Name      string                `json:"name"`
+	Project   *string               `json:"project,omitempty"`
+	CIDR      *string               `json:"cidr,omitempty"`
+	Interface *string               `json:"interface,omitempty"`
+	Note      *string               `json:"note,omitempty"`
+	Hub       *string               `json:"hub,omitempty"`
+	Members   []SegmentMemberSetReq `json:"members,omitempty"`
+	Unaddress []string              `json:"unaddress,omitempty"`
+	Cascade   bool                  `json:"cascade,omitempty"`
+	Confirm   bool                  `json:"confirm,omitempty"`
+}
+
+// SegmentMemberSetReq patches one membership. Machine says which; the rest are
+// pointers so re-addressing a member does not silently drop the public key and
+// the endpoint the operator did not retype.
+//
+// Hub is absent on purpose: it is single-valued across the segment, so it lives
+// on SegmentSetReq as a machine NAME. Two members each carrying hub=true is a
+// contradiction a per-member flag invites and a name cannot express.
+type SegmentMemberSetReq struct {
+	Machine   string  `json:"machine"`
+	Address   *string `json:"address,omitempty"`
+	PublicKey *string `json:"publicKey,omitempty"`
+	Endpoint  *string `json:"endpoint,omitempty"`
+}
+
+// SegmentSetResp answers both halves of a set with one shape, for the reason
+// RemovalResp does: a dry run and a write differ only in whether anything was
+// written.
+//
+// OK is true only when the config actually changed. Blocked is what stands in
+// the way — non-empty means nothing was written whatever Confirm said. Changes
+// is one line per changed value. Strands is what cascade would unaddress.
+// HubMove is the peer rewiring, present only when the hub actually moves.
+type SegmentSetResp struct {
+	OK      bool                `json:"ok"`
+	Blocked []DependantResp     `json:"blocked,omitempty"`
+	Changes []string            `json:"changes,omitempty"`
+	Strands []DependantResp     `json:"strands,omitempty"`
+	HubMove *SegmentHubMoveResp `json:"hubMove,omitempty"`
+	Segment *SegmentResp        `json:"segment,omitempty"`
+}
+
+// SegmentHubMoveResp is what moving the hub does, carried explicitly because it
+// is not a field edit: Peers is derived hub and spoke, so the hub moving rewires
+// every member's peer set, and none of that shows up in a diff of the record.
+type SegmentHubMoveResp struct {
+	From  string                  `json:"from,omitempty"`
+	To    string                  `json:"to"`
+	Peers []SegmentPeerChangeResp `json:"peers,omitempty"`
+}
+
+// SegmentPeerChangeResp is one member's peer set before and after. Only members
+// whose peers actually change appear.
+type SegmentPeerChangeResp struct {
+	Machine string   `json:"machine"`
+	Before  []string `json:"before,omitempty"`
+	After   []string `json:"after,omitempty"`
+}
+
+// RemovalResp answers both halves of a removal with one shape, because a dry run
+// and a write differ only in whether anything was written.
+//
+// OK is true only when the config actually changed. Blocked is what stands in
+// the way — non-empty means nothing was written whatever Confirm said. Removes
+// is the whole set a confirmed run takes, target first. Feed is the feed the
+// target declares and the removal would destroy: it is the one part of a project
+// that `hz project add` cannot put back, so it is named before the fact.
+type RemovalResp struct {
+	OK      bool            `json:"ok"`
+	Blocked []DependantResp `json:"blocked,omitempty"`
+	Removes []DependantResp `json:"removes"`
+	Feed    *FeedResp       `json:"feed,omitempty"`
+}
+
+// The import plan. These mirror the config.Import* records one-to-one; the
+// planner lives in internal/config because it reads a whole config, and the
+// wire shape lives here because every other client contract does.
+//
+// Nothing in a plan is a command. It is a proposal, every row of it carries the
+// evidence it came from, and the services it cannot explain are listed as
+// unassigned rather than guessed at.
+
+// ImportMachineResp is a machine the import would declare, and why. In practice
+// the gateway: hz runs on a box, and a box hz runs on that nothing declares is
+// a machine missing from the model. Name only — an import proposes that the box
+// exists, not where it sits on the network.
+type ImportMachineResp struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
+}
+
+// ImportProjectResp is a project the import would declare, and why.
+type ImportProjectResp struct {
+	Name   string `json:"name"`
+	Parent string `json:"parent,omitempty"`
+	Reason string `json:"reason"`
+}
+
+// ImportEnvironmentResp is a rung the import would declare. Name and Posture
+// stay separate for the reason EnvironmentResp gives.
+type ImportEnvironmentResp struct {
+	Project string `json:"project"`
+	Name    string `json:"name"`
+	Posture string `json:"posture"`
+	Reason  string `json:"reason"`
+}
+
+// ImportAssignmentResp moves one service onto one rung. Environment may be
+// empty: project evidence and posture evidence are independent.
+type ImportAssignmentResp struct {
+	Service           string `json:"service"`
+	Project           string `json:"project"`
+	Environment       string `json:"environment,omitempty"`
+	ProjectReason     string `json:"projectReason"`
+	EnvironmentReason string `json:"environmentReason,omitempty"`
+}
+
+// ImportUnassignedResp is a service the import leaves alone, and why. Not a
+// failure: a service with no project is legal and works exactly as before.
+type ImportUnassignedResp struct {
+	Service string `json:"service"`
+	Reason  string `json:"reason"`
+	Note    string `json:"note,omitempty"`
+}
+
+// ImportSignalResp is a signal that was examined and NOT used. Reported because
+// silence about a signal is indistinguishable from not having looked at it.
+type ImportSignalResp struct {
+	Name   string `json:"name"`
+	Detail string `json:"detail"`
+}
+
+// ImportPlanResp is the whole proposal.
+//
+// Fingerprint identifies this plan's content. An execute carries it back, so a
+// config that changed between the dry run and the write is refused instead of
+// silently applying a plan nobody read. ExistingProjects is the other thing a
+// client cannot derive from the plan itself: it is what makes an execute need
+// --merge, and saying it in the DRY RUN means the operator learns it before
+// typing the flag rather than after.
+type ImportPlanResp struct {
+	Fingerprint      string                  `json:"fingerprint"`
+	Machines         []ImportMachineResp     `json:"machines,omitempty"`
+	Projects         []ImportProjectResp     `json:"projects"`
+	Environments     []ImportEnvironmentResp `json:"environments"`
+	Assignments      []ImportAssignmentResp  `json:"assignments"`
+	Unassigned       []ImportUnassignedResp  `json:"unassigned"`
+	Signals          []ImportSignalResp      `json:"signals,omitempty"`
+	ExistingProjects int                     `json:"existingProjects"`
+}
+
+// ImportApplyReq writes a plan.
+//
+// TWO SOURCES, ONE PIPELINE. With no Plan the server recomputes its own
+// proposal and writes that; Fingerprint is the one the dry run printed, and a
+// config that changed since is refused rather than silently importing something
+// nobody read. With a Plan the operator has EDITED the proposal — the heuristic
+// cannot see a flat estate's structure and the operator can — so the file is the
+// authority, and Fingerprint must be empty because a hand-edited plan is by
+// definition not the one hz computed. Both paths end in the same ApplyImport.
+//
+// A client-supplied plan is a bigger thing to have authorised than "apply your
+// own proposal", so it is validated against the config before anything is
+// written: every service it names must exist, every service in the config must
+// be accounted for by name, and an environment may not be spread across
+// projects. See config.ImportFile.
+//
+// Merge is the acknowledgement that this config already has a tree and the
+// import is to ADD to it — existing projects, rungs and assignments are kept.
+type ImportApplyReq struct {
+	Fingerprint string `json:"fingerprint"`
+	Merge       bool   `json:"merge"`
+	// Plan is the edited plan file. Optional; absent means "apply your own
+	// proposal", which is what `hz import --execute` has always meant.
+	Plan *ImportFileReq `json:"plan,omitempty"`
+}
+
+// ImportFileReq is the editable plan file on the wire: the DECISIONS only.
+//
+// The evidence strings the proposal carries (ImportPlanResp's Reason/Note
+// fields) are deliberately absent. They are hz's account of how it reached a
+// row, and the moment an operator moves that row they are a lie sitting beside
+// it. They are output, not input.
+type ImportFileReq struct {
+	Version int `json:"version"`
+	// Machines the plan declares. Additive and skipped when already declared,
+	// so re-sending a plan is a no-op rather than a duplicate-name refusal.
+	Machines     []ImportFileMachineReq     `json:"machines,omitempty"`
+	Projects     []ImportFileProjectReq     `json:"projects"`
+	Environments []ImportFileEnvironmentReq `json:"environments"`
+	Assign       []ImportFilePlacementReq   `json:"assign"`
+	// Unassigned names the services the plan deliberately leaves with no
+	// project. Explicit rather than implied: a service the file simply does not
+	// mention is refused, because an omission and a deliberate "leave this one
+	// alone" would otherwise be the same file.
+	Unassigned []string `json:"unassigned"`
+}
+
+// ImportFileMachineReq declares a machine. Name only: segment membership needs
+// a Segment record to resolve against and an import file cannot declare one.
+type ImportFileMachineReq struct {
+	Name string `json:"name"`
+}
+
+// ImportFileProjectReq declares a project. Parent names another project in the
+// same file.
+type ImportFileProjectReq struct {
+	Name   string `json:"name"`
+	Parent string `json:"parent,omitempty"`
+}
+
+// ImportFileEnvironmentReq declares a rung. Project is required: an environment
+// belongs to exactly one project, and this field is what makes a rung shared
+// across projects inexpressible.
+type ImportFileEnvironmentReq struct {
+	Project string `json:"project"`
+	Name    string `json:"name"`
+	Posture string `json:"posture"`
+}
+
+// ImportFilePlacementReq puts one service in one project, optionally on one
+// rung. Environment resolves against this service's project, never globally —
+// every project gets to have a "dev".
+type ImportFilePlacementReq struct {
+	Service     string `json:"service"`
+	Project     string `json:"project"`
+	Environment string `json:"environment,omitempty"`
+}
+
+// ImportApplyResp is what the write actually did, counted from the config after
+// it rather than from the plan before it — under merge the two differ, because
+// anything already declared is skipped.
+type ImportApplyResp struct {
+	OK bool `json:"ok"`
+	// MachinesAdded is counted from the config after the write like every
+	// other number here, so a plan that proposed a machine hz already declared
+	// reports 0 rather than 1.
+	MachinesAdded     int `json:"machinesAdded"`
+	ProjectsAdded     int `json:"projectsAdded"`
+	EnvironmentsAdded int `json:"environmentsAdded"`
+	ServicesAssigned  int `json:"servicesAssigned"`
 }
 
 // IntegrationsResp mirrors config.Integrations for read/round-trip.
@@ -195,11 +807,111 @@ type ExporterTargetResp struct {
 // TopologyResp is the read view of the observability topology: the raw declared
 // hosts and exporters (for editing) plus the fully-expanded targets with status.
 type TopologyResp struct {
-	Hosts            []HostDecl           `json:"hosts"`
+	Hosts []HostDecl `json:"hosts"`
+	// SelfHost is the reserved "@self" pseudo-host: this instance's own LAN
+	// address. Not a declaration and never editable — it is here so a client
+	// can show what @self resolves to beside the declared hosts.
+	SelfHost         HostDecl             `json:"selfHost"`
 	Exporters        []Exporter           `json:"exporters"`
 	Targets          []ExporterTargetResp `json:"targets"`
 	KnownHosts       []string             `json:"knownHosts"`       // all host IPs hz knows (derived + declared); the "*" population
 	ScrapeExclusions []string             `json:"scrapeExclusions"` // IPs/CIDRs dropped from the scrape config (host still listed, just not scraped)
+}
+
+// HostReferenceResp is one record that resolves through a declared host via a
+// "@name" reference: what kind of record it is, which one, and the value as
+// the operator wrote it.
+type HostReferenceResp struct {
+	Kind  string `json:"kind"`  // "service backend", "port forward", "local DNS record", ...
+	Owner string `json:"owner"` // service name, record name, exporter job
+	Field string `json:"field"` // field within that record, e.g. "proxy.backend"
+	Value string `json:"value"` // the authored value, e.g. "@nas:8080"
+}
+
+// HostOccurrenceResp is one record that carries a host's address as a LITERAL
+// string. It is the same four fields as HostReferenceResp and it is a separate
+// list on purpose — see HostShowResp.
+type HostOccurrenceResp struct {
+	Kind  string `json:"kind"`  // a reference kind, or "local interface" / "host declaration"
+	Owner string `json:"owner"` // service name, record name, exporter job
+	Field string `json:"field"` // field within that record, e.g. "proxy.backend"
+	Value string `json:"value"` // the authored literal, e.g. "192.168.1.160:8080"
+
+	// Ref is what `hz host adopt` would write here, e.g. "@self:8080". Empty
+	// exactly when WhyNotAdoptable is set.
+	Ref string `json:"ref,omitempty"`
+	// WhyNotAdoptable is hz's sentence for refusing to rewrite this record —
+	// the declaration sites, which are where references bottom out. Empty
+	// exactly when Ref is set.
+	WhyNotAdoptable string `json:"whyNotAdoptable,omitempty"`
+}
+
+// HostShowResp is one declared host and everything that points at it — the
+// answer to "what breaks if I move this box", which is the question a host
+// reference exists to make answerable.
+//
+// TWO LISTS, NEVER ONE. References are records written "@name": they FOLLOW
+// the host, so `hz host set` moves them. Occurrences are records carrying the
+// host's address as a plain string: they follow nothing, and they are exactly
+// what breaks. Merging them would report records about to move as records
+// about to break, or the reverse — so they stay apart, with separate labels,
+// on every surface that shows them.
+type HostShowResp struct {
+	Host       HostDecl            `json:"host"`
+	References []HostReferenceResp `json:"references"`
+
+	// Occurrences is every record carrying this host's address as a literal.
+	// Non-nil whenever OccurrencesKnown is true.
+	Occurrences []HostOccurrenceResp `json:"occurrences"`
+	// OccurrencesKnown distinguishes "nothing carries this address" from "hz
+	// could not look". It is false only when the host has no address to scan
+	// for — @self before hz has detected local_interface — and
+	// OccurrencesUnknownWhy then says so. An empty list under a false flag
+	// would be the reassuring-zero bug the reference list already has.
+	OccurrencesKnown      bool   `json:"occurrencesKnown"`
+	OccurrencesUnknownWhy string `json:"occurrencesUnknownWhy,omitempty"`
+}
+
+// HostAdoptRequest rewrites every literal occurrence of a host's address into a
+// reference to it. DRY RUN unless Confirm is set: the listing is the product.
+type HostAdoptRequest struct {
+	// Name is the declared host, or "self" for this gateway's own address.
+	Name string `json:"name"`
+	// Confirm writes. Without it hz computes the identical plan and returns it
+	// having touched nothing.
+	Confirm bool `json:"confirm"`
+}
+
+// HostAdoptResp is what adoption would do, or did.
+type HostAdoptResp struct {
+	// Address is the literal being adopted, e.g. "192.168.1.160".
+	Address string `json:"address"`
+	// Ref is the spelling every adopted record receives: "@self" or "@name".
+	Ref string `json:"ref"`
+	// RefWhy explains the choice when both spellings were available — a
+	// declared host and @self holding the same address. Empty when only one
+	// candidate existed.
+	RefWhy string `json:"refWhy,omitempty"`
+
+	// Adopt is every record that would be, or was, rewritten.
+	Adopt []HostOccurrenceResp `json:"adopt"`
+	// Refused is every record carrying the address that hz will not rewrite,
+	// each naming itself and the reason. Listed rather than dropped: a record
+	// hz cannot adopt is still a record that breaks when the box moves.
+	Refused []HostOccurrenceResp `json:"refused"`
+
+	// Confirmed is whether this was a write. False means nothing was touched.
+	Confirmed bool `json:"confirmed"`
+	// Written is how many records were rewritten. Always 0 when Confirmed is
+	// false — that is the only difference between the two runs.
+	Written int `json:"written"`
+}
+
+// HostSetRequest repoints a declared host at a new address. It is the whole
+// point of the indirection: one edit moves every record that references it.
+type HostSetRequest struct {
+	Name string `json:"name"`
+	IP   string `json:"ip"`
 }
 
 // ScrapeTokenResp carries the read-only Prometheus scrape token.
@@ -320,19 +1032,47 @@ type DomainsResponse struct {
 // VPN Peers
 
 type PeerResp struct {
-	Name             string `json:"name"`
-	PublicKey        string `json:"publicKey"`
-	AllowedIPs       string `json:"allowedIPs"`
-	Endpoint         string `json:"endpoint,omitempty"`
-	LatestHandshake  string `json:"latestHandshake,omitempty"`
-	TransferRx       string `json:"transferRx,omitempty"`
-	TransferTx       string `json:"transferTx,omitempty"`
-	Online           bool   `json:"online"`
-	IsAdmin          bool   `json:"isAdmin"`
-	Profile          string `json:"profile"`
+	Name            string `json:"name"`
+	PublicKey       string `json:"publicKey"`
+	AllowedIPs      string `json:"allowedIPs"`
+	Endpoint        string `json:"endpoint,omitempty"`
+	LatestHandshake string `json:"latestHandshake,omitempty"`
+	TransferRx      string `json:"transferRx,omitempty"`
+	TransferTx      string `json:"transferTx,omitempty"`
+	Online          bool   `json:"online"`
+	IsAdmin         bool   `json:"isAdmin"`
+	Profile         string `json:"profile"`
+	// Project the client is attributed to; "" is global. Attribution only —
+	// the client's config, routes and firewall rules do not depend on it.
+	Project          string `json:"project"`
 	MFAEnrolled      bool   `json:"mfaEnrolled"`
 	MFASessionActive bool   `json:"mfaSessionActive"`
 	MFASessionExpiry string `json:"mfaSessionExpiry,omitempty"`
+	// Tag is "user" (a person; MFA applies) or "infra" (a machine; no MFA
+	// while vpn-only). MFAExempt is why the client skips MFA right now
+	// (config.MFAExemption), "" when it does not or MFA is off.
+	Tag       string `json:"tag"`
+	MFAExempt string `json:"mfaExempt,omitempty"`
+}
+
+// PeerAddReq creates a VPN client. Project is optional; empty is global, and
+// a named project must be declared (refused before the peer is created).
+type PeerAddReq struct {
+	Name     string `json:"name"`
+	ExtraIPs string `json:"extraIPs"`
+	Profile  string `json:"profile"`
+	Project  string `json:"project,omitempty"`
+}
+
+// PeerEditReq edits a VPN client. Name, ExtraIPs and Profile are whole-value
+// as they always were. Project is a pointer: nil leaves the attribution alone
+// (a rename carries it), a non-nil "" makes the client global.
+type PeerEditReq struct {
+	PublicKey string  `json:"publicKey"`
+	Name      string  `json:"name"`
+	ExtraIPs  string  `json:"extraIPs"`
+	Profile   string  `json:"profile"`
+	Project   *string `json:"project,omitempty"`
 }
 
 // MFA types
@@ -347,6 +1087,13 @@ type MFAStatusResponse struct {
 	SessionExpiry   string   `json:"sessionExpiry,omitempty"`
 	Durations       []string `json:"durations"`
 	ProvisioningURI string   `json:"provisioningUri,omitempty"` // only during enrollment
+
+	// UIURL is hz's UI for a peer that is through: https://hz.<domain>/app/
+	// on a nested hz with a registered domain (upstream.domain — the VPN-only
+	// name), else the kiosk name, https://<kiosk>/app/ — on the VPN either
+	// resolves to this hz and routes to its UI (proxy.self). "" when there is
+	// neither: the portal then links its own origin's /app/.
+	UIURL string `json:"uiUrl"`
 
 	Passkeys []PasskeyInfo `json:"passkeys,omitempty"`
 	// PasskeysAvailable is a property of the deployment, not the peer: WebAuthn
@@ -410,6 +1157,25 @@ type MFAVerifyResponse struct {
 	Expiry string `json:"expiry,omitempty"`
 }
 
+// PeerTagReq tags a VPN client "user" (a person; MFA applies) or "infra" (a
+// machine; exempt from MFA while vpn-only). Reason is required for infra.
+type PeerTagReq struct {
+	Name   string `json:"name"`
+	Tag    string `json:"tag"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// MFAExemptResp is one VPN client that is NOT jailed right now, and why:
+// "upstream", "infra", "exception", "admin", "session-forever" or "session".
+// Reason/SetBy/SetAt carry the record behind an infra tag or an exception.
+type MFAExemptResp struct {
+	Name   string `json:"name"`
+	Why    string `json:"why"`
+	Reason string `json:"reason,omitempty"`
+	SetBy  string `json:"setBy,omitempty"`
+	SetAt  string `json:"setAt,omitempty"`
+}
+
 // MFAExceptionResp is a live, time-limited bypass — the only kind "all" scope
 // permits.
 type MFAExceptionResp struct {
@@ -430,6 +1196,14 @@ type MFASettingsResponse struct {
 	// before the switch rather than after.
 	AdminsWithoutFactor []string           `json:"adminsWithoutFactor,omitempty"`
 	Exceptions          []MFAExceptionResp `json:"exceptions,omitempty"`
+	// Exempt is every VPN client that skips MFA right now, and why — the
+	// report the owner reasons about (2026-11-07). Persons with a live session
+	// are listed too: "session" is how the jail is passed, not a bypass, but
+	// "session-forever" is standing and belongs in the same view.
+	Exempt []MFAExemptResp `json:"exempt,omitempty"`
+	// InfraInactive are clients tagged infra whose profile is no longer
+	// vpn-only: the tag is kept and NOT honoured; they are jailed.
+	InfraInactive []string `json:"infraInactive,omitempty"`
 
 	// Inactivity re-jailing. Zero means off; the floor is the smallest
 	// non-zero value the API accepts, and the form needs it to say so rather
@@ -442,6 +1216,12 @@ type AddPeerResponse struct {
 	OK     bool   `json:"ok"`
 	Config string `json:"config"`
 	QRCode string `json:"qrCode"`
+	// PublicKey is the new client's public key — what delete takes, so a flow
+	// that must undo the add (the nested-instance declaration) can.
+	PublicKey string `json:"publicKey,omitempty"`
+	// ParentURL is set for an `upstream` client only: the address the nested
+	// hz reaches this hz's API on — the one the upstream rules admit.
+	ParentURL string `json:"parentUrl,omitempty"`
 }
 
 type PeerConfigResponse struct {
@@ -450,12 +1230,21 @@ type PeerConfigResponse struct {
 	QRCode string `json:"qrCode"`
 }
 
+// RekeyPeerReq: Share asks for a share link (an unauthenticated kiosk URL
+// serving the new config, private key included). Off unless asked.
+type RekeyPeerReq struct {
+	PublicKey string `json:"publicKey"`
+	Share     bool   `json:"share,omitempty"`
+}
+
+// RekeyPeerResponse: ShareToken and ShareURL are set only when the request
+// asked for a share link.
 type RekeyPeerResponse struct {
 	OK         bool   `json:"ok"`
 	Config     string `json:"config"`
 	QRCode     string `json:"qrCode"`
-	ShareToken string `json:"shareToken"`
-	ShareURL   string `json:"shareURL"`
+	ShareToken string `json:"shareToken,omitempty"`
+	ShareURL   string `json:"shareURL,omitempty"`
 }
 
 type ConfigShareResp struct {
@@ -466,16 +1255,88 @@ type ConfigShareResp struct {
 
 // Invites
 
+//
+// A VPN invite is a single-use link. The invitee's BROWSER generates the
+// WireGuard keypair and sends only the public key; hz never receives, stores or
+// returns a private key on this path. No type below has a field for one —
+// internal/server/invites_test.go pins that by field list.
+//
+// hz keeps only the token's sha256, so the link is shown once, at create.
+
+// InviteResp is an outstanding invite, as the list shows it: no token, no link.
 type InviteResp struct {
-	Token string `json:"token"`
-	URL   string `json:"url"`
+	// ID is a prefix of the token's sha256 — what delete takes.
+	ID        string `json:"id"`
+	Name      string `json:"name"`    // "" = the invitee names the device
+	Profile   string `json:"profile"` // vpn-only, lan-access or full-tunnel
+	User      string `json:"user"`    // "" = no owning account
+	ExpiresAt string `json:"expiresAt"`
 }
 
-type CreateInviteResponse struct {
-	OK    bool   `json:"ok"`
-	Token string `json:"token"`
-	URL   string `json:"url"`
+// CreateInviteReq is POST /api/v1/vpn/invites/create. Every field is optional.
+type CreateInviteReq struct {
+	Name    string `json:"name,omitempty"`
+	Profile string `json:"profile,omitempty"` // default vpn-only
+	User    string `json:"user,omitempty"`    // an account on this hz
+	// ExpiresSeconds defaults to 24h; at most 7 days.
+	ExpiresSeconds int64 `json:"expiresSeconds,omitempty"`
 }
+
+// CreateInviteResponse carries the link ONCE. hz keeps only its sha256.
+type CreateInviteResponse struct {
+	OK        bool   `json:"ok"`
+	URL       string `json:"url"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Profile   string `json:"profile"`
+	User      string `json:"user"`
+	ExpiresAt string `json:"expiresAt"`
+}
+
+// DeleteInviteReq is POST /api/v1/vpn/invites/delete.
+type DeleteInviteReq struct {
+	ID string `json:"id"`
+}
+
+// InviteCheckReq is POST /api/v1/vpn/invite/check (no session: the token is
+// the credential). Kiosk vhost only.
+type InviteCheckReq struct {
+	Token string `json:"token"`
+}
+
+// InviteCheckResp says whether the token can still be redeemed, and what it
+// will make. Nothing is consumed.
+type InviteCheckResp struct {
+	Valid     bool   `json:"valid"`
+	Name      string `json:"name"`
+	Profile   string `json:"profile"`
+	ExpiresAt string `json:"expiresAt"`
+}
+
+// InviteRedeemReq is POST /api/v1/vpn/invite/redeem: the token and the PUBLIC
+// key the browser generated. Name is used only when the invite carries none.
+type InviteRedeemReq struct {
+	Token     string `json:"token"`
+	PublicKey string `json:"publicKey"`
+	Name      string `json:"name,omitempty"`
+}
+
+// InviteRedeemResp is the client config with InvitePrivateKeyPlaceholder where
+// the private key goes. The browser substitutes its own key; hz never had it.
+type InviteRedeemResp struct {
+	OK        bool   `json:"ok"`
+	Name      string `json:"name"`
+	Address   string `json:"address"`
+	PublicKey string `json:"publicKey"`
+	Config    string `json:"config"`
+	// UIURL is where the device goes once connected and through MFA — the
+	// same address the MFA portal's "Open hz" links (MFAStatusResponse.UIURL).
+	// "" when this hz has neither a domain nor a kiosk_url.
+	UIURL string `json:"uiUrl,omitempty"`
+}
+
+// InvitePrivateKeyPlaceholder stands in the redeemed config's PrivateKey line.
+const InvitePrivateKeyPlaceholder = "<PRIVATE_KEY_FROM_THIS_DEVICE>"
 
 // Zones
 
@@ -519,9 +1380,23 @@ type CheckStatusResp struct {
 	Interval  int       `json:"interval"`
 	Enabled   bool      `json:"enabled"`
 	AutoGen   bool      `json:"auto_gen"`
+	// Project the check is attributed to; "" is global. DERIVED at response
+	// time for a svc:* check (its service's project), stored for a standalone
+	// check (ServiceCheck.Project). Other generated checks are global.
+	Project string `json:"project"`
 	// Vantage names the remote hz-probe agent this result came from. Empty
 	// means the check ran on hz itself.
 	Vantage string `json:"vantage,omitempty"`
+}
+
+// CheckAddReq declares a standalone check. Project is optional; empty is
+// global, and a named project must be declared.
+type CheckAddReq struct {
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Target   string `json:"target"`
+	Interval int    `json:"interval"`
+	Project  string `json:"project,omitempty"`
 }
 
 // RemoteProbeResp is one configured outside-in vantage, plus what hz has
@@ -545,6 +1420,11 @@ type RemoteProbeResp struct {
 	Resolvers []string `json:"resolvers,omitempty"`
 	PinSHA256 string   `json:"pinSha256,omitempty"`
 	HasToken  bool     `json:"hasToken"`
+
+	// The vantage's ntfy alert channel, write-only like the token: whether
+	// each part is set, never what it is.
+	HasNtfyURL   bool `json:"hasNtfyUrl"`
+	HasNtfyToken bool `json:"hasNtfyToken"`
 
 	// Live state from the poll loop.
 	Reachable    bool      `json:"reachable"`
@@ -580,6 +1460,14 @@ type RemoteProbeRequest struct {
 	Timeout   int      `json:"timeout,omitempty"`
 	Resolvers []string `json:"resolvers,omitempty"`
 	PinSHA256 string   `json:"pinSha256,omitempty"`
+
+	// NtfyURL and NtfyToken are the vantage's alert channel, handed to it in
+	// its push reply. Write-only like Token: empty on edit keeps the stored
+	// value, and only ClearNtfyURL / ClearNtfyToken remove one.
+	NtfyURL        string `json:"ntfyUrl,omitempty"`
+	NtfyToken      string `json:"ntfyToken,omitempty"`
+	ClearNtfyURL   bool   `json:"clearNtfyUrl,omitempty"`
+	ClearNtfyToken bool   `json:"clearNtfyToken,omitempty"`
 
 	// Rename targets an existing entry by its old name, so editing the name
 	// is an edit rather than a delete plus an add.
@@ -834,11 +1722,29 @@ type LocalDNSRecord struct {
 	ShadowsDerived string `json:"shadowsDerived,omitempty"`
 }
 
+// LocalDNSDerived is one name a service makes hz answer.
+type LocalDNSDerived struct {
+	Name string `json:"name"`
+	IP   string `json:"ip"`
+	// Service is the service the name comes from.
+	Service string `json:"service"`
+	// Ports the service uses: backend, both blue-green slots, HAProxy.
+	Ports []ServicePort `json:"ports"`
+}
+
+// ServicePort is one port a service uses.
+type ServicePort struct {
+	Port int `json:"port"`
+	// Label is "backend", "slot a (current)", "slot b (next)", "http" or "https".
+	Label string `json:"label"`
+}
+
 type LocalDNSResponse struct {
 	Records []LocalDNSRecord `json:"records"`
 	// Derived are the records hz generates from services, shown so the page
 	// can present everything the resolver answers rather than half of it.
-	Derived []LocalDNSRecord `json:"derived,omitempty"`
+	// Sorted by IP, then name.
+	Derived []LocalDNSDerived `json:"derived,omitempty"`
 	// Enabled is false when dnsmasq is off, in which case records are stored
 	// and served the moment it is turned on.
 	Enabled  bool   `json:"enabled"`
@@ -871,13 +1777,6 @@ type DeployStateChangeResponse struct {
 	State  string `json:"state"`
 }
 
-type DeploySwapResponse struct {
-	Status     string `json:"status"`
-	ActiveSlot string `json:"active_slot"`
-	Current    string `json:"current"`
-	Next       string `json:"next"`
-}
-
 // Service mutations
 
 type ServiceRequest struct {
@@ -892,9 +1791,58 @@ type ServiceRequest struct {
 	Dormant       bool   `json:"dormant,omitempty"`
 	DormantReason string `json:"dormantReason,omitempty"`
 
+	// Project and Environment place the service in the project tree.
+	//
+	// POINTERS, and the only pointers-to-string on this request, because absent
+	// and empty mean different things here and mean them on the path every other
+	// client already uses. nil is "leave the assignment alone"; a non-nil "" is
+	// "take it out of the tree". A plain string could not tell those apart, and
+	// the web UI does not send these at all — so a full-replace field would have
+	// quietly unassigned every service anybody edited from the UI. Clearing is a
+	// real operation (`hz service unassign`), so it has to be sayable.
+	//
+	// Both are checked against the declared tree BEFORE anything is written:
+	// declare, then assign. An environment without a project is refused, and a
+	// project with no environment is fine — plenty of services are not on a
+	// ladder.
+	Project     *string `json:"project,omitempty"`
+	Environment *string `json:"environment,omitempty"`
+
 	// Forwards: full-replace like the other fields, so every edit client must
 	// round-trip them or the edit removes the service's port forwards.
 	Forwards []ServiceForward `json:"forwards,omitempty"`
+}
+
+// ServiceAssignReq moves one service in the project tree, or — with both
+// placement fields empty — takes it out of it.
+//
+// WHOLE-VALUE, not a patch, and deliberately not ServiceRequest. Where a service
+// sits is one fact with two halves: a rung only means anything under a project,
+// so there is no useful "change the environment and leave the project alone".
+// That makes clearing expressible without a pointer, which EnvironmentSetReq
+// needed and this does not.
+//
+// Its own request rather than /services/edit because that path is full-replace
+// across domains, proxy, DNS and forwards: an assign that had to round-trip a
+// whole service could drop a port forward somebody else added between the read
+// and the write. Moving a service between rungs has no business touching any of
+// that.
+type ServiceAssignReq struct {
+	// Service is the name of the service to place.
+	Service string `json:"service"`
+	// Project is the project it joins. Empty (with Environment empty) unassigns.
+	Project string `json:"project,omitempty"`
+	// Environment is the rung within that project. Optional: a service can be in
+	// a project and on no rung. Naming one with no project is refused.
+	Environment string `json:"environment,omitempty"`
+}
+
+// ServiceAssignResp is the placement as hz now holds it, so a write answers with
+// the record rather than an echo of the request.
+type ServiceAssignResp struct {
+	Service     string `json:"service"`
+	Project     string `json:"project,omitempty"`
+	Environment string `json:"environment,omitempty"`
 }
 
 // ServiceRequestIntegrations carries per-service observability integrations from
@@ -933,7 +1881,7 @@ type ServiceRequestProxy struct {
 	InternalOnly bool                       `json:"internalOnly"`
 	Deploy       *ServiceRequestDeploy      `json:"deploy,omitempty"`
 	Timeouts     *ServiceRequestTimeouts    `json:"timeouts,omitempty"`
-	BackendProto string                     `json:"backendProto,omitempty"` // "" = HTTP/1.1, "h2" = cleartext HTTP/2 to the backend
+	BackendProto string                     `json:"backendProto,omitempty"` // "" = HTTP/1.1, "h2" = cleartext HTTP/2, "https" = HTTP/1.1 over TLS, backend cert NOT verified
 	PublicPaths  []string                   `json:"publicPaths,omitempty"`  // path prefixes exempt from internalOnly
 }
 
@@ -960,6 +1908,11 @@ type BanRequest struct {
 	IP      string `json:"ip"`
 	Timeout int    `json:"timeout,omitempty"` // seconds, 0 = permanent
 	Reason  string `json:"reason,omitempty"`
+	// Project attributes the ban (admin path, /api/v1/bans/add, only); empty
+	// is global. Enforcement is gateway-wide whatever it says. The service
+	// token path (/api/ban/ban) ignores it: a service's ban is global and
+	// names the service in BanEntry.Service.
+	Project string `json:"project,omitempty"`
 }
 
 type UnbanRequest struct {
@@ -973,6 +1926,8 @@ type BanEntry struct {
 	ExpiresAt int64  `json:"expiresAt,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 	Service   string `json:"service,omitempty"`
+	// Project the ban is attributed to; "" is global. Attribution only.
+	Project string `json:"project"`
 }
 
 type BanListResponse struct {
@@ -994,11 +1949,18 @@ type DNSRecordResp struct {
 	Value string `json:"value"`
 	TTL   int    `json:"ttl"`
 	// Owner is who authored this record: "derived" (a service publishes it),
-	// "declared" (Zone.Records), "observed" (live but not hz's), or
+	// "declared" (Zone.Records), "instance" (Zone.Records, owned by a nested
+	// hz instance — see Instance), "observed" (live but not hz's), or
 	// "tombstoned" (hz's, pending retraction). Replaces an earlier `managed`
 	// bool that was computed from Zone.Records alone and so reported every
 	// service-derived record as un-owned.
 	Owner string `json:"owner"`
+	// Note is the declared record's note, when Owner is "declared".
+	Note string `json:"note,omitempty"`
+	// Instance is the hz instance that owns the record, when Owner is
+	// "instance": the parent publishes it for that nested hz, inside its DNS
+	// grant. Read-only here — narrow or revoke the grant to remove it.
+	Instance string `json:"instance,omitempty"`
 }
 
 // DNSTombstoneResp is a deletion hz has been told to make and not yet confirmed
@@ -1013,12 +1975,63 @@ type DNSTombstoneResp struct {
 	// StillLive is true when the value is still present at the provider — i.e.
 	// the retraction has not taken effect yet.
 	StillLive bool `json:"stillLive"`
+	// NotConfirmed is set when hz's last retraction was accepted by the
+	// provider and a read-back found the value still live: "retraction not
+	// confirmed". The tombstone stays pending and is retried each sync.
+	NotConfirmed string `json:"notConfirmed,omitempty"`
 }
 
 type ZoneRecordsResponse struct {
 	Zone       string             `json:"zone"`
 	Records    []DNSRecordResp    `json:"records"`
 	Tombstones []DNSTombstoneResp `json:"tombstones,omitempty"`
+	// Declared is the zone's Zone.Records — what hz has been told to own —
+	// whether or not it is live yet. Records above only shows what the
+	// provider holds, so a declaration that has not published (a failed sync,
+	// a drift block) was invisible there.
+	Declared []DeclaredDNSRecordResp `json:"declared,omitempty"`
+}
+
+// DeclaredDNSRecordResp is one value hz has been told to publish.
+type DeclaredDNSRecordResp struct {
+	Name  string `json:"name"` // FQDN
+	Type  string `json:"type"`
+	Value string `json:"value"`
+	TTL   int    `json:"ttl"`
+	Note  string `json:"note,omitempty"`
+	// Live is true when the provider holds exactly this value at this name.
+	Live bool `json:"live"`
+	// Instance names the hz instance that owns this record ("" = this hz's
+	// own declaration). Read-only: it changes only by that instance's request
+	// or by narrowing its grant.
+	Instance string `json:"instance,omitempty"`
+}
+
+// DNSRecordSetRequest declares the complete value set hz owns at one
+// (name, type), and publishes it: POST /api/v1/zones/records/set.
+//
+// Refused (409) when the provider holds a value at that (name, type) that hz
+// did not publish and the request does not list — hz replaces whole record
+// sets, so writing would delete someone else's record. List the value to adopt
+// it. ExpectedFrom is the value set the caller saw live; a mismatch is refused
+// (409, drift) rather than overwriting a change made since.
+type DNSRecordSetRequest struct {
+	Zone         string   `json:"zone,omitempty"` // derived from Name when empty
+	Name         string   `json:"name"`
+	Type         string   `json:"type"` // A, AAAA, CNAME, TXT, MX, NS (NS below the apex only: a delegation)
+	Values       []string `json:"values"`
+	TTL          int      `json:"ttl,omitempty"` // seconds; 0 keeps the declared TTL, else 300
+	Note         string   `json:"note,omitempty"`
+	ExpectedFrom []string `json:"expectedFrom"`
+}
+
+type DNSRecordSetResponse struct {
+	OK      bool     `json:"ok"`
+	Zone    string   `json:"zone"`
+	Name    string   `json:"name"`
+	Type    string   `json:"type"`
+	Values  []string `json:"values"`
+	Changed bool     `json:"changed"` // false when the provider already held exactly this set
 }
 
 // DNSDriftInfoResp describes an out-of-band change detected at a DNS provider
@@ -1051,6 +2064,9 @@ type HostPortEntry struct {
 	// Forward marks a layer-4 port forward's reservation. hz ports next treats
 	// these as taken for every protocol, not just their own.
 	Forward bool `json:"forward,omitempty"`
+	// Project is the owning service's project, DERIVED at response time and
+	// never stored; "" is global (infra ports, and services with no project).
+	Project string `json:"project"`
 }
 
 type HostPortMapResponse struct {
@@ -1063,6 +2079,10 @@ type PortRange struct {
 	From int    `json:"from"`
 	To   int    `json:"to,omitempty"`
 	Note string `json:"note,omitempty"`
+	// Project attributes a custom exclusion; empty (omitted) is global, and
+	// every built-in range is global. Allocation ignores it: an exclusion
+	// denies the port to every project.
+	Project string `json:"project,omitempty"`
 }
 
 // PortExclusionsResp carries the allocation denylist: Builtin is the read-only
@@ -1084,6 +2104,13 @@ type DNSSyncAllResponse struct {
 }
 
 // Toggle admin
+
+// ToggleAdminReq is POST /api/v1/vpn/peers/toggle-admin. Without Admin it
+// flips the client's VPN-admin flag; with Admin it SETS it (idempotent).
+type ToggleAdminReq struct {
+	Name  string `json:"name"`
+	Admin *bool  `json:"admin,omitempty"`
+}
 
 type ToggleAdminResponse struct {
 	OK      bool `json:"ok"`
@@ -1217,6 +2244,25 @@ type DomainSSLRemoveRequest struct {
 	Force bool `json:"force,omitempty"`
 }
 
+// SSLTestIssueReq is POST /api/v1/ssl/test-issue: issue the zone's
+// certificate against Let's Encrypt STAGING and keep none of it.
+type SSLTestIssueReq struct {
+	Zone string `json:"zone"`
+}
+
+// SSLTestIssueResp is the staging answer. OK false is a refusal from the CA or
+// the DNS provider, with Error and the issuance Log saying where it stopped;
+// nothing was written either way.
+type SSLTestIssueResp struct {
+	Zone     string   `json:"zone"`
+	OK       bool     `json:"ok"`
+	Error    string   `json:"error,omitempty"`
+	SANs     []string `json:"sans"`
+	Issuer   string   `json:"issuer,omitempty"`
+	NotAfter string   `json:"notAfter,omitempty"` // RFC 3339
+	Log      []string `json:"log"`
+}
+
 // Service integration
 
 type ServiceIntegration struct {
@@ -1225,6 +2271,18 @@ type ServiceIntegration struct {
 	BaseURL   string `json:"baseURL"`
 	HasDeploy bool   `json:"hasDeploy"`
 	HasStatic bool   `json:"hasStatic"` // static-folder service: site upload available
+	// Snippet is the ready-to-run hz-client script, HZ_URL and HZ_TOKEN filled
+	// in. It is rendered by hz, once, so the UI, the CLI and the create
+	// response cannot disagree about what to run.
+	Snippet string `json:"snippet"`
+}
+
+// ServiceAddResp is the POST /api/v1/services/add answer: the new service's
+// integration, so the token and the script to manage it arrive with the
+// create. The token stays re-fetchable from GET /api/v1/services/integration.
+type ServiceAddResp struct {
+	OK                 bool `json:"ok"`
+	ServiceIntegration `tstype:",extends"`
 }
 
 // HA Fleet
@@ -1314,16 +2372,61 @@ type PinnedIPResp struct {
 }
 
 type SystemHealthResponse struct {
-	Components           []ComponentHealth `json:"components"`
-	LANAdvice            *CIDRAdviceResp   `json:"lan_advice,omitempty"`
-	VPNAdvice            *CIDRAdviceResp   `json:"vpn_advice,omitempty"`
-	PinnedIPs            []PinnedIPResp    `json:"pinned_ips,omitempty"`
-	PublicIP             string            `json:"publicIP,omitempty"`
-	IPForwarding         bool              `json:"ip_forwarding"`
-	IPForwardingError    string            `json:"ip_forwarding_error,omitempty"`
-	HorizonUnitInstalled bool              `json:"horizon_unit_installed"`
-	HorizonEnabled       bool              `json:"horizon_enabled"`
-	HorizonRunning       bool              `json:"horizon_running"`
+	Components []ComponentHealth `json:"components"`
+	// Dependencies is every command this config requires, present or not
+	// (autoheal.Check): the list startup warns from and `homelab-horizon
+	// check` prints. Installing is CLI-only by design — InstallHint is the
+	// command, there is no HTTP install.
+	Dependencies         []DependencyStatus `json:"dependencies"`
+	InstallHint          string             `json:"install_hint"`
+	LANAdvice            *CIDRAdviceResp    `json:"lan_advice,omitempty"`
+	VPNAdvice            *CIDRAdviceResp    `json:"vpn_advice,omitempty"`
+	PinnedIPs            []PinnedIPResp     `json:"pinned_ips,omitempty"`
+	PublicIP             string             `json:"publicIP,omitempty"`
+	IPForwarding         bool               `json:"ip_forwarding"`
+	IPForwardingError    string             `json:"ip_forwarding_error,omitempty"`
+	HorizonUnitInstalled bool               `json:"horizon_unit_installed"`
+	HorizonEnabled       bool               `json:"horizon_enabled"`
+	HorizonRunning       bool               `json:"horizon_running"`
+}
+
+// DoctorFinding is one result of `hz doctor` (GET /api/v1/doctor), which the
+// System tab's Doctor card renders too, so the page and the CLI read one list.
+//
+// Status is "ok", "failing", "warning" (a risk the operator may accept; failing
+// under --pci), "unknown" (hz could not measure — not a shade of failing; a
+// --deep check not run is unknown) or "info" (true and worth knowing, nothing
+// to fix). Fix is the exact command or step; Evidence says
+// what was measured and how, so a reader can check the claim.
+type DoctorFinding struct {
+	Check    string `json:"check"`
+	Subject  string `json:"subject"`
+	Status   string `json:"status"`
+	Problem  string `json:"problem"`
+	Fix      string `json:"fix,omitempty"`
+	Evidence string `json:"evidence,omitempty"`
+}
+
+// DoctorResp is every finding, in check order. Deep says whether the checks
+// that ask outside hz (DNS providers, public DNS) ran; PCI whether warnings
+// that PCI DSS forbids were judged failing.
+type DoctorResp struct {
+	Deep     bool            `json:"deep"`
+	PCI      bool            `json:"pci"`
+	Findings []DoctorFinding `json:"findings"`
+}
+
+// DependencyStatus is one command hz needs for this config, and whether it is
+// on PATH. Purpose says what stops working without it.
+type DependencyStatus struct {
+	Name    string `json:"name"`
+	Binary  string `json:"binary"`
+	Package string `json:"package"`
+	Purpose string `json:"purpose"`
+	Present bool   `json:"present"`
+	// Optional: folded in when present, never run by hz (the node exporter).
+	// Not counted as missing.
+	Optional bool `json:"optional,omitempty"`
 }
 
 // Live host metrics — point-in-time snapshot. CPU/network counters are
@@ -1438,6 +2541,22 @@ type TombstoneCancelRequest struct {
 	Value string `json:"value"`
 }
 
+// NtfySettingsResp is hz's ntfy notification target as the settings page sees
+// it. The access token is never included — only whether one is stored.
+type NtfySettingsResp struct {
+	URL          string `json:"url"`
+	HasNtfyToken bool   `json:"hasNtfyToken"`
+}
+
+// NtfySettingsReq is what the settings page sends back. An empty URL turns
+// notifications off. An empty Token keeps the stored one (the page never has
+// it to send back); ClearToken removes it.
+type NtfySettingsReq struct {
+	URL        string `json:"url"`
+	Token      string `json:"token,omitempty"`
+	ClearToken bool   `json:"clearToken,omitempty"`
+}
+
 // OIDCSettingsResp is the single-sign-on configuration as the settings page
 // sees it. The client secret is never included — only whether one is stored.
 type OIDCSettingsResp struct {
@@ -1513,11 +2632,29 @@ type CMRegistrationResp struct {
 	ID          string `json:"id"`
 	MachineID   string `json:"machineId"`
 	MachineName string `json:"machineName"`
+	Project     string `json:"project"`
 	Environment string `json:"environment"`
 	App         string `json:"app"`
 	Role        string `json:"role"`
 	Version     string `json:"version"`
 	State       string `json:"state"`
+
+	// ObservedVersion is what this instance last reported it is RUNNING, and
+	// Version is what it was running when an admin reviewed the tuple. They are
+	// the same on the first boot and diverge on every upgrade afterwards, which
+	// is the point: the desired/observed drift is the rollout.
+	//
+	// It is reported per INSTANCE, never per machine — redline's `current` and
+	// `next` slots share a box and run different versions mid-deploy — so it
+	// lives on this shape and not on CMMachineResp.
+	ObservedVersion string `json:"observedVersion,omitempty"`
+	// ObservedBuild is the `git describe` string beside it. Provenance only:
+	// nothing sorts or compares it, and it may not be semver at all.
+	ObservedBuild string `json:"observedBuild,omitempty"`
+	// ObservedAt is when that report arrived. Without it a version string
+	// cannot be told from one a box stopped reporting a month ago, so an
+	// omitted ObservedAt must read as "never reported", never as "now".
+	ObservedAt string `json:"observedAt,omitempty"`
 
 	// Fingerprint of the machine's public key, for the approver to compare
 	// against what the box printed. This is the ONLY defence against hz
@@ -1543,6 +2680,64 @@ type CMRegistrationResp struct {
 	DeniedReason string `json:"deniedReason,omitempty"`
 	CreatedAt    string `json:"createdAt"`
 	LastSeenAt   string `json:"lastSeenAt,omitempty"`
+}
+
+// CMMachineResp is one enrolled box, and — because the same shape answers the
+// read a removal is previewed from — everything removing it would destroy.
+//
+// Registrations and SecretKeys are here for exactly that reason. `hz config remove`
+// has to be able to show an operator what is about to go, and a count alone
+// ("3 registrations") does not let them recognise the box they meant. They
+// carry no key material: CMRegistrationResp has no field for a wrapped key, and
+// SecretKeys is names only, which is the same rule ListMachineSecretKeys
+// enforces one layer down.
+type CMMachineResp struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+
+	// EnrolledEnvironment is what the box claimed when it enrolled. Not
+	// authoritative — see CMRegistrationResp — and shown so an operator can
+	// tell two same-named enrolments apart.
+	EnrolledEnvironment string `json:"enrolledEnvironment"`
+
+	// Fingerprint of the machine's public key. For a removal it is the one
+	// field that distinguishes "the box I rebuilt" from "a box that took this
+	// name": the operator can compare it against what the old box printed.
+	Fingerprint string `json:"fingerprint"`
+
+	CreatedAt  string `json:"createdAt"`
+	LastSeenAt string `json:"lastSeenAt,omitempty"`
+
+	Registrations []CMRegistrationResp `json:"registrations,omitempty"`
+
+	// SecretKeys names the machine-scoped secrets sealed to this box's public
+	// key — names, never values, and there is no field here that could carry
+	// one.
+	SecretKeys []string `json:"secretKeys,omitempty"`
+}
+
+// CMMachineRemovedResp reports what a removal actually destroyed.
+//
+// It is a count of rows and not a success flag, because the counts are the
+// thing an operator has to be able to check against the preview they approved.
+// A removal that reports more grants than the preview showed means the box
+// registered somewhere new between the two calls, and that is worth seeing.
+//
+// REMOVAL IS NOT REVOCATION, and nothing built on this may say it is. A box
+// that was ever approved unwrapped its environment key onto its own disk;
+// deleting hz's copy of the wrapped blob reaches none of it. See
+// db.DeleteMachine.
+type CMMachineRemovedResp struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+
+	RegistrationsRemoved int `json:"registrationsRemoved"`
+	// GrantsRemoved counts the subset that were approved — the ones that held
+	// a wrapped environment key. Separate from the total because a pending row
+	// disappearing costs nothing and an approved one is a box that stops being
+	// served config.
+	GrantsRemoved  int `json:"grantsRemoved"`
+	SecretsRemoved int `json:"secretsRemoved"`
 }
 
 // CMApproveReq carries the wrapped environment key minted on a client.
@@ -1575,16 +2770,28 @@ type CMConfigValueReq struct {
 	Sealed  string `json:"sealed"`  // base64 envelope, sealed on the client
 	KeyID   string `json:"keyId"`
 
+	// Origin is normally inferred — a value naming a source config was
+	// promoted, one naming none was set here — and is sent explicitly for
+	// exactly one case: "awaiting", a key a promotion DECLARED in this
+	// environment and carried no value for. It cannot be inferred, because an
+	// awaiting value looks like an omission and must not be read as one: it
+	// carries no Sealed and no KeyID, which for any other origin is the
+	// refusal ErrValueOmitted.
+	Origin string `json:"origin,omitempty"` // direct | promoted | awaiting
+
 	// SourceConfigID is set when this value was promoted rather than authored
 	// here, and it is what makes drift readable off the graph instead of
 	// inferred by comparison. hz cannot verify the claim — it cannot read
 	// either value — so lineage records what the promoting client asserted.
+	// An awaiting value names the promotion that declared it, which is the
+	// answer to "who left this blank".
 	SourceConfigID string `json:"sourceConfigId,omitempty"`
 }
 
 // CMCreateConfigReq blesses a config. Ranges are immutable afterwards, so this
 // is the only moment the operator is present to be told no.
 type CMCreateConfigReq struct {
+	Project     string             `json:"project"`
 	Environment string             `json:"environment"`
 	App         string             `json:"app"`
 	Role        string             `json:"role"`
@@ -1599,9 +2806,9 @@ type CMConfigValueResp struct {
 	Key            string `json:"key"`
 	Binding        string `json:"binding"`
 	KeyID          string `json:"keyId"`
-	Origin         string `json:"origin"` // direct | promoted
+	Origin         string `json:"origin"` // direct | promoted | awaiting
 	SourceConfigID string `json:"sourceConfigId,omitempty"`
-	Sealed         string `json:"sealed,omitempty"` // absent once tombstoned
+	Sealed         string `json:"sealed,omitempty"` // absent once tombstoned, and while awaiting
 	TombstonedAt   string `json:"tombstonedAt,omitempty"`
 	TombstonedBy   string `json:"tombstonedBy,omitempty"`
 }
@@ -1609,6 +2816,7 @@ type CMConfigValueResp struct {
 // CMConfigResp is one blessed config.
 type CMConfigResp struct {
 	ID          string              `json:"id"`
+	Project     string              `json:"project"`
 	Environment string              `json:"environment"`
 	App         string              `json:"app"`
 	Role        string              `json:"role"`
@@ -1638,12 +2846,52 @@ type CMResolveResp struct {
 // the whole reason promotion is a gate rather than a copy, and hz can compute it
 // without reading a single value: it asks whether a key is bound, never what it
 // holds.
+// Edge is the SECOND gate and it is separate from OK on purpose. OK is about
+// VALUES — does the target already hold every environment-bound key. Edge is
+// about the LADDER — is this promotion one the declared environments allow at
+// all. A promotion can be fine on one and refused on the other, and collapsing
+// them into a single boolean would make the refusal unreadable.
 type CMPromotionGateResp struct {
 	SourceConfigID string   `json:"sourceConfigId"`
 	TargetEnv      string   `json:"targetEnv"`
 	Promotes       []string `json:"promotes"`          // invariant keys that would carry
 	Blocked        []string `json:"blocked,omitempty"` // env-bound keys unbound in the target
 	OK             bool     `json:"ok"`
+
+	// Edge is hz's answer about the declared promotion edge. A client must
+	// require it: a gate response that simply omits the edge is a refusal that
+	// never arrived, and this is an irreversible operation on production
+	// credentials. Nil means hz did not answer, which is not the same as
+	// "allowed".
+	Edge *CMPromotionEdgeResp `json:"edge,omitempty"`
+}
+
+// CMPromotionEdgeResp describes the declared edge a promotion would travel.
+//
+// Error is set when the promotion is refused and is a sentence, not a code. Upward
+// says whether it climbs the ladder by PostureRank; Forcible says whether an
+// operator may override the refusal, and only a not-upward refusal ever is — a
+// missing edge is a declaration that does not exist, and no flag can invent it.
+type CMPromotionEdgeResp struct {
+	// Project is the project whose rungs these are. It is the project the
+	// CALLER NAMED, not one hz worked out: `hz config promote --project` sends
+	// it, and the promotion gate reads config.Environments to check the edge.
+	// It used to be "the project we resolved for you" — a narrowing hint that
+	// was required only when a bare environment name was ambiguous — which was
+	// the config address's missing project coordinate showing through on one
+	// surface. The address names the project now; this field only echoes it.
+	Project       string `json:"project,omitempty"`
+	SourceEnv     string `json:"sourceEnv"`
+	SourcePosture string `json:"sourcePosture,omitempty"`
+	TargetEnv     string `json:"targetEnv"`
+	TargetPosture string `json:"targetPosture,omitempty"`
+	// DeclaredFrom is the target's `from`. Empty means the target declares none,
+	// which is the missing-edge case and is reported by name in Error.
+	DeclaredFrom string `json:"declaredFrom,omitempty"`
+	Upward       bool   `json:"upward"`
+	OK           bool   `json:"ok"`
+	Forcible     bool   `json:"forcible,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 // CMCurrentKeyReq / CMCurrentKeyResp carry the advisory current-key pointer.
@@ -1659,6 +2907,7 @@ type CMCurrentKeyReq struct {
 }
 
 type CMCurrentKeyResp struct {
+	Project     string `json:"project"`
 	Environment string `json:"environment"`
 	App         string `json:"app"`
 	Role        string `json:"role"`

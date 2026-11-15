@@ -303,3 +303,48 @@ func TestLogPersistenceNeedsBothHalves(t *testing.T) {
 		t.Error("unmeasured facts should not satisfy 10.5.1")
 	}
 }
+
+// PCI 2.2.7 with the VPN listener (operator, 2026-09-29: WireGuard counts as
+// the encryption). Loopback passes — HAProxy TLS is the only way in; a primary
+// on the WireGuard address passes — wg0 encrypts it; every interface and a
+// LAN address fail. The WG IP must be known for the WG case: an unknown one
+// never passes a non-loopback primary.
+func TestAdminAccessEncrypted(t *testing.T) {
+	const wg = "10.100.0.1"
+	tests := []struct {
+		addr, wgIP string
+		want       bool
+	}{
+		{"127.0.0.1:8080", wg, true},
+		{"127.0.0.1:8080", "", true},
+		{"10.100.0.1:8080", wg, true},
+		{"10.100.0.1:8080", "", false},
+		{":8080", wg, false},
+		{"0.0.0.0:8080", wg, false},
+		{"[::]:8080", wg, false},
+		{"192.168.1.160:8080", wg, false},
+		{"", wg, false},
+	}
+	for _, tc := range tests {
+		cfg := config.Config{ListenAddr: tc.addr}
+		if got := cfg.AdminAccessEncrypted(tc.wgIP); got != tc.want {
+			t.Errorf("AdminAccessEncrypted(%q, wg=%q) = %v, want %v", tc.addr, tc.wgIP, got, tc.want)
+		}
+	}
+}
+
+// The evidence names every listener and how each is encrypted, so an assessor
+// reads the path — the reason the operator's call is visible, not buried.
+func TestAdminAccessEvidenceNamesBothPaths(t *testing.T) {
+	cfg := &config.Config{ListenAddr: "127.0.0.1:8080"}
+	got := adminAccessEvidence(cfg, hostFactsSnapshot{wgIP: "10.100.0.1", vpnListener: "10.100.0.1:8080"})
+	for _, want := range []string{"127.0.0.1:8080", "HAProxy's TLS", "10.100.0.1:8080", "encrypted by WireGuard"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("evidence %q lacks %q", got, want)
+		}
+	}
+	lan := adminAccessEvidence(&config.Config{ListenAddr: "192.168.1.160:8080"}, hostFactsSnapshot{wgIP: "10.100.0.1"})
+	if !strings.Contains(lan, "cleartext off this host") {
+		t.Errorf("a LAN listener's evidence must say cleartext: %q", lan)
+	}
+}

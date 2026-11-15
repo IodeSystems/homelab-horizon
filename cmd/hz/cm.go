@@ -17,7 +17,7 @@ import (
 
 // The config-manager operator surface, and the reason it lives in a CLI at all.
 //
-// An adversarial review of the browser ceremony (plan/config-manager.md, hole
+// An adversarial review of the browser ceremony (plan/design/config-manager.md, hole
 // 9) settled this: a page served by hz cannot defend against hz. Compromise hz,
 // edit one line of the bundle, and the approval page POSTs the pasted key
 // before wrapping it. Every mitigation the design named — a mandatory
@@ -40,26 +40,33 @@ import (
 // cmAPI is the admin route prefix. Every path below is assembled from it.
 //
 // Note on where these shapes come from: internal/apitypes fixes the request and
-// response bodies, and this file treats them as given. The ROUTES are not
-// declared anywhere yet — the handler work is a separate slice — so the paths
-// here are this client's assumption about them, kept in one place so a rename
-// is one edit.
+// response bodies, and this file treats them as given. The paths under this
+// prefix are still spelled out here rather than shared, which is the same shape
+// that made five endpoints unreachable — see cm_routes_test.go. The ones that
+// were fixed moved to configmgr constants (apitypes.CMPath*); anything added
+// under this prefix should be declared there too, not assembled from cmAPI.
 const cmAPI = "/api/v1/cm"
 
 func runCM(c *client, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("cm subcommand required: key | pending | approve | deny | promote | show | resolve")
+		return fmt.Errorf("config subcommand required: key | recovery | machines | pending | approve | deny | remove | promote | show | resolve")
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
 	case "key":
 		return runCMKey(c, rest)
+	case "recovery":
+		return runCMRecovery(c, rest)
+	case "machines":
+		return cmMachines(c, rest)
 	case "pending":
 		return cmPending(c, rest)
 	case "approve":
 		return cmApprove(c, rest)
 	case "deny":
 		return cmDeny(c, rest)
+	case "remove":
+		return cmRemove(c, rest)
 	case "promote":
 		return cmPromote(c, rest)
 	case "show":
@@ -67,13 +74,20 @@ func runCM(c *client, args []string) error {
 	case "resolve":
 		return cmResolve(c, rest)
 	default:
-		return fmt.Errorf("unknown cm subcommand: %s", sub)
+		return fmt.Errorf("unknown config subcommand: %s", sub)
 	}
 }
 
 // --- addresses -------------------------------------------------------------
 
-// parseCMAddr reads the <environment>/<app>/<role> form every cm command takes.
+// parseCMAddr reads the <project>/<environment>/<app>/<role> form every cm
+// command takes.
+//
+// FOUR PARTS, AND A THREE-PART ADDRESS IS AN ERROR THAT SAYS SO. Environment
+// names are unique per project and not globally, so the old three-part form
+// was never an identity — it only looked like one while exactly one project
+// declared each app name. An operator who types the old form gets told which
+// field is missing rather than having an address silently mean something else.
 //
 // Only the shape is checked here. The charset is the keystore's business
 // (configmgr.ErrBadName), and it is checked there because that is where a bad
@@ -81,20 +95,24 @@ func runCM(c *client, args []string) error {
 // definitions drift and the weaker one win.
 func parseCMAddr(s string) (configmgr.EnvKeyAddr, error) {
 	parts := strings.Split(s, "/")
-	if len(parts) != 3 {
-		return configmgr.EnvKeyAddr{}, fmt.Errorf("address %q must be <environment>/<app>/<role>, e.g. staging/redline/app", s)
+	if len(parts) != 4 {
+		hint := ""
+		if len(parts) == 3 {
+			hint = " — that is the old three-part form; the address now names the project it belongs to, because every project gets to have a \"prod\""
+		}
+		return configmgr.EnvKeyAddr{}, fmt.Errorf("address %q must be <project>/<environment>/<app>/<role>, e.g. acme/staging/redline/app%s", s, hint)
 	}
-	for i, what := range []string{"environment", "app", "role"} {
+	for i, what := range []string{"project", "environment", "app", "role"} {
 		if parts[i] == "" {
 			return configmgr.EnvKeyAddr{}, fmt.Errorf("address %q has an empty %s", s, what)
 		}
 	}
-	return configmgr.EnvKeyAddr{Environment: parts[0], App: parts[1], Role: parts[2]}, nil
+	return configmgr.EnvKeyAddr{Project: parts[0], Environment: parts[1], App: parts[2], Role: parts[3]}, nil
 }
 
 // splitCMPositional pulls a leading positional off the argument list.
 //
-// Go's flag package stops at the first non-flag token, so `hz cm deny reg-1
+// Go's flag package stops at the first non-flag token, so `hz config deny reg-1
 // --reason=x` would silently drop --reason. The repo's splitNameArgs solves
 // that by taking the first non-flag token anywhere, which misreads the value of
 // a space-separated flag (`--label 2026-01 prod/redline/app` would take
@@ -110,19 +128,36 @@ func splitCMPositional(args []string) (string, []string) {
 }
 
 // keyAddr projects a grant address onto the keystore's address type. The
-// keystore ignores Addr.Key — the key tree is (environment, app, role) and the
-// config key name is bound into the AEAD, not into a path.
+// keystore ignores Addr.Key — the key tree is (project, environment, app, role)
+// and the config key name is bound into the AEAD, not into a path.
 func keyAddr(a configmgr.EnvKeyAddr) configmgr.Addr {
-	return configmgr.Addr{Environment: a.Environment, App: a.App, Role: a.Role}
+	return configmgr.Addr{Project: a.Project, Environment: a.Environment, App: a.App, Role: a.Role}
 }
 
 // valueAddr is the address one config VALUE is sealed at.
 func valueAddr(a configmgr.EnvKeyAddr, key string) configmgr.Addr {
-	return configmgr.Addr{Environment: a.Environment, App: a.App, Role: a.Role, Key: key}
+	return configmgr.Addr{Project: a.Project, Environment: a.Environment, App: a.App, Role: a.Role, Key: key}
 }
 
 func addrOfConfig(cfg apitypes.CMConfigResp) configmgr.EnvKeyAddr {
-	return configmgr.EnvKeyAddr{Environment: cfg.Environment, App: cfg.App, Role: cfg.Role}
+	return configmgr.EnvKeyAddr{Project: cfg.Project, Environment: cfg.Environment, App: cfg.App, Role: cfg.Role}
+}
+
+// addrOfWrap is the same projection for a stored recovery wrap, and it exists
+// because hand-spelling this address was a real bug twice in one file.
+//
+// `hz config recovery ls` and `hz config recovery backfill` both join wraps
+// against the keys this machine HOLDS, and the held side is keyed by
+// EnvKeyAddr.String(). Each had its own `w.Environment+"/"+w.App+"/"+w.Role`
+// on the wrap side, which silently stopped matching the moment the project
+// joined the address: ls split one address into two rows (held-but-uncovered
+// and covered-but-not-held), and backfill's idempotence check never fired, so
+// every run re-wrapped every key forever. Neither failed loudly.
+//
+// One projection, used by both sides of both joins, is what makes that class
+// of drift unrepresentable rather than merely fixed.
+func addrOfWrap(w apitypes.CMRecoveryWrap) configmgr.EnvKeyAddr {
+	return configmgr.EnvKeyAddr{Project: w.Project, Environment: w.Environment, App: w.App, Role: w.Role}
 }
 
 // --- the current-key pointer ----------------------------------------------
@@ -141,9 +176,10 @@ func addrOfConfig(cfg apitypes.CMConfigResp) configmgr.EnvKeyAddr {
 // only move the failure later and make it less legible.
 func cmCurrentKey(c *client, addr configmgr.EnvKeyAddr) (configmgr.CurrentKey, error) {
 	q := url.Values{
-		apitypes.CMQueryEnv:  {addr.Environment},
-		apitypes.CMQueryApp:  {addr.App},
-		apitypes.CMQueryRole: {addr.Role},
+		apitypes.CMQueryProject: {addr.Project},
+		apitypes.CMQueryEnv:     {addr.Environment},
+		apitypes.CMQueryApp:     {addr.App},
+		apitypes.CMQueryRole:    {addr.Role},
 	}
 	var resp apitypes.CMCurrentKeyResp
 	if err := c.do(http.MethodGet, cmAPI+"/current-key?"+q.Encode(), nil, &resp); err != nil {
@@ -187,8 +223,8 @@ func cmSealAdvice(addr configmgr.EnvKeyAddr, cur configmgr.CurrentKey, err error
 	case errors.Is(err, configmgr.ErrNoSuchKey):
 		return fmt.Errorf("%w\n"+
 			"  this machine holds no key for %s.\n"+
-			"  import the one from your password manager:  hz cm key import %s\n"+
-			"  or mint the first key for the address:       hz cm key new %s",
+			"  import the one from your password manager:  hz config key import %s\n"+
+			"  or mint the first key for the address:       hz config key new %s",
 			err, addr, addr, addr)
 	case errors.Is(err, configmgr.ErrRefuseToSeal):
 		return fmt.Errorf("%w\n"+
@@ -196,8 +232,8 @@ func cmSealAdvice(addr configmgr.EnvKeyAddr, cur configmgr.CurrentKey, err error
 			"  that is deliberate: created_at lives in a file anyone who can write the\n"+
 			"  keystore can set, and hz's pointer is the only thing that arbitrates it.\n"+
 			"  hz calls %s current for %s.\n"+
-			"  if that key is the right one:  hz cm key import %s\n"+
-			"  if the key you hold is newer:  hz cm key current %s --set <keyid>",
+			"  if that key is the right one:  hz config key import %s\n"+
+			"  if the key you hold is newer:  hz config key current %s --set <keyid>",
 			err, cur, addr, addr, addr)
 	case errors.Is(err, configmgr.ErrInsecureKey):
 		return fmt.Errorf("%w\n  fix the mode and ownership (0600, owned by you, in a directory nobody else can write) and retry", err)
@@ -208,12 +244,12 @@ func cmSealAdvice(addr configmgr.EnvKeyAddr, cur configmgr.CurrentKey, err error
 // --- the approval queue ----------------------------------------------------
 
 func cmPending(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm pending", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config pending", flag.ContinueOnError)
 	all := fs.Bool("all", false, "list every registration, not only pending ones")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	path := cmAPI + "/registrations?state=" + configmgr.StatePending
+	path := cmAPI + "/registrations?" + apitypes.CMQueryState + "=" + configmgr.StatePending
 	if *all {
 		path = cmAPI + "/registrations"
 	}
@@ -227,14 +263,14 @@ func cmPending(c *client, args []string) error {
 	}
 	fmt.Printf("%-38s  %-20s  %-30s  %-10s  %s\n", "ID", "MACHINE", "ADDRESS", "STATE", "VERSION")
 	for _, r := range rows {
-		addr := configmgr.EnvKeyAddr{Environment: r.Environment, App: r.App, Role: r.Role}
+		addr := configmgr.EnvKeyAddr{Project: r.Project, Environment: r.Environment, App: r.App, Role: r.Role}
 		fmt.Printf("%-38s  %-20s  %-30s  %-10s  %s\n", r.ID, r.MachineName, addr, r.State, r.Version)
 		if r.EnrolledEnvironment != "" && r.EnrolledEnvironment != r.Environment {
 			fmt.Printf("%-38s  ! enrolled as %q, now asking for %q\n", "", r.EnrolledEnvironment, r.Environment)
 		}
 	}
 	// The fingerprint is deliberately not a column. See cmApprove.
-	fmt.Println("\nApprove one with 'hz cm approve <id>'. You will need the fingerprint the box printed.")
+	fmt.Println("\nApprove one with 'hz config approve <id>'. You will need the fingerprint the box printed.")
 	return nil
 }
 
@@ -283,7 +319,7 @@ func cmFetchPublicKey(c *client, id string) (*ecdh.PublicKey, error) {
 //     is the entire defence.
 //  3. Load the environment key from the LOCAL keystore, for the address taken
 //     from the registration.
-//  4. Wrap it to that public key at EnvKeyAddr{environment, app, role}.
+//  4. Wrap it to that public key at EnvKeyAddr{project, environment, app, role}.
 //  5. POST the wrapped blob and nothing else.
 //
 // What is deliberately NOT printed before the prompt: hz's fingerprint. Showing
@@ -293,9 +329,9 @@ func cmFetchPublicKey(c *client, id string) (*ecdh.PublicKey, error) {
 // afterwards — on a match, to confirm, and on a mismatch, so the difference is
 // visible.
 func cmApprove(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm approve", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config approve", flag.ContinueOnError)
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, "usage: hz cm approve <registration-id>\n\n"+
+		fmt.Fprint(os.Stderr, "usage: hz config approve <registration-id>\n\n"+
 			"Wraps this machine's environment key to the box's public key and sends the\n"+
 			"wrapped blob. The key itself never leaves this process.\n\n"+
 			"You will be asked to type the fingerprint the BOX printed. Read it from the\n"+
@@ -320,7 +356,14 @@ func cmApprove(c *client, args []string) error {
 	if reg.State != configmgr.StatePending {
 		return fmt.Errorf("registration %s is %s, not pending; approving it again would grant a key to a machine somebody already decided about", id, reg.State)
 	}
-	addr := configmgr.EnvKeyAddr{Environment: reg.Environment, App: reg.App, Role: reg.Role}
+	// The PROJECT comes off the registration, like every other coordinate.
+	// Dropping it here would not fail loudly: the wrap would be produced, hz
+	// would relay it, and the box would refuse to unwrap it at boot with an
+	// authentication failure naming nothing — the approver's ceremony spent on
+	// a blob that opens for nobody.
+	addr := configmgr.EnvKeyAddr{
+		Project: reg.Project, Environment: reg.Environment, App: reg.App, Role: reg.Role,
+	}
 
 	pub, err := cmFetchPublicKey(c, id)
 	if err != nil {
@@ -408,7 +451,7 @@ func cmApprove(c *client, args []string) error {
 }
 
 func cmDeny(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm deny", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config deny", flag.ContinueOnError)
 	reason := fs.String("reason", "", "why this registration is refused (required)")
 	id, rest := splitCMPositional(args)
 	if err := fs.Parse(rest); err != nil {
@@ -418,7 +461,7 @@ func cmDeny(c *client, args []string) error {
 		id = fs.Arg(0)
 	}
 	if id == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz cm deny <registration-id> --reason=\"...\"")
+		return fmt.Errorf("usage: hz config deny <registration-id> --reason=\"...\"")
 	}
 	if strings.TrimSpace(*reason) == "" {
 		return fmt.Errorf("--reason is required: a denial with no stated cause is indistinguishable from a mistake six months later")
@@ -450,7 +493,7 @@ func isTTY(f *os.File) bool {
 
 // readLine reads one line, without echo suppression. Everything read this way
 // is public — a fingerprint, a key id — and the one genuinely secret thing read
-// from stdin (hz cm key import) is a whole-stream read, not a prompt.
+// from stdin (hz config key import) is a whole-stream read, not a prompt.
 func readLine(r *os.File) (string, error) {
 	br := bufio.NewReader(r)
 	line, err := br.ReadString('\n')

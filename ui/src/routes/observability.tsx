@@ -38,6 +38,7 @@ import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import AutorenewIcon from "@mui/icons-material/Autorenew";
+import CloseIcon from "@mui/icons-material/Close";
 import {
   useTopology,
   useSaveTopologyHosts,
@@ -47,8 +48,12 @@ import {
   useScrapeYaml,
   useScrapeToken,
   useRotateScrapeToken,
+  useSetupScript,
 } from "../api/hooks";
+import { setupInstallCommand } from "../components/observability/promSetup";
 import type { HostDecl, Exporter, ExporterTargetResp } from "../api/types";
+import { readRefusal, type RefusalReading } from "../components/hosts/hosts";
+import { RefusalNote } from "../components/hosts/HostBits";
 
 // --- Labels editor (shared by host + exporter forms) ---
 
@@ -636,7 +641,7 @@ function ScrapeTokenSection() {
       </Typography>
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
         The Prometheus discovery endpoints (scrape.yaml / targets.json) require this token or an
-        admin session. <code>setup.sh</code> bakes it into the refresh cron. Rotating it stops
+        admin session. <code>setup.sh</code> bakes it into the refresh timer. Rotating it stops
         existing pullers until they re-run setup.sh.
       </Typography>
       {scrapeToken.isLoading ? (
@@ -710,100 +715,9 @@ function ScrapeTokenSection() {
   );
 }
 
-// Prometheus wiring targets. scrape.yaml is fetched with the scrape token onto
-// the Prometheus box; hz.yml is the include file Prometheus reads via
-// scrape_config_files (matches what setup.sh installs server-side).
-const SCRAPE_YAML_PATH = "/integration/prometheus/scrape.yaml";
+// hz.yml is the include file Prometheus reads via scrape_config_files; setup.sh
+// installs and refreshes it.
 const HZ_YML_DEST = "/etc/prometheus/hz.yml";
-const PROM_YML = "/etc/prometheus/prometheus.yml";
-const REFRESH_BIN = "/usr/local/bin/hz-scrape-refresh.sh";
-const CRON_DEST = "/etc/cron.d/hz-scrape-refresh";
-
-function hzOrigin(): string {
-  return typeof window !== "undefined" ? window.location.origin : "";
-}
-
-// Preamble: shell vars every snippet references (PROM_URL is overridable).
-const shellHeader = [
-  `PROM_URL="\${PROM_URL:-http://localhost:9090}"   # Prometheus API — override if not local`,
-  `PROM_YML=${PROM_YML}`,
-  `HZ_YML=${HZ_YML_DEST}`,
-];
-
-// Idempotently wire the scrape_config_files include into prometheus.yml. Without
-// this hz.yml is written but never read — the "not loaded" trap.
-const ensureIncludeSnippet = [
-  `# Ensure prometheus.yml includes hz.yml (idempotent):`,
-  `if ! grep -qF "$HZ_YML" "$PROM_YML"; then`,
-  `  sudo cp -a "$PROM_YML" "$PROM_YML.bak.$(date +%s)"`,
-  `  if grep -qE '^scrape_config_files:' "$PROM_YML"; then`,
-  `    sudo sed -i "/^scrape_config_files:/a\\  - $HZ_YML" "$PROM_YML"`,
-  `  else`,
-  `    printf '\\nscrape_config_files:\\n  - %s\\n' "$HZ_YML" | sudo tee -a "$PROM_YML" >/dev/null`,
-  `  fi`,
-  `fi`,
-];
-
-// Confirm Prometheus actually loaded the include after a reload.
-const verifyLoadedSnippet = [
-  `# Verify hz.yml is loaded by Prometheus:`,
-  `sleep 1`,
-  `if curl -fsS "$PROM_URL/api/v1/status/config" | grep -q hz.yml; then`,
-  `  echo "OK: hz.yml is loaded by Prometheus"`,
-  `else`,
-  `  echo "WARNING: hz.yml NOT loaded — check scrape_config_files in $PROM_YML"`,
-  `fi`,
-];
-
-// One-time: fetch scrape.yaml → wire include → validate → reload → verify.
-function scrapeFetchCommand(token: string): string {
-  return [
-    ...shellHeader,
-    ``,
-    `# 1. Fetch hz's generated scrape config:`,
-    `curl -fsS -H "Authorization: Bearer ${token}" \\`,
-    `  ${hzOrigin()}${SCRAPE_YAML_PATH} | sudo tee "$HZ_YML" >/dev/null`,
-    ``,
-    `# 2. ${ensureIncludeSnippet[0]?.slice(2)}`,
-    ...ensureIncludeSnippet.slice(1),
-    ``,
-    `# 3. Validate + reload:`,
-    `sudo promtool check config "$PROM_YML"`,
-    `sudo systemctl reload prometheus`,
-    ``,
-    `# 4. ${verifyLoadedSnippet[0]?.slice(2)}`,
-    ...verifyLoadedSnippet.slice(1),
-  ].join("\n");
-}
-
-// Self-contained cron: wire the include once, install a refresh script (scrape
-// token baked in) + cron.d entry that re-pulls scrape.yaml and reloads every
-// 2 min, then verify it loaded.
-function cronInstallCommand(token: string): string {
-  return [
-    ...shellHeader,
-    ``,
-    `# 1. ${ensureIncludeSnippet[0]?.slice(2)}`,
-    ...ensureIncludeSnippet.slice(1),
-    ``,
-    `# 2. Install the refresh script (scrape token baked in):`,
-    `sudo tee ${REFRESH_BIN} >/dev/null <<'EOF'`,
-    `#!/bin/bash`,
-    `set -euo pipefail`,
-    `curl -fsS -H "Authorization: Bearer ${token}" \\`,
-    `  ${hzOrigin()}${SCRAPE_YAML_PATH} -o ${HZ_YML_DEST}`,
-    `systemctl reload prometheus`,
-    `EOF`,
-    `sudo chmod +x ${REFRESH_BIN}`,
-    ``,
-    `# 3. Pull now, then every 2 minutes via cron:`,
-    `sudo ${REFRESH_BIN}`,
-    `echo '*/2 * * * * root ${REFRESH_BIN}' | sudo tee ${CRON_DEST} >/dev/null`,
-    ``,
-    `# 4. ${verifyLoadedSnippet[0]?.slice(2)}`,
-    ...verifyLoadedSnippet.slice(1),
-  ].join("\n");
-}
 
 function CommandModal({
   open,
@@ -817,7 +731,7 @@ function CommandModal({
   onClose: () => void;
   title: string;
   description: ReactNode;
-  command: string;
+  command?: string;
   children?: ReactNode;
 }) {
   return (
@@ -827,7 +741,7 @@ function CommandModal({
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           {description}
         </Typography>
-        <CodeBlock text={command} maxHeight={400} />
+        {command !== undefined && <CodeBlock text={command} maxHeight={400} />}
         {children}
       </DialogContent>
       <DialogActions>
@@ -840,7 +754,8 @@ function CommandModal({
 function SetupZone() {
   const scrapeToken = useScrapeToken();
   const scrapeYaml = useScrapeYaml();
-  const [openModal, setOpenModal] = useState<null | "scrape" | "cron">(null);
+  const setupScript = useSetupScript();
+  const [openModal, setOpenModal] = useState<null | "scrape" | "timer">(null);
   const token = scrapeToken.data?.token ?? "";
 
   return (
@@ -849,8 +764,8 @@ function SetupZone() {
         Setup
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Wire a Prometheus server to hz. Pull the generated scrape config once, or install a cron
-        job that keeps it current. Both authenticate with the scrape token below.
+        Wire a Prometheus server to hz. Install a timer that keeps the generated scrape config
+        current. It authenticates with the scrape token below.
       </Typography>
 
       <Stack spacing={2}>
@@ -862,24 +777,23 @@ function SetupZone() {
             Prometheus wiring
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.5 }}>
-            Each opens a copy-run command (scrape token baked in) for your Prometheus box.
+            Auto-update opens a copy-run command (scrape token baked in) for your Prometheus box.
           </Typography>
           <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", gap: 1 }}>
             <Button
               variant="outlined"
-              startIcon={<ContentCopyIcon />}
-              disabled={!token}
+              startIcon={<VisibilityIcon />}
               onClick={() => setOpenModal("scrape")}
             >
-              scrape.yaml (one-time)
+              View scrape.yaml
             </Button>
             <Button
               variant="outlined"
               startIcon={<AutorenewIcon />}
               disabled={!token}
-              onClick={() => setOpenModal("cron")}
+              onClick={() => setOpenModal("timer")}
             >
-              Auto-update (cron)
+              Auto-update (timer)
             </Button>
           </Stack>
         </Paper>
@@ -888,20 +802,14 @@ function SetupZone() {
       <CommandModal
         open={openModal === "scrape"}
         onClose={() => setOpenModal(null)}
-        title="Fetch scrape.yaml"
+        title="Current scrape.yaml"
         description={
           <>
-            One-time pull of hz's generated scrape config to <code>{HZ_YML_DEST}</code>, wires the{" "}
-            <code>scrape_config_files</code> include into <code>prometheus.yml</code> if missing,
-            reloads, then verifies Prometheus actually loaded it. The command contains your scrape
-            token.
+            The scrape config hz serves now. The auto-update timer installs it as{" "}
+            <code>{HZ_YML_DEST}</code> after <code>promtool</code> accepts it.
           </>
         }
-        command={scrapeFetchCommand(token)}
       >
-        <Typography variant="subtitle2" sx={{ fontWeight: 600, mt: 2, mb: 1 }}>
-          Current scrape.yaml
-        </Typography>
         {scrapeYaml.isLoading ? (
           <CircularProgress size={20} />
         ) : scrapeYaml.error ? (
@@ -912,19 +820,28 @@ function SetupZone() {
       </CommandModal>
 
       <CommandModal
-        open={openModal === "cron"}
+        open={openModal === "timer"}
         onClose={() => setOpenModal(null)}
-        title="Install auto-update cron"
+        title="Install auto-update timer"
         description={
           <>
-            Wires the <code>scrape_config_files</code> include once, installs a refresh script +{" "}
-            <code>cron.d</code> entry that re-pulls scrape.yaml every 2 minutes and reloads
-            Prometheus, then verifies it loaded. Uses the scrape token — no admin token needed on
-            the box. The command contains your scrape token.
+            Runs hz&apos;s <code>setup.sh</code>: wires the <code>scrape_config_files</code>{" "}
+            include, installs <code>hz-scrape-refresh.timer</code> (every 2 minutes), and removes a
+            legacy <code>/etc/cron.d/hz-scrape-refresh</code>. Each refresh downloads to a temp
+            file, checks the whole Prometheus config with <code>promtool</code>, and only then
+            replaces <code>{HZ_YML_DEST}</code> and reloads — a failed check leaves the live file
+            unchanged (<code>journalctl -t hz-scrape-refresh</code>). Re-run it after rotating the
+            scrape token. The command contains your scrape token.
           </>
         }
-        command={cronInstallCommand(token)}
-      />
+        command={setupScript.data ? setupInstallCommand(setupScript.data) : ""}
+      >
+        {setupScript.isLoading ? (
+          <CircularProgress size={20} />
+        ) : setupScript.error ? (
+          <Alert severity="error">Failed to load setup.sh: {setupScript.error.message}</Alert>
+        ) : null}
+      </CommandModal>
     </Box>
   );
 }
@@ -1435,6 +1352,7 @@ function ObservabilityPage() {
   const [addHostPrefillIP, setAddHostPrefillIP] = useState("");
   const [editHostTarget, setEditHostTarget] = useState<HostDecl | null>(null);
   const [deleteHostTarget, setDeleteHostTarget] = useState<string | null>(null);
+  const [hostRefusal, setHostRefusal] = useState<RefusalReading | null>(null);
 
   const [snack, setSnack] = useState<SnackState>({ open: false, message: "", severity: "success" });
   const showSnack = (message: string, severity: "success" | "error") =>
@@ -1504,6 +1422,23 @@ function ObservabilityPage() {
     });
   };
 
+  // Removing or RENAMING a host that something still references is refused by
+  // the backend, and the refusal names every dependant on its own line. A
+  // snackbar shows the first line and eats the rest — the operator is told
+  // "still referenced by 31 record(s):" and given no way to find out which,
+  // which is the same as not being told. So a reference refusal opens as an
+  // explanation; anything else stays a toast.
+  const onHostMutationError = (err: Error) => {
+    const refusal = readRefusal(err.message);
+    if (!refusal.isReferenceRefusal) {
+      showSnack(err.message, "error");
+      return;
+    }
+    setEditHostTarget(null);
+    setDeleteHostTarget(null);
+    setHostRefusal(refusal);
+  };
+
   const handleEditHost = (form: HostFormState) => {
     if (!editHostTarget) return;
     const next = hosts.map((h) => (h.name === editHostTarget.name ? formToHost(form) : h));
@@ -1512,7 +1447,7 @@ function ObservabilityPage() {
         setEditHostTarget(null);
         showSnack("Host updated", "success");
       },
-      onError: (err) => showSnack(err.message, "error"),
+      onError: onHostMutationError,
     });
   };
 
@@ -1524,7 +1459,7 @@ function ObservabilityPage() {
         setDeleteHostTarget(null);
         showSnack("Host deleted", "success");
       },
-      onError: (err) => showSnack(err.message, "error"),
+      onError: onHostMutationError,
     });
   };
 
@@ -1638,6 +1573,36 @@ function ObservabilityPage() {
         onConfirm={handleDeleteHost}
         isDeleting={saveHosts.isPending}
       />
+
+      {/* The refusal, as an explanation. Dismissal is explicit twice: a
+          labelled button and a visible X. */}
+      {hostRefusal && (
+        <Dialog open onClose={() => setHostRefusal(null)} maxWidth="md" fullWidth>
+          <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <Box sx={{ flex: 1 }}>That host is still in use — nothing was changed</Box>
+            <IconButton
+              onClick={() => setHostRefusal(null)}
+              aria-label="Close this dialog"
+              title="Close"
+            >
+              <CloseIcon />
+            </IconButton>
+          </DialogTitle>
+          <DialogContent dividers>
+            <RefusalNote refusal={hostRefusal} />
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+              If the box simply moved, its address is one edit on the Hosts
+              screen and every record above follows it — nothing has to be
+              repointed by hand.
+            </Typography>
+          </DialogContent>
+          <DialogActions>
+            <Button variant="contained" onClick={() => setHostRefusal(null)}>
+              Close — nothing was changed
+            </Button>
+          </DialogActions>
+        </Dialog>
+      )}
 
       {/* Snackbar feedback */}
       <Snackbar

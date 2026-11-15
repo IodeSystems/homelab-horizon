@@ -1,0 +1,955 @@
+package wireguard
+
+// This file is the PURE half of the package: desired state in, bytes out. It
+// reads no files, runs no commands, looks at no clock, consults no environment
+// — and, uniquely for this package, it mints no keys. Everything it needs
+// arrives as an argument, so the WireGuard config a machine would get can be
+// computed, diffed and tested without being on that machine, without being
+// root, and without a `wg` binary anywhere.
+//
+// The key rule is the one worth stating twice: a public key is an INPUT here.
+// `wg genkey` is non-deterministic by construction, so a renderer that mints a
+// key cannot be diffed against itself and cannot be tested by comparing bytes.
+// Generation lives in apply.go; render only interpolates what it is handed.
+//
+// See seam_test.go, which enforces both halves of that.
+
+import (
+	"bufio"
+	"bytes"
+	"fmt"
+	"net"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/iodesystems/homelab-horizon/internal/iptables"
+)
+
+// Peer is one [Peer] block: the identity and the addresses routed to it.
+type Peer struct {
+	PublicKey  string
+	AllowedIPs string
+	Name       string
+}
+
+// PeerStatus contains live status from wg show
+type PeerStatus struct {
+	PublicKey       string
+	Endpoint        string
+	AllowedIPs      string
+	LatestHandshake string
+	TransferRx      string
+	TransferTx      string
+}
+
+// InterfaceStatus contains live interface status
+type InterfaceStatus struct {
+	Up        bool
+	PublicKey string
+	Port      string
+	Peers     map[string]PeerStatus // keyed by public key
+}
+
+// PeerTraffic is one peer's counters as the kernel currently reports them.
+type PeerTraffic struct {
+	LatestHandshake time.Time
+	// RX and TX are cumulative byte counts since the interface came up. They
+	// reset when it is recreated, so a consumer comparing samples has to treat
+	// a decrease as a restart rather than as negative traffic.
+	RX uint64
+	TX uint64
+}
+
+// Chain names come from the generator so the two cannot disagree about which
+// chains they are talking about.
+const (
+	forwardChainName = iptables.ForwardChainName
+	inputChainName   = iptables.InputChainName
+
+	// defaultWGInterface is what the chain-body rebuilds pass to the generator
+	// when a caller has no interface to give. The body rules never mention it.
+	defaultWGInterface = "wg0"
+)
+
+// ParsedConfig is everything a wg0.conf says, as values.
+//
+// This is the seam's answer to the first of this package's fights: the file on
+// disk is still the state of record (moving that is a model change, not this
+// refactor — plan/design/architecture.md phase 4, items 13–15), but *parsing* it is
+// pure and *holding* it is the manager's job. Nothing below this line reads a
+// file to find out what the peers are; WGConfig does that once and passes the
+// result in.
+type ParsedConfig struct {
+	PrivateKey string
+	Address    string
+	ListenPort string
+	PostUp     string
+	PostDown   string
+
+	// RawInterface is every [Interface] line verbatim, in file order — kept
+	// because a hand-added directive we do not model (MTU, Table, SaveConfig)
+	// must survive a round trip.
+	RawInterface []string
+
+	Peers []Peer
+}
+
+// ParseConfig reads a wg0.conf's text into values.
+//
+// Lifted verbatim out of WGConfig.Load, which used to read the file and parse
+// it in one breath. The read is the manager's; this half is what can be run
+// against a config fetched from anywhere, including a box you are not on.
+func ParseConfig(data []byte) (ParsedConfig, error) {
+	var cfg ParsedConfig
+
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	var currentPeer *Peer
+	inInterface := false
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		if line == "[Interface]" {
+			inInterface = true
+			currentPeer = nil
+			continue
+		}
+
+		if line == "[Peer]" {
+			if currentPeer != nil {
+				cfg.Peers = append(cfg.Peers, *currentPeer)
+			}
+			currentPeer = &Peer{}
+			inInterface = false
+			continue
+		}
+
+		if inInterface {
+			cfg.RawInterface = append(cfg.RawInterface, scanner.Text())
+			if strings.HasPrefix(line, "PrivateKey") {
+				cfg.PrivateKey = extractValue(line)
+			} else if strings.HasPrefix(line, "Address") {
+				cfg.Address = extractValue(line)
+			} else if strings.HasPrefix(line, "ListenPort") {
+				cfg.ListenPort = extractValue(line)
+			} else if strings.HasPrefix(line, "PostUp") {
+				cfg.PostUp = extractValue(line)
+			} else if strings.HasPrefix(line, "PostDown") {
+				cfg.PostDown = extractValue(line)
+			}
+		}
+
+		if currentPeer != nil {
+			if strings.HasPrefix(line, "PublicKey") {
+				currentPeer.PublicKey = extractValue(line)
+			} else if strings.HasPrefix(line, "AllowedIPs") {
+				currentPeer.AllowedIPs = extractValue(line)
+			} else if strings.HasPrefix(line, "#") && currentPeer.Name == "" {
+				currentPeer.Name = strings.TrimPrefix(line, "# ")
+			}
+		}
+	}
+
+	if currentPeer != nil {
+		cfg.Peers = append(cfg.Peers, *currentPeer)
+	}
+
+	return cfg, scanner.Err()
+}
+
+func extractValue(line string) string {
+	parts := strings.SplitN(line, "=", 2)
+	if len(parts) == 2 {
+		return strings.TrimSpace(parts[1])
+	}
+	return ""
+}
+
+// IP FORWARDING: ONE DECLARATION, TWO CONSUMERS.
+//
+// hz's own writer (EnableIPForwarding, apply.go) and the payload hz serves the
+// agent (internal/server/ipforward.go) have to put the same bytes in the same
+// two places, because BOTH run on the gateway until item 12 step 5
+// (plan/design/privilege-audit.md §7 B). So the names and the contents are
+// stated once, here, in the pure half — the same discipline
+// config.MaintenancePagePattern and haproxy.Error503Path follow, and for the
+// same reason: two spellings of one fact are two things free to disagree.
+//
+// TWO PLACES, BECAUSE FORWARDING HAS TWO LIFETIMES, and until this landed the
+// tree only ever wrote one of them (plan/icebox.md, "IP forwarding is never
+// persisted"):
+//
+//	/proc/sys/net/ipv4/ip_forward   the live kernel flag. Gone at reboot.
+//	/etc/sysctl.d/<drop-in>         what sets it again at the next boot.
+//
+// Writing only the first IS the reboot bug: a gateway whose distro default is
+// 0 stops routing when it restarts, and nothing says so until a human presses
+// the fixer button again.
+const (
+	// IPForwardRuntimePath is the live flag.
+	//
+	// NOT AN ORDINARY FILE. What that costs the agent — and why it is still
+	// modelled as an agent.File — is set out in internal/server/ipforward.go.
+	IPForwardRuntimePath = "/proc/sys/net/ipv4/ip_forward"
+
+	// IPForwardOn is the value, WITH ITS TRAILING NEWLINE, and the newline is
+	// load-bearing rather than cosmetic.
+	//
+	// procfs prints the flag back as "1\n". A desired value of "1" — which is
+	// what this package wrote until the hand-over — therefore never equals
+	// what a reconciler reads, so the agent would rewrite the kernel flag on
+	// every single pass and `hz-agent diff` would report drift forever on a
+	// machine that is already correct. Both writers take the value from here
+	// so neither can drop it.
+	IPForwardOn = "1\n"
+
+	// SysctlDropInDir is where the persistent half goes. A drop-in rather
+	// than an append to /etc/sysctl.conf, which is what the HA join script
+	// does (handlers_ha.go): an append is not idempotent, cannot be undone
+	// without editing a file hz does not own, and gives the agent nothing it
+	// can claim.
+	SysctlDropInDir = "/etc/sysctl.d"
+
+	// IPForwardDropInName is hz's file in it.
+	//
+	// 70- puts it after the distribution's own drop-ins (10-, 30-, 50-) and
+	// before 99-sysctl.conf, which on Debian is a symlink to /etc/sysctl.conf.
+	// SO IT DOES NOT BEAT AN ADMIN WHO HAS WRITTEN net.ipv4.ip_forward=0 IN
+	// /etc/sysctl.conf, deliberately: that is somebody turning forwarding off
+	// on purpose, and hz silently overriding it would be worse than hz not
+	// routing.
+	IPForwardDropInName = "70-hz-ip-forward.conf"
+
+	// IPForwardDropInMatch is the glob for "hz's own forwarding drop-in,
+	// whatever number it was written with" — the agent's directory claim
+	// (agent.Directory.Match) and the sweep in EnableIPForwardingAt, from one
+	// constant.
+	//
+	// NARROW ON PURPOSE. /etc/sysctl.d on a real box holds the
+	// distribution's files, and a "*.conf" claim would have the agent delete
+	// every one of them the first time it ran. That is the errors-directory
+	// lesson (privilege-audit.md §7 B) spelled here rather than re-learned.
+	IPForwardDropInMatch = "*-hz-ip-forward.conf"
+)
+
+// RenderIPForwardDropIn is the persistent half's contents.
+//
+// It names the live flag as well, because an admin who finds this file is
+// entitled to know that hz sets forwarding in two places and that editing only
+// this one leaves the running kernel where it was until a reboot.
+func RenderIPForwardDropIn() string {
+	return "# Managed by homelab-horizon. Edits are overwritten.\n" +
+		"#\n" +
+		"# This gateway routes between the WireGuard tunnel and the LAN, which\n" +
+		"# the kernel will not do with forwarding off. hz also sets the live\n" +
+		"# flag at " + IPForwardRuntimePath + "; this file is what sets it\n" +
+		"# again after a reboot.\n" +
+		"net.ipv4.ip_forward=1\n"
+}
+
+// RenderPeerBlock is the [Peer] stanza appended for a new peer. The leading
+// newline separates it from whatever the file already ended with.
+//
+// publicKey is an input. Nothing in this file can produce one.
+func RenderPeerBlock(name, publicKey, allowedIP string) string {
+	return fmt.Sprintf("\n[Peer]\n# %s\nPublicKey = %s\nAllowedIPs = %s\n", name, publicKey, allowedIP)
+}
+
+// renderPeerUpdate rewrites one peer's name comment and AllowedIPs in the
+// config text, preserving every other byte, and reports whether the peer was
+// found.
+//
+// Line-patching rather than re-rendering the whole file: a wg0.conf may carry
+// directives this package does not model, and a full re-render would drop them.
+// That is a property of the file being the state of record — when the peer set
+// moves into hz this function goes away rather than being ported.
+func renderPeerUpdate(current, publicKey, name, allowedIPs string) (string, bool) {
+	lines := strings.Split(current, "\n")
+	var result []string
+	found := false
+	inTargetPeer := false
+	skipNextComment := false
+
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+
+		// Check if we're entering a new peer section
+		if trimmed == "[Peer]" {
+			inTargetPeer = false
+			skipNextComment = false
+		}
+
+		// Check if this is the target peer by looking at the PublicKey line
+		if strings.HasPrefix(trimmed, "PublicKey") && extractValue(trimmed) == publicKey {
+			inTargetPeer = true
+			found = true
+
+			// Look back and update the comment (name) if it exists
+			for j := len(result) - 1; j >= 0; j-- {
+				resultTrimmed := strings.TrimSpace(result[j])
+				if resultTrimmed == "[Peer]" {
+					// Insert the new name comment after [Peer]
+					result = append(result, "# "+name)
+					break
+				} else if strings.HasPrefix(resultTrimmed, "#") {
+					// Replace existing name comment
+					result[j] = "# " + name
+					break
+				} else if resultTrimmed == "" {
+					continue
+				} else {
+					break
+				}
+			}
+		}
+
+		// If we're in the target peer section, handle AllowedIPs
+		if inTargetPeer && strings.HasPrefix(trimmed, "AllowedIPs") {
+			result = append(result, "AllowedIPs = "+allowedIPs)
+			continue
+		}
+
+		// Skip the old comment line if we just added a new one
+		if skipNextComment && strings.HasPrefix(trimmed, "#") {
+			skipNextComment = false
+			continue
+		}
+
+		result = append(result, line)
+	}
+
+	if !found {
+		return "", false
+	}
+	return strings.Join(result, "\n"), true
+}
+
+// renderPeerKeyReplacement swaps one peer's PublicKey line, leaving the rest of
+// the file alone, and reports whether the old key was present.
+//
+// Only the first match is replaced: two peers sharing a public key is not a
+// state WireGuard accepts, so the second would be a corrupt file either way.
+func renderPeerKeyReplacement(current, oldPubKey, newPubKey string) (string, bool) {
+	lines := strings.Split(current, "\n")
+	found := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "PublicKey") && extractValue(trimmed) == oldPubKey {
+			lines[i] = "PublicKey = " + newPubKey
+			found = true
+			break
+		}
+	}
+	if !found {
+		return "", false
+	}
+	return strings.Join(lines, "\n"), true
+}
+
+// renderPeerRemoval deletes a peer's whole stanza — the [Peer] header, its name
+// comment, the blank lines that led up to it, and everything after its
+// PublicKey until the next [Peer] — and reports whether the peer was found.
+//
+// The backwards walk over already-emitted lines is what removes the header and
+// comment: they precede the PublicKey line that identifies the peer, so they
+// are already in the output by the time we know we are deleting this one.
+func renderPeerRemoval(current, publicKey string) (string, bool) {
+	lines := strings.Split(current, "\n")
+	var result []string
+	skip := false
+	found := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if trimmed == "[Peer]" {
+			skip = false
+		}
+
+		if skip {
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "PublicKey") && extractValue(trimmed) == publicKey {
+			skip = true
+			found = true
+			for len(result) > 0 {
+				last := strings.TrimSpace(result[len(result)-1])
+				if last == "[Peer]" || strings.HasPrefix(last, "#") || last == "" {
+					result = result[:len(result)-1]
+				} else {
+					break
+				}
+			}
+			continue
+		}
+
+		result = append(result, line)
+	}
+
+	if !found {
+		return "", false
+	}
+	return strings.TrimRight(strings.Join(result, "\n"), "\n") + "\n", true
+}
+
+// masqIfaceRe matches the iface token in an iptables MASQUERADE clause embedded
+// in a wg0.conf PostUp/PostDown line.
+//
+// A regex rather than a comparison against ExpectedPostUp(old): the heal has to
+// work when hz does not know the old interface's name at all — the first
+// reconcile after an upgrade, or a box whose LastLocalIface never persisted —
+// and "find the `-o X -j MASQUERADE` and swap X" needs no X to start from.
+//
+// It is the ONLY definition of that shape. It used to live in
+// internal/server/reconcile_iptables.go, where hz's own writer was its only
+// caller; the agent's payload needs the same rewrite (see the package header of
+// internal/server/wg_masquerade.go), and two spellings of this regex is exactly
+// how the two writers would come to disagree about which interface the gateway
+// NATs through.
+var masqIfaceRe = regexp.MustCompile(`-o \S+ -j MASQUERADE`)
+
+// RetargetMasquerade points every `-o <iface> -j MASQUERADE` clause in one
+// PostUp/PostDown line at iface. A line with no such clause is returned
+// unchanged — including the empty string, which is what a config with no
+// PostUp parses to and must not be turned into a directive.
+func RetargetMasquerade(rule, iface string) string {
+	if rule == "" || iface == "" {
+		return rule
+	}
+	return masqIfaceRe.ReplaceAllString(rule, "-o "+iface+" -j MASQUERADE")
+}
+
+// HealMasqueradeIface is THE interface-change heal for wg0.conf, and it is pure:
+// config text in, config text out, plus whether anything moved.
+//
+// It is what keeps a reboot coming up correct after the gateway's egress
+// interface changes — the founding outage of this repo was a MASQUERADE left
+// bound to an interface that no longer existed. The live rule is healed by
+// iptables.Reconcile; this is the half that heals the FILE, so PostUp installs
+// the right rule next time wg-quick runs it rather than re-installing the
+// stale one for the reconciler to condemn all over again.
+//
+// # LINE-WISE, AND DELIBERATELY NOT renderInterfaceRules
+//
+// Three properties the rewrite has to have, and renderInterfaceRules has none
+// of them:
+//
+//  1. IT NEVER INTRODUCES A DIRECTIVE. renderInterfaceRules INSERTS PostUp and
+//     PostDown after ListenPort when they are absent. A config with a PostUp
+//     and no PostDown would grow an empty `PostDown = ` line, which wg-quick
+//     runs as a command.
+//  2. IT CHANGES ONE TOKEN. Everything else in the file — spacing around `=`,
+//     comments, unmodelled directives, the order of the [Peer] blocks — is
+//     returned byte-for-byte. A heal that reformats the file makes every
+//     comparison between the two writers a comparison of formatting.
+//  3. IT READS THE FILE, NOT A CACHE. hz's writer used to compose the new line
+//     from WGConfig's in-memory postUp, parsed whenever Load last ran, so a
+//     hand edit made since was silently reverted by the next heal.
+//
+// An empty iface returns the text unchanged: hz cannot name the egress
+// interface this instant, and rewriting the clause to `-o  -j MASQUERADE`
+// would be worse than leaving the stale name there. That is the same
+// stand-down iptablesSectionFor makes with the rule sets, for the same reason.
+func HealMasqueradeIface(current, iface string) (string, bool) {
+	if current == "" || iface == "" {
+		return current, false
+	}
+	lines := strings.Split(current, "\n")
+	inInterface := false
+	changed := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			inInterface = trimmed == "[Interface]"
+			continue
+		}
+		if !inInterface {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "PostUp") && !strings.HasPrefix(trimmed, "PostDown") {
+			continue
+		}
+		if healed := RetargetMasquerade(line, iface); healed != line {
+			lines[i] = healed
+			changed = true
+		}
+	}
+	if !changed {
+		return current, false
+	}
+	return strings.Join(lines, "\n"), true
+}
+
+// renderInterfaceRules rewrites PostUp and PostDown in the config text,
+// preserving everything else.
+//
+// When either directive is absent it is inserted after ListenPort rather than
+// appended: wg-quick applies [Interface] keys in file order, and PostUp has to
+// be inside the [Interface] section to run at all.
+func renderInterfaceRules(current, postUp, postDown string) string {
+	lines := strings.Split(current, "\n")
+	var result []string
+	inInterface := false
+	replacedUp := false
+	replacedDown := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if trimmed == "[Interface]" {
+			inInterface = true
+			result = append(result, line)
+			continue
+		}
+		if trimmed == "[Peer]" {
+			inInterface = false
+		}
+
+		if inInterface {
+			if strings.HasPrefix(trimmed, "PostUp") {
+				result = append(result, "PostUp = "+postUp)
+				replacedUp = true
+				continue
+			}
+			if strings.HasPrefix(trimmed, "PostDown") {
+				result = append(result, "PostDown = "+postDown)
+				replacedDown = true
+				continue
+			}
+		}
+
+		result = append(result, line)
+	}
+
+	// If PostUp/PostDown didn't exist, add them before the first blank line after [Interface]
+	if !replacedUp || !replacedDown {
+		var final []string
+		added := false
+		for _, line := range result {
+			final = append(final, line)
+			if !added && strings.HasPrefix(strings.TrimSpace(line), "ListenPort") {
+				if !replacedUp {
+					final = append(final, "PostUp = "+postUp)
+				}
+				if !replacedDown {
+					final = append(final, "PostDown = "+postDown)
+				}
+				added = true
+			}
+		}
+		result = final
+	}
+
+	return strings.Join(result, "\n")
+}
+
+// ServerInterface is the gateway's own [Interface] block: everything a fresh
+// wg0.conf needs and nothing it can look up for itself.
+//
+// Its private key is an INPUT, like every other key in this file. The verb that
+// mints one is `hz-agent wg-create-config` (cmd/hz-agent/wgconfig.go), which is
+// apply-side by construction and hands the result in here.
+type ServerInterface struct {
+	// PrivateKey is the server's own, base64 as `wg genkey` prints it.
+	PrivateKey string
+	// Address is the gateway's address ON the VPN, with its prefix length —
+	// what ServerAddress derives from a range.
+	Address string
+	// ListenPort is the UDP port wg listens on.
+	ListenPort int
+	// PostUp and PostDown are the firewall lines, from ExpectedPostUp and
+	// ExpectedPostDown. Arguments rather than a lookup because building them
+	// needs the default-route interface, which is a read of the machine.
+	PostUp   string
+	PostDown string
+}
+
+// RenderServerInterface renders a fresh wg0.conf with no peers in it.
+//
+// Peers are added later by the peer handlers, which append [Peer] blocks to
+// this file; a newly created interface has none, and that is the only state
+// this function can honestly render — it is called exactly once per gateway,
+// on a box where no wg0.conf exists.
+func RenderServerInterface(s ServerInterface) string {
+	return fmt.Sprintf(`[Interface]
+PrivateKey = %s
+Address = %s
+ListenPort = %d
+PostUp = %s
+PostDown = %s
+`, s.PrivateKey, s.Address, s.ListenPort, s.PostUp, s.PostDown)
+}
+
+// ServerAddress derives the gateway's own VPN address from the VPN range: the
+// network address plus one, carrying the range's real prefix length.
+//
+// The handler this replaced did it with string surgery — split on "/", trim a
+// trailing ".0", append ".1", and write "/24" whatever the range said. For the
+// default 10.0.2.0/24 the answer is identical; for a range written any other
+// way it was wrong in two directions at once (a /16 range got a /24 address,
+// and "10.0.2.5/24" became "10.0.2.5.1"). This parses instead.
+func ServerAddress(vpnRange string) (string, error) {
+	_, ipnet, err := net.ParseCIDR(vpnRange)
+	if err != nil {
+		return "", fmt.Errorf("vpn range %q: %w", vpnRange, err)
+	}
+	base := ipnet.IP.To4()
+	if base == nil {
+		return "", fmt.Errorf("vpn range %q is not IPv4", vpnRange)
+	}
+	if base[3] == 255 {
+		return "", fmt.Errorf("vpn range %q has no host address above its network address", vpnRange)
+	}
+	ones, _ := ipnet.Mask.Size()
+	return fmt.Sprintf("%s/%d", net.IPv4(base[0], base[1], base[2], base[3]+1), ones), nil
+}
+
+// NextIP picks the lowest free host address in vpnRange, as a /32.
+//
+// Allocation is a DECISION, not an observation, so the addresses already in use
+// arrive as an argument — this is the third of the package's fights. The method
+// that used to read them straight off the loaded config is now a two-line
+// wrapper (WGConfig.GetNextIP) that gathers the set and calls this. That is
+// what lets "which address would the next peer get" be answered for a config
+// hz has never written.
+//
+// used entries may carry a CIDR suffix or not; both forms are accepted and the
+// suffix is ignored. Host numbers start at 2 because .0 is the network and .1
+// is conventionally the server's own address, and stop before 255 (broadcast),
+// which caps a segment at 253 peers regardless of the prefix length the range
+// is written with.
+func NextIP(vpnRange string, used []string) (string, error) {
+	_, ipnet, err := net.ParseCIDR(vpnRange)
+	if err != nil {
+		return "", err
+	}
+
+	usedIPs := make(map[string]bool, len(used))
+	for _, u := range used {
+		if u == "" {
+			continue
+		}
+		usedIPs[strings.Split(u, "/")[0]] = true
+	}
+
+	ip := ipnet.IP.To4()
+	if ip == nil {
+		return "", fmt.Errorf("only IPv4 supported")
+	}
+
+	for i := 2; i < 255; i++ {
+		candidate := net.IPv4(ip[0], ip[1], ip[2], byte(i)).String()
+		if !usedIPs[candidate] {
+			return candidate + "/32", nil
+		}
+	}
+
+	return "", fmt.Errorf("no available IPs in range")
+}
+
+// ExpectedPostUp returns the PostUp line we'd generate for a new config with
+// the given output interface. The form is chain-based: it ensures WG-FORWARD
+// and WG-INPUT exist, jumps to them from FORWARD and INPUT for wg-incoming
+// traffic (so per-peer profile/jail/DROP rules actually fire), allows return
+// traffic via conntrack, and adds NAT MASQUERADE for the default iface.
+//
+// The INPUT jump is what keeps an MFA-jailed peer off the gateway's own
+// listeners — traffic to the wg0 address is delivered locally and never
+// reaches FORWARD, so WG-FORWARD alone can't see it. The chain is empty
+// unless someone is jailed, so this costs one hash lookup in the common case.
+//
+// `2>/dev/null || true` on the chain create swallows the "chain already
+// exists" error so wg-quick doesn't abort PostUp on a re-up.
+//
+// Earlier versions emitted `iptables -I FORWARD 1 -i %i -j ACCEPT` directly,
+// which short-circuited everything — WG-FORWARD never fired and per-peer
+// policy was bypassed. Hosts upgraded from that template need their wg0.conf
+// rewritten (handlers_api_system_fix.go re-emits via this function), as do
+// hosts predating the WG-INPUT jump (reconcileIPTables migrates those).
+//
+// outIface is an argument, not something this file looks up: reading the
+// routing table is apply-side work (detectDefaultInterface). That is the
+// fourth of the package's fights, and it was already resolved in the signature
+// — the function just used to sit next to the thing that reads /proc.
+func ExpectedPostUp(outIface string) string {
+	return fmt.Sprintf("iptables -N %s 2>/dev/null || true; iptables -N %s 2>/dev/null || true; iptables -I FORWARD 1 -i %%i -j %s; iptables -I FORWARD 2 -o %%i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; iptables -I INPUT 1 -i %%i -j %s; iptables -t nat -I POSTROUTING 1 -o %s -j MASQUERADE",
+		forwardChainName, inputChainName, forwardChainName, inputChainName, outIface)
+}
+
+// ExpectedPostDown returns the PostDown line we'd generate for a new config
+// with the given output interface. Inverse of ExpectedPostUp: removes the
+// FORWARD/INPUT jumps, the conntrack return rule, and the NAT MASQUERADE,
+// then flushes and deletes both chains so a subsequent PostUp starts from a
+// clean slate.
+func ExpectedPostDown(outIface string) string {
+	return fmt.Sprintf("iptables -D FORWARD -i %%i -j %s; iptables -D FORWARD -o %%i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; iptables -D INPUT -i %%i -j %s; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE; iptables -F %s; iptables -X %s; iptables -F %s; iptables -X %s",
+		forwardChainName, inputChainName, outIface, forwardChainName, forwardChainName, inputChainName, inputChainName)
+}
+
+// ForwardChainOpts holds options for rebuilding the WG-FORWARD chain.
+type ForwardChainOpts struct {
+	// WGInterface is optional: these entry points rebuild chain bodies, which
+	// do not reference it. Empty means the package default.
+	WGInterface string
+	Peers       []Peer
+	Profiles    map[string]string
+	VPNRange    string
+	LanCIDR     string
+	JailedPeers map[string]bool // peers currently MFA-jailed
+	ServerWGIP  string          // WG interface address (e.g. "10.100.0.1")
+	ListenPort  string          // Horizon listen port (e.g. "8080")
+
+	// HAProxyPorts are the gateway's HAProxy bind ports. Jailed peers reach
+	// them so HAProxy can apply the L7 half of the jail (portal vs everything
+	// else); empty when HAProxy is disabled.
+	HAProxyPorts []string
+}
+
+// expectedRulesInputs translates this package's options into the generator's.
+//
+// The two structs carry the same facts under different names because they were
+// written apart; keeping the translation in one function means a new field is a
+// compile error here rather than a rule that silently stops being emitted on the
+// immediate-apply path.
+func (opts ForwardChainOpts) expectedRulesInputs() iptables.Inputs {
+	peers := make([]iptables.PeerInput, 0, len(opts.Peers))
+	for _, p := range opts.Peers {
+		// Profile travels in Inputs.Profiles, keyed by name — PeerInput itself
+		// carries only identity.
+		peers = append(peers, iptables.PeerInput{
+			Name:       p.Name,
+			AllowedIPs: p.AllowedIPs,
+		})
+	}
+	return iptables.Inputs{
+		// WGInterface only has to be non-empty: the generator returns nothing
+		// without one, and the FORWARD/INPUT jump rules it emits for it are
+		// filtered out below by chain.
+		WGInterface:  wgInterfaceForRules(opts),
+		VPNRange:     opts.VPNRange,
+		LanCIDR:      opts.LanCIDR,
+		Peers:        peers,
+		ServerWGIP:   opts.ServerWGIP,
+		ListenPort:   opts.ListenPort,
+		JailedPeers:  opts.JailedPeers,
+		HAProxyPorts: opts.HAProxyPorts,
+		Profiles:     opts.Profiles,
+	}
+}
+
+// wgInterfaceForRules returns the interface name the generator needs.
+//
+// These two entry points only ever rebuild the chain bodies, and the body rules
+// do not mention the interface — but the generator refuses to emit anything
+// without one, so this supplies the package default rather than making every
+// caller pass a value it has no use for.
+func wgInterfaceForRules(opts ForwardChainOpts) string {
+	if opts.WGInterface != "" {
+		return opts.WGInterface
+	}
+	return defaultWGInterface
+}
+
+// GenerateClientConfig renders the .conf a single-site client is handed.
+//
+// clientPrivateKey arrives as an argument. This function does not mint it and
+// must not: see the file header.
+//
+// The /32 the peer is allocated becomes a /24 on the client's Address line so
+// the client routes the whole VPN range over the tunnel rather than ARPing for
+// its neighbours.
+func GenerateClientConfig(clientPrivateKey, clientIP, serverPubKey, serverEndpoint, dns, allowedIPs string) string {
+	clientIPWithMask := clientIP
+	if !strings.Contains(clientIP, "/") {
+		clientIPWithMask = clientIP + "/32"
+	}
+	clientIPForAddress := strings.TrimSuffix(clientIPWithMask, "/32") + "/24"
+
+	return fmt.Sprintf(`[Interface]
+PrivateKey = %s
+Address = %s
+DNS = %s
+
+[Peer]
+PublicKey = %s
+Endpoint = %s
+AllowedIPs = %s
+PersistentKeepalive = 25
+`, clientPrivateKey, clientIPForAddress, dns, serverPubKey, serverEndpoint, allowedIPs)
+}
+
+// GenerateUpstreamClientConfig renders the .conf a nested hz is handed for its
+// `upstream` VPN client (config.ProfileUpstream).
+//
+// It differs from GenerateClientConfig in three lines, each on purpose:
+//   - AllowedIPs is the gateway's WG address /32 only — the one address the
+//     gateway's rules admit (iptables upstreamRules), so the child routes
+//     nothing else into the tunnel;
+//   - Address is the client's /32, not /24: the child is itself an hz and
+//     very likely runs its own VPN on a /24 of its own, which a /24 here would
+//     shadow with a connected route;
+//   - there is NO DNS line: the child reaches the parent by IP, port 53 is not
+//     admitted, and wg-quick would otherwise replace the child's resolver with
+//     one it cannot reach.
+//
+// Single-site even in a multi-site fleet: an upstream client reaches one hz.
+//
+// clientPrivateKey arrives as an argument, as for GenerateClientConfig.
+func GenerateUpstreamClientConfig(clientPrivateKey, clientIP, serverPubKey, serverEndpoint, serverWGIP string) string {
+	return fmt.Sprintf(`[Interface]
+PrivateKey = %s
+Address = %s/32
+
+[Peer]
+PublicKey = %s
+Endpoint = %s
+AllowedIPs = %s/32
+PersistentKeepalive = 25
+`, clientPrivateKey, strings.TrimSuffix(clientIP, "/32"), serverPubKey, serverEndpoint, serverWGIP)
+}
+
+// SitePeer describes one site's WireGuard server for multi-site client configs.
+type SitePeer struct {
+	PublicKey  string
+	Endpoint   string
+	AllowedIPs string // that site's VPN range
+}
+
+// GenerateMultiSiteClientConfig generates a client config with one [Peer]
+// block per site. Each peer gets its own AllowedIPs (the site's VPN range).
+// Used for site-to-site topologies where the client can reach both sites.
+func GenerateMultiSiteClientConfig(clientPrivateKey, clientIP, dns string, sites []SitePeer) string {
+	clientIPForAddress := clientIP
+	if !strings.Contains(clientIP, "/") {
+		clientIPForAddress = clientIP + "/24"
+	} else {
+		clientIPForAddress = strings.TrimSuffix(clientIPForAddress, "/32") + "/24"
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "[Interface]\nPrivateKey = %s\nAddress = %s\nDNS = %s\n",
+		clientPrivateKey, clientIPForAddress, dns)
+
+	for _, site := range sites {
+		fmt.Fprintf(&b, "\n[Peer]\nPublicKey = %s\nEndpoint = %s\nAllowedIPs = %s\nPersistentKeepalive = 25\n",
+			site.PublicKey, site.Endpoint, site.AllowedIPs)
+	}
+
+	return b.String()
+}
+
+func ValidatePublicKey(key string) bool {
+	if len(key) != 44 {
+		return false
+	}
+	matched, _ := regexp.MatchString(`^[A-Za-z0-9+/]{43}=$`, key)
+	return matched
+}
+
+// parseWGShow reads the human-readable `wg show <iface>` output.
+//
+// Split out from GetInterfaceStatus so the parsing is testable without a kernel
+// or a wg binary — the same reason parseWGDump is separate. The caller decides
+// what an error from the command means; this half only sees text, and text it
+// was given means the interface was up.
+func parseWGShow(out string) InterfaceStatus {
+	status := InterfaceStatus{
+		Up:    true,
+		Peers: make(map[string]PeerStatus),
+	}
+
+	lines := strings.Split(out, "\n")
+	var currentPeer *PeerStatus
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		if strings.HasPrefix(line, "interface:") {
+			continue
+		}
+
+		if strings.HasPrefix(line, "public key:") {
+			status.PublicKey = strings.TrimSpace(strings.TrimPrefix(line, "public key:"))
+			continue
+		}
+
+		if strings.HasPrefix(line, "listening port:") {
+			status.Port = strings.TrimSpace(strings.TrimPrefix(line, "listening port:"))
+			continue
+		}
+
+		if strings.HasPrefix(line, "peer:") {
+			if currentPeer != nil {
+				status.Peers[currentPeer.PublicKey] = *currentPeer
+			}
+			currentPeer = &PeerStatus{
+				PublicKey: strings.TrimSpace(strings.TrimPrefix(line, "peer:")),
+			}
+			continue
+		}
+
+		if currentPeer != nil {
+			if strings.HasPrefix(line, "endpoint:") {
+				currentPeer.Endpoint = strings.TrimSpace(strings.TrimPrefix(line, "endpoint:"))
+			} else if strings.HasPrefix(line, "allowed ips:") {
+				currentPeer.AllowedIPs = strings.TrimSpace(strings.TrimPrefix(line, "allowed ips:"))
+			} else if strings.HasPrefix(line, "latest handshake:") {
+				currentPeer.LatestHandshake = strings.TrimSpace(strings.TrimPrefix(line, "latest handshake:"))
+			} else if strings.HasPrefix(line, "transfer:") {
+				transfer := strings.TrimSpace(strings.TrimPrefix(line, "transfer:"))
+				parts := strings.Split(transfer, ",")
+				if len(parts) >= 2 {
+					currentPeer.TransferRx = strings.TrimSpace(strings.TrimSuffix(parts[0], "received"))
+					currentPeer.TransferTx = strings.TrimSpace(strings.TrimSuffix(parts[1], "sent"))
+				}
+			}
+		}
+	}
+
+	if currentPeer != nil {
+		status.Peers[currentPeer.PublicKey] = *currentPeer
+	}
+
+	return status
+}
+
+// parseWGDump reads the tab-separated dump format. Split out so the parsing is
+// testable without a kernel or a wg binary.
+//
+// The first line describes the interface itself (private key, public key,
+// listen port, fwmark) and is skipped; every later line is a peer:
+//
+//	public-key  preshared-key  endpoint  allowed-ips  latest-handshake  rx  tx  keepalive
+func parseWGDump(out string) map[string]PeerTraffic {
+	traffic := make(map[string]PeerTraffic)
+	for i, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if i == 0 {
+			continue // the interface line
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) < 7 {
+			continue
+		}
+		t := PeerTraffic{}
+		// A handshake of 0 means "never", which is not the epoch: leaving it as
+		// the zero Time keeps callers from computing a 56-year-old session.
+		if secs, err := strconv.ParseInt(fields[4], 10, 64); err == nil && secs != 0 {
+			t.LatestHandshake = time.Unix(secs, 0)
+		}
+		if rx, err := strconv.ParseUint(fields[5], 10, 64); err == nil {
+			t.RX = rx
+		}
+		if tx, err := strconv.ParseUint(fields[6], 10, 64); err == nil {
+			t.TX = tx
+		}
+		traffic[fields[0]] = t
+	}
+	return traffic
+}

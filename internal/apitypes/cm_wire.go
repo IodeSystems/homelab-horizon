@@ -13,9 +13,9 @@ import "github.com/iodesystems/homelab-horizon/configmgr"
 //
 // which is not valid TypeScript. hz now pins a fork that resolves constants through
 // go/types (gzuidhof/tygo#100), so these WOULD generate correctly today. The exclusion
-// stays for a different reason: the UI references none of these eleven names — they are
-// Go-side wire constants shared by the server and the CLI, and the browser is not a party
-// to them. Generating them would ship dead weight and invite someone to use them.
+// stays for a different reason: the UI references none of these names — they are Go-side
+// wire constants shared by the server and the CLI, and the browser is not a party to them.
+// Generating them would ship dead weight and invite someone to use them.
 //
 // Duplicating the literals here instead was rejected: that reintroduces the second
 // definition whose drift broke five endpoints.
@@ -27,9 +27,18 @@ const (
 	CMQueryConfigID = configmgr.QueryConfigID
 	CMQueryTarget   = configmgr.QueryTarget
 	CMQueryState    = configmgr.QueryState
+	CMQueryConfirm  = configmgr.QueryConfirm
+	CMQueryProject  = configmgr.QueryProject
 
 	CMPathResolve     = configmgr.PathResolve
 	CMPathPromoteGate = configmgr.PathPromoteGate
 	CMPathCurrentKey  = configmgr.PathCurrentKey
 	CMPathConfigs     = configmgr.PathConfigs
+	CMPathMachines    = configmgr.PathMachines
+
+	CMPathVersionDrift = configmgr.PathVersionDrift
+
+	CMPathRecovery           = configmgr.PathRecovery
+	CMPathRecoveryRecipients = configmgr.PathRecoveryRecipients
+	CMPathRecoveryWraps      = configmgr.PathRecoveryWraps
 )

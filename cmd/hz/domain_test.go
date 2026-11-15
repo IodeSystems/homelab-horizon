@@ -77,7 +77,17 @@ func TestDomainSetAndHTTPSIntent(t *testing.T) {
 			args:        []string{"--domain-https", "new.example.com"},
 			base:        []string{"old.example.com"},
 			wantDomains: []string{"old.example.com", "new.example.com"},
-			wantHTTPS:   map[string]bool{"old.example.com": false, "new.example.com": true},
+			// old.example.com is not named, so it has no intent: its
+			// coverage, whatever it is, stays.
+			wantHTTPS: map[string]bool{"new.example.com": true},
+			flagSet:   true,
+		},
+		{
+			name:        "--https on edit still covers the kept domains",
+			args:        []string{"--domain-https", "new.example.com", "--https"},
+			base:        []string{"old.example.com"},
+			wantDomains: []string{"old.example.com", "new.example.com"},
+			wantHTTPS:   map[string]bool{"old.example.com": true, "new.example.com": true},
 			flagSet:     true,
 		},
 		{
@@ -146,6 +156,15 @@ func TestPlanHTTPS(t *testing.T) {
 			existing:        map[string]bool{bare.Domain: true},
 			wantChanges:     []httpsChange{{bare.Domain, true}},
 			wantNeedConfirm: []httpsChange{{bare.Domain, true}},
+		},
+		{
+			// The live case of 2026-10-30: adding a name must not plan the
+			// service's covered names to HTTP.
+			name:        "a domain the command does not name is left alone",
+			domains:     []string{covered.Domain, "fresh.example.com"},
+			want:        map[string]bool{"fresh.example.com": true},
+			existing:    map[string]bool{covered.Domain: true},
+			wantChanges: []httpsChange{{"fresh.example.com", true}},
 		},
 		{
 			name:            "losing HTTPS always needs confirmation",

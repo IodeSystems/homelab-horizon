@@ -42,7 +42,10 @@ func extractBearerToken(r *http.Request) string {
 //	GET  /api/deploy/status
 //	POST /api/deploy/current/up|drain|down
 //	POST /api/deploy/next/up|drain|down
-//	POST /api/deploy/swap
+//
+// There is no swap. Under `balance first` next is listed first (render.go),
+// so a label swap would put the slot still running the old code first; the
+// rolling sequence leaves both slots on the new code instead.
 func (s *Server) handleDeployAPI(w http.ResponseWriter, r *http.Request) {
 	token := extractBearerToken(r)
 	if token == "" {
@@ -88,11 +91,7 @@ func (s *Server) handleDeployAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleDeployStateChange(w, backendName, action, parts[1])
 
 	case "swap":
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		s.handleDeploySwap(w, idx)
+		http.Error(w, "swap is removed: next is listed first, so swapping labels would serve the old code; deploy with the rolling sequence (hz-client rolling start|continue|finalize)", http.StatusGone)
 
 	case "maint-page":
 		if r.Method != http.MethodPost {
@@ -129,6 +128,13 @@ func (s *Server) handleDeployStatus(w http.ResponseWriter, svc *config.Service, 
 		nextSlot = "a"
 	}
 
+	// Both slots are reported as ADDRESSES: this is the status a deployer
+	// reads to know where to push, and HAProxy's own state is keyed by the
+	// address too, so a "@nas:8080" here would match nothing.
+	cfg := s.cfg()
+	backend := cfg.ServiceBackend(svc)
+	resolved := cfg.ResolvedDeploy(svc)
+
 	status := apitypes.DeployStatus{
 		Service:     svc.Name,
 		Domain:      svc.PrimaryDomain(),
@@ -138,12 +144,12 @@ func (s *Server) handleDeployStatus(w http.ResponseWriter, svc *config.Service, 
 		HealthCheck: healthCheck,
 		Current: apitypes.DeploySlotStatus{
 			Slot:    currentSlot,
-			Backend: deploy.CurrentServer(svc.Proxy.Backend),
+			Backend: resolved.CurrentServer(backend),
 			State:   "unknown",
 		},
 		Next: apitypes.DeploySlotStatus{
 			Slot:    nextSlot,
-			Backend: deploy.InactiveServer(svc.Proxy.Backend),
+			Backend: resolved.InactiveServer(backend),
 			State:   "unknown",
 		},
 	}
@@ -220,7 +226,7 @@ func (s *Server) handleDeployMaintPage(w http.ResponseWriter, r *http.Request, s
 	}
 
 	s.syncHAProxyBackends()
-	ssl := &haproxy.SSLConfig{Enabled: s.cfg().SSLEnabled, CertDir: s.cfg().SSLHAProxyCertDir}
+	ssl := haproxySSLFor(s.cfg())
 	if err := s.haproxy.WriteConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, ssl); err != nil {
 		http.Error(w, "failed to write haproxy config: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -237,39 +243,4 @@ func (s *Server) handleDeployMaintPage(w http.ResponseWriter, r *http.Request, s
 	} else {
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}
-}
-
-func (s *Server) handleDeploySwap(w http.ResponseWriter, svcIdx int) {
-	if err := s.updateConfig(func(cfg *config.Config) {
-		cfg.Services[svcIdx].Proxy.Deploy.Swap()
-	}); err != nil {
-		http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Regenerate and reload haproxy so current/next ports reflect the new active slot
-	s.syncHAProxyBackends()
-	ssl := &haproxy.SSLConfig{
-		Enabled: s.cfg().SSLEnabled,
-		CertDir: s.cfg().SSLHAProxyCertDir,
-	}
-	if err := s.haproxy.WriteConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, ssl); err != nil {
-		http.Error(w, "failed to write haproxy config: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if err := s.haproxy.Reload(); err != nil {
-		http.Error(w, "failed to reload haproxy: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	svc := s.cfg().Services[svcIdx]
-	deploy := svc.Proxy.Deploy
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(apitypes.DeploySwapResponse{
-		Status:     "ok",
-		ActiveSlot: deploy.ActiveSlot,
-		Current:    deploy.CurrentServer(svc.Proxy.Backend),
-		Next:       deploy.InactiveServer(svc.Proxy.Backend),
-	})
 }

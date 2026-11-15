@@ -1,9 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Chip,
   CircularProgress,
   Dialog,
@@ -11,6 +12,8 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
+  FormControlLabel,
+  FormHelperText,
   IconButton,
   InputLabel,
   MenuItem,
@@ -44,12 +47,14 @@ import {
   useDeleteInvite,
   useDeletePeer,
   useEditPeer,
+  usePeerTag,
   useGetPeerConfig,
   useInvites,
   useMFAGrantSession,
   useMFAReset,
   useMFARevokeSession,
   useMFASettings,
+  useProjects,
   useRekeyPeer,
   useReloadWG,
   useSetPeerProfile,
@@ -57,6 +62,10 @@ import {
   useVPNPeers,
 } from "../api/hooks";
 import type { AddPeerResponse, RekeyPeerResponse, VPNPeer } from "../api/types";
+import { buildProjectIndex } from "../components/model/projectRoutes.ts";
+import { PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
+import { LocationCell } from "../components/model/ProjectBits";
+import { InvitesSection } from "../components/invite/InvitesSection";
 
 function StatusDot({ active }: { active: boolean }) {
   return (
@@ -75,29 +84,95 @@ function StatusDot({ active }: { active: boolean }) {
   );
 }
 
-function AddPeerDialog({
+/**
+ * The routing profiles, each with the one line that says what it reaches.
+ * `upstream` is a nested hz's client (plan/plan.md Tier 1b, N1b): the parent
+ * hz's API port on the gateway's WG address and nothing else
+ * (`internal/iptables/rules.go` upstreamRules). It is offered here so an
+ * existing client can be seen and chosen, but the usual way in is "Declare a
+ * nested instance", which creates and links one.
+ */
+export const PEER_PROFILES: { value: string; label: string; line: string }[] = [
+  { value: "lan-access", label: "LAN Access (VPN + LAN)", line: "Other VPN clients and the LAN." },
+  { value: "full-tunnel", label: "Full Tunnel (all traffic)", line: "Everything, the internet included, through the gateway." },
+  { value: "vpn-only", label: "VPN Only (restricted)", line: "Other VPN clients only." },
+  { value: "upstream", label: "Upstream (parent hz API only)", line: "Only the parent hz's API. For a nested hz." },
+];
+
+/** A peer that never completed a handshake has no endpoint, handshake or
+ * transfer: hz omits them (omitempty). That is a state, not a blank (#2). */
+export const NEVER_CONNECTED = "never connected";
+
+/** The cycle the table's profile chip steps through. `upstream` is not in it:
+ * one click must never widen a nested hz's client to the LAN, and the server
+ * refuses that while the client is linked anyway. */
+const CYCLE_PROFILES = ["lan-access", "full-tunnel", "vpn-only"];
+
+/** The profile select with the chosen profile's line under it — apart from
+ * the dialogs so a render check can draw it (a Dialog renders nothing under
+ * SSR). */
+export function PeerProfileSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const line = PEER_PROFILES.find((p) => p.value === value)?.line ?? "";
+  return (
+    <FormControl fullWidth margin="normal">
+      <InputLabel>Routing Profile</InputLabel>
+      <Select value={value} label="Routing Profile" onChange={(e) => onChange(e.target.value)}>
+        {PEER_PROFILES.map((p) => (
+          <MenuItem key={p.value} value={p.value}>
+            {p.label}
+          </MenuItem>
+        ))}
+      </Select>
+      <FormHelperText data-profile-line>{line}</FormHelperText>
+    </FormControl>
+  );
+}
+
+/**
+ * Add a VPN client. Reused from both `/vpn` (no `project`: a select offers
+ * every declared project, defaulting to global) and a project's own tab
+ * (`project` fixed — the same pattern `AddServiceDialog` uses in
+ * `services.tsx`: no select, the title names where it lands).
+ */
+export function AddPeerDialog({
   open,
   onClose,
   onResult,
+  project,
 }: {
   open: boolean;
   onClose: () => void;
   onResult: (result: AddPeerResponse, name: string) => void;
+  /** Fixed to one project when given. Omit to show the project select. */
+  project?: string;
 }) {
+  const fixedProject = project;
   const [name, setName] = useState("");
   const [extraIPs, setExtraIPs] = useState("");
   const [profile, setProfile] = useState("lan-access");
+  const [pickedProject, setPickedProject] = useState("");
+  const projectsQuery = useProjects();
+  const index = useMemo(
+    () => buildProjectIndex(projectsQuery.data ?? []),
+    [projectsQuery.data],
+  );
   const addPeer = useAddPeer();
 
   const handleSubmit = () => {
     addPeer.mutate(
-      { name: name.trim(), extraIPs: extraIPs.trim(), profile },
+      {
+        name: name.trim(),
+        extraIPs: extraIPs.trim(),
+        profile,
+        project: fixedProject !== undefined ? fixedProject : pickedProject,
+      },
       {
         onSuccess: (data) => {
           onResult(data, name.trim());
           setName("");
           setExtraIPs("");
           setProfile("lan-access");
+          setPickedProject("");
         },
       },
     );
@@ -105,7 +180,9 @@ function AddPeerDialog({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Add VPN Client</DialogTitle>
+      <DialogTitle>
+        {fixedProject !== undefined ? `Add VPN client to ${fixedProject}` : "Add VPN Client"}
+      </DialogTitle>
       <DialogContent>
         <TextField
           autoFocus
@@ -115,18 +192,31 @@ function AddPeerDialog({
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
-        <FormControl fullWidth margin="normal">
-          <InputLabel>Routing Profile</InputLabel>
-          <Select
-            value={profile}
-            label="Routing Profile"
-            onChange={(e) => setProfile(e.target.value)}
+        {fixedProject === undefined && (
+          <TextField
+            select
+            label="Project"
+            fullWidth
+            margin="normal"
+            value={pickedProject}
+            onChange={(e) => setPickedProject(e.target.value)}
+            helperText="Attribution only — every client is in the one wg0.conf regardless."
           >
-            <MenuItem value="lan-access">LAN Access (VPN + LAN)</MenuItem>
-            <MenuItem value="full-tunnel">Full Tunnel (all traffic)</MenuItem>
-            <MenuItem value="vpn-only">VPN Only (restricted)</MenuItem>
-          </Select>
-        </FormControl>
+            <MenuItem value="">
+              <em>global</em>
+            </MenuItem>
+            {index.routes.map((r) => (
+              <MenuItem
+                key={r.name}
+                value={r.name}
+                sx={{ fontFamily: "monospace", pl: 2 + r.depth * 2 }}
+              >
+                {r.name}
+              </MenuItem>
+            ))}
+          </TextField>
+        )}
+        <PeerProfileSelect value={profile} onChange={setProfile} />
         <TextField
           label="Extra Allowed IPs (optional)"
           fullWidth
@@ -156,7 +246,10 @@ function AddPeerDialog({
   );
 }
 
-function PeerResultDialog({
+/** The post-create result — QR code and config — shown from both `/vpn` and
+ * a project's own VPN tab, so a client added from either place gets the same
+ * follow-up. */
+export function PeerResultDialog({
   open,
   onClose,
   result,
@@ -167,15 +260,7 @@ function PeerResultDialog({
   result: AddPeerResponse | null;
   name: string;
 }) {
-  const [copied, setCopied] = useState(false);
-
   if (!result) return null;
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(result.config);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   const handleDownload = () => {
     const blob = new Blob([result.config], { type: "text/plain" });
@@ -191,42 +276,7 @@ function PeerResultDialog({
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle>Client Created: {name}</DialogTitle>
       <DialogContent>
-        <Typography variant="subtitle2" sx={{ mb: 1 }}>
-          QR Code
-        </Typography>
-        <Box
-          sx={{ display: "flex", justifyContent: "center", mb: 2 }}
-          dangerouslySetInnerHTML={{ __html: result.qrCode }}
-        />
-        <Typography variant="subtitle2" sx={{ mb: 1 }}>
-          WireGuard Config
-        </Typography>
-        <Box sx={{ position: "relative" }}>
-          <pre
-            style={{
-              background: "#1e1e1e",
-              color: "#d4d4d4",
-              padding: 16,
-              borderRadius: 4,
-              overflow: "auto",
-              fontSize: 12,
-            }}
-          >
-            {result.config}
-          </pre>
-          <IconButton
-            size="small"
-            onClick={handleCopy}
-            sx={{ position: "absolute", top: 4, right: 4, color: "#aaa" }}
-          >
-            <CopyIcon fontSize="small" />
-          </IconButton>
-        </Box>
-        {copied && (
-          <Typography variant="caption" color="success.main">
-            Copied to clipboard
-          </Typography>
-        )}
+        <PeerResultBody result={result} />
       </DialogContent>
       <DialogActions>
         <Button startIcon={<DownloadIcon />} onClick={handleDownload}>
@@ -237,6 +287,66 @@ function PeerResultDialog({
         </Button>
       </DialogActions>
     </Dialog>
+  );
+}
+
+/** What `PeerResultDialog` shows, apart from the Dialog so a render check can
+ * draw it. For an `upstream` client (a nested hz) it leads with the parent URL
+ * the child must use — the exact address the upstream rules admit — because
+ * the config alone does not say where hz's API is. */
+export function PeerResultBody({ result }: { result: AddPeerResponse }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(result.config);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <>
+      {result.parentUrl ? (
+        <Alert severity="info" sx={{ mb: 2 }} data-parent-url>
+          Install this config on the nested hz, then point it at its parent:{" "}
+          <code>{result.parentUrl}</code>. That is the only address this client can reach — the parent hz&apos;s
+          API, over the tunnel. It has no DNS and no route to the LAN.
+        </Alert>
+      ) : null}
+      <Typography variant="subtitle2" sx={{ mb: 1 }}>
+        QR Code
+      </Typography>
+      <Box
+        sx={{ display: "flex", justifyContent: "center", mb: 2 }}
+        dangerouslySetInnerHTML={{ __html: result.qrCode }}
+      />
+      <Typography variant="subtitle2" sx={{ mb: 1 }}>
+        WireGuard Config
+      </Typography>
+      <Box sx={{ position: "relative" }}>
+        <pre
+          style={{
+            background: "#1e1e1e",
+            color: "#d4d4d4",
+            padding: 16,
+            borderRadius: 4,
+            overflow: "auto",
+            fontSize: 12,
+          }}
+        >
+          {result.config}
+        </pre>
+        <IconButton
+          size="small"
+          onClick={handleCopy}
+          sx={{ position: "absolute", top: 4, right: 4, color: "#aaa" }}
+        >
+          <CopyIcon fontSize="small" />
+        </IconButton>
+      </Box>
+      {copied && (
+        <Typography variant="caption" color="success.main">
+          Copied to clipboard
+        </Typography>
+      )}
+    </>
   );
 }
 
@@ -252,7 +362,16 @@ function EditPeerDialog({
   const [name, setName] = useState("");
   const [extraIPs, setExtraIPs] = useState("");
   const [profile, setProfile] = useState("lan-access");
+  const [project, setProject] = useState("");
+  const [tag, setTag] = useState<"user" | "infra">("user");
+  const [tagReason, setTagReason] = useState("");
   const editPeer = useEditPeer();
+  const peerTag = usePeerTag();
+  const projectsQuery = useProjects();
+  const index = useMemo(
+    () => buildProjectIndex(projectsQuery.data ?? []),
+    [projectsQuery.data],
+  );
 
   // Sync state when peer changes
   const [lastPeerKey, setLastPeerKey] = useState("");
@@ -260,17 +379,39 @@ function EditPeerDialog({
     setLastPeerKey(peer.publicKey);
     setName(peer.name);
     setProfile(peer.profile || "lan-access");
+    setProject(peer.project);
+    setTag(peer.tag === "infra" ? "infra" : "user");
+    setTagReason("");
     // Extract extra IPs (everything after the first /32 entry)
     const parts = peer.allowedIPs.split(",").map((s) => s.trim());
     const extra = parts.filter((p) => !p.endsWith("/32"));
     setExtraIPs(extra.join(", "));
   }
 
+  const wasInfra = peer?.tag === "infra";
+  const tagChanged = (tag === "infra") !== wasInfra || (tag === "infra" && tagReason.trim() !== "");
+  // The server refuses both; say so before Save rather than after.
+  const tagProblem =
+    tag === "infra" && profile !== "vpn-only"
+      ? "An infra client must be vpn-only: a machine with no MFA must not also reach the LAN or the internet."
+      : tag === "infra" && !wasInfra && !tagReason.trim()
+        ? "A reason is required: an infra client skips MFA for good, so the reason is the record."
+        : "";
+
   const handleSubmit = () => {
     if (!peer) return;
+    const newName = name.trim();
     editPeer.mutate(
-      { publicKey: peer.publicKey, name: name.trim(), extraIPs: extraIPs.trim(), profile },
-      { onSuccess: () => onClose() },
+      { publicKey: peer.publicKey, name: newName, extraIPs: extraIPs.trim(), profile, project },
+      {
+        onSuccess: () => {
+          if (!tagChanged) return onClose();
+          peerTag.mutate(
+            { name: newName, tag, reason: tag === "infra" ? tagReason.trim() || undefined : undefined },
+            { onSuccess: () => onClose() },
+          );
+        },
+      },
     );
   };
 
@@ -286,18 +427,60 @@ function EditPeerDialog({
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
-        <FormControl fullWidth margin="normal">
-          <InputLabel>Routing Profile</InputLabel>
-          <Select
-            value={profile}
-            label="Routing Profile"
-            onChange={(e) => setProfile(e.target.value)}
-          >
-            <MenuItem value="lan-access">LAN Access (VPN + LAN)</MenuItem>
-            <MenuItem value="full-tunnel">Full Tunnel (all traffic)</MenuItem>
-            <MenuItem value="vpn-only">VPN Only (restricted)</MenuItem>
-          </Select>
-        </FormControl>
+        <TextField
+          select
+          label="Project"
+          fullWidth
+          margin="normal"
+          value={project}
+          onChange={(e) => setProject(e.target.value)}
+          helperText="Attribution only — re-attributing changes no rendered artifact."
+        >
+          <MenuItem value="">
+            <em>global</em>
+          </MenuItem>
+          {index.routes.map((r) => (
+            <MenuItem
+              key={r.name}
+              value={r.name}
+              sx={{ fontFamily: "monospace", pl: 2 + r.depth * 2 }}
+            >
+              {r.name}
+            </MenuItem>
+          ))}
+        </TextField>
+        <PeerProfileSelect value={profile} onChange={setProfile} />
+        <TextField
+          select
+          label="Client kind"
+          fullWidth
+          margin="normal"
+          value={tag}
+          onChange={(e) => setTag(e.target.value === "infra" ? "infra" : "user")}
+          helperText={
+            tag === "infra"
+              ? "A machine (a service box): no MFA, in either MFA scope, while vpn-only. Listed under Settings › VPN clients without MFA."
+              : "A person: must pass MFA when MFA is on."
+          }
+        >
+          <MenuItem value="user">user — a person</MenuItem>
+          <MenuItem value="infra">infra — a machine, no MFA</MenuItem>
+        </TextField>
+        {tag === "infra" && (
+          <TextField
+            label={wasInfra ? "Reason (leave blank to keep the recorded one)" : "Reason (required)"}
+            fullWidth
+            margin="normal"
+            value={tagReason}
+            onChange={(e) => setTagReason(e.target.value)}
+            placeholder="e.g. AI/dev box: its services are VPN-only"
+          />
+        )}
+        {tagProblem && (
+          <Alert severity="warning" sx={{ mt: 1 }}>
+            {tagProblem}
+          </Alert>
+        )}
         <TextField
           label="Extra Allowed IPs"
           fullWidth
@@ -311,15 +494,20 @@ function EditPeerDialog({
             {editPeer.error.message}
           </Alert>
         )}
+        {peerTag.error && (
+          <Alert severity="error" sx={{ mt: 1 }}>
+            {peerTag.error.message}
+          </Alert>
+        )}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
         <Button
           onClick={handleSubmit}
           variant="contained"
-          disabled={!name.trim() || editPeer.isPending}
+          disabled={!name.trim() || editPeer.isPending || peerTag.isPending || tagProblem !== ""}
         >
-          {editPeer.isPending ? "Saving..." : "Save"}
+          {editPeer.isPending || peerTag.isPending ? "Saving..." : "Save"}
         </Button>
       </DialogActions>
     </Dialog>
@@ -385,6 +573,7 @@ function PeerConfigDialog({
   const [rekeyResult, setRekeyResult] = useState<RekeyPeerResponse | null>(null);
   const [copied, setCopied] = useState("");
   const [confirmRekey, setConfirmRekey] = useState(false);
+  const [wantShare, setWantShare] = useState(false);
 
   // Reset state when dialog opens/closes or peer changes
   const [lastPeerKey, setLastPeerKey] = useState("");
@@ -392,6 +581,7 @@ function PeerConfigDialog({
     setLastPeerKey(peer.publicKey);
     setRekeyResult(null);
     setConfirmRekey(false);
+    setWantShare(false);
     setCopied("");
   }
 
@@ -413,7 +603,7 @@ function PeerConfigDialog({
 
   const handleRekey = () => {
     if (!peer) return;
-    rekeyPeer.mutate(peer.publicKey, {
+    rekeyPeer.mutate({ publicKey: peer.publicKey, share: wantShare }, {
       onSuccess: (data) => {
         setRekeyResult(data);
         setConfirmRekey(false);
@@ -537,7 +727,7 @@ function PeerConfigDialog({
                     <IconButton
                       size="small"
                       onClick={() =>
-                        handleCopy(rekeyResult.shareURL, "share")
+                        handleCopy(rekeyResult.shareURL ?? "", "share")
                       }
                     >
                       <CopyIcon fontSize="small" />
@@ -592,6 +782,17 @@ function PeerConfigDialog({
             This will generate a new keypair and <strong>invalidate</strong> the
             client's current WireGuard config. They will need the new config to
             reconnect.
+            <FormControlLabel
+              sx={{ display: "flex", mt: 1 }}
+              control={
+                <Checkbox
+                  size="small"
+                  checked={wantShare}
+                  onChange={(e) => setWantShare(e.target.checked)}
+                />
+              }
+              label="Also create a share link — anyone with the link gets this client's private key, until you revoke it or hz restarts"
+            />
           </Alert>
         )}
       </DialogContent>
@@ -637,6 +838,11 @@ function PeerConfigDialog({
 
 function VPNPage() {
   const { data, isLoading, error } = useVPNPeers();
+  const projectsQuery = useProjects();
+  const index = useMemo(
+    () => buildProjectIndex(projectsQuery.data ?? []),
+    [projectsQuery.data],
+  );
   const invitesQuery = useInvites();
   const toggleAdmin = useToggleAdmin();
   const setPeerProfile = useSetPeerProfile();
@@ -720,6 +926,7 @@ function VPNPage() {
           <TableHead>
             <TableRow>
               <TableCell>Name</TableCell>
+              <TableCell>{PROJECT_COLUMN_LABEL}</TableCell>
               <TableCell>Profile</TableCell>
               {mfaSettings.data?.enabled && <TableCell>MFA</TableCell>}
               <TableCell>Status</TableCell>
@@ -733,7 +940,7 @@ function VPNPage() {
           <TableBody>
             {peers.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={mfaSettings.data?.enabled ? 9 : 8} align="center">
+                <TableCell colSpan={mfaSettings.data?.enabled ? 10 : 9} align="center">
                   <Typography
                     variant="body2"
                     color="text.secondary"
@@ -764,19 +971,30 @@ function VPNPage() {
                     </Box>
                   </TableCell>
                   <TableCell>
-                    <Tooltip title="Click to cycle profile">
+                    <LocationCell index={index} project={peer.project} />
+                  </TableCell>
+                  <TableCell>
+                    <Tooltip
+                      title={
+                        peer.profile === "upstream"
+                          ? "Only the parent hz's API. For a nested hz. Changed from Edit, never by a click."
+                          : peer.tag === "infra"
+                            ? "An infra client: no MFA only while vpn-only. Changed from Edit, never by a click."
+                            : "Click to cycle profile"
+                      }
+                    >
                       <Chip
                         label={peer.profile || "lan-access"}
                         size="small"
                         color={
                           peer.profile === "full-tunnel"
                             ? "warning"
-                            : peer.profile === "vpn-only"
+                            : peer.profile === "vpn-only" || peer.profile === "upstream"
                               ? "info"
                               : "default"
                         }
-                        onClick={() => {
-                          const profiles = ["lan-access", "full-tunnel", "vpn-only"];
+                        onClick={peer.profile === "upstream" || peer.tag === "infra" ? undefined : () => {
+                          const profiles = CYCLE_PROFILES;
                           const current = peer.profile || "lan-access";
                           const idx = profiles.indexOf(current);
                           const next = profiles[(idx + 1) % profiles.length] ?? "lan-access";
@@ -788,14 +1006,26 @@ function VPNPage() {
                             },
                           );
                         }}
-                        sx={{ cursor: "pointer" }}
+                        sx={{ cursor: peer.profile === "upstream" || peer.tag === "infra" ? "default" : "pointer" }}
                       />
                     </Tooltip>
                   </TableCell>
                   {mfaSettings.data?.enabled && (
                     <TableCell>
                       <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexWrap: "wrap" }}>
-                        {peer.isAdmin ? (
+                        {peer.profile === "upstream" ? (
+                          <Tooltip title="Never jailed: it reaches only hz's API, which authenticates it by enrolment.">
+                            <Chip label="exempt" size="small" color="default" />
+                          </Tooltip>
+                        ) : peer.mfaExempt === "infra" ? (
+                          <Tooltip title="Tagged infra: a machine, vpn-only. No MFA in either scope.">
+                            <Chip label="infra" size="small" color="info" />
+                          </Tooltip>
+                        ) : peer.tag === "infra" ? (
+                          <Tooltip title="Tagged infra but not vpn-only, so the tag is not honoured: jailed until its profile is vpn-only again.">
+                            <Chip label="infra (inactive)" size="small" color="warning" />
+                          </Tooltip>
+                        ) : peer.isAdmin ? (
                           <Chip label="bypass" size="small" color="default" />
                         ) : peer.mfaSessionActive ? (
                           <Tooltip title={peer.mfaSessionExpiry ? `Expires: ${new Date(peer.mfaSessionExpiry).toLocaleString()}` : "Permanent session"}>
@@ -811,7 +1041,7 @@ function VPNPage() {
                         ) : (
                           <Chip label="not enrolled" size="small" color="warning" variant="outlined" />
                         )}
-                        {!peer.isAdmin && (
+                        {!peer.isAdmin && peer.profile !== "upstream" && (
                           <Box sx={{ display: "flex", gap: 0.25 }}>
                             {peer.mfaEnrolled && (
                               <Tooltip title="Reset TOTP (force re-enrollment)">
@@ -851,7 +1081,7 @@ function VPNPage() {
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                      {peer.endpoint || "\u2014"}
+                      {peer.endpoint || NEVER_CONNECTED}
                     </Typography>
                   </TableCell>
                   <TableCell>
@@ -861,14 +1091,14 @@ function VPNPage() {
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" color="text.secondary">
-                      {peer.latestHandshake || "\u2014"}
+                      {peer.latestHandshake || NEVER_CONNECTED}
                     </Typography>
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" color="text.secondary">
                       {peer.transferRx && peer.transferTx
                         ? `${peer.transferRx} / ${peer.transferTx}`
-                        : "\u2014"}
+                        : NEVER_CONNECTED}
                     </Typography>
                   </TableCell>
                   <TableCell align="right">
@@ -937,119 +1167,23 @@ function VPNPage() {
       </TableContainer>
 
       {/* Invites Section */}
-      <Box sx={{ mt: 4 }}>
-        <Box
-          sx={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            mb: 2,
-          }}
-        >
-          <Typography variant="h6" sx={{ fontWeight: 600 }}>
-            Invites
-          </Typography>
-          <Button
-            variant="outlined"
-            startIcon={<AddIcon />}
-            onClick={() =>
-              createInvite.mutate(undefined, {
-                onSuccess: () => setSnack("Invite created"),
-              })
-            }
-            disabled={createInvite.isPending}
-            size="small"
-          >
-            Create Invite
-          </Button>
-        </Box>
-
-        <TableContainer component={Paper}>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell>Token</TableCell>
-                <TableCell>Invite URL</TableCell>
-                <TableCell align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {invites.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={3} align="center">
-                    <Typography
-                      variant="body2"
-                      color="text.secondary"
-                      sx={{ py: 3 }}
-                    >
-                      No active invites.
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                invites.map((invite) => (
-                  <TableRow key={invite.token} hover>
-                    <TableCell>
-                      <Typography
-                        variant="body2"
-                        sx={{ fontFamily: "monospace" }}
-                      >
-                        {invite.token.slice(0, 12)}...
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Box
-                        sx={{ display: "flex", alignItems: "center", gap: 1 }}
-                      >
-                        <Typography
-                          variant="body2"
-                          sx={{
-                            fontFamily: "monospace",
-                            fontSize: 12,
-                            maxWidth: 400,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {invite.url}
-                        </Typography>
-                        <Tooltip title="Copy URL">
-                          <IconButton
-                            size="small"
-                            onClick={() => {
-                              navigator.clipboard.writeText(invite.url);
-                              setSnack("URL copied");
-                            }}
-                          >
-                            <CopyIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                      </Box>
-                    </TableCell>
-                    <TableCell align="right">
-                      <Tooltip title="Delete invite">
-                        <IconButton
-                          size="small"
-                          color="error"
-                          onClick={() =>
-                            deleteInvite.mutate(invite.token, {
-                              onSuccess: () => setSnack("Invite deleted"),
-                            })
-                          }
-                          disabled={deleteInvite.isPending}
-                        >
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      </Box>
+      <InvitesSection
+        invites={invites}
+        creating={createInvite.isPending}
+        onCreate={(req, done, fail) =>
+          createInvite.mutate(req, {
+            onSuccess: done,
+            onError: (e) => fail((e as Error).message),
+          })
+        }
+        deleting={deleteInvite.isPending}
+        onDelete={(id) =>
+          deleteInvite.mutate(id, {
+            onSuccess: () => setSnack("Invite revoked"),
+          })
+        }
+        onCopied={() => setSnack("Link copied")}
+      />
 
       {/* Dialogs */}
       <AddPeerDialog
